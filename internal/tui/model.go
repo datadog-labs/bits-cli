@@ -14,8 +14,9 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/editor"
 )
 
-// memoEntry caches one item's rendered output, keyed by its version and width.
-type memoEntry struct {
+// renderCacheEntry caches one item's rendered output, keyed by its version and
+// width.
+type renderCacheEntry struct {
 	version int
 	width   int
 	out     string
@@ -24,25 +25,30 @@ type memoEntry struct {
 // Model is the root Bubble Tea model. All state lives here and is mutated only
 // on the tea thread; the sole async source is the engine's event channel.
 type Model struct {
+	// Collaborators the model drives.
 	engine     *agent.Engine
 	transcript *chat.Transcript
-	styles     chat.Styles
+	editor     *editor.Editor
 
-	// turn is the active turn's event channel (nil when idle); cancel
-	// interrupts it.
-	turn   <-chan agent.Event
-	cancel context.CancelFunc
+	// Active turn: turnEvents is the running turn's event channel (nil when
+	// idle); cancelTurn interrupts it.
+	turnEvents <-chan agent.Event
+	cancelTurn context.CancelFunc
 
-	viewport viewport.Model
-	editor   *editor.Editor
-	memo     map[string]memoEntry
+	// Turn status, surfaced in the status line.
+	chatPhase chat.Phase
+	convID    string
+	usage     *assistant.Usage
+	errMsg    string
 
-	phase  chat.Phase
-	convID string
-	usage  *assistant.Usage
-	errMsg string
+	// Transcript rendering.
+	viewport    viewport.Model
+	chatStyles  chat.Styles
+	renderCache map[string]renderCacheEntry
 
-	width  int
+	// Terminal height (the full window height from WindowSizeMsg; the transcript
+	// viewport height is derived from it). Width isn't stored — it equals
+	// viewport.Width(). ready is set once the first WindowSizeMsg arrives.
 	height int
 	ready  bool
 }
@@ -50,12 +56,12 @@ type Model struct {
 // New builds the root model for the given engine.
 func New(engine *agent.Engine) *Model {
 	return &Model{
-		engine:     engine,
-		transcript: chat.NewTranscript(),
-		styles:     chat.DefaultStyles(),
-		editor:     editor.New(),
-		memo:       map[string]memoEntry{},
-		phase:      chat.PhaseIdle,
+		engine:      engine,
+		transcript:  chat.NewTranscript(),
+		editor:      editor.New(),
+		chatStyles:  chat.DefaultStyles(),
+		renderCache: map[string]renderCacheEntry{},
+		chatPhase:   chat.PhaseIdle,
 	}
 }
 

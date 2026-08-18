@@ -37,8 +37,8 @@ func (m *Model) View() tea.View {
 	// bottom rows without reflowing the layout.
 	menuW, menuH := lipgloss.Width(menu), lipgloss.Height(menu)
 	x := 2 // align under the "› " prompt
-	if x+menuW > m.width {
-		x = max(0, m.width-menuW)
+	if width := m.viewport.Width(); x+menuW > width {
+		x = max(0, width-menuW)
 	}
 	y := max(0, m.height-m.editor.Height()-menuH)
 	v.Content = lipgloss.NewCompositor(
@@ -50,17 +50,17 @@ func (m *Model) View() tea.View {
 
 func (m *Model) statusLine() string {
 	var b strings.Builder
-	b.WriteString(phaseLabel(m.phase))
+	b.WriteString(phaseLabel(m.chatPhase))
 	if m.usage != nil && m.usage.TokensUsed > 0 {
 		fmt.Fprintf(&b, " · %d tokens", m.usage.TokensUsed)
 	}
 	if m.convID != "" {
 		fmt.Fprintf(&b, " · %s", shortID(m.convID))
 	}
-	if m.phase == chat.PhaseError && m.errMsg != "" {
+	if m.chatPhase == chat.PhaseError && m.errMsg != "" {
 		fmt.Fprintf(&b, " · %s", m.errMsg)
 	}
-	return m.styles.Meta.Render(ansi.Truncate(b.String(), max(1, m.width), "…"))
+	return m.chatStyles.Meta.Render(ansi.Truncate(b.String(), max(1, m.viewport.Width()), "…"))
 }
 
 // phaseLabel is exhaustive over chat.Phase.

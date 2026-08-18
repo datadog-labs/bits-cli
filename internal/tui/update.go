@@ -49,14 +49,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case turnEventMsg:
 		m.applyEvent(msg.ev)
 		m.refreshViewport()
-		return m, waitEvent(m.turn)
+		return m, waitEvent(m.turnEvents)
 
 	case turnClosedMsg:
-		if m.phase != chat.PhaseError {
-			m.phase = chat.PhaseIdle
+		if m.chatPhase != chat.PhaseError {
+			m.chatPhase = chat.PhaseIdle
 		}
-		m.turn = nil
-		m.cancel = nil
+		m.turnEvents = nil
+		m.cancelTurn = nil
 		return m, nil
 	}
 
@@ -69,8 +69,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
-		if m.cancel != nil {
-			m.cancel()
+		if m.cancelTurn != nil {
+			m.cancelTurn()
 		}
 		return m, tea.Quit
 	}
@@ -85,8 +85,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
-		if m.cancel != nil {
-			m.cancel() // interrupt the running turn
+		if m.cancelTurn != nil {
+			m.cancelTurn() // interrupt the running turn
 		}
 		return m, nil
 	case "enter":
@@ -110,19 +110,19 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // already running.
 func (m *Model) submit() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.editor.Value())
-	if text == "" || m.turn != nil {
+	if text == "" || m.turnEvents != nil {
 		return m, nil
 	}
 	m.editor.Reset()
 	m.transcript.AppendUser(text)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	m.cancel = cancel
-	m.turn = m.engine.Start(ctx, text)
-	m.phase = chat.PhaseWaiting
+	m.cancelTurn = cancel
+	m.turnEvents = m.engine.Start(ctx, text)
+	m.chatPhase = chat.PhaseWaiting
 	m.errMsg = ""
 	m.refreshViewport()
-	return m, waitEvent(m.turn)
+	return m, waitEvent(m.turnEvents)
 }
 
 // applyEvent folds one engine event into the transcript / status. The switch is
@@ -132,7 +132,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 func (m *Model) applyEvent(ev agent.Event) {
 	switch ev.Kind {
 	case agent.EventDelta:
-		m.phase = chat.PhaseStreaming
+		m.chatPhase = chat.PhaseStreaming
 		m.transcript.AppendText(ev.ItemID, ev.Role, ev.Content, ev.Text)
 	case agent.EventTool:
 		m.transcript.UpsertTool(ev.ItemID, chat.ToolView{
@@ -147,10 +147,10 @@ func (m *Model) applyEvent(ev agent.Event) {
 		m.convID = ev.ConvID
 	case agent.EventTurnDone:
 		m.transcript.FinalizeAll()
-		m.phase = chat.PhaseIdle
+		m.chatPhase = chat.PhaseIdle
 	case agent.EventError:
 		m.transcript.FinalizeAll()
-		m.phase = chat.PhaseError
+		m.chatPhase = chat.PhaseError
 		if ev.Err != nil {
 			m.errMsg = ev.Err.Error()
 		}
@@ -160,7 +160,7 @@ func (m *Model) applyEvent(ev agent.Event) {
 }
 
 func (m *Model) resize(w, h int) {
-	m.width, m.height = w, h
+	m.height = h
 	if !m.ready {
 		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(1))
 		m.ready = true
@@ -200,10 +200,10 @@ func (m *Model) renderTranscript() string {
 // the changed (streaming) item re-renders.
 func (m *Model) renderCached(it chat.Item) string {
 	w := m.viewport.Width()
-	if e, ok := m.memo[it.ID]; ok && e.version == it.Version && e.width == w {
+	if e, ok := m.renderCache[it.ID]; ok && e.version == it.Version && e.width == w {
 		return e.out
 	}
-	out := it.Render(w, m.styles)
-	m.memo[it.ID] = memoEntry{version: it.Version, width: w, out: out}
+	out := it.Render(w, m.chatStyles)
+	m.renderCache[it.ID] = renderCacheEntry{version: it.Version, width: w, out: out}
 	return out
 }

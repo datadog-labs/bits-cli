@@ -34,8 +34,8 @@ func TestModel_StreamsDeltasIntoView(t *testing.T) {
 	if got := m.View().Content; !strings.Contains(got, "hello world") {
 		t.Errorf("view missing concatenated stream:\n%s", got)
 	}
-	if m.phase != chat.PhaseStreaming {
-		t.Errorf("phase = %v, want streaming", m.phase)
+	if m.chatPhase != chat.PhaseStreaming {
+		t.Errorf("chatPhase = %v, want streaming", m.chatPhase)
 	}
 }
 
