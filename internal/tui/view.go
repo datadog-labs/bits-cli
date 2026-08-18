@@ -4,21 +4,27 @@ import (
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
-// View lays out the transcript viewport, a status line, and the input.
-func (m *Model) View() string {
+// View lays out the transcript viewport, a status line, and the input. Alt-screen
+// and mouse tracking, which were program options in Bubble Tea v1, are now
+// declared on the returned view.
+func (m *Model) View() tea.View {
+	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion}
 	if !m.ready {
-		return "loading…"
+		v.Content = "loading…"
+		return v
 	}
-	return strings.Join([]string{
+	v.Content = strings.Join([]string{
 		m.viewport.View(),
 		m.statusLine(),
 		m.input.View(),
 	}, "\n")
+	return v
 }
 
 func (m *Model) statusLine() string {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
@@ -31,7 +31,7 @@ func TestModel_StreamsDeltasIntoView(t *testing.T) {
 	m.feed(agent.Event{Kind: agent.EventDelta, ItemID: "msg:1", Role: assistant.RoleAssistant, Content: assistant.KindText, Text: "hello "})
 	m.feed(agent.Event{Kind: agent.EventDelta, ItemID: "msg:1", Role: assistant.RoleAssistant, Content: assistant.KindText, Text: "world"})
 
-	if got := m.View(); !strings.Contains(got, "hello world") {
+	if got := m.View().Content; !strings.Contains(got, "hello world") {
 		t.Errorf("view missing concatenated stream:\n%s", got)
 	}
 	if m.phase != chat.PhaseStreaming {
@@ -44,7 +44,7 @@ func TestModel_TurnDoneReturnsToReady(t *testing.T) {
 	m.feed(agent.Event{Kind: agent.EventDelta, ItemID: "msg:1", Role: assistant.RoleAssistant, Content: assistant.KindText, Text: "hi"})
 	m.feed(agent.Event{Kind: agent.EventTurnDone})
 
-	if got := m.View(); !strings.Contains(got, "ready") {
+	if got := m.View().Content; !strings.Contains(got, "ready") {
 		t.Errorf("status line should show ready after turn done:\n%s", got)
 	}
 }
@@ -54,7 +54,7 @@ func TestModel_ToolAndErrorRender(t *testing.T) {
 	m.feed(agent.Event{Kind: agent.EventTool, ItemID: "tool:1", Tool: agent.ToolCall{Name: "run_bash", Output: "ok", Status: "success"}})
 	m.feed(agent.Event{Kind: agent.EventError, Err: errors.New("boom")})
 
-	got := m.View()
+	got := m.View().Content
 	for _, want := range []string{"run_bash", "error", "boom"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("view missing %q:\n%s", want, got)

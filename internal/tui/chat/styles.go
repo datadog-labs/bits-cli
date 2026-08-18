@@ -1,6 +1,6 @@
 package chat
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // Styles holds the lipgloss styles the renderers use. It is a plain value:
 // construct one with DefaultStyles and pass it into Item.Render. No theme system

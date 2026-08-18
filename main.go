@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
@@ -19,7 +19,7 @@ func main() {
 	}
 
 	engine := agent.New(client, assistant.SendOptions{})
-	p := tea.NewProgram(tui.New(engine), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(tui.New(engine))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "bits:", err)
 		os.Exit(1)

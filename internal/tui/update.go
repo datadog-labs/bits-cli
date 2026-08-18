@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
@@ -41,7 +41,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(msg.Width, msg.Height)
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
@@ -69,7 +69,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		if m.cancel != nil {
@@ -151,14 +151,13 @@ func (m *Model) resize(w, h int) {
 	m.width, m.height = w, h
 	vpHeight := max(1, h-chromeHeight)
 	if !m.ready {
-		m.viewport = viewport.New(w, vpHeight)
-		m.viewport.MouseWheelEnabled = true
+		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(vpHeight))
 		m.ready = true
 	} else {
-		m.viewport.Width = w
-		m.viewport.Height = vpHeight
+		m.viewport.SetWidth(w)
+		m.viewport.SetHeight(vpHeight)
 	}
-	m.input.Width = max(1, w-len(m.input.Prompt)-1)
+	m.input.SetWidth(max(1, w-len(m.input.Prompt)-1))
 	m.refreshViewport()
 }
 
@@ -187,7 +186,7 @@ func (m *Model) renderTranscript() string {
 // renderCached memoizes each item's rendered output by version + width so only
 // the changed (streaming) item re-renders.
 func (m *Model) renderCached(it chat.Item) string {
-	w := m.viewport.Width
+	w := m.viewport.Width()
 	if e, ok := m.memo[it.ID]; ok && e.version == it.Version && e.width == w {
 		return e.out
 	}
