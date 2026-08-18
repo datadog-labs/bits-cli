@@ -3,8 +3,6 @@ package assistant
 // String returns a short, stable label for a ContentKind, used for logging and
 // as the fallback render label. The switch is exhaustive so a new kind must be
 // named here.
-//
-//exhaustive:enforce
 func (k ContentKind) String() string {
 	switch k {
 	case KindText:

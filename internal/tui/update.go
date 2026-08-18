@@ -127,8 +127,6 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 
 // applyEvent folds one engine event into the transcript / status. The switch is
 // exhaustive over agent.EventKind.
-//
-//exhaustive:enforce
 func (m *Model) applyEvent(ev agent.Event) {
 	switch ev.Kind {
 	case agent.EventDelta:

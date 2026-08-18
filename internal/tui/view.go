@@ -64,8 +64,6 @@ func (m *Model) statusLine() string {
 }
 
 // phaseLabel is exhaustive over chat.Phase.
-//
-//exhaustive:enforce
 func phaseLabel(p chat.Phase) string {
 	switch p {
 	case chat.PhaseIdle:

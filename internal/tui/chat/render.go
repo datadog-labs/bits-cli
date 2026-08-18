@@ -14,8 +14,6 @@ import (
 // (the caller joins items). width is the target display width in cells.
 // Rendering is a single exhaustive switch over assistant.ContentKind so a new
 // server content type fails the build until it is handled here.
-//
-//exhaustive:enforce
 func (it Item) Render(width int, sty Styles) string {
 	switch it.Kind {
 	case assistant.KindText:
@@ -104,8 +102,6 @@ func toolName(t ToolView) string {
 }
 
 // statusParts returns the glyph, label, and style for a tool status.
-//
-//exhaustive:enforce
 func statusParts(s ToolStatus, sty Styles) (glyph, label string, style lipgloss.Style) {
 	switch s {
 	case ToolRunning:

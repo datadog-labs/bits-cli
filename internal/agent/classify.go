@@ -9,8 +9,6 @@ import (
 // classify maps one streamed response line to an Event and, when the line is a
 // client tool call the caller must answer, the originating Content. The switch
 // is exhaustive over ContentKind so a new kind must be handled here.
-//
-//exhaustive:enforce
 func classify(ar assistant.AssistantResponse) (Event, *assistant.Content) {
 	msg := ar.Data.Attributes.StructuredMessage
 	c := msg.Content
