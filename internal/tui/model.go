@@ -5,13 +5,13 @@ package tui
 import (
 	"context"
 
-	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/editor"
 )
 
 // memoEntry caches one item's rendered output, keyed by its version and width.
@@ -34,7 +34,7 @@ type Model struct {
 	cancel context.CancelFunc
 
 	viewport viewport.Model
-	input    textinput.Model
+	editor   *editor.Editor
 	memo     map[string]memoEntry
 
 	phase  chat.Phase
@@ -49,22 +49,17 @@ type Model struct {
 
 // New builds the root model for the given engine.
 func New(engine *agent.Engine) *Model {
-	in := textinput.New()
-	in.Prompt = "› "
-	in.Placeholder = "Ask Bits…"
-	in.Focus()
-
 	return &Model{
 		engine:     engine,
 		transcript: chat.NewTranscript(),
 		styles:     chat.DefaultStyles(),
-		input:      in,
+		editor:     editor.New(),
 		memo:       map[string]memoEntry{},
 		phase:      chat.PhaseIdle,
 	}
 }
 
-// Init starts the input cursor blink.
+// Init focuses the editor and starts its cursor blink.
 func (m *Model) Init() tea.Cmd {
-	return textinput.Blink
+	return m.editor.Focus()
 }

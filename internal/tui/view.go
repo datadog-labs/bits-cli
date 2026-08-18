@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/tui/chat"
@@ -19,11 +20,31 @@ func (m *Model) View() tea.View {
 		v.Content = "loading…"
 		return v
 	}
-	v.Content = strings.Join([]string{
+	base := strings.Join([]string{
 		m.viewport.View(),
 		m.statusLine(),
-		m.input.View(),
+		m.editor.View(),
 	}, "\n")
+
+	menu := m.editor.MenuView()
+	if menu == "" {
+		v.Content = base
+		return v
+	}
+
+	// Float the completion menu as a fixed overlay just above the input. The
+	// editor's Height excludes the menu, so opening it covers the transcript's
+	// bottom rows without reflowing the layout.
+	menuW, menuH := lipgloss.Width(menu), lipgloss.Height(menu)
+	x := 2 // align under the "› " prompt
+	if x+menuW > m.width {
+		x = max(0, m.width-menuW)
+	}
+	y := max(0, m.height-m.editor.Height()-menuH)
+	v.Content = lipgloss.NewCompositor(
+		lipgloss.NewLayer(base),
+		lipgloss.NewLayer(menu).X(x).Y(y).Z(1),
+	).Render()
 	return v
 }
 

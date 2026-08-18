@@ -11,9 +11,6 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
-// chrome rows reserved below the transcript viewport (status + input).
-const chromeHeight = 2
-
 // turnEventMsg carries one engine event into Update; turnClosedMsg signals the
 // turn's channel was closed (turn finished or cancelled).
 type (
@@ -63,19 +60,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Anything else (paste, etc.) goes to the input.
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
+	// Cursor blink, paste, and other input messages go to the editor; a paste
+	// can change its height, so relayout.
+	cmd := m.editor.Update(msg)
+	m.refreshViewport()
 	return m, cmd
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
+	if msg.String() == "ctrl+c" {
 		if m.cancel != nil {
 			m.cancel()
 		}
 		return m, tea.Quit
+	}
+
+	// While the completion menu is open it owns navigation keys (arrows, tab,
+	// enter to accept, esc to close); route everything to the editor.
+	if m.editor.MenuOpen() {
+		cmd := m.editor.Update(msg)
+		m.refreshViewport()
+		return m, cmd
+	}
+
+	switch msg.String() {
 	case "esc":
 		if m.cancel != nil {
 			m.cancel() // interrupt the running turn
@@ -83,25 +91,29 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m.submit()
-	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+	case "pgup", "pgdown":
+		// ctrl+u / ctrl+d are intentionally NOT scroll keys: the editor is always
+		// focused and owns them for line editing (ctrl+u = delete to line start,
+		// which is what Ghostty sends for cmd+backspace). Transcript scrolling is
+		// pgup/pgdown and the mouse wheel.
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
 	}
 
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
+	cmd := m.editor.Update(msg)
+	m.refreshViewport()
 	return m, cmd
 }
 
 // submit starts a turn for the current input, unless it is empty or a turn is
 // already running.
 func (m *Model) submit() (tea.Model, tea.Cmd) {
-	text := strings.TrimSpace(m.input.Value())
+	text := strings.TrimSpace(m.editor.Value())
 	if text == "" || m.turn != nil {
 		return m, nil
 	}
-	m.input.SetValue("")
+	m.editor.Reset()
 	m.transcript.AppendUser(text)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -149,25 +161,26 @@ func (m *Model) applyEvent(ev agent.Event) {
 
 func (m *Model) resize(w, h int) {
 	m.width, m.height = w, h
-	vpHeight := max(1, h-chromeHeight)
 	if !m.ready {
-		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(vpHeight))
+		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(1))
 		m.ready = true
 	} else {
 		m.viewport.SetWidth(w)
-		m.viewport.SetHeight(vpHeight)
 	}
-	m.input.SetWidth(max(1, w-len(m.input.Prompt)-1))
+	m.editor.SetWidth(w)
 	m.refreshViewport()
 }
 
-// refreshViewport re-renders the transcript into the viewport, keeping the view
-// pinned to the bottom while it was already there (auto-follow).
+// refreshViewport re-renders the transcript into the viewport and sizes it to
+// the space left by the status line and the (possibly multi-row) editor. The
+// view stays pinned to the bottom while it was already there (auto-follow).
 func (m *Model) refreshViewport() {
 	if !m.ready {
 		return
 	}
+	vpHeight := max(1, m.height-1-m.editor.Height())
 	pinned := m.viewport.AtBottom()
+	m.viewport.SetHeight(vpHeight)
 	m.viewport.SetContent(m.renderTranscript())
 	if pinned {
 		m.viewport.GotoBottom()
