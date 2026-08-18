@@ -1,3 +1,7 @@
+// Package agent drives the remote assistant turn loop and emits fine-grained
+// events on a channel. It imports only the assistant client and has no Bubble
+// Tea / UI dependency, so it is reusable by a future headless surface and
+// testable without a program.
 package agent
 
 import (
@@ -6,6 +10,49 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
+
+// Backend is the minimal transport the engine drives. *assistant.Client
+// satisfies it; tests can substitute a fake.
+type Backend interface {
+	Send(ctx context.Context, message any, opts assistant.SendOptions,
+		fn func(assistant.AssistantResponse) error) (string, error)
+}
+
+// EventKind discriminates the events the engine streams for a turn.
+type EventKind int
+
+const (
+	EventNone         EventKind = iota // ignored; keeps classify total
+	EventDelta                         // text/reasoning fragment for ItemID
+	EventTool                          // tool call or result upsert
+	EventUsage                         // token accounting
+	EventConversation                  // server-assigned/confirmed conversation id
+	EventTurnDone                      // the turn completed with no pending tool calls
+	EventError                         // the turn failed
+)
+
+// ToolCall is the agent-owned tool payload on an event. The tui maps it to a
+// transcript view; agent stays independent of the UI-domain chat package.
+type ToolCall struct {
+	Name   string
+	Input  string
+	Output string
+	Status string // wire status ("success" / "error"); empty for a fresh call
+}
+
+// Event is one thing that happened during a turn. It is a plain value carried
+// on a channel, with only the fields relevant to Kind populated.
+type Event struct {
+	Kind    EventKind
+	ItemID  string                // stable transcript key (see classify.itemID)
+	Role    assistant.Role        // for EventDelta
+	Content assistant.ContentKind // for EventDelta: text vs reasoning
+	Text    string                // for EventDelta
+	Tool    ToolCall              // for EventTool
+	Usage   *assistant.Usage      // for EventUsage
+	ConvID  string                // for EventConversation
+	Err     error                 // for EventError
+}
 
 // maxTurns caps the client-tool loop so a misbehaving backend can't spin
 // forever.

@@ -9,11 +9,30 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
-	"github.com/DataDog/bits-cli/internal/tui/render"
 )
 
 // chrome rows reserved below the transcript viewport (status + input).
 const chromeHeight = 2
+
+// turnEventMsg carries one engine event into Update; turnClosedMsg signals the
+// turn's channel was closed (turn finished or cancelled).
+type (
+	turnEventMsg  struct{ ev agent.Event }
+	turnClosedMsg struct{}
+)
+
+// waitEvent reads one event from the turn channel and re-arms after each event
+// in Update — the turn-scoped pump. Reading a closed channel yields
+// turnClosedMsg.
+func waitEvent(ch <-chan agent.Event) tea.Cmd {
+	return func() tea.Msg {
+		ev, ok := <-ch
+		if !ok {
+			return turnClosedMsg{}
+		}
+		return turnEventMsg{ev: ev}
+	}
+}
 
 // Update is the single message handler. Only this thread touches Model state.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -172,7 +191,7 @@ func (m *Model) renderCached(it chat.Item) string {
 	if e, ok := m.memo[it.ID]; ok && e.version == it.Version && e.width == w {
 		return e.out
 	}
-	out := render.Item(it, w, m.styles)
+	out := it.Render(w, m.styles)
 	m.memo[it.ID] = memoEntry{version: it.Version, width: w, out: out}
 	return out
 }

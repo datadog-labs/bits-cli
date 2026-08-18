@@ -2,6 +2,29 @@ package assistant
 
 import "encoding/json"
 
+// Role is the message author. The wire form is the string Message.Role
+// ("user" / "assistant"); Role is the typed value the rest of the app uses.
+type Role int
+
+const (
+	RoleUser Role = iota
+	RoleAssistant
+	RoleSystem
+)
+
+// RoleOf maps a wire role string to a Role. Unknown values fall back to
+// RoleAssistant.
+func RoleOf(s string) Role {
+	switch s {
+	case "user":
+		return RoleUser
+	case "system":
+		return RoleSystem
+	default:
+		return RoleAssistant
+	}
+}
+
 // Request is the JSON:API-style envelope for POST /api/v2/assistant.
 type Request struct {
 	Data RequestData `json:"data"`
@@ -31,18 +54,9 @@ type RequestAttributes struct {
 
 // Server-side surface profiles. Each selects a preset that controls the system
 // prompt's surface section, tool availability, and the conversation's
-// ChatStore namespace (so switching profiles mid-conversation targets a
-// different history). The server rejects any profile not in this set with
-// HTTP 400; a custom profile requires a server-side addition first.
-//
-// The chat surfaces (Slack/MSTeams) tell the model it is "not the Datadog web
-// UI", use absolute links, and suppress widgets/dashboards — closer to what a
-// terminal wants than the widget-happy ProfileWebUI default.
+// ChatStore namespace.
 const (
-	ProfileWebUI                    = "web_ui" // default; bare persona, UI-oriented (widgets, relative links)
-	ProfileSlack                    = "slack"  // chat surface; Slack mrkdwn, absolute links, no widgets
-	ProfileMSTeams                  = "ms_teams"
-	ProfileRecallMSTeamsMeetingChat = "recall_ms_teams_meeting_chat" // plain text only
+	ProfileWebUI = "web_ui" // default; bare persona, UI-oriented (widgets, relative links)
 )
 
 // DefaultProfile is applied by Send when SendOptions.Profile is empty. It

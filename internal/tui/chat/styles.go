@@ -1,9 +1,10 @@
-package render
+package chat
 
 import "github.com/charmbracelet/lipgloss"
 
 // Styles holds the lipgloss styles the renderers use. It is a plain value:
-// construct one with DefaultStyles and pass it into Item. No theme system yet.
+// construct one with DefaultStyles and pass it into Item.Render. No theme system
+// yet.
 type Styles struct {
 	UserMarker    lipgloss.Style // "› " prompt marker
 	UserText      lipgloss.Style

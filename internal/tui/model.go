@@ -12,7 +12,6 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
-	"github.com/DataDog/bits-cli/internal/tui/render"
 )
 
 // memoEntry caches one item's rendered output, keyed by its version and width.
@@ -27,7 +26,7 @@ type memoEntry struct {
 type Model struct {
 	engine     *agent.Engine
 	transcript *chat.Transcript
-	styles     render.Styles
+	styles     chat.Styles
 
 	// turn is the active turn's event channel (nil when idle); cancel
 	// interrupts it.
@@ -58,7 +57,7 @@ func New(engine *agent.Engine) *Model {
 	return &Model{
 		engine:     engine,
 		transcript: chat.NewTranscript(),
-		styles:     render.DefaultStyles(),
+		styles:     chat.DefaultStyles(),
 		input:      in,
 		memo:       map[string]memoEntry{},
 		phase:      chat.PhaseIdle,
