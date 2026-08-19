@@ -81,38 +81,6 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 	return resp, nil
 }
 
-// SendOptions configures a single call to Send.
-type SendOptions struct {
-	// ConversationID resumes an existing conversation. Empty starts a new one;
-	// the server-generated id is available via the streamed responses.
-	ConversationID string
-	// Model optionally overrides the model (e.g. "claude-sonnet-4-6").
-	Model string
-	// Referrer is the Datadog page URL the user was on, used for context.
-	Referrer string
-	// ClientTools are client-side tools the caller can execute. Required to
-	// participate in the client-tool / approval flow. They must be resent on
-	// every request in the conversation, including tool-result follow-ups.
-	ClientTools []ClientTool
-	// SkillOverrides flip per-skill default-enabled state for the request
-	// (see Client.ListSkills). Like ClientTools, they must be resent on every
-	// request in the conversation. RunTools carries them across turns.
-	SkillOverrides []SkillOverride
-	// Context puts Datadog objects (dashboards, monitors, services, …) in
-	// scope for the turn; the server fetches their details into the prompt.
-	// Like ClientTools, it must be resent on every request in the
-	// conversation. RunTools carries it across turns.
-	Context *AssistantContext
-	// Profile selects the server-side surface preset (see the Profile*
-	// constants) that controls the system prompt's surface section, tool
-	// availability, and conversation namespace. Empty uses DefaultProfile.
-	// An unknown profile is rejected by the server with HTTP 400.
-	Profile string
-	// MaxTurns caps the RunTools agent loop. Zero uses DefaultMaxTurns.
-	// Ignored by Send.
-	MaxTurns int
-}
-
 // Send posts a user message and invokes fn for every streamed AssistantResponse
 // line until the stream ends. It returns the conversation id observed in the
 // stream (useful when the server generated a new one).
@@ -122,14 +90,22 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 		profile = DefaultProfile
 	}
 	attrs := RequestAttributes{
-		Message:        message,
-		ConversationID: opts.ConversationID,
-		Model:          opts.Model,
-		Referrer:       opts.Referrer,
-		ClientTools:    opts.ClientTools,
-		SkillOverrides: opts.SkillOverrides,
-		Context:        opts.Context,
-		Profile:        profile,
+		Message:                   message,
+		ConversationID:            opts.ConversationID,
+		Model:                     opts.Model,
+		Referrer:                  opts.Referrer,
+		ClientTools:               opts.ClientTools,
+		SkillOverrides:            opts.SkillOverrides,
+		Context:                   opts.Context,
+		Profile:                   profile,
+		CustomUserContext:         opts.CustomUserContext,
+		EnableDebugMode:           opts.EnableDebugMode,
+		DebugTag:                  opts.DebugTag,
+		MessageHistory:            opts.MessageHistory,
+		ExperimentalToolOverrides: opts.ExperimentalToolOverrides,
+	}
+	if opts.StreamToolCallInput {
+		attrs.Capabilities = &RequestCapabilities{StreamToolCallInput: true}
 	}
 	reqBody := Request{Data: RequestData{
 		Type:       "assistant-request",
@@ -242,18 +218,18 @@ func (c *Client) RunTools(ctx context.Context, message string, tools []Tool, opt
 			resp := ClientToolResponse{
 				Type:       "client_tool_response",
 				ToolCallID: call.ToolCallID,
-				Status:     "success",
+				Status:     ToolStatusSuccess,
 				Metadata:   ClientToolMetadata{Name: name, Input: input},
 			}
 			tool, ok := byName[name]
 			if !ok {
-				resp.Status = "error"
+				resp.Status = ToolStatusError
 				resp.Title = "Unknown tool"
 				resp.Metadata.Output = fmt.Sprintf("no client tool named %q is registered", name)
 			} else {
 				out, runErr := tool.Run(ctx, input)
 				if runErr != nil {
-					resp.Status = "error"
+					resp.Status = ToolStatusError
 					resp.Title = "Tool error"
 					resp.Metadata.Output = runErr.Error()
 				} else {
@@ -334,4 +310,46 @@ func (c *Client) DeleteConversation(ctx context.Context, conversationID string) 
 	}
 	_ = resp.Body.Close()
 	return nil
+}
+
+// RenameConversation sets a conversation's title (1-200 chars) via
+// PUT /api/v2/assistant/user-conversations/{id}/title. The server returns no
+// body on success.
+func (c *Client) RenameConversation(ctx context.Context, conversationID, title string) error {
+	reqBody := updateConversationRequest{Data: updateConversationData{
+		Type:       "update-conversation-request",
+		Attributes: updateConversationAttributes{Title: title},
+	}}
+	resp, err := c.do(ctx, http.MethodPut, "/api/v2/assistant/user-conversations/"+conversationID+"/title", reqBody)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
+// ShareConversation toggles sharing for a conversation via
+// PUT /api/v2/assistant/conversation/{id}/is_shared. When shared is true,
+// ttlDays optionally sets the expiry window (1-1095 days); pass nil for the
+// server default. When shared is false, ttlDays is ignored. It returns the
+// updated conversation summary.
+func (c *Client) ShareConversation(ctx context.Context, conversationID string, shared bool, ttlDays *int) (*ConversationSummary, error) {
+	reqBody := updateSharingRequest{IsShared: shared}
+	if shared {
+		reqBody.TTLDays = ttlDays
+	}
+	resp, err := c.do(ctx, http.MethodPut, "/api/v2/assistant/conversation/"+conversationID+"/is_shared", reqBody)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out struct {
+		Data struct {
+			Attributes ConversationSummary `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode sharing response: %w", err)
+	}
+	return &out.Data.Attributes, nil
 }

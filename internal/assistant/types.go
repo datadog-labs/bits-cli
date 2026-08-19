@@ -25,6 +25,55 @@ func RoleOf(s string) Role {
 	}
 }
 
+// SendOptions configures a single call to Send.
+type SendOptions struct {
+	// ConversationID resumes an existing conversation. Empty starts a new one;
+	// the server-generated id is available via the streamed responses.
+	ConversationID string
+	// Model optionally overrides the model (e.g. "claude-sonnet-4-6").
+	Model string
+	// Referrer is the Datadog page URL the user was on, used for context.
+	Referrer string
+	// ClientTools are client-side tools the caller can execute. Required to
+	// participate in the client-tool / approval flow. They must be resent on
+	// every request in the conversation, including tool-result follow-ups.
+	ClientTools []ClientTool
+	// SkillOverrides flip per-skill default-enabled state for the request.
+	// Must be resent on every turn.
+	SkillOverrides []SkillOverride
+	// Context puts Datadog objects (dashboards, monitors, services...) in scope
+	// for the turn. Must be resent on every turn.
+	Context *AssistantContext
+	// Profile selects the server-side surface preset.
+	Profile Profile
+	// CustomUserContext is freeform text injected into the prompt as extra
+	// context for the assistant's response.
+	CustomUserContext string
+	// EnableDebugMode asks the server for a detailed internal response; when the
+	// org's debug-mode feature flag is on, the system prompt is echoed back in
+	// ResponseAttributes.Prompt.
+	EnableDebugMode bool
+	// DebugTag tags the request in server traces.
+	DebugTag string
+	// MessageHistory injects an explicit conversation history, bypassing the
+	// server's chat store. Each entry is a raw AssistantConversationMessage
+	// object (role/message_id/agent_id/content/...); pass pre-formed JSON since
+	// Message does not round-trip through Go marshaling.
+	MessageHistory []json.RawMessage
+	// ExperimentalToolOverrides overrides experimental tool feature flags for the
+	// turn (e.g. {"user_memory": true} or {"mcp_tool__ask_widget_expert": true}).
+	// Values are usually bool; external MCP session flags carry string values.
+	ExperimentalToolOverrides map[string]any
+	// StreamToolCallInput opts into streamed tool-call input: the server emits a
+	// tool_call_started followed by tool_call_input_delta fragments before the
+	// final tool_call / client_tool_call. Off by default; without it those two
+	// content types are never sent.
+	StreamToolCallInput bool
+	// MaxTurns caps the RunTools agent loop. Zero uses DefaultMaxTurns.
+	// Ignored by Send.
+	MaxTurns int
+}
+
 // Request is the JSON:API-style envelope for POST /api/v2/assistant.
 type Request struct {
 	Data RequestData `json:"data"`
@@ -42,21 +91,62 @@ type RequestData struct {
 // Message is either a plain string (a user message) or a list of
 // ClientToolResponse objects (answering a client-tool / approval request).
 type RequestAttributes struct {
-	Message        any               `json:"message"`
-	ConversationID string            `json:"conversation_id,omitempty"`
-	Model          string            `json:"model,omitempty"`
-	Referrer       string            `json:"referrer,omitempty"`
-	ClientTools    []ClientTool      `json:"client_tools,omitempty"`
-	SkillOverrides []SkillOverride   `json:"skill_overrides,omitempty"`
-	Context        *AssistantContext `json:"context,omitempty"`
-	Profile        string            `json:"profile,omitempty"`
+	Message                   any                  `json:"message"`
+	ConversationID            string               `json:"conversation_id,omitempty"`
+	Model                     string               `json:"model,omitempty"`
+	Referrer                  string               `json:"referrer,omitempty"`
+	ClientTools               []ClientTool         `json:"client_tools,omitempty"`
+	SkillOverrides            []SkillOverride      `json:"skill_overrides,omitempty"`
+	Context                   *AssistantContext    `json:"context,omitempty"`
+	Profile                   Profile              `json:"profile,omitempty"`
+	CustomUserContext         string               `json:"custom_user_context,omitempty"`
+	EnableDebugMode           bool                 `json:"enable_debug_mode,omitempty"`
+	DebugTag                  string               `json:"debug_tag,omitempty"`
+	MessageHistory            []json.RawMessage    `json:"message_history,omitempty"`
+	ExperimentalToolOverrides map[string]any       `json:"experimental_tool_overrides,omitempty"`
+	Capabilities              *RequestCapabilities `json:"capabilities,omitempty"`
 }
 
-// Server-side surface profiles. Each selects a preset that controls the system
+// RequestCapabilities declares optional response behaviors the client can
+// handle. Each capability defaults off server-side, so a behavior is only
+// enabled once explicitly requested.
+type RequestCapabilities struct {
+	// StreamToolCallInput requests streamed tool-call input (tool_call_started +
+	// tool_call_input_delta) ahead of the authoritative final tool call.
+	StreamToolCallInput bool `json:"stream_tool_call_input,omitempty"`
+}
+
+// updateConversationRequest is the JSON:API body for renaming a conversation
+// (PUT /api/v2/assistant/user-conversations/{id}/title).
+type updateConversationRequest struct {
+	Data updateConversationData `json:"data"`
+}
+
+type updateConversationData struct {
+	Type       string                       `json:"type"`
+	Attributes updateConversationAttributes `json:"attributes"`
+}
+
+type updateConversationAttributes struct {
+	Title string `json:"title"`
+}
+
+// updateSharingRequest is the (non-JSON:API) body for toggling conversation
+// sharing (PUT /api/v2/assistant/conversation/{id}/is_shared). TTLDays maps to
+// the server's ttl_days alias; omit it (nil) to use the server default.
+type updateSharingRequest struct {
+	IsShared bool `json:"is_shared"`
+	TTLDays  *int `json:"ttl_days,omitempty"`
+}
+
+// Profile selects a server-side surface preset that controls the system
 // prompt's surface section, tool availability, and the conversation's
-// ChatStore namespace.
+// ChatStore namespace. The server accepts other values, so this is an open set.
+type Profile string
+
+// Server-side surface profiles.
 const (
-	ProfileWebUI = "web_ui" // default; bare persona, UI-oriented (widgets, relative links)
+	ProfileWebUI Profile = "web_ui" // default; bare persona, UI-oriented (widgets, relative links)
 )
 
 // DefaultProfile is applied by Send when SendOptions.Profile is empty. It
@@ -86,21 +176,31 @@ type AssistantContext struct {
 // id, profiling-view URL, …). Label is an optional human name for the UI; the
 // server ignores it for prompt-building.
 type ContextEntity struct {
-	Type  string `json:"type"`
-	ID    string `json:"id"`
-	Label string `json:"label,omitempty"`
+	Type  EntityType `json:"type"`
+	ID    string     `json:"id"`
+	Label string     `json:"label,omitempty"`
+	// Definition is the entity's definition object. Optional; the server
+	// normally fetches details itself, so it can be left nil.
+	Definition map[string]any `json:"definition,omitempty"`
 }
 
 // Entity types the server's EntitiesProvider enriches with fetched details
 // (KnownContextEntityType). Any other type string is accepted but only
 // described generically.
+// EntityType identifies the kind of Datadog object a ContextEntity references.
+// The server accepts unknown values (described generically), so this is an open
+// set; the Entity* constants are the types it enriches with fetched details.
+type EntityType string
+
 const (
-	EntityDashboard = "dashboard"
-	EntityMonitor   = "monitor"
-	EntityService   = "service"
-	EntityIncident  = "incident"
-	EntityProfile   = "profile"
-	EntityImageURL  = "image_url"
+	EntityDashboard          EntityType = "dashboard"
+	EntityMonitor            EntityType = "monitor"
+	EntityService            EntityType = "service"
+	EntityIncident           EntityType = "incident"
+	EntityProfile            EntityType = "profile"
+	EntityImageURL           EntityType = "image_url"
+	EntityErrorTrackingIssue EntityType = "error_tracking_issue"
+	EntitySpreadsheet        EntityType = "spreadsheet"
 )
 
 // SkillOverride flips a skill's default-enabled state for a request. Name and
@@ -109,10 +209,20 @@ const (
 // silently ignored by the server. Like ClientTools, overrides should be resent
 // on every request in the conversation.
 type SkillOverride struct {
-	Name    string `json:"name"`
-	Source  string `json:"source"`
-	Enabled bool   `json:"enabled"`
+	Name    string      `json:"name"`
+	Source  SkillSource `json:"source"`
+	Enabled bool        `json:"enabled"`
 }
+
+// SkillSource identifies where a skill originates. Matches the server's
+// SkillSource literal (assistant | datadog_mcp | skills_library).
+type SkillSource string
+
+const (
+	SkillSourceAssistant     SkillSource = "assistant"
+	SkillSourceDatadogMCP    SkillSource = "datadog_mcp"
+	SkillSourceSkillsLibrary SkillSource = "skills_library"
+)
 
 // ClientTool is a client-side tool definition sent in client_tools. The
 // backend does not whitelist these: any tool defined here is offered to the
@@ -124,17 +234,56 @@ type ClientTool struct {
 	Description string `json:"description"`
 	// InputSchema is a JSON Schema object describing the tool's arguments.
 	InputSchema map[string]any `json:"input_schema"`
+	// IsDeferred marks the tool for deferred (search-based) loading rather than
+	// eager exposure.
+	IsDeferred bool `json:"is_deferred,omitempty"`
+	// IsAvailable reports whether the tool is usable on the current page. Defaults
+	// to true server-side; set the pointer to send false explicitly.
+	IsAvailable *bool `json:"is_available,omitempty"`
+	// RequiresApproval gates execution behind a user approval prompt. One of the
+	// ToolApproval* constants; empty means the server default (ToolApprovalNo).
+	RequiresApproval ToolApproval `json:"requires_approval,omitempty"`
+}
+
+// ToolApproval controls whether a client tool requires user approval before
+// execution.
+type ToolApproval string
+
+const (
+	ToolApprovalNo      ToolApproval = "no"      // never prompt
+	ToolApprovalYes     ToolApproval = "yes"     // always prompt before running
+	ToolApprovalRuntime ToolApproval = "runtime" // decide per-invocation from the input
+)
+
+// MarkdownContent is a nested markdown display block ({type, content}). Used as
+// the optional display body on a ClientToolResponse and on tool call/response
+// content.
+type MarkdownContent struct {
+	Type    string `json:"type"` // "markdown_fragment"
+	Content string `json:"content"`
 }
 
 // ClientToolResponse is one entry in the message list used to answer a
 // client-side tool call (including the approval_request flow).
 type ClientToolResponse struct {
-	Type       string             `json:"type"` // "client_tool_response"
-	ToolCallID string             `json:"tool_call_id"`
-	Title      string             `json:"title,omitempty"`
-	Status     string             `json:"status,omitempty"` // "success" / "error"
-	Metadata   ClientToolMetadata `json:"metadata"`
+	Type       string     `json:"type"` // "client_tool_response"
+	ToolCallID string     `json:"tool_call_id"`
+	Title      string     `json:"title,omitempty"`
+	Status     ToolStatus `json:"status,omitempty"`
+	// Content is an optional nested markdown block describing the response for
+	// display in the UI. The output passed back to the model lives in Metadata.
+	Content  *MarkdownContent   `json:"content,omitempty"`
+	Metadata ClientToolMetadata `json:"metadata"`
 }
+
+// ToolStatus is the outcome of a client tool execution, echoed back to the
+// model in a ClientToolResponse.
+type ToolStatus string
+
+const (
+	ToolStatusSuccess ToolStatus = "success"
+	ToolStatusError   ToolStatus = "error"
+)
 
 // ClientToolMetadata carries the tool identity plus its (JSON-string) input
 // and output for a ClientToolResponse.
@@ -169,11 +318,13 @@ type Results struct {
 	Usage *Usage `json:"usage,omitempty"`
 }
 
-// Usage reports token consumption. The server also sends input_tokens,
-// output_tokens, and time_to_first_chunk_ms; we model the two headline fields.
+// Usage reports token consumption for a model call.
 type Usage struct {
-	TokensUsed int `json:"tokens_used"`
-	MaxTokens  int `json:"max_tokens"`
+	TokensUsed         int  `json:"tokens_used"`
+	MaxTokens          int  `json:"max_tokens"`
+	InputTokens        *int `json:"input_tokens,omitempty"`
+	OutputTokens       *int `json:"output_tokens,omitempty"`
+	TimeToFirstChunkMs *int `json:"time_to_first_chunk_ms,omitempty"`
 }
 
 // Message is one message in a conversation, streamed or from history.
@@ -260,22 +411,54 @@ type Content struct {
 	Status     string        `json:"status,omitempty"` // tool_response only
 	Metadata   *ToolMetadata `json:"metadata,omitempty"`
 
+	// tool_call_started (only when StreamToolCallInput is set): the tool being
+	// invoked, sent before its input streams in.
+	ToolName     string `json:"tool_name,omitempty"`
+	IsClientSide bool   `json:"is_client_side,omitempty"`
+
+	// tool_call_input_delta (only when StreamToolCallInput is set): one ordered
+	// fragment of the tool call's input JSON.
+	PartialJSON string `json:"partial_json,omitempty"`
+
 	// widget_def: the Datadog widget definition object (nil when absent).
 	WidgetDef *WidgetDefinition `json:"widget_def,omitempty"`
-	// widget (persisted/rendered form): the raw tile definition.
-	TileDef json.RawMessage `json:"tile_def,omitempty"`
-	// dashboard: the raw widgets array (for summarizing widget count).
-	Widgets json.RawMessage `json:"widgets,omitempty"`
+	// widget (persisted/rendered form): the raw tile definition and its timeframe.
+	TileDef   json.RawMessage `json:"tile_def,omitempty"`
+	Timeframe *Timeframe      `json:"timeframe,omitempty"`
+	// dashboard: the raw widgets array (for summarizing widget count) plus the
+	// surrounding dashboard metadata.
+	Widgets           json.RawMessage `json:"widgets,omitempty"`
+	Description       string          `json:"description,omitempty"`
+	LayoutType        string          `json:"layout_type,omitempty"`
+	ReflowType        string          `json:"reflow_type,omitempty"`
+	TemplateVariables json.RawMessage `json:"template_variables,omitempty"`
 
 	// background_task_update: which phase this update is ("progress"/"final").
 	// The human-readable body is in Content. turn_status uses Status
 	// ("started"/"ended"); user_stop's marker text is in Content.
 	EventType string `json:"event_type,omitempty"`
+	// background_task_update: task identity, ordering, and free-form metadata.
+	TaskID       string            `json:"task_id,omitempty"`
+	Sequence     int               `json:"sequence,omitempty"`
+	TaskMetadata map[string]string `json:"-"`
+
+	// provider_compaction (never streamed to clients): opaque vendor payload the
+	// backend echoes on the next request; modeled for completeness.
+	Provider      string `json:"provider,omitempty"`
+	VendorPayload string `json:"vendor_payload,omitempty"`
+	Summary       string `json:"summary,omitempty"`
 
 	// Nested content: for tool_call / tool_response this is a
 	// markdown_fragment describing the call. For text content this is the
 	// raw string. Kept as RawMessage so Content stays one flat type.
 	nested json.RawMessage
+}
+
+// Timeframe is the time window attached to a persisted widget content block.
+type Timeframe struct {
+	Start  int64 `json:"start"` // start timestamp in milliseconds
+	End    int64 `json:"end"`   // end timestamp in milliseconds
+	Paused bool  `json:"paused"`
 }
 
 // ToolMetadata describes a server- or client-side tool call/response. Input
@@ -293,18 +476,31 @@ type ToolMetadata struct {
 // fragments but a nested object for tool_call / tool_response.
 func (c *Content) UnmarshalJSON(data []byte) error {
 	type alias struct {
-		Type             string            `json:"type"`
-		Content          json.RawMessage   `json:"content"`
-		EncryptedContent string            `json:"encrypted_content"`
-		Redacted         bool              `json:"redacted"`
-		ToolCallID       string            `json:"tool_call_id"`
-		Title            string            `json:"title"`
-		Status           string            `json:"status"`
-		Metadata         *ToolMetadata     `json:"metadata"`
-		WidgetDef        *WidgetDefinition `json:"widget_def"`
-		TileDef          json.RawMessage   `json:"tile_def"`
-		Widgets          json.RawMessage   `json:"widgets"`
-		EventType        string            `json:"event_type"`
+		Type              string            `json:"type"`
+		Content           json.RawMessage   `json:"content"`
+		EncryptedContent  string            `json:"encrypted_content"`
+		Redacted          bool              `json:"redacted"`
+		ToolCallID        string            `json:"tool_call_id"`
+		Title             string            `json:"title"`
+		Status            string            `json:"status"`
+		Metadata          json.RawMessage   `json:"metadata"`
+		ToolName          string            `json:"tool_name"`
+		IsClientSide      bool              `json:"is_client_side"`
+		PartialJSON       string            `json:"partial_json"`
+		WidgetDef         *WidgetDefinition `json:"widget_def"`
+		TileDef           json.RawMessage   `json:"tile_def"`
+		Timeframe         *Timeframe        `json:"timeframe"`
+		Widgets           json.RawMessage   `json:"widgets"`
+		Description       string            `json:"description"`
+		LayoutType        string            `json:"layout_type"`
+		ReflowType        string            `json:"reflow_type"`
+		TemplateVariables json.RawMessage   `json:"template_variables"`
+		EventType         string            `json:"event_type"`
+		TaskID            string            `json:"task_id"`
+		Sequence          int               `json:"sequence"`
+		Provider          string            `json:"provider"`
+		VendorPayload     string            `json:"vendor_payload"`
+		Summary           string            `json:"summary"`
 	}
 	var a alias
 	if err := json.Unmarshal(data, &a); err != nil {
@@ -316,11 +512,34 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 	c.ToolCallID = a.ToolCallID
 	c.Title = a.Title
 	c.Status = a.Status
-	c.Metadata = a.Metadata
+	c.ToolName = a.ToolName
+	c.IsClientSide = a.IsClientSide
+	c.PartialJSON = a.PartialJSON
 	c.WidgetDef = a.WidgetDef
 	c.TileDef = a.TileDef
+	c.Timeframe = a.Timeframe
 	c.Widgets = a.Widgets
+	c.Description = a.Description
+	c.LayoutType = a.LayoutType
+	c.ReflowType = a.ReflowType
+	c.TemplateVariables = a.TemplateVariables
 	c.EventType = a.EventType
+	c.TaskID = a.TaskID
+	c.Sequence = a.Sequence
+	c.Provider = a.Provider
+	c.VendorPayload = a.VendorPayload
+	c.Summary = a.Summary
+
+	// metadata is polymorphic: a tool metadata object for tool_call /
+	// tool_response / client_tool_call, but a flat string map for
+	// background_task_update. Decode by content type.
+	if len(a.Metadata) > 0 {
+		if a.Type == ContentBackgroundTaskUpdate {
+			_ = json.Unmarshal(a.Metadata, &c.TaskMetadata)
+		} else {
+			_ = json.Unmarshal(a.Metadata, &c.Metadata)
+		}
+	}
 
 	if len(a.Content) == 0 {
 		return nil
@@ -434,8 +653,10 @@ type ConversationHistoryResponse struct {
 		ID         string `json:"id"`
 		Type       string `json:"type"`
 		Attributes struct {
-			Title    string    `json:"title"`
-			Messages []Message `json:"messages"`
+			Title         string    `json:"title"`
+			Messages      []Message `json:"messages"`
+			OwnerUserUUID string    `json:"owner_user_uuid"`
+			SharedExpires *int64    `json:"shared_expires_at"`
 		} `json:"attributes"`
 	} `json:"data"`
 }

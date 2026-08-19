@@ -161,17 +161,17 @@ func (e *Engine) execTools(ctx context.Context, calls []assistant.Content) []ass
 		resp := assistant.ClientToolResponse{
 			Type:       "client_tool_response",
 			ToolCallID: call.ToolCallID,
-			Status:     "success",
+			Status:     assistant.ToolStatusSuccess,
 			Metadata:   assistant.ClientToolMetadata{Name: name, Input: input},
 		}
 		switch tool, ok := e.tools[name]; {
 		case !ok:
-			resp.Status = "error"
+			resp.Status = assistant.ToolStatusError
 			resp.Title = "Unknown tool"
 			resp.Metadata.Output = "no client tool named " + name + " is registered"
 		default:
 			if out, err := tool.Run(ctx, input); err != nil {
-				resp.Status = "error"
+				resp.Status = assistant.ToolStatusError
 				resp.Title = "Tool error"
 				resp.Metadata.Output = err.Error()
 			} else {
