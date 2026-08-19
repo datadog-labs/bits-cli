@@ -153,14 +153,10 @@ const (
 // matches the server's own default so behavior is unchanged unless overridden.
 const DefaultProfile = ProfileWebUI
 
-// AssistantContext is the request-level `context` object: the Datadog objects
-// the user has in scope for the turn. The server's EntitiesProvider fetches
-// each entity's details (dashboard title/widgets, monitor query, incident, …)
-// and injects them into the system prompt, so attaching an entity is the
-// programmatic equivalent of the UI's "@dashboard" context chips.
-//
-// Entities must be resent on every request in the conversation (like
-// ClientTools); RunTools carries them across turns via SendOptions.
+// AssistantContext is the request-level `context`: Datadog objects in scope for
+// the turn. The server fetches each entity's details and injects them into the
+// prompt. Like ClientTools, it must be resent on every request in the
+// conversation; RunTools carries it across turns via SendOptions.
 type AssistantContext struct {
 	Entities []ContextEntity `json:"entities,omitempty"`
 	// Resources is the sibling `resources` list. Its wire shape is not modeled
@@ -184,12 +180,9 @@ type ContextEntity struct {
 	Definition map[string]any `json:"definition,omitempty"`
 }
 
-// Entity types the server's EntitiesProvider enriches with fetched details
-// (KnownContextEntityType). Any other type string is accepted but only
-// described generically.
 // EntityType identifies the kind of Datadog object a ContextEntity references.
-// The server accepts unknown values (described generically), so this is an open
-// set; the Entity* constants are the types it enriches with fetched details.
+// The server enriches the known types below with fetched details and accepts
+// any other value (described generically), so this is an open set.
 type EntityType string
 
 const (
@@ -300,6 +293,10 @@ type AssistantResponse struct {
 		Type       string             `json:"type"` // "assistant-response"
 		Attributes ResponseAttributes `json:"attributes"`
 	} `json:"data"`
+	// Errors is set only for an in-band error line, which the server emits on
+	// the streaming 200 as a JSON:API error document ({"errors":[...]}) in place
+	// of a data envelope. A normal response line leaves it nil.
+	Errors []apiErrorItem `json:"errors,omitempty"`
 }
 
 // ResponseAttributes is the payload of one streamed response line. Mirrors the

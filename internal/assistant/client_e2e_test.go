@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -126,8 +127,8 @@ func TestE2E_ConversationLifecycle(t *testing.T) {
 	if err := c.DeleteConversation(ctx, convID); err != nil {
 		t.Fatalf("DeleteConversation: %v", err)
 	}
-	if _, err := c.ConversationHistory(ctx, convID); err == nil {
-		t.Error("expected an error fetching history for a deleted conversation")
+	if _, err := c.ConversationHistory(ctx, convID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound fetching history for a deleted conversation, got %v", err)
 	}
 }
 
