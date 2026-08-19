@@ -2,7 +2,7 @@ version: "2"
 linters:
   default: standard # errcheck, govet, ineffassign, staticcheck, unused
   enable:
-    - exhaustive # enum-switch invariant (render.Item, classify)
+    - exhaustive # enum-switch invariant (render.Item, tui event/content switches)
     - bodyclose # raw HTTP + streaming; catch leaked response bodies
     - errorlint # correct %w wrapping + errors.Is/As
     - copyloopvar # modern loop-var hygiene (Go 1.22+)

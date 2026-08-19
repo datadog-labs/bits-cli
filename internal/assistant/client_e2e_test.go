@@ -49,7 +49,7 @@ func TestE2E_ConversationLifecycle(t *testing.T) {
 	var text strings.Builder
 	convID, err := c.Send(ctx, "Reply with a short one-sentence greeting.", SendOptions{}, func(ar AssistantResponse) error {
 		if ct := ar.Data.Attributes.StructuredMessage.Content; ct.Kind() == KindText {
-			text.WriteString(ct.Content)
+			text.WriteString(ct.TextBody())
 		}
 		return nil
 	})

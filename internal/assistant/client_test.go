@@ -75,7 +75,7 @@ func TestDo_MapsStatusToSentinel(t *testing.T) {
 		t.Run(http.StatusText(tc.status), func(t *testing.T) {
 			c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.status)
-				fmt.Fprintf(w, `{"errors":[{"status":"%d","title":%q,"detail":"boom"}]}`, tc.status, http.StatusText(tc.status))
+				_, _ = fmt.Fprintf(w, `{"errors":[{"status":"%d","title":%q,"detail":"boom"}]}`, tc.status, http.StatusText(tc.status))
 			})
 			_, err := c.ConversationHistory(context.Background(), "cid")
 			if err == nil {
@@ -101,7 +101,7 @@ func TestDo_MapsStatusToSentinel(t *testing.T) {
 func TestDo_FallsBackToRawBodyWhenNotJSONAPI(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprint(w, "upstream exploded")
+		_, _ = fmt.Fprint(w, "upstream exploded")
 	})
 	_, err := c.UserConversations(context.Background())
 	var apiErr *APIError
@@ -126,7 +126,7 @@ func TestSend_StreamsTextAndConversationID(t *testing.T) {
 	var got strings.Builder
 	convID, err := c.Send(context.Background(), "hi", SendOptions{}, func(ar AssistantResponse) error {
 		if ct := ar.Data.Attributes.StructuredMessage.Content; ct.Kind() == KindText {
-			got.WriteString(ct.Content)
+			got.WriteString(ct.TextBody())
 		}
 		return nil
 	})
@@ -228,7 +228,7 @@ func TestSend_HandlesLargeLine(t *testing.T) {
 	})
 	var got int
 	_, err := c.Send(context.Background(), "hi", SendOptions{}, func(ar AssistantResponse) error {
-		got = len(ar.Data.Attributes.StructuredMessage.Content.Content)
+		got = len(ar.Data.Attributes.StructuredMessage.Content.TextBody())
 		return nil
 	})
 	if err != nil {
@@ -251,7 +251,7 @@ func TestSend_SkipsKeepalive(t *testing.T) {
 	var got string
 	convID, err := c.Send(context.Background(), "hi", SendOptions{}, func(ar AssistantResponse) error {
 		calls++
-		got = ar.Data.Attributes.StructuredMessage.Content.Content
+		got = ar.Data.Attributes.StructuredMessage.Content.TextBody()
 		return nil
 	})
 	if err != nil {
@@ -305,7 +305,7 @@ func TestSend_KeepalivesResetIdleTimeout(t *testing.T) {
 	start := time.Now()
 	_, err := c.Send(context.Background(), "hi", SendOptions{}, func(ar AssistantResponse) error {
 		calls++
-		got.WriteString(ar.Data.Attributes.StructuredMessage.Content.Content)
+		got.WriteString(ar.Data.Attributes.StructuredMessage.Content.TextBody())
 		return nil
 	})
 	elapsed := time.Since(start)
@@ -344,7 +344,7 @@ func TestDo_RetriesTransientStatusThenSucceeds(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"data":{"attributes":{"conversations":[]}}}`)
+		_, _ = fmt.Fprint(w, `{"data":{"attributes":{"conversations":[]}}}`)
 	})
 	c.MaxRetries = 2
 	c.RetryBaseDelay = time.Millisecond
@@ -378,7 +378,7 @@ func TestDo_DoesNotRetryNonRetryableStatus(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		n.Add(1)
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"errors":[{"status":"404","detail":"nope"}]}`)
+		_, _ = fmt.Fprint(w, `{"errors":[{"status":"404","detail":"nope"}]}`)
 	})
 	c.MaxRetries = 3
 	c.RetryBaseDelay = time.Millisecond
@@ -398,7 +398,7 @@ func TestSend_DoesNotRetry(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		n.Add(1)
 		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprint(w, `{"errors":[{"status":"503","detail":"busy"}]}`)
+		_, _ = fmt.Fprint(w, `{"errors":[{"status":"503","detail":"busy"}]}`)
 	})
 	c.MaxRetries = 5
 	c.RetryBaseDelay = time.Millisecond
@@ -431,7 +431,7 @@ func TestNewRequest_SetsAuthHeaders(t *testing.T) {
 		gotApp = r.Header.Get("DD-APPLICATION-KEY")
 		gotContentType = r.Header.Get("Content-Type")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"data":{"attributes":{"flags":{}}}}`)
+		_, _ = fmt.Fprint(w, `{"data":{"attributes":{"flags":{}}}}`)
 	})
 	if _, err := c.ExperimentalToolFlags(context.Background()); err != nil {
 		t.Fatalf("ExperimentalToolFlags: %v", err)

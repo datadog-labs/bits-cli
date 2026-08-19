@@ -108,7 +108,7 @@ func (f *Fake) Send(ctx context.Context, message any, opts assistant.SendOptions
 		return convID, err
 	}
 
-	// Token usage rides on its own line (classify reads it before content).
+	// Token usage rides on its own line, on the message rather than the content.
 	// Scale it with the total words so longer turns report more tokens.
 	if err := step(usageResp(convID, nextMsgID(), totalWords)); err != nil {
 		return convID, err
@@ -154,48 +154,41 @@ func emitWords(step func(assistant.AssistantResponse) error, r *rand.Rand, convI
 	return nil
 }
 
-// base builds a response envelope for one assistant message fragment.
-func base(convID, msgID string) assistant.AssistantResponse {
+// resp wraps one message in the response envelope the stream delivers.
+func resp(convID string, msg assistant.Message) assistant.AssistantResponse {
 	var ar assistant.AssistantResponse
 	ar.Data.Type = "assistant-response"
 	ar.Data.Attributes.ConversationID = convID
-	ar.Data.Attributes.StructuredMessage = assistant.Message{Role: "assistant", MessageID: msgID}
+	ar.Data.Attributes.StructuredMessage = msg
 	return ar
 }
 
 func textResp(convID, msgID, typ, text string) assistant.AssistantResponse {
-	ar := base(convID, msgID)
-	ar.Data.Attributes.StructuredMessage.Content = assistant.Content{Type: typ, Content: text}
-	return ar
+	c := assistant.TextContent(text)
+	if typ == assistant.ContentThinking {
+		c = assistant.ThinkingContent(text)
+	}
+	return resp(convID, assistant.AssistantMessage(msgID, c))
 }
 
 func toolCallResp(convID, msgID, toolID string, r *rand.Rand) assistant.AssistantResponse {
-	ar := base(convID, msgID)
-	ar.Data.Attributes.StructuredMessage.Content = assistant.Content{
-		Type:       assistant.ContentToolCall,
-		ToolCallID: toolID,
-		Metadata:   &assistant.ToolMetadata{Name: pick(r, toolNames), Input: `{"query":"` + pick(r, lexicon) + `"}`},
-	}
-	return ar
+	input := `{"query":"` + pick(r, lexicon) + `"}`
+	return resp(convID, assistant.AssistantMessage(msgID,
+		assistant.ToolCallContent(toolID, pick(r, toolNames), input)))
 }
 
 func toolResultResp(convID, msgID, toolID string, r *rand.Rand) assistant.AssistantResponse {
-	ar := base(convID, msgID)
-	ar.Data.Attributes.StructuredMessage.Content = assistant.Content{
-		Type:       assistant.ContentToolResponse,
-		ToolCallID: toolID,
-		Status:     "success",
-		Metadata:   &assistant.ToolMetadata{Output: fmt.Sprintf("ok: %d results", 1+r.Intn(9))},
-	}
-	return ar
+	output := fmt.Sprintf("ok: %d results", 1+r.Intn(9))
+	return resp(convID, assistant.AssistantMessage(msgID,
+		assistant.ToolResultContent(toolID, "", assistant.ToolStatusSuccess, output)))
 }
 
 func usageResp(convID, msgID string, words int) assistant.AssistantResponse {
-	ar := base(convID, msgID)
-	ar.Data.Attributes.StructuredMessage.Results = &assistant.Results{
+	msg := assistant.AssistantMessage(msgID, assistant.Content{})
+	msg.Results = &assistant.Results{
 		Usage: &assistant.Usage{TokensUsed: 50 + words*3, MaxTokens: 8000},
 	}
-	return ar
+	return resp(convID, msg)
 }
 
 func hashString(s string) uint64 {

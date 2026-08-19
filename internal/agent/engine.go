@@ -22,36 +22,22 @@ type Backend interface {
 type EventKind int
 
 const (
-	EventNone         EventKind = iota // ignored; keeps classify total
-	EventDelta                         // text/reasoning fragment for ItemID
-	EventTool                          // tool call or result upsert
-	EventUsage                         // token accounting
+	EventMessage      EventKind = iota // a message arrived; read Msg
 	EventConversation                  // server-assigned/confirmed conversation id
 	EventTurnDone                      // the turn completed with no pending tool calls
 	EventError                         // the turn failed
 )
 
-// ToolCall is the agent-owned tool payload on an event. The tui maps it to a
-// transcript view; agent stays independent of the UI-domain chat package.
-type ToolCall struct {
-	Name   string
-	Input  string
-	Output string
-	Status string // wire status ("success" / "error"); empty for a fresh call
-}
-
 // Event is one thing that happened during a turn. It is a plain value carried
 // on a channel, with only the fields relevant to Kind populated.
+//
+// Msg is the streamed message verbatim; switch on Msg.Content.Kind() to handle
+// it. Token usage rides on it (Msg.Results.Usage), as it does on the wire.
 type Event struct {
-	Kind    EventKind
-	ItemID  string                // stable transcript key (see classify.itemID)
-	Role    assistant.Role        // for EventDelta
-	Content assistant.ContentKind // for EventDelta: text vs reasoning
-	Text    string                // for EventDelta
-	Tool    ToolCall              // for EventTool
-	Usage   *assistant.Usage      // for EventUsage
-	ConvID  string                // for EventConversation
-	Err     error                 // for EventError
+	Kind   EventKind
+	Msg    assistant.Message // for EventMessage
+	ConvID string            // for EventConversation
+	Err    error             // for EventError
 }
 
 // maxTurns caps the client-tool loop so a misbehaving backend can't spin
@@ -106,11 +92,13 @@ func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 		opts.ClientTools = e.toolDefs()
 
 		id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {
-			ev, call := classify(ar)
-			if call != nil {
-				calls = append(calls, *call)
+			msg := ar.Data.Attributes.StructuredMessage
+			// A client_tool_call pauses the stream until we answer it; collect it
+			// for execTools below.
+			if msg.Content.Type == assistant.ContentClientToolCall {
+				calls = append(calls, msg.Content)
 			}
-			if ev.Kind != EventNone && !send(ev) {
+			if !send(Event{Kind: EventMessage, Msg: msg}) {
 				return ctx.Err()
 			}
 			return nil
@@ -155,12 +143,16 @@ func (e *Engine) execTools(ctx context.Context, calls []assistant.Content) []ass
 	responses := make([]assistant.ClientToolResponse, 0, len(calls))
 	for _, call := range calls {
 		var name, input string
-		if call.Metadata != nil {
-			name, input = call.Metadata.Name, call.Metadata.Input
+		if call.Tool != nil && call.Tool.Metadata != nil {
+			name, input = call.Tool.Metadata.Name, call.Tool.Metadata.Input
+		}
+		toolCallID := ""
+		if call.Tool != nil {
+			toolCallID = call.Tool.ToolCallID
 		}
 		resp := assistant.ClientToolResponse{
 			Type:       "client_tool_response",
-			ToolCallID: call.ToolCallID,
+			ToolCallID: toolCallID,
 			Status:     assistant.ToolStatusSuccess,
 			Metadata:   assistant.ClientToolMetadata{Name: name, Input: input},
 		}

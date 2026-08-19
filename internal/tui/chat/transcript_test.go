@@ -6,10 +6,18 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
 
+// msgID and toolID build keys directly; ItemIDOf covers deriving them from a
+// message.
+func msgID(key string, kind assistant.ContentKind) ItemID {
+	return ItemID{Scope: ScopeMessage, Key: key, Kind: kind}
+}
+
+func toolID(key string) ItemID { return ItemID{Scope: ScopeTool, Key: key} }
+
 func TestAppendText_ConcatenatesSameID(t *testing.T) {
 	tr := NewTranscript()
-	tr.AppendText("m1", assistant.RoleAssistant, assistant.KindText, "Hel")
-	tr.AppendText("m1", assistant.RoleAssistant, assistant.KindText, "lo")
+	tr.AppendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "Hel")
+	tr.AppendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "lo")
 
 	items := tr.Items()
 	if len(items) != 1 {
@@ -26,10 +34,12 @@ func TestAppendText_ConcatenatesSameID(t *testing.T) {
 	}
 }
 
-func TestAppendText_SeparateIDsKeepDistinctItems(t *testing.T) {
+// One message that reasons and then answers must yield two blocks: the keys
+// differ only by Kind.
+func TestAppendText_SameMessageDifferentKindsKeepDistinctItems(t *testing.T) {
 	tr := NewTranscript()
-	tr.AppendText("think:1", assistant.RoleAssistant, assistant.KindReasoning, "why")
-	tr.AppendText("msg:1", assistant.RoleAssistant, assistant.KindText, "answer")
+	tr.AppendText(msgID("m1", assistant.KindReasoning), assistant.RoleAssistant, assistant.KindReasoning, "why")
+	tr.AppendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "answer")
 
 	items := tr.Items()
 	if len(items) != 2 {
@@ -40,9 +50,29 @@ func TestAppendText_SeparateIDsKeepDistinctItems(t *testing.T) {
 	}
 }
 
+func TestAppendText_EmptyDeltaIsNoOp(t *testing.T) {
+	tr := NewTranscript()
+	id := msgID("m1", assistant.KindText)
+
+	// The stream's final fragment is empty (it carries usage): no blank block.
+	tr.AppendText(id, assistant.RoleAssistant, assistant.KindText, "")
+	if got := len(tr.Items()); got != 0 {
+		t.Fatalf("empty delta created %d items, want 0", got)
+	}
+
+	// Nor a version bump on an existing item, which would force a re-render.
+	tr.AppendText(id, assistant.RoleAssistant, assistant.KindText, "hi")
+	v0 := tr.Items()[0].Version
+	tr.AppendText(id, assistant.RoleAssistant, assistant.KindText, "")
+	it := tr.Items()[0]
+	if it.Text != "hi" || it.Version != v0 {
+		t.Errorf("item = (%q, v%d), want (%q, v%d) unchanged", it.Text, it.Version, "hi", v0)
+	}
+}
+
 func TestAppendText_UnknownKindStored(t *testing.T) {
 	tr := NewTranscript()
-	tr.AppendText("x", assistant.RoleAssistant, assistant.KindUnknown, "?")
+	tr.AppendText(msgID("x", assistant.KindUnknown), assistant.RoleAssistant, assistant.KindUnknown, "?")
 	if got := tr.Items()[0].Kind; got != assistant.KindUnknown {
 		t.Errorf("kind = %v, want KindUnknown", got)
 	}
@@ -50,7 +80,7 @@ func TestAppendText_UnknownKindStored(t *testing.T) {
 
 func TestUpsertTool_CreateThenMerge(t *testing.T) {
 	tr := NewTranscript()
-	tr.UpsertTool("tool:1", ToolView{Name: "run_bash", Input: `{"cmd":"ls"}`})
+	tr.UpsertTool(toolID("1"), ToolView{Name: "run_bash", Input: `{"cmd":"ls"}`})
 
 	items := tr.Items()
 	if len(items) != 1 {
@@ -64,7 +94,7 @@ func TestUpsertTool_CreateThenMerge(t *testing.T) {
 	}
 
 	// Result arrives on the same ID: merge output+status, keep input, one item.
-	tr.UpsertTool("tool:1", ToolView{Output: "a\nb", Status: ToolSuccess})
+	tr.UpsertTool(toolID("1"), ToolView{Output: "a\nb", Status: ToolSuccess})
 
 	items = tr.Items()
 	if len(items) != 1 {
@@ -84,7 +114,7 @@ func TestUpsertTool_CreateThenMerge(t *testing.T) {
 
 func TestFinalizeAll_ClearsStreamingAndBumpsVersionOnce(t *testing.T) {
 	tr := NewTranscript()
-	tr.AppendText("m1", assistant.RoleAssistant, assistant.KindText, "hi")
+	tr.AppendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "hi")
 	v0 := tr.Items()[0].Version
 
 	tr.FinalizeAll()
@@ -120,14 +150,15 @@ func TestToolStatusOf(t *testing.T) {
 
 func TestPush_DuplicateIDPanics(t *testing.T) {
 	tr := NewTranscript()
-	tr.push(Item{ID: "dup"})
+	dup := msgID("dup", assistant.KindText)
+	tr.push(Item{ID: dup})
 
 	defer func() {
 		if recover() == nil {
 			t.Errorf("push of duplicate id should panic")
 		}
 	}()
-	tr.push(Item{ID: "dup"}) // programmer error: must panic
+	tr.push(Item{ID: dup}) // programmer error: must panic
 }
 
 func TestAppendUser_UniqueIDsAndRole(t *testing.T) {
@@ -140,7 +171,7 @@ func TestAppendUser_UniqueIDsAndRole(t *testing.T) {
 		t.Fatalf("want 2 items, got %d", len(items))
 	}
 	if items[0].ID == items[1].ID {
-		t.Errorf("user ids not unique: both %q", items[0].ID)
+		t.Errorf("user ids not unique: both %s", items[0].ID)
 	}
 	if items[0].Role != assistant.RoleUser {
 		t.Errorf("role = %v, want RoleUser", items[0].Role)

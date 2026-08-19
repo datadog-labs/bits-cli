@@ -482,12 +482,16 @@ func (c *Client) RunTools(ctx context.Context, message string, tools []Tool, opt
 		for _, call := range calls {
 			name := ""
 			input := ""
-			if call.Metadata != nil {
-				name, input = call.Metadata.Name, call.Metadata.Input
+			if call.Tool != nil && call.Tool.Metadata != nil {
+				name, input = call.Tool.Metadata.Name, call.Tool.Metadata.Input
+			}
+			toolCallID := ""
+			if call.Tool != nil {
+				toolCallID = call.Tool.ToolCallID
 			}
 			resp := ClientToolResponse{
 				Type:       "client_tool_response",
-				ToolCallID: call.ToolCallID,
+				ToolCallID: toolCallID,
 				Status:     ToolStatusSuccess,
 				Metadata:   ClientToolMetadata{Name: name, Input: input},
 			}

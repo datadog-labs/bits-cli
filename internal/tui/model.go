@@ -44,7 +44,7 @@ type Model struct {
 	// Transcript rendering.
 	viewport    viewport.Model
 	chatStyles  chat.Styles
-	renderCache map[string]renderCacheEntry
+	renderCache map[chat.ItemID]renderCacheEntry
 
 	// Terminal height (the full window height from WindowSizeMsg; the transcript
 	// viewport height is derived from it). Width isn't stored — it equals
@@ -60,7 +60,7 @@ func New(engine *agent.Engine) *Model {
 		transcript:  chat.NewTranscript(),
 		editor:      editor.New(),
 		chatStyles:  chat.DefaultStyles(),
-		renderCache: map[string]renderCacheEntry{},
+		renderCache: map[chat.ItemID]renderCacheEntry{},
 		chatPhase:   chat.PhaseIdle,
 	}
 }

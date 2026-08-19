@@ -15,7 +15,7 @@ func collect(t *testing.T, message string) [][2]string {
 	var got [][2]string
 	_, err := f.Send(context.Background(), message, assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
 		c := ar.Data.Attributes.StructuredMessage.Content
-		got = append(got, [2]string{c.Type, c.Content})
+		got = append(got, [2]string{c.Type, c.TextBody()})
 		return nil
 	})
 	if err != nil {
@@ -59,7 +59,7 @@ func TestStreamsTextAndUsage(t *testing.T) {
 	var text, usage int
 	_, err := f.Send(context.Background(), "hello", assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
 		msg := ar.Data.Attributes.StructuredMessage
-		if msg.Content.Type == assistant.ContentMarkdownFragment && msg.Content.Content != "" {
+		if msg.Content.Type == assistant.ContentMarkdownFragment && msg.Content.TextBody() != "" {
 			text++
 		}
 		if msg.Results != nil && msg.Results.Usage != nil {
@@ -121,12 +121,12 @@ func TestMultipleUniqueToolCalls(t *testing.T) {
 		calls := 0
 		_, err := f.Send(context.Background(), msg, assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
 			c := ar.Data.Attributes.StructuredMessage.Content
-			if c.Type == assistant.ContentToolCall {
+			if c.Type == assistant.ContentToolCall && c.Tool != nil {
 				calls++
-				if seen[c.ToolCallID] {
-					t.Fatalf("duplicate tool call id %q in one turn (%q)", c.ToolCallID, msg)
+				if seen[c.Tool.ToolCallID] {
+					t.Fatalf("duplicate tool call id %q in one turn (%q)", c.Tool.ToolCallID, msg)
 				}
-				seen[c.ToolCallID] = true
+				seen[c.Tool.ToolCallID] = true
 			}
 			return nil
 		})

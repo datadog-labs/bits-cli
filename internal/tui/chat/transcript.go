@@ -1,7 +1,7 @@
 package chat
 
 import (
-	"fmt"
+	"strconv"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
@@ -10,13 +10,13 @@ import (
 // O(1) patching. Not safe for concurrent use.
 type Transcript struct {
 	items   []Item
-	index   map[string]int // ID -> position in items
+	index   map[ItemID]int // ID -> position in items
 	userSeq int            // monotonic id source for local user messages
 }
 
 // NewTranscript returns an empty transcript.
 func NewTranscript() *Transcript {
-	return &Transcript{index: map[string]int{}}
+	return &Transcript{index: map[ItemID]int{}}
 }
 
 // Items returns the underlying slice. Callers must treat it as read-only.
@@ -27,7 +27,7 @@ func (t *Transcript) Items() []Item { return t.items }
 func (t *Transcript) AppendUser(text string) {
 	t.userSeq++
 	t.push(Item{
-		ID:   fmt.Sprintf("user:%d", t.userSeq),
+		ID:   ItemID{Scope: ScopeLocal, Key: strconv.Itoa(t.userSeq)},
 		Role: assistant.RoleUser,
 		Kind: assistant.KindText,
 		Text: text,
@@ -36,7 +36,14 @@ func (t *Transcript) AppendUser(text string) {
 
 // AppendText appends a streamed text/reasoning fragment. Fragments sharing an
 // ID are concatenated into one item; the first creates a streaming item.
-func (t *Transcript) AppendText(id string, role assistant.Role, kind assistant.ContentKind, delta string) {
+//
+// An empty delta is a no-op: it must not mint a blank block (the stream's final
+// fragment is empty — it exists to carry usage) nor bump Version and force a
+// re-render that changes nothing.
+func (t *Transcript) AppendText(id ItemID, role assistant.Role, kind assistant.ContentKind, delta string) {
+	if delta == "" {
+		return
+	}
 	if i, ok := t.index[id]; ok {
 		t.items[i].Text += delta
 		t.items[i].Version++
@@ -48,7 +55,7 @@ func (t *Transcript) AppendText(id string, role assistant.Role, kind assistant.C
 // UpsertTool creates a tool block on the call and merges the result into it
 // (same ID). The block stays a KindToolCall so one renderer draws call+result
 // together; only non-empty result fields overwrite existing ones.
-func (t *Transcript) UpsertTool(id string, tv ToolView) {
+func (t *Transcript) UpsertTool(id ItemID, tv ToolView) {
 	if i, ok := t.index[id]; ok {
 		cur := &t.items[i].Tool
 		if tv.Name != "" {
@@ -88,7 +95,7 @@ func (t *Transcript) push(it Item) {
 	// Mutators upsert by ID before reaching push, so a duplicate is a
 	// programmer error, not bad input; fail loudly.
 	if _, ok := t.index[it.ID]; ok {
-		panic("chat: push of duplicate item id " + it.ID)
+		panic("chat: push of duplicate item id " + it.ID.String())
 	}
 	t.index[it.ID] = len(t.items)
 	t.items = append(t.items, it)

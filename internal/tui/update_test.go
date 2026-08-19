@@ -26,10 +26,14 @@ func testModel(t *testing.T) *Model {
 
 func (m *Model) feed(ev agent.Event) { m.Update(turnEventMsg{ev: ev}) }
 
+func (m *Model) feedMsg(msg assistant.Message) {
+	m.feed(agent.Event{Kind: agent.EventMessage, Msg: msg})
+}
+
 func TestModel_StreamsDeltasIntoView(t *testing.T) {
 	m := testModel(t)
-	m.feed(agent.Event{Kind: agent.EventDelta, ItemID: "msg:1", Role: assistant.RoleAssistant, Content: assistant.KindText, Text: "hello "})
-	m.feed(agent.Event{Kind: agent.EventDelta, ItemID: "msg:1", Role: assistant.RoleAssistant, Content: assistant.KindText, Text: "world"})
+	m.feedMsg(assistant.AssistantMessage("m1", assistant.TextContent("hello ")))
+	m.feedMsg(assistant.AssistantMessage("m1", assistant.TextContent("world")))
 
 	if got := m.View().Content; !strings.Contains(got, "hello world") {
 		t.Errorf("view missing concatenated stream:\n%s", got)
@@ -41,7 +45,7 @@ func TestModel_StreamsDeltasIntoView(t *testing.T) {
 
 func TestModel_TurnDoneReturnsToReady(t *testing.T) {
 	m := testModel(t)
-	m.feed(agent.Event{Kind: agent.EventDelta, ItemID: "msg:1", Role: assistant.RoleAssistant, Content: assistant.KindText, Text: "hi"})
+	m.feedMsg(assistant.AssistantMessage("m1", assistant.TextContent("hi")))
 	m.feed(agent.Event{Kind: agent.EventTurnDone})
 
 	if got := m.View().Content; !strings.Contains(got, "ready") {
@@ -51,7 +55,8 @@ func TestModel_TurnDoneReturnsToReady(t *testing.T) {
 
 func TestModel_ToolAndErrorRender(t *testing.T) {
 	m := testModel(t)
-	m.feed(agent.Event{Kind: agent.EventTool, ItemID: "tool:1", Tool: agent.ToolCall{Name: "run_bash", Output: "ok", Status: "success"}})
+	m.feedMsg(assistant.AssistantMessage("m1",
+		assistant.ToolResultContent("tc1", "run_bash", assistant.ToolStatusSuccess, "ok")))
 	m.feed(agent.Event{Kind: agent.EventError, Err: errors.New("boom")})
 
 	got := m.View().Content
@@ -59,5 +64,67 @@ func TestModel_ToolAndErrorRender(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("view missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// A call and its result arrive on separate messages but must fold into one block.
+func TestModel_ToolCallAndResultMergeIntoOneItem(t *testing.T) {
+	m := testModel(t)
+	m.feedMsg(assistant.AssistantMessage("m1", assistant.ToolCallContent("tc1", "run_bash", `{"cmd":"ls"}`)))
+	m.feedMsg(assistant.AssistantMessage("m2",
+		assistant.ToolResultContent("tc1", "", assistant.ToolStatusSuccess, "ok")))
+
+	items := m.transcript.Items()
+	if len(items) != 1 {
+		t.Fatalf("want 1 tool item, got %d", len(items))
+	}
+	if items[0].Tool.Output != "ok" || items[0].Tool.Status != chat.ToolSuccess {
+		t.Errorf("result did not merge: %+v", items[0].Tool)
+	}
+}
+
+// One message that reasons and then answers renders as two blocks.
+func TestModel_ReasoningAndTextAreSeparateItems(t *testing.T) {
+	m := testModel(t)
+	m.feedMsg(assistant.AssistantMessage("m1", assistant.ThinkingContent("let me think")))
+	m.feedMsg(assistant.AssistantMessage("m1", assistant.TextContent("the answer")))
+
+	items := m.transcript.Items()
+	if len(items) != 2 {
+		t.Fatalf("want 2 items, got %d", len(items))
+	}
+	if items[0].Kind != assistant.KindReasoning || items[1].Kind != assistant.KindText {
+		t.Errorf("kinds = %v, %v; want reasoning then text", items[0].Kind, items[1].Kind)
+	}
+}
+
+// The usage final fragment is empty: bank the usage, render no block.
+func TestModel_UsageFromMessageResults(t *testing.T) {
+	m := testModel(t)
+	msg := assistant.AssistantMessage("m1", assistant.TextContent(""))
+	msg.Results = &assistant.Results{Usage: &assistant.Usage{TokensUsed: 42, MaxTokens: 200000}}
+	m.feedMsg(msg)
+
+	if m.usage == nil || m.usage.TokensUsed != 42 {
+		t.Fatalf("usage = %+v, want TokensUsed 42", m.usage)
+	}
+	if got := len(m.transcript.Items()); got != 0 {
+		t.Errorf("want no items for an empty fragment, got %d", got)
+	}
+}
+
+// Content kinds with no renderer yet must be ignored, not create empty blocks.
+func TestModel_UnrenderedContentIgnored(t *testing.T) {
+	m := testModel(t)
+	m.feedMsg(assistant.Message{
+		Role:      "assistant",
+		MessageID: "m1",
+		Content: assistant.Content{
+			Type:      assistant.ContentDashboard,
+			Dashboard: &assistant.DashboardPayload{Title: "gen"},
+		},
+	})
+	if got := len(m.transcript.Items()); got != 0 {
+		t.Errorf("want no items for a dashboard, got %d", got)
 	}
 }

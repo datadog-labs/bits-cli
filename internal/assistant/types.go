@@ -327,8 +327,8 @@ type Usage struct {
 // Message is one message in a conversation, streamed or from history.
 //
 // Content is polymorphic; use Content.Type to discriminate. During streaming,
-// text-bearing content (markdown_fragment, thinking) arrives as many small
-// fragments sharing one MessageID that the caller concatenates.
+// text content (markdown_fragment, thinking) arrives as many small fragments
+// sharing one MessageID that the caller concatenates.
 type Message struct {
 	Role             string          `json:"role"` // "user" / "assistant"
 	MessageID        string          `json:"message_id"`
@@ -390,65 +390,159 @@ const (
 // distinguish absent (nil) from an empty object.
 type WidgetDefinition map[string]any
 
-// Content is a polymorphic message body. Only the fields relevant to its Type
-// are populated.
+// MarkdownPayload carries the text fragment of a markdown_fragment content.
+type MarkdownPayload struct {
+	Content string
+}
+
+// ThinkingPayload carries a thinking (reasoning) fragment plus its provider
+// signature.
+type ThinkingPayload struct {
+	Content          string
+	EncryptedContent string
+	Redacted         bool
+}
+
+// StopPayload carries the marker text of a user_stop content.
+type StopPayload struct {
+	Content string
+}
+
+// TurnStatusPayload carries the turn_status marker ("started" / "ended").
+type TurnStatusPayload struct {
+	Status string
+}
+
+// ToolPayload carries fields for all tool-related content types: tool_call,
+// client_tool_call, tool_call_started, tool_call_input_delta, tool_response.
+type ToolPayload struct {
+	ToolCallID   string
+	Title        string
+	Status       string // tool_response: "success" / "error"
+	Metadata     *ToolMetadata
+	ToolName     string // tool_call_started
+	IsClientSide bool   // tool_call_started
+	PartialJSON  string // tool_call_input_delta
+	// Detail is the nested display markdown ("content" on the wire), shown in the
+	// UI beside the call. Always a markdown fragment; nil when absent. The data
+	// passed back to the model lives in Metadata.
+	Detail *MarkdownPayload
+}
+
+// WidgetPayload carries fields for the widget_def and widget content types.
+type WidgetPayload struct {
+	Title     string
+	WidgetDef *WidgetDefinition
+	TileDef   json.RawMessage
+	Timeframe *Timeframe
+}
+
+// DashboardPayload carries fields for the dashboard content type.
+type DashboardPayload struct {
+	Title             string
+	Widgets           json.RawMessage
+	Description       string
+	LayoutType        string
+	ReflowType        string
+	TemplateVariables json.RawMessage
+}
+
+// ProgressPayload carries fields for the background_task_update content type;
+// Content holds the human-readable body.
+type ProgressPayload struct {
+	Content      string
+	EventType    string // "progress" / "final"
+	TaskID       string
+	Sequence     int
+	TaskMetadata map[string]string
+}
+
+// CompactionPayload carries fields for the provider_compaction content type.
+type CompactionPayload struct {
+	Provider      string
+	VendorPayload string
+	Summary       string
+}
+
+// Content is a polymorphic message body: Type is always set, and exactly one
+// matching payload pointer is non-nil (all nil for types this client does not
+// model). It mirrors the server's AssistantContent discriminated union, so
+// distinct variants — text and a widget, say — never coexist on one Content.
 type Content struct {
 	Type string `json:"type"`
 
-	// markdown_fragment / thinking: the text fragment.
-	Content string `json:"-"`
+	Markdown   *MarkdownPayload   // markdown_fragment
+	Thinking   *ThinkingPayload   // thinking
+	Tool       *ToolPayload       // tool_call, client_tool_call, tool_call_started, tool_call_input_delta, tool_response
+	Widget     *WidgetPayload     // widget_def, widget
+	Dashboard  *DashboardPayload  // dashboard
+	Progress   *ProgressPayload   // background_task_update
+	Stop       *StopPayload       // user_stop
+	TurnStatus *TurnStatusPayload // turn_status
+	Compaction *CompactionPayload // provider_compaction
+}
 
-	// thinking extras.
-	EncryptedContent string `json:"encrypted_content,omitempty"`
-	Redacted         bool   `json:"redacted,omitempty"`
+// TextBody returns the human-readable text of the text-bearing variants
+// (markdown_fragment, thinking, user_stop, background_task_update) and "" for
+// every other type.
+func (c *Content) TextBody() string {
+	switch {
+	case c.Markdown != nil:
+		return c.Markdown.Content
+	case c.Thinking != nil:
+		return c.Thinking.Content
+	case c.Stop != nil:
+		return c.Stop.Content
+	case c.Progress != nil:
+		return c.Progress.Content
+	}
+	return ""
+}
 
-	// tool_call / tool_response.
-	ToolCallID string        `json:"tool_call_id,omitempty"`
-	Title      string        `json:"title,omitempty"`
-	Status     string        `json:"status,omitempty"` // tool_response only
-	Metadata   *ToolMetadata `json:"metadata,omitempty"`
+// The constructors below build the Content variants a client produces rather
+// than decodes (replayed history, a fake backend, tests), keeping the "Type
+// matches the one non-nil payload" invariant in one place. Fields they omit can
+// be set on the returned payload.
 
-	// tool_call_started (only when StreamToolCallInput is set): the tool being
-	// invoked, sent before its input streams in.
-	ToolName     string `json:"tool_name,omitempty"`
-	IsClientSide bool   `json:"is_client_side,omitempty"`
+// TextContent builds a markdown_fragment (answer text).
+func TextContent(text string) Content {
+	return Content{Type: ContentMarkdownFragment, Markdown: &MarkdownPayload{Content: text}}
+}
 
-	// tool_call_input_delta (only when StreamToolCallInput is set): one ordered
-	// fragment of the tool call's input JSON.
-	PartialJSON string `json:"partial_json,omitempty"`
+// ThinkingContent builds a thinking (reasoning) fragment.
+func ThinkingContent(text string) Content {
+	return Content{Type: ContentThinking, Thinking: &ThinkingPayload{Content: text}}
+}
 
-	// widget_def: the Datadog widget definition object (nil when absent).
-	WidgetDef *WidgetDefinition `json:"widget_def,omitempty"`
-	// widget (persisted/rendered form): the raw tile definition and its timeframe.
-	TileDef   json.RawMessage `json:"tile_def,omitempty"`
-	Timeframe *Timeframe      `json:"timeframe,omitempty"`
-	// dashboard: the raw widgets array (for summarizing widget count) plus the
-	// surrounding dashboard metadata.
-	Widgets           json.RawMessage `json:"widgets,omitempty"`
-	Description       string          `json:"description,omitempty"`
-	LayoutType        string          `json:"layout_type,omitempty"`
-	ReflowType        string          `json:"reflow_type,omitempty"`
-	TemplateVariables json.RawMessage `json:"template_variables,omitempty"`
+// ToolCallContent builds a server-side tool_call. Input is JSON encoded as a
+// string, as it is on the wire.
+func ToolCallContent(toolCallID, name, input string) Content {
+	return Content{
+		Type: ContentToolCall,
+		Tool: &ToolPayload{
+			ToolCallID: toolCallID,
+			Metadata:   &ToolMetadata{Name: name, Input: input},
+		},
+	}
+}
 
-	// background_task_update: which phase this update is ("progress"/"final").
-	// The human-readable body is in Content. turn_status uses Status
-	// ("started"/"ended"); user_stop's marker text is in Content.
-	EventType string `json:"event_type,omitempty"`
-	// background_task_update: task identity, ordering, and free-form metadata.
-	TaskID       string            `json:"task_id,omitempty"`
-	Sequence     int               `json:"sequence,omitempty"`
-	TaskMetadata map[string]string `json:"-"`
+// ToolResultContent builds a tool_response for the call with toolCallID. Name is
+// optional: the call it merges with already carries it.
+func ToolResultContent(toolCallID, name string, status ToolStatus, output string) Content {
+	return Content{
+		Type: ContentToolResponse,
+		Tool: &ToolPayload{
+			ToolCallID: toolCallID,
+			Status:     string(status),
+			Metadata:   &ToolMetadata{Name: name, Output: output},
+		},
+	}
+}
 
-	// provider_compaction (never streamed to clients): opaque vendor payload the
-	// backend echoes on the next request; modeled for completeness.
-	Provider      string `json:"provider,omitempty"`
-	VendorPayload string `json:"vendor_payload,omitempty"`
-	Summary       string `json:"summary,omitempty"`
-
-	// Nested content: for tool_call / tool_response this is a
-	// markdown_fragment describing the call. For text content this is the
-	// raw string. Kept as RawMessage so Content stays one flat type.
-	nested json.RawMessage
+// AssistantMessage wraps content in an assistant-authored Message. Streamed
+// fragments that should concatenate into one block share a messageID.
+func AssistantMessage(messageID string, content Content) Message {
+	return Message{Role: "assistant", MessageID: messageID, Content: content}
 }
 
 // Timeframe is the time window attached to a persisted widget content block.
@@ -469,8 +563,9 @@ type ToolMetadata struct {
 	Namespace          *string `json:"namespace,omitempty"`
 }
 
-// UnmarshalJSON handles the fact that "content" is a string for text
-// fragments but a nested object for tool_call / tool_response.
+// UnmarshalJSON dispatches on the content type, populating the one matching
+// payload. It also handles "content" being a plain string for text fragments
+// but a nested object for tool_call / tool_response.
 func (c *Content) UnmarshalJSON(data []byte) error {
 	type alias struct {
 		Type              string            `json:"type"`
@@ -504,64 +599,87 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	c.Type = a.Type
-	c.EncryptedContent = a.EncryptedContent
-	c.Redacted = a.Redacted
-	c.ToolCallID = a.ToolCallID
-	c.Title = a.Title
-	c.Status = a.Status
-	c.ToolName = a.ToolName
-	c.IsClientSide = a.IsClientSide
-	c.PartialJSON = a.PartialJSON
-	c.WidgetDef = a.WidgetDef
-	c.TileDef = a.TileDef
-	c.Timeframe = a.Timeframe
-	c.Widgets = a.Widgets
-	c.Description = a.Description
-	c.LayoutType = a.LayoutType
-	c.ReflowType = a.ReflowType
-	c.TemplateVariables = a.TemplateVariables
-	c.EventType = a.EventType
-	c.TaskID = a.TaskID
-	c.Sequence = a.Sequence
-	c.Provider = a.Provider
-	c.VendorPayload = a.VendorPayload
-	c.Summary = a.Summary
 
-	// metadata is polymorphic: a tool metadata object for tool_call /
-	// tool_response / client_tool_call, but a flat string map for
-	// background_task_update. Decode by content type.
-	if len(a.Metadata) > 0 {
-		if a.Type == ContentBackgroundTaskUpdate {
-			_ = json.Unmarshal(a.Metadata, &c.TaskMetadata)
-		} else {
-			_ = json.Unmarshal(a.Metadata, &c.Metadata)
+	switch a.Type {
+	case ContentMarkdownFragment:
+		c.Markdown = &MarkdownPayload{Content: jsonString(a.Content)}
+	case ContentThinking:
+		c.Thinking = &ThinkingPayload{
+			Content:          jsonString(a.Content),
+			EncryptedContent: a.EncryptedContent,
+			Redacted:         a.Redacted,
+		}
+	case ContentUserStop:
+		c.Stop = &StopPayload{Content: jsonString(a.Content)}
+	case ContentToolCall, ContentClientToolCall, ContentToolCallStarted, ContentToolCallInputDelta, ContentToolResponse:
+		tp := &ToolPayload{
+			ToolCallID:   a.ToolCallID,
+			Title:        a.Title,
+			Status:       a.Status,
+			ToolName:     a.ToolName,
+			IsClientSide: a.IsClientSide,
+			PartialJSON:  a.PartialJSON,
+		}
+		if len(a.Metadata) > 0 {
+			_ = json.Unmarshal(a.Metadata, &tp.Metadata)
+		}
+		// A tool's "content" is a nested MarkdownContent (display detail), never a
+		// bare string; pull out its text.
+		var md struct {
+			Content string `json:"content"`
+		}
+		if json.Unmarshal(a.Content, &md) == nil && md.Content != "" {
+			tp.Detail = &MarkdownPayload{Content: md.Content}
+		}
+		c.Tool = tp
+	case ContentWidgetDef, ContentWidget:
+		c.Widget = &WidgetPayload{
+			Title:     a.Title,
+			WidgetDef: a.WidgetDef,
+			TileDef:   a.TileDef,
+			Timeframe: a.Timeframe,
+		}
+	case ContentDashboard:
+		c.Dashboard = &DashboardPayload{
+			Title:             a.Title,
+			Widgets:           a.Widgets,
+			Description:       a.Description,
+			LayoutType:        a.LayoutType,
+			ReflowType:        a.ReflowType,
+			TemplateVariables: a.TemplateVariables,
+		}
+	case ContentBackgroundTaskUpdate:
+		pp := &ProgressPayload{
+			Content:   jsonString(a.Content),
+			EventType: a.EventType,
+			TaskID:    a.TaskID,
+			Sequence:  a.Sequence,
+		}
+		if len(a.Metadata) > 0 {
+			_ = json.Unmarshal(a.Metadata, &pp.TaskMetadata)
+		}
+		c.Progress = pp
+	case ContentTurnStatus:
+		c.TurnStatus = &TurnStatusPayload{Status: a.Status}
+	case ContentProviderCompaction:
+		c.Compaction = &CompactionPayload{
+			Provider:      a.Provider,
+			VendorPayload: a.VendorPayload,
+			Summary:       a.Summary,
 		}
 	}
 
-	if len(a.Content) == 0 {
-		return nil
-	}
-	// Try string first (text fragments); otherwise keep the nested object.
-	var s string
-	if err := json.Unmarshal(a.Content, &s); err == nil {
-		c.Content = s
-	} else {
-		c.nested = a.Content
-	}
 	return nil
 }
 
-// Nested returns the nested descriptive Content for tool_call / tool_response
-// messages (typically a markdown_fragment). ok is false when there is none.
-func (c *Content) Nested() (Content, bool) {
-	if len(c.nested) == 0 {
-		return Content{}, false
-	}
-	var nc Content
-	if err := json.Unmarshal(c.nested, &nc); err != nil {
-		return Content{}, false
-	}
-	return nc, true
+// jsonString decodes raw as a JSON string, returning "" when raw is empty or
+// not a string (e.g. a nested object). The stream's "content" key is a string
+// for text variants but an object for tool variants, so it must be captured as
+// json.RawMessage and decoded per type.
+func jsonString(raw json.RawMessage) string {
+	var s string
+	_ = json.Unmarshal(raw, &s)
+	return s
 }
 
 // ContentKind is a coarse rendering bucket for a Content. It lets a client

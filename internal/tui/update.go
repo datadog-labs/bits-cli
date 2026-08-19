@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
@@ -129,18 +130,8 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 // exhaustive over agent.EventKind.
 func (m *Model) applyEvent(ev agent.Event) {
 	switch ev.Kind {
-	case agent.EventDelta:
-		m.chatPhase = chat.PhaseStreaming
-		m.transcript.AppendText(ev.ItemID, ev.Role, ev.Content, ev.Text)
-	case agent.EventTool:
-		m.transcript.UpsertTool(ev.ItemID, chat.ToolView{
-			Name:   ev.Tool.Name,
-			Input:  ev.Tool.Input,
-			Output: ev.Tool.Output,
-			Status: chat.ToolStatusOf(ev.Tool.Status),
-		})
-	case agent.EventUsage:
-		m.usage = ev.Usage
+	case agent.EventMessage:
+		m.applyMessage(ev.Msg)
 	case agent.EventConversation:
 		m.convID = ev.ConvID
 	case agent.EventTurnDone:
@@ -152,8 +143,29 @@ func (m *Model) applyEvent(ev agent.Event) {
 		if ev.Err != nil {
 			m.errMsg = ev.Err.Error()
 		}
-	case agent.EventNone:
-		// nothing to do
+	}
+}
+
+// applyMessage folds one streamed message into the transcript. The switch is
+// exhaustive over assistant.ContentKind so a new kind must be handled here.
+func (m *Model) applyMessage(msg assistant.Message) {
+	if msg.Results != nil && msg.Results.Usage != nil {
+		m.usage = msg.Results.Usage
+	}
+
+	kind := msg.Content.Kind()
+	switch kind {
+	case assistant.KindText, assistant.KindReasoning:
+		// A redacted thinking block has no text and so renders as nothing; showing
+		// it needs a renderer for Content.Thinking.Redacted.
+		m.chatPhase = chat.PhaseStreaming
+		m.transcript.AppendText(chat.ItemIDOf(msg), assistant.RoleOf(msg.Role), kind, msg.Content.TextBody())
+	case assistant.KindToolCall, assistant.KindToolResult:
+		m.transcript.UpsertTool(chat.ItemIDOf(msg), chat.ToolViewOf(msg.Content.Tool))
+	case assistant.KindWidget, assistant.KindDashboard, assistant.KindProgress,
+		assistant.KindTurnMarker, assistant.KindStop, assistant.KindInternal,
+		assistant.KindUnknown:
+		// Deferred/observe-only for the MVP; the payload is on msg.Content.
 	}
 }
 
