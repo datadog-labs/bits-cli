@@ -94,7 +94,9 @@ func forbiddenNotice(apiErr *assistant.APIError) chat.Notice {
 }
 
 func badRequestNotice(apiErr *assistant.APIError) chat.Notice {
-	switch apiErr.Input.(type) {
+	switch in := apiErr.Input.(type) {
+	case assistant.ConversationHistoryInput:
+		return notice(chat.NoticeError, apiErr, "Could not load the requested conversation %s. It may be invalid.", shortID(in.ConversationID))
 	case assistant.RenameConversationInput:
 		return notice(chat.NoticeError, apiErr, "Couldn't rename the conversation.")
 	case assistant.ShareConversationInput:
@@ -106,9 +108,9 @@ func badRequestNotice(apiErr *assistant.APIError) chat.Notice {
 func shortID(s string) string {
 	const max = 12
 	if len(s) > max {
-		return s[:max] + "…"
+		return fmt.Sprintf("%q", s[:max]+"…")
 	}
-	return s
+	return fmt.Sprintf("%q", s)
 }
 
 func notice(level chat.NoticeLevel, err error, format string, args ...any) chat.Notice {
