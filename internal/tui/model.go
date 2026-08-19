@@ -45,6 +45,7 @@ type Model struct {
 	viewport    viewport.Model
 	chatStyles  chat.Styles
 	renderCache map[chat.ItemID]renderCacheEntry
+	hasDarkBG   bool // terminal background; assumed dark until detected
 
 	// Terminal height (the full window height from WindowSizeMsg; the transcript
 	// viewport height is derived from it). Width isn't stored — it equals
@@ -59,13 +60,16 @@ func New(engine *agent.Engine) *Model {
 		engine:      engine,
 		transcript:  chat.NewTranscript(),
 		editor:      editor.New(),
-		chatStyles:  chat.DefaultStyles(),
+		chatStyles:  chat.DefaultStyles(true),
 		renderCache: map[chat.ItemID]renderCacheEntry{},
 		chatPhase:   chat.PhaseIdle,
+		hasDarkBG:   true,
 	}
 }
 
-// Init focuses the editor and starts its cursor blink.
+// Init focuses the editor, starts its cursor blink, and asks the terminal for
+// its background color so styles can adapt to a light or dark theme.
 func (m *Model) Init() tea.Cmd {
-	return m.editor.Focus()
+	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
+	return tea.Batch(m.editor.Focus(), requestBG)
 }

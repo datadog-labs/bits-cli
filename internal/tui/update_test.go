@@ -2,10 +2,12 @@ package tui
 
 import (
 	"errors"
+	"image/color"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
@@ -35,7 +37,9 @@ func TestModel_StreamsDeltasIntoView(t *testing.T) {
 	m.feedMsg(assistant.AssistantMessage("m1", assistant.TextContent("hello ")))
 	m.feedMsg(assistant.AssistantMessage("m1", assistant.TextContent("world")))
 
-	if got := m.View().Content; !strings.Contains(got, "hello world") {
+	// Assistant text renders as markdown, so strip ANSI before matching: glamour
+	// colors each word separately, splitting the literal substring in raw output.
+	if got := ansi.Strip(m.View().Content); !strings.Contains(got, "hello world") {
 		t.Errorf("view missing concatenated stream:\n%s", got)
 	}
 	if m.chatPhase != chat.PhaseStreaming {
@@ -50,6 +54,29 @@ func TestModel_TurnDoneReturnsToReady(t *testing.T) {
 
 	if got := m.View().Content; !strings.Contains(got, "ready") {
 		t.Errorf("status line should show ready after turn done:\n%s", got)
+	}
+}
+
+func TestModel_BackgroundColorMsgReStylesTranscript(t *testing.T) {
+	m := testModel(t)
+	if m.chatStyles.MarkdownStyle != "dark" {
+		t.Fatalf("default markdown style = %q, want dark", m.chatStyles.MarkdownStyle)
+	}
+	m.feedMsg(assistant.AssistantMessage("m1", assistant.TextContent("hello world")))
+	dark := m.View().Content
+
+	// A light (white) background must flip styles and re-render the transcript.
+	m.Update(tea.BackgroundColorMsg{Color: color.White})
+	light := m.View().Content
+
+	if m.hasDarkBG {
+		t.Error("hasDarkBG should be false after a light background message")
+	}
+	if m.chatStyles.MarkdownStyle != "light" {
+		t.Errorf("markdown style = %q, want light", m.chatStyles.MarkdownStyle)
+	}
+	if dark == light {
+		t.Error("expected transcript to re-style when the background changes")
 	}
 }
 
