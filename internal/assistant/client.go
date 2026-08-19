@@ -519,10 +519,10 @@ func (c *Client) RunTools(ctx context.Context, message string, tools []Tool, opt
 }
 
 // ConversationHistory fetches the full message history for a conversation.
-func (c *Client) ConversationHistory(ctx context.Context, conversationID string) (*ConversationHistoryResponse, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/api/v2/assistant/conversation-history/"+conversationID, nil)
+func (c *Client) ConversationHistory(ctx context.Context, in ConversationHistoryInput) (*ConversationHistoryResponse, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/api/v2/assistant/conversation-history/"+in.ConversationID, nil)
 	if err != nil {
-		return nil, err
+		return nil, withInput(err, in)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var out ConversationHistoryResponse
@@ -577,10 +577,10 @@ func (c *Client) ExperimentalToolFlags(ctx context.Context) (map[string]bool, er
 }
 
 // DeleteConversation deletes a conversation by id.
-func (c *Client) DeleteConversation(ctx context.Context, conversationID string) error {
-	resp, err := c.do(ctx, http.MethodDelete, "/api/v2/assistant/conversation/"+conversationID, nil)
+func (c *Client) DeleteConversation(ctx context.Context, in DeleteConversationInput) error {
+	resp, err := c.do(ctx, http.MethodDelete, "/api/v2/assistant/conversation/"+in.ConversationID, nil)
 	if err != nil {
-		return err
+		return withInput(err, in)
 	}
 	_ = resp.Body.Close()
 	return nil
@@ -589,32 +589,32 @@ func (c *Client) DeleteConversation(ctx context.Context, conversationID string) 
 // RenameConversation sets a conversation's title (1-200 chars) via
 // PUT /api/v2/assistant/user-conversations/{id}/title. The server returns no
 // body on success.
-func (c *Client) RenameConversation(ctx context.Context, conversationID, title string) error {
+func (c *Client) RenameConversation(ctx context.Context, in RenameConversationInput) error {
 	reqBody := updateConversationRequest{Data: updateConversationData{
 		Type:       "update-conversation-request",
-		Attributes: updateConversationAttributes{Title: title},
+		Attributes: updateConversationAttributes{Title: in.Title},
 	}}
-	resp, err := c.do(ctx, http.MethodPut, "/api/v2/assistant/user-conversations/"+conversationID+"/title", reqBody)
+	resp, err := c.do(ctx, http.MethodPut, "/api/v2/assistant/user-conversations/"+in.ConversationID+"/title", reqBody)
 	if err != nil {
-		return err
+		return withInput(err, in)
 	}
 	_ = resp.Body.Close()
 	return nil
 }
 
 // ShareConversation toggles sharing for a conversation via
-// PUT /api/v2/assistant/conversation/{id}/is_shared. When shared is true,
-// ttlDays optionally sets the expiry window (1-1095 days); pass nil for the
-// server default. When shared is false, ttlDays is ignored. It returns the
-// updated conversation summary.
-func (c *Client) ShareConversation(ctx context.Context, conversationID string, shared bool, ttlDays *int) (*ConversationSummary, error) {
-	reqBody := updateSharingRequest{IsShared: shared}
-	if shared {
-		reqBody.TTLDays = ttlDays
+// PUT /api/v2/assistant/conversation/{id}/is_shared. When in.Shared is true,
+// in.TTLDays optionally sets the expiry window (1-1095 days); pass nil for the
+// server default. When in.Shared is false, in.TTLDays is ignored. It returns
+// the updated conversation summary.
+func (c *Client) ShareConversation(ctx context.Context, in ShareConversationInput) (*ConversationSummary, error) {
+	reqBody := updateSharingRequest{IsShared: in.Shared}
+	if in.Shared {
+		reqBody.TTLDays = in.TTLDays
 	}
-	resp, err := c.do(ctx, http.MethodPut, "/api/v2/assistant/conversation/"+conversationID+"/is_shared", reqBody)
+	resp, err := c.do(ctx, http.MethodPut, "/api/v2/assistant/conversation/"+in.ConversationID+"/is_shared", reqBody)
 	if err != nil {
-		return nil, err
+		return nil, withInput(err, in)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var out struct {

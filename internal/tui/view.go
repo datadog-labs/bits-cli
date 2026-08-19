@@ -1,14 +1,11 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-
-	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
 // View lays out the transcript viewport, a status line, and the input. Alt-screen
@@ -16,20 +13,28 @@ import (
 // declared on the returned view.
 func (m *Model) View() tea.View {
 	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion}
-	if !m.ready {
+	switch m.mode {
+	case ModeTermInit:
 		v.Content = "loading…"
-		return v
+	case ModeChat:
+		v.Content = m.chatView()
 	}
+	return v
+}
+
+// chatView renders the chat screen: the transcript viewport, the status line,
+// and the input, floating the completion menu as an overlay above the input
+// when it is open.
+func (m *Model) chatView() string {
 	base := strings.Join([]string{
 		m.viewport.View(),
-		m.statusLine(),
+		m.noticeBar(),
 		m.editor.View(),
 	}, "\n")
 
 	menu := m.editor.MenuView()
 	if menu == "" {
-		v.Content = base
-		return v
+		return base
 	}
 
 	// Float the completion menu as a fixed overlay just above the input. The
@@ -41,48 +46,25 @@ func (m *Model) View() tea.View {
 		x = max(0, width-menuW)
 	}
 	y := max(0, m.height-m.editor.Height()-menuH)
-	v.Content = lipgloss.NewCompositor(
+	return lipgloss.NewCompositor(
 		lipgloss.NewLayer(base),
 		lipgloss.NewLayer(menu).X(x).Y(y).Z(1),
 	).Render()
-	return v
 }
 
-func (m *Model) statusLine() string {
-	var b strings.Builder
-	b.WriteString(phaseLabel(m.chatPhase))
-	if m.usage != nil && m.usage.TokensUsed > 0 {
-		fmt.Fprintf(&b, " · %d tokens", m.usage.TokensUsed)
+// noticeBar renders the transient notification bar between the transcript and
+// the input.
+func (m *Model) noticeBar() string {
+	if m.notice.Empty() {
+		return ""
 	}
-	if m.convID != "" {
-		fmt.Fprintf(&b, " · %s", shortID(m.convID))
+	width := max(1, m.viewport.Width())
+	text := m.notice.Text
+	if err := m.notice.Err; err != nil {
+		if detail := err.Error(); detail != "" && detail != m.notice.Text {
+			text += " (" + detail + ")"
+		}
 	}
-	if m.chatPhase == chat.PhaseError && m.errMsg != "" {
-		fmt.Fprintf(&b, " · %s", m.errMsg)
-	}
-	return m.chatStyles.Meta.Render(ansi.Truncate(b.String(), max(1, m.viewport.Width()), "…"))
-}
-
-// phaseLabel is exhaustive over chat.Phase.
-func phaseLabel(p chat.Phase) string {
-	switch p {
-	case chat.PhaseIdle:
-		return "ready"
-	case chat.PhaseLoading:
-		return "loading history…"
-	case chat.PhaseWaiting:
-		return "waiting…"
-	case chat.PhaseStreaming:
-		return "streaming…"
-	case chat.PhaseError:
-		return "error"
-	}
-	return ""
-}
-
-func shortID(s string) string {
-	if len(s) > 8 {
-		return s[:8]
-	}
-	return s
+	text = ansi.Truncate(text, max(1, width-2), "…")
+	return m.chatStyles.Notice(m.notice.Level).Width(width).Render(text)
 }

@@ -27,7 +27,22 @@ type Styles struct {
 	StatusRunning lipgloss.Style
 	StatusSuccess lipgloss.Style
 	StatusError   lipgloss.Style
-	Meta          lipgloss.Style
+	Meta          lipgloss.Style // fallback labels, separators
+	NoticeInfo    lipgloss.Style // solid notification bar: informational
+	NoticeWarn    lipgloss.Style // solid notification bar: warning
+	NoticeError   lipgloss.Style // solid notification bar: error
+}
+
+// Notice returns the style for a transient notice of the given level.
+func (s Styles) Notice(level NoticeLevel) lipgloss.Style {
+	switch level {
+	case NoticeError:
+		return s.NoticeError
+	case NoticeWarn:
+		return s.NoticeWarn
+	default:
+		return s.NoticeInfo
+	}
 }
 
 // DefaultStyles returns the palette for the given terminal background.
@@ -48,6 +63,9 @@ func DefaultStyles(isDark bool) Styles {
 		StatusSuccess: lipgloss.NewStyle().Foreground(c(lipgloss.Color("2"), lipgloss.Color("10"))),
 		StatusError:   lipgloss.NewStyle().Foreground(c(lipgloss.Color("1"), lipgloss.Color("9"))),
 		Meta:          lipgloss.NewStyle().Faint(true),
+		NoticeInfo:    lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#632CA6")),
+		NoticeWarn:    lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color("#1A1A1A")).Background(lipgloss.Color("#F5A623")),
+		NoticeError:   lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#C4314B")),
 	}
 }
 

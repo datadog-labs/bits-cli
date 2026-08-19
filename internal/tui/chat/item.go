@@ -28,6 +28,27 @@ const (
 	PhaseError
 )
 
+// NoticeLevel is the severity of a transient status notice shown in the status
+// line. It selects the notice's style.
+type NoticeLevel int
+
+const (
+	NoticeInfo NoticeLevel = iota
+	NoticeWarn
+	NoticeError
+)
+
+// Notice is a transient status message: a severity level and the text shown in
+// the bar.
+type Notice struct {
+	Level NoticeLevel
+	Text  string
+	Err   error
+}
+
+// Empty reports whether there is no notice to display.
+func (n Notice) Empty() bool { return n.Text == "" }
+
 // ToolStatus is the lifecycle state of a tool block. The zero value ToolUnknown
 // means "unset", which lets a merge leave an existing status untouched.
 type ToolStatus int

@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -20,8 +21,8 @@ func testModel(t *testing.T) *Model {
 	t.Helper()
 	m := New(agent.New(nil, assistant.SendOptions{}))
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	if !m.ready {
-		t.Fatal("model not ready after WindowSizeMsg")
+	if m.mode != ModeChat {
+		t.Fatal("model not in chat mode after WindowSizeMsg")
 	}
 	return m
 }
@@ -47,13 +48,19 @@ func TestModel_StreamsDeltasIntoView(t *testing.T) {
 	}
 }
 
-func TestModel_TurnDoneReturnsToReady(t *testing.T) {
+func TestModel_TurnDoneReturnsToIdle(t *testing.T) {
 	m := testModel(t)
 	m.feedMsg(assistant.AssistantMessage("m1", assistant.TextContent("hi")))
 	m.feed(agent.Event{Kind: agent.EventTurnDone})
 
-	if got := m.View().Content; !strings.Contains(got, "ready") {
-		t.Errorf("status line should show ready after turn done:\n%s", got)
+	if m.chatPhase != chat.PhaseIdle {
+		t.Errorf("chatPhase = %v, want idle after turn done", m.chatPhase)
+	}
+	if !m.notice.Empty() {
+		t.Errorf("a clean turn should leave no notice; got %+v", m.notice)
+	}
+	if got := m.View().Content; !strings.Contains(got, "hi") {
+		t.Errorf("view missing message:\n%s", got)
 	}
 }
 
@@ -87,10 +94,13 @@ func TestModel_ToolAndErrorRender(t *testing.T) {
 	m.feed(agent.Event{Kind: agent.EventError, Err: errors.New("boom")})
 
 	got := m.View().Content
-	for _, want := range []string{"run_bash", "error", "boom"} {
+	for _, want := range []string{"run_bash", "boom"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("view missing %q:\n%s", want, got)
 		}
+	}
+	if m.notice.Level != chat.NoticeError {
+		t.Errorf("notice level = %v, want error", m.notice.Level)
 	}
 }
 
@@ -153,7 +163,7 @@ func TestModel_RestoreConversationReplaysHistory(t *testing.T) {
 	}})
 
 	got := m.View().Content
-	for _, want := range []string{"why is latency high", "search_logs", "a deploy regressed the p99", "ready"} {
+	for _, want := range []string{"why is latency high", "search_logs", "a deploy regressed the p99"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("restored view missing %q:\n%s", want, got)
 		}
@@ -168,16 +178,59 @@ func TestModel_RestoreConversationReplaysHistory(t *testing.T) {
 	}
 }
 
-// A failed restore surfaces on the status line instead of a transcript.
+// A failed restore posts a transient error notice and returns to idle (the
+// error lives in the notice, not the phase), so the user can still type.
 func TestModel_RestoreErrorShowsOnStatus(t *testing.T) {
 	m := testModel(t)
 	m.Update(historyLoadedMsg{err: errors.New("not found")})
 
-	if m.chatPhase != chat.PhaseError {
-		t.Fatalf("chatPhase = %v, want error", m.chatPhase)
+	if m.chatPhase != chat.PhaseIdle {
+		t.Fatalf("chatPhase = %v, want idle after failed restore", m.chatPhase)
+	}
+	if m.notice.Level != chat.NoticeError {
+		t.Errorf("notice level = %v, want error", m.notice.Level)
 	}
 	if got := m.View().Content; !strings.Contains(got, "not found") {
 		t.Errorf("status line missing restore error:\n%s", got)
+	}
+}
+
+// A turn error posts an error notice while keeping PhaseError as the turn
+// lifecycle state; clearing the notice leaves the phase untouched (the two are
+// decoupled).
+func TestModel_TurnErrorPostsNotice(t *testing.T) {
+	m := testModel(t)
+	m.feed(agent.Event{Kind: agent.EventError, Err: errors.New("boom")})
+	if m.chatPhase != chat.PhaseError {
+		t.Fatalf("chatPhase = %v, want error", m.chatPhase)
+	}
+	if m.notice.Level != chat.NoticeError || !strings.Contains(m.notice.Text, "boom") {
+		t.Fatalf("notice = %+v, want error notice with boom", m.notice)
+	}
+
+	m.clearNotice()
+	if !m.notice.Empty() {
+		t.Errorf("notice = %+v, want cleared", m.notice)
+	}
+	if m.chatPhase != chat.PhaseError {
+		t.Errorf("clearing the notice must not change the phase; got %v", m.chatPhase)
+	}
+}
+
+// A stale expiry timer must not clear a newer notice; the matching one does.
+func TestModel_NoticeExpirySeqGuard(t *testing.T) {
+	m := testModel(t)
+	m.showNotice(chat.Notice{Level: chat.NoticeError, Text: "first"}, time.Hour)
+	staleSeq := m.noticeSeq
+	m.showNotice(chat.Notice{Level: chat.NoticeInfo, Text: "second"}, time.Hour)
+
+	m.Update(noticeExpiredMsg{seq: staleSeq})
+	if m.notice.Text != "second" {
+		t.Errorf("stale timer cleared the newer notice: %+v", m.notice)
+	}
+	m.Update(noticeExpiredMsg{seq: m.noticeSeq})
+	if !m.notice.Empty() {
+		t.Errorf("matching timer did not clear the notice: %+v", m.notice)
 	}
 }
 

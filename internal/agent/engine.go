@@ -7,9 +7,13 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
+)
+
+var (
+	ErrMaxTurns           = errors.New("exceeded max turns")
+	ErrHistoryUnsupported = errors.New("backend does not support loading conversation history")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -19,11 +23,9 @@ type Backend interface {
 		fn func(assistant.AssistantResponse) error) (string, error)
 }
 
-// HistoryBackend is an optional Backend capability: loading a conversation's
-// persisted messages so a session can be restored and continued.
-// *assistant.Client satisfies it; the fake backend does not.
+// HistoryBackend adds conversation history loading
 type HistoryBackend interface {
-	ConversationHistory(ctx context.Context, conversationID string) (*assistant.ConversationHistoryResponse, error)
+	ConversationHistory(ctx context.Context, in assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error)
 }
 
 // EventKind discriminates the events the engine streams for a turn.
@@ -129,7 +131,7 @@ func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 		}
 		next = e.execTools(ctx, calls)
 	}
-	send(Event{Kind: EventError, Err: errors.New("exceeded max turns")})
+	send(Event{Kind: EventError, Err: ErrMaxTurns})
 }
 
 // ConversationID reports the conversation the engine is bound to. It is set
@@ -146,9 +148,9 @@ func (e *Engine) LoadHistory(ctx context.Context) ([]assistant.Message, error) {
 	}
 	hb, ok := e.backend.(HistoryBackend)
 	if !ok {
-		return nil, fmt.Errorf("backend does not support loading conversation history")
+		return nil, ErrHistoryUnsupported
 	}
-	resp, err := hb.ConversationHistory(ctx, e.opts.ConversationID)
+	resp, err := hb.ConversationHistory(ctx, assistant.ConversationHistoryInput{ConversationID: e.opts.ConversationID})
 	if err != nil {
 		return nil, err
 	}

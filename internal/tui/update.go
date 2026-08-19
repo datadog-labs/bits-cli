@@ -16,6 +16,9 @@ import (
 // historyLoadTimeout bounds the one-shot conversation-history fetch on startup.
 const historyLoadTimeout = 30 * time.Second
 
+// defaultNoticeTTL is how long a transient status notice stays before it clears.
+const defaultNoticeTTL = 10 * time.Second
+
 // turnEventMsg carries one engine event into Update; turnClosedMsg signals the
 // turn's channel was closed (turn finished or cancelled).
 type (
@@ -28,6 +31,29 @@ type (
 type historyLoadedMsg struct {
 	msgs []assistant.Message
 	err  error
+}
+
+// noticeExpiredMsg clears a transient status notice when its TTL elapses. seq
+// guards against a stale timer clearing a newer notice.
+type noticeExpiredMsg struct{ seq int }
+
+// showNotice sets the transient status notice and returns a command that clears
+// it after ttl (defaultNoticeTTL when ttl <= 0). The seq stamps the timer so a
+// later notice is not cleared by an earlier one's timer.
+func (m *Model) showNotice(n chat.Notice, ttl time.Duration) tea.Cmd {
+	m.noticeSeq++
+	m.notice = n
+	if ttl <= 0 {
+		ttl = defaultNoticeTTL
+	}
+	seq := m.noticeSeq
+	return tea.Tick(ttl, func(time.Time) tea.Msg { return noticeExpiredMsg{seq: seq} })
+}
+
+// clearNotice removes any notice immediately and invalidates a pending timer.
+func (m *Model) clearNotice() {
+	m.noticeSeq++
+	m.notice = chat.Notice{}
 }
 
 // loadHistory fetches the engine's conversation history off the tea thread and
@@ -75,9 +101,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case turnEventMsg:
-		m.applyEvent(msg.ev)
+		cmd := m.applyEvent(msg.ev)
 		m.refreshViewport()
-		return m, waitEvent(m.turnEvents)
+		return m, tea.Batch(cmd, waitEvent(m.turnEvents))
 
 	case turnClosedMsg:
 		if m.chatPhase != chat.PhaseError {
@@ -88,8 +114,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case historyLoadedMsg:
-		m.applyHistory(msg)
+		cmd := m.applyHistory(msg)
 		m.refreshViewport()
+		return m, cmd
+
+	case noticeExpiredMsg:
+		if msg.seq == m.noticeSeq {
+			m.notice = chat.Notice{}
+		}
 		return m, nil
 	}
 
@@ -153,14 +185,15 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	m.cancelTurn = cancel
 	m.turnEvents = m.engine.Start(ctx, text)
 	m.chatPhase = chat.PhaseWaiting
-	m.errMsg = ""
+	m.clearNotice()
 	m.refreshViewport()
 	return m, waitEvent(m.turnEvents)
 }
 
 // applyEvent folds one engine event into the transcript / status. The switch is
-// exhaustive over agent.EventKind.
-func (m *Model) applyEvent(ev agent.Event) {
+// exhaustive over agent.EventKind. It returns a command for side effects (a turn
+// error posts a transient notice); nil otherwise.
+func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	switch ev.Kind {
 	case agent.EventMessage:
 		m.applyMessage(ev.Msg)
@@ -173,9 +206,10 @@ func (m *Model) applyEvent(ev agent.Event) {
 		m.transcript.FinalizeAll()
 		m.chatPhase = chat.PhaseError
 		if ev.Err != nil {
-			m.errMsg = ev.Err.Error()
+			return m.showNotice(noticeForError("", ev.Err), 0)
 		}
 	}
+	return nil
 }
 
 // applyMessage folds one streamed message into the transcript and advances the
@@ -194,12 +228,12 @@ func (m *Model) applyMessage(msg assistant.Message) {
 // applyHistory replays a restored conversation into the transcript. It reuses
 // the same folding as the live path, banks the final usage, then finalizes so
 // nothing shows a streaming indicator and returns to idle ready for input. A
-// load error surfaces on the status line without a transcript.
-func (m *Model) applyHistory(res historyLoadedMsg) {
+// load failure posts a transient error notice instead of a transcript and
+// returns its TTL-clear command; success returns nil.
+func (m *Model) applyHistory(res historyLoadedMsg) tea.Cmd {
 	if res.err != nil {
-		m.chatPhase = chat.PhaseError
-		m.errMsg = res.err.Error()
-		return
+		m.chatPhase = chat.PhaseIdle
+		return m.showNotice(noticeForError("restore failed", res.err), 0)
 	}
 	for _, msg := range res.msgs {
 		if msg.Results != nil && msg.Results.Usage != nil {
@@ -209,6 +243,7 @@ func (m *Model) applyHistory(res historyLoadedMsg) {
 	}
 	m.transcript.FinalizeAll()
 	m.chatPhase = chat.PhaseIdle
+	return nil
 }
 
 // setDarkBackground adapts styles to the detected terminal background. It drops
@@ -227,13 +262,13 @@ func (m *Model) setDarkBackground(isDark bool) {
 
 func (m *Model) resize(w, h int) {
 	m.height = h
-	if !m.ready {
-		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(1))
-		m.ready = true
-	} else {
-		m.viewport.SetWidth(w)
-	}
 	m.editor.SetWidth(w)
+	if m.mode == ModeTermInit {
+		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(1))
+		m.setMode(ModeChat)
+		return
+	}
+	m.viewport.SetWidth(w)
 	m.refreshViewport()
 }
 
@@ -241,7 +276,7 @@ func (m *Model) resize(w, h int) {
 // the space left by the status line and the (possibly multi-row) editor. The
 // view stays pinned to the bottom while it was already there (auto-follow).
 func (m *Model) refreshViewport() {
-	if !m.ready {
+	if m.mode == ModeTermInit {
 		return
 	}
 	vpHeight := max(1, m.height-1-m.editor.Height())

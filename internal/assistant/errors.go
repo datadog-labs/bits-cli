@@ -40,6 +40,16 @@ type APIError struct {
 	// Method and Path identify the request, when known.
 	Method string
 	Path   string
+	// Input is the request input that produced the error
+	Input any
+}
+
+func withInput(err error, input any) error {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		apiErr.Input = input
+	}
+	return err
 }
 
 func (e *APIError) Error() string {

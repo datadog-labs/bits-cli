@@ -60,13 +60,15 @@ func TestE2E_ConversationLifecycle(t *testing.T) {
 		t.Fatal("Send returned an empty conversation id")
 	}
 	// Best-effort cleanup even if a later assertion fails.
-	defer func() { _ = c.DeleteConversation(context.Background(), convID) }()
+	defer func() {
+		_ = c.DeleteConversation(context.Background(), DeleteConversationInput{ConversationID: convID})
+	}()
 	if strings.TrimSpace(text.String()) == "" {
 		t.Fatalf("expected non-empty assistant text, got %q", text.String())
 	}
 
 	// Structural: history returns the turn we just had.
-	hist, err := c.ConversationHistory(ctx, convID)
+	hist, err := c.ConversationHistory(ctx, ConversationHistoryInput{ConversationID: convID})
 	if err != nil {
 		t.Fatalf("ConversationHistory: %v", err)
 	}
@@ -79,10 +81,10 @@ func TestE2E_ConversationLifecycle(t *testing.T) {
 
 	// Deterministic: rename and read the title back.
 	title := fmt.Sprintf("bits-e2e-%d", time.Now().UnixNano())
-	if err := c.RenameConversation(ctx, convID, title); err != nil {
+	if err := c.RenameConversation(ctx, RenameConversationInput{ConversationID: convID, Title: title}); err != nil {
 		t.Fatalf("RenameConversation: %v", err)
 	}
-	renamed, err := c.ConversationHistory(ctx, convID)
+	renamed, err := c.ConversationHistory(ctx, ConversationHistoryInput{ConversationID: convID})
 	if err != nil {
 		t.Fatalf("ConversationHistory after rename: %v", err)
 	}
@@ -108,14 +110,14 @@ func TestE2E_ConversationLifecycle(t *testing.T) {
 
 	// Deterministic: sharing sets an expiry, unsharing clears it.
 	ttl := 7
-	shared, err := c.ShareConversation(ctx, convID, true, &ttl)
+	shared, err := c.ShareConversation(ctx, ShareConversationInput{ConversationID: convID, Shared: true, TTLDays: &ttl})
 	if err != nil {
 		t.Fatalf("ShareConversation(true): %v", err)
 	}
 	if shared.SharedExpires == nil {
 		t.Error("expected shared_expires_at to be set after sharing")
 	}
-	unshared, err := c.ShareConversation(ctx, convID, false, nil)
+	unshared, err := c.ShareConversation(ctx, ShareConversationInput{ConversationID: convID, Shared: false})
 	if err != nil {
 		t.Fatalf("ShareConversation(false): %v", err)
 	}
@@ -124,10 +126,10 @@ func TestE2E_ConversationLifecycle(t *testing.T) {
 	}
 
 	// Deterministic: after deletion, fetching history fails.
-	if err := c.DeleteConversation(ctx, convID); err != nil {
+	if err := c.DeleteConversation(ctx, DeleteConversationInput{ConversationID: convID}); err != nil {
 		t.Fatalf("DeleteConversation: %v", err)
 	}
-	if _, err := c.ConversationHistory(ctx, convID); !errors.Is(err, ErrNotFound) {
+	if _, err := c.ConversationHistory(ctx, ConversationHistoryInput{ConversationID: convID}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound fetching history for a deleted conversation, got %v", err)
 	}
 }
@@ -181,7 +183,9 @@ func TestE2E_RunToolsClientTool(t *testing.T) {
 	if convID == "" {
 		t.Fatal("RunTools returned an empty conversation id")
 	}
-	defer func() { _ = c.DeleteConversation(context.Background(), convID) }()
+	defer func() {
+		_ = c.DeleteConversation(context.Background(), DeleteConversationInput{ConversationID: convID})
+	}()
 
 	if called {
 		// input is a JSON string (possibly "{}"); it must at least be present.
