@@ -360,10 +360,10 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 	scanner.Buffer(make([]byte, 0, initial), maxLine)
 	for scanner.Scan() {
 		trimmed := bytes.TrimSpace(scanner.Bytes())
+		timer.Reset(idle)
 		if len(trimmed) == 0 {
 			continue
 		}
-		timer.Reset(idle)
 		var ar AssistantResponse
 		if err := json.Unmarshal(trimmed, &ar); err != nil {
 			return conversationID, fmt.Errorf("decode stream line: %w: %s", err, trimmed)

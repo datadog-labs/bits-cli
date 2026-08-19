@@ -112,6 +112,7 @@ func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 		}
 
 		convID = id
+		e.opts.ConversationID = convID
 		send(Event{Kind: EventConversation, ConvID: convID})
 
 		if len(calls) == 0 {
