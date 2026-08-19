@@ -162,12 +162,14 @@ func markdownAnswer(r *rand.Rand) string {
 	parts := []string{"## " + capitalize(phrase(r, 2+r.Intn(3)))}
 	usedCode := false
 	for range 2 + r.Intn(4) {
-		switch r.Intn(5) {
+		switch r.Intn(6) {
 		case 0:
 			parts = append(parts, bulletList(r))
 		case 1:
 			parts = append(parts, orderedList(r))
 		case 2:
+			parts = append(parts, table(r))
+		case 3:
 			if !usedCode {
 				parts = append(parts, codeBlock(r))
 				usedCode = true
@@ -249,6 +251,15 @@ var codeSnippets = []struct{ lang, body string }{
 func codeBlock(r *rand.Rand) string {
 	s := codeSnippets[r.Intn(len(codeSnippets))]
 	return "```" + s.lang + "\n" + s.body + "\n```"
+}
+
+// table returns a small GFM table with 2-4 rows of fake service metrics.
+func table(r *rand.Rand) string {
+	lines := []string{"| Service | P95 | Errors |", "| --- | --- | --- |"}
+	for range 2 + r.Intn(3) {
+		lines = append(lines, fmt.Sprintf("| %s | %dms | %d |", pick(r, lexicon), 10+r.Intn(300), r.Intn(10)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // streamText streams s as one segment (all fragments share msgID) in

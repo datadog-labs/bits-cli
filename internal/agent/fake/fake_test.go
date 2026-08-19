@@ -102,7 +102,7 @@ func markdownMessages(t *testing.T, message string) map[string]string {
 func TestFinalAnswerIsMarkdown(t *testing.T) {
 	// The final answer always opens with a heading; across several seeds we
 	// should also see fenced code and list markers at least once.
-	sawHeading, sawFence, sawList := false, false, false
+	sawHeading, sawFence, sawList, sawTable := false, false, false, false
 	for i := range 30 {
 		for _, txt := range markdownMessages(t, "seed-"+strconv.Itoa(i)) {
 			if strings.HasPrefix(txt, "## ") {
@@ -114,6 +114,9 @@ func TestFinalAnswerIsMarkdown(t *testing.T) {
 			if strings.Contains(txt, "\n- ") {
 				sawList = true
 			}
+			if strings.Contains(txt, "| --- |") {
+				sawTable = true
+			}
 		}
 	}
 	if !sawHeading {
@@ -124,6 +127,9 @@ func TestFinalAnswerIsMarkdown(t *testing.T) {
 	}
 	if !sawList {
 		t.Error("expected a bullet list in some answer")
+	}
+	if !sawTable {
+		t.Error("expected a table in some answer")
 	}
 }
 
