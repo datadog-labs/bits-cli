@@ -68,6 +68,8 @@ func phaseLabel(p chat.Phase) string {
 	switch p {
 	case chat.PhaseIdle:
 		return "ready"
+	case chat.PhaseLoading:
+		return "loading history…"
 	case chat.PhaseWaiting:
 		return "waiting…"
 	case chat.PhaseStreaming:

@@ -140,6 +140,62 @@ func TestModel_UsageFromMessageResults(t *testing.T) {
 	}
 }
 
+// A restored conversation replays through the same folding as the live stream:
+// user and assistant text and a tool block all appear, and the model lands
+// idle-ready with no streaming indicators.
+func TestModel_RestoreConversationReplaysHistory(t *testing.T) {
+	m := testModel(t)
+	m.Update(historyLoadedMsg{msgs: []assistant.Message{
+		{Role: "user", MessageID: "u1", Content: assistant.TextContent("why is latency high")},
+		assistant.AssistantMessage("a1", assistant.ToolCallContent("tc1", "search_logs", `{"q":"errors"}`)),
+		assistant.AssistantMessage("a2", assistant.ToolResultContent("tc1", "", assistant.ToolStatusSuccess, "3 hits")),
+		assistant.AssistantMessage("a3", assistant.TextContent("a deploy regressed the p99")),
+	}})
+
+	got := m.View().Content
+	for _, want := range []string{"why is latency high", "search_logs", "a deploy regressed the p99", "ready"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("restored view missing %q:\n%s", want, got)
+		}
+	}
+	if m.chatPhase != chat.PhaseIdle {
+		t.Errorf("chatPhase = %v, want idle after restore", m.chatPhase)
+	}
+	for _, it := range m.transcript.Items() {
+		if it.Streaming {
+			t.Errorf("item %s still streaming after restore", it.ID)
+		}
+	}
+}
+
+// A failed restore surfaces on the status line instead of a transcript.
+func TestModel_RestoreErrorShowsOnStatus(t *testing.T) {
+	m := testModel(t)
+	m.Update(historyLoadedMsg{err: errors.New("not found")})
+
+	if m.chatPhase != chat.PhaseError {
+		t.Fatalf("chatPhase = %v, want error", m.chatPhase)
+	}
+	if got := m.View().Content; !strings.Contains(got, "not found") {
+		t.Errorf("status line missing restore error:\n%s", got)
+	}
+}
+
+// Binding the engine to a conversation shows its id immediately and puts the
+// model in the loading phase on Init.
+func TestModel_RestoringConversationLoadsOnInit(t *testing.T) {
+	m := New(agent.New(nil, assistant.SendOptions{ConversationID: "conv-abc123"}))
+	if m.convID != "conv-abc123" {
+		t.Errorf("convID = %q, want conv-abc123", m.convID)
+	}
+	if cmd := m.Init(); cmd == nil {
+		t.Error("Init returned no command while restoring")
+	}
+	if m.chatPhase != chat.PhaseLoading {
+		t.Errorf("chatPhase = %v, want loading on Init", m.chatPhase)
+	}
+}
+
 // Content kinds with no renderer yet must be ignored, not create empty blocks.
 func TestModel_UnrenderedContentIgnored(t *testing.T) {
 	m := testModel(t)

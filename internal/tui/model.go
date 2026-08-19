@@ -54,7 +54,9 @@ type Model struct {
 	ready  bool
 }
 
-// New builds the root model for the given engine.
+// New builds the root model for the given engine. When the engine is bound to a
+// conversation, the model shows its id immediately and restores its history on
+// Init.
 func New(engine *agent.Engine) *Model {
 	return &Model{
 		engine:      engine,
@@ -62,14 +64,18 @@ func New(engine *agent.Engine) *Model {
 		editor:      editor.New(),
 		chatStyles:  chat.DefaultStyles(true),
 		renderCache: map[chat.ItemID]renderCacheEntry{},
-		chatPhase:   chat.PhaseIdle,
+		convID:      engine.ConversationID(),
 		hasDarkBG:   true,
 	}
 }
 
-// Init focuses the editor, starts its cursor blink, and asks the terminal for
-// its background color so styles can adapt to a light or dark theme.
+// Init focuses the editor and, when restoring a conversation, kicks off the
+// one-shot history load whose result arrives as a historyLoadedMsg.
 func (m *Model) Init() tea.Cmd {
 	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
-	return tea.Batch(m.editor.Focus(), requestBG)
+	if m.engine.ConversationID() == "" {
+		return m.editor.Focus()
+	}
+	m.chatPhase = chat.PhaseLoading
+	return tea.Batch(m.editor.Focus(), loadHistory(m.engine), requestBG)
 }

@@ -85,6 +85,63 @@ func TestEngine_PassesMessagesThroughVerbatim(t *testing.T) {
 	}
 }
 
+// historyStub is a Backend that also loads a fixed conversation history.
+type historyStub struct {
+	stub
+	history []assistant.Message
+	histErr error
+	gotID   string
+}
+
+func (h *historyStub) ConversationHistory(_ context.Context, id string) (*assistant.ConversationHistoryResponse, error) {
+	h.gotID = id
+	if h.histErr != nil {
+		return nil, h.histErr
+	}
+	var resp assistant.ConversationHistoryResponse
+	resp.Data.Attributes.Messages = h.history
+	return &resp, nil
+}
+
+func TestEngine_LoadHistoryReturnsPersistedMessages(t *testing.T) {
+	want := []assistant.Message{
+		{Role: "user", MessageID: "u1", Content: assistant.TextContent("hello")},
+		assistant.AssistantMessage("a1", assistant.TextContent("hi there")),
+	}
+	b := &historyStub{history: want}
+	e := agent.New(b, assistant.SendOptions{ConversationID: "conv-42"})
+
+	got, err := e.LoadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("LoadHistory: %v", err)
+	}
+	if b.gotID != "conv-42" {
+		t.Errorf("loaded id = %q, want conv-42", b.gotID)
+	}
+	if len(got) != len(want) || got[0].MessageID != "u1" || got[1].MessageID != "a1" {
+		t.Fatalf("history = %+v, want %+v", got, want)
+	}
+}
+
+// With no conversation to restore, LoadHistory is a no-op and never touches the
+// backend (so a backend without history support is fine).
+func TestEngine_LoadHistoryNoConversationIsNoop(t *testing.T) {
+	e := agent.New(&stub{}, assistant.SendOptions{})
+	got, err := e.LoadHistory(context.Background())
+	if err != nil || got != nil {
+		t.Fatalf("LoadHistory = (%v, %v), want (nil, nil)", got, err)
+	}
+}
+
+// A backend that cannot load history (the fake) errors only when a conversation
+// is actually requested.
+func TestEngine_LoadHistoryUnsupportedBackendErrors(t *testing.T) {
+	e := agent.New(&stub{}, assistant.SendOptions{ConversationID: "conv-1"})
+	if _, err := e.LoadHistory(context.Background()); err == nil {
+		t.Fatal("want error for backend without history support")
+	}
+}
+
 func TestEngine_BackendErrorBecomesErrorEvent(t *testing.T) {
 	boom := errors.New("boom")
 	e := agent.New(&stub{err: boom}, assistant.SendOptions{})

@@ -22,6 +22,7 @@ type Phase int
 
 const (
 	PhaseIdle      Phase = iota
+	PhaseLoading         // restoring a conversation's history from the server
 	PhaseWaiting         // sent, awaiting first token
 	PhaseStreaming       // tokens arriving
 	PhaseError

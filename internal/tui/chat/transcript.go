@@ -79,6 +79,25 @@ func (t *Transcript) UpsertTool(id ItemID, tv ToolView) {
 	t.push(Item{ID: id, Role: assistant.RoleAssistant, Kind: assistant.KindToolCall, Tool: tv})
 }
 
+// Fold folds one message — streamed live or replayed from history — into the
+// transcript using the same mapping for both paths: text/reasoning fragments
+// concatenate by id, a tool call and its result merge into one block. The
+// switch is exhaustive over assistant.ContentKind (default = observe-only), so
+// a new renderable kind must be handled here to appear in the transcript.
+func (t *Transcript) Fold(msg assistant.Message) {
+	switch kind := msg.Content.Kind(); kind {
+	case assistant.KindText, assistant.KindReasoning:
+		// A redacted thinking block has no text and so renders as nothing; showing
+		// it needs a renderer for Content.Thinking.Redacted.
+		t.AppendText(ItemIDOf(msg), assistant.RoleOf(msg.Role), kind, msg.Content.TextBody())
+	case assistant.KindToolCall, assistant.KindToolResult:
+		t.UpsertTool(ItemIDOf(msg), ToolViewOf(msg.Content.Tool))
+	default:
+		// Widget, dashboard, progress, turn markers, stop, internal, and unknown
+		// kinds have no renderer yet; the payload is on msg.Content.
+	}
+}
+
 // FinalizeAll clears the streaming flag on every streaming item; called at turn
 // end. It bumps Version on the items it changes so a memoized render drops the
 // streaming indicator.

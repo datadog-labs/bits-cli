@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -12,12 +13,34 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
+// historyLoadTimeout bounds the one-shot conversation-history fetch on startup.
+const historyLoadTimeout = 30 * time.Second
+
 // turnEventMsg carries one engine event into Update; turnClosedMsg signals the
 // turn's channel was closed (turn finished or cancelled).
 type (
 	turnEventMsg  struct{ ev agent.Event }
 	turnClosedMsg struct{}
 )
+
+// historyLoadedMsg carries the result of the startup history restore: the
+// persisted messages to replay, or an error to surface.
+type historyLoadedMsg struct {
+	msgs []assistant.Message
+	err  error
+}
+
+// loadHistory fetches the engine's conversation history off the tea thread and
+// delivers it as a historyLoadedMsg. It is a one-shot command, not a turn: it
+// does not touch the turn-event pump.
+func loadHistory(engine *agent.Engine) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
+		defer cancel()
+		msgs, err := engine.LoadHistory(ctx)
+		return historyLoadedMsg{msgs: msgs, err: err}
+	}
+}
 
 // waitEvent reads one event from the turn channel and re-arms after each event
 // in Update — the turn-scoped pump. Reading a closed channel yields
@@ -62,6 +85,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.turnEvents = nil
 		m.cancelTurn = nil
+		return m, nil
+
+	case historyLoadedMsg:
+		m.applyHistory(msg)
+		m.refreshViewport()
 		return m, nil
 	}
 
@@ -150,27 +178,37 @@ func (m *Model) applyEvent(ev agent.Event) {
 	}
 }
 
-// applyMessage folds one streamed message into the transcript. The switch is
-// exhaustive over assistant.ContentKind so a new kind must be handled here.
+// applyMessage folds one streamed message into the transcript and advances the
+// live-turn status. The transcript mapping is shared with history replay via
+// Transcript.Fold; only the phase/usage side effects are live-turn specific.
 func (m *Model) applyMessage(msg assistant.Message) {
 	if msg.Results != nil && msg.Results.Usage != nil {
 		m.usage = msg.Results.Usage
 	}
-
-	kind := msg.Content.Kind()
-	switch kind {
-	case assistant.KindText, assistant.KindReasoning:
-		// A redacted thinking block has no text and so renders as nothing; showing
-		// it needs a renderer for Content.Thinking.Redacted.
+	if k := msg.Content.Kind(); k == assistant.KindText || k == assistant.KindReasoning {
 		m.chatPhase = chat.PhaseStreaming
-		m.transcript.AppendText(chat.ItemIDOf(msg), assistant.RoleOf(msg.Role), kind, msg.Content.TextBody())
-	case assistant.KindToolCall, assistant.KindToolResult:
-		m.transcript.UpsertTool(chat.ItemIDOf(msg), chat.ToolViewOf(msg.Content.Tool))
-	case assistant.KindWidget, assistant.KindDashboard, assistant.KindProgress,
-		assistant.KindTurnMarker, assistant.KindStop, assistant.KindInternal,
-		assistant.KindUnknown:
-		// Deferred/observe-only for the MVP; the payload is on msg.Content.
 	}
+	m.transcript.Fold(msg)
+}
+
+// applyHistory replays a restored conversation into the transcript. It reuses
+// the same folding as the live path, banks the final usage, then finalizes so
+// nothing shows a streaming indicator and returns to idle ready for input. A
+// load error surfaces on the status line without a transcript.
+func (m *Model) applyHistory(res historyLoadedMsg) {
+	if res.err != nil {
+		m.chatPhase = chat.PhaseError
+		m.errMsg = res.err.Error()
+		return
+	}
+	for _, msg := range res.msgs {
+		if msg.Results != nil && msg.Results.Usage != nil {
+			m.usage = msg.Results.Usage
+		}
+		m.transcript.Fold(msg)
+	}
+	m.transcript.FinalizeAll()
+	m.chatPhase = chat.PhaseIdle
 }
 
 // setDarkBackground adapts styles to the detected terminal background. It drops

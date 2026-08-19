@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -13,6 +14,10 @@ import (
 )
 
 func main() {
+	conversationID := flag.String("conversation", "",
+		"resume an existing conversation by id: its history is restored before the prompt")
+	flag.Parse()
+
 	// BITS_FAKE_BACKEND streams seeded pseudo-random output with no network or
 	// auth, for offline development and demos.
 	var backend agent.Backend
@@ -27,7 +32,7 @@ func main() {
 		backend = client
 	}
 
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, assistant.SendOptions{ConversationID: *conversationID})
 	p := tea.NewProgram(tui.New(engine))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "bits:", err)

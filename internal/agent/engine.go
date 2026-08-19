@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
@@ -16,6 +17,13 @@ import (
 type Backend interface {
 	Send(ctx context.Context, message any, opts assistant.SendOptions,
 		fn func(assistant.AssistantResponse) error) (string, error)
+}
+
+// HistoryBackend is an optional Backend capability: loading a conversation's
+// persisted messages so a session can be restored and continued.
+// *assistant.Client satisfies it; the fake backend does not.
+type HistoryBackend interface {
+	ConversationHistory(ctx context.Context, conversationID string) (*assistant.ConversationHistoryResponse, error)
 }
 
 // EventKind discriminates the events the engine streams for a turn.
@@ -122,6 +130,32 @@ func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 		next = e.execTools(ctx, calls)
 	}
 	send(Event{Kind: EventError, Err: errors.New("exceeded max turns")})
+}
+
+// ConversationID reports the conversation the engine is bound to. It is set
+// from SendOptions and updated as turns run; empty means a new conversation.
+func (e *Engine) ConversationID() string { return e.opts.ConversationID }
+
+// LoadHistory fetches the persisted messages for the engine's conversation so a
+// caller can replay them into its view before continuing the turn loop. It
+// returns (nil, nil) when there is no conversation to restore, and an error
+// when the backend cannot load history (e.g. the fake backend).
+func (e *Engine) LoadHistory(ctx context.Context) ([]assistant.Message, error) {
+	if e.opts.ConversationID == "" {
+		return nil, nil
+	}
+	hb, ok := e.backend.(HistoryBackend)
+	if !ok {
+		return nil, fmt.Errorf("backend does not support loading conversation history")
+	}
+	resp, err := hb.ConversationHistory(ctx, e.opts.ConversationID)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, nil
+	}
+	return resp.Data.Attributes.Messages, nil
 }
 
 // toolDefs returns the client tool definitions to resend each turn (nil when
