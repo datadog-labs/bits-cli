@@ -1,0 +1,16 @@
+version: "2"
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - exhaustive # enum-switch invariant (render.Item, tui event/content switches)
+    - bodyclose # raw HTTP + streaming; catch leaked response bodies
+    - errorlint # correct %w wrapping + errors.Is/As
+    - copyloopvar # modern loop-var hygiene (Go 1.22+)
+    - intrange # prefer range-over-int
+    - misspell # comment/doc hygiene
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+formatters:
+  enable:
+    - gofumpt # stricter gofmt; one canonical format
