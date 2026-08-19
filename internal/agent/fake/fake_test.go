@@ -3,6 +3,8 @@ package fake
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
@@ -75,6 +77,71 @@ func TestStreamsTextAndUsage(t *testing.T) {
 	}
 	if usage != 1 {
 		t.Errorf("expected exactly one usage line, got %d", usage)
+	}
+}
+
+// markdownMessages reassembles streamed markdown fragments by message id, so
+// each entry is one complete assistant text block.
+func markdownMessages(t *testing.T, message string) map[string]string {
+	t.Helper()
+	f := &Fake{}
+	acc := map[string]string{}
+	_, err := f.Send(context.Background(), message, assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
+		m := ar.Data.Attributes.StructuredMessage
+		if m.Content.Type == assistant.ContentMarkdownFragment {
+			acc[m.MessageID] += m.Content.TextBody()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	return acc
+}
+
+func TestFinalAnswerIsMarkdown(t *testing.T) {
+	// The final answer always opens with a heading; across several seeds we
+	// should also see fenced code and list markers at least once.
+	sawHeading, sawFence, sawList := false, false, false
+	for i := range 30 {
+		for _, txt := range markdownMessages(t, "seed-"+strconv.Itoa(i)) {
+			if strings.HasPrefix(txt, "## ") {
+				sawHeading = true
+			}
+			if strings.Contains(txt, "```") {
+				sawFence = true
+			}
+			if strings.Contains(txt, "\n- ") {
+				sawList = true
+			}
+		}
+	}
+	if !sawHeading {
+		t.Error("expected a Markdown heading in some answer")
+	}
+	if !sawFence {
+		t.Error("expected a fenced code block in some answer")
+	}
+	if !sawList {
+		t.Error("expected a bullet list in some answer")
+	}
+}
+
+func TestStreamReassemblesToDoc(t *testing.T) {
+	// Token-by-token streaming must reassemble byte-identically to a valid doc:
+	// the final answer starts with a heading and ends with a newline.
+	msgs := markdownMessages(t, "reassemble")
+	var final string
+	for _, txt := range msgs {
+		if strings.HasPrefix(txt, "## ") {
+			final = txt
+		}
+	}
+	if final == "" {
+		t.Fatal("no heading-led answer found")
+	}
+	if !strings.HasSuffix(final, "\n") {
+		t.Errorf("answer should end with a newline: %q", final)
 	}
 }
 

@@ -39,6 +39,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(msg.Width, msg.Height)
 		return m, nil
 
+	case tea.BackgroundColorMsg:
+		m.setDarkBackground(msg.IsDark())
+		return m, nil
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
@@ -167,6 +171,20 @@ func (m *Model) applyMessage(msg assistant.Message) {
 		assistant.KindUnknown:
 		// Deferred/observe-only for the MVP; the payload is on msg.Content.
 	}
+}
+
+// setDarkBackground adapts styles to the detected terminal background. It drops
+// the render cache because those entries were produced under the old palette —
+// the cache key is version+width, not style — so stale colors would otherwise
+// persist until each item next changes.
+func (m *Model) setDarkBackground(isDark bool) {
+	if isDark == m.hasDarkBG {
+		return
+	}
+	m.hasDarkBG = isDark
+	m.chatStyles = chat.DefaultStyles(isDark)
+	m.renderCache = map[chat.ItemID]renderCacheEntry{}
+	m.refreshViewport()
 }
 
 func (m *Model) resize(w, h int) {

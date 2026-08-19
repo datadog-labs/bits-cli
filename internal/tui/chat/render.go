@@ -36,13 +36,13 @@ func fallback(it Item, width int, sty Styles) string {
 	return sty.Meta.Render(wrap("["+it.Kind.String()+"]", width))
 }
 
-// renderText renders a user or assistant text fragment. Markdown is shown as
-// plain wrapped text for now; rich markdown rendering is deferred.
+// renderText renders a user or assistant text fragment. Assistant text is
+// rendered as markdown; user text keeps its marker and stays plain.
 func renderText(it Item, width int, sty Styles) string {
 	if it.Role == assistant.RoleUser {
 		return renderUser(it.Text, width, sty)
 	}
-	return sty.AssistantText.Render(wrap(it.Text, width))
+	return renderMarkdown(it.Text, width, sty.MarkdownStyle)
 }
 
 // renderUser prefixes the first line with a marker and hangs the continuation

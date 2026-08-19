@@ -100,11 +100,12 @@ func (f *Fake) Send(ctx context.Context, message any, opts assistant.SendOptions
 		}
 	}
 
-	// The final answer: its own message, length varying widely — a sentence up to
-	// several paragraphs — so long, scrolling replies get exercised too.
-	n := 10 + r.Intn(200)
-	totalWords += n
-	if err := emitWords(step, r, convID, nextMsgID(), assistant.ContentMarkdownFragment, n); err != nil {
+	// The final answer is a Markdown document — a heading, prose with inline
+	// formatting, lists, and fenced code — streamed token by token so Markdown
+	// rendering (including transient partial code fences) gets exercised.
+	doc := markdownAnswer(r)
+	totalWords += len(strings.Fields(doc))
+	if err := streamText(step, convID, nextMsgID(), assistant.ContentMarkdownFragment, doc); err != nil {
 		return convID, err
 	}
 
@@ -153,6 +154,124 @@ func emitWords(step func(assistant.AssistantResponse) error, r *rand.Rand, convI
 	}
 	return nil
 }
+
+// markdownAnswer builds a deterministic Markdown document: a heading followed
+// by 2-5 body blocks (prose, bullet/ordered lists, and at most one fenced code
+// block) so the renderer sees a realistic mix of constructs.
+func markdownAnswer(r *rand.Rand) string {
+	parts := []string{"## " + capitalize(phrase(r, 2+r.Intn(3)))}
+	usedCode := false
+	for range 2 + r.Intn(4) {
+		switch r.Intn(5) {
+		case 0:
+			parts = append(parts, bulletList(r))
+		case 1:
+			parts = append(parts, orderedList(r))
+		case 2:
+			if !usedCode {
+				parts = append(parts, codeBlock(r))
+				usedCode = true
+				continue
+			}
+			parts = append(parts, paragraph(r))
+		default:
+			parts = append(parts, paragraph(r))
+		}
+	}
+	return strings.Join(parts, "\n\n") + "\n"
+}
+
+// paragraph returns 2-4 prose sentences.
+func paragraph(r *rand.Rand) string {
+	ss := make([]string, 2+r.Intn(3))
+	for i := range ss {
+		ss[i] = sentence(r)
+	}
+	return strings.Join(ss, " ")
+}
+
+// sentence returns one capitalized sentence with occasional inline Markdown
+// (bold, inline code, a link) sprinkled on non-leading words.
+func sentence(r *rand.Rand) string {
+	ws := make([]string, 6+r.Intn(8))
+	for i := range ws {
+		w := pick(r, lexicon)
+		if i > 0 {
+			switch r.Intn(12) {
+			case 0:
+				w = "**" + w + "**"
+			case 1:
+				w = "`" + w + "`"
+			case 2:
+				w = "[" + w + "](https://docs.datadoghq.com)"
+			}
+		}
+		ws[i] = w
+	}
+	ws[0] = capitalize(ws[0])
+	return strings.Join(ws, " ") + "."
+}
+
+// phrase returns n lowercase words joined by spaces, with no trailing period.
+func phrase(r *rand.Rand, n int) string {
+	ws := make([]string, n)
+	for i := range ws {
+		ws[i] = pick(r, lexicon)
+	}
+	return strings.Join(ws, " ")
+}
+
+func bulletList(r *rand.Rand) string {
+	items := make([]string, 2+r.Intn(3))
+	for i := range items {
+		items[i] = "- " + phrase(r, 2+r.Intn(4))
+	}
+	return strings.Join(items, "\n")
+}
+
+func orderedList(r *rand.Rand) string {
+	items := make([]string, 2+r.Intn(3))
+	for i := range items {
+		items[i] = strconv.Itoa(i+1) + ". " + phrase(r, 2+r.Intn(4))
+	}
+	return strings.Join(items, "\n")
+}
+
+// codeSnippets are small, syntactically plausible blocks so the code fence path
+// (and chroma highlighting) is exercised across a few languages.
+var codeSnippets = []struct{ lang, body string }{
+	{"go", "func main() {\n\tfmt.Println(\"latency spike\")\n}"},
+	{"bash", "kubectl get pods -n prod\ncurl -s localhost:8126/health"},
+	{"json", "{\n  \"service\": \"web\",\n  \"p95_ms\": 42\n}"},
+	{"sql", "SELECT service, count(*)\nFROM traces\nGROUP BY service;"},
+}
+
+func codeBlock(r *rand.Rand) string {
+	s := codeSnippets[r.Intn(len(codeSnippets))]
+	return "```" + s.lang + "\n" + s.body + "\n```"
+}
+
+// streamText streams s as one segment (all fragments share msgID) in
+// word+whitespace chunks, so the reassembled text is byte-identical to s while
+// Markdown structure streams in incrementally (a code fence is briefly open).
+func streamText(step func(assistant.AssistantResponse) error, convID, msgID, typ, s string) error {
+	for i := 0; i < len(s); {
+		j := i
+		for j < len(s) && !isSpaceByte(s[j]) {
+			j++
+		}
+		for j < len(s) && isSpaceByte(s[j]) {
+			j++
+		}
+		if err := step(textResp(convID, msgID, typ, s[i:j])); err != nil {
+			return err
+		}
+		i = j
+	}
+	return nil
+}
+
+func isSpaceByte(b byte) bool { return b == ' ' || b == '\t' || b == '\n' }
 
 // resp wraps one message in the response envelope the stream delivers.
 func resp(convID string, msg assistant.Message) assistant.AssistantResponse {
