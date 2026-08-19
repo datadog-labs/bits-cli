@@ -213,8 +213,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 }
 
 // applyMessage folds one streamed message into the transcript and advances the
-// live-turn status. The transcript mapping is shared with history replay via
-// Transcript.Fold; only the phase/usage side effects are live-turn specific.
+// live-turn status.
 func (m *Model) applyMessage(msg assistant.Message) {
 	if msg.Results != nil && msg.Results.Usage != nil {
 		m.usage = msg.Results.Usage
@@ -222,14 +221,10 @@ func (m *Model) applyMessage(msg assistant.Message) {
 	if k := msg.Content.Kind(); k == assistant.KindText || k == assistant.KindReasoning {
 		m.chatPhase = chat.PhaseStreaming
 	}
-	m.transcript.Fold(msg)
+	m.transcript.AppendMessage(msg)
 }
 
-// applyHistory replays a restored conversation into the transcript. It reuses
-// the same folding as the live path, banks the final usage, then finalizes so
-// nothing shows a streaming indicator and returns to idle ready for input. A
-// load failure posts a transient error notice instead of a transcript and
-// returns its TTL-clear command; success returns nil.
+// applyHistory replays a restored conversation into the transcript.
 func (m *Model) applyHistory(res historyLoadedMsg) tea.Cmd {
 	if res.err != nil {
 		m.chatPhase = chat.PhaseIdle
@@ -239,7 +234,7 @@ func (m *Model) applyHistory(res historyLoadedMsg) tea.Cmd {
 		if msg.Results != nil && msg.Results.Usage != nil {
 			m.usage = msg.Results.Usage
 		}
-		m.transcript.Fold(msg)
+		m.transcript.AppendMessage(msg)
 	}
 	m.transcript.FinalizeAll()
 	m.chatPhase = chat.PhaseIdle

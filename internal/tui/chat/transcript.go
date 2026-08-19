@@ -22,8 +22,7 @@ func NewTranscript() *Transcript {
 // Items returns the underlying slice. Callers must treat it as read-only.
 func (t *Transcript) Items() []Item { return t.items }
 
-// AppendUser adds a user message with a locally generated unique ID (the wire
-// has no id for the message we are about to send).
+// AppendUser adds a user message with a locally generated unique ID.
 func (t *Transcript) AppendUser(text string) {
 	t.userSeq++
 	t.push(Item{
@@ -34,13 +33,13 @@ func (t *Transcript) AppendUser(text string) {
 	})
 }
 
-// AppendText appends a streamed text/reasoning fragment. Fragments sharing an
+// appendText appends a streamed text/reasoning fragment. Fragments sharing an
 // ID are concatenated into one item; the first creates a streaming item.
 //
 // An empty delta is a no-op: it must not mint a blank block (the stream's final
 // fragment is empty — it exists to carry usage) nor bump Version and force a
 // re-render that changes nothing.
-func (t *Transcript) AppendText(id ItemID, role assistant.Role, kind assistant.ContentKind, delta string) {
+func (t *Transcript) appendText(id ItemID, role assistant.Role, kind assistant.ContentKind, delta string) {
 	if delta == "" {
 		return
 	}
@@ -52,10 +51,10 @@ func (t *Transcript) AppendText(id ItemID, role assistant.Role, kind assistant.C
 	t.push(Item{ID: id, Role: role, Kind: kind, Text: delta, Streaming: true})
 }
 
-// UpsertTool creates a tool block on the call and merges the result into it
+// upsertTool creates a tool block on the call and merges the result into it
 // (same ID). The block stays a KindToolCall so one renderer draws call+result
 // together; only non-empty result fields overwrite existing ones.
-func (t *Transcript) UpsertTool(id ItemID, tv ToolView) {
+func (t *Transcript) upsertTool(id ItemID, tv ToolView) {
 	if i, ok := t.index[id]; ok {
 		cur := &t.items[i].Tool
 		if tv.Name != "" {
@@ -79,19 +78,13 @@ func (t *Transcript) UpsertTool(id ItemID, tv ToolView) {
 	t.push(Item{ID: id, Role: assistant.RoleAssistant, Kind: assistant.KindToolCall, Tool: tv})
 }
 
-// Fold folds one message — streamed live or replayed from history — into the
-// transcript using the same mapping for both paths: text/reasoning fragments
-// concatenate by id, a tool call and its result merge into one block. The
-// switch is exhaustive over assistant.ContentKind (default = observe-only), so
-// a new renderable kind must be handled here to appear in the transcript.
-func (t *Transcript) Fold(msg assistant.Message) {
+// AppendMessage adds a backend message to the transcript.
+func (t *Transcript) AppendMessage(msg assistant.Message) {
 	switch kind := msg.Content.Kind(); kind {
 	case assistant.KindText, assistant.KindReasoning:
-		// A redacted thinking block has no text and so renders as nothing; showing
-		// it needs a renderer for Content.Thinking.Redacted.
-		t.AppendText(ItemIDOf(msg), assistant.RoleOf(msg.Role), kind, msg.Content.TextBody())
+		t.appendText(ItemIDOf(msg), assistant.RoleOf(msg.Role), kind, msg.Content.TextBody())
 	case assistant.KindToolCall, assistant.KindToolResult:
-		t.UpsertTool(ItemIDOf(msg), ToolViewOf(msg.Content.Tool))
+		t.upsertTool(ItemIDOf(msg), ToolViewOf(msg.Content.Tool))
 	default:
 		// Widget, dashboard, progress, turn markers, stop, internal, and unknown
 		// kinds have no renderer yet; the payload is on msg.Content.
@@ -99,8 +92,7 @@ func (t *Transcript) Fold(msg assistant.Message) {
 }
 
 // FinalizeAll clears the streaming flag on every streaming item; called at turn
-// end. It bumps Version on the items it changes so a memoized render drops the
-// streaming indicator.
+// end.
 func (t *Transcript) FinalizeAll() {
 	for i := range t.items {
 		if t.items[i].Streaming {

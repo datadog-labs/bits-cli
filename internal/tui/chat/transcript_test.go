@@ -16,8 +16,8 @@ func toolID(key string) ItemID { return ItemID{Scope: ScopeTool, Key: key} }
 
 func TestAppendText_ConcatenatesSameID(t *testing.T) {
 	tr := NewTranscript()
-	tr.AppendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "Hel")
-	tr.AppendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "lo")
+	tr.appendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "Hel")
+	tr.appendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "lo")
 
 	items := tr.Items()
 	if len(items) != 1 {
@@ -38,8 +38,8 @@ func TestAppendText_ConcatenatesSameID(t *testing.T) {
 // differ only by Kind.
 func TestAppendText_SameMessageDifferentKindsKeepDistinctItems(t *testing.T) {
 	tr := NewTranscript()
-	tr.AppendText(msgID("m1", assistant.KindReasoning), assistant.RoleAssistant, assistant.KindReasoning, "why")
-	tr.AppendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "answer")
+	tr.appendText(msgID("m1", assistant.KindReasoning), assistant.RoleAssistant, assistant.KindReasoning, "why")
+	tr.appendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "answer")
 
 	items := tr.Items()
 	if len(items) != 2 {
@@ -55,15 +55,15 @@ func TestAppendText_EmptyDeltaIsNoOp(t *testing.T) {
 	id := msgID("m1", assistant.KindText)
 
 	// The stream's final fragment is empty (it carries usage): no blank block.
-	tr.AppendText(id, assistant.RoleAssistant, assistant.KindText, "")
+	tr.appendText(id, assistant.RoleAssistant, assistant.KindText, "")
 	if got := len(tr.Items()); got != 0 {
 		t.Fatalf("empty delta created %d items, want 0", got)
 	}
 
 	// Nor a version bump on an existing item, which would force a re-render.
-	tr.AppendText(id, assistant.RoleAssistant, assistant.KindText, "hi")
+	tr.appendText(id, assistant.RoleAssistant, assistant.KindText, "hi")
 	v0 := tr.Items()[0].Version
-	tr.AppendText(id, assistant.RoleAssistant, assistant.KindText, "")
+	tr.appendText(id, assistant.RoleAssistant, assistant.KindText, "")
 	it := tr.Items()[0]
 	if it.Text != "hi" || it.Version != v0 {
 		t.Errorf("item = (%q, v%d), want (%q, v%d) unchanged", it.Text, it.Version, "hi", v0)
@@ -72,7 +72,7 @@ func TestAppendText_EmptyDeltaIsNoOp(t *testing.T) {
 
 func TestAppendText_UnknownKindStored(t *testing.T) {
 	tr := NewTranscript()
-	tr.AppendText(msgID("x", assistant.KindUnknown), assistant.RoleAssistant, assistant.KindUnknown, "?")
+	tr.appendText(msgID("x", assistant.KindUnknown), assistant.RoleAssistant, assistant.KindUnknown, "?")
 	if got := tr.Items()[0].Kind; got != assistant.KindUnknown {
 		t.Errorf("kind = %v, want KindUnknown", got)
 	}
@@ -80,7 +80,7 @@ func TestAppendText_UnknownKindStored(t *testing.T) {
 
 func TestUpsertTool_CreateThenMerge(t *testing.T) {
 	tr := NewTranscript()
-	tr.UpsertTool(toolID("1"), ToolView{Name: "run_bash", Input: `{"cmd":"ls"}`})
+	tr.upsertTool(toolID("1"), ToolView{Name: "run_bash", Input: `{"cmd":"ls"}`})
 
 	items := tr.Items()
 	if len(items) != 1 {
@@ -94,7 +94,7 @@ func TestUpsertTool_CreateThenMerge(t *testing.T) {
 	}
 
 	// Result arrives on the same ID: merge output+status, keep input, one item.
-	tr.UpsertTool(toolID("1"), ToolView{Output: "a\nb", Status: ToolSuccess})
+	tr.upsertTool(toolID("1"), ToolView{Output: "a\nb", Status: ToolSuccess})
 
 	items = tr.Items()
 	if len(items) != 1 {
@@ -114,7 +114,7 @@ func TestUpsertTool_CreateThenMerge(t *testing.T) {
 
 func TestFinalizeAll_ClearsStreamingAndBumpsVersionOnce(t *testing.T) {
 	tr := NewTranscript()
-	tr.AppendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "hi")
+	tr.appendText(msgID("m1", assistant.KindText), assistant.RoleAssistant, assistant.KindText, "hi")
 	v0 := tr.Items()[0].Version
 
 	tr.FinalizeAll()
