@@ -6,6 +6,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
 // View lays out the transcript viewport, a status line, and the input. Alt-screen
@@ -26,6 +28,7 @@ func (m *Model) View() tea.View {
 // and the input, floating the completion menu as an overlay above the input
 // when it is open.
 func (m *Model) chatView() string {
+	m.editor.SetPlaceholder(m.promptPlaceholder())
 	base := strings.Join([]string{
 		m.viewport.View(),
 		m.noticeBar(),
@@ -50,6 +53,22 @@ func (m *Model) chatView() string {
 		lipgloss.NewLayer(base),
 		lipgloss.NewLayer(menu).X(x).Y(y).Z(1),
 	).Render()
+}
+
+// promptPlaceholder
+func (m *Model) promptPlaceholder() string {
+	var b strings.Builder
+	switch m.chatPhase {
+	case chat.PhaseLoading:
+		b.WriteString("Loading…")
+	case chat.PhaseWaiting, chat.PhaseStreaming:
+		b.WriteString("Working on it…")
+	case chat.PhaseError:
+		b.WriteString("Error")
+	default:
+		b.WriteString("Ask Bits…")
+	}
+	return b.String()
 }
 
 // noticeBar renders the transient notification bar between the transcript and

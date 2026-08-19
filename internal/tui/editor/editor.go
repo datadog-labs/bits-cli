@@ -77,6 +77,9 @@ func (e *Editor) Focus() tea.Cmd { return e.ta.Focus() }
 // SetWidth sets the input width in cells.
 func (e *Editor) SetWidth(w int) { e.ta.SetWidth(w) }
 
+// SetPlaceholder sets the hint shown while the input is empty.
+func (e *Editor) SetPlaceholder(s string) { e.ta.Placeholder = s }
+
 // Value returns the current input text.
 func (e *Editor) Value() string { return e.ta.Value() }
 

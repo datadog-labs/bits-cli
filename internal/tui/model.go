@@ -22,17 +22,10 @@ type renderCacheEntry struct {
 	out     string
 }
 
-// Mode is the top-level screen the model shows. It starts at ModeTermInit until
-// the first WindowSizeMsg sizes the viewport, then moves to ModeChat. Routing
-// the pre-sized state through Mode (rather than a separate boolean) keeps screen
-// transitions and their layout side effects funnelled through setMode; a future
-// conversation picker / onboarding screen plugs in the same way.
+// Mode is the top-level screen the model shows.
 type Mode int
 
 const (
-	// ModeTermInit is shown before the terminal reports its size. It is the zero
-	// value, so a freshly constructed Model starts here until the first
-	// WindowSizeMsg arrives and the viewport can be sized.
 	ModeTermInit Mode = iota
 	ModeChat
 )
