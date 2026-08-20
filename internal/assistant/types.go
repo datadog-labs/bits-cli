@@ -357,6 +357,9 @@ const (
 	// for tools we declare in client_tools, plus the server-injected
 	// approval_request gate. Distinct from ContentToolCall (server-side).
 	ContentClientToolCall = "client_tool_call"
+	// ContentClientToolResponse is the persisted result of a client-side tool
+	// call, echoed into conversation history (role user).
+	ContentClientToolResponse = "client_tool_response"
 	// ContentWidgetDef carries a Datadog dashboard widget definition (in the
 	// WidgetDef field) that the UI renders as a rich visualization. The
 	// definition is a query spec + styling; it contains no data. It is decoded
@@ -414,7 +417,8 @@ type TurnStatusPayload struct {
 }
 
 // ToolPayload carries fields for all tool-related content types: tool_call,
-// client_tool_call, tool_call_started, tool_call_input_delta, tool_response.
+// client_tool_call, tool_call_started, tool_call_input_delta, tool_response,
+// client_tool_response.
 type ToolPayload struct {
 	ToolCallID   string
 	Title        string
@@ -473,7 +477,7 @@ type Content struct {
 
 	Markdown   *MarkdownPayload   // markdown_fragment
 	Thinking   *ThinkingPayload   // thinking
-	Tool       *ToolPayload       // tool_call, client_tool_call, tool_call_started, tool_call_input_delta, tool_response
+	Tool       *ToolPayload       // tool_call, client_tool_call, tool_call_started, tool_call_input_delta, tool_response, client_tool_response
 	Widget     *WidgetPayload     // widget_def, widget
 	Dashboard  *DashboardPayload  // dashboard
 	Progress   *ProgressPayload   // background_task_update
@@ -611,7 +615,7 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 		}
 	case ContentUserStop:
 		c.Stop = &StopPayload{Content: jsonString(a.Content)}
-	case ContentToolCall, ContentClientToolCall, ContentToolCallStarted, ContentToolCallInputDelta, ContentToolResponse:
+	case ContentToolCall, ContentClientToolCall, ContentToolCallStarted, ContentToolCallInputDelta, ContentToolResponse, ContentClientToolResponse:
 		tp := &ToolPayload{
 			ToolCallID:   a.ToolCallID,
 			Title:        a.Title,
@@ -692,7 +696,7 @@ const (
 	KindText                          // markdown_fragment: render as answer text
 	KindReasoning                     // thinking: render dimmed/collapsible
 	KindToolCall                      // tool_call / client_tool_call / tool_call_started / tool_call_input_delta
-	KindToolResult                    // tool_response
+	KindToolResult                    // tool_response / client_tool_response
 	KindWidget                        // widget_def / widget: rich viz, render or summarize
 	KindDashboard                     // dashboard: whole dashboard, summarize
 	KindProgress                      // background_task_update: async task progress/final
@@ -712,7 +716,7 @@ func (c *Content) Kind() ContentKind {
 		return KindReasoning
 	case ContentToolCall, ContentClientToolCall, ContentToolCallStarted, ContentToolCallInputDelta:
 		return KindToolCall
-	case ContentToolResponse:
+	case ContentToolResponse, ContentClientToolResponse:
 		return KindToolResult
 	case ContentWidgetDef, ContentWidget:
 		return KindWidget
