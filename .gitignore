@@ -1,0 +1,8 @@
+/bits-cli
+
+# Go workspace file
+go.work
+go.work.sum
+
+# OS
+**/.DS_Store

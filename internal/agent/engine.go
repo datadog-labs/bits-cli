@@ -7,8 +7,14 @@ package agent
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
+)
+
+var (
+	ErrMaxTurns           = errors.New("exceeded max turns")
+	ErrHistoryUnsupported = errors.New("backend does not support loading conversation history")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -18,11 +24,17 @@ type Backend interface {
 		fn func(assistant.AssistantResponse) error) (string, error)
 }
 
+// HistoryBackend adds conversation history loading
+type HistoryBackend interface {
+	ConversationHistory(ctx context.Context, in assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error)
+}
+
 // EventKind discriminates the events the engine streams for a turn.
 type EventKind int
 
 const (
-	EventMessage      EventKind = iota // a message arrived; read Msg
+	EventBlock        EventKind = iota // a block was created or updated; read Block
+	EventUsage                         // token usage update; read Usage
 	EventConversation                  // server-assigned/confirmed conversation id
 	EventTurnDone                      // the turn completed with no pending tool calls
 	EventError                         // the turn failed
@@ -30,14 +42,19 @@ const (
 
 // Event is one thing that happened during a turn. It is a plain value carried
 // on a channel, with only the fields relevant to Kind populated.
-//
-// Msg is the streamed message verbatim; switch on Msg.Content.Kind() to handle
-// it. Token usage rides on it (Msg.Results.Usage), as it does on the wire.
 type Event struct {
 	Kind   EventKind
-	Msg    assistant.Message // for EventMessage
-	ConvID string            // for EventConversation
-	Err    error             // for EventError
+	Update TranscriptUpdate // for EventBlock
+	Usage  *assistant.Usage // for EventUsage
+	ConvID string           // for EventConversation
+	Err    error            // for EventError
+}
+
+// TranscriptUpdate is the snapshot delivered on each block change: the full
+// ordered block list plus the block that changed.
+type TranscriptUpdate struct {
+	Blocks  []Block
+	Changed Block
 }
 
 // maxTurns caps the client-tool loop so a misbehaving backend can't spin
@@ -45,30 +62,53 @@ type Event struct {
 const maxTurns = 20
 
 // Engine drives the assistant turn loop over a Backend and streams events. It
-// is safe to create one Engine and run many turns sequentially.
+// owns the aggregated conversation transcript, folding streamed deltas into it
+// and emitting snapshots.
+//
+// It is not designed to run concurrent turns / restore and left to the consumer
+// to make sure it does not concurrently starts either of those in parallel.
 type Engine struct {
-	backend Backend
-	tools   map[string]assistant.Tool // client tools by name; empty for the MVP
-	opts    assistant.SendOptions
+	backend    Backend
+	tools      map[string]assistant.Tool // client tools by name; empty for the MVP
+	opts       assistant.SendOptions
+	transcript *Transcript
+	// active is true while a turn or restore runs; overlapping them is a bug.
+	active atomic.Bool
 }
 
 // New returns an Engine. opts carries the per-request defaults (profile, model,
 // conversation id, …); ConversationID is updated as turns run.
 func New(b Backend, opts assistant.SendOptions) *Engine {
-	return &Engine{backend: b, tools: map[string]assistant.Tool{}, opts: opts}
+	return &Engine{
+		backend:    b,
+		tools:      map[string]assistant.Tool{},
+		opts:       opts,
+		transcript: NewTranscript(),
+	}
 }
 
-// Start runs one user turn (plus any client-tool round-trips) in a goroutine
+// StartTurn runs one user turn (plus any client-tool round-trips) in a goroutine
 // and streams events. The channel is closed when the turn ends. Cancel ctx to
-// interrupt; cancellation ends the turn quietly (no error event).
-func (e *Engine) Start(ctx context.Context, message string) <-chan Event {
+// interrupt; cancellation ends the turn quietly (no error event). It panics if a
+// turn or restore is already in flight.
+func (e *Engine) StartTurn(ctx context.Context, message string) <-chan Event {
+	e.begin()
 	out := make(chan Event, 64)
 	go e.run(ctx, message, out)
 	return out
 }
 
+// begin claims the engine for one turn/restore, panicking if another is already
+// running. The paired release is deferred inside run/restore.
+func (e *Engine) begin() {
+	if !e.active.CompareAndSwap(false, true) {
+		panic("agent: StartTurn/Restore called while a turn is already running")
+	}
+}
+
 func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 	defer close(out)
+	defer e.active.Store(false)
 
 	// send is cancellation-aware so a stalled consumer during cancel can't
 	// wedge the engine goroutine.
@@ -79,6 +119,26 @@ func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 		case <-ctx.Done():
 			return false
 		}
+	}
+
+	fold := func(msg assistant.Message) bool {
+		if b, ok := e.transcript.AppendMessage(msg); ok {
+			if !send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: e.snapshot(), Changed: b}}) {
+				return false
+			}
+		}
+		if msg.Results != nil && msg.Results.Usage != nil {
+			if !send(Event{Kind: EventUsage, Usage: msg.Results.Usage}) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// The user's turn opens the transcript; the engine owns the user block too.
+	userBlock := e.transcript.AppendUser(message)
+	if !send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: e.snapshot(), Changed: userBlock}}) {
+		return
 	}
 
 	var next any = message
@@ -98,7 +158,7 @@ func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 			if msg.Content.Type == assistant.ContentClientToolCall {
 				calls = append(calls, msg.Content)
 			}
-			if !send(Event{Kind: EventMessage, Msg: msg}) {
+			if !fold(msg) {
 				return ctx.Err()
 			}
 			return nil
@@ -107,6 +167,7 @@ func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 			return // cancelled: end the turn quietly
 		}
 		if err != nil {
+			e.transcript.FinalizeAll()
 			send(Event{Kind: EventError, Err: err})
 			return
 		}
@@ -116,12 +177,72 @@ func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 		send(Event{Kind: EventConversation, ConvID: convID})
 
 		if len(calls) == 0 {
+			e.transcript.FinalizeAll()
 			send(Event{Kind: EventTurnDone})
 			return
 		}
 		next = e.execTools(ctx, calls)
 	}
-	send(Event{Kind: EventError, Err: errors.New("exceeded max turns")})
+	e.transcript.FinalizeAll()
+	send(Event{Kind: EventError, Err: ErrMaxTurns})
+}
+
+// snapshot returns a copy of the current blocks, safe to send on the channel and
+// retain: the engine keeps mutating its own transcript on later folds.
+func (e *Engine) snapshot() []Block {
+	return append([]Block(nil), e.transcript.Blocks()...)
+}
+
+// ConversationID reports the conversation the engine is bound to. It is set
+// from SendOptions and updated as turns run; empty means a new conversation.
+func (e *Engine) ConversationID() string { return e.opts.ConversationID }
+
+// Restore fetches the persisted history for the engine's conversation, folds it
+// into the transcript.
+func (e *Engine) Restore(ctx context.Context) <-chan Event {
+	e.begin()
+	out := make(chan Event, 64)
+	go e.restore(ctx, out)
+	return out
+}
+
+func (e *Engine) restore(ctx context.Context, out chan<- Event) {
+	defer close(out)
+	defer e.active.Store(false)
+
+	send := func(ev Event) {
+		select {
+		case out <- ev:
+		case <-ctx.Done():
+		}
+	}
+
+	if e.opts.ConversationID == "" {
+		return
+	}
+	hb, ok := e.backend.(HistoryBackend)
+	if !ok {
+		send(Event{Kind: EventError, Err: ErrHistoryUnsupported})
+		return
+	}
+	resp, err := hb.ConversationHistory(ctx, assistant.ConversationHistoryInput{ConversationID: e.opts.ConversationID})
+	if ctx.Err() != nil {
+		return // cancelled: end quietly
+	}
+	if err != nil {
+		send(Event{Kind: EventError, Err: err})
+		return
+	}
+	if resp == nil {
+		return
+	}
+	for _, msg := range resp.Data.Attributes.Messages {
+		e.transcript.AppendMessage(msg)
+	}
+	e.transcript.FinalizeAll()
+	if blocks := e.snapshot(); len(blocks) > 0 {
+		send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: blocks}})
+	}
 }
 
 // toolDefs returns the client tool definitions to resend each turn (nil when

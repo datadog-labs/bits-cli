@@ -3,8 +3,8 @@ package tui
 import (
 	"context"
 	"strings"
+	"time"
 
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
@@ -12,12 +12,45 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
+// historyLoadTimeout bounds the conversation-history fetch on startup.
+const historyLoadTimeout = 30 * time.Second
+
+// mouseWheelDelta is how many transcript lines one wheel notch scrolls,
+const mouseWheelDelta = 3
+
+// defaultNoticeTTL is how long a transient status notice stays before it clears.
+const defaultNoticeTTL = 10 * time.Second
+
 // turnEventMsg carries one engine event into Update; turnClosedMsg signals the
-// turn's channel was closed (turn finished or cancelled).
+// turn's channel was closed (turn finished or cancelled). A history restore runs
+// through the same pump, so its events flow here too.
 type (
 	turnEventMsg  struct{ ev agent.Event }
 	turnClosedMsg struct{}
 )
+
+// noticeExpiredMsg clears a transient status notice when its TTL elapses. seq
+// guards against a stale timer clearing a newer notice.
+type noticeExpiredMsg struct{ seq int }
+
+// showNotice sets the transient status notice and returns a command that clears
+// it after ttl (defaultNoticeTTL when ttl <= 0). The seq stamps the timer so a
+// later notice is not cleared by an earlier one's timer.
+func (m *Model) showNotice(n chat.Notice, ttl time.Duration) tea.Cmd {
+	m.noticeSeq++
+	m.notice = n
+	if ttl <= 0 {
+		ttl = defaultNoticeTTL
+	}
+	seq := m.noticeSeq
+	return tea.Tick(ttl, func(time.Time) tea.Msg { return noticeExpiredMsg{seq: seq} })
+}
+
+// clearNotice removes any notice immediately and invalidates a pending timer.
+func (m *Model) clearNotice() {
+	m.noticeSeq++
+	m.notice = chat.Notice{}
+}
 
 // waitEvent reads one event from the turn channel and re-arms after each event
 // in Update — the turn-scoped pump. Reading a closed channel yields
@@ -46,22 +79,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
-	case tea.MouseMsg:
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
+	case tea.MouseWheelMsg:
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.list.ScrollBy(-mouseWheelDelta)
+		case tea.MouseWheelDown:
+			m.list.ScrollBy(mouseWheelDelta)
+		}
+		return m, nil
 
 	case turnEventMsg:
-		m.applyEvent(msg.ev)
+		cmd := m.applyEvent(msg.ev)
 		m.refreshViewport()
-		return m, waitEvent(m.turnEvents)
+		return m, tea.Batch(cmd, waitEvent(m.turnEvents))
 
 	case turnClosedMsg:
 		if m.chatPhase != chat.PhaseError {
 			m.chatPhase = chat.PhaseIdle
 		}
 		m.turnEvents = nil
-		m.cancelTurn = nil
+		if m.cancelTurn != nil {
+			m.cancelTurn() // release the turn/restore context
+			m.cancelTurn = nil
+		}
+		return m, nil
+
+	case noticeExpiredMsg:
+		if msg.seq == m.noticeSeq {
+			m.notice = chat.Notice{}
+		}
 		return m, nil
 	}
 
@@ -101,9 +147,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// focused and owns them for line editing (ctrl+u = delete to line start,
 		// which is what Ghostty sends for cmd+backspace). Transcript scrolling is
 		// pgup/pgdown and the mouse wheel.
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
+		if msg.String() == "pgup" {
+			m.list.PageUp()
+		} else {
+			m.list.PageDown()
+		}
+		return m, nil
 	}
 
 	cmd := m.editor.Update(msg)
@@ -111,127 +160,94 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// submit starts a turn for the current input, unless it is empty or a turn is
-// already running.
+// submit starts a turn for the current input, unless it is empty, a turn is
+// already running, or history is still loading. The user block is added by the
+// engine (it owns the transcript), so it arrives as the turn's first event.
 func (m *Model) submit() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.editor.Value())
-	if text == "" || m.turnEvents != nil {
+	if text == "" || m.turnEvents != nil || m.chatPhase == chat.PhaseLoading {
 		return m, nil
 	}
 	m.editor.Reset()
-	m.transcript.AppendUser(text)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelTurn = cancel
-	m.turnEvents = m.engine.Start(ctx, text)
+	m.turnEvents = m.engine.StartTurn(ctx, text)
 	m.chatPhase = chat.PhaseWaiting
-	m.errMsg = ""
+	m.clearNotice()
 	m.refreshViewport()
+	// Submitting always jumps to the tail and re-engages auto-follow, so the
+	// user sees their message and the incoming reply even if they had scrolled up.
+	m.list.ScrollToBottom()
 	return m, waitEvent(m.turnEvents)
 }
 
-// applyEvent folds one engine event into the transcript / status. The switch is
-// exhaustive over agent.EventKind.
-func (m *Model) applyEvent(ev agent.Event) {
+// applyEvent folds one engine event into the block snapshot / status. The switch
+// is exhaustive over agent.EventKind. It returns a command for side effects (an
+// error posts a transient notice); nil otherwise.
+func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	switch ev.Kind {
-	case agent.EventMessage:
-		m.applyMessage(ev.Msg)
+	case agent.EventBlock:
+		m.blocks = ev.Update.Blocks
+		// A still-open text/reasoning block means tokens are arriving. Restored
+		// (Complete) blocks and the bulk restore snapshot (zero Changed) don't
+		// flip the phase, so restore stays in PhaseLoading until its channel closes.
+		if k := ev.Update.Changed.Kind; !ev.Update.Changed.Complete &&
+			(k == assistant.KindText || k == assistant.KindReasoning) {
+			m.chatPhase = chat.PhaseStreaming
+		}
+	case agent.EventUsage:
+		m.usage = ev.Usage
 	case agent.EventConversation:
 		m.convID = ev.ConvID
 	case agent.EventTurnDone:
-		m.transcript.FinalizeAll()
 		m.chatPhase = chat.PhaseIdle
 	case agent.EventError:
-		m.transcript.FinalizeAll()
-		m.chatPhase = chat.PhaseError
-		if ev.Err != nil {
-			m.errMsg = ev.Err.Error()
+		// A failure during restore is benign: drop to idle with a notice so the
+		// user can still type. A failure mid-turn is the turn's error state.
+		if m.chatPhase == chat.PhaseLoading {
+			m.chatPhase = chat.PhaseIdle
+			if ev.Err != nil {
+				return m.showNotice(noticeForError("restore failed", ev.Err), 0)
+			}
+		} else {
+			m.chatPhase = chat.PhaseError
+			if ev.Err != nil {
+				return m.showNotice(noticeForError("", ev.Err), 0)
+			}
 		}
 	}
+	return nil
 }
 
-// applyMessage folds one streamed message into the transcript. The switch is
-// exhaustive over assistant.ContentKind so a new kind must be handled here.
-func (m *Model) applyMessage(msg assistant.Message) {
-	if msg.Results != nil && msg.Results.Usage != nil {
-		m.usage = msg.Results.Usage
-	}
-
-	kind := msg.Content.Kind()
-	switch kind {
-	case assistant.KindText, assistant.KindReasoning:
-		// A redacted thinking block has no text and so renders as nothing; showing
-		// it needs a renderer for Content.Thinking.Redacted.
-		m.chatPhase = chat.PhaseStreaming
-		m.transcript.AppendText(chat.ItemIDOf(msg), assistant.RoleOf(msg.Role), kind, msg.Content.TextBody())
-	case assistant.KindToolCall, assistant.KindToolResult:
-		m.transcript.UpsertTool(chat.ItemIDOf(msg), chat.ToolViewOf(msg.Content.Tool))
-	case assistant.KindWidget, assistant.KindDashboard, assistant.KindProgress,
-		assistant.KindTurnMarker, assistant.KindStop, assistant.KindInternal,
-		assistant.KindUnknown:
-		// Deferred/observe-only for the MVP; the payload is on msg.Content.
-	}
-}
-
-// setDarkBackground adapts styles to the detected terminal background. It drops
-// the render cache because those entries were produced under the old palette —
-// the cache key is version+width, not style — so stale colors would otherwise
-// persist until each item next changes.
+// setDarkBackground adapts styles to the detected terminal background.
 func (m *Model) setDarkBackground(isDark bool) {
 	if isDark == m.hasDarkBG {
 		return
 	}
 	m.hasDarkBG = isDark
 	m.chatStyles = chat.DefaultStyles(isDark)
-	m.renderCache = map[chat.ItemID]renderCacheEntry{}
+	m.list.SetStyles(m.chatStyles)
 	m.refreshViewport()
 }
 
 func (m *Model) resize(w, h int) {
 	m.height = h
-	if !m.ready {
-		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(1))
-		m.ready = true
-	} else {
-		m.viewport.SetWidth(w)
-	}
 	m.editor.SetWidth(w)
+	m.list.SetWidth(w)
+	if m.mode == ModeTermInit {
+		m.setMode(ModeChat)
+		return
+	}
 	m.refreshViewport()
 }
 
-// refreshViewport re-renders the transcript into the viewport and sizes it to
-// the space left by the status line and the (possibly multi-row) editor. The
-// view stays pinned to the bottom while it was already there (auto-follow).
+// refreshViewport re-syncs the transcript list and sizes it to the space left by
+// the status line and the (possibly multi-row) editor.
 func (m *Model) refreshViewport() {
-	if !m.ready {
+	if m.mode == ModeTermInit {
 		return
 	}
-	vpHeight := max(1, m.height-1-m.editor.Height())
-	pinned := m.viewport.AtBottom()
-	m.viewport.SetHeight(vpHeight)
-	m.viewport.SetContent(m.renderTranscript())
-	if pinned {
-		m.viewport.GotoBottom()
-	}
-}
-
-func (m *Model) renderTranscript() string {
-	items := m.transcript.Items()
-	blocks := make([]string, len(items))
-	for i := range items {
-		blocks[i] = m.renderCached(items[i])
-	}
-	return strings.Join(blocks, "\n\n")
-}
-
-// renderCached memoizes each item's rendered output by version + width so only
-// the changed (streaming) item re-renders.
-func (m *Model) renderCached(it chat.Item) string {
-	w := m.viewport.Width()
-	if e, ok := m.renderCache[it.ID]; ok && e.version == it.Version && e.width == w {
-		return e.out
-	}
-	out := it.Render(w, m.chatStyles)
-	m.renderCache[it.ID] = renderCacheEntry{version: it.Version, width: w, out: out}
-	return out
+	m.list.SetHeight(max(1, m.height-1-m.editor.Height()))
+	m.list.SetItems(m.blocks)
 }

@@ -77,7 +77,7 @@ func TestDo_MapsStatusToSentinel(t *testing.T) {
 				w.WriteHeader(tc.status)
 				_, _ = fmt.Fprintf(w, `{"errors":[{"status":"%d","title":%q,"detail":"boom"}]}`, tc.status, http.StatusText(tc.status))
 			})
-			_, err := c.ConversationHistory(context.Background(), "cid")
+			_, err := c.ConversationHistory(context.Background(), ConversationHistoryInput{ConversationID: "cid"})
 			if err == nil {
 				t.Fatalf("expected error for status %d", tc.status)
 			}
@@ -382,7 +382,7 @@ func TestDo_DoesNotRetryNonRetryableStatus(t *testing.T) {
 	})
 	c.MaxRetries = 3
 	c.RetryBaseDelay = time.Millisecond
-	_, err := c.ConversationHistory(context.Background(), "cid")
+	_, err := c.ConversationHistory(context.Background(), ConversationHistoryInput{ConversationID: "cid"})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}

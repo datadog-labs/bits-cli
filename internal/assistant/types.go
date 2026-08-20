@@ -831,3 +831,27 @@ type SkillsListResponse struct {
 		} `json:"attributes"`
 	} `json:"data"`
 }
+
+// ConversationHistoryInput is the input to Client.ConversationHistory.
+type ConversationHistoryInput struct {
+	ConversationID string
+}
+
+// DeleteConversationInput is the input to Client.DeleteConversation.
+type DeleteConversationInput struct {
+	ConversationID string
+}
+
+// RenameConversationInput is the input to Client.RenameConversation.
+type RenameConversationInput struct {
+	ConversationID string
+	Title          string
+}
+
+// ShareConversationInput is the input to Client.ShareConversation. When Shared
+// is false, TTLDays is ignored.
+type ShareConversationInput struct {
+	ConversationID string
+	Shared         bool
+	TTLDays        *int
+}

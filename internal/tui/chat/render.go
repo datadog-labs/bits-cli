@@ -7,14 +7,15 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
 
-// Render turns one transcript item into a styled block with no trailing newline
-// (the caller joins items). width is the target display width in cells.
+// RenderBlock turns one aggregated block into a styled string with no trailing
+// newline (the caller joins blocks). width is the target display width in cells.
 // Rendering is a single exhaustive switch over assistant.ContentKind so a new
 // server content type fails the build until it is handled here.
-func (it Item) Render(width int, sty Styles) string {
+func RenderBlock(it agent.Block, width int, sty Styles) string {
 	switch it.Kind {
 	case assistant.KindText:
 		return renderText(it, width, sty)
@@ -22,9 +23,14 @@ func (it Item) Render(width int, sty Styles) string {
 		return renderReasoning(it, width, sty)
 	case assistant.KindToolCall, assistant.KindToolResult:
 		return renderTool(it, width, sty)
-	case assistant.KindWidget, assistant.KindDashboard,
-		assistant.KindProgress, assistant.KindTurnMarker,
-		assistant.KindStop, assistant.KindInternal, assistant.KindUnknown:
+	case assistant.KindWidget:
+		return renderWidget(it, width, sty)
+	case assistant.KindDashboard:
+		return renderDashboard(it, width, sty)
+	case assistant.KindProgress:
+		return renderProgress(it, width, sty)
+	case assistant.KindTurnMarker, assistant.KindStop,
+		assistant.KindInternal, assistant.KindUnknown:
 		return fallback(it, width, sty)
 	}
 	return fallback(it, width, sty) // unreachable; the compiler needs a return
@@ -32,17 +38,18 @@ func (it Item) Render(width int, sty Styles) string {
 
 // fallback renders kinds without a dedicated renderer as a dim, bracketed label
 // so nothing is silently dropped.
-func fallback(it Item, width int, sty Styles) string {
+func fallback(it agent.Block, width int, sty Styles) string {
 	return sty.Meta.Render(wrap("["+it.Kind.String()+"]", width))
 }
 
 // renderText renders a user or assistant text fragment. Assistant text is
 // rendered as markdown; user text keeps its marker and stays plain.
-func renderText(it Item, width int, sty Styles) string {
+func renderText(it agent.Block, width int, sty Styles) string {
+	text := it.Markdown.Content
 	if it.Role == assistant.RoleUser {
-		return renderUser(it.Text, width, sty)
+		return renderUser(text, width, sty)
 	}
-	return renderMarkdown(it.Text, width, sty.MarkdownStyle)
+	return renderMarkdown(text, width, sty.MarkdownStyle)
 }
 
 // renderUser prefixes the first line with a marker and hangs the continuation
@@ -62,10 +69,43 @@ func renderUser(text string, width int, sty Styles) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderReasoning renders model thinking as dimmed, wrapped text. Collapsing
-// (Ctrl+O) is deferred; the whole block is shown for now.
-func renderReasoning(it Item, width int, sty Styles) string {
-	return sty.Reasoning.Render(wrap(it.Text, width))
+// renderReasoning renders model thinking as dimmed, wrapped text. Redacted
+// thinking has no body to show, so it renders a marker instead of nothing.
+// Collapsing (Ctrl+O) is deferred; the whole block is shown for now.
+func renderReasoning(it agent.Block, width int, sty Styles) string {
+	text := it.Thinking.Content
+	if it.Thinking.Redacted && text == "" {
+		text = "[redacted]"
+	}
+	return sty.Reasoning.Render(wrap(text, width))
+}
+
+// renderWidget summarizes a widget block as a titled label; rich rendering of
+// the visualization is deferred.
+func renderWidget(it agent.Block, width int, sty Styles) string {
+	label := "widget"
+	if it.Widget != nil && it.Widget.Title != "" {
+		label = "widget: " + it.Widget.Title
+	}
+	return sty.Meta.Render(wrap("["+label+"]", width))
+}
+
+// renderDashboard summarizes a dashboard block as a titled label; full
+// dashboard rendering is deferred.
+func renderDashboard(it agent.Block, width int, sty Styles) string {
+	label := "dashboard"
+	if it.Dashboard != nil && it.Dashboard.Title != "" {
+		label = "dashboard: " + it.Dashboard.Title
+	}
+	return sty.Meta.Render(wrap("["+label+"]", width))
+}
+
+// renderProgress renders an async background-task update as dimmed text.
+func renderProgress(it agent.Block, width int, sty Styles) string {
+	if it.Progress == nil {
+		return fallback(it, width, sty)
+	}
+	return sty.Meta.Render(wrap(it.Progress.Content, width))
 }
 
 // toolOutputMaxLines caps how much tool output is shown before truncation.
@@ -74,27 +114,28 @@ const toolOutputMaxLines = 12
 
 // renderTool renders a tool call+result as one block: a header (name + status)
 // and, when present, a one-line input summary and a truncated output body.
-func renderTool(it Item, width int, sty Styles) string {
-	glyph, label, style := statusParts(it.Tool.Status, sty)
+func renderTool(it agent.Block, width int, sty Styles) string {
+	tool := it.Tool
+	glyph, label, style := statusParts(tool.Status, sty)
 
-	header := style.Render(glyph+" ") + sty.ToolName.Render(toolName(it.Tool))
+	header := style.Render(glyph+" ") + sty.ToolName.Render(toolName(tool))
 	if label != "" {
 		header += sty.Meta.Render(" · ") + style.Render(label)
 	}
 	lines := []string{ansi.Truncate(header, width, "…")}
 
-	if in := collapseWS(it.Tool.Input); in != "" {
+	if in := collapseWS(tool.Input); in != "" {
 		summary := ansi.Truncate(in, max(1, width-4), "…")
 		lines = append(lines, sty.ToolDetail.Render("  ↳ "+summary))
 	}
-	if out := strings.TrimRight(it.Tool.Output, "\n"); out != "" {
+	if out := strings.TrimRight(tool.Output, "\n"); out != "" {
 		body := clampLines(wrap(out, max(1, width-2)), toolOutputMaxLines)
 		lines = append(lines, indent(sty.ToolDetail.Render(body), 2))
 	}
 	return strings.Join(lines, "\n")
 }
 
-func toolName(t ToolView) string {
+func toolName(t *agent.ToolCall) string {
 	if t.Name == "" {
 		return "tool"
 	}
@@ -102,15 +143,15 @@ func toolName(t ToolView) string {
 }
 
 // statusParts returns the glyph, label, and style for a tool status.
-func statusParts(s ToolStatus, sty Styles) (glyph, label string, style lipgloss.Style) {
+func statusParts(s agent.ToolStatus, sty Styles) (glyph, label string, style lipgloss.Style) {
 	switch s {
-	case ToolRunning:
+	case agent.ToolRunning:
 		return "•", "running", sty.StatusRunning
-	case ToolSuccess:
+	case agent.ToolSuccess:
 		return "✓", "success", sty.StatusSuccess
-	case ToolError:
+	case agent.ToolError:
 		return "✗", "error", sty.StatusError
-	case ToolUnknown:
+	case agent.ToolUnknown:
 		return "•", "", sty.Meta
 	}
 	return "•", "", sty.Meta
