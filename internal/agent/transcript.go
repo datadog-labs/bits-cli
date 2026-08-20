@@ -14,6 +14,9 @@ type Transcript struct {
 	blocks  []Block
 	index   map[BlockID]int // id -> position in blocks
 	userSeq int             // monotonic id source for local user messages
+	// openStream tracks the currently streaming (incomplete) text/reasoning
+	openStream BlockID
+	hasOpen    bool
 }
 
 // NewTranscript returns an empty transcript.
@@ -36,12 +39,22 @@ func (t *Transcript) AppendUser(text string) Block {
 		Complete: true,
 	}
 	t.push(b)
+	t.closePrior(b)
 	return b
 }
 
 // AppendMessage folds a wire message into the transcript and returns the block
 // it created or updated, plus whether one was produced.
 func (t *Transcript) AppendMessage(msg assistant.Message) (Block, bool) {
+	b, ok := t.fold(msg)
+	if ok {
+		t.closePrior(b)
+	}
+	return b, ok
+}
+
+// fold routes a wire message to the mutator for its kind.
+func (t *Transcript) fold(msg assistant.Message) (Block, bool) {
 	switch kind := msg.Content.Kind(); kind {
 	case assistant.KindText:
 		return t.appendMarkdown(msg)
@@ -73,6 +86,7 @@ func (t *Transcript) appendMarkdown(msg assistant.Message) (Block, bool) {
 	id := BlockIDOf(msg)
 	if i, ok := t.index[id]; ok {
 		t.blocks[i].Markdown = &assistant.MarkdownPayload{Content: t.blocks[i].Markdown.Content + p.Content}
+		t.blocks[i].Complete = false
 		t.blocks[i].Rev++
 		return t.blocks[i], true
 	}
@@ -110,6 +124,7 @@ func (t *Transcript) appendReasoning(msg assistant.Message) (Block, bool) {
 			next.EncryptedContent = p.EncryptedContent
 		}
 		t.blocks[i].Thinking = next
+		t.blocks[i].Complete = false
 		t.blocks[i].Rev++
 		return t.blocks[i], true
 	}
@@ -201,9 +216,29 @@ func (t *Transcript) appendPassthrough(msg assistant.Message, kind assistant.Con
 	return b, true
 }
 
-// FinalizeAll marks every still-open block complete; called at turn end. The
-// rendered output does not depend on Complete, so callers need not re-emit the
-// changed blocks.
+// closePrior implements block-scoped completion. It optimistically assumes a
+// streamed text/reasoning block is done once a fragment lands on a different
+// block id.
+//
+// Assistant API does not forward thinking start/complete events.
+func (t *Transcript) closePrior(b Block) {
+	if t.hasOpen && t.openStream != b.ID {
+		if i, ok := t.index[t.openStream]; ok && !t.blocks[i].Complete {
+			t.blocks[i].Complete = true
+			t.blocks[i].Rev++
+		}
+		t.hasOpen = false
+	}
+	if !b.Complete {
+		t.openStream = b.ID
+		t.hasOpen = true
+	}
+}
+
+// FinalizeAll marks every still-open block complete; called at turn end as the
+// backstop for the last open block (typically the answer text, which has no
+// status glyph). Mid-turn blocks are already closed incrementally by
+// closePrior, so this normally only touches that trailing block.
 func (t *Transcript) FinalizeAll() {
 	for i := range t.blocks {
 		if !t.blocks[i].Complete {
@@ -211,6 +246,7 @@ func (t *Transcript) FinalizeAll() {
 			t.blocks[i].Rev++
 		}
 	}
+	t.hasOpen = false
 }
 
 func (t *Transcript) push(b Block) {
