@@ -55,20 +55,18 @@ func (m *Model) chatView() string {
 	).Render()
 }
 
-// promptPlaceholder
+// promptPlaceholder returns the current editor prompt placeholder.
 func (m *Model) promptPlaceholder() string {
-	var b strings.Builder
 	switch m.chatPhase {
 	case chat.PhaseLoading:
-		b.WriteString("Loading…")
+		return "Loading…"
 	case chat.PhaseWaiting, chat.PhaseStreaming:
-		b.WriteString("Working on it…")
+		return "Working on it…"
 	case chat.PhaseError:
-		b.WriteString("Error")
+		return "Error"
 	default:
-		b.WriteString("Ask Bits…")
+		return "Ask Bits…"
 	}
-	return b.String()
 }
 
 // noticeBar renders the transient notification bar between the transcript and
