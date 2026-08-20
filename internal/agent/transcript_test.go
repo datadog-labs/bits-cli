@@ -203,3 +203,17 @@ func TestPassthroughKindProducesBlock(t *testing.T) {
 		t.Fatalf("widget block = %+v", b)
 	}
 }
+
+func TestFinalizeAllReleasesStreamingAccumulator(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(assistant.AssistantMessage("m1", assistant.TextContent("partial")))
+
+	tr.FinalizeAll()
+
+	if tr.accumulator != nil {
+		t.Fatal("FinalizeAll retained the completed stream accumulator")
+	}
+	if got := tr.Blocks()[0]; !got.Complete {
+		t.Fatalf("final block = %+v, want complete", got)
+	}
+}
