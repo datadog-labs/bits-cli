@@ -1,6 +1,10 @@
 package chat
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/DataDog/bits-cli/internal/agent"
+)
 
 // List is a lazily-rendered, vertically-stacked view of transcript items with an
 // owned scroll position. Only items in the visible window are rendered per
@@ -21,23 +25,23 @@ type List struct {
 	// list re-syncs, so AtBottom() would already see the grown content.
 	follow bool
 
-	items []Item
+	items []agent.Block
 	sty   Styles
 
-	cache map[ItemID]listLineEntry
+	cache map[agent.BlockID]listLineEntry
 }
 
-// listLineEntry memoizes one item's rendered lines (height is len(lines)), valid
-// while the item's version and the list width are unchanged.
+// listLineEntry memoizes one block's rendered lines (height is len(lines)),
+// valid while the block's revision and the list width are unchanged.
 type listLineEntry struct {
-	version int
-	width   int
-	lines   []string
+	rev   int
+	width int
+	lines []string
 }
 
-// NewList returns an empty list with a one-row gap between items.
+// NewList returns an empty list with a one-row gap between blocks.
 func NewList() *List {
-	return &List{gap: 1, follow: true, cache: map[ItemID]listLineEntry{}}
+	return &List{gap: 1, follow: true, cache: map[agent.BlockID]listLineEntry{}}
 }
 
 // Following reports whether the view is pinned to the tail.
@@ -68,9 +72,9 @@ func (l *List) SetStyles(sty Styles) {
 	l.invalidateAll()
 }
 
-// SetItems replaces the item slice, preserving the scroll offset but clamping it
-// so it never points past the end.
-func (l *List) SetItems(items []Item) {
+// SetItems replaces the block slice, preserving the scroll offset but clamping
+// it so it never points past the end.
+func (l *List) SetItems(items []agent.Block) {
 	l.items = items
 	if l.offsetIdx >= len(l.items) {
 		l.offsetIdx = max(0, len(l.items)-1)
@@ -96,14 +100,14 @@ func (l *List) invalidateAll() {
 	clear(l.cache)
 }
 
-// renderItem returns the item's rendered lines, cached by version and width.
+// renderItem returns the block's rendered lines, cached by revision and width.
 func (l *List) renderItem(idx int) []string {
 	it := l.items[idx]
-	if e, ok := l.cache[it.ID]; ok && e.version == it.Version && e.width == l.width {
+	if e, ok := l.cache[it.ID]; ok && e.rev == it.Rev && e.width == l.width {
 		return e.lines
 	}
-	lines := strings.Split(it.Render(l.width, l.sty), "\n")
-	l.cache[it.ID] = listLineEntry{version: it.Version, width: l.width, lines: lines}
+	lines := strings.Split(RenderBlock(it, l.width, l.sty), "\n")
+	l.cache[it.ID] = listLineEntry{rev: it.Rev, width: l.width, lines: lines}
 	return lines
 }
 

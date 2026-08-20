@@ -25,9 +25,11 @@ const (
 // on the tea thread; the sole async source is the engine's event channel.
 type Model struct {
 	// Collaborators the model drives.
-	engine     *agent.Engine
-	transcript *chat.Transcript
-	editor     *editor.Editor
+	engine *agent.Engine
+	editor *editor.Editor
+
+	// blocks is the latest snapshot of the engine's aggregated transcript
+	blocks []agent.Block
 
 	// Active turn: turnEvents is the running turn's event channel (nil when
 	// idle); cancelTurn interrupts it.
@@ -65,7 +67,6 @@ type Model struct {
 func New(engine *agent.Engine) *Model {
 	m := &Model{
 		engine:     engine,
-		transcript: chat.NewTranscript(),
 		editor:     editor.New(),
 		list:       chat.NewList(),
 		chatStyles: chat.DefaultStyles(true),
@@ -85,13 +86,17 @@ func (m *Model) setMode(mode Mode) {
 	m.refreshViewport()
 }
 
-// Init focuses the editor and, when restoring a conversation, kicks off the
-// one-shot history load whose result arrives as a historyLoadedMsg.
+// Init focuses the editor and, when restoring a conversation, starts the history
+// restore as a run: it streams through the same turn-event pump, so its blocks
+// arrive as ordinary events and the engine transcript stays single-writer.
 func (m *Model) Init() tea.Cmd {
 	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
 	if m.engine.ConversationID() == "" {
 		return m.editor.Focus()
 	}
 	m.chatPhase = chat.PhaseLoading
-	return tea.Batch(m.editor.Focus(), loadHistory(m.engine), requestBG)
+	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
+	m.cancelTurn = cancel
+	m.turnEvents = m.engine.Restore(ctx)
+	return tea.Batch(m.editor.Focus(), waitEvent(m.turnEvents), requestBG)
 }

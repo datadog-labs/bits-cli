@@ -1,112 +1,144 @@
-package agent_test
+package agent
 
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
 
-// stub is an agent.Backend that replays a fixed list of messages.
-type stub struct {
+// scriptBackend replays a fixed set of messages, then returns convID/err.
+type scriptBackend struct {
 	msgs   []assistant.Message
 	convID string
 	err    error
 }
 
-func (s *stub) Send(_ context.Context, _ any, _ assistant.SendOptions,
-	fn func(assistant.AssistantResponse) error,
-) (string, error) {
-	for _, m := range s.msgs {
+func (b *scriptBackend) Send(_ context.Context, _ any, _ assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
+	for _, m := range b.msgs {
 		var ar assistant.AssistantResponse
-		ar.Data.Attributes.ConversationID = s.convID
 		ar.Data.Attributes.StructuredMessage = m
 		if err := fn(ar); err != nil {
-			return s.convID, err
+			return "", err
 		}
 	}
-	return s.convID, s.err
+	return b.convID, b.err
 }
 
-// Every message reaches the consumer untouched, including content kinds the
-// engine has no opinion about, followed by the synthesized lifecycle events.
-func TestEngine_PassesMessagesThroughVerbatim(t *testing.T) {
-	redacted := assistant.ThinkingContent("hmm")
-	redacted.Thinking.Redacted = true
+// blockingBackend holds a turn open until gate is closed.
+type blockingBackend struct{ gate chan struct{} }
 
-	in := []assistant.Message{
-		assistant.AssistantMessage("m1", redacted),
-		assistant.AssistantMessage("m2", assistant.TextContent("hi")),
-		assistant.AssistantMessage("m3", assistant.Content{
-			Type:      assistant.ContentDashboard,
-			Dashboard: &assistant.DashboardPayload{Title: "gen"},
-		}),
+func (b *blockingBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
+	select {
+	case <-b.gate:
+	case <-ctx.Done():
 	}
-	e := agent.New(&stub{msgs: in, convID: "conv-1"}, assistant.SendOptions{})
+	return "conv", nil
+}
 
-	var got []assistant.Message
-	var kinds []agent.EventKind
-	for ev := range e.Start(context.Background(), "hello") {
-		kinds = append(kinds, ev.Kind)
-		if ev.Kind == agent.EventMessage {
-			got = append(got, ev.Msg)
+// historyBackend also serves conversation history.
+type historyBackend struct {
+	scriptBackend
+	resp *assistant.ConversationHistoryResponse
+	err  error
+}
+
+func (b *historyBackend) ConversationHistory(_ context.Context, _ assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
+	return b.resp, b.err
+}
+
+func drain(ch <-chan Event) []Event {
+	var evs []Event
+	for ev := range ch {
+		evs = append(evs, ev)
+	}
+	return evs
+}
+
+func kinds(evs []Event) []EventKind {
+	ks := make([]EventKind, len(evs))
+	for i, e := range evs {
+		ks[i] = e.Kind
+	}
+	return ks
+}
+
+func TestConcurrentTurnPanics(t *testing.T) {
+	gate := make(chan struct{})
+	e := New(&blockingBackend{gate: gate}, assistant.SendOptions{})
+	ch := e.StartTurn(context.Background(), "one")
+	defer func() {
+		close(gate)
+		for range ch {
 		}
-	}
-
-	if len(got) != len(in) {
-		t.Fatalf("got %d messages, want %d", len(got), len(in))
-	}
-	if !got[0].Content.Thinking.Redacted {
-		t.Error("thinking redacted flag lost in transit")
-	}
-	if got[2].Content.Dashboard == nil || got[2].Content.Dashboard.Title != "gen" {
-		t.Error("dashboard payload lost in transit")
-	}
-	for i := range in {
-		if got[i].MessageID != in[i].MessageID || got[i].Content.Type != in[i].Content.Type {
-			t.Errorf("message %d = (%s, %s), want (%s, %s)",
-				i, got[i].MessageID, got[i].Content.Type, in[i].MessageID, in[i].Content.Type)
+	}()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic on overlapping turn")
 		}
-	}
+	}()
+	_ = e.StartTurn(context.Background(), "two")
+}
 
-	want := []agent.EventKind{
-		agent.EventMessage, agent.EventMessage, agent.EventMessage,
-		agent.EventConversation, agent.EventTurnDone,
+func TestTurnEmitsEventSequence(t *testing.T) {
+	usage := assistant.AssistantMessage("m1", assistant.TextContent(""))
+	usage.Results = &assistant.Results{Usage: &assistant.Usage{TokensUsed: 5}}
+	b := &scriptBackend{
+		convID: "conv-1",
+		msgs: []assistant.Message{
+			assistant.AssistantMessage("m1", assistant.TextContent("Hello")),
+			assistant.AssistantMessage("m1", assistant.TextContent(" world")),
+			usage,
+		},
 	}
-	if len(kinds) != len(want) {
-		t.Fatalf("event kinds = %v, want %v", kinds, want)
+	e := New(b, assistant.SendOptions{})
+
+	evs := drain(e.StartTurn(context.Background(), "hi"))
+	want := []EventKind{EventBlock, EventBlock, EventBlock, EventUsage, EventConversation, EventTurnDone}
+	if got := kinds(evs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("event kinds = %v, want %v", got, want)
 	}
-	for i := range want {
-		if kinds[i] != want[i] {
-			t.Fatalf("event kinds = %v, want %v", kinds, want)
-		}
+	if changed := evs[2].Update.Changed; changed.Markdown == nil || changed.Markdown.Content != "Hello world" {
+		t.Fatalf("final text block = %+v", changed)
+	}
+	if evs[4].ConvID != "conv-1" {
+		t.Fatalf("conv id = %q, want conv-1", evs[4].ConvID)
 	}
 }
 
-func TestEngine_BackendErrorBecomesErrorEvent(t *testing.T) {
-	boom := errors.New("boom")
-	e := agent.New(&stub{err: boom}, assistant.SendOptions{})
-
-	var last agent.Event
-	for ev := range e.Start(context.Background(), "hello") {
-		last = ev
+func TestRestoreEmitsSingleSnapshot(t *testing.T) {
+	resp := &assistant.ConversationHistoryResponse{}
+	resp.Data.Attributes.Messages = []assistant.Message{
+		assistant.AssistantMessage("m1", assistant.TextContent("Hello")),
+		assistant.AssistantMessage("m2", assistant.TextContent("World")),
 	}
-	if last.Kind != agent.EventError || !errors.Is(last.Err, boom) {
-		t.Fatalf("last event = %v (%v), want EventError wrapping boom", last.Kind, last.Err)
+	e := New(&historyBackend{resp: resp}, assistant.SendOptions{ConversationID: "conv-1"})
+
+	evs := drain(e.Restore(context.Background()))
+	if len(evs) != 1 || evs[0].Kind != EventBlock {
+		t.Fatalf("events = %v, want one EventBlock", kinds(evs))
+	}
+	if n := len(evs[0].Update.Blocks); n != 2 {
+		t.Fatalf("restored blocks = %d, want 2", n)
 	}
 }
 
-// Cancelling ends the turn quietly: the channel closes with no error event.
-func TestEngine_CancelEndsTurnQuietly(t *testing.T) {
-	e := agent.New(&stub{convID: "conv-1"}, assistant.SendOptions{})
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+func TestRestoreUnsupportedBackendErrors(t *testing.T) {
+	e := New(&scriptBackend{}, assistant.SendOptions{ConversationID: "conv-1"})
 
-	for ev := range e.Start(ctx, "hello") {
-		if ev.Kind == agent.EventError {
-			t.Fatalf("cancel produced an error event: %v", ev.Err)
-		}
+	evs := drain(e.Restore(context.Background()))
+	if len(evs) != 1 || evs[0].Kind != EventError || !errors.Is(evs[0].Err, ErrHistoryUnsupported) {
+		t.Fatalf("events = %+v, want ErrHistoryUnsupported", evs)
+	}
+}
+
+// An empty history folds to no blocks, so the len>0 guard emits nothing.
+func TestRestoreEmptyEmitsNothing(t *testing.T) {
+	e := New(&historyBackend{resp: &assistant.ConversationHistoryResponse{}}, assistant.SendOptions{ConversationID: "conv-1"})
+
+	if evs := drain(e.Restore(context.Background())); len(evs) != 0 {
+		t.Fatalf("events = %v, want none", kinds(evs))
 	}
 }

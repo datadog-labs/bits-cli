@@ -12,28 +12,22 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
+// historyLoadTimeout bounds the conversation-history fetch on startup.
+const historyLoadTimeout = 30 * time.Second
+
 // mouseWheelDelta is how many transcript lines one wheel notch scrolls,
 const mouseWheelDelta = 3
-
-// historyLoadTimeout bounds the one-shot conversation-history fetch on startup.
-const historyLoadTimeout = 30 * time.Second
 
 // defaultNoticeTTL is how long a transient status notice stays before it clears.
 const defaultNoticeTTL = 10 * time.Second
 
 // turnEventMsg carries one engine event into Update; turnClosedMsg signals the
-// turn's channel was closed (turn finished or cancelled).
+// turn's channel was closed (turn finished or cancelled). A history restore runs
+// through the same pump, so its events flow here too.
 type (
 	turnEventMsg  struct{ ev agent.Event }
 	turnClosedMsg struct{}
 )
-
-// historyLoadedMsg carries the result of the startup history restore: the
-// persisted messages to replay, or an error to surface.
-type historyLoadedMsg struct {
-	msgs []assistant.Message
-	err  error
-}
 
 // noticeExpiredMsg clears a transient status notice when its TTL elapses. seq
 // guards against a stale timer clearing a newer notice.
@@ -56,18 +50,6 @@ func (m *Model) showNotice(n chat.Notice, ttl time.Duration) tea.Cmd {
 func (m *Model) clearNotice() {
 	m.noticeSeq++
 	m.notice = chat.Notice{}
-}
-
-// loadHistory fetches the engine's conversation history off the tea thread and
-// delivers it as a historyLoadedMsg. It is a one-shot command, not a turn: it
-// does not touch the turn-event pump.
-func loadHistory(engine *agent.Engine) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
-		defer cancel()
-		msgs, err := engine.LoadHistory(ctx)
-		return historyLoadedMsg{msgs: msgs, err: err}
-	}
 }
 
 // waitEvent reads one event from the turn channel and re-arms after each event
@@ -116,13 +98,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatPhase = chat.PhaseIdle
 		}
 		m.turnEvents = nil
-		m.cancelTurn = nil
+		if m.cancelTurn != nil {
+			m.cancelTurn() // release the turn/restore context
+			m.cancelTurn = nil
+		}
 		return m, nil
-
-	case historyLoadedMsg:
-		cmd := m.applyHistory(msg)
-		m.refreshViewport()
-		return m, cmd
 
 	case noticeExpiredMsg:
 		if msg.seq == m.noticeSeq {
@@ -180,74 +160,63 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// submit starts a turn for the current input, unless it is empty or a turn is
-// already running.
+// submit starts a turn for the current input, unless it is empty, a turn is
+// already running, or history is still loading. The user block is added by the
+// engine (it owns the transcript), so it arrives as the turn's first event.
 func (m *Model) submit() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.editor.Value())
-	if text == "" || m.turnEvents != nil {
+	if text == "" || m.turnEvents != nil || m.chatPhase == chat.PhaseLoading {
 		return m, nil
 	}
 	m.editor.Reset()
-	m.transcript.AppendUser(text)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelTurn = cancel
-	m.turnEvents = m.engine.Start(ctx, text)
+	m.turnEvents = m.engine.StartTurn(ctx, text)
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()
 	m.refreshViewport()
+	// Submitting always jumps to the tail and re-engages auto-follow, so the
+	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
 	return m, waitEvent(m.turnEvents)
 }
 
-// applyEvent folds one engine event into the transcript / status. The switch is
-// exhaustive over agent.EventKind. It returns a command for side effects (a turn
+// applyEvent folds one engine event into the block snapshot / status. The switch
+// is exhaustive over agent.EventKind. It returns a command for side effects (an
 // error posts a transient notice); nil otherwise.
 func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	switch ev.Kind {
-	case agent.EventMessage:
-		m.applyMessage(ev.Msg)
+	case agent.EventBlock:
+		m.blocks = ev.Update.Blocks
+		// A still-open text/reasoning block means tokens are arriving. Restored
+		// (Complete) blocks and the bulk restore snapshot (zero Changed) don't
+		// flip the phase, so restore stays in PhaseLoading until its channel closes.
+		if k := ev.Update.Changed.Kind; !ev.Update.Changed.Complete &&
+			(k == assistant.KindText || k == assistant.KindReasoning) {
+			m.chatPhase = chat.PhaseStreaming
+		}
+	case agent.EventUsage:
+		m.usage = ev.Usage
 	case agent.EventConversation:
 		m.convID = ev.ConvID
 	case agent.EventTurnDone:
-		m.transcript.FinalizeAll()
 		m.chatPhase = chat.PhaseIdle
 	case agent.EventError:
-		m.transcript.FinalizeAll()
-		m.chatPhase = chat.PhaseError
-		if ev.Err != nil {
-			return m.showNotice(noticeForError("", ev.Err), 0)
+		// A failure during restore is benign: drop to idle with a notice so the
+		// user can still type. A failure mid-turn is the turn's error state.
+		if m.chatPhase == chat.PhaseLoading {
+			m.chatPhase = chat.PhaseIdle
+			if ev.Err != nil {
+				return m.showNotice(noticeForError("restore failed", ev.Err), 0)
+			}
+		} else {
+			m.chatPhase = chat.PhaseError
+			if ev.Err != nil {
+				return m.showNotice(noticeForError("", ev.Err), 0)
+			}
 		}
 	}
-	return nil
-}
-
-// applyMessage folds one streamed message into the transcript and advances the
-// live-turn status.
-func (m *Model) applyMessage(msg assistant.Message) {
-	if msg.Results != nil && msg.Results.Usage != nil {
-		m.usage = msg.Results.Usage
-	}
-	if k := msg.Content.Kind(); k == assistant.KindText || k == assistant.KindReasoning {
-		m.chatPhase = chat.PhaseStreaming
-	}
-	m.transcript.AppendMessage(msg)
-}
-
-// applyHistory replays a restored conversation into the transcript.
-func (m *Model) applyHistory(res historyLoadedMsg) tea.Cmd {
-	if res.err != nil {
-		m.chatPhase = chat.PhaseIdle
-		return m.showNotice(noticeForError("restore failed", res.err), 0)
-	}
-	for _, msg := range res.msgs {
-		if msg.Results != nil && msg.Results.Usage != nil {
-			m.usage = msg.Results.Usage
-		}
-		m.transcript.AppendMessage(msg)
-	}
-	m.transcript.FinalizeAll()
-	m.chatPhase = chat.PhaseIdle
 	return nil
 }
 
@@ -280,5 +249,5 @@ func (m *Model) refreshViewport() {
 		return
 	}
 	m.list.SetHeight(max(1, m.height-1-m.editor.Height()))
-	m.list.SetItems(m.transcript.Items())
+	m.list.SetItems(m.blocks)
 }
