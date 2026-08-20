@@ -5,13 +5,15 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
+
+// mouseWheelDelta is how many transcript lines one wheel notch scrolls,
+const mouseWheelDelta = 3
 
 // historyLoadTimeout bounds the one-shot conversation-history fetch on startup.
 const historyLoadTimeout = 30 * time.Second
@@ -95,10 +97,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
-	case tea.MouseMsg:
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
+	case tea.MouseWheelMsg:
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.list.ScrollBy(-mouseWheelDelta)
+		case tea.MouseWheelDown:
+			m.list.ScrollBy(mouseWheelDelta)
+		}
+		return m, nil
 
 	case turnEventMsg:
 		cmd := m.applyEvent(msg.ev)
@@ -161,9 +167,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// focused and owns them for line editing (ctrl+u = delete to line start,
 		// which is what Ghostty sends for cmd+backspace). Transcript scrolling is
 		// pgup/pgdown and the mouse wheel.
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
+		if msg.String() == "pgup" {
+			m.list.PageUp()
+		} else {
+			m.list.PageDown()
+		}
+		return m, nil
 	}
 
 	cmd := m.editor.Update(msg)
@@ -187,6 +196,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()
 	m.refreshViewport()
+	m.list.ScrollToBottom()
 	return m, waitEvent(m.turnEvents)
 }
 
@@ -241,65 +251,34 @@ func (m *Model) applyHistory(res historyLoadedMsg) tea.Cmd {
 	return nil
 }
 
-// setDarkBackground adapts styles to the detected terminal background. It drops
-// the render cache because those entries were produced under the old palette —
-// the cache key is version+width, not style — so stale colors would otherwise
-// persist until each item next changes.
+// setDarkBackground adapts styles to the detected terminal background.
 func (m *Model) setDarkBackground(isDark bool) {
 	if isDark == m.hasDarkBG {
 		return
 	}
 	m.hasDarkBG = isDark
 	m.chatStyles = chat.DefaultStyles(isDark)
-	m.renderCache = map[chat.ItemID]renderCacheEntry{}
+	m.list.SetStyles(m.chatStyles)
 	m.refreshViewport()
 }
 
 func (m *Model) resize(w, h int) {
 	m.height = h
 	m.editor.SetWidth(w)
+	m.list.SetWidth(w)
 	if m.mode == ModeTermInit {
-		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(1))
 		m.setMode(ModeChat)
 		return
 	}
-	m.viewport.SetWidth(w)
 	m.refreshViewport()
 }
 
-// refreshViewport re-renders the transcript into the viewport and sizes it to
-// the space left by the status line and the (possibly multi-row) editor. The
-// view stays pinned to the bottom while it was already there (auto-follow).
+// refreshViewport re-syncs the transcript list and sizes it to the space left by
+// the status line and the (possibly multi-row) editor.
 func (m *Model) refreshViewport() {
 	if m.mode == ModeTermInit {
 		return
 	}
-	vpHeight := max(1, m.height-1-m.editor.Height())
-	pinned := m.viewport.AtBottom()
-	m.viewport.SetHeight(vpHeight)
-	m.viewport.SetContent(m.renderTranscript())
-	if pinned {
-		m.viewport.GotoBottom()
-	}
-}
-
-func (m *Model) renderTranscript() string {
-	items := m.transcript.Items()
-	blocks := make([]string, len(items))
-	for i := range items {
-		blocks[i] = m.renderCached(items[i])
-	}
-	return strings.Join(blocks, "\n\n")
-}
-
-// renderCached memoizes each item's rendered output by version + width so only
-// the changed (streaming) item re-renders.
-func (m *Model) renderCached(it chat.Item) string {
-	w := m.viewport.Width()
-	if e, ok := m.renderCache[it.ID]; ok && e.version == it.Version && e.width == w {
-		return e.out
-	}
-	out := it.Render(w, m.chatStyles)
-	m.renderCache[it.ID] = renderCacheEntry{version: it.Version, width: w, out: out}
-	return out
+	m.list.SetHeight(max(1, m.height-1-m.editor.Height()))
+	m.list.SetItems(m.transcript.Items())
 }

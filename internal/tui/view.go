@@ -30,7 +30,7 @@ func (m *Model) View() tea.View {
 func (m *Model) chatView() string {
 	m.editor.SetPlaceholder(m.promptPlaceholder())
 	base := strings.Join([]string{
-		m.viewport.View(),
+		m.list.Render(),
 		m.noticeBar(),
 		m.editor.View(),
 	}, "\n")
@@ -45,7 +45,7 @@ func (m *Model) chatView() string {
 	// bottom rows without reflowing the layout.
 	menuW, menuH := lipgloss.Width(menu), lipgloss.Height(menu)
 	x := 2 // align under the "› " prompt
-	if width := m.viewport.Width(); x+menuW > width {
+	if width := m.list.Width(); x+menuW > width {
 		x = max(0, width-menuW)
 	}
 	y := max(0, m.height-m.editor.Height()-menuH)
@@ -75,7 +75,7 @@ func (m *Model) noticeBar() string {
 	if m.notice.Empty() {
 		return ""
 	}
-	width := max(1, m.viewport.Width())
+	width := max(1, m.list.Width())
 	text := m.notice.Text
 	if err := m.notice.Err; err != nil {
 		if detail := err.Error(); detail != "" && detail != m.notice.Text {

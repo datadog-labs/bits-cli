@@ -5,7 +5,6 @@ package tui
 import (
 	"context"
 
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
@@ -13,14 +12,6 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	"github.com/DataDog/bits-cli/internal/tui/editor"
 )
-
-// renderCacheEntry caches one item's rendered output, keyed by its version and
-// width.
-type renderCacheEntry struct {
-	version int
-	width   int
-	out     string
-}
 
 // Mode is the top-level screen the model shows.
 type Mode int
@@ -56,16 +47,15 @@ type Model struct {
 	notice    chat.Notice
 	noticeSeq int
 
-	// Transcript rendering.
-	viewport    viewport.Model
-	chatStyles  chat.Styles
-	renderCache map[chat.ItemID]renderCacheEntry
-	hasDarkBG   bool // terminal background; assumed dark until detected
+	// Transcript rendering. list owns the transcript's scroll position and
+	// per-item render cache; chatStyles is also used by the notice bar.
+	list       *chat.List
+	chatStyles chat.Styles
+	hasDarkBG  bool // terminal background; assumed dark until detected
 
 	// Terminal height (the full window height from WindowSizeMsg; the transcript
-	// viewport height is derived from it). Width isn't stored — it equals
-	// viewport.Width(). The model leaves ModeTermInit once the first
-	// WindowSizeMsg arrives.
+	// height is derived from it). Width isn't stored here — it lives on list.
+	// The model leaves ModeTermInit once the first WindowSizeMsg arrives.
 	height int
 }
 
@@ -74,14 +64,15 @@ type Model struct {
 // Init.
 func New(engine *agent.Engine) *Model {
 	m := &Model{
-		engine:      engine,
-		transcript:  chat.NewTranscript(),
-		editor:      editor.New(),
-		chatStyles:  chat.DefaultStyles(true),
-		renderCache: map[chat.ItemID]renderCacheEntry{},
-		convID:      engine.ConversationID(),
-		hasDarkBG:   true,
+		engine:     engine,
+		transcript: chat.NewTranscript(),
+		editor:     editor.New(),
+		list:       chat.NewList(),
+		chatStyles: chat.DefaultStyles(true),
+		convID:     engine.ConversationID(),
+		hasDarkBG:  true,
 	}
+	m.list.SetStyles(m.chatStyles)
 	return m
 }
 

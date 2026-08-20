@@ -40,7 +40,7 @@ type Fake struct {
 
 // New returns a Fake with a small inter-fragment delay so interactive use looks
 // like a real stream.
-func New() *Fake { return &Fake{Delay: 40 * time.Millisecond} }
+func New() *Fake { return &Fake{Delay: 10 * time.Millisecond} }
 
 // Send implements agent.Backend. message seeds the output so the same prompt
 // reproduces the same stream. It honors ctx so Esc/Ctrl+C interrupt a turn.

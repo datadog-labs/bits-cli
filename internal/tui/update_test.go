@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"image/color"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/agent/fake"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
@@ -45,6 +47,81 @@ func TestModel_StreamsDeltasIntoView(t *testing.T) {
 	}
 	if m.chatPhase != chat.PhaseStreaming {
 		t.Errorf("chatPhase = %v, want streaming", m.chatPhase)
+	}
+}
+
+// feedLines appends n distinct one-line assistant messages, each its own item.
+func (m *Model) feedLines(n int) {
+	for i := range n {
+		id := "m" + strconv.Itoa(i)
+		m.feedMsg(assistant.AssistantMessage(id, assistant.TextContent("line"+strconv.Itoa(i))))
+	}
+}
+
+// The view auto-follows the tail as content streams in past the viewport. This
+// is the regression guard for the in-place-mutation bug: the transcript grows
+// its items in place, so deriving "was at bottom" from post-mutation state fails
+// — the list must track following explicitly.
+func TestModel_SticksToTailAsContentGrows(t *testing.T) {
+	m := testModel(t)
+	m.feedLines(40) // far more than the ~22-row transcript region
+
+	got := ansi.Strip(m.View().Content)
+	if !strings.Contains(got, "line39") {
+		t.Errorf("tail not visible; latest line missing:\n%s", got)
+	}
+	if strings.Contains(got, "line0") {
+		t.Errorf("expected the top to have scrolled off while following:\n%s", got)
+	}
+}
+
+// Scrolling up releases the tail pin: new content no longer yanks the view to
+// the bottom. Scrolling back to the bottom resumes following.
+func TestModel_ScrollUpReleasesTailThenResumes(t *testing.T) {
+	m := testModel(t)
+	m.feedLines(40)
+
+	m.list.PageUp()
+	if m.list.Following() {
+		t.Fatal("PageUp over overflowing content should stop following")
+	}
+	m.feedMsg(assistant.AssistantMessage("later", assistant.TextContent("brandnew")))
+	if got := ansi.Strip(m.View().Content); strings.Contains(got, "brandnew") {
+		t.Errorf("released view should not jump to new tail content:\n%s", got)
+	}
+
+	m.list.ScrollToBottom()
+	if got := ansi.Strip(m.View().Content); !strings.Contains(got, "brandnew") {
+		t.Errorf("scrolling back to bottom should reveal the tail:\n%s", got)
+	}
+}
+
+// Submitting a prompt always jumps to the tail and re-engages auto-follow, even
+// if the user had scrolled up to read earlier history.
+func TestModel_SubmitJumpsToTail(t *testing.T) {
+	m := New(agent.New(fake.New(), assistant.SendOptions{}))
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.editor.Focus() // the textarea ignores input while blurred
+
+	m.feedLines(40) // overflow the transcript
+	_ = m.View()    // render pins to the tail (following)
+	m.list.PageUp() // scroll up: release the tail pin
+	if m.list.Following() {
+		t.Fatal("precondition: PageUp should release follow")
+	}
+
+	m.Update(tea.PasteMsg{Content: "what changed?"})
+	_, cmd := m.submit()
+	if m.cancelTurn != nil {
+		defer m.cancelTurn() // stop the fake turn's goroutine
+	}
+	if cmd == nil {
+		t.Fatal("submit should start a turn")
+	}
+
+	if !m.list.Following() || !m.list.AtBottom() {
+		t.Errorf("submit must jump to the tail and follow (following=%v, atBottom=%v)",
+			m.list.Following(), m.list.AtBottom())
 	}
 }
 
