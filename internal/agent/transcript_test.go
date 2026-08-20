@@ -74,6 +74,87 @@ func TestReasoningPreservesRedacted(t *testing.T) {
 	}
 }
 
+// A streamed block is finalized as soon as a fragment lands on a different
+// block id, rather than staying open until FinalizeAll at turn end.
+func TestPriorStreamFinalizedOnNewBlock(t *testing.T) {
+	tr := NewTranscript()
+	think, _ := tr.AppendMessage(assistant.AssistantMessage("m1", assistant.ThinkingContent("hmm")))
+	if think.Complete {
+		t.Fatal("reasoning block should start incomplete")
+	}
+	tr.AppendMessage(assistant.AssistantMessage("m2", assistant.TextContent("answer")))
+
+	blocks := tr.Blocks()
+	if len(blocks) != 2 {
+		t.Fatalf("blocks = %d, want 2", len(blocks))
+	}
+	if !blocks[0].Complete {
+		t.Fatal("reasoning block not finalized after a different block started")
+	}
+	if blocks[1].Complete {
+		t.Fatal("newest streaming block should stay open until something follows it")
+	}
+}
+
+// Consecutive fragments on the same id keep the block open (still streaming).
+func TestSameIdFragmentsStayOpen(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(assistant.AssistantMessage("m1", assistant.ThinkingContent("a")))
+	tr.AppendMessage(assistant.AssistantMessage("m1", assistant.ThinkingContent("b")))
+	if tr.Blocks()[0].Complete {
+		t.Fatal("block should stay open while its own fragments stream")
+	}
+}
+
+// A tool call after reasoning closes the reasoning block and bumps its revision
+// so a per-revision render cache refreshes the status glyph.
+func TestToolCallFinalizesPriorReasoning(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(assistant.AssistantMessage("m1", assistant.ThinkingContent("plan")))
+	before := tr.Blocks()[0].Rev
+	tr.AppendMessage(assistant.AssistantMessage("mc", assistant.ToolCallContent("tc1", "search", "{}")))
+	got := tr.Blocks()[0]
+	if !got.Complete {
+		t.Fatal("reasoning not finalized when tool call started")
+	}
+	if got.Rev == before {
+		t.Fatal("Rev not bumped on implicit finalize; cached render would not refresh")
+	}
+}
+
+// Interleaved streaming self-corrects: a fragment resuming a block that
+// closePrior optimistically finalized reopens it, rather than leaving it marked
+// done while still growing.
+func TestInterleavedStreamReopens(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(assistant.AssistantMessage("m1", assistant.TextContent("A1")))
+	tr.AppendMessage(assistant.AssistantMessage("m2", assistant.TextContent("B1"))) // closes m1
+	if !tr.Blocks()[0].Complete {
+		t.Fatal("m1 should be closed once m2 started")
+	}
+	tr.AppendMessage(assistant.AssistantMessage("m1", assistant.TextContent("A2"))) // resumes m1
+
+	if b := tr.Blocks()[0]; b.Complete {
+		t.Fatal("resumed m1 should not be marked complete")
+	} else if b.Markdown.Content != "A1A2" {
+		t.Fatalf("content = %q, want %q", b.Markdown.Content, "A1A2")
+	}
+	if !tr.Blocks()[1].Complete {
+		t.Fatal("m2 should be closed once m1 resumed")
+	}
+}
+
+// A user message closes the open assistant stream that preceded it, e.g. across
+// turns in restored history.
+func TestUserMessageFinalizesPriorStream(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(assistant.AssistantMessage("m1", assistant.TextContent("partial")))
+	tr.AppendUser("next turn")
+	if !tr.Blocks()[0].Complete {
+		t.Fatal("assistant block not finalized when a user message followed it")
+	}
+}
+
 // Widget/dashboard/progress kinds now produce blocks instead of being dropped.
 func TestPassthroughKindProducesBlock(t *testing.T) {
 	tr := NewTranscript()
