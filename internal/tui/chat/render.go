@@ -118,9 +118,9 @@ func renderTool(it agent.Block, width int, sty Styles) string {
 	tool := it.Tool
 	glyph, label, style := statusParts(tool.Status, sty)
 
-	header := style.Render(glyph+" ") + sty.ToolName.Render(toolName(tool))
+	header := style.UnsetBackground().Render(glyph+" ") + sty.ToolName.Render(toolName(tool))
 	if label != "" {
-		header += sty.Meta.Render(" · ") + style.Render(label)
+		header += sty.Meta.Render(" · ") + pill(style, label)
 	}
 	lines := []string{ansi.Truncate(header, width, "…")}
 
@@ -140,6 +140,24 @@ func toolName(t *agent.ToolCall) string {
 		return "tool"
 	}
 	return t.Name
+}
+
+// Rounded pill caps (powerline). Require a Nerd/Powerline font to render;
+// without one they show as missing-glyph boxes.
+const (
+	pillCapLeft  = "" //
+	pillCapRight = "" //
+)
+
+// pill wraps text in rounded caps colored to the style's background, forming a
+// rounded chip. If the style has no background set, text is rendered as-is.
+func pill(s lipgloss.Style, text string) string {
+	bg := s.GetBackground()
+	if _, ok := bg.(lipgloss.NoColor); ok {
+		return s.Render(text)
+	}
+	caps := lipgloss.NewStyle().Foreground(bg)
+	return caps.Render(pillCapLeft) + s.Render(text) + caps.Render(pillCapRight)
 }
 
 // statusParts returns the glyph, label, and style for a tool status.
