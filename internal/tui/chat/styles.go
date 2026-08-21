@@ -120,7 +120,10 @@ func datadogStyleConfig(isDark bool) ansi.StyleConfig {
 	cfg.H6.Color = new(secondary)
 	cfg.H1.Color = new("#FFFFFF")
 	cfg.H1.BackgroundColor = new(uiAIPrimary)
+	// Color both the URL (Link) and the visible label (LinkText); glamour uses
+	// separate fields, so setting only Link leaves the label at the base color.
 	cfg.Link.Color = new(link)
+	cfg.LinkText.Color = new(link)
 	cfg.Code.Color = new(codeText)
 	cfg.Code.BackgroundColor = new(codeBg)
 
