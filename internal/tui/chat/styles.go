@@ -6,11 +6,31 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Work in progress: these colors (the Datadog violet accents and the status
-// palette) are placeholders and should be refined.
+// UI color tokens, mirroring the design system's CSS custom properties. Tokens
+// that differ by terminal background carry Dark/Light variants; the renderers
+// pick the right one via lipgloss.LightDark.
 const (
-	brandPurple = "#632CA6"
-	lightViolet = "#A78BFA"
+	uiAIPrimary = "#5e6dd6" // --ui-ai-primary (same in both modes)
+
+	uiAISecondaryDark  = "#3f4ca5" // --ui-ai-secondary (dark mode)
+	uiAISecondaryLight = "#1d2140" // --ui-ai-secondary (light mode)
+
+	uiLinkDark  = "#3d8bd0" // link color (dark mode) — rgb(61, 139, 208)
+	uiLinkLight = "#006bc2" // link color (light mode) — rgb(0, 107, 194)
+
+	uiCodeBgDark    = "#343336" // inline code background (dark mode)
+	uiCodeBgLight   = "#EEEFF0" // inline code background (light mode)
+	uiCodeTextDark  = "#CECECE" // inline code text (dark mode)
+	uiCodeTextLight = "#1C2E38" // inline code text (light mode)
+
+	uiStatusSuccessDark    = "#349C50" // tool success (dark mode)
+	uiStatusSuccessLight   = "#41C464" // tool success (light mode)
+	uiStatusSuccessBgDark  = "#0D2714" // tool success background (dark mode)
+	uiStatusSuccessBgLight = "#ECF9EF" // tool success background (light mode)
+	uiStatusErrorDark      = "#D33043" // tool error (dark mode)
+	uiStatusErrorLight     = "#EB364B" // tool error (light mode)
+	uiStatusErrorBgDark    = "#2F0A0F" // tool error background (dark mode)
+	uiStatusErrorBgLight   = "#FDEBED" // tool error background (light mode)
 )
 
 // Styles holds the lipgloss styles the renderers use. Construct one with
@@ -48,20 +68,20 @@ func (s Styles) Notice(level NoticeLevel) lipgloss.Style {
 // DefaultStyles returns the palette for the given terminal background.
 func DefaultStyles(isDark bool) Styles {
 	c := lipgloss.LightDark(isDark)
-	violet := c(lipgloss.Color(brandPurple), lipgloss.Color(lightViolet))
+	aiPrimary := lipgloss.Color(uiAIPrimary)
 
 	return Styles{
 		MarkdownStyle: markdownStyleName(isDark),
 
-		UserMarker:    lipgloss.NewStyle().Bold(true).Foreground(violet),
+		UserMarker:    lipgloss.NewStyle().Bold(true).Foreground(aiPrimary),
 		UserText:      lipgloss.NewStyle(),
 		AssistantText: lipgloss.NewStyle(),
 		Reasoning:     lipgloss.NewStyle().Faint(true).Italic(true),
-		ToolName:      lipgloss.NewStyle().Bold(true).Foreground(violet),
-		ToolDetail:    lipgloss.NewStyle().Faint(true),
+		ToolName:      lipgloss.NewStyle().Bold(true).Foreground(aiPrimary),
+		ToolDetail:    lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Faint(true),
 		StatusRunning: lipgloss.NewStyle().Foreground(c(lipgloss.Color("3"), lipgloss.Color("11"))),
-		StatusSuccess: lipgloss.NewStyle().Foreground(c(lipgloss.Color("2"), lipgloss.Color("10"))),
-		StatusError:   lipgloss.NewStyle().Foreground(c(lipgloss.Color("1"), lipgloss.Color("9"))),
+		StatusSuccess: lipgloss.NewStyle().Foreground(c(lipgloss.Color(uiStatusSuccessLight), lipgloss.Color(uiStatusSuccessDark))).Background(c(lipgloss.Color(uiStatusSuccessBgLight), lipgloss.Color(uiStatusSuccessBgDark))),
+		StatusError:   lipgloss.NewStyle().Foreground(c(lipgloss.Color(uiStatusErrorLight), lipgloss.Color(uiStatusErrorDark))).Background(c(lipgloss.Color(uiStatusErrorBgLight), lipgloss.Color(uiStatusErrorBgDark))),
 		Meta:          lipgloss.NewStyle().Faint(true),
 		NoticeInfo:    lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#632CA6")),
 		NoticeWarn:    lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color("#1A1A1A")).Background(lipgloss.Color("#F5A623")),
@@ -77,22 +97,35 @@ func markdownStyleName(isDark bool) string {
 }
 
 // datadogStyleConfig derives a glamour style from the built-in dark/light base,
-// accenting headings and links. It copies the base by value and only reassigns
-// pointer fields, so the shared built-in config is never mutated.
+// recoloring headings, links, and inline code with the UI tokens. It copies the
+// base by value and only reassigns pointer fields, so the shared built-in config
+// is never mutated.
 func datadogStyleConfig(isDark bool) ansi.StyleConfig {
 	cfg := styles.LightStyleConfig
-	accent := brandPurple
+	secondary := uiAISecondaryLight
+	link := uiLinkLight
+	codeBg := uiCodeBgLight
+	codeText := uiCodeTextLight
 	if isDark {
 		cfg = styles.DarkStyleConfig
-		accent = lightViolet
+		secondary = uiAISecondaryDark
+		link = uiLinkDark
+		codeBg = uiCodeBgDark
+		codeText = uiCodeTextDark
 	}
 
-	cfg.Heading.Color = new(accent)
+	// Headings use the secondary color. H2–H5 inherit Heading via cascade; H6
+	// carries its own color in the dark base, so it needs an explicit override.
+	cfg.Heading.Color = new(secondary)
+	cfg.H6.Color = new(secondary)
 	cfg.H1.Color = new("#FFFFFF")
-	cfg.H1.BackgroundColor = new(brandPurple)
-	cfg.H6.Color = new(accent)
-	cfg.Link.Color = new(accent)
-	cfg.LinkText.Color = new(accent)
+	cfg.H1.BackgroundColor = new(uiAIPrimary)
+	// Color both the URL (Link) and the visible label (LinkText); glamour uses
+	// separate fields, so setting only Link leaves the label at the base color.
+	cfg.Link.Color = new(link)
+	cfg.LinkText.Color = new(link)
+	cfg.Code.Color = new(codeText)
+	cfg.Code.BackgroundColor = new(codeBg)
 
 	return cfg
 }
