@@ -2,6 +2,7 @@ package agent
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
@@ -11,9 +12,11 @@ import (
 // of a conversation: it folds streamed wire messages into blocks. Not safe for
 // concurrent use; the engine serializes access.
 type Transcript struct {
-	blocks  []Block
-	index   map[BlockID]int // id -> position in blocks
-	userSeq int             // monotonic id source for local user messages
+	blocks        []Block
+	index         map[BlockID]int // id -> position in blocks
+	accumulatorID BlockID
+	accumulator   *strings.Builder // pointer-owned: Builder must not be copied after use
+	userSeq       int              // monotonic id source for local user messages
 	// openStream tracks the currently streaming (incomplete) text/reasoning
 	openStream BlockID
 	hasOpen    bool
@@ -85,11 +88,15 @@ func (t *Transcript) appendMarkdown(msg assistant.Message) (Block, bool) {
 	}
 	id := BlockIDOf(msg)
 	if i, ok := t.index[id]; ok {
-		t.blocks[i].Markdown = &assistant.MarkdownPayload{Content: t.blocks[i].Markdown.Content + p.Content}
+		acc := t.accumulatorFor(id, t.blocks[i].Markdown.Content)
+		_, _ = acc.WriteString(p.Content)
+		t.blocks[i].Markdown = &assistant.MarkdownPayload{Content: acc.String()}
 		t.blocks[i].Complete = false
 		t.blocks[i].Rev++
 		return t.blocks[i], true
 	}
+	acc := t.accumulatorFor(id, "")
+	_, _ = acc.WriteString(p.Content)
 	b := Block{
 		ID:        id,
 		Role:      assistant.RoleOf(msg.Role),
@@ -97,7 +104,7 @@ func (t *Transcript) appendMarkdown(msg assistant.Message) (Block, bool) {
 		MessageID: msg.MessageID,
 		AgentID:   msg.AgentID,
 		CreatedAt: msg.CreatedAt,
-		Markdown:  &assistant.MarkdownPayload{Content: p.Content},
+		Markdown:  &assistant.MarkdownPayload{Content: acc.String()},
 	}
 	t.push(b)
 	return b, true
@@ -115,8 +122,10 @@ func (t *Transcript) appendReasoning(msg assistant.Message) (Block, bool) {
 	id := BlockIDOf(msg)
 	if i, ok := t.index[id]; ok {
 		prev := t.blocks[i].Thinking
+		acc := t.accumulatorFor(id, prev.Content)
+		_, _ = acc.WriteString(p.Content)
 		next := &assistant.ThinkingPayload{
-			Content:          prev.Content + p.Content,
+			Content:          acc.String(),
 			EncryptedContent: prev.EncryptedContent,
 			Redacted:         prev.Redacted || p.Redacted,
 		}
@@ -128,6 +137,8 @@ func (t *Transcript) appendReasoning(msg assistant.Message) (Block, bool) {
 		t.blocks[i].Rev++
 		return t.blocks[i], true
 	}
+	acc := t.accumulatorFor(id, "")
+	_, _ = acc.WriteString(p.Content)
 	b := Block{
 		ID:        id,
 		Role:      assistant.RoleOf(msg.Role),
@@ -136,7 +147,7 @@ func (t *Transcript) appendReasoning(msg assistant.Message) (Block, bool) {
 		AgentID:   msg.AgentID,
 		CreatedAt: msg.CreatedAt,
 		Thinking: &assistant.ThinkingPayload{
-			Content:          p.Content,
+			Content:          acc.String(),
 			EncryptedContent: p.EncryptedContent,
 			Redacted:         p.Redacted,
 		},
@@ -223,10 +234,12 @@ func (t *Transcript) appendPassthrough(msg assistant.Message, kind assistant.Con
 // Assistant API does not forward thinking start/complete events.
 func (t *Transcript) closePrior(b Block) {
 	if t.hasOpen && t.openStream != b.ID {
-		if i, ok := t.index[t.openStream]; ok && !t.blocks[i].Complete {
+		priorID := t.openStream
+		if i, ok := t.index[priorID]; ok && !t.blocks[i].Complete {
 			t.blocks[i].Complete = true
 			t.blocks[i].Rev++
 		}
+		t.releaseAccumulator(priorID)
 		t.hasOpen = false
 	}
 	if !b.Complete {
@@ -240,13 +253,35 @@ func (t *Transcript) closePrior(b Block) {
 // status glyph). Mid-turn blocks are already closed incrementally by
 // closePrior, so this normally only touches that trailing block.
 func (t *Transcript) FinalizeAll() {
-	for i := range t.blocks {
-		if !t.blocks[i].Complete {
+	if t.hasOpen {
+		id := t.openStream
+		if i, ok := t.index[id]; ok && !t.blocks[i].Complete {
 			t.blocks[i].Complete = true
 			t.blocks[i].Rev++
 		}
+		t.releaseAccumulator(id)
 	}
 	t.hasOpen = false
+}
+
+func (t *Transcript) accumulatorFor(id BlockID, existing string) *strings.Builder {
+	if t.accumulator != nil && t.accumulatorID == id {
+		return t.accumulator
+	}
+	acc := &strings.Builder{}
+	if existing != "" {
+		_, _ = acc.WriteString(existing)
+	}
+	t.accumulatorID = id
+	t.accumulator = acc
+	return acc
+}
+
+func (t *Transcript) releaseAccumulator(id BlockID) {
+	if t.accumulator != nil && t.accumulatorID == id {
+		t.accumulatorID = BlockID{}
+		t.accumulator = nil
+	}
 }
 
 func (t *Transcript) push(b Block) {
