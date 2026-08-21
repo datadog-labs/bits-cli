@@ -15,6 +15,10 @@ import (
 // testClient points a Client at h with the httptest server's client for both
 // the streaming and non-streaming paths. StreamIdleTimeout is left zero so it
 // defaults (90s); idle-specific tests set it explicitly.
+type staticAccessToken string
+
+func (t staticAccessToken) AccessToken() (string, error) { return string(t), nil }
+
 func testClient(t *testing.T, h http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(h)
@@ -421,6 +425,31 @@ func TestRetryAfterDelay(t *testing.T) {
 	future := time.Now().Add(3 * time.Second).UTC().Format(http.TimeFormat)
 	if d, ok := retryAfterDelay(http.Header{"Retry-After": {future}}); !ok || d <= 0 || d > 4*time.Second {
 		t.Errorf("http-date: got %v ok=%v, want ~3s true", d, ok)
+	}
+}
+
+func TestNewRequest_SetsOAuthBearerWithoutAPIKeys(t *testing.T) {
+	var authorization, apiKey, appKey, source string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+		apiKey = r.Header.Get("DD-API-KEY")
+		appKey = r.Header.Get("DD-APPLICATION-KEY")
+		source = r.Header.Get("X-Bits-Source")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"data":{"attributes":{"flags":{}}}}`)
+	})
+	c.TokenSource = staticAccessToken("oauth-token")
+	if _, err := c.ExperimentalToolFlags(context.Background()); err != nil {
+		t.Fatalf("ExperimentalToolFlags: %v", err)
+	}
+	if authorization != "Bearer oauth-token" {
+		t.Errorf("Authorization = %q", authorization)
+	}
+	if apiKey != "" || appKey != "" {
+		t.Errorf("API key headers must be absent in OAuth mode: %q/%q", apiKey, appKey)
+	}
+	if source != "bits-cli" {
+		t.Errorf("X-Bits-Source = %q", source)
 	}
 }
 

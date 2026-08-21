@@ -49,11 +49,18 @@ const (
 	maxRetryDelay = 5 * time.Second
 )
 
+// AccessTokenSource returns a current OAuth access token. Implementations may
+// refresh and persist rotating tokens before returning.
+type AccessTokenSource interface {
+	AccessToken() (string, error)
+}
+
 // Client talks to the Bits AI assistant API over HTTP.
 type Client struct {
-	BaseURL string
-	APIKey  string
-	AppKey  string
+	BaseURL     string
+	APIKey      string
+	AppKey      string
+	TokenSource AccessTokenSource
 	// HTTPClient handles non-streaming requests (history, conversations,
 	// skills, flags, rename, share, delete). Its Timeout bounds the whole
 	// request. Nil falls back to http.DefaultClient.
@@ -94,29 +101,48 @@ func newTransport() *http.Transport {
 }
 
 // NewClient builds a Client from DD_API_KEY / DD_APP_KEY in the environment
-// (as populated by dd-auth). BaseURL defaults to staging.
+// (as populated by dd-auth). This remains the CI and developer fallback while
+// interactive users authenticate through NewOAuthClient.
 func NewClient() (*Client, error) {
 	apiKey := os.Getenv("DD_API_KEY")
 	appKey := os.Getenv("DD_APP_KEY")
 	if apiKey == "" || appKey == "" {
-		return nil, fmt.Errorf("DD_API_KEY and DD_APP_KEY must be set (run under: dd-auth --domain dd.datad0g.com -- ...)")
+		return nil, fmt.Errorf("DD_API_KEY and DD_APP_KEY must both be set")
 	}
 	base := os.Getenv("DD_SITE_URL")
 	if base == "" {
 		base = DefaultBaseURL
 	}
+	client := newClient(base)
+	client.APIKey = apiKey
+	client.AppKey = appKey
+	return client, nil
+}
+
+// NewOAuthClient builds a Client backed by a refreshing OAuth token source.
+func NewOAuthClient(baseURL string, source AccessTokenSource) (*Client, error) {
+	if source == nil {
+		return nil, fmt.Errorf("OAuth token source is required")
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		return nil, fmt.Errorf("OAuth Datadog site is required")
+	}
+	client := newClient(baseURL)
+	client.TokenSource = source
+	return client, nil
+}
+
+func newClient(baseURL string) *Client {
 	tr := newTransport()
 	return &Client{
-		BaseURL:           strings.TrimRight(base, "/"),
-		APIKey:            apiKey,
-		AppKey:            appKey,
+		BaseURL:           strings.TrimRight(baseURL, "/"),
 		HTTPClient:        &http.Client{Timeout: defaultRequestTimeout, Transport: tr},
 		StreamClient:      &http.Client{Transport: tr}, // no total timeout; idle-bounded
 		StreamIdleTimeout: defaultStreamIdleTimeout,
 		MaxLineBytes:      defaultMaxLineBytes,
 		MaxRetries:        defaultMaxRetries,
 		RetryBaseDelay:    defaultRetryBaseDelay,
-	}, nil
+	}
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -176,8 +202,18 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("DD-API-KEY", c.APIKey)
-	req.Header.Set("DD-APPLICATION-KEY", c.AppKey)
+	req.Header.Set("User-Agent", "bits-cli/dev")
+	req.Header.Set("X-Bits-Source", "bits-cli")
+	if c.TokenSource != nil {
+		token, err := c.TokenSource.AccessToken()
+		if err != nil {
+			return nil, fmt.Errorf("get OAuth access token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		req.Header.Set("DD-API-KEY", c.APIKey)
+		req.Header.Set("DD-APPLICATION-KEY", c.AppKey)
+	}
 	return req, nil
 }
 

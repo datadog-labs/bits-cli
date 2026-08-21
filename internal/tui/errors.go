@@ -48,7 +48,7 @@ func noticeForNonAPIError(op string, err error) chat.Notice {
 func noticeForAPIError(apiErr *assistant.APIError) chat.Notice {
 	switch {
 	case errors.Is(apiErr, assistant.ErrUnauthorized):
-		return notice(chat.NoticeError, apiErr, "Not authenticated. Refresh your Datadog credentials (dd-auth) and try again.")
+		return notice(chat.NoticeError, apiErr, "Not authenticated. Run `bits login` again, or refresh your Datadog developer credentials.")
 	case errors.Is(apiErr, assistant.ErrForbidden):
 		return forbiddenNotice(apiErr)
 	case errors.Is(apiErr, assistant.ErrNotFound):

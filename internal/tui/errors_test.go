@@ -24,7 +24,7 @@ func TestNoticeForError(t *testing.T) {
 			name:      "api error maps through its status sentinel",
 			err:       &assistant.APIError{StatusCode: 401},
 			wantLevel: chat.NoticeError,
-			wantText:  "Not authenticated. Refresh your Datadog credentials (dd-auth) and try again.",
+			wantText:  "Not authenticated. Run `bits login` again, or refresh your Datadog developer credentials.",
 		},
 		{
 			name:      "not found without an input stays generic",

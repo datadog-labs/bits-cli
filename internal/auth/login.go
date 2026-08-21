@@ -1,0 +1,236 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"html"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os/exec"
+	"runtime"
+	"strings"
+	"time"
+
+	"golang.org/x/oauth2"
+)
+
+const loginTimeout = 5 * time.Minute
+
+// LoginOptions contains the testable dependencies for an interactive login.
+type LoginOptions struct {
+	Site       string
+	ClientID   string
+	Store      CredentialStore
+	HTTPClient *http.Client
+	OpenURL    func(string) error
+	Out        io.Writer
+}
+
+// Login runs Authorization Code + PKCE through the registered loopback
+// callback and stores the resulting tokens in the OS credential manager.
+func Login(ctx context.Context, opts LoginOptions) (Session, error) {
+	cfg, err := ConfigForSite(opts.Site, opts.ClientID)
+	if err != nil {
+		return Session{}, err
+	}
+	if opts.Store == nil {
+		opts.Store = KeyringStore{}
+	}
+	if opts.HTTPClient == nil {
+		opts.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+	}
+	if opts.OpenURL == nil {
+		opts.OpenURL = openBrowser
+	}
+	if opts.Out == nil {
+		opts.Out = io.Discard
+	}
+
+	verifier := oauth2.GenerateVerifier()
+	state, err := randomState()
+	if err != nil {
+		return Session{}, err
+	}
+	listener, callback, err := listenForCallback(cfg.RedirectURI, state)
+	if err != nil {
+		return Session{}, err
+	}
+	defer func() { _ = listener.server.Close() }()
+
+	authURL := cfg.OAuth2Config().AuthCodeURL(
+		state,
+		oauth2.S256ChallengeOption(verifier),
+	)
+	_, _ = fmt.Fprintf(opts.Out, "Opening Datadog login in your browser…\nIf it does not open, visit:\n%s\n", authURL)
+	if err := opts.OpenURL(authURL); err != nil {
+		_, _ = fmt.Fprintf(opts.Out, "Could not open a browser automatically: %v\n", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, loginTimeout)
+	defer cancel()
+	var code string
+	select {
+	case <-waitCtx.Done():
+		return Session{}, fmt.Errorf("wait for OAuth callback: %w", waitCtx.Err())
+	case result := <-callback:
+		if result.err != nil {
+			return Session{}, result.err
+		}
+		code = result.code
+	}
+
+	exchangeCtx, exchangeCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer exchangeCancel()
+	exchangeCtx = context.WithValue(exchangeCtx, oauth2.HTTPClient, opts.HTTPClient)
+	token, err := cfg.OAuth2Config().Exchange(exchangeCtx, code, oauth2.VerifierOption(verifier))
+	if err != nil {
+		return Session{}, fmt.Errorf("exchange Datadog OAuth code: %w", err)
+	}
+	session := sessionFromToken(cfg, token)
+	if err := opts.Store.Save(session); err != nil {
+		return Session{}, err
+	}
+	return session, nil
+}
+
+type callbackResult struct {
+	code string
+	err  error
+}
+
+type callbackListener struct {
+	server *http.Server
+}
+
+func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan callbackResult, error) {
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse OAuth redirect URI: %w", err)
+	}
+	if u.Scheme != "http" || u.Hostname() != "localhost" || u.Port() == "" {
+		return nil, nil, fmt.Errorf("OAuth redirect must use a registered localhost loopback URI with an explicit port")
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", u.Port()))
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen for OAuth callback on %s: %w", u.Host, err)
+	}
+
+	results := make(chan callbackResult, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc(u.Path, func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Get("state") != wantState {
+			http.Error(w, "OAuth state did not match. Return to the terminal and try again.", http.StatusBadRequest)
+			select {
+			case results <- callbackResult{err: errors.New("OAuth callback state did not match")}:
+			default:
+			}
+			return
+		}
+		if oauthErr := query.Get("error"); oauthErr != "" {
+			description := query.Get("error_description")
+			if description == "" {
+				description = oauthErr
+			}
+			http.Error(w, "Datadog login was not completed. Return to the terminal.", http.StatusBadRequest)
+			select {
+			case results <- callbackResult{err: fmt.Errorf("Datadog OAuth authorization failed: %s", description)}:
+			default:
+			}
+			return
+		}
+		code := query.Get("code")
+		if code == "" {
+			http.Error(w, "Missing OAuth authorization code.", http.StatusBadRequest)
+			select {
+			case results <- callbackResult{err: errors.New("OAuth callback did not include an authorization code")}:
+			default:
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprintf(w, "<!doctype html><title>Bits CLI login complete</title><h1>Login complete</h1><p>You can close this tab and return to Bits CLI.</p><small>%s</small>", html.EscapeString(u.Host))
+		select {
+		case results <- callbackResult{code: code}:
+		default:
+		}
+	})
+	server := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       10 * time.Second,
+	}
+	go func() {
+		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			select {
+			case results <- callbackResult{err: fmt.Errorf("serve OAuth callback: %w", err)}:
+			default:
+			}
+		}
+	}()
+	return &callbackListener{server: server}, results, nil
+}
+
+// Revoke invalidates the refresh token when available, otherwise the access
+// token. Callers should delete the local session even if this best-effort call
+// fails.
+func Revoke(ctx context.Context, session Session, httpClient *http.Client) error {
+	cfg, err := ConfigForSite(session.Site, session.ClientID)
+	if err != nil {
+		return err
+	}
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 10 * time.Second}
+	}
+	token := session.RefreshToken
+	hint := "refresh_token"
+	if token == "" {
+		token = session.AccessToken
+		hint = "access_token"
+	}
+	form := url.Values{
+		"client_id":       {cfg.ClientID},
+		"token":           {token},
+		"token_type_hint": {hint},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.RevokeURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("revoke Datadog OAuth token: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("revoke Datadog OAuth token: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func randomState() (string, error) {
+	state := oauth2.GenerateVerifier()
+	if state == "" {
+		return "", errors.New("generate OAuth state")
+	}
+	return state, nil
+}
+
+func openBrowser(target string) error {
+	var command string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		command, args = "open", []string{target}
+	case "windows":
+		command, args = "rundll32", []string{"url.dll,FileProtocolHandler", target}
+	default:
+		command, args = "xdg-open", []string{target}
+	}
+	return exec.Command(command, args...).Start()
+}
