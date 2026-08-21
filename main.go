@@ -141,7 +141,7 @@ func runChat(args []string) error {
 
 func authenticatedClient() (*assistant.Client, error) {
 	apiKey, appKey := os.Getenv("DD_API_KEY"), os.Getenv("DD_APP_KEY")
-	if apiKey != "" || appKey != "" {
+	if apiKey != "" && appKey != "" {
 		return assistant.NewClient()
 	}
 

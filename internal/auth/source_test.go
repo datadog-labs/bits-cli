@@ -101,6 +101,38 @@ func TestSourceRefreshesOnceAndPersistsRotatedToken(t *testing.T) {
 	}
 }
 
+func TestSourceKeepsRotatedTokenWhenPersistenceTemporarilyFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer server.Close()
+
+	store := &memoryStore{err: fmt.Errorf("keyring unavailable")}
+	source := &Source{
+		config:     SiteConfig{Site: DefaultStagingSite, ClientID: "client", TokenURL: server.URL},
+		store:      store,
+		httpClient: server.Client(),
+		session: Session{
+			Site: DefaultStagingSite, ClientID: "client", AccessToken: "old-access",
+			RefreshToken: "old-refresh", Expiry: time.Now().Add(-time.Minute),
+		},
+	}
+	if token, err := source.AccessToken(); err != nil || token != "new-access" {
+		t.Fatalf("first AccessToken = %q, %v", token, err)
+	}
+	if !source.dirty {
+		t.Fatal("rotated token should remain dirty after failed persistence")
+	}
+	store.err = nil
+	if token, err := source.AccessToken(); err != nil || token != "new-access" {
+		t.Fatalf("second AccessToken = %q, %v", token, err)
+	}
+	if source.dirty || store.session.RefreshToken != "new-refresh" {
+		t.Fatalf("rotated session was not persisted: %#v", store.session)
+	}
+}
+
 func TestSourceRequiresReauthWithoutRefreshToken(t *testing.T) {
 	source := &Source{
 		config: SiteConfig{},

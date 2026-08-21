@@ -36,6 +36,10 @@ func Login(ctx context.Context, opts LoginOptions) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
+	return login(ctx, cfg, opts)
+}
+
+func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, error) {
 	if opts.Store == nil {
 		opts.Store = KeyringStore{}
 	}
@@ -58,7 +62,11 @@ func Login(ctx context.Context, opts LoginOptions) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
-	defer func() { _ = listener.server.Close() }()
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = listener.server.Shutdown(shutdownCtx)
+	}()
 
 	authURL := cfg.OAuth2Config().AuthCodeURL(
 		state,
@@ -113,7 +121,7 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 	if u.Scheme != "http" || u.Hostname() != "localhost" || u.Port() == "" {
 		return nil, nil, fmt.Errorf("OAuth redirect must use a registered localhost loopback URI with an explicit port")
 	}
-	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", u.Port()))
+	ln, err := net.Listen("tcp", net.JoinHostPort(u.Hostname(), u.Port()))
 	if err != nil {
 		return nil, nil, fmt.Errorf("listen for OAuth callback on %s: %w", u.Host, err)
 	}
@@ -123,11 +131,9 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 	mux.HandleFunc(u.Path, func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 		if query.Get("state") != wantState {
+			// Ignore unsolicited localhost probes rather than letting them cancel
+			// the real browser flow. A matching state remains mandatory.
 			http.Error(w, "OAuth state did not match. Return to the terminal and try again.", http.StatusBadRequest)
-			select {
-			case results <- callbackResult{err: errors.New("OAuth callback state did not match")}:
-			default:
-			}
 			return
 		}
 		if oauthErr := query.Get("error"); oauthErr != "" {

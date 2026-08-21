@@ -50,10 +50,13 @@ func (s *Source) AccessToken() (string, error) {
 	defer s.mu.Unlock()
 
 	if s.dirty {
-		if err := s.store.Save(s.session); err != nil {
-			return "", fmt.Errorf("persist rotated OAuth token: %w", err)
+		if err := s.store.Save(s.session); err == nil {
+			s.dirty = false
 		}
-		s.dirty = false
+		// The in-memory token remains usable even if the credential manager is
+		// temporarily unavailable. Keep retrying persistence on later calls;
+		// never retry the already-consumed rotating refresh token.
+		return s.session.AccessToken, nil
 	}
 
 	current := s.session.token()
@@ -78,7 +81,10 @@ func (s *Source) AccessToken() (string, error) {
 	s.session = sessionFromToken(s.config, refreshed)
 	s.dirty = true
 	if err := s.store.Save(s.session); err != nil {
-		return "", fmt.Errorf("persist rotated OAuth token: %w", err)
+		// Continue with the valid in-memory access token and retry persistence
+		// before the next request. Returning an error here would strand the
+		// process after the server consumed the old rotating refresh token.
+		return refreshed.AccessToken, nil
 	}
 	s.dirty = false
 	return refreshed.AccessToken, nil
