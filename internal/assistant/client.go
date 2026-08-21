@@ -85,6 +85,10 @@ type Client struct {
 	// RetryBaseDelay is the base for exponential backoff between retries. Zero
 	// uses defaultRetryBaseDelay.
 	RetryBaseDelay time.Duration
+	// ForceTracing asks Rapid to manual-keep the streaming Assistant trace.
+	// This is intended only for targeted diagnostics because it bypasses normal
+	// trace sampling for the request.
+	ForceTracing bool
 }
 
 // newTransport returns a tuned transport: pooled connections plus bounded
@@ -356,7 +360,10 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 		Attributes: attrs,
 	}}
 
-	const path = "/api/v2/assistant"
+	path := "/api/v2/assistant"
+	if c.ForceTracing {
+		path += "?force_tracing=1"
+	}
 	conversationID := opts.ConversationID
 
 	// Bound the gap between lines (not the total duration) by cancelling a

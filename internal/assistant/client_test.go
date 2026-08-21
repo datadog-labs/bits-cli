@@ -145,6 +145,22 @@ func TestSend_StreamsTextAndConversationID(t *testing.T) {
 	}
 }
 
+func TestSend_ForceTracingRequestsManualRetention(t *testing.T) {
+	var forceTracing string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		forceTracing = r.URL.Query().Get("force_tracing")
+		writeStream(t, w, textLine("conv-forced", "retained"))
+	})
+	c.ForceTracing = true
+
+	if _, err := c.Send(context.Background(), "hi", SendOptions{}, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if forceTracing != "1" {
+		t.Errorf("force_tracing = %q, want 1", forceTracing)
+	}
+}
+
 func TestSend_SurfacesInBandError(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeStream(t, w,

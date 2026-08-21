@@ -104,6 +104,8 @@ func runChat(args []string) error {
 	flags.SetOutput(os.Stderr)
 	conversationID := flags.String("conversation", "",
 		"resume an existing conversation by id: its history is restored before the prompt")
+	forceTracing := flags.Bool("force-tracing", false,
+		"retain the Assistant request trace for targeted diagnostics")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -121,6 +123,7 @@ func runChat(args []string) error {
 		if err != nil {
 			return err
 		}
+		client.ForceTracing = *forceTracing
 		backend = client
 	}
 
