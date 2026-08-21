@@ -63,12 +63,23 @@ func TestAuthorizationURL_UsesPKCEWithoutExplicitScope(t *testing.T) {
 	}
 }
 
+func TestConfigForSite_RegionalCustomSubdomain(t *testing.T) {
+	cfg, err := ConfigForSite("https://acme.us3.datadoghq.com", "production-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthorizeURL != "https://us3.datadoghq.com/oauth2/v1/authorize" {
+		t.Errorf("AuthorizeURL = %q", cfg.AuthorizeURL)
+	}
+}
+
 func TestNormalizeSiteRejectsUnsafeInput(t *testing.T) {
 	for _, raw := range []string{
 		"http://dd.datad0g.com",
 		"https://user@example.com",
 		"https://dd.datad0g.com/path",
 		"https://dd.datad0g.com?x=1",
+		"https://evil.us3.example.com",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			if _, _, err := normalizeSite(raw); err == nil {

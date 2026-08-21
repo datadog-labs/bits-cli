@@ -49,16 +49,16 @@ func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
 	case hasDomainSuffix(domain, "datadoghq.eu"):
 		authDomain = "app.datadoghq.eu"
 		apiDomain = "api.datadoghq.eu"
-	case domain == "us3.datadoghq.com" || strings.Contains(domain, ".us3."):
+	case hasDomainSuffix(domain, "us3.datadoghq.com"):
 		authDomain = "us3.datadoghq.com"
 		apiDomain = "api.us3.datadoghq.com"
-	case domain == "us5.datadoghq.com" || strings.Contains(domain, ".us5."):
+	case hasDomainSuffix(domain, "us5.datadoghq.com"):
 		authDomain = "us5.datadoghq.com"
 		apiDomain = "api.us5.datadoghq.com"
-	case domain == "ap1.datadoghq.com" || strings.Contains(domain, ".ap1."):
+	case hasDomainSuffix(domain, "ap1.datadoghq.com"):
 		authDomain = "ap1.datadoghq.com"
 		apiDomain = "api.ap1.datadoghq.com"
-	case domain == "ap2.datadoghq.com" || strings.Contains(domain, ".ap2."):
+	case hasDomainSuffix(domain, "ap2.datadoghq.com"):
 		authDomain = "ap2.datadoghq.com"
 		apiDomain = "api.ap2.datadoghq.com"
 	default:
@@ -118,6 +118,11 @@ func normalizeSite(raw string) (site, domain string, err error) {
 		return "", "", fmt.Errorf("Datadog site must not include credentials, a path, query, or fragment")
 	}
 	domain = strings.ToLower(u.Hostname())
+	if !hasDomainSuffix(domain, "datad0g.com") &&
+		!hasDomainSuffix(domain, "datadoghq.com") &&
+		!hasDomainSuffix(domain, "datadoghq.eu") {
+		return "", "", fmt.Errorf("Datadog site must use a datad0g.com, datadoghq.com, or datadoghq.eu hostname")
+	}
 	return "https://" + u.Host, domain, nil
 }
 

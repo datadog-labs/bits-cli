@@ -54,9 +54,9 @@ func (s *Source) AccessToken() (string, error) {
 			s.dirty = false
 		}
 		// The in-memory token remains usable even if the credential manager is
-		// temporarily unavailable. Keep retrying persistence on later calls;
-		// never retry the already-consumed rotating refresh token.
-		return s.session.AccessToken, nil
+		// temporarily unavailable. Keep retrying persistence on later calls and
+		// fall through so an expired in-memory token can still refresh using the
+		// latest rotating refresh token.
 	}
 
 	current := s.session.token()

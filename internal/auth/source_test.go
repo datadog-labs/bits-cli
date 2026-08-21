@@ -133,6 +133,34 @@ func TestSourceKeepsRotatedTokenWhenPersistenceTemporarilyFails(t *testing.T) {
 	}
 }
 
+func TestSourceRefreshesExpiredDirtyTokenWhenStoreRemainsUnavailable(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"access_token":"next-access","refresh_token":"next-refresh","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer server.Close()
+
+	source := &Source{
+		config:     SiteConfig{Site: DefaultStagingSite, ClientID: "client", TokenURL: server.URL},
+		store:      &memoryStore{err: fmt.Errorf("keyring unavailable")},
+		httpClient: server.Client(),
+		session: Session{
+			Site: DefaultStagingSite, ClientID: "client", AccessToken: "dirty-expired",
+			RefreshToken: "dirty-refresh", Expiry: time.Now().Add(-time.Minute),
+		},
+		dirty: true,
+	}
+	token, err := source.AccessToken()
+	if err != nil || token != "next-access" {
+		t.Fatalf("AccessToken = %q, %v", token, err)
+	}
+	if requests.Load() != 1 || !source.dirty {
+		t.Fatalf("requests = %d, dirty = %v", requests.Load(), source.dirty)
+	}
+}
+
 func TestSourceRequiresReauthWithoutRefreshToken(t *testing.T) {
 	source := &Source{
 		config: SiteConfig{},
