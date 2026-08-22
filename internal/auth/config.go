@@ -140,16 +140,16 @@ func normalizeSite(raw string) (site, domain string, err error) {
 		return "", "", fmt.Errorf("parse Datadog site: %w", err)
 	}
 	if u.Scheme != "https" || u.Hostname() == "" {
-		return "", "", fmt.Errorf("Datadog site must be an https URL or hostname")
+		return "", "", fmt.Errorf("datadog site must be an https URL or hostname")
 	}
 	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return "", "", fmt.Errorf("Datadog site must not include credentials, a path, query, or fragment")
+		return "", "", fmt.Errorf("datadog site must not include credentials, a path, query, or fragment")
 	}
 	domain = strings.ToLower(u.Hostname())
 	if !hasDomainSuffix(domain, "datad0g.com") &&
 		!hasDomainSuffix(domain, "datadoghq.com") &&
 		!hasDomainSuffix(domain, "datadoghq.eu") {
-		return "", "", fmt.Errorf("Datadog site must use a datad0g.com, datadoghq.com, or datadoghq.eu hostname")
+		return "", "", fmt.Errorf("datadog site must use a datad0g.com, datadoghq.com, or datadoghq.eu hostname")
 	}
 	return "https://" + u.Host, domain, nil
 }

@@ -150,7 +150,7 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 			}
 			http.Error(w, "Datadog login was not completed. Return to the terminal.", http.StatusBadRequest)
 			select {
-			case results <- callbackResult{err: fmt.Errorf("Datadog OAuth authorization failed: %s", description)}:
+			case results <- callbackResult{err: fmt.Errorf("datadog OAuth authorization failed: %s", description)}:
 			default:
 			}
 			return
