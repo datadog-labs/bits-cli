@@ -75,7 +75,7 @@ func runLogout(args []string) error {
 		return fmt.Errorf("logout does not accept positional arguments")
 	}
 
-	logoutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	logoutCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	hadSession, revokeErr, err := auth.Logout(logoutCtx, auth.KeyringStore{}, nil)
 	cancel()
 	if err != nil {
@@ -157,6 +157,9 @@ func authenticatedClientWith(store auth.CredentialStore, apiKey, appKey, apiSite
 			return nil, sourceErr
 		}
 		return assistant.NewOAuthClient(source.Site(), source)
+	}
+	if errors.Is(err, auth.ErrSessionCorrupt) {
+		return nil, fmt.Errorf("stored Bits login is unreadable; run `bits logout`, then `bits login`: %w", err)
 	}
 	if !errors.Is(err, auth.ErrNoSession) {
 		return nil, err

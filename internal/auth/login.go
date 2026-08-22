@@ -19,7 +19,11 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const loginTimeout = 5 * time.Minute
+const (
+	loginTimeout          = 5 * time.Minute
+	sessionLockTimeout    = 45 * time.Second
+	sessionPersistTimeout = 5 * time.Second
+)
 
 // LoginOptions contains the testable dependencies for an interactive login.
 type LoginOptions struct {
@@ -104,22 +108,24 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	exchangeCtx = context.WithValue(exchangeCtx, oauth2.HTTPClient, opts.HTTPClient)
 	token, err := cfg.OAuth2Config().Exchange(exchangeCtx, code, oauth2.VerifierOption(verifier))
 	if err != nil {
-		return Session{}, fmt.Errorf("exchange Datadog OAuth code: %w", err)
+		return Session{}, sanitizedOAuthError("exchange Datadog OAuth code", err)
 	}
 	session := sessionFromToken(cfg, token)
 	var previous Session
 	var hadPrevious bool
-	persistCtx, persistCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer persistCancel()
-	persistErr := withSessionLock(persistCtx, opts.Store, func() error {
+	lockCtx, lockCancel := context.WithTimeout(ctx, sessionLockTimeout)
+	defer lockCancel()
+	persistErr := withSessionLock(lockCtx, opts.Store, func() error {
 		stored, loadErr := opts.Store.Load()
 		switch {
 		case loadErr == nil:
 			previous, hadPrevious = stored, true
-		case errors.Is(loadErr, ErrNoSession):
+		case errors.Is(loadErr, ErrNoSession), errors.Is(loadErr, ErrSessionCorrupt):
 		default:
 			return loadErr
 		}
+		persistCtx, persistCancel := context.WithTimeout(ctx, sessionPersistTimeout)
+		defer persistCancel()
 		return saveWithRetry(persistCtx, opts.Store, session)
 	})
 	if persistErr != nil {
@@ -189,13 +195,13 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 			return
 		}
 		if oauthErr := query.Get("error"); oauthErr != "" {
-			description := query.Get("error_description")
-			if description == "" {
-				description = oauthErr
+			code := safeOAuthErrorCode(oauthErr)
+			if code == "" {
+				code = "authorization_error"
 			}
 			http.Error(w, "Datadog login was not completed. Return to the terminal.", http.StatusBadRequest)
 			select {
-			case results <- callbackResult{err: fmt.Errorf("datadog OAuth authorization failed: %s", description)}:
+			case results <- callbackResult{err: fmt.Errorf("datadog OAuth authorization failed: %s", code)}:
 			default:
 			}
 			return
@@ -293,6 +299,10 @@ func Logout(ctx context.Context, store CredentialStore, httpClient *http.Client)
 		if errors.Is(loadErr, ErrNoSession) {
 			return nil
 		}
+		if errors.Is(loadErr, ErrSessionCorrupt) {
+			hadSession = true
+			return deleteWithRetry(ctx, store)
+		}
 		if loadErr != nil {
 			return loadErr
 		}
@@ -302,7 +312,30 @@ func Logout(ctx context.Context, store CredentialStore, httpClient *http.Client)
 	if err != nil || !hadSession {
 		return hadSession, nil, err
 	}
+	if session.AccessToken == "" {
+		// A corrupt credential was removed but cannot be safely revoked because
+		// its token/client/routing fields were not trusted.
+		return true, nil, nil
+	}
 	return true, Revoke(ctx, session, httpClient), nil
+}
+
+func sanitizedOAuthError(operation string, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	var retrieveErr *oauth2.RetrieveError
+	if !errors.As(err, &retrieveErr) {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	status := 0
+	if retrieveErr.Response != nil {
+		status = retrieveErr.Response.StatusCode
+	}
+	if code := safeOAuthErrorCode(retrieveErr.ErrorCode); code != "" {
+		return fmt.Errorf("%s: HTTP %d (%s)", operation, status, code)
+	}
+	return fmt.Errorf("%s: HTTP %d", operation, status)
 }
 
 func safeOAuthErrorCode(code string) string {

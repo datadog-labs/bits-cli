@@ -2,12 +2,54 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestMutationRetriesAcceptCommittedPostconditions(t *testing.T) {
+	session := expiredSession()
+
+	t.Run("save committed before error", func(t *testing.T) {
+		store := &memoryStore{saveCommitErr: errors.New("lost save response")}
+		if err := saveWithRetry(context.Background(), store, session); err != nil {
+			t.Fatal(err)
+		}
+		if !store.present || !sameSession(store.session, session) || store.saves != 1 {
+			t.Fatalf("stored = %#v, saves = %d", store.session, store.saves)
+		}
+	})
+
+	t.Run("delete committed before error", func(t *testing.T) {
+		store := newMemoryStore(session)
+		store.deleteCommitErr = errors.New("lost delete response")
+		if err := deleteWithRetry(context.Background(), store); err != nil {
+			t.Fatal(err)
+		}
+		if store.present || store.deletes != 1 {
+			t.Fatalf("present = %v, deletes = %d", store.present, store.deletes)
+		}
+	})
+}
+
+func TestDefaultLockPathIgnoresProcessHomeEnvironment(t *testing.T) {
+	before, err := defaultSessionLockPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	after, err := defaultSessionLockPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("lock path changed with process environment: %q != %q", before, after)
+	}
+}
 
 func TestKeyringStoreLockSerializesProcesses(t *testing.T) {
 	if os.Getenv("BITS_LOCK_HELPER") == "1" {

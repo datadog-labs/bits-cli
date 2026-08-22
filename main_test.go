@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +73,16 @@ func TestAuthenticatedClientDoesNotHideCredentialStoreErrors(t *testing.T) {
 	)
 	if !errors.Is(err, keyringErr) {
 		t.Fatalf("error = %v, want keyring error", err)
+	}
+}
+
+func TestAuthenticatedClientExplainsCorruptStoredSession(t *testing.T) {
+	_, err := authenticatedClientWith(
+		stubCredentialStore{err: fmt.Errorf("%w: truncated", auth.ErrSessionCorrupt)},
+		"api-key", "app-key", "https://keys.example.com",
+	)
+	if err == nil || !errors.Is(err, auth.ErrSessionCorrupt) || !strings.Contains(err.Error(), "run `bits logout`, then `bits login`") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

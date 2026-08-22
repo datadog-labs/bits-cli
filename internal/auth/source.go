@@ -20,7 +20,8 @@ const (
 // Every durable transition also takes the store's cross-process lock so two
 // Bits processes cannot consume or overwrite the same rotating token lineage.
 type Source struct {
-	mu          sync.Mutex
+	gateOnce    sync.Once
+	gate        chan struct{}
 	config      SiteConfig
 	store       CredentialStore
 	httpClient  *http.Client
@@ -54,8 +55,10 @@ func (s *Source) Site() string {
 
 // AccessToken implements assistant.AccessTokenSource.
 func (s *Source) AccessToken(ctx context.Context) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.acquire(ctx); err != nil {
+		return "", err
+	}
+	defer s.release()
 
 	var accessToken string
 	err := withSessionLock(ctx, s.store, func() error {
@@ -99,7 +102,13 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 			if isInvalidGrant(err) {
 				return s.invalidateLocked(ctx, fmt.Errorf("the authorization server rejected the refresh grant"))
 			}
-			return sanitizedRefreshError(err)
+			return sanitizedOAuthError("refresh Datadog OAuth token", err)
+		}
+		if refreshed.Expiry.IsZero() {
+			// expires_in is optional in OAuth, but treating a zero expiry as
+			// immediately stale would rotate on every request. Use a short,
+			// conservative lifetime and refresh again after five minutes.
+			refreshed.Expiry = time.Now().Add(2 * refreshWindow)
 		}
 
 		before := s.session
@@ -126,6 +135,7 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 func (s *Source) reconcileDirty(ctx context.Context, durable Session, loadErr error) error {
 	if loadErr != nil {
 		if errors.Is(loadErr, ErrNoSession) {
+			s.revokeDirtyGrant()
 			return fmt.Errorf("%w: the stored session was removed while a rotated token was pending; run `bits login`", ErrReauthRequired)
 		}
 		return fmt.Errorf("%w: %w", ErrSessionNotDurable, loadErr)
@@ -145,10 +155,14 @@ func (s *Source) reconcileDirty(ctx context.Context, durable Session, loadErr er
 		return nil
 	default:
 		// Another process committed a newer login or rotation. Never overwrite
-		// it with this process's pending state.
+		// it with this process's pending state. Best-effort revoke the abandoned
+		// dirty grant because no durable session can reference it anymore.
+		dirty := s.session
 		s.dirty = false
 		s.persistBase = Session{}
-		return s.adopt(durable)
+		adoptErr := s.adopt(durable)
+		s.revokeGrant(dirty)
+		return adoptErr
 	}
 }
 
@@ -156,7 +170,7 @@ func (s *Source) adopt(session Session) error {
 	if err := session.validate(); err != nil {
 		return err
 	}
-	if session.Site != s.session.Site || session.ClientID != s.session.ClientID {
+	if session.Site != s.config.Site || session.ClientID != s.config.ClientID {
 		return fmt.Errorf("%w; restart Bits to use the new login", ErrSessionReplaced)
 	}
 	s.session = session
@@ -174,24 +188,71 @@ func (s *Source) invalidateLocked(ctx context.Context, reason error) error {
 	return fmt.Errorf("%w: %w; run `bits login`", ErrReauthRequired, reason)
 }
 
+func (s *Source) acquire(ctx context.Context) error {
+	s.gateOnce.Do(func() { s.gate = make(chan struct{}, 1) })
+	select {
+	case s.gate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Source) release() {
+	<-s.gate
+}
+
+func (s *Source) revokeDirtyGrant() {
+	dirty := s.session
+	s.session = Session{}
+	s.dirty = false
+	s.persistBase = Session{}
+	s.revokeGrant(dirty)
+}
+
+func (s *Source) revokeGrant(session Session) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = Revoke(cleanupCtx, session, s.httpClient)
+}
+
+// RejectAccessToken marks only the access-token generation rejected by a 401
+// as stale. The failed request is never replayed; the next independently
+// initiated request refreshes under the normal durable transaction.
+func (s *Source) RejectAccessToken(ctx context.Context, rejected string) error {
+	if rejected == "" {
+		return nil
+	}
+	if err := s.acquire(ctx); err != nil {
+		return err
+	}
+	defer s.release()
+	return withSessionLock(ctx, s.store, func() error {
+		durable, err := s.store.Load()
+		if errors.Is(err, ErrNoSession) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if durable.AccessToken != rejected {
+			return nil
+		}
+		stale := durable
+		stale.Expiry = time.Now().Add(-time.Minute)
+		if err := saveWithRetry(ctx, s.store, stale); err != nil {
+			s.session = stale
+			s.dirty = true
+			s.persistBase = durable
+			return fmt.Errorf("%w: %w", ErrSessionNotDurable, err)
+		}
+		return s.adopt(stale)
+	})
+}
+
 func isInvalidGrant(err error) bool {
 	var retrieveErr *oauth2.RetrieveError
 	return errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant"
-}
-
-func sanitizedRefreshError(err error) error {
-	var retrieveErr *oauth2.RetrieveError
-	if !errors.As(err, &retrieveErr) {
-		return fmt.Errorf("refresh Datadog OAuth token: %w", err)
-	}
-	status := 0
-	if retrieveErr.Response != nil {
-		status = retrieveErr.Response.StatusCode
-	}
-	if code := safeOAuthErrorCode(retrieveErr.ErrorCode); code != "" {
-		return fmt.Errorf("refresh Datadog OAuth token: HTTP %d (%s)", status, code)
-	}
-	return fmt.Errorf("refresh Datadog OAuth token: HTTP %d", status)
 }
 
 func needsRefresh(token *oauth2.Token) bool {

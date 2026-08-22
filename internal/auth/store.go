@@ -6,8 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -27,6 +28,10 @@ const (
 var (
 	// ErrNoSession means no OAuth login is present in the OS credential store.
 	ErrNoSession = errors.New("no Bits CLI OAuth session")
+	// ErrSessionCorrupt means a credential exists but cannot be decoded or
+	// trusted. Login may replace it and logout may delete it, but chat must not
+	// silently fall back to a different principal.
+	ErrSessionCorrupt = errors.New("stored OAuth session is unreadable")
 	// ErrReauthRequired means the stored grant cannot be refreshed safely and a
 	// new interactive login is required.
 	ErrReauthRequired = errors.New("OAuth login is no longer valid")
@@ -73,6 +78,9 @@ func (s Session) validate() error {
 	if s.Site == "" || s.ClientID == "" || s.AccessToken == "" {
 		return fmt.Errorf("stored OAuth session is incomplete")
 	}
+	if s.TokenType != "" && !strings.EqualFold(s.TokenType, "Bearer") {
+		return fmt.Errorf("stored OAuth token type is unsupported")
+	}
 	return nil
 }
 
@@ -97,7 +105,7 @@ type sessionLocker interface {
 	WithSessionLock(context.Context, func() error) error
 }
 
-var fallbackSessionLock sync.Mutex
+var fallbackSessionGate = make(chan struct{}, 1)
 
 // withSessionLock serializes every durable session transition. KeyringStore's
 // implementation is cross-process; the fallback exists for test/custom stores
@@ -106,10 +114,11 @@ func withSessionLock(ctx context.Context, store CredentialStore, fn func() error
 	if locker, ok := store.(sessionLocker); ok {
 		return locker.WithSessionLock(ctx, fn)
 	}
-	fallbackSessionLock.Lock()
-	defer fallbackSessionLock.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
+	select {
+	case fallbackSessionGate <- struct{}{}:
+		defer func() { <-fallbackSessionGate }()
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 	return fn()
 }
@@ -119,8 +128,15 @@ func saveWithRetry(ctx context.Context, store CredentialStore, session Session) 
 	for attempt := range persistenceAttempts {
 		if err := store.Save(session); err == nil {
 			return nil
-		} else if firstErr == nil {
-			firstErr = err
+		} else {
+			if firstErr == nil {
+				firstErr = err
+			}
+			// Credential-manager IPC can commit and then lose its response.
+			// Read back while still locked before deciding the save failed.
+			if stored, loadErr := store.Load(); loadErr == nil && sameSession(stored, session) {
+				return nil
+			}
 		}
 		if attempt == persistenceAttempts-1 {
 			break
@@ -141,8 +157,14 @@ func deleteWithRetry(ctx context.Context, store CredentialStore) error {
 	for attempt := range persistenceAttempts {
 		if err := store.Delete(); err == nil {
 			return nil
-		} else if firstErr == nil {
-			firstErr = err
+		} else {
+			if firstErr == nil {
+				firstErr = err
+			}
+			// As with Save, deletion may have committed before IPC failed.
+			if _, loadErr := store.Load(); errors.Is(loadErr, ErrNoSession) {
+				return nil
+			}
 		}
 		if attempt == persistenceAttempts-1 {
 			break
@@ -176,10 +198,10 @@ func (KeyringStore) Load() (Session, error) {
 	}
 	var session Session
 	if err := json.Unmarshal([]byte(raw), &session); err != nil {
-		return Session{}, fmt.Errorf("decode OAuth session from OS credential store: %w", err)
+		return Session{}, fmt.Errorf("%w: decode credential: %w", ErrSessionCorrupt, err)
 	}
 	if err := session.validate(); err != nil {
-		return Session{}, err
+		return Session{}, fmt.Errorf("%w: %w", ErrSessionCorrupt, err)
 	}
 	return session, nil
 }
@@ -209,17 +231,44 @@ func (KeyringStore) Delete() error {
 	return nil
 }
 
+func defaultSessionLockPath() (string, error) {
+	currentUser, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("locate OAuth session lock owner: %w", err)
+	}
+	if currentUser.HomeDir == "" {
+		return "", fmt.Errorf("locate OAuth session lock owner: home directory is empty")
+	}
+	// The keyring account is shared per OS user, so the lock path must not vary
+	// with HOME/XDG_CONFIG_HOME or another process environment.
+	return filepath.Join(currentUser.HomeDir, ".bits-cli", "oauth-session.lock"), nil
+}
+
 func (s KeyringStore) WithSessionLock(ctx context.Context, fn func() error) (err error) {
 	path := s.LockPath
-	if path == "" {
-		configDir, configErr := os.UserConfigDir()
-		if configErr != nil {
-			return fmt.Errorf("locate OAuth session lock directory: %w", configErr)
+	usingDefaultPath := path == ""
+	if usingDefaultPath {
+		var pathErr error
+		path, pathErr = defaultSessionLockPath()
+		if pathErr != nil {
+			return pathErr
 		}
-		path = filepath.Join(configDir, "bits-cli", "oauth-session.lock")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	lockDir := filepath.Dir(path)
+	if usingDefaultPath {
+		if info, statErr := os.Lstat(lockDir); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("create OAuth session lock directory: refusing symlink %s", lockDir)
+		} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return fmt.Errorf("inspect OAuth session lock directory: %w", statErr)
+		}
+	}
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
 		return fmt.Errorf("create OAuth session lock directory: %w", err)
+	}
+	if usingDefaultPath {
+		if err := os.Chmod(lockDir, 0o700); err != nil {
+			return fmt.Errorf("secure OAuth session lock directory: %w", err)
+		}
 	}
 
 	fileLock := flock.New(path)
@@ -228,7 +277,10 @@ func (s KeyringStore) WithSessionLock(ctx context.Context, fn func() error) (err
 		return fmt.Errorf("lock OAuth session: %w", err)
 	}
 	if !locked {
-		return fmt.Errorf("lock OAuth session: %w", context.Cause(ctx))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("lock OAuth session: %w", ctxErr)
+		}
+		return fmt.Errorf("lock OAuth session: lock was not acquired")
 	}
 	defer func() {
 		if unlockErr := fileLock.Unlock(); unlockErr != nil {

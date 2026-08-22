@@ -55,6 +55,10 @@ type AccessTokenSource interface {
 	AccessToken(context.Context) (string, error)
 }
 
+type accessTokenRejector interface {
+	RejectAccessToken(context.Context, string) error
+}
+
 // Client talks to the Bits AI assistant API over HTTP.
 type Client struct {
 	BaseURL     string
@@ -239,6 +243,18 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 // MaxRetries with exponential backoff and jitter, honoring Retry-After. It is
 // only used for idempotent requests (GET/DELETE/PUT); the streaming POST does
 // not go through do and is never retried.
+func (c *Client) rejectAccessToken(ctx context.Context, req *http.Request) {
+	rejector, ok := c.TokenSource.(accessTokenRejector)
+	if !ok {
+		return
+	}
+	token, ok := strings.CutPrefix(req.Header.Get("Authorization"), "Bearer ")
+	if !ok || token == "" {
+		return
+	}
+	_ = rejector.RejectAccessToken(ctx, token)
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	attempts := c.maxRetries() + 1
 	var lastErr error
@@ -276,6 +292,9 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 			return nil, err
 		}
 		if resp.StatusCode >= 400 {
+			if resp.StatusCode == http.StatusUnauthorized {
+				c.rejectAccessToken(ctx, req)
+			}
 			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 			_ = resp.Body.Close()
 			apiErr := httpError(snippet, resp.StatusCode, method, path)
@@ -400,6 +419,9 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
+		if resp.StatusCode == http.StatusUnauthorized {
+			c.rejectAccessToken(ctx, req)
+		}
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		return conversationID, httpError(snippet, resp.StatusCode, http.MethodPost, path)
 	}

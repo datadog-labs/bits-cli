@@ -48,6 +48,8 @@ Authentication selection is deterministic:
 bits logout
 ```
 
-Logout removes the local session under the same cross-process lock used by refresh and login, then attempts remote token revocation. A remote revocation outage does not restore the locally deleted session.
+Logout removes the local session under the same per-user cross-process lock used by refresh and login, then attempts remote token revocation. The lock identity is stable across process environment changes. A remote revocation outage does not restore the locally deleted session.
 
-If Bits reports that the login expired or refresh was rejected, run `bits login` again. If another process replaced the login with a different site or client, restart Bits to adopt it.
+If Bits reports that the login expired or refresh was rejected, run `bits login` again. An unreadable credential can be cleared with `bits logout` before logging in again. If another process replaced the login with a different site or client, restart Bits to adopt it.
+
+An Assistant HTTP 401 is never retried automatically, especially for the non-idempotent streaming turn. It marks that exact access-token generation stale so the next independently initiated request refreshes safely.

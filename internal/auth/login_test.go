@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
 func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
@@ -145,6 +147,40 @@ func TestCallbackChoosesEphemeralPortAndIgnoresWrongState(t *testing.T) {
 	}
 }
 
+func TestCallbackSanitizesAuthorizationErrorDescription(t *testing.T) {
+	listener, results, err := listenForCallback(DefaultRedirectURI, "expected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = listener.server.Shutdown(ctx)
+	}()
+	resp, err := http.Get(listener.redirectURI + "?error=access_denied&error_description=do-not-leak-secret&state=expected") //nolint:gosec // loopback test callback
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	result := <-results
+	if result.err == nil || !strings.Contains(result.err.Error(), "access_denied") || strings.Contains(result.err.Error(), "do-not-leak-secret") {
+		t.Fatalf("callback error = %v", result.err)
+	}
+}
+
+func TestTokenErrorSanitizerOmitsResponseBody(t *testing.T) {
+	err := &oauth2.RetrieveError{
+		Response:         &http.Response{StatusCode: http.StatusBadRequest},
+		ErrorCode:        "invalid_grant",
+		ErrorDescription: "do-not-leak-secret",
+		Body:             []byte(`{"error":"invalid_grant","secret":"do-not-leak-secret"}`),
+	}
+	got := sanitizedOAuthError("exchange Datadog OAuth code", err)
+	if !strings.Contains(got.Error(), "HTTP 400 (invalid_grant)") || strings.Contains(got.Error(), "do-not-leak-secret") {
+		t.Fatalf("sanitized error = %v", got)
+	}
+}
+
 func TestCallbackRejectsNonLiteralAndMalformedRedirects(t *testing.T) {
 	for _, redirectURI := range []string{
 		"http://localhost:0/oauth/callback",
@@ -187,7 +223,7 @@ func TestLoginRevokesUnpersistedGrant(t *testing.T) {
 		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
 		return http.DefaultTransport.RoundTrip(clone)
 	})
-	store := &memoryStore{saveErr: fmt.Errorf("keyring unavailable")}
+	store := &memoryStore{saveFailures: -1, saveErr: fmt.Errorf("keyring unavailable")}
 	openURL := callbackOpenURL(t)
 	_, err := login(context.Background(), SiteConfig{
 		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
@@ -263,6 +299,52 @@ func callbackOpenURL(t *testing.T) func(string) error {
 			_ = resp.Body.Close()
 		}()
 		return nil
+	}
+}
+
+func TestLoginReplacesCorruptCredential(t *testing.T) {
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth2/v1/token" {
+			t.Errorf("unexpected request path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer issuer.Close()
+	client := issuer.Client()
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+	store := &memoryStore{
+		present: true,
+		loadErr: fmt.Errorf("%w: truncated credential", ErrSessionCorrupt),
+	}
+	session, err := login(context.Background(), SiteConfig{
+		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
+		TokenURL: issuer.URL + "/oauth2/v1/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
+	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: callbackOpenURL(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.AccessToken != "new-access" || store.session.AccessToken != "new-access" || store.saves != 1 {
+		t.Fatalf("session = %#v, stored = %#v", session, store.session)
+	}
+}
+
+func TestLogoutClearsCorruptCredential(t *testing.T) {
+	store := &memoryStore{
+		present: true,
+		loadErr: fmt.Errorf("%w: truncated credential", ErrSessionCorrupt),
+	}
+	hadSession, revokeErr, err := Logout(context.Background(), store, nil)
+	if err != nil || revokeErr != nil || !hadSession {
+		t.Fatalf("Logout = had %v, revoke %v, err %v", hadSession, revokeErr, err)
+	}
+	if store.present || store.deletes != 1 {
+		t.Fatalf("present = %v, deletes = %d", store.present, store.deletes)
 	}
 }
 

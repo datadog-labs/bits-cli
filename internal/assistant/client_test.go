@@ -19,6 +19,19 @@ type staticAccessToken string
 
 func (t staticAccessToken) AccessToken(context.Context) (string, error) { return string(t), nil }
 
+type rejectingAccessToken struct {
+	token    string
+	rejected string
+	calls    int
+}
+
+func (t *rejectingAccessToken) AccessToken(context.Context) (string, error) { return t.token, nil }
+func (t *rejectingAccessToken) RejectAccessToken(_ context.Context, token string) error {
+	t.calls++
+	t.rejected = token
+	return nil
+}
+
 func testClient(t *testing.T, h http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(h)
@@ -428,6 +441,37 @@ func TestSend_DoesNotRetry(t *testing.T) {
 	}
 	if got := n.Load(); got != 1 {
 		t.Errorf("POST attempts = %d, want 1 (streaming POST is never retried)", got)
+	}
+}
+
+func TestUnauthorizedMarksOAuthTokenStaleWithoutRetry(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		name := "idempotent"
+		if streaming {
+			name = "streaming"
+		}
+		t.Run(name, func(t *testing.T) {
+			var requests atomic.Int32
+			c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = fmt.Fprint(w, `{"errors":[{"status":"401"}]}`)
+			})
+			source := &rejectingAccessToken{token: "rejected-token"}
+			c.TokenSource = source
+			c.MaxRetries = 3
+			if streaming {
+				_, _ = c.Send(context.Background(), "hi", SendOptions{}, nil)
+			} else {
+				_, _ = c.ExperimentalToolFlags(context.Background())
+			}
+			if requests.Load() != 1 {
+				t.Fatalf("requests = %d, want no automatic retry", requests.Load())
+			}
+			if source.calls != 1 || source.rejected != "rejected-token" {
+				t.Fatalf("rejections = %d, token = %q", source.calls, source.rejected)
+			}
+		})
 	}
 }
 

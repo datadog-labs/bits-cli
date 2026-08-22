@@ -17,14 +17,16 @@ type memoryStore struct {
 	txMu sync.Mutex
 	mu   sync.Mutex
 
-	session      Session
-	present      bool
-	saves        int
-	deletes      int
-	saveFailures int
-	loadErr      error
-	saveErr      error
-	deleteErr    error
+	session         Session
+	present         bool
+	saves           int
+	deletes         int
+	saveFailures    int
+	saveCommitErr   error
+	deleteCommitErr error
+	loadErr         error
+	saveErr         error
+	deleteErr       error
 }
 
 func newMemoryStore(session Session) *memoryStore {
@@ -46,16 +48,20 @@ func (s *memoryStore) Load() (Session, error) {
 func (s *memoryStore) Save(session Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.saveFailures > 0 {
-		s.saveFailures--
-		return s.saveErr
-	}
-	if s.saveErr != nil {
+	if s.saveFailures != 0 {
+		if s.saveFailures > 0 {
+			s.saveFailures--
+		}
 		return s.saveErr
 	}
 	s.session = session
 	s.present = true
 	s.saves++
+	if s.saveCommitErr != nil {
+		err := s.saveCommitErr
+		s.saveCommitErr = nil
+		return err
+	}
 	return nil
 }
 
@@ -68,6 +74,11 @@ func (s *memoryStore) Delete() error {
 	s.session = Session{}
 	s.present = false
 	s.deletes++
+	if s.deleteCommitErr != nil {
+		err := s.deleteCommitErr
+		s.deleteCommitErr = nil
+		return err
+	}
 	return nil
 }
 
@@ -203,13 +214,6 @@ func TestSourceRetriesRotatedTokenPersistence(t *testing.T) {
 	store.saveErr = errors.New("keyring unavailable")
 	source := testSource(t, initial, store, server.URL, server.Client())
 
-	// Clear the persistent error after the configured transient failures.
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		store.mu.Lock()
-		store.saveErr = nil
-		store.mu.Unlock()
-	}()
 	token, err := source.AccessToken(context.Background())
 	if err != nil || token != "new-access" {
 		t.Fatalf("AccessToken = %q, %v", token, err)
@@ -226,6 +230,7 @@ func TestSourceKeepsRotatedTokenAndRetriesWithoutSecondRefresh(t *testing.T) {
 
 	initial := expiredSession()
 	store := newMemoryStore(initial)
+	store.saveFailures = -1
 	store.saveErr = errors.New("keyring unavailable")
 	source := testSource(t, initial, store, server.URL, server.Client())
 
@@ -237,7 +242,7 @@ func TestSourceKeepsRotatedTokenAndRetriesWithoutSecondRefresh(t *testing.T) {
 	}
 
 	store.mu.Lock()
-	store.saveErr = nil
+	store.saveFailures = 0
 	store.mu.Unlock()
 	token, err := source.AccessToken(context.Background())
 	if err != nil || token != "new-access" {
@@ -249,6 +254,18 @@ func TestSourceKeepsRotatedTokenAndRetriesWithoutSecondRefresh(t *testing.T) {
 }
 
 func TestDirtySourceNeverOverwritesReplacementOrDeletion(t *testing.T) {
+	cleanupServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer cleanupServer.Close()
+	cleanupClient := cleanupServer.Client()
+	cleanupClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(cleanupServer.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+
 	initial := expiredSession()
 	rotated := initial
 	rotated.AccessToken = "rotated-access"
@@ -261,7 +278,7 @@ func TestDirtySourceNeverOverwritesReplacementOrDeletion(t *testing.T) {
 
 	t.Run("adopts replacement", func(t *testing.T) {
 		store := newMemoryStore(replacement)
-		source := testSource(t, rotated, store, "", http.DefaultClient)
+		source := testSource(t, rotated, store, "", cleanupClient)
 		source.dirty = true
 		source.persistBase = initial
 		token, err := source.AccessToken(context.Background())
@@ -275,7 +292,7 @@ func TestDirtySourceNeverOverwritesReplacementOrDeletion(t *testing.T) {
 
 	t.Run("does not resurrect deletion", func(t *testing.T) {
 		store := &memoryStore{}
-		source := testSource(t, rotated, store, "", http.DefaultClient)
+		source := testSource(t, rotated, store, "", cleanupClient)
 		source.dirty = true
 		source.persistBase = initial
 		if _, err := source.AccessToken(context.Background()); !errors.Is(err, ErrReauthRequired) {
@@ -356,6 +373,85 @@ func TestLogoutWaitsForRefreshAndDeletesRotatedSession(t *testing.T) {
 	}
 }
 
+func TestSourceGateHonorsCancellationWhileAnotherRefreshRuns(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`)
+	}))
+	defer server.Close()
+	initial := expiredSession()
+	store := newMemoryStore(initial)
+	source := testSource(t, initial, store, server.URL, server.Client())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := source.AccessToken(context.Background())
+		firstDone <- err
+	}()
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	startedWait := time.Now()
+	if _, err := source.AccessToken(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(startedWait); elapsed > 200*time.Millisecond {
+		t.Fatalf("gate cancellation took %s", elapsed)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRejectedAccessTokenRefreshesOnNextRequestWithoutReplay(t *testing.T) {
+	var requests atomic.Int32
+	server := refreshServer(t, &requests)
+	defer server.Close()
+	initial := expiredSession()
+	initial.Expiry = time.Now().Add(time.Hour)
+	store := newMemoryStore(initial)
+	source := testSource(t, initial, store, server.URL, server.Client())
+	if err := source.RejectAccessToken(context.Background(), "old-access"); err != nil {
+		t.Fatal(err)
+	}
+	if !needsRefresh(store.session.token()) {
+		t.Fatal("rejected access token was not marked stale durably")
+	}
+	token, err := source.AccessToken(context.Background())
+	if err != nil || token != "new-access" {
+		t.Fatalf("AccessToken = %q, %v", token, err)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("refresh requests = %d", requests.Load())
+	}
+}
+
+func TestRefreshWithoutExpiryDoesNotRotateOnEveryRequest(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer"}`)
+	}))
+	defer server.Close()
+	initial := expiredSession()
+	store := newMemoryStore(initial)
+	source := testSource(t, initial, store, server.URL, server.Client())
+	for range 2 {
+		if token, err := source.AccessToken(context.Background()); err != nil || token != "new-access" {
+			t.Fatalf("AccessToken = %q, %v", token, err)
+		}
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("refresh requests = %d, want 1", requests.Load())
+	}
+}
+
 func TestSourceInvalidGrantDeletesSessionAndRequiresLogin(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -376,6 +472,17 @@ func TestSourceInvalidGrantDeletesSessionAndRequiresLogin(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret server detail") {
 		t.Fatalf("error leaked server detail: %v", err)
+	}
+
+	replacement := initial
+	replacement.AccessToken = "replacement-access"
+	replacement.RefreshToken = "replacement-refresh"
+	replacement.Expiry = time.Now().Add(time.Hour)
+	if err := store.Save(replacement); err != nil {
+		t.Fatal(err)
+	}
+	if token, adoptErr := source.AccessToken(context.Background()); adoptErr != nil || token != "replacement-access" {
+		t.Fatalf("same-route replacement = %q, %v", token, adoptErr)
 	}
 }
 
