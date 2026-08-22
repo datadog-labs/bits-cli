@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -23,11 +24,16 @@ func TestE2E_OAuthRefresh(t *testing.T) {
 
 	forced := before
 	forced.Expiry = time.Now().Add(-time.Minute)
+	if err := withSessionLock(context.Background(), store, func() error {
+		return store.Save(forced)
+	}); err != nil {
+		t.Fatalf("persist forced-expiry session: %v", err)
+	}
 	source, err := NewSource(forced, store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	accessToken, err := source.AccessToken()
+	accessToken, err := source.AccessToken(context.Background())
 	if err != nil {
 		t.Fatalf("refresh OAuth session: %v", err)
 	}

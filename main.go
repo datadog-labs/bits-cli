@@ -75,21 +75,15 @@ func runLogout(args []string) error {
 		return fmt.Errorf("logout does not accept positional arguments")
 	}
 
-	store := auth.KeyringStore{}
-	session, err := store.Load()
-	if errors.Is(err, auth.ErrNoSession) {
-		fmt.Fprintln(os.Stderr, "No Bits CLI OAuth session is stored.")
-		return nil
-	}
+	logoutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	hadSession, revokeErr, err := auth.Logout(logoutCtx, auth.KeyringStore{}, nil)
+	cancel()
 	if err != nil {
 		return err
 	}
-
-	revokeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	revokeErr := auth.Revoke(revokeCtx, session, nil)
-	cancel()
-	if err := store.Delete(); err != nil {
-		return err
+	if !hadSession {
+		fmt.Fprintln(os.Stderr, "No Bits CLI OAuth session is stored.")
+		return nil
 	}
 	if revokeErr != nil {
 		fmt.Fprintf(os.Stderr, "Logged out locally; remote token revocation failed: %v\n", revokeErr)
@@ -143,22 +137,32 @@ func runChat(args []string) error {
 }
 
 func authenticatedClient() (*assistant.Client, error) {
-	apiKey, appKey := os.Getenv("DD_API_KEY"), os.Getenv("DD_APP_KEY")
-	if apiKey != "" && appKey != "" {
-		return assistant.NewClient()
-	}
+	return authenticatedClientWith(
+		auth.KeyringStore{},
+		os.Getenv("DD_API_KEY"),
+		os.Getenv("DD_APP_KEY"),
+		os.Getenv("DD_SITE_URL"),
+	)
+}
 
-	store := auth.KeyringStore{}
+func authenticatedClientWith(store auth.CredentialStore, apiKey, appKey, apiSite string) (*assistant.Client, error) {
+	// A stored OAuth login is the customer path and deliberately wins over
+	// ambient developer credentials. Complete API/app-key pairs are only the
+	// CI/developer fallback when no OAuth session exists. Real keyring errors
+	// must surface rather than silently switching principals.
 	session, err := store.Load()
-	if errors.Is(err, auth.ErrNoSession) {
-		return nil, fmt.Errorf("not logged in; run `bits login --site %s`", auth.DefaultStagingSite)
+	if err == nil {
+		source, sourceErr := auth.NewSource(session, store, nil)
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		return assistant.NewOAuthClient(source.Site(), source)
 	}
-	if err != nil {
+	if !errors.Is(err, auth.ErrNoSession) {
 		return nil, err
 	}
-	source, err := auth.NewSource(session, store, nil)
-	if err != nil {
-		return nil, err
+	if apiKey != "" && appKey != "" {
+		return assistant.NewAPIKeyClient(apiSite, apiKey, appKey)
 	}
-	return assistant.NewOAuthClient(source.Site(), source)
+	return nil, fmt.Errorf("not logged in; run `bits login --site %s`", auth.DefaultStagingSite)
 }

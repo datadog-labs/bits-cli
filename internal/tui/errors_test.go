@@ -3,11 +3,13 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
@@ -20,6 +22,24 @@ func TestNoticeForError(t *testing.T) {
 		wantText  string // exact match, unless wantSubstr is set
 		substr    bool
 	}{
+		{
+			name:      "reauth required is actionable",
+			err:       fmt.Errorf("token: %w", auth.ErrReauthRequired),
+			wantLevel: chat.NoticeError,
+			wantText:  "Your Datadog login expired. Run `bits login` again.",
+		},
+		{
+			name:      "nondurable refresh is actionable",
+			err:       fmt.Errorf("token: %w", auth.ErrSessionNotDurable),
+			wantLevel: chat.NoticeError,
+			wantText:  "The refreshed login could not be secured. Try again; if this continues, run `bits login`.",
+		},
+		{
+			name:      "replaced session asks for restart",
+			err:       fmt.Errorf("token: %w", auth.ErrSessionReplaced),
+			wantLevel: chat.NoticeWarn,
+			wantText:  "The active Datadog login changed. Restart Bits to use it.",
+		},
 		{
 			name:      "api error maps through its status sentinel",
 			err:       &assistant.APIError{StatusCode: 401},

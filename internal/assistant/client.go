@@ -52,7 +52,7 @@ const (
 // AccessTokenSource returns a current OAuth access token. Implementations may
 // refresh and persist rotating tokens before returning.
 type AccessTokenSource interface {
-	AccessToken() (string, error)
+	AccessToken(context.Context) (string, error)
 }
 
 // Client talks to the Bits AI assistant API over HTTP.
@@ -117,7 +117,18 @@ func NewClient() (*Client, error) {
 	if base == "" {
 		base = DefaultBaseURL
 	}
-	client := newClient(base)
+	return NewAPIKeyClient(base, apiKey, appKey)
+}
+
+// NewAPIKeyClient builds the explicit developer/CI fallback client.
+func NewAPIKeyClient(baseURL, apiKey, appKey string) (*Client, error) {
+	if apiKey == "" || appKey == "" {
+		return nil, fmt.Errorf("DD_API_KEY and DD_APP_KEY must both be set")
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = DefaultBaseURL
+	}
+	client := newClient(baseURL)
 	client.APIKey = apiKey
 	client.AppKey = appKey
 	return client, nil
@@ -207,9 +218,9 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "bits-cli/dev")
-	req.Header.Set("X-Bits-Source", "bits-cli")
+	req.Header.Set("X-Datadog-Bits-Surface", "cli")
 	if c.TokenSource != nil {
-		token, err := c.TokenSource.AccessToken()
+		token, err := c.TokenSource.AccessToken(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("get OAuth access token: %w", err)
 		}

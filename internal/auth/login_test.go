@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -160,6 +161,111 @@ func TestCallbackRejectsNonLiteralAndMalformedRedirects(t *testing.T) {
 	}
 }
 
+func TestLoginRevokesUnpersistedGrant(t *testing.T) {
+	var revokedToken string
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth2/v1/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`)
+		case "/oauth2/v1/revoke":
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("ParseForm: %v", err)
+			}
+			revokedToken = r.Form.Get("token")
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer issuer.Close()
+
+	client := issuer.Client()
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+	store := &memoryStore{saveErr: fmt.Errorf("keyring unavailable")}
+	openURL := callbackOpenURL(t)
+	_, err := login(context.Background(), SiteConfig{
+		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
+		TokenURL: issuer.URL + "/oauth2/v1/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
+	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: openURL})
+	if err == nil || !strings.Contains(err.Error(), "persist new OAuth session") {
+		t.Fatalf("login error = %v", err)
+	}
+	if strings.Contains(err.Error(), "new-refresh") || revokedToken != "new-refresh" {
+		t.Fatalf("revoked token = %q, error = %v", revokedToken, err)
+	}
+}
+
+func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
+	previous := Session{
+		Site: "https://api.datad0g.com", ClientID: "client", AccessToken: "old-access",
+		RefreshToken: "old-refresh", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour),
+	}
+	store := newMemoryStore(previous)
+	var revokedToken string
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth2/v1/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`)
+		case "/oauth2/v1/revoke":
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("ParseForm: %v", err)
+			}
+			revokedToken = r.Form.Get("token")
+			stored, loadErr := store.Load()
+			if loadErr != nil || stored.AccessToken != "new-access" {
+				t.Errorf("replacement was not durable before revocation: %#v, %v", stored, loadErr)
+			}
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer issuer.Close()
+	client := issuer.Client()
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+	_, err := login(context.Background(), SiteConfig{
+		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
+		TokenURL: issuer.URL + "/oauth2/v1/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
+	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: callbackOpenURL(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revokedToken != "old-refresh" || store.session.RefreshToken != "new-refresh" {
+		t.Fatalf("revoked = %q, stored = %#v", revokedToken, store.session)
+	}
+}
+
+func callbackOpenURL(t *testing.T) func(string) error {
+	t.Helper()
+	return func(raw string) error {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return err
+		}
+		query := u.Query()
+		go func() {
+			callback := query.Get("redirect_uri") + "?code=auth-code&domain=datad0g.com&state=" + url.QueryEscape(query.Get("state"))
+			resp, callbackErr := http.Get(callback) //nolint:gosec // loopback test callback
+			if callbackErr != nil {
+				t.Errorf("callback: %v", callbackErr)
+				return
+			}
+			_ = resp.Body.Close()
+		}()
+		return nil
+	}
+}
+
 func TestRevokeUsesRefreshToken(t *testing.T) {
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
@@ -189,6 +295,56 @@ func TestRevokeUsesRefreshToken(t *testing.T) {
 	}, client)
 	if err != nil {
 		t.Fatalf("Revoke: %v", err)
+	}
+}
+
+func TestRevokeSanitizesAuthorizationServerError(t *testing.T) {
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"error":"invalid_request","error_description":"do not leak refresh-secret"}`)
+	}))
+	defer issuer.Close()
+	client := issuer.Client()
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+	err := Revoke(context.Background(), Session{
+		Site: DefaultStagingSite, ClientID: "client", AccessToken: "access", RefreshToken: "refresh-secret",
+	}, client)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 400 (invalid_request)") || strings.Contains(err.Error(), "refresh-secret") {
+		t.Fatalf("Revoke error = %v", err)
+	}
+}
+
+func TestLogoutDeletesBeforeBestEffortRevocation(t *testing.T) {
+	session := Session{
+		Site: DefaultStagingSite, ClientID: "client", AccessToken: "access", RefreshToken: "refresh",
+	}
+	store := newMemoryStore(session)
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, loadErr := store.Load(); !errors.Is(loadErr, ErrNoSession) {
+			t.Errorf("session was still durable during revocation: %v", loadErr)
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer issuer.Close()
+	client := issuer.Client()
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+	hadSession, revokeErr, err := Logout(context.Background(), store, client)
+	if err != nil || !hadSession || revokeErr == nil {
+		t.Fatalf("Logout = had %v, revoke %v, err %v", hadSession, revokeErr, err)
+	}
+	if store.present || store.deletes != 1 {
+		t.Fatalf("store present = %v, deletes = %d", store.present, store.deletes)
 	}
 }
 

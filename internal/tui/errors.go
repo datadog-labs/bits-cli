@@ -9,6 +9,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
@@ -28,6 +29,12 @@ func noticeForError(op string, err error) chat.Notice {
 func noticeForNonAPIError(op string, err error) chat.Notice {
 	_, isNet := errors.AsType[net.Error](err)
 	switch {
+	case errors.Is(err, auth.ErrReauthRequired):
+		return notice(chat.NoticeError, err, "Your Datadog login expired. Run `bits login` again.")
+	case errors.Is(err, auth.ErrSessionNotDurable):
+		return notice(chat.NoticeError, err, "The refreshed login could not be secured. Try again; if this continues, run `bits login`.")
+	case errors.Is(err, auth.ErrSessionReplaced):
+		return notice(chat.NoticeWarn, err, "The active Datadog login changed. Restart Bits to use it.")
 	case errors.Is(err, context.DeadlineExceeded):
 		return notice(chat.NoticeWarn, err, "The assistant took too long to respond. Try again.")
 	case isNet:

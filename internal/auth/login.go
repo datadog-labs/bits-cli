@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -106,8 +107,41 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		return Session{}, fmt.Errorf("exchange Datadog OAuth code: %w", err)
 	}
 	session := sessionFromToken(cfg, token)
-	if err := opts.Store.Save(session); err != nil {
-		return Session{}, err
+	var previous Session
+	var hadPrevious bool
+	persistCtx, persistCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer persistCancel()
+	persistErr := withSessionLock(persistCtx, opts.Store, func() error {
+		stored, loadErr := opts.Store.Load()
+		switch {
+		case loadErr == nil:
+			previous, hadPrevious = stored, true
+		case errors.Is(loadErr, ErrNoSession):
+		default:
+			return loadErr
+		}
+		return saveWithRetry(persistCtx, opts.Store, session)
+	})
+	if persistErr != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		revokeErr := Revoke(cleanupCtx, session, opts.HTTPClient)
+		cleanupCancel()
+		if revokeErr != nil {
+			cleanupErr := fmt.Errorf("cleanup revocation failed: %w", revokeErr)
+			return Session{}, fmt.Errorf("persist new OAuth session: %w", errors.Join(persistErr, cleanupErr))
+		}
+		return Session{}, fmt.Errorf("persist new OAuth session: %w; the unpersisted grant was revoked", persistErr)
+	}
+
+	// Replacement login is commit-then-cleanup: the new grant is durable before
+	// the old one is revoked, so a revocation outage cannot destroy the login.
+	if hadPrevious && !sameSession(previous, session) {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		revokeErr := Revoke(cleanupCtx, previous, opts.HTTPClient)
+		cleanupCancel()
+		if revokeErr != nil {
+			_, _ = fmt.Fprintf(opts.Out, "New login saved; previous token revocation failed: %v\n", revokeErr)
+		}
 	}
 	return session, nil
 }
@@ -232,9 +266,56 @@ func Revoke(ctx context.Context, session Session, httpClient *http.Client) error
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("revoke Datadog OAuth token: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		var oauthErr struct {
+			Code string `json:"error"`
+		}
+		if json.Unmarshal(body, &oauthErr) == nil {
+			if code := safeOAuthErrorCode(oauthErr.Code); code != "" {
+				return fmt.Errorf("revoke Datadog OAuth token: HTTP %d (%s)", resp.StatusCode, code)
+			}
+		}
+		return fmt.Errorf("revoke Datadog OAuth token: HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// Logout atomically removes the current local session before best-effort
+// remote revocation. A refreshing process that was waiting on the same lock
+// will observe deletion and cannot resurrect the session.
+func Logout(ctx context.Context, store CredentialStore, httpClient *http.Client) (bool, error, error) {
+	if store == nil {
+		store = KeyringStore{}
+	}
+	var session Session
+	var hadSession bool
+	err := withSessionLock(ctx, store, func() error {
+		stored, loadErr := store.Load()
+		if errors.Is(loadErr, ErrNoSession) {
+			return nil
+		}
+		if loadErr != nil {
+			return loadErr
+		}
+		session, hadSession = stored, true
+		return deleteWithRetry(ctx, store)
+	})
+	if err != nil || !hadSession {
+		return hadSession, nil, err
+	}
+	return true, Revoke(ctx, session, httpClient), nil
+}
+
+func safeOAuthErrorCode(code string) string {
+	code = strings.TrimSpace(code)
+	if code == "" || len(code) > 64 {
+		return ""
+	}
+	for _, r := range code {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' && r != '.' {
+			return ""
+		}
+	}
+	return code
 }
 
 func randomState() (string, error) {
@@ -256,5 +337,10 @@ func openBrowser(target string) error {
 	default:
 		command, args = "xdg-open", []string{target}
 	}
-	return exec.Command(command, args...).Start()
+	cmd := exec.Command(command, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
