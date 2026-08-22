@@ -25,6 +25,9 @@ func TestConfigForSite_Staging(t *testing.T) {
 	if cfg.TokenURL != "https://api.datad0g.com/oauth2/v1/token" {
 		t.Errorf("TokenURL = %q", cfg.TokenURL)
 	}
+	if cfg.AssistantBase != "https://api.datad0g.com" {
+		t.Errorf("AssistantBase = %q", cfg.AssistantBase)
+	}
 }
 
 func TestConfigForSite_ProductionRequiresClient(t *testing.T) {
@@ -70,6 +73,60 @@ func TestConfigForSite_RegionalCustomSubdomain(t *testing.T) {
 	}
 	if cfg.AuthorizeURL != "https://us3.datadoghq.com/oauth2/v1/authorize" {
 		t.Errorf("AuthorizeURL = %q", cfg.AuthorizeURL)
+	}
+}
+
+func TestWithCallbackDomain_UsesCanonicalRegionalAPIHost(t *testing.T) {
+	for _, domain := range []string{
+		"datad0g.com",
+		"datadoghq.com",
+		"datadoghq.eu",
+		"us3.datadoghq.com",
+		"us5.datadoghq.com",
+		"ap1.datadoghq.com",
+		"ap2.datadoghq.com",
+	} {
+		t.Run(domain, func(t *testing.T) {
+			initial, err := ConfigForSite(DefaultStagingSite, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := initial.WithCallbackDomain("  " + strings.ToUpper(domain) + "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			apiBase := "https://api." + domain
+			if cfg.Site != apiBase || cfg.AssistantBase != apiBase {
+				t.Errorf("routing = Site %q, AssistantBase %q; want %q", cfg.Site, cfg.AssistantBase, apiBase)
+			}
+			if cfg.TokenURL != apiBase+"/oauth2/v1/token" || cfg.RevokeURL != apiBase+"/oauth2/v1/revoke" {
+				t.Errorf("OAuth endpoints = token %q, revoke %q", cfg.TokenURL, cfg.RevokeURL)
+			}
+			if cfg.AuthorizeURL != initial.AuthorizeURL {
+				t.Errorf("AuthorizeURL changed from %q to %q", initial.AuthorizeURL, cfg.AuthorizeURL)
+			}
+		})
+	}
+}
+
+func TestWithCallbackDomain_RejectsMissingCustomAndArbitraryHosts(t *testing.T) {
+	cfg, err := ConfigForSite(DefaultStagingSite, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, domain := range []string{
+		"",
+		"acme.datadoghq.com",
+		"api.datadoghq.com",
+		"https://datadoghq.com",
+		"datadoghq.com.evil.example",
+		"evil.example",
+	} {
+		t.Run(domain, func(t *testing.T) {
+			if _, err := cfg.WithCallbackDomain(domain); err == nil {
+				t.Fatalf("WithCallbackDomain(%q) succeeded", domain)
+			}
+		})
 	}
 }
 

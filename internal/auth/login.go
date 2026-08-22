@@ -90,9 +90,11 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		code = result.code
 		callbackDomain = result.domain
 	}
-	if callbackDomain != "" {
-		_, _ = fmt.Fprintf(opts.Out, "Datadog OAuth callback domain: %s\n", callbackDomain)
+	cfg, err = cfg.WithCallbackDomain(callbackDomain)
+	if err != nil {
+		return Session{}, err
 	}
+	_, _ = fmt.Fprintf(opts.Out, "Datadog OAuth callback domain: %s\n", cfg.Domain)
 
 	exchangeCtx, exchangeCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer exchangeCancel()

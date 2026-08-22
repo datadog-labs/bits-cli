@@ -42,6 +42,18 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 		RevokeURL:    issuer.URL + "/revoke",
 		RedirectURI:  redirectURI,
 	}
+	httpClient := issuer.Client()
+	httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host != "api.datad0g.com" || req.URL.Path != "/oauth2/v1/token" {
+			t.Errorf("token exchange URL = %s", req.URL)
+		}
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		clone.URL.Path = "/token"
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+
 	store := &memoryStore{}
 	var output bytes.Buffer
 	openURL := func(raw string) error {
@@ -54,7 +66,7 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 			t.Errorf("authorization query = %v", query)
 		}
 		go func() {
-			callback := redirectURI + "?code=auth-code&domain=dd.datad0g.com&state=" + url.QueryEscape(query.Get("state"))
+			callback := redirectURI + "?code=auth-code&domain=datad0g.com&state=" + url.QueryEscape(query.Get("state"))
 			resp, callbackErr := http.Get(callback) //nolint:gosec // loopback test callback
 			if callbackErr != nil {
 				t.Errorf("callback: %v", callbackErr)
@@ -67,20 +79,20 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 
 	session, err := login(context.Background(), cfg, LoginOptions{
 		Store:      store,
-		HTTPClient: issuer.Client(),
+		HTTPClient: httpClient,
 		OpenURL:    openURL,
 		Out:        &output,
 	})
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-	if session.AccessToken != "access" || session.RefreshToken != "refresh" || session.Site != DefaultStagingSite {
+	if session.AccessToken != "access" || session.RefreshToken != "refresh" || session.Site != "https://api.datad0g.com" {
 		t.Errorf("session = %#v", session)
 	}
 	if store.saves != 1 || store.session.AccessToken != "access" {
 		t.Errorf("stored session = %#v, saves = %d", store.session, store.saves)
 	}
-	if !strings.Contains(output.String(), "Datadog OAuth callback domain: dd.datad0g.com") {
+	if !strings.Contains(output.String(), "Datadog OAuth callback domain: datad0g.com") {
 		t.Errorf("output did not report callback domain: %q", output.String())
 	}
 }

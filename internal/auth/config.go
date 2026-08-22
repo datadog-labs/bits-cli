@@ -80,8 +80,36 @@ func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
 		TokenURL:      "https://" + apiDomain + "/oauth2/v1/token",
 		RevokeURL:     "https://" + apiDomain + "/oauth2/v1/revoke",
 		RedirectURI:   DefaultRedirectURI,
-		AssistantBase: site,
+		AssistantBase: "https://" + apiDomain,
 	}, nil
+}
+
+// WithCallbackDomain applies the canonical domain returned by Datadog on the
+// state-validated OAuth callback. Datadog intentionally removes customer
+// subdomains from this value so token and API requests target the correct
+// regional API host. Accept only documented base domains rather than treating
+// callback input as an arbitrary hostname.
+func (c SiteConfig) WithCallbackDomain(raw string) (SiteConfig, error) {
+	domain := strings.ToLower(strings.TrimSpace(raw))
+	switch domain {
+	case "datad0g.com",
+		"datadoghq.com",
+		"datadoghq.eu",
+		"us3.datadoghq.com",
+		"us5.datadoghq.com",
+		"ap1.datadoghq.com",
+		"ap2.datadoghq.com":
+	default:
+		return SiteConfig{}, fmt.Errorf("OAuth callback returned an unsupported Datadog domain %q", raw)
+	}
+
+	apiBase := "https://api." + domain
+	c.Site = apiBase
+	c.Domain = domain
+	c.TokenURL = apiBase + "/oauth2/v1/token"
+	c.RevokeURL = apiBase + "/oauth2/v1/revoke"
+	c.AssistantBase = apiBase
+	return c, nil
 }
 
 // OAuth2Config returns a public-client configuration. Scopes are deliberately
