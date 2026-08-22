@@ -1,9 +1,9 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -43,6 +43,7 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 		RedirectURI:  redirectURI,
 	}
 	store := &memoryStore{}
+	var output bytes.Buffer
 	openURL := func(raw string) error {
 		u, err := url.Parse(raw)
 		if err != nil {
@@ -53,7 +54,7 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 			t.Errorf("authorization query = %v", query)
 		}
 		go func() {
-			callback := redirectURI + "?code=auth-code&state=" + url.QueryEscape(query.Get("state"))
+			callback := redirectURI + "?code=auth-code&domain=dd.datad0g.com&state=" + url.QueryEscape(query.Get("state"))
 			resp, callbackErr := http.Get(callback) //nolint:gosec // loopback test callback
 			if callbackErr != nil {
 				t.Errorf("callback: %v", callbackErr)
@@ -68,7 +69,7 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 		Store:      store,
 		HTTPClient: issuer.Client(),
 		OpenURL:    openURL,
-		Out:        io.Discard,
+		Out:        &output,
 	})
 	if err != nil {
 		t.Fatalf("login: %v", err)
@@ -78,6 +79,9 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 	}
 	if store.saves != 1 || store.session.AccessToken != "access" {
 		t.Errorf("stored session = %#v, saves = %d", store.session, store.saves)
+	}
+	if !strings.Contains(output.String(), "Datadog OAuth callback domain: dd.datad0g.com") {
+		t.Errorf("output did not report callback domain: %q", output.String())
 	}
 }
 

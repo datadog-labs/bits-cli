@@ -79,7 +79,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 
 	waitCtx, cancel := context.WithTimeout(ctx, loginTimeout)
 	defer cancel()
-	var code string
+	var code, callbackDomain string
 	select {
 	case <-waitCtx.Done():
 		return Session{}, fmt.Errorf("wait for OAuth callback: %w", waitCtx.Err())
@@ -88,6 +88,10 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 			return Session{}, result.err
 		}
 		code = result.code
+		callbackDomain = result.domain
+	}
+	if callbackDomain != "" {
+		_, _ = fmt.Fprintf(opts.Out, "Datadog OAuth callback domain: %s\n", callbackDomain)
 	}
 
 	exchangeCtx, exchangeCancel := context.WithTimeout(ctx, 30*time.Second)
@@ -105,8 +109,9 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 }
 
 type callbackResult struct {
-	code string
-	err  error
+	code   string
+	domain string
+	err    error
 }
 
 type callbackListener struct {
@@ -160,7 +165,7 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = fmt.Fprintf(w, "<!doctype html><title>Bits CLI login complete</title><h1>Login complete</h1><p>You can close this tab and return to Bits CLI.</p><small>%s</small>", html.EscapeString(u.Host))
 		select {
-		case results <- callbackResult{code: code}:
+		case results <- callbackResult{code: code, domain: strings.TrimSpace(query.Get("domain"))}:
 		default:
 		}
 	})
