@@ -28,6 +28,9 @@ func TestConfigForSite_Staging(t *testing.T) {
 	if cfg.AssistantBase != "https://api.datad0g.com" {
 		t.Errorf("AssistantBase = %q", cfg.AssistantBase)
 	}
+	if cfg.RedirectURI != "http://127.0.0.1:0/oauth/callback" {
+		t.Errorf("RedirectURI = %q", cfg.RedirectURI)
+	}
 }
 
 func TestConfigForSite_ProductionRequiresClient(t *testing.T) {

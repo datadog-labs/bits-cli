@@ -146,11 +146,11 @@ func TestCallbackChoosesEphemeralPortAndIgnoresWrongState(t *testing.T) {
 
 func TestCallbackRejectsNonLiteralAndMalformedRedirects(t *testing.T) {
 	for _, redirectURI := range []string{
-		"http://localhost:0/step2",
-		"http://0.0.0.0:0/step2",
+		"http://localhost:0/oauth/callback",
+		"http://0.0.0.0:0/oauth/callback",
 		"http://127.0.0.1:0",
-		"http://127.0.0.1:0/step2?unexpected=true",
-		"https://127.0.0.1:0/step2",
+		"http://127.0.0.1:0/oauth/callback?unexpected=true",
+		"https://127.0.0.1:0/oauth/callback",
 	} {
 		t.Run(redirectURI, func(t *testing.T) {
 			if _, _, err := listenForCallback(redirectURI, "state"); err == nil {

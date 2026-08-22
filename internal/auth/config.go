@@ -16,7 +16,7 @@ const (
 	// DefaultRedirectURI asks the OS to select an available IPv4 loopback port.
 	// Datadog's OAuth provider permits flexible ports for native loopback clients
 	// when the literal host and registered path match RFC 8252.
-	DefaultRedirectURI = "http://127.0.0.1:0/step2"
+	DefaultRedirectURI = "http://127.0.0.1:0/oauth/callback"
 )
 
 // SiteConfig contains the site-specific OAuth and Assistant endpoints.
