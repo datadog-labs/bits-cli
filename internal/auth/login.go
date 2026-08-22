@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,6 +63,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	if err != nil {
 		return Session{}, err
 	}
+	cfg.RedirectURI = listener.redirectURI
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -117,7 +119,8 @@ type callbackResult struct {
 }
 
 type callbackListener struct {
-	server *http.Server
+	server      *http.Server
+	redirectURI string
 }
 
 func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan callbackResult, error) {
@@ -125,13 +128,21 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse OAuth redirect URI: %w", err)
 	}
-	if u.Scheme != "http" || u.Hostname() != "localhost" || u.Port() == "" {
-		return nil, nil, fmt.Errorf("OAuth redirect must use a registered localhost loopback URI with an explicit port")
+	if u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.Port() == "" ||
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path == "" || !strings.HasPrefix(u.Path, "/") {
+		return nil, nil, fmt.Errorf("OAuth redirect must use an IPv4 loopback literal, explicit port, and absolute path")
 	}
-	ln, err := net.Listen("tcp", net.JoinHostPort(u.Hostname(), u.Port()))
+	ln, err := net.Listen("tcp4", net.JoinHostPort(u.Hostname(), u.Port()))
 	if err != nil {
 		return nil, nil, fmt.Errorf("listen for OAuth callback on %s: %w", u.Host, err)
 	}
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || !tcpAddr.IP.IsLoopback() || tcpAddr.Port < 1 {
+		_ = ln.Close()
+		return nil, nil, fmt.Errorf("OAuth callback listener did not bind an IPv4 loopback port")
+	}
+	u.Host = net.JoinHostPort("127.0.0.1", strconv.Itoa(tcpAddr.Port))
+	actualRedirectURI := u.String()
 
 	results := make(chan callbackResult, 1)
 	mux := http.NewServeMux()
@@ -184,7 +195,7 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 			}
 		}
 	}()
-	return &callbackListener{server: server}, results, nil
+	return &callbackListener{server: server, redirectURI: actualRedirectURI}, results, nil
 }
 
 // Revoke invalidates the refresh token when available, otherwise the access

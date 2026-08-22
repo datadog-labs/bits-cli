@@ -13,8 +13,10 @@ const (
 	StagingClientID = "605736a5-3085-47c7-ab49-22b90d36530f"
 	// DefaultStagingSite is the org-2 staging site used while the OAuth flow is validated.
 	DefaultStagingSite = "https://dd.datad0g.com"
-	// DefaultRedirectURI is the loopback callback currently registered on the staging client.
-	DefaultRedirectURI = "http://localhost:5000/step2"
+	// DefaultRedirectURI asks the OS to select an available IPv4 loopback port.
+	// Datadog's OAuth provider permits flexible ports for native loopback clients
+	// when the literal host and registered path match RFC 8252.
+	DefaultRedirectURI = "http://127.0.0.1:0/step2"
 )
 
 // SiteConfig contains the site-specific OAuth and Assistant endpoints.

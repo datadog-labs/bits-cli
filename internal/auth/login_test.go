@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,14 +32,13 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 	}))
 	defer issuer.Close()
 
-	redirectURI = availableRedirectURI(t)
 	cfg := SiteConfig{
 		Site:         DefaultStagingSite,
 		ClientID:     "client",
 		AuthorizeURL: issuer.URL + "/authorize",
 		TokenURL:     issuer.URL + "/token",
 		RevokeURL:    issuer.URL + "/revoke",
-		RedirectURI:  redirectURI,
+		RedirectURI:  DefaultRedirectURI,
 	}
 	httpClient := issuer.Client()
 	httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -64,6 +62,11 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 		query := u.Query()
 		if query.Get("scope") != "" || query.Get("code_challenge") == "" || query.Get("code_challenge_method") != "S256" {
 			t.Errorf("authorization query = %v", query)
+		}
+		redirectURI = query.Get("redirect_uri")
+		callbackURL, callbackErr := url.Parse(redirectURI)
+		if callbackErr != nil || callbackURL.Hostname() != "127.0.0.1" || callbackURL.Port() == "" || callbackURL.Port() == "0" {
+			t.Fatalf("dynamic redirect URI = %q, parse error = %v", redirectURI, callbackErr)
 		}
 		go func() {
 			callback := redirectURI + "?code=auth-code&domain=datad0g.com&state=" + url.QueryEscape(query.Get("state"))
@@ -97,9 +100,8 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 	}
 }
 
-func TestCallbackIgnoresWrongStateThenAcceptsExpectedState(t *testing.T) {
-	redirectURI := availableRedirectURI(t)
-	listener, results, err := listenForCallback(redirectURI, "expected")
+func TestCallbackChoosesEphemeralPortAndIgnoresWrongState(t *testing.T) {
+	listener, results, err := listenForCallback(DefaultRedirectURI, "expected")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +111,15 @@ func TestCallbackIgnoresWrongStateThenAcceptsExpectedState(t *testing.T) {
 		_ = listener.server.Shutdown(ctx)
 	}()
 
-	resp, err := http.Get(redirectURI + "?code=wrong&state=unexpected") //nolint:gosec // loopback test callback
+	redirectURL, err := url.Parse(listener.redirectURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if redirectURL.Hostname() != "127.0.0.1" || redirectURL.Port() == "" || redirectURL.Port() == "0" {
+		t.Fatalf("selected redirect URI = %q", listener.redirectURI)
+	}
+
+	resp, err := http.Get(listener.redirectURI + "?code=wrong&state=unexpected") //nolint:gosec // loopback test callback
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +133,7 @@ func TestCallbackIgnoresWrongStateThenAcceptsExpectedState(t *testing.T) {
 	default:
 	}
 
-	resp, err = http.Get(redirectURI + "?code=right&state=expected") //nolint:gosec // loopback test callback
+	resp, err = http.Get(listener.redirectURI + "?code=right&state=expected") //nolint:gosec // loopback test callback
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +141,22 @@ func TestCallbackIgnoresWrongStateThenAcceptsExpectedState(t *testing.T) {
 	result := <-results
 	if result.err != nil || result.code != "right" {
 		t.Fatalf("callback result = %#v", result)
+	}
+}
+
+func TestCallbackRejectsNonLiteralAndMalformedRedirects(t *testing.T) {
+	for _, redirectURI := range []string{
+		"http://localhost:0/step2",
+		"http://0.0.0.0:0/step2",
+		"http://127.0.0.1:0",
+		"http://127.0.0.1:0/step2?unexpected=true",
+		"https://127.0.0.1:0/step2",
+	} {
+		t.Run(redirectURI, func(t *testing.T) {
+			if _, _, err := listenForCallback(redirectURI, "state"); err == nil {
+				t.Fatalf("listenForCallback(%q) succeeded", redirectURI)
+			}
+		})
 	}
 }
 
@@ -169,16 +195,3 @@ func TestRevokeUsesRefreshToken(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
-
-func availableRedirectURI(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	if err := ln.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return fmt.Sprintf("http://localhost:%d/step2", port)
-}
