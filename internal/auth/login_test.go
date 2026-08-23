@@ -243,6 +243,7 @@ func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
 		RefreshToken: "old-refresh", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour),
 	}
 	store := newMemoryStore(previous)
+	store.afterLockErr = fmt.Errorf("%w: injected", ErrSessionUnlock)
 	var revokedToken string
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -407,6 +408,7 @@ func TestLogoutDeletesBeforeBestEffortRevocation(t *testing.T) {
 		Site: DefaultStagingSite, ClientID: "client", AccessToken: "access", RefreshToken: "refresh",
 	}
 	store := newMemoryStore(session)
+	store.afterLockErr = fmt.Errorf("%w: injected", ErrSessionUnlock)
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if _, loadErr := store.Load(); !errors.Is(loadErr, ErrNoSession) {
 			t.Errorf("session was still durable during revocation: %v", loadErr)

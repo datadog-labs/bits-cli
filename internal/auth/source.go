@@ -20,14 +20,15 @@ const (
 // Every durable transition also takes the store's cross-process lock so two
 // Bits processes cannot consume or overwrite the same rotating token lineage.
 type Source struct {
-	gateOnce    sync.Once
-	gate        chan struct{}
-	config      SiteConfig
-	store       CredentialStore
-	httpClient  *http.Client
-	session     Session
-	dirty       bool
-	persistBase Session
+	gateOnce     sync.Once
+	gate         chan struct{}
+	config       SiteConfig
+	store        CredentialStore
+	httpClient   *http.Client
+	session      Session
+	dirty        bool
+	persistBase  Session
+	cleanupGrant Session
 }
 
 // NewSource builds a refreshing source from a stored session.
@@ -94,7 +95,10 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 		// disposable copy into the past so refresh starts five minutes early.
 		candidate := *current
 		candidate.Expiry = time.Now().Add(-time.Minute)
-		refreshCtx, cancel := context.WithTimeout(ctx, refreshTimeout)
+		// Once a rotating-token request begins, complete it even if the caller
+		// cancels. Abandoning an in-flight response can consume the durable
+		// refresh token without giving us the replacement to persist.
+		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
 		defer cancel()
 		refreshCtx = context.WithValue(refreshCtx, oauth2.HTTPClient, s.httpClient)
 		refreshed, err := s.config.OAuth2Config().TokenSource(refreshCtx, &candidate).Token()
@@ -126,6 +130,11 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 		accessToken = refreshed.AccessToken
 		return nil
 	})
+	cleanup := s.cleanupGrant
+	s.cleanupGrant = Session{}
+	if cleanup.AccessToken != "" {
+		s.revokeGrant(cleanup)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -134,8 +143,11 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 
 func (s *Source) reconcileDirty(ctx context.Context, durable Session, loadErr error) error {
 	if loadErr != nil {
+		if errors.Is(loadErr, ErrSessionCorrupt) {
+			return loadErr
+		}
 		if errors.Is(loadErr, ErrNoSession) {
-			s.revokeDirtyGrant()
+			s.queueDirtyGrantCleanup()
 			return fmt.Errorf("%w: the stored session was removed while a rotated token was pending; run `bits login`", ErrReauthRequired)
 		}
 		return fmt.Errorf("%w: %w", ErrSessionNotDurable, loadErr)
@@ -155,14 +167,12 @@ func (s *Source) reconcileDirty(ctx context.Context, durable Session, loadErr er
 		return nil
 	default:
 		// Another process committed a newer login or rotation. Never overwrite
-		// it with this process's pending state. Best-effort revoke the abandoned
-		// dirty grant because no durable session can reference it anymore.
-		dirty := s.session
+		// it and never revoke here: rotated tokens may share a grant family with
+		// the durable replacement, so revoking the stale copy could kill the
+		// active session.
 		s.dirty = false
 		s.persistBase = Session{}
-		adoptErr := s.adopt(durable)
-		s.revokeGrant(dirty)
-		return adoptErr
+		return s.adopt(durable)
 	}
 }
 
@@ -202,12 +212,11 @@ func (s *Source) release() {
 	<-s.gate
 }
 
-func (s *Source) revokeDirtyGrant() {
-	dirty := s.session
+func (s *Source) queueDirtyGrantCleanup() {
+	s.cleanupGrant = s.session
 	s.session = Session{}
 	s.dirty = false
 	s.persistBase = Session{}
-	s.revokeGrant(dirty)
 }
 
 func (s *Source) revokeGrant(session Session) {

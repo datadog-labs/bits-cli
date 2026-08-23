@@ -27,6 +27,7 @@ type memoryStore struct {
 	loadErr         error
 	saveErr         error
 	deleteErr       error
+	afterLockErr    error
 }
 
 func newMemoryStore(session Session) *memoryStore {
@@ -88,7 +89,7 @@ func (s *memoryStore) WithSessionLock(ctx context.Context, fn func() error) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return fn()
+	return errors.Join(fn(), s.afterLockErr)
 }
 
 func expiredSession() Session {
@@ -518,26 +519,27 @@ func TestSourceRequiresReauthWithoutRefreshToken(t *testing.T) {
 	}
 }
 
-func TestSourceRefreshHonorsCancellation(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-r.Context().Done():
-		case <-time.After(500 * time.Millisecond):
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, `{"access_token":"late","refresh_token":"late-refresh","expires_in":3600}`)
-		}
+func TestSourceCompletesInFlightRotationAfterCallerCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"access_token":"late","refresh_token":"late-refresh","expires_in":3600}`)
 	}))
 	defer server.Close()
 	initial := expiredSession()
 	store := newMemoryStore(initial)
 	source := testSource(t, initial, store, server.URL, server.Client())
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	if _, err := source.AccessToken(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("error = %v, want deadline exceeded", err)
+	token, err := source.AccessToken(ctx)
+	if err != nil || token != "late" {
+		t.Fatalf("AccessToken = %q, %v", token, err)
 	}
-	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
-		t.Fatalf("cancellation took %s", elapsed)
+	if elapsed := time.Since(started); elapsed < 100*time.Millisecond {
+		t.Fatalf("rotation returned before response after %s", elapsed)
+	}
+	if store.session.RefreshToken != "late-refresh" {
+		t.Fatalf("rotated session was not persisted: %#v", store.session)
 	}
 }

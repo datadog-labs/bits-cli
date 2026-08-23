@@ -41,6 +41,14 @@ var (
 	// ErrSessionReplaced means another process replaced the active login with a
 	// session whose routing cannot be adopted by the current Assistant client.
 	ErrSessionReplaced = errors.New("OAuth session changed")
+	// ErrSessionUnlock means the durable transaction completed but releasing the
+	// cross-process lock reported an error. Callers must not roll back or revoke
+	// an already-committed mutation in response.
+	ErrSessionUnlock = errors.New("OAuth session lock release failed")
+	// ErrSessionMutationUnknown means credential-manager IPC failed and the
+	// durable postcondition could not be read back. Destructive cleanup must not
+	// assume whether the mutation committed.
+	ErrSessionMutationUnknown = errors.New("OAuth session mutation outcome is unknown")
 )
 
 // Session is the durable subset of an OAuth token plus the routing information
@@ -269,6 +277,11 @@ func (s KeyringStore) WithSessionLock(ctx context.Context, fn func() error) (err
 		if err := os.Chmod(lockDir, 0o700); err != nil {
 			return fmt.Errorf("secure OAuth session lock directory: %w", err)
 		}
+		if info, statErr := os.Lstat(path); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("open OAuth session lock: refusing symlink %s", path)
+		} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return fmt.Errorf("inspect OAuth session lock: %w", statErr)
+		}
 	}
 
 	fileLock := flock.New(path)
@@ -284,7 +297,7 @@ func (s KeyringStore) WithSessionLock(ctx context.Context, fn func() error) (err
 	}
 	defer func() {
 		if unlockErr := fileLock.Unlock(); unlockErr != nil {
-			err = errors.Join(err, fmt.Errorf("unlock OAuth session: %w", unlockErr))
+			err = errors.Join(err, fmt.Errorf("%w: %w", ErrSessionUnlock, unlockErr))
 		}
 	}()
 	return fn()

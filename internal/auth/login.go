@@ -112,7 +112,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	}
 	session := sessionFromToken(cfg, token)
 	var previous Session
-	var hadPrevious bool
+	var hadPrevious, saveCommitted bool
 	lockCtx, lockCancel := context.WithTimeout(ctx, sessionLockTimeout)
 	defer lockCancel()
 	persistErr := withSessionLock(lockCtx, opts.Store, func() error {
@@ -126,8 +126,27 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		}
 		persistCtx, persistCancel := context.WithTimeout(ctx, sessionPersistTimeout)
 		defer persistCancel()
-		return saveWithRetry(persistCtx, opts.Store, session)
+		if err := saveWithRetry(persistCtx, opts.Store, session); err != nil {
+			storedAfter, verifyErr := opts.Store.Load()
+			if verifyErr == nil && sameSession(storedAfter, session) {
+				saveCommitted = true
+				return nil
+			}
+			if verifyErr != nil && !errors.Is(verifyErr, ErrNoSession) {
+				return fmt.Errorf("%w: %w", ErrSessionMutationUnknown, errors.Join(err, verifyErr))
+			}
+			return err
+		}
+		saveCommitted = true
+		return nil
 	})
+	if persistErr != nil && saveCommitted && errors.Is(persistErr, ErrSessionUnlock) {
+		_, _ = fmt.Fprintf(opts.Out, "Login saved, but releasing the session lock failed; restart Bits before continuing: %v\n", persistErr)
+		persistErr = nil
+	}
+	if persistErr != nil && errors.Is(persistErr, ErrSessionMutationUnknown) {
+		return Session{}, fmt.Errorf("persist new OAuth session: %w; not revoking because the durable outcome could not be verified", persistErr)
+	}
 	if persistErr != nil {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		revokeErr := Revoke(cleanupCtx, session, opts.HTTPClient)
@@ -293,7 +312,7 @@ func Logout(ctx context.Context, store CredentialStore, httpClient *http.Client)
 		store = KeyringStore{}
 	}
 	var session Session
-	var hadSession bool
+	var hadSession, localDeleted bool
 	err := withSessionLock(ctx, store, func() error {
 		stored, loadErr := store.Load()
 		if errors.Is(loadErr, ErrNoSession) {
@@ -301,16 +320,27 @@ func Logout(ctx context.Context, store CredentialStore, httpClient *http.Client)
 		}
 		if errors.Is(loadErr, ErrSessionCorrupt) {
 			hadSession = true
-			return deleteWithRetry(ctx, store)
+			if err := deleteWithRetry(ctx, store); err != nil {
+				return err
+			}
+			localDeleted = true
+			return nil
 		}
 		if loadErr != nil {
 			return loadErr
 		}
 		session, hadSession = stored, true
-		return deleteWithRetry(ctx, store)
+		if err := deleteWithRetry(ctx, store); err != nil {
+			return err
+		}
+		localDeleted = true
+		return nil
 	})
-	if err != nil || !hadSession {
+	if err != nil && (!localDeleted || !errors.Is(err, ErrSessionUnlock)) {
 		return hadSession, nil, err
+	}
+	if !hadSession {
+		return false, nil, nil
 	}
 	if session.AccessToken == "" {
 		// A corrupt credential was removed but cannot be safely revoked because

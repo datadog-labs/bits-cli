@@ -243,16 +243,19 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 // MaxRetries with exponential backoff and jitter, honoring Retry-After. It is
 // only used for idempotent requests (GET/DELETE/PUT); the streaming POST does
 // not go through do and is never retried.
-func (c *Client) rejectAccessToken(ctx context.Context, req *http.Request) {
+func (c *Client) rejectAccessToken(ctx context.Context, req *http.Request) error {
 	rejector, ok := c.TokenSource.(accessTokenRejector)
 	if !ok {
-		return
+		return nil
 	}
 	token, ok := strings.CutPrefix(req.Header.Get("Authorization"), "Bearer ")
 	if !ok || token == "" {
-		return
+		return nil
 	}
-	_ = rejector.RejectAccessToken(ctx, token)
+	if err := rejector.RejectAccessToken(ctx, token); err != nil {
+		return fmt.Errorf("mark rejected OAuth token stale: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
@@ -292,8 +295,9 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 			return nil, err
 		}
 		if resp.StatusCode >= 400 {
+			var rejectErr error
 			if resp.StatusCode == http.StatusUnauthorized {
-				c.rejectAccessToken(ctx, req)
+				rejectErr = c.rejectAccessToken(ctx, req)
 			}
 			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 			_ = resp.Body.Close()
@@ -305,7 +309,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 				lastErr = apiErr
 				continue
 			}
-			return nil, apiErr
+			return nil, errors.Join(apiErr, rejectErr)
 		}
 		return resp, nil
 	}
@@ -403,11 +407,6 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 	defer cancel()
 	var idledOut atomic.Bool
 	idle := c.streamIdleTimeout()
-	timer := time.AfterFunc(idle, func() {
-		idledOut.Store(true)
-		cancel()
-	})
-	defer timer.Stop()
 
 	req, err := c.newRequest(streamCtx, http.MethodPost, path, reqBody)
 	if err != nil {
@@ -419,12 +418,23 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
+		var rejectErr error
 		if resp.StatusCode == http.StatusUnauthorized {
-			c.rejectAccessToken(ctx, req)
+			rejectErr = c.rejectAccessToken(ctx, req)
 		}
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return conversationID, httpError(snippet, resp.StatusCode, http.MethodPost, path)
+		apiErr := httpError(snippet, resp.StatusCode, http.MethodPost, path)
+		return conversationID, errors.Join(apiErr, rejectErr)
 	}
+
+	// Start the idle budget after authentication and response headers. A lock
+	// wait or token refresh has its own timeout and must not consume the stream's
+	// first-byte allowance.
+	timer := time.AfterFunc(idle, func() {
+		idledOut.Store(true)
+		cancel()
+	})
+	defer timer.Stop()
 
 	// The stream is newline-delimited JSON (records separated by "\n\n"). A
 	// bounded Scanner caps per-line memory: the HTTP client won't limit the

@@ -23,6 +23,12 @@ func TestNoticeForError(t *testing.T) {
 		substr    bool
 	}{
 		{
+			name:      "corrupt session is actionable",
+			err:       fmt.Errorf("token: %w", auth.ErrSessionCorrupt),
+			wantLevel: chat.NoticeError,
+			wantText:  "The stored Datadog login is unreadable. Run `bits logout`, then `bits login`.",
+		},
+		{
 			name:      "reauth required is actionable",
 			err:       fmt.Errorf("token: %w", auth.ErrReauthRequired),
 			wantLevel: chat.NoticeError,

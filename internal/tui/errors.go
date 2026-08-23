@@ -29,6 +29,8 @@ func noticeForError(op string, err error) chat.Notice {
 func noticeForNonAPIError(op string, err error) chat.Notice {
 	_, isNet := errors.AsType[net.Error](err)
 	switch {
+	case errors.Is(err, auth.ErrSessionCorrupt):
+		return notice(chat.NoticeError, err, "The stored Datadog login is unreadable. Run `bits logout`, then `bits login`.")
 	case errors.Is(err, auth.ErrReauthRequired):
 		return notice(chat.NoticeError, err, "Your Datadog login expired. Run `bits login` again.")
 	case errors.Is(err, auth.ErrSessionNotDurable):
