@@ -236,13 +236,9 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 	return req, nil
 }
 
-// do issues a non-streaming request and returns the response for the caller to
-// decode. On a >=400 status it closes the body and returns a typed *APIError.
-//
-// do retries transient failures (network errors, 429/502/503/504) up to
-// MaxRetries with exponential backoff and jitter, honoring Retry-After. It is
-// only used for idempotent requests (GET/DELETE/PUT); the streaming POST does
-// not go through do and is never retried.
+// rejectAccessToken marks the exact bearer generation rejected by the server
+// so a later, independently initiated request refreshes it without replaying
+// the failed operation.
 func (c *Client) rejectAccessToken(ctx context.Context, req *http.Request) error {
 	rejector, ok := c.TokenSource.(accessTokenRejector)
 	if !ok {
@@ -258,6 +254,10 @@ func (c *Client) rejectAccessToken(ctx context.Context, req *http.Request) error
 	return nil
 }
 
+// do issues a non-streaming request and returns the response for the caller to
+// decode. On a >=400 status it closes the body and returns a typed *APIError.
+// It retries transient failures for idempotent requests only; the streaming
+// POST does not go through do and is never retried.
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	attempts := c.maxRetries() + 1
 	var lastErr error
@@ -295,13 +295,13 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 			return nil, err
 		}
 		if resp.StatusCode >= 400 {
+			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+			_ = resp.Body.Close()
+			apiErr := httpError(snippet, resp.StatusCode, method, path)
 			var rejectErr error
 			if resp.StatusCode == http.StatusUnauthorized {
 				rejectErr = c.rejectAccessToken(ctx, req)
 			}
-			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-			_ = resp.Body.Close()
-			apiErr := httpError(snippet, resp.StatusCode, method, path)
 			if attempt < attempts-1 && isRetryableStatus(resp.StatusCode) {
 				if d, ok := retryAfterDelay(resp.Header); ok {
 					wait = d
@@ -418,12 +418,13 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		_ = resp.Body.Close()
+		apiErr := httpError(snippet, resp.StatusCode, http.MethodPost, path)
 		var rejectErr error
 		if resp.StatusCode == http.StatusUnauthorized {
 			rejectErr = c.rejectAccessToken(ctx, req)
 		}
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		apiErr := httpError(snippet, resp.StatusCode, http.MethodPost, path)
 		return conversationID, errors.Join(apiErr, rejectErr)
 	}
 

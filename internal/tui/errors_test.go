@@ -29,6 +29,12 @@ func TestNoticeForError(t *testing.T) {
 			wantText:  "The stored Datadog login is unreadable. Run `bits logout`, then `bits login`.",
 		},
 		{
+			name:      "unlock failure asks for restart",
+			err:       fmt.Errorf("token: %w", auth.ErrSessionUnlock),
+			wantLevel: chat.NoticeError,
+			wantText:  "The login was updated but its process lock could not be released. Restart Bits before continuing.",
+		},
+		{
 			name:      "reauth required is actionable",
 			err:       fmt.Errorf("token: %w", auth.ErrReauthRequired),
 			wantLevel: chat.NoticeError,

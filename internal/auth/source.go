@@ -62,7 +62,9 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 	defer s.release()
 
 	var accessToken string
-	err := withSessionLock(ctx, s.store, func() error {
+	lockCtx, lockCancel := context.WithTimeout(ctx, sessionLockTimeout)
+	defer lockCancel()
+	err := withSessionLock(lockCtx, s.store, func() error {
 		durable, loadErr := s.store.Load()
 		if s.dirty {
 			if err := s.reconcileDirty(ctx, durable, loadErr); err != nil {
@@ -108,18 +110,13 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 			}
 			return sanitizedOAuthError("refresh Datadog OAuth token", err)
 		}
-		if refreshed.Expiry.IsZero() {
-			// expires_in is optional in OAuth, but treating a zero expiry as
-			// immediately stale would rotate on every request. Use a short,
-			// conservative lifetime and refresh again after five minutes.
-			refreshed.Expiry = time.Now().Add(2 * refreshWindow)
-		}
-
 		before := s.session
 		s.session = sessionFromToken(s.config, refreshed)
 		s.dirty = true
 		s.persistBase = before
-		if err := saveWithRetry(ctx, s.store, s.session); err != nil {
+		persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), sessionPersistTimeout)
+		defer persistCancel()
+		if err := saveWithRetry(persistCtx, s.store, s.session); err != nil {
 			// Keep the rotated token in memory. A later call may secure it only if
 			// the durable predecessor is unchanged; it may never overwrite a
 			// replacement login or resurrect a deleted session.

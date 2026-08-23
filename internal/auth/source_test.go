@@ -374,6 +374,20 @@ func TestLogoutWaitsForRefreshAndDeletesRotatedSession(t *testing.T) {
 	}
 }
 
+func TestSourceSurfacesLockReleaseFailureWithoutInvalidatingSession(t *testing.T) {
+	session := expiredSession()
+	session.Expiry = time.Now().Add(time.Hour)
+	store := newMemoryStore(session)
+	store.afterLockErr = fmt.Errorf("%w: injected", ErrSessionUnlock)
+	source := testSource(t, session, store, "", http.DefaultClient)
+	if _, err := source.AccessToken(context.Background()); !errors.Is(err, ErrSessionUnlock) {
+		t.Fatalf("error = %v, want ErrSessionUnlock", err)
+	}
+	if !store.present || !sameSession(store.session, session) {
+		t.Fatal("unlock error changed the durable session")
+	}
+}
+
 func TestSourceGateHonorsCancellationWhileAnotherRefreshRuns(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -528,6 +542,8 @@ func TestSourceCompletesInFlightRotationAfterCallerCancellation(t *testing.T) {
 	defer server.Close()
 	initial := expiredSession()
 	store := newMemoryStore(initial)
+	store.saveFailures = 1
+	store.saveErr = errors.New("transient keyring failure")
 	source := testSource(t, initial, store, server.URL, server.Client())
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()

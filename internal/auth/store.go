@@ -63,13 +63,19 @@ type Session struct {
 }
 
 func sessionFromToken(cfg SiteConfig, token *oauth2.Token) Session {
+	expiry := token.Expiry
+	if expiry.IsZero() {
+		// expires_in is optional in OAuth. A bounded default avoids treating the
+		// token as valid forever or rotating it again on every request.
+		expiry = time.Now().Add(2 * refreshWindow)
+	}
 	return Session{
 		Site:         cfg.Site,
 		ClientID:     cfg.ClientID,
 		AccessToken:  token.AccessToken,
 		TokenType:    token.TokenType,
 		RefreshToken: token.RefreshToken,
-		Expiry:       token.Expiry,
+		Expiry:       expiry,
 	}
 }
 
