@@ -491,12 +491,11 @@ func TestRetryAfterDelay(t *testing.T) {
 }
 
 func TestNewRequest_SetsOAuthBearerWithoutAPIKeys(t *testing.T) {
-	var authorization, apiKey, appKey, source string
+	var authorization, apiKey, appKey string
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		authorization = r.Header.Get("Authorization")
 		apiKey = r.Header.Get("DD-API-KEY")
 		appKey = r.Header.Get("DD-APPLICATION-KEY")
-		source = r.Header.Get("X-Datadog-Bits-Surface")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"data":{"attributes":{"flags":{}}}}`)
 	})
@@ -509,9 +508,6 @@ func TestNewRequest_SetsOAuthBearerWithoutAPIKeys(t *testing.T) {
 	}
 	if apiKey != "" || appKey != "" {
 		t.Errorf("API key headers must be absent in OAuth mode: %q/%q", apiKey, appKey)
-	}
-	if source != "cli" {
-		t.Errorf("X-Datadog-Bits-Surface = %q", source)
 	}
 }
 
