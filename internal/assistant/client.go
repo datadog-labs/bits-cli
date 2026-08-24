@@ -71,9 +71,9 @@ type Client struct {
 	MaxLineBytes int
 	// MaxRetries is the number of extra attempts for idempotent, non-streaming
 	// requests (GET/DELETE/PUT) on transient failures (network errors,
-	// 429/502/503/504). Negative is treated as 0. The streaming POST
-	// (Send/RunTools) is never retried: the API has no idempotency key, so a
-	// retried turn would be recorded twice.
+	// 429/502/503/504). Negative is treated as 0. The streaming POST (Send) is
+	// never retried: the API has no idempotency key, so a retried turn would be
+	// recorded twice.
 	MaxRetries int
 	// RetryBaseDelay is the base for exponential backoff between retries. Zero
 	// uses defaultRetryBaseDelay.
@@ -428,94 +428,6 @@ type ToolExecutor func(ctx context.Context, input string) (output string, err er
 type Tool struct {
 	ClientTool
 	Run ToolExecutor
-}
-
-// DefaultMaxTurns caps RunTools to avoid an unbounded remote agent loop.
-const DefaultMaxTurns = 20
-
-// RunTools drives a full remote agent loop. It sends message, then for each
-// turn executes any client_tool_call locally with the matching Tool, posts the
-// results back (resending the tool definitions, as the server requires), and
-// repeats until a turn emits no client tool calls or MaxTurns is reached. fn
-// observes every streamed line across all turns.
-//
-// opts.MaxTurns overrides DefaultMaxTurns. opts.ClientTools is ignored; the
-// definitions come from tools.
-func (c *Client) RunTools(ctx context.Context, message string, tools []Tool, opts SendOptions, fn func(AssistantResponse) error) (string, error) {
-	byName := make(map[string]Tool, len(tools))
-	defs := make([]ClientTool, 0, len(tools))
-	for _, t := range tools {
-		byName[t.Name] = t
-		defs = append(defs, t.ClientTool)
-	}
-	opts.ClientTools = defs
-
-	maxTurns := opts.MaxTurns
-	if maxTurns <= 0 {
-		maxTurns = DefaultMaxTurns
-	}
-
-	var next any = message
-	convID := opts.ConversationID
-	for range maxTurns {
-		var calls []Content
-		id, err := c.Send(ctx, next, opts, func(ar AssistantResponse) error {
-			if ar.Data.Attributes.StructuredMessage.Content.Type == ContentClientToolCall {
-				calls = append(calls, ar.Data.Attributes.StructuredMessage.Content)
-			}
-			if fn != nil {
-				return fn(ar)
-			}
-			return nil
-		})
-		if err != nil {
-			return convID, err
-		}
-		convID = id
-		opts.ConversationID = convID
-
-		if len(calls) == 0 {
-			return convID, nil // turn finished with no client tool calls
-		}
-
-		responses := make([]ClientToolResponse, 0, len(calls))
-		for _, call := range calls {
-			name := ""
-			input := ""
-			if call.Tool != nil && call.Tool.Metadata != nil {
-				name, input = call.Tool.Metadata.Name, call.Tool.Metadata.Input
-			}
-			toolCallID := ""
-			if call.Tool != nil {
-				toolCallID = call.Tool.ToolCallID
-			}
-			resp := ClientToolResponse{
-				Type:       "client_tool_response",
-				ToolCallID: toolCallID,
-				Status:     ToolStatusSuccess,
-				Metadata:   ClientToolMetadata{Name: name, Input: input},
-			}
-			tool, ok := byName[name]
-			if !ok {
-				resp.Status = ToolStatusError
-				resp.Title = "Unknown tool"
-				resp.Metadata.Output = fmt.Sprintf("no client tool named %q is registered", name)
-			} else {
-				out, runErr := tool.Run(ctx, input)
-				if runErr != nil {
-					resp.Status = ToolStatusError
-					resp.Title = "Tool error"
-					resp.Metadata.Output = runErr.Error()
-				} else {
-					resp.Title = "Ran " + name
-					resp.Metadata.Output = out
-				}
-			}
-			responses = append(responses, resp)
-		}
-		next = responses
-	}
-	return convID, fmt.Errorf("exceeded MaxTurns (%d) without completing", maxTurns)
 }
 
 // ConversationHistory fetches the full message history for a conversation.

@@ -172,7 +172,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelTurn = cancel
-	m.turnEvents = m.engine.StartTurn(ctx, text)
+	m.turnEvents = m.engine.StartTurn(ctx, agent.TurnInput{Message: text})
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()
 	m.refreshViewport()

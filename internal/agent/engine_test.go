@@ -68,7 +68,7 @@ func kinds(evs []Event) []EventKind {
 func TestConcurrentTurnPanics(t *testing.T) {
 	gate := make(chan struct{})
 	e := New(&blockingBackend{gate: gate}, assistant.SendOptions{})
-	ch := e.StartTurn(context.Background(), "one")
+	ch := e.StartTurn(context.Background(), TurnInput{Message: "one"})
 	defer func() {
 		close(gate)
 		for range ch {
@@ -79,7 +79,7 @@ func TestConcurrentTurnPanics(t *testing.T) {
 			t.Fatal("expected panic on overlapping turn")
 		}
 	}()
-	_ = e.StartTurn(context.Background(), "two")
+	_ = e.StartTurn(context.Background(), TurnInput{Message: "two"})
 }
 
 func TestTurnEmitsEventSequence(t *testing.T) {
@@ -95,7 +95,7 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	}
 	e := New(b, assistant.SendOptions{})
 
-	evs := drain(e.StartTurn(context.Background(), "hi"))
+	evs := drain(e.StartTurn(context.Background(), TurnInput{Message: "hi"}))
 	want := []EventKind{EventBlock, EventBlock, EventBlock, EventUsage, EventConversation, EventTurnDone}
 	if got := kinds(evs); !reflect.DeepEqual(got, want) {
 		t.Fatalf("event kinds = %v, want %v", got, want)

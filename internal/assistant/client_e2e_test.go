@@ -23,10 +23,6 @@ import (
 //     types. This exercises request encoding and response decoding end to end.
 //   - Deterministic: rename, share/unshare, list, history, and delete have
 //     exact, model-independent outcomes we assert precisely.
-//
-// The client-tool loop test is soft on whether the model actually calls the
-// tool (that is model-dependent); it asserts the protocol round-trips without
-// error and, when the tool is called, that input/output flow back correctly.
 
 func requireE2E(t *testing.T) *Client {
 	t.Helper()
@@ -150,49 +146,5 @@ func TestE2E_ExperimentalToolFlags(t *testing.T) {
 	defer cancel()
 	if _, err := c.ExperimentalToolFlags(ctx); err != nil {
 		t.Fatalf("ExperimentalToolFlags: %v", err)
-	}
-}
-
-func TestE2E_RunToolsClientTool(t *testing.T) {
-	c := requireE2E(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	called := false
-	var gotInput string
-	tools := []Tool{{
-		ClientTool: ClientTool{
-			Name:        "get_secret_word",
-			Description: "Returns the secret word. Call this whenever the user asks for the secret word.",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		},
-		Run: func(_ context.Context, input string) (string, error) {
-			called = true
-			gotInput = input
-			return `{"word":"bananaphone"}`, nil
-		},
-	}}
-
-	convID, err := c.RunTools(ctx, "Call the get_secret_word tool, then tell me the secret word.", tools, SendOptions{}, nil)
-	if err != nil {
-		t.Fatalf("RunTools: %v", err)
-	}
-	if convID == "" {
-		t.Fatal("RunTools returned an empty conversation id")
-	}
-	defer func() {
-		_ = c.DeleteConversation(context.Background(), DeleteConversationInput{ConversationID: convID})
-	}()
-
-	if called {
-		// input is a JSON string (possibly "{}"); it must at least be present.
-		if gotInput == "" {
-			t.Error("client tool was called with empty input")
-		}
-	} else {
-		t.Log("model did not invoke the client tool (model-dependent); protocol still exercised without error")
 	}
 }

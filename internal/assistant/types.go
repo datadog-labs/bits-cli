@@ -69,9 +69,6 @@ type SendOptions struct {
 	// final tool_call / client_tool_call. Off by default; without it those two
 	// content types are never sent.
 	StreamToolCallInput bool
-	// MaxTurns caps the RunTools agent loop. Zero uses DefaultMaxTurns.
-	// Ignored by Send.
-	MaxTurns int
 }
 
 // Request is the JSON:API-style envelope for POST /api/v2/assistant.
@@ -156,7 +153,7 @@ const DefaultProfile = ProfileWebUI
 // AssistantContext is the request-level `context`: Datadog objects in scope for
 // the turn. The server fetches each entity's details and injects them into the
 // prompt. Like ClientTools, it must be resent on every request in the
-// conversation; RunTools carries it across turns via SendOptions.
+// conversation; the agent engine carries it across turns via SendOptions.
 type AssistantContext struct {
 	Entities []ContextEntity `json:"entities,omitempty"`
 	// Resources is the sibling `resources` list. Its wire shape is not modeled

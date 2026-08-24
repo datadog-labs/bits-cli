@@ -69,7 +69,6 @@ const maxTurns = 20
 // to make sure it does not concurrently starts either of those in parallel.
 type Engine struct {
 	backend    Backend
-	tools      map[string]assistant.Tool // client tools by name; empty for the MVP
 	opts       assistant.SendOptions
 	transcript *Transcript
 	// active is true while a turn or restore runs; overlapping them is a bug.
@@ -81,20 +80,28 @@ type Engine struct {
 func New(b Backend, opts assistant.SendOptions) *Engine {
 	return &Engine{
 		backend:    b,
-		tools:      map[string]assistant.Tool{},
 		opts:       opts,
 		transcript: NewTranscript(),
 	}
+}
+
+// TurnInput is everything needed to start one turn. Tools are the client tools
+// permitted for this turn; the caller resolves them from its permission model
+// each time. They are fixed for the whole turn, including client-tool
+// round-trips.
+type TurnInput struct {
+	Message string
+	Tools   []assistant.Tool
 }
 
 // StartTurn runs one user turn (plus any client-tool round-trips) in a goroutine
 // and streams events. The channel is closed when the turn ends. Cancel ctx to
 // interrupt; cancellation ends the turn quietly (no error event). It panics if a
 // turn or restore is already in flight.
-func (e *Engine) StartTurn(ctx context.Context, message string) <-chan Event {
+func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
 	e.begin()
 	out := make(chan Event, 64)
-	go e.run(ctx, message, out)
+	go e.run(ctx, in, out)
 	return out
 }
 
@@ -106,9 +113,17 @@ func (e *Engine) begin() {
 	}
 }
 
-func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
+func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event) {
 	defer close(out)
 	defer e.active.Store(false)
+
+	// Tools are fixed for the whole turn: index them once by name for execution
+	// and derive the definitions resent to the server each round-trip.
+	tools := make(map[string]assistant.Tool, len(in.Tools))
+	for _, t := range in.Tools {
+		tools[t.Name] = t
+	}
+	defs := toolDefs(in.Tools)
 
 	// send is cancellation-aware so a stalled consumer during cancel can't
 	// wedge the engine goroutine.
@@ -136,12 +151,12 @@ func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 	}
 
 	// The user's turn opens the transcript; the engine owns the user block too.
-	userBlock := e.transcript.AppendUser(message)
+	userBlock := e.transcript.AppendUser(in.Message)
 	if !send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: e.snapshot(), Changed: userBlock}}) {
 		return
 	}
 
-	var next any = message
+	var next any = in.Message
 	convID := e.opts.ConversationID
 
 	for range maxTurns {
@@ -149,7 +164,7 @@ func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 
 		opts := e.opts
 		opts.ConversationID = convID
-		opts.ClientTools = e.toolDefs()
+		opts.ClientTools = defs
 
 		id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {
 			msg := ar.Data.Attributes.StructuredMessage
@@ -181,7 +196,7 @@ func (e *Engine) run(ctx context.Context, message string, out chan<- Event) {
 			send(Event{Kind: EventTurnDone})
 			return
 		}
-		next = e.execTools(ctx, calls)
+		next = execTools(ctx, tools, calls)
 	}
 	e.transcript.FinalizeAll()
 	send(Event{Kind: EventError, Err: ErrMaxTurns})
@@ -247,12 +262,12 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 
 // toolDefs returns the client tool definitions to resend each turn (nil when
 // none are registered).
-func (e *Engine) toolDefs() []assistant.ClientTool {
-	if len(e.tools) == 0 {
+func toolDefs(tools []assistant.Tool) []assistant.ClientTool {
+	if len(tools) == 0 {
 		return nil
 	}
-	defs := make([]assistant.ClientTool, 0, len(e.tools))
-	for _, t := range e.tools {
+	defs := make([]assistant.ClientTool, 0, len(tools))
+	for _, t := range tools {
 		defs = append(defs, t.ClientTool)
 	}
 	return defs
@@ -260,8 +275,8 @@ func (e *Engine) toolDefs() []assistant.ClientTool {
 
 // execTools runs each client tool call locally and builds the responses to post
 // back. Unregistered tools answer with an error result rather than aborting the
-// loop. No tools are registered in the MVP, so this is not reached yet.
-func (e *Engine) execTools(ctx context.Context, calls []assistant.Content) []assistant.ClientToolResponse {
+// loop.
+func execTools(ctx context.Context, tools map[string]assistant.Tool, calls []assistant.Content) []assistant.ClientToolResponse {
 	responses := make([]assistant.ClientToolResponse, 0, len(calls))
 	for _, call := range calls {
 		var name, input string
@@ -278,7 +293,7 @@ func (e *Engine) execTools(ctx context.Context, calls []assistant.Content) []ass
 			Status:     assistant.ToolStatusSuccess,
 			Metadata:   assistant.ClientToolMetadata{Name: name, Input: input},
 		}
-		switch tool, ok := e.tools[name]; {
+		switch tool, ok := tools[name]; {
 		case !ok:
 			resp.Status = assistant.ToolStatusError
 			resp.Title = "Unknown tool"
