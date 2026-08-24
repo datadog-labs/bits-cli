@@ -3,7 +3,80 @@ package editor
 import (
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
+
+func TestViewCacheIsSharedByHeightAndView(t *testing.T) {
+	e := New()
+	_ = e.Height()
+	if !e.viewCached {
+		t.Fatal("Height did not populate the editor view cache")
+	}
+	first := e.view
+	if got := e.View(); got != first || !e.viewCached {
+		t.Fatalf("View = %q, want cached %q", got, first)
+	}
+
+	e.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if e.viewCached {
+		t.Fatal("editor update did not invalidate the view cache")
+	}
+
+	e.ta.SetValue("@")
+	e.recompute()
+	_ = e.View()
+	e.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if !e.viewCached {
+		t.Fatal("menu-only navigation discarded the unchanged textarea view")
+	}
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if e.viewCached {
+		t.Fatal("accepted completion left the changed textarea view cached")
+	}
+
+	e.SetPlaceholder("Ask Bits…")
+	_ = e.View()
+	e.SetPlaceholder("Ask Bits…")
+	if !e.viewCached {
+		t.Fatal("unchanged placeholder invalidated the editor view")
+	}
+	e.SetPlaceholder("Working on it…")
+	if e.viewCached {
+		t.Fatal("changed placeholder left the editor view cached")
+	}
+
+	_ = e.View()
+	e.SetInputStyles(styles.Default(false).Input)
+	if e.viewCached {
+		t.Fatal("changed input styles left the editor view cached")
+	}
+}
+
+func TestSetWidthTracksRequestedOuterWidth(t *testing.T) {
+	e := New()
+	e.SetWidth(80)
+	innerWidth := e.ta.Width()
+	_ = e.View()
+
+	// textarea.Width reports the content width after subtracting the prompt.
+	// Passing that value back as a new outer width must still resize the editor.
+	e.SetWidth(innerWidth)
+	if got := e.ta.Width(); got >= innerWidth {
+		t.Fatalf("inner width after shrinking outer width = %d, want less than %d", got, innerWidth)
+	}
+	if e.viewCached {
+		t.Fatal("outer-width change left the editor view cached")
+	}
+
+	_ = e.View()
+	e.SetWidth(innerWidth)
+	if !e.viewCached {
+		t.Fatal("unchanged outer width invalidated the editor view")
+	}
+}
 
 func TestWordBounds(t *testing.T) {
 	runes := []rune("look at @engine")
