@@ -79,16 +79,47 @@ func TestConfigForSite_RegionalCustomSubdomain(t *testing.T) {
 	}
 }
 
+func TestRegionRegistryIsCoherent(t *testing.T) {
+	seen := make(map[string]bool, len(datadogRegions))
+	for _, want := range datadogRegions {
+		if seen[want.canonicalDomain] {
+			t.Fatalf("duplicate region %q", want.canonicalDomain)
+		}
+		seen[want.canonicalDomain] = true
+		if want.authorizeDomain == "" || want.apiDomain == "" {
+			t.Errorf("region %q has incomplete endpoints: %#v", want.canonicalDomain, want)
+		}
+
+		got, ok := regionForSite(want.canonicalDomain)
+		if !ok || got.canonicalDomain != want.canonicalDomain {
+			t.Errorf("regionForSite(%q) = %#v, %v", want.canonicalDomain, got, ok)
+		}
+		if want.matchSubdomains {
+			got, ok = regionForSite("customer." + want.canonicalDomain)
+			if !ok || got.canonicalDomain != want.canonicalDomain {
+				t.Errorf("regional customer subdomain for %q resolved to %#v, %v", want.canonicalDomain, got, ok)
+			}
+		}
+
+		if want.callbackAllowed && want.apiDomain != "api."+want.canonicalDomain {
+			t.Errorf("callback region %q has API domain %q", want.canonicalDomain, want.apiDomain)
+		}
+		got, ok = regionForCallback(want.canonicalDomain)
+		if ok != want.callbackAllowed {
+			t.Errorf("regionForCallback(%q) ok = %v, want %v", want.canonicalDomain, ok, want.callbackAllowed)
+		}
+		if ok && got.canonicalDomain != want.canonicalDomain {
+			t.Errorf("regionForCallback(%q) = %#v", want.canonicalDomain, got)
+		}
+	}
+}
+
 func TestWithCallbackDomain_UsesCanonicalRegionalAPIHost(t *testing.T) {
-	for _, domain := range []string{
-		"datad0g.com",
-		"datadoghq.com",
-		"datadoghq.eu",
-		"us3.datadoghq.com",
-		"us5.datadoghq.com",
-		"ap1.datadoghq.com",
-		"ap2.datadoghq.com",
-	} {
+	for _, region := range datadogRegions {
+		if !region.callbackAllowed {
+			continue
+		}
+		domain := region.canonicalDomain
 		t.Run(domain, func(t *testing.T) {
 			initial, err := ConfigForSite(DefaultStagingSite, "")
 			if err != nil {
@@ -98,7 +129,7 @@ func TestWithCallbackDomain_UsesCanonicalRegionalAPIHost(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			apiBase := "https://api." + domain
+			apiBase := "https://" + region.apiDomain
 			if cfg.Site != apiBase || cfg.AssistantBase != apiBase {
 				t.Errorf("routing = Site %q, AssistantBase %q; want %q", cfg.Site, cfg.AssistantBase, apiBase)
 			}
