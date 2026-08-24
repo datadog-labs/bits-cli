@@ -16,7 +16,6 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -102,22 +101,6 @@ func newTransport() *http.Transport {
 	tr.TLSHandshakeTimeout = 10 * time.Second
 	tr.ResponseHeaderTimeout = defaultRequestTimeout
 	return tr
-}
-
-// NewClient builds a Client from DD_API_KEY / DD_APP_KEY in the environment
-// (as populated by dd-auth). This remains the CI and developer fallback while
-// interactive users authenticate through NewOAuthClient.
-func NewClient() (*Client, error) {
-	apiKey := os.Getenv("DD_API_KEY")
-	appKey := os.Getenv("DD_APP_KEY")
-	if apiKey == "" || appKey == "" {
-		return nil, fmt.Errorf("DD_API_KEY and DD_APP_KEY must both be set")
-	}
-	base := os.Getenv("DD_SITE_URL")
-	if base == "" {
-		base = DefaultBaseURL
-	}
-	return NewAPIKeyClient(base, apiKey, appKey)
 }
 
 // NewAPIKeyClient builds the explicit developer/CI fallback client.

@@ -47,9 +47,13 @@ func requireE2E(t *testing.T) *Client {
 	if os.Getenv("BITS_ASSISTANT_E2E") == "" {
 		t.Skip("set BITS_OAUTH_E2E=1 after bits login, or BITS_ASSISTANT_E2E=1 with DD_API_KEY/DD_APP_KEY")
 	}
-	client, err := NewClient()
+	client, err := NewAPIKeyClient(
+		os.Getenv("DD_SITE_URL"),
+		os.Getenv("DD_API_KEY"),
+		os.Getenv("DD_APP_KEY"),
+	)
 	if err != nil {
-		t.Fatalf("NewClient: %v (BITS_ASSISTANT_E2E is set but credentials are missing)", err)
+		t.Fatalf("NewAPIKeyClient: %v (BITS_ASSISTANT_E2E is set but credentials are missing)", err)
 	}
 	return client
 }
