@@ -28,7 +28,8 @@ type List struct {
 	items []agent.Block
 	sty   Styles
 
-	cache map[agent.BlockID]listLineEntry
+	cache    map[agent.BlockID]listLineEntry
+	renderer blockRenderer
 }
 
 // listLineEntry memoizes one block's rendered lines (height is len(lines)),
@@ -106,7 +107,7 @@ func (l *List) renderItem(idx int) []string {
 	if e, ok := l.cache[it.ID]; ok && e.rev == it.Rev && e.width == l.width {
 		return e.lines
 	}
-	lines := strings.Split(RenderBlock(it, l.width, l.sty), "\n")
+	lines := strings.Split(l.renderer.RenderBlock(it, l.width, l.sty), "\n")
 	l.cache[it.ID] = listLineEntry{rev: it.Rev, width: l.width, lines: lines}
 	return lines
 }
