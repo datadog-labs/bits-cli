@@ -35,7 +35,7 @@ tui-benchmarks:
     - export PATH="$CI_PROJECT_DIR/.ci-bin:$PATH"
   script:
     - go test ./... -run '^$' -bench . -benchmem -benchtime=500ms -count=7 -cpu=1 | tee benchmark.txt
-    - go run ./internal/cibench -input benchmark.txt -output benchmark.json
+    - go run ./tools/cibench -input benchmark.txt -output benchmark.json
     - dd-sts exchange --policy bits-cli-ci -- sh -c 'datadog-ci measure --level job --measures-file benchmark-measures.json && datadog-ci tag --level job --tags-file benchmark-tags.json'
   artifacts:
     when: always
