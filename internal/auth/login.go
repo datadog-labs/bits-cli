@@ -117,11 +117,11 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	defer lockCancel()
 	persistErr := withSessionLock(lockCtx, opts.Store, func() error {
 		stored, loadErr := opts.Store.Load()
-		switch {
-		case loadErr == nil:
+		if loadErr == nil {
 			previous, hadPrevious = stored, true
-		case errors.Is(loadErr, ErrNoSession), errors.Is(loadErr, ErrSessionCorrupt):
-		default:
+		} else if errors.Is(loadErr, ErrNoSession) || errors.Is(loadErr, ErrSessionCorrupt) {
+			// Continue and replace the missing or corrupt session.
+		} else {
 			return loadErr
 		}
 		persistCtx, persistCancel := context.WithTimeout(ctx, sessionPersistTimeout)
