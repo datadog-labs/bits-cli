@@ -66,10 +66,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	}
 
 	verifier := oauth2.GenerateVerifier()
-	state, err := randomState()
-	if err != nil {
-		return Session{}, err
-	}
+	state := oauth2.GenerateVerifier()
 	listener, callback, err := listenForCallback(cfg.RedirectURI, state)
 	if err != nil {
 		return Session{}, err
@@ -392,14 +389,6 @@ func safeOAuthErrorCode(code string) string {
 		}
 	}
 	return code
-}
-
-func randomState() (string, error) {
-	state := oauth2.GenerateVerifier()
-	if state == "" {
-		return "", errors.New("generate OAuth state")
-	}
-	return state, nil
 }
 
 func openBrowser(target string) error {
