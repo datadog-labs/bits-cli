@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"image/color"
+
 	"charm.land/glamour/v2/ansi"
 	"charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
@@ -51,6 +53,15 @@ type Styles struct {
 	NoticeInfo    lipgloss.Style // solid notification bar: informational
 	NoticeWarn    lipgloss.Style // solid notification bar: warning
 	NoticeError   lipgloss.Style // solid notification bar: error
+
+	// Markdown token colors mirror the values datadogStyleConfig feeds to
+	// glamour. The renderer does not read these fields (markdown is styled via
+	// datadogStyleConfig); they exist so the glamour-side tokens are inspectable
+	// alongside the lipgloss ones, e.g. in the style catalog.
+	MarkdownHeading color.Color // heading secondary color (--ui-ai-secondary)
+	MarkdownLink    color.Color // link color
+	MarkdownCodeFg  color.Color // inline code foreground
+	MarkdownCodeBg  color.Color // inline code background
 }
 
 // Notice returns the style for a transient notice of the given level.
@@ -70,6 +81,13 @@ func DefaultStyles(isDark bool) Styles {
 	c := lipgloss.LightDark(isDark)
 	aiPrimary := lipgloss.Color(uiAIPrimary)
 
+	// Select the markdown token hex per mode, mirroring datadogStyleConfig so the
+	// exposed colors stay in lockstep with what glamour actually renders.
+	mdSecondary, mdLink, mdCodeText, mdCodeBg := uiAISecondaryLight, uiLinkLight, uiCodeTextLight, uiCodeBgLight
+	if isDark {
+		mdSecondary, mdLink, mdCodeText, mdCodeBg = uiAISecondaryDark, uiLinkDark, uiCodeTextDark, uiCodeBgDark
+	}
+
 	return Styles{
 		MarkdownStyle: markdownStyleName(isDark),
 
@@ -86,6 +104,11 @@ func DefaultStyles(isDark bool) Styles {
 		NoticeInfo:    lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#632CA6")),
 		NoticeWarn:    lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color("#1A1A1A")).Background(lipgloss.Color("#F5A623")),
 		NoticeError:   lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#C4314B")),
+
+		MarkdownHeading: lipgloss.Color(mdSecondary),
+		MarkdownLink:    lipgloss.Color(mdLink),
+		MarkdownCodeFg:  lipgloss.Color(mdCodeText),
+		MarkdownCodeBg:  lipgloss.Color(mdCodeBg),
 	}
 }
 
