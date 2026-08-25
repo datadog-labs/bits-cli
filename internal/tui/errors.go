@@ -9,6 +9,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
@@ -17,11 +18,32 @@ func noticeForError(op string, err error) chat.Notice {
 	if err == nil {
 		return chat.Notice{}
 	}
+	if authNotice, ok := noticeForAuthError(err); ok {
+		return authNotice
+	}
 	apiErr, ok := errors.AsType[*assistant.APIError](err)
 	if !ok {
 		return noticeForNonAPIError(op, err)
 	}
 	return noticeForAPIError(apiErr)
+}
+
+// noticeForAuthError takes precedence when a server response is joined with a
+// credential-state failure, preserving the original joined error for details.
+func noticeForAuthError(err error) (chat.Notice, bool) {
+	switch {
+	case errors.Is(err, auth.ErrSessionCorrupt):
+		return notice(chat.NoticeError, err, "The stored Datadog login is unreadable. Run `bits logout`, then `bits login`."), true
+	case errors.Is(err, auth.ErrReauthRequired):
+		return notice(chat.NoticeError, err, "Your Datadog login expired. Run `bits login` again."), true
+	case errors.Is(err, auth.ErrSessionNotDurable):
+		return notice(chat.NoticeError, err, "The refreshed login could not be secured. Try again; if this continues, run `bits login`."), true
+	case errors.Is(err, auth.ErrSessionReplaced):
+		return notice(chat.NoticeWarn, err, "The active Datadog login changed. Restart Bits to use it."), true
+	case errors.Is(err, auth.ErrSessionUnlock):
+		return notice(chat.NoticeError, err, "The Datadog login state could not be confirmed because its process lock could not be released. Restart Bits before continuing."), true
+	}
+	return chat.Notice{}, false
 }
 
 // noticeForNonAPIError covers errors that never carry an HTTP status.
@@ -48,7 +70,7 @@ func noticeForNonAPIError(op string, err error) chat.Notice {
 func noticeForAPIError(apiErr *assistant.APIError) chat.Notice {
 	switch {
 	case errors.Is(apiErr, assistant.ErrUnauthorized):
-		return notice(chat.NoticeError, apiErr, "Not authenticated. Refresh your Datadog credentials (dd-auth) and try again.")
+		return notice(chat.NoticeError, apiErr, "Not authenticated. Run `bits login` again, or refresh your Datadog developer credentials.")
 	case errors.Is(apiErr, assistant.ErrForbidden):
 		return forbiddenNotice(apiErr)
 	case errors.Is(apiErr, assistant.ErrNotFound):

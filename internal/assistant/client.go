@@ -16,7 +16,6 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -49,11 +48,22 @@ const (
 	maxRetryDelay = 5 * time.Second
 )
 
+// AccessTokenSource returns a current OAuth access token. Implementations may
+// refresh and persist rotating tokens before returning.
+type AccessTokenSource interface {
+	AccessToken(context.Context) (string, error)
+}
+
+type accessTokenRejector interface {
+	RejectAccessToken(context.Context, string) error
+}
+
 // Client talks to the Bits AI assistant API over HTTP.
 type Client struct {
-	BaseURL string
-	APIKey  string
-	AppKey  string
+	BaseURL     string
+	APIKey      string
+	AppKey      string
+	TokenSource AccessTokenSource
 	// HTTPClient handles non-streaming requests (history, conversations,
 	// skills, flags, rename, share, delete). Its Timeout bounds the whole
 	// request. Nil falls back to http.DefaultClient.
@@ -93,30 +103,44 @@ func newTransport() *http.Transport {
 	return tr
 }
 
-// NewClient builds a Client from DD_API_KEY / DD_APP_KEY in the environment
-// (as populated by dd-auth). BaseURL defaults to staging.
-func NewClient() (*Client, error) {
-	apiKey := os.Getenv("DD_API_KEY")
-	appKey := os.Getenv("DD_APP_KEY")
+// NewAPIKeyClient builds the explicit developer/CI fallback client.
+func NewAPIKeyClient(baseURL, apiKey, appKey string) (*Client, error) {
 	if apiKey == "" || appKey == "" {
-		return nil, fmt.Errorf("DD_API_KEY and DD_APP_KEY must be set (run under: dd-auth --domain dd.datad0g.com -- ...)")
+		return nil, fmt.Errorf("DD_API_KEY and DD_APP_KEY must both be set")
 	}
-	base := os.Getenv("DD_SITE_URL")
-	if base == "" {
-		base = DefaultBaseURL
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = DefaultBaseURL
 	}
+	client := newClient(baseURL)
+	client.APIKey = apiKey
+	client.AppKey = appKey
+	return client, nil
+}
+
+// NewOAuthClient builds a Client backed by a refreshing OAuth token source.
+func NewOAuthClient(baseURL string, source AccessTokenSource) (*Client, error) {
+	if source == nil {
+		return nil, fmt.Errorf("OAuth token source is required")
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		return nil, fmt.Errorf("OAuth Datadog site is required")
+	}
+	client := newClient(baseURL)
+	client.TokenSource = source
+	return client, nil
+}
+
+func newClient(baseURL string) *Client {
 	tr := newTransport()
 	return &Client{
-		BaseURL:           strings.TrimRight(base, "/"),
-		APIKey:            apiKey,
-		AppKey:            appKey,
+		BaseURL:           strings.TrimRight(baseURL, "/"),
 		HTTPClient:        &http.Client{Timeout: defaultRequestTimeout, Transport: tr},
 		StreamClient:      &http.Client{Transport: tr}, // no total timeout; idle-bounded
 		StreamIdleTimeout: defaultStreamIdleTimeout,
 		MaxLineBytes:      defaultMaxLineBytes,
 		MaxRetries:        defaultMaxRetries,
 		RetryBaseDelay:    defaultRetryBaseDelay,
-	}, nil
+	}
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -176,18 +200,41 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("DD-API-KEY", c.APIKey)
-	req.Header.Set("DD-APPLICATION-KEY", c.AppKey)
+	if c.TokenSource != nil {
+		token, err := c.TokenSource.AccessToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("get OAuth access token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		req.Header.Set("DD-API-KEY", c.APIKey)
+		req.Header.Set("DD-APPLICATION-KEY", c.AppKey)
+	}
 	return req, nil
+}
+
+// rejectAccessToken marks the exact bearer generation rejected by the server
+// so a later, independently initiated request refreshes it without replaying
+// the failed operation.
+func (c *Client) rejectAccessToken(ctx context.Context, req *http.Request) error {
+	rejector, ok := c.TokenSource.(accessTokenRejector)
+	if !ok {
+		return nil
+	}
+	token, ok := strings.CutPrefix(req.Header.Get("Authorization"), "Bearer ")
+	if !ok || token == "" {
+		return nil
+	}
+	if err := rejector.RejectAccessToken(ctx, token); err != nil {
+		return fmt.Errorf("mark rejected OAuth token stale: %w", err)
+	}
+	return nil
 }
 
 // do issues a non-streaming request and returns the response for the caller to
 // decode. On a >=400 status it closes the body and returns a typed *APIError.
-//
-// do retries transient failures (network errors, 429/502/503/504) up to
-// MaxRetries with exponential backoff and jitter, honoring Retry-After. It is
-// only used for idempotent requests (GET/DELETE/PUT); the streaming POST does
-// not go through do and is never retried.
+// It retries transient failures for idempotent requests only; the streaming
+// POST does not go through do and is never retried.
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	attempts := c.maxRetries() + 1
 	var lastErr error
@@ -228,6 +275,10 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 			_ = resp.Body.Close()
 			apiErr := httpError(snippet, resp.StatusCode, method, path)
+			var rejectErr error
+			if resp.StatusCode == http.StatusUnauthorized {
+				rejectErr = c.rejectAccessToken(ctx, req)
+			}
 			if attempt < attempts-1 && isRetryableStatus(resp.StatusCode) {
 				if d, ok := retryAfterDelay(resp.Header); ok {
 					wait = d
@@ -235,7 +286,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 				lastErr = apiErr
 				continue
 			}
-			return nil, apiErr
+			return nil, errors.Join(apiErr, rejectErr)
 		}
 		return resp, nil
 	}
@@ -320,7 +371,7 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 		Attributes: attrs,
 	}}
 
-	const path = "/api/v2/assistant"
+	path := "/api/v2/assistant"
 	conversationID := opts.ConversationID
 
 	// Bound the gap between lines (not the total duration) by cancelling a
@@ -330,11 +381,6 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 	defer cancel()
 	var idledOut atomic.Bool
 	idle := c.streamIdleTimeout()
-	timer := time.AfterFunc(idle, func() {
-		idledOut.Store(true)
-		cancel()
-	})
-	defer timer.Stop()
 
 	req, err := c.newRequest(streamCtx, http.MethodPost, path, reqBody)
 	if err != nil {
@@ -347,8 +393,23 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return conversationID, httpError(snippet, resp.StatusCode, http.MethodPost, path)
+		_ = resp.Body.Close()
+		apiErr := httpError(snippet, resp.StatusCode, http.MethodPost, path)
+		var rejectErr error
+		if resp.StatusCode == http.StatusUnauthorized {
+			rejectErr = c.rejectAccessToken(ctx, req)
+		}
+		return conversationID, errors.Join(apiErr, rejectErr)
 	}
+
+	// Start the idle budget after authentication and response headers. A lock
+	// wait or token refresh has its own timeout and must not consume the stream's
+	// first-byte allowance.
+	timer := time.AfterFunc(idle, func() {
+		idledOut.Store(true)
+		cancel()
+	})
+	defer timer.Stop()
 
 	// The stream is newline-delimited JSON (records separated by "\n\n"). A
 	// bounded Scanner caps per-line memory: the HTTP client won't limit the

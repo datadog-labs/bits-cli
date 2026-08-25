@@ -3,11 +3,13 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
@@ -21,10 +23,40 @@ func TestNoticeForError(t *testing.T) {
 		substr    bool
 	}{
 		{
+			name:      "corrupt session is actionable",
+			err:       fmt.Errorf("token: %w", auth.ErrSessionCorrupt),
+			wantLevel: chat.NoticeError,
+			wantText:  "The stored Datadog login is unreadable. Run `bits logout`, then `bits login`.",
+		},
+		{
+			name:      "unlock failure asks for restart",
+			err:       fmt.Errorf("token: %w", auth.ErrSessionUnlock),
+			wantLevel: chat.NoticeError,
+			wantText:  "The Datadog login state could not be confirmed because its process lock could not be released. Restart Bits before continuing.",
+		},
+		{
+			name:      "reauth required is actionable",
+			err:       fmt.Errorf("token: %w", auth.ErrReauthRequired),
+			wantLevel: chat.NoticeError,
+			wantText:  "Your Datadog login expired. Run `bits login` again.",
+		},
+		{
+			name:      "nondurable refresh is actionable",
+			err:       fmt.Errorf("token: %w", auth.ErrSessionNotDurable),
+			wantLevel: chat.NoticeError,
+			wantText:  "The refreshed login could not be secured. Try again; if this continues, run `bits login`.",
+		},
+		{
+			name:      "replaced session asks for restart",
+			err:       fmt.Errorf("token: %w", auth.ErrSessionReplaced),
+			wantLevel: chat.NoticeWarn,
+			wantText:  "The active Datadog login changed. Restart Bits to use it.",
+		},
+		{
 			name:      "api error maps through its status sentinel",
 			err:       &assistant.APIError{StatusCode: 401},
 			wantLevel: chat.NoticeError,
-			wantText:  "Not authenticated. Refresh your Datadog credentials (dd-auth) and try again.",
+			wantText:  "Not authenticated. Run `bits login` again, or refresh your Datadog developer credentials.",
 		},
 		{
 			name:      "not found without an input stays generic",
@@ -159,6 +191,111 @@ func TestNoticeForError(t *testing.T) {
 				}
 			} else if got.Text != tc.wantText {
 				t.Errorf("text = %q, want %q", got.Text, tc.wantText)
+			}
+		})
+	}
+}
+
+func TestNoticeForErrorPrioritizesJoinedAuthFailure(t *testing.T) {
+	cases := []struct {
+		name      string
+		sentinel  error
+		wantLevel chat.NoticeLevel
+		wantText  string
+	}{
+		{
+			name:      "corrupt session",
+			sentinel:  auth.ErrSessionCorrupt,
+			wantLevel: chat.NoticeError,
+			wantText:  "The stored Datadog login is unreadable. Run `bits logout`, then `bits login`.",
+		},
+		{
+			name:      "unlock failure",
+			sentinel:  auth.ErrSessionUnlock,
+			wantLevel: chat.NoticeError,
+			wantText:  "The Datadog login state could not be confirmed because its process lock could not be released. Restart Bits before continuing.",
+		},
+		{
+			name:      "reauth required",
+			sentinel:  auth.ErrReauthRequired,
+			wantLevel: chat.NoticeError,
+			wantText:  "Your Datadog login expired. Run `bits login` again.",
+		},
+		{
+			name:      "nondurable refresh",
+			sentinel:  auth.ErrSessionNotDurable,
+			wantLevel: chat.NoticeError,
+			wantText:  "The refreshed login could not be secured. Try again; if this continues, run `bits login`.",
+		},
+		{
+			name:      "replaced session",
+			sentinel:  auth.ErrSessionReplaced,
+			wantLevel: chat.NoticeWarn,
+			wantText:  "The active Datadog login changed. Restart Bits to use it.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			apiErr := &assistant.APIError{StatusCode: 401}
+			joined := errors.Join(apiErr, fmt.Errorf("reject token: %w", tc.sentinel))
+			got := noticeForError("send failed", joined)
+			if got.Level != tc.wantLevel || got.Text != tc.wantText {
+				t.Fatalf("notice = %+v, want level %v and text %q", got, tc.wantLevel, tc.wantText)
+			}
+			if got.Err != joined || !errors.Is(got.Err, tc.sentinel) || !errors.Is(got.Err, apiErr) {
+				t.Fatalf("Err = %v, want original joined API and auth error", got.Err)
+			}
+		})
+	}
+}
+
+func TestNoticeForErrorPrioritizesAuthOutcomeOverUnlock(t *testing.T) {
+	cases := []struct {
+		name      string
+		outcome   error
+		wantLevel chat.NoticeLevel
+		wantText  string
+	}{
+		{
+			name:      "corrupt session",
+			outcome:   auth.ErrSessionCorrupt,
+			wantLevel: chat.NoticeError,
+			wantText:  "The stored Datadog login is unreadable. Run `bits logout`, then `bits login`.",
+		},
+		{
+			name:      "reauth required",
+			outcome:   auth.ErrReauthRequired,
+			wantLevel: chat.NoticeError,
+			wantText:  "Your Datadog login expired. Run `bits login` again.",
+		},
+		{
+			name:      "nondurable refresh",
+			outcome:   auth.ErrSessionNotDurable,
+			wantLevel: chat.NoticeError,
+			wantText:  "The refreshed login could not be secured. Try again; if this continues, run `bits login`.",
+		},
+		{
+			name:      "replaced session",
+			outcome:   auth.ErrSessionReplaced,
+			wantLevel: chat.NoticeWarn,
+			wantText:  "The active Datadog login changed. Restart Bits to use it.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			joined := errors.Join(
+				&assistant.APIError{StatusCode: 401},
+				fmt.Errorf("operation: %w", tc.outcome),
+				fmt.Errorf("release: %w", auth.ErrSessionUnlock),
+			)
+			got := noticeForError("send failed", joined)
+			if got.Level != tc.wantLevel || got.Text != tc.wantText {
+				t.Fatalf("notice = %+v, want level %v and text %q", got, tc.wantLevel, tc.wantText)
+			}
+			if got.Err != joined || !errors.Is(got.Err, tc.outcome) || !errors.Is(got.Err, auth.ErrSessionUnlock) {
+				t.Fatalf("Err = %v, want original joined outcome and unlock error", got.Err)
 			}
 		})
 	}

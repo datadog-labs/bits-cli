@@ -8,12 +8,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DataDog/bits-cli/internal/auth"
 )
 
-// These tests hit the real Bits assistant API. They are opt-in: set
+// These tests hit the real Bits assistant API. They are opt-in: either set
 // BITS_ASSISTANT_E2E=1 and provide DD_API_KEY / DD_APP_KEY (as populated by
-// `dd-auth --domain dd.datad0g.com`). Without the flag they skip, so `go test`
-// stays hermetic by default.
+// `dd-auth --domain dd.datad0g.com`), or set BITS_OAUTH_E2E=1 after `bits login`.
+// Without either flag they skip, so `go test` stays hermetic by default.
 //
 // The assistant is an LLM, so response *content* is not deterministic. The
 // assertions therefore split into two kinds:
@@ -26,14 +28,34 @@ import (
 
 func requireE2E(t *testing.T) *Client {
 	t.Helper()
+	if os.Getenv("BITS_OAUTH_E2E") != "" {
+		store := auth.KeyringStore{}
+		session, err := store.Load()
+		if err != nil {
+			t.Fatalf("load OAuth session: %v (run bits login first)", err)
+		}
+		source, err := auth.NewSource(session, store, nil)
+		if err != nil {
+			t.Fatalf("OAuth token source: %v", err)
+		}
+		client, err := NewOAuthClient(source.Site(), source)
+		if err != nil {
+			t.Fatalf("NewOAuthClient: %v", err)
+		}
+		return client
+	}
 	if os.Getenv("BITS_ASSISTANT_E2E") == "" {
-		t.Skip("set BITS_ASSISTANT_E2E=1 (with DD_API_KEY/DD_APP_KEY) to run assistant e2e tests")
+		t.Skip("set BITS_OAUTH_E2E=1 after bits login, or BITS_ASSISTANT_E2E=1 with DD_API_KEY/DD_APP_KEY")
 	}
-	c, err := NewClient()
+	client, err := NewAPIKeyClient(
+		os.Getenv("DD_SITE_URL"),
+		os.Getenv("DD_API_KEY"),
+		os.Getenv("DD_APP_KEY"),
+	)
 	if err != nil {
-		t.Fatalf("NewClient: %v (BITS_ASSISTANT_E2E is set but credentials are missing)", err)
+		t.Fatalf("NewAPIKeyClient: %v (BITS_ASSISTANT_E2E is set but credentials are missing)", err)
 	}
-	return c
+	return client
 }
 
 func TestE2E_ConversationLifecycle(t *testing.T) {
