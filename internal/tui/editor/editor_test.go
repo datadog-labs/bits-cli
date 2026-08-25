@@ -63,6 +63,28 @@ func TestFakeCommandsPrefix(t *testing.T) {
 	}
 }
 
+func TestFakeCommandsAliasDiscoverable(t *testing.T) {
+	// The canonical name matches its own prefix.
+	quit := FakeCommands("q")
+	if len(quit) == 0 {
+		t.Fatal("expected /quit for prefix 'q'")
+	}
+	for _, c := range quit {
+		if c.Insert != "/quit" {
+			t.Errorf("canonical insert = %q, want /quit", c.Insert)
+		}
+	}
+
+	// The alias is discoverable by its own prefix and normalizes to canonical on accept.
+	exit := FakeCommands("ex")
+	if len(exit) != 1 {
+		t.Fatalf("expected one candidate for alias prefix 'ex', got %d", len(exit))
+	}
+	if exit[0].Insert != "/quit" {
+		t.Errorf("alias accept should insert canonical /quit, got %q", exit[0].Insert)
+	}
+}
+
 func TestRecomputeOpensAndClosesMenu(t *testing.T) {
 	e := New()
 

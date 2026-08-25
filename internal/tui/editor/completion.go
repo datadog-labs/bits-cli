@@ -65,25 +65,47 @@ func FakeFiles(q string) []Candidate {
 }
 
 // fakeCommands is the placeholder slash-command set. Execution is deferred; this
-// only drives the menu for now.
-var fakeCommands = []struct{ name, desc string }{
-	{"help", "show help"},
-	{"model", "choose a model"},
-	{"new", "start a new conversation"},
-	{"resume", "resume a conversation"},
-	{"clear", "clear the transcript"},
-	{"quit", "exit bits"},
+// only drives the menu for now. Each entry may carry aliases; a query matching
+// any alias surfaces the command under its canonical name, so both spellings
+// are discoverable and aliases normalize to canonical on accept.
+var fakeCommands = []struct {
+	name    string
+	aliases []string
+	desc    string
+}{
+	{"help", nil, "show help"},
+	{"model", nil, "choose a model"},
+	{"new", nil, "start a new conversation"},
+	{"resume", nil, "resume a conversation"},
+	{"clear", nil, "clear the transcript"},
+	{"quit", []string{"exit"}, "exit bits"},
 }
 
-// FakeCommands returns /-command candidates whose name is prefixed by q.
+// FakeCommands returns /-command candidates whose canonical name or any alias
+// is prefixed by q. Accepting a candidate inserts the canonical spelling, so
+// aliases normalize on accept; the label annotates aliases for discoverability.
 func FakeCommands(q string) []Candidate {
 	q = strings.ToLower(q)
 	out := make([]Candidate, 0, len(fakeCommands))
 	for _, c := range fakeCommands {
-		if !strings.HasPrefix(c.name, q) {
+		if !commandMatches(c.name, c.aliases, q) {
 			continue
 		}
-		out = append(out, Candidate{Label: "/" + c.name + " — " + c.desc, Insert: "/" + c.name})
+		label := "/" + c.name + " — " + c.desc
+		out = append(out, Candidate{Label: label, Insert: "/" + c.name})
 	}
 	return out
+}
+
+// commandMatches reports whether q prefixes the canonical name or any alias.
+func commandMatches(name string, aliases []string, q string) bool {
+	if strings.HasPrefix(name, q) {
+		return true
+	}
+	for _, a := range aliases {
+		if strings.HasPrefix(a, q) {
+			return true
+		}
+	}
+	return false
 }

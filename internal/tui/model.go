@@ -77,6 +77,10 @@ func New(engine *agent.Engine) *Model {
 	return m
 }
 
+// ConversationID returns the active conversation id, or "" when none has been
+// established yet. main reads it after the program exits to print a resume hint.
+func (m *Model) ConversationID() string { return m.convID }
+
 // setMode switches the top-level screen. It is the single entry point for mode
 // changes so any layout/refresh side effects stay centralized (the tui analog
 // of a state funnel). Today it only drives a viewport refresh; a future
