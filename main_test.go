@@ -30,6 +30,23 @@ func validOAuthSession() auth.Session {
 	}
 }
 
+func TestHelpReturnsSuccess(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "chat", args: []string{"-h"}},
+		{name: "login", args: []string{"login", "-h"}},
+		{name: "logout", args: []string{"logout", "-h"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := run(test.args); err != nil {
+				t.Fatalf("run(%q) = %v, want successful help", test.args, err)
+			}
+		})
+	}
+}
+
 func TestAuthenticatedClientPrefersStoredOAuthOverCompleteKeys(t *testing.T) {
 	client, err := authenticatedClientWith(
 		stubCredentialStore{session: validOAuthSession()},

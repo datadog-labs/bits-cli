@@ -46,6 +46,9 @@ func runLogin(args []string) error {
 	site := flags.String("site", defaultSite, "Datadog site URL or hostname")
 	clientID := flags.String("client-id", os.Getenv("BITS_OAUTH_CLIENT_ID"), "OAuth client ID override")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -69,6 +72,9 @@ func runLogout(args []string) error {
 	flags := flag.NewFlagSet("logout", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -99,6 +105,9 @@ func runChat(args []string) error {
 	conversationID := flags.String("conversation", "",
 		"resume an existing conversation by id: its history is restored before the prompt")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if flags.NArg() != 0 {
