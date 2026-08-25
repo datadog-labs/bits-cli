@@ -196,6 +196,60 @@ func TestNoticeForError(t *testing.T) {
 	}
 }
 
+func TestNoticeForErrorPrioritizesJoinedAuthFailure(t *testing.T) {
+	cases := []struct {
+		name      string
+		sentinel  error
+		wantLevel chat.NoticeLevel
+		wantText  string
+	}{
+		{
+			name:      "corrupt session",
+			sentinel:  auth.ErrSessionCorrupt,
+			wantLevel: chat.NoticeError,
+			wantText:  "The stored Datadog login is unreadable. Run `bits logout`, then `bits login`.",
+		},
+		{
+			name:      "unlock failure",
+			sentinel:  auth.ErrSessionUnlock,
+			wantLevel: chat.NoticeError,
+			wantText:  "The login was updated but its process lock could not be released. Restart Bits before continuing.",
+		},
+		{
+			name:      "reauth required",
+			sentinel:  auth.ErrReauthRequired,
+			wantLevel: chat.NoticeError,
+			wantText:  "Your Datadog login expired. Run `bits login` again.",
+		},
+		{
+			name:      "nondurable refresh",
+			sentinel:  auth.ErrSessionNotDurable,
+			wantLevel: chat.NoticeError,
+			wantText:  "The refreshed login could not be secured. Try again; if this continues, run `bits login`.",
+		},
+		{
+			name:      "replaced session",
+			sentinel:  auth.ErrSessionReplaced,
+			wantLevel: chat.NoticeWarn,
+			wantText:  "The active Datadog login changed. Restart Bits to use it.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			apiErr := &assistant.APIError{StatusCode: 401}
+			joined := errors.Join(apiErr, fmt.Errorf("reject token: %w", tc.sentinel))
+			got := noticeForError("send failed", joined)
+			if got.Level != tc.wantLevel || got.Text != tc.wantText {
+				t.Fatalf("notice = %+v, want level %v and text %q", got, tc.wantLevel, tc.wantText)
+			}
+			if got.Err != joined || !errors.Is(got.Err, tc.sentinel) || !errors.Is(got.Err, apiErr) {
+				t.Fatalf("Err = %v, want original joined API and auth error", got.Err)
+			}
+		})
+	}
+}
+
 // A nil error yields the empty notice (nothing to show).
 func TestNoticeForErrorNil(t *testing.T) {
 	if n := noticeForError("op", nil); !n.Empty() {

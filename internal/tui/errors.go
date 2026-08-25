@@ -18,6 +18,9 @@ func noticeForError(op string, err error) chat.Notice {
 	if err == nil {
 		return chat.Notice{}
 	}
+	if authNotice, ok := noticeForAuthError(err); ok {
+		return authNotice
+	}
 	apiErr, ok := errors.AsType[*assistant.APIError](err)
 	if !ok {
 		return noticeForNonAPIError(op, err)
@@ -25,20 +28,28 @@ func noticeForError(op string, err error) chat.Notice {
 	return noticeForAPIError(apiErr)
 }
 
+// noticeForAuthError takes precedence when a server response is joined with a
+// credential-state failure, preserving the original joined error for details.
+func noticeForAuthError(err error) (chat.Notice, bool) {
+	switch {
+	case errors.Is(err, auth.ErrSessionCorrupt):
+		return notice(chat.NoticeError, err, "The stored Datadog login is unreadable. Run `bits logout`, then `bits login`."), true
+	case errors.Is(err, auth.ErrSessionUnlock):
+		return notice(chat.NoticeError, err, "The login was updated but its process lock could not be released. Restart Bits before continuing."), true
+	case errors.Is(err, auth.ErrReauthRequired):
+		return notice(chat.NoticeError, err, "Your Datadog login expired. Run `bits login` again."), true
+	case errors.Is(err, auth.ErrSessionNotDurable):
+		return notice(chat.NoticeError, err, "The refreshed login could not be secured. Try again; if this continues, run `bits login`."), true
+	case errors.Is(err, auth.ErrSessionReplaced):
+		return notice(chat.NoticeWarn, err, "The active Datadog login changed. Restart Bits to use it."), true
+	}
+	return chat.Notice{}, false
+}
+
 // noticeForNonAPIError covers errors that never carry an HTTP status.
 func noticeForNonAPIError(op string, err error) chat.Notice {
 	_, isNet := errors.AsType[net.Error](err)
 	switch {
-	case errors.Is(err, auth.ErrSessionCorrupt):
-		return notice(chat.NoticeError, err, "The stored Datadog login is unreadable. Run `bits logout`, then `bits login`.")
-	case errors.Is(err, auth.ErrSessionUnlock):
-		return notice(chat.NoticeError, err, "The login was updated but its process lock could not be released. Restart Bits before continuing.")
-	case errors.Is(err, auth.ErrReauthRequired):
-		return notice(chat.NoticeError, err, "Your Datadog login expired. Run `bits login` again.")
-	case errors.Is(err, auth.ErrSessionNotDurable):
-		return notice(chat.NoticeError, err, "The refreshed login could not be secured. Try again; if this continues, run `bits login`.")
-	case errors.Is(err, auth.ErrSessionReplaced):
-		return notice(chat.NoticeWarn, err, "The active Datadog login changed. Restart Bits to use it.")
 	case errors.Is(err, context.DeadlineExceeded):
 		return notice(chat.NoticeWarn, err, "The assistant took too long to respond. Try again.")
 	case isNet:
