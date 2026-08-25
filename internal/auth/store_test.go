@@ -8,24 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"golang.org/x/oauth2"
 )
-
-func TestSessionFromTokenKeepsFallbackRefreshToken(t *testing.T) {
-	cfg := SiteConfig{Site: "https://api.datad0g.com", ClientID: "client"}
-	token := &oauth2.Token{AccessToken: "new-access", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour)}
-	session := sessionFromToken(cfg, token, "old-refresh")
-	if session.RefreshToken != "old-refresh" {
-		t.Fatalf("RefreshToken = %q, want fallback token", session.RefreshToken)
-	}
-
-	token.RefreshToken = "rotated-refresh"
-	session = sessionFromToken(cfg, token, "old-refresh")
-	if session.RefreshToken != "rotated-refresh" {
-		t.Fatalf("RefreshToken = %q, want rotated token", session.RefreshToken)
-	}
-}
 
 func TestMutationRetriesAcceptCommittedPostconditions(t *testing.T) {
 	session := expiredSession()

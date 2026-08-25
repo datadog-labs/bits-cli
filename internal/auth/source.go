@@ -111,7 +111,7 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 			return sanitizedOAuthError("refresh Datadog OAuth token", err)
 		}
 		before := s.session
-		s.session = sessionFromToken(s.config, refreshed, before.RefreshToken)
+		s.session = sessionFromToken(s.config, refreshed)
 		s.dirty = true
 		s.persistBase = before
 		persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), sessionPersistTimeout)

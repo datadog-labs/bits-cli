@@ -62,23 +62,19 @@ type Session struct {
 	Expiry       time.Time `json:"expiry,omitempty"`
 }
 
-func sessionFromToken(cfg SiteConfig, token *oauth2.Token, fallbackRefreshToken string) Session {
+func sessionFromToken(cfg SiteConfig, token *oauth2.Token) Session {
 	expiry := token.Expiry
 	if expiry.IsZero() {
 		// expires_in is optional in OAuth. A bounded default avoids treating the
 		// token as valid forever or rotating it again on every request.
 		expiry = time.Now().Add(2 * refreshWindow)
 	}
-	refreshToken := token.RefreshToken
-	if refreshToken == "" {
-		refreshToken = fallbackRefreshToken
-	}
 	return Session{
 		Site:         cfg.Site,
 		ClientID:     cfg.ClientID,
 		AccessToken:  token.AccessToken,
 		TokenType:    token.TokenType,
-		RefreshToken: refreshToken,
+		RefreshToken: token.RefreshToken,
 		Expiry:       expiry,
 	}
 }

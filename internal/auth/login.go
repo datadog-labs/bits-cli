@@ -110,16 +110,18 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	if err != nil {
 		return Session{}, sanitizedOAuthError("exchange Datadog OAuth code", err)
 	}
-	session := sessionFromToken(cfg, token, "")
+	session := sessionFromToken(cfg, token)
 	var previous Session
 	var hadPrevious, saveCommitted bool
 	lockCtx, lockCancel := context.WithTimeout(ctx, sessionLockTimeout)
 	defer lockCancel()
 	persistErr := withSessionLock(lockCtx, opts.Store, func() error {
 		stored, loadErr := opts.Store.Load()
-		if loadErr == nil {
+		switch {
+		case loadErr == nil:
 			previous, hadPrevious = stored, true
-		} else if !errors.Is(loadErr, ErrNoSession) && !errors.Is(loadErr, ErrSessionCorrupt) {
+		case errors.Is(loadErr, ErrNoSession), errors.Is(loadErr, ErrSessionCorrupt):
+		default:
 			return loadErr
 		}
 		persistCtx, persistCancel := context.WithTimeout(ctx, sessionPersistTimeout)
