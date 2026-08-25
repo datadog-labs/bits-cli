@@ -35,6 +35,12 @@ type LoginOptions struct {
 	Out        io.Writer
 }
 
+// printf writes a best-effort status message to the configured output. Output
+// is advisory, so write failures are intentionally ignored.
+func (o LoginOptions) printf(format string, args ...any) {
+	_, _ = fmt.Fprintf(o.Out, format, args...)
+}
+
 // Login runs Authorization Code + PKCE through the registered loopback
 // callback and stores the resulting tokens in the OS credential manager.
 func Login(ctx context.Context, opts LoginOptions) (Session, error) {
@@ -79,9 +85,9 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		state,
 		oauth2.S256ChallengeOption(verifier),
 	)
-	_, _ = fmt.Fprintf(opts.Out, "Opening Datadog login in your browser…\nIf it does not open, visit:\n%s\n", authURL)
+	opts.printf("Opening Datadog login in your browser…\nIf it does not open, visit:\n%s\n", authURL)
 	if err := opts.OpenURL(authURL); err != nil {
-		_, _ = fmt.Fprintf(opts.Out, "Could not open a browser automatically: %v\n", err)
+		opts.printf("Could not open a browser automatically: %v\n", err)
 	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, loginTimeout)
@@ -101,7 +107,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	if err != nil {
 		return Session{}, err
 	}
-	_, _ = fmt.Fprintf(opts.Out, "Datadog OAuth callback domain: %s\n", cfg.Domain)
+	opts.printf("Datadog OAuth callback domain: %s\n", cfg.Domain)
 
 	exchangeCtx, exchangeCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer exchangeCancel()
@@ -141,7 +147,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		return nil
 	})
 	if persistErr != nil && saveCommitted && errors.Is(persistErr, ErrSessionUnlock) {
-		_, _ = fmt.Fprintf(opts.Out, "Login saved, but releasing the session lock failed; restart Bits before continuing: %v\n", persistErr)
+		opts.printf("Login saved, but releasing the session lock failed; restart Bits before continuing: %v\n", persistErr)
 		persistErr = nil
 	}
 	if persistErr != nil && errors.Is(persistErr, ErrSessionMutationUnknown) {
@@ -165,7 +171,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		revokeErr := Revoke(cleanupCtx, previous, opts.HTTPClient)
 		cleanupCancel()
 		if revokeErr != nil {
-			_, _ = fmt.Fprintf(opts.Out, "New login saved; previous token revocation failed: %v\n", revokeErr)
+			opts.printf("New login saved; previous token revocation failed: %v\n", revokeErr)
 		}
 	}
 	return session, nil
