@@ -2,10 +2,11 @@ package auth
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
+	"html/template"
 	"io"
 	"net"
 	"net/http"
@@ -18,6 +19,14 @@ import (
 
 	"golang.org/x/oauth2"
 )
+
+// html/template escapes interpolated fields, so the callback page stays
+// XSS-safe as the markup grows.
+//
+//go:embed login_callback.html
+var loginCallbackHTML string
+
+var loginCallbackPage = template.Must(template.New("login-callback").Parse(loginCallbackHTML))
 
 const (
 	loginTimeout          = 5 * time.Minute
@@ -213,7 +222,7 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 		if query.Get("state") != wantState {
 			// Ignore unsolicited localhost probes rather than letting them cancel
 			// the real browser flow. A matching state remains mandatory.
-			http.Error(w, "OAuth state did not match. Return to the terminal and try again.", http.StatusBadRequest)
+			writeLoginError(w, http.StatusBadRequest, "OAuth state did not match. Return to the terminal and try again.")
 			return
 		}
 		if oauthErr := query.Get("error"); oauthErr != "" {
@@ -221,7 +230,7 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 			if code == "" {
 				code = "authorization_error"
 			}
-			http.Error(w, "Datadog login was not completed. Return to the terminal.", http.StatusBadRequest)
+			writeLoginError(w, http.StatusBadRequest, "Datadog login was not completed. Return to the terminal.")
 			select {
 			case results <- callbackResult{err: fmt.Errorf("datadog OAuth authorization failed: %s", code)}:
 			default:
@@ -230,7 +239,7 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 		}
 		code := query.Get("code")
 		if code == "" {
-			http.Error(w, "Missing OAuth authorization code.", http.StatusBadRequest)
+			writeLoginError(w, http.StatusBadRequest, "Missing OAuth authorization code.")
 			select {
 			case results <- callbackResult{err: errors.New("OAuth callback did not include an authorization code")}:
 			default:
@@ -238,7 +247,7 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = fmt.Fprintf(w, "<!doctype html><title>Bits CLI login complete</title><h1>Login complete</h1><p>You can close this tab and return to Bits CLI.</p><small>%s</small>", html.EscapeString(u.Host))
+		_ = renderLoginComplete(w, u.Host)
 		select {
 		case results <- callbackResult{code: code, domain: strings.TrimSpace(query.Get("domain"))}:
 		default:
@@ -408,4 +417,33 @@ func openBrowser(target string) error {
 	}
 	go func() { _ = cmd.Wait() }()
 	return nil
+}
+
+type callbackPage struct {
+	Title   string
+	Heading string
+	Message string
+	Host    string
+	Error   bool
+}
+
+func renderLoginComplete(w io.Writer, host string) error {
+	return loginCallbackPage.Execute(w, callbackPage{
+		Title:   "Bits CLI login complete",
+		Heading: "Login complete",
+		Message: "You can close this tab and return to Bits CLI.",
+		Host:    host,
+	})
+}
+
+// writeLoginError renders an HTML error page with the given status code.
+func writeLoginError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = loginCallbackPage.Execute(w, callbackPage{
+		Title:   "Bits CLI login failed",
+		Heading: "Login failed",
+		Message: message,
+		Error:   true,
+	})
 }

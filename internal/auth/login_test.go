@@ -15,6 +15,50 @@ import (
 	"golang.org/x/oauth2"
 )
 
+func TestRenderLoginCompleteEscapesHost(t *testing.T) {
+	var buf bytes.Buffer
+	if err := renderLoginComplete(&buf, "127.0.0.1:1<script>alert(1)</script>"); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Login complete") {
+		t.Errorf("missing page body: %q", out)
+	}
+	if strings.Contains(out, `class="error"`) {
+		t.Errorf("success page marked as error: %q", out)
+	}
+	if strings.Contains(out, "<script>") {
+		t.Errorf("host was not escaped: %q", out)
+	}
+	if !strings.Contains(out, "&lt;script&gt;") {
+		t.Errorf("expected escaped host: %q", out)
+	}
+}
+
+func TestWriteLoginErrorRendersEscapedHTMLPage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeLoginError(rec, http.StatusBadRequest, "boom <script>alert(1)</script>")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("content-type = %q", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Login failed") {
+		t.Errorf("missing error heading: %q", body)
+	}
+	if !strings.Contains(body, `class="error"`) {
+		t.Errorf("error page missing error class: %q", body)
+	}
+	if strings.Contains(body, "<script>") {
+		t.Errorf("message not escaped: %q", body)
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Errorf("expected escaped message: %q", body)
+	}
+}
+
 func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 	var redirectURI string
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
