@@ -34,8 +34,15 @@ func main() {
 
 	engine := agent.New(backend, assistant.SendOptions{ConversationID: *conversationID})
 	p := tea.NewProgram(tui.New(engine))
-	if _, err := p.Run(); err != nil {
+	model, err := p.Run()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "bits:", err)
 		os.Exit(1)
+	}
+	// On a clean exit with an active conversation, surface how to get back to it.
+	// The conversation id is the server-side handle the Assistant API restores via
+	// --conversation; there is no local session store yet.
+	if m, ok := model.(*tui.Model); ok && m.ConversationID() != "" {
+		fmt.Printf("Resume this conversation with: bits --conversation %s\n", m.ConversationID())
 	}
 }
