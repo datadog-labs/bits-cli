@@ -479,6 +479,79 @@ func TestRevokeUsesRefreshToken(t *testing.T) {
 	}
 }
 
+func TestRevokeRefreshesExpiredAccessTokenBeforeRevoking(t *testing.T) {
+	var refreshed, revoked bool
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.URL.Path {
+		case "/oauth2/v1/token":
+			if r.Form.Get("grant_type") != "refresh_token" || r.Form.Get("refresh_token") != "old-refresh" {
+				t.Errorf("refresh form = %v", r.Form)
+			}
+			refreshed = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"access_token":"fresh-access","refresh_token":"fresh-refresh","token_type":"Bearer","expires_in":3600}`)
+		case "/oauth2/v1/revoke":
+			if got := r.Header.Get("Authorization"); got != "Bearer fresh-access" {
+				t.Errorf("Authorization = %q, want Bearer fresh-access", got)
+			}
+			if r.Form.Get("token") != "fresh-refresh" {
+				t.Errorf("revoke token = %q, want fresh-refresh", r.Form.Get("token"))
+			}
+			revoked = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer issuer.Close()
+	client := issuer.Client()
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+	err := Revoke(context.Background(), Session{
+		Site: DefaultStagingSite, ClientID: "client",
+		AccessToken: "expired-access", RefreshToken: "old-refresh",
+		Expiry: time.Now().Add(-time.Hour),
+	}, client)
+	if err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if !refreshed || !revoked {
+		t.Fatalf("refreshed=%v revoked=%v", refreshed, revoked)
+	}
+}
+
+func TestRevokeTreatsInvalidGrantAsAlreadyRevoked(t *testing.T) {
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth2/v1/token" {
+			t.Errorf("revoke should not be reached; path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"error":"invalid_grant"}`)
+	}))
+	defer issuer.Close()
+	client := issuer.Client()
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+	err := Revoke(context.Background(), Session{
+		Site: DefaultStagingSite, ClientID: "client",
+		AccessToken: "expired-access", RefreshToken: "dead-refresh",
+		Expiry: time.Now().Add(-time.Hour),
+	}, client)
+	if err != nil {
+		t.Fatalf("Revoke should treat invalid_grant as already revoked: %v", err)
+	}
+}
+
 func TestRevokeSanitizesAuthorizationServerError(t *testing.T) {
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

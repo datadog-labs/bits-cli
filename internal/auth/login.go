@@ -292,6 +292,18 @@ func Revoke(ctx context.Context, session Session, httpClient *http.Client) error
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Second}
 	}
+	if session.RefreshToken != "" && !session.token().Valid() {
+		refreshCtx := context.WithValue(ctx, oauth2.HTTPClient, httpClient)
+		refreshed, refreshErr := cfg.OAuth2Config().TokenSource(refreshCtx, session.token()).Token()
+		if refreshErr != nil {
+			// invalid_grant means the grant is already gone server-side
+			if isInvalidGrant(refreshErr) {
+				return nil
+			}
+			return sanitizedOAuthError("refresh Datadog OAuth token for revocation", refreshErr)
+		}
+		session = sessionFromToken(cfg, refreshed)
+	}
 	target := sessionRevocationCredential(session)
 	form := url.Values{
 		"client_id":       {cfg.ClientID},
