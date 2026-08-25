@@ -133,6 +133,34 @@ func testSource(t *testing.T, session Session, store CredentialStore, tokenURL s
 	}
 }
 
+func TestSourceKeepsRefreshTokenWhenResponseOmitsReplacement(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("ParseForm: %v", err)
+		}
+		if r.Form.Get("refresh_token") != "old-refresh" {
+			t.Errorf("refresh_token = %q", r.Form.Get("refresh_token"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"access_token":"new-access","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer server.Close()
+
+	initial := expiredSession()
+	store := newMemoryStore(initial)
+	source := testSource(t, initial, store, server.URL, server.Client())
+
+	token, err := source.AccessToken(context.Background())
+	if err != nil || token != "new-access" {
+		t.Fatalf("AccessToken = %q, %v", token, err)
+	}
+	if requests.Load() != 1 || store.session.RefreshToken != initial.RefreshToken {
+		t.Fatalf("requests = %d, stored refresh token = %q", requests.Load(), store.session.RefreshToken)
+	}
+}
+
 func TestIndependentSourcesRefreshOnceAndAdoptDurableRotation(t *testing.T) {
 	var requests atomic.Int32
 	server := refreshServer(t, &requests)
