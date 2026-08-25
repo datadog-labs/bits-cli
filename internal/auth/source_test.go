@@ -121,6 +121,7 @@ func refreshServer(t *testing.T, requests *atomic.Int32) *httptest.Server {
 func testSource(t *testing.T, session Session, store CredentialStore, tokenURL string, client *http.Client) *Source {
 	t.Helper()
 	return &Source{
+		gate: make(chan struct{}, 1),
 		config: SiteConfig{
 			Site:        DefaultStagingSite,
 			ClientID:    "client",

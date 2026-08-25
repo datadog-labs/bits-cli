@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -20,7 +19,6 @@ const (
 // Every durable transition also takes the store's cross-process lock so two
 // Bits processes cannot consume or overwrite the same rotating token lineage.
 type Source struct {
-	gateOnce     sync.Once
 	gate         chan struct{}
 	config       SiteConfig
 	store        CredentialStore
@@ -46,7 +44,13 @@ func NewSource(session Session, store CredentialStore, httpClient *http.Client) 
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: refreshTimeout}
 	}
-	return &Source{config: cfg, store: store, httpClient: httpClient, session: session}, nil
+	return &Source{
+		gate:       make(chan struct{}, 1),
+		config:     cfg,
+		store:      store,
+		httpClient: httpClient,
+		session:    session,
+	}, nil
 }
 
 // Site is the Assistant base URL associated with this login.
@@ -196,7 +200,6 @@ func (s *Source) invalidateLocked(ctx context.Context, reason error) error {
 }
 
 func (s *Source) acquire(ctx context.Context) error {
-	s.gateOnce.Do(func() { s.gate = make(chan struct{}, 1) })
 	select {
 	case s.gate <- struct{}{}:
 		return nil
