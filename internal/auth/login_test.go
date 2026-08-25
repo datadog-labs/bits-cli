@@ -282,6 +282,57 @@ func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
 	}
 }
 
+func TestReplacementLoginDoesNotRevokeSharedRefreshToken(t *testing.T) {
+	previous := Session{
+		Site: "https://api.datad0g.com", ClientID: "client", AccessToken: "old-access",
+		RefreshToken: "shared-refresh", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour),
+	}
+	store := newMemoryStore(previous)
+	var revokeCalls int
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth2/v1/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"shared-refresh","token_type":"Bearer","expires_in":3600}`)
+		case "/oauth2/v1/revoke":
+			revokeCalls++
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer issuer.Close()
+	client := issuer.Client()
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+
+	session, err := login(context.Background(), SiteConfig{
+		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
+		TokenURL: issuer.URL + "/oauth2/v1/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
+	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: callbackOpenURL(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revokeCalls != 0 || session.AccessToken != "new-access" || store.session.RefreshToken != "shared-refresh" {
+		t.Fatalf("revoke calls = %d, session = %#v, stored = %#v", revokeCalls, session, store.session)
+	}
+}
+
+func TestSessionRevocationCredentialPrefersRefreshToken(t *testing.T) {
+	withRefresh := sessionRevocationCredential(Session{AccessToken: "access", RefreshToken: "refresh"})
+	if withRefresh != (revocationCredential{token: "refresh", hint: "refresh_token"}) {
+		t.Fatalf("with refresh token = %#v", withRefresh)
+	}
+	withoutRefresh := sessionRevocationCredential(Session{AccessToken: "access"})
+	if withoutRefresh != (revocationCredential{token: "access", hint: "access_token"}) {
+		t.Fatalf("without refresh token = %#v", withoutRefresh)
+	}
+}
+
 func callbackOpenURL(t *testing.T) func(string) error {
 	t.Helper()
 	return func(raw string) error {

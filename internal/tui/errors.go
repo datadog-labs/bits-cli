@@ -34,14 +34,14 @@ func noticeForAuthError(err error) (chat.Notice, bool) {
 	switch {
 	case errors.Is(err, auth.ErrSessionCorrupt):
 		return notice(chat.NoticeError, err, "The stored Datadog login is unreadable. Run `bits logout`, then `bits login`."), true
-	case errors.Is(err, auth.ErrSessionUnlock):
-		return notice(chat.NoticeError, err, "The login was updated but its process lock could not be released. Restart Bits before continuing."), true
 	case errors.Is(err, auth.ErrReauthRequired):
 		return notice(chat.NoticeError, err, "Your Datadog login expired. Run `bits login` again."), true
 	case errors.Is(err, auth.ErrSessionNotDurable):
 		return notice(chat.NoticeError, err, "The refreshed login could not be secured. Try again; if this continues, run `bits login`."), true
 	case errors.Is(err, auth.ErrSessionReplaced):
 		return notice(chat.NoticeWarn, err, "The active Datadog login changed. Restart Bits to use it."), true
+	case errors.Is(err, auth.ErrSessionUnlock):
+		return notice(chat.NoticeError, err, "The Datadog login state could not be confirmed because its process lock could not be released. Restart Bits before continuing."), true
 	}
 	return chat.Notice{}, false
 }

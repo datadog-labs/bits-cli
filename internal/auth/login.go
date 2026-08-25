@@ -160,7 +160,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 
 	// Replacement login is commit-then-cleanup: the new grant is durable before
 	// the old one is revoked, so a revocation outage cannot destroy the login.
-	if hadPrevious && !sameSession(previous, session) {
+	if hadPrevious && sessionRevocationCredential(previous) != sessionRevocationCredential(session) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		revokeErr := Revoke(cleanupCtx, previous, opts.HTTPClient)
 		cleanupCancel()
@@ -257,6 +257,18 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 	return &callbackListener{server: server, redirectURI: actualRedirectURI}, results, nil
 }
 
+type revocationCredential struct {
+	token string
+	hint  string
+}
+
+func sessionRevocationCredential(session Session) revocationCredential {
+	if session.RefreshToken != "" {
+		return revocationCredential{token: session.RefreshToken, hint: "refresh_token"}
+	}
+	return revocationCredential{token: session.AccessToken, hint: "access_token"}
+}
+
 // Revoke invalidates the refresh token when available, otherwise the access
 // token. Callers should delete the local session even if this best-effort call
 // fails.
@@ -268,16 +280,11 @@ func Revoke(ctx context.Context, session Session, httpClient *http.Client) error
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Second}
 	}
-	token := session.RefreshToken
-	hint := "refresh_token"
-	if token == "" {
-		token = session.AccessToken
-		hint = "access_token"
-	}
+	target := sessionRevocationCredential(session)
 	form := url.Values{
 		"client_id":       {cfg.ClientID},
-		"token":           {token},
-		"token_type_hint": {hint},
+		"token":           {target.token},
+		"token_type_hint": {target.hint},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.RevokeURL, strings.NewReader(form.Encode()))
 	if err != nil {
