@@ -170,6 +170,11 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	}
 	m.editor.Reset()
 
+	// Slash commands are a native control plane: they never reach the model.
+	if name, ok := parseCommand(text); ok {
+		return m.dispatchCommand(name)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelTurn = cancel
 	m.turnEvents = m.engine.StartTurn(ctx, text)
