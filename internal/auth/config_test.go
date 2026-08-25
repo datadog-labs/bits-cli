@@ -157,6 +157,7 @@ func TestNormalizeSiteRejectsUnsafeInput(t *testing.T) {
 	for _, raw := range []string{
 		"http://dd.datad0g.com",
 		"https://user@example.com",
+		"https://dd.datad0g.com:8443",
 		"https://dd.datad0g.com/path",
 		"https://dd.datad0g.com?x=1",
 		"https://evil.us3.example.com",
@@ -167,5 +168,18 @@ func TestNormalizeSiteRejectsUnsafeInput(t *testing.T) {
 				t.Fatalf("normalizeSite(%q) succeeded", raw)
 			}
 		})
+	}
+}
+
+func TestNormalizeSiteLowercasesHost(t *testing.T) {
+	site, domain, err := normalizeSite("https://DD.DataD0g.com")
+	if err != nil {
+		t.Fatalf("normalizeSite: %v", err)
+	}
+	if site != "https://dd.datad0g.com" {
+		t.Errorf("site = %q", site)
+	}
+	if domain != "dd.datad0g.com" {
+		t.Errorf("domain = %q", domain)
 	}
 }

@@ -140,14 +140,14 @@ func normalizeSite(raw string) (site, domain string, err error) {
 	if u.Scheme != "https" || u.Hostname() == "" {
 		return "", "", fmt.Errorf("datadog site must be an https URL or hostname")
 	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return "", "", fmt.Errorf("datadog site must not include credentials, a path, query, or fragment")
+	if u.User != nil || u.Port() != "" || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return "", "", fmt.Errorf("datadog site must not include credentials, a port, a path, query, or fragment")
 	}
 	domain = strings.ToLower(u.Hostname())
 	if !isDatadogDomain(domain) {
 		return "", "", fmt.Errorf("datadog site must use a Datadog-owned hostname")
 	}
-	return "https://" + u.Host, domain, nil
+	return "https://" + domain, domain, nil
 }
 
 func isDatadogDomain(domain string) bool {
