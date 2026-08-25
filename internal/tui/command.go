@@ -8,6 +8,51 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
+// activeTurnPolicy declares how a command behaves while a turn or history
+// restore is active. Keeping this policy beside command metadata lets submit
+// route commands before applying the ordinary-message busy guard.
+type activeTurnPolicy uint8
+
+const (
+	commandAllowedDuringTurn activeTurnPolicy = iota + 1
+	commandRejectedDuringTurn
+	commandCancelsTurn
+)
+
+type commandID uint8
+
+const commandQuit commandID = iota + 1
+
+type commandDefinition struct {
+	id               commandID
+	name             string
+	aliases          []string
+	activeTurnPolicy activeTurnPolicy
+}
+
+var commandDefinitions = []commandDefinition{
+	{
+		id:               commandQuit,
+		name:             "quit",
+		aliases:          []string{"exit"},
+		activeTurnPolicy: commandCancelsTurn,
+	},
+}
+
+func lookupCommand(name string) (commandDefinition, bool) {
+	for _, definition := range commandDefinitions {
+		if name == definition.name {
+			return definition, true
+		}
+		for _, alias := range definition.aliases {
+			if name == alias {
+				return definition, true
+			}
+		}
+	}
+	return commandDefinition{}, false
+}
+
 // parseCommand recognizes a submitted slash command. It returns the command
 // name (lowercased, no leading "/") and true when the input is a single leading
 // "/token"; anything after whitespace is treated as arguments and ignored. A
@@ -34,13 +79,30 @@ func parseCommand(input string) (string, bool) {
 // transient notice rather than reaching the model, so the control plane never
 // leaks literal slash text into an agent turn.
 func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
-	switch name {
-	case "quit":
-		if m.cancelTurn != nil {
-			m.cancelTurn()
+	definition, ok := lookupCommand(name)
+	if !ok {
+		return m, m.showNotice(notice(chat.NoticeError, nil, "Unknown command: /%s", name), 0)
+	}
+
+	if m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading {
+		switch definition.activeTurnPolicy {
+		case commandRejectedDuringTurn:
+			return m, m.showNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active turn: /%s", name), 0)
+		case commandCancelsTurn:
+			if m.cancelTurn != nil {
+				m.cancelTurn()
+			}
+		case commandAllowedDuringTurn:
+			// Continue to the handler without disturbing the active turn.
+		default:
+			panic("invalid active-turn command policy")
 		}
+	}
+
+	switch definition.id {
+	case commandQuit:
 		return m, tea.Quit
 	default:
-		return m, m.showNotice(notice(chat.NoticeError, nil, "Unknown command: /%s", name), 0)
+		panic("unhandled registered command")
 	}
 }

@@ -160,20 +160,26 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// submit starts a turn for the current input, unless it is empty, a turn is
-// already running, or history is still loading. The user block is added by the
-// engine (it owns the transcript), so it arrives as the turn's first event.
+// submit routes slash commands through their active-turn policy, or starts a
+// turn for ordinary input unless a turn is already running or history is still
+// loading. The user block is added by the engine (it owns the transcript), so
+// it arrives as the turn's first event.
 func (m *Model) submit() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.editor.Value())
-	if text == "" || m.turnEvents != nil || m.chatPhase == chat.PhaseLoading {
+	if text == "" {
 		return m, nil
 	}
-	m.editor.Reset()
 
 	// Slash commands are a native control plane: they never reach the model.
 	if name, ok := parseCommand(text); ok {
+		m.editor.Reset()
 		return m.dispatchCommand(name)
 	}
+
+	if m.turnEvents != nil || m.chatPhase == chat.PhaseLoading {
+		return m, nil
+	}
+	m.editor.Reset()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelTurn = cancel
