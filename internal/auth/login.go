@@ -303,6 +303,7 @@ func Revoke(ctx context.Context, session Session, httpClient *http.Client) error
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("revoke Datadog OAuth token: %w", err)

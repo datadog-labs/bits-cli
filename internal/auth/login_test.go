@@ -452,6 +452,9 @@ func TestRevokeUsesRefreshToken(t *testing.T) {
 		if r.Form.Get("client_id") != "client" || r.Form.Get("token") != "refresh" || r.Form.Get("token_type_hint") != "refresh_token" {
 			t.Errorf("revoke form = %v", r.Form)
 		}
+		if got := r.Header.Get("Authorization"); got != "Bearer access" {
+			t.Errorf("Authorization = %q, want Bearer access", got)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer issuer.Close()
