@@ -19,6 +19,11 @@ const (
 	DefaultRedirectURI = "http://127.0.0.1:0/oauth/callback"
 )
 
+// datadogDomainSuffixes is the trust boundary for OAuth login and callback
+// hosts. It lists domain families, not regions, so new regional subdomains work
+// automatically. Production families are documented at
+// https://docs.datadoghq.com/getting_started/site/; datad0g.com is the internal
+// staging family. Adding a new family must be an explicit reviewed change.
 var datadogDomainSuffixes = []string{
 	"datad0g.com",
 	"datadoghq.com",
