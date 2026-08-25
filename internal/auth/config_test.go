@@ -22,14 +22,19 @@ func TestConfigForSite_Staging(t *testing.T) {
 	if cfg.AuthorizeURL != "https://dd.datad0g.com/oauth2/v1/authorize" {
 		t.Errorf("AuthorizeURL = %q", cfg.AuthorizeURL)
 	}
+	if cfg.RedirectURI != "http://127.0.0.1:0/oauth/callback" {
+		t.Errorf("RedirectURI = %q", cfg.RedirectURI)
+	}
+
+	cfg, err = cfg.WithCallbackDomain("datad0g.com")
+	if err != nil {
+		t.Fatalf("WithCallbackDomain: %v", err)
+	}
 	if cfg.TokenURL != "https://api.datad0g.com/oauth2/v1/token" {
 		t.Errorf("TokenURL = %q", cfg.TokenURL)
 	}
 	if cfg.AssistantBase != "https://api.datad0g.com" {
 		t.Errorf("AssistantBase = %q", cfg.AssistantBase)
-	}
-	if cfg.RedirectURI != "http://127.0.0.1:0/oauth/callback" {
-		t.Errorf("RedirectURI = %q", cfg.RedirectURI)
 	}
 }
 
@@ -42,8 +47,8 @@ func TestConfigForSite_ProductionRequiresClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigForSite with override: %v", err)
 	}
-	if cfg.AuthorizeURL != "https://us3.datadoghq.com/oauth2/v1/authorize" || cfg.TokenURL != "https://api.us3.datadoghq.com/oauth2/v1/token" {
-		t.Errorf("unexpected regional endpoints: %#v", cfg)
+	if cfg.AuthorizeURL != "https://us3.datadoghq.com/oauth2/v1/authorize" {
+		t.Errorf("AuthorizeURL = %q", cfg.AuthorizeURL)
 	}
 }
 
@@ -69,90 +74,74 @@ func TestAuthorizationURL_UsesPKCEWithoutExplicitScope(t *testing.T) {
 	}
 }
 
-func TestConfigForSite_RegionalCustomSubdomain(t *testing.T) {
+func TestConfigForSite_PreservesCustomerLoginDomain(t *testing.T) {
 	cfg, err := ConfigForSite("https://acme.us3.datadoghq.com", "production-id")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AuthorizeURL != "https://us3.datadoghq.com/oauth2/v1/authorize" {
+	if cfg.AuthorizeURL != "https://acme.us3.datadoghq.com/oauth2/v1/authorize" {
 		t.Errorf("AuthorizeURL = %q", cfg.AuthorizeURL)
 	}
-}
 
-func TestRegionRegistryIsCoherent(t *testing.T) {
-	seen := make(map[string]bool, len(datadogRegions))
-	for _, want := range datadogRegions {
-		if seen[want.canonicalDomain] {
-			t.Fatalf("duplicate region %q", want.canonicalDomain)
-		}
-		seen[want.canonicalDomain] = true
-		if want.authorizeDomain == "" || want.apiDomain == "" {
-			t.Errorf("region %q has incomplete endpoints: %#v", want.canonicalDomain, want)
-		}
-
-		got, ok := regionForSite(want.canonicalDomain)
-		if !ok || got.canonicalDomain != want.canonicalDomain {
-			t.Errorf("regionForSite(%q) = %#v, %v", want.canonicalDomain, got, ok)
-		}
-		if want.matchSubdomains {
-			got, ok = regionForSite("customer." + want.canonicalDomain)
-			if !ok || got.canonicalDomain != want.canonicalDomain {
-				t.Errorf("regional customer subdomain for %q resolved to %#v, %v", want.canonicalDomain, got, ok)
-			}
-		}
-
-		if want.callbackAllowed && want.apiDomain != "api."+want.canonicalDomain {
-			t.Errorf("callback region %q has API domain %q", want.canonicalDomain, want.apiDomain)
-		}
-		got, ok = regionForCallback(want.canonicalDomain)
-		if ok != want.callbackAllowed {
-			t.Errorf("regionForCallback(%q) ok = %v, want %v", want.canonicalDomain, ok, want.callbackAllowed)
-		}
-		if ok && got.canonicalDomain != want.canonicalDomain {
-			t.Errorf("regionForCallback(%q) = %#v", want.canonicalDomain, got)
-		}
+	cfg, err = cfg.WithCallbackDomain("us3.datadoghq.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AssistantBase != "https://api.us3.datadoghq.com" {
+		t.Errorf("AssistantBase = %q", cfg.AssistantBase)
 	}
 }
 
-func TestWithCallbackDomain_UsesCanonicalRegionalAPIHost(t *testing.T) {
-	for _, region := range datadogRegions {
-		if !region.callbackAllowed {
-			continue
-		}
-		domain := region.canonicalDomain
-		t.Run(domain, func(t *testing.T) {
-			initial, err := ConfigForSite(DefaultStagingSite, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			cfg, err := initial.WithCallbackDomain("  " + strings.ToUpper(domain) + "  ")
-			if err != nil {
-				t.Fatal(err)
-			}
-			apiBase := "https://" + region.apiDomain
-			if cfg.Site != apiBase || cfg.AssistantBase != apiBase {
-				t.Errorf("routing = Site %q, AssistantBase %q; want %q", cfg.Site, cfg.AssistantBase, apiBase)
-			}
-			if cfg.TokenURL != apiBase+"/oauth2/v1/token" || cfg.RevokeURL != apiBase+"/oauth2/v1/revoke" {
-				t.Errorf("OAuth endpoints = token %q, revoke %q", cfg.TokenURL, cfg.RevokeURL)
-			}
-			if cfg.AuthorizeURL != initial.AuthorizeURL {
-				t.Errorf("AuthorizeURL changed from %q to %q", initial.AuthorizeURL, cfg.AuthorizeURL)
-			}
-		})
+func TestConfigForSite_AcceptsGovDomain(t *testing.T) {
+	cfg, err := ConfigForSite("https://customer.ddog-gov.com", "production-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthorizeURL != "https://customer.ddog-gov.com/oauth2/v1/authorize" {
+		t.Errorf("AuthorizeURL = %q", cfg.AuthorizeURL)
+	}
+
+	cfg, err = cfg.WithCallbackDomain("ddog-gov.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AssistantBase != "https://api.ddog-gov.com" {
+		t.Errorf("AssistantBase = %q", cfg.AssistantBase)
 	}
 }
 
-func TestWithCallbackDomain_RejectsMissingCustomAndArbitraryHosts(t *testing.T) {
+func TestWithCallbackDomain_UnknownRegionWorksByDefault(t *testing.T) {
+	initial, err := ConfigForSite("https://customer.xy9.datadoghq.com", "production-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := initial.WithCallbackDomain("  XY9.DATADOGHQ.COM  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiBase := "https://api.xy9.datadoghq.com"
+	if cfg.Site != apiBase || cfg.AssistantBase != apiBase {
+		t.Errorf("routing = Site %q, AssistantBase %q; want %q", cfg.Site, cfg.AssistantBase, apiBase)
+	}
+	if cfg.TokenURL != apiBase+"/oauth2/v1/token" || cfg.RevokeURL != apiBase+"/oauth2/v1/revoke" {
+		t.Errorf("OAuth endpoints = token %q, revoke %q", cfg.TokenURL, cfg.RevokeURL)
+	}
+	if cfg.AuthorizeURL != initial.AuthorizeURL {
+		t.Errorf("AuthorizeURL changed from %q to %q", initial.AuthorizeURL, cfg.AuthorizeURL)
+	}
+}
+
+func TestWithCallbackDomain_RejectsMissingAndNonDatadogHosts(t *testing.T) {
 	cfg, err := ConfigForSite(DefaultStagingSite, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, domain := range []string{
 		"",
-		"acme.datadoghq.com",
 		"api.datadoghq.com",
 		"https://datadoghq.com",
+		"datadoghq.com:443",
+		"datadoghq.com/path",
 		"datadoghq.com.evil.example",
 		"evil.example",
 	} {
@@ -171,6 +160,7 @@ func TestNormalizeSiteRejectsUnsafeInput(t *testing.T) {
 		"https://dd.datad0g.com/path",
 		"https://dd.datad0g.com?x=1",
 		"https://evil.us3.example.com",
+		"https://datadoghq.com.evil.example",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			if _, _, err := normalizeSite(raw); err == nil {

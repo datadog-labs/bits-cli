@@ -19,76 +19,11 @@ const (
 	DefaultRedirectURI = "http://127.0.0.1:0/oauth/callback"
 )
 
-type regionConfig struct {
-	canonicalDomain string
-	authorizeDomain string
-	apiDomain       string
-	defaultClientID string
-	matchSubdomains bool
-	callbackAllowed bool
-}
-
-// datadogRegions is the single registry for initial-site routing and callback
-// validation. More-specific production domains must precede datadoghq.com so
-// customer subdomains resolve to their regional endpoints before the US1
-// fallback. ddstaging is an initial-site alias; OAuth returns datadoghq.com as
-// its canonical callback domain.
-var datadogRegions = []regionConfig{
-	{
-		canonicalDomain: "datad0g.com",
-		authorizeDomain: "dd.datad0g.com",
-		apiDomain:       "api.datad0g.com",
-		defaultClientID: StagingClientID,
-		matchSubdomains: true,
-		callbackAllowed: true,
-	},
-	{
-		canonicalDomain: "ddstaging.datadoghq.com",
-		authorizeDomain: "ddstaging.datadoghq.com",
-		apiDomain:       "api.datadoghq.com",
-	},
-	{
-		canonicalDomain: "datadoghq.eu",
-		authorizeDomain: "app.datadoghq.eu",
-		apiDomain:       "api.datadoghq.eu",
-		matchSubdomains: true,
-		callbackAllowed: true,
-	},
-	{
-		canonicalDomain: "us3.datadoghq.com",
-		authorizeDomain: "us3.datadoghq.com",
-		apiDomain:       "api.us3.datadoghq.com",
-		matchSubdomains: true,
-		callbackAllowed: true,
-	},
-	{
-		canonicalDomain: "us5.datadoghq.com",
-		authorizeDomain: "us5.datadoghq.com",
-		apiDomain:       "api.us5.datadoghq.com",
-		matchSubdomains: true,
-		callbackAllowed: true,
-	},
-	{
-		canonicalDomain: "ap1.datadoghq.com",
-		authorizeDomain: "ap1.datadoghq.com",
-		apiDomain:       "api.ap1.datadoghq.com",
-		matchSubdomains: true,
-		callbackAllowed: true,
-	},
-	{
-		canonicalDomain: "ap2.datadoghq.com",
-		authorizeDomain: "ap2.datadoghq.com",
-		apiDomain:       "api.ap2.datadoghq.com",
-		matchSubdomains: true,
-		callbackAllowed: true,
-	},
-	{
-		canonicalDomain: "datadoghq.com",
-		authorizeDomain: "app.datadoghq.com",
-		apiDomain:       "api.datadoghq.com",
-		matchSubdomains: true,
-		callbackAllowed: true,
-	},
+var datadogDomainSuffixes = []string{
+	"datad0g.com",
+	"datadoghq.com",
+	"datadoghq.eu",
+	"ddog-gov.com",
 }
 
 // SiteConfig contains the site-specific OAuth and Assistant endpoints.
@@ -103,51 +38,53 @@ type SiteConfig struct {
 	AssistantBase string
 }
 
-// ConfigForSite resolves Datadog's regional OAuth endpoints. clientIDOverride
-// is required outside datad0g.com until the dedicated production client exists.
+// ConfigForSite preserves the supplied Datadog site as the authorization host,
+// including customer subdomains. clientIDOverride is required outside
+// datad0g.com until the dedicated production client exists.
 func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
 	site, domain, err := normalizeSite(rawSite)
 	if err != nil {
 		return SiteConfig{}, err
 	}
 
-	region, ok := regionForSite(domain)
-	if !ok {
-		return SiteConfig{}, fmt.Errorf("datadog site %q does not map to a supported region", domain)
-	}
-	clientID := region.defaultClientID
-	if clientIDOverride != "" {
-		clientID = clientIDOverride
+	clientID := clientIDOverride
+	if clientID == "" && hasDomainSuffix(domain, "datad0g.com") {
+		clientID = StagingClientID
 	}
 	if clientID == "" {
 		return SiteConfig{}, fmt.Errorf("no Bits CLI OAuth client is configured for %s; set BITS_OAUTH_CLIENT_ID", domain)
 	}
 
+	// Login replaces these provisional API routes with the canonical domain
+	// returned by AAA before exchanging the authorization code. Sessions already
+	// store that api-prefixed site, so this also reconstructs their routes.
+	apiDomain := domain
+	if !strings.HasPrefix(apiDomain, "api.") {
+		apiDomain = "api." + apiDomain
+	}
+	apiBase := "https://" + apiDomain
 	return SiteConfig{
 		Site:          site,
 		Domain:        domain,
 		ClientID:      clientID,
-		AuthorizeURL:  "https://" + region.authorizeDomain + "/oauth2/v1/authorize",
-		TokenURL:      "https://" + region.apiDomain + "/oauth2/v1/token",
-		RevokeURL:     "https://" + region.apiDomain + "/oauth2/v1/revoke",
+		AuthorizeURL:  site + "/oauth2/v1/authorize",
+		TokenURL:      apiBase + "/oauth2/v1/token",
+		RevokeURL:     apiBase + "/oauth2/v1/revoke",
 		RedirectURI:   DefaultRedirectURI,
-		AssistantBase: "https://" + region.apiDomain,
+		AssistantBase: apiBase,
 	}, nil
 }
 
-// WithCallbackDomain applies the canonical domain returned by Datadog on the
-// state-validated OAuth callback. Datadog intentionally removes customer
-// subdomains from this value so token and API requests target the correct
-// regional API host. Accept only documented base domains rather than treating
-// callback input as an arbitrary hostname.
+// WithCallbackDomain applies the canonical regional base returned by Datadog
+// on the state-validated OAuth callback. AAA removes customer subdomains from
+// this value, so api.<domain> routes token and Assistant requests correctly.
 func (c SiteConfig) WithCallbackDomain(raw string) (SiteConfig, error) {
-	domain := strings.ToLower(strings.TrimSpace(raw))
-	region, ok := regionForCallback(domain)
-	if !ok {
-		return SiteConfig{}, fmt.Errorf("OAuth callback returned an unsupported Datadog domain %q", raw)
+	domain, err := normalizeCallbackDomain(raw)
+	if err != nil {
+		return SiteConfig{}, err
 	}
 
-	apiBase := "https://" + region.apiDomain
+	apiBase := "https://api." + domain
 	c.Site = apiBase
 	c.Domain = domain
 	c.TokenURL = apiBase + "/oauth2/v1/token"
@@ -171,23 +108,16 @@ func (c SiteConfig) OAuth2Config() *oauth2.Config {
 	}
 }
 
-func regionForSite(domain string) (regionConfig, bool) {
-	for _, region := range datadogRegions {
-		if domain == region.canonicalDomain ||
-			(region.matchSubdomains && hasDomainSuffix(domain, region.canonicalDomain)) {
-			return region, true
-		}
+func normalizeCallbackDomain(raw string) (string, error) {
+	domain := strings.ToLower(strings.TrimSpace(raw))
+	u, err := url.Parse("https://" + domain)
+	if err != nil || domain == "" || u.Host != domain || u.Hostname() != domain || u.Port() != "" || !isDatadogDomain(domain) {
+		return "", fmt.Errorf("OAuth callback returned an unsupported Datadog domain %q", raw)
 	}
-	return regionConfig{}, false
-}
-
-func regionForCallback(domain string) (regionConfig, bool) {
-	for _, region := range datadogRegions {
-		if region.callbackAllowed && domain == region.canonicalDomain {
-			return region, true
-		}
+	if strings.HasPrefix(domain, "api.") {
+		return "", fmt.Errorf("OAuth callback returned an unsupported Datadog domain %q", raw)
 	}
-	return regionConfig{}, false
+	return domain, nil
 }
 
 func normalizeSite(raw string) (site, domain string, err error) {
@@ -209,12 +139,19 @@ func normalizeSite(raw string) (site, domain string, err error) {
 		return "", "", fmt.Errorf("datadog site must not include credentials, a path, query, or fragment")
 	}
 	domain = strings.ToLower(u.Hostname())
-	if !hasDomainSuffix(domain, "datad0g.com") &&
-		!hasDomainSuffix(domain, "datadoghq.com") &&
-		!hasDomainSuffix(domain, "datadoghq.eu") {
-		return "", "", fmt.Errorf("datadog site must use a datad0g.com, datadoghq.com, or datadoghq.eu hostname")
+	if !isDatadogDomain(domain) {
+		return "", "", fmt.Errorf("datadog site must use a Datadog-owned hostname")
 	}
 	return "https://" + u.Host, domain, nil
+}
+
+func isDatadogDomain(domain string) bool {
+	for _, suffix := range datadogDomainSuffixes {
+		if hasDomainSuffix(domain, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasDomainSuffix(host, suffix string) bool {
