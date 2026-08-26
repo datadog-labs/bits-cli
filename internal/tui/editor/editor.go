@@ -41,7 +41,11 @@ type Editor struct {
 	// inputStyle is the shared input-block contract. width is the block's total
 	// width; the textarea is sized to fit inside the block's horizontal frame.
 	inputStyle styles.Input
+	view       string
+	viewHeight int
+	viewCached bool
 	width      int
+	widthSet   bool
 }
 
 // menu is the completion popup state rendered below the textarea.
@@ -113,22 +117,35 @@ func (e *Editor) SetInputStyles(inputStyle styles.Input) {
 func (e *Editor) SetStyles(menuStyles styles.Editor) { e.styles = menuStyles }
 
 // Focus focuses the textarea and returns its cursor-blink command.
-func (e *Editor) Focus() tea.Cmd { return e.ta.Focus() }
+func (e *Editor) Focus() tea.Cmd {
+	e.viewCached = false
+	return e.ta.Focus()
+}
 
 // SetWidth sets the block's total width in cells. The textarea is sized to fit
 // inside the block's horizontal frame so the block stays exactly w wide.
 func (e *Editor) SetWidth(w int) {
+	if e.widthSet && e.width == w {
+		return
+	}
 	e.width = w
+	e.widthSet = true
 	e.resizeTextarea()
 }
 
 // resizeTextarea sizes the textarea to the width left inside the block frame.
 func (e *Editor) resizeTextarea() {
 	e.ta.SetWidth(max(1, e.width-e.inputStyle.Block.GetHorizontalFrameSize()))
+	e.viewCached = false
 }
 
 // SetPlaceholder sets the hint shown while the input is empty.
-func (e *Editor) SetPlaceholder(s string) { e.ta.Placeholder = s }
+func (e *Editor) SetPlaceholder(s string) {
+	if e.ta.Placeholder != s {
+		e.ta.Placeholder = s
+		e.viewCached = false
+	}
+}
 
 // Value returns the current input text.
 func (e *Editor) Value() string { return e.ta.Value() }
@@ -137,6 +154,7 @@ func (e *Editor) Value() string { return e.ta.Value() }
 func (e *Editor) Reset() {
 	e.ta.Reset()
 	e.closeMenu()
+	e.viewCached = false
 }
 
 // MenuOpen reports whether the completion menu is showing. The parent uses this
@@ -146,7 +164,10 @@ func (e *Editor) MenuOpen() bool { return e.menu.open }
 // Height is the rendered height of the input in rows. It deliberately excludes
 // the completion menu: the menu is an overlay (see MenuView), so opening it must
 // not change the layout and reflow the transcript.
-func (e *Editor) Height() int { return lipgloss.Height(e.View()) }
+func (e *Editor) Height() int {
+	e.renderView()
+	return e.viewHeight
+}
 
 // Update handles one message. When the menu is open it consumes navigation keys
 // (up/down/tab/enter/esc); otherwise the message is fed to the textarea and the
@@ -168,6 +189,7 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 	}
+	e.viewCached = false
 	var cmd tea.Cmd
 	e.ta, cmd = e.ta.Update(msg)
 	e.recompute()
@@ -178,10 +200,22 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 // and one row of vertical padding. The completion menu is returned separately by
 // MenuView so the parent can composite it as an overlay.
 func (e *Editor) View() string {
-	if e.width <= 0 {
-		return e.inputStyle.Block.Render(e.ta.View())
+	e.renderView()
+	return e.view
+}
+
+func (e *Editor) renderView() {
+	if e.viewCached {
+		return
 	}
-	return e.inputStyle.Block.Width(e.width).Render(e.ta.View())
+	textareaView := e.ta.View()
+	if e.width <= 0 {
+		e.view = e.inputStyle.Block.Render(textareaView)
+	} else {
+		e.view = e.inputStyle.Block.Width(e.width).Render(textareaView)
+	}
+	e.viewHeight = lipgloss.Height(e.view)
+	e.viewCached = true
 }
 
 // ContentOffset returns the number of cells from the editor's left edge to its
@@ -263,6 +297,7 @@ func (e *Editor) accept() {
 	repl := []rune(insert + " ")
 	lines[row] = string(runes[:start]) + string(repl) + string(runes[end:])
 	e.ta.SetValue(strings.Join(lines, "\n"))
+	e.viewCached = false
 	if row == len(lines)-1 {
 		e.ta.SetCursorColumn(start + len(repl))
 	}
