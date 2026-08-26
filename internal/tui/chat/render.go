@@ -12,13 +12,25 @@ import (
 )
 
 // RenderBlock turns one aggregated block into a styled string with no trailing
+// newline. It is the stateless entry point used by dev tooling; the transcript
+// list keeps a blockRenderer so successive Markdown blocks reuse its setup.
+func RenderBlock(it agent.Block, width int, sty Styles) string {
+	var r blockRenderer
+	return r.RenderBlock(it, width, sty)
+}
+
+type blockRenderer struct {
+	markdown markdownRenderer
+}
+
+// RenderBlock turns one aggregated block into a styled string with no trailing
 // newline (the caller joins blocks). width is the target display width in cells.
 // Rendering is a single exhaustive switch over assistant.ContentKind so a new
 // server content type fails the build until it is handled here.
-func RenderBlock(it agent.Block, width int, sty Styles) string {
+func (r *blockRenderer) RenderBlock(it agent.Block, width int, sty Styles) string {
 	switch it.Kind {
 	case assistant.KindText:
-		return renderText(it, width, sty)
+		return r.renderText(it, width, sty)
 	case assistant.KindReasoning:
 		return renderReasoning(it, width, sty)
 	case assistant.KindToolCall, assistant.KindToolResult:
@@ -42,14 +54,12 @@ func fallback(it agent.Block, width int, sty Styles) string {
 	return sty.Meta.Render(wrap("["+it.Kind.String()+"]", width))
 }
 
-// renderText renders a user or assistant text fragment. Assistant text is
-// rendered as markdown; user text keeps its marker and stays plain.
-func renderText(it agent.Block, width int, sty Styles) string {
+func (r *blockRenderer) renderText(it agent.Block, width int, sty Styles) string {
 	text := it.Markdown.Content
 	if it.Role == assistant.RoleUser {
 		return renderUser(text, width, sty)
 	}
-	return renderMarkdown(text, width, sty.Markdown)
+	return r.markdown.Render(text, width, sty.Markdown)
 }
 
 // renderUser draws the user prompt as a shared input block: a colored caret,

@@ -25,19 +25,40 @@ func markdownStyleConfig(isDark bool) ansi.StyleConfig {
 // glamour style for the given palette, wrapped to width, with glamour's
 // surrounding blank lines trimmed so blocks join cleanly.
 func renderMarkdown(src string, width int, style ansi.StyleConfig) string {
+	var r markdownRenderer
+	return r.Render(src, width, style)
+}
+
+type markdownRenderer struct {
+	term  *glamour.TermRenderer
+	width int
+	style ansi.StyleConfig
+	ready bool
+}
+
+// Render reuses Glamour's parsed style and Goldmark pipeline until wrapping or
+// the terminal theme changes. Failed setup is cached too, avoiding repeated
+// setup attempts while the same fallback configuration remains active.
+func (r *markdownRenderer) Render(src string, width int, style ansi.StyleConfig) string {
 	if width < 1 {
 		width = 1
 	}
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStyles(style),
-		glamour.WithWordWrap(width),
-	)
-	if err != nil {
+	if !r.ready || width != r.width || style != r.style {
+		r.term, _ = glamour.NewTermRenderer(
+			glamour.WithStyles(style),
+			glamour.WithWordWrap(width),
+		)
+		r.width = width
+		r.style = style
+		r.ready = true
+	}
+	if r.term == nil {
 		return wrap(src, width)
 	}
-	out, err := r.Render(src)
+	out, err := r.term.Render(src)
 	if err != nil {
-		// glamour tolerates partial markdown; this is belt-and-suspenders.
+		r.term = nil
+		r.ready = false
 		return wrap(src, width)
 	}
 	return strings.Trim(out, "\n")
