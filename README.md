@@ -10,7 +10,7 @@ Bits CLI is a native terminal client for Datadog Assistant.
 bits login
 ```
 
-Bits defaults to the US1 production login. To start from another Datadog site or a customer subdomain, pass it explicitly:
+Bits defaults to the US1 production login when `DD_SITE_URL` is unset. Site precedence is `--site`, then `DD_SITE_URL`, then the US1 production default. To start from another Datadog site or a customer subdomain, pass it explicitly:
 
 ```sh
 bits login --site app.datadoghq.eu
@@ -27,7 +27,7 @@ The resulting access and rotating refresh tokens are stored in the native OS cre
 - Linux: Secret Service-compatible keyring
 - Windows: Credential Manager
 
-Credential-store failures are returned rather than falling back silently to another identity. Tokens are not written to plaintext configuration files.
+On Linux without an available Secret Service, Bits uses `~/.bits-cli/oauth-session.json` with mode `0600`. When the keyring becomes available, the next locked session operation promotes the file session and removes the fallback copy. Other credential-store failures are returned rather than silently switching identities.
 
 Only one OAuth login is active per OS user. Running `bits login` again saves the replacement before best-effort revoking the previous grant.
 
