@@ -38,17 +38,42 @@ func TestConfigForSite_Staging(t *testing.T) {
 	}
 }
 
-func TestConfigForSite_ProductionRequiresClient(t *testing.T) {
-	_, err := ConfigForSite("https://us3.datadoghq.com", "")
-	if err == nil || !strings.Contains(err.Error(), "BITS_OAUTH_CLIENT_ID") {
-		t.Fatalf("error = %v, want missing production client", err)
+func TestConfigForSite_SelectsProductionClient(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		site     string
+		wantSite string
+	}{
+		{name: "default", wantSite: DefaultSite},
+		{name: "US1", site: "https://app.datadoghq.com", wantSite: "https://app.datadoghq.com"},
+		{name: "regional customer subdomain", site: "https://acme.us3.datadoghq.com", wantSite: "https://acme.us3.datadoghq.com"},
+		{name: "EU", site: "https://app.datadoghq.eu", wantSite: "https://app.datadoghq.eu"},
+		{name: "preprod", site: "https://ddstaging.datadoghq.com", wantSite: "https://ddstaging.datadoghq.com"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := ConfigForSite(test.site, "")
+			if err != nil {
+				t.Fatalf("ConfigForSite: %v", err)
+			}
+			if cfg.Site != test.wantSite {
+				t.Errorf("Site = %q, want %q", cfg.Site, test.wantSite)
+			}
+			if cfg.ClientID != ProductionClientID {
+				t.Errorf("ClientID = %q, want %q", cfg.ClientID, ProductionClientID)
+			}
+		})
 	}
-	cfg, err := ConfigForSite("https://us3.datadoghq.com", "production-id")
-	if err != nil {
-		t.Fatalf("ConfigForSite with override: %v", err)
-	}
-	if cfg.AuthorizeURL != "https://us3.datadoghq.com/oauth2/v1/authorize" {
-		t.Errorf("AuthorizeURL = %q", cfg.AuthorizeURL)
+}
+
+func TestConfigForSite_ClientOverrideTakesPrecedence(t *testing.T) {
+	for _, site := range []string{DefaultStagingSite, DefaultSite} {
+		cfg, err := ConfigForSite(site, "override-id")
+		if err != nil {
+			t.Fatalf("ConfigForSite(%q): %v", site, err)
+		}
+		if cfg.ClientID != "override-id" {
+			t.Errorf("ConfigForSite(%q) ClientID = %q", site, cfg.ClientID)
+		}
 	}
 }
 
@@ -75,7 +100,7 @@ func TestAuthorizationURL_UsesPKCEWithoutExplicitScope(t *testing.T) {
 }
 
 func TestConfigForSite_PreservesCustomerLoginDomain(t *testing.T) {
-	cfg, err := ConfigForSite("https://acme.us3.datadoghq.com", "production-id")
+	cfg, err := ConfigForSite("https://acme.us3.datadoghq.com", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,8 +117,13 @@ func TestConfigForSite_PreservesCustomerLoginDomain(t *testing.T) {
 	}
 }
 
-func TestConfigForSite_AcceptsGovDomain(t *testing.T) {
-	cfg, err := ConfigForSite("https://customer.ddog-gov.com", "production-id")
+func TestConfigForSite_AcceptsGovDomainWithExplicitClient(t *testing.T) {
+	_, err := ConfigForSite("https://customer.ddog-gov.com", "")
+	if err == nil || !strings.Contains(err.Error(), "BITS_OAUTH_CLIENT_ID") {
+		t.Fatalf("error = %v, want missing GovCloud client", err)
+	}
+
+	cfg, err := ConfigForSite("https://customer.ddog-gov.com", "gov-client-id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +141,7 @@ func TestConfigForSite_AcceptsGovDomain(t *testing.T) {
 }
 
 func TestWithCallbackDomain_UnknownRegionWorksByDefault(t *testing.T) {
-	initial, err := ConfigForSite("https://customer.xy9.datadoghq.com", "production-id")
+	initial, err := ConfigForSite("https://customer.xy9.datadoghq.com", "")
 	if err != nil {
 		t.Fatal(err)
 	}

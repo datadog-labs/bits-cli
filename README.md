@@ -2,17 +2,24 @@
 
 Bits CLI is a native terminal client for Datadog Assistant.
 
-> **OAuth rollout status:** this branch uses the dedicated org-2 staging client while production registration and regional validation are completed. It is not yet a production release.
-
 ## Authentication
 
 ### Interactive login
 
 ```sh
-bits login --site dd.datad0g.com
+bits login
 ```
 
-Bits opens Datadog in your browser and completes Authorization Code + PKCE through an ephemeral `127.0.0.1` callback. The callback uses an available OS-selected port; no fixed local port needs to be free.
+Bits defaults to the US1 production login. To start from another Datadog site or a customer subdomain, pass it explicitly:
+
+```sh
+bits login --site app.datadoghq.eu
+bits login --site acme.us3.datadoghq.com
+```
+
+The selected site's domain family determines the public OAuth client automatically: `datad0g.com` uses the staging registration, while commercial `datadoghq.com` and `datadoghq.eu` sites use the production registration. The explicit `--client-id` flag or `BITS_OAUTH_CLIENT_ID` environment variable takes precedence for development and environments without a built-in registration, including GovCloud.
+
+Bits opens Datadog in your browser and completes Authorization Code + PKCE through an ephemeral `127.0.0.1` callback. The callback uses an available OS-selected port; no fixed local port needs to be free. The client ID is public configuration; no client secret is shipped.
 
 The resulting access and rotating refresh tokens are stored in the native OS credential manager:
 

@@ -41,7 +41,7 @@ func runLogin(args []string) error {
 	flags.SetOutput(os.Stderr)
 	defaultSite := os.Getenv("DD_SITE_URL")
 	if defaultSite == "" {
-		defaultSite = auth.DefaultStagingSite
+		defaultSite = auth.DefaultSite
 	}
 	site := flags.String("site", defaultSite, "Datadog site URL or hostname")
 	clientID := flags.String("client-id", os.Getenv("BITS_OAUTH_CLIENT_ID"), "OAuth client ID override")
@@ -173,5 +173,5 @@ func authenticatedClientWith(store auth.CredentialStore, apiKey, appKey, apiSite
 	if apiKey != "" && appKey != "" {
 		return assistant.NewAPIKeyClient(apiSite, apiKey, appKey)
 	}
-	return nil, fmt.Errorf("not logged in; run `bits login --site %s`", auth.DefaultStagingSite)
+	return nil, fmt.Errorf("not logged in; run `bits login`")
 }
