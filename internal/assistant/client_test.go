@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -138,6 +139,30 @@ func TestSend_StreamsTextAndConversationID(t *testing.T) {
 	}
 	if got.String() != "hello world" {
 		t.Errorf("text = %q, want %q", got.String(), "hello world")
+	}
+}
+
+func TestSend_EmptyConversationIDCreatesOnFirstTurn(t *testing.T) {
+	var request Request
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		writeStream(t, w, textLine("created-on-send", "hello"))
+	})
+
+	conversationID, err := c.Send(context.Background(), "first prompt", SendOptions{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Data.Attributes.ConversationID != "" {
+		t.Fatalf("request conversation id = %q, want empty", request.Data.Attributes.ConversationID)
+	}
+	if request.Data.Attributes.Message != "first prompt" {
+		t.Fatalf("request message = %#v", request.Data.Attributes.Message)
+	}
+	if conversationID != "created-on-send" {
+		t.Fatalf("returned conversation id = %q, want server-assigned id", conversationID)
 	}
 }
 

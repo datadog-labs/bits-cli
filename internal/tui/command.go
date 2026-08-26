@@ -21,7 +21,10 @@ const (
 
 type commandID uint8
 
-const commandQuit commandID = iota + 1
+const (
+	commandQuit commandID = iota + 1
+	commandNew
+)
 
 type commandDefinition struct {
 	id               commandID
@@ -31,6 +34,12 @@ type commandDefinition struct {
 }
 
 var commandDefinitions = []commandDefinition{
+	{
+		id:               commandNew,
+		name:             "new",
+		aliases:          []string{"clear"},
+		activeTurnPolicy: commandCancelsTurn,
+	},
 	{
 		id:               commandQuit,
 		name:             "quit",
@@ -84,11 +93,15 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, m.showNotice(notice(chat.NoticeError, nil, "Unknown command: /%s", name), 0)
 	}
 
-	if m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading {
+	active := m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading
+	if active {
 		switch definition.activeTurnPolicy {
 		case commandRejectedDuringTurn:
 			return m, m.showNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active turn: /%s", name), 0)
 		case commandCancelsTurn:
+			if definition.id == commandNew {
+				return m, m.requestNewConversation()
+			}
 			if m.cancelTurn != nil {
 				m.cancelTurn()
 			}
@@ -100,6 +113,8 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 	}
 
 	switch definition.id {
+	case commandNew:
+		return m, m.startNewConversation()
 	case commandQuit:
 		return m, tea.Quit
 	default:

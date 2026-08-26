@@ -1,0 +1,97 @@
+package agent
+
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/DataDog/bits-cli/internal/assistant"
+)
+
+// This opt-in test proves the engine reset contract against the real Assistant
+// API: no explicit create call is needed, the next turn gets a distinct ID, and
+// both persisted conversations remain independently loadable. Both disposable
+// conversations are deleted during cleanup.
+func TestE2E_NewConversationResetLifecycle(t *testing.T) {
+	if os.Getenv("BITS_ASSISTANT_E2E") == "" {
+		t.Skip("set BITS_ASSISTANT_E2E=1 (with DD_API_KEY/DD_APP_KEY) to run assistant e2e tests")
+	}
+	client, err := assistant.NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	e := New(client, assistant.SendOptions{})
+
+	turnCtx, cancelTurn := context.WithCancel(ctx)
+	firstTurn := e.StartTurn(turnCtx, TurnInput{Message: "Count from 1 to 200, with one number per line."})
+	cancelledActiveTurn := false
+	for event := range firstTurn {
+		if !cancelledActiveTurn && event.Kind == EventBlock && event.Update.Changed.Role == assistant.RoleAssistant {
+			cancelledActiveTurn = true
+			cancelTurn()
+		}
+	}
+	cancelTurn()
+	if !cancelledActiveTurn {
+		t.Fatal("first turn produced no assistant event to cancel")
+	}
+	firstID := e.ConversationID()
+	if firstID == "" {
+		t.Fatal("first turn returned an empty conversation id")
+	}
+	var secondID string
+	defer func() {
+		for _, id := range []string{firstID, secondID} {
+			if id != "" {
+				_ = client.DeleteConversation(context.Background(), assistant.DeleteConversationInput{ConversationID: id})
+			}
+		}
+	}()
+
+	if err := e.NewConversation(); err != nil {
+		t.Fatal(err)
+	}
+	if e.ConversationID() != "" {
+		t.Fatalf("conversation id after reset = %q", e.ConversationID())
+	}
+	if e.PreviousConversationID() != firstID {
+		t.Fatalf("previous conversation id = %q, want %q", e.PreviousConversationID(), firstID)
+	}
+	_ = drain(e.StartTurn(ctx, TurnInput{Message: "Reply with exactly: second conversation"}))
+	secondID = e.ConversationID()
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("conversation ids before/after reset = %q/%q, want distinct non-empty ids", firstID, secondID)
+	}
+	for label, id := range map[string]string{"first": firstID, "second": secondID} {
+		history, err := client.ConversationHistory(ctx, assistant.ConversationHistoryInput{ConversationID: id})
+		if err != nil {
+			t.Fatalf("load %s conversation %q: %v", label, id, err)
+		}
+		if len(history.Data.Attributes.Messages) == 0 {
+			t.Fatalf("%s conversation %q has empty history", label, id)
+		}
+	}
+	listed, err := client.UserConversations(ctx)
+	if err != nil {
+		t.Fatalf("list conversations: %v", err)
+	}
+	found := map[string]bool{firstID: false, secondID: false}
+	for _, conversation := range listed.Data.Attributes.Conversations {
+		if _, tracked := found[conversation.ConversationID]; tracked {
+			found[conversation.ConversationID] = true
+		}
+	}
+	for id, present := range found {
+		if !present {
+			t.Errorf("conversation %q was not resumable through the user conversation list", id)
+		}
+	}
+	for label, id := range map[string]string{"first": firstID, "second": secondID} {
+		if err := client.DeleteConversation(ctx, assistant.DeleteConversationInput{ConversationID: id}); err != nil {
+			t.Errorf("delete %s disposable conversation %q: %v", label, id, err)
+		}
+	}
+}

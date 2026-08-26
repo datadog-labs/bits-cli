@@ -75,9 +75,8 @@ var fakeCommands = []struct {
 }{
 	{"help", nil, "show help"},
 	{"model", nil, "choose a model"},
-	{"new", nil, "start a new conversation"},
+	{"new", []string{"clear"}, "start a new conversation"},
 	{"resume", nil, "resume a conversation"},
-	{"clear", nil, "clear the transcript"},
 	{"quit", []string{"exit"}, "exit bits"},
 }
 

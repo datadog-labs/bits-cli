@@ -25,8 +25,11 @@ const defaultNoticeTTL = 10 * time.Second
 // turn's channel was closed (turn finished or cancelled). A history restore runs
 // through the same pump, so its events flow here too.
 type (
-	turnEventMsg  struct{ ev agent.Event }
-	turnClosedMsg struct{}
+	turnEventMsg struct {
+		generation uint64
+		ev         agent.Event
+	}
+	turnClosedMsg struct{ generation uint64 }
 )
 
 // noticeExpiredMsg clears a transient status notice when its TTL elapses. seq
@@ -55,13 +58,13 @@ func (m *Model) clearNotice() {
 // waitEvent reads one event from the turn channel and re-arms after each event
 // in Update — the turn-scoped pump. Reading a closed channel yields
 // turnClosedMsg.
-func waitEvent(ch <-chan agent.Event) tea.Cmd {
+func waitEvent(generation uint64, ch <-chan agent.Event) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return turnClosedMsg{}
+			return turnClosedMsg{generation: generation}
 		}
-		return turnEventMsg{ev: ev}
+		return turnEventMsg{generation: generation, ev: ev}
 	}
 }
 
@@ -89,18 +92,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case turnEventMsg:
+		if !m.acceptRemoteMessage(msg.generation) {
+			return m, nil
+		}
 		cmd := m.applyEvent(msg.ev)
 		m.refreshViewport()
-		return m, tea.Batch(cmd, waitEvent(m.turnEvents))
+		return m, tea.Batch(cmd, waitEvent(msg.generation, m.turnEvents))
 
 	case turnClosedMsg:
+		if !m.acceptRemoteMessage(msg.generation) {
+			return m, nil
+		}
 		if m.chatPhase != chat.PhaseError {
 			m.chatPhase = chat.PhaseIdle
 		}
 		m.turnEvents = nil
-		if m.cancelTurn != nil {
+		if m.cancelTurn != nil && !m.cancelRequested {
 			m.cancelTurn() // release the turn/restore context
-			m.cancelTurn = nil
+		}
+		m.cancelTurn = nil
+		m.cancelRequested = false
+		if m.pendingNew {
+			m.pendingNew = false
+			return m, m.startNewConversation()
 		}
 		return m, nil
 
@@ -136,9 +150,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
-		if m.cancelTurn != nil {
-			m.cancelTurn() // interrupt the running turn
-		}
+		m.cancelRemote() // interrupt the running turn
 		return m, nil
 	case "enter":
 		return m.submit()
@@ -182,15 +194,36 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	m.editor.Reset()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelTurn = cancel
-	m.turnEvents = m.engine.StartTurn(ctx, agent.TurnInput{Message: text})
+	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text})
+	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
+	m.usage = nil
 	m.clearNotice()
 	m.refreshViewport()
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
-	return m, waitEvent(m.turnEvents)
+	return m, wait
+}
+
+func (m *Model) beginRemote(events <-chan agent.Event, cancel context.CancelFunc) tea.Cmd {
+	m.turnGen++
+	m.turnEvents = events
+	m.cancelTurn = cancel
+	m.cancelRequested = false
+	return waitEvent(m.turnGen, events)
+}
+
+func (m *Model) acceptRemoteMessage(generation uint64) bool {
+	return m.turnEvents != nil && generation == m.turnGen
+}
+
+func (m *Model) cancelRemote() {
+	if m.cancelTurn == nil || m.cancelRequested {
+		return
+	}
+	m.cancelRequested = true
+	m.cancelTurn()
 }
 
 // applyEvent folds one engine event into the block snapshot / status. The switch

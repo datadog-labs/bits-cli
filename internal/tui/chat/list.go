@@ -83,6 +83,17 @@ func (l *List) SetItems(items []agent.Block) {
 	l.clampOffset()
 }
 
+// Reset clears items, scroll state, and rendered-block cache. Conversation
+// resets need the cache clear because a new Transcript may reuse synthetic
+// block IDs and revisions from the previous conversation.
+func (l *List) Reset() {
+	l.items = nil
+	l.offsetIdx = 0
+	l.offsetLine = 0
+	l.follow = true
+	l.invalidateAll()
+}
+
 // clampOffset pulls the offset back so the view never scrolls past the last
 // content line.
 func (l *List) clampOffset() {
