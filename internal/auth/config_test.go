@@ -161,6 +161,44 @@ func TestWithCallbackDomain_UnknownRegionWorksByDefault(t *testing.T) {
 	}
 }
 
+func TestWithCallbackDomain_AllowsCommercialFamilyChange(t *testing.T) {
+	cfg, err := ConfigForSite("https://app.datadoghq.com", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = cfg.WithCallbackDomain("datadoghq.eu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AssistantBase != "https://api.datadoghq.eu" {
+		t.Fatalf("AssistantBase = %q", cfg.AssistantBase)
+	}
+}
+
+func TestWithCallbackDomain_RejectsDifferentEnvironment(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		site     string
+		clientID string
+		callback string
+	}{
+		{name: "staging to commercial", site: DefaultStagingSite, callback: "datadoghq.com"},
+		{name: "commercial to staging", site: DefaultSite, callback: "datad0g.com"},
+		{name: "commercial to GovCloud", site: DefaultSite, callback: "ddog-gov.com"},
+		{name: "GovCloud to commercial", site: "https://app.ddog-gov.com", clientID: "gov-client", callback: "datadoghq.com"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := ConfigForSite(test.site, test.clientID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := cfg.WithCallbackDomain(test.callback); err == nil {
+				t.Fatalf("WithCallbackDomain(%q) succeeded", test.callback)
+			}
+		})
+	}
+}
+
 func TestWithCallbackDomain_RejectsMissingAndNonDatadogHosts(t *testing.T) {
 	cfg, err := ConfigForSite(DefaultStagingSite, "")
 	if err != nil {

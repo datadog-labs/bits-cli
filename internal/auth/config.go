@@ -25,13 +25,22 @@ const (
 	DefaultRedirectURI = "http://127.0.0.1:0/oauth/callback"
 )
 
+type oauthEnvironment uint8
+
+const (
+	oauthEnvironmentStaging oauthEnvironment = iota + 1
+	oauthEnvironmentCommercial
+	oauthEnvironmentGovCloud
+)
+
 // domainFamily is both the hostname trust boundary and the default OAuth client
 // mapping. It lists domain families, not regions, so customer subdomains and new
 // commercial regions work without a client release. An empty client ID means the
 // family is recognized for explicit configurations but has no default registration.
 type domainFamily struct {
-	suffix   string
-	clientID string
+	suffix      string
+	clientID    string
+	environment oauthEnvironment
 }
 
 // Production families are documented at
@@ -39,10 +48,10 @@ type domainFamily struct {
 // assigning a client must be an explicit reviewed change. The commercial client
 // is not registered for GovCloud, so that family continues to require an override.
 var datadogDomainFamilies = []domainFamily{
-	{suffix: "datad0g.com", clientID: StagingClientID},
-	{suffix: "datadoghq.com", clientID: ProductionClientID},
-	{suffix: "datadoghq.eu", clientID: ProductionClientID},
-	{suffix: "ddog-gov.com"},
+	{suffix: "datad0g.com", clientID: StagingClientID, environment: oauthEnvironmentStaging},
+	{suffix: "datadoghq.com", clientID: ProductionClientID, environment: oauthEnvironmentCommercial},
+	{suffix: "datadoghq.eu", clientID: ProductionClientID, environment: oauthEnvironmentCommercial},
+	{suffix: "ddog-gov.com", environment: oauthEnvironmentGovCloud},
 }
 
 // SiteConfig contains the site-specific OAuth and Assistant endpoints.
@@ -101,6 +110,16 @@ func (c SiteConfig) WithCallbackDomain(raw string) (SiteConfig, error) {
 	domain, err := normalizeCallbackDomain(raw)
 	if err != nil {
 		return SiteConfig{}, err
+	}
+	initialDomain := c.Domain
+	if initialDomain == "" {
+		_, initialDomain, err = normalizeSite(c.Site)
+		if err != nil {
+			return SiteConfig{}, fmt.Errorf("validate initial OAuth site: %w", err)
+		}
+	}
+	if environmentForDomain(initialDomain) != environmentForDomain(domain) {
+		return SiteConfig{}, fmt.Errorf("OAuth callback returned Datadog domain %q from a different environment", raw)
 	}
 
 	apiBase := "https://api." + domain
@@ -180,6 +199,15 @@ func defaultClientID(domain string) string {
 		}
 	}
 	return ""
+}
+
+func environmentForDomain(domain string) oauthEnvironment {
+	for _, family := range datadogDomainFamilies {
+		if hasDomainSuffix(domain, family.suffix) {
+			return family.environment
+		}
+	}
+	return 0
 }
 
 func hasDomainSuffix(host, suffix string) bool {
