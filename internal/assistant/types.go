@@ -143,12 +143,13 @@ type Profile string
 
 // Server-side surface profiles.
 const (
-	ProfileWebUI Profile = "web_ui" // default; bare persona, UI-oriented (widgets, relative links)
+	ProfileWebUI Profile = "web_ui" // bare persona, UI-oriented (widgets, relative links)
+	ProfileCLI   Profile = "cli"
 )
 
 // DefaultProfile is applied by Send when SendOptions.Profile is empty. It
-// matches the server's own default so behavior is unchanged unless overridden.
-const DefaultProfile = ProfileWebUI
+// identifies requests from this terminal client unless explicitly overridden.
+const DefaultProfile = ProfileCLI
 
 // AssistantContext is the request-level `context`: Datadog objects in scope for
 // the turn. The server fetches each entity's details and injects them into the
