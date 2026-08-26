@@ -27,6 +27,8 @@ func renderGroup(g group, width int, sty chat.Styles, isDark bool) string {
 		samples = markdownSamples(width, isDark)
 	case groupColorTokens:
 		samples = colorTokenSamples(sty)
+	default:
+		// numGroups is a count sentinel and is never rendered.
 	}
 	sep := "\n" + delimiter(width) + "\n"
 	body := strings.Join(samples, sep)

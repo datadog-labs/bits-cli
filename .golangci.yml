@@ -11,6 +11,11 @@ linters:
   settings:
     exhaustive:
       default-signifies-exhaustive: true
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errorlint
 formatters:
   enable:
     - gofumpt # stricter gofmt; one canonical format

@@ -27,8 +27,9 @@ func (g group) title() string {
 		return "Markdown elements (glamour)"
 	case groupColorTokens:
 		return "Color tokens"
+	default:
+		return "?"
 	}
-	return "?"
 }
 
 // nextGroup / prevGroup cycle through pages, wrapping at the ends.
