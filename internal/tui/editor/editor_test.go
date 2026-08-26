@@ -156,6 +156,11 @@ func TestFakeCommandsAliasDiscoverable(t *testing.T) {
 	if exit[0].Insert != "/quit" {
 		t.Errorf("alias accept should insert canonical /quit, got %q", exit[0].Insert)
 	}
+
+	clear := FakeCommands("cl")
+	if len(clear) != 1 || clear[0].Insert != "/new" {
+		t.Fatalf("/clear alias candidate = %+v, want one canonical /new insertion", clear)
+	}
 }
 
 func TestRecomputeOpensAndClosesMenu(t *testing.T) {

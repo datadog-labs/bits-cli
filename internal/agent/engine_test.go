@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -36,6 +37,29 @@ func (b *blockingBackend) Send(ctx context.Context, _ any, _ assistant.SendOptio
 	case <-ctx.Done():
 	}
 	return "conv", nil
+}
+
+type conversationRecordingBackend struct {
+	opts     []assistant.SendOptions
+	messages map[string][]string
+}
+
+type cancellationIDBackend struct{ started chan struct{} }
+
+func (b *cancellationIDBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
+	close(b.started)
+	<-ctx.Done()
+	return "created-before-cancel", ctx.Err()
+}
+
+func (b *conversationRecordingBackend) Send(_ context.Context, message any, opts assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
+	b.opts = append(b.opts, opts)
+	id := opts.ConversationID
+	if id == "" {
+		id = "new-conversation-1"
+	}
+	b.messages[id] = append(b.messages[id], message.(string))
+	return id, nil
 }
 
 // historyBackend also serves conversation history.
@@ -106,6 +130,89 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	if evs[4].ConvID != "conv-1" {
 		t.Fatalf("conv id = %q, want conv-1", evs[4].ConvID)
 	}
+}
+
+func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
+	backend := &conversationRecordingBackend{messages: map[string][]string{}}
+	opts := assistant.SendOptions{
+		ConversationID:    "old-conversation",
+		Model:             "retained-model",
+		DebugTag:          "retained-debug-tag",
+		CustomUserContext: "retained-context",
+		MessageHistory:    []json.RawMessage{json.RawMessage(`{"role":"user","content":"old history"}`)},
+	}
+	e := New(backend, opts)
+
+	_ = drain(e.StartTurn(context.Background(), TurnInput{Message: "old prompt"}))
+	callsBeforeReset := len(backend.opts)
+	if err := e.NewConversation(); err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.opts) != callsBeforeReset {
+		t.Fatal("NewConversation made a backend request")
+	}
+	if got := e.ConversationID(); got != "" {
+		t.Fatalf("conversation id after reset = %q, want empty", got)
+	}
+	if got := e.PreviousConversationID(); got != "old-conversation" {
+		t.Fatalf("previous conversation id = %q, want old-conversation", got)
+	}
+	if len(e.transcript.Blocks()) != 0 {
+		t.Fatalf("transcript after reset has %d blocks", len(e.transcript.Blocks()))
+	}
+
+	_ = drain(e.StartTurn(context.Background(), TurnInput{Message: "new prompt"}))
+	if got := e.ConversationID(); got != "new-conversation-1" {
+		t.Fatalf("new conversation id = %q", got)
+	}
+	if got := backend.opts[len(backend.opts)-1]; got.ConversationID != "" ||
+		len(got.MessageHistory) != 0 || got.Model != opts.Model ||
+		got.DebugTag != opts.DebugTag || got.CustomUserContext != opts.CustomUserContext {
+		t.Fatalf("first new request options = %+v; process-wide configuration was not retained", got)
+	}
+	if got := backend.messages["old-conversation"]; !reflect.DeepEqual(got, []string{"old prompt"}) {
+		t.Fatalf("prior conversation was mutated: %v", got)
+	}
+	if got := backend.messages["new-conversation-1"]; !reflect.DeepEqual(got, []string{"new prompt"}) {
+		t.Fatalf("new conversation messages = %v", got)
+	}
+}
+
+func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
+	backend := &cancellationIDBackend{started: make(chan struct{})}
+	e := New(backend, assistant.SendOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	turn := e.StartTurn(ctx, TurnInput{Message: "cancel me"})
+	<-backend.started
+	cancel()
+	_ = drain(turn)
+
+	if got := e.ConversationID(); got != "created-before-cancel" {
+		t.Fatalf("conversation id after cancellation = %q", got)
+	}
+	if err := e.NewConversation(); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.PreviousConversationID(); got != "created-before-cancel" {
+		t.Fatalf("previous conversation id after reset = %q", got)
+	}
+	if e.ConversationID() != "" {
+		t.Fatalf("current conversation id after reset = %q", e.ConversationID())
+	}
+}
+
+func TestNewConversationRejectsActiveTurnWithoutMutation(t *testing.T) {
+	gate := make(chan struct{})
+	e := New(&blockingBackend{gate: gate}, assistant.SendOptions{ConversationID: "old"})
+	turn := e.StartTurn(context.Background(), TurnInput{Message: "busy"})
+	if err := e.NewConversation(); !errors.Is(err, ErrOperationActive) {
+		t.Fatalf("NewConversation error = %v, want ErrOperationActive", err)
+	}
+	if got := e.ConversationID(); got != "old" {
+		t.Fatalf("active reset changed conversation id to %q", got)
+	}
+	close(gate)
+	_ = drain(turn)
 }
 
 func TestRestoreEmitsSingleSnapshot(t *testing.T) {

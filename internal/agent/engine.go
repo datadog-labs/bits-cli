@@ -15,6 +15,7 @@ import (
 var (
 	ErrMaxTurns           = errors.New("exceeded max turns")
 	ErrHistoryUnsupported = errors.New("backend does not support loading conversation history")
+	ErrOperationActive    = errors.New("another conversation operation is active")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -68,9 +69,10 @@ const maxTurns = 20
 // It is not designed to run concurrent turns / restore and left to the consumer
 // to make sure it does not concurrently starts either of those in parallel.
 type Engine struct {
-	backend    Backend
-	opts       assistant.SendOptions
-	transcript *Transcript
+	backend                Backend
+	opts                   assistant.SendOptions
+	transcript             *Transcript
+	previousConversationID string
 	// active is true while a turn or restore runs; overlapping them is a bug.
 	active atomic.Bool
 }
@@ -179,6 +181,12 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event) {
 			return nil
 		})
 		if ctx.Err() != nil {
+			// Send can discover a server-assigned ID before cancellation tears
+			// down the stream. Retain it so /new can preserve a resumable handle
+			// for the conversation being left behind.
+			if id != "" {
+				e.opts.ConversationID = id
+			}
 			return // cancelled: end the turn quietly
 		}
 		if err != nil {
@@ -211,6 +219,34 @@ func (e *Engine) snapshot() []Block {
 // ConversationID reports the conversation the engine is bound to. It is set
 // from SendOptions and updated as turns run; empty means a new conversation.
 func (e *Engine) ConversationID() string { return e.opts.ConversationID }
+
+// PreviousConversationID reports the most recent non-empty conversation that
+// NewConversation left behind. It remains available after reset so navigation
+// and lifecycle checks can recover the prior persisted conversation.
+func (e *Engine) PreviousConversationID() string { return e.previousConversationID }
+
+// NewConversation clears the conversation-scoped engine state without making a
+// backend request. Non-history request configuration and the backend/client
+// itself are retained; the next StartTurn sends an empty conversation ID and no
+// injected history, which asks the Assistant API to create the new conversation
+// on first turn.
+//
+// Callers must cancel and drain an active turn or restore before resetting.
+// The operation gate makes a premature reset fail without mutation.
+func (e *Engine) NewConversation() error {
+	if !e.active.CompareAndSwap(false, true) {
+		return ErrOperationActive
+	}
+	defer e.active.Store(false)
+
+	if e.opts.ConversationID != "" {
+		e.previousConversationID = e.opts.ConversationID
+	}
+	e.opts.ConversationID = ""
+	e.opts.MessageHistory = nil
+	e.transcript = NewTranscript()
+	return nil
+}
 
 // Restore fetches the persisted history for the engine's conversation, folds it
 // into the transcript.

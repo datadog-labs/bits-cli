@@ -8,6 +8,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	tuieditor "github.com/DataDog/bits-cli/internal/tui/editor"
 )
 
 func TestParseCommand(t *testing.T) {
@@ -45,6 +46,38 @@ func TestLookupCommandResolvesExitAlias(t *testing.T) {
 	}
 	if exit.id != quit.id || exit.activeTurnPolicy != commandCancelsTurn {
 		t.Fatalf("/exit resolved to %#v, want /quit with cancel policy", exit)
+	}
+}
+
+func TestLookupCommandResolvesClearAsExactNewAlias(t *testing.T) {
+	newCommand, ok := lookupCommand("new")
+	if !ok {
+		t.Fatal("/new was not registered")
+	}
+	clearCommand, ok := lookupCommand("clear")
+	if !ok {
+		t.Fatal("/clear alias was not registered")
+	}
+	if clearCommand.id != newCommand.id || clearCommand.activeTurnPolicy != newCommand.activeTurnPolicy {
+		t.Fatalf("/clear resolved to %#v, want the /new implementation %#v", clearCommand, newCommand)
+	}
+}
+
+func TestRegisteredCommandsAndCompletionAliasesStayConsistent(t *testing.T) {
+	for _, definition := range commandDefinitions {
+		for _, query := range append([]string{definition.name}, definition.aliases...) {
+			candidates := tuieditor.FakeCommands(query)
+			found := false
+			for _, candidate := range candidates {
+				if candidate.Insert == "/"+definition.name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("completion query %q does not resolve registered command /%s", query, definition.name)
+			}
+		}
 	}
 }
 
