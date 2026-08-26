@@ -39,10 +39,7 @@ func run(args []string) error {
 func runLogin(args []string) error {
 	flags := flag.NewFlagSet("login", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	defaultSite := os.Getenv("DD_SITE_URL")
-	if defaultSite == "" {
-		defaultSite = auth.DefaultStagingSite
-	}
+	defaultSite := defaultLoginSite(os.Getenv("DD_SITE_URL"))
 	site := flags.String("site", defaultSite, "Datadog site URL or hostname")
 	clientID := flags.String("client-id", os.Getenv("BITS_OAUTH_CLIENT_ID"), "OAuth client ID override")
 	if err := flags.Parse(args); err != nil {
@@ -66,6 +63,13 @@ func runLogin(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "Logged in to %s.\n", session.Site)
 	return nil
+}
+
+func defaultLoginSite(configuredSite string) string {
+	if configuredSite != "" {
+		return configuredSite
+	}
+	return auth.DefaultSite
 }
 
 func runLogout(args []string) error {
@@ -173,5 +177,5 @@ func authenticatedClientWith(store auth.CredentialStore, apiKey, appKey, apiSite
 	if apiKey != "" && appKey != "" {
 		return assistant.NewAPIKeyClient(apiSite, apiKey, appKey)
 	}
-	return nil, fmt.Errorf("not logged in; run `bits login --site %s`", auth.DefaultStagingSite)
+	return nil, fmt.Errorf("not logged in; run `bits login`")
 }

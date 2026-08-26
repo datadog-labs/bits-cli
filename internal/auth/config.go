@@ -9,9 +9,15 @@ import (
 )
 
 const (
+	// ProductionClientID is the dedicated Bits CLI native OAuth client replicated
+	// from US1 to the commercial Datadog production regions.
+	ProductionClientID = "83d1af23-fbe1-4f44-a604-405b2c3fbdd9"
 	// StagingClientID is the dedicated Bits CLI native OAuth client in Datadog staging.
 	StagingClientID = "605736a5-3085-47c7-ab49-22b90d36530f"
-	// DefaultStagingSite is the org-2 staging site used while the OAuth flow is validated.
+	// DefaultSite is the production US1 login site. The authorization flow lets a
+	// user select another region and returns its canonical domain on the callback.
+	DefaultSite = "https://app.datadoghq.com"
+	// DefaultStagingSite is the org-2 staging site used for internal validation.
 	DefaultStagingSite = "https://dd.datad0g.com"
 	// DefaultRedirectURI asks the OS to select an available IPv4 loopback port.
 	// Datadog's OAuth provider permits flexible ports for native loopback clients
@@ -19,16 +25,33 @@ const (
 	DefaultRedirectURI = "http://127.0.0.1:0/oauth/callback"
 )
 
-// datadogDomainSuffixes is the trust boundary for OAuth login and callback
-// hosts. It lists domain families, not regions, so new regional subdomains work
-// automatically. Production families are documented at
-// https://docs.datadoghq.com/getting_started/site/; datad0g.com is the internal
-// staging family. Adding a new family must be an explicit reviewed change.
-var datadogDomainSuffixes = []string{
-	"datad0g.com",
-	"datadoghq.com",
-	"datadoghq.eu",
-	"ddog-gov.com",
+type oauthEnvironment uint8
+
+const (
+	oauthEnvironmentStaging oauthEnvironment = iota + 1
+	oauthEnvironmentCommercial
+	oauthEnvironmentGovCloud
+)
+
+// domainFamily is both the hostname trust boundary and the default OAuth client
+// mapping. It lists domain families, not regions, so customer subdomains and new
+// commercial regions work without a client release. An empty client ID means the
+// family is recognized for explicit configurations but has no default registration.
+type domainFamily struct {
+	suffix      string
+	clientID    string
+	environment oauthEnvironment
+}
+
+// Production families are documented at
+// https://docs.datadoghq.com/getting_started/site/. Adding a new family or
+// assigning a client must be an explicit reviewed change. The commercial client
+// is not registered for GovCloud, so that family continues to require an override.
+var datadogDomainFamilies = []domainFamily{
+	{suffix: "datad0g.com", clientID: StagingClientID, environment: oauthEnvironmentStaging},
+	{suffix: "datadoghq.com", clientID: ProductionClientID, environment: oauthEnvironmentCommercial},
+	{suffix: "datadoghq.eu", clientID: ProductionClientID, environment: oauthEnvironmentCommercial},
+	{suffix: "ddog-gov.com", environment: oauthEnvironmentGovCloud},
 }
 
 // SiteConfig contains the site-specific OAuth and Assistant endpoints.
@@ -44,8 +67,8 @@ type SiteConfig struct {
 }
 
 // ConfigForSite preserves the supplied Datadog site as the authorization host,
-// including customer subdomains. clientIDOverride is required outside
-// datad0g.com until the dedicated production client exists.
+// including customer subdomains. The site family selects the staging or
+// commercial production registration unless clientIDOverride is provided.
 func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
 	site, domain, err := normalizeSite(rawSite)
 	if err != nil {
@@ -53,8 +76,8 @@ func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
 	}
 
 	clientID := clientIDOverride
-	if clientID == "" && hasDomainSuffix(domain, "datad0g.com") {
-		clientID = StagingClientID
+	if clientID == "" {
+		clientID = defaultClientID(domain)
 	}
 	if clientID == "" {
 		return SiteConfig{}, fmt.Errorf("no Bits CLI OAuth client is configured for %s; set BITS_OAUTH_CLIENT_ID", domain)
@@ -87,6 +110,16 @@ func (c SiteConfig) WithCallbackDomain(raw string) (SiteConfig, error) {
 	domain, err := normalizeCallbackDomain(raw)
 	if err != nil {
 		return SiteConfig{}, err
+	}
+	initialDomain := c.Domain
+	if initialDomain == "" {
+		_, initialDomain, err = normalizeSite(c.Site)
+		if err != nil {
+			return SiteConfig{}, fmt.Errorf("validate initial OAuth site: %w", err)
+		}
+	}
+	if environmentForDomain(initialDomain) != environmentForDomain(domain) {
+		return SiteConfig{}, fmt.Errorf("OAuth callback returned Datadog domain %q from a different environment", raw)
 	}
 
 	apiBase := "https://api." + domain
@@ -128,7 +161,7 @@ func normalizeCallbackDomain(raw string) (string, error) {
 func normalizeSite(raw string) (site, domain string, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		raw = DefaultStagingSite
+		raw = DefaultSite
 	}
 	if !strings.Contains(raw, "://") {
 		raw = "https://" + raw
@@ -151,12 +184,30 @@ func normalizeSite(raw string) (site, domain string, err error) {
 }
 
 func isDatadogDomain(domain string) bool {
-	for _, suffix := range datadogDomainSuffixes {
-		if hasDomainSuffix(domain, suffix) {
+	for _, family := range datadogDomainFamilies {
+		if hasDomainSuffix(domain, family.suffix) {
 			return true
 		}
 	}
 	return false
+}
+
+func defaultClientID(domain string) string {
+	for _, family := range datadogDomainFamilies {
+		if hasDomainSuffix(domain, family.suffix) {
+			return family.clientID
+		}
+	}
+	return ""
+}
+
+func environmentForDomain(domain string) oauthEnvironment {
+	for _, family := range datadogDomainFamilies {
+		if hasDomainSuffix(domain, family.suffix) {
+			return family.environment
+		}
+	}
+	return 0
 }
 
 func hasDomainSuffix(host, suffix string) bool {
