@@ -24,6 +24,7 @@ type Source struct {
 	store        CredentialStore
 	httpClient   *http.Client
 	session      Session
+	reconciled   bool
 	dirty        bool
 	persistBase  Session
 	cleanupGrant Session
@@ -69,6 +70,9 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 	lockCtx, lockCancel := context.WithTimeout(ctx, sessionLockTimeout)
 	defer lockCancel()
 	err := withSessionLock(lockCtx, s.store, func() error {
+		if err := s.reconcileStoreLocked(); err != nil {
+			return err
+		}
 		durable, loadErr := s.store.Load()
 		if s.dirty {
 			if err := s.reconcileDirty(ctx, durable, loadErr); err != nil {
@@ -237,6 +241,9 @@ func (s *Source) RejectAccessToken(ctx context.Context, rejected string) error {
 	}
 	defer s.release()
 	return withSessionLock(ctx, s.store, func() error {
+		if err := s.reconcileStoreLocked(); err != nil {
+			return err
+		}
 		durable, err := s.store.Load()
 		if errors.Is(err, ErrNoSession) {
 			return nil
@@ -257,6 +264,20 @@ func (s *Source) RejectAccessToken(ctx context.Context, rejected string) error {
 		}
 		return s.adopt(stale)
 	})
+}
+
+// reconcileStoreLocked performs one-time backend maintenance for this Source.
+// Each request still reads the durable session below; skipping repeat cleanup
+// avoids a second keyring round trip on every request.
+func (s *Source) reconcileStoreLocked() error {
+	if s.reconciled {
+		return nil
+	}
+	if err := reconcileStoreLocked(s.store); err != nil {
+		return err
+	}
+	s.reconciled = true
+	return nil
 }
 
 func isInvalidGrant(err error) bool {

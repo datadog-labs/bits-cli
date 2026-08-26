@@ -23,8 +23,8 @@ func build(isDark bool, p palette) Theme {
 			Border(inputRule, true, false, true, false).
 			BorderForeground(lipgloss.Color(p.inputRule)).
 			BorderBackground(lipgloss.Color(p.surface)),
-		Marker:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.primary)).Background(lipgloss.Color(p.surface)),
-		Text:       lipgloss.NewStyle().Background(lipgloss.Color(p.surface)),
+		Marker: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.primary)).Background(lipgloss.Color(p.surface)),
+		Text:   lipgloss.NewStyle().Background(lipgloss.Color(p.surface)),
 	}
 
 	return Theme{

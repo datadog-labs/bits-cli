@@ -58,7 +58,7 @@ func runLogin(args []string) error {
 	session, err := auth.Login(context.Background(), auth.LoginOptions{
 		Site:     *site,
 		ClientID: *clientID,
-		Store:    auth.KeyringStore{},
+		Store:    auth.DefaultStore(),
 		Out:      os.Stderr,
 	})
 	if err != nil {
@@ -82,7 +82,7 @@ func runLogout(args []string) error {
 	}
 
 	logoutCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	hadSession, revokeErr, err := auth.Logout(logoutCtx, auth.KeyringStore{}, nil)
+	hadSession, revokeErr, err := auth.Logout(logoutCtx, auth.DefaultStore(), nil)
 	cancel()
 	if err != nil {
 		return err
@@ -144,7 +144,7 @@ func runChat(args []string) error {
 
 func authenticatedClient() (*assistant.Client, error) {
 	return authenticatedClientWith(
-		auth.KeyringStore{},
+		auth.DefaultStore(),
 		os.Getenv("DD_API_KEY"),
 		os.Getenv("DD_APP_KEY"),
 		os.Getenv("DD_SITE_URL"),

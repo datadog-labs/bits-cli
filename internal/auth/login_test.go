@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -441,6 +442,57 @@ func TestLogoutClearsCorruptCredential(t *testing.T) {
 	}
 	if store.present || store.deletes != 1 {
 		t.Fatalf("present = %v, deletes = %d", store.present, store.deletes)
+	}
+}
+
+func TestLogoutRevokesDistinctSessionsFromBothStoreBackends(t *testing.T) {
+	store := newTestStore(t, true)
+	keyringSession := fileTestSession()
+	keyringSession.AccessToken = "keyring-access"
+	keyringSession.RefreshToken = "keyring-refresh"
+	fileSession := fileTestSession()
+	fileSession.AccessToken = "file-access"
+	fileSession.RefreshToken = "file-refresh"
+	if err := keyringSave(keyringSession); err != nil {
+		t.Fatalf("seed keyring session: %v", err)
+	}
+	if err := saveSessionFile(store.filePath, false, fileSession); err != nil {
+		t.Fatalf("seed file session: %v", err)
+	}
+
+	revoked := make(chan string, 2)
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth2/v1/revoke" {
+			t.Errorf("request path = %q", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("ParseForm: %v", err)
+		}
+		revoked <- r.Form.Get("token")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer issuer.Close()
+	client := issuer.Client()
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+
+	hadSession, revokeErr, err := Logout(context.Background(), store, client)
+	if err != nil || revokeErr != nil || !hadSession {
+		t.Fatalf("Logout = had %v, revoke %v, err %v", hadSession, revokeErr, err)
+	}
+	got := map[string]bool{<-revoked: true, <-revoked: true}
+	if !got[keyringSession.RefreshToken] || !got[fileSession.RefreshToken] {
+		t.Fatalf("revoked tokens = %v", got)
+	}
+	if _, err := keyringLoad(); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("keyring session survived logout: %v", err)
+	}
+	if _, err := os.Stat(store.filePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("file session survived logout: %v", err)
 	}
 }
 

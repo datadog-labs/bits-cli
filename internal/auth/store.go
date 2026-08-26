@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -19,6 +20,12 @@ import (
 const (
 	keyringService = "com.datadog.bits-cli"
 	keyringAccount = "oauth-session"
+
+	// configDirName is the Bits CLI configuration directory under the user's
+	// home. sessionLockFileName and sessionFileName live inside it.
+	configDirName       = ".bits-cli"
+	sessionLockFileName = "oauth-session.lock"
+	sessionFileName     = "oauth-session.json"
 
 	persistenceAttempts = 3
 	persistenceRetry    = 75 * time.Millisecond
@@ -121,7 +128,7 @@ type sessionLocker interface {
 
 var fallbackSessionGate = make(chan struct{}, 1)
 
-// withSessionLock serializes every durable session transition. KeyringStore's
+// withSessionLock serializes every durable session transition. Store's
 // implementation is cross-process; the fallback exists for test/custom stores
 // and only serializes callers in this process.
 func withSessionLock(ctx context.Context, store CredentialStore, fn func() error) error {
@@ -135,6 +142,26 @@ func withSessionLock(ctx context.Context, store CredentialStore, fn func() error
 		return ctx.Err()
 	}
 	return fn()
+}
+
+func reconcileStoreLocked(store CredentialStore) error {
+	builtIn, ok := store.(Store)
+	if ok {
+		return builtIn.reconcileLocked()
+	}
+	return nil
+}
+
+func loadSessionsForDeleteLocked(store CredentialStore) ([]Session, error) {
+	builtIn, ok := store.(Store)
+	if ok {
+		return builtIn.loadSessionsLocked()
+	}
+	session, err := store.Load()
+	if err != nil {
+		return nil, err
+	}
+	return []Session{session}, nil
 }
 
 func saveWithRetry(ctx context.Context, store CredentialStore, session Session) error {
@@ -194,15 +221,213 @@ func deleteWithRetry(ctx context.Context, store CredentialStore) error {
 	return firstErr
 }
 
-// KeyringStore stores the single active Bits CLI session in the native OS
-// credential manager (Keychain, Secret Service, or Windows Credential Manager).
-type KeyringStore struct {
-	// LockPath is only overridden by tests. The default is in the user's config
-	// directory and contains no credential material.
-	LockPath string
+// DefaultStore returns the credential store for this host. The OS keyring is
+// authoritative whenever it is reachable. The file is a Linux fallback only:
+// while holding the session lock, a file-only session is promoted to the
+// keyring when it returns, and a duplicate file is removed.
+func DefaultStore() Store {
+	return Store{}
 }
 
-func (KeyringStore) Load() (Session, error) {
+// Store is the single Bits CLI credential store. It persists the active session
+// in the native OS credential manager (Keychain, Secret Service, or Windows
+// Credential Manager) when one is available, and otherwise (Linux hosts with no
+// Secret Service) in a mode-0600 JSON file under the config directory.
+type Store struct {
+	// lockPath overrides the cross-process flock path (tests). Empty uses the
+	// default in the user's config directory; the lock holds no credential.
+	lockPath string
+	// filePath overrides the fallback credential file (tests). Empty uses the
+	// default ~/.bits-cli/oauth-session.json.
+	filePath string
+	// available overrides the keyring probe (tests). nil uses the cached
+	// KeyringAvailable result for this process.
+	available func() bool
+}
+
+func (s Store) keyringAvailable() bool {
+	if s.available != nil {
+		return s.available()
+	}
+	return keyringAvailableCached()
+}
+
+// resolveFilePath returns the fallback credential path and whether it is the
+// default location that warrants symlink and permission hardening.
+func (s Store) resolveFilePath() (path string, secure bool, err error) {
+	if s.filePath != "" {
+		return s.filePath, false, nil
+	}
+	path, err = defaultSessionFilePath()
+	return path, true, err
+}
+
+// Load returns the active session. With a keyring present it reads the keyring
+// first, then falls back to the file only when the keyring has no session.
+// Callers performing a session transition reconcile the two backends while
+// holding the session lock; Load itself remains read-only so it cannot race a
+// concurrent login or refresh.
+func (s Store) Load() (Session, error) {
+	if s.keyringAvailable() {
+		session, err := keyringLoad()
+		if err == nil {
+			return session, nil
+		}
+		if !errors.Is(err, ErrNoSession) {
+			return Session{}, err
+		}
+		// Keyring reachable but empty: adopt a pre-availability file session.
+	}
+	path, secure, err := s.resolveFilePath()
+	if err != nil {
+		return Session{}, err
+	}
+	return loadSessionFile(path, secure)
+}
+
+// Save writes session to the keyring when one is available, removing any
+// plaintext file left from a prior fallback so a valid refresh token does not
+// linger; otherwise it writes the file fallback.
+func (s Store) Save(session Session) error {
+	if err := session.validate(); err != nil {
+		return err
+	}
+	path, secure, err := s.resolveFilePath()
+	if err != nil {
+		return err
+	}
+	if s.keyringAvailable() {
+		if err := keyringSave(session); err != nil {
+			return err
+		}
+		// Best-effort: the keyring copy is authoritative, so a lingering plaintext
+		// file is a security nuisance, not a reason to fail an otherwise durable save.
+		_ = deleteSessionFile(path)
+		return nil
+	}
+	return saveSessionFile(path, secure, session)
+}
+
+// Delete removes the session from both backends so a change in keyring
+// availability between invocations cannot leave an orphaned grant behind.
+func (s Store) Delete() error {
+	var errs []error
+	// Always attempt the keyring delete, even when this invocation's probe
+	// reports the keyring unavailable: a credential saved during an earlier
+	// available invocation must not be left behind to reactivate once the
+	// keyring is reachable again. keyringDelete treats a missing entry as
+	// success, so this is a no-op when no keyring session exists.
+	if err := keyringDelete(); err != nil {
+		errs = append(errs, err)
+	}
+	if path, _, err := s.resolveFilePath(); err != nil {
+		errs = append(errs, err)
+	} else if err := deleteSessionFile(path); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// reconcileLocked applies the keyring-authoritative policy. It must only be
+// called while Store's session lock is held: promoting a file session from an
+// unlocked Load could overwrite a concurrent login in the keyring.
+func (s Store) reconcileLocked() error {
+	if !s.keyringAvailable() {
+		return nil
+	}
+
+	_, keyringErr := keyringLoad()
+	if keyringErr == nil {
+		// A reachable keyring wins over an older fallback. Ignore cleanup errors:
+		// the keyring session is durable and plaintext removal can be retried by a
+		// later transition.
+		if path, _, err := s.resolveFilePath(); err == nil {
+			_ = deleteSessionFile(path)
+		}
+		return nil
+	}
+	if errors.Is(keyringErr, ErrSessionCorrupt) {
+		// Reconciliation has no safe repair for a credential it cannot trust; let
+		// Store.Load surface ErrSessionCorrupt so Login can replace it.
+		return nil
+	}
+	if !errors.Is(keyringErr, ErrNoSession) {
+		return keyringErr
+	}
+
+	path, secure, err := s.resolveFilePath()
+	if err != nil {
+		return err
+	}
+	fileSession, err := loadSessionFile(path, secure)
+	if errors.Is(err, ErrNoSession) {
+		return nil
+	}
+	if errors.Is(err, ErrSessionCorrupt) {
+		// A corrupt fallback file cannot be promoted; let Store.Load surface it.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := keyringSave(fileSession); err != nil {
+		return err
+	}
+	_ = deleteSessionFile(path)
+	return nil
+}
+
+// loadSessionsLocked returns the readable, distinct local sessions before
+// logout removes them. It does not reconcile: both grants must remain
+// available until each can be considered for best-effort remote revocation.
+func (s Store) loadSessionsLocked() ([]Session, error) {
+	var sessions []Session
+	var errs []error
+	appendSession := func(session Session) {
+		for _, existing := range sessions {
+			if sameSession(existing, session) {
+				return
+			}
+		}
+		sessions = append(sessions, session)
+	}
+
+	if s.keyringAvailable() {
+		session, err := keyringLoad()
+		if err == nil {
+			appendSession(session)
+		} else if errors.Is(err, ErrNoSession) {
+			// No keyring session is normal when this host previously used the file
+			// fallback.
+		} else if errors.Is(err, ErrSessionCorrupt) {
+			errs = append(errs, err)
+		} else {
+			return nil, err
+		}
+	}
+
+	path, secure, err := s.resolveFilePath()
+	if err != nil {
+		return nil, err
+	}
+	session, err := loadSessionFile(path, secure)
+	if err == nil {
+		appendSession(session)
+	} else if errors.Is(err, ErrNoSession) {
+		// Neither backend has a session.
+	} else if errors.Is(err, ErrSessionCorrupt) {
+		errs = append(errs, err)
+	} else {
+		return nil, err
+	}
+
+	if len(sessions) == 0 && len(errs) == 0 {
+		return nil, ErrNoSession
+	}
+	return sessions, errors.Join(errs...)
+}
+
+func keyringLoad() (Session, error) {
 	raw, err := keyring.Get(keyringService, keyringAccount)
 	if errors.Is(err, keyring.ErrNotFound) {
 		return Session{}, ErrNoSession
@@ -220,10 +445,7 @@ func (KeyringStore) Load() (Session, error) {
 	return session, nil
 }
 
-func (KeyringStore) Save(session Session) error {
-	if err := session.validate(); err != nil {
-		return err
-	}
+func keyringSave(session Session) error {
 	raw, err := json.Marshal(session)
 	if err != nil {
 		return fmt.Errorf("encode OAuth session: %w", err)
@@ -234,7 +456,7 @@ func (KeyringStore) Save(session Session) error {
 	return nil
 }
 
-func (KeyringStore) Delete() error {
+func keyringDelete() error {
 	err := keyring.Delete(keyringService, keyringAccount)
 	if errors.Is(err, keyring.ErrNotFound) {
 		return nil
@@ -245,21 +467,42 @@ func (KeyringStore) Delete() error {
 	return nil
 }
 
-func defaultSessionLockPath() (string, error) {
-	currentUser, err := user.Current()
-	if err != nil {
-		return "", fmt.Errorf("locate OAuth session lock owner: %w", err)
-	}
-	if currentUser.HomeDir == "" {
-		return "", fmt.Errorf("locate OAuth session lock owner: home directory is empty")
-	}
-	// The keyring account is shared per OS user, so the lock path must not vary
-	// with HOME/XDG_CONFIG_HOME or another process environment.
-	return filepath.Join(currentUser.HomeDir, ".bits-cli", "oauth-session.lock"), nil
+var (
+	keyringAvailableOnce sync.Once
+	keyringAvailableMemo bool
+)
+
+// keyringAvailableCached probes the OS keyring once per process. Availability
+// does not change within a short-lived CLI invocation, so a single probe keeps
+// the store's backend choice stable and avoids repeated D-Bus round trips.
+func keyringAvailableCached() bool {
+	keyringAvailableOnce.Do(func() {
+		keyringAvailableMemo = KeyringAvailable()
+	})
+	return keyringAvailableMemo
 }
 
-func (s KeyringStore) WithSessionLock(ctx context.Context, fn func() error) (err error) {
-	path := s.LockPath
+func defaultConfigDir() (string, error) {
+	currentUser, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("locate Bits CLI config directory: %w", err)
+	}
+	if currentUser.HomeDir == "" {
+		return "", fmt.Errorf("locate Bits CLI config directory: home directory is empty")
+	}
+	return filepath.Join(currentUser.HomeDir, configDirName), nil
+}
+
+func defaultSessionLockPath() (string, error) {
+	dir, err := defaultConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, sessionLockFileName), nil
+}
+
+func (s Store) WithSessionLock(ctx context.Context, fn func() error) error {
+	path := s.lockPath
 	usingDefaultPath := path == ""
 	if usingDefaultPath {
 		var pathErr error
@@ -268,8 +511,14 @@ func (s KeyringStore) WithSessionLock(ctx context.Context, fn func() error) (err
 			return pathErr
 		}
 	}
+	return withFileLock(ctx, path, usingDefaultPath, fn)
+}
+
+// withFileLock runs fn while holding the cross-process flock at lockPath. When
+// secure is true it refuses symlinked lock dirs/files and tightens dir perms.
+func withFileLock(ctx context.Context, path string, secure bool, fn func() error) (err error) {
 	lockDir := filepath.Dir(path)
-	if usingDefaultPath {
+	if secure {
 		if info, statErr := os.Lstat(lockDir); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("create OAuth session lock directory: refusing symlink %s", lockDir)
 		} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
@@ -279,7 +528,7 @@ func (s KeyringStore) WithSessionLock(ctx context.Context, fn func() error) (err
 	if err := os.MkdirAll(lockDir, 0o700); err != nil {
 		return fmt.Errorf("create OAuth session lock directory: %w", err)
 	}
-	if usingDefaultPath {
+	if secure {
 		if err := os.Chmod(lockDir, 0o700); err != nil {
 			return fmt.Errorf("secure OAuth session lock directory: %w", err)
 		}

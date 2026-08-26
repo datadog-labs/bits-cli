@@ -13,7 +13,7 @@ func TestE2E_OAuthRefresh(t *testing.T) {
 	if os.Getenv("BITS_OAUTH_E2E") == "" {
 		t.Skip("set BITS_OAUTH_E2E=1 after bits login")
 	}
-	store := KeyringStore{}
+	store := DefaultStore()
 	before, err := store.Load()
 	if err != nil {
 		t.Fatalf("load OAuth session: %v", err)

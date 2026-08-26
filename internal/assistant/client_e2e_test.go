@@ -29,7 +29,7 @@ import (
 func requireE2E(t *testing.T) *Client {
 	t.Helper()
 	if os.Getenv("BITS_OAUTH_E2E") != "" {
-		store := auth.KeyringStore{}
+		store := auth.DefaultStore()
 		session, err := store.Load()
 		if err != nil {
 			t.Fatalf("load OAuth session: %v (run bits login first)", err)

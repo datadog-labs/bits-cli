@@ -62,7 +62,7 @@ func Login(ctx context.Context, opts LoginOptions) (Session, error) {
 
 func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, error) {
 	if opts.Store == nil {
-		opts.Store = KeyringStore{}
+		opts.Store = DefaultStore()
 	}
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = &http.Client{Timeout: 30 * time.Second}
@@ -128,6 +128,9 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	lockCtx, lockCancel := context.WithTimeout(ctx, sessionLockTimeout)
 	defer lockCancel()
 	persistErr := withSessionLock(lockCtx, opts.Store, func() error {
+		if err := reconcileStoreLocked(opts.Store); err != nil {
+			return err
+		}
 		stored, loadErr := opts.Store.Load()
 		if loadErr == nil {
 			previous, hadPrevious = stored, true
@@ -341,17 +344,18 @@ func Revoke(ctx context.Context, session Session, httpClient *http.Client) error
 // will observe deletion and cannot resurrect the session.
 func Logout(ctx context.Context, store CredentialStore, httpClient *http.Client) (bool, error, error) {
 	if store == nil {
-		store = KeyringStore{}
+		store = DefaultStore()
 	}
-	var session Session
+	var sessions []Session
 	var hadSession, localDeleted bool
 	err := withSessionLock(ctx, store, func() error {
-		stored, loadErr := store.Load()
+		stored, loadErr := loadSessionsForDeleteLocked(store)
 		if errors.Is(loadErr, ErrNoSession) {
 			return nil
 		}
 		if errors.Is(loadErr, ErrSessionCorrupt) {
 			hadSession = true
+			sessions = stored
 			if err := deleteWithRetry(ctx, store); err != nil {
 				return err
 			}
@@ -361,7 +365,7 @@ func Logout(ctx context.Context, store CredentialStore, httpClient *http.Client)
 		if loadErr != nil {
 			return loadErr
 		}
-		session, hadSession = stored, true
+		sessions, hadSession = stored, true
 		if err := deleteWithRetry(ctx, store); err != nil {
 			return err
 		}
@@ -374,12 +378,18 @@ func Logout(ctx context.Context, store CredentialStore, httpClient *http.Client)
 	if !hadSession {
 		return false, nil, nil
 	}
-	if session.AccessToken == "" {
-		// A corrupt credential was removed but cannot be safely revoked because
-		// its token/client/routing fields were not trusted.
-		return true, nil, nil
+	var revokeErrs []error
+	for _, session := range sessions {
+		if session.AccessToken == "" {
+			// A corrupt credential was removed but cannot be safely revoked because
+			// its token/client/routing fields were not trusted.
+			continue
+		}
+		if err := Revoke(ctx, session, httpClient); err != nil {
+			revokeErrs = append(revokeErrs, err)
+		}
 	}
-	return true, Revoke(ctx, session, httpClient), nil
+	return true, errors.Join(revokeErrs...), nil
 }
 
 func sanitizedOAuthError(operation string, err error) error {
