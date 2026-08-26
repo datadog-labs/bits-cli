@@ -89,21 +89,16 @@ func kinds(evs []Event) []EventKind {
 	return ks
 }
 
-func TestConcurrentTurnPanics(t *testing.T) {
+func TestConcurrentTurnReturnsOperationError(t *testing.T) {
 	gate := make(chan struct{})
 	e := New(&blockingBackend{gate: gate}, assistant.SendOptions{})
 	ch := e.StartTurn(context.Background(), TurnInput{Message: "one"})
-	defer func() {
-		close(gate)
-		for range ch {
-		}
-	}()
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic on overlapping turn")
-		}
-	}()
-	_ = e.StartTurn(context.Background(), TurnInput{Message: "two"})
+	events := drain(e.StartTurn(context.Background(), TurnInput{Message: "two"}))
+	if len(events) != 1 || events[0].Kind != EventError || !errors.Is(events[0].Err, ErrOperationActive) {
+		t.Fatalf("overlap events = %+v, want ErrOperationActive", events)
+	}
+	close(gate)
+	_ = drain(ch)
 }
 
 func TestTurnEmitsEventSequence(t *testing.T) {
@@ -219,7 +214,11 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 	resp := &assistant.ConversationHistoryResponse{}
 	resp.Data.Attributes.Messages = []assistant.Message{
 		assistant.AssistantMessage("m1", assistant.TextContent("Hello")),
+		assistant.AssistantMessage("turn", assistant.Content{Type: assistant.ContentTurnStatus, TurnStatus: &assistant.TurnStatusPayload{Status: "ended"}}),
+		assistant.AssistantMessage("stop", assistant.Content{Type: assistant.ContentUserStop, Stop: &assistant.StopPayload{Content: "stopped"}}),
+		assistant.AssistantMessage("internal", assistant.Content{Type: assistant.ContentProviderCompaction, Compaction: &assistant.CompactionPayload{Summary: "private"}}),
 		assistant.AssistantMessage("m2", assistant.TextContent("World")),
+		assistant.AssistantMessage("future", assistant.Content{Type: "future_content"}),
 	}
 	e := New(&historyBackend{resp: resp}, assistant.SendOptions{ConversationID: "conv-1"})
 
@@ -227,8 +226,9 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 	if len(evs) != 1 || evs[0].Kind != EventBlock {
 		t.Fatalf("events = %v, want one EventBlock", kinds(evs))
 	}
-	if n := len(evs[0].Update.Blocks); n != 2 {
-		t.Fatalf("restored blocks = %d, want 2", n)
+	blocks := evs[0].Update.Blocks
+	if len(blocks) != 3 || blocks[0].Kind != assistant.KindText || blocks[1].Kind != assistant.KindText || blocks[2].Kind != assistant.KindUnknown {
+		t.Fatalf("restored blocks = %+v, want text/text/unknown without technical markers", blocks)
 	}
 }
 

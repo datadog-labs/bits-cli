@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
@@ -70,6 +71,7 @@ const maxTurns = 20
 // to make sure it does not concurrently starts either of those in parallel.
 type Engine struct {
 	backend                Backend
+	mu                     sync.RWMutex // protects opts, transcript, and previousConversationID
 	opts                   assistant.SendOptions
 	transcript             *Transcript
 	previousConversationID string
@@ -98,21 +100,26 @@ type TurnInput struct {
 
 // StartTurn runs one user turn (plus any client-tool round-trips) in a goroutine
 // and streams events. The channel is closed when the turn ends. Cancel ctx to
-// interrupt; cancellation ends the turn quietly (no error event). It panics if a
-// turn or restore is already in flight.
+// interrupt; cancellation ends the turn quietly (no error event). An overlap
+// returns a one-event ErrOperationActive channel.
 func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
-	e.begin()
+	if !e.begin() {
+		return eventResult(Event{Kind: EventError, Err: ErrOperationActive})
+	}
 	out := make(chan Event, 64)
 	go e.run(ctx, in, out)
 	return out
 }
 
-// begin claims the engine for one turn/restore, panicking if another is already
-// running. The paired release is deferred inside run/restore.
-func (e *Engine) begin() {
-	if !e.active.CompareAndSwap(false, true) {
-		panic("agent: StartTurn/Restore called while a turn is already running")
-	}
+// begin claims the engine for one operation. The operation owns the paired
+// release, including a loaded conversation awaiting the UI's commit decision.
+func (e *Engine) begin() bool { return e.active.CompareAndSwap(false, true) }
+
+func eventResult(ev Event) <-chan Event {
+	out := make(chan Event, 1)
+	out <- ev
+	close(out)
+	return out
 }
 
 func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event) {
@@ -139,8 +146,12 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event) {
 	}
 
 	fold := func(msg assistant.Message) bool {
-		if b, ok := e.transcript.AppendMessage(msg); ok {
-			if !send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: e.snapshot(), Changed: b}}) {
+		e.mu.Lock()
+		b, ok := e.transcript.AppendMessage(msg)
+		blocks := append([]Block(nil), e.transcript.Blocks()...)
+		e.mu.Unlock()
+		if ok {
+			if !send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: blocks, Changed: b}}) {
 				return false
 			}
 		}
@@ -153,18 +164,23 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event) {
 	}
 
 	// The user's turn opens the transcript; the engine owns the user block too.
+	e.mu.Lock()
 	userBlock := e.transcript.AppendUser(in.Message)
-	if !send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: e.snapshot(), Changed: userBlock}}) {
+	userBlocks := append([]Block(nil), e.transcript.Blocks()...)
+	e.mu.Unlock()
+	if !send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: userBlocks, Changed: userBlock}}) {
 		return
 	}
 
 	var next any = in.Message
-	convID := e.opts.ConversationID
+	convID := e.ConversationID()
 
 	for range maxTurns {
 		var calls []assistant.Content
 
+		e.mu.RLock()
 		opts := e.opts
+		e.mu.RUnlock()
 		opts.ConversationID = convID
 		opts.ClientTools = defs
 
@@ -185,45 +201,65 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event) {
 			// down the stream. Retain it so /new can preserve a resumable handle
 			// for the conversation being left behind.
 			if id != "" {
+				e.mu.Lock()
 				e.opts.ConversationID = id
+				e.mu.Unlock()
 			}
 			return // cancelled: end the turn quietly
 		}
 		if err != nil {
-			e.transcript.FinalizeAll()
+			e.finalizeTranscript()
 			send(Event{Kind: EventError, Err: err})
 			return
 		}
 
 		convID = id
+		e.mu.Lock()
 		e.opts.ConversationID = convID
+		e.mu.Unlock()
 		send(Event{Kind: EventConversation, ConvID: convID})
 
 		if len(calls) == 0 {
-			e.transcript.FinalizeAll()
+			e.finalizeTranscript()
 			send(Event{Kind: EventTurnDone})
 			return
 		}
 		next = execTools(ctx, tools, calls)
 	}
-	e.transcript.FinalizeAll()
+	e.finalizeTranscript()
 	send(Event{Kind: EventError, Err: ErrMaxTurns})
 }
 
 // snapshot returns a copy of the current blocks, safe to send on the channel and
 // retain: the engine keeps mutating its own transcript on later folds.
 func (e *Engine) snapshot() []Block {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	return append([]Block(nil), e.transcript.Blocks()...)
+}
+
+func (e *Engine) finalizeTranscript() {
+	e.mu.Lock()
+	e.transcript.FinalizeAll()
+	e.mu.Unlock()
 }
 
 // ConversationID reports the conversation the engine is bound to. It is set
 // from SendOptions and updated as turns run; empty means a new conversation.
-func (e *Engine) ConversationID() string { return e.opts.ConversationID }
+func (e *Engine) ConversationID() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.opts.ConversationID
+}
 
 // PreviousConversationID reports the most recent non-empty conversation that
 // NewConversation left behind. It remains available after reset so navigation
 // and lifecycle checks can recover the prior persisted conversation.
-func (e *Engine) PreviousConversationID() string { return e.previousConversationID }
+func (e *Engine) PreviousConversationID() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.previousConversationID
+}
 
 // NewConversation clears the conversation-scoped engine state without making a
 // backend request. Non-history request configuration and the backend/client
@@ -239,6 +275,8 @@ func (e *Engine) NewConversation() error {
 	}
 	defer e.active.Store(false)
 
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.opts.ConversationID != "" {
 		e.previousConversationID = e.opts.ConversationID
 	}
@@ -251,7 +289,9 @@ func (e *Engine) NewConversation() error {
 // Restore fetches the persisted history for the engine's conversation, folds it
 // into the transcript.
 func (e *Engine) Restore(ctx context.Context) <-chan Event {
-	e.begin()
+	if !e.begin() {
+		return eventResult(Event{Kind: EventError, Err: ErrOperationActive})
+	}
 	out := make(chan Event, 64)
 	go e.restore(ctx, out)
 	return out
@@ -268,7 +308,8 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 		}
 	}
 
-	if e.opts.ConversationID == "" {
+	conversationID := e.ConversationID()
+	if conversationID == "" {
 		return
 	}
 	hb, ok := e.backend.(HistoryBackend)
@@ -276,7 +317,7 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 		send(Event{Kind: EventError, Err: ErrHistoryUnsupported})
 		return
 	}
-	resp, err := hb.ConversationHistory(ctx, assistant.ConversationHistoryInput{ConversationID: e.opts.ConversationID})
+	resp, err := hb.ConversationHistory(ctx, assistant.ConversationHistoryInput{ConversationID: conversationID})
 	if ctx.Err() != nil {
 		return // cancelled: end quietly
 	}
@@ -287,10 +328,12 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 	if resp == nil {
 		return
 	}
+	e.mu.Lock()
 	for _, msg := range resp.Data.Attributes.Messages {
 		e.transcript.AppendMessage(msg)
 	}
 	e.transcript.FinalizeAll()
+	e.mu.Unlock()
 	if blocks := e.snapshot(); len(blocks) > 0 {
 		send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: blocks}})
 	}

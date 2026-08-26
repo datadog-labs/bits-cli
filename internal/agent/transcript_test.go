@@ -204,6 +204,27 @@ func TestPassthroughKindProducesBlock(t *testing.T) {
 	}
 }
 
+func TestTechnicalMarkersAreDroppedButUnknownContentIsRetained(t *testing.T) {
+	tr := NewTranscript()
+	technical := []assistant.Content{
+		{Type: assistant.ContentTurnStatus, TurnStatus: &assistant.TurnStatusPayload{Status: "ended"}},
+		{Type: assistant.ContentUserStop, Stop: &assistant.StopPayload{Content: "stopped"}},
+		{Type: assistant.ContentProviderCompaction, Compaction: &assistant.CompactionPayload{Summary: "private"}},
+	}
+	for i, content := range technical {
+		if block, ok := tr.AppendMessage(assistant.AssistantMessage("technical", content)); ok {
+			t.Fatalf("technical content %d produced block %+v", i, block)
+		}
+	}
+	unknown, ok := tr.AppendMessage(assistant.AssistantMessage("future", assistant.Content{Type: "future_content"}))
+	if !ok || unknown.Kind != assistant.KindUnknown {
+		t.Fatalf("unknown content = (%+v, %v), want safe fallback block", unknown, ok)
+	}
+	if blocks := tr.Blocks(); len(blocks) != 1 || blocks[0].Kind != assistant.KindUnknown {
+		t.Fatalf("transcript blocks = %+v", blocks)
+	}
+}
+
 func TestFinalizeAllReleasesStreamingAccumulator(t *testing.T) {
 	tr := NewTranscript()
 	tr.AppendMessage(assistant.AssistantMessage("m1", assistant.TextContent("partial")))

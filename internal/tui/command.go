@@ -24,6 +24,7 @@ type commandID uint8
 const (
 	commandQuit commandID = iota + 1
 	commandNew
+	commandResume
 )
 
 type commandDefinition struct {
@@ -45,6 +46,11 @@ var commandDefinitions = []commandDefinition{
 		name:             "quit",
 		aliases:          []string{"exit"},
 		activeTurnPolicy: commandCancelsTurn,
+	},
+	{
+		id:               commandResume,
+		name:             "resume",
+		activeTurnPolicy: commandRejectedDuringTurn,
 	},
 }
 
@@ -117,6 +123,8 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, m.startNewConversation()
 	case commandQuit:
 		return m, tea.Quit
+	case commandResume:
+		return m, m.openConversationPicker()
 	default:
 		panic("unhandled registered command")
 	}

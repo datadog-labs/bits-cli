@@ -71,11 +71,16 @@ func (t *Transcript) fold(msg assistant.Message) (Block, bool) {
 		return t.appendPassthrough(msg, kind, func(b *Block) { b.Dashboard = msg.Content.Dashboard })
 	case assistant.KindProgress:
 		return t.appendPassthrough(msg, kind, func(b *Block) { b.Progress = msg.Content.Progress })
-	default:
-		// Turn markers, stop, internal, and unknown kinds carry no renderable
-		// block yet; the payload is on msg.Content.
+	case assistant.KindTurnMarker, assistant.KindStop, assistant.KindInternal:
+		// Known history-only control metadata is not conversation content. Keep it
+		// out of both startup restore and /resume transcripts.
 		return Block{}, false
+	case assistant.KindUnknown:
+		// Future content remains visible as a safe fallback label. Its provider
+		// payload is deliberately not rendered.
+		return t.appendPassthrough(msg, kind, func(*Block) {})
 	}
+	return Block{}, false
 }
 
 // appendMarkdown appends a streamed answer-text fragment. Fragments sharing an

@@ -152,6 +152,94 @@ func TestE2E_ConversationLifecycle(t *testing.T) {
 	}
 }
 
+// TestE2E_ResumeConversationLifecycle covers the cross-surface contract used by
+// /resume: create a disposable conversation, find it through the same list API
+// used by Bits web, load its history, append using that exact id, and verify the
+// persisted user turns remain ordered and unique.
+func TestE2E_ResumeConversationLifecycle(t *testing.T) {
+	c := requireE2E(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	nonce := time.Now().UnixNano()
+	first := fmt.Sprintf("bits-resume-e2e-first-%d", nonce)
+	second := fmt.Sprintf("bits-resume-e2e-second-%d", nonce)
+	convID, err := c.Send(ctx, first, SendOptions{}, nil)
+	if err != nil {
+		t.Fatalf("initial Send: %v", err)
+	}
+	if convID == "" {
+		t.Fatal("initial Send returned an empty conversation id")
+	}
+	defer func() {
+		_ = c.DeleteConversation(context.Background(), DeleteConversationInput{ConversationID: convID})
+	}()
+
+	listed, err := c.UserConversations(ctx)
+	if err != nil {
+		t.Fatalf("UserConversations: %v", err)
+	}
+	if listed.Data.Type != "user-conversations-response" {
+		t.Fatalf("list response type = %q", listed.Data.Type)
+	}
+	found := false
+	for _, summary := range listed.Data.Attributes.Conversations {
+		if summary.ConversationID != convID {
+			continue
+		}
+		found = true
+		if summary.ID != convID {
+			t.Errorf("JSON:API id = %q, want canonical conversation_id %q", summary.ID, convID)
+		}
+		if summary.UpdatedAt <= 0 {
+			t.Errorf("updated_at = %d, want milliseconds timestamp", summary.UpdatedAt)
+		}
+		break
+	}
+	if !found {
+		t.Fatalf("conversation %s not present in user list", convID)
+	}
+
+	before, err := c.ConversationHistory(ctx, ConversationHistoryInput{ConversationID: convID})
+	if err != nil {
+		t.Fatalf("ConversationHistory before append: %v", err)
+	}
+	if before.Data.Type != "conversation-history-response" {
+		t.Fatalf("history response type = %q", before.Data.Type)
+	}
+	if before.Data.ID == convID {
+		t.Errorf("history data.id unexpectedly equals conversation id %q; contract says it identifies the response", convID)
+	}
+
+	appendedID, err := c.Send(ctx, second, SendOptions{ConversationID: convID}, nil)
+	if err != nil {
+		t.Fatalf("append Send: %v", err)
+	}
+	if appendedID != convID {
+		t.Fatalf("append returned conversation id %q, want %q", appendedID, convID)
+	}
+	after, err := c.ConversationHistory(ctx, ConversationHistoryInput{ConversationID: convID})
+	if err != nil {
+		t.Fatalf("ConversationHistory after append: %v", err)
+	}
+
+	positions := map[string][]int{first: nil, second: nil}
+	for i, message := range after.Data.Attributes.Messages {
+		if message.Role != "user" || message.Content.Kind() != KindText || message.Content.Markdown == nil {
+			continue
+		}
+		if _, ok := positions[message.Content.Markdown.Content]; ok {
+			positions[message.Content.Markdown.Content] = append(positions[message.Content.Markdown.Content], i)
+		}
+	}
+	if len(positions[first]) != 1 || len(positions[second]) != 1 {
+		t.Fatalf("persisted user turn positions = %#v, want each exactly once", positions)
+	}
+	if positions[first][0] >= positions[second][0] {
+		t.Fatalf("persisted user turns out of order: first=%d second=%d", positions[first][0], positions[second][0])
+	}
+}
+
 func TestE2E_ListSkills(t *testing.T) {
 	c := requireE2E(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

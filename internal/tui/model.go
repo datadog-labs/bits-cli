@@ -11,6 +11,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	"github.com/DataDog/bits-cli/internal/tui/editor"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
@@ -23,6 +24,7 @@ const (
 	ModeTermInit Mode = iota
 	ModeChat
 	ModeLogin
+	ModeConversations
 )
 
 // EngineFactory constructs the authenticated chat engine after startup login
@@ -35,6 +37,7 @@ type Model struct {
 	// Collaborators the model drives.
 	engine *agent.Engine
 	editor *editor.Editor
+	picker *conversationview.Model
 
 	// Startup login stays inside this root model so Bubble Tea owns the
 	// alternate screen continuously while switching from login to chat.
@@ -64,6 +67,13 @@ type Model struct {
 
 	// Top-level screen; transitions go through setMode.
 	mode Mode
+
+	// /resume operations are cancellable and generation-stamped. A late result
+	// from a cancelled list/load can never mutate the current conversation.
+	conversationGeneration uint64
+	conversationCancel     context.CancelFunc
+	conversationRetry      conversationRetry
+	conversationSwitchID   string
 
 	// Turn status, surfaced in the status line.
 	chatPhase chat.Phase

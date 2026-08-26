@@ -11,6 +11,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
@@ -92,9 +93,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
+		// Global quit must win over mode-specific input routing. In particular,
+		// /resume may own a live list/history request that must be cancelled
+		// before the application exits.
+		if msg.String() == "ctrl+c" && m.mode == ModeConversations {
+			_ = m.closeConversationPicker()
+			return m.handleKey(msg)
+		}
+		if m.mode == ModeConversations {
+			return m, m.updateConversationPicker(msg)
+		}
 		return m.handleKey(msg)
 
 	case tea.MouseWheelMsg:
+		if m.mode == ModeConversations {
+			return m, m.updateConversationPicker(msg)
+		}
 		switch msg.Button {
 		case tea.MouseWheelUp:
 			m.list.ScrollBy(-mouseWheelDelta)
@@ -130,11 +144,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case conversationListResultMsg:
+		return m, m.applyConversationListResult(msg)
+
+	case conversationSwitchResultMsg:
+		return m, m.applyConversationSwitchResult(msg)
+
+	case conversationview.SelectedMsg:
+		return m, m.selectConversation(msg.Conversation)
+
+	case conversationview.CancelledMsg:
+		return m, m.closeConversationPicker()
+
+	case conversationview.RetryMsg:
+		return m, m.retryConversationOperation()
+
 	case noticeExpiredMsg:
 		if msg.seq == m.noticeSeq {
 			m.notice = chat.Notice{}
 		}
 		return m, nil
+	}
+	if m.mode == ModeConversations {
+		return m, m.updateConversationPicker(msg)
 	}
 
 	// Cursor blink, paste, and other input messages go to the editor; a paste
@@ -373,6 +405,9 @@ func (m *Model) resize(w, h int) {
 	m.width, m.height = w, h
 	m.editor.SetWidth(w)
 	m.list.SetWidth(w)
+	if m.picker != nil {
+		m.picker.SetSize(w, h)
+	}
 	if m.mode == ModeTermInit {
 		m.setMode(ModeChat)
 		return
