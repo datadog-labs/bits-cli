@@ -49,24 +49,32 @@ func renderText(it agent.Block, width int, sty Styles) string {
 	if it.Role == assistant.RoleUser {
 		return renderUser(text, width, sty)
 	}
-	return renderMarkdown(text, width, sty.MarkdownStyle)
+	return renderMarkdown(text, width, sty.Markdown)
 }
 
-// renderUser prefixes the first line with a marker and hangs the continuation
-// lines under it so the message stays visually aligned.
+// renderUser draws the user prompt as a shared input block: a colored caret,
+// the text hang-indented under it, all on the shared input background with one
+// row of vertical padding above and below (from InputBlock). The caret and its
+// single-space gutter match the editor prompt so a submitted message aligns
+// exactly with what was typed.
 func renderUser(text string, width int, sty Styles) string {
-	const marker = "› "
-	w := ansi.StringWidth(marker)
+	marker := sty.Input.Prompt
+	w := sty.Input.PromptWidth()
 
-	lines := strings.Split(wrap(text, max(1, width-w)), "\n")
+	// Reserve the block's horizontal padding, then the caret gutter, so wrapped
+	// text fits inside the background fill.
+	inner := max(1, width-sty.Input.Block.GetHorizontalFrameSize())
+
+	lines := strings.Split(wrap(text, max(1, inner-w)), "\n")
 	for i, ln := range lines {
 		if i == 0 {
-			lines[i] = sty.UserMarker.Render(marker) + sty.UserText.Render(ln)
+			lines[i] = sty.Input.Marker.Render(marker) + sty.Input.Text.Render(ln)
 			continue
 		}
-		lines[i] = strings.Repeat(" ", w) + sty.UserText.Render(ln)
+		// Hang-indent continuation lines; the padding carries the background too.
+		lines[i] = sty.Input.Text.Render(strings.Repeat(" ", w) + ln)
 	}
-	return strings.Join(lines, "\n")
+	return sty.Input.Block.Width(width).Render(strings.Join(lines, "\n"))
 }
 
 // renderReasoning renders model thinking as dimmed, wrapped text. Redacted

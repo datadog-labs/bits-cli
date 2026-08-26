@@ -60,7 +60,7 @@ func textAttrSamples() []string {
 
 func semanticRoleSamples(width int, sty chat.Styles) []string {
 	return []string{
-		renderSample("UserMarker + UserText", sty.UserMarker.Render("› ")+sty.UserText.Render("show me error logs")),
+		renderSample("Input block", sty.Input.Block.Render(sty.Input.Marker.Render(sty.Input.Prompt)+sty.Input.Text.Render("show me error logs"))),
 		renderSample("AssistantText", sty.AssistantText.Render(sampleText)),
 		renderSample("Reasoning", sty.Reasoning.Render("thinking through the query plan…")),
 		renderSample("ToolName", sty.ToolName.Render("search_logs")),

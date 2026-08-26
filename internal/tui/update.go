@@ -10,6 +10,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 // historyLoadTimeout bounds the conversation-history fetch on startup.
@@ -233,12 +234,10 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 
 // setDarkBackground adapts styles to the detected terminal background.
 func (m *Model) setDarkBackground(isDark bool) {
-	if isDark == m.hasDarkBG {
+	if isDark == m.styles.IsDark {
 		return
 	}
-	m.hasDarkBG = isDark
-	m.chatStyles = chat.DefaultStyles(isDark)
-	m.list.SetStyles(m.chatStyles)
+	m.applyStyles(styles.Default(isDark))
 	m.refreshViewport()
 }
 

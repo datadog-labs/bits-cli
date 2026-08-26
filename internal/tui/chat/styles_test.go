@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"image/color"
 	"testing"
+
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 func hex(c color.Color) string {
@@ -16,19 +18,19 @@ func hex(c color.Color) string {
 // two representations can't silently drift.
 func TestDefaultStylesMarkdownTokens(t *testing.T) {
 	cases := []struct {
-		isDark                          bool
-		secondary, link, codeFg, codeBg string
+		isDark bool
 	}{
-		{true, uiAISecondaryDark, uiLinkDark, uiCodeTextDark, uiCodeBgDark},
-		{false, uiAISecondaryLight, uiLinkLight, uiCodeTextLight, uiCodeBgLight},
+		{true},
+		{false},
 	}
 	for _, tc := range cases {
 		sty := DefaultStyles(tc.isDark)
+		want := styles.Default(tc.isDark).Chat
 		got := []struct{ name, have, want string }{
-			{"heading", hex(sty.MarkdownHeading), tc.secondary},
-			{"link", hex(sty.MarkdownLink), tc.link},
-			{"code fg", hex(sty.MarkdownCodeFg), tc.codeFg},
-			{"code bg", hex(sty.MarkdownCodeBg), tc.codeBg},
+			{"heading", hex(sty.MarkdownHeading), hex(want.MarkdownHeading)},
+			{"link", hex(sty.MarkdownLink), hex(want.MarkdownLink)},
+			{"code fg", hex(sty.MarkdownCodeFg), hex(want.MarkdownCodeFg)},
+			{"code bg", hex(sty.MarkdownCodeBg), hex(want.MarkdownCodeBg)},
 		}
 		for _, g := range got {
 			if !equalHex(g.have, g.want) {

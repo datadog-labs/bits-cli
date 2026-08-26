@@ -44,7 +44,7 @@ func (m *Model) chatView() string {
 	// editor's Height excludes the menu, so opening it covers the transcript's
 	// bottom rows without reflowing the layout.
 	menuW, menuH := lipgloss.Width(menu), lipgloss.Height(menu)
-	x := 2 // align under the "› " prompt
+	x := m.editor.ContentOffset()
 	if width := m.list.Width(); x+menuW > width {
 		x = max(0, width-menuW)
 	}

@@ -13,6 +13,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 // menuMaxWidth caps the completion popup width in cells.
@@ -33,8 +35,13 @@ const (
 type Editor struct {
 	ta       textarea.Model
 	complete Completer
-	styles   Styles
+	styles   styles.Editor
 	menu     menu
+
+	// inputStyle is the shared input-block contract. width is the block's total
+	// width; the textarea is sized to fit inside the block's horizontal frame.
+	inputStyle styles.Input
+	width      int
 }
 
 // menu is the completion popup state rendered below the textarea.
@@ -47,8 +54,9 @@ type menu struct {
 // New returns a chat editor using the built-in fake completer. Call Focus to
 // start the cursor and receive its blink command.
 func New() *Editor {
+	defaultStyles := styles.Default(true)
 	ta := textarea.New()
-	ta.Prompt = "› "
+	ta.Prompt = defaultStyles.Input.Prompt
 	ta.Placeholder = "Ask Bits…"
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
@@ -68,14 +76,56 @@ func New() *Editor {
 	st.Blurred.CursorLine = lipgloss.NewStyle()
 	ta.SetStyles(st)
 
-	return &Editor{ta: ta, complete: Dispatch, styles: DefaultStyles()}
+	return &Editor{
+		ta:         ta,
+		complete:   Dispatch,
+		styles:     defaultStyles.Editor,
+		inputStyle: defaultStyles.Input,
+	}
 }
+
+// SetInputStyles gives the editor the shared input-block look: a background
+// fill, a colored caret, and one row of vertical padding above and below. The
+// background lives on the textarea's Base style (inherited by every inner span,
+// so the whole editor paints on bg with no gaps); the padding lives on an
+// external wrapper (block) instead of Base, because textarea.placeholderView
+// applies Base and the viewport itself and View applies both again — a padded
+// Base would be applied twice and clip the placeholder and caret on empty input.
+// The parent wires the shared input style so editor stays chat-free.
+func (e *Editor) SetInputStyles(inputStyle styles.Input) {
+	base := lipgloss.NewStyle().Background(inputStyle.Background)
+
+	st := e.ta.Styles()
+	st.Focused.Base, st.Blurred.Base = base, base
+	st.Focused.Prompt, st.Blurred.Prompt = inputStyle.Marker, inputStyle.Marker
+	// Drop the current-line highlight; it inherits Base's background instead.
+	st.Focused.CursorLine = lipgloss.NewStyle()
+	st.Blurred.CursorLine = lipgloss.NewStyle()
+	e.ta.SetStyles(st)
+
+	// Vertical padding only, matching the user block: the caret sits flush left
+	// and the background fills the width.
+	e.inputStyle = inputStyle
+	e.resizeTextarea()
+}
+
+// SetStyles updates the completion-menu appearance.
+func (e *Editor) SetStyles(menuStyles styles.Editor) { e.styles = menuStyles }
 
 // Focus focuses the textarea and returns its cursor-blink command.
 func (e *Editor) Focus() tea.Cmd { return e.ta.Focus() }
 
-// SetWidth sets the input width in cells.
-func (e *Editor) SetWidth(w int) { e.ta.SetWidth(w) }
+// SetWidth sets the block's total width in cells. The textarea is sized to fit
+// inside the block's horizontal frame so the block stays exactly w wide.
+func (e *Editor) SetWidth(w int) {
+	e.width = w
+	e.resizeTextarea()
+}
+
+// resizeTextarea sizes the textarea to the width left inside the block frame.
+func (e *Editor) resizeTextarea() {
+	e.ta.SetWidth(max(1, e.width-e.inputStyle.Block.GetHorizontalFrameSize()))
+}
 
 // SetPlaceholder sets the hint shown while the input is empty.
 func (e *Editor) SetPlaceholder(s string) { e.ta.Placeholder = s }
@@ -96,7 +146,7 @@ func (e *Editor) MenuOpen() bool { return e.menu.open }
 // Height is the rendered height of the input in rows. It deliberately excludes
 // the completion menu: the menu is an overlay (see MenuView), so opening it must
 // not change the layout and reflow the transcript.
-func (e *Editor) Height() int { return lipgloss.Height(e.ta.View()) }
+func (e *Editor) Height() int { return lipgloss.Height(e.View()) }
 
 // Update handles one message. When the menu is open it consumes navigation keys
 // (up/down/tab/enter/esc); otherwise the message is fed to the textarea and the
@@ -124,9 +174,19 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-// View renders the input line(s). The completion menu is returned separately by
+// View renders the input block: the textarea wrapped in the shared background
+// and one row of vertical padding. The completion menu is returned separately by
 // MenuView so the parent can composite it as an overlay.
-func (e *Editor) View() string { return e.ta.View() }
+func (e *Editor) View() string {
+	if e.width <= 0 {
+		return e.inputStyle.Block.Render(e.ta.View())
+	}
+	return e.inputStyle.Block.Width(e.width).Render(e.ta.View())
+}
+
+// ContentOffset returns the number of cells from the editor's left edge to its
+// text content. Parents use it to align overlays with the input text.
+func (e *Editor) ContentOffset() int { return e.inputStyle.ContentOffset() }
 
 // MenuView renders the completion menu as an opaque, fixed-width block, or ""
 // when closed. The parent floats it above the input; giving every row a
@@ -227,20 +287,4 @@ func wordBounds(runes []rune, col int) (start, end int) {
 		end++
 	}
 	return start, end
-}
-
-// Styles controls the completion menu appearance. It is a plain value; no theme
-// system yet.
-type Styles struct {
-	MenuItem     lipgloss.Style
-	MenuSelected lipgloss.Style
-}
-
-// DefaultStyles returns a reasonable default menu palette. Both states carry a
-// background so the overlaid popup is opaque.
-func DefaultStyles() Styles {
-	return Styles{
-		MenuItem:     lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")),
-		MenuSelected: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("238")),
-	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	"github.com/DataDog/bits-cli/internal/tui/editor"
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 // Mode is the top-level screen the model shows.
@@ -53,7 +54,7 @@ type Model struct {
 	// per-item render cache; chatStyles is also used by the notice bar.
 	list       *chat.List
 	chatStyles chat.Styles
-	hasDarkBG  bool // terminal background; assumed dark until detected
+	styles     styles.Theme // terminal styles; dark until detected
 
 	// Terminal height (the full window height from WindowSizeMsg; the transcript
 	// height is derived from it). Width isn't stored here — it lives on list.
@@ -66,20 +67,29 @@ type Model struct {
 // Init.
 func New(engine *agent.Engine) *Model {
 	m := &Model{
-		engine:     engine,
-		editor:     editor.New(),
-		list:       chat.NewList(),
-		chatStyles: chat.DefaultStyles(true),
-		convID:     engine.ConversationID(),
-		hasDarkBG:  true,
+		engine: engine,
+		editor: editor.New(),
+		list:   chat.NewList(),
+		styles: styles.Default(true),
+		convID: engine.ConversationID(),
 	}
-	m.list.SetStyles(m.chatStyles)
+	m.applyStyles(m.styles)
 	return m
 }
 
 // ConversationID returns the active conversation id, or "" when none has been
 // established yet. main reads it after the program exits to print a resume hint.
 func (m *Model) ConversationID() string { return m.convID }
+
+// applyStyles propagates one complete theme to every component that copies
+// style values. Keep this as the single fan-out point for theme changes.
+func (m *Model) applyStyles(theme styles.Theme) {
+	m.styles = theme
+	m.chatStyles = chat.StylesFor(theme)
+	m.list.SetStyles(m.chatStyles)
+	m.editor.SetInputStyles(theme.Input)
+	m.editor.SetStyles(theme.Editor)
+}
 
 // setMode switches the top-level screen. It is the single entry point for mode
 // changes so any layout/refresh side effects stay centralized (the tui analog

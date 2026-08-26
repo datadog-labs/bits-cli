@@ -8,7 +8,7 @@ import (
 func TestRenderMarkdownMatchesInternal(t *testing.T) {
 	src := "# Title\n\nHello **world**."
 	got := RenderMarkdown(src, 40, true)
-	want := renderMarkdown(src, 40, markdownStyleName(true))
+	want := renderMarkdown(src, 40, markdownStyleConfig(true))
 	if got != want {
 		t.Fatalf("RenderMarkdown != internal renderMarkdown\n got=%q\nwant=%q", got, want)
 	}
