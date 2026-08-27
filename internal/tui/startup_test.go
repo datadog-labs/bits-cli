@@ -211,15 +211,25 @@ func TestStartupLoginFactoryErrorQuitsWithStoredError(t *testing.T) {
 	}
 }
 
-func TestStartupLoginCancellationInvalidatesPendingFactory(t *testing.T) {
+func TestControlCAfterCompletedLoginInvalidatesPendingFactory(t *testing.T) {
 	factoryStarted := make(chan struct{})
 	factoryCanceled := make(chan struct{})
-	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil, ""), func(ctx context.Context) (*agent.Engine, error) {
+	loginModel := loginui.New(context.Background(), func(context.Context, string, func(loginui.BrowserStatus)) error {
+		return nil
+	}, "")
+	root := NewWithLogin(context.Background(), loginModel, func(ctx context.Context) (*agent.Engine, error) {
 		close(factoryStarted)
 		<-ctx.Done()
 		close(factoryCanceled)
 		return nil, ctx.Err()
 	})
+	_, loginCmd := root.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	for _, child := range loginCmd().(tea.BatchMsg) {
+		_, _ = root.Update(child())
+	}
+	if !loginModel.Completed() {
+		t.Fatal("test login did not reach persisted completion")
+	}
 	_, factoryCmd := root.Update(loginui.CompletedMsg{})
 	factoryResult := make(chan tea.Msg, 1)
 	go func() { factoryResult <- factoryCmd() }()
@@ -235,8 +245,9 @@ func TestStartupLoginCancellationInvalidatesPendingFactory(t *testing.T) {
 		t.Fatal("pending engine factory context was not canceled")
 	}
 	_, _ = root.Update(<-factoryResult)
-	if root.mode != ModeLogin || root.engine != nil || !errors.Is(root.StartupError(), loginui.ErrCanceled) {
-		t.Fatalf("mode=%v engine=%v startup error=%v", root.mode, root.engine != nil, root.StartupError())
+	if root.mode != ModeLogin || root.engine != nil || root.StartupError() != nil || !root.startupStopping {
+		t.Fatalf("mode=%v engine=%v startup error=%v stopping=%t",
+			root.mode, root.engine != nil, root.StartupError(), root.startupStopping)
 	}
 }
 

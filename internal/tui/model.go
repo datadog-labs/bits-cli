@@ -42,6 +42,7 @@ type Model struct {
 	startupCancel     context.CancelFunc
 	startupGeneration uint64
 	startupCanceled   bool
+	startupStopping   bool
 	loginModel        *loginui.Model
 	engineFactory     EngineFactory
 	startupPending    bool

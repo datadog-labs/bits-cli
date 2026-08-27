@@ -32,7 +32,8 @@ type BrowserStatus struct {
 	OpenError        error
 }
 
-// LoginFunc performs and persists OAuth for the selected Datadog site.
+// LoginFunc performs and persists OAuth for the selected Datadog site. Status
+// reports are synchronous: implementations must not call report after returning.
 type LoginFunc func(context.Context, string, func(BrowserStatus)) error
 
 type phase uint8
@@ -180,7 +181,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.attempt != m.attempt || m.phase != phaseWaiting || msg.done {
 			return m, nil
 		}
-		m.authorizationURL = msg.status.AuthorizationURL
+		if msg.status.AuthorizationURL != "" {
+			m.authorizationURL = msg.status.AuthorizationURL
+		}
 		m.browserOpenErr = msg.status.OpenError
 		if msg.updates != nil {
 			return m, waitBrowserStatus(msg.attempt, msg.updates, msg.ctx)
@@ -327,6 +330,9 @@ func (m *Model) startLogin(site string) tea.Cmd {
 }
 
 func waitBrowserStatus(attempt uint64, updates <-chan BrowserStatus, ctx context.Context) tea.Cmd {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return func() tea.Msg {
 		select {
 		case update, ok := <-updates:

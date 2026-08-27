@@ -151,7 +151,7 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.setDarkBackground(msg.IsDark())
 	case loginui.CompletedMsg:
-		if m.startupPending || m.startupCanceled {
+		if m.startupPending || m.startupCanceled || m.startupStopping {
 			return m, nil
 		}
 		m.startupPending = true
@@ -168,7 +168,7 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return engineReadyMsg{generation: generation, engine: engine, err: err}
 		}
 	case engineReadyMsg:
-		if msg.generation != m.startupGeneration || m.startupCanceled {
+		if msg.generation != m.startupGeneration || m.startupCanceled || m.startupStopping {
 			return m, nil
 		}
 		m.startupPending = false
@@ -205,16 +205,27 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if loginModel, ok := next.(*loginui.Model); ok {
 		m.loginModel = loginModel
 	}
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+		m.stopStartup()
+	}
 	if m.loginModel.Canceled() {
 		m.startupCanceled = true
-		m.startupGeneration++
-		m.startupPending = false
-		if m.startupCancel != nil {
-			m.startupCancel()
-			m.startupCancel = nil
-		}
+		m.stopStartup()
 	}
 	return m, cmd
+}
+
+func (m *Model) stopStartup() {
+	if m.startupStopping {
+		return
+	}
+	m.startupStopping = true
+	m.startupGeneration++
+	m.startupPending = false
+	if m.startupCancel != nil {
+		m.startupCancel()
+		m.startupCancel = nil
+	}
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
