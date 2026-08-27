@@ -35,8 +35,8 @@ func build(isDark bool, p palette) Theme {
 	}
 	feedback := Feedback{
 		Progress: lipgloss.NewStyle().Foreground(lipgloss.Color(p.primary)),
-		Error:    lipgloss.NewStyle().Foreground(lipgloss.Color(p.error)),
-		Success:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.success)),
+		Error:    lipgloss.NewStyle().Foreground(lipgloss.Color(p.feedbackError)),
+		Success:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.feedbackSuccess)),
 	}
 	panel := Panel{
 		Frame: lipgloss.NewStyle().

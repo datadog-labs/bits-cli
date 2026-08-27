@@ -35,7 +35,12 @@ func TestMarkdownGroupContainsHeadingText(t *testing.T) {
 
 func TestSharedComponentsGroupContainsProductionPanelAndSelector(t *testing.T) {
 	body := ansi.Strip(renderGroup(groupSharedComponents, 100, styles.Default(true)))
-	for _, want := range []string{"Panel", "Choose your Datadog site", "Selector", "US1", "app.datadoghq.com"} {
+	for _, want := range []string{
+		"Text roles", "Muted metadata", "Feedback states", "Waiting for Datadog",
+		"Authentication complete", "Login did not complete", "Text input", "Panel — full",
+		"Panel — compact", "Panel — tiny", "Selector — selected", "Selector — narrow",
+		"Choose your Datadog site", "US1", "app.datadoghq.com",
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("shared components page missing %q", want)
 		}

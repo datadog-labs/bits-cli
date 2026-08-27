@@ -59,7 +59,7 @@ var siteOptions = []siteOption{
 	{name: "AP2", domain: "ap2.datadoghq.com"},
 }
 
-const customOptionIndex = 6
+func customOptionIndex() int { return len(siteOptions) }
 
 type loginFinishedMsg struct {
 	attempt uint64
@@ -225,7 +225,7 @@ func (m *Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		switch key {
 		case "enter":
 			selected := m.selector.Index()
-			if selected == customOptionIndex {
+			if selected == customOptionIndex() {
 				m.phase = phaseCustom
 				m.loginErr = nil
 				return m, m.custom.Focus()

@@ -4,6 +4,7 @@ import (
 	"image/color"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/lipgloss/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
@@ -116,22 +117,50 @@ func markdownSamples(width int, isDark bool) []string {
 
 func sharedComponentSamples(width int, theme styles.Theme) []string {
 	panel := components.NewPanel(theme.Panel)
-	panelSample := panel.View(width, 16, components.PanelContent{
-		Title:       "Choose your Datadog site",
-		Dismiss:     "esc ×",
-		Body:        func(int) string { return theme.Text.Muted.Render("Select the site where your organization lives.") },
-		FooterLeft:  "↑/↓ navigate",
-		FooterRight: "enter to continue",
-		TinyMessage: "Resize to view panel",
-	})
+	panelContent := components.PanelContent{
+		Title:          "Choose your Datadog site",
+		Dismiss:        "esc ×",
+		Body:           func(int) string { return theme.Text.Muted.Render("Select the site where your organization lives.") },
+		FooterLeft:     "↑/↓ navigate",
+		FooterRight:    "enter to continue",
+		CompactTitle:   "Sign in to Bits",
+		CompactMessage: "Resize the terminal to continue.",
+		TinyMessage:    "Resize to view panel",
+	}
+
 	selector := components.NewSelector([]components.Choice{
 		{Label: "US1", Detail: "app.datadoghq.com"},
 		{Label: "US3", Detail: "us3.datadoghq.com"},
 		{Label: "Custom", Detail: "Enter another domain"},
 	}, theme.Selector)
+	selector.SetIndex(1)
+
+	focused := textinput.New()
+	focused.SetValue("acme.us3.datadoghq.com")
+	focused.SetStyles(theme.TextInput)
+	focused.Focus()
+	blurred := textinput.New()
+	blurred.Placeholder = "your-org.datadoghq.com"
+	blurred.SetStyles(theme.TextInput)
+	blurred.Blur()
+
 	return []string{
-		renderSample("Panel", panelSample),
-		renderSample("Selector", selector.View(width)),
+		renderSample("Text roles", lipgloss.JoinVertical(lipgloss.Left,
+			theme.Text.Body.Render("Body text"),
+			theme.Text.Muted.Render("Muted metadata"),
+			theme.Text.Help.Render("Keyboard help"),
+		)),
+		renderSample("Feedback states", lipgloss.JoinVertical(lipgloss.Left,
+			theme.Feedback.Progress.Render("⠋  Waiting for Datadog"),
+			theme.Feedback.Success.Render("✓  Authentication complete"),
+			theme.Feedback.Error.Render("Login did not complete"),
+		)),
+		renderSample("Text input — focused / blurred", focused.View()+"\n"+blurred.View()),
+		renderSample("Panel — full", panel.View(width, 16, panelContent)),
+		renderSample("Panel — compact", panel.View(min(width, 32), 6, panelContent)),
+		renderSample("Panel — tiny", panel.View(min(width, 18), 2, panelContent)),
+		renderSample("Selector — selected", selector.View(width)),
+		renderSample("Selector — narrow", selector.View(min(width, 26))),
 	}
 }
 

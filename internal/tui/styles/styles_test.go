@@ -40,10 +40,10 @@ func TestSharedComponentStylesDeriveFromSemanticTokens(t *testing.T) {
 			if got, want := test.theme.Selector.Selected.GetForeground(), lipgloss.Color(test.palette.primary); got != want {
 				t.Errorf("selector selected = %v, want token %v", got, want)
 			}
-			if got, want := test.theme.Feedback.Error.GetForeground(), lipgloss.Color(test.palette.error); got != want {
+			if got, want := test.theme.Feedback.Error.GetForeground(), lipgloss.Color(test.palette.feedbackError); got != want {
 				t.Errorf("feedback error = %v, want token %v", got, want)
 			}
-			if got, want := test.theme.Feedback.Success.GetForeground(), lipgloss.Color(test.palette.success); got != want {
+			if got, want := test.theme.Feedback.Success.GetForeground(), lipgloss.Color(test.palette.feedbackSuccess); got != want {
 				t.Errorf("feedback success = %v, want token %v", got, want)
 			}
 			if got, want := test.theme.TextInput.Cursor.Color, lipgloss.Color(test.palette.primary); got != want {

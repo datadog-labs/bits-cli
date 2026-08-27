@@ -39,7 +39,7 @@ func TestSitePickerNavigatesAndStartsSelectedSite(t *testing.T) {
 func TestSitePickerWraps(t *testing.T) {
 	m := newModel(func(context.Context, string) error { return nil })
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if m.selector.Index() != customOptionIndex {
+	if m.selector.Index() != customOptionIndex() {
 		t.Fatalf("up from first selected %d, want custom", m.selector.Index())
 	}
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
@@ -54,7 +54,7 @@ func TestCustomDomainValidationAndLogin(t *testing.T) {
 		called <- site
 		return nil
 	})
-	m.selector.SetIndex(customOptionIndex)
+	m.selector.SetIndex(customOptionIndex())
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.phase != phaseCustom || !m.custom.Focused() {
 		t.Fatalf("custom input phase = %v, focused = %t", m.phase, m.custom.Focused())
