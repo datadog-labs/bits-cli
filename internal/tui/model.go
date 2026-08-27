@@ -156,6 +156,9 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	m.list.SetStyles(m.chatStyles)
 	m.editor.SetInputStyles(theme.Input)
 	m.editor.SetStyles(theme.Editor)
+	if m.picker != nil {
+		m.picker.SetStyles(theme)
+	}
 }
 
 // setMode switches the top-level screen. It is the single entry point for mode

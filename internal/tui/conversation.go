@@ -90,7 +90,7 @@ func waitConversationSwitch(generation uint64, results <-chan agent.Conversation
 
 func (m *Model) openConversationPicker() tea.Cmd {
 	m.clearNotice()
-	picker := conversationview.New(m.list.Width(), m.height)
+	picker := conversationview.New(m.width, m.height, m.styles)
 	m.picker = &picker
 	m.setMode(ModeConversations)
 	return m.startConversationList()

@@ -17,6 +17,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/components"
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 type State int
@@ -53,6 +55,8 @@ func (i conversationItem) FilterValue() string { return safeTitle(i.summary) }
 type Model struct {
 	list         list.Model
 	search       textinput.Model
+	panel        *components.Panel
+	theme        styles.Theme
 	state        State
 	operation    Operation
 	err          error // retained for diagnostics; never rendered directly
@@ -63,8 +67,13 @@ type Model struct {
 	now          func() time.Time
 }
 
-func New(width, height int) Model {
-	delegate := newConversationDelegate()
+func New(width, height int, themes ...styles.Theme) Model {
+	theme := styles.Default(true)
+	if len(themes) > 0 {
+		theme = themes[0]
+	}
+	theme = conversationTheme(theme)
+	delegate := newConversationDelegate(theme)
 	model := list.New(nil, delegate, max(width, 1), max(height, 1))
 	model.SetShowTitle(false)
 	model.SetShowFilter(false)
@@ -73,7 +82,7 @@ func New(width, height int) Model {
 	// list's modal "/ filter" key while continuing to apply queries explicitly
 	// through SetFilterText.
 	model.SetFilteringEnabled(false)
-	model.SetShowHelp(true)
+	model.SetShowHelp(false)
 	model.SetShowStatusBar(false)
 	configureConversationHelp(&model)
 	search := textinput.New()
@@ -82,9 +91,11 @@ func New(width, height int) Model {
 	search.CharLimit = 128
 	search.Focus()
 	m := Model{
-		list: model, search: search, state: StateLoading, operation: OperationList,
+		list: model, search: search, panel: components.NewPanel(theme.Panel), theme: theme,
+		state: StateLoading, operation: OperationList,
 		width: max(width, 1), height: max(height, 1), now: time.Now,
 	}
+	m.search.SetStyles(theme.TextInput)
 	m.resizeChildren()
 	return m
 }
@@ -136,16 +147,22 @@ func (m *Model) SetConversations(summaries []assistant.ConversationSummary) tea.
 	return cmd
 }
 
-func newConversationDelegate() list.DefaultDelegate {
+func newConversationDelegate(themes ...styles.Theme) list.DefaultDelegate {
+	theme := styles.Default(true)
+	if len(themes) > 0 {
+		theme = themes[0]
+	}
 	delegate := list.NewDefaultDelegate()
-	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.Bold(true)
-	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Bold(true)
+	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.
+		Foreground(theme.Selector.Item.GetForeground()).Bold(true)
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
+		Foreground(theme.Selector.Selected.GetForeground()).Bold(true)
 	// Keep the timestamp subordinate to the title, including on the selected
 	// row where the default delegate otherwise gives both lines equal emphasis.
-	muted := delegate.Styles.NormalDesc.GetForeground()
-	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Bold(false).Faint(true)
+	muted := theme.Selector.Detail.GetForeground()
+	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(muted).Bold(false).Faint(true)
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(muted).Bold(false).Faint(true)
-	delegate.Styles.DimmedDesc = delegate.Styles.DimmedDesc.Bold(false).Faint(true)
+	delegate.Styles.DimmedDesc = delegate.Styles.DimmedDesc.Foreground(muted).Bold(false).Faint(true)
 	return delegate
 }
 
@@ -234,6 +251,16 @@ func (m *Model) SetSize(width, height int) {
 	m.resizeChildren()
 }
 
+// SetStyles applies the root terminal theme without resetting picker state.
+func (m *Model) SetStyles(theme styles.Theme) {
+	theme = conversationTheme(theme)
+	m.theme = theme
+	m.panel.SetStyles(theme.Panel)
+	m.search.SetStyles(theme.TextInput)
+	m.list.SetDelegate(newConversationDelegate(theme))
+	m.resizeChildren()
+}
+
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
 		m.SetSize(size.Width, size.Height)
@@ -299,17 +326,41 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
+	dismiss := "esc cancel"
+	if m.search.Value() != "" {
+		dismiss = "esc clear"
+	}
+	content := components.PanelContent{
+		Title:          "Resume a conversation",
+		Dismiss:        dismiss,
+		Body:           m.panelBody,
+		CompactTitle:   "Resume a conversation",
+		CompactMessage: "Resize terminal to choose a conversation",
+		TinyMessage:    "Resize terminal to resume",
+	}
+	if m.state == StateReady {
+		content.FooterLeft = "↑/↓ navigate"
+		if m.list.Paginator.TotalPages > 1 {
+			content.FooterLeft += "   ←/→ page"
+		}
+		content.FooterRight = "enter select"
+	}
+	return m.panel.View(m.width, m.height, content)
+}
+
+func (m Model) panelBody(width int) string {
+	m.resizeBody(width)
 	search := m.search.View()
 	var body string
 	switch m.state {
 	case StateLoading:
 		if m.operation == OperationOpen {
-			body = "Loading conversation…\n\nEsc cancel"
+			body = m.theme.Feedback.Progress.Render("Loading conversation…")
 		} else {
-			body = "Loading conversations…\n\nEsc cancel"
+			body = m.theme.Feedback.Progress.Render("Loading conversations…")
 		}
 	case StateEmpty:
-		body = joinWarning("No conversations found.\n\nEsc cancel", m.warning)
+		body = joinWarning(m.theme.Text.Muted.Render("No conversations found."), m.warning)
 	case StateError:
 		message := m.errorMessage
 		if message == "" {
@@ -319,9 +370,12 @@ func (m Model) View() string {
 				message = "Could not load conversations."
 			}
 		}
-		body = message + "\n\nEnter retry · Esc cancel"
+		body = m.theme.Feedback.Error.Render(message) + "\n\n" + m.theme.Text.Help.Render("enter retry")
 	case StateReady:
-		body = joinWarning(m.list.View(), m.warning)
+		body = m.list.View()
+		if m.warning != "" {
+			body = m.theme.Text.Muted.Render(m.warning) + "\n" + body
+		}
 	default:
 		body = ""
 	}
@@ -342,16 +396,36 @@ func (m *Model) applySearch() {
 }
 
 func (m *Model) resizeChildren() {
+	m.resizeBody(m.panelBodyWidth())
+	m.updateHelp()
+}
+
+func (m *Model) resizeBody(width int) {
 	// textinput renders its prompt outside the configured text width. Reserve
 	// both the prompt and cursor so the complete search line cannot wrap.
-	searchWidth := max(0, m.width-lipgloss.Width(m.search.Prompt)-1)
+	searchWidth := max(0, width-lipgloss.Width(m.search.Prompt)-1)
 	m.search.SetWidth(searchWidth)
-	reserved := 1 // persistent search bar
+	listHeight := max(1, m.height-m.theme.Panel.Frame.GetVerticalFrameSize()-6)
 	if m.warning != "" && m.state == StateReady {
-		reserved += 2 // warning plus separating blank line
+		listHeight = max(1, listHeight-2)
 	}
-	m.list.SetSize(m.width, max(1, m.height-reserved))
-	m.updateHelp()
+	m.list.SetSize(width, listHeight)
+}
+
+func conversationTheme(theme styles.Theme) styles.Theme {
+	// The resume panel has a persistent search row and a paginated list. A
+	// tighter section gap keeps its controls useful in ordinary terminal sizes
+	// while retaining the shared panel frame, palette, and responsive fallback.
+	theme.Panel.SectionGap = 0
+	return theme
+}
+
+func (m Model) panelBodyWidth() int {
+	available := m.width - 2*max(0, m.theme.Panel.HorizontalMargin)
+	if m.theme.Panel.MaxWidth > 0 {
+		available = min(available, m.theme.Panel.MaxWidth)
+	}
+	return max(1, available-m.theme.Panel.Frame.GetHorizontalFrameSize())
 }
 
 func joinWarning(body, warning string) string {

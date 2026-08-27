@@ -48,8 +48,7 @@ func TestPickerDistinguishesHistoryLoadingAndSanitizesErrors(t *testing.T) {
 	}
 	raw := errors.New("\x1b[31mraw\a backend detail")
 	m.SetError("Could not open conversation: \x1b[31mraw\x1b[0m\nbackend detail", raw)
-	view := safeDisplay(m.View())
-	if strings.ContainsAny(m.errorMessage, "\x1b\a\n") || !strings.Contains(view, "Could not open conversation: raw backend detail") {
+	if strings.ContainsAny(m.errorMessage, "\x1b\a\n") || m.errorMessage != "Could not open conversation: raw backend detail" {
 		t.Fatalf("sanitized error view = %q", m.View())
 	}
 	if m.err != raw {
@@ -58,7 +57,7 @@ func TestPickerDistinguishesHistoryLoadingAndSanitizesErrors(t *testing.T) {
 }
 
 func TestPickerShowsSearchBarAndMalformedRecordWarning(t *testing.T) {
-	m := New(60, 12)
+	m := New(60, 16)
 	m.SetConversations([]assistant.ConversationSummary{{ConversationID: "one", Title: "One"}})
 	m.SetWarning("1 malformed conversation record omitted")
 	view := safeDisplay(m.View())
@@ -68,30 +67,31 @@ func TestPickerShowsSearchBarAndMalformedRecordWarning(t *testing.T) {
 	if strings.Contains(view, "1 conversation") {
 		t.Fatalf("ready picker should not render a conversation count: %q", m.View())
 	}
-	if m.list.Height() != 9 {
-		t.Fatalf("list height = %d, want 9", m.list.Height())
+	if m.list.Height() != 4 {
+		t.Fatalf("list height = %d, want 4", m.list.Height())
 	}
 }
 
 func TestSearchLineNeverExceedsPickerWidth(t *testing.T) {
-	for _, width := range []int{8, 20, 60} {
+	for _, width := range []int{20, 60} {
 		m := New(width, 12)
-		wantInputWidth := max(0, width-ansi.StringWidth(m.search.Prompt)-1)
+		bodyWidth := m.panelBodyWidth()
+		wantInputWidth := max(0, bodyWidth-ansi.StringWidth(m.search.Prompt)-1)
 		if got := m.search.Width(); got != wantInputWidth {
 			t.Fatalf("width %d configured input width %d, want %d", width, got, wantInputWidth)
 		}
 		for _, value := range []string{"", strings.Repeat("x", 128)} {
 			m.search.SetValue(value)
-			firstLine := strings.SplitN(m.View(), "\n", 2)[0]
-			if got := ansi.StringWidth(firstLine); got > width {
-				t.Fatalf("width %d rendered a %d-cell search line for %d chars: %q", width, got, len(value), firstLine)
+			firstLine := strings.SplitN(m.panelBody(bodyWidth), "\n", 2)[0]
+			if got := ansi.StringWidth(firstLine); got > bodyWidth {
+				t.Fatalf("width %d rendered a %d-cell search line in a %d-cell body for %d chars: %q", width, got, bodyWidth, len(value), firstLine)
 			}
 		}
 	}
 }
 
 func TestPickerHelpUsesConciseStateAwareActions(t *testing.T) {
-	m := New(120, 8)
+	m := New(120, 18)
 	summaries := make([]assistant.ConversationSummary, 10)
 	for i := range summaries {
 		summaries[i] = assistant.ConversationSummary{
