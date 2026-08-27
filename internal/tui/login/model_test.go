@@ -3,6 +3,7 @@ package login
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +143,11 @@ func TestViewContainsVisualHierarchyAndFits(t *testing.T) {
 			t.Errorf("view missing %q:\n%s", want, plain)
 		}
 	}
+	for _, domain := range []string{"app.datadoghq.com", "us3.datadoghq.com", "us5.datadoghq.com", "app.datadoghq.eu", "ap1.datadoghq.com", "ap2.datadoghq.com"} {
+		if got := strings.Count(plain, domain); got != 1 {
+			t.Errorf("domain %q appears %d times, want one physical option row", domain, got)
+		}
+	}
 	for lineNo, line := range strings.Split(view, "\n") {
 		if got := ansi.StringWidth(line); got > 80 {
 			t.Fatalf("view line %d width = %d, want <= 80", lineNo+1, got)
@@ -169,20 +175,24 @@ func TestBrowserOpenFailureShowsManualURL(t *testing.T) {
 }
 
 func TestSmallTerminalUsesBoundedResizePrompt(t *testing.T) {
-	m := newModel(func(context.Context, string) error { return nil })
-	_, _ = m.Update(tea.WindowSizeMsg{Width: 24, Height: 8})
-	view := m.View().Content
-	lines := strings.Split(view, "\n")
-	if len(lines) > 8 {
-		t.Fatalf("small view height = %d, want <= 8", len(lines))
-	}
-	for lineNo, line := range lines {
-		if got := ansi.StringWidth(line); got > 24 {
-			t.Fatalf("small view line %d width = %d, want <= 24", lineNo+1, got)
-		}
-	}
-	if !strings.Contains(ansi.Strip(view), "Resize the terminal") {
-		t.Fatalf("small view = %q", ansi.Strip(view))
+	for _, size := range []struct{ width, height int }{{80, 16}, {36, 16}, {24, 8}, {10, 2}} {
+		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
+			m := newModel(func(context.Context, string) error { return nil })
+			_, _ = m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
+			view := m.View().Content
+			lines := strings.Split(view, "\n")
+			if len(lines) > size.height {
+				t.Fatalf("small view height = %d, want <= %d", len(lines), size.height)
+			}
+			for lineNo, line := range lines {
+				if got := ansi.StringWidth(line); got > size.width {
+					t.Fatalf("small view line %d width = %d, want <= %d", lineNo+1, got, size.width)
+				}
+			}
+			if !strings.Contains(ansi.Strip(view), "Resize") {
+				t.Fatalf("small view = %q", ansi.Strip(view))
+			}
+		})
 	}
 }
 

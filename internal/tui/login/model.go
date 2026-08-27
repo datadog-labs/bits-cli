@@ -332,8 +332,8 @@ func (m *Model) View() tea.View {
 
 func (m *Model) panelView() string {
 	p := paletteFor(m.dark)
-	if m.width < 36 || m.height < 16 || (m.browserOpenErr != nil && m.height < 24) {
-		return p.compact.Width(max(1, min(m.width, 34))).Render("Sign in to Bits\n\nResize the terminal to continue.")
+	if m.width < 12 {
+		return m.compactView(p)
 	}
 
 	outerWidth := min(panelWidth, m.width-2)
@@ -341,8 +341,21 @@ func (m *Model) panelView() string {
 	title := p.eyebrow.Render("DATADOG") + "\n" + p.title.Render(m.title())
 	body := m.bodyView(contentWidth, p)
 	content := lipgloss.JoinVertical(lipgloss.Left, title, "", body)
+	panel := p.panel.Width(outerWidth).Render(content)
+	if lipgloss.Width(panel) <= m.width && lipgloss.Height(panel) <= m.height {
+		return panel
+	}
+	return m.compactView(p)
+}
 
-	return p.panel.Width(outerWidth).Render(content)
+func (m *Model) compactView(p loginPalette) string {
+	if m.height >= 4 && m.width >= 20 {
+		compact := p.compact.Width(min(m.width, 34)).Render("Sign in to Bits\n\nResize the terminal to continue.")
+		if lipgloss.Width(compact) <= m.width && lipgloss.Height(compact) <= m.height {
+			return compact
+		}
+	}
+	return ansi.Truncate("Resize terminal to sign in", max(1, m.width), "")
 }
 
 func (m *Model) title() string {

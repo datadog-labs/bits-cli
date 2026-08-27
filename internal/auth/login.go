@@ -439,12 +439,10 @@ func openBrowser(target string) error {
 	default:
 		command, args = "xdg-open", []string{target}
 	}
-	cmd := exec.Command(command, args...)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() { _ = cmd.Wait() }()
-	return nil
+	// Launcher failures must be observable by the startup UI so it can surface
+	// the authorization URL as a manual fallback. These platform launchers return
+	// after handing the URL to the desktop rather than waiting for the browser.
+	return exec.Command(command, args...).Run()
 }
 
 type callbackPage struct {

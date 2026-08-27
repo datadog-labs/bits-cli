@@ -235,7 +235,10 @@ func authenticatedClientWithContext(ctx context.Context, store auth.CredentialSt
 	if err == nil {
 		source, sourceErr := auth.NewSource(session, store, nil)
 		if sourceErr != nil {
-			return nil, sourceErr
+			// The credential decoded but its required fields or trusted Datadog
+			// routing are unusable. Treat this deterministic local failure like any
+			// other corrupt stored session so startup login can safely replace it.
+			return nil, fmt.Errorf("%w: %w", auth.ErrSessionCorrupt, sourceErr)
 		}
 		// Validate the grant before opening the chat UI. This is a local check for
 		// a fresh token and performs the existing safe refresh transaction only

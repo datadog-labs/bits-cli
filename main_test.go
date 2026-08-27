@@ -194,6 +194,28 @@ func TestEnsureAuthenticatedClientRepairsCorruptSession(t *testing.T) {
 	}
 }
 
+func TestEnsureAuthenticatedClientRepairsDecodedSessionWithInvalidRouting(t *testing.T) {
+	store := &mutableCredentialStore{session: auth.Session{
+		Site:         "https://example.com",
+		ClientID:     "oauth-client",
+		AccessToken:  "oauth-access",
+		RefreshToken: "oauth-refresh",
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(time.Hour),
+	}}
+	loginCalls := 0
+	_, err := ensureAuthenticatedClient(context.Background(), store, "", "", "", func() error {
+		loginCalls++
+		return store.Save(validOAuthSession())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loginCalls != 1 {
+		t.Fatalf("login calls = %d, want 1", loginCalls)
+	}
+}
+
 func TestEnsureAuthenticatedClientSurfacesStoreAndLoginErrors(t *testing.T) {
 	storeErr := errors.New("keyring unavailable")
 	loginCalls := 0
