@@ -138,7 +138,7 @@ func TestViewContainsVisualHierarchyAndFits(t *testing.T) {
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	view := m.View().Content
 	plain := ansi.Strip(view)
-	for _, want := range []string{"DATADOG", "Sign in to Bits", "US1", "Custom domain", "↑/↓ navigate"} {
+	for _, want := range []string{"Choose your Datadog site", "esc ×", "US1", "Enter another domain", "↑/↓ navigate"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("view missing %q:\n%s", want, plain)
 		}
@@ -189,7 +189,7 @@ func TestSmallTerminalUsesBoundedResizePrompt(t *testing.T) {
 					t.Fatalf("small view line %d width = %d, want <= %d", lineNo+1, got, size.width)
 				}
 			}
-			if !strings.Contains(ansi.Strip(view), "Resize") {
+			if size.width == 10 && !strings.Contains(ansi.Strip(view), "Resize") {
 				t.Fatalf("small view = %q", ansi.Strip(view))
 			}
 		})

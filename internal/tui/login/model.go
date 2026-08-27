@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	panelWidth      = 64
+	panelMaxWidth   = 112
 	completionPause = 650 * time.Millisecond
 	spinnerInterval = 90 * time.Millisecond
 )
@@ -336,11 +336,14 @@ func (m *Model) panelView() string {
 		return m.compactView(p)
 	}
 
-	outerWidth := min(panelWidth, m.width-2)
+	outerWidth := min(panelMaxWidth, m.width-4)
 	contentWidth := max(1, outerWidth-p.panel.GetHorizontalFrameSize())
-	title := p.eyebrow.Render("DATADOG") + "\n" + p.title.Render(m.title())
+	heading := p.heading.Render(m.title())
+	closeHint := p.close.Render("esc ×")
+	gap := max(1, contentWidth-lipgloss.Width(heading)-lipgloss.Width(closeHint))
+	header := lipgloss.JoinHorizontal(lipgloss.Top, heading, strings.Repeat(" ", gap), closeHint)
 	body := m.bodyView(contentWidth, p)
-	content := lipgloss.JoinVertical(lipgloss.Left, title, "", body)
+	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
 	panel := p.panel.Width(outerWidth).Render(content)
 	if lipgloss.Width(panel) <= m.width && lipgloss.Height(panel) <= m.height {
 		return panel
@@ -361,13 +364,15 @@ func (m *Model) compactView(p loginPalette) string {
 func (m *Model) title() string {
 	switch m.phase {
 	case phaseWaiting:
-		return "Sign in with your browser"
+		return "Sign in to Datadog"
 	case phaseError:
-		return "We couldn't sign you in"
+		return "Login failed"
 	case phaseComplete:
-		return "You're signed in"
+		return "Signed in"
+	case phaseCustom:
+		return "Enter your Datadog domain"
 	default:
-		return "Sign in to Bits"
+		return "Choose your Datadog site"
 	}
 }
 
@@ -375,21 +380,21 @@ func (m *Model) bodyView(width int, p loginPalette) string {
 	switch m.phase {
 	case phaseCustom:
 		parts := []string{
-			p.description.Render("Enter your Datadog hostname."),
+			p.description.Render("Enter the hostname where your organization lives."),
 			"",
 			p.input.Width(width).Render(m.custom.View()),
 		}
 		if m.loginErr != nil {
 			parts = append(parts, "", p.error.Width(width).Render(m.loginErr.Error()))
 		}
-		parts = append(parts, "", p.help.Render("enter continue   esc back   ctrl+c quit"))
+		parts = append(parts, "", footer(width, p.help.Render("esc back"), p.help.Render("enter to continue")))
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	case phaseWaiting:
 		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 		parts := []string{
-			p.description.Render("Complete sign-in in the browser window we opened."),
+			p.description.Render("Complete sign-in in the browser window."),
 			"",
-			p.waiting.Render(frames[m.spinner%len(frames)] + "  Waiting for Datadog…"),
+			p.waiting.Render(frames[m.spinner%len(frames)] + "  Waiting for Datadog"),
 			p.domain.Render(strings.TrimPrefix(m.activeSite, "https://")),
 		}
 		if m.browserOpenErr != nil {
@@ -398,7 +403,7 @@ func (m *Model) bodyView(width int, p loginPalette) string {
 				parts = append(parts, "", p.description.Render("Open this URL:"), p.domain.Render(ansi.Hardwrap(m.authorizationURL, width, false)))
 			}
 		}
-		parts = append(parts, "", p.help.Render("esc choose another site   ctrl+c quit"))
+		parts = append(parts, "", p.help.Render("esc choose another site"))
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	case phaseError:
 		message := "Login did not complete."
@@ -407,51 +412,53 @@ func (m *Model) bodyView(width int, p loginPalette) string {
 		}
 		return lipgloss.JoinVertical(lipgloss.Left,
 			p.error.Width(width).Render(message),
-			"",
 			p.domain.Render(strings.TrimPrefix(m.activeSite, "https://")),
 			"",
-			p.help.Render("enter retry   esc choose another site   ctrl+c quit"),
+			footer(width, p.help.Render("esc choose another site"), p.help.Render("enter to retry")),
 		)
 	case phaseComplete:
 		return lipgloss.JoinVertical(lipgloss.Left,
-			p.success.Render("✓  Datadog authentication complete"),
-			"",
-			p.description.Render("Opening Bits…"),
+			p.success.Render("✓  Authentication complete"),
+			p.domain.Render(strings.TrimPrefix(m.activeSite, "https://")),
 		)
 	default:
 		rows := make([]string, 0, len(siteOptions)+1)
 		for i, option := range siteOptions {
-			marker := "  "
-			style := p.row
-			if i == m.selected {
-				marker = "› "
-				style = p.selected
-			}
-			label := fmt.Sprintf("%s%-5s  %s", marker, option.name, option.domain)
-			rows = append(rows, style.Width(width).Render(label))
+			rows = append(rows, siteRow(option.name, option.domain, i == m.selected, p))
 		}
-		marker := "  "
-		style := p.row
-		if m.selected == customOptionIndex {
-			marker = "› "
-			style = p.selected
-		}
-		rows = append(rows, style.Width(width).Render(marker+"Custom domain…"))
+		rows = append(rows, siteRow("Custom", "Enter another domain", m.selected == customOptionIndex, p))
 		return lipgloss.JoinVertical(lipgloss.Left,
-			p.description.Render("Choose the Datadog site where your organization lives."),
+			p.description.Render("Select the site where your organization lives."),
 			"",
 			lipgloss.JoinVertical(lipgloss.Left, rows...),
 			"",
-			p.help.Render("↑/↓ navigate   enter continue   esc quit"),
+			footer(width, p.help.Render("↑/↓ navigate"), p.help.Render("enter to continue")),
 		)
 	}
+}
+
+func siteRow(name, detail string, selected bool, p loginPalette) string {
+	marker := "  "
+	nameStyle := p.row
+	detailStyle := p.domain
+	if selected {
+		marker = "› "
+		nameStyle = p.selected
+		detailStyle = p.row
+	}
+	return nameStyle.Render(marker+fmt.Sprintf("%-7s", name)) + detailStyle.Render(detail)
+}
+
+func footer(width int, left, right string) string {
+	gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right)
 }
 
 type loginPalette struct {
 	panel       lipgloss.Style
 	compact     lipgloss.Style
-	eyebrow     lipgloss.Style
-	title       lipgloss.Style
+	heading     lipgloss.Style
+	close       lipgloss.Style
 	description lipgloss.Style
 	row         lipgloss.Style
 	selected    lipgloss.Style
@@ -464,31 +471,28 @@ type loginPalette struct {
 }
 
 func paletteFor(dark bool) loginPalette {
-	text, muted, surface, inputSurface, border := "#F2F2F2", "#8A8D98", "#181A21", "#11131A", "#4B4E59"
-	selectedText, selectedSurface := "#FFFFFF", "#4D58AF"
+	text, muted, border, accent, danger, success := "#C9CBD1", "#6F727C", "#474A54", "#5E6DD6", "#C85A68", "#65A875"
 	if !dark {
-		text, muted, surface, inputSurface, border = "#1C2E38", "#66707A", "#FFFFFF", "#EEF0F3", "#B8BCC4"
-		selectedText, selectedSurface = "#FFFFFF", "#5E6DD6"
+		text, muted, border, accent, danger, success = "#29333A", "#737A80", "#B8BCC4", "#4D58AF", "#B23A4A", "#397A4A"
 	}
 
 	return loginPalette{
 		panel: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(text)).
-			Background(lipgloss.Color(surface)).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(border)).
 			Padding(1, 2),
-		compact:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(text)).Background(lipgloss.Color(surface)).Padding(1),
-		eyebrow:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#8C97FF")).Background(lipgloss.Color(surface)),
-		title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(text)).Background(lipgloss.Color(surface)),
-		description: lipgloss.NewStyle().Foreground(lipgloss.Color(text)).Background(lipgloss.Color(surface)),
-		row:         lipgloss.NewStyle().Foreground(lipgloss.Color(text)).Background(lipgloss.Color(surface)),
-		selected:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(selectedText)).Background(lipgloss.Color(selectedSurface)),
-		domain:      lipgloss.NewStyle().Foreground(lipgloss.Color(muted)).Background(lipgloss.Color(surface)),
-		help:        lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color(muted)).Background(lipgloss.Color(surface)),
-		input:       lipgloss.NewStyle().Foreground(lipgloss.Color(text)).Background(lipgloss.Color(inputSurface)).Padding(0, 1),
-		waiting:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#8C97FF")).Background(lipgloss.Color(surface)),
-		error:       lipgloss.NewStyle().Foreground(lipgloss.Color("#EB5364")).Background(lipgloss.Color(surface)),
-		success:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#41C464")).Background(lipgloss.Color(surface)),
+		compact:     lipgloss.NewStyle().Foreground(lipgloss.Color(text)),
+		heading:     lipgloss.NewStyle().Foreground(lipgloss.Color(text)),
+		close:       lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color(muted)),
+		description: lipgloss.NewStyle().Foreground(lipgloss.Color(muted)),
+		row:         lipgloss.NewStyle().Foreground(lipgloss.Color(text)),
+		selected:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(accent)),
+		domain:      lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color(muted)),
+		help:        lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color(muted)),
+		input:       lipgloss.NewStyle().Foreground(lipgloss.Color(text)),
+		waiting:     lipgloss.NewStyle().Foreground(lipgloss.Color(accent)),
+		error:       lipgloss.NewStyle().Foreground(lipgloss.Color(danger)),
+		success:     lipgloss.NewStyle().Foreground(lipgloss.Color(success)),
 	}
 }
