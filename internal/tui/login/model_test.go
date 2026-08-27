@@ -331,6 +331,12 @@ func TestNormalizeCustomSite(t *testing.T) {
 		}
 	}
 
+	for _, raw := range []string{"api.us3.datadoghq.com", "https://api.datadoghq.eu"} {
+		if _, err := normalizeCustomSite(raw, ""); err == nil || !strings.Contains(err.Error(), "not its API endpoint") {
+			t.Errorf("normalizeCustomSite(%q) error = %v; want API endpoint rejection", raw, err)
+		}
+	}
+
 	if got, err := normalizeCustomSite("app.ddog-gov.com", "gov-client"); err != nil || got != "https://app.ddog-gov.com" {
 		t.Errorf("GovCloud custom site = %q, %v", got, err)
 	}

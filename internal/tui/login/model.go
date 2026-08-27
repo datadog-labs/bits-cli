@@ -51,6 +51,9 @@ type siteOption struct {
 	domain string
 }
 
+// Keep this user-facing region list in sync with Datadog's public site catalog:
+// https://docs.datadoghq.com/getting_started/site/. New or uncommon Datadog
+// domains remain available through the validated custom-site path.
 var siteOptions = []siteOption{
 	{name: "US1", domain: "app.datadoghq.com"},
 	{name: "US3", domain: "us3.datadoghq.com"},
@@ -365,6 +368,9 @@ func normalizeCustomSite(raw, clientID string) (string, error) {
 	cfg, err := auth.ConfigForSite(raw, clientID)
 	if err != nil {
 		return "", fmt.Errorf("enter a Datadog site, such as acme.us3.datadoghq.com: %w", err)
+	}
+	if cfg.Site == cfg.AssistantBase {
+		return "", errors.New("enter your Datadog site, not its API endpoint, such as acme.us3.datadoghq.com")
 	}
 	return cfg.Site, nil
 }
