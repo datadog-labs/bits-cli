@@ -97,6 +97,7 @@ func TestSwitchConversationCommitIsAtomic(t *testing.T) {
 	response.Data.ID = "response-id-is-not-conversation-id"
 	response.Data.Attributes.Messages = []assistant.Message{
 		assistant.AssistantMessage("m1", assistant.TextContent("Hello")),
+		{Results: &assistant.Results{Usage: &assistant.Usage{TokensUsed: 42}}},
 		assistant.AssistantMessage("m1", assistant.TextContent(" world")),
 		assistant.AssistantMessage("turn", assistant.Content{Type: assistant.ContentTurnStatus, TurnStatus: &assistant.TurnStatusPayload{Status: "ended"}}),
 		assistant.AssistantMessage("stop", assistant.Content{Type: assistant.ContentUserStop, Stop: &assistant.StopPayload{Content: "stopped"}}),
@@ -207,10 +208,14 @@ func TestSwitchConversationRejectsMalformedHistory(t *testing.T) {
 	for name, response := range map[string]*assistant.ConversationHistoryResponse{
 		"nil response":     nil,
 		"missing envelope": &assistant.ConversationHistoryResponse{},
-		"missing content type": func() *assistant.ConversationHistoryResponse {
+		"missing text payload": func() *assistant.ConversationHistoryResponse {
 			r := &assistant.ConversationHistoryResponse{}
 			r.Data.Type = "conversation-history-response"
-			r.Data.Attributes.Messages = []assistant.Message{{MessageID: "bad"}}
+			r.Data.Attributes.Messages = []assistant.Message{{
+				MessageID: "bad",
+				Role:      "assistant",
+				Content:   assistant.Content{Type: assistant.ContentMarkdownFragment},
+			}}
 			return r
 		}(),
 	} {

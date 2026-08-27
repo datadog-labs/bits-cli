@@ -256,6 +256,12 @@ func validConversationID(id string) bool {
 }
 
 func validateHistoryMessage(message assistant.Message) error {
+	if strings.TrimSpace(message.Content.Type) == "" {
+		// History can include bookkeeping-only records (for example usage) with
+		// no renderable content. Transcript.fold discards these no-ops, matching
+		// startup restore behavior.
+		return nil
+	}
 	if strings.TrimSpace(message.MessageID) == "" {
 		return errors.New("missing message id")
 	}
@@ -263,9 +269,6 @@ func validateHistoryMessage(message assistant.Message) error {
 	case "user", "assistant", "system":
 	default:
 		return fmt.Errorf("unknown role %q", message.Role)
-	}
-	if strings.TrimSpace(message.Content.Type) == "" {
-		return errors.New("missing content type")
 	}
 	switch message.Content.Kind() {
 	case assistant.KindText:
