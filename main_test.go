@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,6 +19,21 @@ type stubCredentialStore struct {
 func (s stubCredentialStore) Load() (auth.Session, error) { return s.session, s.err }
 func (stubCredentialStore) Save(auth.Session) error       { return nil }
 func (stubCredentialStore) Delete() error                 { return nil }
+
+type mutableCredentialStore struct {
+	session auth.Session
+	err     error
+}
+
+func (s *mutableCredentialStore) Load() (auth.Session, error) { return s.session, s.err }
+func (s *mutableCredentialStore) Save(session auth.Session) error {
+	s.session, s.err = session, nil
+	return nil
+}
+func (s *mutableCredentialStore) Delete() error {
+	s.session, s.err = auth.Session{}, auth.ErrNoSession
+	return nil
+}
 
 func validOAuthSession() auth.Session {
 	return auth.Session{
@@ -119,5 +135,81 @@ func TestAuthenticatedClientDoesNotFallbackFromInvalidStoredSession(t *testing.T
 	)
 	if err == nil {
 		t.Fatal("invalid OAuth session silently fell back to API keys")
+	}
+}
+
+func TestEnsureAuthenticatedClientRunsLoginOnlyWhenNeeded(t *testing.T) {
+	store := &mutableCredentialStore{err: auth.ErrNoSession}
+	loginCalls := 0
+	client, err := ensureAuthenticatedClient(context.Background(), store, "", "", "", func() error {
+		loginCalls++
+		return store.Save(validOAuthSession())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loginCalls != 1 || client.TokenSource == nil {
+		t.Fatalf("login calls = %d, OAuth client = %t", loginCalls, client.TokenSource != nil)
+	}
+
+	loginCalls = 0
+	if _, err := ensureAuthenticatedClient(context.Background(), store, "", "", "", func() error {
+		loginCalls++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if loginCalls != 0 {
+		t.Fatalf("login called %d times with working OAuth", loginCalls)
+	}
+}
+
+func TestEnsureAuthenticatedClientKeepsCompleteAPIKeys(t *testing.T) {
+	store := &mutableCredentialStore{err: auth.ErrNoSession}
+	loginCalls := 0
+	client, err := ensureAuthenticatedClient(context.Background(), store, "api", "app", "https://keys.example.com", func() error {
+		loginCalls++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loginCalls != 0 || client.APIKey != "api" || client.AppKey != "app" {
+		t.Fatalf("login calls = %d, client = %#v", loginCalls, client)
+	}
+}
+
+func TestEnsureAuthenticatedClientRepairsCorruptSession(t *testing.T) {
+	store := &mutableCredentialStore{err: fmt.Errorf("%w: truncated", auth.ErrSessionCorrupt)}
+	loginCalls := 0
+	_, err := ensureAuthenticatedClient(context.Background(), store, "api", "app", "", func() error {
+		loginCalls++
+		return store.Save(validOAuthSession())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loginCalls != 1 {
+		t.Fatalf("login calls = %d, want 1", loginCalls)
+	}
+}
+
+func TestEnsureAuthenticatedClientSurfacesStoreAndLoginErrors(t *testing.T) {
+	storeErr := errors.New("keyring unavailable")
+	loginCalls := 0
+	_, err := ensureAuthenticatedClient(context.Background(), stubCredentialStore{err: storeErr}, "", "", "", func() error {
+		loginCalls++
+		return nil
+	})
+	if !errors.Is(err, storeErr) || loginCalls != 0 {
+		t.Fatalf("store error = %v, login calls = %d", err, loginCalls)
+	}
+
+	loginErr := errors.New("authorization denied")
+	_, err = ensureAuthenticatedClient(context.Background(), stubCredentialStore{err: auth.ErrNoSession}, "", "", "", func() error {
+		return loginErr
+	})
+	if !errors.Is(err, loginErr) {
+		t.Fatalf("login error = %v", err)
 	}
 }

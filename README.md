@@ -4,13 +4,17 @@ Bits CLI is a native terminal client for Datadog Assistant.
 
 ## Authentication
 
-### Interactive login
+### Startup login
+
+Run `bits`. When no working OAuth session or complete API/app-key pair is available, Bits opens a site picker automatically. Choose US1, US3, US5, EU1, AP1, AP2, or enter your organization's Datadog subdomain. Bits then opens the regional OAuth flow in your browser and continues into chat after authentication succeeds.
+
+`DD_SITE_URL` skips the picker and starts OAuth for that site. The existing `bits login` command remains a non-TUI escape hatch for staging, GovCloud, scripting, and debugging:
 
 ```sh
 bits login
 ```
 
-Bits defaults to the US1 production login when `DD_SITE_URL` is unset. Site precedence is `--site`, then `DD_SITE_URL`, then the US1 production default. To start from another Datadog site or a customer subdomain, pass it explicitly:
+`bits login` defaults to the US1 production login when `DD_SITE_URL` is unset. Site precedence is `--site`, then `DD_SITE_URL`, then the US1 production default. To start from another Datadog site or a customer subdomain, pass it explicitly:
 
 ```sh
 bits login --site app.datadoghq.eu
@@ -46,8 +50,8 @@ Authentication selection is deterministic:
 
 1. A stored OAuth login wins, even if API/app keys are present in the environment.
 2. A complete `DD_API_KEY` and `DD_APP_KEY` pair is used only when no OAuth session exists.
-3. Partial key pairs are never used.
-4. Credential-store errors do not trigger API-key fallback.
+3. Missing, corrupt, or definitively unrefreshable OAuth starts the login flow; partial API/app-key pairs do not suppress it.
+4. Transient credential-store and OAuth refresh failures surface as errors instead of opening a browser or changing identities.
 
 ### Logout
 

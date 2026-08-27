@@ -5,7 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -15,7 +17,10 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/DataDog/bits-cli/internal/tui"
+	loginui "github.com/DataDog/bits-cli/internal/tui/login"
 )
+
+var errNoWorkingAuth = errors.New("no working authentication")
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -124,7 +129,7 @@ func runChat(args []string) error {
 	if os.Getenv("BITS_FAKE_BACKEND") == "1" {
 		backend = fake.New()
 	} else {
-		client, err := authenticatedClient()
+		client, err := authenticatedClient(context.Background())
 		if err != nil {
 			return err
 		}
@@ -146,16 +151,79 @@ func runChat(args []string) error {
 	return nil
 }
 
-func authenticatedClient() (*assistant.Client, error) {
-	return authenticatedClientWith(
-		auth.DefaultStore(),
-		os.Getenv("DD_API_KEY"),
-		os.Getenv("DD_APP_KEY"),
-		os.Getenv("DD_SITE_URL"),
-	)
+func authenticatedClient(ctx context.Context) (*assistant.Client, error) {
+	store := auth.DefaultStore()
+	apiKey := os.Getenv("DD_API_KEY")
+	appKey := os.Getenv("DD_APP_KEY")
+	apiSite := os.Getenv("DD_SITE_URL")
+	clientID := strings.TrimSpace(os.Getenv("BITS_OAUTH_CLIENT_ID"))
+
+	return ensureAuthenticatedClient(ctx, store, apiKey, appKey, apiSite, func() error {
+		configuredSite := strings.TrimSpace(apiSite)
+		if configuredSite != "" {
+			_, err := auth.Login(ctx, auth.LoginOptions{
+				Site:     configuredSite,
+				ClientID: clientID,
+				Store:    store,
+				Out:      os.Stderr,
+			})
+			return err
+		}
+
+		return runStartupLogin(func(loginCtx context.Context, site string) error {
+			_, err := auth.Login(loginCtx, auth.LoginOptions{
+				Site:     site,
+				ClientID: clientID,
+				Store:    store,
+				Out:      io.Discard,
+			})
+			return err
+		})
+	})
+}
+
+func runStartupLogin(login loginui.LoginFunc) error {
+	model, err := tea.NewProgram(loginui.New(login)).Run()
+	if err != nil {
+		return err
+	}
+	result, ok := model.(*loginui.Model)
+	if !ok || !result.Completed() {
+		return loginui.ErrCanceled
+	}
+	return nil
+}
+
+func ensureAuthenticatedClient(
+	ctx context.Context,
+	store auth.CredentialStore,
+	apiKey, appKey, apiSite string,
+	login func() error,
+) (*assistant.Client, error) {
+	client, err := authenticatedClientWithContext(ctx, store, apiKey, appKey, apiSite)
+	if err == nil {
+		return client, nil
+	}
+
+	// A corrupt or definitively unrefreshable OAuth session is not working auth.
+	// Login can safely replace either one; transient keyring/network failures are
+	// surfaced instead of unexpectedly opening a browser.
+	if !errors.Is(err, errNoWorkingAuth) &&
+		!errors.Is(err, auth.ErrSessionCorrupt) &&
+		!errors.Is(err, auth.ErrReauthRequired) {
+		return nil, err
+	}
+	if err := login(); err != nil {
+		return nil, fmt.Errorf("sign in to Datadog: %w", err)
+	}
+	return authenticatedClientWithContext(ctx, store, apiKey, appKey, apiSite)
 }
 
 func authenticatedClientWith(store auth.CredentialStore, apiKey, appKey, apiSite string) (*assistant.Client, error) {
+	return authenticatedClientWithContext(context.Background(), store, apiKey, appKey, apiSite)
+}
+
+func authenticatedClientWithContext(ctx context.Context, store auth.CredentialStore, apiKey, appKey, apiSite string) (*assistant.Client, error) {
 	// A stored OAuth login is the customer path and deliberately wins over
 	// ambient developer credentials. Complete API/app-key pairs are only the
 	// CI/developer fallback when no OAuth session exists. Real keyring errors
@@ -164,6 +232,12 @@ func authenticatedClientWith(store auth.CredentialStore, apiKey, appKey, apiSite
 	if err == nil {
 		source, sourceErr := auth.NewSource(session, store, nil)
 		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		// Validate the grant before opening the chat UI. This is a local check for
+		// a fresh token and performs the existing safe refresh transaction only
+		// when the token is near expiry.
+		if _, sourceErr = source.AccessToken(ctx); sourceErr != nil {
 			return nil, sourceErr
 		}
 		return assistant.NewOAuthClient(source.Site(), source)
@@ -177,5 +251,5 @@ func authenticatedClientWith(store auth.CredentialStore, apiKey, appKey, apiSite
 	if apiKey != "" && appKey != "" {
 		return assistant.NewAPIKeyClient(apiSite, apiKey, appKey)
 	}
-	return nil, fmt.Errorf("not logged in; run `bits login`")
+	return nil, fmt.Errorf("%w: no OAuth session or complete API/app-key pair", errNoWorkingAuth)
 }
