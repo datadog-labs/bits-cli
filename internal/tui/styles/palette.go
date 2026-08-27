@@ -4,8 +4,9 @@ package styles
 // in builder.go, keeping colors centralized without tying the palette to a
 // particular component.
 type palette struct {
-	primary   string
-	secondary string
+	primary     string
+	interactive string
+	secondary   string
 
 	onAccent  string
 	onWarning string
@@ -36,11 +37,12 @@ type palette struct {
 func darkPalette() palette {
 	return palette{
 		primary:         "#5e6dd6",
+		interactive:     "#8B80F9",
 		secondary:       "#3f4ca5",
 		onAccent:        "#FFFFFF",
 		onWarning:       "#1A1A1A",
 		text:            "252",
-		muted:           "#666666",
+		muted:           "#8C8F99",
 		surface:         "#22252F",
 		surfaceRaised:   "236",
 		inputRule:       "#383A40",
@@ -54,7 +56,7 @@ func darkPalette() palette {
 		error:           "#D33043",
 		errorSurface:    "#2F0A0F",
 		feedbackSuccess: "#65A875",
-		feedbackError:   "#C85A68",
+		feedbackError:   "#D77480",
 		critical:        "#C4314B",
 		info:            "#632CA6",
 		warning:         "#F5A623",
@@ -64,6 +66,7 @@ func darkPalette() palette {
 func lightPalette() palette {
 	return palette{
 		primary:         "#5e6dd6",
+		interactive:     "#4D58AF",
 		secondary:       "#1d2140",
 		onAccent:        "#FFFFFF",
 		onWarning:       "#1A1A1A",

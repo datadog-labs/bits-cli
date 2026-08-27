@@ -14,12 +14,20 @@ var rawColorPattern = regexp.MustCompile(`#[[:xdigit:]]{3,8}`)
 // TUI components and screens consume Theme roles; this package remains the
 // single source of raw TUI colors.
 func TestTUIDoesNotDefineRawColorsOutsideStyles(t *testing.T) {
-	err := filepath.WalkDir("..", func(path string, entry fs.DirEntry, err error) error {
+	centralStylesDir, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = filepath.WalkDir("..", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
-			if path != ".." && filepath.Base(path) == "styles" {
+			absolutePath, err := filepath.Abs(path)
+			if err != nil {
+				return err
+			}
+			if absolutePath == centralStylesDir {
 				return filepath.SkipDir
 			}
 			return nil

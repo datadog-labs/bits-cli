@@ -176,7 +176,7 @@ func colorTokenSamples(theme styles.Theme) []string {
 		{"Editor menu item bg", theme.Editor.MenuItem.GetBackground()},
 		{"Editor menu selected fg", theme.Editor.MenuSelected.GetForeground()},
 		{"Editor menu selected bg", theme.Editor.MenuSelected.GetBackground()},
-		{"AI primary (UserMarker/ToolName fg)", sty.ToolName.GetForeground()},
+		{"Interactive accent (UserMarker/ToolName fg)", sty.ToolName.GetForeground()},
 		{"Tool detail fg", sty.ToolDetail.GetForeground()},
 		{"Status running fg", sty.StatusRunning.GetForeground()},
 		{"Status success fg", sty.StatusSuccess.GetForeground()},
