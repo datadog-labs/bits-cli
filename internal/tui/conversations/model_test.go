@@ -161,22 +161,26 @@ func TestPickerHidesPageHelpWithoutPaginationAndExplainsNoMatches(t *testing.T) 
 	}
 }
 
-func TestSearchPreservesNewestFirstOrder(t *testing.T) {
+func TestSearchUsesCaseInsensitiveSubstringAndPreservesNewestFirstOrder(t *testing.T) {
 	m := New(80, 18)
 	m.SetConversations([]assistant.ConversationSummary{
-		{ConversationID: "older", UpdatedAt: 100, Title: "target"},
-		{ConversationID: "newer", UpdatedAt: 200, Title: "notes about target"},
+		{ConversationID: "unrelated", UpdatedAt: 300, Title: "Create a new ordered Datadog dashboard for: POST /api/unstable/interpolate-widget service:morpheus-widget-toolkit"},
+		{ConversationID: "older", UpdatedAt: 100, Title: "SELECT COALESCE(attempt_method, success_method)"},
+		{ConversationID: "newer", UpdatedAt: 200, Title: "Notes about coalesce usage"},
 	})
 
-	for _, r := range "target" {
+	for _, r := range "coalesce" {
 		m, _ = m.Update(pickerKey(r, string(r)))
 	}
 	visible := m.list.VisibleItems()
 	if len(visible) != 2 {
-		t.Fatalf("visible matches = %d, want 2", len(visible))
+		t.Fatalf("visible matches = %+v, want only 2 contiguous matches", visible)
 	}
 	if first := visible[0].(conversationItem).summary.ConversationID; first != "newer" {
 		t.Fatalf("first filtered conversation = %q, want newest conversation", first)
+	}
+	if second := visible[1].(conversationItem).summary.ConversationID; second != "older" {
+		t.Fatalf("second filtered conversation = %q, want older case-insensitive match", second)
 	}
 }
 

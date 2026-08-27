@@ -74,9 +74,10 @@ func New(width, height int, themes ...styles.Theme) Model {
 	}
 	delegate := newConversationDelegate(theme)
 	model := list.New(nil, delegate, max(width, 1), max(height, 1))
-	// Search narrows the API's newest-first order without fuzzy-score ranking
-	// moving older conversations ahead of more recent matches.
-	model.Filter = list.UnsortedFilter
+	// Search narrows the API's newest-first order using a contiguous,
+	// case-insensitive title match. Fuzzy subsequence matching creates surprising
+	// positives for long conversation titles.
+	model.Filter = substringFilter
 	model.SetShowTitle(false)
 	model.SetShowFilter(false)
 	model.DisableQuitKeybindings()
@@ -181,6 +182,55 @@ func configureConversationHelp(model *list.Model) {
 	model.KeyMap.ClearFilter.Unbind()
 	model.KeyMap.ShowFullHelp.Unbind()
 	model.KeyMap.CloseFullHelp.Unbind()
+}
+
+func substringFilter(term string, targets []string) []list.Rank {
+	needle := foldedRunes(term)
+	if len(needle) == 0 {
+		ranks := make([]list.Rank, len(targets))
+		for i := range targets {
+			ranks[i] = list.Rank{Index: i}
+		}
+		return ranks
+	}
+
+	ranks := make([]list.Rank, 0, len(targets))
+	for i, target := range targets {
+		start := runeSliceIndex(foldedRunes(target), needle)
+		if start < 0 {
+			continue
+		}
+		matched := make([]int, len(needle))
+		for j := range needle {
+			matched[j] = start + j
+		}
+		ranks = append(ranks, list.Rank{Index: i, MatchedIndexes: matched})
+	}
+	return ranks
+}
+
+func foldedRunes(value string) []rune {
+	runes := []rune(value)
+	for i, r := range runes {
+		runes[i] = unicode.ToLower(r)
+	}
+	return runes
+}
+
+func runeSliceIndex(haystack, needle []rune) int {
+	for start := 0; start+len(needle) <= len(haystack); start++ {
+		matched := true
+		for i := range needle {
+			if haystack[start+i] != needle[i] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return start
+		}
+	}
+	return -1
 }
 
 func (m *Model) updateHelp() {
