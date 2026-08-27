@@ -138,6 +138,23 @@ func TestAuthenticatedClientDoesNotFallbackFromInvalidStoredSession(t *testing.T
 	}
 }
 
+func TestCanStartLoginOnlyForReplaceableAuthenticationFailures(t *testing.T) {
+	for _, err := range []error{
+		errNoWorkingAuth,
+		fmt.Errorf("wrapped: %w", auth.ErrSessionCorrupt),
+		auth.ErrReauthRequired,
+	} {
+		if !canStartLogin(err) {
+			t.Errorf("canStartLogin(%v) = false", err)
+		}
+	}
+	for _, err := range []error{nil, errors.New("keyring unavailable"), context.Canceled} {
+		if canStartLogin(err) {
+			t.Errorf("canStartLogin(%v) = true", err)
+		}
+	}
+}
+
 func TestEnsureAuthenticatedClientRunsLoginOnlyWhenNeeded(t *testing.T) {
 	store := &mutableCredentialStore{err: auth.ErrNoSession}
 	loginCalls := 0

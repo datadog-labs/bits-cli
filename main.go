@@ -123,78 +123,96 @@ func runChat(args []string) error {
 		return fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
 
-	// BITS_FAKE_BACKEND streams seeded pseudo-random output with no network or
-	// auth, for offline development and demos.
-	var backend agent.Backend
-	if os.Getenv("BITS_FAKE_BACKEND") == "1" {
-		backend = fake.New()
-	} else {
-		client, err := authenticatedClient(context.Background())
-		if err != nil {
-			return err
-		}
-		backend = client
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	root, err := startupModel(ctx, *conversationID)
+	if err != nil {
+		return err
 	}
 
-	engine := agent.New(backend, assistant.SendOptions{ConversationID: *conversationID})
-	p := tea.NewProgram(tui.New(engine))
-	model, err := p.Run()
+	// Login and chat are modes of one Bubble Tea program. Keeping the same
+	// renderer alive prevents an alt-screen teardown flash after OAuth succeeds.
+	model, err := tea.NewProgram(root, tea.WithContext(ctx)).Run()
 	if err != nil {
+		return err
+	}
+	m, ok := model.(*tui.Model)
+	if !ok {
+		return errors.New("Bits TUI returned an unexpected model")
+	}
+	if err := m.StartupError(); err != nil {
+		if errors.Is(err, loginui.ErrCanceled) {
+			return fmt.Errorf("sign in to Datadog: %w", err)
+		}
 		return err
 	}
 	// On a clean exit with an active conversation, surface how to get back to it.
 	// The conversation id is the server-side handle the Assistant API restores via
 	// --conversation; there is no local session store yet.
-	if m, ok := model.(*tui.Model); ok && m.ConversationID() != "" {
+	if m.ConversationID() != "" {
 		fmt.Printf("Resume this conversation with: bits --conversation %s\n", m.ConversationID())
 	}
 	return nil
 }
 
-func authenticatedClient(ctx context.Context) (*assistant.Client, error) {
+func startupModel(ctx context.Context, conversationID string) (*tui.Model, error) {
+	options := assistant.SendOptions{ConversationID: conversationID}
+	// BITS_FAKE_BACKEND streams seeded pseudo-random output with no network or
+	// auth, for offline development and demos.
+	if os.Getenv("BITS_FAKE_BACKEND") == "1" {
+		return tui.New(agent.New(fake.New(), options)), nil
+	}
+
 	store := auth.DefaultStore()
 	apiKey := os.Getenv("DD_API_KEY")
 	appKey := os.Getenv("DD_APP_KEY")
 	apiSite := os.Getenv("DD_SITE_URL")
 	clientID := strings.TrimSpace(os.Getenv("BITS_OAUTH_CLIENT_ID"))
+	client, err := authenticatedClientWithContext(ctx, store, apiKey, appKey, apiSite)
+	if err == nil {
+		return tui.New(agent.New(client, options)), nil
+	}
+	if !canStartLogin(err) {
+		return nil, err
+	}
 
-	return ensureAuthenticatedClient(ctx, store, apiKey, appKey, apiSite, func() error {
-		configuredSite := strings.TrimSpace(apiSite)
-		if configuredSite != "" {
-			_, err := auth.Login(ctx, auth.LoginOptions{
+	// An explicitly configured site retains the non-picker OAuth path. With no
+	// override, startup login is embedded in the root TUI and hands off in place.
+	if configuredSite := strings.TrimSpace(apiSite); configuredSite != "" {
+		client, err = ensureAuthenticatedClient(ctx, store, apiKey, appKey, apiSite, func() error {
+			_, loginErr := auth.Login(ctx, auth.LoginOptions{
 				Site:     configuredSite,
 				ClientID: clientID,
 				Store:    store,
 				Out:      os.Stderr,
 			})
-			return err
-		}
-
-		return runStartupLogin(ctx, clientID, func(loginCtx context.Context, site string, report func(loginui.BrowserStatus)) error {
-			_, err := auth.Login(loginCtx, auth.LoginOptions{
-				Site:     site,
-				ClientID: clientID,
-				Store:    store,
-				OnBrowserOpen: func(url string, openErr error) {
-					report(loginui.BrowserStatus{AuthorizationURL: url, OpenError: openErr})
-				},
-				Out: io.Discard,
-			})
-			return err
+			return loginErr
 		})
-	})
-}
+		if err != nil {
+			return nil, err
+		}
+		return tui.New(agent.New(client, options)), nil
+	}
 
-func runStartupLogin(ctx context.Context, clientID string, login loginui.LoginFunc) error {
-	model, err := tea.NewProgram(loginui.New(ctx, login, clientID), tea.WithContext(ctx)).Run()
-	if err != nil {
-		return err
-	}
-	result, ok := model.(*loginui.Model)
-	if !ok || !result.Completed() {
-		return loginui.ErrCanceled
-	}
-	return nil
+	loginModel := loginui.New(ctx, func(loginCtx context.Context, site string, report func(loginui.BrowserStatus)) error {
+		_, loginErr := auth.Login(loginCtx, auth.LoginOptions{
+			Site:     site,
+			ClientID: clientID,
+			Store:    store,
+			OnBrowserOpen: func(url string, openErr error) {
+				report(loginui.BrowserStatus{AuthorizationURL: url, OpenError: openErr})
+			},
+			Out: io.Discard,
+		})
+		return loginErr
+	}, clientID)
+	return tui.NewWithLogin(ctx, loginModel, func(factoryCtx context.Context) (*agent.Engine, error) {
+		client, factoryErr := authenticatedClientWithContext(factoryCtx, store, apiKey, appKey, apiSite)
+		if factoryErr != nil {
+			return nil, factoryErr
+		}
+		return agent.New(client, options), nil
+	}), nil
 }
 
 func ensureAuthenticatedClient(
@@ -211,15 +229,19 @@ func ensureAuthenticatedClient(
 	// A corrupt or definitively unrefreshable OAuth session is not working auth.
 	// Login can safely replace either one; transient keyring/network failures are
 	// surfaced instead of unexpectedly opening a browser.
-	if !errors.Is(err, errNoWorkingAuth) &&
-		!errors.Is(err, auth.ErrSessionCorrupt) &&
-		!errors.Is(err, auth.ErrReauthRequired) {
+	if !canStartLogin(err) {
 		return nil, err
 	}
 	if err := login(); err != nil {
 		return nil, fmt.Errorf("sign in to Datadog: %w", err)
 	}
 	return authenticatedClientWithContext(ctx, store, apiKey, appKey, apiSite)
+}
+
+func canStartLogin(err error) bool {
+	return errors.Is(err, errNoWorkingAuth) ||
+		errors.Is(err, auth.ErrSessionCorrupt) ||
+		errors.Is(err, auth.ErrReauthRequired)
 }
 
 func authenticatedClientWith(store auth.CredentialStore, apiKey, appKey, apiSite string) (*assistant.Client, error) {

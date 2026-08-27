@@ -74,6 +74,11 @@ type browserStatusMsg struct {
 type spinnerTickMsg struct{ attempt uint64 }
 type completionPauseMsg struct{ attempt uint64 }
 
+// CompletedMsg tells the owning application that the persisted OAuth session
+// is ready. It deliberately does not quit Bubble Tea: the root model can switch
+// to chat while the same program keeps control of the alternate screen.
+type CompletedMsg struct{}
+
 // Model is the startup login state machine.
 type Model struct {
 	ctx      context.Context
@@ -198,7 +203,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case completionPauseMsg:
 		if msg.attempt == m.attempt && m.phase == phaseComplete {
-			return m, tea.Quit
+			return m, func() tea.Msg { return CompletedMsg{} }
 		}
 	}
 

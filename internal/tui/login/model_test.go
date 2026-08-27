@@ -100,6 +100,20 @@ func TestLoginErrorCanRetry(t *testing.T) {
 	}
 }
 
+func TestCompletionSignalsOwnerWithoutQuittingProgram(t *testing.T) {
+	m := newModel(func(context.Context, string) error { return nil })
+	m.attempt = 1
+	m.phase = phaseComplete
+	m.completed = true
+	_, cmd := m.Update(completionPauseMsg{attempt: 1})
+	if cmd == nil {
+		t.Fatal("completion returned no command")
+	}
+	if msg := cmd(); msg != (CompletedMsg{}) {
+		t.Fatalf("completion command = %T, want CompletedMsg", msg)
+	}
+}
+
 func TestEscapeCancelsWaitingAttemptAndIgnoresLateResult(t *testing.T) {
 	finished := make(chan struct{})
 	m := newModel(func(ctx context.Context, _ string) error {

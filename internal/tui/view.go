@@ -14,6 +14,9 @@ import (
 // and mouse tracking, which were program options in Bubble Tea v1, are now
 // declared on the returned view.
 func (m *Model) View() tea.View {
+	if m.mode == ModeLogin && m.loginModel != nil {
+		return m.loginModel.View()
+	}
 	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion}
 	switch m.mode {
 	case ModeTermInit:
