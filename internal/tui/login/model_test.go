@@ -206,6 +206,37 @@ func TestViewContainsVisualHierarchyAndFits(t *testing.T) {
 	}
 }
 
+func TestBrowserStatusCanAddURLThenReportLauncherFailure(t *testing.T) {
+	reported := make(chan struct{})
+	release := make(chan struct{})
+	m := New(context.Background(), func(_ context.Context, _ string, report func(BrowserStatus)) error {
+		report(BrowserStatus{AuthorizationURL: "https://app.datadoghq.com/oauth2/v1/authorize?client_id=bits"})
+		report(BrowserStatus{
+			AuthorizationURL: "https://app.datadoghq.com/oauth2/v1/authorize?client_id=bits",
+			OpenError:        errors.New("browser unavailable"),
+		})
+		close(reported)
+		<-release
+		return nil
+	}, "")
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	batch := cmd().(tea.BatchMsg)
+	finished := make(chan tea.Msg, 1)
+	go func() { finished <- batch[0]() }()
+	<-reported
+
+	_, next := m.Update(batch[1]())
+	if m.authorizationURL == "" || m.browserOpenErr != nil || next == nil {
+		t.Fatalf("initial browser status URL=%q error=%v next=%v", m.authorizationURL, m.browserOpenErr, next != nil)
+	}
+	_, _ = m.Update(next())
+	if m.browserOpenErr == nil {
+		t.Fatal("follow-up browser launch error was not applied")
+	}
+	close(release)
+	_, _ = m.Update(<-finished)
+}
+
 func TestBrowserOpenFailureShowsManualURL(t *testing.T) {
 	m := newModel(func(context.Context, string) error { return nil })
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 90, Height: 28})

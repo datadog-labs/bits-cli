@@ -97,8 +97,11 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		openURL = func(target string) error { return openBrowser(waitCtx, target) }
 	}
 	opts.printf("Opening Datadog login in your browser…\nIf it does not open, visit:\n%s\n", authURL)
-	openErr := openURL(authURL)
 	if opts.OnBrowserOpen != nil {
+		opts.OnBrowserOpen(authURL, nil)
+	}
+	openErr := openURL(authURL)
+	if openErr != nil && opts.OnBrowserOpen != nil {
 		opts.OnBrowserOpen(authURL, openErr)
 	}
 	if openErr != nil {

@@ -69,6 +69,9 @@ type loginFinishedMsg struct {
 type browserStatusMsg struct {
 	attempt uint64
 	status  BrowserStatus
+	updates <-chan BrowserStatus
+	ctx     context.Context
+	done    bool
 }
 
 type (
@@ -174,9 +177,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.handleKey(key)
 	case browserStatusMsg:
-		if msg.attempt == m.attempt && m.phase == phaseWaiting {
-			m.authorizationURL = msg.status.AuthorizationURL
-			m.browserOpenErr = msg.status.OpenError
+		if msg.attempt != m.attempt || m.phase != phaseWaiting || msg.done {
+			return m, nil
+		}
+		m.authorizationURL = msg.status.AuthorizationURL
+		m.browserOpenErr = msg.status.OpenError
+		if msg.updates != nil {
+			return m, waitBrowserStatus(msg.attempt, msg.updates, msg.ctx)
 		}
 		return m, nil
 	case loginFinishedMsg:
@@ -297,7 +304,7 @@ func (m *Model) startLogin(site string) tea.Cmd {
 	m.spinner = 0
 
 	login := m.login
-	status := make(chan BrowserStatus, 1)
+	status := make(chan BrowserStatus, 2)
 	report := func(update BrowserStatus) {
 		select {
 		case status <- update:
@@ -307,20 +314,27 @@ func (m *Model) startLogin(site string) tea.Cmd {
 	return tea.Batch(
 		func() tea.Msg {
 			if login == nil {
+				close(status)
 				return loginFinishedMsg{attempt: attempt, err: errors.New("OAuth login is unavailable")}
 			}
-			return loginFinishedMsg{attempt: attempt, err: login(ctx, site, report)}
+			err := login(ctx, site, report)
+			close(status)
+			return loginFinishedMsg{attempt: attempt, err: err}
 		},
-		func() tea.Msg {
-			select {
-			case update := <-status:
-				return browserStatusMsg{attempt: attempt, status: update}
-			case <-ctx.Done():
-				return browserStatusMsg{attempt: attempt}
-			}
-		},
+		waitBrowserStatus(attempt, status, ctx),
 		spinnerTick(attempt),
 	)
+}
+
+func waitBrowserStatus(attempt uint64, updates <-chan BrowserStatus, ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case update, ok := <-updates:
+			return browserStatusMsg{attempt: attempt, status: update, updates: updates, ctx: ctx, done: !ok}
+		case <-ctx.Done():
+			return browserStatusMsg{attempt: attempt, done: true}
+		}
+	}
 }
 
 func (m *Model) abort() {
