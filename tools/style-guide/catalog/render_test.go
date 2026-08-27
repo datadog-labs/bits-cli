@@ -28,7 +28,7 @@ func TestHexOf(t *testing.T) {
 
 func TestFooterContainsPositionAndMode(t *testing.T) {
 	f := footer(200, groupMarkdown, true)
-	if !strings.Contains(f, "3 / 4") {
+	if !strings.Contains(f, "4 / 5") {
 		t.Fatalf("footer missing position: %q", f)
 	}
 	if !strings.Contains(f, "DARK") {

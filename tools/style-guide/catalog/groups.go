@@ -9,6 +9,8 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/components"
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 // sampleText is representative prose used to show text attributes and roles.
@@ -16,17 +18,20 @@ const sampleText = "The quick brown fox jumps over the lazy dog."
 
 // renderGroup renders one page's body: its samples joined by delimiter lines,
 // with an end-of-content marker so reaching the bottom is obvious.
-func renderGroup(g group, width int, sty chat.Styles, isDark bool) string {
+func renderGroup(g group, width int, theme styles.Theme) string {
+	sty := chat.StylesFor(theme)
 	var samples []string
 	switch g {
 	case groupTextAttrs:
 		samples = textAttrSamples()
 	case groupSemanticRoles:
 		samples = semanticRoleSamples(width, sty)
+	case groupSharedComponents:
+		samples = sharedComponentSamples(width, theme)
 	case groupMarkdown:
-		samples = markdownSamples(width, isDark)
+		samples = markdownSamples(width, theme.IsDark)
 	case groupColorTokens:
-		samples = colorTokenSamples(sty)
+		samples = colorTokenSamples(theme)
 	default:
 		// numGroups is a count sentinel and is never rendered.
 	}
@@ -109,11 +114,39 @@ func markdownSamples(width int, isDark bool) []string {
 	return out
 }
 
-func colorTokenSamples(sty chat.Styles) []string {
+func sharedComponentSamples(width int, theme styles.Theme) []string {
+	panel := components.NewPanel(theme.Panel)
+	panelSample := panel.View(width, 16, components.PanelContent{
+		Title:       "Choose your Datadog site",
+		Dismiss:     "esc ×",
+		Body:        func(int) string { return theme.Text.Muted.Render("Select the site where your organization lives.") },
+		FooterLeft:  "↑/↓ navigate",
+		FooterRight: "enter to continue",
+		TinyMessage: "Resize to view panel",
+	})
+	selector := components.NewSelector([]components.Choice{
+		{Label: "US1", Detail: "app.datadoghq.com"},
+		{Label: "US3", Detail: "us3.datadoghq.com"},
+		{Label: "Custom", Detail: "Enter another domain"},
+	}, theme.Selector)
+	return []string{
+		renderSample("Panel", panelSample),
+		renderSample("Selector", selector.View(width)),
+	}
+}
+
+func colorTokenSamples(theme styles.Theme) []string {
+	sty := chat.StylesFor(theme)
 	tokens := []struct {
 		label string
 		color color.Color
 	}{
+		{"Input surface", theme.Input.Block.GetBackground()},
+		{"Input rule", theme.Input.Block.GetBorderTopForeground()},
+		{"Editor menu item fg", theme.Editor.MenuItem.GetForeground()},
+		{"Editor menu item bg", theme.Editor.MenuItem.GetBackground()},
+		{"Editor menu selected fg", theme.Editor.MenuSelected.GetForeground()},
+		{"Editor menu selected bg", theme.Editor.MenuSelected.GetBackground()},
 		{"AI primary (UserMarker/ToolName fg)", sty.ToolName.GetForeground()},
 		{"Tool detail fg", sty.ToolDetail.GetForeground()},
 		{"Status running fg", sty.StatusRunning.GetForeground()},
@@ -124,6 +157,14 @@ func colorTokenSamples(sty chat.Styles) []string {
 		{"Notice info bg", sty.NoticeInfo.GetBackground()},
 		{"Notice warn bg", sty.NoticeWarn.GetBackground()},
 		{"Notice error bg", sty.NoticeError.GetBackground()},
+		{"Text body fg", theme.Text.Body.GetForeground()},
+		{"Text muted/help fg", theme.Text.Muted.GetForeground()},
+		{"Panel border", theme.Panel.Frame.GetBorderTopForeground()},
+		{"Selector selected fg", theme.Selector.Selected.GetForeground()},
+		{"Feedback progress fg", theme.Feedback.Progress.GetForeground()},
+		{"Feedback error fg", theme.Feedback.Error.GetForeground()},
+		{"Feedback success fg", theme.Feedback.Success.GetForeground()},
+		{"Text input cursor", theme.TextInput.Cursor.Color},
 		// Glamour-side markdown tokens, exposed on chat.Styles so this page shows
 		// every active color token, not just the lipgloss ones.
 		{"Markdown heading (glamour secondary)", sty.MarkdownHeading},

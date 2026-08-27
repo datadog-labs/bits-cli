@@ -9,7 +9,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	tuistyles "github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 func TestSitePickerNavigatesAndStartsSelectedSite(t *testing.T) {
@@ -36,12 +39,12 @@ func TestSitePickerNavigatesAndStartsSelectedSite(t *testing.T) {
 func TestSitePickerWraps(t *testing.T) {
 	m := newModel(func(context.Context, string) error { return nil })
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if m.selected != customOptionIndex {
-		t.Fatalf("up from first selected %d, want custom", m.selected)
+	if m.selector.Index() != customOptionIndex {
+		t.Fatalf("up from first selected %d, want custom", m.selector.Index())
 	}
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.selected != 0 {
-		t.Fatalf("down from custom selected %d, want first", m.selected)
+	if m.selector.Index() != 0 {
+		t.Fatalf("down from custom selected %d, want first", m.selector.Index())
 	}
 }
 
@@ -51,7 +54,7 @@ func TestCustomDomainValidationAndLogin(t *testing.T) {
 		called <- site
 		return nil
 	})
-	m.selected = customOptionIndex
+	m.selector.SetIndex(customOptionIndex)
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.phase != phaseCustom || !m.custom.Focused() {
 		t.Fatalf("custom input phase = %v, focused = %t", m.phase, m.custom.Focused())
@@ -130,6 +133,24 @@ func TestEscapeFromPickerCancelsStartup(t *testing.T) {
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if !m.Canceled() || cmd == nil {
 		t.Fatalf("canceled = %t, cmd = %v", m.Canceled(), cmd)
+	}
+}
+
+func TestBackgroundColorAppliesCompleteSharedTheme(t *testing.T) {
+	m := newModel(func(context.Context, string) error { return nil })
+	_, _ = m.Update(tea.BackgroundColorMsg{Color: lipgloss.Color("#FFFFFF")})
+	want := tuistyles.Default(false)
+	if m.theme.IsDark {
+		t.Fatal("theme remained dark")
+	}
+	if got := m.theme.Panel.Frame.GetBorderTopForeground(); got != want.Panel.Frame.GetBorderTopForeground() {
+		t.Errorf("panel border = %v, want %v", got, want.Panel.Frame.GetBorderTopForeground())
+	}
+	if got := m.theme.Selector.Selected.GetForeground(); got != want.Selector.Selected.GetForeground() {
+		t.Errorf("selector accent = %v, want %v", got, want.Selector.Selected.GetForeground())
+	}
+	if got := m.custom.Styles().Cursor.Color; got != want.TextInput.Cursor.Color {
+		t.Errorf("text input cursor = %v, want %v", got, want.TextInput.Cursor.Color)
 	}
 }
 

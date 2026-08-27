@@ -1,6 +1,7 @@
 package styles
 
 import (
+	"charm.land/bubbles/v2/textinput"
 	glamouransi "charm.land/glamour/v2/ansi"
 	glamourstyles "charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
@@ -27,9 +28,60 @@ func build(isDark bool, p palette) Theme {
 		Text:   lipgloss.NewStyle().Background(lipgloss.Color(p.surface)),
 	}
 
+	text := Text{
+		Body:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)),
+		Muted: lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
+		Help:  lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color(p.muted)),
+	}
+	feedback := Feedback{
+		Progress: lipgloss.NewStyle().Foreground(lipgloss.Color(p.primary)),
+		Error:    lipgloss.NewStyle().Foreground(lipgloss.Color(p.error)),
+		Success:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.success)),
+	}
+	panel := Panel{
+		Frame: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(p.text)).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(p.borderSubtle)).
+			Padding(1, 2),
+		Title:            text.Body,
+		Dismiss:          text.Help,
+		Compact:          text.Body,
+		Help:             text.Help,
+		MaxWidth:         112,
+		HorizontalMargin: 2,
+		CompactMaxWidth:  34,
+		SectionGap:       1,
+		FooterSeparator:  "   ",
+	}
+	selector := Selector{
+		Item:           text.Body,
+		Selected:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.primary)),
+		Detail:         text.Help,
+		SelectedDetail: text.Body,
+		Marker:         "  ",
+		SelectedMarker: "› ",
+		ColumnGap:      2,
+	}
+	textInput := textinput.DefaultStyles(isDark)
+	textInput.Focused.Text = text.Body
+	textInput.Focused.Placeholder = text.Help
+	textInput.Focused.Suggestion = text.Help
+	textInput.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(p.primary))
+	textInput.Blurred.Text = text.Body
+	textInput.Blurred.Placeholder = text.Help
+	textInput.Blurred.Suggestion = text.Help
+	textInput.Blurred.Prompt = text.Muted
+	textInput.Cursor.Color = lipgloss.Color(p.primary)
+
 	return Theme{
-		IsDark: isDark,
-		Input:  input,
+		IsDark:    isDark,
+		Input:     input,
+		Text:      text,
+		Feedback:  feedback,
+		Panel:     panel,
+		Selector:  selector,
+		TextInput: textInput,
 		Chat: Chat{
 			Markdown:        markdown(isDark, p),
 			MarkdownHeading: lipgloss.Color(p.secondary),

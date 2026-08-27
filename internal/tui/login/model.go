@@ -10,14 +10,14 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/auth"
+	"github.com/DataDog/bits-cli/internal/tui/components"
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 const (
-	panelMaxWidth   = 112
 	completionPause = 650 * time.Millisecond
 	spinnerInterval = 90 * time.Millisecond
 )
@@ -81,11 +81,12 @@ type Model struct {
 	clientID string
 
 	phase    phase
-	selected int
 	custom   textinput.Model
+	selector *components.Selector
+	panel    *components.Panel
+	theme    styles.Theme
 	width    int
 	height   int
-	dark     bool
 
 	attempt          uint64
 	cancel           context.CancelFunc
@@ -105,14 +106,28 @@ func New(ctx context.Context, login LoginFunc, clientID string) *Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	theme := styles.Default(true)
 	input := textinput.New()
-	input.Prompt = "› "
+	input.Prompt = theme.Input.Prompt
 	input.Placeholder = "acme.us3.datadoghq.com"
 	input.CharLimit = 253
 	input.SetWidth(48)
+	input.SetStyles(theme.TextInput)
 
-	input.SetStyles(textinput.DefaultDarkStyles())
-	return &Model{ctx: ctx, login: login, clientID: clientID, custom: input, dark: true}
+	choices := make([]components.Choice, 0, len(siteOptions)+1)
+	for _, option := range siteOptions {
+		choices = append(choices, components.Choice{Label: option.name, Detail: option.domain})
+	}
+	choices = append(choices, components.Choice{Label: "Custom", Detail: "Enter another domain"})
+	return &Model{
+		ctx:      ctx,
+		login:    login,
+		clientID: clientID,
+		custom:   input,
+		selector: components.NewSelector(choices, theme.Selector),
+		panel:    components.NewPanel(theme.Panel),
+		theme:    theme,
+	}
 }
 
 // Completed reports whether OAuth completed successfully.
@@ -126,6 +141,13 @@ func (m *Model) Init() tea.Cmd {
 	return func() tea.Msg { return tea.RequestBackgroundColor() }
 }
 
+func (m *Model) applyTheme(theme styles.Theme) {
+	m.theme = theme
+	m.custom.SetStyles(theme.TextInput)
+	m.panel.SetStyles(theme.Panel)
+	m.selector.SetStyles(theme.Selector)
+}
+
 // Update advances site selection, custom input, and the asynchronous OAuth flow.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -134,8 +156,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.custom.SetWidth(max(12, min(48, msg.Width-10)))
 		return m, nil
 	case tea.BackgroundColorMsg:
-		m.dark = msg.IsDark()
-		m.custom.SetStyles(textinput.DefaultStyles(m.dark))
+		m.applyTheme(styles.Default(msg.IsDark()))
 		return m, nil
 	case tea.KeyPressMsg:
 		key := msg.String()
@@ -198,18 +219,18 @@ func (m *Model) handleKey(key string) (tea.Model, tea.Cmd) {
 
 	switch m.phase {
 	case phaseSelect:
+		if m.selector.UpdateKey(key) {
+			return m, nil
+		}
 		switch key {
-		case "up", "k", "ctrl+p":
-			m.selected = (m.selected - 1 + len(siteOptions) + 1) % (len(siteOptions) + 1)
-		case "down", "j", "ctrl+n":
-			m.selected = (m.selected + 1) % (len(siteOptions) + 1)
 		case "enter":
-			if m.selected == customOptionIndex {
+			selected := m.selector.Index()
+			if selected == customOptionIndex {
 				m.phase = phaseCustom
 				m.loginErr = nil
 				return m, m.custom.Focus()
 			}
-			return m, m.startLogin("https://" + siteOptions[m.selected].domain)
+			return m, m.startLogin("https://" + siteOptions[selected].domain)
 		case "esc":
 			m.canceled = true
 			return m, tea.Quit
@@ -316,49 +337,40 @@ func normalizeCustomSite(raw, clientID string) (string, error) {
 	return cfg.Site, nil
 }
 
-// View renders the login as a centered modal-like panel, following the same
-// compact list treatment as the rest of the Bits TUI.
+// View composes the login state into shared panel and selector components.
 func (m *Model) View() tea.View {
 	view := tea.View{AltScreen: true}
 	if m.width <= 0 || m.height <= 0 {
 		view.Content = "Loading…"
 		return view
 	}
-
-	panel := m.panelView()
-	view.Content = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, panel)
+	view.Content = m.panel.View(m.width, m.height, m.panelContent())
 	return view
 }
 
-func (m *Model) panelView() string {
-	p := paletteFor(m.dark)
-	if m.width < 12 {
-		return m.compactView(p)
+func (m *Model) panelContent() components.PanelContent {
+	content := components.PanelContent{
+		Title:          m.title(),
+		Dismiss:        "esc ×",
+		Body:           m.bodyView,
+		CompactTitle:   "Sign in to Bits",
+		CompactMessage: "Resize the terminal to continue.",
+		TinyMessage:    "Resize terminal to sign in",
 	}
-
-	outerWidth := min(panelMaxWidth, m.width-4)
-	contentWidth := max(1, outerWidth-p.panel.GetHorizontalFrameSize())
-	heading := p.heading.Render(m.title())
-	closeHint := p.close.Render("esc ×")
-	gap := max(1, contentWidth-lipgloss.Width(heading)-lipgloss.Width(closeHint))
-	header := lipgloss.JoinHorizontal(lipgloss.Top, heading, strings.Repeat(" ", gap), closeHint)
-	body := m.bodyView(contentWidth, p)
-	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
-	panel := p.panel.Width(outerWidth).Render(content)
-	if lipgloss.Width(panel) <= m.width && lipgloss.Height(panel) <= m.height {
-		return panel
+	switch m.phase {
+	case phaseSelect:
+		content.FooterLeft = "↑/↓ navigate"
+		content.FooterRight = "enter to continue"
+	case phaseCustom:
+		content.FooterLeft = "esc back"
+		content.FooterRight = "enter to continue"
+	case phaseWaiting:
+		content.FooterLeft = "esc choose another site"
+	case phaseError:
+		content.FooterLeft = "esc choose another site"
+		content.FooterRight = "enter to retry"
 	}
-	return m.compactView(p)
-}
-
-func (m *Model) compactView(p loginPalette) string {
-	if m.height >= 4 && m.width >= 20 {
-		compact := p.compact.Width(min(m.width, 34)).Render("Sign in to Bits\n\nResize the terminal to continue.")
-		if lipgloss.Width(compact) <= m.width && lipgloss.Height(compact) <= m.height {
-			return compact
-		}
-	}
-	return ansi.Truncate("Resize terminal to sign in", max(1, m.width), "")
+	return content
 }
 
 func (m *Model) title() string {
@@ -376,123 +388,54 @@ func (m *Model) title() string {
 	}
 }
 
-func (m *Model) bodyView(width int, p loginPalette) string {
+func (m *Model) bodyView(width int) string {
+	text := m.theme.Text
+	feedback := m.theme.Feedback
 	switch m.phase {
 	case phaseCustom:
 		parts := []string{
-			p.description.Render("Enter the hostname where your organization lives."),
+			text.Muted.Render("Enter the hostname where your organization lives."),
 			"",
-			p.input.Width(width).Render(m.custom.View()),
+			ansi.Truncate(m.custom.View(), width, "…"),
 		}
 		if m.loginErr != nil {
-			parts = append(parts, "", p.error.Width(width).Render(m.loginErr.Error()))
+			parts = append(parts, "", feedback.Error.Render(ansi.Hardwrap(m.loginErr.Error(), width, false)))
 		}
-		parts = append(parts, "", footer(width, p.help.Render("esc back"), p.help.Render("enter to continue")))
-		return lipgloss.JoinVertical(lipgloss.Left, parts...)
+		return strings.Join(parts, "\n")
 	case phaseWaiting:
 		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 		parts := []string{
-			p.description.Render("Complete sign-in in the browser window."),
+			text.Muted.Render("Complete sign-in in the browser window."),
 			"",
-			p.waiting.Render(frames[m.spinner%len(frames)] + "  Waiting for Datadog"),
-			p.domain.Render(strings.TrimPrefix(m.activeSite, "https://")),
+			feedback.Progress.Render(frames[m.spinner%len(frames)] + "  Waiting for Datadog"),
+			text.Help.Render(strings.TrimPrefix(m.activeSite, "https://")),
 		}
 		if m.browserOpenErr != nil {
-			parts[0] = p.error.Render("We couldn't open a browser: " + m.browserOpenErr.Error())
+			parts[0] = feedback.Error.Render("We couldn't open a browser: " + m.browserOpenErr.Error())
 			if m.authorizationURL != "" {
-				parts = append(parts, "", p.description.Render("Open this URL:"), p.domain.Render(ansi.Hardwrap(m.authorizationURL, width, false)))
+				parts = append(parts, "", text.Muted.Render("Open this URL:"), text.Help.Render(ansi.Hardwrap(m.authorizationURL, width, false)))
 			}
 		}
-		parts = append(parts, "", p.help.Render("esc choose another site"))
-		return lipgloss.JoinVertical(lipgloss.Left, parts...)
+		return strings.Join(parts, "\n")
 	case phaseError:
 		message := "Login did not complete."
 		if m.loginErr != nil {
 			message = m.loginErr.Error()
 		}
-		return lipgloss.JoinVertical(lipgloss.Left,
-			p.error.Width(width).Render(message),
-			p.domain.Render(strings.TrimPrefix(m.activeSite, "https://")),
-			"",
-			footer(width, p.help.Render("esc choose another site"), p.help.Render("enter to retry")),
-		)
+		return strings.Join([]string{
+			feedback.Error.Render(ansi.Hardwrap(message, width, false)),
+			text.Help.Render(strings.TrimPrefix(m.activeSite, "https://")),
+		}, "\n")
 	case phaseComplete:
-		return lipgloss.JoinVertical(lipgloss.Left,
-			p.success.Render("✓  Authentication complete"),
-			p.domain.Render(strings.TrimPrefix(m.activeSite, "https://")),
-		)
+		return strings.Join([]string{
+			feedback.Success.Render("✓  Authentication complete"),
+			text.Help.Render(strings.TrimPrefix(m.activeSite, "https://")),
+		}, "\n")
 	default:
-		rows := make([]string, 0, len(siteOptions)+1)
-		for i, option := range siteOptions {
-			rows = append(rows, siteRow(option.name, option.domain, i == m.selected, p))
-		}
-		rows = append(rows, siteRow("Custom", "Enter another domain", m.selected == customOptionIndex, p))
-		return lipgloss.JoinVertical(lipgloss.Left,
-			p.description.Render("Select the site where your organization lives."),
+		return strings.Join([]string{
+			text.Muted.Render("Select the site where your organization lives."),
 			"",
-			lipgloss.JoinVertical(lipgloss.Left, rows...),
-			"",
-			footer(width, p.help.Render("↑/↓ navigate"), p.help.Render("enter to continue")),
-		)
-	}
-}
-
-func siteRow(name, detail string, selected bool, p loginPalette) string {
-	marker := "  "
-	nameStyle := p.row
-	detailStyle := p.domain
-	if selected {
-		marker = "› "
-		nameStyle = p.selected
-		detailStyle = p.row
-	}
-	return nameStyle.Render(marker+fmt.Sprintf("%-7s", name)) + detailStyle.Render(detail)
-}
-
-func footer(width int, left, right string) string {
-	gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right)
-}
-
-type loginPalette struct {
-	panel       lipgloss.Style
-	compact     lipgloss.Style
-	heading     lipgloss.Style
-	close       lipgloss.Style
-	description lipgloss.Style
-	row         lipgloss.Style
-	selected    lipgloss.Style
-	domain      lipgloss.Style
-	help        lipgloss.Style
-	input       lipgloss.Style
-	waiting     lipgloss.Style
-	error       lipgloss.Style
-	success     lipgloss.Style
-}
-
-func paletteFor(dark bool) loginPalette {
-	text, muted, border, accent, danger, success := "#C9CBD1", "#6F727C", "#474A54", "#5E6DD6", "#C85A68", "#65A875"
-	if !dark {
-		text, muted, border, accent, danger, success = "#29333A", "#737A80", "#B8BCC4", "#4D58AF", "#B23A4A", "#397A4A"
-	}
-
-	return loginPalette{
-		panel: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(text)).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color(border)).
-			Padding(1, 2),
-		compact:     lipgloss.NewStyle().Foreground(lipgloss.Color(text)),
-		heading:     lipgloss.NewStyle().Foreground(lipgloss.Color(text)),
-		close:       lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color(muted)),
-		description: lipgloss.NewStyle().Foreground(lipgloss.Color(muted)),
-		row:         lipgloss.NewStyle().Foreground(lipgloss.Color(text)),
-		selected:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(accent)),
-		domain:      lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color(muted)),
-		help:        lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color(muted)),
-		input:       lipgloss.NewStyle().Foreground(lipgloss.Color(text)),
-		waiting:     lipgloss.NewStyle().Foreground(lipgloss.Color(accent)),
-		error:       lipgloss.NewStyle().Foreground(lipgloss.Color(danger)),
-		success:     lipgloss.NewStyle().Foreground(lipgloss.Color(success)),
+			m.selector.View(width),
+		}, "\n")
 	}
 }
