@@ -10,6 +10,11 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
+const (
+	minimumChatWidth  = 12
+	minimumChatHeight = 5
+)
+
 // View lays out the transcript viewport, a status line, and the input. Alt-screen
 // and mouse tracking, which were program options in Bubble Tea v1, are now
 // declared on the returned view.
@@ -22,7 +27,18 @@ func (m *Model) View() tea.View {
 	case ModeTermInit:
 		v.Content = "loading…"
 	case ModeChat:
+		if m.width < minimumChatWidth || m.height < minimumChatHeight {
+			v.MouseMode = tea.MouseModeNone
+			message := ansi.Truncate("Resize terminal to use Bits", max(1, m.width), "")
+			v.Content = lipgloss.Place(max(1, m.width), max(1, m.height), lipgloss.Center, lipgloss.Center, message)
+			break
+		}
 		v.Content = m.chatView()
+	case ModeLogin:
+		// A valid login model returns above. Keep a bounded fallback for the
+		// defensive nil-model shutdown path rather than flashing a blank frame.
+		v.MouseMode = tea.MouseModeNone
+		v.Content = "loading…"
 	}
 	return v
 }

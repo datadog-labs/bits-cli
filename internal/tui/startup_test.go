@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -150,6 +151,32 @@ func waitForOutput(t *testing.T, output *synchronizedBuffer, text string) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("terminal output did not contain %q", text)
+}
+
+func TestStartupHandoffTinyTerminalShowsBoundedResizePrompt(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{10, 2}, {24, 4}} {
+		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
+			root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil, ""), func(context.Context) (*agent.Engine, error) {
+				return agent.New(fake.New(), assistant.SendOptions{}), nil
+			})
+			_, _ = root.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
+			_, factory := root.Update(loginui.CompletedMsg{})
+			_, _ = root.Update(factory())
+			view := root.View().Content
+			if !strings.Contains(ansi.Strip(view), "Resize") {
+				t.Fatalf("view = %q, want resize prompt", ansi.Strip(view))
+			}
+			lines := strings.Split(view, "\n")
+			if len(lines) > size.height {
+				t.Fatalf("height = %d, want <= %d", len(lines), size.height)
+			}
+			for _, line := range lines {
+				if width := ansi.StringWidth(line); width > size.width {
+					t.Fatalf("line width = %d, want <= %d", width, size.width)
+				}
+			}
+		})
+	}
 }
 
 func TestStartupLoginCompletionIsSingleFlight(t *testing.T) {

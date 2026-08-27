@@ -71,8 +71,10 @@ type browserStatusMsg struct {
 	status  BrowserStatus
 }
 
-type spinnerTickMsg struct{ attempt uint64 }
-type completionPauseMsg struct{ attempt uint64 }
+type (
+	spinnerTickMsg     struct{ attempt uint64 }
+	completionPauseMsg struct{ attempt uint64 }
+)
 
 // CompletedMsg tells the owning application that the persisted OAuth session
 // is ready. It deliberately does not quit Bubble Tea: the root model can switch
@@ -218,7 +220,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	if key == "ctrl+c" {
 		m.abort()
-		m.canceled = true
+		if !m.completed {
+			m.canceled = true
+		}
 		return m, tea.Quit
 	}
 
@@ -272,6 +276,9 @@ func (m *Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.loginErr = nil
 			return m, nil
 		}
+	case phaseComplete:
+		// Ignore ordinary keys during the brief success confirmation. Ctrl+C is
+		// handled above as a successful early exit, not a canceled login.
 	}
 	return m, nil
 }
@@ -362,6 +369,10 @@ func (m *Model) panelContent() components.PanelContent {
 		CompactMessage: "Resize the terminal to continue.",
 		TinyMessage:    "Resize terminal to sign in",
 	}
+	if m.phase == phaseWaiting && m.authorizationURL != "" {
+		content.CompactMessage = m.authorizationLink("Open Datadog login manually")
+		content.TinyMessage = m.authorizationLink("Open login")
+	}
 	switch m.phase {
 	case phaseSelect:
 		content.FooterLeft = "↑/↓ navigate"
@@ -374,8 +385,14 @@ func (m *Model) panelContent() components.PanelContent {
 	case phaseError:
 		content.FooterLeft = "esc choose another site"
 		content.FooterRight = "enter to retry"
+	case phaseComplete:
+		// The success state has no available action before handoff.
 	}
 	return content
+}
+
+func (m *Model) authorizationLink(label string) string {
+	return ansi.SetHyperlink(m.authorizationURL) + m.theme.Text.Help.Render(label) + ansi.ResetHyperlink()
 }
 
 func (m *Model) title() string {
@@ -417,9 +434,9 @@ func (m *Model) bodyView(width int) string {
 		}
 		if m.browserOpenErr != nil {
 			parts[0] = feedback.Error.Render("We couldn't open a browser: " + m.browserOpenErr.Error())
-			if m.authorizationURL != "" {
-				parts = append(parts, "", text.Muted.Render("Open this URL:"), text.Help.Render(ansi.Hardwrap(m.authorizationURL, width, false)))
-			}
+		}
+		if m.authorizationURL != "" {
+			parts = append(parts, "", m.authorizationLink("Open Datadog login manually"))
 		}
 		return strings.Join(parts, "\n")
 	case phaseError:

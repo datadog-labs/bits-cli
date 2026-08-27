@@ -75,7 +75,7 @@ func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
 		return SiteConfig{}, err
 	}
 
-	clientID := clientIDOverride
+	clientID := strings.TrimSpace(clientIDOverride)
 	if clientID == "" {
 		clientID = defaultClientID(domain)
 	}

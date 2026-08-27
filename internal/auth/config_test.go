@@ -65,6 +65,16 @@ func TestConfigForSite_SelectsProductionClient(t *testing.T) {
 	}
 }
 
+func TestConfigForSite_TrimsClientOverride(t *testing.T) {
+	cfg, err := ConfigForSite(DefaultStagingSite, "  override-id\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ClientID != "override-id" {
+		t.Fatalf("ClientID = %q, want trimmed override", cfg.ClientID)
+	}
+}
+
 func TestConfigForSite_ClientOverrideTakesPrecedence(t *testing.T) {
 	for _, site := range []string{DefaultStagingSite, DefaultSite} {
 		cfg, err := ConfigForSite(site, "override-id")

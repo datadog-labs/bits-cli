@@ -114,6 +114,22 @@ func TestCompletionSignalsOwnerWithoutQuittingProgram(t *testing.T) {
 	}
 }
 
+func TestControlCAfterCompletedLoginExitsWithoutReportingCancellation(t *testing.T) {
+	m := newModel(func(context.Context, string) error { return nil })
+	m.phase = phaseComplete
+	m.completed = true
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("control-C returned no quit command")
+	}
+	if m.Canceled() {
+		t.Fatal("persisted successful login was reported as canceled")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("control-C command = %T, want tea.QuitMsg", cmd())
+	}
+}
+
 func TestEscapeCancelsWaitingAttemptAndIgnoresLateResult(t *testing.T) {
 	finished := make(chan struct{})
 	m := newModel(func(ctx context.Context, _ string) error {
@@ -201,11 +217,43 @@ func TestBrowserOpenFailureShowsManualURL(t *testing.T) {
 			OpenError:        errors.New("browser unavailable"),
 		},
 	})
-	plain := ansi.Strip(m.View().Content)
-	for _, want := range []string{"couldn't open a browser", "browser unavailable", "https://app.datadoghq.com/oauth2/v1/authorize"} {
+	view := m.View().Content
+	plain := ansi.Strip(view)
+	for _, want := range []string{"couldn't open a browser", "browser unavailable", "Open Datadog login manually"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("browser fallback view missing %q:\n%s", want, plain)
 		}
+	}
+	if !strings.Contains(view, m.authorizationURL) {
+		t.Fatal("manual login hyperlink does not retain the copy-safe authorization URL")
+	}
+}
+
+func TestWaitingViewAlwaysProvidesManualBrowserLink(t *testing.T) {
+	m := newModel(func(context.Context, string) error { return nil })
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 90, Height: 28})
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, _ = m.Update(browserStatusMsg{
+		attempt: m.attempt,
+		status:  BrowserStatus{AuthorizationURL: "https://app.datadoghq.com/oauth2/v1/authorize?client_id=bits"},
+	})
+	view := m.View().Content
+	if !strings.Contains(ansi.Strip(view), "Open Datadog login manually") || !strings.Contains(view, m.authorizationURL) {
+		t.Fatalf("waiting view missing manual hyperlink: %q", ansi.Strip(view))
+	}
+}
+
+func TestCompactWaitingViewRetainsManualBrowserLink(t *testing.T) {
+	m := newModel(func(context.Context, string) error { return nil })
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 24, Height: 8})
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, _ = m.Update(browserStatusMsg{
+		attempt: m.attempt,
+		status:  BrowserStatus{AuthorizationURL: "https://app.datadoghq.com/oauth2/v1/authorize?client_id=bits"},
+	})
+	view := m.View().Content
+	if !strings.Contains(ansi.Strip(view), "Open Datadog login") || !strings.Contains(view, m.authorizationURL) {
+		t.Fatalf("compact waiting view missing manual hyperlink: %q", ansi.Strip(view))
 	}
 }
 

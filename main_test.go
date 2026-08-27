@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/auth"
 )
 
@@ -30,9 +31,14 @@ func (s *mutableCredentialStore) Save(session auth.Session) error {
 	s.session, s.err = session, nil
 	return nil
 }
+
 func (s *mutableCredentialStore) Delete() error {
 	s.session, s.err = auth.Session{}, auth.ErrNoSession
 	return nil
+}
+
+func authenticatedClientWith(store auth.CredentialStore, apiKey, appKey, apiSite string) (*assistant.Client, error) {
+	return authenticatedClientWithContext(context.Background(), store, apiKey, appKey, apiSite)
 }
 
 func validOAuthSession() auth.Session {

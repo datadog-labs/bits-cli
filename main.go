@@ -138,7 +138,7 @@ func runChat(args []string) error {
 	}
 	m, ok := model.(*tui.Model)
 	if !ok {
-		return errors.New("Bits TUI returned an unexpected model")
+		return errors.New("bits TUI returned an unexpected model")
 	}
 	if err := m.StartupError(); err != nil {
 		if errors.Is(err, loginui.ErrCanceled) {
@@ -242,10 +242,6 @@ func canStartLogin(err error) bool {
 	return errors.Is(err, errNoWorkingAuth) ||
 		errors.Is(err, auth.ErrSessionCorrupt) ||
 		errors.Is(err, auth.ErrReauthRequired)
-}
-
-func authenticatedClientWith(store auth.CredentialStore, apiKey, appKey, apiSite string) (*assistant.Client, error) {
-	return authenticatedClientWithContext(context.Background(), store, apiKey, appKey, apiSite)
 }
 
 func authenticatedClientWithContext(ctx context.Context, store auth.CredentialStore, apiKey, appKey, apiSite string) (*assistant.Client, error) {

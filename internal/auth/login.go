@@ -30,6 +30,7 @@ var loginCallbackPage = template.Must(template.New("login-callback").Parse(login
 
 const (
 	loginTimeout          = 5 * time.Minute
+	browserOpenTimeout    = 10 * time.Second
 	sessionLockTimeout    = 45 * time.Second
 	sessionPersistTimeout = 5 * time.Second
 )
@@ -68,9 +69,6 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = &http.Client{Timeout: 30 * time.Second}
 	}
-	if opts.OpenURL == nil {
-		opts.OpenURL = openBrowser
-	}
 	if opts.Out == nil {
 		opts.Out = io.Discard
 	}
@@ -92,8 +90,14 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		state,
 		oauth2.S256ChallengeOption(verifier),
 	)
+	waitCtx, cancel := context.WithTimeout(ctx, loginTimeout)
+	defer cancel()
+	openURL := opts.OpenURL
+	if openURL == nil {
+		openURL = func(target string) error { return openBrowser(waitCtx, target) }
+	}
 	opts.printf("Opening Datadog login in your browser…\nIf it does not open, visit:\n%s\n", authURL)
-	openErr := opts.OpenURL(authURL)
+	openErr := openURL(authURL)
 	if opts.OnBrowserOpen != nil {
 		opts.OnBrowserOpen(authURL, openErr)
 	}
@@ -101,8 +105,6 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		opts.printf("Could not open a browser automatically: %v\n", openErr)
 	}
 
-	waitCtx, cancel := context.WithTimeout(ctx, loginTimeout)
-	defer cancel()
 	var code, callbackDomain string
 	select {
 	case <-waitCtx.Done():
@@ -428,7 +430,7 @@ func safeOAuthErrorCode(code string) string {
 	return code
 }
 
-func openBrowser(target string) error {
+func openBrowser(ctx context.Context, target string) error {
 	var command string
 	var args []string
 	switch runtime.GOOS {
@@ -440,9 +442,11 @@ func openBrowser(target string) error {
 		command, args = "xdg-open", []string{target}
 	}
 	// Launcher failures must be observable by the startup UI so it can surface
-	// the authorization URL as a manual fallback. These platform launchers return
-	// after handing the URL to the desktop rather than waiting for the browser.
-	return exec.Command(command, args...).Run()
+	// the authorization URL as a manual fallback. Bound the launcher separately:
+	// a broken desktop handler must not trap OAuth beyond the user's cancellation.
+	launchCtx, cancel := context.WithTimeout(ctx, browserOpenTimeout)
+	defer cancel()
+	return exec.CommandContext(launchCtx, command, args...).Run()
 }
 
 type callbackPage struct {
