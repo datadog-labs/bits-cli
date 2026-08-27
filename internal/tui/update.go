@@ -34,8 +34,9 @@ type (
 	}
 	turnClosedMsg  struct{ generation uint64 }
 	engineReadyMsg struct {
-		engine *agent.Engine
-		err    error
+		generation uint64
+		engine     *agent.Engine
+		err        error
 	}
 )
 
@@ -150,20 +151,31 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.setDarkBackground(msg.IsDark())
 	case loginui.CompletedMsg:
-		if m.startupPending {
+		if m.startupPending || m.startupCanceled {
 			return m, nil
 		}
 		m.startupPending = true
-		factory, ctx := m.engineFactory, m.startupCtx
+		m.startupGeneration++
+		generation := m.startupGeneration
+		factory := m.engineFactory
+		factoryCtx, cancel := context.WithCancel(m.startupCtx)
+		m.startupCancel = cancel
 		return m, func() tea.Msg {
 			if factory == nil {
-				return engineReadyMsg{err: errors.New("authenticated chat is unavailable")}
+				return engineReadyMsg{generation: generation, err: errors.New("authenticated chat is unavailable")}
 			}
-			engine, err := factory(ctx)
-			return engineReadyMsg{engine: engine, err: err}
+			engine, err := factory(factoryCtx)
+			return engineReadyMsg{generation: generation, engine: engine, err: err}
 		}
 	case engineReadyMsg:
+		if msg.generation != m.startupGeneration || m.startupCanceled {
+			return m, nil
+		}
 		m.startupPending = false
+		if m.startupCancel != nil {
+			m.startupCancel()
+			m.startupCancel = nil
+		}
 		if msg.err != nil {
 			m.startupErr = msg.err
 			return m, tea.Quit
@@ -192,6 +204,15 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.loginModel.Update(msg)
 	if loginModel, ok := next.(*loginui.Model); ok {
 		m.loginModel = loginModel
+	}
+	if m.loginModel.Canceled() {
+		m.startupCanceled = true
+		m.startupGeneration++
+		m.startupPending = false
+		if m.startupCancel != nil {
+			m.startupCancel()
+			m.startupCancel = nil
+		}
 	}
 	return m, cmd
 }

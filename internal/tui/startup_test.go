@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,15 +64,16 @@ func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
 }
 
 func TestStartupHandoffKeepsOneAltScreenSession(t *testing.T) {
-	var output bytes.Buffer
-	factoryCalled := make(chan struct{})
-	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil, ""), func(context.Context) (*agent.Engine, error) {
-		close(factoryCalled)
+	output := &synchronizedBuffer{}
+	loginModel := loginui.New(context.Background(), func(context.Context, string, func(loginui.BrowserStatus)) error {
+		return nil
+	}, "")
+	root := NewWithLogin(context.Background(), loginModel, func(context.Context) (*agent.Engine, error) {
 		return agent.New(fake.New(), assistant.SendOptions{}), nil
 	})
 	program := tea.NewProgram(root,
 		tea.WithInput(bytes.NewReader(nil)),
-		tea.WithOutput(&output),
+		tea.WithOutput(output),
 		tea.WithWindowSize(80, 24),
 		tea.WithEnvironment([]string{"TERM=xterm-256color"}),
 	)
@@ -80,19 +82,23 @@ func TestStartupHandoffKeepsOneAltScreenSession(t *testing.T) {
 		_, err := program.Run()
 		done <- err
 	}()
-	program.Send(loginui.CompletedMsg{})
+	t.Cleanup(program.Kill)
+
+	waitForOutput(t, output, "Choose your Datadog site")
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForOutput(t, output, "Authentication complete")
+	waitForOutput(t, output, "Ask Bits…")
+	program.Quit()
 	select {
-	case <-factoryCalled:
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
 	case <-time.After(time.Second):
 		program.Kill()
-		t.Fatal("engine factory was not called")
+		t.Fatal("program did not stop")
 	}
-	// Let the engine-ready message render chat before the deliberate final exit.
-	time.Sleep(50 * time.Millisecond)
-	program.Quit()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
+
 	terminalOutput := output.String()
 	if got := strings.Count(terminalOutput, ansi.SetModeAltScreenSaveCursor); got != 1 {
 		t.Errorf("alternate-screen enters = %d, want 1", got)
@@ -100,6 +106,50 @@ func TestStartupHandoffKeepsOneAltScreenSession(t *testing.T) {
 	if got := strings.Count(terminalOutput, ansi.ResetModeAltScreenSaveCursor); got != 1 {
 		t.Errorf("alternate-screen exits = %d, want one final teardown", got)
 	}
+	plain := ansi.Strip(terminalOutput)
+	loginAt := strings.Index(plain, "Choose your Datadog site")
+	completeAt := strings.Index(plain, "Authentication complete")
+	chatAt := strings.Index(plain, "Ask Bits…")
+	enterAt := strings.Index(terminalOutput, ansi.SetModeAltScreenSaveCursor)
+	rawLoginAt := strings.Index(terminalOutput, "Choose your Datadog site")
+	rawChatAt := strings.Index(terminalOutput, "Ask Bits…")
+	exitAt := strings.Index(terminalOutput, ansi.ResetModeAltScreenSaveCursor)
+	if loginAt < 0 || completeAt <= loginAt || chatAt <= completeAt ||
+		enterAt < 0 || rawLoginAt <= enterAt || rawChatAt <= rawLoginAt || exitAt <= rawChatAt {
+		t.Fatalf("render order login=%d complete=%d chat=%d enter=%d raw-login=%d raw-chat=%d exit=%d",
+			loginAt, completeAt, chatAt, enterAt, rawLoginAt, rawChatAt, exitAt)
+	}
+}
+
+// synchronizedBuffer permits deterministic observation while Bubble Tea's
+// renderer is still writing from its own goroutine.
+type synchronizedBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
+}
+
+func waitForOutput(t *testing.T, output *synchronizedBuffer, text string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(ansi.Strip(output.String()), text) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("terminal output did not contain %q", text)
 }
 
 func TestStartupLoginCompletionIsSingleFlight(t *testing.T) {
@@ -131,6 +181,35 @@ func TestStartupLoginFactoryErrorQuitsWithStoredError(t *testing.T) {
 	}
 	if _, ok := quit().(tea.QuitMsg); !ok {
 		t.Fatalf("factory failure command = %T, want tea.QuitMsg", quit())
+	}
+}
+
+func TestStartupLoginCancellationInvalidatesPendingFactory(t *testing.T) {
+	factoryStarted := make(chan struct{})
+	factoryCanceled := make(chan struct{})
+	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil, ""), func(ctx context.Context) (*agent.Engine, error) {
+		close(factoryStarted)
+		<-ctx.Done()
+		close(factoryCanceled)
+		return nil, ctx.Err()
+	})
+	_, factoryCmd := root.Update(loginui.CompletedMsg{})
+	factoryResult := make(chan tea.Msg, 1)
+	go func() { factoryResult <- factoryCmd() }()
+	<-factoryStarted
+
+	_, quit := root.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if _, ok := quit().(tea.QuitMsg); !ok {
+		t.Fatalf("cancel command = %T, want tea.QuitMsg", quit())
+	}
+	select {
+	case <-factoryCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("pending engine factory context was not canceled")
+	}
+	_, _ = root.Update(<-factoryResult)
+	if root.mode != ModeLogin || root.engine != nil || !errors.Is(root.StartupError(), loginui.ErrCanceled) {
+		t.Fatalf("mode=%v engine=%v startup error=%v", root.mode, root.engine != nil, root.StartupError())
 	}
 }
 

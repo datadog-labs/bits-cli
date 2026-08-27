@@ -38,11 +38,14 @@ type Model struct {
 
 	// Startup login stays inside this root model so Bubble Tea owns the
 	// alternate screen continuously while switching from login to chat.
-	startupCtx     context.Context
-	loginModel     *loginui.Model
-	engineFactory  EngineFactory
-	startupPending bool
-	startupErr     error
+	startupCtx        context.Context
+	startupCancel     context.CancelFunc
+	startupGeneration uint64
+	startupCanceled   bool
+	loginModel        *loginui.Model
+	engineFactory     EngineFactory
+	startupPending    bool
+	startupErr        error
 
 	// blocks is the latest snapshot of the engine's aggregated transcript
 	blocks []agent.Block
@@ -125,11 +128,11 @@ func (m *Model) ConversationID() string { return m.convID }
 // StartupError reports why login could not transition into chat. Cancellation
 // remains distinguishable from post-login client construction failures.
 func (m *Model) StartupError() error {
+	if m.startupCanceled || (m.mode == ModeLogin && m.loginModel != nil && m.loginModel.Canceled()) {
+		return loginui.ErrCanceled
+	}
 	if m.startupErr != nil {
 		return m.startupErr
-	}
-	if m.mode == ModeLogin && m.loginModel != nil && m.loginModel.Canceled() {
-		return loginui.ErrCanceled
 	}
 	return nil
 }
