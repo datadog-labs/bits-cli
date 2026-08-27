@@ -67,8 +67,13 @@ func TestPickerShowsSearchBarAndMalformedRecordWarning(t *testing.T) {
 	if strings.Contains(view, "1 conversation") {
 		t.Fatalf("ready picker should not render a conversation count: %q", m.View())
 	}
-	if m.list.Height() != 4 {
-		t.Fatalf("list height = %d, want 4", m.list.Height())
+	if m.list.Height() != 2 {
+		t.Fatalf("list height = %d, want 2", m.list.Height())
+	}
+	body := m.panelBody(m.panelBodyWidth())
+	lines := strings.Split(body, "\n")
+	if len(lines) < 3 || lines[1] != "" {
+		t.Fatalf("search row should have a blank line before results: %q", body)
 	}
 }
 
@@ -105,11 +110,14 @@ func TestPickerHelpUsesConciseStateAwareActions(t *testing.T) {
 	if !strings.Contains(view, "↑/↓ navigate") || strings.Count(view, "navigate") != 1 {
 		t.Fatalf("navigation help should use one combined binding: %q", m.View())
 	}
-	if !strings.Contains(view, "esc cancel") {
-		t.Fatalf("cancel help should be visible: %q", m.View())
+	if !strings.Contains(view, "esc ×") || strings.Contains(view, "esc cancel") {
+		t.Fatalf("dismiss help should match the site picker: %q", m.View())
 	}
 	if !strings.Contains(view, "←/→ page") || strings.Contains(view, "? more") {
 		t.Fatalf("picker should show page arrows without expandable help: %q", m.View())
+	}
+	if strings.Contains(view, "enter select") {
+		t.Fatalf("picker should not advertise enter selection: %q", m.View())
 	}
 
 	m, _ = m.Update(pickerKey(tea.KeyRight, ""))
@@ -123,19 +131,19 @@ func TestPickerHelpUsesConciseStateAwareActions(t *testing.T) {
 
 	m, _ = m.Update(pickerKey('c', "c"))
 	view = safeDisplay(m.View())
-	if !strings.Contains(view, "esc clear") || strings.Contains(view, "esc cancel") || strings.Contains(view, "clear filter") {
+	if !strings.Contains(view, "esc clear") || strings.Contains(view, "esc ×") || strings.Contains(view, "clear filter") {
 		t.Fatalf("active search should show only the concise clear action: %q", m.View())
 	}
 
 	m, _ = m.Update(pickerKey(tea.KeyEscape, ""))
 	view = safeDisplay(m.View())
-	if m.Query() != "" || !strings.Contains(view, "esc cancel") || strings.Contains(view, "esc clear") {
+	if m.Query() != "" || !strings.Contains(view, "esc ×") || strings.Contains(view, "esc clear") {
 		t.Fatalf("cleared search should restore only the cancel action: query=%q view=%q", m.Query(), m.View())
 	}
 }
 
 func TestPickerHidesPageHelpWithoutPaginationAndExplainsNoMatches(t *testing.T) {
-	m := New(120, 12)
+	m := New(120, 18)
 	m.SetConversations([]assistant.ConversationSummary{{ConversationID: "one", Title: "Alpha"}})
 	if view := safeDisplay(m.View()); strings.Contains(view, "←/→ page") {
 		t.Fatalf("single-page picker advertised pagination: %q", m.View())
@@ -148,7 +156,7 @@ func TestPickerHidesPageHelpWithoutPaginationAndExplainsNoMatches(t *testing.T) 
 	if !strings.Contains(view, "No conversations match your search.") {
 		t.Fatalf("zero-match picker = %q", m.View())
 	}
-	if !strings.Contains(view, "esc clear") || strings.Contains(view, "esc cancel") || strings.Contains(view, "←/→ page") {
+	if !strings.Contains(view, "esc clear") || strings.Contains(view, "esc ×") || strings.Contains(view, "←/→ page") {
 		t.Fatalf("zero-match help is misleading: %q", m.View())
 	}
 }

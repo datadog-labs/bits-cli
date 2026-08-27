@@ -72,7 +72,6 @@ func New(width, height int, themes ...styles.Theme) Model {
 	if len(themes) > 0 {
 		theme = themes[0]
 	}
-	theme = conversationTheme(theme)
 	delegate := newConversationDelegate(theme)
 	model := list.New(nil, delegate, max(width, 1), max(height, 1))
 	model.SetShowTitle(false)
@@ -253,7 +252,6 @@ func (m *Model) SetSize(width, height int) {
 
 // SetStyles applies the root terminal theme without resetting picker state.
 func (m *Model) SetStyles(theme styles.Theme) {
-	theme = conversationTheme(theme)
 	m.theme = theme
 	m.panel.SetStyles(theme.Panel)
 	m.search.SetStyles(theme.TextInput)
@@ -326,7 +324,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	dismiss := "esc cancel"
+	dismiss := "esc ×"
 	if m.search.Value() != "" {
 		dismiss = "esc clear"
 	}
@@ -335,7 +333,7 @@ func (m Model) View() string {
 		Dismiss:        dismiss,
 		Body:           m.panelBody,
 		CompactTitle:   "Resume a conversation",
-		CompactMessage: "Resize terminal to choose a conversation",
+		CompactMessage: m.compactMessage(),
 		TinyMessage:    "Resize terminal to resume",
 	}
 	if m.state == StateReady {
@@ -343,9 +341,27 @@ func (m Model) View() string {
 		if m.list.Paginator.TotalPages > 1 {
 			content.FooterLeft += "   ←/→ page"
 		}
-		content.FooterRight = "enter select"
 	}
 	return m.panel.View(m.width, m.height, content)
+}
+
+func (m Model) compactMessage() string {
+	switch m.state {
+	case StateLoading:
+		if m.operation == OperationOpen {
+			return "Loading conversation…"
+		}
+		return "Loading conversations…"
+	case StateEmpty:
+		return "No conversations found."
+	case StateError:
+		if m.errorMessage != "" {
+			return m.errorMessage
+		}
+		return "Could not load conversations."
+	default:
+		return "Resize terminal to choose a conversation"
+	}
 }
 
 func (m Model) panelBody(width int) string {
@@ -379,7 +395,7 @@ func (m Model) panelBody(width int) string {
 	default:
 		body = ""
 	}
-	return search + "\n" + body
+	return search + "\n\n" + body
 }
 
 func (m *Model) applySearch() {
@@ -405,19 +421,11 @@ func (m *Model) resizeBody(width int) {
 	// both the prompt and cursor so the complete search line cannot wrap.
 	searchWidth := max(0, width-lipgloss.Width(m.search.Prompt)-1)
 	m.search.SetWidth(searchWidth)
-	listHeight := max(1, m.height-m.theme.Panel.Frame.GetVerticalFrameSize()-6)
+	listHeight := max(1, m.height-m.theme.Panel.Frame.GetVerticalFrameSize()-9)
 	if m.warning != "" && m.state == StateReady {
-		listHeight = max(1, listHeight-2)
+		listHeight = max(1, listHeight-1)
 	}
 	m.list.SetSize(width, listHeight)
-}
-
-func conversationTheme(theme styles.Theme) styles.Theme {
-	// The resume panel has a persistent search row and a paginated list. A
-	// tighter section gap keeps its controls useful in ordinary terminal sizes
-	// while retaining the shared panel frame, palette, and responsive fallback.
-	theme.Panel.SectionGap = 0
-	return theme
 }
 
 func (m Model) panelBodyWidth() int {
