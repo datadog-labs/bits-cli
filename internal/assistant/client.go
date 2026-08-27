@@ -200,6 +200,7 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Datadog-Bits-Surface", "cli")
 	if c.TokenSource != nil {
 		token, err := c.TokenSource.AccessToken(ctx)
 		if err != nil {

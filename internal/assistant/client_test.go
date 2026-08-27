@@ -76,6 +76,22 @@ func writeStream(t *testing.T, w http.ResponseWriter, lines ...string) {
 	}
 }
 
+func decodeRequestProfile(t *testing.T, r *http.Request) string {
+	t.Helper()
+	var req struct {
+		Data struct {
+			Attributes struct {
+				Profile string `json:"profile"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		t.Errorf("decode request: %v", err)
+		return ""
+	}
+	return req.Data.Attributes.Profile
+}
+
 func TestDo_MapsStatusToSentinel(t *testing.T) {
 	cases := []struct {
 		status int
@@ -181,6 +197,40 @@ func TestSend_EmptyConversationIDCreatesOnFirstTurn(t *testing.T) {
 	}
 	if conversationID != "created-on-send" {
 		t.Fatalf("returned conversation id = %q, want server-assigned id", conversationID)
+	}
+}
+
+func TestSend_DefaultsToCLIProfile(t *testing.T) {
+	var gotProfile, gotSurface string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotSurface = r.Header.Get("X-Datadog-Bits-Surface")
+		gotProfile = decodeRequestProfile(t, r)
+		writeStream(t, w)
+	})
+
+	if _, err := c.Send(context.Background(), "hi", SendOptions{}, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if gotProfile != "cli" {
+		t.Errorf("profile = %q, want cli", gotProfile)
+	}
+	if gotSurface != "cli" {
+		t.Errorf("X-Datadog-Bits-Surface = %q, want cli", gotSurface)
+	}
+}
+
+func TestSend_PreservesExplicitProfile(t *testing.T) {
+	var got string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		got = decodeRequestProfile(t, r)
+		writeStream(t, w)
+	})
+
+	if _, err := c.Send(context.Background(), "hi", SendOptions{Profile: ProfileWebUI}, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got != "web_ui" {
+		t.Errorf("profile = %q, want web_ui", got)
 	}
 }
 
@@ -536,12 +586,13 @@ func TestNewRequest_SetsOAuthBearerWithoutAPIKeys(t *testing.T) {
 	}
 }
 
-func TestNewRequest_SetsAuthHeaders(t *testing.T) {
-	var gotAPI, gotApp, gotContentType string
+func TestNewRequest_SetsHeaders(t *testing.T) {
+	var gotAPI, gotApp, gotContentType, gotSurface string
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAPI = r.Header.Get("DD-API-KEY")
 		gotApp = r.Header.Get("DD-APPLICATION-KEY")
 		gotContentType = r.Header.Get("Content-Type")
+		gotSurface = r.Header.Get("X-Datadog-Bits-Surface")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"data":{"attributes":{"flags":{}}}}`)
 	})
@@ -553,5 +604,8 @@ func TestNewRequest_SetsAuthHeaders(t *testing.T) {
 	}
 	if gotContentType != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", gotContentType)
+	}
+	if gotSurface != "cli" {
+		t.Errorf("X-Datadog-Bits-Surface = %q, want cli", gotSurface)
 	}
 }
