@@ -128,11 +128,18 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 		return nil
 	}
 
+	var reportedURL string
 	session, err := login(context.Background(), cfg, LoginOptions{
 		Store:      store,
 		HTTPClient: httpClient,
 		OpenURL:    openURL,
-		Out:        &output,
+		OnBrowserOpen: func(raw string, openErr error) {
+			reportedURL = raw
+			if openErr != nil {
+				t.Errorf("reported browser error = %v", openErr)
+			}
+		},
+		Out: &output,
 	})
 	if err != nil {
 		t.Fatalf("login: %v", err)
@@ -145,6 +152,9 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "Datadog OAuth callback domain: datad0g.com") {
 		t.Errorf("output did not report callback domain: %q", output.String())
+	}
+	if reportedURL == "" || !strings.Contains(reportedURL, "code_challenge=") {
+		t.Errorf("reported browser URL = %q", reportedURL)
 	}
 }
 

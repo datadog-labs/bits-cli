@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/auth"
 )
@@ -24,8 +25,15 @@ const (
 // ErrCanceled means the required startup login was canceled by the user.
 var ErrCanceled = errors.New("login canceled")
 
+// BrowserStatus reports where the OAuth flow opened and whether launching the
+// browser failed. The authorization URL remains usable as a manual fallback.
+type BrowserStatus struct {
+	AuthorizationURL string
+	OpenError        error
+}
+
 // LoginFunc performs and persists OAuth for the selected Datadog site.
-type LoginFunc func(context.Context, string) error
+type LoginFunc func(context.Context, string, func(BrowserStatus)) error
 
 type phase uint8
 
@@ -58,12 +66,19 @@ type loginFinishedMsg struct {
 	err     error
 }
 
+type browserStatusMsg struct {
+	attempt uint64
+	status  BrowserStatus
+}
+
 type spinnerTickMsg struct{ attempt uint64 }
 type completionPauseMsg struct{ attempt uint64 }
 
 // Model is the startup login state machine.
 type Model struct {
-	login LoginFunc
+	ctx      context.Context
+	login    LoginFunc
+	clientID string
 
 	phase    phase
 	selected int
@@ -72,25 +87,32 @@ type Model struct {
 	height   int
 	dark     bool
 
-	attempt    uint64
-	cancel     context.CancelFunc
-	activeSite string
-	loginErr   error
-	spinner    int
-	completed  bool
-	canceled   bool
+	attempt          uint64
+	cancel           context.CancelFunc
+	activeSite       string
+	authorizationURL string
+	browserOpenErr   error
+	loginErr         error
+	spinner          int
+	completed        bool
+	canceled         bool
 }
 
 // New creates a startup login model. login must persist a successful session
-// before it returns nil.
-func New(login LoginFunc) *Model {
+// before it returns nil. clientID enables validation of explicitly configured
+// environments such as GovCloud.
+func New(ctx context.Context, login LoginFunc, clientID string) *Model {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	input := textinput.New()
 	input.Prompt = "› "
 	input.Placeholder = "acme.us3.datadoghq.com"
 	input.CharLimit = 253
 	input.SetWidth(48)
 
-	return &Model{login: login, custom: input, dark: true}
+	input.SetStyles(textinput.DefaultDarkStyles())
+	return &Model{ctx: ctx, login: login, clientID: clientID, custom: input, dark: true}
 }
 
 // Completed reports whether OAuth completed successfully.
@@ -113,6 +135,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.BackgroundColorMsg:
 		m.dark = msg.IsDark()
+		m.custom.SetStyles(textinput.DefaultStyles(m.dark))
 		return m, nil
 	case tea.KeyPressMsg:
 		key := msg.String()
@@ -122,11 +145,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m.handleKey(key)
+	case browserStatusMsg:
+		if msg.attempt == m.attempt && m.phase == phaseWaiting {
+			m.authorizationURL = msg.status.AuthorizationURL
+			m.browserOpenErr = msg.status.OpenError
+		}
+		return m, nil
 	case loginFinishedMsg:
 		if msg.attempt != m.attempt || m.phase != phaseWaiting {
 			return m, nil
 		}
-		m.cancel = nil
+		if m.cancel != nil {
+			m.cancel()
+			m.cancel = nil
+		}
 		if msg.err != nil {
 			m.loginErr = msg.err
 			m.phase = phaseError
@@ -185,7 +217,7 @@ func (m *Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case phaseCustom:
 		switch key {
 		case "enter":
-			site, err := normalizeCustomSite(m.custom.Value())
+			site, err := normalizeCustomSite(m.custom.Value(), m.clientID)
 			if err != nil {
 				m.loginErr = err
 				return m, nil
@@ -222,20 +254,37 @@ func (m *Model) startLogin(site string) tea.Cmd {
 	m.abort()
 	m.attempt++
 	attempt := m.attempt
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.ctx)
 	m.cancel = cancel
 	m.activeSite = site
+	m.authorizationURL = ""
+	m.browserOpenErr = nil
 	m.loginErr = nil
 	m.phase = phaseWaiting
 	m.spinner = 0
 
 	login := m.login
+	status := make(chan BrowserStatus, 1)
+	report := func(update BrowserStatus) {
+		select {
+		case status <- update:
+		default:
+		}
+	}
 	return tea.Batch(
 		func() tea.Msg {
 			if login == nil {
 				return loginFinishedMsg{attempt: attempt, err: errors.New("OAuth login is unavailable")}
 			}
-			return loginFinishedMsg{attempt: attempt, err: login(ctx, site)}
+			return loginFinishedMsg{attempt: attempt, err: login(ctx, site, report)}
+		},
+		func() tea.Msg {
+			select {
+			case update := <-status:
+				return browserStatusMsg{attempt: attempt, status: update}
+			case <-ctx.Done():
+				return browserStatusMsg{attempt: attempt}
+			}
 		},
 		spinnerTick(attempt),
 	)
@@ -255,12 +304,12 @@ func spinnerTick(attempt uint64) tea.Cmd {
 	})
 }
 
-func normalizeCustomSite(raw string) (string, error) {
+func normalizeCustomSite(raw, clientID string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", errors.New("enter your Datadog site")
 	}
-	cfg, err := auth.ConfigForSite(raw, "")
+	cfg, err := auth.ConfigForSite(raw, clientID)
 	if err != nil {
 		return "", fmt.Errorf("enter a Datadog site, such as acme.us3.datadoghq.com: %w", err)
 	}
@@ -283,14 +332,17 @@ func (m *Model) View() tea.View {
 
 func (m *Model) panelView() string {
 	p := paletteFor(m.dark)
-	outerWidth := min(panelWidth, max(28, m.width-2))
-	contentWidth := max(24, outerWidth-6)
+	if m.width < 36 || m.height < 16 || (m.browserOpenErr != nil && m.height < 24) {
+		return p.compact.Width(max(1, min(m.width, 34))).Render("Sign in to Bits\n\nResize the terminal to continue.")
+	}
 
+	outerWidth := min(panelWidth, m.width-2)
+	contentWidth := max(1, outerWidth-p.panel.GetHorizontalFrameSize())
 	title := p.eyebrow.Render("DATADOG") + "\n" + p.title.Render(m.title())
 	body := m.bodyView(contentWidth, p)
 	content := lipgloss.JoinVertical(lipgloss.Left, title, "", body)
 
-	return p.panel.Width(contentWidth).Render(content)
+	return p.panel.Width(outerWidth).Render(content)
 }
 
 func (m *Model) title() string {
@@ -321,14 +373,20 @@ func (m *Model) bodyView(width int, p loginPalette) string {
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	case phaseWaiting:
 		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-		return lipgloss.JoinVertical(lipgloss.Left,
+		parts := []string{
 			p.description.Render("Complete sign-in in the browser window we opened."),
 			"",
-			p.waiting.Render(frames[m.spinner%len(frames)]+"  Waiting for Datadog…"),
+			p.waiting.Render(frames[m.spinner%len(frames)] + "  Waiting for Datadog…"),
 			p.domain.Render(strings.TrimPrefix(m.activeSite, "https://")),
-			"",
-			p.help.Render("esc choose another site   ctrl+c quit"),
-		)
+		}
+		if m.browserOpenErr != nil {
+			parts[0] = p.error.Render("We couldn't open a browser: " + m.browserOpenErr.Error())
+			if m.authorizationURL != "" {
+				parts = append(parts, "", p.description.Render("Open this URL:"), p.domain.Render(ansi.Hardwrap(m.authorizationURL, width, false)))
+			}
+		}
+		parts = append(parts, "", p.help.Render("esc choose another site   ctrl+c quit"))
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	case phaseError:
 		message := "Login did not complete."
 		if m.loginErr != nil {
@@ -378,6 +436,7 @@ func (m *Model) bodyView(width int, p loginPalette) string {
 
 type loginPalette struct {
 	panel       lipgloss.Style
+	compact     lipgloss.Style
 	eyebrow     lipgloss.Style
 	title       lipgloss.Style
 	description lipgloss.Style
@@ -406,6 +465,7 @@ func paletteFor(dark bool) loginPalette {
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(border)).
 			Padding(1, 2),
+		compact:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(text)).Background(lipgloss.Color(surface)).Padding(1),
 		eyebrow:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#8C97FF")).Background(lipgloss.Color(surface)),
 		title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(text)).Background(lipgloss.Color(surface)),
 		description: lipgloss.NewStyle().Foreground(lipgloss.Color(text)).Background(lipgloss.Color(surface)),

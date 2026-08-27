@@ -13,7 +13,7 @@ import (
 
 func TestSitePickerNavigatesAndStartsSelectedSite(t *testing.T) {
 	called := make(chan string, 1)
-	m := New(func(_ context.Context, site string) error {
+	m := newModel(func(_ context.Context, site string) error {
 		called <- site
 		return nil
 	})
@@ -33,7 +33,7 @@ func TestSitePickerNavigatesAndStartsSelectedSite(t *testing.T) {
 }
 
 func TestSitePickerWraps(t *testing.T) {
-	m := New(func(context.Context, string) error { return nil })
+	m := newModel(func(context.Context, string) error { return nil })
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.selected != customOptionIndex {
 		t.Fatalf("up from first selected %d, want custom", m.selected)
@@ -46,7 +46,7 @@ func TestSitePickerWraps(t *testing.T) {
 
 func TestCustomDomainValidationAndLogin(t *testing.T) {
 	called := make(chan string, 1)
-	m := New(func(_ context.Context, site string) error {
+	m := newModel(func(_ context.Context, site string) error {
 		called <- site
 		return nil
 	})
@@ -76,7 +76,7 @@ func TestCustomDomainValidationAndLogin(t *testing.T) {
 
 func TestLoginErrorCanRetry(t *testing.T) {
 	attempts := 0
-	m := New(func(context.Context, string) error {
+	m := newModel(func(context.Context, string) error {
 		attempts++
 		if attempts == 1 {
 			return errors.New("authorization denied")
@@ -98,7 +98,7 @@ func TestLoginErrorCanRetry(t *testing.T) {
 
 func TestEscapeCancelsWaitingAttemptAndIgnoresLateResult(t *testing.T) {
 	finished := make(chan struct{})
-	m := New(func(ctx context.Context, _ string) error {
+	m := newModel(func(ctx context.Context, _ string) error {
 		<-ctx.Done()
 		close(finished)
 		return ctx.Err()
@@ -125,7 +125,7 @@ func TestEscapeCancelsWaitingAttemptAndIgnoresLateResult(t *testing.T) {
 }
 
 func TestEscapeFromPickerCancelsStartup(t *testing.T) {
-	m := New(func(context.Context, string) error { return nil })
+	m := newModel(func(context.Context, string) error { return nil })
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if !m.Canceled() || cmd == nil {
 		t.Fatalf("canceled = %t, cmd = %v", m.Canceled(), cmd)
@@ -133,7 +133,7 @@ func TestEscapeFromPickerCancelsStartup(t *testing.T) {
 }
 
 func TestViewContainsVisualHierarchyAndFits(t *testing.T) {
-	m := New(func(context.Context, string) error { return nil })
+	m := newModel(func(context.Context, string) error { return nil })
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	view := m.View().Content
 	plain := ansi.Strip(view)
@@ -149,6 +149,43 @@ func TestViewContainsVisualHierarchyAndFits(t *testing.T) {
 	}
 }
 
+func TestBrowserOpenFailureShowsManualURL(t *testing.T) {
+	m := newModel(func(context.Context, string) error { return nil })
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 90, Height: 28})
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, _ = m.Update(browserStatusMsg{
+		attempt: m.attempt,
+		status: BrowserStatus{
+			AuthorizationURL: "https://app.datadoghq.com/oauth2/v1/authorize?client_id=bits",
+			OpenError:        errors.New("browser unavailable"),
+		},
+	})
+	plain := ansi.Strip(m.View().Content)
+	for _, want := range []string{"couldn't open a browser", "browser unavailable", "https://app.datadoghq.com/oauth2/v1/authorize"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("browser fallback view missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestSmallTerminalUsesBoundedResizePrompt(t *testing.T) {
+	m := newModel(func(context.Context, string) error { return nil })
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 24, Height: 8})
+	view := m.View().Content
+	lines := strings.Split(view, "\n")
+	if len(lines) > 8 {
+		t.Fatalf("small view height = %d, want <= 8", len(lines))
+	}
+	for lineNo, line := range lines {
+		if got := ansi.StringWidth(line); got > 24 {
+			t.Fatalf("small view line %d width = %d, want <= 24", lineNo+1, got)
+		}
+	}
+	if !strings.Contains(ansi.Strip(view), "Resize the terminal") {
+		t.Fatalf("small view = %q", ansi.Strip(view))
+	}
+}
+
 func TestNormalizeCustomSite(t *testing.T) {
 	for _, test := range []struct {
 		raw  string
@@ -158,17 +195,27 @@ func TestNormalizeCustomSite(t *testing.T) {
 		{raw: "https://app.datadoghq.eu/", want: "https://app.datadoghq.eu"},
 		{raw: "ACME.US5.DATADOGHQ.COM", want: "https://acme.us5.datadoghq.com"},
 	} {
-		got, err := normalizeCustomSite(test.raw)
+		got, err := normalizeCustomSite(test.raw, "")
 		if err != nil || got != test.want {
 			t.Errorf("normalizeCustomSite(%q) = %q, %v; want %q", test.raw, got, err, test.want)
 		}
 	}
 
 	for _, raw := range []string{"", "http://app.datadoghq.com", "example.com", "app.datadoghq.com/path"} {
-		if _, err := normalizeCustomSite(raw); err == nil {
+		if _, err := normalizeCustomSite(raw, ""); err == nil {
 			t.Errorf("normalizeCustomSite(%q) succeeded", raw)
 		}
 	}
+
+	if got, err := normalizeCustomSite("app.ddog-gov.com", "gov-client"); err != nil || got != "https://app.ddog-gov.com" {
+		t.Errorf("GovCloud custom site = %q, %v", got, err)
+	}
+}
+
+func newModel(login func(context.Context, string) error) *Model {
+	return New(context.Background(), func(ctx context.Context, site string, _ func(BrowserStatus)) error {
+		return login(ctx, site)
+	}, "")
 }
 
 func runBatch(t *testing.T, m *Model, cmd tea.Cmd) {

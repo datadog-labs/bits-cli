@@ -170,20 +170,23 @@ func authenticatedClient(ctx context.Context) (*assistant.Client, error) {
 			return err
 		}
 
-		return runStartupLogin(func(loginCtx context.Context, site string) error {
+		return runStartupLogin(ctx, clientID, func(loginCtx context.Context, site string, report func(loginui.BrowserStatus)) error {
 			_, err := auth.Login(loginCtx, auth.LoginOptions{
 				Site:     site,
 				ClientID: clientID,
 				Store:    store,
-				Out:      io.Discard,
+				OnBrowserOpen: func(url string, openErr error) {
+					report(loginui.BrowserStatus{AuthorizationURL: url, OpenError: openErr})
+				},
+				Out: io.Discard,
 			})
 			return err
 		})
 	})
 }
 
-func runStartupLogin(login loginui.LoginFunc) error {
-	model, err := tea.NewProgram(loginui.New(login)).Run()
+func runStartupLogin(ctx context.Context, clientID string, login loginui.LoginFunc) error {
+	model, err := tea.NewProgram(loginui.New(ctx, login, clientID), tea.WithContext(ctx)).Run()
 	if err != nil {
 		return err
 	}

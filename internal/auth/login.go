@@ -36,12 +36,13 @@ const (
 
 // LoginOptions contains the testable dependencies for an interactive login.
 type LoginOptions struct {
-	Site       string
-	ClientID   string
-	Store      CredentialStore
-	HTTPClient *http.Client
-	OpenURL    func(string) error
-	Out        io.Writer
+	Site          string
+	ClientID      string
+	Store         CredentialStore
+	HTTPClient    *http.Client
+	OpenURL       func(string) error
+	OnBrowserOpen func(url string, err error)
+	Out           io.Writer
 }
 
 // printf writes a best-effort status message to the configured output. Output
@@ -92,8 +93,12 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		oauth2.S256ChallengeOption(verifier),
 	)
 	opts.printf("Opening Datadog login in your browser…\nIf it does not open, visit:\n%s\n", authURL)
-	if err := opts.OpenURL(authURL); err != nil {
-		opts.printf("Could not open a browser automatically: %v\n", err)
+	openErr := opts.OpenURL(authURL)
+	if opts.OnBrowserOpen != nil {
+		opts.OnBrowserOpen(authURL, openErr)
+	}
+	if openErr != nil {
+		opts.printf("Could not open a browser automatically: %v\n", openErr)
 	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, loginTimeout)
