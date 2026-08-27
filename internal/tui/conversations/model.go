@@ -74,6 +74,9 @@ func New(width, height int, themes ...styles.Theme) Model {
 	}
 	delegate := newConversationDelegate(theme)
 	model := list.New(nil, delegate, max(width, 1), max(height, 1))
+	// Search narrows the API's newest-first order without fuzzy-score ranking
+	// moving older conversations ahead of more recent matches.
+	model.Filter = list.UnsortedFilter
 	model.SetShowTitle(false)
 	model.SetShowFilter(false)
 	model.DisableQuitKeybindings()
@@ -325,9 +328,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 func (m Model) View() string {
 	dismiss := "esc ×"
-	if m.search.Value() != "" {
-		dismiss = "esc clear"
-	}
 	content := components.PanelContent{
 		Title:          "Resume a conversation",
 		Dismiss:        dismiss,

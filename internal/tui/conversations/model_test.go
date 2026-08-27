@@ -131,8 +131,8 @@ func TestPickerHelpUsesConciseStateAwareActions(t *testing.T) {
 
 	m, _ = m.Update(pickerKey('c', "c"))
 	view = safeDisplay(m.View())
-	if !strings.Contains(view, "esc clear") || strings.Contains(view, "esc ×") || strings.Contains(view, "clear filter") {
-		t.Fatalf("active search should show only the concise clear action: %q", m.View())
+	if !strings.Contains(view, "esc ×") || strings.Contains(view, "esc clear") || strings.Contains(view, "clear filter") {
+		t.Fatalf("active search should retain the same dismiss label: %q", m.View())
 	}
 
 	m, _ = m.Update(pickerKey(tea.KeyEscape, ""))
@@ -156,8 +156,27 @@ func TestPickerHidesPageHelpWithoutPaginationAndExplainsNoMatches(t *testing.T) 
 	if !strings.Contains(view, "No conversations match your search.") {
 		t.Fatalf("zero-match picker = %q", m.View())
 	}
-	if !strings.Contains(view, "esc clear") || strings.Contains(view, "esc ×") || strings.Contains(view, "←/→ page") {
+	if !strings.Contains(view, "esc ×") || strings.Contains(view, "esc clear") || strings.Contains(view, "←/→ page") {
 		t.Fatalf("zero-match help is misleading: %q", m.View())
+	}
+}
+
+func TestSearchPreservesNewestFirstOrder(t *testing.T) {
+	m := New(80, 18)
+	m.SetConversations([]assistant.ConversationSummary{
+		{ConversationID: "older", UpdatedAt: 100, Title: "target"},
+		{ConversationID: "newer", UpdatedAt: 200, Title: "notes about target"},
+	})
+
+	for _, r := range "target" {
+		m, _ = m.Update(pickerKey(r, string(r)))
+	}
+	visible := m.list.VisibleItems()
+	if len(visible) != 2 {
+		t.Fatalf("visible matches = %d, want 2", len(visible))
+	}
+	if first := visible[0].(conversationItem).summary.ConversationID; first != "newer" {
+		t.Fatalf("first filtered conversation = %q, want newest conversation", first)
 	}
 }
 
