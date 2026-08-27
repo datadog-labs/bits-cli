@@ -74,6 +74,7 @@ type Model struct {
 	conversationCancel     context.CancelFunc
 	conversationRetry      conversationRetry
 	conversationSwitchID   string
+	conversationClosing    bool
 
 	// Turn status, surfaced in the status line.
 	chatPhase chat.Phase

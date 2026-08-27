@@ -156,6 +156,76 @@ func TestCtrlCCancelsResumeOperationAndQuits(t *testing.T) {
 	}
 }
 
+func TestCancelPendingResumeWaitsForEngineDrainBeforeReturningToChat(t *testing.T) {
+	backend := newResumeBackend()
+	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
+	m := New(engine)
+	m.resize(50, 12)
+	_ = m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "draft survives"})
+	wait := m.openConversationPicker()
+
+	if cmd := m.closeConversationPicker(); cmd != nil {
+		t.Fatal("pending close focused chat before the engine drained")
+	}
+	if m.mode != ModeConversations || m.picker == nil || m.picker.State() != conversationview.StateClosing || !m.conversationClosing {
+		t.Fatalf("pending close state: mode=%v picker=%v state=%v closing=%v", m.mode, m.picker != nil, m.picker.State(), m.conversationClosing)
+	}
+	if m.editor.Value() != "draft survives" {
+		t.Fatalf("pending close changed draft: %q", m.editor.Value())
+	}
+
+	msg := runResumeCmd(t, wait)
+	_, _ = m.Update(msg)
+	if m.mode != ModeChat || m.picker != nil || m.conversationClosing || engine.OperationActive() {
+		t.Fatalf("drained close state: mode=%v picker=%v closing=%v active=%v", m.mode, m.picker != nil, m.conversationClosing, engine.OperationActive())
+	}
+	if m.editor.Value() != "draft survives" {
+		t.Fatalf("drained close lost draft: %q", m.editor.Value())
+	}
+}
+
+func TestQueuedResumeActionsCannotRestartLoadingOperation(t *testing.T) {
+	t.Run("selection", func(t *testing.T) {
+		backend := newResumeBackend()
+		m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
+		summary := assistant.ConversationSummary{ConversationID: resumeConversationID, Title: "New"}
+		backend.lists <- resumeListReply{response: summaries(summary)}
+		listWait := m.openConversationPicker()
+		_, _ = m.Update(runResumeCmd(t, listWait))
+
+		first := m.selectConversation(summary)
+		if first == nil || m.picker.State() != conversationview.StateLoading {
+			t.Fatalf("first selection: cmd=%v state=%v", first != nil, m.picker.State())
+		}
+		if second := m.selectConversation(summary); second != nil {
+			t.Fatal("queued second selection restarted the load")
+		}
+
+		_ = m.closeConversationPicker()
+		_, _ = m.Update(runResumeCmd(t, first))
+	})
+
+	t.Run("retry", func(t *testing.T) {
+		backend := newResumeBackend()
+		m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
+		backend.lists <- resumeListReply{err: errors.New("unavailable")}
+		listWait := m.openConversationPicker()
+		_, _ = m.Update(runResumeCmd(t, listWait))
+
+		first := m.retryConversationOperation()
+		if first == nil || m.picker.State() != conversationview.StateLoading {
+			t.Fatalf("first retry: cmd=%v state=%v", first != nil, m.picker.State())
+		}
+		if second := m.retryConversationOperation(); second != nil {
+			t.Fatal("queued second retry restarted the load")
+		}
+
+		_ = m.closeConversationPicker()
+		_, _ = m.Update(runResumeCmd(t, first))
+	})
+}
+
 func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	backend := newResumeBackend()
 	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
@@ -206,9 +276,12 @@ func TestCancelLoadedButUnappliedResultCannotSwitchEngine(t *testing.T) {
 	backend.histories <- resumeHistoryReply{response: history(assistant.AssistantMessage("m", assistant.TextContent("new")))}
 	_, wait = m.Update(conversationview.SelectedMsg{Conversation: summary})
 	loadedMsg := runResumeCmd(t, wait)
-	// Escape wins the event race: cancellation invalidates this already-loaded
-	// result before Bubble Tea applies it.
+	// Escape wins the event race: the picker stays non-interactive until this
+	// already-loaded candidate is discarded and engine ownership is released.
 	_, _ = m.Update(conversationview.CancelledMsg{})
+	if m.mode != ModeConversations || m.picker == nil || m.picker.State() != conversationview.StateClosing {
+		t.Fatalf("cancel did not wait for loaded candidate drain: mode=%v picker=%v", m.mode, m.picker != nil)
+	}
 	_, _ = m.Update(loadedMsg)
 	if m.mode != ModeChat || m.convID != "old" || engine.ConversationID() != "old" {
 		t.Fatalf("stale loaded result switched state: mode=%v root=%q engine=%q", m.mode, m.convID, engine.ConversationID())

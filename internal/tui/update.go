@@ -97,7 +97,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// /resume may own a live list/history request that must be cancelled
 		// before the application exits.
 		if msg.String() == "ctrl+c" && m.mode == ModeConversations {
-			_ = m.closeConversationPicker()
+			m.abandonConversationPicker()
 			return m.handleKey(msg)
 		}
 		if m.mode == ModeConversations {

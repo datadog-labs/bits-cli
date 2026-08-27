@@ -40,6 +40,27 @@ func TestPickerLoadingEmptyErrorRetryAndCancel(t *testing.T) {
 	}
 }
 
+func TestPickerClosingIsNonInteractive(t *testing.T) {
+	m := New(60, 16)
+	m.SetConversations([]assistant.ConversationSummary{{ConversationID: "one", Title: "One"}})
+	m.SetClosing()
+
+	for _, msg := range []tea.Msg{
+		pickerKey('x', "x"),
+		pickerKey(tea.KeyEnter, ""),
+		pickerKey(tea.KeyEscape, ""),
+	} {
+		var cmd tea.Cmd
+		m, cmd = m.Update(msg)
+		if cmd != nil {
+			t.Fatalf("closing picker emitted command for %T", msg)
+		}
+	}
+	if m.State() != StateClosing || m.Query() != "" || !strings.Contains(m.View(), "Closing…") {
+		t.Fatalf("closing picker changed state: state=%v query=%q view=%q", m.State(), m.Query(), m.View())
+	}
+}
+
 func TestPickerDistinguishesHistoryLoadingAndSanitizesErrors(t *testing.T) {
 	m := New(40, 12)
 	m.SetLoading(OperationOpen)

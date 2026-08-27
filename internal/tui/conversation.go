@@ -90,6 +90,7 @@ func waitConversationSwitch(generation uint64, results <-chan agent.Conversation
 
 func (m *Model) openConversationPicker() tea.Cmd {
 	m.clearNotice()
+	m.conversationClosing = false
 	picker := conversationview.New(m.width, m.height, m.styles)
 	m.picker = &picker
 	m.setMode(ModeConversations)
@@ -111,7 +112,14 @@ func (m *Model) startConversationList() tea.Cmd {
 }
 
 func (m *Model) applyConversationListResult(msg conversationListResultMsg) tea.Cmd {
-	if m.picker == nil || m.mode != ModeConversations || msg.generation != m.conversationGeneration {
+	if msg.generation != m.conversationGeneration {
+		return nil
+	}
+	if m.conversationClosing {
+		m.finishConversationOperation()
+		return m.finishClosingConversationPicker()
+	}
+	if m.picker == nil || m.mode != ModeConversations {
 		return nil
 	}
 	m.finishConversationOperation()
@@ -130,7 +138,7 @@ func (m *Model) applyConversationListResult(msg conversationListResultMsg) tea.C
 }
 
 func (m *Model) selectConversation(summary assistant.ConversationSummary) tea.Cmd {
-	if m.picker == nil || m.mode != ModeConversations {
+	if m.picker == nil || m.mode != ModeConversations || m.conversationClosing || m.picker.State() != conversationview.StateReady {
 		return nil
 	}
 	return m.startConversationSwitch(strings.TrimSpace(summary.ConversationID))
@@ -151,7 +159,16 @@ func (m *Model) startConversationSwitch(conversationID string) tea.Cmd {
 }
 
 func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) tea.Cmd {
-	if m.picker == nil || m.mode != ModeConversations || msg.generation != m.conversationGeneration {
+	if msg.generation != m.conversationGeneration {
+		_ = msg.result.Discard()
+		return nil
+	}
+	if m.conversationClosing {
+		_ = msg.result.Discard()
+		m.finishConversationOperation()
+		return m.finishClosingConversationPicker()
+	}
+	if m.picker == nil || m.mode != ModeConversations {
 		_ = msg.result.Discard()
 		return nil
 	}
@@ -192,13 +209,14 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	m.clearNotice()
 	m.conversationRetry = retryNone
 	m.conversationSwitchID = ""
+	m.conversationClosing = false
 	m.picker = nil
 	m.setMode(ModeChat)
 	return m.editor.Focus()
 }
 
 func (m *Model) retryConversationOperation() tea.Cmd {
-	if m.picker == nil || m.mode != ModeConversations {
+	if m.picker == nil || m.mode != ModeConversations || m.conversationClosing || m.picker.State() != conversationview.StateError {
 		return nil
 	}
 	switch m.conversationRetry {
@@ -215,12 +233,38 @@ func (m *Model) closeConversationPicker() tea.Cmd {
 	if m.mode != ModeConversations {
 		return nil
 	}
-	m.invalidateConversationOperation()
+	if m.conversationClosing {
+		return nil
+	}
+	if m.conversationCancel != nil {
+		m.conversationClosing = true
+		m.picker.SetClosing()
+		m.conversationCancel()
+		return nil
+	}
+	return m.finishClosingConversationPicker()
+}
+
+func (m *Model) finishClosingConversationPicker() tea.Cmd {
 	m.picker = nil
+	m.conversationClosing = false
 	m.conversationRetry = retryNone
 	m.conversationSwitchID = ""
 	m.setMode(ModeChat)
 	return m.editor.Focus()
+}
+
+// abandonConversationPicker is the process-exit path. Unlike ordinary Escape,
+// quitting does not resume chat input, so the UI need not wait for the canceled
+// result before disappearing. The result still drains through its waiter and
+// stale-result handling.
+func (m *Model) abandonConversationPicker() {
+	m.invalidateConversationOperation()
+	m.picker = nil
+	m.conversationClosing = false
+	m.conversationRetry = retryNone
+	m.conversationSwitchID = ""
+	m.setMode(ModeChat)
 }
 
 func (m *Model) updateConversationPicker(msg tea.Msg) tea.Cmd {

@@ -28,6 +28,7 @@ const (
 	StateReady
 	StateEmpty
 	StateError
+	StateClosing
 )
 
 type Operation int
@@ -115,6 +116,17 @@ func (m *Model) SetLoading(operation Operation) {
 	m.resizeChildren()
 	m.list.StopSpinner()
 	_ = m.list.SetItems(nil)
+}
+
+// SetClosing makes the picker non-interactive while the root model waits for
+// its canceled engine operation to publish a terminal result and release
+// ownership.
+func (m *Model) SetClosing() {
+	m.state = StateClosing
+	m.err = nil
+	m.errorMessage = ""
+	m.warning = ""
+	m.list.StopSpinner()
 }
 
 // SetConversations drops entries without the canonical conversation_id. The
@@ -317,6 +329,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.SetSize(size.Width, size.Height)
 		return m, nil
 	}
+	if m.state == StateClosing {
+		return m, nil
+	}
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc":
@@ -409,6 +424,8 @@ func (m Model) compactMessage() string {
 			return m.errorMessage
 		}
 		return "Could not load conversations."
+	case StateClosing:
+		return "Closing…"
 	default:
 		return "Resize terminal to choose a conversation"
 	}
@@ -437,6 +454,8 @@ func (m Model) panelBody(width int) string {
 			}
 		}
 		body = m.theme.Feedback.Error.Render(message) + "\n\n" + m.theme.Text.Help.Render("enter retry")
+	case StateClosing:
+		body = m.theme.Feedback.Progress.Render("Closing…")
 	case StateReady:
 		body = m.list.View()
 		if m.warning != "" {
