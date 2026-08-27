@@ -224,6 +224,7 @@ func (e *Engine) switchConversation(ctx context.Context, conversationID string, 
 			// response UUID, not the selected conversation identity.
 			e.mu.Lock()
 			e.opts.ConversationID = conversationID
+			e.opts.MessageHistory = nil
 			e.transcript = temporary
 			e.mu.Unlock()
 		}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -109,6 +110,9 @@ func TestSwitchConversationCommitIsAtomic(t *testing.T) {
 		return response, nil
 	}}
 	e := engineWithConversation(backend, "old", assistant.AssistantMessage("old", assistant.TextContent("keep")))
+	e.mu.Lock()
+	e.opts.MessageHistory = []json.RawMessage{json.RawMessage(`{"role":"user","content":"stale"}`)}
+	e.mu.Unlock()
 	before := e.Snapshot()
 	result := <-e.SwitchConversation(context.Background(), " "+testConversationID+" ")
 	if result.Err != nil || result.ConversationID != testConversationID || len(result.Blocks) != 2 {
@@ -131,6 +135,12 @@ func TestSwitchConversationCommitIsAtomic(t *testing.T) {
 	}
 	if e.ConversationID() != testConversationID || !reflect.DeepEqual(e.Snapshot(), result.Blocks) {
 		t.Fatal("commit did not atomically install candidate")
+	}
+	e.mu.RLock()
+	history := e.opts.MessageHistory
+	e.mu.RUnlock()
+	if history != nil {
+		t.Fatalf("commit retained stale injected message history: %s", history)
 	}
 }
 

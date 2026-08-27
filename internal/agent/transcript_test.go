@@ -216,6 +216,9 @@ func TestTechnicalMarkersAreDroppedButUnknownContentIsRetained(t *testing.T) {
 			t.Fatalf("technical content %d produced block %+v", i, block)
 		}
 	}
+	if block, ok := tr.AppendMessage(assistant.AssistantMessage("metadata", assistant.Content{})); ok {
+		t.Fatalf("metadata-only content produced block %+v", block)
+	}
 	unknown, ok := tr.AppendMessage(assistant.AssistantMessage("future", assistant.Content{Type: "future_content"}))
 	if !ok || unknown.Kind != assistant.KindUnknown {
 		t.Fatalf("unknown content = (%+v, %v), want safe fallback block", unknown, ok)

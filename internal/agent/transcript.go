@@ -76,6 +76,11 @@ func (t *Transcript) fold(msg assistant.Message) (Block, bool) {
 		// out of both startup restore and /resume transcripts.
 		return Block{}, false
 	case assistant.KindUnknown:
+		if strings.TrimSpace(msg.Content.Type) == "" {
+			// History envelopes can contain metadata-only records with no content
+			// discriminator. They are not user-visible conversation content.
+			return Block{}, false
+		}
 		// Future content remains visible as a safe fallback label. Its provider
 		// payload is deliberately not rendered.
 		return t.appendPassthrough(msg, kind, func(*Block) {})
