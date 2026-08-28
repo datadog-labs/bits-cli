@@ -89,6 +89,22 @@ func kinds(evs []Event) []EventKind {
 	return ks
 }
 
+func TestTurnCompletionSynchronizesOperationRelease(t *testing.T) {
+	e := New(&scriptBackend{convID: "conversation-1"}, assistant.SendOptions{})
+	operation := e.beginTurn(context.Background(), TurnInput{Message: "question"})
+	completion := <-operation.completion
+	if !completion.Completed {
+		t.Fatalf("completion = %+v", completion)
+	}
+	if e.OperationActive() {
+		t.Fatal("completion was published before operation release")
+	}
+	if err := e.NewConversation(); err != nil {
+		t.Fatalf("operation after completion: %v", err)
+	}
+	_ = drain(operation.events)
+}
+
 func TestConcurrentTurnReturnsOperationError(t *testing.T) {
 	gate := make(chan struct{})
 	e := New(&blockingBackend{gate: gate}, assistant.SendOptions{})
@@ -124,6 +140,31 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	}
 	if evs[4].ConvID != "conv-1" {
 		t.Fatalf("conv id = %q, want conv-1", evs[4].ConvID)
+	}
+}
+
+func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
+	backendErr := errors.New("stream failed")
+	e := New(&scriptBackend{
+		convID: "created-before-error",
+		err:    backendErr,
+		msgs:   []assistant.Message{assistant.AssistantMessage("m1", assistant.TextContent("partial"))},
+	}, assistant.SendOptions{})
+
+	events := drain(e.StartTurn(context.Background(), TurnInput{Message: "question"}))
+	wantKinds := []EventKind{EventBlock, EventBlock, EventConversation, EventError}
+	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
+		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
+	}
+	if events[2].ConvID != "created-before-error" || !errors.Is(events[3].Err, backendErr) {
+		t.Fatalf("terminal events = %+v", events[2:])
+	}
+	if got := e.ConversationID(); got != "created-before-error" {
+		t.Fatalf("conversation ID = %q", got)
+	}
+	blocks := e.Snapshot()
+	if len(blocks) != 2 || !blocks[1].Complete {
+		t.Fatalf("final blocks = %+v", blocks)
 	}
 }
 

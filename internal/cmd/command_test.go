@@ -53,23 +53,23 @@ func TestCommandDispatch(t *testing.T) {
 	}{
 		{
 			name:  "chat",
-			chats: []ChatOptions{{AuthMode: AuthenticationModeAuto}},
+			chats: []ChatOptions{{AuthMode: auth.ModeAuto}},
 		},
 		{
 			name:  "chat conversation",
 			args:  []string{"--conversation", "conversation-1"},
-			chats: []ChatOptions{{ConversationID: "conversation-1", AuthMode: AuthenticationModeAuto}},
+			chats: []ChatOptions{{ConversationID: "conversation-1", AuthMode: auth.ModeAuto}},
 		},
 		{
 			name:  "chat conversation equals",
 			args:  []string{"--conversation=conversation-2"},
-			chats: []ChatOptions{{ConversationID: "conversation-2", AuthMode: AuthenticationModeAuto}},
+			chats: []ChatOptions{{ConversationID: "conversation-2", AuthMode: auth.ModeAuto}},
 		},
 		{
 			name: "explicit API key mode",
 			args: []string{"--auth", "api-key", "--site=https://api.datadoghq.eu"},
 			chats: []ChatOptions{{
-				AuthMode: AuthenticationModeAPIKey,
+				AuthMode: auth.ModeAPIKey,
 				Site:     "https://api.datadoghq.eu",
 			}},
 		},
@@ -110,8 +110,8 @@ func TestCommandTreesDoNotShareFlagState(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ChatOptions{
-		{AuthMode: AuthenticationModeAPIKey, Site: "api.datadoghq.eu"},
-		{AuthMode: AuthenticationModeAuto},
+		{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.eu"},
+		{AuthMode: auth.ModeAuto},
 	}
 	if !reflect.DeepEqual(recorder.chats, want) {
 		t.Fatalf("chat options = %#v, want %#v", recorder.chats, want)

@@ -123,18 +123,47 @@ type TurnInput struct {
 	Tools   *ToolSet
 }
 
-// StartTurn runs one user turn (plus any client-tool round-trips) in a goroutine
-// and streams events. The channel is closed when the turn ends. Cancel ctx to
-// interrupt; cancellation ends the turn quietly (no error event). An overlap
-// returns a one-event ErrOperationActive channel.
-func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
+// turnCompletion is the final state captured before an engine operation
+// releases ownership. It remains authoritative even if cancellation prevents a
+// corresponding event from reaching the consumer. Its snapshots are read-only.
+type turnCompletion struct {
+	ConversationID string
+	Blocks         []Block
+	Usage          *assistant.Usage
+	Completed      bool
+	Err            error
+}
+
+type turnOperation struct {
+	events     <-chan Event
+	completion <-chan turnCompletion
+}
+
+// beginTurn starts one user turn and its client-tool round trips. The event
+// channel closes only after the completion snapshot has been captured and the
+// engine operation has been released.
+func (e *Engine) beginTurn(ctx context.Context, in TurnInput) turnOperation {
 	if !e.begin() {
-		return eventResult(Event{Kind: EventError, Err: ErrOperationActive})
+		return completedTurnOperation(ErrOperationActive)
 	}
 	generation := e.operationGeneration.Load()
-	out := make(chan Event, 64)
-	go e.run(ctx, in, out, generation)
-	return out
+	events := make(chan Event, 64)
+	completion := make(chan turnCompletion, 1)
+	go e.run(ctx, in, events, completion, generation)
+	return turnOperation{events: events, completion: completion}
+}
+
+// StartTurn preserves the event-only API used by interactive surfaces.
+func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
+	return e.beginTurn(ctx, in).events
+}
+
+func completedTurnOperation(err error) turnOperation {
+	events := eventResult(Event{Kind: EventError, Err: err})
+	completion := make(chan turnCompletion, 1)
+	completion <- turnCompletion{Err: err}
+	close(completion)
+	return turnOperation{events: events, completion: completion}
 }
 
 // begin claims the engine for one operation. The operation owns the paired
@@ -182,9 +211,25 @@ func (e *Engine) command(command toolCommand) bool {
 	}
 }
 
-func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event, generation uint64) {
-	defer close(out)
-	defer e.active.Store(false)
+func (e *Engine) run(
+	ctx context.Context,
+	in TurnInput,
+	out chan<- Event,
+	completionOut chan<- turnCompletion,
+	generation uint64,
+) {
+	completion := turnCompletion{}
+	defer func() {
+		if completion.Err == nil && !completion.Completed && ctx.Err() != nil {
+			completion.Err = ctx.Err()
+		}
+		completion.ConversationID = e.opts.ConversationID
+		completion.Blocks = e.snapshot()
+		e.active.Store(false)
+		completionOut <- completion
+		close(completionOut)
+		close(out)
+	}()
 
 	tools := in.Tools
 	defs := tools.Definitions()
@@ -201,6 +246,9 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event, genera
 	}
 
 	fold := func(msg assistant.Message) bool {
+		if msg.Results != nil && msg.Results.Usage != nil {
+			completion.Usage = cloneUsage(msg.Results.Usage)
+		}
 		b, ok := e.transcript.AppendMessage(msg)
 		blocks := append([]Block(nil), e.transcript.Blocks()...)
 		if ok {
@@ -245,19 +293,28 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event, genera
 			}
 			return nil
 		})
-		if ctx.Err() != nil {
-			// Send can discover a server-assigned ID before cancellation tears
-			// down the stream. Retain it so /new can preserve a resumable handle
-			// for the conversation being left behind.
-			if id != "" {
-				e.opts.ConversationID = id
-			}
-			return // cancelled: end the turn quietly
+		// Send may discover a server-assigned ID before a later stream failure or
+		// cancellation. Preserve it so every surface can report a resumable handle.
+		if id != "" {
+			convID = id
+			e.opts.ConversationID = id
 		}
 		if err != nil {
-			e.finalizeTranscript()
-			send(Event{Kind: EventError, Err: err})
-			return
+			// Context-derived cancellation remains quiet. An independent backend
+			// failure wins even if the caller canceled at the same time, preserving
+			// the more specific diagnostic in the authoritative completion.
+			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
+				completion.Err = err
+				e.finalizeTranscript()
+				if id != "" && !send(Event{Kind: EventConversation, ConvID: id}) {
+					return
+				}
+				send(Event{Kind: EventError, Err: err})
+				return
+			}
+		}
+		if ctx.Err() != nil {
+			return // cancelled: end the turn quietly
 		}
 
 		convID = id
@@ -266,11 +323,12 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event, genera
 
 		if len(calls) == 0 {
 			e.finalizeTranscript()
-			send(Event{Kind: EventTurnDone})
+			completion.Completed = send(Event{Kind: EventTurnDone})
 			return
 		}
 		responses, complete, err := e.runTools(ctx, tools, calls, generation, send)
 		if err != nil {
+			completion.Err = err
 			e.finalizeTranscript()
 			send(Event{Kind: EventError, Err: err})
 			return
@@ -278,14 +336,34 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event, genera
 		if !complete {
 			if ctx.Err() == nil {
 				e.finalizeTranscript()
-				send(Event{Kind: EventTurnDone})
+				completion.Completed = send(Event{Kind: EventTurnDone})
 			}
 			return
 		}
 		next = responses
 	}
+	completion.Err = ErrMaxTurns
 	e.finalizeTranscript()
 	send(Event{Kind: EventError, Err: ErrMaxTurns})
+}
+
+func cloneUsage(usage *assistant.Usage) *assistant.Usage {
+	if usage == nil {
+		return nil
+	}
+	copied := *usage
+	copied.InputTokens = cloneInt(usage.InputTokens)
+	copied.OutputTokens = cloneInt(usage.OutputTokens)
+	copied.TimeToFirstChunkMs = cloneInt(usage.TimeToFirstChunkMs)
+	return &copied
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 // snapshot returns a copy of the current blocks, safe to send on the channel and
