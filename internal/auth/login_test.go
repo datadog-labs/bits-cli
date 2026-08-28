@@ -16,23 +16,45 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func TestRenderLoginCompleteEscapesHost(t *testing.T) {
+// The success page is static: it interpolates nothing, so it carries no
+// injection surface. The escaping guarantee that matters now lives on the
+// error page, which still renders through html/template.
+func TestRenderLoginCompleteServesStaticPage(t *testing.T) {
 	var buf bytes.Buffer
-	if err := renderLoginComplete(&buf, "127.0.0.1:1<script>alert(1)</script>"); err != nil {
+	if err := renderLoginComplete(&buf); err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "Login complete") {
-		t.Errorf("missing page body: %q", out)
+	if !strings.Contains(out, "Authorization successful") {
+		t.Errorf("missing success heading: %q", out)
+	}
+	if !strings.Contains(out, "return to Bits CLI.") {
+		t.Errorf("missing return-to-terminal copy: %q", out)
 	}
 	if strings.Contains(out, `class="error"`) {
 		t.Errorf("success page marked as error: %q", out)
 	}
-	if strings.Contains(out, "<script>") {
-		t.Errorf("host was not escaped: %q", out)
+	if strings.Contains(out, "{{") {
+		t.Errorf("success page leaked an unexecuted template action: %q", out)
 	}
-	if !strings.Contains(out, "&lt;script&gt;") {
-		t.Errorf("expected escaped host: %q", out)
+}
+
+// The countdown is the page's only behavior; a silent regression here would
+// leave the tab open with a stale timer.
+func TestRenderLoginCompleteIncludesAutoCloseCountdown(t *testing.T) {
+	var buf bytes.Buffer
+	if err := renderLoginComplete(&buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `id="countdown">10</span> seconds`) {
+		t.Errorf("missing countdown seed: %q", out)
+	}
+	if !strings.Contains(out, "window.close()") {
+		t.Errorf("missing auto-close call: %q", out)
+	}
+	if !strings.Contains(out, "You can safely close this tab.") {
+		t.Errorf("missing blocked-close fallback: %q", out)
 	}
 }
 
