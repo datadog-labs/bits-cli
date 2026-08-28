@@ -39,6 +39,10 @@ func (m *Model) View() tea.View {
 		// defensive nil-model shutdown path rather than flashing a blank frame.
 		v.MouseMode = tea.MouseModeNone
 		v.Content = "loading…"
+	case ModeConversations:
+		if m.picker != nil {
+			v.Content = m.picker.View()
+		}
 	}
 	return v
 }

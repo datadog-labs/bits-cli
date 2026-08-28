@@ -81,6 +81,61 @@ func TestRegisteredCommandsAndCompletionAliasesStayConsistent(t *testing.T) {
 	}
 }
 
+func TestResumeIsRegisteredWithRejectActivePolicy(t *testing.T) {
+	resume, ok := lookupCommand("resume")
+	if !ok || resume.id != commandResume || resume.activeTurnPolicy != commandRejectedDuringTurn {
+		t.Fatalf("resume definition = %#v, registered=%v", resume, ok)
+	}
+}
+
+func TestSubmitResumeNeverCallsSend(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.editor.Update(tea.PasteMsg{Content: "/resume"})
+	_, cmd := m.submit()
+	if cmd == nil || m.mode != ModeConversations || m.picker == nil {
+		t.Fatalf("resume state: cmd=%v mode=%v picker=%v", cmd != nil, m.mode, m.picker != nil)
+	}
+	msg := cmd()
+	_, _ = m.Update(msg)
+	if m.picker == nil || m.picker.State() == 0 {
+		t.Fatal("unsupported list backend did not leave loading state")
+	}
+}
+
+func TestSubmitResumeDuringTurnIsRejectedWithoutCancellation(t *testing.T) {
+	m := newModelWithSpy(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.cancelTurn = cancel
+	m.turnEvents = make(chan agent.Event)
+	m.chatPhase = chat.PhaseStreaming
+	m.editor.Update(tea.PasteMsg{Content: "/resume"})
+	_, cmd := m.submit()
+	if cmd == nil || m.notice.Empty() {
+		t.Fatal("expected active-turn rejection notice")
+	}
+	if ctx.Err() != nil || m.mode == ModeConversations {
+		t.Fatal("resume cancelled the turn or opened the picker")
+	}
+}
+
+func TestSubmitResumeDuringStartupHistoryLoadIsRejected(t *testing.T) {
+	m := newModelWithSpy(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.cancelTurn = cancel
+	m.turnEvents = make(chan agent.Event)
+	m.chatPhase = chat.PhaseLoading
+	m.editor.Update(tea.PasteMsg{Content: "/resume"})
+	_, cmd := m.submit()
+	if cmd == nil || m.notice.Empty() {
+		t.Fatal("expected history-load rejection notice")
+	}
+	if ctx.Err() != nil || m.mode == ModeConversations {
+		t.Fatal("resume cancelled startup restore or opened picker")
+	}
+}
+
 func TestDispatchQuitCancelsRunningTurnAndQuits(t *testing.T) {
 	m := &Model{}
 	ctx, cancel := context.WithCancel(context.Background())
