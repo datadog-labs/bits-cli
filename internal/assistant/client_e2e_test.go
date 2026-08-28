@@ -48,7 +48,7 @@ func requireE2E(t *testing.T) *Client {
 		t.Skip("set BITS_OAUTH_E2E=1 after bits login, or BITS_ASSISTANT_E2E=1 with DD_API_KEY/DD_APP_KEY")
 	}
 	client, err := NewAPIKeyClient(
-		os.Getenv("DD_SITE_URL"),
+		DefaultBaseURL,
 		os.Getenv("DD_API_KEY"),
 		os.Getenv("DD_APP_KEY"),
 	)

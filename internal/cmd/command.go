@@ -1,17 +1,36 @@
 // Package cmd is the process-level command surface for bits. It owns the
 // Cobra command tree, generated help, and dispatch to caller-supplied
-// operations, keeping dependencies on chat, auth, and the TUI out of this
-// layer so the command interface can grow independently.
+// operations, keeping the command interface independent of chat and TUI
+// implementations.
 package cmd
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/spf13/cobra"
 )
+
+// AuthenticationMode selects the authentication policy for a chat invocation.
+type AuthenticationMode string
+
+const (
+	// AuthenticationModeAuto uses a stored OAuth session or starts login.
+	AuthenticationModeAuto AuthenticationMode = "auto"
+	// AuthenticationModeAPIKey requires explicit API/app-key authentication.
+	AuthenticationModeAPIKey AuthenticationMode = "api-key"
+)
+
+// ChatOptions carries the user-supplied root command flags resolved before
+// chat starts.
+type ChatOptions struct {
+	ConversationID string
+	AuthMode       AuthenticationMode
+	Site           string
+}
 
 // LoginOptions carries the user-supplied login flags resolved by the command
 // tree before dispatch.
@@ -20,26 +39,19 @@ type LoginOptions struct {
 	ClientID string
 }
 
-// Defaults holds environment-derived defaults used to seed command flags. A
-// fresh value is built for each execution so state does not leak between runs.
-type Defaults struct {
-	Site     string
-	ClientID string
-}
-
 // Actions binds command dispatch to caller-owned operations. The command tree
-// never imports chat, auth, or TUI packages directly; it invokes these.
+// invokes these without depending on their implementations.
 type Actions struct {
-	Chat   func(ctx context.Context, conversationID string) error
+	Chat   func(ctx context.Context, opts ChatOptions) error
 	Login  func(ctx context.Context, opts LoginOptions) error
 	Logout func(ctx context.Context) error
 }
 
 // Execute builds a fresh command tree for args and runs it with ctx, writing
-// output to stdout and stderr. A new tree per call keeps parsing state and
-// environment-derived defaults from leaking between runs or tests.
-func Execute(ctx context.Context, args []string, actions Actions, defaults Defaults, stdout, stderr io.Writer) error {
-	root := newRootCommand(actions, defaults)
+// output to stdout and stderr. A new tree per call keeps parsing state from
+// leaking between runs or tests.
+func Execute(ctx context.Context, args []string, actions Actions, stdout, stderr io.Writer) error {
+	root := newRootCommand(actions)
 	if args == nil {
 		args = []string{}
 	}
@@ -49,8 +61,9 @@ func Execute(ctx context.Context, args []string, actions Actions, defaults Defau
 	return root.ExecuteContext(ctx)
 }
 
-func newRootCommand(actions Actions, defaults Defaults) *cobra.Command {
-	var conversationID string
+func newRootCommand(actions Actions) *cobra.Command {
+	opts := ChatOptions{AuthMode: AuthenticationModeAuto}
+	var authMode string
 	// Keep root.Args nil so Cobra can identify unknown commands, suggest close
 	// matches, and reject unknown help topics during command discovery. The
 	// RunE check handles arguments after a -- terminator.
@@ -59,43 +72,64 @@ func newRootCommand(actions Actions, defaults Defaults) *cobra.Command {
 		Short:         "Datadog Assistant in your terminal",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := cobra.NoArgs(cmd, args); err != nil {
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := cobra.NoArgs(command, args); err != nil {
 				return err
 			}
-			return actions.Chat(cmd.Context(), conversationID)
+			mode, err := parseAuthenticationMode(authMode)
+			if err != nil {
+				return err
+			}
+			siteSet := command.Flags().Changed("site") && strings.TrimSpace(opts.Site) != ""
+			switch {
+			case mode == AuthenticationModeAPIKey && !siteSet:
+				return fmt.Errorf("--auth %s requires --site", AuthenticationModeAPIKey)
+			case mode == AuthenticationModeAuto && command.Flags().Changed("site"):
+				return fmt.Errorf("--site requires --auth %s; use `bits login --site` for OAuth", AuthenticationModeAPIKey)
+			}
+			opts.AuthMode = mode
+			return actions.Chat(command.Context(), opts)
 		},
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
-	root.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
-		return fmt.Errorf("%w\nRun '%s --help' for usage", err, cmd.CommandPath())
+	root.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
+		return fmt.Errorf("%w\nRun '%s --help' for usage", err, command.CommandPath())
 	})
+	root.Flags().StringVar(&authMode, "auth", string(AuthenticationModeAuto), "authentication mode: auto or api-key")
+	root.Flags().StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
 	root.Flags().StringVar(
-		&conversationID,
+		&opts.ConversationID,
 		"conversation",
 		"",
 		"resume an existing conversation by ID",
 	)
-	root.AddCommand(newLoginCommand(actions.Login, defaults), newLogoutCommand(actions.Logout))
+	root.AddCommand(newLoginCommand(actions.Login), newLogoutCommand(actions.Logout))
 	return root
 }
 
-func newLoginCommand(action func(context.Context, LoginOptions) error, defaults Defaults) *cobra.Command {
-	opts := LoginOptions{
-		Site:     defaultLoginSite(defaults.Site),
-		ClientID: defaults.ClientID,
-	}
-	cmd := &cobra.Command{
+func newLoginCommand(action func(context.Context, LoginOptions) error) *cobra.Command {
+	opts := LoginOptions{Site: auth.DefaultSite}
+	command := &cobra.Command{
 		Use:   "login",
 		Short: "Sign in to Datadog",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return action(cmd.Context(), opts)
+		RunE: func(command *cobra.Command, _ []string) error {
+			return action(command.Context(), opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.Site, "site", opts.Site, "Datadog site URL or hostname")
-	cmd.Flags().StringVar(&opts.ClientID, "client-id", opts.ClientID, "OAuth client ID override")
-	return cmd
+	command.Flags().StringVar(&opts.Site, "site", opts.Site, "Datadog site URL or hostname")
+	command.Flags().StringVar(&opts.ClientID, "client-id", opts.ClientID, "OAuth client ID override")
+	return command
+}
+
+func parseAuthenticationMode(raw string) (AuthenticationMode, error) {
+	mode := AuthenticationMode(raw)
+	switch mode {
+	case AuthenticationModeAuto, AuthenticationModeAPIKey:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid authentication mode %q; expected auto or api-key", raw)
+	}
 }
 
 func newLogoutCommand(action func(context.Context) error) *cobra.Command {
@@ -103,17 +137,8 @@ func newLogoutCommand(action func(context.Context) error) *cobra.Command {
 		Use:   "logout",
 		Short: "Sign out of Datadog",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return action(cmd.Context())
+		RunE: func(command *cobra.Command, _ []string) error {
+			return action(command.Context())
 		},
 	}
-}
-
-// defaultLoginSite resolves the configured site, falling back to the canonical
-// Datadog site when none is provided.
-func defaultLoginSite(configuredSite string) string {
-	if configuredSite != "" {
-		return configuredSite
-	}
-	return auth.DefaultSite
 }

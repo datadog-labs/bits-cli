@@ -8,6 +8,7 @@ Run `bits` to open chat. Process-level long flags use conventional double-dash s
 
 ```sh
 bits [--conversation ID]
+bits --auth api-key --site API_SITE [--conversation ID]
 bits login [--site SITE] [--client-id ID]
 bits logout
 bits help [command]
@@ -19,22 +20,22 @@ Use `bits --help` for the complete command list or `bits help login` for command
 
 ### Startup login
 
-Run `bits`. When no working OAuth session or complete API/app-key pair is available, Bits opens a site picker automatically. Choose US1, US3, US5, EU1, AP1, AP2, or enter your organization's Datadog subdomain. Bits then opens the regional OAuth flow in your browser and continues into chat after authentication succeeds.
+Run `bits`. When no working OAuth session is available, Bits opens a site picker automatically. Choose US1, US3, US5, EU1, AP1, AP2, or enter your organization's Datadog subdomain. Bits then opens the regional OAuth flow in your browser and continues into chat after authentication succeeds.
 
-`DD_SITE_URL` skips the picker and starts OAuth for that site. The existing `bits login` command remains a non-TUI escape hatch for staging, GovCloud, scripting, and debugging:
-
-```sh
-bits login
-```
-
-`bits login` defaults to the US1 production login when `DD_SITE_URL` is unset. Site precedence is `--site`, then `DD_SITE_URL`, then the US1 production default. To start from another Datadog site or a customer subdomain, pass it explicitly:
+The `bits login` command is the explicit non-TUI login path for choosing a site before chat, including staging, GovCloud, scripting, and debugging:
 
 ```sh
 bits login --site app.datadoghq.eu
 bits login --site acme.us3.datadoghq.com
 ```
 
-The selected site's domain family determines the public OAuth client automatically: `datad0g.com` uses the staging registration, while commercial `datadoghq.com` and `datadoghq.eu` sites use the production registration. The explicit `--client-id` flag or `BITS_OAUTH_CLIENT_ID` environment variable takes precedence for development and environments without a built-in registration, including GovCloud.
+`bits login` also accepts `--client-id` for development and environments without a built-in registration, including GovCloud. It defaults to the US1 production site when `--site` is omitted:
+
+```sh
+bits login --site customer.ddog-gov.com --client-id UUID
+```
+
+The selected site's domain family determines the public OAuth client automatically: `datad0g.com` uses the staging registration, while commercial `datadoghq.com` and `datadoghq.eu` sites use the production registration. Site and OAuth-client selection are non-secret runtime configuration and are accepted only as flags. The former `DD_SITE_URL` and `BITS_OAUTH_CLIENT_ID` environment overrides are no longer supported; use `--site` and `bits login --client-id` respectively.
 
 Bits opens Datadog in your browser and completes Authorization Code + PKCE through an ephemeral `127.0.0.1` callback. The callback uses an available OS-selected port; no fixed local port needs to be free. The client ID is public configuration; no client secret is shipped.
 
@@ -48,22 +49,23 @@ On Linux without an available Secret Service, Bits uses `~/.bits-cli/oauth-sessi
 
 Only one OAuth login is active per OS user. Running `bits login` again saves the replacement before best-effort revoking the previous grant.
 
-### Developer and CI fallback
+### Developer and CI authentication
 
-A complete API/app-key pair remains available when no OAuth login is stored:
+API and application keys remain environment variables because they are secrets. Select them explicitly for a deterministic, noninteractive authentication path:
 
 ```sh
 export DD_API_KEY=...
 export DD_APP_KEY=...
-export DD_SITE_URL=https://dd.datad0g.com
-bits
+bits --auth api-key --site https://api.datadoghq.com
 ```
+
+Explicit API-key mode requires `--site`, accepts an `api.`-prefixed Datadog API URL or hostname (plus the org-2 staging host `dd.datad0g.com`), and does not read, refresh, replace, or delete a stored OAuth session. It never opens a browser or login picker. Both secrets are required; OAuth client selection remains on `bits login`. The mode affects only the current invocation, so a later plain `bits` returns to automatic OAuth selection. This makes authentication noninteractive; `bits` still launches its interactive terminal UI.
 
 Authentication selection is deterministic:
 
-1. A stored OAuth login wins, even if API/app keys are present in the environment.
-2. A complete `DD_API_KEY` and `DD_APP_KEY` pair is used only when no OAuth session exists.
-3. Missing, corrupt, or definitively unrefreshable OAuth starts the login flow; partial API/app-key pairs do not suppress it.
+1. `--auth auto` is the default and uses only a stored OAuth session or interactive OAuth login. Ambient API/app keys never change the selected principal.
+2. `--auth api-key` bypasses the OAuth credential store and requires `--site` plus the complete `DD_API_KEY` and `DD_APP_KEY` pair.
+3. In automatic mode, missing, corrupt, or definitively unrefreshable OAuth starts the login flow.
 4. Transient credential-store and OAuth refresh failures surface as errors instead of opening a browser or changing identities.
 
 ### Logout

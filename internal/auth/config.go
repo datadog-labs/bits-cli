@@ -66,6 +66,20 @@ type SiteConfig struct {
 	AssistantBase string
 }
 
+// NormalizeAPISite validates a Datadog-owned API endpoint and returns its
+// canonical HTTPS URL. It accepts either a URL or hostname. The org-2 staging
+// host is the sole non-api-prefixed endpoint supported by the Assistant API.
+func NormalizeAPISite(rawSite string) (string, error) {
+	site, domain, err := normalizeSite(rawSite)
+	if err != nil {
+		return "", err
+	}
+	if domain != "dd.datad0g.com" && !strings.HasPrefix(domain, "api.") {
+		return "", fmt.Errorf("datadog API site must use an api-prefixed hostname")
+	}
+	return site, nil
+}
+
 // ConfigForSite preserves the supplied Datadog site as the authorization host,
 // including customer subdomains. The site family selects the staging or
 // commercial production registration unless clientIDOverride is provided.
@@ -80,7 +94,7 @@ func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
 		clientID = defaultClientID(domain)
 	}
 	if clientID == "" {
-		return SiteConfig{}, fmt.Errorf("no Bits CLI OAuth client is configured for %s; set BITS_OAUTH_CLIENT_ID", domain)
+		return SiteConfig{}, fmt.Errorf("no Bits CLI OAuth client is configured for %s; provide an OAuth client ID override", domain)
 	}
 
 	// Login replaces these provisional API routes with the canonical domain

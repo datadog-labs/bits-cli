@@ -90,9 +90,8 @@ type CompletedMsg struct{}
 
 // Model is the startup login state machine.
 type Model struct {
-	ctx      context.Context
-	login    LoginFunc
-	clientID string
+	ctx   context.Context
+	login LoginFunc
 
 	phase    phase
 	custom   textinput.Model
@@ -114,9 +113,8 @@ type Model struct {
 }
 
 // New creates a startup login model. login must persist a successful session
-// before it returns nil. clientID enables validation of explicitly configured
-// environments such as GovCloud.
-func New(ctx context.Context, login LoginFunc, clientID string) *Model {
+// before it returns nil.
+func New(ctx context.Context, login LoginFunc) *Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -136,7 +134,6 @@ func New(ctx context.Context, login LoginFunc, clientID string) *Model {
 	return &Model{
 		ctx:      ctx,
 		login:    login,
-		clientID: clientID,
 		custom:   input,
 		selector: components.NewSelector(choices, theme.Selector),
 		panel:    components.NewPanel(theme.Panel),
@@ -260,7 +257,7 @@ func (m *Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case phaseCustom:
 		switch key {
 		case "enter":
-			site, err := normalizeCustomSite(m.custom.Value(), m.clientID)
+			site, err := normalizeCustomSite(m.custom.Value())
 			if err != nil {
 				m.loginErr = err
 				return m, nil
@@ -360,12 +357,12 @@ func spinnerTick(attempt uint64) tea.Cmd {
 	})
 }
 
-func normalizeCustomSite(raw, clientID string) (string, error) {
+func normalizeCustomSite(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", errors.New("enter your Datadog site")
 	}
-	cfg, err := auth.ConfigForSite(raw, clientID)
+	cfg, err := auth.ConfigForSite(raw, "")
 	if err != nil {
 		return "", fmt.Errorf("enter a Datadog site, such as acme.us3.datadoghq.com: %w", err)
 	}

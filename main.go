@@ -38,10 +38,6 @@ func run(args []string) error {
 			Login:  runLogin,
 			Logout: runLogout,
 		},
-		cmd.Defaults{
-			Site:     os.Getenv("DD_SITE_URL"),
-			ClientID: os.Getenv("BITS_OAUTH_CLIENT_ID"),
-		},
 		os.Stdout,
 		os.Stderr,
 	)
@@ -80,10 +76,10 @@ func runLogout(ctx context.Context) error {
 	return nil
 }
 
-func runChat(parent context.Context, conversationID string) error {
+func runChat(parent context.Context, opts cmd.ChatOptions) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	root, err := startupModel(ctx, conversationID)
+	root, err := startupModel(ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -113,8 +109,22 @@ func runChat(parent context.Context, conversationID string) error {
 	return nil
 }
 
-func startupModel(ctx context.Context, conversationID string) (*tui.Model, error) {
-	options := assistant.SendOptions{ConversationID: conversationID}
+func startupModel(ctx context.Context, opts cmd.ChatOptions) (*tui.Model, error) {
+	options := assistant.SendOptions{ConversationID: opts.ConversationID}
+	apiKey := os.Getenv("DD_API_KEY")
+	appKey := os.Getenv("DD_APP_KEY")
+	apiSite := strings.TrimSpace(opts.Site)
+	if opts.AuthMode == cmd.AuthenticationModeAPIKey {
+		client, err := authenticatedClientWithContext(ctx, nil, apiKey, appKey, apiSite, opts.AuthMode)
+		if err != nil {
+			return nil, fmt.Errorf("authenticate with API/app keys: %w", err)
+		}
+		return tui.New(agent.New(client, options)), nil
+	}
+	if opts.AuthMode != cmd.AuthenticationModeAuto {
+		return nil, fmt.Errorf("unsupported authentication mode %q", opts.AuthMode)
+	}
+
 	// BITS_FAKE_BACKEND streams seeded pseudo-random output with no network or
 	// auth, for offline development and demos.
 	if os.Getenv("BITS_FAKE_BACKEND") == "1" {
@@ -122,11 +132,7 @@ func startupModel(ctx context.Context, conversationID string) (*tui.Model, error
 	}
 
 	store := auth.DefaultStore()
-	apiKey := os.Getenv("DD_API_KEY")
-	appKey := os.Getenv("DD_APP_KEY")
-	apiSite := os.Getenv("DD_SITE_URL")
-	clientID := strings.TrimSpace(os.Getenv("BITS_OAUTH_CLIENT_ID"))
-	client, err := authenticatedClientWithContext(ctx, store, apiKey, appKey, apiSite)
+	client, err := authenticatedClientWithContext(ctx, store, apiKey, appKey, apiSite, opts.AuthMode)
 	if err == nil {
 		return tui.New(agent.New(client, options)), nil
 	}
@@ -134,28 +140,10 @@ func startupModel(ctx context.Context, conversationID string) (*tui.Model, error
 		return nil, err
 	}
 
-	// An explicitly configured site retains the non-picker OAuth path. With no
-	// override, startup login is embedded in the root TUI and hands off in place.
-	if configuredSite := strings.TrimSpace(apiSite); configuredSite != "" {
-		client, err = ensureAuthenticatedClient(ctx, store, apiKey, appKey, apiSite, func() error {
-			_, loginErr := auth.Login(ctx, auth.LoginOptions{
-				Site:     configuredSite,
-				ClientID: clientID,
-				Store:    store,
-				Out:      os.Stderr,
-			})
-			return loginErr
-		})
-		if err != nil {
-			return nil, err
-		}
-		return tui.New(agent.New(client, options)), nil
-	}
-
 	loginModel := loginui.New(ctx, func(loginCtx context.Context, site string, report func(loginui.BrowserStatus)) error {
 		_, loginErr := auth.Login(loginCtx, auth.LoginOptions{
 			Site:     site,
-			ClientID: clientID,
+			ClientID: "",
 			Store:    store,
 			OnBrowserOpen: func(url string, openErr error) {
 				report(loginui.BrowserStatus{AuthorizationURL: url, OpenError: openErr})
@@ -163,37 +151,14 @@ func startupModel(ctx context.Context, conversationID string) (*tui.Model, error
 			Out: io.Discard,
 		})
 		return loginErr
-	}, clientID)
+	})
 	return tui.NewWithLogin(ctx, loginModel, func(factoryCtx context.Context) (*agent.Engine, error) {
-		client, factoryErr := authenticatedClientWithContext(factoryCtx, store, apiKey, appKey, apiSite)
+		client, factoryErr := authenticatedClientWithContext(factoryCtx, store, apiKey, appKey, apiSite, cmd.AuthenticationModeAuto)
 		if factoryErr != nil {
 			return nil, factoryErr
 		}
 		return agent.New(client, options), nil
 	}), nil
-}
-
-func ensureAuthenticatedClient(
-	ctx context.Context,
-	store auth.CredentialStore,
-	apiKey, appKey, apiSite string,
-	login func() error,
-) (*assistant.Client, error) {
-	client, err := authenticatedClientWithContext(ctx, store, apiKey, appKey, apiSite)
-	if err == nil {
-		return client, nil
-	}
-
-	// A corrupt or definitively unrefreshable OAuth session is not working auth.
-	// Login can safely replace either one; transient keyring/network failures are
-	// surfaced instead of unexpectedly opening a browser.
-	if !canStartLogin(err) {
-		return nil, err
-	}
-	if err := login(); err != nil {
-		return nil, fmt.Errorf("sign in to Datadog: %w", err)
-	}
-	return authenticatedClientWithContext(ctx, store, apiKey, appKey, apiSite)
 }
 
 func canStartLogin(err error) bool {
@@ -202,11 +167,32 @@ func canStartLogin(err error) bool {
 		errors.Is(err, auth.ErrReauthRequired)
 }
 
-func authenticatedClientWithContext(ctx context.Context, store auth.CredentialStore, apiKey, appKey, apiSite string) (*assistant.Client, error) {
-	// A stored OAuth login is the customer path and deliberately wins over
-	// ambient developer credentials. Complete API/app-key pairs are only the
-	// CI/developer fallback when no OAuth session exists. Real keyring errors
-	// must surface rather than silently switching principals.
+func authenticatedClientWithContext(
+	ctx context.Context,
+	store auth.CredentialStore,
+	apiKey, appKey, apiSite string,
+	mode cmd.AuthenticationMode,
+) (*assistant.Client, error) {
+	if mode == cmd.AuthenticationModeAPIKey {
+		// Explicit API-key mode is noninteractive and must not inspect or mutate
+		// OAuth state. This makes CI deterministic even when a host keyring is
+		// locked, unavailable, or contains a different principal.
+		if strings.TrimSpace(apiSite) == "" {
+			return nil, fmt.Errorf("api-key authentication requires a Datadog site")
+		}
+		normalizedSite, err := auth.NormalizeAPISite(apiSite)
+		if err != nil {
+			return nil, fmt.Errorf("validate API-key Datadog site: %w", err)
+		}
+		return assistant.NewAPIKeyClient(normalizedSite, apiKey, appKey)
+	}
+	if mode != cmd.AuthenticationModeAuto {
+		return nil, fmt.Errorf("unsupported authentication mode %q", mode)
+	}
+
+	// Automatic mode is the OAuth customer path. Ambient API/app keys never
+	// change principals; callers must explicitly select API-key mode. Real
+	// keyring errors surface rather than opening a browser or changing identity.
 	session, err := store.Load()
 	if err == nil {
 		source, sourceErr := auth.NewSource(session, store, nil)
@@ -230,8 +216,5 @@ func authenticatedClientWithContext(ctx context.Context, store auth.CredentialSt
 	if !errors.Is(err, auth.ErrNoSession) {
 		return nil, err
 	}
-	if apiKey != "" && appKey != "" {
-		return assistant.NewAPIKeyClient(apiSite, apiKey, appKey)
-	}
-	return nil, fmt.Errorf("%w: no OAuth session or complete API/app-key pair", errNoWorkingAuth)
+	return nil, fmt.Errorf("%w: no OAuth session", errNoWorkingAuth)
 }

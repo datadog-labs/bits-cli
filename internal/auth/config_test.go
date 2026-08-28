@@ -127,9 +127,37 @@ func TestConfigForSite_PreservesCustomerLoginDomain(t *testing.T) {
 	}
 }
 
+func TestNormalizeAPISite(t *testing.T) {
+	for _, test := range []struct {
+		raw  string
+		want string
+	}{
+		{raw: "api.datadoghq.com", want: "https://api.datadoghq.com"},
+		{raw: "https://API.US3.DATADOGHQ.COM/", want: "https://api.us3.datadoghq.com"},
+		{raw: "dd.datad0g.com", want: "https://dd.datad0g.com"},
+	} {
+		got, err := NormalizeAPISite(test.raw)
+		if err != nil || got != test.want {
+			t.Errorf("NormalizeAPISite(%q) = %q, %v; want %q", test.raw, got, err, test.want)
+		}
+	}
+
+	for _, raw := range []string{
+		"",
+		"app.datadoghq.com",
+		"https://example.com",
+		"http://api.datadoghq.com",
+		"https://api.datadoghq.com/path",
+	} {
+		if _, err := NormalizeAPISite(raw); err == nil {
+			t.Errorf("NormalizeAPISite(%q) succeeded", raw)
+		}
+	}
+}
+
 func TestConfigForSite_AcceptsGovDomainWithExplicitClient(t *testing.T) {
 	_, err := ConfigForSite("https://customer.ddog-gov.com", "")
-	if err == nil || !strings.Contains(err.Error(), "BITS_OAUTH_CLIENT_ID") {
+	if err == nil || !strings.Contains(err.Error(), "OAuth client ID override") {
 		t.Fatalf("error = %v, want missing GovCloud client", err)
 	}
 

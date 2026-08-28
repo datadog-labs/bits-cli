@@ -12,7 +12,7 @@ import (
 )
 
 type commandRecorder struct {
-	chatIDs []string
+	chats   []ChatOptions
 	logins  []LoginOptions
 	logouts int
 	err     error
@@ -20,8 +20,8 @@ type commandRecorder struct {
 
 func (r *commandRecorder) actionsWithValues() Actions {
 	return Actions{
-		Chat: func(_ context.Context, conversationID string) error {
-			r.chatIDs = append(r.chatIDs, conversationID)
+		Chat: func(_ context.Context, opts ChatOptions) error {
+			r.chats = append(r.chats, opts)
 			return r.err
 		},
 		Login: func(_ context.Context, opts LoginOptions) error {
@@ -35,81 +35,86 @@ func (r *commandRecorder) actionsWithValues() Actions {
 	}
 }
 
-func executeForTest(t *testing.T, args []string, recorder *commandRecorder, defaults Defaults) (stdout, stderr string, err error) {
+func executeForTest(t *testing.T, args []string, recorder *commandRecorder) (stdout, stderr string, err error) {
 	t.Helper()
 	var out bytes.Buffer
 	var errOut bytes.Buffer
-	err = Execute(context.Background(), args, recorder.actionsWithValues(), defaults, &out, &errOut)
+	err = Execute(context.Background(), args, recorder.actionsWithValues(), &out, &errOut)
 	return out.String(), errOut.String(), err
 }
 
-func TestDefaultLoginSite(t *testing.T) {
-	if got := defaultLoginSite(""); got != auth.DefaultSite {
-		t.Fatalf("defaultLoginSite(\"\") = %q, want %q", got, auth.DefaultSite)
-	}
-	if got := defaultLoginSite(auth.DefaultStagingSite); got != auth.DefaultStagingSite {
-		t.Fatalf("defaultLoginSite(staging) = %q, want configured site", got)
-	}
-}
-
 func TestCommandDispatch(t *testing.T) {
-	defaults := Defaults{Site: "https://env.datad0g.com", ClientID: "env-client"}
 	for _, test := range []struct {
 		name      string
 		args      []string
-		chatIDs   []string
+		chats     []ChatOptions
 		logins    []LoginOptions
 		logoutCnt int
 	}{
-		{name: "chat", chatIDs: []string{""}},
-		{name: "chat conversation", args: []string{"--conversation", "conversation-1"}, chatIDs: []string{"conversation-1"}},
-		{name: "chat conversation equals", args: []string{"--conversation=conversation-2"}, chatIDs: []string{"conversation-2"}},
-		{name: "login defaults", args: []string{"login"}, logins: []LoginOptions{{Site: defaults.Site, ClientID: defaults.ClientID}}},
-		{name: "login flags", args: []string{"login", "--site", "app.datadoghq.eu", "--client-id=explicit-client"}, logins: []LoginOptions{{Site: "app.datadoghq.eu", ClientID: "explicit-client"}}},
+		{
+			name:  "chat",
+			chats: []ChatOptions{{AuthMode: AuthenticationModeAuto}},
+		},
+		{
+			name:  "chat conversation",
+			args:  []string{"--conversation", "conversation-1"},
+			chats: []ChatOptions{{ConversationID: "conversation-1", AuthMode: AuthenticationModeAuto}},
+		},
+		{
+			name:  "chat conversation equals",
+			args:  []string{"--conversation=conversation-2"},
+			chats: []ChatOptions{{ConversationID: "conversation-2", AuthMode: AuthenticationModeAuto}},
+		},
+		{
+			name: "explicit API key mode",
+			args: []string{"--auth", "api-key", "--site=https://api.datadoghq.eu"},
+			chats: []ChatOptions{{
+				AuthMode: AuthenticationModeAPIKey,
+				Site:     "https://api.datadoghq.eu",
+			}},
+		},
+		{
+			name:   "login defaults",
+			args:   []string{"login"},
+			logins: []LoginOptions{{Site: auth.DefaultSite}},
+		},
+		{
+			name:   "login flags",
+			args:   []string{"login", "--site", "app.datadoghq.eu", "--client-id=explicit-client"},
+			logins: []LoginOptions{{Site: "app.datadoghq.eu", ClientID: "explicit-client"}},
+		},
 		{name: "logout", args: []string{"logout"}, logoutCnt: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := &commandRecorder{}
-			stdout, stderr, err := executeForTest(t, test.args, recorder, defaults)
+			stdout, stderr, err := executeForTest(t, test.args, recorder)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if stdout != "" || stderr != "" {
 				t.Fatalf("unexpected command output: stdout %q, stderr %q", stdout, stderr)
 			}
-			if !reflect.DeepEqual(recorder.chatIDs, test.chatIDs) || !reflect.DeepEqual(recorder.logins, test.logins) || recorder.logouts != test.logoutCnt {
-				t.Fatalf("calls = chat %#v, login %#v, logout %d", recorder.chatIDs, recorder.logins, recorder.logouts)
+			if !reflect.DeepEqual(recorder.chats, test.chats) || !reflect.DeepEqual(recorder.logins, test.logins) || recorder.logouts != test.logoutCnt {
+				t.Fatalf("calls = chat %#v, login %#v, logout %d", recorder.chats, recorder.logins, recorder.logouts)
 			}
 		})
 	}
 }
 
-func TestLoginDefaults(t *testing.T) {
-	for _, test := range []struct {
-		name     string
-		defaults Defaults
-		want     LoginOptions
-	}{
-		{
-			name: "production site",
-			want: LoginOptions{Site: auth.DefaultSite},
-		},
-		{
-			name:     "environment overrides",
-			defaults: Defaults{Site: auth.DefaultStagingSite, ClientID: "client-from-env"},
-			want:     LoginOptions{Site: auth.DefaultStagingSite, ClientID: "client-from-env"},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			recorder := &commandRecorder{}
-			_, _, err := executeForTest(t, []string{"login"}, recorder, test.defaults)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(recorder.logins, []LoginOptions{test.want}) {
-				t.Fatalf("login options = %#v, want %#v", recorder.logins, test.want)
-			}
-		})
+func TestCommandTreesDoNotShareFlagState(t *testing.T) {
+	recorder := &commandRecorder{}
+	if _, _, err := executeForTest(t, []string{"--auth", "api-key", "--site", "api.datadoghq.eu"}, recorder); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := executeForTest(t, nil, recorder); err != nil {
+		t.Fatal(err)
+	}
+	want := []ChatOptions{
+		{AuthMode: AuthenticationModeAPIKey, Site: "api.datadoghq.eu"},
+		{AuthMode: AuthenticationModeAuto},
+	}
+	if !reflect.DeepEqual(recorder.chats, want) {
+		t.Fatalf("chat options = %#v, want %#v", recorder.chats, want)
 	}
 }
 
@@ -121,15 +126,19 @@ func TestCommandHelp(t *testing.T) {
 		doNotWant []string
 	}{
 		{
-			name:      "root short",
-			args:      []string{"-h"},
-			want:      []string{"Datadog Assistant in your terminal", "Available Commands:", "login", "logout", "--conversation", "--help"},
-			doNotWant: []string{"completion"},
+			name: "root short",
+			args: []string{"-h"},
+			want: []string{
+				"Datadog Assistant in your terminal", "Available Commands:",
+				"login", "logout", "--auth", "auto or api-key", "--site",
+				"--conversation", "--help",
+			},
+			doNotWant: []string{"completion", "--client-id"},
 		},
 		{
 			name: "root long",
 			args: []string{"--help"},
-			want: []string{"Available Commands:", "login", "logout"},
+			want: []string{"Available Commands:", "login", "logout", "--auth", "--site"},
 		},
 		{
 			name: "help login",
@@ -154,7 +163,7 @@ func TestCommandHelp(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := &commandRecorder{}
-			stdout, stderr, err := executeForTest(t, test.args, recorder, Defaults{})
+			stdout, stderr, err := executeForTest(t, test.args, recorder)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -171,7 +180,7 @@ func TestCommandHelp(t *testing.T) {
 					t.Errorf("help output unexpectedly contains %q:\n%s", notWant, stdout)
 				}
 			}
-			if len(recorder.chatIDs) != 0 || len(recorder.logins) != 0 || recorder.logouts != 0 {
+			if len(recorder.chats) != 0 || len(recorder.logins) != 0 || recorder.logouts != 0 {
 				t.Fatalf("help invoked an action: %#v", recorder)
 			}
 		})
@@ -186,20 +195,28 @@ func TestCommandRejectsInvalidInputWithoutInvokingActions(t *testing.T) {
 	}{
 		{name: "root positional", args: []string{"unexpected"}, wantErr: `unknown command "unexpected" for "bits"`},
 		{name: "misspelled command", args: []string{"loign"}, wantErr: `unknown command "loign" for "bits"`},
+		{name: "disabled completion", args: []string{"completion"}, wantErr: `unknown command "completion" for "bits"`},
 		{name: "argument after terminator", args: []string{"--", "login"}, wantErr: `unknown command "login" for "bits"`},
 		{name: "login positional", args: []string{"login", "unexpected"}, wantErr: `unknown command "unexpected" for "bits login"`},
 		{name: "logout positional", args: []string{"logout", "unexpected"}, wantErr: `unknown command "unexpected" for "bits logout"`},
 		{name: "unknown root flag", args: []string{"--unknown"}, wantErr: "unknown flag: --unknown"},
 		{name: "unknown login flag", args: []string{"login", "--unknown"}, wantErr: "unknown flag: --unknown"},
+		{name: "root auth flag on login", args: []string{"login", "--auth", "api-key"}, wantErr: "unknown flag: --auth"},
 		{name: "root flag on login", args: []string{"login", "--conversation", "conversation-1"}, wantErr: "unknown flag: --conversation"},
+		{name: "invalid authentication mode", args: []string{"--auth", "oauth"}, wantErr: `invalid authentication mode "oauth"`},
+		{name: "API key mode without site", args: []string{"--auth", "api-key"}, wantErr: "--auth api-key requires --site"},
+		{name: "API key mode with empty site", args: []string{"--auth", "api-key", "--site", " "}, wantErr: "--auth api-key requires --site"},
+		{name: "site in automatic mode", args: []string{"--site", "app.datadoghq.eu"}, wantErr: "--site requires --auth api-key"},
+		{name: "OAuth client ID on root", args: []string{"--client-id", "client"}, wantErr: "unknown flag: --client-id"},
 		{name: "single dash conversation", args: []string{"-conversation", "conversation-1"}},
 		{name: "single dash conversation equals", args: []string{"-conversation=conversation-1"}, wantErr: "unknown shorthand flag: 'c'"},
-		{name: "single dash site", args: []string{"login", "-site", "app.datadoghq.com"}, wantErr: "unknown shorthand flag: 's'"},
-		{name: "single dash client id", args: []string{"login", "-client-id", "client"}, wantErr: "unknown shorthand flag: 'c'"},
+		{name: "single dash auth", args: []string{"-auth=api-key"}, wantErr: "unknown shorthand flag: 'a'"},
+		{name: "single dash site", args: []string{"-site=app.datadoghq.com"}, wantErr: "unknown shorthand flag: 's'"},
+		{name: "single dash client id", args: []string{"-client-id=client"}, wantErr: "unknown shorthand flag: 'c'"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := &commandRecorder{}
-			stdout, stderr, err := executeForTest(t, test.args, recorder, Defaults{})
+			stdout, stderr, err := executeForTest(t, test.args, recorder)
 			if err == nil {
 				t.Fatalf("Execute(%q) succeeded", test.args)
 			}
@@ -209,7 +226,7 @@ func TestCommandRejectsInvalidInputWithoutInvokingActions(t *testing.T) {
 			if stdout != "" || stderr != "" {
 				t.Fatalf("invalid command printed output: stdout %q, stderr %q", stdout, stderr)
 			}
-			if len(recorder.chatIDs) != 0 || len(recorder.logins) != 0 || recorder.logouts != 0 {
+			if len(recorder.chats) != 0 || len(recorder.logins) != 0 || recorder.logouts != 0 {
 				t.Fatalf("invalid command invoked an action: %#v", recorder)
 			}
 		})
@@ -218,7 +235,7 @@ func TestCommandRejectsInvalidInputWithoutInvokingActions(t *testing.T) {
 
 func TestCommandSuggestsCloseMatches(t *testing.T) {
 	recorder := &commandRecorder{}
-	_, _, err := executeForTest(t, []string{"loign"}, recorder, Defaults{})
+	_, _, err := executeForTest(t, []string{"loign"}, recorder)
 	if err == nil {
 		t.Fatal("misspelled command succeeded")
 	}
@@ -238,7 +255,7 @@ func TestFlagErrorsPointToCommandHelp(t *testing.T) {
 		{args: []string{"login", "--unknown"}, want: "Run 'bits login --help' for usage"},
 	} {
 		recorder := &commandRecorder{}
-		_, _, err := executeForTest(t, test.args, recorder, Defaults{})
+		_, _, err := executeForTest(t, test.args, recorder)
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("Execute(%q) error = %q, want it to contain %q", test.args, err, test.want)
 		}
@@ -252,7 +269,7 @@ func TestCommandPropagatesContextAndActionErrors(t *testing.T) {
 	wantErr := errors.New("action failed")
 	var gotContext context.Context
 	actions := Actions{
-		Chat: func(ctx context.Context, _ string) error {
+		Chat: func(ctx context.Context, _ ChatOptions) error {
 			gotContext = ctx
 			return wantErr
 		},
@@ -260,7 +277,7 @@ func TestCommandPropagatesContextAndActionErrors(t *testing.T) {
 		Logout: func(context.Context) error { return nil },
 	}
 	var stdout, stderr bytes.Buffer
-	err := Execute(ctx, nil, actions, Defaults{}, &stdout, &stderr)
+	err := Execute(ctx, nil, actions, &stdout, &stderr)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want %v", err, wantErr)
 	}
