@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"bytes"
@@ -13,50 +13,59 @@ import (
 
 type commandRecorder struct {
 	chatIDs []string
-	logins  []loginCommandOptions
+	logins  []LoginOptions
 	logouts int
 	err     error
 }
 
-func (r *commandRecorder) actionsWithValues() commandActions {
-	return commandActions{
-		chat: func(_ context.Context, conversationID string) error {
+func (r *commandRecorder) actionsWithValues() Actions {
+	return Actions{
+		Chat: func(_ context.Context, conversationID string) error {
 			r.chatIDs = append(r.chatIDs, conversationID)
 			return r.err
 		},
-		login: func(_ context.Context, opts loginCommandOptions) error {
+		Login: func(_ context.Context, opts LoginOptions) error {
 			r.logins = append(r.logins, opts)
 			return r.err
 		},
-		logout: func(context.Context) error {
+		Logout: func(context.Context) error {
 			r.logouts++
 			return r.err
 		},
 	}
 }
 
-func executeForTest(t *testing.T, args []string, recorder *commandRecorder, defaults commandDefaults) (stdout, stderr string, err error) {
+func executeForTest(t *testing.T, args []string, recorder *commandRecorder, defaults Defaults) (stdout, stderr string, err error) {
 	t.Helper()
 	var out bytes.Buffer
 	var errOut bytes.Buffer
-	err = executeCommands(context.Background(), args, recorder.actionsWithValues(), defaults, &out, &errOut)
+	err = Execute(context.Background(), args, recorder.actionsWithValues(), defaults, &out, &errOut)
 	return out.String(), errOut.String(), err
 }
 
+func TestDefaultLoginSite(t *testing.T) {
+	if got := defaultLoginSite(""); got != auth.DefaultSite {
+		t.Fatalf("defaultLoginSite(\"\") = %q, want %q", got, auth.DefaultSite)
+	}
+	if got := defaultLoginSite(auth.DefaultStagingSite); got != auth.DefaultStagingSite {
+		t.Fatalf("defaultLoginSite(staging) = %q, want configured site", got)
+	}
+}
+
 func TestCommandDispatch(t *testing.T) {
-	defaults := commandDefaults{Site: "https://env.datad0g.com", ClientID: "env-client"}
+	defaults := Defaults{Site: "https://env.datad0g.com", ClientID: "env-client"}
 	for _, test := range []struct {
 		name      string
 		args      []string
 		chatIDs   []string
-		logins    []loginCommandOptions
+		logins    []LoginOptions
 		logoutCnt int
 	}{
 		{name: "chat", chatIDs: []string{""}},
 		{name: "chat conversation", args: []string{"--conversation", "conversation-1"}, chatIDs: []string{"conversation-1"}},
 		{name: "chat conversation equals", args: []string{"--conversation=conversation-2"}, chatIDs: []string{"conversation-2"}},
-		{name: "login defaults", args: []string{"login"}, logins: []loginCommandOptions{{Site: defaults.Site, ClientID: defaults.ClientID}}},
-		{name: "login flags", args: []string{"login", "--site", "app.datadoghq.eu", "--client-id=explicit-client"}, logins: []loginCommandOptions{{Site: "app.datadoghq.eu", ClientID: "explicit-client"}}},
+		{name: "login defaults", args: []string{"login"}, logins: []LoginOptions{{Site: defaults.Site, ClientID: defaults.ClientID}}},
+		{name: "login flags", args: []string{"login", "--site", "app.datadoghq.eu", "--client-id=explicit-client"}, logins: []LoginOptions{{Site: "app.datadoghq.eu", ClientID: "explicit-client"}}},
 		{name: "logout", args: []string{"logout"}, logoutCnt: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -78,17 +87,17 @@ func TestCommandDispatch(t *testing.T) {
 func TestLoginDefaults(t *testing.T) {
 	for _, test := range []struct {
 		name     string
-		defaults commandDefaults
-		want     loginCommandOptions
+		defaults Defaults
+		want     LoginOptions
 	}{
 		{
 			name: "production site",
-			want: loginCommandOptions{Site: auth.DefaultSite},
+			want: LoginOptions{Site: auth.DefaultSite},
 		},
 		{
 			name:     "environment overrides",
-			defaults: commandDefaults{Site: auth.DefaultStagingSite, ClientID: "client-from-env"},
-			want:     loginCommandOptions{Site: auth.DefaultStagingSite, ClientID: "client-from-env"},
+			defaults: Defaults{Site: auth.DefaultStagingSite, ClientID: "client-from-env"},
+			want:     LoginOptions{Site: auth.DefaultStagingSite, ClientID: "client-from-env"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -97,7 +106,7 @@ func TestLoginDefaults(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(recorder.logins, []loginCommandOptions{test.want}) {
+			if !reflect.DeepEqual(recorder.logins, []LoginOptions{test.want}) {
 				t.Fatalf("login options = %#v, want %#v", recorder.logins, test.want)
 			}
 		})
@@ -145,7 +154,7 @@ func TestCommandHelp(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := &commandRecorder{}
-			stdout, stderr, err := executeForTest(t, test.args, recorder, commandDefaults{})
+			stdout, stderr, err := executeForTest(t, test.args, recorder, Defaults{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,9 +199,9 @@ func TestCommandRejectsInvalidInputWithoutInvokingActions(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := &commandRecorder{}
-			stdout, stderr, err := executeForTest(t, test.args, recorder, commandDefaults{})
+			stdout, stderr, err := executeForTest(t, test.args, recorder, Defaults{})
 			if err == nil {
-				t.Fatalf("executeCommands(%q) succeeded", test.args)
+				t.Fatalf("Execute(%q) succeeded", test.args)
 			}
 			if test.wantErr != "" && !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("error = %q, want it to contain %q", err, test.wantErr)
@@ -209,7 +218,7 @@ func TestCommandRejectsInvalidInputWithoutInvokingActions(t *testing.T) {
 
 func TestCommandSuggestsCloseMatches(t *testing.T) {
 	recorder := &commandRecorder{}
-	_, _, err := executeForTest(t, []string{"loign"}, recorder, commandDefaults{})
+	_, _, err := executeForTest(t, []string{"loign"}, recorder, Defaults{})
 	if err == nil {
 		t.Fatal("misspelled command succeeded")
 	}
@@ -229,9 +238,9 @@ func TestFlagErrorsPointToCommandHelp(t *testing.T) {
 		{args: []string{"login", "--unknown"}, want: "Run 'bits login --help' for usage"},
 	} {
 		recorder := &commandRecorder{}
-		_, _, err := executeForTest(t, test.args, recorder, commandDefaults{})
+		_, _, err := executeForTest(t, test.args, recorder, Defaults{})
 		if err == nil || !strings.Contains(err.Error(), test.want) {
-			t.Errorf("executeCommands(%q) error = %q, want it to contain %q", test.args, err, test.want)
+			t.Errorf("Execute(%q) error = %q, want it to contain %q", test.args, err, test.want)
 		}
 	}
 }
@@ -242,16 +251,16 @@ func TestCommandPropagatesContextAndActionErrors(t *testing.T) {
 	ctx := context.WithValue(context.Background(), key, "value")
 	wantErr := errors.New("action failed")
 	var gotContext context.Context
-	actions := commandActions{
-		chat: func(ctx context.Context, _ string) error {
+	actions := Actions{
+		Chat: func(ctx context.Context, _ string) error {
 			gotContext = ctx
 			return wantErr
 		},
-		login:  func(context.Context, loginCommandOptions) error { return nil },
-		logout: func(context.Context) error { return nil },
+		Login:  func(context.Context, LoginOptions) error { return nil },
+		Logout: func(context.Context) error { return nil },
 	}
 	var stdout, stderr bytes.Buffer
-	err := executeCommands(ctx, nil, actions, commandDefaults{}, &stdout, &stderr)
+	err := Execute(ctx, nil, actions, Defaults{}, &stdout, &stderr)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want %v", err, wantErr)
 	}

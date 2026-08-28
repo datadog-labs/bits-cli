@@ -15,6 +15,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent/fake"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/auth"
+	"github.com/DataDog/bits-cli/internal/cmd"
 	"github.com/DataDog/bits-cli/internal/tui"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
 )
@@ -28,7 +29,25 @@ func main() {
 	}
 }
 
-func runLogin(ctx context.Context, opts loginCommandOptions) error {
+func run(args []string) error {
+	return cmd.Execute(
+		context.Background(),
+		args,
+		cmd.Actions{
+			Chat:   runChat,
+			Login:  runLogin,
+			Logout: runLogout,
+		},
+		cmd.Defaults{
+			Site:     os.Getenv("DD_SITE_URL"),
+			ClientID: os.Getenv("BITS_OAUTH_CLIENT_ID"),
+		},
+		os.Stdout,
+		os.Stderr,
+	)
+}
+
+func runLogin(ctx context.Context, opts cmd.LoginOptions) error {
 	session, err := auth.Login(ctx, auth.LoginOptions{
 		Site:     opts.Site,
 		ClientID: opts.ClientID,
@@ -40,13 +59,6 @@ func runLogin(ctx context.Context, opts loginCommandOptions) error {
 	}
 	fmt.Fprintf(os.Stderr, "Logged in to %s.\n", session.Site)
 	return nil
-}
-
-func defaultLoginSite(configuredSite string) string {
-	if configuredSite != "" {
-		return configuredSite
-	}
-	return auth.DefaultSite
 }
 
 func runLogout(ctx context.Context) error {

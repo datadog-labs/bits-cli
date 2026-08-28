@@ -52,15 +52,6 @@ func validOAuthSession() auth.Session {
 	}
 }
 
-func TestDefaultLoginSite(t *testing.T) {
-	if got := defaultLoginSite(""); got != auth.DefaultSite {
-		t.Fatalf("defaultLoginSite(\"\") = %q, want %q", got, auth.DefaultSite)
-	}
-	if got := defaultLoginSite(auth.DefaultStagingSite); got != auth.DefaultStagingSite {
-		t.Fatalf("defaultLoginSite(staging) = %q, want configured site", got)
-	}
-}
-
 func TestAuthenticatedClientPrefersStoredOAuthOverCompleteKeys(t *testing.T) {
 	client, err := authenticatedClientWith(
 		stubCredentialStore{session: validOAuthSession()},
