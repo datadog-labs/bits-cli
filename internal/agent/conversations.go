@@ -194,7 +194,7 @@ func (e *Engine) switchConversation(ctx context.Context, conversationID string, 
 	temporary := NewTranscript()
 	for i, message := range response.Data.Attributes.Messages {
 		if err := validateHistoryMessage(message); err != nil {
-			publishTerminal(ConversationSwitchResult{Err: fmt.Errorf("%w: message %d: %v", ErrMalformedHistory, i, err)})
+			publishTerminal(ConversationSwitchResult{Err: fmt.Errorf("%w: message %d: %w", ErrMalformedHistory, i, err)})
 			return
 		}
 		temporary.AppendMessage(message)
@@ -248,7 +248,7 @@ func validConversationID(id string) bool {
 		if i == 8 || i == 13 || i == 18 || i == 23 {
 			continue
 		}
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 			return false
 		}
 	}

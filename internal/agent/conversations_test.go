@@ -20,9 +20,11 @@ type conversationBackend struct {
 func (*conversationBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {
 	return "", nil
 }
+
 func (b *conversationBackend) UserConversations(ctx context.Context) (*assistant.UserConversationsResponse, error) {
 	return b.list(ctx)
 }
+
 func (b *conversationBackend) ConversationHistory(ctx context.Context, in assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
 	return b.history(ctx, in)
 }
@@ -203,7 +205,7 @@ func TestSwitchConversationDiscardFailureAndCancellationRollback(t *testing.T) {
 func TestSwitchConversationRejectsMalformedHistory(t *testing.T) {
 	for name, response := range map[string]*assistant.ConversationHistoryResponse{
 		"nil response":     nil,
-		"missing envelope": &assistant.ConversationHistoryResponse{},
+		"missing envelope": {},
 		"missing text payload": func() *assistant.ConversationHistoryResponse {
 			r := &assistant.ConversationHistoryResponse{}
 			r.Data.Type = "conversation-history-response"
