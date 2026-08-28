@@ -18,6 +18,7 @@ type ToolStatus int
 const (
 	ToolUnknown ToolStatus = iota
 	ToolRunning
+	ToolAwaitingApproval
 	ToolSuccess
 	ToolError
 )
@@ -46,6 +47,7 @@ type ToolBlock struct {
 	Title        string
 	Detail       string
 	IsClientSide bool
+	Approval     *ApprovalPrompt
 }
 
 // ToolBlockOf builds the aggregated view of a tool content block.
@@ -98,6 +100,13 @@ type BlockID struct {
 	Scope BlockScope
 	Key   string
 	Kind  assistant.ContentKind
+}
+
+func (b Block) ToolCallID() string {
+	if b.ID.Scope == ScopeTool {
+		return b.ID.Key
+	}
+	return ""
 }
 
 // BlockIDOf derives the transcript key for a streamed message: the shared

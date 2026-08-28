@@ -183,6 +183,8 @@ func statusParts(s agent.ToolStatus, sty Styles) (glyph, label string, style lip
 	switch s {
 	case agent.ToolRunning:
 		return "•", "running", sty.StatusRunning
+	case agent.ToolAwaitingApproval:
+		return "•", "awaiting approval", sty.StatusRunning
 	case agent.ToolSuccess:
 		return "✓", "success", sty.StatusSuccess
 	case agent.ToolError:

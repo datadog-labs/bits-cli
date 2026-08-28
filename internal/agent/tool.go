@@ -24,17 +24,23 @@ type ToolHandler func(context.Context, ToolCall) (ToolResult, error)
 type Tool struct {
 	Definition assistant.ClientTool
 	Handler    ToolHandler
+	Approval   ApprovalPolicy
 }
 
 type ToolSet struct {
 	definitions []assistant.ClientTool
-	handlers    map[string]ToolHandler
+	tools       map[string]registeredTool
+}
+
+type registeredTool struct {
+	handler  ToolHandler
+	approval ApprovalPolicy
 }
 
 func NewToolSet(tools ...Tool) (*ToolSet, error) {
 	set := &ToolSet{
 		definitions: make([]assistant.ClientTool, 0, len(tools)),
-		handlers:    make(map[string]ToolHandler, len(tools)),
+		tools:       make(map[string]registeredTool, len(tools)),
 	}
 	for _, tool := range tools {
 		name := tool.Definition.Name
@@ -44,11 +50,11 @@ func NewToolSet(tools ...Tool) (*ToolSet, error) {
 		if tool.Handler == nil {
 			return nil, fmt.Errorf("tool %q handler is nil", name)
 		}
-		if _, exists := set.handlers[name]; exists {
+		if _, exists := set.tools[name]; exists {
 			return nil, fmt.Errorf("duplicate tool %q", name)
 		}
 		set.definitions = append(set.definitions, tool.Definition)
-		set.handlers[name] = tool.Handler
+		set.tools[name] = registeredTool{handler: tool.Handler, approval: tool.Approval}
 	}
 	return set, nil
 }
@@ -62,8 +68,8 @@ func (s *ToolSet) Definitions() []assistant.ClientTool {
 
 func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 	if s != nil {
-		if handler, ok := s.handlers[call.Name]; ok {
-			return handler(ctx, call)
+		if tool, ok := s.tools[call.Name]; ok {
+			return tool.handler(ctx, call)
 		}
 	}
 	return ToolResult{
@@ -71,4 +77,15 @@ func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 		Output:  "no client tool named " + call.Name + " is registered",
 		IsError: true,
 	}, nil
+}
+
+func (s *ToolSet) Approval(call ToolCall) (ApprovalRequirement, bool) {
+	if s == nil {
+		return ApprovalRequirement{}, false
+	}
+	tool, ok := s.tools[call.Name]
+	if !ok || tool.approval == nil {
+		return ApprovalRequirement{}, false
+	}
+	return tool.approval(call)
 }

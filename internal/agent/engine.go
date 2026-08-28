@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -75,17 +76,41 @@ type Engine struct {
 	opts                   assistant.SendOptions
 	transcript             *Transcript
 	previousConversationID string
-	// active is true while a turn or restore runs; overlapping them is a bug.
-	active atomic.Bool
+	commands               chan toolCommand
+	sessionGrants          map[ApprovalKey]struct{}
+	active                 atomic.Bool
+	operationGeneration    atomic.Uint64
+}
+
+type toolCommand struct {
+	generation uint64
+	id         string
+	decision   ApprovalDecision
+	cancel     bool
+}
+
+type pendingTool struct {
+	call  ToolCall
+	index int
+	key   ApprovalKey
+}
+
+type toolDone struct {
+	call   ToolCall
+	index  int
+	result ToolResult
+	err    error
 }
 
 // New returns an Engine. opts carries the per-request defaults (profile, model,
 // conversation id, …); ConversationID is updated as turns run.
 func New(b Backend, opts assistant.SendOptions) *Engine {
 	return &Engine{
-		backend:    b,
-		opts:       opts,
-		transcript: NewTranscript(),
+		backend:       b,
+		opts:          opts,
+		transcript:    NewTranscript(),
+		commands:      make(chan toolCommand, 64),
+		sessionGrants: make(map[ApprovalKey]struct{}),
 	}
 }
 
@@ -102,14 +127,21 @@ func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
 	if !e.begin() {
 		return eventResult(Event{Kind: EventError, Err: ErrOperationActive})
 	}
+	generation := e.operationGeneration.Load()
 	out := make(chan Event, 64)
-	go e.run(ctx, in, out)
+	go e.run(ctx, in, out, generation)
 	return out
 }
 
 // begin claims the engine for one operation. The operation owns the paired
 // release, including a loaded conversation awaiting the UI's commit decision.
-func (e *Engine) begin() bool { return e.active.CompareAndSwap(false, true) }
+func (e *Engine) begin() bool {
+	if !e.active.CompareAndSwap(false, true) {
+		return false
+	}
+	e.operationGeneration.Add(1)
+	return true
+}
 
 func eventResult(ev Event) <-chan Event {
 	out := make(chan Event, 1)
@@ -118,7 +150,35 @@ func eventResult(ev Event) <-chan Event {
 	return out
 }
 
-func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event) {
+func (e *Engine) Decide(toolCallID string, decision ApprovalDecision) bool {
+	if !decision.valid() {
+		return false
+	}
+	return e.command(toolCommand{
+		generation: e.operationGeneration.Load(),
+		id:         toolCallID,
+		decision:   decision,
+	})
+}
+
+func (e *Engine) CancelTool(toolCallID string) bool {
+	return e.command(toolCommand{
+		generation: e.operationGeneration.Load(),
+		id:         toolCallID,
+		cancel:     true,
+	})
+}
+
+func (e *Engine) command(command toolCommand) bool {
+	select {
+	case e.commands <- command:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event, generation uint64) {
 	defer close(out)
 	defer e.active.Store(false)
 
@@ -215,10 +275,17 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event) {
 			send(Event{Kind: EventTurnDone})
 			return
 		}
-		responses, err := execTools(ctx, tools, calls)
+		responses, complete, err := e.runTools(ctx, tools, calls, generation, send)
 		if err != nil {
-			e.transcript.FinalizeAll()
+			e.finalizeTranscript()
 			send(Event{Kind: EventError, Err: err})
+			return
+		}
+		if !complete {
+			if ctx.Err() == nil {
+				e.finalizeTranscript()
+				send(Event{Kind: EventTurnDone})
+			}
 			return
 		}
 		next = responses
@@ -280,6 +347,7 @@ func (e *Engine) NewConversation() error {
 	e.opts.ConversationID = ""
 	e.opts.MessageHistory = nil
 	e.transcript = NewTranscript()
+	clear(e.sessionGrants)
 	return nil
 }
 
@@ -336,17 +404,196 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 	}
 }
 
-func execTools(ctx context.Context, tools *ToolSet, calls []assistant.Content) ([]assistant.ClientToolResponse, error) {
-	responses := make([]assistant.ClientToolResponse, 0, len(calls))
-	for _, content := range calls {
+// Workers only execute handlers. The engine goroutine owns approvals,
+// transcript changes, and response ordering.
+func (e *Engine) runTools(
+	ctx context.Context,
+	tools *ToolSet,
+	contents []assistant.Content,
+	generation uint64,
+	send func(Event) bool,
+) ([]assistant.ClientToolResponse, bool, error) {
+	work := make([]pendingTool, len(contents))
+	seen := make(map[string]struct{}, len(contents))
+	byID := make(map[string]pendingTool, len(contents))
+	for i, content := range contents {
 		call := toolCallOf(content)
-		result, err := tools.Run(ctx, call)
-		if err != nil {
-			return nil, err
+		if call.ID == "" {
+			return nil, false, errors.New("client tool call has no id")
 		}
-		responses = append(responses, toolResponse(call, result))
+		if _, exists := seen[call.ID]; exists {
+			return nil, false, fmt.Errorf("duplicate client tool call id %q", call.ID)
+		}
+		seen[call.ID] = struct{}{}
+		work[i] = pendingTool{call: call, index: i}
+		byID[call.ID] = work[i]
 	}
-	return responses, nil
+
+	responses := make([]assistant.ClientToolResponse, len(work))
+	pending := make(map[string]pendingTool)
+	running := make(map[string]context.CancelFunc)
+	resolved := make(map[string]bool, len(work))
+	results := make(chan toolDone, len(work))
+	outstanding := len(work)
+
+	emit := func(block Block, ok bool) bool {
+		return !ok || send(Event{
+			Kind: EventBlock,
+			Update: TranscriptUpdate{
+				Blocks:  e.snapshot(),
+				Changed: block,
+			},
+		})
+	}
+	finishBlock := func(item pendingTool, result ToolResult) bool {
+		if resolved[item.call.ID] {
+			return true
+		}
+		resolved[item.call.ID] = true
+		outstanding--
+		e.mu.Lock()
+		block, ok := e.transcript.MarkToolExecuted(item.call.ID, result)
+		e.mu.Unlock()
+		return emit(block, ok)
+	}
+	record := func(item pendingTool, result ToolResult) bool {
+		responses[item.index] = toolResponse(item.call, result)
+		return finishBlock(item, result)
+	}
+	launch := func(item pendingTool, approved bool) bool {
+		toolCtx, cancel := context.WithCancel(ctx)
+		running[item.call.ID] = cancel
+		if approved {
+			e.mu.Lock()
+			block, ok := e.transcript.MarkToolRunning(item.call.ID)
+			e.mu.Unlock()
+			if !emit(block, ok) {
+				cancel()
+				delete(running, item.call.ID)
+				return false
+			}
+		}
+		go func() {
+			result, err := tools.Run(toolCtx, item.call)
+			results <- toolDone{call: item.call, index: item.index, result: result, err: err}
+		}()
+		return true
+	}
+	cancelRunning := func() {
+		for _, cancel := range running {
+			cancel()
+		}
+	}
+	stopRound := func(failed *pendingTool, err error) {
+		cancelRunning()
+		for _, item := range work {
+			if resolved[item.call.ID] {
+				continue
+			}
+			result := cancelledResult()
+			if failed != nil && item.call.ID == failed.call.ID {
+				result = ToolResult{Title: "Tool failed", Output: err.Error(), IsError: true}
+			}
+			finishBlock(item, result)
+		}
+	}
+
+	for _, item := range work {
+		requirement, needsApproval := tools.Approval(item.call)
+		_, granted := e.sessionGrants[requirement.Key]
+		if needsApproval && !granted {
+			item.key = requirement.Key
+			pending[item.call.ID] = item
+			e.mu.Lock()
+			block, ok := e.transcript.MarkAwaitingApproval(item.call.ID, requirement.Prompt)
+			e.mu.Unlock()
+			if !emit(block, ok) {
+				cancelRunning()
+				return nil, false, nil
+			}
+			continue
+		}
+		if !launch(item, false) {
+			cancelRunning()
+			return nil, false, nil
+		}
+	}
+
+	for outstanding > 0 {
+		select {
+		case command := <-e.commands:
+			if command.generation != generation {
+				continue
+			}
+			if command.cancel {
+				if item, ok := pending[command.id]; ok {
+					delete(pending, command.id)
+					if !record(item, cancelledResult()) {
+						cancelRunning()
+						return nil, false, nil
+					}
+					continue
+				}
+				if cancel, ok := running[command.id]; ok {
+					cancel()
+					delete(running, command.id)
+					if !record(byID[command.id], cancelledResult()) {
+						cancelRunning()
+						return nil, false, nil
+					}
+				}
+				continue
+			}
+
+			item, ok := pending[command.id]
+			if !ok {
+				continue
+			}
+			delete(pending, command.id)
+			if command.decision == ApprovalDeny {
+				finishBlock(item, deniedResult())
+				stopRound(nil, nil)
+				return nil, false, nil
+			}
+			if command.decision == ApprovalAllowSession {
+				e.sessionGrants[item.key] = struct{}{}
+			}
+			if !launch(item, true) {
+				cancelRunning()
+				return nil, false, nil
+			}
+			for id, sibling := range pending {
+				if _, granted := e.sessionGrants[sibling.key]; !granted {
+					continue
+				}
+				delete(pending, id)
+				if !launch(sibling, true) {
+					cancelRunning()
+					return nil, false, nil
+				}
+			}
+
+		case done := <-results:
+			if resolved[done.call.ID] {
+				continue
+			}
+			delete(running, done.call.ID)
+			item := work[done.index]
+			if done.err != nil {
+				stopRound(&item, done.err)
+				return nil, false, done.err
+			}
+			if !record(item, done.result) {
+				cancelRunning()
+				return nil, false, nil
+			}
+
+		case <-ctx.Done():
+			cancelRunning()
+			return nil, false, nil
+		}
+	}
+	return responses, true, nil
 }
 
 func toolCallOf(content assistant.Content) ToolCall {

@@ -30,6 +30,49 @@ func NewTranscript() *Transcript {
 // Blocks returns the underlying slice. Callers must treat it as read-only.
 func (t *Transcript) Blocks() []Block { return t.blocks }
 
+func (t *Transcript) MarkAwaitingApproval(id string, prompt ApprovalPrompt) (Block, bool) {
+	p := prompt
+	return t.markTool(id, func(tool *ToolBlock) {
+		tool.Status = ToolAwaitingApproval
+		tool.Approval = &p
+	})
+}
+
+func (t *Transcript) MarkToolRunning(id string) (Block, bool) {
+	return t.markTool(id, func(tool *ToolBlock) {
+		tool.Status = ToolRunning
+		tool.Approval = nil
+	})
+}
+
+func (t *Transcript) MarkToolExecuted(id string, result ToolResult) (Block, bool) {
+	return t.markTool(id, func(tool *ToolBlock) {
+		tool.Approval = nil
+		tool.Status = ToolSuccess
+		if result.IsError {
+			tool.Status = ToolError
+		}
+		if result.Title != "" {
+			tool.Title = result.Title
+		}
+		if result.Output != "" {
+			tool.Output = result.Output
+		}
+	})
+}
+
+func (t *Transcript) markTool(id string, mutate func(*ToolBlock)) (Block, bool) {
+	i, ok := t.index[BlockID{Scope: ScopeTool, Key: id}]
+	if !ok || t.blocks[i].Tool == nil {
+		return Block{}, false
+	}
+	tool := *t.blocks[i].Tool
+	mutate(&tool)
+	t.blocks[i].Tool = &tool
+	t.blocks[i].Rev++
+	return t.blocks[i], true
+}
+
 // AppendUser adds a user message with a locally generated unique id and returns
 // the created block. User blocks are complete on creation (never streamed).
 func (t *Transcript) AppendUser(text string) Block {
