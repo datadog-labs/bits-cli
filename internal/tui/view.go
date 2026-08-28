@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -11,8 +12,10 @@ import (
 )
 
 const (
-	minimumChatWidth  = 12
-	minimumChatHeight = 5
+	minimumChatWidth      = 12
+	minimumChatHeight     = 5
+	minimumApprovalWidth  = 32
+	minimumApprovalHeight = 9
 )
 
 // View lays out the transcript viewport, a status line, and the input. Alt-screen
@@ -27,7 +30,9 @@ func (m *Model) View() tea.View {
 	case ModeTermInit:
 		v.Content = "loading…"
 	case ModeChat:
-		if m.width < minimumChatWidth || m.height < minimumChatHeight {
+		approvalTooSmall := len(m.pendingApprovals) > 0 &&
+			(m.width < minimumApprovalWidth || m.height < minimumApprovalHeight)
+		if m.width < minimumChatWidth || m.height < minimumChatHeight || approvalTooSmall {
 			v.MouseMode = tea.MouseModeNone
 			message := ansi.Truncate("Resize terminal to use Bits", max(1, m.width), "")
 			v.Content = lipgloss.Place(max(1, m.width), max(1, m.height), lipgloss.Center, lipgloss.Center, message)
@@ -47,17 +52,23 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// chatView renders the chat screen: the transcript viewport, the status line,
-// and the input, floating the completion menu as an overlay above the input
-// when it is open.
+// chatView keeps the transcript stable while the composer switches between
+// normal input and tool approval.
 func (m *Model) chatView() string {
-	m.editor.SetPlaceholder(m.promptPlaceholder())
+	composer := m.approvalView()
+	if composer == "" {
+		m.editor.SetPlaceholder(m.promptPlaceholder())
+		composer = m.editor.View()
+	}
 	base := strings.Join([]string{
 		m.list.Render(),
 		m.noticeBar(),
-		m.editor.View(),
+		composer,
 	}, "\n")
 
+	if len(m.pendingApprovals) > 0 {
+		return base
+	}
 	menu := m.editor.MenuView()
 	if menu == "" {
 		return base
@@ -76,6 +87,64 @@ func (m *Model) chatView() string {
 		lipgloss.NewLayer(base),
 		lipgloss.NewLayer(menu).X(x).Y(y).Z(1),
 	).Render()
+}
+
+func (m *Model) approvalView() string {
+	if len(m.pendingApprovals) == 0 || m.pendingApprovals[0].Tool == nil {
+		return ""
+	}
+
+	block := m.pendingApprovals[0]
+	prompt := block.Tool.Approval
+	title := "Run " + block.Tool.Name + "?"
+	detail := ""
+	if prompt != nil {
+		if prompt.Title != "" {
+			title = prompt.Title
+		}
+		detail = prompt.Detail
+	}
+
+	frame := m.styles.Panel.Frame.Padding(0, 1)
+	width := max(1, m.list.Width()-frame.GetHorizontalFrameSize())
+	queue := "Approval required"
+	if count := len(m.pendingApprovals); count > 1 {
+		queue += " · " + strconv.Itoa(count) + " waiting"
+	}
+	lines := []string{
+		m.styles.Panel.Title.Bold(true).Render(queue),
+		m.styles.Text.Body.Render(ansi.Truncate(title, width, "…")),
+	}
+	if detail != "" {
+		lines = append(lines, m.styles.Text.Muted.Render(ansi.Truncate(detail, width, "…")))
+	}
+
+	labels := [...]string{"Deny", "Allow once", "Allow for session"}
+	if width < 48 {
+		labels = [...]string{"Deny", "Once", "Session"}
+	}
+	actions := make([]string, len(labels))
+	for i, label := range labels {
+		text := "  " + label + "  "
+		if i == m.approvalChoice {
+			text = "[ " + label + " ]"
+			actions[i] = m.styles.Selector.Selected.Render(text)
+		} else {
+			actions[i] = m.styles.Selector.Item.Render(text)
+		}
+	}
+	lines = append(lines,
+		ansi.Truncate(strings.Join(actions, " "), width, ""),
+		m.styles.Text.Help.Render(ansi.Truncate("←/→ choose · Enter confirm · Esc deny", width, "")),
+	)
+	return frame.Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m *Model) composerHeight() int {
+	if approval := m.approvalView(); approval != "" {
+		return lipgloss.Height(approval)
+	}
+	return m.editor.Height()
 }
 
 // promptPlaceholder returns the current editor prompt placeholder.

@@ -45,6 +45,12 @@ type (
 // guards against a stale timer clearing a newer notice.
 type noticeExpiredMsg struct{ seq int }
 
+var approvalChoices = [...]agent.ApprovalDecision{
+	agent.ApprovalDeny,
+	agent.ApprovalAllowOnce,
+	agent.ApprovalAllowSession,
+}
+
 // showNotice sets the transient status notice and returns a command that clears
 // it after ttl (defaultNoticeTTL when ttl <= 0). The seq stamps the timer so a
 // later notice is not cleared by an earlier one's timer.
@@ -133,6 +139,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatPhase = chat.PhaseIdle
 		}
 		m.turnEvents = nil
+		m.pendingApprovals = nil
+		m.approvalChoice = 0
 		if m.cancelTurn != nil && !m.cancelRequested {
 			m.cancelTurn() // release the turn/restore context
 		}
@@ -267,6 +275,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	}
+	if len(m.pendingApprovals) > 0 {
+		return m.handleApprovalKey(msg)
+	}
 
 	// While the completion menu is open it owns navigation keys (arrows, tab,
 	// enter to accept, esc to close); route everything to the editor.
@@ -300,6 +311,27 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "left", "shift+tab":
+		m.approvalChoice = (m.approvalChoice + len(approvalChoices) - 1) % len(approvalChoices)
+	case "right", "tab":
+		m.approvalChoice = (m.approvalChoice + 1) % len(approvalChoices)
+	case "d", "esc":
+		m.respondToApproval(agent.ApprovalDeny)
+	case "enter":
+		m.respondToApproval(approvalChoices[m.approvalChoice])
+	}
+	return m, nil
+}
+
+func (m *Model) respondToApproval(decision agent.ApprovalDecision) {
+	if len(m.pendingApprovals) == 0 {
+		return
+	}
+	m.engine.Decide(m.pendingApprovals[0].ToolCallID(), decision)
+}
+
 // submit routes slash commands through their active-turn policy, or starts a
 // turn for ordinary input unless a turn is already running or history is still
 // loading. The user block is added by the engine (it owns the transcript), so
@@ -322,7 +354,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	m.editor.Reset()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text})
+	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools})
 	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.usage = nil
@@ -361,6 +393,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	switch ev.Kind {
 	case agent.EventBlock:
 		m.blocks = ev.Update.Blocks
+		m.updatePendingApprovals()
 		// A still-open text/reasoning block means tokens are arriving. Restored
 		// (Complete) blocks and the bulk restore snapshot (zero Changed) don't
 		// flip the phase, so restore stays in PhaseLoading until its channel closes.
@@ -392,6 +425,22 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	return nil
 }
 
+func (m *Model) updatePendingApprovals() {
+	current := ""
+	if len(m.pendingApprovals) > 0 {
+		current = m.pendingApprovals[0].ToolCallID()
+	}
+	m.pendingApprovals = m.pendingApprovals[:0]
+	for _, block := range m.blocks {
+		if block.Tool != nil && block.Tool.Status == agent.ToolAwaitingApproval {
+			m.pendingApprovals = append(m.pendingApprovals, block)
+		}
+	}
+	if len(m.pendingApprovals) == 0 || m.pendingApprovals[0].ToolCallID() != current {
+		m.approvalChoice = 0
+	}
+}
+
 // setDarkBackground adapts styles to the detected terminal background.
 func (m *Model) setDarkBackground(isDark bool) {
 	if isDark == m.styles.IsDark {
@@ -421,6 +470,6 @@ func (m *Model) refreshViewport() {
 	if m.mode == ModeTermInit {
 		return
 	}
-	m.list.SetHeight(max(1, m.height-1-m.editor.Height()))
+	m.list.SetHeight(max(1, m.height-1-m.composerHeight()))
 	m.list.SetItems(m.blocks)
 }

@@ -31,11 +31,16 @@ const (
 // has persisted a session.
 type EngineFactory func(context.Context) (*agent.Engine, error)
 
+type Config struct {
+	Tools *agent.ToolSet
+}
+
 // Model is the root Bubble Tea model. All state lives here and is mutated only
 // on the tea thread; the sole async source is the engine's event channel.
 type Model struct {
 	// Collaborators the model drives.
 	engine *agent.Engine
+	tools  *agent.ToolSet
 	editor *editor.Editor
 	picker *conversationview.Model
 
@@ -64,6 +69,9 @@ type Model struct {
 	// /new and /clear cancel an active turn/restore once, then wait for its
 	// channel to close before resetting conversation state.
 	pendingNew bool
+
+	pendingApprovals []agent.Block
+	approvalChoice   int
 
 	// Top-level screen; transitions go through setMode.
 	mode Mode
@@ -101,17 +109,18 @@ type Model struct {
 // New builds the root model for the given engine. When the engine is bound to a
 // conversation, the model shows its id immediately and restores its history on
 // Init.
-func New(engine *agent.Engine) *Model {
+func New(engine *agent.Engine, configs ...Config) *Model {
 	m := newShell()
 	m.engine = engine
 	m.convID = engine.ConversationID()
+	m.configure(configs)
 	return m
 }
 
 // NewWithLogin creates the same root TUI in login mode. On successful OAuth,
 // factory builds the engine and this model transitions to chat without ending
 // the Bubble Tea program or leaving the alternate screen.
-func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory EngineFactory) *Model {
+func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory EngineFactory, configs ...Config) *Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -120,7 +129,14 @@ func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory Engine
 	m.startupCtx = ctx
 	m.loginModel = loginModel
 	m.engineFactory = factory
+	m.configure(configs)
 	return m
+}
+
+func (m *Model) configure(configs []Config) {
+	if len(configs) > 0 {
+		m.tools = configs[0].Tools
+	}
 }
 
 func newShell() *Model {
