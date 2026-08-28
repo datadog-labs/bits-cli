@@ -54,6 +54,21 @@ func build(isDark bool, p palette) Theme {
 		SectionGap:       1,
 		FooterSeparator:  "   ",
 	}
+	approvalSurface := lipgloss.Color(p.approvalSurface)
+	approvalBase := lipgloss.NewStyle().Background(approvalSurface)
+	approval := Approval{
+		Prompt: prompt,
+		Block: lipgloss.NewStyle().Background(approvalSurface).
+			Border(inputRule, true, false, true, false).
+			BorderForeground(lipgloss.Color(p.interactive)).
+			BorderBackground(approvalSurface),
+		Marker:   approvalBase.Bold(true).Foreground(lipgloss.Color(p.interactive)),
+		Title:    approvalBase.Bold(true).Foreground(lipgloss.Color(p.text)),
+		Text:     approvalBase.Foreground(lipgloss.Color(p.text)),
+		Detail:   approvalBase.Foreground(lipgloss.Color(p.muted)),
+		Action:   approvalBase.Foreground(lipgloss.Color(p.muted)),
+		Selected: approvalBase.Bold(true).Foreground(lipgloss.Color(p.interactive)),
+	}
 	selector := Selector{
 		Item:           text.Body,
 		Selected:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
@@ -80,6 +95,7 @@ func build(isDark bool, p palette) Theme {
 		Text:      text,
 		Feedback:  feedback,
 		Panel:     panel,
+		Approval:  approval,
 		Selector:  selector,
 		TextInput: textInput,
 		Chat: Chat{

@@ -13,12 +13,13 @@ type palette struct {
 	text      string
 	muted     string
 
-	surface       string
-	surfaceRaised string
-	inputRule     string
-	borderSubtle  string
-	codeSurface   string
-	codeText      string
+	surface         string
+	surfaceRaised   string
+	approvalSurface string
+	inputRule       string
+	borderSubtle    string
+	codeSurface     string
+	codeText        string
 
 	link string
 
@@ -45,6 +46,7 @@ func darkPalette() palette {
 		muted:           "#8C8F99",
 		surface:         "#22252F",
 		surfaceRaised:   "236",
+		approvalSurface: "#2C3142",
 		inputRule:       "#383A40",
 		borderSubtle:    "#474A54",
 		codeSurface:     "#343336",
@@ -74,6 +76,7 @@ func lightPalette() palette {
 		muted:           "#666666",
 		surface:         "#EEF0F3",
 		surfaceRaised:   "#EEF0F3",
+		approvalSurface: "#E2E6EF",
 		inputRule:       "#383A40",
 		borderSubtle:    "#B8BCC4",
 		codeSurface:     "#EEEFF0",
