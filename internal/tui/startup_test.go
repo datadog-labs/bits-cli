@@ -22,7 +22,7 @@ import (
 )
 
 func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
-	loginModel := loginui.New(context.Background(), nil, "")
+	loginModel := loginui.New(context.Background(), nil)
 	factoryCalls := 0
 	root := NewWithLogin(context.Background(), loginModel, func(context.Context) (*agent.Engine, error) {
 		factoryCalls++
@@ -68,7 +68,7 @@ func TestStartupHandoffKeepsOneAltScreenSession(t *testing.T) {
 	output := &synchronizedBuffer{}
 	loginModel := loginui.New(context.Background(), func(context.Context, string, func(loginui.BrowserStatus)) error {
 		return nil
-	}, "")
+	})
 	root := NewWithLogin(context.Background(), loginModel, func(context.Context) (*agent.Engine, error) {
 		return agent.New(fake.New(), assistant.SendOptions{}), nil
 	})
@@ -156,7 +156,7 @@ func waitForOutput(t *testing.T, output *synchronizedBuffer, text string) {
 func TestStartupHandoffTinyTerminalShowsBoundedResizePrompt(t *testing.T) {
 	for _, size := range []struct{ width, height int }{{10, 2}, {24, 4}} {
 		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
-			root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil, ""), func(context.Context) (*agent.Engine, error) {
+			root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil), func(context.Context) (*agent.Engine, error) {
 				return agent.New(fake.New(), assistant.SendOptions{}), nil
 			})
 			_, _ = root.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
@@ -181,7 +181,7 @@ func TestStartupHandoffTinyTerminalShowsBoundedResizePrompt(t *testing.T) {
 
 func TestStartupLoginCompletionIsSingleFlight(t *testing.T) {
 	factoryCalls := 0
-	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil, ""), func(context.Context) (*agent.Engine, error) {
+	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil), func(context.Context) (*agent.Engine, error) {
 		factoryCalls++
 		return agent.New(fake.New(), assistant.SendOptions{}), nil
 	})
@@ -198,7 +198,7 @@ func TestStartupLoginCompletionIsSingleFlight(t *testing.T) {
 
 func TestStartupLoginFactoryErrorQuitsWithStoredError(t *testing.T) {
 	want := errors.New("load persisted login")
-	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil, ""), func(context.Context) (*agent.Engine, error) {
+	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil), func(context.Context) (*agent.Engine, error) {
 		return nil, want
 	})
 	_, cmd := root.Update(loginui.CompletedMsg{})
@@ -216,7 +216,7 @@ func TestControlCAfterCompletedLoginInvalidatesPendingFactory(t *testing.T) {
 	factoryCanceled := make(chan struct{})
 	loginModel := loginui.New(context.Background(), func(context.Context, string, func(loginui.BrowserStatus)) error {
 		return nil
-	}, "")
+	})
 	root := NewWithLogin(context.Background(), loginModel, func(ctx context.Context) (*agent.Engine, error) {
 		close(factoryStarted)
 		<-ctx.Done()
@@ -253,7 +253,7 @@ func TestControlCAfterCompletedLoginInvalidatesPendingFactory(t *testing.T) {
 
 func TestStartupLoginCancellationRemainsProgramExit(t *testing.T) {
 	factoryCalls := 0
-	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil, ""), func(context.Context) (*agent.Engine, error) {
+	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil), func(context.Context) (*agent.Engine, error) {
 		factoryCalls++
 		return nil, nil
 	})
@@ -267,7 +267,7 @@ func TestStartupLoginCancellationRemainsProgramExit(t *testing.T) {
 }
 
 func TestStartupLoginInitializesConversationRestore(t *testing.T) {
-	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil, ""), func(context.Context) (*agent.Engine, error) {
+	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil), func(context.Context) (*agent.Engine, error) {
 		return agent.New(fake.New(), assistant.SendOptions{ConversationID: "conversation-1"}), nil
 	})
 	_, cmd := root.Update(loginui.CompletedMsg{})

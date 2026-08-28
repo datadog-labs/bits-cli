@@ -18,7 +18,7 @@ func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 		t.Skip("set BITS_ASSISTANT_E2E=1 (with DD_API_KEY/DD_APP_KEY) to run assistant e2e tests")
 	}
 	client, err := assistant.NewAPIKeyClient(
-		os.Getenv("DD_SITE_URL"),
+		assistant.DefaultBaseURL,
 		os.Getenv("DD_API_KEY"),
 		os.Getenv("DD_APP_KEY"),
 	)

@@ -218,7 +218,7 @@ func TestBrowserStatusCanAddURLThenReportLauncherFailure(t *testing.T) {
 		close(reported)
 		<-release
 		return nil
-	}, "")
+	})
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	batch := cmd().(tea.BatchMsg)
 	finished := make(chan tea.Msg, 1)
@@ -319,33 +319,29 @@ func TestNormalizeCustomSite(t *testing.T) {
 		{raw: "https://app.datadoghq.eu/", want: "https://app.datadoghq.eu"},
 		{raw: "ACME.US5.DATADOGHQ.COM", want: "https://acme.us5.datadoghq.com"},
 	} {
-		got, err := normalizeCustomSite(test.raw, "")
+		got, err := normalizeCustomSite(test.raw)
 		if err != nil || got != test.want {
 			t.Errorf("normalizeCustomSite(%q) = %q, %v; want %q", test.raw, got, err, test.want)
 		}
 	}
 
-	for _, raw := range []string{"", "http://app.datadoghq.com", "example.com", "app.datadoghq.com/path"} {
-		if _, err := normalizeCustomSite(raw, ""); err == nil {
+	for _, raw := range []string{"", "http://app.datadoghq.com", "example.com", "app.datadoghq.com/path", "app.ddog-gov.com"} {
+		if _, err := normalizeCustomSite(raw); err == nil {
 			t.Errorf("normalizeCustomSite(%q) succeeded", raw)
 		}
 	}
 
 	for _, raw := range []string{"api.us3.datadoghq.com", "https://api.datadoghq.eu"} {
-		if _, err := normalizeCustomSite(raw, ""); err == nil || !strings.Contains(err.Error(), "not its API endpoint") {
+		if _, err := normalizeCustomSite(raw); err == nil || !strings.Contains(err.Error(), "not its API endpoint") {
 			t.Errorf("normalizeCustomSite(%q) error = %v; want API endpoint rejection", raw, err)
 		}
-	}
-
-	if got, err := normalizeCustomSite("app.ddog-gov.com", "gov-client"); err != nil || got != "https://app.ddog-gov.com" {
-		t.Errorf("GovCloud custom site = %q, %v", got, err)
 	}
 }
 
 func newModel(login func(context.Context, string) error) *Model {
 	return New(context.Background(), func(ctx context.Context, site string, _ func(BrowserStatus)) error {
 		return login(ctx, site)
-	}, "")
+	})
 }
 
 func runBatch(t *testing.T, m *Model, cmd tea.Cmd) {
