@@ -577,7 +577,10 @@ func (e *Engine) runTools(
 			if resolved[done.call.ID] {
 				continue
 			}
-			delete(running, done.call.ID)
+			if cancel, ok := running[done.call.ID]; ok {
+				cancel()
+				delete(running, done.call.ID)
+			}
 			item := work[done.index]
 			if done.err != nil {
 				stopRound(&item, done.err)
