@@ -20,9 +20,11 @@ type conversationBackend struct {
 func (*conversationBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {
 	return "", nil
 }
+
 func (b *conversationBackend) UserConversations(ctx context.Context) (*assistant.UserConversationsResponse, error) {
 	return b.list(ctx)
 }
+
 func (b *conversationBackend) ConversationHistory(ctx context.Context, in assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
 	return b.history(ctx, in)
 }
@@ -111,9 +113,7 @@ func TestSwitchConversationCommitIsAtomic(t *testing.T) {
 		return response, nil
 	}}
 	e := engineWithConversation(backend, "old", assistant.AssistantMessage("old", assistant.TextContent("keep")))
-	e.mu.Lock()
 	e.opts.MessageHistory = []json.RawMessage{json.RawMessage(`{"role":"user","content":"stale"}`)}
-	e.mu.Unlock()
 	before := e.Snapshot()
 	result := <-e.SwitchConversation(context.Background(), " "+testConversationID+" ")
 	if result.Err != nil || result.ConversationID != testConversationID || len(result.Blocks) != 2 {
@@ -137,9 +137,7 @@ func TestSwitchConversationCommitIsAtomic(t *testing.T) {
 	if e.ConversationID() != testConversationID || !reflect.DeepEqual(e.Snapshot(), result.Blocks) {
 		t.Fatal("commit did not atomically install candidate")
 	}
-	e.mu.RLock()
 	history := e.opts.MessageHistory
-	e.mu.RUnlock()
 	if history != nil {
 		t.Fatalf("commit retained stale injected message history: %s", history)
 	}
@@ -207,7 +205,7 @@ func TestSwitchConversationDiscardFailureAndCancellationRollback(t *testing.T) {
 func TestSwitchConversationRejectsMalformedHistory(t *testing.T) {
 	for name, response := range map[string]*assistant.ConversationHistoryResponse{
 		"nil response":     nil,
-		"missing envelope": &assistant.ConversationHistoryResponse{},
+		"missing envelope": {},
 		"missing text payload": func() *assistant.ConversationHistoryResponse {
 			r := &assistant.ConversationHistoryResponse{}
 			r.Data.Type = "conversation-history-response"

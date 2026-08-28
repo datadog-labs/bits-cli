@@ -32,6 +32,7 @@ type resumeHistoryReply struct {
 func (b *resumeBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {
 	return "", errors.New("unexpected Send")
 }
+
 func (b *resumeBackend) UserConversations(ctx context.Context) (*assistant.UserConversationsResponse, error) {
 	select {
 	case reply := <-b.lists:
@@ -40,6 +41,7 @@ func (b *resumeBackend) UserConversations(ctx context.Context) (*assistant.UserC
 		return nil, ctx.Err()
 	}
 }
+
 func (b *resumeBackend) ConversationHistory(ctx context.Context, _ assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
 	select {
 	case reply := <-b.histories:

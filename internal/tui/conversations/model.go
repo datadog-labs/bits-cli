@@ -38,9 +38,11 @@ const (
 	OperationOpen
 )
 
-type SelectedMsg struct{ Conversation assistant.ConversationSummary }
-type CancelledMsg struct{}
-type RetryMsg struct{}
+type (
+	SelectedMsg  struct{ Conversation assistant.ConversationSummary }
+	CancelledMsg struct{}
+	RetryMsg     struct{}
+)
 
 type conversationItem struct {
 	summary assistant.ConversationSummary

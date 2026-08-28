@@ -89,7 +89,7 @@ func semanticRoleSamples(width int, sty chat.Styles) []string {
 func toolBlock(status agent.ToolStatus) agent.Block {
 	return agent.Block{
 		Kind: assistant.KindToolResult,
-		Tool: &agent.ToolCall{
+		Tool: &agent.ToolBlock{
 			Name:   "search_logs",
 			Input:  `{"query":"timeout"}`,
 			Output: "ok: 4 results",

@@ -18,6 +18,7 @@ type ToolStatus int
 const (
 	ToolUnknown ToolStatus = iota
 	ToolRunning
+	ToolAwaitingApproval
 	ToolSuccess
 	ToolError
 )
@@ -37,8 +38,8 @@ func ToolStatusOf(s string) ToolStatus {
 	}
 }
 
-// ToolCall is the aggregated state of a tool call+result block.
-type ToolCall struct {
+// ToolBlock is the aggregated state of a tool call and its result.
+type ToolBlock struct {
 	Name         string
 	Input        string
 	Output       string
@@ -46,14 +47,15 @@ type ToolCall struct {
 	Title        string
 	Detail       string
 	IsClientSide bool
+	Approval     *ApprovalPrompt
 }
 
-// ToolCallOf builds the aggregated view of a tool content block.
-func ToolCallOf(tp *assistant.ToolPayload) ToolCall {
+// ToolBlockOf builds the aggregated view of a tool content block.
+func ToolBlockOf(tp *assistant.ToolPayload) ToolBlock {
 	if tp == nil {
-		return ToolCall{}
+		return ToolBlock{}
 	}
-	tc := ToolCall{
+	tc := ToolBlock{
 		Status:       ToolStatusOf(tp.Status),
 		Title:        tp.Title,
 		IsClientSide: tp.IsClientSide,
@@ -86,7 +88,7 @@ type Block struct {
 
 	Markdown  *assistant.MarkdownPayload  // KindText: assistant answer or user prompt
 	Thinking  *assistant.ThinkingPayload  // KindReasoning: model thinking
-	Tool      *ToolCall                   // KindToolCall/KindToolResult: merged call+result
+	Tool      *ToolBlock                  // KindToolCall/KindToolResult: merged call+result
 	Widget    *assistant.WidgetPayload    // KindWidget
 	Dashboard *assistant.DashboardPayload // KindDashboard
 	Progress  *assistant.ProgressPayload  // KindProgress
@@ -98,6 +100,13 @@ type BlockID struct {
 	Scope BlockScope
 	Key   string
 	Kind  assistant.ContentKind
+}
+
+func (b Block) ToolCallID() string {
+	if b.ID.Scope == ScopeTool {
+		return b.ID.Key
+	}
+	return ""
 }
 
 // BlockIDOf derives the transcript key for a streamed message: the shared

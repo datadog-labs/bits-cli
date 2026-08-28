@@ -153,7 +153,7 @@ func renderTool(it agent.Block, width int, sty Styles) string {
 	return strings.Join(lines, "\n")
 }
 
-func toolName(t *agent.ToolCall) string {
+func toolName(t *agent.ToolBlock) string {
 	if t.Name == "" {
 		return "tool"
 	}
@@ -183,6 +183,8 @@ func statusParts(s agent.ToolStatus, sty Styles) (glyph, label string, style lip
 	switch s {
 	case agent.ToolRunning:
 		return "•", "running", sty.StatusRunning
+	case agent.ToolAwaitingApproval:
+		return "•", "awaiting approval", sty.StatusRunning
 	case agent.ToolSuccess:
 		return "✓", "success", sty.StatusSuccess
 	case agent.ToolError:

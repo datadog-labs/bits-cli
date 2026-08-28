@@ -194,7 +194,7 @@ func (e *Engine) switchConversation(ctx context.Context, conversationID string, 
 	temporary := NewTranscript()
 	for i, message := range response.Data.Attributes.Messages {
 		if err := validateHistoryMessage(message); err != nil {
-			publishTerminal(ConversationSwitchResult{Err: fmt.Errorf("%w: message %d: %v", ErrMalformedHistory, i, err)})
+			publishTerminal(ConversationSwitchResult{Err: fmt.Errorf("%w: message %d: %w", ErrMalformedHistory, i, err)})
 			return
 		}
 		temporary.AppendMessage(message)
@@ -222,11 +222,9 @@ func (e *Engine) switchConversation(ctx context.Context, conversationID string, 
 		} else {
 			// The response's data.id is intentionally ignored: it is a fresh
 			// response UUID, not the selected conversation identity.
-			e.mu.Lock()
 			e.opts.ConversationID = conversationID
 			e.opts.MessageHistory = nil
 			e.transcript = temporary
-			e.mu.Unlock()
 		}
 	}
 	// candidate.done is the completion barrier observed by Commit/Discard. The
@@ -235,6 +233,8 @@ func (e *Engine) switchConversation(ctx context.Context, conversationID string, 
 	close(candidate.done)
 }
 
+// Snapshot returns a copy of the current transcript. Call it only while the
+// engine is idle or after synchronizing with the operation's result channel.
 func (e *Engine) Snapshot() []Block     { return e.snapshot() }
 func (e *Engine) OperationActive() bool { return e.active.Load() }
 
@@ -248,7 +248,7 @@ func validConversationID(id string) bool {
 		if i == 8 || i == 13 || i == 18 || i == 23 {
 			continue
 		}
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 			return false
 		}
 	}
