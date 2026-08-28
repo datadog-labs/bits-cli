@@ -176,6 +176,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.mode == ModeConversations {
 		return m, m.updateConversationPicker(msg)
 	}
+	if len(m.pendingApprovals) > 0 {
+		return m, nil
+	}
 
 	// Cursor blink, paste, and other input messages go to the editor; a paste
 	// can change its height, so relayout.

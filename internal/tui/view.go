@@ -137,7 +137,7 @@ func (m *Model) approvalView() string {
 		ansi.Truncate(strings.Join(actions, " "), width, ""),
 		m.styles.Text.Help.Render(ansi.Truncate("←/→ choose · Enter confirm · Esc deny", width, "")),
 	)
-	return frame.Width(width).Render(strings.Join(lines, "\n"))
+	return frame.Width(m.list.Width()).Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) composerHeight() int {
