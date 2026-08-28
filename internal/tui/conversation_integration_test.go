@@ -126,6 +126,28 @@ func TestResumeListErrorRetryEmptyAndCancelPreserveChat(t *testing.T) {
 	}
 }
 
+func TestPickerBlursEditorUntilClosed(t *testing.T) {
+	backend := newResumeBackend()
+	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
+	m.resize(50, 12)
+	_ = m.editor.Focus()
+	if !m.editor.Focused() {
+		t.Fatal("editor not focused before opening the picker")
+	}
+
+	backend.lists <- resumeListReply{response: summaries()}
+	wait := m.openConversationPicker()
+	_, _ = m.Update(runResumeCmd(t, wait))
+	if m.mode != ModeConversations || m.editor.Focused() {
+		t.Fatalf("picker did not take focus from the editor: mode=%v focused=%v", m.mode, m.editor.Focused())
+	}
+
+	_, _ = m.Update(conversationview.CancelledMsg{})
+	if m.mode != ModeChat || !m.editor.Focused() {
+		t.Fatalf("closing the picker did not restore editor focus: mode=%v focused=%v", m.mode, m.editor.Focused())
+	}
+}
+
 func TestCtrlCCancelsResumeOperationAndQuits(t *testing.T) {
 	backend := newResumeBackend()
 	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})

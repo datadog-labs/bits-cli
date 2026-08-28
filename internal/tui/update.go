@@ -83,12 +83,81 @@ func waitEvent(generation uint64, ch <-chan agent.Event) tea.Cmd {
 	}
 }
 
-// Update is the single message handler. Only this thread touches Model state.
+// focus identifies which surface currently owns keyboard input. It is derived
+// from mode and turn state, never stored, so input routing and the editor's
+// cursor cannot disagree about who is active.
+type focus int
+
+const (
+	focusEditor   focus = iota // transcript scroll + text input (and its completion menu)
+	focusApproval              // a tool approval is pending
+	focusPicker                // the /resume conversation picker
+	focusLogin                 // startup OAuth
+)
+
+func (m *Model) focus() focus {
+	switch m.mode {
+	case ModeLogin:
+		return focusLogin
+	case ModeConversations:
+		return focusPicker
+	default: // ModeChat, ModeTermInit
+		if len(m.pendingApprovals) > 0 {
+			return focusApproval
+		}
+		return focusEditor
+	}
+}
+
+// reconcileFocus makes the editor's focus (and thus its cursor/blink) match the
+// current input owner. Called once at the end of Update so every state change
+// reconciles uniformly: the editor blinks only while it owns input and stays
+// dark — ignoring keys and pastes — whenever the approval, picker, or login
+// owns it. It returns the blink command on the transition back into input.
+func (m *Model) reconcileFocus() tea.Cmd {
+	want := m.focus() == focusEditor
+	if want == m.editor.Focused() {
+		return nil
+	}
+	if want {
+		return m.editor.Focus()
+	}
+	m.editor.Blur()
+	return nil
+}
+
+// Update is the single message handler. Only this thread touches Model state. It
+// routes the message to the owning surface, then reconciles editor focus so the
+// cursor always tracks the active surface.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.mode == ModeLogin {
 		return m.updateLogin(msg)
 	}
+	// Global quit wins over every surface and must not reconcile focus (we are
+	// tearing down); the picker's in-flight request is abandoned on the way out.
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+		return m.quit()
+	}
+	next, cmd := m.dispatch(msg)
+	return next, tea.Batch(cmd, m.reconcileFocus())
+}
 
+func (m *Model) quit() (tea.Model, tea.Cmd) {
+	// /resume may own a live list/history request that must be cancelled before
+	// the application exits.
+	if m.focus() == focusPicker {
+		m.abandonConversationPicker()
+	}
+	if m.cancelTurn != nil {
+		m.cancelTurn()
+	}
+	return m, tea.Quit
+}
+
+// dispatch routes one message to the owning surface. Non-input messages (resize,
+// engine events, conversation results, notices) are handled directly; keyboard,
+// mouse, and editor-bound input are routed by focus().
+func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
@@ -99,29 +168,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
-		// Global quit must win over mode-specific input routing. In particular,
-		// /resume may own a live list/history request that must be cancelled
-		// before the application exits.
-		if msg.String() == "ctrl+c" && m.mode == ModeConversations {
-			m.abandonConversationPicker()
-			return m.handleKey(msg)
-		}
-		if m.mode == ModeConversations {
-			return m, m.updateConversationPicker(msg)
-		}
 		return m.handleKey(msg)
 
 	case tea.MouseWheelMsg:
-		if m.mode == ModeConversations {
-			return m, m.updateConversationPicker(msg)
-		}
-		switch msg.Button {
-		case tea.MouseWheelUp:
-			m.list.ScrollBy(-mouseWheelDelta)
-		case tea.MouseWheelDown:
-			m.list.ScrollBy(mouseWheelDelta)
-		}
-		return m, nil
+		return m, m.handleMouseWheel(msg)
 
 	case turnEventMsg:
 		if !m.acceptRemoteMessage(msg.generation) {
@@ -132,25 +182,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, waitEvent(msg.generation, m.turnEvents))
 
 	case turnClosedMsg:
-		if !m.acceptRemoteMessage(msg.generation) {
-			return m, nil
-		}
-		if m.chatPhase != chat.PhaseError {
-			m.chatPhase = chat.PhaseIdle
-		}
-		m.turnEvents = nil
-		m.pendingApprovals = nil
-		m.approvalChoice = 0
-		if m.cancelTurn != nil && !m.cancelRequested {
-			m.cancelTurn() // release the turn/restore context
-		}
-		m.cancelTurn = nil
-		m.cancelRequested = false
-		if m.pendingNew {
-			m.pendingNew = false
-			return m, m.startNewConversation()
-		}
-		return m, nil
+		return m.handleTurnClosed(msg)
 
 	case conversationListResultMsg:
 		return m, m.applyConversationListResult(msg)
@@ -173,18 +205,51 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if m.mode == ModeConversations {
+
+	if m.focus() == focusPicker {
 		return m, m.updateConversationPicker(msg)
 	}
-	if len(m.pendingApprovals) > 0 {
-		return m, nil
-	}
-
-	// Cursor blink, paste, and other input messages go to the editor; a paste
-	// can change its height, so relayout.
+	// Paste, cursor blink, and other editor-bound input; a paste can change the
+	// editor's height, so relayout. When the editor is not the focus it is
+	// blurred and ignores these, showing no cursor.
 	cmd := m.editor.Update(msg)
 	m.refreshViewport()
 	return m, cmd
+}
+
+func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
+	if m.focus() == focusPicker {
+		return m.updateConversationPicker(msg)
+	}
+	switch msg.Button {
+	case tea.MouseWheelUp:
+		m.list.ScrollBy(-mouseWheelDelta)
+	case tea.MouseWheelDown:
+		m.list.ScrollBy(mouseWheelDelta)
+	}
+	return nil
+}
+
+func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
+	if !m.acceptRemoteMessage(msg.generation) {
+		return m, nil
+	}
+	if m.chatPhase != chat.PhaseError {
+		m.chatPhase = chat.PhaseIdle
+	}
+	m.turnEvents = nil
+	m.pendingApprovals = nil
+	m.approvalChoice = 0
+	if m.cancelTurn != nil && !m.cancelRequested {
+		m.cancelTurn() // release the turn/restore context
+	}
+	m.cancelTurn = nil
+	m.cancelRequested = false
+	if m.pendingNew {
+		m.pendingNew = false
+		return m, m.startNewConversation()
+	}
+	return m, nil
 }
 
 func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -271,17 +336,22 @@ func (m *Model) stopStartup() {
 	}
 }
 
+// handleKey routes a keypress to the surface that owns input. Global quit is
+// handled earlier in Update.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "ctrl+c" {
-		if m.cancelTurn != nil {
-			m.cancelTurn()
-		}
-		return m, tea.Quit
-	}
-	if len(m.pendingApprovals) > 0 {
+	switch m.focus() {
+	case focusPicker:
+		return m, m.updateConversationPicker(msg)
+	case focusApproval:
 		return m.handleApprovalKey(msg)
+	default:
+		return m.handleEditorKey(msg)
 	}
+}
 
+// handleEditorKey handles keys while the editor owns input. The completion menu,
+// when open, is a sub-state of the editor and intercepts navigation keys.
+func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// While the completion menu is open it owns navigation keys (arrows, tab,
 	// enter to accept, esc to close); route everything to the editor.
 	if m.editor.MenuOpen() {
@@ -320,7 +390,7 @@ func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.approvalChoice = (m.approvalChoice + len(approvalChoices) - 1) % len(approvalChoices)
 	case "right", "tab":
 		m.approvalChoice = (m.approvalChoice + 1) % len(approvalChoices)
-	case "d", "esc":
+	case "esc":
 		m.respondToApproval(agent.ApprovalDeny)
 	case "enter":
 		m.respondToApproval(approvalChoices[m.approvalChoice])

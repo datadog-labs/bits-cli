@@ -41,6 +41,37 @@ func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendO
 	return "conversation-1", emit(response)
 }
 
+func TestApprovalBlursEditorUntilResolved(t *testing.T) {
+	backend := &approvalBackend{t: t}
+	fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
+	tools, err := agent.NewToolSet(localtime.New(func() time.Time { return fixedTime }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model.Init() // focuses the editor, starting the cursor blink
+	model.resize(80, 24)
+	if !model.editor.Focused() {
+		t.Fatal("editor not focused after init")
+	}
+
+	setConversationInput(model, "What time is it?")
+	_, _ = model.submit()
+	for len(model.pendingApprovals) == 0 {
+		msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
+		_, _ = model.Update(msg)
+	}
+	if model.editor.Focused() {
+		t.Fatal("editor stayed focused while an approval owned the composer")
+	}
+
+	_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape}) // deny
+	drainConversationRemote(t, model)
+	if !model.editor.Focused() {
+		t.Fatal("editor not refocused after the approval resolved")
+	}
+}
+
 func TestToolApprovalComposerE2E(t *testing.T) {
 	tests := []struct {
 		name      string
