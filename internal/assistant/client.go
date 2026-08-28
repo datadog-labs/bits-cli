@@ -479,19 +479,6 @@ func isKeepalive(ar AssistantResponse) bool {
 		ar.Data.Attributes.Prompt == ""
 }
 
-// ToolExecutor runs a client tool given its arguments as the raw JSON string
-// the model produced (metadata.input), and returns the tool output that is
-// echoed back to the model. A non-nil error is reported to the model as a
-// failed tool result rather than aborting the loop.
-type ToolExecutor func(ctx context.Context, input string) (output string, err error)
-
-// Tool bundles a client-side tool definition with the function that executes
-// it locally.
-type Tool struct {
-	ClientTool
-	Run ToolExecutor
-}
-
 // ConversationHistory fetches the full message history for a conversation.
 func (c *Client) ConversationHistory(ctx context.Context, in ConversationHistoryInput) (*ConversationHistoryResponse, error) {
 	resp, err := c.do(ctx, http.MethodGet, "/api/v2/assistant/conversation-history/"+in.ConversationID, nil)

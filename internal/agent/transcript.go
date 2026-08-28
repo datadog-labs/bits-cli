@@ -169,7 +169,7 @@ func (t *Transcript) appendReasoning(msg assistant.Message) (Block, bool) {
 // upsertTool creates a tool block on the call and merges the result into it.
 func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 	id := BlockIDOf(msg)
-	tc := ToolCallOf(msg.Content.Tool)
+	tc := ToolBlockOf(msg.Content.Tool)
 	if i, ok := t.index[id]; ok {
 		// Merge into a copy of the current aggregate, then swap the pointer, so
 		// a snapshot already sharing the old pointer is not mutated.

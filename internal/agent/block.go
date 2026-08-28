@@ -37,8 +37,8 @@ func ToolStatusOf(s string) ToolStatus {
 	}
 }
 
-// ToolCall is the aggregated state of a tool call+result block.
-type ToolCall struct {
+// ToolBlock is the aggregated state of a tool call and its result.
+type ToolBlock struct {
 	Name         string
 	Input        string
 	Output       string
@@ -48,12 +48,12 @@ type ToolCall struct {
 	IsClientSide bool
 }
 
-// ToolCallOf builds the aggregated view of a tool content block.
-func ToolCallOf(tp *assistant.ToolPayload) ToolCall {
+// ToolBlockOf builds the aggregated view of a tool content block.
+func ToolBlockOf(tp *assistant.ToolPayload) ToolBlock {
 	if tp == nil {
-		return ToolCall{}
+		return ToolBlock{}
 	}
-	tc := ToolCall{
+	tc := ToolBlock{
 		Status:       ToolStatusOf(tp.Status),
 		Title:        tp.Title,
 		IsClientSide: tp.IsClientSide,
@@ -86,7 +86,7 @@ type Block struct {
 
 	Markdown  *assistant.MarkdownPayload  // KindText: assistant answer or user prompt
 	Thinking  *assistant.ThinkingPayload  // KindReasoning: model thinking
-	Tool      *ToolCall                   // KindToolCall/KindToolResult: merged call+result
+	Tool      *ToolBlock                  // KindToolCall/KindToolResult: merged call+result
 	Widget    *assistant.WidgetPayload    // KindWidget
 	Dashboard *assistant.DashboardPayload // KindDashboard
 	Progress  *assistant.ProgressPayload  // KindProgress

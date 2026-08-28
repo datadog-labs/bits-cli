@@ -89,13 +89,9 @@ func New(b Backend, opts assistant.SendOptions) *Engine {
 	}
 }
 
-// TurnInput is everything needed to start one turn. Tools are the client tools
-// permitted for this turn; the caller resolves them from its permission model
-// each time. They are fixed for the whole turn, including client-tool
-// round-trips.
 type TurnInput struct {
 	Message string
-	Tools   []assistant.Tool
+	Tools   *ToolSet
 }
 
 // StartTurn runs one user turn (plus any client-tool round-trips) in a goroutine
@@ -126,13 +122,8 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event) {
 	defer close(out)
 	defer e.active.Store(false)
 
-	// Tools are fixed for the whole turn: index them once by name for execution
-	// and derive the definitions resent to the server each round-trip.
-	tools := make(map[string]assistant.Tool, len(in.Tools))
-	for _, t := range in.Tools {
-		tools[t.Name] = t
-	}
-	defs := toolDefs(in.Tools)
+	tools := in.Tools
+	defs := tools.Definitions()
 
 	// send is cancellation-aware so a stalled consumer during cancel can't
 	// wedge the engine goroutine.
@@ -224,7 +215,13 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event) {
 			send(Event{Kind: EventTurnDone})
 			return
 		}
-		next = execTools(ctx, tools, calls)
+		responses, err := execTools(ctx, tools, calls)
+		if err != nil {
+			e.transcript.FinalizeAll()
+			send(Event{Kind: EventError, Err: err})
+			return
+		}
+		next = responses
 	}
 	e.finalizeTranscript()
 	send(Event{Kind: EventError, Err: ErrMaxTurns})
@@ -339,55 +336,53 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 	}
 }
 
-// toolDefs returns the client tool definitions to resend each turn (nil when
-// none are registered).
-func toolDefs(tools []assistant.Tool) []assistant.ClientTool {
-	if len(tools) == 0 {
-		return nil
+func execTools(ctx context.Context, tools *ToolSet, calls []assistant.Content) ([]assistant.ClientToolResponse, error) {
+	responses := make([]assistant.ClientToolResponse, 0, len(calls))
+	for _, content := range calls {
+		call := toolCallOf(content)
+		result, err := tools.Run(ctx, call)
+		if err != nil {
+			return nil, err
+		}
+		responses = append(responses, toolResponse(call, result))
 	}
-	defs := make([]assistant.ClientTool, 0, len(tools))
-	for _, t := range tools {
-		defs = append(defs, t.ClientTool)
-	}
-	return defs
+	return responses, nil
 }
 
-// execTools runs each client tool call locally and builds the responses to post
-// back. Unregistered tools answer with an error result rather than aborting the
-// loop.
-func execTools(ctx context.Context, tools map[string]assistant.Tool, calls []assistant.Content) []assistant.ClientToolResponse {
-	responses := make([]assistant.ClientToolResponse, 0, len(calls))
-	for _, call := range calls {
-		var name, input string
-		if call.Tool != nil && call.Tool.Metadata != nil {
-			name, input = call.Tool.Metadata.Name, call.Tool.Metadata.Input
-		}
-		toolCallID := ""
-		if call.Tool != nil {
-			toolCallID = call.Tool.ToolCallID
-		}
-		resp := assistant.ClientToolResponse{
-			Type:       "client_tool_response",
-			ToolCallID: toolCallID,
-			Status:     assistant.ToolStatusSuccess,
-			Metadata:   assistant.ClientToolMetadata{Name: name, Input: input},
-		}
-		switch tool, ok := tools[name]; {
-		case !ok:
-			resp.Status = assistant.ToolStatusError
-			resp.Title = "Unknown tool"
-			resp.Metadata.Output = "no client tool named " + name + " is registered"
-		default:
-			if out, err := tool.Run(ctx, input); err != nil {
-				resp.Status = assistant.ToolStatusError
-				resp.Title = "Tool error"
-				resp.Metadata.Output = err.Error()
-			} else {
-				resp.Title = "Ran " + name
-				resp.Metadata.Output = out
-			}
-		}
-		responses = append(responses, resp)
+func toolCallOf(content assistant.Content) ToolCall {
+	var call ToolCall
+	if content.Tool == nil {
+		return call
 	}
-	return responses
+	call.ID = content.Tool.ToolCallID
+	if content.Tool.Metadata != nil {
+		call.Name = content.Tool.Metadata.Name
+		call.Input = content.Tool.Metadata.Input
+	}
+	return call
+}
+
+func toolResponse(call ToolCall, result ToolResult) assistant.ClientToolResponse {
+	title := result.Title
+	if title == "" {
+		title = call.Name
+		if title == "" {
+			title = "tool"
+		}
+	}
+	response := assistant.ClientToolResponse{
+		Type:       "client_tool_response",
+		ToolCallID: call.ID,
+		Status:     assistant.ToolStatusSuccess,
+		Title:      title,
+		Metadata: assistant.ClientToolMetadata{
+			Name:   call.Name,
+			Input:  call.Input,
+			Output: result.Output,
+		},
+	}
+	if result.IsError {
+		response.Status = assistant.ToolStatusError
+	}
+	return response
 }

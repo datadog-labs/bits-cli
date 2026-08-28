@@ -153,7 +153,7 @@ func renderTool(it agent.Block, width int, sty Styles) string {
 	return strings.Join(lines, "\n")
 }
 
-func toolName(t *agent.ToolCall) string {
+func toolName(t *agent.ToolBlock) string {
 	if t.Name == "" {
 		return "tool"
 	}
