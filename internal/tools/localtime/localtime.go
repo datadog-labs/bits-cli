@@ -15,9 +15,8 @@ const Name = "get_local_time"
 func New(now func() time.Time) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:             Name,
-			Description:      "Get the current time and time zone from this local Bits CLI process.",
-			RequiresApproval: assistant.ToolApprovalYes,
+			Name:        Name,
+			Description: "Get the current time and time zone from this local Bits CLI process.",
 			InputSchema: map[string]any{
 				"type":                 "object",
 				"properties":           map[string]any{},

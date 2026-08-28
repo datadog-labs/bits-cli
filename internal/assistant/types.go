@@ -231,20 +231,12 @@ type ClientTool struct {
 	// IsAvailable reports whether the tool is usable on the current page. Defaults
 	// to true server-side; set the pointer to send false explicitly.
 	IsAvailable *bool `json:"is_available,omitempty"`
-	// RequiresApproval gates execution behind a user approval prompt. One of the
-	// ToolApproval* constants; empty means the server default (ToolApprovalNo).
-	RequiresApproval ToolApproval `json:"requires_approval,omitempty"`
+
+	// RequiresApproval is intentionally not modeled: it drives a server-side
+	// approval gate that conflicts with our client-side approval.
+	//
+	// RequiresApproval ToolApproval `json:"requires_approval,omitempty"`
 }
-
-// ToolApproval controls whether a client tool requires user approval before
-// execution.
-type ToolApproval string
-
-const (
-	ToolApprovalNo      ToolApproval = "no"      // never prompt
-	ToolApprovalYes     ToolApproval = "yes"     // always prompt before running
-	ToolApprovalRuntime ToolApproval = "runtime" // decide per-invocation from the input
-)
 
 // MarkdownContent is a nested markdown display block ({type, content}). Used as
 // the optional display body on a ClientToolResponse and on tool call/response
