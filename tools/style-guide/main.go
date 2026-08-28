@@ -1,6 +1,6 @@
 // Command style-guide opens the dev-only style catalog: a Bubble Tea page that
-// renders every text attribute, semantic style role, markdown element, and color
-// token the chat TUI uses, at live terminal width with a dark/light toggle. It
+// renders shared components, text attributes, semantic roles, markdown elements,
+// and color tokens at live terminal width with a dark/light toggle. It
 // touches no engine, backend, network, or auth.
 //
 // Run it with:

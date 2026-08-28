@@ -4,11 +4,14 @@ import (
 	"image/color"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/lipgloss/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/components"
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 // sampleText is representative prose used to show text attributes and roles.
@@ -16,17 +19,20 @@ const sampleText = "The quick brown fox jumps over the lazy dog."
 
 // renderGroup renders one page's body: its samples joined by delimiter lines,
 // with an end-of-content marker so reaching the bottom is obvious.
-func renderGroup(g group, width int, sty chat.Styles, isDark bool) string {
+func renderGroup(g group, width int, theme styles.Theme) string {
+	sty := chat.StylesFor(theme)
 	var samples []string
 	switch g {
 	case groupTextAttrs:
 		samples = textAttrSamples()
 	case groupSemanticRoles:
 		samples = semanticRoleSamples(width, sty)
+	case groupSharedComponents:
+		samples = sharedComponentSamples(width, theme)
 	case groupMarkdown:
-		samples = markdownSamples(width, isDark)
+		samples = markdownSamples(width, theme.IsDark)
 	case groupColorTokens:
-		samples = colorTokenSamples(sty)
+		samples = colorTokenSamples(theme)
 	default:
 		// numGroups is a count sentinel and is never rendered.
 	}
@@ -109,12 +115,68 @@ func markdownSamples(width int, isDark bool) []string {
 	return out
 }
 
-func colorTokenSamples(sty chat.Styles) []string {
+func sharedComponentSamples(width int, theme styles.Theme) []string {
+	panel := components.NewPanel(theme.Panel)
+	panelContent := components.PanelContent{
+		Title:          "Choose your Datadog site",
+		Dismiss:        "esc ×",
+		Body:           func(int) string { return theme.Text.Muted.Render("Select the site where your organization lives.") },
+		FooterLeft:     "↑/↓ navigate",
+		FooterRight:    "enter to continue",
+		CompactTitle:   "Sign in to Bits",
+		CompactMessage: "Resize the terminal to continue.",
+		TinyMessage:    "Resize to view panel",
+	}
+
+	selector := components.NewSelector([]components.Choice{
+		{Label: "US1", Detail: "app.datadoghq.com"},
+		{Label: "US3", Detail: "us3.datadoghq.com"},
+		{Label: "Custom", Detail: "Enter another domain"},
+	}, theme.Selector)
+	selector.SetIndex(1)
+
+	focused := textinput.New()
+	focused.SetValue("acme.us3.datadoghq.com")
+	focused.SetStyles(theme.TextInput)
+	focused.Focus()
+	blurred := textinput.New()
+	blurred.Placeholder = "your-org.datadoghq.com"
+	blurred.SetStyles(theme.TextInput)
+	blurred.Blur()
+
+	return []string{
+		renderSample("Text roles", lipgloss.JoinVertical(lipgloss.Left,
+			theme.Text.Body.Render("Body text"),
+			theme.Text.Muted.Render("Muted metadata"),
+			theme.Text.Help.Render("Keyboard help"),
+		)),
+		renderSample("Feedback states", lipgloss.JoinVertical(lipgloss.Left,
+			theme.Feedback.Progress.Render("⠋  Waiting for Datadog"),
+			theme.Feedback.Success.Render("✓  Authentication complete"),
+			theme.Feedback.Error.Render("Login did not complete"),
+		)),
+		renderSample("Text input — focused / blurred", focused.View()+"\n"+blurred.View()),
+		renderSample("Panel — full", panel.View(width, 16, panelContent)),
+		renderSample("Panel — compact", panel.View(min(width, 32), 6, panelContent)),
+		renderSample("Panel — tiny", panel.View(min(width, 18), 2, panelContent)),
+		renderSample("Selector — selected", selector.View(width)),
+		renderSample("Selector — narrow", selector.View(min(width, 26))),
+	}
+}
+
+func colorTokenSamples(theme styles.Theme) []string {
+	sty := chat.StylesFor(theme)
 	tokens := []struct {
 		label string
 		color color.Color
 	}{
-		{"AI primary (UserMarker/ToolName fg)", sty.ToolName.GetForeground()},
+		{"Input surface", theme.Input.Block.GetBackground()},
+		{"Input rule", theme.Input.Block.GetBorderTopForeground()},
+		{"Editor menu item fg", theme.Editor.MenuItem.GetForeground()},
+		{"Editor menu item bg", theme.Editor.MenuItem.GetBackground()},
+		{"Editor menu selected fg", theme.Editor.MenuSelected.GetForeground()},
+		{"Editor menu selected bg", theme.Editor.MenuSelected.GetBackground()},
+		{"Interactive accent (UserMarker/ToolName fg)", sty.ToolName.GetForeground()},
 		{"Tool detail fg", sty.ToolDetail.GetForeground()},
 		{"Status running fg", sty.StatusRunning.GetForeground()},
 		{"Status success fg", sty.StatusSuccess.GetForeground()},
@@ -124,6 +186,14 @@ func colorTokenSamples(sty chat.Styles) []string {
 		{"Notice info bg", sty.NoticeInfo.GetBackground()},
 		{"Notice warn bg", sty.NoticeWarn.GetBackground()},
 		{"Notice error bg", sty.NoticeError.GetBackground()},
+		{"Text body fg", theme.Text.Body.GetForeground()},
+		{"Text muted/help fg", theme.Text.Muted.GetForeground()},
+		{"Panel border", theme.Panel.Frame.GetBorderTopForeground()},
+		{"Selector selected fg", theme.Selector.Selected.GetForeground()},
+		{"Feedback progress fg", theme.Feedback.Progress.GetForeground()},
+		{"Feedback error fg", theme.Feedback.Error.GetForeground()},
+		{"Feedback success fg", theme.Feedback.Success.GetForeground()},
+		{"Text input cursor", theme.TextInput.Cursor.Color},
 		// Glamour-side markdown tokens, exposed on chat.Styles so this page shows
 		// every active color token, not just the lipgloss ones.
 		{"Markdown heading (glamour secondary)", sty.MarkdownHeading},

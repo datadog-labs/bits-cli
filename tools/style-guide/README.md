@@ -1,13 +1,13 @@
 # style-guide
 
-A dev-only Bubble Tea page that catalogs the chat TUI's visual language: every
-text attribute, semantic style role, markdown element, and color token, rendered
+A dev-only Bubble Tea catalog for the TUI design system: shared components,
+text attributes, semantic roles, markdown elements, and color tokens, rendered
 at live terminal width with a dark/light toggle. It has no engine, backend,
 network, or auth.
 
-It imports the real `internal/tui/chat` styles (`chat.DefaultStyles`,
-`chat.RenderBlock`, `chat.RenderMarkdown`), so what you see is exactly what a
-transcript renders — no copied style values that could drift.
+It imports the real shared theme, panel, selector, and chat renderers, so what
+you see is exactly what production screens render — no copied style values that
+could drift.
 
 ## Run
 

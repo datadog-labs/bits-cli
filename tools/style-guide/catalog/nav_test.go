@@ -12,6 +12,12 @@ func TestGroupCycle(t *testing.T) {
 	if nextGroup(groupTextAttrs) != groupSemanticRoles {
 		t.Fatal("nextGroup should advance")
 	}
+	if nextGroup(groupSemanticRoles) != groupSharedComponents || nextGroup(groupSharedComponents) != groupMarkdown {
+		t.Fatal("shared components should sit between semantic roles and markdown")
+	}
+	if prevGroup(groupMarkdown) != groupSharedComponents {
+		t.Fatal("previous from markdown should return to shared components")
+	}
 }
 
 func TestClampOffset(t *testing.T) {

@@ -3,7 +3,7 @@ package catalog
 import (
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/DataDog/bits-cli/internal/tui/chat"
+	tuistyles "github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 // pageScrollLines is how many lines PgUp/PgDn (and space) move.
@@ -19,13 +19,13 @@ type Model struct {
 	offset int
 	width  int
 	height int
-	styles chat.Styles
+	theme  tuistyles.Theme
 }
 
 // New returns a catalog model, defaulting to dark until the terminal background
 // is detected.
 func New() *Model {
-	return &Model{isDark: true, styles: chat.DefaultStyles(true)}
+	return &Model{isDark: true, theme: tuistyles.Default(true)}
 }
 
 // Init requests the terminal background so the catalog opens in the user's real
@@ -95,7 +95,7 @@ func (m *Model) setDark(isDark bool) {
 		return
 	}
 	m.isDark = isDark
-	m.styles = chat.DefaultStyles(isDark)
+	m.theme = tuistyles.Default(isDark)
 	m.offset = clampOffset(m.offset, m.contentLines(), m.viewHeight())
 }
 
@@ -109,12 +109,12 @@ func (m *Model) viewHeight() int {
 
 // contentLines is the number of lines in the current group's body.
 func (m *Model) contentLines() int {
-	return lineCount(renderGroup(m.group, m.width, m.styles, m.isDark))
+	return lineCount(renderGroup(m.group, m.width, m.theme))
 }
 
 // View renders the scrolled body of the current group plus the footer line.
 func (m *Model) View() tea.View {
-	body := renderGroup(m.group, m.width, m.styles, m.isDark)
+	body := renderGroup(m.group, m.width, m.theme)
 	visible := visibleLines(body, m.offset, m.viewHeight())
 	content := visible + "\n" + footer(m.width, m.group, m.isDark)
 	return tea.View{

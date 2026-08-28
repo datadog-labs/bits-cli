@@ -30,18 +30,20 @@ var loginCallbackPage = template.Must(template.New("login-callback").Parse(login
 
 const (
 	loginTimeout          = 5 * time.Minute
+	browserOpenTimeout    = 10 * time.Second
 	sessionLockTimeout    = 45 * time.Second
 	sessionPersistTimeout = 5 * time.Second
 )
 
 // LoginOptions contains the testable dependencies for an interactive login.
 type LoginOptions struct {
-	Site       string
-	ClientID   string
-	Store      CredentialStore
-	HTTPClient *http.Client
-	OpenURL    func(string) error
-	Out        io.Writer
+	Site          string
+	ClientID      string
+	Store         CredentialStore
+	HTTPClient    *http.Client
+	OpenURL       func(string) error
+	OnBrowserOpen func(url string, err error)
+	Out           io.Writer
 }
 
 // printf writes a best-effort status message to the configured output. Output
@@ -67,9 +69,6 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = &http.Client{Timeout: 30 * time.Second}
 	}
-	if opts.OpenURL == nil {
-		opts.OpenURL = openBrowser
-	}
 	if opts.Out == nil {
 		opts.Out = io.Discard
 	}
@@ -91,13 +90,24 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		state,
 		oauth2.S256ChallengeOption(verifier),
 	)
-	opts.printf("Opening Datadog login in your browser…\nIf it does not open, visit:\n%s\n", authURL)
-	if err := opts.OpenURL(authURL); err != nil {
-		opts.printf("Could not open a browser automatically: %v\n", err)
-	}
-
 	waitCtx, cancel := context.WithTimeout(ctx, loginTimeout)
 	defer cancel()
+	openURL := opts.OpenURL
+	if openURL == nil {
+		openURL = func(target string) error { return openBrowser(waitCtx, target) }
+	}
+	opts.printf("Opening Datadog login in your browser…\nIf it does not open, visit:\n%s\n", authURL)
+	if opts.OnBrowserOpen != nil {
+		opts.OnBrowserOpen(authURL, nil)
+	}
+	openErr := openURL(authURL)
+	if openErr != nil && opts.OnBrowserOpen != nil {
+		opts.OnBrowserOpen(authURL, openErr)
+	}
+	if openErr != nil {
+		opts.printf("Could not open a browser automatically: %v\n", openErr)
+	}
+
 	var code, callbackDomain string
 	select {
 	case <-waitCtx.Done():
@@ -423,7 +433,7 @@ func safeOAuthErrorCode(code string) string {
 	return code
 }
 
-func openBrowser(target string) error {
+func openBrowser(ctx context.Context, target string) error {
 	var command string
 	var args []string
 	switch runtime.GOOS {
@@ -434,12 +444,12 @@ func openBrowser(target string) error {
 	default:
 		command, args = "xdg-open", []string{target}
 	}
-	cmd := exec.Command(command, args...)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() { _ = cmd.Wait() }()
-	return nil
+	// Launcher failures must be observable by the startup UI so it can surface
+	// the authorization URL as a manual fallback. Bound the launcher separately:
+	// a broken desktop handler must not trap OAuth beyond the user's cancellation.
+	launchCtx, cancel := context.WithTimeout(ctx, browserOpenTimeout)
+	defer cancel()
+	return exec.CommandContext(launchCtx, command, args...).Run()
 }
 
 type callbackPage struct {

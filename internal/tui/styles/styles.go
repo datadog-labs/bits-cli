@@ -4,6 +4,7 @@ package styles
 import (
 	"image/color"
 
+	"charm.land/bubbles/v2/textinput"
 	glamouransi "charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -56,12 +57,57 @@ type Editor struct {
 	MenuSelected lipgloss.Style
 }
 
+// Text contains shared semantic text roles used outside the transcript.
+type Text struct {
+	Body  lipgloss.Style
+	Muted lipgloss.Style
+	Help  lipgloss.Style
+}
+
+// Feedback contains shared progress and outcome roles.
+type Feedback struct {
+	Progress lipgloss.Style
+	Error    lipgloss.Style
+	Success  lipgloss.Style
+}
+
+// Panel styles the reusable understated bordered surface.
+type Panel struct {
+	Frame   lipgloss.Style
+	Title   lipgloss.Style
+	Dismiss lipgloss.Style
+	Compact lipgloss.Style
+	Help    lipgloss.Style
+
+	MaxWidth         int
+	HorizontalMargin int
+	CompactMaxWidth  int
+	SectionGap       int
+	FooterSeparator  string
+}
+
+// Selector styles the reusable two-column keyboard selector.
+type Selector struct {
+	Item           lipgloss.Style
+	Selected       lipgloss.Style
+	Detail         lipgloss.Style
+	SelectedDetail lipgloss.Style
+	Marker         string
+	SelectedMarker string
+	ColumnGap      int
+}
+
 // Theme is the complete set of styles for one terminal background mode.
 type Theme struct {
-	IsDark bool
-	Input  Input
-	Chat   Chat
-	Editor Editor
+	IsDark    bool
+	Input     Input
+	Chat      Chat
+	Editor    Editor
+	Text      Text
+	Feedback  Feedback
+	Panel     Panel
+	Selector  Selector
+	TextInput textinput.Styles
 }
 
 // Default returns the complete UI theme for a terminal background mode.

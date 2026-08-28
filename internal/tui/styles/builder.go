@@ -1,6 +1,7 @@
 package styles
 
 import (
+	"charm.land/bubbles/v2/textinput"
 	glamouransi "charm.land/glamour/v2/ansi"
 	glamourstyles "charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
@@ -23,13 +24,64 @@ func build(isDark bool, p palette) Theme {
 			Border(inputRule, true, false, true, false).
 			BorderForeground(lipgloss.Color(p.inputRule)).
 			BorderBackground(lipgloss.Color(p.surface)),
-		Marker: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.primary)).Background(lipgloss.Color(p.surface)),
+		Marker: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)).Background(lipgloss.Color(p.surface)),
 		Text:   lipgloss.NewStyle().Background(lipgloss.Color(p.surface)),
 	}
 
+	text := Text{
+		Body:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)),
+		Muted: lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
+		Help:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
+	}
+	feedback := Feedback{
+		Progress: lipgloss.NewStyle().Foreground(lipgloss.Color(p.interactive)),
+		Error:    lipgloss.NewStyle().Foreground(lipgloss.Color(p.feedbackError)),
+		Success:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.feedbackSuccess)),
+	}
+	panel := Panel{
+		Frame: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(p.text)).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(p.borderSubtle)).
+			Padding(1, 2),
+		Title:            text.Body,
+		Dismiss:          text.Help,
+		Compact:          text.Body,
+		Help:             text.Help,
+		MaxWidth:         112,
+		HorizontalMargin: 2,
+		CompactMaxWidth:  34,
+		SectionGap:       1,
+		FooterSeparator:  "   ",
+	}
+	selector := Selector{
+		Item:           text.Body,
+		Selected:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
+		Detail:         text.Help,
+		SelectedDetail: text.Body,
+		Marker:         "  ",
+		SelectedMarker: "› ",
+		ColumnGap:      2,
+	}
+	textInput := textinput.DefaultStyles(isDark)
+	textInput.Focused.Text = text.Body
+	textInput.Focused.Placeholder = text.Help
+	textInput.Focused.Suggestion = text.Help
+	textInput.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(p.interactive))
+	textInput.Blurred.Text = text.Body
+	textInput.Blurred.Placeholder = text.Help
+	textInput.Blurred.Suggestion = text.Help
+	textInput.Blurred.Prompt = text.Muted
+	textInput.Cursor.Color = lipgloss.Color(p.interactive)
+
 	return Theme{
-		IsDark: isDark,
-		Input:  input,
+		IsDark:    isDark,
+		Input:     input,
+		Text:      text,
+		Feedback:  feedback,
+		Panel:     panel,
+		Selector:  selector,
+		TextInput: textInput,
 		Chat: Chat{
 			Markdown:        markdown(isDark, p),
 			MarkdownHeading: lipgloss.Color(p.secondary),
@@ -38,8 +90,8 @@ func build(isDark bool, p palette) Theme {
 			MarkdownCodeBg:  lipgloss.Color(p.codeSurface),
 			AssistantText:   lipgloss.NewStyle(),
 			Reasoning:       lipgloss.NewStyle().Faint(true).Italic(true),
-			ToolName:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.primary)),
-			ToolDetail:      lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)).Faint(true),
+			ToolName:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
+			ToolDetail:      lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
 			StatusRunning:   lipgloss.NewStyle().Foreground(lipgloss.Color(p.busy)),
 			StatusSuccess:   lipgloss.NewStyle().Foreground(lipgloss.Color(p.success)).Background(lipgloss.Color(p.successSurface)),
 			StatusError:     lipgloss.NewStyle().Foreground(lipgloss.Color(p.error)).Background(lipgloss.Color(p.errorSurface)),

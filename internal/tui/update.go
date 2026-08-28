@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	loginui "github.com/DataDog/bits-cli/internal/tui/login"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -30,7 +32,12 @@ type (
 		generation uint64
 		ev         agent.Event
 	}
-	turnClosedMsg struct{ generation uint64 }
+	turnClosedMsg  struct{ generation uint64 }
+	engineReadyMsg struct {
+		generation uint64
+		engine     *agent.Engine
+		err        error
+	}
 )
 
 // noticeExpiredMsg clears a transient status notice when its TTL elapses. seq
@@ -71,6 +78,10 @@ func waitEvent(generation uint64, ch <-chan agent.Event) tea.Cmd {
 
 // Update is the single message handler. Only this thread touches Model state.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.mode == ModeLogin {
+		return m.updateLogin(msg)
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
@@ -131,6 +142,90 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd := m.editor.Update(msg)
 	m.refreshViewport()
 	return m, cmd
+}
+
+func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+	case tea.BackgroundColorMsg:
+		m.setDarkBackground(msg.IsDark())
+	case loginui.CompletedMsg:
+		if m.startupPending || m.startupCanceled || m.startupStopping {
+			return m, nil
+		}
+		m.startupPending = true
+		m.startupGeneration++
+		generation := m.startupGeneration
+		factory := m.engineFactory
+		factoryCtx, cancel := context.WithCancel(m.startupCtx)
+		m.startupCancel = cancel
+		return m, func() tea.Msg {
+			if factory == nil {
+				return engineReadyMsg{generation: generation, err: errors.New("authenticated chat is unavailable")}
+			}
+			engine, err := factory(factoryCtx)
+			return engineReadyMsg{generation: generation, engine: engine, err: err}
+		}
+	case engineReadyMsg:
+		if msg.generation != m.startupGeneration || m.startupCanceled || m.startupStopping {
+			return m, nil
+		}
+		m.startupPending = false
+		if m.startupCancel != nil {
+			m.startupCancel()
+			m.startupCancel = nil
+		}
+		if msg.err != nil {
+			m.startupErr = msg.err
+			return m, tea.Quit
+		}
+		if msg.engine == nil {
+			m.startupErr = errors.New("authenticated chat returned no engine")
+			return m, tea.Quit
+		}
+		m.engine = msg.engine
+		m.convID = msg.engine.ConversationID()
+		m.loginModel = nil
+		m.engineFactory = nil
+		m.startupCtx = nil
+		if m.width > 0 {
+			m.editor.SetWidth(m.width)
+			m.list.SetWidth(m.width)
+		}
+		m.setMode(ModeChat)
+		return m, m.initChat()
+	}
+
+	if m.loginModel == nil {
+		m.startupErr = errors.New("startup login is unavailable")
+		return m, tea.Quit
+	}
+	next, cmd := m.loginModel.Update(msg)
+	if loginModel, ok := next.(*loginui.Model); ok {
+		m.loginModel = loginModel
+	}
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+		m.stopStartup()
+	}
+	if m.loginModel.Canceled() {
+		m.startupCanceled = true
+		m.stopStartup()
+	}
+	return m, cmd
+}
+
+func (m *Model) stopStartup() {
+	if m.startupStopping {
+		return
+	}
+	m.startupStopping = true
+	m.startupGeneration++
+	m.startupPending = false
+	if m.startupCancel != nil {
+		m.startupCancel()
+		m.startupCancel = nil
+	}
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -275,7 +370,7 @@ func (m *Model) setDarkBackground(isDark bool) {
 }
 
 func (m *Model) resize(w, h int) {
-	m.height = h
+	m.width, m.height = w, h
 	m.editor.SetWidth(w)
 	m.list.SetWidth(w)
 	if m.mode == ModeTermInit {

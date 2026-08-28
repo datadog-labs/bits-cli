@@ -1,6 +1,6 @@
-// Package catalog is a dev-only Bubble Tea page that renders every text
-// attribute, semantic style role, markdown element, and color token the chat
-// TUI uses, at live terminal width and in either color mode. It has no engine
+// Package catalog is a dev-only Bubble Tea page that renders shared text
+// attributes, semantic roles, components, markdown elements, and color tokens
+// at live terminal width and in either color mode. It has no engine
 // or backend. Launch it via the style-guide tool: `go run ./tools/style-guide`.
 package catalog
 
@@ -12,6 +12,7 @@ type group int
 const (
 	groupTextAttrs group = iota
 	groupSemanticRoles
+	groupSharedComponents
 	groupMarkdown
 	groupColorTokens
 	numGroups // count sentinel; not a real page
@@ -23,6 +24,8 @@ func (g group) title() string {
 		return "Text attributes"
 	case groupSemanticRoles:
 		return "Semantic roles (lipgloss)"
+	case groupSharedComponents:
+		return "Shared components"
 	case groupMarkdown:
 		return "Markdown elements (glamour)"
 	case groupColorTokens:

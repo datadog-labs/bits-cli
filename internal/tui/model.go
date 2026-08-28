@@ -4,6 +4,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	"github.com/DataDog/bits-cli/internal/tui/editor"
+	loginui "github.com/DataDog/bits-cli/internal/tui/login"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -20,7 +22,12 @@ type Mode int
 const (
 	ModeTermInit Mode = iota
 	ModeChat
+	ModeLogin
 )
+
+// EngineFactory constructs the authenticated chat engine after startup login
+// has persisted a session.
+type EngineFactory func(context.Context) (*agent.Engine, error)
 
 // Model is the root Bubble Tea model. All state lives here and is mutated only
 // on the tea thread; the sole async source is the engine's event channel.
@@ -28,6 +35,18 @@ type Model struct {
 	// Collaborators the model drives.
 	engine *agent.Engine
 	editor *editor.Editor
+
+	// Startup login stays inside this root model so Bubble Tea owns the
+	// alternate screen continuously while switching from login to chat.
+	startupCtx        context.Context
+	startupCancel     context.CancelFunc
+	startupGeneration uint64
+	startupCanceled   bool
+	startupStopping   bool
+	loginModel        *loginui.Model
+	engineFactory     EngineFactory
+	startupPending    bool
+	startupErr        error
 
 	// blocks is the latest snapshot of the engine's aggregated transcript
 	blocks []agent.Block
@@ -62,9 +81,9 @@ type Model struct {
 	chatStyles chat.Styles
 	styles     styles.Theme // terminal styles; dark until detected
 
-	// Terminal height (the full window height from WindowSizeMsg; the transcript
-	// height is derived from it). Width isn't stored here — it lives on list.
-	// The model leaves ModeTermInit once the first WindowSizeMsg arrives.
+	// Terminal dimensions are cached so a chat installed after startup login can
+	// be laid out immediately; Bubble Tea does not replay its initial size event.
+	width  int
 	height int
 }
 
@@ -72,12 +91,32 @@ type Model struct {
 // conversation, the model shows its id immediately and restores its history on
 // Init.
 func New(engine *agent.Engine) *Model {
+	m := newShell()
+	m.engine = engine
+	m.convID = engine.ConversationID()
+	return m
+}
+
+// NewWithLogin creates the same root TUI in login mode. On successful OAuth,
+// factory builds the engine and this model transitions to chat without ending
+// the Bubble Tea program or leaving the alternate screen.
+func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory EngineFactory) *Model {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m := newShell()
+	m.mode = ModeLogin
+	m.startupCtx = ctx
+	m.loginModel = loginModel
+	m.engineFactory = factory
+	return m
+}
+
+func newShell() *Model {
 	m := &Model{
-		engine: engine,
 		editor: editor.New(),
 		list:   chat.NewList(),
 		styles: styles.Default(true),
-		convID: engine.ConversationID(),
 	}
 	m.applyStyles(m.styles)
 	return m
@@ -86,6 +125,18 @@ func New(engine *agent.Engine) *Model {
 // ConversationID returns the active conversation id, or "" when none has been
 // established yet. main reads it after the program exits to print a resume hint.
 func (m *Model) ConversationID() string { return m.convID }
+
+// StartupError reports why login could not transition into chat. Cancellation
+// remains distinguishable from post-login client construction failures.
+func (m *Model) StartupError() error {
+	if m.startupCanceled || (m.mode == ModeLogin && m.loginModel != nil && m.loginModel.Canceled()) {
+		return loginui.ErrCanceled
+	}
+	if m.startupErr != nil {
+		return m.startupErr
+	}
+	return nil
+}
 
 // applyStyles propagates one complete theme to every component that copies
 // style values. Keep this as the single fan-out point for theme changes.
@@ -98,25 +149,38 @@ func (m *Model) applyStyles(theme styles.Theme) {
 }
 
 // setMode switches the top-level screen. It is the single entry point for mode
-// changes so any layout/refresh side effects stay centralized (the tui analog
-// of a state funnel). Today it only drives a viewport refresh; a future
-// conversation picker plugs its layout in here.
+// changes so layout and refresh side effects stay centralized while startup
+// login hands control to chat without replacing or quitting the root model.
 func (m *Model) setMode(mode Mode) {
 	m.mode = mode
 	m.refreshViewport()
 }
 
-// Init focuses the editor and, when restoring a conversation, starts the history
-// restore as a run: it streams through the same turn-event pump, so its blocks
-// arrive as ordinary events and the engine transcript stays single-writer.
+// Init starts the active screen. Login owns initial color detection; a direct
+// chat startup and the later login-to-chat handoff both use initChat.
 func (m *Model) Init() tea.Cmd {
+	if m.mode == ModeLogin {
+		if m.loginModel == nil {
+			m.startupErr = errors.New("startup login is unavailable")
+			return tea.Quit
+		}
+		return m.loginModel.Init()
+	}
+	return m.initChat()
+}
+
+// initChat focuses the editor and, when restoring a conversation, starts the
+// history restore through the normal turn-event pump. It is called explicitly
+// on login handoff because Bubble Tea calls Init only on the original model.
+func (m *Model) initChat() tea.Cmd {
 	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
-	if m.engine.ConversationID() == "" {
-		return m.editor.Focus()
+	commands := []tea.Cmd{m.editor.Focus(), requestBG}
+	if m.engine == nil || m.engine.ConversationID() == "" {
+		return tea.Batch(commands...)
 	}
 	m.chatPhase = chat.PhaseLoading
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
 	events := m.engine.Restore(ctx)
-	wait := m.beginRemote(events, cancel)
-	return tea.Batch(m.editor.Focus(), wait, requestBG)
+	commands = append(commands, m.beginRemote(events, cancel))
+	return tea.Batch(commands...)
 }

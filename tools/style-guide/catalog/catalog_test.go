@@ -18,8 +18,8 @@ func TestKeyToggleTheme(t *testing.T) {
 	m.width, m.height = 80, 24
 	before := m.isDark
 	m.key("t")
-	if m.isDark == before {
-		t.Fatal("t should toggle theme")
+	if m.isDark == before || m.theme.IsDark != m.isDark {
+		t.Fatal("t should toggle the complete theme")
 	}
 }
 
@@ -33,6 +33,10 @@ func TestKeyNavAdvancesGroupAndResetsOffset(t *testing.T) {
 	}
 	if m.offset != 0 {
 		t.Fatal("group change should reset offset")
+	}
+	m.key("tab")
+	if m.group != groupSharedComponents {
+		t.Fatalf("second tab should open shared components, got %v", m.group)
 	}
 }
 
@@ -71,7 +75,7 @@ func TestViewIncludesFooter(t *testing.T) {
 	if !strings.Contains(v.Content, "DARK") {
 		t.Fatal("view missing footer mode")
 	}
-	if !strings.Contains(v.Content, "/ 4") {
+	if !strings.Contains(v.Content, "/ 5") {
 		t.Fatal("view missing footer position")
 	}
 }
