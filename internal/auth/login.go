@@ -28,6 +28,13 @@ var loginCallbackHTML string
 
 var loginCallbackPage = template.Must(template.New("login-callback").Parse(loginCallbackHTML))
 
+// The success page interpolates nothing, so it is served as static bytes
+// rather than through html/template. Keeping it free of user-controlled
+// values is what makes that safe; add no interpolation here.
+//
+//go:embed login_callback_success.html
+var loginCallbackSuccessHTML string
+
 const (
 	loginTimeout          = 5 * time.Minute
 	browserOpenTimeout    = 10 * time.Second
@@ -260,7 +267,7 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = renderLoginComplete(w, u.Host)
+		_ = renderLoginComplete(w)
 		select {
 		case results <- callbackResult{code: code, domain: strings.TrimSpace(query.Get("domain"))}:
 		default:
@@ -460,13 +467,9 @@ type callbackPage struct {
 	Error   bool
 }
 
-func renderLoginComplete(w io.Writer, host string) error {
-	return loginCallbackPage.Execute(w, callbackPage{
-		Title:   "Bits CLI login complete",
-		Heading: "Login complete",
-		Message: "You can close this tab and return to Bits CLI.",
-		Host:    host,
-	})
+func renderLoginComplete(w io.Writer) error {
+	_, err := io.WriteString(w, loginCallbackSuccessHTML)
+	return err
 }
 
 // writeLoginError renders an HTML error page with the given status code.
