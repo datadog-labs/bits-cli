@@ -2,6 +2,19 @@
 
 Bits CLI is a native terminal client for Datadog Assistant.
 
+## Command line
+
+Run `bits` to open chat. Process-level long flags use conventional double-dash syntax; `-h` is the only shorthand:
+
+```sh
+bits [--conversation ID]
+bits login [--site SITE] [--client-id ID]
+bits logout
+bits help [command]
+```
+
+Use `bits --help` for the complete command list or `bits help login` for command-specific help. In-TUI slash commands such as `/new`, `/resume`, and `/quit` are a separate interactive command surface.
+
 ## Authentication
 
 ### Startup login

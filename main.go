@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -29,37 +28,10 @@ func main() {
 	}
 }
 
-func run(args []string) error {
-	if len(args) > 0 {
-		switch args[0] {
-		case "login":
-			return runLogin(args[1:])
-		case "logout":
-			return runLogout(args[1:])
-		}
-	}
-	return runChat(args)
-}
-
-func runLogin(args []string) error {
-	flags := flag.NewFlagSet("login", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	defaultSite := defaultLoginSite(os.Getenv("DD_SITE_URL"))
-	site := flags.String("site", defaultSite, "Datadog site URL or hostname")
-	clientID := flags.String("client-id", os.Getenv("BITS_OAUTH_CLIENT_ID"), "OAuth client ID override")
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	if flags.NArg() != 0 {
-		return fmt.Errorf("login does not accept positional arguments")
-	}
-
-	session, err := auth.Login(context.Background(), auth.LoginOptions{
-		Site:     *site,
-		ClientID: *clientID,
+func runLogin(ctx context.Context, opts loginCommandOptions) error {
+	session, err := auth.Login(ctx, auth.LoginOptions{
+		Site:     opts.Site,
+		ClientID: opts.ClientID,
 		Store:    auth.DefaultStore(),
 		Out:      os.Stderr,
 	})
@@ -77,20 +49,8 @@ func defaultLoginSite(configuredSite string) string {
 	return auth.DefaultSite
 }
 
-func runLogout(args []string) error {
-	flags := flag.NewFlagSet("logout", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	if flags.NArg() != 0 {
-		return fmt.Errorf("logout does not accept positional arguments")
-	}
-
-	logoutCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func runLogout(ctx context.Context) error {
+	logoutCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	hadSession, revokeErr, err := auth.Logout(logoutCtx, auth.DefaultStore(), nil)
 	cancel()
 	if err != nil {
@@ -108,24 +68,10 @@ func runLogout(args []string) error {
 	return nil
 }
 
-func runChat(args []string) error {
-	flags := flag.NewFlagSet("bits", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	conversationID := flags.String("conversation", "",
-		"resume an existing conversation by id: its history is restored before the prompt")
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected arguments: %v", flags.Args())
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
+func runChat(parent context.Context, conversationID string) error {
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	root, err := startupModel(ctx, *conversationID)
+	root, err := startupModel(ctx, conversationID)
 	if err != nil {
 		return err
 	}
