@@ -101,12 +101,12 @@ func (m *Model) focus() focus {
 		return focusLogin
 	case ModeConversations:
 		return focusPicker
-	default: // ModeChat, ModeTermInit
+	case ModeChat, ModeTermInit:
 		if len(m.pendingApprovals) > 0 {
 			return focusApproval
 		}
-		return focusEditor
 	}
+	return focusEditor
 }
 
 // reconcileFocus makes the editor's focus (and thus its cursor/blink) match the
@@ -137,6 +137,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// tearing down); the picker's in-flight request is abandoned on the way out.
 	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
 		return m.quit()
+	}
+	// When the chat is too small to render, View shows only a resize hint, so no
+	// surface is visible. Drop user input before it can drive a hidden surface
+	// (an approval granted blind, the composer, scrolling); ctrl+c already quit
+	// above. System and engine messages still flow so the app keeps working and
+	// can be resized back.
+	if m.chatViewTooSmall() {
+		switch msg.(type) {
+		case tea.KeyPressMsg, tea.MouseWheelMsg, tea.PasteMsg:
+			return m, nil
+		}
 	}
 	next, cmd := m.dispatch(msg)
 	return next, tea.Batch(cmd, m.reconcileFocus())

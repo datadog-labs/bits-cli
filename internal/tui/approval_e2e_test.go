@@ -72,6 +72,51 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 	}
 }
 
+func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
+	backend := &approvalBackend{t: t}
+	fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
+	tools, err := agent.NewToolSet(localtime.New(func() time.Time { return fixedTime }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model.resize(80, 24)
+	setConversationInput(model, "What time is it?")
+	_, _ = model.submit()
+	for len(model.pendingApprovals) == 0 {
+		msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
+		_, _ = model.Update(msg)
+	}
+
+	// Shrink below the approval minimum: View hides the whole chat behind the
+	// resize hint, so no keypress may drive the hidden prompt — not even Esc.
+	model.resize(minimumApprovalWidth-1, minimumApprovalHeight)
+	if !model.chatViewTooSmall() {
+		t.Fatal("chat not concealed at the reduced size")
+	}
+	if view := ansi.Strip(model.View().Content); strings.Contains(view, "Approval required") {
+		t.Fatalf("concealed approval still rendered:\n%s", view)
+	}
+
+	for _, code := range []rune{tea.KeyRight, tea.KeyEnter, tea.KeyEscape} {
+		_, _ = model.Update(tea.KeyPressMsg{Code: code})
+	}
+	if len(model.pendingApprovals) == 0 {
+		t.Fatal("a concealed keypress answered the approval")
+	}
+	if backend.calls != 1 {
+		t.Fatalf("backend calls = %d while concealed, want 1 (no follow-up)", backend.calls)
+	}
+
+	// Resizing back restores the prompt and its controls; Esc then denies.
+	model.resize(80, 24)
+	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	drainConversationRemote(t, model)
+	if backend.calls != 1 || len(backend.responses) != 0 {
+		t.Fatalf("deny after resize not honored: calls=%d responses=%d", backend.calls, len(backend.responses))
+	}
+}
+
 func TestToolApprovalComposerE2E(t *testing.T) {
 	tests := []struct {
 		name      string

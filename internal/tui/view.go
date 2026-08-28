@@ -34,9 +34,7 @@ func (m *Model) View() tea.View {
 	case ModeTermInit:
 		v.Content = "loading…"
 	case ModeChat:
-		approvalTooSmall := len(m.pendingApprovals) > 0 &&
-			(m.width < minimumApprovalWidth || m.height < minimumApprovalHeight)
-		if m.width < minimumChatWidth || m.height < minimumChatHeight || approvalTooSmall {
+		if m.chatViewTooSmall() {
 			v.MouseMode = tea.MouseModeNone
 			message := ansi.Truncate("Resize terminal to use Bits", max(1, m.width), "")
 			v.Content = lipgloss.Place(max(1, m.width), max(1, m.height), lipgloss.Center, lipgloss.Center, message)
@@ -90,6 +88,24 @@ func (m *Model) chatView() string {
 		lipgloss.NewLayer(base),
 		lipgloss.NewLayer(menu).X(x).Y(y).Z(1),
 	).Render()
+}
+
+// chatViewTooSmall reports whether the chat cannot be usably rendered, so View
+// replaces the whole screen with a resize hint. In that state the UI is
+// invisible, so Update suppresses user input: nothing — a pending approval, the
+// composer, transcript scrolling — can be driven blind. Only the global quit
+// (ctrl+c) still works; the user resizes to interact.
+func (m *Model) chatViewTooSmall() bool {
+	if m.mode != ModeChat {
+		return false
+	}
+	if m.width < minimumChatWidth || m.height < minimumChatHeight {
+		return true
+	}
+	// A pending approval needs more room than the bare chat; when it doesn't fit,
+	// its prompt is hidden behind the resize hint too.
+	return len(m.pendingApprovals) > 0 &&
+		(m.width < minimumApprovalWidth || m.height < minimumApprovalHeight)
 }
 
 // approvalView renders the docked approval block, or "" when nothing awaits
