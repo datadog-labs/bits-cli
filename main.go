@@ -15,6 +15,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/DataDog/bits-cli/internal/cmd"
 	"github.com/DataDog/bits-cli/internal/startup"
+	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tools/localtime"
 	"github.com/DataDog/bits-cli/internal/tui"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
@@ -112,11 +113,19 @@ func startupModel(ctx context.Context, opts cmd.ChatOptions) (*tui.Model, error)
 }
 
 func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth.CredentialStore) (*tui.Model, error) {
-	tools, err := agent.NewToolSet(opts.ApprovalMode, localtime.New(time.Now))
+	workspaceRoot, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("determine workspace: %w", err)
+	}
+	workspaceTools, err := tools.New(workspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("open workspace: %w", err)
+	}
+	toolSet, err := agent.NewToolSet(opts.ApprovalMode, append(workspaceTools, localtime.New(time.Now))...)
 	if err != nil {
 		return nil, err
 	}
-	config := tui.Config{Tools: tools}
+	config := tui.Config{Tools: toolSet}
 	engineOpts := startup.EngineOptions{
 		Client: startup.ClientOptions{
 			Mode:    opts.AuthMode,
