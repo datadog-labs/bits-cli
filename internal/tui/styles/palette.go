@@ -22,9 +22,21 @@ type palette struct {
 
 	link string
 
-	busy            string
+	// busy roles style the in-flight status chip. busyDim and busyHot are the
+	// low- and high-emphasis ends of the sweep animated across its label, so in
+	// a light theme busyHot is the *darker* of the two.
+	//
+	// Open question for review: busy was previously raw ANSI ("11" dark / "3"
+	// light) and is now hex, matching success and error. A gradient needs real
+	// colors to interpolate between, so the sweep could not be built on the ANSI
+	// pair — but this does change the flat chip's color on 16-color terminals,
+	// which is a palette decision beyond the animation itself.
+	busy        string
+	busySurface string
+	busyDim     string
+	busyHot     string
+
 	success         string
-	successSurface  string
 	error           string
 	errorSurface    string
 	feedbackSuccess string
@@ -50,9 +62,11 @@ func darkPalette() palette {
 		codeSurface:     "#343336",
 		codeText:        "#CECECE",
 		link:            "#3d8bd0",
-		busy:            "11",
+		busy:            "#F5C453",
+		busySurface:     "#2E2409",
+		busyDim:         "#8A6A1F",
+		busyHot:         "#FFE9A8",
 		success:         "#349C50",
-		successSurface:  "#0D2714",
 		error:           "#D33043",
 		errorSurface:    "#2F0A0F",
 		feedbackSuccess: "#65A875",
@@ -79,9 +93,11 @@ func lightPalette() palette {
 		codeSurface:     "#EEEFF0",
 		codeText:        "#1C2E38",
 		link:            "#006bc2",
-		busy:            "3",
+		busy:            "#7A5200",
+		busySurface:     "#FFF3D0",
+		busyDim:         "#D9B15C",
+		busyHot:         "#4A3000",
 		success:         "#41C464",
-		successSurface:  "#ECF9EF",
 		error:           "#EB364B",
 		errorSurface:    "#FDEBED",
 		feedbackSuccess: "#397A4A",

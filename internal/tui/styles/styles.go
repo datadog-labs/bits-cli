@@ -45,10 +45,28 @@ type Chat struct {
 	StatusRunning   lipgloss.Style
 	StatusSuccess   lipgloss.Style
 	StatusError     lipgloss.Style
-	Meta            lipgloss.Style
-	NoticeInfo      lipgloss.Style
-	NoticeWarn      lipgloss.Style
-	NoticeError     lipgloss.Style
+
+	// StatusRunningLabel and StatusAwaitingLabel are the pre-rendered animated
+	// labels for the two in-flight tool states. They replace the static words
+	// inside the status chip; see Shimmer.
+	StatusRunningLabel  Shimmer
+	StatusAwaitingLabel Shimmer
+
+	// StatusSweepDim and StatusSweepHot are the low- and high-emphasis ends of
+	// the animated sweep, exposed so the style catalog can show the tokens and
+	// illustrate the motion without keeping its own copy of these colors.
+	StatusSweepDim color.Color
+	StatusSweepHot color.Color
+
+	// StatusSpinner is the glyph cycle shown in place of the static dot while a
+	// tool is running. It reports work in progress, so it is deliberately not
+	// used for a tool awaiting approval, which is blocked rather than busy.
+	StatusSpinner Spinner
+
+	Meta        lipgloss.Style
+	NoticeInfo  lipgloss.Style
+	NoticeWarn  lipgloss.Style
+	NoticeError lipgloss.Style
 }
 
 // Editor contains editor-specific styles derived from a Theme.

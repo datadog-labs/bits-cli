@@ -63,6 +63,15 @@ func build(isDark bool, p palette) Theme {
 		SelectedMarker: "› ",
 		ColumnGap:      2,
 	}
+	// The in-flight chip's labels are animated, so they are pre-rendered once
+	// per theme rather than styled per frame.
+	busy := shimmerPalette{
+		fg:  lipgloss.Color(p.busy),
+		bg:  lipgloss.Color(p.busySurface),
+		dim: lipgloss.Color(p.busyDim),
+		hot: lipgloss.Color(p.busyHot),
+	}
+
 	textInput := textinput.DefaultStyles(isDark)
 	textInput.Focused.Text = text.Body
 	textInput.Focused.Placeholder = text.Help
@@ -92,13 +101,22 @@ func build(isDark bool, p palette) Theme {
 			Reasoning:       lipgloss.NewStyle().Faint(true).Italic(true),
 			ToolName:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
 			ToolDetail:      lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
-			StatusRunning:   lipgloss.NewStyle().Foreground(lipgloss.Color(p.busy)),
-			StatusSuccess:   lipgloss.NewStyle().Foreground(lipgloss.Color(p.success)).Background(lipgloss.Color(p.successSurface)),
-			StatusError:     lipgloss.NewStyle().Foreground(lipgloss.Color(p.error)).Background(lipgloss.Color(p.errorSurface)),
-			Meta:            lipgloss.NewStyle().Faint(true),
-			NoticeInfo:      lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.info)),
-			NoticeWarn:      lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onWarning)).Background(lipgloss.Color(p.warning)),
-			NoticeError:     lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.critical)),
+			// The busy surface is what makes pill() draw caps for an in-flight
+			// chip; without a background it skips them and renders bare text.
+			StatusRunning: lipgloss.NewStyle().Foreground(lipgloss.Color(p.busy)).Background(lipgloss.Color(p.busySurface)),
+			// A succeeded tool renders as a bare glyph, so this style needs no
+			// surface; giving it one would leave a chip nothing ever draws.
+			StatusSuccess:       lipgloss.NewStyle().Foreground(lipgloss.Color(p.success)),
+			StatusError:         lipgloss.NewStyle().Foreground(lipgloss.Color(p.error)).Background(lipgloss.Color(p.errorSurface)),
+			StatusRunningLabel:  busy.shimmer("running"),
+			StatusAwaitingLabel: busy.shimmer("awaiting approval"),
+			StatusSweepDim:      busy.dim,
+			StatusSweepHot:      busy.hot,
+			StatusSpinner:       Spinner{frames: brailleFrames, stepsPerFrame: spinnerStepsPerFrame},
+			Meta:                lipgloss.NewStyle().Faint(true),
+			NoticeInfo:          lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.info)),
+			NoticeWarn:          lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onWarning)).Background(lipgloss.Color(p.warning)),
+			NoticeError:         lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.critical)),
 		},
 		Editor: Editor{
 			MenuItem:     lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)).Background(lipgloss.Color(p.surfaceRaised)),
