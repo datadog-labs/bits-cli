@@ -107,9 +107,9 @@ func TestNewAndClearResetConversationStateLocally(t *testing.T) {
 			m.notice = notice(chat.NoticeError, errors.New("old error"), "old error")
 			setConversationInput(m, input)
 
-			_, cmd := m.submit()
-			if cmd == nil {
-				t.Fatal("reset did not return the editor focus command")
+			_, _ = m.submit()
+			if !m.editor.Focused() {
+				t.Fatal("reset left the editor unfocused")
 			}
 			if m.convID != "" || m.engine.ConversationID() != "" || len(m.blocks) != 0 {
 				t.Fatalf("identity/transcript not reset: root=%q engine=%q blocks=%d", m.convID, m.engine.ConversationID(), len(m.blocks))

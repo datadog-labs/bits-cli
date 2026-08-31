@@ -16,6 +16,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/DataDog/bits-cli/internal/cmd"
+	"github.com/DataDog/bits-cli/internal/tools/localtime"
 	"github.com/DataDog/bits-cli/internal/tui"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
 )
@@ -114,27 +115,31 @@ func startupModel(ctx context.Context, opts cmd.ChatOptions) (*tui.Model, error)
 	apiKey := os.Getenv("DD_API_KEY")
 	appKey := os.Getenv("DD_APP_KEY")
 	apiSite := strings.TrimSpace(opts.Site)
+	tools, err := agent.NewToolSet(localtime.New(time.Now))
+	if err != nil {
+		return nil, err
+	}
+	config := tui.Config{Tools: tools}
 	if opts.AuthMode == cmd.AuthenticationModeAPIKey {
 		client, err := authenticatedClientWithContext(ctx, nil, apiKey, appKey, apiSite, opts.AuthMode)
 		if err != nil {
 			return nil, fmt.Errorf("authenticate with API/app keys: %w", err)
 		}
-		return tui.New(agent.New(client, options)), nil
+		return tui.New(agent.New(client, options), config), nil
 	}
 	if opts.AuthMode != cmd.AuthenticationModeAuto {
 		return nil, fmt.Errorf("unsupported authentication mode %q", opts.AuthMode)
 	}
-
 	// BITS_FAKE_BACKEND streams seeded pseudo-random output with no network or
 	// auth, for offline development and demos.
 	if os.Getenv("BITS_FAKE_BACKEND") == "1" {
-		return tui.New(agent.New(fake.New(), options)), nil
+		return tui.New(agent.New(fake.New(), options), config), nil
 	}
 
 	store := auth.DefaultStore()
 	client, err := authenticatedClientWithContext(ctx, store, apiKey, appKey, apiSite, opts.AuthMode)
 	if err == nil {
-		return tui.New(agent.New(client, options)), nil
+		return tui.New(agent.New(client, options), config), nil
 	}
 	if !canStartLogin(err) {
 		return nil, err
@@ -158,7 +163,7 @@ func startupModel(ctx context.Context, opts cmd.ChatOptions) (*tui.Model, error)
 			return nil, factoryErr
 		}
 		return agent.New(client, options), nil
-	}), nil
+	}, config), nil
 }
 
 func canStartLogin(err error) bool {

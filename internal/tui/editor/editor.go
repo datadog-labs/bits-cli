@@ -122,6 +122,16 @@ func (e *Editor) Focus() tea.Cmd {
 	return e.ta.Focus()
 }
 
+// Blur removes focus from the textarea, hiding the cursor and making it ignore
+// input. Used while another surface (a pending tool approval) owns the composer.
+func (e *Editor) Blur() {
+	e.viewCached = false
+	e.ta.Blur()
+}
+
+// Focused reports whether the textarea currently holds focus.
+func (e *Editor) Focused() bool { return e.ta.Focused() }
+
 // SetWidth sets the block's total width in cells. The textarea is sized to fit
 // inside the block's horizontal frame so the block stays exactly w wide.
 func (e *Editor) SetWidth(w int) {

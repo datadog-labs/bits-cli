@@ -86,6 +86,22 @@ type Panel struct {
 	FooterSeparator  string
 }
 
+// Approval styles the docked tool-approval block. It mirrors the input block's
+// shape (top and bottom rules, a filled background) on a distinct surface so it
+// reads as an attention-seeking sibling of the editor that pushes the
+// transcript up, rather than an overlay that hides it. Every text role carries
+// the block background so inner spans blend into the fill.
+type Approval struct {
+	Block    lipgloss.Style // outer surface + rules; width applied at render
+	Marker   lipgloss.Style // accent prompt glyph
+	Title    lipgloss.Style // emphasized header ("Approval required")
+	Text     lipgloss.Style // normal body (the tool prompt)
+	Detail   lipgloss.Style // muted secondary (detail, help)
+	Action   lipgloss.Style // unselected choice
+	Selected lipgloss.Style // focused choice
+	Prompt   string
+}
+
 // Selector styles the reusable two-column keyboard selector.
 type Selector struct {
 	Item           lipgloss.Style
@@ -106,6 +122,7 @@ type Theme struct {
 	Text      Text
 	Feedback  Feedback
 	Panel     Panel
+	Approval  Approval
 	Selector  Selector
 	TextInput textinput.Styles
 }
