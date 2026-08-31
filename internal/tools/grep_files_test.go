@@ -144,6 +144,37 @@ func TestGrepFilesTool(t *testing.T) {
 		}
 	})
 
+	t.Run("include glob semantics", func(t *testing.T) {
+		cases := []struct {
+			include string
+			path    string
+			want    bool
+		}{
+			{"**/*.go", "main.go", true},
+			{"**/*.go", "src/main.go", true},
+			{"**/*.go", "a/b/c.go", true},
+			{"**/*.go", "main.ts", false},
+			{"*.go", "main.go", true},
+			{"*.go", "src/main.go", true},
+			{"src/*.go", "src/main.go", true},
+			{"src/*.go", "lib/main.go", false},
+		}
+		for _, tc := range cases {
+			t.Run(tc.include+"/"+tc.path, func(t *testing.T) {
+				fsys := fstest.MapFS{tc.path: {Data: []byte("needle\n")}}
+				tool := newGrepFilesTool(fsys, "/workspace")
+				input := fmt.Sprintf(`{"pattern":"needle","include":%q}`, tc.include)
+				result, err := tool.Handler(ctx, agent.ToolCall{Input: input})
+				if err != nil || result.IsError {
+					t.Fatalf("unexpected error: %v %s", err, result.Output)
+				}
+				if got := strings.Contains(result.Output, tc.path); got != tc.want {
+					t.Errorf("include %q, path %q: matched=%v, want %v (output: %s)", tc.include, tc.path, got, tc.want, result.Output)
+				}
+			})
+		}
+	})
+
 	t.Run("binary files are skipped", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"lib.so":  {Data: append([]byte("needle"), 0, 0, 0)},

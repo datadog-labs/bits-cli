@@ -87,30 +87,6 @@ func TestIgnorerIgnore(t *testing.T) {
 	}
 }
 
-func TestMatchInclude(t *testing.T) {
-	tests := []struct {
-		pattern string
-		path    string
-		want    bool
-	}{
-		{"**/*.go", "main.go", true},
-		{"**/*.go", "src/main.go", true},
-		{"**/*.go", "a/b/c.go", true},
-		{"**/*.go", "main.ts", false},
-		{"*.go", "main.go", true},
-		{"*.go", "src/main.go", true},
-		{"src/*.go", "src/main.go", true},
-		{"src/*.go", "lib/main.go", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.pattern+"/"+tt.path, func(t *testing.T) {
-			if got := matchInclude(tt.pattern, tt.path); got != tt.want {
-				t.Errorf("matchInclude(%q, %q) = %v, want %v", tt.pattern, tt.path, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestIgnorerReportsGitignoreReadErrors(t *testing.T) {
 	var ig Ignorer
 	err := ig.Add(context.Background(), deniedIgnoreFS{FS: fstest.MapFS{}}, ".")

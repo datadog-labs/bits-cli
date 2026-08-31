@@ -102,10 +102,3 @@ func loadIgnorer(ctx context.Context, fsys fs.FS, base string, baseIsDir bool) (
 	}
 	return ig, nil
 }
-
-// matchInclude reports whether filePath matches a gitignore-style include glob.
-func matchInclude(pattern, filePath string) bool {
-	m := gitignore.New("")
-	m.AddPatterns([]byte(pattern), "")
-	return len(m.Errors()) == 0 && m.MatchPath(filePath, false)
-}

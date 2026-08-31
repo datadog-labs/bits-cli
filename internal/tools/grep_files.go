@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 
+	gitignore "github.com/git-pkgs/gitignore"
+
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
@@ -81,6 +83,15 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 		re, err := regexp.Compile(reStr)
 		if err != nil {
 			return agent.ToolResult{IsError: true, Output: "invalid pattern: " + err.Error()}, nil
+		}
+
+		var includeMatcher *gitignore.Matcher
+		if args.Include != "" {
+			includeMatcher = gitignore.New("")
+			includeMatcher.AddPatterns([]byte(args.Include), "")
+			if len(includeMatcher.Errors()) > 0 {
+				return agent.ToolResult{IsError: true, Output: "invalid include pattern: " + args.Include}, nil
+			}
 		}
 
 		base := args.Path
@@ -198,7 +209,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 				if d.IsDir() {
 					return nil
 				}
-				if args.Include != "" && !matchInclude(args.Include, p) {
+				if includeMatcher != nil && !includeMatcher.MatchPath(p, false) {
 					return nil
 				}
 				return searchFile(p)
