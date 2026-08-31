@@ -219,3 +219,73 @@ func TestAnimationFrameReachesTheList(t *testing.T) {
 		t.Error("advancing the animation did not change the rendered transcript")
 	}
 }
+
+// TestColorProfileIsAppliedDuringLogin covers a gap the split exposed: Update
+// short-circuits to updateLogin whenever the login screen is showing, and Bubble
+// Tea sends the terminal's color profile exactly then — at startup. Without
+// handling it before that short-circuit, a low-color terminal reached through
+// login would never disable motion, and nothing re-requests the profile later.
+func TestColorProfileIsAppliedDuringLogin(t *testing.T) {
+	m := newShell()
+	m.mode = ModeLogin
+
+	m.Update(tea.ColorProfileMsg{Profile: colorprofile.ANSI})
+
+	if !m.motionDisabled {
+		t.Fatal("a low-color profile seen during login did not disable motion")
+	}
+	if m.chatStyles.StatusRunningLabel.Len() != 0 {
+		t.Error("the theme still carries an animated label after a low-color profile during login")
+	}
+}
+
+// TestColorProfileDuringLoginSurvivesTheHandoff is the other half: the profile
+// arrives before the engine exists, so the decision has to still hold once chat
+// takes over and re-derives its styles.
+func TestColorProfileDuringLoginSurvivesTheHandoff(t *testing.T) {
+	m := newShell()
+	m.mode = ModeLogin
+	m.Update(tea.ColorProfileMsg{Profile: colorprofile.ANSI})
+
+	m.setMode(ModeChat)
+	m.setDarkBackground(!m.styles.IsDark)
+
+	if m.chatStyles.StatusRunningLabel.Len() != 0 {
+		t.Error("motion came back after the login-to-chat handoff re-derived the theme")
+	}
+}
+
+// TestConversationResetDisarmsTheAnimation guards the ordering around /new, on
+// the real path rather than by calling syncAnimation by hand.
+//
+// A cancelled client tool can leave its block reporting ToolRunning, so a sync
+// evaluated before the reset sees no change and leaves the chain armed; the
+// reset then empties the transcript and nothing re-syncs, so the tick keeps
+// re-arming itself forever against an empty view. Syncing after the reset
+// cannot get this wrong: the list is empty, so it always disarms.
+func TestConversationResetDisarmsTheAnimation(t *testing.T) {
+	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
+	m.mode = ModeChat
+	m.resize(80, 24)
+	m.blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
+	m.refreshViewport()
+	m.syncAnimation()
+	if !m.animArmed {
+		t.Fatal("expected the tick to be armed")
+	}
+
+	// /new completing as the turn's channel closes, with the tool never settled.
+	events := make(chan agent.Event)
+	close(events)
+	m.turnEvents = events
+	m.pendingNew = true
+
+	m.Update(turnClosedMsg{generation: m.turnGen})
+
+	if m.animArmed {
+		t.Error("the tick is still armed after /new cleared the transcript")
+	}
+	if m.list.HasAnimated() {
+		t.Error("the transcript should be empty after the reset")
+	}
+}

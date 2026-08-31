@@ -78,6 +78,14 @@ func waitEvent(generation uint64, ch <-chan agent.Event) tea.Cmd {
 
 // Update is the single message handler. Only this thread touches Model state.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The color profile is handled ahead of the mode check because Bubble Tea
+	// reports it once, at startup — which is while the login screen owns the
+	// screen. Routing it through updateLogin would drop it, and nothing
+	// re-requests it after the handoff, so a low-color terminal reached through
+	// login would keep a truecolor sweep it cannot render.
+	if profile, ok := msg.(tea.ColorProfileMsg); ok {
+		return m, m.setColorProfile(profile.Profile)
+	}
 	if m.mode == ModeLogin {
 		return m.updateLogin(msg)
 	}
@@ -90,9 +98,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.setDarkBackground(msg.IsDark())
 		return m, nil
-
-	case tea.ColorProfileMsg:
-		return m, m.setColorProfile(msg.Profile)
 
 	case animTickMsg:
 		return m, m.advanceAnimation(msg)
@@ -145,14 +150,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.cancelTurn = nil
 		m.cancelRequested = false
-		// A cancelled turn settles its tools, so this also stops an animation
-		// left running by an interrupted call.
-		stopAnim := m.syncAnimation()
 		if m.pendingNew {
 			m.pendingNew = false
-			return m, tea.Batch(stopAnim, m.startNewConversation())
+			// Resync *after* the reset. A cancelled client tool can leave its
+			// block reporting ToolRunning, so syncing first would see no change
+			// and leave the chain armed — and the reset that follows empties the
+			// transcript with nothing left to disarm it.
+			return m, tea.Batch(m.startNewConversation(), m.syncAnimation())
 		}
-		return m, stopAnim
+		// A cancelled turn settles its tools, so this also stops an animation
+		// left running by an interrupted call.
+		return m, m.syncAnimation()
 
 	case conversationListResultMsg:
 		return m, m.applyConversationListResult(msg)
