@@ -117,7 +117,7 @@ func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth
 	if err != nil {
 		return nil, fmt.Errorf("determine workspace: %w", err)
 	}
-	workspaceTools, err := tools.New(workspaceRoot)
+	workspaceTools, err := tools.NewEditorTools(workspaceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("open workspace: %w", err)
 	}

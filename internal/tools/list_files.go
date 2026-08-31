@@ -19,7 +19,7 @@ const (
 func newListFilesTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:        "list_files",
+			Name:        toolListFiles,
 			Description: "List files and directories in the workspace. Directories end with /. Respects .gitignore. Returns up to 2000 entries.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -30,7 +30,7 @@ func newListFilesTool(fsys fs.FS, root string) agent.Tool {
 				"additionalProperties": false,
 			},
 		},
-		Approval: approvalFor(root),
+		Approval: workspaceReadApproval(root),
 		Handler:  listFilesHandler(fsys),
 	}
 }
@@ -85,7 +85,8 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 		}
 
 		var entries []string
-		truncated := false
+		hitEntryLimit := false
+		hitByteLimit := false
 		byteCount := 0
 
 		err = fs.WalkDir(fsys, base, func(p string, d fs.DirEntry, err error) error {
@@ -134,8 +135,12 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 			}
 
 			line := entry + "\n"
-			if len(entries) >= maxListEntries || byteCount+len(line) > maxListBytes {
-				truncated = true
+			if len(entries) >= maxListEntries {
+				hitEntryLimit = true
+				return fs.SkipAll
+			}
+			if byteCount+len(line) > maxListBytes {
+				hitByteLimit = true
 				return fs.SkipAll
 			}
 			entries = append(entries, entry)
@@ -154,8 +159,15 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 		}
 
 		output := strings.Join(entries, "\n")
-		if truncated {
-			output += fmt.Sprintf("\n\n[Truncated: showing %d of more entries.]", len(entries))
+		if hitEntryLimit || hitByteLimit {
+			var warnings []string
+			if hitEntryLimit {
+				warnings = append(warnings, fmt.Sprintf("%d entries limit", maxListEntries))
+			}
+			if hitByteLimit {
+				warnings = append(warnings, fmt.Sprintf("%dKB limit", maxListBytes/1024))
+			}
+			output += "\n\n[Truncated: " + strings.Join(warnings, ", ") + "]"
 		}
 		return agent.ToolResult{Title: base, Output: output}, nil
 	}

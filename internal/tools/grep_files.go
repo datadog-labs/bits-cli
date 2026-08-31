@@ -28,7 +28,7 @@ var errGrepMatchLimit = errors.New("grep match limit reached")
 func newGrepFilesTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:        "grep_files",
+			Name:        toolGrepFiles,
 			Description: "Search workspace files using a Go regular expression. Returns file:line: text matches. Skips binary files. Respects .gitignore. Returns up to 200 matches.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -43,7 +43,7 @@ func newGrepFilesTool(fsys fs.FS, root string) agent.Tool {
 				"additionalProperties": false,
 			},
 		},
-		Approval: approvalFor(root),
+		Approval: workspaceReadApproval(root),
 		// TODO: add optional ripgrep acceleration once profiling identifies a bottleneck.
 		Handler: grepFilesHandler(fsys),
 	}

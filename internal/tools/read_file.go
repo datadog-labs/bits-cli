@@ -14,16 +14,10 @@ import (
 
 const maxFileSize = 10 * 1024 * 1024
 
-type readFileArgs struct {
-	Path   string `json:"path"`
-	Offset *int   `json:"offset"`
-	Limit  *int   `json:"limit"`
-}
-
 func newReadFileTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:        "read_file",
+			Name:        toolReadFile,
 			Description: "Read the contents of a file in the workspace.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -37,7 +31,7 @@ func newReadFileTool(fsys fs.FS, root string) agent.Tool {
 			},
 		},
 		Handler:  readFileHandler(fsys),
-		Approval: approvalFor(root),
+		Approval: workspaceReadApproval(root),
 	}
 }
 
@@ -46,7 +40,11 @@ func readFileHandler(fsys fs.FS) agent.ToolHandler {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
 		}
-		var args readFileArgs
+		var args struct {
+			Path   string `json:"path"`
+			Offset *int   `json:"offset"`
+			Limit  *int   `json:"limit"`
+		}
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return agent.ToolResult{IsError: true, Output: err.Error()}, nil
 		}
