@@ -16,7 +16,6 @@ import (
 	"github.com/DataDog/bits-cli/internal/cmd"
 	"github.com/DataDog/bits-cli/internal/startup"
 	"github.com/DataDog/bits-cli/internal/tools"
-	"github.com/DataDog/bits-cli/internal/tools/localtime"
 	"github.com/DataDog/bits-cli/internal/tui"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
 )
@@ -121,7 +120,7 @@ func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth
 	if err != nil {
 		return nil, fmt.Errorf("open workspace: %w", err)
 	}
-	toolSet, err := agent.NewToolSet(opts.ApprovalMode, append(workspaceTools, localtime.New(time.Now))...)
+	toolSet, err := agent.NewToolSet(opts.ApprovalMode, workspaceTools...)
 	if err != nil {
 		return nil, err
 	}

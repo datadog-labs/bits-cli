@@ -4,15 +4,43 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/tools/localtime"
 )
+
+const approvalToolName = "confirm_action"
+
+// newApprovalTool is a self-contained tool that always requires approval,
+// used to drive the approval composer in these end-to-end tests.
+func newApprovalTool() agent.Tool {
+	return agent.Tool{
+		Definition: assistant.ClientTool{
+			Name:        approvalToolName,
+			Description: "Test tool that requires approval before running.",
+			InputSchema: map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
+				"additionalProperties": false,
+			},
+		},
+		Approval: func(agent.ToolCall) (agent.ApprovalRequirement, bool) {
+			return agent.ApprovalRequirement{
+				Key: agent.ApprovalKey{Tool: approvalToolName, Resource: "test"},
+				Prompt: agent.ApprovalPrompt{
+					Title:  "Run the test action?",
+					Detail: "This test tool requires approval before it runs.",
+				},
+			}, true
+		},
+		Handler: func(context.Context, agent.ToolCall) (agent.ToolResult, error) {
+			return agent.ToolResult{Title: "Done", Output: `{"status":"ok"}`}, nil
+		},
+	}
+}
 
 type approvalBackend struct {
 	t         *testing.T
@@ -24,10 +52,10 @@ func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendO
 	b.t.Helper()
 	b.calls++
 	if b.calls == 1 {
-		content := assistant.ToolCallContent("time-call", localtime.Name, `{}`)
+		content := assistant.ToolCallContent("tool-call", approvalToolName, `{}`)
 		content.Type = assistant.ContentClientToolCall
 		var response assistant.AssistantResponse
-		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("time-message", content)
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-message", content)
 		return "conversation-1", emit(response)
 	}
 
@@ -37,14 +65,13 @@ func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendO
 		b.t.Fatalf("tool follow-up has type %T", message)
 	}
 	var response assistant.AssistantResponse
-	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("It is noon."))
+	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("Done."))
 	return "conversation-1", emit(response)
 }
 
 func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
-	tools, err := agent.NewToolSet(agent.ModeGated, localtime.New(func() time.Time { return fixedTime }))
+	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +82,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 		t.Fatal("editor not focused after init")
 	}
 
-	setConversationInput(model, "What time is it?")
+	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	for len(model.pendingApprovals) == 0 {
 		msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
@@ -74,14 +101,13 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 
 func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
-	tools, err := agent.NewToolSet(agent.ModeGated, localtime.New(func() time.Time { return fixedTime }))
+	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
 	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
 	model.resize(80, 24)
-	setConversationInput(model, "What time is it?")
+	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	for len(model.pendingApprovals) == 0 {
 		msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
@@ -119,14 +145,13 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 
 func TestToolApprovalComposerSuppressedInAllowAll(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
-	tools, err := agent.NewToolSet(agent.ModeAllowAll, localtime.New(func() time.Time { return fixedTime }))
+	tools, err := agent.NewToolSet(agent.ModeAllowAll, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
 	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
 	model.resize(80, 24)
-	setConversationInput(model, "What time is it?")
+	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	drainConversationRemote(t, model)
 
@@ -134,14 +159,14 @@ func TestToolApprovalComposerSuppressedInAllowAll(t *testing.T) {
 		t.Fatalf("allow-all surfaced %d approval prompts", len(model.pendingApprovals))
 	}
 	view := ansi.Strip(model.View().Content)
-	if strings.Contains(view, "Approval required") || strings.Contains(view, "Share your local time?") {
+	if strings.Contains(view, "Approval required") || strings.Contains(view, "Run the test action?") {
 		t.Fatalf("approval composer rendered in allow-all mode:\n%s", view)
 	}
 	if !model.editor.Focused() {
 		t.Fatal("editor lost focus without an approval owning the composer")
 	}
-	if len(backend.responses) != 1 || !strings.Contains(backend.responses[0].Metadata.Output, `"utc_offset":"+02:00"`) {
-		t.Fatalf("local-time response = %+v, want the tool to have run unprompted", backend.responses)
+	if len(backend.responses) != 1 || !strings.Contains(backend.responses[0].Metadata.Output, `"status":"ok"`) {
+		t.Fatalf("tool response = %+v, want the tool to have run unprompted", backend.responses)
 	}
 }
 
@@ -160,14 +185,13 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &approvalBackend{t: t}
-			fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
-			tools, err := agent.NewToolSet(agent.ModeGated, localtime.New(func() time.Time { return fixedTime }))
+			tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
 			if err != nil {
 				t.Fatal(err)
 			}
 			model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
 			model.resize(80, 24)
-			setConversationInput(model, "What time is it?")
+			setConversationInput(model, "Run the action")
 			_, _ = model.submit()
 
 			for len(model.pendingApprovals) == 0 {
@@ -179,7 +203,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 			}
 
 			view := ansi.Strip(model.View().Content)
-			if !strings.Contains(view, "Approval required") || !strings.Contains(view, "Share your local time?") || !strings.Contains(view, tt.selection) {
+			if !strings.Contains(view, "Approval required") || !strings.Contains(view, "Run the test action?") || !strings.Contains(view, tt.selection) {
 				t.Fatalf("approval composer not rendered:\n%s", view)
 			}
 			lines := strings.Split(view, "\n")
@@ -212,8 +236,8 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				}
 				return
 			}
-			if len(backend.responses) != 1 || !strings.Contains(backend.responses[0].Metadata.Output, `"utc_offset":"+02:00"`) {
-				t.Fatalf("local-time response = %+v", backend.responses)
+			if len(backend.responses) != 1 || !strings.Contains(backend.responses[0].Metadata.Output, `"status":"ok"`) {
+				t.Fatalf("tool response = %+v", backend.responses)
 			}
 		})
 	}
