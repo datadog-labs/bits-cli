@@ -44,7 +44,7 @@ func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendO
 func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 	backend := &approvalBackend{t: t}
 	fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
-	tools, err := agent.NewToolSet(localtime.New(func() time.Time { return fixedTime }))
+	tools, err := agent.NewToolSet(agent.ModeGated, localtime.New(func() time.Time { return fixedTime }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	backend := &approvalBackend{t: t}
 	fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
-	tools, err := agent.NewToolSet(localtime.New(func() time.Time { return fixedTime }))
+	tools, err := agent.NewToolSet(agent.ModeGated, localtime.New(func() time.Time { return fixedTime }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &approvalBackend{t: t}
 			fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
-			tools, err := agent.NewToolSet(localtime.New(func() time.Time { return fixedTime }))
+			tools, err := agent.NewToolSet(agent.ModeGated, localtime.New(func() time.Time { return fixedTime }))
 			if err != nil {
 				t.Fatal(err)
 			}
