@@ -13,7 +13,7 @@ func TestRenderGroupNonEmptyBothModes(t *testing.T) {
 	for _, isDark := range []bool{true, false} {
 		theme := styles.Default(isDark)
 		for g := group(0); g < numGroups; g++ {
-			body := renderGroup(g, 80, theme)
+			body := renderGroup(g, 80, theme, 0)
 			if strings.TrimSpace(body) == "" {
 				t.Fatalf("group %d (dark=%v) rendered empty", g, isDark)
 			}
@@ -27,14 +27,14 @@ func TestRenderGroupNonEmptyBothModes(t *testing.T) {
 func TestMarkdownGroupContainsHeadingText(t *testing.T) {
 	// Strip ANSI first: glamour renders the H1 as a colored block, splitting the
 	// text with escape sequences, so a raw substring check would miss it.
-	body := ansi.Strip(renderGroup(groupMarkdown, 80, styles.Default(true)))
+	body := ansi.Strip(renderGroup(groupMarkdown, 80, styles.Default(true), 0))
 	if !strings.Contains(body, "H1 heading") {
 		t.Fatalf("markdown group missing heading text: %q", body)
 	}
 }
 
 func TestSharedComponentsGroupContainsProductionPanelAndSelector(t *testing.T) {
-	body := ansi.Strip(renderGroup(groupSharedComponents, 100, styles.Default(true)))
+	body := ansi.Strip(renderGroup(groupSharedComponents, 100, styles.Default(true), 0))
 	for _, want := range []string{
 		"Text roles", "Muted metadata", "Feedback states", "Waiting for Datadog",
 		"Authentication complete", "Login did not complete", "Text input", "Panel — full",
@@ -48,7 +48,7 @@ func TestSharedComponentsGroupContainsProductionPanelAndSelector(t *testing.T) {
 }
 
 func TestColorTokensContainHex(t *testing.T) {
-	body := renderGroup(groupColorTokens, 80, styles.Default(true))
+	body := renderGroup(groupColorTokens, 80, styles.Default(true), 0)
 	if !strings.Contains(body, "#") {
 		t.Fatal("color tokens group missing hex values")
 	}
@@ -58,7 +58,7 @@ func TestColorTokensContainHex(t *testing.T) {
 // (heading, link, inline code fg/bg) appear on the color page, not just the
 // lipgloss ones — the page's purpose is to show every active token.
 func TestColorTokensIncludeSharedComponentTokens(t *testing.T) {
-	body := ansi.Strip(renderGroup(groupColorTokens, 120, styles.Default(true)))
+	body := ansi.Strip(renderGroup(groupColorTokens, 120, styles.Default(true), 0))
 	for _, label := range []string{"Text body", "Panel border", "Selector selected", "Feedback progress", "Text input cursor"} {
 		if !strings.Contains(body, label) {
 			t.Errorf("color tokens page missing %q", label)
@@ -67,7 +67,7 @@ func TestColorTokensIncludeSharedComponentTokens(t *testing.T) {
 }
 
 func TestColorTokensIncludeMarkdownTokens(t *testing.T) {
-	body := ansi.Strip(renderGroup(groupColorTokens, 120, styles.Default(true)))
+	body := ansi.Strip(renderGroup(groupColorTokens, 120, styles.Default(true), 0))
 	for _, label := range []string{"Markdown heading", "Markdown link", "Markdown inline code fg", "Markdown inline code bg"} {
 		if !strings.Contains(body, label) {
 			t.Errorf("color tokens page missing %q", label)
@@ -83,7 +83,7 @@ func TestRenderGroupWrapsToWidth(t *testing.T) {
 	for _, isDark := range []bool{true, false} {
 		theme := styles.Default(isDark)
 		for g := group(0); g < numGroups; g++ {
-			for i, line := range strings.Split(renderGroup(g, width, theme), "\n") {
+			for i, line := range strings.Split(renderGroup(g, width, theme, 0), "\n") {
 				if w := ansi.StringWidth(line); w > width {
 					t.Errorf("group %d (dark=%v) line %d width %d > %d: %q",
 						g, isDark, i, w, width, ansi.Strip(line))

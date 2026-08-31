@@ -15,6 +15,7 @@ const (
 	groupSharedComponents
 	groupMarkdown
 	groupColorTokens
+	groupStatusPillMotion
 	numGroups // count sentinel; not a real page
 )
 
@@ -30,10 +31,17 @@ func (g group) title() string {
 		return "Markdown elements (glamour)"
 	case groupColorTokens:
 		return "Color tokens"
+	case groupStatusPillMotion:
+		return "[Design proposal] Status pill motion"
 	default:
 		return "?"
 	}
 }
+
+// animates reports whether a page's body depends on the frame counter. The
+// catalog schedules repaints only while such a page is on screen, so every
+// other page stays completely idle.
+func (g group) animates() bool { return g == groupStatusPillMotion }
 
 // nextGroup / prevGroup cycle through pages, wrapping at the ends.
 func nextGroup(g group) group { return (g + 1) % numGroups }

@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -75,7 +76,7 @@ func TestViewIncludesFooter(t *testing.T) {
 	if !strings.Contains(v.Content, "DARK") {
 		t.Fatal("view missing footer mode")
 	}
-	if !strings.Contains(v.Content, "/ 5") {
+	if !strings.Contains(v.Content, fmt.Sprintf("/ %d", numGroups)) {
 		t.Fatal("view missing footer position")
 	}
 }

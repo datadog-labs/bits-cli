@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ func TestHexOf(t *testing.T) {
 
 func TestFooterContainsPositionAndMode(t *testing.T) {
 	f := footer(200, groupMarkdown, true)
-	if !strings.Contains(f, "4 / 5") {
+	if !strings.Contains(f, fmt.Sprintf("%d / %d", int(groupMarkdown)+1, numGroups)) {
 		t.Fatalf("footer missing position: %q", f)
 	}
 	if !strings.Contains(f, "DARK") {
