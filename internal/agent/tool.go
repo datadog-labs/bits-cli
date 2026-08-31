@@ -84,6 +84,12 @@ func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 	}, nil
 }
 
+// ApprovesServerGate reports whether the server write gate is approved without
+// a local decision: allow-all approves; gated denies. A nil set denies.
+func (s *ToolSet) ApprovesServerGate() bool {
+	return s != nil && s.mode == ModeAllowAll
+}
+
 // Approval reports whether call must wait for an approval decision before
 // it runs. The set's ApprovalMode is consulted first: ModeAllowAll suppresses
 // every declared gate, ModeGated defers to the tool's ApprovalPolicy.

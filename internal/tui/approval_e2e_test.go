@@ -112,8 +112,15 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	model.resize(80, 24)
 	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	drainConversationRemote(t, model)
-	if backend.calls != 1 || len(backend.responses) != 0 {
+	// The denial is answered on the wire; the follow-up answer never renders.
+	if backend.calls != 2 || len(backend.responses) != 1 {
 		t.Fatalf("deny after resize not honored: calls=%d responses=%d", backend.calls, len(backend.responses))
+	}
+	if backend.responses[0].Status != assistant.ToolStatusError || backend.responses[0].ToolCallID != "time-call" {
+		t.Fatalf("denial response = %+v", backend.responses[0])
+	}
+	if view := ansi.Strip(model.View().Content); strings.Contains(view, "It is noon.") {
+		t.Fatalf("aborted deny still delivered the model's follow-up answer:\n%s", view)
 	}
 }
 
@@ -207,8 +214,15 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				t.Fatal("approval composer remained after the decision")
 			}
 			if tt.deny {
-				if backend.calls != 1 {
-					t.Fatalf("backend calls = %d, want 1", backend.calls)
+				// The denial is answered on the wire; the follow-up answer never renders.
+				if backend.calls != 2 || len(backend.responses) != 1 {
+					t.Fatalf("backend calls = %d responses = %d, want the denial answered on the wire", backend.calls, len(backend.responses))
+				}
+				if backend.responses[0].Status != assistant.ToolStatusError || backend.responses[0].ToolCallID != "time-call" {
+					t.Fatalf("denial response = %+v", backend.responses[0])
+				}
+				if strings.Contains(ansi.Strip(model.View().Content), "It is noon.") {
+					t.Fatal("aborted deny still delivered the model's follow-up answer")
 				}
 				return
 			}

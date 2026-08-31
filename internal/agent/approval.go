@@ -1,5 +1,9 @@
 package agent
 
+// ApprovalRequestTool is the server-injected client_tool_call that gates a
+// backend write. The engine answers it directly per the active approval mode.
+const ApprovalRequestTool = "approval_request"
+
 type ApprovalDecision string
 
 const (
@@ -63,6 +67,21 @@ func deniedResult() ToolResult {
 		Title:   "Permission denied",
 		Output:  "local execution was denied by the user",
 		IsError: true,
+	}
+}
+
+func serverDeniedResult() ToolResult {
+	return ToolResult{
+		Title:   "Permission denied",
+		Output:  "the user denied this action",
+		IsError: true,
+	}
+}
+
+func approvedResult() ToolResult {
+	return ToolResult{
+		Title:  "Approved",
+		Output: "the write was approved",
 	}
 }
 
