@@ -296,7 +296,6 @@ func (e *Engine) run(
 		// Send may discover a server-assigned ID before a later stream failure or
 		// cancellation. Preserve it so every surface can report a resumable handle.
 		if id != "" {
-			convID = id
 			e.opts.ConversationID = id
 		}
 		if err != nil {
