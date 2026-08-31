@@ -158,8 +158,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// transcript with nothing left to disarm it.
 			return m, tea.Batch(m.startNewConversation(), m.syncAnimation())
 		}
-		// A cancelled turn settles its tools, so this also stops an animation
-		// left running by an interrupted call.
+		// Resync in case the turn ended with nothing left in flight.
+		//
+		// Known gap: a cancelled turn does NOT settle its tools. The engine's
+		// tool loop returns on ctx.Done() after cancelling the per-tool
+		// contexts, without emitting a final block state, so after a Ctrl+C the
+		// blocks still report ToolRunning. This sync therefore sees no change
+		// and leaves the tick armed against a tool that is already dead, until
+		// the conversation is reset. Settling those blocks belongs in the
+		// engine, not here; accepted as out of scope for this change.
 		return m, m.syncAnimation()
 
 	case conversationListResultMsg:
