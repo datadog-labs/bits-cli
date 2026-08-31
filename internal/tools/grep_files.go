@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	gitignore "github.com/git-pkgs/gitignore"
 
@@ -175,6 +176,9 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 
 		cappedByMatchLimit := false
 		if !info.IsDir() {
+			if includeMatcher != nil && !includeMatcher.MatchPath(base, false) {
+				return agent.ToolResult{Output: "No matches found."}, nil
+			}
 			if err := searchFile(base); err != nil {
 				if !errors.Is(err, errGrepMatchLimit) {
 					if ctxErr := ctx.Err(); ctxErr != nil {
@@ -314,7 +318,11 @@ func truncateGrepMatch(line []byte) string {
 	if len(line) <= maxGrepMatchBytes {
 		return string(line)
 	}
-	return string(line[:maxGrepMatchBytes]) + "… [match truncated]"
+	cut := maxGrepMatchBytes
+	for cut > 0 && !utf8.RuneStart(line[cut]) {
+		cut--
+	}
+	return string(line[:cut]) + "… [match truncated]"
 }
 
 func truncateOutputLine(line string, limit int) string {
@@ -323,7 +331,18 @@ func truncateOutputLine(line string, limit int) string {
 	}
 	const suffix = "… [match truncated]\n"
 	if limit <= len(suffix) {
-		return suffix[:limit]
+		return truncateUTF8(suffix, limit)
 	}
-	return line[:limit-len(suffix)] + suffix
+	return truncateUTF8(line, limit-len(suffix)) + suffix
+}
+
+func truncateUTF8(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }

@@ -222,6 +222,14 @@ func TestReadFileTool(t *testing.T) {
 		}
 	})
 
+	t.Run("trailing newline does not create an extra line", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"small.txt": &fstest.MapFile{Data: []byte("a\nb\n")},
+		}
+		r := invokeReadFile(t, fsys, map[string]any{"path": "small.txt", "offset": 3})
+		assertError(t, r, "beyond end of file (2 lines)")
+	})
+
 	t.Run("offset plus line cap truncation", func(t *testing.T) {
 		total := maxReadLines + 5
 		lines := make([]string, total)

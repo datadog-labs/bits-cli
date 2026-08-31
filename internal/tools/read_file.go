@@ -99,7 +99,7 @@ func readFileHandler(fsys fs.FS) agent.ToolHandler {
 			return agent.ToolResult{IsError: true, Output: "binary file, cannot read as text"}, nil
 		}
 
-		allLines := strings.Split(string(data), "\n")
+		allLines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 		totalLines := len(allLines)
 
 		offset := 1

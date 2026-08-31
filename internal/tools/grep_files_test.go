@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"unicode/utf8"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 )
@@ -141,6 +142,20 @@ func TestGrepFilesTool(t *testing.T) {
 		}
 		if strings.Contains(result.Output, "main.ts") {
 			t.Errorf("main.ts must be excluded by include glob: %s", result.Output)
+		}
+	})
+
+	t.Run("include glob filters a directly specified file", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"main.ts": {Data: []byte("needle\n")},
+		}
+		tool := newGrepFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"pattern":"needle","path":"main.ts","include":"**/*.go"}`})
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected error: %v %s", err, result.Output)
+		}
+		if result.Output != "No matches found." {
+			t.Errorf("output = %q, want no matches", result.Output)
 		}
 	})
 
@@ -343,6 +358,18 @@ func TestGrepFilesTool(t *testing.T) {
 		}
 		if !strings.Contains(result.Output, "match truncated") || !strings.Contains(result.Output, "needle-again") {
 			t.Errorf("oversized match was not safely truncated: %s", result.Output)
+		}
+	})
+
+	t.Run("truncation preserves UTF-8", func(t *testing.T) {
+		line := strings.Repeat("a", maxGrepMatchBytes-1) + "é"
+		if got := truncateGrepMatch([]byte(line)); !utf8.ValidString(got) {
+			t.Errorf("truncateGrepMatch returned invalid UTF-8: %q", got)
+		}
+
+		output := strings.Repeat("a", maxGrepBytes-len("… [match truncated]\n")-1) + "é\n"
+		if got := truncateOutputLine(output, maxGrepBytes); !utf8.ValidString(got) {
+			t.Errorf("truncateOutputLine returned invalid UTF-8: %q", got)
 		}
 	})
 
