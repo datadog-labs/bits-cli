@@ -10,6 +10,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/spf13/cobra"
 )
@@ -20,6 +21,7 @@ type ChatOptions struct {
 	ConversationID string
 	AuthMode       auth.Mode
 	Site           string
+	ApprovalMode   agent.ApprovalMode
 }
 
 // LoginOptions carries the user-supplied login flags resolved by the command
@@ -52,8 +54,9 @@ func Execute(ctx context.Context, args []string, actions Actions, stdout, stderr
 }
 
 func newRootCommand(actions Actions) *cobra.Command {
-	opts := ChatOptions{AuthMode: auth.ModeAuto}
+	opts := ChatOptions{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}
 	var authMode string
+	var approvalMode string
 	// Keep root.Args nil so Cobra can identify unknown commands, suggest close
 	// matches, and reject unknown help topics during command discovery. The
 	// RunE check handles arguments after a -- terminator.
@@ -70,6 +73,10 @@ func newRootCommand(actions Actions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			approval, err := parseApprovalMode(approvalMode)
+			if err != nil {
+				return err
+			}
 			siteSet := command.Flags().Changed("site") && strings.TrimSpace(opts.Site) != ""
 			switch {
 			case mode == auth.ModeAPIKey && !siteSet:
@@ -78,6 +85,7 @@ func newRootCommand(actions Actions) *cobra.Command {
 				return fmt.Errorf("--site requires --auth %s; use `bits login --site` for OAuth", auth.ModeAPIKey)
 			}
 			opts.AuthMode = mode
+			opts.ApprovalMode = approval
 			return actions.Chat(command.Context(), opts)
 		},
 	}
@@ -86,6 +94,7 @@ func newRootCommand(actions Actions) *cobra.Command {
 		return fmt.Errorf("%w\nRun '%s --help' for usage", err, command.CommandPath())
 	})
 	root.Flags().StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
+	root.Flags().StringVar(&approvalMode, "approval", string(agent.ModeAllowAll), "approval mode: allow-all or gated")
 	root.Flags().StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
 	root.Flags().StringVar(
 		&opts.ConversationID,
@@ -119,6 +128,16 @@ func parseAuthenticationMode(raw string) (auth.Mode, error) {
 		return mode, nil
 	default:
 		return "", fmt.Errorf("invalid authentication mode %q; expected auto or api-key", raw)
+	}
+}
+
+func parseApprovalMode(raw string) (agent.ApprovalMode, error) {
+	mode := agent.ApprovalMode(raw)
+	switch mode {
+	case agent.ModeAllowAll, agent.ModeGated:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid approval mode %q; expected allow-all or gated", raw)
 	}
 }
 

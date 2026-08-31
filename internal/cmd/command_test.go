@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/auth"
 )
 
@@ -53,25 +54,36 @@ func TestCommandDispatch(t *testing.T) {
 	}{
 		{
 			name:  "chat",
-			chats: []ChatOptions{{AuthMode: auth.ModeAuto}},
+			chats: []ChatOptions{{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}},
 		},
 		{
 			name:  "chat conversation",
 			args:  []string{"--conversation", "conversation-1"},
-			chats: []ChatOptions{{ConversationID: "conversation-1", AuthMode: auth.ModeAuto}},
+			chats: []ChatOptions{{ConversationID: "conversation-1", AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}},
 		},
 		{
 			name:  "chat conversation equals",
 			args:  []string{"--conversation=conversation-2"},
-			chats: []ChatOptions{{ConversationID: "conversation-2", AuthMode: auth.ModeAuto}},
+			chats: []ChatOptions{{ConversationID: "conversation-2", AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}},
 		},
 		{
 			name: "explicit API key mode",
 			args: []string{"--auth", "api-key", "--site=https://api.datadoghq.eu"},
 			chats: []ChatOptions{{
-				AuthMode: auth.ModeAPIKey,
-				Site:     "https://api.datadoghq.eu",
+				AuthMode:     auth.ModeAPIKey,
+				Site:         "https://api.datadoghq.eu",
+				ApprovalMode: agent.ModeAllowAll,
 			}},
+		},
+		{
+			name:  "approval defaults to allow-all",
+			args:  []string{"--approval=allow-all"},
+			chats: []ChatOptions{{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}},
+		},
+		{
+			name:  "gated approval mode",
+			args:  []string{"--approval", "gated"},
+			chats: []ChatOptions{{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeGated}},
 		},
 		{
 			name:   "login defaults",
@@ -103,15 +115,15 @@ func TestCommandDispatch(t *testing.T) {
 
 func TestCommandTreesDoNotShareFlagState(t *testing.T) {
 	recorder := &commandRecorder{}
-	if _, _, err := executeForTest(t, []string{"--auth", "api-key", "--site", "api.datadoghq.eu"}, recorder); err != nil {
+	if _, _, err := executeForTest(t, []string{"--auth", "api-key", "--site", "api.datadoghq.eu", "--approval", "gated"}, recorder); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := executeForTest(t, nil, recorder); err != nil {
 		t.Fatal(err)
 	}
 	want := []ChatOptions{
-		{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.eu"},
-		{AuthMode: auth.ModeAuto},
+		{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.eu", ApprovalMode: agent.ModeGated},
+		{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll},
 	}
 	if !reflect.DeepEqual(recorder.chats, want) {
 		t.Fatalf("chat options = %#v, want %#v", recorder.chats, want)
@@ -130,7 +142,7 @@ func TestCommandHelp(t *testing.T) {
 			args: []string{"-h"},
 			want: []string{
 				"Datadog Assistant in your terminal", "Available Commands:",
-				"login", "logout", "--auth", "auto or api-key", "--site",
+				"login", "logout", "--auth", "auto or api-key", "--approval", "allow-all or gated", "--site",
 				"--conversation", "--help",
 			},
 			doNotWant: []string{"completion", "--client-id"},
@@ -138,7 +150,7 @@ func TestCommandHelp(t *testing.T) {
 		{
 			name: "root long",
 			args: []string{"--help"},
-			want: []string{"Available Commands:", "login", "logout", "--auth", "--site"},
+			want: []string{"Available Commands:", "login", "logout", "--auth", "--approval", "--site"},
 		},
 		{
 			name: "help login",
@@ -203,7 +215,10 @@ func TestCommandRejectsInvalidInputWithoutInvokingActions(t *testing.T) {
 		{name: "unknown login flag", args: []string{"login", "--unknown"}, wantErr: "unknown flag: --unknown"},
 		{name: "root auth flag on login", args: []string{"login", "--auth", "api-key"}, wantErr: "unknown flag: --auth"},
 		{name: "root flag on login", args: []string{"login", "--conversation", "conversation-1"}, wantErr: "unknown flag: --conversation"},
-		{name: "invalid authentication mode", args: []string{"--auth", "oauth"}, wantErr: `invalid authentication mode "oauth"`},
+		{name: "invalid authentication mode", args: []string{"--auth", "oauth"}, wantErr: `invalid authentication mode "oauth"; expected auto or api-key`},
+		{name: "invalid approval mode lists valid modes", args: []string{"--approval", "yes"}, wantErr: `invalid approval mode "yes"; expected allow-all or gated`},
+		{name: "approval flag on login", args: []string{"login", "--approval", "gated"}, wantErr: "unknown flag: --approval"},
+		{name: "single dash approval", args: []string{"-approval=gated"}, wantErr: "unknown shorthand flag: 'a'"},
 		{name: "API key mode without site", args: []string{"--auth", "api-key"}, wantErr: "--auth api-key requires --site"},
 		{name: "API key mode with empty site", args: []string{"--auth", "api-key", "--site", " "}, wantErr: "--auth api-key requires --site"},
 		{name: "site in automatic mode", args: []string{"--site", "app.datadoghq.eu"}, wantErr: "--site requires --auth api-key"},

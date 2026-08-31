@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/DataDog/bits-cli/internal/cmd"
 )
@@ -39,7 +40,7 @@ func TestStartupExplicitAPIKeyModeDoesNotFallThroughToFakeBackend(t *testing.T) 
 	t.Setenv("DD_APP_KEY", "")
 	_, err := startupModelWithStore(
 		context.Background(),
-		cmd.ChatOptions{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com"},
+		cmd.ChatOptions{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com", ApprovalMode: agent.ModeAllowAll},
 		stubCredentialStore{session: validOAuthSession()},
 	)
 	if err == nil || !strings.Contains(err.Error(), "DD_API_KEY and DD_APP_KEY must both be set") {
@@ -51,7 +52,7 @@ func TestStartupMissingOAuthSelectsInteractiveLogin(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	model, err := startupModelWithStore(
 		context.Background(),
-		cmd.ChatOptions{AuthMode: auth.ModeAuto},
+		cmd.ChatOptions{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll},
 		stubCredentialStore{err: auth.ErrNoSession},
 	)
 	if err != nil {
@@ -68,7 +69,7 @@ func TestStartupCredentialStoreFailureDoesNotSelectLogin(t *testing.T) {
 	storeErr := errors.New("keyring unavailable")
 	_, err := startupModelWithStore(
 		context.Background(),
-		cmd.ChatOptions{AuthMode: auth.ModeAuto},
+		cmd.ChatOptions{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll},
 		stubCredentialStore{err: storeErr},
 	)
 	if !errors.Is(err, storeErr) {
@@ -80,7 +81,7 @@ func TestStartupStoredOAuthEntersChatWithConversation(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	model, err := startupModelWithStore(
 		context.Background(),
-		cmd.ChatOptions{AuthMode: auth.ModeAuto, ConversationID: "conversation-1"},
+		cmd.ChatOptions{AuthMode: auth.ModeAuto, ConversationID: "conversation-1", ApprovalMode: agent.ModeAllowAll},
 		stubCredentialStore{session: validOAuthSession()},
 	)
 	if err != nil {
