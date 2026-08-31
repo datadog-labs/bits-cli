@@ -14,21 +14,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// AuthenticationMode selects the authentication policy for a chat invocation.
-type AuthenticationMode string
-
-const (
-	// AuthenticationModeAuto uses a stored OAuth session or starts login.
-	AuthenticationModeAuto AuthenticationMode = "auto"
-	// AuthenticationModeAPIKey requires explicit API/app-key authentication.
-	AuthenticationModeAPIKey AuthenticationMode = "api-key"
-)
-
 // ChatOptions carries the user-supplied root command flags resolved before
 // chat starts.
 type ChatOptions struct {
 	ConversationID string
-	AuthMode       AuthenticationMode
+	AuthMode       auth.Mode
 	Site           string
 }
 
@@ -62,7 +52,7 @@ func Execute(ctx context.Context, args []string, actions Actions, stdout, stderr
 }
 
 func newRootCommand(actions Actions) *cobra.Command {
-	opts := ChatOptions{AuthMode: AuthenticationModeAuto}
+	opts := ChatOptions{AuthMode: auth.ModeAuto}
 	var authMode string
 	// Keep root.Args nil so Cobra can identify unknown commands, suggest close
 	// matches, and reject unknown help topics during command discovery. The
@@ -82,10 +72,10 @@ func newRootCommand(actions Actions) *cobra.Command {
 			}
 			siteSet := command.Flags().Changed("site") && strings.TrimSpace(opts.Site) != ""
 			switch {
-			case mode == AuthenticationModeAPIKey && !siteSet:
-				return fmt.Errorf("--auth %s requires --site", AuthenticationModeAPIKey)
-			case mode == AuthenticationModeAuto && command.Flags().Changed("site"):
-				return fmt.Errorf("--site requires --auth %s; use `bits login --site` for OAuth", AuthenticationModeAPIKey)
+			case mode == auth.ModeAPIKey && !siteSet:
+				return fmt.Errorf("--auth %s requires --site", auth.ModeAPIKey)
+			case mode == auth.ModeAuto && command.Flags().Changed("site"):
+				return fmt.Errorf("--site requires --auth %s; use `bits login --site` for OAuth", auth.ModeAPIKey)
 			}
 			opts.AuthMode = mode
 			return actions.Chat(command.Context(), opts)
@@ -95,7 +85,7 @@ func newRootCommand(actions Actions) *cobra.Command {
 	root.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
 		return fmt.Errorf("%w\nRun '%s --help' for usage", err, command.CommandPath())
 	})
-	root.Flags().StringVar(&authMode, "auth", string(AuthenticationModeAuto), "authentication mode: auto or api-key")
+	root.Flags().StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
 	root.Flags().StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
 	root.Flags().StringVar(
 		&opts.ConversationID,
@@ -122,10 +112,10 @@ func newLoginCommand(action func(context.Context, LoginOptions) error) *cobra.Co
 	return command
 }
 
-func parseAuthenticationMode(raw string) (AuthenticationMode, error) {
-	mode := AuthenticationMode(raw)
+func parseAuthenticationMode(raw string) (auth.Mode, error) {
+	mode := auth.Mode(raw)
 	switch mode {
-	case AuthenticationModeAuto, AuthenticationModeAPIKey:
+	case auth.ModeAuto, auth.ModeAPIKey:
 		return mode, nil
 	default:
 		return "", fmt.Errorf("invalid authentication mode %q; expected auto or api-key", raw)
