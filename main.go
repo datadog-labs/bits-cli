@@ -112,7 +112,7 @@ func startupModel(ctx context.Context, opts cmd.ChatOptions) (*tui.Model, error)
 }
 
 func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth.CredentialStore) (*tui.Model, error) {
-	tools, err := agent.NewToolSet(localtime.New(time.Now))
+	tools, err := agent.NewToolSet(opts.ApprovalMode, localtime.New(time.Now))
 	if err != nil {
 		return nil, err
 	}

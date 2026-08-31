@@ -28,6 +28,7 @@ type Tool struct {
 }
 
 type ToolSet struct {
+	mode        ApprovalMode
 	definitions []assistant.ClientTool
 	tools       map[string]registeredTool
 }
@@ -37,8 +38,12 @@ type registeredTool struct {
 	approval ApprovalPolicy
 }
 
-func NewToolSet(tools ...Tool) (*ToolSet, error) {
+func NewToolSet(mode ApprovalMode, tools ...Tool) (*ToolSet, error) {
+	if !mode.valid() {
+		return nil, fmt.Errorf("invalid approval mode %q; expected allow-all or gated", mode)
+	}
 	set := &ToolSet{
+		mode:        mode,
 		definitions: make([]assistant.ClientTool, 0, len(tools)),
 		tools:       make(map[string]registeredTool, len(tools)),
 	}
@@ -79,8 +84,11 @@ func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 	}, nil
 }
 
+// Approval reports whether call must wait for an approval decision before
+// it runs. The set's ApprovalMode is consulted first: ModeAllowAll suppresses
+// every declared gate, ModeGated defers to the tool's ApprovalPolicy.
 func (s *ToolSet) Approval(call ToolCall) (ApprovalRequirement, bool) {
-	if s == nil {
+	if s == nil || s.mode != ModeGated {
 		return ApprovalRequirement{}, false
 	}
 	tool, ok := s.tools[call.Name]

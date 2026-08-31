@@ -44,7 +44,7 @@ func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendO
 func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 	backend := &approvalBackend{t: t}
 	fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
-	tools, err := agent.NewToolSet(localtime.New(func() time.Time { return fixedTime }))
+	tools, err := agent.NewToolSet(agent.ModeGated, localtime.New(func() time.Time { return fixedTime }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	backend := &approvalBackend{t: t}
 	fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
-	tools, err := agent.NewToolSet(localtime.New(func() time.Time { return fixedTime }))
+	tools, err := agent.NewToolSet(agent.ModeGated, localtime.New(func() time.Time { return fixedTime }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +117,34 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	}
 }
 
+func TestToolApprovalComposerSuppressedInAllowAll(t *testing.T) {
+	backend := &approvalBackend{t: t}
+	fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
+	tools, err := agent.NewToolSet(agent.ModeAllowAll, localtime.New(func() time.Time { return fixedTime }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model.resize(80, 24)
+	setConversationInput(model, "What time is it?")
+	_, _ = model.submit()
+	drainConversationRemote(t, model)
+
+	if len(model.pendingApprovals) != 0 {
+		t.Fatalf("allow-all surfaced %d approval prompts", len(model.pendingApprovals))
+	}
+	view := ansi.Strip(model.View().Content)
+	if strings.Contains(view, "Approval required") || strings.Contains(view, "Share your local time?") {
+		t.Fatalf("approval composer rendered in allow-all mode:\n%s", view)
+	}
+	if !model.editor.Focused() {
+		t.Fatal("editor lost focus without an approval owning the composer")
+	}
+	if len(backend.responses) != 1 || !strings.Contains(backend.responses[0].Metadata.Output, `"utc_offset":"+02:00"`) {
+		t.Fatalf("local-time response = %+v, want the tool to have run unprompted", backend.responses)
+	}
+}
+
 func TestToolApprovalComposerE2E(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -133,7 +161,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &approvalBackend{t: t}
 			fixedTime := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
-			tools, err := agent.NewToolSet(localtime.New(func() time.Time { return fixedTime }))
+			tools, err := agent.NewToolSet(agent.ModeGated, localtime.New(func() time.Time { return fixedTime }))
 			if err != nil {
 				t.Fatal(err)
 			}
