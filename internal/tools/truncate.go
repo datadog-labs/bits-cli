@@ -29,8 +29,12 @@ func truncateLines(lines []string, startLine, totalLines int) truncation {
 		cost := len(line) + 1 // newline
 		if written >= maxReadLines || byteCount+cost > maxReadBytes {
 			if written == 0 {
+				content := fmt.Sprintf("[Line %d exceeds the %d-byte read limit.]", startLine, maxReadBytes)
+				if startLine < totalLines {
+					content += fmt.Sprintf(" Use offset=%d to continue.", startLine+1)
+				}
 				return truncation{
-					content:   fmt.Sprintf("[Line %d exceeds the %d-byte read limit.]", startLine, maxReadBytes),
+					content:   content,
 					truncated: true,
 					next:      startLine + 1,
 				}

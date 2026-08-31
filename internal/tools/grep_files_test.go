@@ -18,6 +18,23 @@ type openCountingFS struct {
 	opens int
 }
 
+type openErrorFS struct {
+	fs.FS
+	name string
+	err  error
+}
+
+func (fsys openErrorFS) Open(name string) (fs.File, error) {
+	if name == fsys.name {
+		return nil, fsys.err
+	}
+	return fsys.FS.Open(name)
+}
+
+func (fsys openErrorFS) Stat(name string) (fs.FileInfo, error) {
+	return fs.Stat(fsys.FS, name)
+}
+
 func (fsys *openCountingFS) Open(name string) (fs.File, error) {
 	fsys.opens++
 	return fsys.FS.Open(name)
@@ -88,6 +105,22 @@ func TestGrepFilesTool(t *testing.T) {
 		}
 		if !strings.Contains(result.Output, "No matches") {
 			t.Errorf("expected no-matches message, got: %s", result.Output)
+		}
+	})
+
+	t.Run("directly searched file open error is returned", func(t *testing.T) {
+		fsys := openErrorFS{
+			FS:   fstest.MapFS{"denied.txt": {Data: []byte("needle\n")}},
+			name: "denied.txt",
+			err:  fs.ErrPermission,
+		}
+		tool := newGrepFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"pattern":"needle","path":"denied.txt"}`})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !result.IsError || !strings.Contains(result.Output, "open denied.txt: permission denied") {
+			t.Fatalf("output = %q, want an open error", result.Output)
 		}
 	})
 
@@ -345,6 +378,19 @@ func TestGrepFilesTool(t *testing.T) {
 		}
 		if !strings.Contains(result.Output, "f.txt:2: needle") {
 			t.Errorf("search did not continue after the long line: %s", result.Output)
+		}
+	})
+
+	t.Run("unterminated line at buffer boundary is searched", func(t *testing.T) {
+		content := strings.Repeat("x", binaryProbeSize-len("needle")) + "needle"
+		fsys := fstest.MapFS{"f.txt": {Data: []byte(content)}}
+		tool := newGrepFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"pattern":"needle"}`})
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected error: %v %s", err, result.Output)
+		}
+		if !strings.Contains(result.Output, "f.txt:1:") {
+			t.Errorf("unterminated boundary line was not searched: %s", result.Output)
 		}
 	})
 

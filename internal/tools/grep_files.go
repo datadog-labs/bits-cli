@@ -122,13 +122,16 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 		start := args.Offset
 		seen := 0
 
-		searchFile := func(filePath string) error {
+		searchFile := func(filePath string, skipOpenErrors bool) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			f, err := fsys.Open(filePath)
 			if err != nil {
-				return nil
+				if skipOpenErrors {
+					return nil
+				}
+				return fmt.Errorf("open %s: %w", filePath, err)
 			}
 			defer func() { _ = f.Close() }()
 			stopClose := context.AfterFunc(ctx, func() { _ = f.Close() })
@@ -179,7 +182,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 			if includeMatcher != nil && !includeMatcher.MatchPath(base, false) {
 				return agent.ToolResult{Output: "No matches found."}, nil
 			}
-			if err := searchFile(base); err != nil {
+			if err := searchFile(base, false); err != nil {
 				if !errors.Is(err, errGrepMatchLimit) {
 					if ctxErr := ctx.Err(); ctxErr != nil {
 						return agent.ToolResult{}, ctxErr
@@ -216,7 +219,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 				if includeMatcher != nil && !includeMatcher.MatchPath(p, false) {
 					return nil
 				}
-				return searchFile(p)
+				return searchFile(p, true)
 			})
 			if errors.Is(walkErr, errGrepMatchLimit) {
 				cappedByMatchLimit = true
@@ -287,6 +290,12 @@ func scanGrepLines(ctx context.Context, r io.Reader, visit func(int, []byte) err
 		fragment, isPrefix, err := br.ReadLine()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if len(line) > 0 && !tooLong {
+					lineNum++
+					if err := visit(lineNum, line); err != nil {
+						return err
+					}
+				}
 				return nil
 			}
 			return err

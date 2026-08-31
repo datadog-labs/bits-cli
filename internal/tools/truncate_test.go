@@ -47,7 +47,7 @@ func TestTruncateLines(t *testing.T) {
 			totalLines: 10,
 			wantTrunc:  true,
 			wantNext:   4,
-			wantSnip:   "Line 3 exceeds",
+			wantSnip:   "offset=4",
 		},
 		{
 			name:       "continuation hint line numbers with offset",
