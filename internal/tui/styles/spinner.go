@@ -30,11 +30,15 @@ func (s Spinner) Frame(step int) string {
 	if held < 1 {
 		held = 1
 	}
-	i := (step / held) % len(s.frames)
-	if i < 0 {
-		i += len(s.frames)
+	// Normalise into one full cycle before dividing. Go truncates integer
+	// division toward zero, so dividing a negative step by the hold count first
+	// lands on the wrong glyph — and rounds two different negative steps onto
+	// the same one.
+	step %= s.Len()
+	if step < 0 {
+		step += s.Len()
 	}
-	return s.frames[i]
+	return s.frames[step/held]
 }
 
 // withoutMotion returns a spinner with no frames, so callers fall back to their

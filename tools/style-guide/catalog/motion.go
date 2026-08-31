@@ -41,8 +41,8 @@ const (
 // Rounded pill caps (powerline), the same glyphs the transcript uses. They
 // need a Nerd/Powerline font; without one they show as missing-glyph boxes.
 const (
-	motionCapLeft  = ""
-	motionCapRight = ""
+	motionCapLeft  = ""
+	motionCapRight = ""
 )
 
 // motionSteps is how many frames the illustrative option rows loop over. It

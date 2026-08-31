@@ -286,3 +286,16 @@ func TestSpinnerHoldsEachGlyph(t *testing.T) {
 		t.Error("the spinner should advance within two ticks")
 	}
 }
+
+// TestSpinnerFrameWrapsNegativeSteps guards the documented contract. Integer
+// division truncates toward zero, so a negative step divided by the hold count
+// lands on the wrong glyph unless the step is normalised into range first.
+func TestSpinnerFrameWrapsNegativeSteps(t *testing.T) {
+	s := Default(true).Chat.StatusSpinner
+	n := s.Len()
+	for step := 1; step <= n+3; step++ {
+		if got, want := s.Frame(-step), s.Frame(n-step%n); got != want {
+			t.Errorf("Frame(%d) = %q, want %q (same glyph as step %d)", -step, got, want, n-step%n)
+		}
+	}
+}
