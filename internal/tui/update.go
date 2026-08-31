@@ -13,7 +13,6 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
-	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 // historyLoadTimeout bounds the conversation-history fetch on startup.
@@ -92,6 +91,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setDarkBackground(msg.IsDark())
 		return m, nil
 
+	case tea.ColorProfileMsg:
+		return m, m.setColorProfile(msg.Profile)
+
+	case animTickMsg:
+		return m, m.advanceAnimation(msg)
+
 	case tea.KeyPressMsg:
 		// Global quit must win over mode-specific input routing. In particular,
 		// /resume may own a live list/history request that must be cancelled
@@ -123,7 +128,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd := m.applyEvent(msg.ev)
 		m.refreshViewport()
-		return m, tea.Batch(cmd, waitEvent(msg.generation, m.turnEvents))
+		// Tool state only changes on engine events, so this is where the chip
+		// animation starts and stops.
+		return m, tea.Batch(cmd, m.syncAnimation(), waitEvent(msg.generation, m.turnEvents))
 
 	case turnClosedMsg:
 		if !m.acceptRemoteMessage(msg.generation) {
@@ -138,11 +145,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.cancelTurn = nil
 		m.cancelRequested = false
+		// A cancelled turn settles its tools, so this also stops an animation
+		// left running by an interrupted call.
+		stopAnim := m.syncAnimation()
 		if m.pendingNew {
 			m.pendingNew = false
-			return m, m.startNewConversation()
+			return m, tea.Batch(stopAnim, m.startNewConversation())
 		}
-		return m, nil
+		return m, stopAnim
 
 	case conversationListResultMsg:
 		return m, m.applyConversationListResult(msg)
@@ -397,7 +407,7 @@ func (m *Model) setDarkBackground(isDark bool) {
 	if isDark == m.styles.IsDark {
 		return
 	}
-	m.applyStyles(styles.Default(isDark))
+	m.applyStyles(m.theme(isDark))
 	m.refreshViewport()
 }
 
