@@ -50,6 +50,10 @@ type Event struct {
 	Usage  *assistant.Usage // for EventUsage
 	ConvID string           // for EventConversation
 	Err    error            // for EventError
+	// Round is the 1-based backend send the event belongs to (0 for
+	// out-of-turn events). Drained rounds after a denial count but emit
+	// no content events.
+	Round int
 }
 
 // TranscriptUpdate is the snapshot delivered on each block change: the full
@@ -121,6 +125,8 @@ func New(b Backend, opts assistant.SendOptions) *Engine {
 type TurnInput struct {
 	Message string
 	Tools   *ToolSet
+	// OnDeny is the turn's policy after a denial is answered on the wire.
+	OnDeny DenyPolicy
 }
 
 // turnCompletion is the final state captured before an engine operation
@@ -131,6 +137,7 @@ type turnCompletion struct {
 	Blocks         []Block
 	Usage          *assistant.Usage
 	Completed      bool
+	Denied         bool
 	Err            error
 }
 
@@ -245,37 +252,41 @@ func (e *Engine) run(
 		}
 	}
 
-	fold := func(msg assistant.Message) bool {
-		if msg.Results != nil && msg.Results.Usage != nil {
-			completion.Usage = cloneUsage(msg.Results.Usage)
-		}
-		b, ok := e.transcript.AppendMessage(msg)
-		blocks := append([]Block(nil), e.transcript.Blocks()...)
-		if ok {
-			if !send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: blocks, Changed: b}}) {
-				return false
-			}
-		}
-		if msg.Results != nil && msg.Results.Usage != nil {
-			if !send(Event{Kind: EventUsage, Usage: msg.Results.Usage}) {
-				return false
-			}
-		}
-		return true
-	}
-
 	// The user's turn opens the transcript; the engine owns the user block too.
 	userBlock := e.transcript.AppendUser(in.Message)
 	userBlocks := append([]Block(nil), e.transcript.Blocks()...)
-	if !send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: userBlocks, Changed: userBlock}}) {
+	if !send(Event{Kind: EventBlock, Round: 1, Update: TranscriptUpdate{Blocks: userBlocks, Changed: userBlock}}) {
 		return
 	}
 
 	var next any = in.Message
 	convID := e.ConversationID()
 
-	for range maxTurns {
+	for round := 1; round <= maxTurns; round++ {
 		var calls []assistant.Content
+
+		emit := func(ev Event) bool {
+			ev.Round = round
+			return send(ev)
+		}
+		fold := func(msg assistant.Message) bool {
+			if msg.Results != nil && msg.Results.Usage != nil {
+				completion.Usage = cloneUsage(msg.Results.Usage)
+			}
+			b, ok := e.transcript.AppendMessage(msg)
+			blocks := append([]Block(nil), e.transcript.Blocks()...)
+			if ok {
+				if !emit(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: blocks, Changed: b}}) {
+					return false
+				}
+			}
+			if msg.Results != nil && msg.Results.Usage != nil {
+				if !emit(Event{Kind: EventUsage, Usage: msg.Results.Usage}) {
+					return false
+				}
+			}
+			return true
+		}
 
 		opts := e.opts
 		opts.ConversationID = convID
@@ -305,10 +316,10 @@ func (e *Engine) run(
 			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
 				completion.Err = err
 				e.finalizeTranscript()
-				if id != "" && !send(Event{Kind: EventConversation, ConvID: id}) {
+				if id != "" && !emit(Event{Kind: EventConversation, ConvID: id}) {
 					return
 				}
-				send(Event{Kind: EventError, Err: err})
+				emit(Event{Kind: EventError, Err: err})
 				return
 			}
 		}
@@ -318,46 +329,49 @@ func (e *Engine) run(
 
 		convID = id
 		e.opts.ConversationID = convID
-		send(Event{Kind: EventConversation, ConvID: convID})
+		emit(Event{Kind: EventConversation, ConvID: convID})
 
 		if len(calls) == 0 {
 			e.finalizeTranscript()
-			completion.Completed = send(Event{Kind: EventTurnDone})
+			completion.Completed = emit(Event{Kind: EventTurnDone})
 			return
 		}
-		toolRound, err := e.runTools(ctx, tools, calls, generation, send)
+		toolRound, err := e.runTools(ctx, tools, calls, generation, emit, in.OnDeny)
 		if err != nil {
 			completion.Err = err
+			completion.Denied = completion.Denied || toolRound.denied
 			e.finalizeTranscript()
-			send(Event{Kind: EventError, Err: err})
+			emit(Event{Kind: EventError, Err: err})
 			return
 		}
+		completion.Denied = completion.Denied || toolRound.denied
 		if toolRound.stopped {
 			// A denial was answered on the wire; discard the follow-up and end the turn.
 			if ctx.Err() == nil {
 				opts.ConversationID = convID
-				id, err = e.drainStoppedToolCalls(ctx, toolRound.responses, opts)
+				id, drainRounds, err := e.drainStoppedToolCalls(ctx, toolRound.responses, opts)
+				terminalRound := round + drainRounds
 				if id != "" {
 					e.opts.ConversationID = id
 				}
 				if err != nil && (ctx.Err() == nil || !errors.Is(err, ctx.Err())) {
 					completion.Err = err
 					e.finalizeTranscript()
-					send(Event{Kind: EventError, Err: err})
+					send(Event{Kind: EventError, Round: terminalRound, Err: err})
 					return
 				}
 				if ctx.Err() != nil {
 					return // cancelled: end the turn quietly
 				}
 				e.finalizeTranscript()
-				completion.Completed = send(Event{Kind: EventTurnDone})
+				completion.Completed = send(Event{Kind: EventTurnDone, Round: terminalRound})
 			}
 			return
 		}
 		if !toolRound.complete {
 			if ctx.Err() == nil {
 				e.finalizeTranscript()
-				completion.Completed = send(Event{Kind: EventTurnDone})
+				completion.Completed = emit(Event{Kind: EventTurnDone})
 			}
 			return
 		}
@@ -365,19 +379,21 @@ func (e *Engine) run(
 	}
 	completion.Err = ErrMaxTurns
 	e.finalizeTranscript()
-	send(Event{Kind: EventError, Err: ErrMaxTurns})
+	send(Event{Kind: EventError, Round: maxTurns, Err: ErrMaxTurns})
 }
 
-// drainStoppedToolCalls discards model output after a stopped round while
-// cancelling every follow-up client call so the backend is never left waiting.
+// drainStoppedToolCalls cancels follow-up client calls after a stopped
+// round so the backend is never left waiting.
 func (e *Engine) drainStoppedToolCalls(
 	ctx context.Context,
 	responses []assistant.ClientToolResponse,
 	opts assistant.SendOptions,
-) (string, error) {
+) (string, int, error) {
 	payload := any(responses)
 	conversationID := opts.ConversationID
+	rounds := 0
 	for range maxTurns {
+		rounds++
 		var calls []ToolCall
 		seen := make(map[string]struct{})
 		id, err := e.backend.Send(ctx, payload, opts, func(response assistant.AssistantResponse) error {
@@ -400,10 +416,10 @@ func (e *Engine) drainStoppedToolCalls(
 			opts.ConversationID = id
 		}
 		if err != nil {
-			return conversationID, err
+			return conversationID, rounds, err
 		}
 		if len(calls) == 0 {
-			return conversationID, nil
+			return conversationID, rounds, nil
 		}
 		drained := make([]assistant.ClientToolResponse, len(calls))
 		for i, call := range calls {
@@ -411,14 +427,14 @@ func (e *Engine) drainStoppedToolCalls(
 		}
 		payload = drained
 	}
-	return conversationID, ErrMaxTurns
+	return conversationID, rounds, ErrMaxTurns
 }
 
-// toolRound is one client-tool round trip's ordered wire response and whether
-// the round stopped after a denial.
+// toolRound is one client-tool round trip's wire responses and outcome.
 type toolRound struct {
 	responses []assistant.ClientToolResponse
 	complete  bool
+	denied    bool
 	stopped   bool
 }
 
@@ -543,6 +559,7 @@ func (e *Engine) runTools(
 	contents []assistant.Content,
 	generation uint64,
 	send func(Event) bool,
+	onDeny DenyPolicy,
 ) (toolRound, error) {
 	work := make([]pendingTool, len(contents))
 	seen := make(map[string]struct{}, len(contents))
@@ -566,6 +583,7 @@ func (e *Engine) runTools(
 	resolved := make(map[string]bool, len(work))
 	results := make(chan toolDone, len(work))
 	outstanding := len(work)
+	denied := false
 	stopRequested := false
 
 	emit := func(block Block, ok bool) bool {
@@ -589,6 +607,11 @@ func (e *Engine) runTools(
 	record := func(item pendingTool, result ToolResult) bool {
 		responses[item.index] = toolResponse(item.call, result)
 		return finishBlock(item, result)
+	}
+	// deny answers a gate refusal on the wire.
+	deny := func(item pendingTool, result ToolResult) bool {
+		denied = true
+		return record(item, result)
 	}
 	launch := func(item pendingTool, approved bool) bool {
 		toolCtx, cancel := context.WithCancel(ctx)
@@ -640,21 +663,24 @@ func (e *Engine) runTools(
 
 	for _, item := range work {
 		if item.call.Name == assistant.ApprovalRequestTool {
-			// The server-injected approval_request is a protocol gate, not a
-			// registered tool. Gated mode denies it without an interactive
-			// decision; surfacing server gates in the TUI approval flow is a
-			// tracked follow-up.
-			result := approvedResult()
-			if !tools.ApprovesServerGate() {
-				result = serverDeniedResult()
-				stopRequested = true
-			}
-			if !record(item, result) {
-				cancelRunning()
-				return toolRound{}, nil
-			}
-			if stopRequested && !stopPendingAfterDenial() {
-				return toolRound{}, nil
+			// A protocol gate, not a registered tool. Gated mode denies it with
+			// no interactive decision; the TUI flow is tracked in BCLI-41.
+			if tools.ApprovesServerGate() {
+				if !record(item, approvedResult()) {
+					cancelRunning()
+					return toolRound{denied: denied}, nil
+				}
+			} else {
+				if !deny(item, serverDeniedResult()) {
+					cancelRunning()
+					return toolRound{denied: denied}, nil
+				}
+				if onDeny == DenyStop {
+					stopRequested = true
+					if !stopPendingAfterDenial() {
+						return toolRound{denied: denied}, nil
+					}
+				}
 			}
 			continue
 		}
@@ -664,7 +690,7 @@ func (e *Engine) runTools(
 			if stopRequested {
 				if !record(item, cancelledResult()) {
 					cancelRunning()
-					return toolRound{}, nil
+					return toolRound{denied: denied}, nil
 				}
 				continue
 			}
@@ -673,13 +699,13 @@ func (e *Engine) runTools(
 			block, ok := e.transcript.MarkAwaitingApproval(item.call.ID, requirement.Prompt)
 			if !emit(block, ok) {
 				cancelRunning()
-				return toolRound{}, nil
+				return toolRound{denied: denied}, nil
 			}
 			continue
 		}
 		if !launch(item, false) {
 			cancelRunning()
-			return toolRound{}, nil
+			return toolRound{denied: denied}, nil
 		}
 	}
 
@@ -694,7 +720,7 @@ func (e *Engine) runTools(
 					delete(pending, command.id)
 					if !record(item, cancelledResult()) {
 						cancelRunning()
-						return toolRound{}, nil
+						return toolRound{denied: denied}, nil
 					}
 					continue
 				}
@@ -703,7 +729,7 @@ func (e *Engine) runTools(
 					delete(running, command.id)
 					if !record(byID[command.id], cancelledResult()) {
 						cancelRunning()
-						return toolRound{}, nil
+						return toolRound{denied: denied}, nil
 					}
 				}
 				continue
@@ -715,13 +741,17 @@ func (e *Engine) runTools(
 			}
 			delete(pending, command.id)
 			if command.decision == ApprovalDeny {
-				if !record(item, deniedResult()) {
+				// Answer the denial on the wire; siblings still resolve. Under
+				// DenyStop the round then aborts without a follow-up round.
+				if !deny(item, deniedResult()) {
 					cancelRunning()
-					return toolRound{}, nil
+					return toolRound{denied: denied}, nil
 				}
-				stopRequested = true
-				if !stopPendingAfterDenial() {
-					return toolRound{}, nil
+				if onDeny == DenyStop {
+					stopRequested = true
+					if !stopPendingAfterDenial() {
+						return toolRound{denied: denied}, nil
+					}
 				}
 				continue
 			}
@@ -730,7 +760,7 @@ func (e *Engine) runTools(
 			}
 			if !launch(item, true) {
 				cancelRunning()
-				return toolRound{}, nil
+				return toolRound{denied: denied}, nil
 			}
 			for id, sibling := range pending {
 				if _, granted := e.sessionGrants[sibling.key]; !granted {
@@ -739,7 +769,7 @@ func (e *Engine) runTools(
 				delete(pending, id)
 				if !launch(sibling, true) {
 					cancelRunning()
-					return toolRound{}, nil
+					return toolRound{denied: denied}, nil
 				}
 			}
 
@@ -753,29 +783,28 @@ func (e *Engine) runTools(
 			}
 			item := work[done.index]
 			if done.err != nil {
-				if stopRequested {
-					// Keep answering the stopped round on the wire: record the
-					// failure instead of aborting so every call gets a response.
+				if stopRequested || denied {
+					// Record the failure so the round's batch still gets answered.
 					if !record(item, ToolResult{Title: "Tool failed", Output: done.err.Error(), IsError: true}) {
 						cancelRunning()
-						return toolRound{}, nil
+						return toolRound{denied: denied}, nil
 					}
 					continue
 				}
 				stopRound(&item, done.err)
-				return toolRound{}, done.err
+				return toolRound{denied: denied}, done.err
 			}
 			if !record(item, done.result) {
 				cancelRunning()
-				return toolRound{}, nil
+				return toolRound{denied: denied}, nil
 			}
 
 		case <-ctx.Done():
 			cancelRunning()
-			return toolRound{}, nil
+			return toolRound{denied: denied}, nil
 		}
 	}
-	return toolRound{responses: responses, complete: true, stopped: stopRequested}, nil
+	return toolRound{responses: responses, complete: true, denied: denied, stopped: stopRequested}, nil
 }
 
 func toolCallOf(content assistant.Content) ToolCall {

@@ -48,6 +48,10 @@ type ToolBlock struct {
 	Detail       string
 	IsClientSide bool
 	Approval     *ApprovalPrompt
+	// Denied marks an approval refusal, not a tool error.
+	Denied bool
+	// Cancelled marks a call ended by a user stop rather than a tool failure.
+	Cancelled bool
 }
 
 // ToolBlockOf builds the aggregated view of a tool content block.

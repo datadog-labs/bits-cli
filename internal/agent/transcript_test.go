@@ -241,3 +241,21 @@ func TestFinalizeAllReleasesStreamingAccumulator(t *testing.T) {
 		t.Fatalf("final block = %+v, want complete", got)
 	}
 }
+
+func TestClientToolCallDerivedClientSideWithoutEngineFold(t *testing.T) {
+	// Restore and replay fold history straight into the transcript, never
+	// passing through the engine's live-stream fold, so client-side derivation
+	// must not depend on the wire is_client_side field.
+	tr := NewTranscript()
+	content := assistant.ToolCallContent("call-1", "get_local_time", "{}")
+	content.Type = assistant.ContentClientToolCall
+	tr.AppendMessage(assistant.AssistantMessage("m1", content))
+
+	blocks := tr.Blocks()
+	if len(blocks) != 1 || blocks[0].Tool == nil {
+		t.Fatalf("transcript blocks = %+v", blocks)
+	}
+	if !blocks[0].Tool.IsClientSide {
+		t.Fatal("replayed client tool call was not derived as client-side")
+	}
+}
