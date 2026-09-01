@@ -285,3 +285,113 @@ func TestReadFileTool(t *testing.T) {
 		}
 	})
 }
+
+func TestReadWindow(t *testing.T) {
+	join := func(n int, s string) string { return strings.Join(repeatLines(n, s), "\n") }
+
+	tests := []struct {
+		name       string
+		content    string
+		offset     int
+		limit      *int
+		totalLines int
+		wantExact  string   // when set, output must equal this exactly (zero-copy path)
+		wantSnips  []string // substrings that must be present
+		noSnips    []string // substrings that must be absent
+	}{
+		{
+			name:       "no truncation returns content unchanged",
+			content:    join(10, "hello"),
+			offset:     1,
+			totalLines: 10,
+			wantExact:  join(10, "hello"),
+			noSnips:    []string{"Use offset=", "more lines"},
+		},
+		{
+			name:       "byte cap",
+			content:    join(5, strings.Repeat("a", maxReadBytes/3)),
+			offset:     1,
+			totalLines: 5,
+			wantSnips:  []string{"Showing lines 1\u20132 of 5", "offset=3"},
+		},
+		{
+			// The last line has no trailing newline, so a final line of exactly
+			// maxReadBytes must fit rather than be reported as over the limit.
+			name:       "final line exactly at byte cap fits",
+			content:    strings.Repeat("a", maxReadBytes),
+			offset:     1,
+			totalLines: 1,
+			wantExact:  strings.Repeat("a", maxReadBytes),
+		},
+		{
+			// A non-final line of maxReadBytes is charged for its newline and so
+			// exceeds the cap.
+			name:       "non-final line at byte cap exceeds",
+			content:    strings.Repeat("a", maxReadBytes) + "\nb",
+			offset:     1,
+			totalLines: 2,
+			wantSnips:  []string{"exceeds", "offset=2"},
+		},
+		{
+			name:       "line at offset exceeds byte limit",
+			content:    "b\nb\n" + strings.Repeat("a", maxReadBytes+1) + "\n" + join(7, "b"),
+			offset:     3,
+			totalLines: 10,
+			wantSnips:  []string{"exceeds", "offset=4"},
+		},
+		{
+			name:       "continuation hint line numbers with offset",
+			content:    join(maxReadLines+501, "x"),
+			offset:     501,
+			totalLines: maxReadLines + 501,
+			wantSnips: []string{
+				fmt.Sprintf("Showing lines 501\u2013%d of %d", 500+maxReadLines, maxReadLines+501),
+				fmt.Sprintf("offset=%d", 501+maxReadLines),
+			},
+		},
+		{
+			name:       "limit reaching end adds no hint",
+			content:    join(3, "y"),
+			offset:     1,
+			limit:      new(5),
+			totalLines: 3,
+			wantExact:  join(3, "y"),
+			noSnips:    []string{"more lines", "Use offset="},
+		},
+		{
+			name:       "offset and limit reaching end yield a plain slice of content",
+			content:    "a\nb\nc\nd",
+			offset:     3,
+			limit:      new(2),
+			totalLines: 4,
+			wantExact:  "c\nd",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := readWindow(tt.content, tt.offset, tt.limit, tt.totalLines)
+			if tt.wantExact != "" && got != tt.wantExact {
+				t.Fatalf("output = %q, want %q", got, tt.wantExact)
+			}
+			for _, snip := range tt.wantSnips {
+				if !strings.Contains(got, snip) {
+					t.Errorf("output missing %q:\n%s", snip, got)
+				}
+			}
+			for _, snip := range tt.noSnips {
+				if strings.Contains(got, snip) {
+					t.Errorf("output unexpectedly contains %q:\n%s", snip, got)
+				}
+			}
+		})
+	}
+}
+
+func repeatLines(n int, s string) []string {
+	lines := make([]string, n)
+	for i := range lines {
+		lines[i] = s
+	}
+	return lines
+}

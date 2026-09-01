@@ -107,6 +107,24 @@ func TestListFilesTool(t *testing.T) {
 		}
 	})
 
+	t.Run("depth below minimum rejected", func(t *testing.T) {
+		tool := newListFilesTool(fstest.MapFS{"f.go": {Data: []byte("x")}}, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"depth":0}`})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertError(t, result, "depth must be between")
+	})
+
+	t.Run("depth above maximum rejected", func(t *testing.T) {
+		tool := newListFilesTool(fstest.MapFS{"f.go": {Data: []byte("x")}}, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"depth":11}`})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertError(t, result, "depth must be between")
+	})
+
 	t.Run(".git directory is always skipped", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			".git/config": {Data: []byte("x")},

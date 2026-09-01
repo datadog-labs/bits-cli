@@ -15,6 +15,10 @@ import (
 const (
 	maxListEntries = 2000
 	maxListBytes   = 100 * 1024
+
+	listFilesDefaultDepth = 1
+	listFilesMinDepth     = 1
+	listFilesMaxDepth     = 10
 )
 
 func newListFilesTool(fsys fs.FS, root string) agent.Tool {
@@ -26,7 +30,7 @@ func newListFilesTool(fsys fs.FS, root string) agent.Tool {
 				"type": "object",
 				"properties": map[string]any{
 					"path":  map[string]any{"type": "string", "description": "Workspace-relative directory. Default: workspace root."},
-					"depth": map[string]any{"type": "integer", "description": "Max traversal depth. Default: 1. Max: 10."},
+					"depth": map[string]any{"type": "integer", "description": fmt.Sprintf("Max traversal depth. Default: %d. Range: %d-%d.", listFilesDefaultDepth, listFilesMinDepth, listFilesMaxDepth)},
 				},
 				"additionalProperties": false,
 			},
@@ -46,37 +50,34 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 			Depth *int   `json:"depth"`
 		}
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-			return agent.ToolResult{IsError: true, Output: "invalid input: " + err.Error()}, nil
+			return errorResult("invalid input: %s", err.Error()), nil
 		}
 		if strings.HasPrefix(args.Path, "/") {
-			return agent.ToolResult{IsError: true, Output: "path must be workspace-relative, not absolute"}, nil
+			return errorResult("path must be workspace-relative, not absolute"), nil
 		}
 
 		base := path.Clean(args.Path)
 
-		maxDepth := 1
+		maxDepth := listFilesDefaultDepth
 		if args.Depth != nil {
 			maxDepth = *args.Depth
-			if maxDepth < 1 {
-				maxDepth = 1
-			}
-			if maxDepth > 10 {
-				maxDepth = 10
+			if maxDepth < listFilesMinDepth || maxDepth > listFilesMaxDepth {
+				return errorResult("depth must be between %d and %d", listFilesMinDepth, listFilesMaxDepth), nil
 			}
 		}
 
 		// Verify the target exists and is a directory.
 		info, err := fs.Stat(fsys, base)
 		if err != nil {
-			return agent.ToolResult{IsError: true, Output: "cannot access path: " + err.Error()}, nil
+			return errorResult("cannot access path: %s", err.Error()), nil
 		}
 		if !info.IsDir() {
-			return agent.ToolResult{IsError: true, Output: args.Path + " is not a directory"}, nil
+			return errorResult("%s is not a directory", args.Path), nil
 		}
 
 		ig, err := loadIgnorer(ctx, fsys, base, true)
 		if err != nil {
-			return agent.ToolResult{IsError: true, Output: err.Error()}, nil
+			return errorResult("%s", err.Error()), nil
 		}
 		if base != "." && ig.Ignore(base, true) {
 			return agent.ToolResult{Title: base, Output: "(empty)"}, nil
@@ -149,7 +150,7 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return agent.ToolResult{}, ctxErr
 			}
-			return agent.ToolResult{IsError: true, Output: "walk error: " + err.Error()}, nil
+			return errorResult("walk error: %s", err.Error()), nil
 		}
 
 		if len(entries) == 0 {

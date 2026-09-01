@@ -35,6 +35,11 @@ func NewEditorTools(root string) ([]agent.Tool, error) {
 	}, nil
 }
 
+// errorResult builds an error ToolResult with a formatted output message.
+func errorResult(format string, args ...any) agent.ToolResult {
+	return agent.ToolResult{IsError: true, Output: fmt.Sprintf(format, args...)}
+}
+
 // workspaceReadApproval returns the shared approval policy for the read-only editor tools.
 func workspaceReadApproval(root string) agent.ApprovalPolicy {
 	return func(_ agent.ToolCall) (agent.ApprovalRequirement, bool) {

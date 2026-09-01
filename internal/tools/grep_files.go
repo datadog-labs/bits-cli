@@ -65,16 +65,16 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 			Offset        int    `json:"offset"`
 		}
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
-			return agent.ToolResult{IsError: true, Output: "invalid input: " + err.Error()}, nil
+			return errorResult("invalid input: %s", err.Error()), nil
 		}
 		if args.Pattern == "" {
-			return agent.ToolResult{IsError: true, Output: "pattern is required"}, nil
+			return errorResult("pattern is required"), nil
 		}
 		if args.Offset < 0 {
-			return agent.ToolResult{IsError: true, Output: "offset must not be negative"}, nil
+			return errorResult("offset must not be negative"), nil
 		}
 		if strings.HasPrefix(args.Path, "/") {
-			return agent.ToolResult{IsError: true, Output: "path must be workspace-relative, not absolute"}, nil
+			return errorResult("path must be workspace-relative, not absolute"), nil
 		}
 
 		reStr := args.Pattern
@@ -83,7 +83,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 		}
 		re, err := regexp.Compile(reStr)
 		if err != nil {
-			return agent.ToolResult{IsError: true, Output: "invalid pattern: " + err.Error()}, nil
+			return errorResult("invalid pattern: %s", err.Error()), nil
 		}
 
 		var includeMatcher *gitignore.Matcher
@@ -91,7 +91,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 			includeMatcher = gitignore.New("")
 			includeMatcher.AddPatterns([]byte(args.Include), "")
 			if len(includeMatcher.Errors()) > 0 {
-				return agent.ToolResult{IsError: true, Output: "invalid include pattern: " + args.Include}, nil
+				return errorResult("invalid include pattern: %s", args.Include), nil
 			}
 		}
 
@@ -99,12 +99,12 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 
 		info, err := fs.Stat(fsys, base)
 		if err != nil {
-			return agent.ToolResult{IsError: true, Output: "cannot access path: " + err.Error()}, nil
+			return errorResult("cannot access path: %s", err.Error()), nil
 		}
 
 		ig, err := loadIgnorer(ctx, fsys, base, info.IsDir())
 		if err != nil {
-			return agent.ToolResult{IsError: true, Output: err.Error()}, nil
+			return errorResult("%s", err.Error()), nil
 		}
 		if base != "." && ig.Ignore(base, info.IsDir()) {
 			return agent.ToolResult{Output: "No matches found."}, nil
@@ -178,7 +178,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 					if ctxErr := ctx.Err(); ctxErr != nil {
 						return agent.ToolResult{}, ctxErr
 					}
-					return agent.ToolResult{IsError: true, Output: err.Error()}, nil
+					return errorResult("%s", err.Error()), nil
 				}
 				cappedByMatchLimit = true
 			}
@@ -218,7 +218,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return agent.ToolResult{}, ctxErr
 				}
-				return agent.ToolResult{IsError: true, Output: "walk error: " + walkErr.Error()}, nil
+				return errorResult("walk error: %s", walkErr.Error()), nil
 			}
 		}
 
