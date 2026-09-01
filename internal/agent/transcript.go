@@ -58,6 +58,9 @@ func (t *Transcript) MarkToolExecuted(id string, result ToolResult) (Block, bool
 		if result.Output != "" {
 			tool.Output = result.Output
 		}
+		if result.Display != "" {
+			tool.Detail = result.Display
+		}
 	})
 }
 

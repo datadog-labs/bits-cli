@@ -240,6 +240,154 @@ func TestE2E_ResumeConversationLifecycle(t *testing.T) {
 	}
 }
 
+// TestE2E_ClientToolOutOfBandContent proves the backend stores a client tool
+// response's display Content out of the model's token band, separate from the
+// model-visible Metadata.Output, and that the display content is retrievable via
+// the history API.
+//
+// The wire contract (types.go): ClientToolResponse.Content is a display-only
+// markdown block, while ClientToolResponse.Metadata.Output is what the model
+// sees. On the history side these surface on the tool payload as
+// Content.Tool.Detail (display markdown) and Content.Tool.Metadata.Output
+// (model output). We reply with two distinct nonces so we can tell which field
+// each round-tripped into.
+func TestE2E_ClientToolOutOfBandContent(t *testing.T) {
+	c := requireE2E(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	nonce := time.Now().UnixNano()
+	displayNonce := fmt.Sprintf("display-only-%d", nonce)
+	outputNonce := fmt.Sprintf("model-output-%d", nonce)
+
+	tool := ClientTool{
+		Name:        "record_note",
+		Description: "Record a short note. Call this exactly once with the given text.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"note": map[string]any{"type": "string"},
+			},
+			"required": []string{"note"},
+		},
+	}
+
+	prompt := "Call the record_note tool exactly once, with the note argument set to " +
+		"the exact string \"hello from e2e\". Do not write any other text and do not " +
+		"call any other tool. Just make that single tool call."
+
+	var (
+		toolCallID string
+		toolInput  string
+	)
+	convID, err := c.Send(ctx, prompt, SendOptions{ClientTools: []ClientTool{tool}}, func(ar AssistantResponse) error {
+		ct := ar.Data.Attributes.StructuredMessage.Content
+		// A client-side tool invocation surfaces as ContentClientToolCall; the
+		// stream pauses until we answer it. This is the same discriminator the
+		// engine uses (agent/engine.go).
+		if ct.Type == ContentClientToolCall && ct.Tool != nil && toolCallID == "" {
+			toolCallID = ct.Tool.ToolCallID
+			if ct.Tool.Metadata != nil {
+				toolInput = ct.Tool.Metadata.Input
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("initial Send: %v", err)
+	}
+	if convID == "" {
+		t.Fatal("initial Send returned an empty conversation id")
+	}
+	defer func() {
+		_ = c.DeleteConversation(context.Background(), DeleteConversationInput{ConversationID: convID})
+	}()
+	if toolCallID == "" {
+		t.Fatalf("model did not call the record_note client tool; cannot exercise out-of-band content contract")
+	}
+
+	// Answer the client tool call: distinct display Content vs model Output.
+	responses := []ClientToolResponse{{
+		Type:       "client_tool_response",
+		ToolCallID: toolCallID,
+		Title:      "record_note",
+		Status:     ToolStatusSuccess,
+		Content:    &MarkdownContent{Type: ContentMarkdownFragment, Content: displayNonce},
+		Metadata: ClientToolMetadata{
+			Name:   "record_note",
+			Input:  toolInput,
+			Output: outputNonce,
+		},
+	}}
+	// Send the follow-up on the same conversation and drain its continuation.
+	// The model may reply with text or (defensively) call again; we don't need
+	// to answer a second call, since the response we assert on is the one we
+	// just persisted above.
+	if _, err := c.Send(ctx, responses, SendOptions{ConversationID: convID, ClientTools: []ClientTool{tool}}, func(AssistantResponse) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("follow-up Send with ClientToolResponse: %v", err)
+	}
+
+	hist, err := c.ConversationHistory(ctx, ConversationHistoryInput{ConversationID: convID})
+	if err != nil {
+		t.Fatalf("ConversationHistory: %v", err)
+	}
+
+	var (
+		found      bool
+		gotDisplay string
+		gotOutput  string
+	)
+	for _, m := range hist.Data.Attributes.Messages {
+		ct := m.Content
+		if ct.Kind() != KindToolResult || ct.Tool == nil {
+			continue
+		}
+		// Match on the tool_call_id we answered, falling back to the message
+		// whose model output equals our output nonce.
+		matches := ct.Tool.ToolCallID == toolCallID
+		if !matches && ct.Tool.Metadata != nil && ct.Tool.Metadata.Output == outputNonce {
+			matches = true
+		}
+		if !matches {
+			continue
+		}
+		found = true
+		if ct.Tool.Detail != nil {
+			gotDisplay = ct.Tool.Detail.Content
+		}
+		if ct.Tool.Metadata != nil {
+			gotOutput = ct.Tool.Metadata.Output
+		}
+		break
+	}
+	if !found {
+		t.Fatalf("no tool-response message for tool_call_id %q (or output nonce %q) in history", toolCallID, outputNonce)
+	}
+
+	// The model-visible output must round-trip into the metadata output field.
+	if gotOutput != outputNonce {
+		t.Errorf("metadata output = %q, want model-output nonce %q", gotOutput, outputNonce)
+	}
+	// The key finding: the display-only content must be preserved and
+	// retrievable via the history display field (Content.Tool.Detail), NOT the
+	// model output. If the history does not expose it at all, this fails
+	// explicitly so the result is unambiguous.
+	if gotDisplay != displayNonce {
+		t.Errorf("display content on tool payload Detail = %q, want display-only nonce %q "+
+			"(display content not preserved/retrievable out of band)", gotDisplay, displayNonce)
+	}
+	// The two fields must be genuinely distinct: the display nonce must not have
+	// leaked into the model output, and vice versa.
+	if gotOutput == displayNonce {
+		t.Errorf("display-only nonce leaked into model output field: %q", gotOutput)
+	}
+	if gotDisplay == outputNonce {
+		t.Errorf("model-output nonce appeared in display content field: %q", gotDisplay)
+	}
+}
+
 func TestE2E_ListSkills(t *testing.T) {
 	c := requireE2E(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
