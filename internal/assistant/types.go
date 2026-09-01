@@ -350,6 +350,14 @@ const (
 	// ContentClientToolResponse is the persisted result of a client-side tool
 	// call, echoed into conversation history (role user).
 	ContentClientToolResponse = "client_tool_response"
+)
+
+// ApprovalRequestTool is the name of the server-injected client_tool_call that
+// gates a backend write. It is never advertised in client_tools; the caller
+// answers it directly according to its own approval policy.
+const ApprovalRequestTool = "approval_request"
+
+const (
 	// ContentWidgetDef carries a Datadog dashboard widget definition (in the
 	// WidgetDef field) that the UI renders as a rich visualization. The
 	// definition is a query spec + styling; it contains no data. It is decoded

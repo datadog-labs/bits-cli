@@ -325,25 +325,101 @@ func (e *Engine) run(
 			completion.Completed = send(Event{Kind: EventTurnDone})
 			return
 		}
-		responses, complete, err := e.runTools(ctx, tools, calls, generation, send)
+		toolRound, err := e.runTools(ctx, tools, calls, generation, send)
 		if err != nil {
 			completion.Err = err
 			e.finalizeTranscript()
 			send(Event{Kind: EventError, Err: err})
 			return
 		}
-		if !complete {
+		if toolRound.stopped {
+			// A denial was answered on the wire; discard the follow-up and end the turn.
+			if ctx.Err() == nil {
+				opts.ConversationID = convID
+				id, err = e.drainStoppedToolCalls(ctx, toolRound.responses, opts)
+				if id != "" {
+					e.opts.ConversationID = id
+				}
+				if err != nil && (ctx.Err() == nil || !errors.Is(err, ctx.Err())) {
+					completion.Err = err
+					e.finalizeTranscript()
+					send(Event{Kind: EventError, Err: err})
+					return
+				}
+				if ctx.Err() != nil {
+					return // cancelled: end the turn quietly
+				}
+				e.finalizeTranscript()
+				completion.Completed = send(Event{Kind: EventTurnDone})
+			}
+			return
+		}
+		if !toolRound.complete {
 			if ctx.Err() == nil {
 				e.finalizeTranscript()
 				completion.Completed = send(Event{Kind: EventTurnDone})
 			}
 			return
 		}
-		next = responses
+		next = toolRound.responses
 	}
 	completion.Err = ErrMaxTurns
 	e.finalizeTranscript()
 	send(Event{Kind: EventError, Err: ErrMaxTurns})
+}
+
+// drainStoppedToolCalls discards model output after a stopped round while
+// cancelling every follow-up client call so the backend is never left waiting.
+func (e *Engine) drainStoppedToolCalls(
+	ctx context.Context,
+	responses []assistant.ClientToolResponse,
+	opts assistant.SendOptions,
+) (string, error) {
+	payload := any(responses)
+	conversationID := opts.ConversationID
+	for range maxTurns {
+		var calls []ToolCall
+		seen := make(map[string]struct{})
+		id, err := e.backend.Send(ctx, payload, opts, func(response assistant.AssistantResponse) error {
+			content := response.Data.Attributes.StructuredMessage.Content
+			if content.Type != assistant.ContentClientToolCall {
+				return nil
+			}
+			call := toolCallOf(content)
+			if call.ID == "" {
+				return errors.New("client tool call has no id")
+			}
+			if _, duplicate := seen[call.ID]; !duplicate {
+				seen[call.ID] = struct{}{}
+				calls = append(calls, call)
+			}
+			return nil
+		})
+		if id != "" {
+			conversationID = id
+			opts.ConversationID = id
+		}
+		if err != nil {
+			return conversationID, err
+		}
+		if len(calls) == 0 {
+			return conversationID, nil
+		}
+		drained := make([]assistant.ClientToolResponse, len(calls))
+		for i, call := range calls {
+			drained[i] = toolResponse(call, cancelledResult())
+		}
+		payload = drained
+	}
+	return conversationID, ErrMaxTurns
+}
+
+// toolRound is one client-tool round trip's ordered wire response and whether
+// the round stopped after a denial.
+type toolRound struct {
+	responses []assistant.ClientToolResponse
+	complete  bool
+	stopped   bool
 }
 
 func cloneUsage(usage *assistant.Usage) *assistant.Usage {
@@ -467,17 +543,17 @@ func (e *Engine) runTools(
 	contents []assistant.Content,
 	generation uint64,
 	send func(Event) bool,
-) ([]assistant.ClientToolResponse, bool, error) {
+) (toolRound, error) {
 	work := make([]pendingTool, len(contents))
 	seen := make(map[string]struct{}, len(contents))
 	byID := make(map[string]pendingTool, len(contents))
 	for i, content := range contents {
 		call := toolCallOf(content)
 		if call.ID == "" {
-			return nil, false, errors.New("client tool call has no id")
+			return toolRound{}, errors.New("client tool call has no id")
 		}
 		if _, exists := seen[call.ID]; exists {
-			return nil, false, fmt.Errorf("duplicate client tool call id %q", call.ID)
+			return toolRound{}, fmt.Errorf("duplicate client tool call id %q", call.ID)
 		}
 		seen[call.ID] = struct{}{}
 		work[i] = pendingTool{call: call, index: i}
@@ -490,6 +566,7 @@ func (e *Engine) runTools(
 	resolved := make(map[string]bool, len(work))
 	results := make(chan toolDone, len(work))
 	outstanding := len(work)
+	stopRequested := false
 
 	emit := func(block Block, ok bool) bool {
 		return !ok || send(Event{
@@ -535,6 +612,18 @@ func (e *Engine) runTools(
 			cancel()
 		}
 	}
+	// stopPendingAfterDenial answers still-pending approvals as cancelled;
+	// running siblings finish so their real results reach the wire batch.
+	stopPendingAfterDenial := func() bool {
+		for id, item := range pending {
+			delete(pending, id)
+			if !record(item, cancelledResult()) {
+				cancelRunning()
+				return false
+			}
+		}
+		return true
+	}
 	stopRound := func(failed *pendingTool, err error) {
 		cancelRunning()
 		for _, item := range work {
@@ -550,21 +639,47 @@ func (e *Engine) runTools(
 	}
 
 	for _, item := range work {
+		if item.call.Name == assistant.ApprovalRequestTool {
+			// The server-injected approval_request is a protocol gate, not a
+			// registered tool. Gated mode denies it without an interactive
+			// decision; surfacing server gates in the TUI approval flow is a
+			// tracked follow-up.
+			result := approvedResult()
+			if !tools.ApprovesServerGate() {
+				result = serverDeniedResult()
+				stopRequested = true
+			}
+			if !record(item, result) {
+				cancelRunning()
+				return toolRound{}, nil
+			}
+			if stopRequested && !stopPendingAfterDenial() {
+				return toolRound{}, nil
+			}
+			continue
+		}
 		requirement, needsApproval := tools.Approval(item.call)
 		_, granted := e.sessionGrants[requirement.Key]
 		if needsApproval && !granted {
+			if stopRequested {
+				if !record(item, cancelledResult()) {
+					cancelRunning()
+					return toolRound{}, nil
+				}
+				continue
+			}
 			item.key = requirement.Key
 			pending[item.call.ID] = item
 			block, ok := e.transcript.MarkAwaitingApproval(item.call.ID, requirement.Prompt)
 			if !emit(block, ok) {
 				cancelRunning()
-				return nil, false, nil
+				return toolRound{}, nil
 			}
 			continue
 		}
 		if !launch(item, false) {
 			cancelRunning()
-			return nil, false, nil
+			return toolRound{}, nil
 		}
 	}
 
@@ -579,7 +694,7 @@ func (e *Engine) runTools(
 					delete(pending, command.id)
 					if !record(item, cancelledResult()) {
 						cancelRunning()
-						return nil, false, nil
+						return toolRound{}, nil
 					}
 					continue
 				}
@@ -588,7 +703,7 @@ func (e *Engine) runTools(
 					delete(running, command.id)
 					if !record(byID[command.id], cancelledResult()) {
 						cancelRunning()
-						return nil, false, nil
+						return toolRound{}, nil
 					}
 				}
 				continue
@@ -600,16 +715,22 @@ func (e *Engine) runTools(
 			}
 			delete(pending, command.id)
 			if command.decision == ApprovalDeny {
-				finishBlock(item, deniedResult())
-				stopRound(nil, nil)
-				return nil, false, nil
+				if !record(item, deniedResult()) {
+					cancelRunning()
+					return toolRound{}, nil
+				}
+				stopRequested = true
+				if !stopPendingAfterDenial() {
+					return toolRound{}, nil
+				}
+				continue
 			}
 			if command.decision == ApprovalAllowSession {
 				e.sessionGrants[item.key] = struct{}{}
 			}
 			if !launch(item, true) {
 				cancelRunning()
-				return nil, false, nil
+				return toolRound{}, nil
 			}
 			for id, sibling := range pending {
 				if _, granted := e.sessionGrants[sibling.key]; !granted {
@@ -618,7 +739,7 @@ func (e *Engine) runTools(
 				delete(pending, id)
 				if !launch(sibling, true) {
 					cancelRunning()
-					return nil, false, nil
+					return toolRound{}, nil
 				}
 			}
 
@@ -632,20 +753,29 @@ func (e *Engine) runTools(
 			}
 			item := work[done.index]
 			if done.err != nil {
+				if stopRequested {
+					// Keep answering the stopped round on the wire: record the
+					// failure instead of aborting so every call gets a response.
+					if !record(item, ToolResult{Title: "Tool failed", Output: done.err.Error(), IsError: true}) {
+						cancelRunning()
+						return toolRound{}, nil
+					}
+					continue
+				}
 				stopRound(&item, done.err)
-				return nil, false, done.err
+				return toolRound{}, done.err
 			}
 			if !record(item, done.result) {
 				cancelRunning()
-				return nil, false, nil
+				return toolRound{}, nil
 			}
 
 		case <-ctx.Done():
 			cancelRunning()
-			return nil, false, nil
+			return toolRound{}, nil
 		}
 	}
-	return responses, true, nil
+	return toolRound{responses: responses, complete: true, stopped: stopRequested}, nil
 }
 
 func toolCallOf(content assistant.Content) ToolCall {

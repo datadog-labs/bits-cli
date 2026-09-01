@@ -66,6 +66,21 @@ func deniedResult() ToolResult {
 	}
 }
 
+func serverDeniedResult() ToolResult {
+	return ToolResult{
+		Title:   "Permission denied",
+		Output:  "the user denied this action",
+		IsError: true,
+	}
+}
+
+func approvedResult() ToolResult {
+	return ToolResult{
+		Title:  "Approved",
+		Output: "the write was approved",
+	}
+}
+
 func cancelledResult() ToolResult {
 	return ToolResult{
 		Title:   "Cancelled",

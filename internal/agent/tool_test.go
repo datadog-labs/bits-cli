@@ -207,10 +207,12 @@ func TestEngineApprovalScope(t *testing.T) {
 			wantCalls:     3,
 		},
 		{
+			// Deny: the denial is answered, then siblings and follow-up calls cancel.
 			name:          "deny aborts pending round",
 			decision:      ApprovalDeny,
 			wantDecisions: 1,
-			wantCalls:     1,
+			wantRuns:      0,
+			wantCalls:     3,
 		},
 	}
 
@@ -238,6 +240,7 @@ func TestEngineApprovalScope(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			engine := New(backend, assistant.SendOptions{})
+			// Interactive surface: stop after the denial is answered on the wire.
 			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools})
 			decisions := 0
 			decide := func(id string) {
@@ -247,7 +250,8 @@ func TestEngineApprovalScope(t *testing.T) {
 				decisions++
 			}
 
-			waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
+			var all []Event
+			all = append(all, waitForToolStatusEvents(t, events, "call-a", ToolAwaitingApproval)...)
 			decide("call-a")
 			if tt.decision == ApprovalAllowOnce {
 				beforeACompleted := waitForToolStatusEvents(t, events, "call-a", ToolSuccess)
@@ -258,11 +262,13 @@ func TestEngineApprovalScope(t *testing.T) {
 					t.Fatal("allow-once approval released sibling call")
 				}
 				decide("call-b")
-				waitForToolStatus(t, events, "call-b", ToolSuccess)
-				waitForToolStatus(t, events, "call-c", ToolAwaitingApproval)
+				all = append(all, waitForToolStatusEvents(t, events, "call-c", ToolAwaitingApproval)...)
 				decide("call-c")
 			}
+			// ApprovalDeny aborts right after call-a's answer; a session grant
+			// decides later gates on its own. Draining ends both cases.
 			rest := drain(events)
+			all = append(all, rest...)
 
 			if decisions != tt.wantDecisions {
 				t.Fatalf("decisions = %d, want %d", decisions, tt.wantDecisions)
@@ -278,11 +284,25 @@ func TestEngineApprovalScope(t *testing.T) {
 			}
 
 			if tt.decision == ApprovalDeny {
-				if len(backend.responses) != 0 {
-					t.Fatalf("response batches = %d, want 0", len(backend.responses))
+				// Denial and sibling answer first; the follow-up drains as cancelled.
+				if len(backend.responses) != 2 || len(backend.responses[0]) != 2 || len(backend.responses[1]) != 1 {
+					t.Fatalf("response batch sizes = %v, want [2 1]", responseBatchSizes(backend.responses))
 				}
-				assertToolResult(t, rest, "call-a", "Permission denied")
-				assertToolResult(t, rest, "call-b", "Cancelled")
+				if response := backend.responses[0][0]; response.ToolCallID != "call-a" || response.Status != assistant.ToolStatusError || response.Metadata.Output != "local execution was denied by the user" {
+					t.Fatalf("denial response = %+v, want the typed error for call-a", response)
+				}
+				if response := backend.responses[0][1]; response.ToolCallID != "call-b" || response.Status != assistant.ToolStatusError {
+					t.Fatalf("sibling response = %+v, want the cancelled result sent on the wire", response)
+				}
+				if response := backend.responses[1][0]; response.ToolCallID != "call-c" || response.Status != assistant.ToolStatusError || response.Metadata.Output != "tool execution was cancelled by the user" {
+					t.Fatalf("follow-up response = %+v, want the cancelled result sent on the wire", response)
+				}
+				assertToolResult(t, all, "call-a", "Permission denied")
+				assertToolResult(t, all, "call-b", "Cancelled")
+				// The abort happened before the follow-up round: call-c never decides.
+				if hasToolStatus(all, "call-c", ToolAwaitingApproval) {
+					t.Fatal("aborted round still processed the model's follow-up round")
+				}
 				return
 			}
 
@@ -305,6 +325,21 @@ func TestNewToolSetRejectsInvalidApprovalMode(t *testing.T) {
 		if !strings.Contains(err.Error(), "allow-all") || !strings.Contains(err.Error(), "gated") {
 			t.Fatalf("NewToolSet(%q) error %q does not list the valid modes", mode, err)
 		}
+	}
+}
+
+// The server-injected gate name is reserved; a registered tool with that
+// name would be silently intercepted by the engine.
+func TestNewToolSetRejectsApprovalRequestName(t *testing.T) {
+	set, err := NewToolSet(ModeAllowAll, Tool{
+		Definition: assistant.ClientTool{Name: assistant.ApprovalRequestTool},
+		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+	})
+	if err == nil || set != nil {
+		t.Fatalf("NewToolSet(%q) = (%v, %v), want an error", assistant.ApprovalRequestTool, set, err)
+	}
+	if !strings.Contains(err.Error(), "approval gate") {
+		t.Fatalf("error %q does not name the reserved gate", err)
 	}
 }
 

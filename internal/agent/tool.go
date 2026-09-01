@@ -52,6 +52,9 @@ func NewToolSet(mode ApprovalMode, tools ...Tool) (*ToolSet, error) {
 		if name == "" {
 			return nil, fmt.Errorf("tool name is empty")
 		}
+		if name == assistant.ApprovalRequestTool {
+			return nil, fmt.Errorf("tool %q collides with the server approval gate", name)
+		}
 		if tool.Handler == nil {
 			return nil, fmt.Errorf("tool %q handler is nil", name)
 		}
@@ -82,6 +85,12 @@ func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 		Output:  "no client tool named " + call.Name + " is registered",
 		IsError: true,
 	}, nil
+}
+
+// ApprovesServerGate reports whether the server write gate is approved without
+// a local decision: allow-all approves; gated denies. A nil set denies.
+func (s *ToolSet) ApprovesServerGate() bool {
+	return s != nil && s.mode == ModeAllowAll
 }
 
 // Approval reports whether call must wait for an approval decision before
