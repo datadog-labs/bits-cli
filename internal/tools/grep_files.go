@@ -2,13 +2,13 @@ package tools
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -95,10 +95,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 			}
 		}
 
-		base := args.Path
-		if base == "" {
-			base = "."
-		}
+		base := path.Clean(args.Path)
 
 		info, err := fs.Stat(fsys, base)
 		if err != nil {
@@ -144,21 +141,15 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 				return nil
 			}
 
-			// Binary probe.
-			probe := make([]byte, binaryProbeSize)
-			n, readErr := io.ReadFull(contextReader{ctx: ctx, r: f}, probe)
-			if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return ctxErr
-				}
-				return readErr
+			reader, binary, err := probeBinary(ctx, f)
+			if err != nil {
+				return err
 			}
-			if isBinary(probe[:n]) {
+			if binary {
 				return nil
 			}
 
-			// Replay the bytes used for probing, then continue with the original file.
-			return scanGrepLines(ctx, io.MultiReader(bytes.NewReader(probe[:n]), f), func(lineNum int, line []byte) error {
+			return scanGrepLines(ctx, reader, func(lineNum int, line []byte) error {
 				if re.Match(line) {
 					seen++
 					if seen <= start {

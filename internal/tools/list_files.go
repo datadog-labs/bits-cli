@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"path"
 	"strings"
 
 	"github.com/DataDog/bits-cli/internal/agent"
@@ -51,10 +52,7 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 			return agent.ToolResult{IsError: true, Output: "path must be workspace-relative, not absolute"}, nil
 		}
 
-		base := args.Path
-		if base == "" {
-			base = "."
-		}
+		base := path.Clean(args.Path)
 
 		maxDepth := 1
 		if args.Depth != nil {

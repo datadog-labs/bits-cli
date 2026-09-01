@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"path"
 	"strings"
 
 	"github.com/DataDog/bits-cli/internal/agent"
@@ -62,7 +63,8 @@ func readFileHandler(fsys fs.FS) agent.ToolHandler {
 			return agent.ToolResult{IsError: true, Output: "limit must be positive"}, nil
 		}
 
-		f, err := fsys.Open(args.Path)
+		filePath := path.Clean(args.Path)
+		f, err := fsys.Open(filePath)
 		if err != nil {
 			return agent.ToolResult{IsError: true, Output: err.Error()}, nil
 		}
@@ -75,10 +77,10 @@ func readFileHandler(fsys fs.FS) agent.ToolHandler {
 			return agent.ToolResult{IsError: true, Output: err.Error()}, nil
 		}
 		if info.IsDir() {
-			return agent.ToolResult{IsError: true, Output: args.Path + " is a directory"}, nil
+			return agent.ToolResult{IsError: true, Output: filePath + " is a directory"}, nil
 		}
 		if !info.Mode().IsRegular() {
-			return agent.ToolResult{IsError: true, Output: args.Path + " is not a regular file"}, nil
+			return agent.ToolResult{IsError: true, Output: filePath + " is not a regular file"}, nil
 		}
 		if info.Size() > maxFileSize {
 			return agent.ToolResult{IsError: true, Output: fmt.Sprintf("file exceeds 10 MB limit (%d bytes)", info.Size())}, nil
@@ -132,6 +134,6 @@ func readFileHandler(fsys fs.FS) agent.ToolHandler {
 			r.content += fmt.Sprintf("\n\n[%d more lines. Use offset=%d to continue.]", remaining, nextOffset)
 		}
 
-		return agent.ToolResult{Title: args.Path, Output: r.content}, nil
+		return agent.ToolResult{Title: filePath, Output: r.content}, nil
 	}
 }

@@ -212,6 +212,17 @@ func TestReadFileTool(t *testing.T) {
 		}
 	})
 
+	t.Run("relative path syntax is normalized", func(t *testing.T) {
+		fsys := fstest.MapFS{"hello.txt": {Data: []byte("content")}}
+		r := invokeReadFile(t, fsys, map[string]any{"path": "./hello.txt"})
+		if r.IsError {
+			t.Fatalf("unexpected error: %s", r.Output)
+		}
+		if r.Title != "hello.txt" || r.Output != "content" {
+			t.Errorf("result = (%q, %q), want (hello.txt, content)", r.Title, r.Output)
+		}
+	})
+
 	t.Run("offset beyond file end", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"small.txt": &fstest.MapFile{Data: []byte("a\nb\nc")},

@@ -161,6 +161,18 @@ func TestListFilesTool(t *testing.T) {
 		}
 	})
 
+	t.Run("relative path syntax is normalized", func(t *testing.T) {
+		fsys := fstest.MapFS{"src/visible.txt": {Data: []byte("visible")}}
+		tool := newListFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"path":"./src/"}`})
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected error: %v %s", err, result.Output)
+		}
+		if result.Title != "src" || result.Output != "visible.txt" {
+			t.Errorf("result = (%q, %q), want (src, visible.txt)", result.Title, result.Output)
+		}
+	})
+
 	t.Run("empty directory", func(t *testing.T) {
 		// MapFS requires a file to represent a directory; use a gitignored file so the dir appears empty.
 		fsys2 := fstest.MapFS{

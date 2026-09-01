@@ -241,6 +241,18 @@ func TestGrepFilesTool(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid UTF-8 files are skipped", func(t *testing.T) {
+		fsys := fstest.MapFS{"invalid.txt": {Data: []byte("needle\xff")}}
+		tool := newGrepFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"pattern":"needle"}`})
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected error: %v %s", err, result.Output)
+		}
+		if result.Output != "No matches found." {
+			t.Errorf("output = %q, want no matches", result.Output)
+		}
+	})
+
 	t.Run("non-regular files are skipped", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"pipe":    {Data: []byte("needle\n"), Mode: fs.ModeNamedPipe},
@@ -301,6 +313,18 @@ func TestGrepFilesTool(t *testing.T) {
 		}
 		if strings.Contains(result.Output, "secret.txt") || !strings.Contains(result.Output, "visible.txt") {
 			t.Errorf("root ignore rules must apply to scoped searches: %s", result.Output)
+		}
+	})
+
+	t.Run("relative path syntax is normalized", func(t *testing.T) {
+		fsys := fstest.MapFS{"src/visible.txt": {Data: []byte("needle\n")}}
+		tool := newGrepFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"pattern":"needle","path":"./src/"}`})
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected error: %v %s", err, result.Output)
+		}
+		if !strings.Contains(result.Output, "visible.txt:1: needle") {
+			t.Errorf("normalized scoped search missing match: %s", result.Output)
 		}
 	})
 
@@ -391,6 +415,19 @@ func TestGrepFilesTool(t *testing.T) {
 		}
 		if !strings.Contains(result.Output, "f.txt:1:") {
 			t.Errorf("unterminated boundary line was not searched: %s", result.Output)
+		}
+	})
+
+	t.Run("UTF-8 rune crossing probe boundary is searched", func(t *testing.T) {
+		content := strings.Repeat("x", binaryProbeSize-1) + "éneedle\n"
+		fsys := fstest.MapFS{"f.txt": {Data: []byte(content)}}
+		tool := newGrepFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"pattern":"needle"}`})
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected error: %v %s", err, result.Output)
+		}
+		if !strings.Contains(result.Output, "f.txt:1:") {
+			t.Errorf("boundary UTF-8 line was not searched: %s", result.Output)
 		}
 	})
 
