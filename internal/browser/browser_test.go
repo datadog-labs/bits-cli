@@ -12,14 +12,14 @@ func TestConversationURLUsesAuthoritativeSiteMapping(t *testing.T) {
 		site string
 		want string
 	}{
-		{name: "US1", site: "https://api.datadoghq.com", want: "https://app.datadoghq.com/bits?conversation_id=conversation-1"},
-		{name: "US3", site: "https://api.us3.datadoghq.com", want: "https://us3.datadoghq.com/bits?conversation_id=conversation-1"},
-		{name: "US5", site: "https://api.us5.datadoghq.com", want: "https://us5.datadoghq.com/bits?conversation_id=conversation-1"},
-		{name: "EU1", site: "https://api.datadoghq.eu", want: "https://app.datadoghq.eu/bits?conversation_id=conversation-1"},
-		{name: "AP1", site: "https://api.ap1.datadoghq.com", want: "https://ap1.datadoghq.com/bits?conversation_id=conversation-1"},
-		{name: "AP2", site: "https://api.ap2.datadoghq.com", want: "https://ap2.datadoghq.com/bits?conversation_id=conversation-1"},
-		{name: "staging API", site: "https://api.datad0g.com", want: "https://dd.datad0g.com/bits?conversation_id=conversation-1"},
-		{name: "staging direct", site: "https://dd.datad0g.com", want: "https://dd.datad0g.com/bits?conversation_id=conversation-1"},
+		{name: "US1", site: "https://api.datadoghq.com", want: "https://app.datadoghq.com/ask/conversation-1"},
+		{name: "US3", site: "https://api.us3.datadoghq.com", want: "https://us3.datadoghq.com/ask/conversation-1"},
+		{name: "US5", site: "https://api.us5.datadoghq.com", want: "https://us5.datadoghq.com/ask/conversation-1"},
+		{name: "EU1", site: "https://api.datadoghq.eu", want: "https://app.datadoghq.eu/ask/conversation-1"},
+		{name: "AP1", site: "https://api.ap1.datadoghq.com", want: "https://ap1.datadoghq.com/ask/conversation-1"},
+		{name: "AP2", site: "https://api.ap2.datadoghq.com", want: "https://ap2.datadoghq.com/ask/conversation-1"},
+		{name: "staging API", site: "https://api.datad0g.com", want: "https://dd.datad0g.com/ask/conversation-1"},
+		{name: "staging direct", site: "https://dd.datad0g.com", want: "https://dd.datad0g.com/ask/conversation-1"},
 	}
 
 	for _, test := range tests {
@@ -40,7 +40,7 @@ func TestConversationURLEncodesConversationID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "https://app.datadoghq.com/bits?conversation_id=conversation%2Fid%3Fcopy%3Dyes"
+	want := "https://app.datadoghq.com/ask/conversation%2Fid%3Fcopy=yes"
 	if got != want {
 		t.Fatalf("ConversationURL() = %q, want %q", got, want)
 	}
@@ -70,7 +70,7 @@ func TestConversationURLRejectsMissingIDAndUnsupportedSites(t *testing.T) {
 }
 
 func TestLauncherCommand(t *testing.T) {
-	target := "https://app.datadoghq.com/bits?conversation_id=conversation-1"
+	target := "https://app.datadoghq.com/ask/conversation-1"
 	tests := []struct {
 		goos    string
 		command string

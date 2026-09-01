@@ -166,7 +166,7 @@ func TestSubmitWebOpensCurrentConversationWithoutSending(t *testing.T) {
 	}
 	msg := cmd()
 	_, _ = m.Update(msg)
-	want := "https://us3.datadoghq.com/bits?conversation_id=conversation-1"
+	want := "https://us3.datadoghq.com/ask/conversation-1"
 	if opened != want {
 		t.Fatalf("opened URL = %q, want %q", opened, want)
 	}
@@ -235,7 +235,7 @@ func TestSubmitWebLauncherFailureProvidesManualURL(t *testing.T) {
 	if m.notice.Level != chat.NoticeError || !errors.Is(m.notice.Err, launchErr) {
 		t.Fatalf("launcher-failure notice = %#v", m.notice)
 	}
-	for _, want := range []string{"Could not open a browser", "https://app.datadoghq.com/bits?conversation_id=conversation-1"} {
+	for _, want := range []string{"Could not open a browser", "https://app.datadoghq.com/ask/conversation-1"} {
 		if !strings.Contains(m.notice.Text, want) {
 			t.Fatalf("launcher-failure notice %q does not contain %q", m.notice.Text, want)
 		}

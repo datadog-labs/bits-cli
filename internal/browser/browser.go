@@ -45,10 +45,12 @@ func ConversationURL(apiSite, conversationID string) (string, error) {
 		return "", fmt.Errorf("unsupported Datadog Assistant site %q", apiSite)
 	}
 
-	target := &url.URL{Scheme: "https", Host: webHost, Path: "/bits"}
-	query := target.Query()
-	query.Set("conversation_id", conversationID)
-	target.RawQuery = query.Encode()
+	target := &url.URL{
+		Scheme:  "https",
+		Host:    webHost,
+		Path:    "/ask/" + conversationID,
+		RawPath: "/ask/" + url.PathEscape(conversationID),
+	}
 	return target.String(), nil
 }
 
