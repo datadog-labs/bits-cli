@@ -40,7 +40,7 @@ func (b *gateBackend) Send(_ context.Context, message any, _ assistant.SendOptio
 				return "conversation-1", err
 			}
 		}
-		if err := emit(clientToolCall("conversation-1", "gate-message", "gate-1", ApprovalRequestTool, `{"action":"delete_dashboard"}`)); err != nil {
+		if err := emit(clientToolCall("conversation-1", "gate-message", "gate-1", assistant.ApprovalRequestTool, `{"action":"delete_dashboard"}`)); err != nil {
 			return "conversation-1", err
 		}
 		if b.includeSibling && !b.siblingFirst {

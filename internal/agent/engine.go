@@ -639,7 +639,11 @@ func (e *Engine) runTools(
 	}
 
 	for _, item := range work {
-		if item.call.Name == ApprovalRequestTool {
+		if item.call.Name == assistant.ApprovalRequestTool {
+			// The server-injected approval_request is a protocol gate, not a
+			// registered tool. Gated mode denies it without an interactive
+			// decision; surfacing server gates in the TUI approval flow is a
+			// tracked follow-up.
 			result := approvedResult()
 			if !tools.ApprovesServerGate() {
 				result = serverDeniedResult()

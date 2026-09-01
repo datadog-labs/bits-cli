@@ -332,11 +332,11 @@ func TestNewToolSetRejectsInvalidApprovalMode(t *testing.T) {
 // name would be silently intercepted by the engine.
 func TestNewToolSetRejectsApprovalRequestName(t *testing.T) {
 	set, err := NewToolSet(ModeAllowAll, Tool{
-		Definition: assistant.ClientTool{Name: ApprovalRequestTool},
+		Definition: assistant.ClientTool{Name: assistant.ApprovalRequestTool},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 	})
 	if err == nil || set != nil {
-		t.Fatalf("NewToolSet(%q) = (%v, %v), want an error", ApprovalRequestTool, set, err)
+		t.Fatalf("NewToolSet(%q) = (%v, %v), want an error", assistant.ApprovalRequestTool, set, err)
 	}
 	if !strings.Contains(err.Error(), "approval gate") {
 		t.Fatalf("error %q does not name the reserved gate", err)

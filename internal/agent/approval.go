@@ -1,9 +1,5 @@
 package agent
 
-// ApprovalRequestTool is the server-injected client_tool_call that gates a
-// backend write. The engine answers it directly per the active approval mode.
-const ApprovalRequestTool = "approval_request"
-
 type ApprovalDecision string
 
 const (

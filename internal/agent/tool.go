@@ -52,7 +52,7 @@ func NewToolSet(mode ApprovalMode, tools ...Tool) (*ToolSet, error) {
 		if name == "" {
 			return nil, fmt.Errorf("tool name is empty")
 		}
-		if name == ApprovalRequestTool {
+		if name == assistant.ApprovalRequestTool {
 			return nil, fmt.Errorf("tool %q collides with the server approval gate", name)
 		}
 		if tool.Handler == nil {
