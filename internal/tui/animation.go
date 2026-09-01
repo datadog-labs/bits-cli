@@ -42,8 +42,17 @@ func animTick(generation uint64) tea.Cmd {
 // syncAnimation arms or disarms the animation tick to match the transcript. It
 // returns a command only when it starts a chain, so calling it on every
 // transcript change is safe and idempotent.
+//
+// want requires an active turn (m.turnEvents != nil) in addition to
+// HasAnimated(). The engine's tool loop can exit on a cancelled context
+// without settling the block it was running (see the "Known gap" comment
+// where turnClosedMsg resyncs), so a closed turn can leave a block reporting
+// ToolRunning forever. Tying want to turnEvents makes the turn's own lifecycle
+// — not the block state the engine does not guarantee — the source of truth
+// for whether the tick should be running, so a closed turn always disarms
+// regardless of what its blocks say.
 func (m *Model) syncAnimation() tea.Cmd {
-	want := m.motionEnabled() && m.list.HasAnimated()
+	want := m.turnEvents != nil && m.motionEnabled() && m.list.HasAnimated()
 	if want == m.animArmed {
 		return nil
 	}
