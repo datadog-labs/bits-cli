@@ -270,6 +270,28 @@ func TestDenyStopDrainsFollowUpClientToolCalls(t *testing.T) {
 	}
 }
 
+func TestDenyStopBackendFailureRetainsBackendProvenance(t *testing.T) {
+	backendErr := errors.New("backend failed while recording denial")
+	backend := &gateBackend{failFollowUp: backendErr}
+	var failure Event
+	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+		Message: "write something",
+		Tools:   gatedToolSet(t, ModeGated),
+	}, func(event Event) error {
+		if event.Kind == EventError {
+			failure = event
+		}
+		return nil
+	})
+
+	if !errors.Is(err, backendErr) || result.Outcome != TurnOutcomeFailed {
+		t.Fatalf("result/error = %+v, %v", result, err)
+	}
+	if !failure.BackendFailure || !errors.Is(failure.Err, backendErr) {
+		t.Fatalf("failure event = %+v, want backend provenance", failure)
+	}
+}
+
 func TestDeniedGateRecordsFailingSiblingOnTheWire(t *testing.T) {
 	backend := &gateBackend{includeSibling: true}
 	release := make(chan struct{})

@@ -25,6 +25,7 @@ const (
 	commandQuit commandID = iota + 1
 	commandNew
 	commandResume
+	commandStatus
 )
 
 type commandDefinition struct {
@@ -51,6 +52,11 @@ var commandDefinitions = []commandDefinition{
 		id:               commandResume,
 		name:             "resume",
 		activeTurnPolicy: commandRejectedDuringTurn,
+	},
+	{
+		id:               commandStatus,
+		name:             "status",
+		activeTurnPolicy: commandAllowedDuringTurn,
 	},
 }
 
@@ -125,6 +131,8 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case commandResume:
 		return m, m.openConversationPicker()
+	case commandStatus:
+		return m, m.openStatus()
 	default:
 		panic("unhandled registered command")
 	}

@@ -154,6 +154,66 @@ func TestDo_FallsBackToRawBodyWhenNotJSONAPI(t *testing.T) {
 	}
 }
 
+func TestCurrentUserFetchesProfileAndMatchingOrganization(t *testing.T) {
+	var gotMethod, gotPath, gotSurface string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotSurface = r.Header.Get("X-Datadog-Bits-Surface")
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		_, _ = fmt.Fprint(w, `{
+			"data": {
+				"type": "users",
+				"id": "user-uuid",
+				"attributes": {
+					"name": "Bits User",
+					"handle": "bits.user@example.com",
+					"email": "bits.user@example.com",
+					"title": "Engineer",
+					"icon": "avatar.png",
+					"verified": true,
+					"service_account": false,
+					"disabled": false,
+					"created_at": "2026-01-01T00:00:00Z",
+					"modified_at": "2026-01-02T00:00:00Z",
+					"allowed_login_methods": ["PASSWORD"],
+					"status": "Active",
+					"mfa_enabled": true,
+					"last_login_time": "2026-01-03T00:00:00Z"
+				},
+				"relationships": {
+					"org": {"data": {"type": "orgs", "id": "org-uuid"}},
+					"roles": {"data": [{"type": "roles", "id": "role-uuid"}]}
+				}
+			},
+			"included": [
+				{"type": "roles", "id": "role-uuid", "attributes": {"name": "Datadog Standard Role"}},
+				{"type": "permissions", "id": "permission-uuid", "attributes": {"name": "user_self_profile_read"}},
+				{"type": "orgs", "id": "other-org", "attributes": {"name": "Wrong Org", "public_id": "wrong"}},
+				{"type": "orgs", "id": "org-uuid", "attributes": {"name": "Bits Staging", "public_id": "bits-staging"}}
+			]
+		}`)
+	})
+
+	got, err := c.CurrentUser(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := CurrentUser{
+		Name:           "Bits User",
+		Handle:         "bits.user@example.com",
+		Email:          "bits.user@example.com",
+		Organization:   "Bits Staging",
+		OrganizationID: "bits-staging",
+	}
+	if got != want {
+		t.Fatalf("current user = %+v, want %+v", got, want)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/v2/current_user" || gotSurface != "cli" {
+		t.Fatalf("request = %s %s surface=%q", gotMethod, gotPath, gotSurface)
+	}
+}
+
 func TestSend_StreamsTextAndConversationID(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeStream(t, w, textLine("conv-xyz", "hello "), textLine("conv-xyz", "world"))
@@ -607,5 +667,45 @@ func TestNewRequest_SetsHeaders(t *testing.T) {
 	}
 	if gotSurface != "cli" {
 		t.Errorf("X-Datadog-Bits-Surface = %q, want cli", gotSurface)
+	}
+}
+
+func TestClientBackendStatusReportsConfiguredAuthenticationWithoutCredentials(t *testing.T) {
+	oauthClient, err := NewOAuthClient("https://api.us3.datadoghq.com", staticAccessToken("oauth-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiClient, err := NewAPIKeyClient("https://api.datadoghq.eu", "api-secret", "app-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name string
+		got  BackendStatus
+		want BackendStatus
+	}{
+		{
+			name: "oauth",
+			got:  oauthClient.BackendStatus(),
+			want: BackendStatus{Site: "https://api.us3.datadoghq.com", AuthenticationMode: "oauth", AuthenticationState: "configured, not verified"},
+		},
+		{
+			name: "api key",
+			got:  apiClient.BackendStatus(),
+			want: BackendStatus{Site: "https://api.datadoghq.eu", AuthenticationMode: "api-key", AuthenticationState: "configured, not verified"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.got != test.want {
+				t.Fatalf("backend status = %+v, want %+v", test.got, test.want)
+			}
+			formatted := fmt.Sprintf("%+v", test.got)
+			for _, secret := range []string{"oauth-secret", "api-secret", "app-secret"} {
+				if strings.Contains(formatted, secret) {
+					t.Fatalf("backend status exposed a credential: %s", formatted)
+				}
+			}
+		})
 	}
 }

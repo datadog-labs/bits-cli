@@ -92,6 +92,7 @@ const (
 	focusEditor   focus = iota // transcript scroll + text input (and its completion menu)
 	focusApproval              // a tool approval is pending
 	focusPicker                // the /resume conversation picker
+	focusStatus                // the local /status document
 	focusLogin                 // startup OAuth
 )
 
@@ -101,6 +102,8 @@ func (m *Model) focus() focus {
 		return focusLogin
 	case ModeConversations:
 		return focusPicker
+	case ModeStatus:
+		return focusStatus
 	case ModeChat, ModeTermInit:
 		if len(m.pendingApprovals) > 0 {
 			return focusApproval
@@ -159,6 +162,10 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.focus() == focusPicker {
 		m.abandonConversationPicker()
 	}
+	if m.statusCancel != nil {
+		m.statusCancel()
+		m.statusCancel = nil
+	}
 	if m.cancelTurn != nil {
 		m.cancelTurn()
 	}
@@ -189,6 +196,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		cmd := m.applyEvent(msg.ev)
+		m.syncStatus()
 		m.refreshViewport()
 		return m, tea.Batch(cmd, waitEvent(msg.generation, m.turnEvents))
 
@@ -210,6 +218,20 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case conversationview.RetryMsg:
 		return m, m.retryConversationOperation()
 
+	case statusEnvironmentMsg:
+		m.applyStatusEnvironment(msg)
+		return m, nil
+
+	case statusIdentityMsg:
+		m.applyStatusIdentity(msg)
+		return m, nil
+
+	case statusClosedMsg:
+		if msg.generation == m.statusGeneration && m.mode == ModeStatus {
+			m.closeStatus()
+		}
+		return m, nil
+
 	case noticeExpiredMsg:
 		if msg.seq == m.noticeSeq {
 			m.notice = chat.Notice{}
@@ -219,6 +241,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m.focus() == focusPicker {
 		return m, m.updateConversationPicker(msg)
+	}
+	if m.focus() == focusStatus {
+		return m, m.updateStatus(msg)
 	}
 	// Paste, cursor blink, and other editor-bound input; a paste can change the
 	// editor's height, so relayout. When the editor is not the focus it is
@@ -231,6 +256,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	if m.focus() == focusPicker {
 		return m.updateConversationPicker(msg)
+	}
+	if m.focus() == focusStatus {
+		return m.updateStatus(msg)
 	}
 	switch msg.Button {
 	case tea.MouseWheelUp:
@@ -256,6 +284,7 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	}
 	m.cancelTurn = nil
 	m.cancelRequested = false
+	m.syncStatus()
 	if m.pendingNew {
 		m.pendingNew = false
 		return m, m.startNewConversation()
@@ -355,6 +384,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.updateConversationPicker(msg)
 	case focusApproval:
 		return m.handleApprovalKey(msg)
+	case focusStatus:
+		return m, m.updateStatus(msg)
 	default:
 		return m.handleEditorKey(msg)
 	}
@@ -364,8 +395,17 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // when open, is a sub-state of the editor and intercepts navigation keys.
 func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// While the completion menu is open it owns navigation keys (arrows, tab,
-	// enter to accept, esc to close); route everything to the editor.
+	// enter to accept, esc to close). An exact registered command executes on
+	// enter; partial completion remains editor-owned.
 	if m.editor.MenuOpen() {
+		if msg.String() == "enter" {
+			text := strings.TrimSpace(m.editor.Value())
+			if name, parsed := parseCommand(text); parsed {
+				if _, registered := lookupCommand(name); registered {
+					return m.submit()
+				}
+			}
+		}
 		cmd := m.editor.Update(msg)
 		m.refreshViewport()
 		return m, cmd
@@ -474,6 +514,7 @@ func (m *Model) cancelRemote() {
 // is exhaustive over agent.EventKind. It returns a command for side effects (an
 // error posts a transient notice); nil otherwise.
 func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
+	m.observeEvent(ev)
 	switch ev.Kind {
 	case agent.EventBlock:
 		m.blocks = ev.Update.Blocks
@@ -540,6 +581,9 @@ func (m *Model) resize(w, h int) {
 	m.list.SetWidth(w)
 	if m.picker != nil {
 		m.picker.SetSize(w, h)
+	}
+	if m.status != nil {
+		m.status.SetSize(w, h)
 	}
 	if m.mode == ModeTermInit {
 		m.setMode(ModeChat)

@@ -14,6 +14,7 @@ import (
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	"github.com/DataDog/bits-cli/internal/tui/editor"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
+	statusview "github.com/DataDog/bits-cli/internal/tui/status"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -25,6 +26,7 @@ const (
 	ModeChat
 	ModeLogin
 	ModeConversations
+	ModeStatus
 )
 
 // EngineFactory constructs the authenticated chat engine after startup login
@@ -32,7 +34,8 @@ const (
 type EngineFactory func(context.Context) (*agent.Engine, error)
 
 type Config struct {
-	Tools *agent.ToolSet
+	Tools          *agent.ToolSet
+	StatusProvider statusview.Provider
 }
 
 // Model is the root Bubble Tea model. All state lives here and is mutated only
@@ -43,6 +46,12 @@ type Model struct {
 	tools  *agent.ToolSet
 	editor *editor.Editor
 	picker *conversationview.Model
+	status *statusview.Model
+
+	statusProvider   statusview.Provider
+	statusGeneration uint64
+	statusIdentity   string
+	statusCancel     context.CancelFunc
 
 	// Startup login stays inside this root model so Bubble Tea owns the
 	// alternate screen continuously while switching from login to chat.
@@ -88,6 +97,12 @@ type Model struct {
 	chatPhase chat.Phase
 	convID    string
 	usage     *assistant.Usage
+	// connectivity is the last observed remote outcome. Active phases override
+	// it with connecting/connected when building the status snapshot.
+	connectivity          statusview.Connectivity
+	authStateOverride     string
+	authFailureObserved   bool
+	authFailureGeneration uint64
 
 	// notice is the transient status message (error/warn/info) shown in the
 	// status line.
@@ -136,14 +151,21 @@ func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory Engine
 func (m *Model) configure(configs []Config) {
 	if len(configs) > 0 {
 		m.tools = configs[0].Tools
+		if configs[0].StatusProvider != nil {
+			m.statusProvider = configs[0].StatusProvider
+		}
 	}
 }
 
 func newShell() *Model {
+	theme := styles.Default(true)
+	status := statusview.New(1, 1, theme)
 	m := &Model{
-		editor: editor.New(),
-		list:   chat.NewList(),
-		styles: styles.Default(true),
+		editor:         editor.New(),
+		list:           chat.NewList(),
+		status:         &status,
+		statusProvider: statusview.SystemProvider{},
+		styles:         theme,
 	}
 	m.applyStyles(m.styles)
 	return m
@@ -175,6 +197,9 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	m.editor.SetStyles(theme.Editor)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
+	}
+	if m.status != nil {
+		m.status.SetStyles(theme)
 	}
 }
 

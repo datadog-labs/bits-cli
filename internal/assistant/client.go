@@ -90,6 +90,40 @@ type Client struct {
 	RetryBaseDelay time.Duration
 }
 
+// BackendStatus is the non-secret connection metadata a local surface may
+// render. It intentionally cannot carry tokens, API keys, or user identity.
+type BackendStatus struct {
+	Site                string
+	AuthenticationMode  string
+	AuthenticationState string
+}
+
+// CurrentUser is the small, non-secret subset of the Datadog user profile that
+// local status surfaces may display. Roles and permissions returned by the API
+// are deliberately not retained.
+type CurrentUser struct {
+	Name           string
+	Handle         string
+	Email          string
+	Organization   string
+	OrganizationID string
+}
+
+// BackendStatus reports how this client was constructed without inspecting or
+// exposing its credentials. Construction only proves that credentials were
+// configured; status surfaces promote that state after an observed request.
+func (c *Client) BackendStatus() BackendStatus {
+	mode := "api-key"
+	if c.TokenSource != nil {
+		mode = "oauth"
+	}
+	return BackendStatus{
+		Site:                c.BaseURL,
+		AuthenticationMode:  mode,
+		AuthenticationState: "configured, not verified",
+	}
+}
+
 // newTransport returns a tuned transport: pooled connections plus bounded
 // dial/TLS/response-header phases so a black-holed endpoint fails fast before
 // the first byte, without capping a healthy streaming body.
@@ -491,6 +525,63 @@ func (c *Client) ConversationHistory(ctx context.Context, in ConversationHistory
 		return nil, fmt.Errorf("decode history: %w", err)
 	}
 	return &out, nil
+}
+
+// CurrentUser fetches the authenticated Datadog user and their active
+// organization from the JSON:API current-user document.
+func (c *Client) CurrentUser(ctx context.Context) (CurrentUser, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/api/v2/current_user", nil)
+	if err != nil {
+		return CurrentUser{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var document struct {
+		Data struct {
+			Attributes struct {
+				Name   string `json:"name"`
+				Handle string `json:"handle"`
+				Email  string `json:"email"`
+			} `json:"attributes"`
+			Relationships struct {
+				Organization struct {
+					Data struct {
+						Type string `json:"type"`
+						ID   string `json:"id"`
+					} `json:"data"`
+				} `json:"org"`
+			} `json:"relationships"`
+		} `json:"data"`
+		Included []struct {
+			Type       string `json:"type"`
+			ID         string `json:"id"`
+			Attributes struct {
+				Name     string `json:"name"`
+				PublicID string `json:"public_id"`
+			} `json:"attributes"`
+		} `json:"included"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&document); err != nil {
+		return CurrentUser{}, fmt.Errorf("decode current user: %w", err)
+	}
+
+	organizationRef := document.Data.Relationships.Organization.Data
+	out := CurrentUser{
+		Name:           document.Data.Attributes.Name,
+		Handle:         document.Data.Attributes.Handle,
+		Email:          document.Data.Attributes.Email,
+		OrganizationID: organizationRef.ID,
+	}
+	for _, resource := range document.Included {
+		if resource.Type != "orgs" || resource.ID != organizationRef.ID {
+			continue
+		}
+		out.Organization = resource.Attributes.Name
+		if resource.Attributes.PublicID != "" {
+			out.OrganizationID = resource.Attributes.PublicID
+		}
+		break
+	}
+	return out, nil
 }
 
 // UserConversations lists all conversations for the current user.

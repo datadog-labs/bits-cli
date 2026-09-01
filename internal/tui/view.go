@@ -50,6 +50,10 @@ func (m *Model) View() tea.View {
 		if m.picker != nil {
 			v.Content = m.picker.View()
 		}
+	case ModeStatus:
+		if m.status != nil {
+			v.Content = m.status.View()
+		}
 	}
 	return v
 }

@@ -156,7 +156,7 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
 	}
-	if events[2].ConvID != "created-before-error" || !errors.Is(events[3].Err, backendErr) {
+	if events[2].ConvID != "created-before-error" || !errors.Is(events[3].Err, backendErr) || !events[3].BackendFailure {
 		t.Fatalf("terminal events = %+v", events[2:])
 	}
 	if got := e.ConversationID(); got != "created-before-error" {
@@ -288,5 +288,81 @@ func TestRestoreEmptyEmitsNothing(t *testing.T) {
 
 	if evs := drain(e.Restore(context.Background())); len(evs) != 0 {
 		t.Fatalf("events = %v, want none", kinds(evs))
+	}
+}
+
+type statusBackend struct{ calls int }
+
+func (*statusBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {
+	return "", nil
+}
+
+func (b *statusBackend) BackendStatus() assistant.BackendStatus {
+	b.calls++
+	return assistant.BackendStatus{
+		Site:                "https://api.us5.datadoghq.com",
+		AuthenticationMode:  "oauth",
+		AuthenticationState: "authenticated",
+	}
+}
+
+func TestEngineStatusReportsEffectiveNonSecretRuntimeConfiguration(t *testing.T) {
+	backend := &statusBackend{}
+	engine := New(backend, assistant.SendOptions{
+		ConversationID: "conversation-1",
+		Model:          "model-x",
+	})
+	got := engine.Status()
+	if got.Profile != assistant.DefaultProfile || got.Model != "model-x" {
+		t.Fatalf("engine status = %+v", got)
+	}
+	if got.Backend != (assistant.BackendStatus{
+		Site:                "https://api.us5.datadoghq.com",
+		AuthenticationMode:  "oauth",
+		AuthenticationState: "authenticated",
+	}) {
+		t.Fatalf("backend status = %+v", got.Backend)
+	}
+	_ = engine.Status()
+	if backend.calls != 1 {
+		t.Fatalf("backend status collections = %d, want one immutable snapshot", backend.calls)
+	}
+}
+
+type currentUserBackend struct {
+	user  assistant.CurrentUser
+	err   error
+	calls int
+}
+
+func (*currentUserBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {
+	return "", nil
+}
+
+func (b *currentUserBackend) CurrentUser(context.Context) (assistant.CurrentUser, error) {
+	b.calls++
+	return b.user, b.err
+}
+
+func TestEngineCurrentUserUsesOptionalBackendCapability(t *testing.T) {
+	want := assistant.CurrentUser{Name: "Bits User", Organization: "Bits Staging"}
+	backend := &currentUserBackend{user: want}
+	engine := New(backend, assistant.SendOptions{})
+
+	got, err := engine.CurrentUser(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want || backend.calls != 1 {
+		t.Fatalf("current user = %+v calls=%d, want %+v calls=1", got, backend.calls, want)
+	}
+}
+
+func TestEngineCurrentUserRejectsUnsupportedBackend(t *testing.T) {
+	engine := New(&scriptBackend{}, assistant.SendOptions{})
+
+	_, err := engine.CurrentUser(context.Background())
+	if !errors.Is(err, ErrCurrentUserUnsupported) {
+		t.Fatalf("current user error = %v, want ErrCurrentUserUnsupported", err)
 	}
 }
