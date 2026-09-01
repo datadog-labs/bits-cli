@@ -326,3 +326,45 @@ func TestRunTurnDeniedGateThenBackendFailureFails(t *testing.T) {
 		t.Fatal("denial evidence was lost on the failing turn")
 	}
 }
+
+// Under DenyContinue a sibling handler failure must not drop the round's
+// wire batch: the failure is recorded and the model gets to adjust.
+func TestDenyContinueRecordsFailingSiblingOnTheWire(t *testing.T) {
+	backend := &gateBackend{includeSibling: true}
+	release := make(chan struct{})
+	tools, err := NewToolSet(ModeGated, Tool{
+		Definition: assistant.ClientTool{Name: "write"},
+		Handler: func(context.Context, ToolCall) (ToolResult, error) {
+			<-release
+			return ToolResult{}, errors.New("handler exploded")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := New(backend, assistant.SendOptions{}).RunTurn(ctx, TurnInput{
+		Message: "write something",
+		Tools:   tools,
+		OnDeny:  DenyContinue,
+	}, nil)
+	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
+		t.Fatalf("result/error = %+v, %v", result, err)
+	}
+	if len(backend.responses) != 1 || len(backend.responses[0]) != 2 {
+		t.Fatalf("wire responses = %+v, want denial and failed sibling", backend.responses)
+	}
+	denial, sibling := backend.responses[0][0], backend.responses[0][1]
+	if denial.ToolCallID != "gate-1" || denial.Status != assistant.ToolStatusError {
+		t.Fatalf("denial response = %+v", denial)
+	}
+	if sibling.ToolCallID != "write-1" || sibling.Status != assistant.ToolStatusError || sibling.Metadata.Output != "handler exploded" {
+		t.Fatalf("sibling response = %+v, want the recorded failure", sibling)
+	}
+}

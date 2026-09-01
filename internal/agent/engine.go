@@ -783,8 +783,8 @@ func (e *Engine) runTools(
 			}
 			item := work[done.index]
 			if done.err != nil {
-				if stopRequested {
-					// Record the failure so the stopped batch still gets answered.
+				if stopRequested || denied {
+					// Record the failure so the round's batch still gets answered.
 					if !record(item, ToolResult{Title: "Tool failed", Output: done.err.Error(), IsError: true}) {
 						cancelRunning()
 						return toolRound{denied: denied}, nil
