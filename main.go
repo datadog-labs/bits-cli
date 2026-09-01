@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -14,6 +15,8 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/DataDog/bits-cli/internal/cmd"
+	"github.com/DataDog/bits-cli/internal/headless"
+	"github.com/DataDog/bits-cli/internal/headless/adeep"
 	"github.com/DataDog/bits-cli/internal/startup"
 	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tui"
@@ -23,22 +26,124 @@ import (
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "bits:", err)
-		os.Exit(1)
+		var exitErr *cmd.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.Code)
+		}
+		os.Exit(cmd.ExitFailure)
 	}
 }
 
 func run(args []string) error {
+	// Ctrl-C cancels the active command instead of killing the process, so a
+	// headless run can still write its terminal delivery record before exit.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 	return cmd.Execute(
-		context.Background(),
+		ctx,
 		args,
 		cmd.Actions{
 			Chat:   runChat,
+			Run:    runRun,
 			Login:  runLogin,
 			Logout: runLogout,
 		},
 		os.Stdout,
 		os.Stderr,
 	)
+}
+
+// runRun executes one noninteractive turn. It never initializes Bubble Tea or
+// opens interactive login; missing OAuth fails fast with startup's login hint.
+func runRun(ctx context.Context, opts cmd.RunOptions) error {
+	return runRunWithStore(ctx, opts, auth.DefaultStore(), os.Stdout)
+}
+
+func runRunWithStore(ctx context.Context, opts cmd.RunOptions, store auth.CredentialStore, out io.Writer) error {
+	workspaceRoot, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("determine workspace: %w", err)
+	}
+	workspaceTools, err := tools.NewEditorTools(workspaceRoot)
+	if err != nil {
+		return fmt.Errorf("open workspace: %w", err)
+	}
+	toolSet, err := agent.NewToolSet(opts.ApprovalMode, workspaceTools...)
+	if err != nil {
+		return err
+	}
+	engine, err := startup.NewEngine(ctx, startup.EngineOptions{
+		Client: startup.ClientOptions{
+			Mode:    opts.AuthMode,
+			Store:   store,
+			APIKey:  os.Getenv("DD_API_KEY"),
+			AppKey:  os.Getenv("DD_APP_KEY"),
+			APISite: opts.Site,
+		},
+		Send:           assistant.SendOptions{ConversationID: opts.ConversationID, Model: opts.Model},
+		UseFakeBackend: os.Getenv("BITS_FAKE_BACKEND") == "1",
+	})
+	if err != nil {
+		return err
+	}
+	return runEngineTurn(ctx, engine, toolSet, opts, out)
+}
+
+// runEngineTurn drives exactly one turn, attempts Finish once, and maps its
+// authoritative outcome to the process contract.
+func runEngineTurn(ctx context.Context, engine *agent.Engine, tools *agent.ToolSet, opts cmd.RunOptions, out io.Writer) error {
+	var delivery headless.Delivery
+	switch opts.Delivery {
+	case "adeep":
+		delivery = adeep.New(out)
+	default:
+		return fmt.Errorf("unsupported delivery %q", opts.Delivery)
+	}
+	if err := delivery.Start(headless.Start{StartedAt: time.Now(), RequestedModel: opts.Model}); err != nil {
+		return err
+	}
+
+	// A headless gated run has no interactive approver. Deny each local gate
+	// and continue so the backend can adjust before the terminal response.
+	consume := func(event agent.Event) error {
+		if err := delivery.Consume(event); err != nil {
+			return err
+		}
+		if event.Kind == agent.EventBlock {
+			if err := autoDenyApproval(engine.Decide, event.Update.Changed); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	result, err := engine.RunTurn(ctx, agent.TurnInput{Message: opts.Prompt, Tools: tools, OnDeny: agent.DenyContinue}, consume) // no-dd-sa:datadog/go-promptinjection -- opts.Prompt is intentionally sent as the user's message for this one turn; it is never used as a system instruction
+	finishErr := delivery.Finish(headless.Finish{EndedAt: time.Now(), Result: result, Err: err})
+
+	switch headless.ClassifyTurn(result) {
+	case headless.OutcomeCompleted:
+		return finishErr
+	case headless.OutcomeApprovalDenied:
+		if finishErr != nil {
+			return finishErr
+		}
+		return &cmd.ExitError{Code: cmd.ExitApprovalDenied, Err: errors.New("an approval gate was denied; the turn finished with the backend's adjusted answer")}
+	default:
+		if err != nil {
+			return err
+		}
+		return finishErr
+	}
+}
+
+func autoDenyApproval(decide func(string, agent.ApprovalDecision) bool, block agent.Block) error {
+	if block.Tool == nil || block.Tool.Status != agent.ToolAwaitingApproval {
+		return nil
+	}
+	if !decide(block.ToolCallID(), agent.ApprovalDeny) {
+		return fmt.Errorf("failed to auto-deny approval gate for tool call %s: command queue full", block.ToolCallID())
+	}
+	return nil
 }
 
 func runLogin(ctx context.Context, opts cmd.LoginOptions) error {

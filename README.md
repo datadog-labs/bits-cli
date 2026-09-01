@@ -9,12 +9,28 @@ Run `bits` to open chat. Process-level long flags use conventional double-dash s
 ```sh
 bits [--conversation ID]
 bits --auth api-key --site API_SITE [--conversation ID]
+bits run --prompt TEXT --delivery adeep [--model MODEL] [flags]
 bits login [--site SITE] [--client-id ID]
 bits logout
 bits help [command]
 ```
 
 Use `bits --help` for the complete command list or `bits help login` for command-specific help. In-TUI slash commands such as `/new`, `/resume`, `/status`, and `/quit` are a separate interactive command surface.
+
+## Noninteractive run
+
+`bits run` executes exactly one assistant turn without a TUI or interactive login. It writes only versioned JSONL to stdout; diagnostics go to stderr:
+
+```sh
+BITS_FAKE_BACKEND=1 bits run --prompt "Summarize the incident" --delivery adeep
+bits run --prompt "What changed?" --delivery adeep --auth api-key --site https://api.datadoghq.com --approval allow-all
+```
+
+`--prompt` is required and literal: positional and stdin prompts are not supported. The initial and only delivery is `adeep`, which emits `bits.delivery.adeep` v1 run/round lifecycle, correlated tool calls and results, usage, conversation updates, and one terminal record. Assistant Markdown appears only as `run.finished.response`. Without a working OAuth session, `run` fails fast with a `bits login` hint.
+
+Exit statuses are `0` for a completed turn, `1` for startup/runtime/delivery failure, `2` for command or flag misuse, and `3` when at least one approval gate was denied even though the backend could adjust and finish. In `--approval gated` mode there is no interactive approver, so gates are denied and returned to the model as error tool responses. `--approval allow-all` is the default.
+
+`bits --version` prints the module version when available, otherwise `dev` with the short commit recorded in the build.
 
 ## Authentication
 
