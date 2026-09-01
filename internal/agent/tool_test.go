@@ -328,6 +328,21 @@ func TestNewToolSetRejectsInvalidApprovalMode(t *testing.T) {
 	}
 }
 
+// The server-injected gate name is reserved; a registered tool with that
+// name would be silently intercepted by the engine.
+func TestNewToolSetRejectsApprovalRequestName(t *testing.T) {
+	set, err := NewToolSet(ModeAllowAll, Tool{
+		Definition: assistant.ClientTool{Name: ApprovalRequestTool},
+		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+	})
+	if err == nil || set != nil {
+		t.Fatalf("NewToolSet(%q) = (%v, %v), want an error", ApprovalRequestTool, set, err)
+	}
+	if !strings.Contains(err.Error(), "approval gate") {
+		t.Fatalf("error %q does not name the reserved gate", err)
+	}
+}
+
 func TestToolSetApprovalModeGatesPolicyConsultation(t *testing.T) {
 	var policyCalls atomic.Int32
 	declaredGate := func(ToolCall) (ApprovalRequirement, bool) {
