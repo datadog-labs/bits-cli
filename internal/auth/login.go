@@ -11,12 +11,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/DataDog/bits-cli/internal/browser"
 	"golang.org/x/oauth2"
 )
 
@@ -37,7 +36,6 @@ var loginCallbackSuccessHTML string
 
 const (
 	loginTimeout          = 5 * time.Minute
-	browserOpenTimeout    = 10 * time.Second
 	sessionLockTimeout    = 45 * time.Second
 	sessionPersistTimeout = 5 * time.Second
 )
@@ -441,26 +439,7 @@ func safeOAuthErrorCode(code string) string {
 }
 
 func openBrowser(ctx context.Context, target string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	var command string
-	var args []string
-	switch runtime.GOOS {
-	case "darwin":
-		command, args = "open", []string{target}
-	case "windows":
-		command, args = "rundll32", []string{"url.dll,FileProtocolHandler", target}
-	default:
-		command, args = "xdg-open", []string{target}
-	}
-	// Launcher failures must be observable by the startup UI so it can surface
-	// the authorization URL as a manual fallback. Bound the launcher separately:
-	// a broken desktop handler must not trap OAuth beyond the user's cancellation.
-	launchCtx, cancel := context.WithTimeout(ctx, browserOpenTimeout)
-	defer cancel()
-	return exec.CommandContext(launchCtx, command, args...).Run()
+	return browser.Open(ctx, target)
 }
 
 type callbackPage struct {

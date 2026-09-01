@@ -150,6 +150,12 @@ func New(b Backend, opts assistant.SendOptions) *Engine {
 	}
 }
 
+// Site returns the Assistant API site of the active backend. Backends without
+// a web counterpart, such as the demo backend, return an empty string.
+func (e *Engine) Site() string {
+	return e.runtimeStatus.Backend.Site
+}
+
 type TurnInput struct {
 	Message string
 	Tools   *ToolSet

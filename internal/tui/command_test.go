@@ -2,11 +2,14 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	tuieditor "github.com/DataDog/bits-cli/internal/tui/editor"
 )
@@ -135,6 +138,129 @@ func TestPartialSlashAndFileCompletionsRemainEditorOwned(t *testing.T) {
 				t.Fatalf("completion routing: command=%v conv=%q editor=%q, want nil/preserved/%q", command != nil, m.convID, m.editor.Value(), test.wantValue)
 			}
 		})
+	}
+}
+
+func TestWebIsRegisteredAndAllowedDuringTurn(t *testing.T) {
+	web, ok := lookupCommand("web")
+	if !ok || web.id != commandWeb || web.activeTurnPolicy != commandAllowedDuringTurn {
+		t.Fatalf("web definition = %#v, registered=%v", web, ok)
+	}
+}
+
+func TestSubmitWebOpensCurrentConversationWithoutSending(t *testing.T) {
+	var opened string
+	backend := &spyBackend{t: t, site: "https://api.us3.datadoghq.com"}
+	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+		OpenURL: func(_ context.Context, target string) error {
+			opened = target
+			return nil
+		},
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/web"})
+
+	_, cmd := m.submit()
+	if cmd == nil {
+		t.Fatal("/web returned no launcher command")
+	}
+	msg := cmd()
+	_, _ = m.Update(msg)
+	want := "https://us3.datadoghq.com/bits?conversation_id=conversation-1"
+	if opened != want {
+		t.Fatalf("opened URL = %q, want %q", opened, want)
+	}
+	if !strings.Contains(m.notice.Text, want) || m.notice.Level != chat.NoticeInfo {
+		t.Fatalf("success notice = %#v", m.notice)
+	}
+	if m.ConversationID() != "conversation-1" {
+		t.Fatalf("conversation ID changed to %q", m.ConversationID())
+	}
+	if m.editor.Value() != "" {
+		t.Fatalf("editor still contains %q", m.editor.Value())
+	}
+}
+
+func TestSubmitWebWithoutConversationDoesNotLaunchOrSend(t *testing.T) {
+	launched := false
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, assistant.SendOptions{}), Config{
+		OpenURL: func(context.Context, string) error {
+			launched = true
+			return nil
+		},
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/web"})
+
+	_, cmd := m.submit()
+	if cmd == nil || launched {
+		t.Fatalf("missing-conversation result: cmd=%v launched=%v", cmd != nil, launched)
+	}
+	if m.notice.Level != chat.NoticeWarn || !strings.Contains(m.notice.Text, "Start a conversation") {
+		t.Fatalf("missing-conversation notice = %#v", m.notice)
+	}
+}
+
+func TestSubmitWebUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
+	launched := false
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.ddog-gov.com"}, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+		OpenURL: func(context.Context, string) error {
+			launched = true
+			return nil
+		},
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/web"})
+
+	_, cmd := m.submit()
+	if cmd == nil || launched {
+		t.Fatalf("unsupported-site result: cmd=%v launched=%v", cmd != nil, launched)
+	}
+	if m.notice.Level != chat.NoticeError || !strings.Contains(m.notice.Text, "Could not build a web link") || m.notice.Err == nil {
+		t.Fatalf("unsupported-site notice = %#v", m.notice)
+	}
+}
+
+func TestSubmitWebLauncherFailureProvidesManualURL(t *testing.T) {
+	launchErr := errors.New("no graphical browser is available")
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+		OpenURL: func(context.Context, string) error { return launchErr },
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/web"})
+
+	_, cmd := m.submit()
+	msg := cmd()
+	_, _ = m.Update(msg)
+	if m.notice.Level != chat.NoticeError || !errors.Is(m.notice.Err, launchErr) {
+		t.Fatalf("launcher-failure notice = %#v", m.notice)
+	}
+	for _, want := range []string{"Could not open a browser", "https://app.datadoghq.com/bits?conversation_id=conversation-1"} {
+		if !strings.Contains(m.notice.Text, want) {
+			t.Fatalf("launcher-failure notice %q does not contain %q", m.notice.Text, want)
+		}
+	}
+}
+
+func TestSubmitWebDuringActiveTurnDoesNotCancel(t *testing.T) {
+	backend := &spyBackend{t: t, site: "https://api.datadoghq.com"}
+	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+		OpenURL: func(context.Context, string) error { return nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.cancelTurn = cancel
+	m.turnEvents = make(chan agent.Event)
+	m.chatPhase = chat.PhaseStreaming
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/web"})
+
+	_, cmd := m.submit()
+	if cmd == nil {
+		t.Fatal("active-turn /web returned no launcher command")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("/web cancelled the active turn")
 	}
 }
 

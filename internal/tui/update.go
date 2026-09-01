@@ -10,6 +10,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/browser"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
@@ -38,6 +39,10 @@ type (
 		generation uint64
 		engine     *agent.Engine
 		err        error
+	}
+	webOpenResultMsg struct {
+		url string
+		err error
 	}
 )
 
@@ -237,6 +242,12 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = chat.Notice{}
 		}
 		return m, nil
+
+	case webOpenResultMsg:
+		if msg.err != nil {
+			return m, m.showNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url), 0)
+		}
+		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Opened this conversation in your browser: %s", msg.url), 0)
 	}
 
 	if m.focus() == focusPicker {
@@ -251,6 +262,26 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd := m.editor.Update(msg)
 	m.refreshViewport()
 	return m, cmd
+}
+
+func (m *Model) openConversationInBrowser() tea.Cmd {
+	if strings.TrimSpace(m.convID) == "" {
+		return m.showNotice(notice(chat.NoticeWarn, nil, "Start a conversation before using /web."), 0)
+	}
+	if m.engine == nil {
+		return m.showNotice(notice(chat.NoticeError, nil, "This conversation has no Datadog web site."), 0)
+	}
+	target, err := browser.ConversationURL(m.engine.Site(), m.convID)
+	if err != nil {
+		return m.showNotice(notice(chat.NoticeError, err, "Could not build a web link for this conversation."), 0)
+	}
+	openURL := m.openURL
+	if openURL == nil {
+		openURL = browser.Open
+	}
+	return func() tea.Msg {
+		return webOpenResultMsg{url: target, err: openURL(context.Background(), target)}
+	}
 }
 
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
