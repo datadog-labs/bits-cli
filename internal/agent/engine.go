@@ -749,6 +749,15 @@ func (e *Engine) runTools(
 			}
 			item := work[done.index]
 			if done.err != nil {
+				if stopRequested {
+					// Keep answering the stopped round on the wire: record the
+					// failure instead of aborting so every call gets a response.
+					if !record(item, ToolResult{Title: "Tool failed", Output: done.err.Error(), IsError: true}) {
+						cancelRunning()
+						return toolRound{}, nil
+					}
+					continue
+				}
 				stopRound(&item, done.err)
 				return toolRound{}, done.err
 			}
