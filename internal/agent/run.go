@@ -29,6 +29,8 @@ type TurnResult struct {
 	ConversationID string
 	Blocks         []Block
 	Usage          *assistant.Usage
+	// Denied reports a refused approval gate even when the turn completed.
+	Denied bool
 }
 
 // TurnEventConsumer observes engine events in order. Returning an error cancels
@@ -59,6 +61,7 @@ func (e *Engine) RunTurn(ctx context.Context, input TurnInput, consume TurnEvent
 		ConversationID: completion.ConversationID,
 		Blocks:         completion.Blocks,
 		Usage:          completion.Usage,
+		Denied:         completion.Denied,
 	}
 
 	switch {

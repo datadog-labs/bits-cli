@@ -41,6 +41,17 @@ func (m ApprovalMode) valid() bool {
 	}
 }
 
+// DenyPolicy decides what the turn does after a denial is answered on the
+// wire. Denial responses are always sent; only the aftermath is policy.
+type DenyPolicy uint8
+
+const (
+	// DenyStop ends the turn after the wire answer. The zero value.
+	DenyStop DenyPolicy = iota
+	// DenyContinue lets the model adjust, keeping the typed denial.
+	DenyContinue
+)
+
 type ApprovalKey struct {
 	Tool     string
 	Resource string
@@ -63,6 +74,7 @@ func deniedResult() ToolResult {
 		Title:   "Permission denied",
 		Output:  "local execution was denied by the user",
 		IsError: true,
+		Denied:  true,
 	}
 }
 
@@ -71,6 +83,7 @@ func serverDeniedResult() ToolResult {
 		Title:   "Permission denied",
 		Output:  "the user denied this action",
 		IsError: true,
+		Denied:  true,
 	}
 }
 
@@ -83,8 +96,9 @@ func approvedResult() ToolResult {
 
 func cancelledResult() ToolResult {
 	return ToolResult{
-		Title:   "Cancelled",
-		Output:  "tool execution was cancelled by the user",
-		IsError: true,
+		Title:     "Cancelled",
+		Output:    "tool execution was cancelled by the user",
+		IsError:   true,
+		Cancelled: true,
 	}
 }

@@ -52,6 +52,8 @@ func (t *Transcript) MarkToolExecuted(id string, result ToolResult) (Block, bool
 		if result.IsError {
 			tool.Status = ToolError
 		}
+		tool.Denied = result.Denied
+		tool.Cancelled = result.Cancelled
 		if result.Title != "" {
 			tool.Title = result.Title
 		}
@@ -213,6 +215,12 @@ func (t *Transcript) appendReasoning(msg assistant.Message) (Block, bool) {
 func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 	id := BlockIDOf(msg)
 	tc := ToolBlockOf(msg.Content.Tool)
+	// A client_tool_call is client-side regardless of the wire is_client_side
+	// field, which only tool_call_started populates. Deriving here also covers
+	// replayed history (restore), which never passes through the engine fold.
+	if msg.Content.Type == assistant.ContentClientToolCall {
+		tc.IsClientSide = true
+	}
 	if i, ok := t.index[id]; ok {
 		// Merge into a copy of the current aggregate, then swap the pointer, so
 		// a snapshot already sharing the old pointer is not mutated.

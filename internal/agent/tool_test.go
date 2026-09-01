@@ -241,7 +241,7 @@ func TestEngineApprovalScope(t *testing.T) {
 			defer cancel()
 			engine := New(backend, assistant.SendOptions{})
 			// Interactive surface: stop after the denial is answered on the wire.
-			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools})
+			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools, OnDeny: DenyStop})
 			decisions := 0
 			decide := func(id string) {
 				if !engine.Decide(id, tt.decision) {
@@ -299,6 +299,9 @@ func TestEngineApprovalScope(t *testing.T) {
 				}
 				assertToolResult(t, all, "call-a", "Permission denied")
 				assertToolResult(t, all, "call-b", "Cancelled")
+				if !hasDeniedToolBlock(t, all, "call-a") {
+					t.Fatal("tool call-a denial was not recorded as a typed outcome")
+				}
 				// The abort happened before the follow-up round: call-c never decides.
 				if hasToolStatus(all, "call-c", ToolAwaitingApproval) {
 					t.Fatal("aborted round still processed the model's follow-up round")
@@ -638,6 +641,22 @@ func waitForToolStatusEvents(t *testing.T, events <-chan Event, id string, statu
 func hasToolStatus(events []Event, id string, status ToolStatus) bool {
 	for _, event := range events {
 		if event.Kind == EventBlock && event.Update.Changed.ToolCallID() == id && event.Update.Changed.Tool.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+// hasDeniedToolBlock reports whether id's terminal block carries the typed
+// denial flag rather than a plain error.
+func hasDeniedToolBlock(t *testing.T, events []Event, id string) bool {
+	t.Helper()
+	for _, event := range events {
+		block := event.Update.Changed
+		if event.Kind != EventBlock || block.ToolCallID() != id || block.Tool == nil {
+			continue
+		}
+		if block.Tool.Status == ToolError && block.Tool.Denied {
 			return true
 		}
 	}

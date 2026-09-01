@@ -17,6 +17,10 @@ type ToolResult struct {
 	Title   string
 	Output  string
 	IsError bool
+	// Denied marks an approval refusal, not a tool failure.
+	Denied bool
+	// Cancelled marks a user or stop cancellation, not a tool failure.
+	Cancelled bool
 }
 
 type ToolHandler func(context.Context, ToolCall) (ToolResult, error)
