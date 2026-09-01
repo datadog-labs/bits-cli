@@ -172,11 +172,8 @@ func (d *Delivery) Consume(ev agent.Event) error {
 		return d.writeErr
 	}
 	// The engine's local echo of the user's text precedes any backend send;
-	// it must not open a delivery round on its own. The kind check keeps
-	// blocks with an unset role (the zero value is user) from matching.
-	if !(ev.Kind == agent.EventBlock &&
-		ev.Update.Changed.Kind == assistant.KindText &&
-		ev.Update.Changed.Role == assistant.RoleUser) {
+	// it must not open a delivery round on its own.
+	if !isUserEcho(ev) {
 		if err := d.setRound(ev.Round); err != nil {
 			return err
 		}
@@ -202,6 +199,15 @@ func (d *Delivery) Consume(ev agent.Event) error {
 		// Finish owns the sole terminal record.
 	}
 	return nil
+}
+
+// isUserEcho reports whether ev is the engine's local echo of the user's
+// message, emitted before any backend send. The kind check keeps blocks with
+// an unset role (the zero value is user) from matching.
+func isUserEcho(ev agent.Event) bool {
+	return ev.Kind == agent.EventBlock &&
+		ev.Update.Changed.Kind == assistant.KindText &&
+		ev.Update.Changed.Role == assistant.RoleUser
 }
 
 // consumeTool emits each call and terminal result once. Calls whose arguments
