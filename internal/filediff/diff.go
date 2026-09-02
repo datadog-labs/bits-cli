@@ -81,8 +81,14 @@ func Build(fromName, toName, before, after string, limit int) Diff {
 
 // BuildWithDisplay constructs a bounded local view and the complete raw unified
 // diff text for the durable Display field, from one go-udiff calculation.
-// TODO: place an explicit durable Display resource limit here before exposing
-// write_file diffs for arbitrarily large inputs.
+//
+// NOTE: Editor mutations intentionally include the preimage in Display: a
+// workspace-write approval covers reading the target and the durable history
+// shows the exact applied diff.
+// TODO: Add a sanitizer/redactor here or at the client-response boundary when
+// product policy requires filtering sensitive workspace content.
+// TODO: Define an explicit durable Display byte budget when payload sizing
+// becomes a product concern; limit bounds only the local renderer's line count.
 func BuildWithDisplay(fromName, toName, before, after string, limit int) (Diff, string) {
 	u, err := unified(fromName, toName, before, after)
 	if err != nil {
