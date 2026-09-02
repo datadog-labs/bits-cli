@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/filediff"
 )
 
 type editSpec struct {
@@ -65,6 +66,17 @@ func TestEditFileReplacements(t *testing.T) {
 		}
 		if got != "package main\n\nfunc main() { println(1) }\n" {
 			t.Errorf("content = %q", got)
+		}
+	})
+
+	t.Run("returns handler-authoritative rendered state", func(t *testing.T) {
+		r, _ := editInDir(t, "f.txt", "before\n", []editSpec{{Old: "before", New: "after"}})
+		if r.RenderState == nil {
+			t.Fatal("RenderState = nil, want applied state")
+		}
+		state, ok := r.RenderState.State.(*filediff.State)
+		if !ok || state.Phase != filediff.PhaseApplied || state.Change == nil || state.Change.Op != filediff.OpEdit || state.Change.Diff == nil || state.Change.Diff.Additions != 1 || state.Change.Diff.Deletions != 1 {
+			t.Fatalf("RenderState = %#v, want applied edit", r.RenderState.State)
 		}
 	})
 
@@ -246,14 +258,11 @@ func TestEditFileReplacements(t *testing.T) {
 		if strings.Contains(r.Output, "@@") || strings.Contains(r.Output, "---") {
 			t.Errorf("Output must not carry the diff: %q", r.Output)
 		}
-		// The full unified diff is in Display, fenced for rendering.
-		if !strings.HasPrefix(r.Display, "```diff\n") {
-			t.Errorf("Display should be a fenced diff block:\n%s", r.Display)
+		if !strings.HasPrefix(r.Display, "--- a/f.txt\n+++ b/f.txt\n") {
+			t.Fatalf("Display = %q, want a raw unified diff", r.Display)
 		}
-		for _, want := range []string{"--- a/f.txt", "+++ b/f.txt", "@@", "-two", "+TWO"} {
-			if !strings.Contains(r.Display, want) {
-				t.Errorf("Display diff missing %q:\n%s", want, r.Display)
-			}
+		if !strings.Contains(r.Display, "\n-two") || !strings.Contains(r.Display, "\n+TWO") {
+			t.Errorf("Display diff = %q, want -two and +TWO", r.Display)
 		}
 	})
 
@@ -295,12 +304,12 @@ func TestEditFileReplacements(t *testing.T) {
 		if r.IsError {
 			t.Fatalf("unexpected error: %s", r.Output)
 		}
-		if n := strings.Count(r.Display, "@@ "); n != 2 {
-			t.Errorf("hunk count = %d, want 2:\n%s", n, r.Display)
+		if hunks := strings.Count(r.Display, "@@ -"); hunks != 2 {
+			t.Errorf("hunk count = %d, want 2", hunks)
 		}
 		for _, want := range []string{"-line02", "+LINE02", "-line13", "+LINE13"} {
-			if !strings.Contains(r.Display, want) {
-				t.Errorf("diff missing %q:\n%s", want, r.Display)
+			if !strings.Contains(r.Display, "\n"+want) {
+				t.Errorf("diff missing %q", want)
 			}
 		}
 	})
