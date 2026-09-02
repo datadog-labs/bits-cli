@@ -99,7 +99,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	defer cancel()
 	openURL := opts.OpenURL
 	if openURL == nil {
-		openURL = func(target string) error { return openBrowser(waitCtx, target) }
+		openURL = func(target string) error { return browser.Open(waitCtx, target) }
 	}
 	opts.printf("Opening Datadog login in your browser…\nIf it does not open, visit:\n%s\n", authURL)
 	if opts.OnBrowserOpen != nil {
@@ -436,10 +436,6 @@ func safeOAuthErrorCode(code string) string {
 		}
 	}
 	return code
-}
-
-func openBrowser(ctx context.Context, target string) error {
-	return browser.Open(ctx, target)
 }
 
 type callbackPage struct {
