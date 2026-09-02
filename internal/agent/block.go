@@ -40,12 +40,24 @@ func ToolStatusOf(s string) ToolStatus {
 
 // ToolBlock is the aggregated state of a tool call and its result.
 type ToolBlock struct {
-	Name         string
-	Input        string
-	Output       string
-	Status       ToolStatus
-	Title        string
-	Detail       string
+	Name string
+	// Input is the authoritative, final tool argument. HasFinalInput indicates
+	// that a final tool-call payload supplied it, including an intentionally
+	// empty argument.
+	Input         string
+	HasFinalInput bool
+	// InputPartial is the bounded prefix assembled from streamed input deltas.
+	// It is kept separate from Input because the latter must remain complete for
+	// tool execution while streamed previews must not retain unbounded data.
+	InputPartial          string
+	InputPreviewTruncated bool
+	Output                string
+	Status                ToolStatus
+	Title                 string
+	Detail                string
+	// RenderState is opaque, process-local state for a presentation layer. It
+	// is never sent to the backend or persisted in history.
+	RenderState  any
 	IsClientSide bool
 	Approval     *ApprovalPrompt
 	// Denied marks an approval refusal, not a tool error.

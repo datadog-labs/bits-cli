@@ -89,6 +89,141 @@ func kinds(evs []Event) []EventKind {
 	return ks
 }
 
+type streamedInputState struct {
+	phase string
+	delta string
+	final string
+}
+
+type streamedInputBackend struct {
+	opts   []assistant.SendOptions
+	calls  int
+	server bool
+}
+
+func (b *streamedInputBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	b.opts = append(b.opts, opts)
+	b.calls++
+	if b.calls > 1 {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("done"))
+		return "conversation-1", emit(response)
+	}
+	content := assistant.Content{Type: assistant.ContentToolCallStarted, Tool: &assistant.ToolPayload{
+		ToolCallID: "call-1", ToolName: "preview", IsClientSide: true,
+	}}
+	if b.server {
+		content.Type = assistant.ContentToolCall
+		content.Tool.IsClientSide = false
+		content.Tool.Metadata = &assistant.ToolMetadata{Name: "preview", Input: `{"value":"server"}`}
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("server-call", content)
+		return "conversation-1", emit(response)
+	}
+	for _, payload := range []assistant.Content{
+		content,
+		{Type: assistant.ContentToolCallInputDelta, Tool: &assistant.ToolPayload{ToolCallID: "call-1", PartialJSON: `{"value":`}},
+		{Type: assistant.ContentToolCallInputDelta, Tool: &assistant.ToolPayload{ToolCallID: "call-1", PartialJSON: `"delta"}`}},
+	} {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-call", payload)
+		if err := emit(response); err != nil {
+			return "conversation-1", err
+		}
+	}
+	final := assistant.ToolCallContent("call-1", "preview", `{"value":"final"}`)
+	final.Type = assistant.ContentClientToolCall
+	var response assistant.AssistantResponse
+	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("client-call", final)
+	return "conversation-1", emit(response)
+}
+
+func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
+	backend := &streamedInputBackend{}
+	reducerCalls := 0
+	handlerSawReducer := false
+	tools, err := NewToolSet(ModeAllowAll, Tool{
+		Definition: assistant.ClientTool{Name: "preview"},
+		InputReducer: func(_ context.Context, update ToolInputUpdate, prior any) any {
+			reducerCalls++
+			state := &streamedInputState{phase: update.Name, delta: update.Delta, final: update.FinalInput}
+			if previous, ok := prior.(*streamedInputState); ok {
+				state.phase = previous.phase + "+" + state.phase
+			}
+			return state
+		},
+		Handler: func(_ context.Context, _ ToolCall) (ToolResult, error) {
+			handlerSawReducer = reducerCalls == 4
+			return ToolResult{Output: "ok"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := drain(New(backend, assistant.SendOptions{}).StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
+	if len(backend.opts) == 0 || !backend.opts[0].StreamToolCallInput {
+		t.Fatalf("stream capability not requested: %+v", backend.opts)
+	}
+	if reducerCalls != 4 {
+		t.Fatalf("reducer calls = %d, want 4", reducerCalls)
+	}
+	if !handlerSawReducer {
+		t.Fatal("handler ran before all streamed input reductions")
+	}
+	var final Block
+	for _, event := range events {
+		if event.Kind != EventBlock || event.Update.Changed.ToolCallID() != "call-1" {
+			continue
+		}
+		if event.Update.Changed.Tool != nil && event.Update.Changed.Tool.RenderState != nil {
+			final = event.Update.Changed
+		}
+	}
+	state, ok := final.Tool.RenderState.(*streamedInputState)
+	if !ok || state.final != `{"value":"final"}` {
+		t.Fatalf("final reducer state = %#v, want final input", final.Tool.RenderState)
+	}
+}
+
+func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
+	backend := &streamedInputBackend{server: true}
+	reducerCalls := 0
+	tools, err := NewToolSet(ModeAllowAll, Tool{
+		Definition: assistant.ClientTool{Name: "preview"},
+		InputReducer: func(context.Context, ToolInputUpdate, any) any {
+			reducerCalls++
+			return struct{}{}
+		},
+		Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(New(backend, assistant.SendOptions{}).StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
+	if reducerCalls != 0 {
+		t.Fatalf("server-side tool triggered %d reductions", reducerCalls)
+	}
+	if len(backend.opts) == 0 || !backend.opts[0].StreamToolCallInput {
+		t.Fatalf("stream capability not requested for reducer-backed tool: %+v", backend.opts)
+	}
+}
+
+func TestEnginePreservesPreconfiguredStreamToolCallInput(t *testing.T) {
+	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
+	tools, err := NewToolSet(ModeAllowAll, Tool{
+		Definition: assistant.ClientTool{Name: "ordinary"},
+		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(backend, assistant.SendOptions{StreamToolCallInput: true})
+	_ = drain(e.StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
+	if len(backend.opts) == 0 || !backend.opts[0].StreamToolCallInput {
+		t.Fatalf("caller-provided stream capability was disabled: %+v", backend.opts)
+	}
+}
+
 func TestTurnCompletionSynchronizesOperationRelease(t *testing.T) {
 	e := New(&scriptBackend{convID: "conversation-1"}, assistant.SendOptions{})
 	operation := e.beginTurn(context.Background(), TurnInput{Message: "question"})

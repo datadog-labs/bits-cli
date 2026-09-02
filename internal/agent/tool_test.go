@@ -346,6 +346,169 @@ func TestNewToolSetRejectsApprovalRequestName(t *testing.T) {
 	}
 }
 
+func TestToolSetReduceInput(t *testing.T) {
+	type contextKey struct{}
+	type renderState struct {
+		input string
+		prior any
+	}
+	var gotContext context.Context
+	var gotUpdate ToolInputUpdate
+	var gotPrior any
+	set, err := NewToolSet(ModeAllowAll,
+		Tool{
+			Definition: assistant.ClientTool{Name: "reduce"},
+			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+			InputReducer: func(ctx context.Context, update ToolInputUpdate, prior any) any {
+				gotContext = ctx
+				gotUpdate = update
+				gotPrior = prior
+				return renderState{input: update.RawPrefix, prior: prior}
+			},
+		},
+		Tool{
+			Definition: assistant.ClientTool{Name: "ordinary"},
+			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.WithValue(context.Background(), contextKey{}, "value")
+	prior := &renderState{input: "old"}
+	update := ToolInputUpdate{
+		ToolCallID:       "call-1",
+		Name:             "reduce",
+		Delta:            "fragment",
+		RawPrefix:        `{"path":"file.txt"}`,
+		PreviewTruncated: true,
+		FinalInput:       `{"path":"file.txt","content":"done"}`,
+		HasFinalInput:    true,
+	}
+	state, exists := set.ReduceInput(ctx, update, prior)
+	if !exists {
+		t.Fatal("ReduceInput reported no reducer")
+	}
+	if gotContext != ctx || gotUpdate != update || gotPrior != prior {
+		t.Fatalf("reducer arguments = (%v, %+v, %v), want (%v, %+v, %v)", gotContext, gotUpdate, gotPrior, ctx, update, prior)
+	}
+	gotState, ok := state.(renderState)
+	if !ok || gotState.input != update.RawPrefix || gotState.prior != prior {
+		t.Fatalf("reduced state = %#v, want state built from update and prior", state)
+	}
+
+	if state, exists := set.ReduceInput(ctx, ToolInputUpdate{Name: "ordinary"}, prior); exists || state != nil {
+		t.Fatalf("ordinary tool ReduceInput = (%#v, %v), want (nil, false)", state, exists)
+	}
+	if state, exists := set.ReduceInput(ctx, ToolInputUpdate{Name: "missing"}, prior); exists || state != nil {
+		t.Fatalf("unknown tool ReduceInput = (%#v, %v), want (nil, false)", state, exists)
+	}
+	var nilSet *ToolSet
+	if state, exists := nilSet.ReduceInput(ctx, update, prior); exists || state != nil {
+		t.Fatalf("nil ToolSet ReduceInput = (%#v, %v), want (nil, false)", state, exists)
+	}
+}
+
+func TestToolSetReduceInputAllowsNilState(t *testing.T) {
+	set, err := NewToolSet(ModeAllowAll, Tool{
+		Definition: assistant.ClientTool{Name: "reduce"},
+		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+		InputReducer: func(context.Context, ToolInputUpdate, any) any {
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, exists := set.ReduceInput(context.Background(), ToolInputUpdate{Name: "reduce"}, "prior")
+	if !exists || state != nil {
+		t.Fatalf("nil reducer state = (%#v, %v), want (nil, true)", state, exists)
+	}
+}
+
+func TestToolSetNeedsStreamedInput(t *testing.T) {
+	var nilSet *ToolSet
+	if nilSet.NeedsStreamedInput() {
+		t.Fatal("nil ToolSet needs streamed input")
+	}
+	ordinary, err := NewToolSet(ModeAllowAll, Tool{
+		Definition: assistant.ClientTool{Name: "ordinary"},
+		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordinary.NeedsStreamedInput() {
+		t.Fatal("ordinary-only ToolSet needs streamed input")
+	}
+	withReducer, err := NewToolSet(ModeAllowAll,
+		Tool{
+			Definition: assistant.ClientTool{Name: "ordinary"},
+			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+		},
+		Tool{
+			Definition: assistant.ClientTool{Name: "reduce"},
+			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+			InputReducer: func(context.Context, ToolInputUpdate, any) any {
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !withReducer.NeedsStreamedInput() {
+		t.Fatal("ToolSet with reducer does not need streamed input")
+	}
+}
+
+func TestToolSetNormalizeResult(t *testing.T) {
+	set, err := NewToolSet(ModeAllowAll,
+		Tool{
+			Definition: assistant.ClientTool{Name: "reduce"},
+			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+			InputReducer: func(context.Context, ToolInputUpdate, any) any {
+				return nil
+			},
+		},
+		Tool{
+			Definition: assistant.ClientTool{Name: "ordinary"},
+			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cleared := set.NormalizeResult(ToolCall{Name: "reduce"}, ToolResult{Output: "denied"})
+	if cleared.RenderState == nil || cleared.RenderState.State != nil {
+		t.Fatalf("omitted reducer result RenderState = %#v, want explicit clear", cleared.RenderState)
+	}
+
+	state := &RenderStateUpdate{State: "final"}
+	preserved := set.NormalizeResult(ToolCall{Name: "reduce"}, ToolResult{RenderState: state})
+	if preserved.RenderState != state {
+		t.Fatalf("explicit reducer result RenderState = %#v, want same update", preserved.RenderState)
+	}
+	clearedExplicitly := set.NormalizeResult(ToolCall{Name: "reduce"}, ToolResult{RenderState: ClearRenderState()})
+	if clearedExplicitly.RenderState == nil || clearedExplicitly.RenderState.State != nil {
+		t.Fatalf("explicit clear RenderState = %#v, want clear", clearedExplicitly.RenderState)
+	}
+
+	ordinaryResult := ToolResult{}
+	if got := set.NormalizeResult(ToolCall{Name: "ordinary"}, ordinaryResult); got.RenderState != nil {
+		t.Fatalf("ordinary result RenderState = %#v, want nil", got.RenderState)
+	}
+	if got := set.NormalizeResult(ToolCall{Name: "missing"}, ordinaryResult); got.RenderState != nil {
+		t.Fatalf("unknown result RenderState = %#v, want nil", got.RenderState)
+	}
+	var nilSet *ToolSet
+	if got := nilSet.NormalizeResult(ToolCall{Name: "reduce"}, ordinaryResult); got.RenderState != nil {
+		t.Fatalf("nil ToolSet result RenderState = %#v, want nil", got.RenderState)
+	}
+}
+
 func TestToolSetApprovalModeGatesPolicyConsultation(t *testing.T) {
 	var policyCalls atomic.Int32
 	declaredGate := func(ToolCall) (ApprovalRequirement, bool) {
