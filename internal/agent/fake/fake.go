@@ -42,6 +42,15 @@ type Fake struct {
 // like a real stream.
 func New() *Fake { return &Fake{Delay: 10 * time.Millisecond} }
 
+// BackendStatus identifies the local fake transport without implying that a
+// Datadog principal or remote site is active.
+func (*Fake) BackendStatus() assistant.BackendStatus {
+	return assistant.BackendStatus{
+		AuthenticationMode:  "none (fake backend)",
+		AuthenticationState: "unauthenticated",
+	}
+}
+
 // Send implements agent.Backend. message seeds the output so the same prompt
 // reproduces the same stream. It honors ctx so Esc/Ctrl+C interrupt a turn.
 func (f *Fake) Send(ctx context.Context, message any, opts assistant.SendOptions,

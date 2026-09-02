@@ -58,6 +58,23 @@ func requireE2E(t *testing.T) *Client {
 	return client
 }
 
+func TestE2E_CurrentUser(t *testing.T) {
+	c := requireE2E(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	user, err := c.CurrentUser(ctx)
+	if err != nil {
+		t.Fatalf("CurrentUser: %v", err)
+	}
+	if strings.TrimSpace(user.Name) == "" && strings.TrimSpace(user.Handle) == "" && strings.TrimSpace(user.Email) == "" {
+		t.Fatal("CurrentUser returned no user display field")
+	}
+	if strings.TrimSpace(user.Organization) == "" && strings.TrimSpace(user.OrganizationID) == "" {
+		t.Fatal("CurrentUser returned no organization display field")
+	}
+}
+
 func TestE2E_ConversationLifecycle(t *testing.T) {
 	c := requireE2E(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

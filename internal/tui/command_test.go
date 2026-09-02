@@ -88,6 +88,56 @@ func TestResumeIsRegisteredWithRejectActivePolicy(t *testing.T) {
 	}
 }
 
+func TestStatusIsRegisteredWithAllowActivePolicy(t *testing.T) {
+	status, ok := lookupCommand("status")
+	if !ok || status.id != commandStatus || status.activeTurnPolicy != commandAllowedDuringTurn {
+		t.Fatalf("status definition = %#v, registered=%v", status, ok)
+	}
+}
+
+func TestExactNewCommandsExecuteOnFirstEnterWithCompletionOpen(t *testing.T) {
+	for _, input := range []string{"/new", "/clear"} {
+		t.Run(input, func(t *testing.T) {
+			m := newModelWithSpy(t)
+			m.convID = "conversation-before-reset"
+			m.editor.Update(tea.PasteMsg{Content: input})
+			if !m.editor.MenuOpen() {
+				t.Fatal("expected exact command completion menu to be open")
+			}
+
+			_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if m.convID != "" || m.editor.Value() != "" {
+				t.Fatalf("first Enter did not reset conversation: conv=%q editor=%q", m.convID, m.editor.Value())
+			}
+		})
+	}
+}
+
+func TestPartialSlashAndFileCompletionsRemainEditorOwned(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		input     string
+		wantValue string
+	}{
+		{name: "partial slash command", input: "/n", wantValue: "/new "},
+		{name: "file", input: "@README", wantValue: "@README.md "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := newModelWithSpy(t)
+			m.convID = "conversation-preserved"
+			m.editor.Update(tea.PasteMsg{Content: test.input})
+			if !m.editor.MenuOpen() {
+				t.Fatal("expected completion menu to be open")
+			}
+
+			_, command := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if command != nil || m.convID != "conversation-preserved" || m.editor.Value() != test.wantValue {
+				t.Fatalf("completion routing: command=%v conv=%q editor=%q, want nil/preserved/%q", command != nil, m.convID, m.editor.Value(), test.wantValue)
+			}
+		})
+	}
+}
+
 func TestSubmitResumeNeverCallsSend(t *testing.T) {
 	m := newModelWithSpy(t)
 	m.editor.Update(tea.PasteMsg{Content: "/resume"})

@@ -78,6 +78,14 @@ func (s *ToolSet) Definitions() []assistant.ClientTool {
 	return append([]assistant.ClientTool(nil), s.definitions...)
 }
 
+// ApprovalMode reports the non-secret policy selected for this tool set.
+func (s *ToolSet) ApprovalMode() ApprovalMode {
+	if s == nil {
+		return ""
+	}
+	return s.mode
+}
+
 func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 	if s != nil {
 		if tool, ok := s.tools[call.Name]; ok {

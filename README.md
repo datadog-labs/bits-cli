@@ -14,7 +14,7 @@ bits logout
 bits help [command]
 ```
 
-Use `bits --help` for the complete command list or `bits help login` for command-specific help. In-TUI slash commands such as `/new`, `/resume`, and `/quit` are a separate interactive command surface.
+Use `bits --help` for the complete command list or `bits help login` for command-specific help. In-TUI slash commands such as `/new`, `/resume`, `/status`, and `/quit` are a separate interactive command surface.
 
 ## Authentication
 

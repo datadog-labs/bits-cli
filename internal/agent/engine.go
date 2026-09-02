@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	ErrMaxTurns           = errors.New("exceeded max turns")
-	ErrHistoryUnsupported = errors.New("backend does not support loading conversation history")
-	ErrOperationActive    = errors.New("another conversation operation is active")
+	ErrMaxTurns               = errors.New("exceeded max turns")
+	ErrHistoryUnsupported     = errors.New("backend does not support loading conversation history")
+	ErrCurrentUserUnsupported = errors.New("backend does not support loading the current user")
+	ErrOperationActive        = errors.New("another conversation operation is active")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -29,6 +30,12 @@ type Backend interface {
 // HistoryBackend adds conversation history loading
 type HistoryBackend interface {
 	ConversationHistory(ctx context.Context, in assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error)
+}
+
+// CurrentUserBackend adds current-user profile loading for local status
+// surfaces. Backends without an authenticated Datadog principal may omit it.
+type CurrentUserBackend interface {
+	CurrentUser(context.Context) (assistant.CurrentUser, error)
 }
 
 // EventKind discriminates the events the engine streams for a turn.
@@ -45,11 +52,12 @@ const (
 // Event is one thing that happened during a turn. It is a plain value carried
 // on a channel, with only the fields relevant to Kind populated.
 type Event struct {
-	Kind   EventKind
-	Update TranscriptUpdate // for EventBlock
-	Usage  *assistant.Usage // for EventUsage
-	ConvID string           // for EventConversation
-	Err    error            // for EventError
+	Kind           EventKind
+	Update         TranscriptUpdate // for EventBlock
+	Usage          *assistant.Usage // for EventUsage
+	ConvID         string           // for EventConversation
+	Err            error            // for EventError
+	BackendFailure bool             // EventError originated at the Assistant backend boundary
 	// Round is the 1-based backend send the event belongs to (0 for
 	// out-of-turn events). Drained rounds after a denial count but emit
 	// no content events.
@@ -82,12 +90,21 @@ const maxTurns = 20
 type Engine struct {
 	backend                Backend
 	opts                   assistant.SendOptions
+	runtimeStatus          RuntimeStatus
 	transcript             *Transcript
 	previousConversationID string
 	commands               chan toolCommand
 	sessionGrants          map[ApprovalKey]struct{}
 	active                 atomic.Bool
 	operationGeneration    atomic.Uint64
+}
+
+// RuntimeStatus is the non-secret request and backend state needed by local
+// status surfaces.
+type RuntimeStatus struct {
+	Profile assistant.Profile
+	Model   string
+	Backend assistant.BackendStatus
 }
 
 type toolCommand struct {
@@ -113,9 +130,20 @@ type toolDone struct {
 // New returns an Engine. opts carries the per-request defaults (profile, model,
 // conversation id, …); ConversationID is updated as turns run.
 func New(b Backend, opts assistant.SendOptions) *Engine {
+	profile := opts.Profile
+	if profile == "" {
+		profile = assistant.DefaultProfile
+	}
+	runtimeStatus := RuntimeStatus{Profile: profile, Model: opts.Model}
+	if provider, ok := b.(interface {
+		BackendStatus() assistant.BackendStatus
+	}); ok {
+		runtimeStatus.Backend = provider.BackendStatus()
+	}
 	return &Engine{
 		backend:       b,
 		opts:          opts,
+		runtimeStatus: runtimeStatus,
 		transcript:    NewTranscript(),
 		commands:      make(chan toolCommand, 64),
 		sessionGrants: make(map[ApprovalKey]struct{}),
@@ -319,7 +347,7 @@ func (e *Engine) run(
 				if id != "" && !emit(Event{Kind: EventConversation, ConvID: id}) {
 					return
 				}
-				emit(Event{Kind: EventError, Err: err})
+				emit(Event{Kind: EventError, Err: err, BackendFailure: true})
 				return
 			}
 		}
@@ -357,7 +385,7 @@ func (e *Engine) run(
 				if err != nil && (ctx.Err() == nil || !errors.Is(err, ctx.Err())) {
 					completion.Err = err
 					e.finalizeTranscript()
-					send(Event{Kind: EventError, Round: terminalRound, Err: err})
+					send(Event{Kind: EventError, Round: terminalRound, Err: err, BackendFailure: true})
 					return
 				}
 				if ctx.Err() != nil {
@@ -471,6 +499,23 @@ func (e *Engine) finalizeTranscript() {
 // from SendOptions and updated as turns run; empty means a new conversation.
 func (e *Engine) ConversationID() string { return e.opts.ConversationID }
 
+// Status reports the immutable effective request configuration and non-secret
+// backend metadata captured when the engine was constructed. An empty model
+// remains empty because only the server knows which effective model it selected.
+func (e *Engine) Status() RuntimeStatus {
+	return e.runtimeStatus
+}
+
+// CurrentUser loads the authenticated Datadog identity when the backend
+// exposes that optional capability.
+func (e *Engine) CurrentUser(ctx context.Context) (assistant.CurrentUser, error) {
+	backend, ok := e.backend.(CurrentUserBackend)
+	if !ok {
+		return assistant.CurrentUser{}, ErrCurrentUserUnsupported
+	}
+	return backend.CurrentUser(ctx)
+}
+
 // PreviousConversationID reports the most recent non-empty conversation that
 // NewConversation left behind. It remains available after reset so navigation
 // and lifecycle checks can recover the prior persisted conversation.
@@ -536,7 +581,7 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 		return // cancelled: end quietly
 	}
 	if err != nil {
-		send(Event{Kind: EventError, Err: err})
+		send(Event{Kind: EventError, Err: err, BackendFailure: true})
 		return
 	}
 	if resp == nil {
