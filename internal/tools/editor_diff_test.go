@@ -214,6 +214,13 @@ func TestEditorInputReducerEditStreamsOnlyAfterCompleteOldText(t *testing.T) {
 	if !deletedOld || !addedNew || !pending {
 		t.Fatalf("partial new_text diff = %#v, want -old +new and pending tail", partialNew.Preview.Diff.AllLines())
 	}
+	completeEdit, ok := reduce(context.Background(), agent.ToolInputUpdate{
+		// The edit array is complete, but the outer object is still streaming.
+		Name: toolEditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new"}],`,
+	}, partialNew).(*filediff.State)
+	if !ok || completeEdit.Phase != filediff.PhaseStreaming || completeEdit.Preview == nil || !completeEdit.Preview.Pending {
+		t.Fatalf("complete non-final edit state = %#v, want pending streaming preview", completeEdit)
+	}
 	stable, ok := reduce(context.Background(), agent.ToolInputUpdate{
 		Name: toolEditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new\nsecond`,
 	}, partialNew).(*filediff.State)

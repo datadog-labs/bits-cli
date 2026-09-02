@@ -341,7 +341,7 @@ func editFileInputReducer(r *os.Root) agent.ToolInputReducer {
 			edits = append(edits, filediff.Edit{OldText: input.PendingEdit.OldText, NewText: &newText})
 		}
 		bytes, hash := editPreviewKey(edits)
-		pending := visiblePending && !update.HasFinalInput
+		pending := !update.HasFinalInput
 		if pending && streamPreviewUnchanged(previous, filediff.PreviewEdit, bytes, hash, update.PreviewTruncated) {
 			return previous
 		}
