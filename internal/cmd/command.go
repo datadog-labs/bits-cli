@@ -24,6 +24,14 @@ type ChatOptions struct {
 	ApprovalMode   agent.ApprovalMode
 }
 
+// RunOptions carries the shared execution flags plus one-turn run options.
+type RunOptions struct {
+	ChatOptions
+	Prompt   string
+	Model    string
+	Delivery string
+}
+
 // LoginOptions carries the user-supplied login flags resolved by the command
 // tree before dispatch.
 type LoginOptions struct {
@@ -35,6 +43,7 @@ type LoginOptions struct {
 // invokes these without depending on their implementations.
 type Actions struct {
 	Chat   func(ctx context.Context, opts ChatOptions) error
+	Run    func(ctx context.Context, opts RunOptions) error
 	Login  func(ctx context.Context, opts LoginOptions) error
 	Logout func(ctx context.Context) error
 }
@@ -43,14 +52,37 @@ type Actions struct {
 // output to stdout and stderr. A new tree per call keeps parsing state from
 // leaking between runs or tests.
 func Execute(ctx context.Context, args []string, actions Actions, stdout, stderr io.Writer) error {
-	root := newRootCommand(actions)
+	invoked := false
+	dispatch := Actions{
+		Chat: func(ctx context.Context, opts ChatOptions) error {
+			invoked = true
+			return actions.Chat(ctx, opts)
+		},
+		Run: func(ctx context.Context, opts RunOptions) error {
+			invoked = true
+			return actions.Run(ctx, opts)
+		},
+		Login: func(ctx context.Context, opts LoginOptions) error {
+			invoked = true
+			return actions.Login(ctx, opts)
+		},
+		Logout: func(ctx context.Context) error {
+			invoked = true
+			return actions.Logout(ctx)
+		},
+	}
+	root := newRootCommand(dispatch)
 	if args == nil {
 		args = []string{}
 	}
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	return root.ExecuteContext(ctx)
+	err := root.ExecuteContext(ctx)
+	if err != nil && !invoked {
+		return &ExitError{Code: ExitUsage, Err: err}
+	}
+	return err
 }
 
 func newRootCommand(actions Actions) *cobra.Command {
@@ -65,6 +97,7 @@ func newRootCommand(actions Actions) *cobra.Command {
 		Short:         "Datadog Assistant in your terminal",
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		Version:       buildVersion(),
 		RunE: func(command *cobra.Command, args []string) error {
 			if err := cobra.NoArgs(command, args); err != nil {
 				return err
@@ -77,12 +110,8 @@ func newRootCommand(actions Actions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			siteSet := command.Flags().Changed("site") && strings.TrimSpace(opts.Site) != ""
-			switch {
-			case mode == auth.ModeAPIKey && !siteSet:
-				return fmt.Errorf("--auth %s requires --site", auth.ModeAPIKey)
-			case mode == auth.ModeAuto && command.Flags().Changed("site"):
-				return fmt.Errorf("--site requires --auth %s; use `bits login --site` for OAuth", auth.ModeAPIKey)
+			if err := validateSiteSelection(mode, opts.Site, command.Flags().Changed("site")); err != nil {
+				return err
 			}
 			opts.AuthMode = mode
 			opts.ApprovalMode = approval
@@ -102,8 +131,19 @@ func newRootCommand(actions Actions) *cobra.Command {
 		"",
 		"resume an existing conversation by ID",
 	)
-	root.AddCommand(newLoginCommand(actions.Login), newLogoutCommand(actions.Logout))
+	root.AddCommand(newRunCommand(actions.Run), newLoginCommand(actions.Login), newLogoutCommand(actions.Logout))
 	return root
+}
+
+func validateSiteSelection(mode auth.Mode, site string, siteChanged bool) error {
+	siteSet := siteChanged && strings.TrimSpace(site) != ""
+	switch {
+	case mode == auth.ModeAPIKey && !siteSet:
+		return fmt.Errorf("--auth %s requires --site", auth.ModeAPIKey)
+	case mode == auth.ModeAuto && siteChanged:
+		return fmt.Errorf("--site requires --auth %s; use `bits login --site` for OAuth", auth.ModeAPIKey)
+	}
+	return nil
 }
 
 func newLoginCommand(action func(context.Context, LoginOptions) error) *cobra.Command {
