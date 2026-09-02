@@ -25,6 +25,7 @@ var regions = []catalogEntry{
 	{Region: Region{Name: "EU1", WebHost: "app.datadoghq.eu"}, AssistantHosts: []string{"api.datadoghq.eu"}, ShowInLogin: true},
 	{Region: Region{Name: "AP1", WebHost: "ap1.datadoghq.com"}, AssistantHosts: []string{"api.ap1.datadoghq.com"}, ShowInLogin: true},
 	{Region: Region{Name: "AP2", WebHost: "ap2.datadoghq.com"}, AssistantHosts: []string{"api.ap2.datadoghq.com"}, ShowInLogin: true},
+	{Region: Region{Name: "UK1", WebHost: "uk1.datadoghq.com"}, AssistantHosts: []string{"api.uk1.datadoghq.com"}, ShowInLogin: true},
 	{Region: Region{Name: "Staging", WebHost: "dd.datad0g.com"}, AssistantHosts: []string{"api.datad0g.com", "dd.datad0g.com"}},
 }
 

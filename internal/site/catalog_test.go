@@ -14,6 +14,7 @@ func TestLoginRegions(t *testing.T) {
 		{Name: "EU1", WebHost: "app.datadoghq.eu"},
 		{Name: "AP1", WebHost: "ap1.datadoghq.com"},
 		{Name: "AP2", WebHost: "ap2.datadoghq.com"},
+		{Name: "UK1", WebHost: "uk1.datadoghq.com"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("LoginRegions() = %#v, want %#v", got, want)
@@ -30,6 +31,7 @@ func TestWebHostForAssistantHost(t *testing.T) {
 		{host: "API.US3.DATADOGHQ.COM", want: "us3.datadoghq.com", ok: true},
 		{host: "api.datad0g.com", want: "dd.datad0g.com", ok: true},
 		{host: "dd.datad0g.com", want: "dd.datad0g.com", ok: true},
+		{host: "api.uk1.datadoghq.com", want: "uk1.datadoghq.com", ok: true},
 		{host: "api.ddog-gov.com"},
 	}
 	for _, test := range tests {

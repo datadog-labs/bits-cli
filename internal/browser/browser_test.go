@@ -18,6 +18,7 @@ func TestConversationURLUsesAuthoritativeSiteMapping(t *testing.T) {
 		{name: "EU1", site: "https://api.datadoghq.eu", want: "https://app.datadoghq.eu/ask/conversation-1"},
 		{name: "AP1", site: "https://api.ap1.datadoghq.com", want: "https://ap1.datadoghq.com/ask/conversation-1"},
 		{name: "AP2", site: "https://api.ap2.datadoghq.com", want: "https://ap2.datadoghq.com/ask/conversation-1"},
+		{name: "UK1", site: "https://api.uk1.datadoghq.com", want: "https://uk1.datadoghq.com/ask/conversation-1"},
 		{name: "staging API", site: "https://api.datad0g.com", want: "https://dd.datad0g.com/ask/conversation-1"},
 		{name: "staging direct", site: "https://dd.datad0g.com", want: "https://dd.datad0g.com/ask/conversation-1"},
 	}
