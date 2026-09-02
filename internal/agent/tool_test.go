@@ -347,6 +347,7 @@ func TestNewToolSetRejectsApprovalRequestName(t *testing.T) {
 }
 
 func TestToolSetReduceInput(t *testing.T) {
+	type contextKey struct{}
 	type renderState struct {
 		input string
 		prior any
@@ -374,7 +375,7 @@ func TestToolSetReduceInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx := context.WithValue(context.Background(), struct{}{}, "value")
+	ctx := context.WithValue(context.Background(), contextKey{}, "value")
 	prior := &renderState{input: "old"}
 	update := ToolInputUpdate{
 		ToolCallID:       "call-1",

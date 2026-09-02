@@ -302,8 +302,15 @@ func (e *Engine) run(
 				completion.Usage = cloneUsage(msg.Results.Usage)
 			}
 			b, ok := e.transcript.AppendMessage(msg)
-			blocks := append([]Block(nil), e.transcript.Blocks()...)
 			if ok {
+				// Reducers run in the engine goroutine immediately after the wire
+				// update is folded. This ordering lets the emitted snapshot carry
+				// the reducer's state and keeps filesystem-aware reducers ahead of
+				// client-tool execution.
+				if reduced, reducedOK := e.reduceToolInput(ctx, tools, msg, b); reducedOK {
+					b = reduced
+				}
+				blocks := append([]Block(nil), e.transcript.Blocks()...)
 				if !emit(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: blocks, Changed: b}}) {
 					return false
 				}
@@ -319,6 +326,7 @@ func (e *Engine) run(
 		opts := e.opts
 		opts.ConversationID = convID
 		opts.ClientTools = defs
+		opts.StreamToolCallInput = opts.StreamToolCallInput || tools.NeedsStreamedInput()
 
 		id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {
 			msg := ar.Data.Attributes.StructuredMessage
@@ -646,6 +654,7 @@ func (e *Engine) runTools(
 		}
 		resolved[item.call.ID] = true
 		outstanding--
+		result = tools.NormalizeResult(item.call, result)
 		block, ok := e.transcript.MarkToolExecuted(item.call.ID, result)
 		return emit(block, ok)
 	}
@@ -863,6 +872,57 @@ func toolCallOf(content assistant.Content) ToolCall {
 		call.Input = content.Tool.Metadata.Input
 	}
 	return call
+}
+
+// reduceToolInput invokes a registered reducer for the client-side tool
+// updates that can carry streamed input. The final client_tool_call is
+// explicitly client-side even though its payload does not carry the
+// IsClientSide marker used by tool_call_started. Server-side tool_call events
+// are intentionally excluded, even when their name matches a local tool.
+func (e *Engine) reduceToolInput(
+	ctx context.Context,
+	tools *ToolSet,
+	msg assistant.Message,
+	b Block,
+) (Block, bool) {
+	if tools == nil || b.Tool == nil || b.ToolCallID() == "" || msg.Content.Tool == nil {
+		return b, false
+	}
+	tp := msg.Content.Tool
+	if tp.ToolCallID == "" {
+		return b, false
+	}
+	update := ToolInputUpdate{
+		ToolCallID:       b.ToolCallID(),
+		Name:             b.Tool.Name,
+		RawPrefix:        b.Tool.InputPartial,
+		PreviewTruncated: b.Tool.InputPreviewTruncated,
+	}
+	switch msg.Content.Type {
+	case assistant.ContentToolCallStarted:
+		if !tp.IsClientSide {
+			return b, false
+		}
+	case assistant.ContentToolCallInputDelta:
+		// Deltas inherit client-side provenance from their aggregate started
+		// block. Some payloads also repeat the marker, so accept either.
+		if !b.Tool.IsClientSide && !tp.IsClientSide {
+			return b, false
+		}
+		update.Delta = tp.PartialJSON
+	case assistant.ContentClientToolCall:
+		update.HasFinalInput = tp.Metadata != nil
+		if update.HasFinalInput {
+			update.FinalInput = tp.Metadata.Input
+		}
+	default:
+		return b, false
+	}
+	next, ok := tools.ReduceInput(ctx, update, b.Tool.RenderState)
+	if !ok {
+		return b, false
+	}
+	return e.transcript.SetToolRenderState(b.ToolCallID(), next)
 }
 
 func toolResponse(call ToolCall, result ToolResult) assistant.ClientToolResponse {
