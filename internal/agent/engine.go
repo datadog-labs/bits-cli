@@ -884,6 +884,12 @@ func toolResponse(call ToolCall, result ToolResult) assistant.ClientToolResponse
 			Output: result.Output,
 		},
 	}
+	if result.Display != "" {
+		response.Content = &assistant.MarkdownContent{
+			Type:    assistant.ContentMarkdownFragment,
+			Content: result.Display,
+		}
+	}
 	if result.IsError {
 		response.Status = assistant.ToolStatusError
 	}

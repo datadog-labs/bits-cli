@@ -14,8 +14,11 @@ type ToolCall struct {
 }
 
 type ToolResult struct {
-	Title   string
-	Output  string
+	Title string
+	// Output is the model-visible result
+	Output string
+	// Display is optional additionnal data
+	Display string
 	IsError bool
 	// Denied marks an approval refusal, not a tool failure.
 	Denied bool
