@@ -167,16 +167,20 @@ func runLogout(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	printLogoutResult(hadSession, revokeErr)
+	return nil
+}
+
+func printLogoutResult(hadSession bool, revokeErr error) {
 	if !hadSession {
 		fmt.Fprintln(os.Stderr, "No Bits CLI OAuth session is stored.")
-		return nil
+		return
 	}
 	if revokeErr != nil {
 		fmt.Fprintf(os.Stderr, "Logged out locally; remote token revocation failed: %v\n", revokeErr)
-		return nil
+		return
 	}
 	fmt.Fprintln(os.Stderr, "Logged out.")
-	return nil
 }
 
 func runChat(parent context.Context, opts cmd.ChatOptions) error {
@@ -202,6 +206,10 @@ func runChat(parent context.Context, opts cmd.ChatOptions) error {
 			return fmt.Errorf("sign in to Datadog: %w", err)
 		}
 		return err
+	}
+	if result, ok := m.LogoutResult(); ok {
+		printLogoutResult(result.HadSession, result.RevokeErr)
+		return nil
 	}
 	// On a clean exit with an active conversation, surface how to get back to it.
 	// The conversation id is the server-side handle the Assistant API restores via
@@ -229,7 +237,12 @@ func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth
 	if err != nil {
 		return nil, err
 	}
-	config := tui.Config{Tools: toolSet}
+	config := tui.Config{
+		Tools: toolSet,
+		Logout: func(logoutCtx context.Context) (bool, error, error) {
+			return auth.Logout(logoutCtx, store, nil)
+		},
+	}
 	engineOpts := startup.EngineOptions{
 		Client: startup.ClientOptions{
 			Mode:    opts.AuthMode,

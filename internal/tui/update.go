@@ -43,6 +43,11 @@ type (
 		url string
 		err error
 	}
+	logoutResultMsg struct {
+		generation uint64
+		result     LogoutResult
+		err        error
+	}
 )
 
 // noticeExpiredMsg clears a transient status notice when its TTL elapses. seq
@@ -181,6 +186,9 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.cancelTurn != nil {
 		m.cancelTurn()
 	}
+	if m.logoutCancel != nil {
+		m.logoutCancel()
+	}
 	return m, tea.Quit
 }
 
@@ -219,6 +227,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case turnClosedMsg:
 		return m.handleTurnClosed(msg)
+
+	case logoutResultMsg:
+		return m.applyLogoutResult(msg)
 
 	case conversationListResultMsg:
 		return m, m.applyConversationListResult(msg)
@@ -335,6 +346,10 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 		// and leave the chain armed — and the reset that follows empties the
 		// transcript with nothing left to disarm it.
 		return m, tea.Batch(m.startNewConversation(), m.syncAnimation())
+	}
+	if m.pendingLogout {
+		m.pendingLogout = false
+		return m, tea.Batch(m.startLogout(), m.syncAnimation())
 	}
 	// Resync in case the turn ended with nothing left in flight.
 	//
@@ -527,6 +542,9 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	if name, ok := parseCommand(raw); ok {
 		m.editor.Reset()
 		return m.dispatchCommand(name)
+	}
+	if m.pendingLogout || m.logoutRunning {
+		return m, nil
 	}
 
 	if m.turnEvents != nil || m.chatPhase == chat.PhaseLoading {

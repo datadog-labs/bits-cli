@@ -34,10 +34,15 @@ const (
 // has persisted a session.
 type EngineFactory func(context.Context) (*agent.Engine, error)
 
+// LogoutFunc removes the durable OAuth session and best-effort revokes its
+// grant. It matches auth.Logout without coupling the TUI to a concrete store.
+type LogoutFunc func(context.Context) (hadSession bool, revokeErr, err error)
+
 type Config struct {
 	Tools          *agent.ToolSet
 	StatusProvider statusview.Provider
 	OpenURL        func(context.Context, string) error
+	Logout         LogoutFunc
 }
 
 // Model is the root Bubble Tea model. All state lives here and is mutated only
@@ -81,6 +86,16 @@ type Model struct {
 	// /new and /clear cancel an active turn/restore once, then wait for its
 	// channel to close before resetting conversation state.
 	pendingNew bool
+
+	// /logout drains active engine work before deleting credentials. Once local
+	// deletion succeeds, the engine is discarded so its authenticated client can
+	// never be reused, even when remote revocation fails.
+	logout           LogoutFunc
+	pendingLogout    bool
+	logoutRunning    bool
+	logoutCancel     context.CancelFunc
+	logoutGeneration uint64
+	logoutResult     *LogoutResult
 
 	pendingApprovals []agent.Block
 	approvalChoice   int
@@ -167,6 +182,7 @@ func (m *Model) configure(configs []Config) {
 			m.statusProvider = configs[0].StatusProvider
 		}
 		m.openURL = configs[0].OpenURL
+		m.logout = configs[0].Logout
 	}
 	if m.openURL == nil {
 		m.openURL = browser.Open
@@ -190,6 +206,15 @@ func newShell() *Model {
 // ConversationID returns the active conversation id, or "" when none has been
 // established yet. main reads it after the program exits to print a resume hint.
 func (m *Model) ConversationID() string { return m.convID }
+
+// LogoutResult reports a completed native logout. The process surface uses it
+// after Bubble Tea exits so the result remains visible outside the alt screen.
+func (m *Model) LogoutResult() (LogoutResult, bool) {
+	if m.logoutResult == nil {
+		return LogoutResult{}, false
+	}
+	return *m.logoutResult, true
+}
 
 // StartupError reports why login could not transition into chat. Cancellation
 // remains distinguishable from post-login client construction failures.
