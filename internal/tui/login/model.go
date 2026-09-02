@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/auth"
+	"github.com/DataDog/bits-cli/internal/site"
 	"github.com/DataDog/bits-cli/internal/tui/components"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
@@ -46,22 +47,7 @@ const (
 	phaseComplete
 )
 
-type siteOption struct {
-	name   string
-	domain string
-}
-
-// Keep this user-facing region list in sync with Datadog's public site catalog:
-// https://docs.datadoghq.com/getting_started/site/. New or uncommon Datadog
-// domains remain available through the validated custom-site path.
-var siteOptions = []siteOption{
-	{name: "US1", domain: "app.datadoghq.com"},
-	{name: "US3", domain: "us3.datadoghq.com"},
-	{name: "US5", domain: "us5.datadoghq.com"},
-	{name: "EU1", domain: "app.datadoghq.eu"},
-	{name: "AP1", domain: "ap1.datadoghq.com"},
-	{name: "AP2", domain: "ap2.datadoghq.com"},
-}
+var siteOptions = site.LoginRegions()
 
 func customOptionIndex() int { return len(siteOptions) }
 
@@ -128,7 +114,7 @@ func New(ctx context.Context, login LoginFunc) *Model {
 
 	choices := make([]components.Choice, 0, len(siteOptions)+1)
 	for _, option := range siteOptions {
-		choices = append(choices, components.Choice{Label: option.name, Detail: option.domain})
+		choices = append(choices, components.Choice{Label: option.Name, Detail: option.WebHost})
 	}
 	choices = append(choices, components.Choice{Label: "Custom", Detail: "Enter another domain"})
 	return &Model{
@@ -249,7 +235,7 @@ func (m *Model) handleKey(key string) (tea.Model, tea.Cmd) {
 				m.loginErr = nil
 				return m, m.custom.Focus()
 			}
-			return m, m.startLogin("https://" + siteOptions[selected].domain)
+			return m, m.startLogin("https://" + siteOptions[selected].WebHost)
 		case "esc":
 			m.canceled = true
 			return m, tea.Quit

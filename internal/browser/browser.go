@@ -11,20 +11,11 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/DataDog/bits-cli/internal/site"
 )
 
 const openTimeout = 10 * time.Second
-
-var conversationHosts = map[string]string{
-	"api.datadoghq.com":     "app.datadoghq.com",
-	"api.us3.datadoghq.com": "us3.datadoghq.com",
-	"api.us5.datadoghq.com": "us5.datadoghq.com",
-	"api.datadoghq.eu":      "app.datadoghq.eu",
-	"api.ap1.datadoghq.com": "ap1.datadoghq.com",
-	"api.ap2.datadoghq.com": "ap2.datadoghq.com",
-	"api.datad0g.com":       "dd.datad0g.com",
-	"dd.datad0g.com":        "dd.datad0g.com",
-}
 
 // ConversationURL returns the dedicated Bits web page for a conversation on
 // the Datadog site serving the Assistant API. The explicit mapping is the
@@ -35,12 +26,12 @@ func ConversationURL(apiSite, conversationID string) (string, error) {
 		return "", errors.New("conversation ID is empty")
 	}
 
-	site, err := url.Parse(strings.TrimSpace(apiSite))
-	if err != nil || site.Scheme != "https" || site.Hostname() == "" || site.Host != site.Hostname() ||
-		site.User != nil || site.RawQuery != "" || site.Fragment != "" || (site.Path != "" && site.Path != "/") {
+	parsedSite, err := url.Parse(strings.TrimSpace(apiSite))
+	if err != nil || parsedSite.Scheme != "https" || parsedSite.Hostname() == "" || parsedSite.Host != parsedSite.Hostname() ||
+		parsedSite.User != nil || parsedSite.RawQuery != "" || parsedSite.Fragment != "" || (parsedSite.Path != "" && parsedSite.Path != "/") {
 		return "", fmt.Errorf("unsupported Datadog Assistant site %q", apiSite)
 	}
-	webHost, ok := conversationHosts[strings.ToLower(site.Hostname())]
+	webHost, ok := site.WebHostForAssistantHost(parsedSite.Hostname())
 	if !ok {
 		return "", fmt.Errorf("unsupported Datadog Assistant site %q", apiSite)
 	}
