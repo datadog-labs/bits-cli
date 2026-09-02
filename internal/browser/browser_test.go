@@ -1,10 +1,20 @@
 package browser
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestOpenHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := Open(ctx, "https://app.datadoghq.com"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Open() error = %v, want context cancellation", err)
+	}
+}
 
 func TestConversationURLUsesAuthoritativeSiteMapping(t *testing.T) {
 	tests := []struct {

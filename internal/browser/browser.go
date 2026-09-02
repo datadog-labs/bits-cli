@@ -48,6 +48,9 @@ func ConversationURL(apiSite, conversationID string) (string, error) {
 // Open starts the operating system's browser launcher and waits long enough to
 // observe startup failures. Callers should retain the URL as a manual fallback.
 func Open(ctx context.Context, target string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	command, args := launcherCommand(runtime.GOOS, target)
 	launchCtx, cancel := context.WithTimeout(ctx, openTimeout)
 	defer cancel()
