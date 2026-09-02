@@ -441,6 +441,10 @@ func safeOAuthErrorCode(code string) string {
 }
 
 func openBrowser(ctx context.Context, target string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	var command string
 	var args []string
 	switch runtime.GOOS {

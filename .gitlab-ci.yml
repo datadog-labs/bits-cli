@@ -19,6 +19,17 @@ lint:
   rules:
     - when: always
 
+test:
+  stage: lint
+  image: $GO_IMAGE
+  tags:
+    - arch:arm64
+  timeout: 10m
+  script:
+    - go test ./...
+  rules:
+    - when: always
+
 build:
   stage: build
   image: $GO_IMAGE

@@ -142,10 +142,10 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	if backend.calls != 2 || len(backend.responses) != 1 {
 		t.Fatalf("deny after resize not honored: calls=%d responses=%d", backend.calls, len(backend.responses))
 	}
-	if backend.responses[0].Status != assistant.ToolStatusError || backend.responses[0].ToolCallID != "time-call" {
+	if backend.responses[0].Status != assistant.ToolStatusError || backend.responses[0].ToolCallID != "tool-call" {
 		t.Fatalf("denial response = %+v", backend.responses[0])
 	}
-	if view := ansi.Strip(model.View().Content); strings.Contains(view, "It is noon.") {
+	if view := ansi.Strip(model.View().Content); strings.Contains(view, "Done.") {
 		t.Fatalf("aborted deny still delivered the model's follow-up answer:\n%s", view)
 	}
 }
@@ -242,10 +242,10 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				if backend.calls != 2 || len(backend.responses) != 1 {
 					t.Fatalf("backend calls = %d responses = %d, want the denial answered on the wire", backend.calls, len(backend.responses))
 				}
-				if backend.responses[0].Status != assistant.ToolStatusError || backend.responses[0].ToolCallID != "time-call" {
+				if backend.responses[0].Status != assistant.ToolStatusError || backend.responses[0].ToolCallID != "tool-call" {
 					t.Fatalf("denial response = %+v", backend.responses[0])
 				}
-				if strings.Contains(ansi.Strip(model.View().Content), "It is noon.") {
+				if strings.Contains(ansi.Strip(model.View().Content), "Done.") {
 					t.Fatal("aborted deny still delivered the model's follow-up answer")
 				}
 				return
