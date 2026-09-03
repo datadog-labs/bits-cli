@@ -14,7 +14,6 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
-	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 // historyLoadTimeout bounds the conversation-history fetch on startup.
@@ -138,6 +137,14 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // routes the message to the owning surface, then reconciles editor focus so the
 // cursor always tracks the active surface.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The color profile is handled ahead of the mode check because Bubble Tea
+	// reports it once, at startup — which is while the login screen owns the
+	// screen. Routing it through updateLogin would drop it, and nothing
+	// re-requests it after the handoff, so a low-color terminal reached through
+	// login would keep a truecolor sweep it cannot render.
+	if profile, ok := msg.(tea.ColorProfileMsg); ok {
+		return m, m.setColorProfile(profile.Profile)
+	}
 	if m.mode == ModeLogin {
 		return m.updateLogin(msg)
 	}
@@ -190,6 +197,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setDarkBackground(msg.IsDark())
 		return m, nil
 
+	case animTickMsg:
+		return m, m.advanceAnimation(msg)
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
@@ -203,7 +213,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.applyEvent(msg.ev)
 		m.syncStatus()
 		m.refreshViewport()
-		return m, tea.Batch(cmd, waitEvent(msg.generation, m.turnEvents))
+		// Tool state only changes on engine events, so this is where the chip
+		// animation starts and stops.
+		return m, tea.Batch(cmd, m.syncAnimation(), waitEvent(msg.generation, m.turnEvents))
 
 	case turnClosedMsg:
 		return m.handleTurnClosed(msg)
@@ -318,9 +330,22 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	m.syncStatus()
 	if m.pendingNew {
 		m.pendingNew = false
-		return m, m.startNewConversation()
+		// Resync *after* the reset. A cancelled client tool can leave its
+		// block reporting ToolRunning, so syncing first would see no change
+		// and leave the chain armed — and the reset that follows empties the
+		// transcript with nothing left to disarm it.
+		return m, tea.Batch(m.startNewConversation(), m.syncAnimation())
 	}
-	return m, nil
+	// Resync in case the turn ended with nothing left in flight.
+	//
+	// Known gap: a cancelled turn does NOT settle its tools. The engine's
+	// tool loop returns on ctx.Done() after cancelling the per-tool
+	// contexts, without emitting a final block state, so after a Ctrl+C the
+	// blocks still report ToolRunning. This sync therefore sees no change
+	// and leaves the tick armed against a tool that is already dead, until
+	// the conversation is reset. Settling those blocks belongs in the
+	// engine, not here; accepted as out of scope for this change.
+	return m, m.syncAnimation()
 }
 
 func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -603,7 +628,7 @@ func (m *Model) setDarkBackground(isDark bool) {
 	if isDark == m.styles.IsDark {
 		return
 	}
-	m.applyStyles(styles.Default(isDark))
+	m.applyStyles(m.theme(isDark))
 	m.refreshViewport()
 }
 

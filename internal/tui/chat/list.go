@@ -28,6 +28,11 @@ type List struct {
 	items []agent.Block
 	sty   Styles
 
+	// frame is the animation step handed to in-flight status chips. It is not
+	// part of the cache key: animated blocks bypass the cache entirely (see
+	// renderItem), so advancing the frame never invalidates settled blocks.
+	frame int
+
 	cache    map[agent.BlockID]listLineEntry
 	renderer blockRenderer
 }
@@ -113,18 +118,52 @@ func (l *List) invalidateAll() {
 }
 
 // renderItem returns the block's rendered lines, cached by revision and width.
-// Blocks render at animation frame 0 for now: the status chip's motion is
-// driven by a frame counter the tui does not own yet, so an in-flight chip
-// draws its first frame and holds it.
+// Animated blocks are re-rendered every call and never cached, so the
+// per-frame cost tracks the number of in-flight tools rather than the length
+// of the transcript.
 func (l *List) renderItem(idx int) []string {
 	it := l.items[idx]
+	if animated(it) {
+		return strings.Split(l.renderer.RenderBlock(it, l.width, l.sty, l.frame), "\n")
+	}
 	if e, ok := l.cache[it.ID]; ok && e.rev == it.Rev && e.width == l.width {
 		return e.lines
 	}
-	lines := strings.Split(l.renderer.RenderBlock(it, l.width, l.sty, 0), "\n")
+	lines := strings.Split(l.renderer.RenderBlock(it, l.width, l.sty, l.frame), "\n")
 	l.cache[it.ID] = listLineEntry{rev: it.Rev, width: l.width, lines: lines}
 	return lines
 }
+
+// animated reports whether a block's rendering depends on the frame counter.
+// Only the two in-flight tool states carry an animated status chip.
+//
+// Open question for review: ToolAwaitingApproval is included, so the tick keeps
+// running for as long as the prompt is unanswered — indefinitely if the user
+// walks away. The motion is what draws the eye to something needing action,
+// which is why it is here; dropping it from this predicate is the one-line
+// change if the idle repaints matter more.
+func animated(it agent.Block) bool {
+	if it.Tool == nil {
+		return false
+	}
+	return it.Tool.Status == agent.ToolRunning || it.Tool.Status == agent.ToolAwaitingApproval
+}
+
+// HasAnimated reports whether any block currently needs the frame counter to
+// advance. The tui uses it to arm and disarm the animation tick, so an idle
+// transcript costs nothing.
+func (l *List) HasAnimated() bool {
+	for _, it := range l.items {
+		if animated(it) {
+			return true
+		}
+	}
+	return false
+}
+
+// SetFrame sets the animation step used by in-flight status chips. It does not
+// touch the cache, since animated blocks do not use it.
+func (l *List) SetFrame(frame int) { l.frame = frame }
 
 func (l *List) itemHeight(idx int) int { return len(l.renderItem(idx)) }
 
