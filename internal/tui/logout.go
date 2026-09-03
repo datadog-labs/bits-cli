@@ -54,8 +54,7 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 		return m, m.showNotice(noticeForError("could not log out", msg.err), 0)
 	}
 
-	// Local deletion is authoritative. Drop every reference that can issue an
-	// authenticated Assistant request before leaving the program.
+	// Discard the engine so it cannot make authenticated requests after logout.
 	m.engine = nil
 	m.convID = ""
 	m.turnEvents = nil

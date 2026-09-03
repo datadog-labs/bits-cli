@@ -162,12 +162,21 @@ func runLogin(ctx context.Context, opts cmd.LoginOptions) error {
 
 func runLogout(ctx context.Context) error {
 	logoutCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	_, _, err := auth.Logout(logoutCtx, auth.DefaultStore(), nil)
+	hadSession, revokeErr, err := auth.Logout(logoutCtx, auth.DefaultStore(), nil)
 	cancel()
 	if err != nil {
 		return err
 	}
-	return printLoggedOut(os.Stderr)
+	if !hadSession {
+		fmt.Fprintln(os.Stderr, "No Bits CLI OAuth session is stored.")
+		return nil
+	}
+	if revokeErr != nil {
+		fmt.Fprintf(os.Stderr, "Logged out locally; remote token revocation failed: %v\n", revokeErr)
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "Logged out.")
+	return nil
 }
 
 func printLoggedOut(w io.Writer) error {

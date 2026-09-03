@@ -87,9 +87,8 @@ type Model struct {
 	// channel to close before resetting conversation state.
 	pendingNew bool
 
-	// /logout drains active engine work before deleting credentials. Once local
-	// deletion succeeds, the engine is discarded so its authenticated client can
-	// never be reused, even when remote revocation fails.
+	// /logout stops active work before deleting credentials, then discards the
+	// authenticated engine.
 	logout           LogoutFunc
 	pendingLogout    bool
 	logoutRunning    bool
@@ -207,9 +206,7 @@ func newShell() *Model {
 // established yet. main reads it after the program exits to print a resume hint.
 func (m *Model) ConversationID() string { return m.convID }
 
-// LoggedOut reports whether native logout completed. The process surface uses
-// it after Bubble Tea exits so the confirmation remains visible outside the
-// alt screen.
+// LoggedOut show confirmation message after /logout is used
 func (m *Model) LoggedOut() bool { return m.loggedOut }
 
 // StartupError reports why login could not transition into chat. Cancellation
