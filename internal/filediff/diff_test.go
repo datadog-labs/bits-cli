@@ -38,6 +38,16 @@ func TestBuildWithDisplayRawUnifiedDiff(t *testing.T) {
 	}
 }
 
+func TestLineCountMatchesAllLines(t *testing.T) {
+	diff := Build("a/f.txt", "b/f.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\nfour\n", 0)
+	if got, want := diff.LineCount(), len(diff.AllLines()); got != want {
+		t.Fatalf("LineCount() = %d, want %d", got, want)
+	}
+	if (Diff{}).LineCount() != 0 {
+		t.Fatalf("empty diff LineCount() = %d, want 0", (Diff{}).LineCount())
+	}
+}
+
 func TestParseUnifiedDiffRoundTrip(t *testing.T) {
 	built, display := BuildWithDisplay("a/f.txt", "b/f.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n", 0)
 	parsed, ok := ParseUnifiedDiff(display)

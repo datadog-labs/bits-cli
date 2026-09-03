@@ -69,6 +69,16 @@ func (d Diff) AllLines() []DiffLine {
 	return lines
 }
 
+// LineCount returns the total number of diff lines across all hunks. It avoids
+// the allocation of len(AllLines()) when only the count is needed.
+func (d Diff) LineCount() int {
+	n := 0
+	for _, hunk := range d.Hunks {
+		n += len(hunk.Lines)
+	}
+	return n
+}
+
 // Build constructs a bounded model directly from go-udiff's structured API.
 // It never formats and reparses unified text. A non-positive limit means
 // unlimited.

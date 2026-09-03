@@ -347,6 +347,15 @@ func editFileInputReducer(r *os.Root) agent.ToolInputReducer {
 		}
 		replacements, err := filediff.MatchEdits(snapshot.Text, edits)
 		if err != nil {
+			// While streaming, a trailing edit whose target is not yet resolvable
+			// must not discard an already-valid preview: earlier hunks would flicker
+			// out and back in as input arrives. Keep the last streaming preview; a
+			// genuine error still surfaces once the input is final (pending false).
+			if pending {
+				if preserveStreamingState(previous, state) == previous {
+					return previous
+				}
+			}
 			state.Reason = err.Error()
 			return state
 		}
@@ -354,6 +363,13 @@ func editFileInputReducer(r *os.Root) agent.ToolInputReducer {
 		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Text, after, maxEditorDiffLines)
 		if pending {
 			appendPendingMarker(&diff, "awaiting more input")
+			// Streamed input only ever adds content, so a frame that resolves fewer
+			// lines than the previous one is a transient partial-JSON parse (e.g. a
+			// chunk boundary inside a string escape). Keep the prior preview rather
+			// than momentarily dropping a hunk.
+			if regressesStreamingPreview(previous, diff) {
+				return previous
+			}
 		} else {
 			state.Phase = filediff.PhaseReady
 		}
@@ -395,6 +411,18 @@ func preserveStreamingState(previous, next *filediff.State) *filediff.State {
 		return next
 	}
 	return previous
+}
+
+// regressesStreamingPreview reports whether a freshly built streaming diff
+// resolved strictly fewer lines than the previous streaming preview. Streamed
+// input only grows, so a shrink signals a transient partial parse rather than a
+// real edit, and the previous preview should be retained to avoid a visible
+// hunk flickering out and back in.
+func regressesStreamingPreview(previous *filediff.State, diff filediff.Diff) bool {
+	if previous == nil || previous.Phase != filediff.PhaseStreaming || previous.Preview == nil || previous.Preview.Diff == nil {
+		return false
+	}
+	return diff.LineCount() < previous.Preview.Diff.LineCount()
 }
 
 func streamPreviewUnchanged(previous *filediff.State, kind filediff.PreviewKind, bytes int, hash uint64, truncated bool) bool {

@@ -256,3 +256,80 @@ func TestParsePartialEditorInputStopsAtCompleteInvalidEdit(t *testing.T) {
 		t.Fatalf("edits = %#v, want invalid set discarded", input.Edits)
 	}
 }
+
+func editReducerForFile(t *testing.T, name, content string) agent.ToolInputReducer {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	return editFileInputReducer(r)
+}
+
+func previewContains(state *filediff.State, want string) bool {
+	if state == nil || state.Preview == nil || state.Preview.Diff == nil {
+		return false
+	}
+	for _, content := range diffContents(state.Preview.Diff) {
+		if content == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestEditFileStreamingDoesNotFlickerHunksOnPartialEscape reproduces the
+// jumpiness where a later hunk that is already visible momentarily disappears
+// because a streamed chunk boundary lands inside a JSON string escape (here a
+// trailing backslash), which transiently fails the partial-JSON parse.
+func TestEditFileStreamingDoesNotFlickerHunksOnPartialEscape(t *testing.T) {
+	reduce := editReducerForFile(t, "f.txt", "alpha\nomega\n")
+
+	visible := reduce(context.Background(), agent.ToolInputUpdate{
+		Name:      toolEditFile,
+		RawPrefix: `{"path":"f.txt","edits":[{"old_text":"alpha","new_text":"ALPHA"},{"old_text":"omega","new_text":"OMEGA\n`,
+	}, nil).(*filediff.State)
+	if !previewContains(visible, "OMEGA") {
+		t.Fatalf("expected the second hunk to be visible, got %#v", visible)
+	}
+
+	// The next streamed chunk ends on a lone backslash inside new_text.
+	flickered := reduce(context.Background(), agent.ToolInputUpdate{
+		Name:      toolEditFile,
+		RawPrefix: `{"path":"f.txt","edits":[{"old_text":"alpha","new_text":"ALPHA"},{"old_text":"omega","new_text":"OMEGA\nfoo\`,
+	}, visible).(*filediff.State)
+	if !previewContains(flickered, "OMEGA") {
+		t.Fatalf("second hunk flickered out on a partial escape:\n%#v", diffContents(flickered.Preview.Diff))
+	}
+}
+
+// TestEditFileStreamingKeepsEarlierHunkWhenTrailingEditUnresolvable reproduces
+// the case where a still-streaming trailing edit cannot yet be resolved: the
+// earlier, valid hunk must stay visible instead of the whole preview being
+// cleared to an error state.
+func TestEditFileStreamingKeepsEarlierHunkWhenTrailingEditUnresolvable(t *testing.T) {
+	reduce := editReducerForFile(t, "f.txt", "alpha\nomega\n")
+
+	first := reduce(context.Background(), agent.ToolInputUpdate{
+		Name:      toolEditFile,
+		RawPrefix: `{"path":"f.txt","edits":[{"old_text":"alpha","new_text":"ALPHA"},`,
+	}, nil).(*filediff.State)
+	if !previewContains(first, "ALPHA") {
+		t.Fatalf("expected the first hunk to be visible, got %#v", first)
+	}
+
+	// A trailing edit whose target is not present in the file (yet) must not
+	// discard the earlier valid hunk while streaming.
+	unresolvable := reduce(context.Background(), agent.ToolInputUpdate{
+		Name:      toolEditFile,
+		RawPrefix: `{"path":"f.txt","edits":[{"old_text":"alpha","new_text":"ALPHA"},{"old_text":"zzz","new_text":"Z\n`,
+	}, first).(*filediff.State)
+	if !previewContains(unresolvable, "ALPHA") {
+		t.Fatalf("earlier hunk was cleared by an unresolvable trailing edit:\n%#v", unresolvable)
+	}
+}
