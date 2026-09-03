@@ -113,12 +113,15 @@ func (l *List) invalidateAll() {
 }
 
 // renderItem returns the block's rendered lines, cached by revision and width.
+// Blocks render at animation frame 0 for now: the status chip's motion is
+// driven by a frame counter the tui does not own yet, so an in-flight chip
+// draws its first frame and holds it.
 func (l *List) renderItem(idx int) []string {
 	it := l.items[idx]
 	if e, ok := l.cache[it.ID]; ok && e.rev == it.Rev && e.width == l.width {
 		return e.lines
 	}
-	lines := strings.Split(l.renderer.RenderBlock(it, l.width, l.sty), "\n")
+	lines := strings.Split(l.renderer.RenderBlock(it, l.width, l.sty, 0), "\n")
 	l.cache[it.ID] = listLineEntry{rev: it.Rev, width: l.width, lines: lines}
 	return lines
 }

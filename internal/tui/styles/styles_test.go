@@ -103,3 +103,20 @@ func TestSharedComponentStylesDeriveFromSemanticTokens(t *testing.T) {
 		})
 	}
 }
+
+// TestSuccessStyleHasNoSurface follows the chip removal: a succeeded tool
+// renders as a bare glyph, so StatusSuccess carries no background and the
+// palette has no success surface role to go stale.
+func TestSuccessStyleHasNoSurface(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		isDark bool
+	}{{"dark", true}, {"light", false}} {
+		t.Run(test.name, func(t *testing.T) {
+			bg := Default(test.isDark).Chat.StatusSuccess.GetBackground()
+			if _, ok := bg.(lipgloss.NoColor); !ok {
+				t.Errorf("StatusSuccess background = %v, want unset", bg)
+			}
+		})
+	}
+}

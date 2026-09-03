@@ -18,8 +18,9 @@ import (
 const sampleText = "The quick brown fox jumps over the lazy dog."
 
 // renderGroup renders one page's body: its samples joined by delimiter lines,
-// with an end-of-content marker so reaching the bottom is obvious.
-func renderGroup(g group, width int, theme styles.Theme) string {
+// with an end-of-content marker so reaching the bottom is obvious. frame is the
+// animation step; only pages whose animates() is true consult it.
+func renderGroup(g group, width int, theme styles.Theme, frame int) string {
 	sty := chat.StylesFor(theme)
 	var samples []string
 	switch g {
@@ -33,6 +34,8 @@ func renderGroup(g group, width int, theme styles.Theme) string {
 		samples = markdownSamples(width, theme.IsDark)
 	case groupColorTokens:
 		samples = colorTokenSamples(theme)
+	case groupStatusPillMotion:
+		samples = statusPillMotionSamples(width, sty, frame)
 	default:
 		// numGroups is a count sentinel and is never rendered.
 	}
@@ -75,10 +78,12 @@ func semanticRoleSamples(width int, sty chat.Styles) []string {
 		renderSample("ToolDetail", sty.ToolDetail.Render("  ↳ {\"query\":\"timeout\"}")),
 		renderSample("Meta (separator)", "a"+sty.Meta.Render(" · ")+"b"),
 		// Status pills go through the real block renderer, so the catalog shows
-		// exactly what a transcript shows (glyph + name + pill chip).
-		renderSample("StatusRunning (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolRunning), width, sty)),
-		renderSample("StatusSuccess (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolSuccess), width, sty)),
-		renderSample("StatusError (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolError), width, sty)),
+		// exactly what a transcript shows (glyph + name + pill chip). This page is
+		// a static reference, so the in-flight chip is pinned to its first frame;
+		// its motion is shown on the Status pill motion page.
+		renderSample("StatusRunning (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolRunning), width, sty, 0)),
+		renderSample("StatusSuccess (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolSuccess), width, sty, 0)),
+		renderSample("StatusError (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolError), width, sty, 0)),
 		renderSample("NoticeInfo", sty.NoticeInfo.Render(" heads up: restored 3 messages ")),
 		renderSample("NoticeWarn", sty.NoticeWarn.Render(" warning: partial results ")),
 		renderSample("NoticeError", sty.NoticeError.Render(" error: request failed ")),
@@ -179,8 +184,12 @@ func colorTokenSamples(theme styles.Theme) []string {
 		{"Interactive accent (UserMarker/ToolName fg)", sty.ToolName.GetForeground()},
 		{"Tool detail fg", sty.ToolDetail.GetForeground()},
 		{"Status running fg", sty.StatusRunning.GetForeground()},
+		{"Status running bg", sty.StatusRunning.GetBackground()},
+		{"Status sweep dim", sty.StatusSweepDim},
+		{"Status sweep hot", sty.StatusSweepHot},
+		// A succeeded tool renders as a bare glyph, so there is no success
+		// surface to show here.
 		{"Status success fg", sty.StatusSuccess.GetForeground()},
-		{"Status success bg", sty.StatusSuccess.GetBackground()},
 		{"Status error fg", sty.StatusError.GetForeground()},
 		{"Status error bg", sty.StatusError.GetBackground()},
 		{"Notice info bg", sty.NoticeInfo.GetBackground()},

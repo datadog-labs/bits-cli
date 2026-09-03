@@ -3,10 +3,13 @@ package catalog
 import "testing"
 
 func TestGroupCycle(t *testing.T) {
-	if nextGroup(groupColorTokens) != groupTextAttrs {
+	// Derived from numGroups rather than named, so adding a page does not
+	// require editing the wrap assertions.
+	last := group(numGroups - 1)
+	if nextGroup(last) != groupTextAttrs {
 		t.Fatal("nextGroup should wrap to first")
 	}
-	if prevGroup(groupTextAttrs) != groupColorTokens {
+	if prevGroup(groupTextAttrs) != last {
 		t.Fatal("prevGroup should wrap to last")
 	}
 	if nextGroup(groupTextAttrs) != groupSemanticRoles {
