@@ -47,7 +47,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	m.clearNotice()
 	m.setMode(ModeChat)
 	m.list.ScrollToBottom()
-	return m.editor.Focus()
+	return nil // Update reconciles editor focus after the mode change.
 }
 
 type conversationRetry int
@@ -212,7 +212,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	m.conversationClosing = false
 	m.picker = nil
 	m.setMode(ModeChat)
-	return m.editor.Focus()
+	return nil // Update reconciles editor focus after the mode change.
 }
 
 func (m *Model) retryConversationOperation() tea.Cmd {
@@ -251,7 +251,7 @@ func (m *Model) finishClosingConversationPicker() tea.Cmd {
 	m.conversationRetry = retryNone
 	m.conversationSwitchID = ""
 	m.setMode(ModeChat)
-	return m.editor.Focus()
+	return nil // Update reconciles editor focus after the mode change.
 }
 
 // abandonConversationPicker is the process-exit path. Unlike ordinary Escape,

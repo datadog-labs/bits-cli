@@ -7,8 +7,10 @@ require (
 	charm.land/bubbletea/v2 v2.0.8
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.6
+	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/x/ansi v0.11.8
+	github.com/git-pkgs/gitignore v1.2.0
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gofrs/flock v0.13.0
 	github.com/lucasb-eyer/go-colorful v1.4.1
@@ -39,10 +41,10 @@ require (
 	github.com/sahilm/fuzzy v0.1.3 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/yuin/goldmark v1.7.8 // indirect
+	github.com/yuin/goldmark v1.8.5 // indirect
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
-	golang.org/x/net v0.39.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.24.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 )

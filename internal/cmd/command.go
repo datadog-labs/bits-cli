@@ -10,26 +10,26 @@ import (
 	"io"
 	"strings"
 
+	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/spf13/cobra"
-)
-
-// AuthenticationMode selects the authentication policy for a chat invocation.
-type AuthenticationMode string
-
-const (
-	// AuthenticationModeAuto uses a stored OAuth session or starts login.
-	AuthenticationModeAuto AuthenticationMode = "auto"
-	// AuthenticationModeAPIKey requires explicit API/app-key authentication.
-	AuthenticationModeAPIKey AuthenticationMode = "api-key"
 )
 
 // ChatOptions carries the user-supplied root command flags resolved before
 // chat starts.
 type ChatOptions struct {
 	ConversationID string
-	AuthMode       AuthenticationMode
+	AuthMode       auth.Mode
 	Site           string
+	ApprovalMode   agent.ApprovalMode
+}
+
+// RunOptions carries the shared execution flags plus one-turn run options.
+type RunOptions struct {
+	ChatOptions
+	Prompt   string
+	Model    string
+	Delivery string
 }
 
 // LoginOptions carries the user-supplied login flags resolved by the command
@@ -43,6 +43,7 @@ type LoginOptions struct {
 // invokes these without depending on their implementations.
 type Actions struct {
 	Chat   func(ctx context.Context, opts ChatOptions) error
+	Run    func(ctx context.Context, opts RunOptions) error
 	Login  func(ctx context.Context, opts LoginOptions) error
 	Logout func(ctx context.Context) error
 }
@@ -51,19 +52,43 @@ type Actions struct {
 // output to stdout and stderr. A new tree per call keeps parsing state from
 // leaking between runs or tests.
 func Execute(ctx context.Context, args []string, actions Actions, stdout, stderr io.Writer) error {
-	root := newRootCommand(actions)
+	invoked := false
+	dispatch := Actions{
+		Chat: func(ctx context.Context, opts ChatOptions) error {
+			invoked = true
+			return actions.Chat(ctx, opts)
+		},
+		Run: func(ctx context.Context, opts RunOptions) error {
+			invoked = true
+			return actions.Run(ctx, opts)
+		},
+		Login: func(ctx context.Context, opts LoginOptions) error {
+			invoked = true
+			return actions.Login(ctx, opts)
+		},
+		Logout: func(ctx context.Context) error {
+			invoked = true
+			return actions.Logout(ctx)
+		},
+	}
+	root := newRootCommand(dispatch)
 	if args == nil {
 		args = []string{}
 	}
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	return root.ExecuteContext(ctx)
+	err := root.ExecuteContext(ctx)
+	if err != nil && !invoked {
+		return &ExitError{Code: ExitUsage, Err: err}
+	}
+	return err
 }
 
 func newRootCommand(actions Actions) *cobra.Command {
-	opts := ChatOptions{AuthMode: AuthenticationModeAuto}
+	opts := ChatOptions{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}
 	var authMode string
+	var approvalMode string
 	// Keep root.Args nil so Cobra can identify unknown commands, suggest close
 	// matches, and reject unknown help topics during command discovery. The
 	// RunE check handles arguments after a -- terminator.
@@ -72,6 +97,7 @@ func newRootCommand(actions Actions) *cobra.Command {
 		Short:         "Datadog Assistant in your terminal",
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		Version:       buildVersion(),
 		RunE: func(command *cobra.Command, args []string) error {
 			if err := cobra.NoArgs(command, args); err != nil {
 				return err
@@ -80,14 +106,15 @@ func newRootCommand(actions Actions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			siteSet := command.Flags().Changed("site") && strings.TrimSpace(opts.Site) != ""
-			switch {
-			case mode == AuthenticationModeAPIKey && !siteSet:
-				return fmt.Errorf("--auth %s requires --site", AuthenticationModeAPIKey)
-			case mode == AuthenticationModeAuto && command.Flags().Changed("site"):
-				return fmt.Errorf("--site requires --auth %s; use `bits login --site` for OAuth", AuthenticationModeAPIKey)
+			approval, err := parseApprovalMode(approvalMode)
+			if err != nil {
+				return err
+			}
+			if err := validateSiteSelection(mode, opts.Site, command.Flags().Changed("site")); err != nil {
+				return err
 			}
 			opts.AuthMode = mode
+			opts.ApprovalMode = approval
 			return actions.Chat(command.Context(), opts)
 		},
 	}
@@ -95,7 +122,8 @@ func newRootCommand(actions Actions) *cobra.Command {
 	root.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
 		return fmt.Errorf("%w\nRun '%s --help' for usage", err, command.CommandPath())
 	})
-	root.Flags().StringVar(&authMode, "auth", string(AuthenticationModeAuto), "authentication mode: auto or api-key")
+	root.Flags().StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
+	root.Flags().StringVar(&approvalMode, "approval", string(agent.ModeAllowAll), "approval mode: allow-all or gated")
 	root.Flags().StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
 	root.Flags().StringVar(
 		&opts.ConversationID,
@@ -103,8 +131,19 @@ func newRootCommand(actions Actions) *cobra.Command {
 		"",
 		"resume an existing conversation by ID",
 	)
-	root.AddCommand(newLoginCommand(actions.Login), newLogoutCommand(actions.Logout))
+	root.AddCommand(newRunCommand(actions.Run), newLoginCommand(actions.Login), newLogoutCommand(actions.Logout))
 	return root
+}
+
+func validateSiteSelection(mode auth.Mode, site string, siteChanged bool) error {
+	siteSet := siteChanged && strings.TrimSpace(site) != ""
+	switch {
+	case mode == auth.ModeAPIKey && !siteSet:
+		return fmt.Errorf("--auth %s requires --site", auth.ModeAPIKey)
+	case mode == auth.ModeAuto && siteChanged:
+		return fmt.Errorf("--site requires --auth %s; use `bits login --site` for OAuth", auth.ModeAPIKey)
+	}
+	return nil
 }
 
 func newLoginCommand(action func(context.Context, LoginOptions) error) *cobra.Command {
@@ -122,13 +161,23 @@ func newLoginCommand(action func(context.Context, LoginOptions) error) *cobra.Co
 	return command
 }
 
-func parseAuthenticationMode(raw string) (AuthenticationMode, error) {
-	mode := AuthenticationMode(raw)
+func parseAuthenticationMode(raw string) (auth.Mode, error) {
+	mode := auth.Mode(raw)
 	switch mode {
-	case AuthenticationModeAuto, AuthenticationModeAPIKey:
+	case auth.ModeAuto, auth.ModeAPIKey:
 		return mode, nil
 	default:
 		return "", fmt.Errorf("invalid authentication mode %q; expected auto or api-key", raw)
+	}
+}
+
+func parseApprovalMode(raw string) (agent.ApprovalMode, error) {
+	mode := agent.ApprovalMode(raw)
+	switch mode {
+	case agent.ModeAllowAll, agent.ModeGated:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid approval mode %q; expected allow-all or gated", raw)
 	}
 }
 

@@ -1,13 +1,61 @@
 variables:
   GIT_DEPTH: 1
   GIT_BASE_BRANCH: main
+  GO_IMAGE: registry.ddbuild.io/ci/dd-go:gbi-jammy@sha256:40d49aa83486b1cda5cf9ab6fa29576cbc16697b7aea00e1f6e22350a2314fca
 
 stages:
+  - lint
+  - build
   - benchmark
+
+lint:
+  stage: lint
+  image: $GO_IMAGE
+  tags:
+    - arch:arm64
+  timeout: 10m
+  script:
+    - ./scripts/lint.sh
+  rules:
+    - when: always
+
+test:
+  stage: lint
+  image: $GO_IMAGE
+  tags:
+    - arch:arm64
+  timeout: 10m
+  script:
+    - go test ./...
+  rules:
+    - when: always
+
+build:
+  stage: build
+  image: $GO_IMAGE
+  tags:
+    - arch:arm64
+  timeout: 10m
+  parallel:
+    matrix:
+      - GOOS: linux
+        GOARCH: [amd64, arm64]
+      - GOOS: darwin
+        GOARCH: [amd64, arm64]
+      - GOOS: windows
+        GOARCH: [amd64, arm64]
+  script:
+    - ./scripts/build.sh
+  artifacts:
+    expire_in: 2 weeks
+    paths:
+      - build/
+  rules:
+    - when: always
 
 tui-benchmarks:
   stage: benchmark
-  image: registry.ddbuild.io/ci/dd-go:gbi-jammy@sha256:40d49aa83486b1cda5cf9ab6fa29576cbc16697b7aea00e1f6e22350a2314fca
+  image: $GO_IMAGE
   tags:
     - arch:arm64
   allow_failure: true

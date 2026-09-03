@@ -2,11 +2,14 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	tuieditor "github.com/DataDog/bits-cli/internal/tui/editor"
 )
@@ -26,12 +29,51 @@ func TestParseCommand(t *testing.T) {
 		{"", "", false},
 		{"/", "", false},      // bare slash is not a command
 		{"/ help", "", false}, // space before the name is not a command
+		{"hello /quit", "", false},
+		{" /quit", "", false}, // commands must start the prompt
 	}
 	for _, tc := range cases {
 		got, ok := parseCommand(tc.in)
 		if got != tc.wantName || ok != tc.wantOk {
 			t.Errorf("parseCommand(%q) = (%q, %v), want (%q, %v)", tc.in, got, ok, tc.wantName, tc.wantOk)
 		}
+	}
+}
+
+func TestEnterOnLeadingCommandCompletionDispatchesImmediately(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.editor.Update(tea.PasteMsg{Content: "/q"})
+	if !m.editor.MenuOpen() {
+		t.Fatal("leading slash command should open the completion menu")
+	}
+
+	_, cmd := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on a slash-command completion should dispatch it")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("command result = %T, want tea.QuitMsg", cmd())
+	}
+	if got := m.editor.Value(); got != "" {
+		t.Fatalf("editor value = %q, want empty after command dispatch", got)
+	}
+}
+
+func TestSlashCompletionDoesNotOpenMidPrompt(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.turnEvents = make(chan agent.Event)
+	m.chatPhase = chat.PhaseStreaming
+	m.editor.Update(tea.PasteMsg{Content: "explain /new"})
+	if m.editor.MenuOpen() {
+		t.Fatal("slash completion should not open outside the first prompt token")
+	}
+
+	_, cmd := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("mid-prompt slash should remain ordinary input while a turn is active")
+	}
+	if got := m.editor.Value(); got != "explain /new" {
+		t.Fatalf("editor value = %q, want ordinary input to remain pending", got)
 	}
 }
 
@@ -85,6 +127,168 @@ func TestResumeIsRegisteredWithRejectActivePolicy(t *testing.T) {
 	resume, ok := lookupCommand("resume")
 	if !ok || resume.id != commandResume || resume.activeTurnPolicy != commandRejectedDuringTurn {
 		t.Fatalf("resume definition = %#v, registered=%v", resume, ok)
+	}
+}
+
+func TestStatusIsRegisteredWithAllowActivePolicy(t *testing.T) {
+	status, ok := lookupCommand("status")
+	if !ok || status.id != commandStatus || status.activeTurnPolicy != commandAllowedDuringTurn {
+		t.Fatalf("status definition = %#v, registered=%v", status, ok)
+	}
+}
+
+func TestExactNewCommandsExecuteOnFirstEnterWithCompletionOpen(t *testing.T) {
+	for _, input := range []string{"/new", "/clear"} {
+		t.Run(input, func(t *testing.T) {
+			m := newModelWithSpy(t)
+			m.convID = "conversation-before-reset"
+			m.editor.Update(tea.PasteMsg{Content: input})
+			if !m.editor.MenuOpen() {
+				t.Fatal("expected exact command completion menu to be open")
+			}
+
+			_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if m.convID != "" || m.editor.Value() != "" {
+				t.Fatalf("first Enter did not reset conversation: conv=%q editor=%q", m.convID, m.editor.Value())
+			}
+		})
+	}
+}
+
+func TestFileCompletionRemainsEditorOwned(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.convID = "conversation-preserved"
+	m.editor.Update(tea.PasteMsg{Content: "@README"})
+	if !m.editor.MenuOpen() {
+		t.Fatal("expected completion menu to be open")
+	}
+
+	_, command := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command != nil || m.convID != "conversation-preserved" || m.editor.Value() != "@README.md " {
+		t.Fatalf("completion routing: command=%v conv=%q editor=%q, want nil/preserved/@README.md ", command != nil, m.convID, m.editor.Value())
+	}
+}
+
+func TestWebIsRegisteredAndAllowedDuringTurn(t *testing.T) {
+	web, ok := lookupCommand("web")
+	if !ok || web.id != commandWeb || web.activeTurnPolicy != commandAllowedDuringTurn {
+		t.Fatalf("web definition = %#v, registered=%v", web, ok)
+	}
+}
+
+func TestSubmitWebOpensCurrentConversationWithoutSending(t *testing.T) {
+	var opened string
+	backend := &spyBackend{t: t, site: "https://api.us3.datadoghq.com"}
+	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+		OpenURL: func(_ context.Context, target string) error {
+			opened = target
+			return nil
+		},
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/web"})
+
+	_, cmd := m.submit()
+	if cmd == nil {
+		t.Fatal("/web returned no launcher command")
+	}
+	msg := cmd()
+	_, _ = m.Update(msg)
+	want := "https://us3.datadoghq.com/ask/conversation-1"
+	if opened != want {
+		t.Fatalf("opened URL = %q, want %q", opened, want)
+	}
+	if !strings.Contains(m.notice.Text, want) || m.notice.Level != chat.NoticeInfo {
+		t.Fatalf("success notice = %#v", m.notice)
+	}
+	if m.ConversationID() != "conversation-1" {
+		t.Fatalf("conversation ID changed to %q", m.ConversationID())
+	}
+	if m.editor.Value() != "" {
+		t.Fatalf("editor still contains %q", m.editor.Value())
+	}
+}
+
+func TestSubmitWebWithoutConversationDoesNotLaunchOrSend(t *testing.T) {
+	launched := false
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, assistant.SendOptions{}), Config{
+		OpenURL: func(context.Context, string) error {
+			launched = true
+			return nil
+		},
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/web"})
+
+	_, cmd := m.submit()
+	if cmd == nil || launched {
+		t.Fatalf("missing-conversation result: cmd=%v launched=%v", cmd != nil, launched)
+	}
+	if m.notice.Level != chat.NoticeWarn || !strings.Contains(m.notice.Text, "Start a conversation") {
+		t.Fatalf("missing-conversation notice = %#v", m.notice)
+	}
+}
+
+func TestSubmitWebUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
+	launched := false
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.ddog-gov.com"}, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+		OpenURL: func(context.Context, string) error {
+			launched = true
+			return nil
+		},
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/web"})
+
+	_, cmd := m.submit()
+	if cmd == nil || launched {
+		t.Fatalf("unsupported-site result: cmd=%v launched=%v", cmd != nil, launched)
+	}
+	if m.notice.Level != chat.NoticeError || !strings.Contains(m.notice.Text, "Could not build a web link") || m.notice.Err == nil {
+		t.Fatalf("unsupported-site notice = %#v", m.notice)
+	}
+}
+
+func TestSubmitWebLauncherFailureProvidesManualURL(t *testing.T) {
+	launchErr := errors.New("no graphical browser is available")
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+		OpenURL: func(context.Context, string) error { return launchErr },
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/web"})
+
+	_, cmd := m.submit()
+	msg := cmd()
+	_, _ = m.Update(msg)
+	if m.notice.Level != chat.NoticeError || !errors.Is(m.notice.Err, launchErr) {
+		t.Fatalf("launcher-failure notice = %#v", m.notice)
+	}
+	for _, want := range []string{"Could not open a browser", "https://app.datadoghq.com/ask/conversation-1"} {
+		if !strings.Contains(m.notice.Text, want) {
+			t.Fatalf("launcher-failure notice %q does not contain %q", m.notice.Text, want)
+		}
+	}
+}
+
+func TestSubmitWebDuringActiveTurnDoesNotCancel(t *testing.T) {
+	backend := &spyBackend{t: t, site: "https://api.datadoghq.com"}
+	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+		OpenURL: func(context.Context, string) error { return nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.cancelTurn = cancel
+	m.turnEvents = make(chan agent.Event)
+	m.chatPhase = chat.PhaseStreaming
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/web"})
+
+	_, cmd := m.submit()
+	if cmd == nil {
+		t.Fatal("active-turn /web returned no launcher command")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("/web cancelled the active turn")
 	}
 }
 

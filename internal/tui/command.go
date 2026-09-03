@@ -25,6 +25,8 @@ const (
 	commandQuit commandID = iota + 1
 	commandNew
 	commandResume
+	commandStatus
+	commandWeb
 )
 
 type commandDefinition struct {
@@ -52,6 +54,16 @@ var commandDefinitions = []commandDefinition{
 		name:             "resume",
 		activeTurnPolicy: commandRejectedDuringTurn,
 	},
+	{
+		id:               commandStatus,
+		name:             "status",
+		activeTurnPolicy: commandAllowedDuringTurn,
+	},
+	{
+		id:               commandWeb,
+		name:             "web",
+		activeTurnPolicy: commandAllowedDuringTurn,
+	},
 }
 
 func lookupCommand(name string) (commandDefinition, bool) {
@@ -70,9 +82,10 @@ func lookupCommand(name string) (commandDefinition, bool) {
 
 // parseCommand recognizes a submitted slash command. It returns the command
 // name (lowercased, no leading "/") and true when the input is a single leading
-// "/token"; anything after whitespace is treated as arguments and ignored. A
-// bare "/" or a "/ word" form is not a command, so it falls through to a normal
-// agent turn. The caller passes already-trimmed text.
+// "/token" at the beginning of the prompt; anything after whitespace is
+// treated as arguments and ignored. A bare "/", a "/ word" form, or leading
+// whitespace before the slash is not a command, so it falls through to a normal
+// agent turn.
 func parseCommand(input string) (string, bool) {
 	if !strings.HasPrefix(input, "/") {
 		return "", false
@@ -125,6 +138,10 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case commandResume:
 		return m, m.openConversationPicker()
+	case commandStatus:
+		return m, m.openStatus()
+	case commandWeb:
+		return m, m.openConversationInBrowser()
 	default:
 		panic("unhandled registered command")
 	}

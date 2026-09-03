@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	ErrMaxTurns           = errors.New("exceeded max turns")
-	ErrHistoryUnsupported = errors.New("backend does not support loading conversation history")
-	ErrOperationActive    = errors.New("another conversation operation is active")
+	ErrMaxTurns               = errors.New("exceeded max turns")
+	ErrHistoryUnsupported     = errors.New("backend does not support loading conversation history")
+	ErrCurrentUserUnsupported = errors.New("backend does not support loading the current user")
+	ErrOperationActive        = errors.New("another conversation operation is active")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -29,6 +30,12 @@ type Backend interface {
 // HistoryBackend adds conversation history loading
 type HistoryBackend interface {
 	ConversationHistory(ctx context.Context, in assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error)
+}
+
+// CurrentUserBackend adds current-user profile loading for local status
+// surfaces. Backends without an authenticated Datadog principal may omit it.
+type CurrentUserBackend interface {
+	CurrentUser(context.Context) (assistant.CurrentUser, error)
 }
 
 // EventKind discriminates the events the engine streams for a turn.
@@ -45,11 +52,16 @@ const (
 // Event is one thing that happened during a turn. It is a plain value carried
 // on a channel, with only the fields relevant to Kind populated.
 type Event struct {
-	Kind   EventKind
-	Update TranscriptUpdate // for EventBlock
-	Usage  *assistant.Usage // for EventUsage
-	ConvID string           // for EventConversation
-	Err    error            // for EventError
+	Kind           EventKind
+	Update         TranscriptUpdate // for EventBlock
+	Usage          *assistant.Usage // for EventUsage
+	ConvID         string           // for EventConversation
+	Err            error            // for EventError
+	BackendFailure bool             // EventError originated at the Assistant backend boundary
+	// Round is the 1-based backend send the event belongs to (0 for
+	// out-of-turn events). Drained rounds after a denial count but emit
+	// no content events.
+	Round int
 }
 
 // TranscriptUpdate is the snapshot delivered on each block change: the full
@@ -78,12 +90,21 @@ const maxTurns = 20
 type Engine struct {
 	backend                Backend
 	opts                   assistant.SendOptions
+	runtimeStatus          RuntimeStatus
 	transcript             *Transcript
 	previousConversationID string
 	commands               chan toolCommand
 	sessionGrants          map[ApprovalKey]struct{}
 	active                 atomic.Bool
 	operationGeneration    atomic.Uint64
+}
+
+// RuntimeStatus is the non-secret request and backend state needed by local
+// status surfaces.
+type RuntimeStatus struct {
+	Profile assistant.Profile
+	Model   string
+	Backend assistant.BackendStatus
 }
 
 type toolCommand struct {
@@ -109,32 +130,81 @@ type toolDone struct {
 // New returns an Engine. opts carries the per-request defaults (profile, model,
 // conversation id, …); ConversationID is updated as turns run.
 func New(b Backend, opts assistant.SendOptions) *Engine {
+	profile := opts.Profile
+	if profile == "" {
+		profile = assistant.DefaultProfile
+	}
+	runtimeStatus := RuntimeStatus{Profile: profile, Model: opts.Model}
+	if provider, ok := b.(interface {
+		BackendStatus() assistant.BackendStatus
+	}); ok {
+		runtimeStatus.Backend = provider.BackendStatus()
+	}
 	return &Engine{
 		backend:       b,
 		opts:          opts,
+		runtimeStatus: runtimeStatus,
 		transcript:    NewTranscript(),
 		commands:      make(chan toolCommand, 64),
 		sessionGrants: make(map[ApprovalKey]struct{}),
 	}
 }
 
+// Site returns the Assistant API site of the active backend. Backends without
+// a web counterpart, such as the demo backend, return an empty string.
+func (e *Engine) Site() string {
+	return e.runtimeStatus.Backend.Site
+}
+
 type TurnInput struct {
 	Message string
 	Tools   *ToolSet
+	// OnDeny is the turn's policy after a denial is answered on the wire.
+	OnDeny DenyPolicy
 }
 
-// StartTurn runs one user turn (plus any client-tool round-trips) in a goroutine
-// and streams events. The channel is closed when the turn ends. Cancel ctx to
-// interrupt; cancellation ends the turn quietly (no error event). An overlap
-// returns a one-event ErrOperationActive channel.
-func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
+// turnCompletion is the final state captured before an engine operation
+// releases ownership. It remains authoritative even if cancellation prevents a
+// corresponding event from reaching the consumer. Its snapshots are read-only.
+type turnCompletion struct {
+	ConversationID string
+	Blocks         []Block
+	Usage          *assistant.Usage
+	Completed      bool
+	Denied         bool
+	Err            error
+}
+
+type turnOperation struct {
+	events     <-chan Event
+	completion <-chan turnCompletion
+}
+
+// beginTurn starts one user turn and its client-tool round trips. The event
+// channel closes only after the completion snapshot has been captured and the
+// engine operation has been released.
+func (e *Engine) beginTurn(ctx context.Context, in TurnInput) turnOperation {
 	if !e.begin() {
-		return eventResult(Event{Kind: EventError, Err: ErrOperationActive})
+		return completedTurnOperation(ErrOperationActive)
 	}
 	generation := e.operationGeneration.Load()
-	out := make(chan Event, 64)
-	go e.run(ctx, in, out, generation)
-	return out
+	events := make(chan Event, 64)
+	completion := make(chan turnCompletion, 1)
+	go e.run(ctx, in, events, completion, generation)
+	return turnOperation{events: events, completion: completion}
+}
+
+// StartTurn preserves the event-only API used by interactive surfaces.
+func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
+	return e.beginTurn(ctx, in).events
+}
+
+func completedTurnOperation(err error) turnOperation {
+	events := eventResult(Event{Kind: EventError, Err: err})
+	completion := make(chan turnCompletion, 1)
+	completion <- turnCompletion{Err: err}
+	close(completion)
+	return turnOperation{events: events, completion: completion}
 }
 
 // begin claims the engine for one operation. The operation owns the paired
@@ -182,9 +252,25 @@ func (e *Engine) command(command toolCommand) bool {
 	}
 }
 
-func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event, generation uint64) {
-	defer close(out)
-	defer e.active.Store(false)
+func (e *Engine) run(
+	ctx context.Context,
+	in TurnInput,
+	out chan<- Event,
+	completionOut chan<- turnCompletion,
+	generation uint64,
+) {
+	completion := turnCompletion{}
+	defer func() {
+		if completion.Err == nil && !completion.Completed && ctx.Err() != nil {
+			completion.Err = ctx.Err()
+		}
+		completion.ConversationID = e.opts.ConversationID
+		completion.Blocks = e.snapshot()
+		e.active.Store(false)
+		completionOut <- completion
+		close(completionOut)
+		close(out)
+	}()
 
 	tools := in.Tools
 	defs := tools.Definitions()
@@ -200,38 +286,53 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event, genera
 		}
 	}
 
-	fold := func(msg assistant.Message) bool {
-		b, ok := e.transcript.AppendMessage(msg)
-		blocks := append([]Block(nil), e.transcript.Blocks()...)
-		if ok {
-			if !send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: blocks, Changed: b}}) {
-				return false
-			}
-		}
-		if msg.Results != nil && msg.Results.Usage != nil {
-			if !send(Event{Kind: EventUsage, Usage: msg.Results.Usage}) {
-				return false
-			}
-		}
-		return true
-	}
-
 	// The user's turn opens the transcript; the engine owns the user block too.
 	userBlock := e.transcript.AppendUser(in.Message)
 	userBlocks := append([]Block(nil), e.transcript.Blocks()...)
-	if !send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: userBlocks, Changed: userBlock}}) {
+	if !send(Event{Kind: EventBlock, Round: 1, Update: TranscriptUpdate{Blocks: userBlocks, Changed: userBlock}}) {
 		return
 	}
 
 	var next any = in.Message
 	convID := e.ConversationID()
 
-	for range maxTurns {
+	for round := 1; round <= maxTurns; round++ {
 		var calls []assistant.Content
+
+		emit := func(ev Event) bool {
+			ev.Round = round
+			return send(ev)
+		}
+		fold := func(msg assistant.Message) bool {
+			if msg.Results != nil && msg.Results.Usage != nil {
+				completion.Usage = cloneUsage(msg.Results.Usage)
+			}
+			b, ok := e.transcript.AppendMessage(msg)
+			if ok {
+				// Reducers run in the engine goroutine immediately after the wire
+				// update is folded. This ordering lets the emitted snapshot carry
+				// the reducer's state and keeps filesystem-aware reducers ahead of
+				// client-tool execution.
+				if reduced, reducedOK := e.reduceToolInput(ctx, tools, msg, b); reducedOK {
+					b = reduced
+				}
+				blocks := append([]Block(nil), e.transcript.Blocks()...)
+				if !emit(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: blocks, Changed: b}}) {
+					return false
+				}
+			}
+			if msg.Results != nil && msg.Results.Usage != nil {
+				if !emit(Event{Kind: EventUsage, Usage: msg.Results.Usage}) {
+					return false
+				}
+			}
+			return true
+		}
 
 		opts := e.opts
 		opts.ConversationID = convID
 		opts.ClientTools = defs
+		opts.StreamToolCallInput = opts.StreamToolCallInput || tools.NeedsStreamedInput()
 
 		id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {
 			msg := ar.Data.Attributes.StructuredMessage
@@ -245,47 +346,157 @@ func (e *Engine) run(ctx context.Context, in TurnInput, out chan<- Event, genera
 			}
 			return nil
 		})
-		if ctx.Err() != nil {
-			// Send can discover a server-assigned ID before cancellation tears
-			// down the stream. Retain it so /new can preserve a resumable handle
-			// for the conversation being left behind.
-			if id != "" {
-				e.opts.ConversationID = id
-			}
-			return // cancelled: end the turn quietly
+		// Send may discover a server-assigned ID before a later stream failure or
+		// cancellation. Preserve it so every surface can report a resumable handle.
+		if id != "" {
+			e.opts.ConversationID = id
 		}
 		if err != nil {
-			e.finalizeTranscript()
-			send(Event{Kind: EventError, Err: err})
-			return
+			// Context-derived cancellation remains quiet. An independent backend
+			// failure wins even if the caller canceled at the same time, preserving
+			// the more specific diagnostic in the authoritative completion.
+			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
+				completion.Err = err
+				e.finalizeTranscript()
+				if id != "" && !emit(Event{Kind: EventConversation, ConvID: id}) {
+					return
+				}
+				emit(Event{Kind: EventError, Err: err, BackendFailure: true})
+				return
+			}
+		}
+		if ctx.Err() != nil {
+			return // cancelled: end the turn quietly
 		}
 
 		convID = id
 		e.opts.ConversationID = convID
-		send(Event{Kind: EventConversation, ConvID: convID})
+		emit(Event{Kind: EventConversation, ConvID: convID})
 
 		if len(calls) == 0 {
 			e.finalizeTranscript()
-			send(Event{Kind: EventTurnDone})
+			completion.Completed = emit(Event{Kind: EventTurnDone})
 			return
 		}
-		responses, complete, err := e.runTools(ctx, tools, calls, generation, send)
+		toolRound, err := e.runTools(ctx, tools, calls, generation, emit, in.OnDeny)
 		if err != nil {
+			completion.Err = err
+			completion.Denied = completion.Denied || toolRound.denied
 			e.finalizeTranscript()
-			send(Event{Kind: EventError, Err: err})
+			emit(Event{Kind: EventError, Err: err})
 			return
 		}
-		if !complete {
+		completion.Denied = completion.Denied || toolRound.denied
+		if toolRound.stopped {
+			// A denial was answered on the wire; discard the follow-up and end the turn.
 			if ctx.Err() == nil {
+				opts.ConversationID = convID
+				id, drainRounds, err := e.drainStoppedToolCalls(ctx, toolRound.responses, opts)
+				terminalRound := round + drainRounds
+				if id != "" {
+					e.opts.ConversationID = id
+				}
+				if err != nil && (ctx.Err() == nil || !errors.Is(err, ctx.Err())) {
+					completion.Err = err
+					e.finalizeTranscript()
+					send(Event{Kind: EventError, Round: terminalRound, Err: err, BackendFailure: true})
+					return
+				}
+				if ctx.Err() != nil {
+					return // cancelled: end the turn quietly
+				}
 				e.finalizeTranscript()
-				send(Event{Kind: EventTurnDone})
+				completion.Completed = send(Event{Kind: EventTurnDone, Round: terminalRound})
 			}
 			return
 		}
-		next = responses
+		if !toolRound.complete {
+			if ctx.Err() == nil {
+				e.finalizeTranscript()
+				completion.Completed = emit(Event{Kind: EventTurnDone})
+			}
+			return
+		}
+		next = toolRound.responses
 	}
+	completion.Err = ErrMaxTurns
 	e.finalizeTranscript()
-	send(Event{Kind: EventError, Err: ErrMaxTurns})
+	send(Event{Kind: EventError, Round: maxTurns, Err: ErrMaxTurns})
+}
+
+// drainStoppedToolCalls cancels follow-up client calls after a stopped
+// round so the backend is never left waiting.
+func (e *Engine) drainStoppedToolCalls(
+	ctx context.Context,
+	responses []assistant.ClientToolResponse,
+	opts assistant.SendOptions,
+) (string, int, error) {
+	payload := any(responses)
+	conversationID := opts.ConversationID
+	rounds := 0
+	for range maxTurns {
+		rounds++
+		var calls []ToolCall
+		seen := make(map[string]struct{})
+		id, err := e.backend.Send(ctx, payload, opts, func(response assistant.AssistantResponse) error {
+			content := response.Data.Attributes.StructuredMessage.Content
+			if content.Type != assistant.ContentClientToolCall {
+				return nil
+			}
+			call := toolCallOf(content)
+			if call.ID == "" {
+				return errors.New("client tool call has no id")
+			}
+			if _, duplicate := seen[call.ID]; !duplicate {
+				seen[call.ID] = struct{}{}
+				calls = append(calls, call)
+			}
+			return nil
+		})
+		if id != "" {
+			conversationID = id
+			opts.ConversationID = id
+		}
+		if err != nil {
+			return conversationID, rounds, err
+		}
+		if len(calls) == 0 {
+			return conversationID, rounds, nil
+		}
+		drained := make([]assistant.ClientToolResponse, len(calls))
+		for i, call := range calls {
+			drained[i] = toolResponse(call, cancelledResult())
+		}
+		payload = drained
+	}
+	return conversationID, rounds, ErrMaxTurns
+}
+
+// toolRound is one client-tool round trip's wire responses and outcome.
+type toolRound struct {
+	responses []assistant.ClientToolResponse
+	complete  bool
+	denied    bool
+	stopped   bool
+}
+
+func cloneUsage(usage *assistant.Usage) *assistant.Usage {
+	if usage == nil {
+		return nil
+	}
+	copied := *usage
+	copied.InputTokens = cloneInt(usage.InputTokens)
+	copied.OutputTokens = cloneInt(usage.OutputTokens)
+	copied.TimeToFirstChunkMs = cloneInt(usage.TimeToFirstChunkMs)
+	return &copied
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 // snapshot returns a copy of the current blocks, safe to send on the channel and
@@ -301,6 +512,23 @@ func (e *Engine) finalizeTranscript() {
 // ConversationID reports the conversation the engine is bound to. It is set
 // from SendOptions and updated as turns run; empty means a new conversation.
 func (e *Engine) ConversationID() string { return e.opts.ConversationID }
+
+// Status reports the immutable effective request configuration and non-secret
+// backend metadata captured when the engine was constructed. An empty model
+// remains empty because only the server knows which effective model it selected.
+func (e *Engine) Status() RuntimeStatus {
+	return e.runtimeStatus
+}
+
+// CurrentUser loads the authenticated Datadog identity when the backend
+// exposes that optional capability.
+func (e *Engine) CurrentUser(ctx context.Context) (assistant.CurrentUser, error) {
+	backend, ok := e.backend.(CurrentUserBackend)
+	if !ok {
+		return assistant.CurrentUser{}, ErrCurrentUserUnsupported
+	}
+	return backend.CurrentUser(ctx)
+}
 
 // PreviousConversationID reports the most recent non-empty conversation that
 // NewConversation left behind. It remains available after reset so navigation
@@ -367,7 +595,7 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 		return // cancelled: end quietly
 	}
 	if err != nil {
-		send(Event{Kind: EventError, Err: err})
+		send(Event{Kind: EventError, Err: err, BackendFailure: true})
 		return
 	}
 	if resp == nil {
@@ -390,17 +618,18 @@ func (e *Engine) runTools(
 	contents []assistant.Content,
 	generation uint64,
 	send func(Event) bool,
-) ([]assistant.ClientToolResponse, bool, error) {
+	onDeny DenyPolicy,
+) (toolRound, error) {
 	work := make([]pendingTool, len(contents))
 	seen := make(map[string]struct{}, len(contents))
 	byID := make(map[string]pendingTool, len(contents))
 	for i, content := range contents {
 		call := toolCallOf(content)
 		if call.ID == "" {
-			return nil, false, errors.New("client tool call has no id")
+			return toolRound{}, errors.New("client tool call has no id")
 		}
 		if _, exists := seen[call.ID]; exists {
-			return nil, false, fmt.Errorf("duplicate client tool call id %q", call.ID)
+			return toolRound{}, fmt.Errorf("duplicate client tool call id %q", call.ID)
 		}
 		seen[call.ID] = struct{}{}
 		work[i] = pendingTool{call: call, index: i}
@@ -413,6 +642,8 @@ func (e *Engine) runTools(
 	resolved := make(map[string]bool, len(work))
 	results := make(chan toolDone, len(work))
 	outstanding := len(work)
+	denied := false
+	stopRequested := false
 
 	emit := func(block Block, ok bool) bool {
 		return !ok || send(Event{
@@ -429,12 +660,18 @@ func (e *Engine) runTools(
 		}
 		resolved[item.call.ID] = true
 		outstanding--
+		result = tools.NormalizeResult(item.call, result)
 		block, ok := e.transcript.MarkToolExecuted(item.call.ID, result)
 		return emit(block, ok)
 	}
 	record := func(item pendingTool, result ToolResult) bool {
 		responses[item.index] = toolResponse(item.call, result)
 		return finishBlock(item, result)
+	}
+	// deny answers a gate refusal on the wire.
+	deny := func(item pendingTool, result ToolResult) bool {
+		denied = true
+		return record(item, result)
 	}
 	launch := func(item pendingTool, approved bool) bool {
 		toolCtx, cancel := context.WithCancel(ctx)
@@ -458,6 +695,18 @@ func (e *Engine) runTools(
 			cancel()
 		}
 	}
+	// stopPendingAfterDenial answers still-pending approvals as cancelled;
+	// running siblings finish so their real results reach the wire batch.
+	stopPendingAfterDenial := func() bool {
+		for id, item := range pending {
+			delete(pending, id)
+			if !record(item, cancelledResult()) {
+				cancelRunning()
+				return false
+			}
+		}
+		return true
+	}
 	stopRound := func(failed *pendingTool, err error) {
 		cancelRunning()
 		for _, item := range work {
@@ -473,21 +722,50 @@ func (e *Engine) runTools(
 	}
 
 	for _, item := range work {
+		if item.call.Name == assistant.ApprovalRequestTool {
+			// A protocol gate, not a registered tool. Gated mode denies it with
+			// no interactive decision; the TUI flow is tracked in BCLI-41.
+			if tools.ApprovesServerGate() {
+				if !record(item, approvedResult()) {
+					cancelRunning()
+					return toolRound{denied: denied}, nil
+				}
+			} else {
+				if !deny(item, serverDeniedResult()) {
+					cancelRunning()
+					return toolRound{denied: denied}, nil
+				}
+				if onDeny == DenyStop {
+					stopRequested = true
+					if !stopPendingAfterDenial() {
+						return toolRound{denied: denied}, nil
+					}
+				}
+			}
+			continue
+		}
 		requirement, needsApproval := tools.Approval(item.call)
 		_, granted := e.sessionGrants[requirement.Key]
 		if needsApproval && !granted {
+			if stopRequested {
+				if !record(item, cancelledResult()) {
+					cancelRunning()
+					return toolRound{denied: denied}, nil
+				}
+				continue
+			}
 			item.key = requirement.Key
 			pending[item.call.ID] = item
 			block, ok := e.transcript.MarkAwaitingApproval(item.call.ID, requirement.Prompt)
 			if !emit(block, ok) {
 				cancelRunning()
-				return nil, false, nil
+				return toolRound{denied: denied}, nil
 			}
 			continue
 		}
 		if !launch(item, false) {
 			cancelRunning()
-			return nil, false, nil
+			return toolRound{denied: denied}, nil
 		}
 	}
 
@@ -502,7 +780,7 @@ func (e *Engine) runTools(
 					delete(pending, command.id)
 					if !record(item, cancelledResult()) {
 						cancelRunning()
-						return nil, false, nil
+						return toolRound{denied: denied}, nil
 					}
 					continue
 				}
@@ -511,7 +789,7 @@ func (e *Engine) runTools(
 					delete(running, command.id)
 					if !record(byID[command.id], cancelledResult()) {
 						cancelRunning()
-						return nil, false, nil
+						return toolRound{denied: denied}, nil
 					}
 				}
 				continue
@@ -523,16 +801,26 @@ func (e *Engine) runTools(
 			}
 			delete(pending, command.id)
 			if command.decision == ApprovalDeny {
-				finishBlock(item, deniedResult())
-				stopRound(nil, nil)
-				return nil, false, nil
+				// Answer the denial on the wire; siblings still resolve. Under
+				// DenyStop the round then aborts without a follow-up round.
+				if !deny(item, deniedResult()) {
+					cancelRunning()
+					return toolRound{denied: denied}, nil
+				}
+				if onDeny == DenyStop {
+					stopRequested = true
+					if !stopPendingAfterDenial() {
+						return toolRound{denied: denied}, nil
+					}
+				}
+				continue
 			}
 			if command.decision == ApprovalAllowSession {
 				e.sessionGrants[item.key] = struct{}{}
 			}
 			if !launch(item, true) {
 				cancelRunning()
-				return nil, false, nil
+				return toolRound{denied: denied}, nil
 			}
 			for id, sibling := range pending {
 				if _, granted := e.sessionGrants[sibling.key]; !granted {
@@ -541,7 +829,7 @@ func (e *Engine) runTools(
 				delete(pending, id)
 				if !launch(sibling, true) {
 					cancelRunning()
-					return nil, false, nil
+					return toolRound{denied: denied}, nil
 				}
 			}
 
@@ -555,20 +843,28 @@ func (e *Engine) runTools(
 			}
 			item := work[done.index]
 			if done.err != nil {
+				if stopRequested || denied {
+					// Record the failure so the round's batch still gets answered.
+					if !record(item, ToolResult{Title: "Tool failed", Output: done.err.Error(), IsError: true}) {
+						cancelRunning()
+						return toolRound{denied: denied}, nil
+					}
+					continue
+				}
 				stopRound(&item, done.err)
-				return nil, false, done.err
+				return toolRound{denied: denied}, done.err
 			}
 			if !record(item, done.result) {
 				cancelRunning()
-				return nil, false, nil
+				return toolRound{denied: denied}, nil
 			}
 
 		case <-ctx.Done():
 			cancelRunning()
-			return nil, false, nil
+			return toolRound{denied: denied}, nil
 		}
 	}
-	return responses, true, nil
+	return toolRound{responses: responses, complete: true, denied: denied, stopped: stopRequested}, nil
 }
 
 func toolCallOf(content assistant.Content) ToolCall {
@@ -582,6 +878,57 @@ func toolCallOf(content assistant.Content) ToolCall {
 		call.Input = content.Tool.Metadata.Input
 	}
 	return call
+}
+
+// reduceToolInput invokes a registered reducer for the client-side tool
+// updates that can carry streamed input. The final client_tool_call is
+// explicitly client-side even though its payload does not carry the
+// IsClientSide marker used by tool_call_started. Server-side tool_call events
+// are intentionally excluded, even when their name matches a local tool.
+func (e *Engine) reduceToolInput(
+	ctx context.Context,
+	tools *ToolSet,
+	msg assistant.Message,
+	b Block,
+) (Block, bool) {
+	if tools == nil || b.Tool == nil || b.ToolCallID() == "" || msg.Content.Tool == nil {
+		return b, false
+	}
+	tp := msg.Content.Tool
+	if tp.ToolCallID == "" {
+		return b, false
+	}
+	update := ToolInputUpdate{
+		ToolCallID:       b.ToolCallID(),
+		Name:             b.Tool.Name,
+		RawPrefix:        b.Tool.InputPartial,
+		PreviewTruncated: b.Tool.InputPreviewTruncated,
+	}
+	switch msg.Content.Type {
+	case assistant.ContentToolCallStarted:
+		if !tp.IsClientSide {
+			return b, false
+		}
+	case assistant.ContentToolCallInputDelta:
+		// Deltas inherit client-side provenance from their aggregate started
+		// block. Some payloads also repeat the marker, so accept either.
+		if !b.Tool.IsClientSide && !tp.IsClientSide {
+			return b, false
+		}
+		update.Delta = tp.PartialJSON
+	case assistant.ContentClientToolCall:
+		update.HasFinalInput = tp.Metadata != nil
+		if update.HasFinalInput {
+			update.FinalInput = tp.Metadata.Input
+		}
+	default:
+		return b, false
+	}
+	next, ok := tools.ReduceInput(ctx, update, b.Tool.RenderState)
+	if !ok {
+		return b, false
+	}
+	return e.transcript.SetToolRenderState(b.ToolCallID(), next)
 }
 
 func toolResponse(call ToolCall, result ToolResult) assistant.ClientToolResponse {
@@ -602,6 +949,12 @@ func toolResponse(call ToolCall, result ToolResult) assistant.ClientToolResponse
 			Input:  call.Input,
 			Output: result.Output,
 		},
+	}
+	if result.Display != "" {
+		response.Content = &assistant.MarkdownContent{
+			Type:    assistant.ContentMarkdownFragment,
+			Content: result.Display,
+		}
 	}
 	if result.IsError {
 		response.Status = assistant.ToolStatusError

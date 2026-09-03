@@ -10,10 +10,12 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/browser"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	"github.com/DataDog/bits-cli/internal/tui/editor"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
+	statusview "github.com/DataDog/bits-cli/internal/tui/status"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -25,19 +27,34 @@ const (
 	ModeChat
 	ModeLogin
 	ModeConversations
+	ModeStatus
 )
 
 // EngineFactory constructs the authenticated chat engine after startup login
 // has persisted a session.
 type EngineFactory func(context.Context) (*agent.Engine, error)
 
+type Config struct {
+	Tools          *agent.ToolSet
+	StatusProvider statusview.Provider
+	OpenURL        func(context.Context, string) error
+}
+
 // Model is the root Bubble Tea model. All state lives here and is mutated only
 // on the tea thread; the sole async source is the engine's event channel.
 type Model struct {
 	// Collaborators the model drives.
-	engine *agent.Engine
-	editor *editor.Editor
-	picker *conversationview.Model
+	engine  *agent.Engine
+	tools   *agent.ToolSet
+	openURL func(context.Context, string) error
+	editor  *editor.Editor
+	picker  *conversationview.Model
+	status  *statusview.Model
+
+	statusProvider   statusview.Provider
+	statusGeneration uint64
+	statusIdentity   string
+	statusCancel     context.CancelFunc
 
 	// Startup login stays inside this root model so Bubble Tea owns the
 	// alternate screen continuously while switching from login to chat.
@@ -65,6 +82,9 @@ type Model struct {
 	// channel to close before resetting conversation state.
 	pendingNew bool
 
+	pendingApprovals []agent.Block
+	approvalChoice   int
+
 	// Top-level screen; transitions go through setMode.
 	mode Mode
 
@@ -80,6 +100,12 @@ type Model struct {
 	chatPhase chat.Phase
 	convID    string
 	usage     *assistant.Usage
+	// connectivity is the last observed remote outcome. Active phases override
+	// it with connecting/connected when building the status snapshot.
+	connectivity          statusview.Connectivity
+	authStateOverride     string
+	authFailureObserved   bool
+	authFailureGeneration uint64
 
 	// notice is the transient status message (error/warn/info) shown in the
 	// status line.
@@ -110,17 +136,18 @@ type Model struct {
 // New builds the root model for the given engine. When the engine is bound to a
 // conversation, the model shows its id immediately and restores its history on
 // Init.
-func New(engine *agent.Engine) *Model {
+func New(engine *agent.Engine, configs ...Config) *Model {
 	m := newShell()
 	m.engine = engine
 	m.convID = engine.ConversationID()
+	m.configure(configs)
 	return m
 }
 
 // NewWithLogin creates the same root TUI in login mode. On successful OAuth,
 // factory builds the engine and this model transitions to chat without ending
 // the Bubble Tea program or leaving the alternate screen.
-func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory EngineFactory) *Model {
+func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory EngineFactory, configs ...Config) *Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -129,14 +156,32 @@ func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory Engine
 	m.startupCtx = ctx
 	m.loginModel = loginModel
 	m.engineFactory = factory
+	m.configure(configs)
 	return m
 }
 
+func (m *Model) configure(configs []Config) {
+	if len(configs) > 0 {
+		m.tools = configs[0].Tools
+		if configs[0].StatusProvider != nil {
+			m.statusProvider = configs[0].StatusProvider
+		}
+		m.openURL = configs[0].OpenURL
+	}
+	if m.openURL == nil {
+		m.openURL = browser.Open
+	}
+}
+
 func newShell() *Model {
+	theme := styles.Default(true)
+	status := statusview.New(1, 1, theme)
 	m := &Model{
-		editor: editor.New(),
-		list:   chat.NewList(),
-		styles: styles.Default(true),
+		editor:         editor.New(),
+		list:           chat.NewList(),
+		status:         &status,
+		statusProvider: statusview.SystemProvider{},
+		styles:         theme,
 	}
 	m.applyStyles(m.styles)
 	return m
@@ -168,6 +213,9 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	m.editor.SetStyles(theme.Editor)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
+	}
+	if m.status != nil {
+		m.status.SetStyles(theme)
 	}
 }
 

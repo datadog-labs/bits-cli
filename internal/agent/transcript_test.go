@@ -1,10 +1,37 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
+
+func streamedToolMessage(messageID, contentType, toolCallID, toolName, partialJSON, input string) assistant.Message {
+	return assistant.AssistantMessage(messageID, assistant.Content{
+		Type: contentType,
+		Tool: &assistant.ToolPayload{
+			ToolCallID:  toolCallID,
+			ToolName:    toolName,
+			PartialJSON: partialJSON,
+			Metadata:    &assistant.ToolMetadata{Input: input, Name: toolName},
+		},
+	})
+}
+
+func streamedToolDelta(messageID, toolCallID, partialJSON string) assistant.Message {
+	return assistant.AssistantMessage(messageID, assistant.Content{
+		Type: assistant.ContentToolCallInputDelta,
+		Tool: &assistant.ToolPayload{ToolCallID: toolCallID, PartialJSON: partialJSON},
+	})
+}
+
+func streamedToolStarted(messageID, toolCallID, toolName string) assistant.Message {
+	return assistant.AssistantMessage(messageID, assistant.Content{
+		Type: assistant.ContentToolCallStarted,
+		Tool: &assistant.ToolPayload{ToolCallID: toolCallID, ToolName: toolName},
+	})
+}
 
 // Text fragments sharing a message id concatenate into a single block.
 func TestTextFragmentsConcatenate(t *testing.T) {
@@ -41,6 +68,134 @@ func TestToolCallMergesWithResult(t *testing.T) {
 	}
 	if tool.Status != ToolSuccess {
 		t.Fatalf("status = %v, want ToolSuccess", tool.Status)
+	}
+	if !tool.HasFinalInput {
+		t.Fatal("final tool input should be marked complete")
+	}
+}
+
+func TestStreamedToolInputFoldsIntoOneOrderedBlock(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(streamedToolStarted("start", "tc1", "write_file"))
+	tr.AppendMessage(streamedToolDelta("delta-1", "tc1", `{"path":`))
+	tr.AppendMessage(streamedToolDelta("delta-2", "tc1", `"x"}`))
+	tr.AppendMessage(streamedToolMessage("final", assistant.ContentClientToolCall, "tc1", "write_file", "", `{"path":"x"}`))
+
+	blocks := tr.Blocks()
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1", len(blocks))
+	}
+	tool := blocks[0].Tool
+	if tool == nil {
+		t.Fatal("tool payload is nil")
+	}
+	if tool.Name != "write_file" || tool.Input != `{"path":"x"}` {
+		t.Fatalf("tool = %+v", tool)
+	}
+	if !tool.HasFinalInput {
+		t.Fatal("final input should be marked complete")
+	}
+	if tool.InputPartial != "" || tool.InputPreviewTruncated {
+		t.Fatalf("final input retained speculative preview = %q (truncated=%v)", tool.InputPartial, tool.InputPreviewTruncated)
+	}
+}
+
+func TestStreamedToolInputCapsEachCallPreview(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(streamedToolStarted("start", "tc1", "write_file"))
+	tr.AppendMessage(streamedToolDelta("delta", "tc1", strings.Repeat("x", maxToolInputPreviewBytes+1)))
+	tr.AppendMessage(streamedToolDelta("delta", "tc1", "ignored after cap"))
+
+	tool := tr.Blocks()[0].Tool
+	if len(tool.InputPartial) != maxToolInputPreviewBytes {
+		t.Fatalf("preview length = %d, want %d", len(tool.InputPartial), maxToolInputPreviewBytes)
+	}
+	if !tool.InputPreviewTruncated {
+		t.Fatal("preview should be marked truncated")
+	}
+}
+
+func TestStreamedToolInputInterleavesByCallID(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(streamedToolStarted("a-start", "a", "tool-a"))
+	tr.AppendMessage(streamedToolStarted("b-start", "b", "tool-b"))
+	tr.AppendMessage(streamedToolDelta("a-1", "a", "a1"))
+	tr.AppendMessage(streamedToolDelta("b-1", "b", "b1"))
+	tr.AppendMessage(streamedToolDelta("a-2", "a", "a2"))
+
+	blocks := tr.Blocks()
+	if len(blocks) != 2 {
+		t.Fatalf("blocks = %d, want 2", len(blocks))
+	}
+	if blocks[0].Tool.InputPartial != "a1a2" || blocks[1].Tool.InputPartial != "b1" {
+		t.Fatalf("interleaved previews = %q, %q", blocks[0].Tool.InputPartial, blocks[1].Tool.InputPartial)
+	}
+	if blocks[0].Tool.Name != "tool-a" || blocks[1].Tool.Name != "tool-b" {
+		t.Fatalf("block order/names = %q, %q", blocks[0].Tool.Name, blocks[1].Tool.Name)
+	}
+}
+
+func TestStreamedToolInputRejectsMissingAndUnknownIDs(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(streamedToolStarted("missing-start", "", "bad"))
+	tr.AppendMessage(streamedToolDelta("missing-delta", "", "bad"))
+	tr.AppendMessage(streamedToolDelta("unknown-delta", "unknown", "bad"))
+	if len(tr.Blocks()) != 0 {
+		t.Fatalf("invalid streamed events produced blocks: %+v", tr.Blocks())
+	}
+
+	tr.AppendMessage(streamedToolStarted("valid-start", "valid", "good"))
+	tr.AppendMessage(streamedToolDelta("valid-delta", "valid", "ok"))
+	if len(tr.Blocks()) != 1 || tr.Blocks()[0].Tool.InputPartial != "ok" {
+		t.Fatalf("valid streamed event did not remain isolated: %+v", tr.Blocks())
+	}
+}
+
+func TestStreamedToolInputFinalEmptyIsPresent(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(streamedToolStarted("start", "tc1", "write_file"))
+	tr.AppendMessage(streamedToolDelta("delta", "tc1", "partial"))
+	tr.AppendMessage(streamedToolMessage("final", assistant.ContentClientToolCall, "tc1", "write_file", "", ""))
+
+	tool := tr.Blocks()[0].Tool
+	if tool.Input != "" {
+		t.Fatalf("final input = %q, want empty", tool.Input)
+	}
+	if !tool.HasFinalInput {
+		t.Fatal("empty final input was not marked present")
+	}
+	if tool.InputPartial != "" || tool.InputPreviewTruncated {
+		t.Fatalf("final input retained speculative preview = %q (truncated=%v)", tool.InputPartial, tool.InputPreviewTruncated)
+	}
+}
+
+func TestStreamedToolInputSnapshotIsImmutable(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(streamedToolStarted("start", "tc1", "write_file"))
+	first, _ := tr.AppendMessage(streamedToolDelta("delta-1", "tc1", "one"))
+	tr.AppendMessage(streamedToolDelta("delta-2", "tc1", "two"))
+
+	if got := first.Tool.InputPartial; got != "one" {
+		t.Fatalf("earlier partial input = %q, want one", got)
+	}
+	if got := tr.Blocks()[0].Tool.InputPartial; got != "onetwo" {
+		t.Fatalf("current partial input = %q, want onetwo", got)
+	}
+}
+
+func TestMarkToolExecutedAppliesRenderStateUpdate(t *testing.T) {
+	tr := NewTranscript()
+	tr.AppendMessage(assistant.AssistantMessage("call", assistant.ToolCallContent("tc1", "tool", "{}")))
+	state := &struct{ Value string }{Value: "preview"}
+	tr.SetToolRenderState("tc1", state)
+	previous := tr.Blocks()[0]
+
+	tr.MarkToolExecuted("tc1", ToolResult{RenderState: &RenderStateUpdate{State: nil}})
+	if got := tr.Blocks()[0].Tool.RenderState; got != nil {
+		t.Fatalf("render state = %#v, want nil after explicit clear", got)
+	}
+	if got := previous.Tool.RenderState; got != state {
+		t.Fatalf("published snapshot render state changed: %#v", got)
 	}
 }
 
@@ -239,5 +394,23 @@ func TestFinalizeAllReleasesStreamingAccumulator(t *testing.T) {
 	}
 	if got := tr.Blocks()[0]; !got.Complete {
 		t.Fatalf("final block = %+v, want complete", got)
+	}
+}
+
+func TestClientToolCallDerivedClientSideWithoutEngineFold(t *testing.T) {
+	// Restore and replay fold history straight into the transcript, never
+	// passing through the engine's live-stream fold, so client-side derivation
+	// must not depend on the wire is_client_side field.
+	tr := NewTranscript()
+	content := assistant.ToolCallContent("call-1", "get_local_time", "{}")
+	content.Type = assistant.ContentClientToolCall
+	tr.AppendMessage(assistant.AssistantMessage("m1", content))
+
+	blocks := tr.Blocks()
+	if len(blocks) != 1 || blocks[0].Tool == nil {
+		t.Fatalf("transcript blocks = %+v", blocks)
+	}
+	if !blocks[0].Tool.IsClientSide {
+		t.Fatal("replayed client tool call was not derived as client-side")
 	}
 }

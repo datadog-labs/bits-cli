@@ -30,8 +30,8 @@ const (
 	maxContentHeight = 500
 )
 
-// Editor is the chat input. The completion menu opens automatically when the
-// token before the cursor begins with "@" or "/".
+// Editor is the chat input. The completion menu opens automatically for @
+// tokens and for a / token only when it is the first token in the prompt.
 type Editor struct {
 	ta       textarea.Model
 	complete Completer
@@ -122,6 +122,16 @@ func (e *Editor) Focus() tea.Cmd {
 	return e.ta.Focus()
 }
 
+// Blur removes focus from the textarea, hiding the cursor and making it ignore
+// input. Used while another surface (a pending tool approval) owns the composer.
+func (e *Editor) Blur() {
+	e.viewCached = false
+	e.ta.Blur()
+}
+
+// Focused reports whether the textarea currently holds focus.
+func (e *Editor) Focused() bool { return e.ta.Focused() }
+
 // SetWidth sets the block's total width in cells. The textarea is sized to fit
 // inside the block's horizontal frame so the block stays exactly w wide.
 func (e *Editor) SetWidth(w int) {
@@ -160,6 +170,20 @@ func (e *Editor) Reset() {
 // MenuOpen reports whether the completion menu is showing. The parent uses this
 // to decide whether Enter/Esc drive the menu or submit/cancel.
 func (e *Editor) MenuOpen() bool { return e.menu.open }
+
+// SelectedCommand returns the currently selected leading slash-command
+// completion, without modifying the input. The parent uses it to dispatch a
+// registered command directly when Enter is pressed.
+func (e *Editor) SelectedCommand() (string, bool) {
+	if !e.menu.open || len(e.menu.items) == 0 || !e.commandTriggerActive(e.ta.Word()) {
+		return "", false
+	}
+	insert := e.menu.items[e.menu.selected].Insert
+	if !strings.HasPrefix(insert, "/") {
+		return "", false
+	}
+	return strings.TrimPrefix(insert, "/"), true
+}
 
 // Height is the rendered height of the input in rows. It deliberately excludes
 // the completion menu: the menu is an overlay (see MenuView), so opening it must
@@ -254,7 +278,12 @@ func (e *Editor) menuWidth() int {
 // set (no "@"/"/" trigger, or nothing matched) closes the menu; the selection is
 // kept when it still points at a valid item.
 func (e *Editor) recompute() {
-	items := e.complete(e.ta.Word())
+	word := e.ta.Word()
+	if strings.HasPrefix(word, "/") && !e.commandTriggerActive(word) {
+		e.closeMenu()
+		return
+	}
+	items := e.complete(word)
 	if len(items) == 0 {
 		e.closeMenu()
 		return
@@ -264,6 +293,22 @@ func (e *Editor) recompute() {
 		sel = e.menu.selected
 	}
 	e.menu = menu{open: true, items: items, selected: sel}
+}
+
+// commandTriggerActive reports whether word is the first token on the first
+// input line. A slash elsewhere is ordinary prompt text, not a command.
+func (e *Editor) commandTriggerActive(word string) bool {
+	if !strings.HasPrefix(word, "/") || e.ta.Line() != 0 {
+		return false
+	}
+	lines := strings.Split(e.ta.Value(), "\n")
+	if len(lines) == 0 {
+		return false
+	}
+	runes := []rune(lines[0])
+	col := min(max(e.ta.Column(), 0), len(runes))
+	start, _ := wordBounds(runes, col)
+	return start == 0
 }
 
 func (e *Editor) move(delta int) {

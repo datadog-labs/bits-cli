@@ -7,6 +7,11 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
 
+// maxToolInputPreviewBytes bounds the raw streamed argument retained in a
+// transcript. The final tool-call metadata remains authoritative and is not
+// subject to this preview-only limit.
+const maxToolInputPreviewBytes = 256 << 10
+
 // Transcript is the ordered set of aggregated conversation blocks with an id
 // index for O(1) patching. It is the engine's headless, surface-agnostic view
 // of a conversation: it folds streamed wire messages into blocks. Not safe for
@@ -20,11 +25,23 @@ type Transcript struct {
 	// openStream tracks the currently streaming (incomplete) text/reasoning
 	openStream BlockID
 	hasOpen    bool
+	// inputPreviews are keyed by wire tool-call id because input deltas for
+	// multiple calls can be interleaved. Builders are transcript-owned and are
+	// never published through a Block snapshot.
+	inputPreviews map[string]*toolInputPreview
+}
+
+type toolInputPreview struct {
+	value     strings.Builder
+	truncated bool
 }
 
 // NewTranscript returns an empty transcript.
 func NewTranscript() *Transcript {
-	return &Transcript{index: map[BlockID]int{}}
+	return &Transcript{
+		index:         map[BlockID]int{},
+		inputPreviews: map[string]*toolInputPreview{},
+	}
 }
 
 // Blocks returns the underlying slice. Callers must treat it as read-only.
@@ -45,6 +62,15 @@ func (t *Transcript) MarkToolRunning(id string) (Block, bool) {
 	})
 }
 
+// SetToolRenderState replaces the opaque local state carried by a tool block.
+// markTool copies the ToolBlock before swapping it, preserving snapshots held
+// by event consumers.
+func (t *Transcript) SetToolRenderState(id string, state any) (Block, bool) {
+	return t.markTool(id, func(tool *ToolBlock) {
+		tool.RenderState = state
+	})
+}
+
 func (t *Transcript) MarkToolExecuted(id string, result ToolResult) (Block, bool) {
 	return t.markTool(id, func(tool *ToolBlock) {
 		tool.Approval = nil
@@ -52,11 +78,19 @@ func (t *Transcript) MarkToolExecuted(id string, result ToolResult) (Block, bool
 		if result.IsError {
 			tool.Status = ToolError
 		}
+		tool.Denied = result.Denied
+		tool.Cancelled = result.Cancelled
 		if result.Title != "" {
 			tool.Title = result.Title
 		}
 		if result.Output != "" {
 			tool.Output = result.Output
+		}
+		if result.Display != "" {
+			tool.Detail = result.Display
+		}
+		if result.RenderState != nil {
+			tool.RenderState = result.RenderState.State
 		}
 	})
 }
@@ -211,8 +245,39 @@ func (t *Transcript) appendReasoning(msg assistant.Message) (Block, bool) {
 
 // upsertTool creates a tool block on the call and merges the result into it.
 func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
+	tp := msg.Content.Tool
+	if tp == nil {
+		return Block{}, false
+	}
+
+	// Streamed input events are updates to a call started earlier. They must not
+	// manufacture a block for an unknown or missing id: doing so would merge
+	// malformed deltas into a shared empty-id block.
+	switch msg.Content.Type {
+	case assistant.ContentToolCallStarted:
+		if tp.ToolCallID == "" {
+			return Block{}, false
+		}
+	case assistant.ContentToolCallInputDelta:
+		if tp.ToolCallID == "" {
+			return Block{}, false
+		}
+		if _, ok := t.index[BlockID{Scope: ScopeTool, Key: tp.ToolCallID}]; !ok {
+			return Block{}, false
+		}
+		if _, ok := t.inputPreviews[tp.ToolCallID]; !ok {
+			return Block{}, false
+		}
+	}
+
 	id := BlockIDOf(msg)
 	tc := ToolBlockOf(msg.Content.Tool)
+	// A client_tool_call is client-side regardless of the wire is_client_side
+	// field, which only tool_call_started populates. Deriving here also covers
+	// replayed history (restore), which never passes through the engine fold.
+	if msg.Content.Type == assistant.ContentClientToolCall {
+		tc.IsClientSide = true
+	}
 	if i, ok := t.index[id]; ok {
 		// Merge into a copy of the current aggregate, then swap the pointer, so
 		// a snapshot already sharing the old pointer is not mutated.
@@ -220,8 +285,11 @@ func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 		if tc.Name != "" {
 			merged.Name = tc.Name
 		}
-		if tc.Input != "" {
+		if hasFinalToolInput(msg) {
 			merged.Input = tc.Input
+			merged.HasFinalInput = true
+			merged.InputPartial = ""
+			merged.InputPreviewTruncated = false
 		}
 		if tc.Output != "" {
 			merged.Output = tc.Output
@@ -236,12 +304,39 @@ func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 			merged.Status = tc.Status
 		}
 		merged.IsClientSide = merged.IsClientSide || tc.IsClientSide
+		if msg.Content.Type == assistant.ContentToolCallStarted {
+			// A repeated started event resets no already-received input; it only
+			// refreshes the identifying metadata.
+			if preview := t.inputPreviews[tp.ToolCallID]; preview != nil {
+				merged.InputPartial = preview.value.String()
+				merged.InputPreviewTruncated = preview.truncated
+			}
+		}
+		if msg.Content.Type == assistant.ContentToolCallInputDelta {
+			t.inputToolPreview(&merged, tp.ToolCallID, tp.PartialJSON)
+		}
 		t.blocks[i].Tool = &merged
 		t.blocks[i].Rev++
+		if hasFinalToolInput(msg) || msg.Content.Type == assistant.ContentToolResponse || msg.Content.Type == assistant.ContentClientToolResponse {
+			delete(t.inputPreviews, tp.ToolCallID)
+		}
 		return t.blocks[i], true
+	}
+
+	// Only a started event initializes the per-call preview accumulator. A
+	// normal final call can still create a block for backwards compatibility
+	// with streams that do not advertise streamed input.
+	if msg.Content.Type == assistant.ContentToolCallStarted {
+		t.inputPreviews[tp.ToolCallID] = &toolInputPreview{}
 	}
 	if tc.Status == ToolUnknown {
 		tc.Status = ToolRunning
+	}
+	if hasFinalToolInput(msg) {
+		tc.HasFinalInput = true
+	}
+	if msg.Content.Type == assistant.ContentToolCallStarted {
+		t.inputToolPreview(&tc, tp.ToolCallID, "")
 	}
 	b := Block{
 		ID:        id,
@@ -254,7 +349,43 @@ func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 		Complete:  true,
 	}
 	t.push(b)
+	if hasFinalToolInput(msg) {
+		delete(t.inputPreviews, tp.ToolCallID)
+	}
 	return b, true
+}
+
+func hasFinalToolInput(msg assistant.Message) bool {
+	if msg.Content.Tool == nil || msg.Content.Tool.Metadata == nil {
+		return false
+	}
+	switch msg.Content.Type {
+	case assistant.ContentToolCall, assistant.ContentClientToolCall:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t *Transcript) inputToolPreview(tool *ToolBlock, id, delta string) {
+	preview := t.inputPreviews[id]
+	if preview == nil {
+		preview = &toolInputPreview{}
+		t.inputPreviews[id] = preview
+	}
+	if !preview.truncated && delta != "" {
+		remaining := maxToolInputPreviewBytes - preview.value.Len()
+		if remaining <= 0 {
+			preview.truncated = true
+		} else if len(delta) > remaining {
+			_, _ = preview.value.WriteString(delta[:remaining])
+			preview.truncated = true
+		} else {
+			_, _ = preview.value.WriteString(delta)
+		}
+	}
+	tool.InputPartial = preview.value.String()
+	tool.InputPreviewTruncated = preview.truncated
 }
 
 // appendPassthrough upserts a non-streamed block whose payload the block layer

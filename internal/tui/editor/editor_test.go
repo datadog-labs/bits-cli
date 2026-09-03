@@ -179,6 +179,30 @@ func TestRecomputeOpensAndClosesMenu(t *testing.T) {
 	}
 }
 
+func TestSlashCompletionOnlyOpensForFirstPromptToken(t *testing.T) {
+	e := New()
+
+	e.ta.SetValue("/new")
+	e.ta.SetCursorColumn(len([]rune("/new")))
+	e.recompute()
+	if !e.MenuOpen() {
+		t.Fatal("menu should open for a leading slash command")
+	}
+	if name, ok := e.SelectedCommand(); !ok || name != "new" {
+		t.Fatalf("SelectedCommand() = (%q, %v), want (new, true)", name, ok)
+	}
+
+	e.ta.SetValue("explain /new")
+	e.ta.SetCursorColumn(len([]rune("explain /new")))
+	e.recompute()
+	if e.MenuOpen() {
+		t.Fatal("menu should stay closed for a slash mid-prompt")
+	}
+	if name, ok := e.SelectedCommand(); ok || name != "" {
+		t.Fatalf("SelectedCommand() = (%q, %v), want (empty, false)", name, ok)
+	}
+}
+
 func TestAcceptReplacesActiveWord(t *testing.T) {
 	e := New()
 	e.ta.SetValue("look at @engine")

@@ -10,6 +10,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/browser"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
@@ -38,11 +39,21 @@ type (
 		engine     *agent.Engine
 		err        error
 	}
+	webOpenResultMsg struct {
+		url string
+		err error
+	}
 )
 
 // noticeExpiredMsg clears a transient status notice when its TTL elapses. seq
 // guards against a stale timer clearing a newer notice.
 type noticeExpiredMsg struct{ seq int }
+
+var approvalChoices = [...]agent.ApprovalDecision{
+	agent.ApprovalDeny,
+	agent.ApprovalAllowOnce,
+	agent.ApprovalAllowSession,
+}
 
 // showNotice sets the transient status notice and returns a command that clears
 // it after ttl (defaultNoticeTTL when ttl <= 0). The seq stamps the timer so a
@@ -76,7 +87,55 @@ func waitEvent(generation uint64, ch <-chan agent.Event) tea.Cmd {
 	}
 }
 
-// Update is the single message handler. Only this thread touches Model state.
+// focus identifies which surface currently owns keyboard input. It is derived
+// from mode and turn state, never stored, so input routing and the editor's
+// cursor cannot disagree about who is active.
+type focus int
+
+const (
+	focusEditor   focus = iota // transcript scroll + text input (and its completion menu)
+	focusApproval              // a tool approval is pending
+	focusPicker                // the /resume conversation picker
+	focusStatus                // the local /status document
+	focusLogin                 // startup OAuth
+)
+
+func (m *Model) focus() focus {
+	switch m.mode {
+	case ModeLogin:
+		return focusLogin
+	case ModeConversations:
+		return focusPicker
+	case ModeStatus:
+		return focusStatus
+	case ModeChat, ModeTermInit:
+		if len(m.pendingApprovals) > 0 {
+			return focusApproval
+		}
+	}
+	return focusEditor
+}
+
+// reconcileFocus makes the editor's focus (and thus its cursor/blink) match the
+// current input owner. Called once at the end of Update so every state change
+// reconciles uniformly: the editor blinks only while it owns input and stays
+// dark — ignoring keys and pastes — whenever the approval, picker, or login
+// owns it. It returns the blink command on the transition back into input.
+func (m *Model) reconcileFocus() tea.Cmd {
+	want := m.focus() == focusEditor
+	if want == m.editor.Focused() {
+		return nil
+	}
+	if want {
+		return m.editor.Focus()
+	}
+	m.editor.Blur()
+	return nil
+}
+
+// Update is the single message handler. Only this thread touches Model state. It
+// routes the message to the owning surface, then reconciles editor focus so the
+// cursor always tracks the active surface.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// The color profile is handled ahead of the mode check because Bubble Tea
 	// reports it once, at startup — which is while the login screen owns the
@@ -89,7 +148,46 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.mode == ModeLogin {
 		return m.updateLogin(msg)
 	}
+	// Global quit wins over every surface and must not reconcile focus (we are
+	// tearing down); the picker's in-flight request is abandoned on the way out.
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+		return m.quit()
+	}
+	// When the chat is too small to render, View shows only a resize hint, so no
+	// surface is visible. Drop user input before it can drive a hidden surface
+	// (an approval granted blind, the composer, scrolling); ctrl+c already quit
+	// above. System and engine messages still flow so the app keeps working and
+	// can be resized back.
+	if m.chatViewTooSmall() {
+		switch msg.(type) {
+		case tea.KeyPressMsg, tea.MouseWheelMsg, tea.PasteMsg:
+			return m, nil
+		}
+	}
+	next, cmd := m.dispatch(msg)
+	return next, tea.Batch(cmd, m.reconcileFocus())
+}
 
+func (m *Model) quit() (tea.Model, tea.Cmd) {
+	// /resume may own a live list/history request that must be cancelled before
+	// the application exits.
+	if m.focus() == focusPicker {
+		m.abandonConversationPicker()
+	}
+	if m.statusCancel != nil {
+		m.statusCancel()
+		m.statusCancel = nil
+	}
+	if m.cancelTurn != nil {
+		m.cancelTurn()
+	}
+	return m, tea.Quit
+}
+
+// dispatch routes one message to the owning surface. Non-input messages (resize,
+// engine events, conversation results, notices) are handled directly; keyboard,
+// mouse, and editor-bound input are routed by focus().
+func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
@@ -103,71 +201,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.advanceAnimation(msg)
 
 	case tea.KeyPressMsg:
-		// Global quit must win over mode-specific input routing. In particular,
-		// /resume may own a live list/history request that must be cancelled
-		// before the application exits.
-		if msg.String() == "ctrl+c" && m.mode == ModeConversations {
-			m.abandonConversationPicker()
-			return m.handleKey(msg)
-		}
-		if m.mode == ModeConversations {
-			return m, m.updateConversationPicker(msg)
-		}
 		return m.handleKey(msg)
 
 	case tea.MouseWheelMsg:
-		if m.mode == ModeConversations {
-			return m, m.updateConversationPicker(msg)
-		}
-		switch msg.Button {
-		case tea.MouseWheelUp:
-			m.list.ScrollBy(-mouseWheelDelta)
-		case tea.MouseWheelDown:
-			m.list.ScrollBy(mouseWheelDelta)
-		}
-		return m, nil
+		return m, m.handleMouseWheel(msg)
 
 	case turnEventMsg:
 		if !m.acceptRemoteMessage(msg.generation) {
 			return m, nil
 		}
 		cmd := m.applyEvent(msg.ev)
+		m.syncStatus()
 		m.refreshViewport()
 		// Tool state only changes on engine events, so this is where the chip
 		// animation starts and stops.
 		return m, tea.Batch(cmd, m.syncAnimation(), waitEvent(msg.generation, m.turnEvents))
 
 	case turnClosedMsg:
-		if !m.acceptRemoteMessage(msg.generation) {
-			return m, nil
-		}
-		if m.chatPhase != chat.PhaseError {
-			m.chatPhase = chat.PhaseIdle
-		}
-		m.turnEvents = nil
-		if m.cancelTurn != nil && !m.cancelRequested {
-			m.cancelTurn() // release the turn/restore context
-		}
-		m.cancelTurn = nil
-		m.cancelRequested = false
-		if m.pendingNew {
-			m.pendingNew = false
-			// Resync *after* the reset. A cancelled client tool can leave its
-			// block reporting ToolRunning, so syncing first would see no change
-			// and leave the chain armed — and the reset that follows empties the
-			// transcript with nothing left to disarm it.
-			return m, tea.Batch(m.startNewConversation(), m.syncAnimation())
-		}
-		// Resync in case the turn ended with nothing left in flight.
-		//
-		// Known gap: a cancelled turn does NOT settle its tools. The engine's
-		// tool loop returns on ctx.Done() after cancelling the per-tool
-		// contexts, without emitting a final block state, so after a Ctrl+C the
-		// blocks still report ToolRunning. This sync therefore sees no change
-		// and leaves the tick armed against a tool that is already dead, until
-		// the conversation is reset. Settling those blocks belongs in the
-		// engine, not here; accepted as out of scope for this change.
-		return m, m.syncAnimation()
+		return m.handleTurnClosed(msg)
 
 	case conversationListResultMsg:
 		return m, m.applyConversationListResult(msg)
@@ -184,21 +235,117 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case conversationview.RetryMsg:
 		return m, m.retryConversationOperation()
 
+	case statusEnvironmentMsg:
+		m.applyStatusEnvironment(msg)
+		return m, nil
+
+	case statusIdentityMsg:
+		m.applyStatusIdentity(msg)
+		return m, nil
+
+	case statusClosedMsg:
+		if msg.generation == m.statusGeneration && m.mode == ModeStatus {
+			m.closeStatus()
+		}
+		return m, nil
+
 	case noticeExpiredMsg:
 		if msg.seq == m.noticeSeq {
 			m.notice = chat.Notice{}
 		}
 		return m, nil
-	}
-	if m.mode == ModeConversations {
-		return m, m.updateConversationPicker(msg)
+
+	case webOpenResultMsg:
+		if msg.err != nil {
+			return m, m.showNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url), 0)
+		}
+		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Opened this conversation in your browser: %s", msg.url), 0)
 	}
 
-	// Cursor blink, paste, and other input messages go to the editor; a paste
-	// can change its height, so relayout.
+	if m.focus() == focusPicker {
+		return m, m.updateConversationPicker(msg)
+	}
+	if m.focus() == focusStatus {
+		return m, m.updateStatus(msg)
+	}
+	// Paste, cursor blink, and other editor-bound input; a paste can change the
+	// editor's height, so relayout. When the editor is not the focus it is
+	// blurred and ignores these, showing no cursor.
 	cmd := m.editor.Update(msg)
 	m.refreshViewport()
 	return m, cmd
+}
+
+func (m *Model) openConversationInBrowser() tea.Cmd {
+	if strings.TrimSpace(m.convID) == "" {
+		return m.showNotice(notice(chat.NoticeWarn, nil, "Start a conversation before using /web."), 0)
+	}
+	if m.engine == nil {
+		return m.showNotice(notice(chat.NoticeError, nil, "This conversation has no Datadog web site."), 0)
+	}
+	target, err := browser.ConversationURL(m.engine.Site(), m.convID)
+	if err != nil {
+		return m.showNotice(notice(chat.NoticeError, err, "Could not build a web link for this conversation."), 0)
+	}
+	openURL := m.openURL
+	if openURL == nil {
+		openURL = browser.Open
+	}
+	return func() tea.Msg {
+		return webOpenResultMsg{url: target, err: openURL(context.Background(), target)}
+	}
+}
+
+func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
+	if m.focus() == focusPicker {
+		return m.updateConversationPicker(msg)
+	}
+	if m.focus() == focusStatus {
+		return m.updateStatus(msg)
+	}
+	switch msg.Button {
+	case tea.MouseWheelUp:
+		m.list.ScrollBy(-mouseWheelDelta)
+	case tea.MouseWheelDown:
+		m.list.ScrollBy(mouseWheelDelta)
+	}
+	return nil
+}
+
+func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
+	if !m.acceptRemoteMessage(msg.generation) {
+		return m, nil
+	}
+	if m.chatPhase != chat.PhaseError {
+		m.chatPhase = chat.PhaseIdle
+	}
+	m.turnEvents = nil
+	m.pendingApprovals = nil
+	m.approvalChoice = 0
+	if m.cancelTurn != nil && !m.cancelRequested {
+		m.cancelTurn() // release the turn/restore context
+	}
+	m.cancelTurn = nil
+	m.cancelRequested = false
+	m.syncStatus()
+	if m.pendingNew {
+		m.pendingNew = false
+		// Resync *after* the reset. A cancelled client tool can leave its
+		// block reporting ToolRunning, so syncing first would see no change
+		// and leave the chain armed — and the reset that follows empties the
+		// transcript with nothing left to disarm it.
+		return m, tea.Batch(m.startNewConversation(), m.syncAnimation())
+	}
+	// Resync in case the turn ended with nothing left in flight.
+	//
+	// Known gap: a cancelled turn does NOT settle its tools. The engine's
+	// tool loop returns on ctx.Done() after cancelling the per-tool
+	// contexts, without emitting a final block state, so after a Ctrl+C the
+	// blocks still report ToolRunning. This sync therefore sees no change
+	// and leaves the tick armed against a tool that is already dead, until
+	// the conversation is reset. Settling those blocks belongs in the
+	// engine, not here; accepted as out of scope for this change.
+	return m, m.syncAnimation()
 }
 
 func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -285,17 +432,36 @@ func (m *Model) stopStartup() {
 	}
 }
 
+// handleKey routes a keypress to the surface that owns input. Global quit is
+// handled earlier in Update.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "ctrl+c" {
-		if m.cancelTurn != nil {
-			m.cancelTurn()
-		}
-		return m, tea.Quit
+	switch m.focus() {
+	case focusPicker:
+		return m, m.updateConversationPicker(msg)
+	case focusApproval:
+		return m.handleApprovalKey(msg)
+	case focusStatus:
+		return m, m.updateStatus(msg)
+	default:
+		return m.handleEditorKey(msg)
 	}
+}
 
+// handleEditorKey handles keys while the editor owns input. The completion menu,
+// when open, is a sub-state of the editor and intercepts navigation keys.
+func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// While the completion menu is open it owns navigation keys (arrows, tab,
-	// enter to accept, esc to close); route everything to the editor.
+	// enter to accept, esc to close). Enter dispatches the selected registered
+	// slash command directly, including a partial command completion.
 	if m.editor.MenuOpen() {
+		if msg.String() == "enter" {
+			if name, selected := m.editor.SelectedCommand(); selected {
+				if _, registered := lookupCommand(name); registered {
+					m.editor.Reset()
+					return m.dispatchCommand(name)
+				}
+			}
+		}
 		cmd := m.editor.Update(msg)
 		m.refreshViewport()
 		return m, cmd
@@ -325,18 +491,40 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "left", "shift+tab":
+		m.approvalChoice = (m.approvalChoice + len(approvalChoices) - 1) % len(approvalChoices)
+	case "right", "tab":
+		m.approvalChoice = (m.approvalChoice + 1) % len(approvalChoices)
+	case "esc":
+		m.respondToApproval(agent.ApprovalDeny)
+	case "enter":
+		m.respondToApproval(approvalChoices[m.approvalChoice])
+	}
+	return m, nil
+}
+
+func (m *Model) respondToApproval(decision agent.ApprovalDecision) {
+	if len(m.pendingApprovals) == 0 {
+		return
+	}
+	m.engine.Decide(m.pendingApprovals[0].ToolCallID(), decision)
+}
+
 // submit routes slash commands through their active-turn policy, or starts a
 // turn for ordinary input unless a turn is already running or history is still
 // loading. The user block is added by the engine (it owns the transcript), so
 // it arrives as the turn's first event.
 func (m *Model) submit() (tea.Model, tea.Cmd) {
-	text := strings.TrimSpace(m.editor.Value())
+	raw := m.editor.Value()
+	text := strings.TrimSpace(raw)
 	if text == "" {
 		return m, nil
 	}
 
 	// Slash commands are a native control plane: they never reach the model.
-	if name, ok := parseCommand(text); ok {
+	if name, ok := parseCommand(raw); ok {
 		m.editor.Reset()
 		return m.dispatchCommand(name)
 	}
@@ -347,7 +535,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	m.editor.Reset()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text})
+	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools})
 	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.usage = nil
@@ -383,9 +571,11 @@ func (m *Model) cancelRemote() {
 // is exhaustive over agent.EventKind. It returns a command for side effects (an
 // error posts a transient notice); nil otherwise.
 func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
+	m.observeEvent(ev)
 	switch ev.Kind {
 	case agent.EventBlock:
 		m.blocks = ev.Update.Blocks
+		m.updatePendingApprovals()
 		// A still-open text/reasoning block means tokens are arriving. Restored
 		// (Complete) blocks and the bulk restore snapshot (zero Changed) don't
 		// flip the phase, so restore stays in PhaseLoading until its channel closes.
@@ -417,6 +607,22 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	return nil
 }
 
+func (m *Model) updatePendingApprovals() {
+	current := ""
+	if len(m.pendingApprovals) > 0 {
+		current = m.pendingApprovals[0].ToolCallID()
+	}
+	m.pendingApprovals = m.pendingApprovals[:0]
+	for _, block := range m.blocks {
+		if block.Tool != nil && block.Tool.Status == agent.ToolAwaitingApproval {
+			m.pendingApprovals = append(m.pendingApprovals, block)
+		}
+	}
+	if len(m.pendingApprovals) == 0 || m.pendingApprovals[0].ToolCallID() != current {
+		m.approvalChoice = 0
+	}
+}
+
 // setDarkBackground adapts styles to the detected terminal background.
 func (m *Model) setDarkBackground(isDark bool) {
 	if isDark == m.styles.IsDark {
@@ -433,6 +639,9 @@ func (m *Model) resize(w, h int) {
 	if m.picker != nil {
 		m.picker.SetSize(w, h)
 	}
+	if m.status != nil {
+		m.status.SetSize(w, h)
+	}
 	if m.mode == ModeTermInit {
 		m.setMode(ModeChat)
 		return
@@ -446,6 +655,6 @@ func (m *Model) refreshViewport() {
 	if m.mode == ModeTermInit {
 		return
 	}
-	m.list.SetHeight(max(1, m.height-1-m.editor.Height()))
+	m.list.SetHeight(max(1, m.height-1-m.composerHeight()))
 	m.list.SetItems(m.blocks)
 }

@@ -194,7 +194,7 @@ func TestViewContainsVisualHierarchyAndFits(t *testing.T) {
 			t.Errorf("view missing %q:\n%s", want, plain)
 		}
 	}
-	for _, domain := range []string{"app.datadoghq.com", "us3.datadoghq.com", "us5.datadoghq.com", "app.datadoghq.eu", "ap1.datadoghq.com", "ap2.datadoghq.com"} {
+	for _, domain := range []string{"app.datadoghq.com", "us3.datadoghq.com", "us5.datadoghq.com", "app.datadoghq.eu", "ap1.datadoghq.com", "ap2.datadoghq.com", "uk1.datadoghq.com"} {
 		if got := strings.Count(plain, domain); got != 1 {
 			t.Errorf("domain %q appears %d times, want one physical option row", domain, got)
 		}

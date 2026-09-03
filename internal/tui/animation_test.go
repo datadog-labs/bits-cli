@@ -32,6 +32,11 @@ func animModel(status agent.ToolStatus) *Model {
 	// resize is what propagates the width to the transcript list; setting the
 	// model's fields alone leaves the list at width 0, rendering nothing.
 	m.resize(80, 24)
+	// Production reaches this state through Init(), which focuses the editor
+	// before any tick fires. Without it, the first m.Update() call here would
+	// bundle reconcileFocus's own Focus() command into the result, muddying
+	// assertions about what the animation path alone returned.
+	m.editor.Focus()
 	return m
 }
 

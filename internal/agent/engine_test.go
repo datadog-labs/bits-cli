@@ -89,6 +89,157 @@ func kinds(evs []Event) []EventKind {
 	return ks
 }
 
+type streamedInputState struct {
+	phase string
+	delta string
+	final string
+}
+
+type streamedInputBackend struct {
+	opts   []assistant.SendOptions
+	calls  int
+	server bool
+}
+
+func (b *streamedInputBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	b.opts = append(b.opts, opts)
+	b.calls++
+	if b.calls > 1 {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("done"))
+		return "conversation-1", emit(response)
+	}
+	content := assistant.Content{Type: assistant.ContentToolCallStarted, Tool: &assistant.ToolPayload{
+		ToolCallID: "call-1", ToolName: "preview", IsClientSide: true,
+	}}
+	if b.server {
+		content.Type = assistant.ContentToolCall
+		content.Tool.IsClientSide = false
+		content.Tool.Metadata = &assistant.ToolMetadata{Name: "preview", Input: `{"value":"server"}`}
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("server-call", content)
+		return "conversation-1", emit(response)
+	}
+	for _, payload := range []assistant.Content{
+		content,
+		{Type: assistant.ContentToolCallInputDelta, Tool: &assistant.ToolPayload{ToolCallID: "call-1", PartialJSON: `{"value":`}},
+		{Type: assistant.ContentToolCallInputDelta, Tool: &assistant.ToolPayload{ToolCallID: "call-1", PartialJSON: `"delta"}`}},
+	} {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-call", payload)
+		if err := emit(response); err != nil {
+			return "conversation-1", err
+		}
+	}
+	final := assistant.ToolCallContent("call-1", "preview", `{"value":"final"}`)
+	final.Type = assistant.ContentClientToolCall
+	var response assistant.AssistantResponse
+	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("client-call", final)
+	return "conversation-1", emit(response)
+}
+
+func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
+	backend := &streamedInputBackend{}
+	reducerCalls := 0
+	handlerSawReducer := false
+	tools, err := NewToolSet(ModeAllowAll, Tool{
+		Definition: assistant.ClientTool{Name: "preview"},
+		InputReducer: func(_ context.Context, update ToolInputUpdate, prior any) any {
+			reducerCalls++
+			state := &streamedInputState{phase: update.Name, delta: update.Delta, final: update.FinalInput}
+			if previous, ok := prior.(*streamedInputState); ok {
+				state.phase = previous.phase + "+" + state.phase
+			}
+			return state
+		},
+		Handler: func(_ context.Context, _ ToolCall) (ToolResult, error) {
+			handlerSawReducer = reducerCalls == 4
+			return ToolResult{Output: "ok"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := drain(New(backend, assistant.SendOptions{}).StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
+	if len(backend.opts) == 0 || !backend.opts[0].StreamToolCallInput {
+		t.Fatalf("stream capability not requested: %+v", backend.opts)
+	}
+	if reducerCalls != 4 {
+		t.Fatalf("reducer calls = %d, want 4", reducerCalls)
+	}
+	if !handlerSawReducer {
+		t.Fatal("handler ran before all streamed input reductions")
+	}
+	var final Block
+	for _, event := range events {
+		if event.Kind != EventBlock || event.Update.Changed.ToolCallID() != "call-1" {
+			continue
+		}
+		if event.Update.Changed.Tool != nil && event.Update.Changed.Tool.RenderState != nil {
+			final = event.Update.Changed
+		}
+	}
+	state, ok := final.Tool.RenderState.(*streamedInputState)
+	if !ok || state.final != `{"value":"final"}` {
+		t.Fatalf("final reducer state = %#v, want final input", final.Tool.RenderState)
+	}
+}
+
+func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
+	backend := &streamedInputBackend{server: true}
+	reducerCalls := 0
+	tools, err := NewToolSet(ModeAllowAll, Tool{
+		Definition: assistant.ClientTool{Name: "preview"},
+		InputReducer: func(context.Context, ToolInputUpdate, any) any {
+			reducerCalls++
+			return struct{}{}
+		},
+		Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(New(backend, assistant.SendOptions{}).StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
+	if reducerCalls != 0 {
+		t.Fatalf("server-side tool triggered %d reductions", reducerCalls)
+	}
+	if len(backend.opts) == 0 || !backend.opts[0].StreamToolCallInput {
+		t.Fatalf("stream capability not requested for reducer-backed tool: %+v", backend.opts)
+	}
+}
+
+func TestEnginePreservesPreconfiguredStreamToolCallInput(t *testing.T) {
+	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
+	tools, err := NewToolSet(ModeAllowAll, Tool{
+		Definition: assistant.ClientTool{Name: "ordinary"},
+		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(backend, assistant.SendOptions{StreamToolCallInput: true})
+	_ = drain(e.StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
+	if len(backend.opts) == 0 || !backend.opts[0].StreamToolCallInput {
+		t.Fatalf("caller-provided stream capability was disabled: %+v", backend.opts)
+	}
+}
+
+func TestTurnCompletionSynchronizesOperationRelease(t *testing.T) {
+	e := New(&scriptBackend{convID: "conversation-1"}, assistant.SendOptions{})
+	operation := e.beginTurn(context.Background(), TurnInput{Message: "question"})
+	completion := <-operation.completion
+	if !completion.Completed {
+		t.Fatalf("completion = %+v", completion)
+	}
+	if e.OperationActive() {
+		t.Fatal("completion was published before operation release")
+	}
+	if err := e.NewConversation(); err != nil {
+		t.Fatalf("operation after completion: %v", err)
+	}
+	_ = drain(operation.events)
+}
+
 func TestConcurrentTurnReturnsOperationError(t *testing.T) {
 	gate := make(chan struct{})
 	e := New(&blockingBackend{gate: gate}, assistant.SendOptions{})
@@ -124,6 +275,31 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	}
 	if evs[4].ConvID != "conv-1" {
 		t.Fatalf("conv id = %q, want conv-1", evs[4].ConvID)
+	}
+}
+
+func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
+	backendErr := errors.New("stream failed")
+	e := New(&scriptBackend{
+		convID: "created-before-error",
+		err:    backendErr,
+		msgs:   []assistant.Message{assistant.AssistantMessage("m1", assistant.TextContent("partial"))},
+	}, assistant.SendOptions{})
+
+	events := drain(e.StartTurn(context.Background(), TurnInput{Message: "question"}))
+	wantKinds := []EventKind{EventBlock, EventBlock, EventConversation, EventError}
+	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
+		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
+	}
+	if events[2].ConvID != "created-before-error" || !errors.Is(events[3].Err, backendErr) || !events[3].BackendFailure {
+		t.Fatalf("terminal events = %+v", events[2:])
+	}
+	if got := e.ConversationID(); got != "created-before-error" {
+		t.Fatalf("conversation ID = %q", got)
+	}
+	blocks := e.Snapshot()
+	if len(blocks) != 2 || !blocks[1].Complete {
+		t.Fatalf("final blocks = %+v", blocks)
 	}
 }
 
@@ -247,5 +423,81 @@ func TestRestoreEmptyEmitsNothing(t *testing.T) {
 
 	if evs := drain(e.Restore(context.Background())); len(evs) != 0 {
 		t.Fatalf("events = %v, want none", kinds(evs))
+	}
+}
+
+type statusBackend struct{ calls int }
+
+func (*statusBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {
+	return "", nil
+}
+
+func (b *statusBackend) BackendStatus() assistant.BackendStatus {
+	b.calls++
+	return assistant.BackendStatus{
+		Site:                "https://api.us5.datadoghq.com",
+		AuthenticationMode:  "oauth",
+		AuthenticationState: "authenticated",
+	}
+}
+
+func TestEngineStatusReportsEffectiveNonSecretRuntimeConfiguration(t *testing.T) {
+	backend := &statusBackend{}
+	engine := New(backend, assistant.SendOptions{
+		ConversationID: "conversation-1",
+		Model:          "model-x",
+	})
+	got := engine.Status()
+	if got.Profile != assistant.DefaultProfile || got.Model != "model-x" {
+		t.Fatalf("engine status = %+v", got)
+	}
+	if got.Backend != (assistant.BackendStatus{
+		Site:                "https://api.us5.datadoghq.com",
+		AuthenticationMode:  "oauth",
+		AuthenticationState: "authenticated",
+	}) {
+		t.Fatalf("backend status = %+v", got.Backend)
+	}
+	_ = engine.Status()
+	if backend.calls != 1 {
+		t.Fatalf("backend status collections = %d, want one immutable snapshot", backend.calls)
+	}
+}
+
+type currentUserBackend struct {
+	user  assistant.CurrentUser
+	err   error
+	calls int
+}
+
+func (*currentUserBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {
+	return "", nil
+}
+
+func (b *currentUserBackend) CurrentUser(context.Context) (assistant.CurrentUser, error) {
+	b.calls++
+	return b.user, b.err
+}
+
+func TestEngineCurrentUserUsesOptionalBackendCapability(t *testing.T) {
+	want := assistant.CurrentUser{Name: "Bits User", Organization: "Bits Staging"}
+	backend := &currentUserBackend{user: want}
+	engine := New(backend, assistant.SendOptions{})
+
+	got, err := engine.CurrentUser(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want || backend.calls != 1 {
+		t.Fatalf("current user = %+v calls=%d, want %+v calls=1", got, backend.calls, want)
+	}
+}
+
+func TestEngineCurrentUserRejectsUnsupportedBackend(t *testing.T) {
+	engine := New(&scriptBackend{}, assistant.SendOptions{})
+
+	_, err := engine.CurrentUser(context.Background())
+	if !errors.Is(err, ErrCurrentUserUnsupported) {
+		t.Fatalf("current user error = %v, want ErrCurrentUserUnsupported", err)
 	}
 }
