@@ -26,12 +26,51 @@ func TestParseCommand(t *testing.T) {
 		{"", "", false},
 		{"/", "", false},      // bare slash is not a command
 		{"/ help", "", false}, // space before the name is not a command
+		{"hello /quit", "", false},
+		{" /quit", "", false}, // commands must start the prompt
 	}
 	for _, tc := range cases {
 		got, ok := parseCommand(tc.in)
 		if got != tc.wantName || ok != tc.wantOk {
 			t.Errorf("parseCommand(%q) = (%q, %v), want (%q, %v)", tc.in, got, ok, tc.wantName, tc.wantOk)
 		}
+	}
+}
+
+func TestEnterOnLeadingCommandCompletionDispatchesImmediately(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.editor.Update(tea.PasteMsg{Content: "/q"})
+	if !m.editor.MenuOpen() {
+		t.Fatal("leading slash command should open the completion menu")
+	}
+
+	_, cmd := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on a slash-command completion should dispatch it")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("command result = %T, want tea.QuitMsg", cmd())
+	}
+	if got := m.editor.Value(); got != "" {
+		t.Fatalf("editor value = %q, want empty after command dispatch", got)
+	}
+}
+
+func TestSlashCompletionDoesNotOpenMidPrompt(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.turnEvents = make(chan agent.Event)
+	m.chatPhase = chat.PhaseStreaming
+	m.editor.Update(tea.PasteMsg{Content: "explain /new"})
+	if m.editor.MenuOpen() {
+		t.Fatal("slash completion should not open outside the first prompt token")
+	}
+
+	_, cmd := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("mid-prompt slash should remain ordinary input while a turn is active")
+	}
+	if got := m.editor.Value(); got != "explain /new" {
+		t.Fatalf("editor value = %q, want ordinary input to remain pending", got)
 	}
 }
 
@@ -113,28 +152,17 @@ func TestExactNewCommandsExecuteOnFirstEnterWithCompletionOpen(t *testing.T) {
 	}
 }
 
-func TestPartialSlashAndFileCompletionsRemainEditorOwned(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		input     string
-		wantValue string
-	}{
-		{name: "partial slash command", input: "/n", wantValue: "/new "},
-		{name: "file", input: "@README", wantValue: "@README.md "},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			m := newModelWithSpy(t)
-			m.convID = "conversation-preserved"
-			m.editor.Update(tea.PasteMsg{Content: test.input})
-			if !m.editor.MenuOpen() {
-				t.Fatal("expected completion menu to be open")
-			}
+func TestFileCompletionRemainsEditorOwned(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.convID = "conversation-preserved"
+	m.editor.Update(tea.PasteMsg{Content: "@README"})
+	if !m.editor.MenuOpen() {
+		t.Fatal("expected completion menu to be open")
+	}
 
-			_, command := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-			if command != nil || m.convID != "conversation-preserved" || m.editor.Value() != test.wantValue {
-				t.Fatalf("completion routing: command=%v conv=%q editor=%q, want nil/preserved/%q", command != nil, m.convID, m.editor.Value(), test.wantValue)
-			}
-		})
+	_, command := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command != nil || m.convID != "conversation-preserved" || m.editor.Value() != "@README.md " {
+		t.Fatalf("completion routing: command=%v conv=%q editor=%q, want nil/preserved/@README.md ", command != nil, m.convID, m.editor.Value())
 	}
 }
 

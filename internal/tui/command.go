@@ -76,9 +76,10 @@ func lookupCommand(name string) (commandDefinition, bool) {
 
 // parseCommand recognizes a submitted slash command. It returns the command
 // name (lowercased, no leading "/") and true when the input is a single leading
-// "/token"; anything after whitespace is treated as arguments and ignored. A
-// bare "/" or a "/ word" form is not a command, so it falls through to a normal
-// agent turn. The caller passes already-trimmed text.
+// "/token" at the beginning of the prompt; anything after whitespace is
+// treated as arguments and ignored. A bare "/", a "/ word" form, or leading
+// whitespace before the slash is not a command, so it falls through to a normal
+// agent turn.
 func parseCommand(input string) (string, bool) {
 	if !strings.HasPrefix(input, "/") {
 		return "", false

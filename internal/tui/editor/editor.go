@@ -30,8 +30,8 @@ const (
 	maxContentHeight = 500
 )
 
-// Editor is the chat input. The completion menu opens automatically when the
-// token before the cursor begins with "@" or "/".
+// Editor is the chat input. The completion menu opens automatically for @
+// tokens and for a / token only when it is the first token in the prompt.
 type Editor struct {
 	ta       textarea.Model
 	complete Completer
@@ -171,6 +171,20 @@ func (e *Editor) Reset() {
 // to decide whether Enter/Esc drive the menu or submit/cancel.
 func (e *Editor) MenuOpen() bool { return e.menu.open }
 
+// SelectedCommand returns the currently selected leading slash-command
+// completion, without modifying the input. The parent uses it to dispatch a
+// registered command directly when Enter is pressed.
+func (e *Editor) SelectedCommand() (string, bool) {
+	if !e.menu.open || len(e.menu.items) == 0 || !e.commandTriggerActive(e.ta.Word()) {
+		return "", false
+	}
+	insert := e.menu.items[e.menu.selected].Insert
+	if !strings.HasPrefix(insert, "/") {
+		return "", false
+	}
+	return strings.TrimPrefix(insert, "/"), true
+}
+
 // Height is the rendered height of the input in rows. It deliberately excludes
 // the completion menu: the menu is an overlay (see MenuView), so opening it must
 // not change the layout and reflow the transcript.
@@ -264,7 +278,12 @@ func (e *Editor) menuWidth() int {
 // set (no "@"/"/" trigger, or nothing matched) closes the menu; the selection is
 // kept when it still points at a valid item.
 func (e *Editor) recompute() {
-	items := e.complete(e.ta.Word())
+	word := e.ta.Word()
+	if strings.HasPrefix(word, "/") && !e.commandTriggerActive(word) {
+		e.closeMenu()
+		return
+	}
+	items := e.complete(word)
 	if len(items) == 0 {
 		e.closeMenu()
 		return
@@ -274,6 +293,22 @@ func (e *Editor) recompute() {
 		sel = e.menu.selected
 	}
 	e.menu = menu{open: true, items: items, selected: sel}
+}
+
+// commandTriggerActive reports whether word is the first token on the first
+// input line. A slash elsewhere is ordinary prompt text, not a command.
+func (e *Editor) commandTriggerActive(word string) bool {
+	if !strings.HasPrefix(word, "/") || e.ta.Line() != 0 {
+		return false
+	}
+	lines := strings.Split(e.ta.Value(), "\n")
+	if len(lines) == 0 {
+		return false
+	}
+	runes := []rune(lines[0])
+	col := min(max(e.ta.Column(), 0), len(runes))
+	start, _ := wordBounds(runes, col)
+	return start == 0
 }
 
 func (e *Editor) move(delta int) {

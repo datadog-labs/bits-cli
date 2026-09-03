@@ -395,14 +395,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // when open, is a sub-state of the editor and intercepts navigation keys.
 func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// While the completion menu is open it owns navigation keys (arrows, tab,
-	// enter to accept, esc to close). An exact registered command executes on
-	// enter; partial completion remains editor-owned.
+	// enter to accept, esc to close). Enter dispatches the selected registered
+	// slash command directly, including a partial command completion.
 	if m.editor.MenuOpen() {
 		if msg.String() == "enter" {
-			text := strings.TrimSpace(m.editor.Value())
-			if name, parsed := parseCommand(text); parsed {
+			if name, selected := m.editor.SelectedCommand(); selected {
 				if _, registered := lookupCommand(name); registered {
-					return m.submit()
+					m.editor.Reset()
+					return m.dispatchCommand(name)
 				}
 			}
 		}
@@ -461,13 +461,14 @@ func (m *Model) respondToApproval(decision agent.ApprovalDecision) {
 // loading. The user block is added by the engine (it owns the transcript), so
 // it arrives as the turn's first event.
 func (m *Model) submit() (tea.Model, tea.Cmd) {
-	text := strings.TrimSpace(m.editor.Value())
+	raw := m.editor.Value()
+	text := strings.TrimSpace(raw)
 	if text == "" {
 		return m, nil
 	}
 
 	// Slash commands are a native control plane: they never reach the model.
-	if name, ok := parseCommand(text); ok {
+	if name, ok := parseCommand(raw); ok {
 		m.editor.Reset()
 		return m.dispatchCommand(name)
 	}
