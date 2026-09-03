@@ -45,7 +45,6 @@ type (
 	}
 	logoutResultMsg struct {
 		generation uint64
-		result     LogoutResult
 		err        error
 	}
 )

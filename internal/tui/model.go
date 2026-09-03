@@ -95,7 +95,7 @@ type Model struct {
 	logoutRunning    bool
 	logoutCancel     context.CancelFunc
 	logoutGeneration uint64
-	logoutResult     *LogoutResult
+	loggedOut        bool
 
 	pendingApprovals []agent.Block
 	approvalChoice   int
@@ -207,14 +207,10 @@ func newShell() *Model {
 // established yet. main reads it after the program exits to print a resume hint.
 func (m *Model) ConversationID() string { return m.convID }
 
-// LogoutResult reports a completed native logout. The process surface uses it
-// after Bubble Tea exits so the result remains visible outside the alt screen.
-func (m *Model) LogoutResult() (LogoutResult, bool) {
-	if m.logoutResult == nil {
-		return LogoutResult{}, false
-	}
-	return *m.logoutResult, true
-}
+// LoggedOut reports whether native logout completed. The process surface uses
+// it after Bubble Tea exits so the confirmation remains visible outside the
+// alt screen.
+func (m *Model) LoggedOut() bool { return m.loggedOut }
 
 // StartupError reports why login could not transition into chat. Cancellation
 // remains distinguishable from post-login client construction failures.

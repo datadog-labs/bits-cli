@@ -162,25 +162,17 @@ func runLogin(ctx context.Context, opts cmd.LoginOptions) error {
 
 func runLogout(ctx context.Context) error {
 	logoutCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	hadSession, revokeErr, err := auth.Logout(logoutCtx, auth.DefaultStore(), nil)
+	_, _, err := auth.Logout(logoutCtx, auth.DefaultStore(), nil)
 	cancel()
 	if err != nil {
 		return err
 	}
-	printLogoutResult(hadSession, revokeErr)
-	return nil
+	return printLoggedOut(os.Stderr)
 }
 
-func printLogoutResult(hadSession bool, revokeErr error) {
-	if !hadSession {
-		fmt.Fprintln(os.Stderr, "No Bits CLI OAuth session is stored.")
-		return
-	}
-	if revokeErr != nil {
-		fmt.Fprintf(os.Stderr, "Logged out locally; remote token revocation failed: %v\n", revokeErr)
-		return
-	}
-	fmt.Fprintln(os.Stderr, "Logged out.")
+func printLoggedOut(w io.Writer) error {
+	_, err := fmt.Fprintln(w, "Logged out of Bits.")
+	return err
 }
 
 func runChat(parent context.Context, opts cmd.ChatOptions) error {
@@ -207,9 +199,8 @@ func runChat(parent context.Context, opts cmd.ChatOptions) error {
 		}
 		return err
 	}
-	if result, ok := m.LogoutResult(); ok {
-		printLogoutResult(result.HadSession, result.RevokeErr)
-		return nil
+	if m.LoggedOut() {
+		return printLoggedOut(os.Stderr)
 	}
 	// On a clean exit with an active conversation, surface how to get back to it.
 	// The conversation id is the server-side handle the Assistant API restores via

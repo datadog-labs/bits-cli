@@ -11,12 +11,6 @@ import (
 
 const logoutTimeout = 60 * time.Second
 
-// LogoutResult is the non-secret outcome of a completed native logout.
-type LogoutResult struct {
-	HadSession bool
-	RevokeErr  error
-}
-
 // requestLogout waits for active Assistant work to stop before credential
 // deletion. This ordering prevents an authenticated client from continuing a
 // turn after its durable session has been removed.
@@ -39,14 +33,10 @@ func (m *Model) startLogout() tea.Cmd {
 	m.clearNotice()
 	logout := m.logout
 	return func() tea.Msg {
-		hadSession, revokeErr, err := logout(ctx)
+		_, _, err := logout(ctx)
 		return logoutResultMsg{
 			generation: generation,
-			result: LogoutResult{
-				HadSession: hadSession,
-				RevokeErr:  revokeErr,
-			},
-			err: err,
+			err:        err,
 		}
 	}
 }
@@ -71,6 +61,6 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 	m.turnEvents = nil
 	m.cancelTurn = nil
 	m.pendingApprovals = nil
-	m.logoutResult = &msg.result
+	m.loggedOut = true
 	return m, tea.Quit
 }

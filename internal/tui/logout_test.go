@@ -46,9 +46,8 @@ func TestSubmitLogoutIsLocalAndInvalidatesEngine(t *testing.T) {
 	if m.tools != tools || m.logout == nil {
 		t.Fatal("logout discarded safe process configuration")
 	}
-	result, ok := m.LogoutResult()
-	if !ok || !result.HadSession || result.RevokeErr != nil {
-		t.Fatalf("logout result = %+v, present=%v", result, ok)
+	if !m.LoggedOut() {
+		t.Fatal("successful logout was not recorded")
 	}
 }
 
@@ -114,7 +113,7 @@ func TestLogoutLocalFailureKeepsAuthenticatedEngine(t *testing.T) {
 	if next == nil {
 		t.Fatal("failure notice did not schedule expiry")
 	}
-	if _, ok := m.LogoutResult(); ok {
+	if m.LoggedOut() {
 		t.Fatal("failed local logout recorded success")
 	}
 }
@@ -128,9 +127,8 @@ func TestAlreadyLoggedOutIsSafeAndInvalidatesEngine(t *testing.T) {
 
 	_, cmd := m.dispatchCommand("logout")
 	_, quit := m.Update(cmd())
-	result, ok := m.LogoutResult()
-	if !ok || result.HadSession {
-		t.Fatalf("already-logged-out result = %+v, present=%v", result, ok)
+	if !m.LoggedOut() {
+		t.Fatal("already-logged-out result was not recorded")
 	}
 	if m.engine != nil || quit == nil {
 		t.Fatal("already-logged-out command did not invalidate and quit")
@@ -147,9 +145,8 @@ func TestRemoteRevocationFailureStillInvalidatesLocalSession(t *testing.T) {
 
 	_, cmd := m.dispatchCommand("logout")
 	_, quit := m.Update(cmd())
-	result, ok := m.LogoutResult()
-	if !ok || !errors.Is(result.RevokeErr, want) {
-		t.Fatalf("revocation result = %+v, present=%v", result, ok)
+	if !m.LoggedOut() {
+		t.Fatal("revocation failure did not record local logout")
 	}
 	if m.engine != nil || quit == nil {
 		t.Fatal("revocation failure kept the authenticated client alive")

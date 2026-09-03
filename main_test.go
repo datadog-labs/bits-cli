@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -13,6 +14,16 @@ import (
 	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/DataDog/bits-cli/internal/cmd"
 )
+
+func TestPrintLoggedOutUsesOneSuccessMessage(t *testing.T) {
+	var out bytes.Buffer
+	if err := printLoggedOut(&out); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "Logged out of Bits.\n"; got != want {
+		t.Fatalf("logout output = %q, want %q", got, want)
+	}
+}
 
 type stubCredentialStore struct {
 	session auth.Session
