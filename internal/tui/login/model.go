@@ -360,7 +360,7 @@ func normalizeCustomSite(raw string) (string, error) {
 
 // View composes the login state into shared panel and selector components.
 func (m *Model) View() tea.View {
-	view := tea.View{AltScreen: true}
+	view := tea.View{AltScreen: true, BackgroundColor: m.theme.Background}
 	if m.width <= 0 || m.height <= 0 {
 		view.Content = "Loading…"
 		return view

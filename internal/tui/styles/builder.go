@@ -99,7 +99,9 @@ func build(isDark bool, p palette) Theme {
 	textInput.Cursor.Color = lipgloss.Color(p.interactive)
 
 	return Theme{
-		IsDark:    isDark,
+		IsDark:     isDark,
+		Background: lipgloss.Color(p.background),
+
 		Input:     input,
 		Text:      text,
 		Feedback:  feedback,

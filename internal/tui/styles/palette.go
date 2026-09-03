@@ -13,6 +13,14 @@ type palette struct {
 	text      string
 	muted     string
 
+	// background is the app's own terminal background, painted across the whole
+	// alt-screen rather than inherited from whatever the user's terminal is set
+	// to. Pinning it means every other surface is composed against a known
+	// color, so the UI looks the same in a Solarized terminal as in a default
+	// one. It is the base of the elevation ramp: surface and the other surface*
+	// roles sit above it, away from it in lightness.
+	background string
+
 	surface         string
 	surfaceRaised   string
 	approvalSurface string
@@ -57,6 +65,7 @@ func darkPalette() palette {
 		onWarning:       "#1A1A1A",
 		text:            "252",
 		muted:           "#8C8F99",
+		background:      "#171921",
 		surface:         "#22252F",
 		surfaceRaised:   "236",
 		approvalSurface: "#2C3142",
@@ -81,6 +90,15 @@ func darkPalette() palette {
 	}
 }
 
+// lightPalette is the light-terminal palette.
+//
+// TODO: its surface roles predate background and have not been re-derived
+// against it. They were picked to sit on whatever the terminal supplied, so
+// they land at the same lightness as the pinned background — surface is only
+// 1.010:1 against it, leaving the input block and submitted user messages
+// reading as flat. The ramp below background needs recomputing (surface
+// ≈ #DBE0E8, surfaceRaised ≈ #D1D7E0, and codeSurface/errorSurface/busySurface
+// with it). Kept as follow-up so the background change stays reviewable alone.
 func lightPalette() palette {
 	return palette{
 		primary:         "#5e6dd6",
@@ -90,6 +108,7 @@ func lightPalette() palette {
 		onWarning:       "#1A1A1A",
 		text:            "#1C2E38",
 		muted:           "#666666",
+		background:      "#ECEFF4",
 		surface:         "#EEF0F3",
 		surfaceRaised:   "#EEF0F3",
 		approvalSurface: "#E2E6EF",

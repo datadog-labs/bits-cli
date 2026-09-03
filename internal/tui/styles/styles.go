@@ -143,7 +143,21 @@ type Selector struct {
 
 // Theme is the complete set of styles for one terminal background mode.
 type Theme struct {
-	IsDark    bool
+	IsDark bool
+
+	// Background is painted across the whole alt-screen by the root views, so
+	// the UI composes against a known color instead of the user's terminal
+	// theme. Bubble Tea emits the escape sequence itself when a view sets it and
+	// restores the terminal's own background on teardown.
+	//
+	// This is unconditional today. Crush, which this follows, lets users opt out
+	// via an `options.tui.transparent` config field that leaves the view's
+	// background unset; bits-cli has no user/client settings layer yet, so there
+	// is nowhere to hang that switch. When one lands, expose the same choice
+	// rather than assuming everyone wants a painted background — a terminal with
+	// a deliberate theme or a transparent window has a real claim to show it.
+	Background color.Color
+
 	Input     Input
 	Chat      Chat
 	Editor    Editor

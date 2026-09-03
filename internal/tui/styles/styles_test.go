@@ -27,6 +27,44 @@ func TestDefaultSelectsModeSpecificInputAndMenuStyles(t *testing.T) {
 	}
 }
 
+// TestDefaultPinsAModeSpecificBackground covers the painted alt-screen
+// background: both modes must supply one, and they must differ, since the whole
+// point is that the app stops inheriting the terminal's own background.
+func TestDefaultPinsAModeSpecificBackground(t *testing.T) {
+	dark, light := Default(true), Default(false)
+
+	if dark.Background == nil || light.Background == nil {
+		t.Fatalf("background = dark:%v light:%v, want both set", dark.Background, light.Background)
+	}
+	if dark.Background == light.Background {
+		t.Error("background should differ between themes")
+	}
+	if got, want := dark.Background, lipgloss.Color(darkPalette().background); got != want {
+		t.Errorf("dark background = %v, want token %v", got, want)
+	}
+	if got, want := light.Background, lipgloss.Color(lightPalette().background); got != want {
+		t.Errorf("light background = %v, want token %v", got, want)
+	}
+}
+
+// TestDarkSurfaceReadsAgainstItsBackground pins the elevation contract for the
+// dark ramp: the input block has to separate from the painted background, not
+// blend into it.
+//
+// Light is deliberately absent. Its surface tokens predate this background and
+// sit at the same lightness (1.010:1), so the same assertion would fail by
+// design; they are re-derived in follow-up work, and this test grows a light
+// case then.
+func TestDarkSurfaceReadsAgainstItsBackground(t *testing.T) {
+	p := darkPalette()
+	if got := contrastRatio(p.surface, p.background); got < 1.1 {
+		t.Errorf("surface/background contrast = %.3f:1, want at least 1.1:1", got)
+	}
+	if relativeLuminance(p.surface) <= relativeLuminance(p.background) {
+		t.Error("dark surface should be lighter than the background it sits on")
+	}
+}
+
 func TestForegroundTokensMeetNormalTextContrast(t *testing.T) {
 	for _, test := range []struct {
 		name    string

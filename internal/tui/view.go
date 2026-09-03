@@ -30,7 +30,7 @@ func (m *Model) View() tea.View {
 	if m.mode == ModeLogin && m.loginModel != nil {
 		return m.loginModel.View()
 	}
-	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion}
+	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion, BackgroundColor: m.styles.Background}
 	switch m.mode {
 	case ModeTermInit:
 		v.Content = "loading…"
