@@ -10,6 +10,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/browser"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	"github.com/DataDog/bits-cli/internal/tui/editor"
@@ -36,17 +37,19 @@ type EngineFactory func(context.Context) (*agent.Engine, error)
 type Config struct {
 	Tools          *agent.ToolSet
 	StatusProvider statusview.Provider
+	OpenURL        func(context.Context, string) error
 }
 
 // Model is the root Bubble Tea model. All state lives here and is mutated only
 // on the tea thread; the sole async source is the engine's event channel.
 type Model struct {
 	// Collaborators the model drives.
-	engine *agent.Engine
-	tools  *agent.ToolSet
-	editor *editor.Editor
-	picker *conversationview.Model
-	status *statusview.Model
+	engine  *agent.Engine
+	tools   *agent.ToolSet
+	openURL func(context.Context, string) error
+	editor  *editor.Editor
+	picker  *conversationview.Model
+	status  *statusview.Model
 
 	statusProvider   statusview.Provider
 	statusGeneration uint64
@@ -154,6 +157,10 @@ func (m *Model) configure(configs []Config) {
 		if configs[0].StatusProvider != nil {
 			m.statusProvider = configs[0].StatusProvider
 		}
+		m.openURL = configs[0].OpenURL
+	}
+	if m.openURL == nil {
+		m.openURL = browser.Open
 	}
 }
 

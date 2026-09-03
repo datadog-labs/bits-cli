@@ -26,6 +26,7 @@ const (
 	commandNew
 	commandResume
 	commandStatus
+	commandWeb
 )
 
 type commandDefinition struct {
@@ -56,6 +57,11 @@ var commandDefinitions = []commandDefinition{
 	{
 		id:               commandStatus,
 		name:             "status",
+		activeTurnPolicy: commandAllowedDuringTurn,
+	},
+	{
+		id:               commandWeb,
+		name:             "web",
 		activeTurnPolicy: commandAllowedDuringTurn,
 	},
 }
@@ -134,6 +140,8 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, m.openConversationPicker()
 	case commandStatus:
 		return m, m.openStatus()
+	case commandWeb:
+		return m, m.openConversationInBrowser()
 	default:
 		panic("unhandled registered command")
 	}

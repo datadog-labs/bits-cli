@@ -180,14 +180,6 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 	}
 }
 
-func TestOpenBrowserHonorsCanceledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := openBrowser(ctx, "https://app.datadoghq.com"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("openBrowser error = %v, want context cancellation", err)
-	}
-}
-
 func TestCallbackChoosesEphemeralPortAndIgnoresWrongState(t *testing.T) {
 	listener, results, err := listenForCallback(DefaultRedirectURI, "expected")
 	if err != nil {

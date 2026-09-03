@@ -13,7 +13,14 @@ import (
 // explicitly: if a slash command (or busy-guarded ordinary input) ever falls
 // through to StartTurn, Send runs and the test fails with a clear cause instead
 // of nil-panicking on an unset engine.
-type spyBackend struct{ t *testing.T }
+type spyBackend struct {
+	t    *testing.T
+	site string
+}
+
+func (s *spyBackend) BackendStatus() assistant.BackendStatus {
+	return assistant.BackendStatus{Site: s.site}
+}
 
 func (s *spyBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {
 	s.t.Fatal("backend Send was called; control-plane input leaked to the model")
