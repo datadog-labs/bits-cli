@@ -122,9 +122,9 @@ func ParseUnifiedDiff(text string) (Diff, bool) {
 	var oldLine, newLine int
 	for _, raw := range strings.Split(text, "\n") {
 		switch {
-		case strings.HasPrefix(raw, "--- "):
+		case hunk == nil && strings.HasPrefix(raw, "--- "):
 			d.From = raw[len("--- "):]
-		case strings.HasPrefix(raw, "+++ "):
+		case hunk == nil && strings.HasPrefix(raw, "+++ "):
 			d.To = raw[len("+++ "):]
 		case strings.HasPrefix(raw, "@@"):
 			from, to, ok := parseHunkHeader(raw)
