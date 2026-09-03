@@ -11,6 +11,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/filediff"
 )
 
 func newWriteFileTool(r *os.Root, root string, locker *mutationLocker) agent.Tool {
@@ -28,8 +29,9 @@ func newWriteFileTool(r *os.Root, root string, locker *mutationLocker) agent.Too
 				"additionalProperties": false,
 			},
 		},
-		Approval: workspaceWriteApproval(root),
-		Handler:  writeFileHandler(r, locker),
+		Approval:     workspaceWriteApproval(root),
+		Handler:      writeFileHandler(r, locker),
+		InputReducer: writeFileInputReducer(r),
 	}
 }
 
@@ -65,7 +67,9 @@ func writeFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 
 		// Lstat, not Stat: refuse to overwrite through a symlink or clobber a
 		// non-regular file. A missing target (err != nil) is the create path.
+		operation := filediff.OpCreate
 		if info, err := r.Lstat(filePath); err == nil {
+			operation = filediff.OpOverwrite
 			switch {
 			case info.Mode()&fs.ModeSymlink != 0:
 				return errorResult("%s is a symbolic link", args.Path), nil
@@ -75,6 +79,7 @@ func writeFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 				return errorResult("%s is not a regular file", args.Path), nil
 			}
 		}
+		before := captureEditorSnapshot(ctx, r, filePath)
 
 		data := []byte(*args.Content)
 		if err := safeReplace(ctx, r, filePath, data); err != nil {
@@ -84,10 +89,19 @@ func writeFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 			return errorResult("write failed: %s", err.Error()), nil
 		}
 
-		return agent.ToolResult{
+		result := agent.ToolResult{
 			Title:  filePath,
 			Output: pluralizeBytes(filePath, len(data)),
-		}, nil
+		}
+		if before.State == filediff.SnapshotReady || before.State == filediff.SnapshotMissing {
+			previous := before.Raw
+			renderDiff, display := filediff.BuildWithDisplay("a/"+filePath, "b/"+filePath, previous, *args.Content, maxEditorDiffLines)
+			result.Display = display
+			result.RenderState = agent.ReplaceRenderState(appliedEditorState(filePath, operation, renderDiff))
+		} else {
+			result.RenderState = agent.ReplaceRenderState(&filediff.State{Phase: filediff.PhaseApplied, Snapshot: before, Change: &filediff.Change{Path: filePath, Op: operation, State: filediff.ChangeUnavailable}, Reason: before.Reason})
+		}
+		return result, nil
 	}
 }
 

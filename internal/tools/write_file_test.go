@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/filediff"
 )
 
 // newWriteTool opens dir as a workspace root and returns the write_file tool
@@ -53,6 +54,25 @@ func TestWriteFileTool(t *testing.T) {
 		}
 		if !strings.Contains(r.Output, "8 bytes") {
 			t.Errorf("output missing byte count: %s", r.Output)
+		}
+	})
+
+	t.Run("returns handler-authoritative rendered state", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("before\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		tool, _ := newWriteTool(t, dir)
+		result := invokeWrite(t, tool, map[string]any{"path": "f.txt", "content": "after\n"})
+		if result.RenderState == nil {
+			t.Fatal("RenderState = nil, want applied state")
+		}
+		state, ok := result.RenderState.State.(*filediff.State)
+		if !ok || state.Phase != filediff.PhaseApplied || state.Change == nil || state.Change.Op != filediff.OpOverwrite || state.Change.Diff == nil || state.Change.Diff.Additions != 1 || state.Change.Diff.Deletions != 1 {
+			t.Fatalf("RenderState = %#v, want applied overwrite", result.RenderState.State)
+		}
+		if !strings.HasPrefix(result.Display, "--- a/f.txt\n+++ b/f.txt\n") {
+			t.Fatalf("Display = %q, want a raw unified diff", result.Display)
 		}
 	})
 
@@ -217,4 +237,70 @@ func TestWriteFileTool(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestWriteFileDisplayPreservesExactBOMAndLineEndingChanges(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte(bom+"before\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool, _ := newWriteTool(t, dir)
+	result := invokeWrite(t, tool, map[string]any{"path": "f.txt", "content": "after\n"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Output)
+	}
+	state, ok := result.RenderState.State.(*filediff.State)
+	if !ok || state.Change == nil || state.Change.Diff == nil || state.Change.Diff.Additions != 1 || state.Change.Diff.Deletions != 1 {
+		t.Fatalf("state = %#v, want exact changed diff", result.RenderState.State)
+	}
+	if !state.Change.Diff.BeforeFormat.BOM || state.Change.Diff.BeforeFormat.LineEnding != "crlf" || state.Change.Diff.AfterFormat.LineEnding != "lf" {
+		t.Fatalf("diff format = %#v → %#v, want BOM CRLF → LF", state.Change.Diff.BeforeFormat, state.Change.Diff.AfterFormat)
+	}
+	foundBOM, foundCR := false, false
+	for _, line := range state.Change.Diff.AllLines() {
+		foundBOM = foundBOM || strings.Contains(line.Content, bom)
+		foundCR = foundCR || strings.Contains(line.Content, "before")
+	}
+	if !foundBOM || !foundCR {
+		t.Fatalf("Change.Diff = %#v, want exact preimage markers", state.Change.Diff)
+	}
+}
+
+func TestWriteFileRendersMixedEndingsAndBareCRPreimages(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		before     string
+		after      string
+		lineEnding string
+		wantOld    string
+	}{
+		{name: "mixed endings", before: "one\ntwo\r\n", after: "after\n", lineEnding: "mixed", wantOld: "two"},
+		{name: "bare CR", before: "before\r", after: "after\r", lineEnding: "mixed", wantOld: "before\r"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte(test.before), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			tool, _ := newWriteTool(t, dir)
+			result := invokeWrite(t, tool, map[string]any{"path": "f.txt", "content": test.after})
+			if result.IsError || result.RenderState == nil {
+				t.Fatalf("result = %#v, want applied render state", result)
+			}
+			state, ok := result.RenderState.State.(*filediff.State)
+			if !ok || state.Phase != filediff.PhaseApplied || state.Change == nil || state.Change.State != filediff.ChangeApplied || state.Change.Diff == nil {
+				t.Fatalf("state = %#v, want applied change", result.RenderState.State)
+			}
+			if state.Change.Diff.BeforeFormat.LineEnding != test.lineEnding {
+				t.Fatalf("diff = %#v, want %q line ending", state.Change.Diff, test.lineEnding)
+			}
+			found := false
+			for _, line := range state.Change.Diff.AllLines() {
+				found = found || line.Kind == filediff.LineDelete && line.Content == test.wantOld
+			}
+			if !found {
+				t.Fatalf("diff lines = %#v, want deleted %q", state.Change.Diff.AllLines(), test.wantOld)
+			}
+		})
+	}
 }

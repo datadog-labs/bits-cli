@@ -3,32 +3,20 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path"
-	"sort"
 	"strings"
-
-	udiff "github.com/aymanbagabas/go-udiff"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/filediff"
 )
 
 const bom = "\ufeff"
-
-type textReplacement struct {
-	start   int
-	length  int
-	newText string
-}
-
-type fileEdit struct {
-	OldText string  `json:"old_text"`
-	NewText *string `json:"new_text"`
-}
 
 func newEditFileTool(r *os.Root, root string, locker *mutationLocker) agent.Tool {
 	return agent.Tool{
@@ -57,8 +45,9 @@ func newEditFileTool(r *os.Root, root string, locker *mutationLocker) agent.Tool
 				"additionalProperties": false,
 			},
 		},
-		Approval: workspaceWriteApproval(root),
-		Handler:  editFileHandler(r, locker),
+		Approval:     workspaceWriteApproval(root),
+		Handler:      editFileHandler(r, locker),
+		InputReducer: editFileInputReducer(r),
 	}
 }
 
@@ -68,8 +57,8 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 			return agent.ToolResult{}, err
 		}
 		var args struct {
-			Path  string     `json:"path"`
-			Edits []fileEdit `json:"edits"`
+			Path  string          `json:"path"`
+			Edits []filediff.Edit `json:"edits"`
 		}
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("invalid input: %s", err.Error()), nil
@@ -143,23 +132,23 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 		raw := string(data)
 		hasBOM := strings.HasPrefix(raw, bom)
 		body := strings.TrimPrefix(raw, bom)
-		ending, ok := lineEndingStyle(body)
+		ending, ok := filediff.LineEndingStyle(body)
 		if !ok {
 			return errorResult("%s has inconsistent line endings; normalize them before editing", args.Path), nil
 		}
-		base := normalizeToLF(body)
+		base := filediff.NormalizeToLF(body)
 
-		repls, errResult := matchEdits(base, args.Edits, filePath)
-		if errResult != nil {
-			return *errResult, nil
+		repls, err := filediff.MatchEdits(base, args.Edits)
+		if err != nil {
+			return editMatchError(err, filePath), nil
 		}
 
-		newBase := applyReplacements(base, repls)
+		newBase := filediff.ApplyReplacements(base, repls)
 		if newBase == base {
 			return errorResult("no changes: the replacements produced identical content"), nil
 		}
 
-		final := restoreLineEndings(newBase, ending)
+		final := filediff.RestoreLineEndings(newBase, ending)
 		if hasBOM {
 			final = bom + final
 		}
@@ -170,128 +159,39 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 			return errorResult("write failed: %s", err.Error()), nil
 		}
 
-		// The model sees only a concise summary; the full unified diff travels out
-		// of the model's token band in Display (the tool response's display-only
-		// content), so it is never capped for token budget.
-		diff := strings.TrimSuffix(udiff.Unified("a/"+filePath, "b/"+filePath, base, newBase), "\n")
+		// The model sees only a concise summary; the complete raw diff travels out
+		// of its token band in Display, while RenderState stays capped.
+		renderDiff, display := filediff.BuildWithDisplay("a/"+filePath, "b/"+filePath, raw, final, maxEditorDiffLines)
 		noun := "replacement"
 		if len(repls) != 1 {
 			noun = "replacements"
 		}
 		return agent.ToolResult{
-			Title:   filePath,
-			Output:  fmt.Sprintf("Applied %d %s to %s", len(repls), noun, filePath),
-			Display: "```diff\n" + diff + "\n```",
+			Title:       filePath,
+			Output:      fmt.Sprintf("Applied %d %s to %s", len(repls), noun, filePath),
+			Display:     display,
+			RenderState: agent.ReplaceRenderState(appliedEditorState(filePath, filediff.OpEdit, renderDiff)),
 		}, nil
 	}
 }
 
-// matchEdits resolves every edit against a single snapshot of base. It returns
-// the replacements sorted by position, or an error ToolResult describing the
-// first edit that is empty, missing, ambiguous, or overlaps another edit. No
-// edit is applied unless all of them resolve to unique, disjoint regions.
-func matchEdits(base string, edits []fileEdit, filePath string) ([]textReplacement, *agent.ToolResult) {
-	repls := make([]textReplacement, 0, len(edits))
-	for i, e := range edits {
-		oldText := normalizeToLF(e.OldText)
-		if oldText == "" {
-			res := editError(i, len(edits), filePath, "old_text must not be empty")
-			return nil, &res
-		}
-		if e.NewText == nil {
-			res := editError(i, len(edits), filePath, "new_text is required")
-			return nil, &res
-		}
-		count := countMatches(base, oldText)
-		if count == 0 {
-			res := editError(i, len(edits), filePath, "old_text was not found; it must match the file exactly, including whitespace and newlines")
-			return nil, &res
-		}
-		if count > 1 {
-			res := editError(i, len(edits), filePath, fmt.Sprintf("old_text matched %d regions; add surrounding context so it matches exactly one", count))
-			return nil, &res
-		}
-		repls = append(repls, textReplacement{
-			start:   strings.Index(base, oldText),
-			length:  len(oldText),
-			newText: normalizeToLF(*e.NewText),
-		})
+// editMatchError restores the tool's stable, path-aware diagnostics from the
+// pure matching error. The filediff package deliberately has no tool result or
+// workspace-path dependency.
+func editMatchError(err error, filePath string) agent.ToolResult {
+	var matchErr *filediff.MatchError
+	if !errors.As(err, &matchErr) {
+		return errorResult("%s", err)
 	}
-
-	sort.Slice(repls, func(a, b int) bool { return repls[a].start < repls[b].start })
-	for i := 1; i < len(repls); i++ {
-		if repls[i-1].start+repls[i-1].length > repls[i].start {
-			res := errorResult("edits in %s overlap; each edit must target a disjoint region of the original file", filePath)
-			return nil, &res
-		}
+	if matchErr.Kind == filediff.MatchOverlap {
+		return errorResult("edits in %s overlap; each edit must target a disjoint region of the original file", filePath)
 	}
-	return repls, nil
-}
-
-// countMatches counts occurrences of sub in s including overlapping ones, so a
-// self-overlapping old_text (e.g. "\n\n" in "\n\n\n") is correctly treated as
-// ambiguous rather than unique. strings.Count only counts non-overlapping runs
-// and would report such a match as occurring exactly once.
-func countMatches(s, sub string) int {
-	n := 0
-	for i := 0; ; {
-		j := strings.Index(s[i:], sub)
-		if j < 0 {
-			return n
-		}
-		n++
-		i += j + 1
+	message := matchErr.Error()
+	if matchErr.Kind == filediff.MatchAmbiguous {
+		message = fmt.Sprintf("old_text matched %d regions; add surrounding context so it matches exactly one", matchErr.Count)
 	}
-}
-
-func editError(index, total int, filePath, msg string) agent.ToolResult {
-	if total == 1 {
-		return errorResult("%s in %s", msg, filePath)
+	if matchErr.Total == 1 {
+		return errorResult("%s in %s", message, filePath)
 	}
-	return errorResult("edits[%d]: %s in %s", index, msg, filePath)
-}
-
-// applyReplacements rewrites base by copying the gaps between the (position
-// sorted, non-overlapping) replacements and substituting each matched region.
-func applyReplacements(base string, repls []textReplacement) string {
-	var b strings.Builder
-	prev := 0
-	for _, rep := range repls {
-		b.WriteString(base[prev:rep.start])
-		b.WriteString(rep.newText)
-		prev = rep.start + rep.length
-	}
-	b.WriteString(base[prev:])
-	return b.String()
-}
-
-// lineEndingStyle reports the file's single line-ending convention: "\r\n" if
-// every break is CRLF, "\n" otherwise. It returns ok=false when the endings are
-// inconsistent (a mix of CRLF and bare LF, or any bare CR), rather than silently
-// normalizing untouched lines to one convention on write.
-func lineEndingStyle(s string) (string, bool) {
-	crlf := strings.Count(s, "\r\n")
-	bareLF := strings.Count(s, "\n") - crlf
-	bareCR := strings.Count(s, "\r") - crlf
-	if bareCR > 0 || (crlf > 0 && bareLF > 0) {
-		return "", false
-	}
-	if crlf > 0 {
-		return "\r\n", true
-	}
-	return "\n", true
-}
-
-func normalizeToLF(text string) string {
-	if !strings.ContainsRune(text, '\r') {
-		return text
-	}
-	return strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
-}
-
-func restoreLineEndings(text, ending string) string {
-	if ending == "\r\n" {
-		return strings.ReplaceAll(text, "\n", "\r\n")
-	}
-	return text
+	return errorResult("edits[%d]: %s in %s", matchErr.Index, message, filePath)
 }
