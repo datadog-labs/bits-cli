@@ -179,5 +179,9 @@ func (m *Model) View() tea.View {
 		Content:   content,
 		AltScreen: true,
 		MouseMode: tea.MouseModeCellMotion,
+		// Paint the same background the app pins, so swatches are judged against
+		// the surface they will actually sit on rather than the catalog author's
+		// terminal. It follows the t toggle because setDark rebuilds the theme.
+		BackgroundColor: m.theme.Background,
 	}
 }

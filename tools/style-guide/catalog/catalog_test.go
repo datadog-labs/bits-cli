@@ -24,6 +24,35 @@ func TestKeyToggleTheme(t *testing.T) {
 	}
 }
 
+// TestViewPaintsThemeBackgroundAndFollowsToggle keeps the catalog honest about
+// the surface it previews on: it has to paint the same background the app pins,
+// and the t toggle has to carry that background with the rest of the theme.
+// Without this the swatches are judged against the author's own terminal.
+func TestViewPaintsThemeBackgroundAndFollowsToggle(t *testing.T) {
+	m := New()
+	m.width, m.height = 80, 24
+
+	dark := m.View().BackgroundColor
+	if dark == nil {
+		t.Fatal("view background unset; swatches would render on the terminal's own background")
+	}
+	if dark != m.theme.Background {
+		t.Errorf("view background = %v, want theme background %v", dark, m.theme.Background)
+	}
+
+	m.key("t")
+	light := m.View().BackgroundColor
+	if light == nil {
+		t.Fatal("view background unset after toggling to light")
+	}
+	if light == dark {
+		t.Errorf("background stayed %v across the t toggle", dark)
+	}
+	if light != m.theme.Background {
+		t.Errorf("view background = %v, want theme background %v", light, m.theme.Background)
+	}
+}
+
 func TestKeyNavAdvancesGroupAndResetsOffset(t *testing.T) {
 	m := New()
 	m.width, m.height = 80, 24
