@@ -1,6 +1,7 @@
 package filediff
 
 import (
+	"strconv"
 	"strings"
 
 	udiff "github.com/aymanbagabas/go-udiff"
@@ -95,6 +96,85 @@ func BuildWithDisplay(fromName, toName, before, after string, limit int) (Diff, 
 		return Diff{From: fromName, To: toName}, ""
 	}
 	return fromUnified(u, before, after, limit), strings.TrimSuffix(u.String(), "\n")
+}
+
+// ParseUnifiedDiff reconstructs a structured Diff from the raw unified diff
+// text produced by BuildWithDisplay, so restored history renders through the
+// same path as a live diff. BeforeFormat/AfterFormat are not encoded in unified
+// text and are therefore absent (no format-change annotation on restore).
+func ParseUnifiedDiff(text string) (Diff, bool) {
+	text = strings.TrimSuffix(text, "\n")
+	if text == "" {
+		return Diff{}, false
+	}
+	var d Diff
+	var hunk *Hunk
+	var oldLine, newLine int
+	for _, raw := range strings.Split(text, "\n") {
+		switch {
+		case strings.HasPrefix(raw, "--- "):
+			d.From = raw[len("--- "):]
+		case strings.HasPrefix(raw, "+++ "):
+			d.To = raw[len("+++ "):]
+		case strings.HasPrefix(raw, "@@"):
+			from, to, ok := parseHunkHeader(raw)
+			if !ok {
+				return Diff{}, false
+			}
+			d.Hunks = append(d.Hunks, Hunk{FromLine: from, ToLine: to})
+			hunk = &d.Hunks[len(d.Hunks)-1]
+			oldLine, newLine = from, to
+		case hunk == nil || raw == "":
+			return Diff{}, false
+		default:
+			content := raw[1:]
+			switch raw[0] {
+			case ' ':
+				hunk.Lines = append(hunk.Lines, DiffLine{Kind: LineContext, OldNumber: oldLine, NewNumber: newLine, Content: content})
+				oldLine, newLine = oldLine+1, newLine+1
+				hunk.OldCount, hunk.NewCount = hunk.OldCount+1, hunk.NewCount+1
+			case '-':
+				hunk.Lines = append(hunk.Lines, DiffLine{Kind: LineDelete, OldNumber: oldLine, Content: content})
+				oldLine++
+				hunk.OldCount++
+				d.Deletions++
+			case '+':
+				hunk.Lines = append(hunk.Lines, DiffLine{Kind: LineAdd, NewNumber: newLine, Content: content})
+				newLine++
+				hunk.NewCount++
+				d.Additions++
+			case '\\':
+				hunk.Lines = append(hunk.Lines, DiffLine{Kind: LineNoNewline, Content: "No newline at end of file"})
+			default:
+				return Diff{}, false
+			}
+		}
+	}
+	if len(d.Hunks) == 0 {
+		return Diff{}, false
+	}
+	return d, true
+}
+
+func parseHunkHeader(raw string) (from, to int, ok bool) {
+	haveFrom, haveTo := false, false
+	for _, field := range strings.Fields(raw) {
+		switch {
+		case strings.HasPrefix(field, "-"):
+			from, haveFrom = parseHunkStart(field[1:])
+		case strings.HasPrefix(field, "+"):
+			to, haveTo = parseHunkStart(field[1:])
+		}
+	}
+	return from, to, haveFrom && haveTo
+}
+
+func parseHunkStart(field string) (int, bool) {
+	if i := strings.IndexByte(field, ','); i >= 0 {
+		field = field[:i]
+	}
+	n, err := strconv.Atoi(field)
+	return n, err == nil
 }
 
 func unified(fromName, toName, before, after string) (udiff.UnifiedDiff, error) {

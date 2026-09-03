@@ -38,6 +38,37 @@ func TestBuildWithDisplayRawUnifiedDiff(t *testing.T) {
 	}
 }
 
+func TestParseUnifiedDiffRoundTrip(t *testing.T) {
+	built, display := BuildWithDisplay("a/f.txt", "b/f.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n", 0)
+	parsed, ok := ParseUnifiedDiff(display)
+	if !ok {
+		t.Fatal("ParseUnifiedDiff returned ok=false")
+	}
+	if parsed.From != "a/f.txt" || parsed.To != "b/f.txt" || parsed.Additions != built.Additions || parsed.Deletions != built.Deletions {
+		t.Fatalf("parsed = %#v, built = %#v", parsed, built)
+	}
+	if len(parsed.Hunks) != 1 || parsed.Hunks[0].FromLine != built.Hunks[0].FromLine || parsed.Hunks[0].OldCount != built.Hunks[0].OldCount || parsed.Hunks[0].NewCount != built.Hunks[0].NewCount {
+		t.Fatalf("parsed hunks = %#v, built hunks = %#v", parsed.Hunks, built.Hunks)
+	}
+	pl, bl := parsed.AllLines(), built.AllLines()
+	if len(pl) != len(bl) {
+		t.Fatalf("line counts parsed=%d built=%d", len(pl), len(bl))
+	}
+	for i := range bl {
+		if pl[i] != bl[i] {
+			t.Fatalf("line %d: parsed %#v != built %#v", i, pl[i], bl[i])
+		}
+	}
+}
+
+func TestParseUnifiedDiffRejectsNonDiff(t *testing.T) {
+	for _, text := range []string{"", "not a diff", "--- a/f\n+++ b/f\n"} {
+		if _, ok := ParseUnifiedDiff(text); ok {
+			t.Fatalf("ParseUnifiedDiff(%q) = ok, want rejected", text)
+		}
+	}
+}
+
 func TestBuildPreservesStructuredHunksAndNoFinalNewline(t *testing.T) {
 	diff := Build("a/f.txt", "b/f.txt", "old", "new", 0)
 	if len(diff.Hunks) != 1 || len(diff.AllLines()) < 4 {
