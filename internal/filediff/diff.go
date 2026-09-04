@@ -116,7 +116,8 @@ func ParseUnifiedDiff(text string) (Diff, bool) {
 	var d Diff
 	var hunk *Hunk
 	var oldLine, newLine int
-	for _, raw := range strings.Split(text, "\n") {
+	raws := strings.Split(text, "\n")
+	for i, raw := range raws {
 		switch {
 		case hunk == nil && strings.HasPrefix(raw, "--- "):
 			d.From = raw[len("--- "):]
@@ -134,6 +135,12 @@ func ParseUnifiedDiff(text string) (Diff, bool) {
 			return Diff{}, false
 		default:
 			content := raw[1:]
+			// Unified diff records preserve a source CRLF as a trailing CR after
+			// splitting on LF. An immediately following no-newline marker instead
+			// means that CR belongs to the unterminated source content.
+			if i+1 == len(raws) || !strings.HasPrefix(raws[i+1], "\\") {
+				content = strings.TrimSuffix(content, "\r")
+			}
 			switch raw[0] {
 			case ' ':
 				hunk.Lines = append(hunk.Lines, DiffLine{Kind: LineContext, OldNumber: oldLine, NewNumber: newLine, Content: content})

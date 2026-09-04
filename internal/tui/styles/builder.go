@@ -117,6 +117,14 @@ func build(isDark bool, p palette) Theme {
 			Reasoning:       lipgloss.NewStyle().Faint(true).Italic(true),
 			ToolName:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
 			ToolDetail:      lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
+			Diff: Diff{
+				Add:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)).Background(lipgloss.Color(p.successSurface)),
+				Del:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)).Background(lipgloss.Color(p.errorSurface)),
+				Context:    lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)),
+				Gutter:     lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
+				Meta:       lipgloss.NewStyle().Faint(true),
+				SyntaxDark: isDark,
+			},
 			// The busy surface is what makes pill() draw caps for an in-flight
 			// chip; without a background it skips them and renders bare text.
 			StatusRunning: lipgloss.NewStyle().Foreground(lipgloss.Color(p.busy)).Background(lipgloss.Color(p.busySurface)),

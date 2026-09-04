@@ -42,6 +42,7 @@ type Chat struct {
 	Reasoning       lipgloss.Style
 	ToolName        lipgloss.Style
 	ToolDetail      lipgloss.Style
+	Diff            Diff
 	StatusRunning   lipgloss.Style
 	StatusSuccess   lipgloss.Style
 	StatusError     lipgloss.Style
@@ -67,6 +68,15 @@ type Chat struct {
 	NoticeInfo  lipgloss.Style
 	NoticeWarn  lipgloss.Style
 	NoticeError lipgloss.Style
+}
+
+type Diff struct {
+	Add        lipgloss.Style
+	Del        lipgloss.Style
+	Context    lipgloss.Style
+	Gutter     lipgloss.Style
+	Meta       lipgloss.Style
+	SyntaxDark bool
 }
 
 // Editor contains editor-specific styles derived from a Theme.

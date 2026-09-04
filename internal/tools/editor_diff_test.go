@@ -208,14 +208,14 @@ func TestEditorInputReducerEditStreamsOnlyAfterCompleteOldText(t *testing.T) {
 	if !ok || partialNew.Phase != filediff.PhaseStreaming || partialNew.Preview == nil || !partialNew.Preview.Pending || partialNew.Preview.Diff == nil {
 		t.Fatalf("partial new_text state = %#v, want pending speculative edit", partialNew)
 	}
-	var deletedOld, addedNew, pending bool
+	var deletedOld, addedNew, pendingMarker bool
 	for _, line := range partialNew.Preview.Diff.AllLines() {
 		deletedOld = deletedOld || line.Kind == filediff.LineDelete && line.Content == "old"
 		addedNew = addedNew || line.Kind == filediff.LineAdd && line.Content == "new"
-		pending = pending || line.Kind == filediff.LinePending
+		pendingMarker = pendingMarker || line.Kind == filediff.LinePending
 	}
-	if !deletedOld || !addedNew || !pending {
-		t.Fatalf("partial new_text diff = %#v, want -old +new and pending tail", partialNew.Preview.Diff.AllLines())
+	if !deletedOld || !addedNew || pendingMarker {
+		t.Fatalf("partial new_text diff = %#v, want -old +new without a synthetic pending line", partialNew.Preview.Diff.AllLines())
 	}
 	completeEdit, ok := reduce(context.Background(), agent.ToolInputUpdate{
 		// The edit array is complete, but the outer object is still streaming.

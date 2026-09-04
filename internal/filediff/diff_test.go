@@ -49,7 +49,7 @@ func TestLineCountMatchesAllLines(t *testing.T) {
 }
 
 func TestParseUnifiedDiffRoundTrip(t *testing.T) {
-	built, display := BuildWithDisplay("a/f.txt", "b/f.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n")
+	built, display := BuildWithDisplay("a/f.txt", "b/f.txt", "one\r\ntwo\r\nthree\r\n", "one\r\nTWO\r\nthree\r\n")
 	parsed, ok := ParseUnifiedDiff(display)
 	if !ok {
 		t.Fatal("ParseUnifiedDiff returned ok=false")

@@ -360,7 +360,6 @@ func editFileInputReducer(r *os.Root) agent.ToolInputReducer {
 		after := filediff.ApplyReplacements(snapshot.Text, replacements)
 		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Text, after)
 		if pending {
-			appendPendingMarker(&diff, "awaiting more input")
 			// Streamed input only ever adds content, so a frame that resolves fewer
 			// lines than the previous one is a transient partial-JSON parse (e.g. a
 			// chunk boundary inside a string escape). Keep the prior preview rather
@@ -451,16 +450,6 @@ func editPreviewKey(edits []filediff.Edit) (int, uint64) {
 		_, _ = h.Write([]byte{0})
 	}
 	return bytes, h.Sum64()
-}
-
-func appendPendingMarker(diff *filediff.Diff, content string) {
-	marker := filediff.DiffLine{Kind: filediff.LinePending, Content: content}
-	if len(diff.Hunks) == 0 {
-		diff.Hunks = []filediff.Hunk{{FromLine: 1, ToLine: 1, Lines: []filediff.DiffLine{marker}}}
-		return
-	}
-	last := &diff.Hunks[len(diff.Hunks)-1]
-	last.Lines = append(last.Lines, marker)
 }
 
 func usableWorkspacePath(value *string) bool {

@@ -38,6 +38,7 @@ type palette struct {
 	busyHot     string
 
 	success         string
+	successSurface  string
 	error           string
 	errorSurface    string
 	feedbackSuccess string
@@ -69,6 +70,7 @@ func darkPalette() palette {
 		busyDim:         "#8A6A1F",
 		busyHot:         "#FFE9A8",
 		success:         "#349C50",
+		successSurface:  "#0A2F10",
 		error:           "#D33043",
 		errorSurface:    "#2F0A0F",
 		feedbackSuccess: "#65A875",
@@ -101,6 +103,7 @@ func lightPalette() palette {
 		busyDim:         "#D9B15C",
 		busyHot:         "#4A3000",
 		success:         "#41C464",
+		successSurface:  "#EAFDED",
 		error:           "#EB364B",
 		errorSurface:    "#FDEBED",
 		feedbackSuccess: "#397A4A",
