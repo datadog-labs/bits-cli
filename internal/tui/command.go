@@ -27,6 +27,7 @@ const (
 	commandResume
 	commandStatus
 	commandWeb
+	commandLogout
 )
 
 type commandDefinition struct {
@@ -63,6 +64,11 @@ var commandDefinitions = []commandDefinition{
 		id:               commandWeb,
 		name:             "web",
 		activeTurnPolicy: commandAllowedDuringTurn,
+	},
+	{
+		id:               commandLogout,
+		name:             "logout",
+		activeTurnPolicy: commandCancelsTurn,
 	},
 }
 
@@ -111,6 +117,9 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, m.showNotice(notice(chat.NoticeError, nil, "Unknown command: /%s", name), 0)
 	}
+	if m.pendingLogout || m.logoutRunning {
+		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Logout is already in progress."), 0)
+	}
 
 	active := m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading
 	if active {
@@ -118,11 +127,17 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		case commandRejectedDuringTurn:
 			return m, m.showNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active turn: /%s", name), 0)
 		case commandCancelsTurn:
-			if definition.id == commandNew {
+			switch definition.id {
+			case commandNew:
 				return m, m.requestNewConversation()
-			}
-			if m.cancelTurn != nil {
-				m.cancelTurn()
+			case commandLogout:
+				return m, m.requestLogout()
+			case commandQuit, commandResume, commandStatus, commandWeb:
+				if m.cancelTurn != nil {
+					m.cancelTurn()
+				}
+			default:
+				panic("unhandled command cancellation policy")
 			}
 		case commandAllowedDuringTurn:
 			// Continue to the handler without disturbing the active turn.
@@ -142,6 +157,8 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, m.openStatus()
 	case commandWeb:
 		return m, m.openConversationInBrowser()
+	case commandLogout:
+		return m, m.startLogout()
 	default:
 		panic("unhandled registered command")
 	}

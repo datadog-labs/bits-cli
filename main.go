@@ -179,6 +179,11 @@ func runLogout(ctx context.Context) error {
 	return nil
 }
 
+func printLoggedOut(w io.Writer) error {
+	_, err := fmt.Fprintln(w, "Logged out of Bits.")
+	return err
+}
+
 func runChat(parent context.Context, opts cmd.ChatOptions) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -202,6 +207,9 @@ func runChat(parent context.Context, opts cmd.ChatOptions) error {
 			return fmt.Errorf("sign in to Datadog: %w", err)
 		}
 		return err
+	}
+	if m.LoggedOut() {
+		return printLoggedOut(os.Stderr)
 	}
 	// On a clean exit with an active conversation, surface how to get back to it.
 	// The conversation id is the server-side handle the Assistant API restores via
@@ -229,7 +237,12 @@ func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth
 	if err != nil {
 		return nil, err
 	}
-	config := tui.Config{Tools: toolSet}
+	config := tui.Config{
+		Tools: toolSet,
+		Logout: func(logoutCtx context.Context) (bool, error, error) {
+			return auth.Logout(logoutCtx, store, nil)
+		},
+	}
 	engineOpts := startup.EngineOptions{
 		Client: startup.ClientOptions{
 			Mode:    opts.AuthMode,

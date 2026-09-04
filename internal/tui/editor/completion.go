@@ -79,6 +79,7 @@ var fakeCommands = []struct {
 	{"resume", nil, "resume a conversation"},
 	{"status", nil, "show session status"},
 	{"web", nil, "open this conversation in Datadog"},
+	{"logout", nil, "sign out from your Datadog account"},
 	{"quit", []string{"exit"}, "exit bits"},
 }
 

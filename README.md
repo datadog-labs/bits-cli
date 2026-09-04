@@ -15,7 +15,16 @@ bits logout
 bits help [command]
 ```
 
-Use `bits --help` for the complete command list or `bits help login` for command-specific help. In-TUI slash commands such as `/new`, `/resume`, `/status`, `/web`, and `/quit` are a separate interactive command surface. `/web` opens the active conversation in the Datadog web app.
+Use `bits --help` for the complete command list or `bits help login` for command-specific help. The TUI has its own slash commands:
+
+| Command | Description |
+| --- | --- |
+| `/new`, `/clear` | Start a new conversation. |
+| `/resume` | Resume an existing conversation. |
+| `/status` | Show the current session status. |
+| `/web` | Open the active conversation in the Datadog web app. |
+| `/logout` | Sign out from your Datadog account and exit Bits. |
+| `/quit`, `/exit` | Exit Bits. |
 
 ## Noninteractive run
 
@@ -91,6 +100,8 @@ bits logout
 ```
 
 Logout removes the local session under the same per-user cross-process lock used by refresh and login, then attempts remote token revocation. The lock identity is stable across process environment changes. A remote revocation outage does not restore the locally deleted session.
+
+Inside the TUI, `/logout` uses the same path and exits after invalidating the current authenticated client. Running `/logout` when no OAuth session is stored is safe.
 
 If Bits reports that the login expired or refresh was rejected, run `bits login` again. An unreadable credential can be cleared with `bits logout` before logging in again. If another process replaced the login with a different site or client, restart Bits to adopt it.
 
