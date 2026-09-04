@@ -18,6 +18,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/components"
+	"github.com/DataDog/bits-cli/internal/tui/escape"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -303,11 +304,11 @@ func relativeUpdatedAt(updatedAt int64, now time.Time) string {
 func (m *Model) SetError(message string, err error) {
 	m.state = StateError
 	m.err = err
-	m.errorMessage = ansi.Truncate(safeDisplay(message), 240, "…")
+	m.errorMessage = ansi.Truncate(escape.SingleLine(message), 240, "…")
 }
 
 func (m *Model) SetWarning(message string) {
-	m.warning = ansi.Truncate(safeDisplay(message), 120, "…")
+	m.warning = ansi.Truncate(escape.SingleLine(message), 120, "…")
 	m.resizeChildren()
 }
 
@@ -515,22 +516,8 @@ func joinWarning(body, warning string) string {
 }
 
 func safeTitle(summary assistant.ConversationSummary) string {
-	if title := safeDisplay(summary.Title); title != "" {
+	if title := escape.SingleLine(summary.Title); title != "" {
 		return title
 	}
 	return "Untitled conversation"
-}
-
-func safeDisplay(value string) string {
-	value = ansi.Strip(value)
-	value = strings.Map(func(r rune) rune {
-		if unicode.In(r, unicode.Cf) {
-			return -1
-		}
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, value)
-	return strings.Join(strings.Fields(value), " ")
 }

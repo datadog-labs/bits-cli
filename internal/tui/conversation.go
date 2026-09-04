@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -14,6 +13,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
+	"github.com/DataDog/bits-cli/internal/tui/escape"
 )
 
 // requestNewConversation defers the reset until the current engine channel is
@@ -290,17 +290,7 @@ func (m *Model) finishConversationOperation() {
 
 func conversationErrorNotice(operation string, err error) chat.Notice {
 	n := noticeForError(operation, err)
-	text := ansi.Strip(n.Text)
-	text = strings.Map(func(r rune) rune {
-		if unicode.In(r, unicode.Cf) {
-			return -1
-		}
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, text)
-	n.Text = ansi.Truncate(strings.Join(strings.Fields(text), " "), 240, "…")
+	n.Text = ansi.Truncate(escape.SingleLine(n.Text), 240, "…")
 	n.Err = nil // never append raw backend detail in the notice bar
 	return n
 }

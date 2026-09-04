@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/escape"
 )
 
 func pickerKey(code rune, text string) tea.KeyPressMsg {
@@ -81,7 +82,7 @@ func TestPickerShowsSearchBarAndMalformedRecordWarning(t *testing.T) {
 	m := New(60, 16)
 	m.SetConversations([]assistant.ConversationSummary{{ConversationID: "one", Title: "One"}})
 	m.SetWarning("1 malformed conversation record omitted")
-	view := safeDisplay(m.View())
+	view := escape.SingleLine(m.View())
 	if !strings.Contains(view, "> Type to search") || !strings.Contains(view, "1 malformed conversation") {
 		t.Fatalf("ready picker guidance = %q", m.View())
 	}
@@ -127,7 +128,7 @@ func TestPickerHelpUsesConciseStateAwareActions(t *testing.T) {
 	}
 	m.SetConversations(summaries)
 
-	view := safeDisplay(m.View())
+	view := escape.SingleLine(m.View())
 	if !strings.Contains(view, "↑/↓ navigate") || strings.Count(view, "navigate") != 1 {
 		t.Fatalf("navigation help should use one combined binding: %q", m.View())
 	}
@@ -151,13 +152,13 @@ func TestPickerHelpUsesConciseStateAwareActions(t *testing.T) {
 	}
 
 	m, _ = m.Update(pickerKey('c', "c"))
-	view = safeDisplay(m.View())
+	view = escape.SingleLine(m.View())
 	if !strings.Contains(view, "esc ×") || strings.Contains(view, "esc clear") || strings.Contains(view, "clear filter") {
 		t.Fatalf("active search should retain the same dismiss label: %q", m.View())
 	}
 
 	m, _ = m.Update(pickerKey(tea.KeyEscape, ""))
-	view = safeDisplay(m.View())
+	view = escape.SingleLine(m.View())
 	if m.Query() != "" || !strings.Contains(view, "esc ×") || strings.Contains(view, "esc clear") {
 		t.Fatalf("cleared search should restore only the cancel action: query=%q view=%q", m.Query(), m.View())
 	}
@@ -166,14 +167,14 @@ func TestPickerHelpUsesConciseStateAwareActions(t *testing.T) {
 func TestPickerHidesPageHelpWithoutPaginationAndExplainsNoMatches(t *testing.T) {
 	m := New(120, 18)
 	m.SetConversations([]assistant.ConversationSummary{{ConversationID: "one", Title: "Alpha"}})
-	if view := safeDisplay(m.View()); strings.Contains(view, "←/→ page") {
+	if view := escape.SingleLine(m.View()); strings.Contains(view, "←/→ page") {
 		t.Fatalf("single-page picker advertised pagination: %q", m.View())
 	}
 
 	for _, r := range "missing" {
 		m, _ = m.Update(pickerKey(r, string(r)))
 	}
-	view := safeDisplay(m.View())
+	view := escape.SingleLine(m.View())
 	if !strings.Contains(view, "No conversations match your search.") {
 		t.Fatalf("zero-match picker = %q", m.View())
 	}
