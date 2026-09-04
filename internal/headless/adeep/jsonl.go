@@ -126,6 +126,7 @@ type Delivery struct {
 	tools            map[string]*toolState
 	toolOrder        []string
 	responseBlockIDs map[agent.BlockID]struct{}
+	lastRev          map[agent.BlockID]int
 }
 
 var _ headless.Delivery = (*Delivery)(nil)
@@ -135,6 +136,7 @@ func New(w io.Writer) *Delivery {
 		w:                w,
 		tools:            make(map[string]*toolState),
 		responseBlockIDs: make(map[agent.BlockID]struct{}),
+		lastRev:          make(map[agent.BlockID]int),
 	}
 }
 
@@ -173,19 +175,36 @@ func (d *Delivery) Consume(ev agent.Event) error {
 	}
 	// The engine's local echo of the user's text precedes any backend send;
 	// it must not open a delivery round on its own.
-	if !isUserEcho(ev) {
+	if ev.Kind != agent.EventTranscript || ev.Origin != agent.TranscriptOriginLocal {
 		if err := d.setRound(ev.Round); err != nil {
 			return err
 		}
 	}
 	switch ev.Kind {
-	case agent.EventBlock:
-		block := ev.Update.Changed
-		if block.Kind == assistant.KindText && block.Role == assistant.RoleAssistant {
-			d.responseBlockIDs[block.ID] = struct{}{}
+	case agent.EventTranscript:
+		// A local echo establishes the run boundary. Its full snapshot can
+		// include history restored before this turn, which must not produce
+		// delivery records or become part of this run's response. Remember its
+		// revisions so the first remote snapshot emits only new changes.
+		if ev.Origin == agent.TranscriptOriginLocal {
+			for _, block := range ev.Transcript.Blocks {
+				d.lastRev[block.ID] = block.Rev
+			}
+			return nil
 		}
-		if block.Tool != nil && block.ToolCallID() != "" {
-			return d.consumeTool(block, ev.Round)
+		for _, block := range ev.Transcript.Blocks {
+			if rev, seen := d.lastRev[block.ID]; seen && rev == block.Rev {
+				continue
+			}
+			d.lastRev[block.ID] = block.Rev
+			if block.Kind == assistant.KindText && block.Role == assistant.RoleAssistant {
+				d.responseBlockIDs[block.ID] = struct{}{}
+			}
+			if block.Tool != nil && block.ToolCallID() != "" {
+				if err := d.consumeTool(block, ev.Round); err != nil {
+					return err
+				}
+			}
 		}
 	case agent.EventUsage:
 		return d.write(usageRecord{envelope: env(typeUsage, ev.Round), Usage: usageOf(ev.Usage)})
@@ -199,15 +218,6 @@ func (d *Delivery) Consume(ev agent.Event) error {
 		// Finish owns the sole terminal record.
 	}
 	return nil
-}
-
-// isUserEcho reports whether ev is the engine's local echo of the user's
-// message, emitted before any backend send. The kind check keeps blocks with
-// an unset role (the zero value is user) from matching.
-func isUserEcho(ev agent.Event) bool {
-	return ev.Kind == agent.EventBlock &&
-		ev.Update.Changed.Kind == assistant.KindText &&
-		ev.Update.Changed.Role == assistant.RoleUser
 }
 
 // consumeTool emits each call and terminal result once. Calls whose arguments

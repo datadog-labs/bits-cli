@@ -228,9 +228,8 @@ func (m *Model) statusConnectivity() statusview.Connectivity {
 // never copied into status state.
 func (m *Model) observeEvent(event agent.Event) {
 	switch event.Kind {
-	case agent.EventBlock:
-		if event.Update.Changed.Role == assistant.RoleAssistant ||
-			(event.Update.Changed == (agent.Block{}) && len(event.Update.Blocks) > 0) {
+	case agent.EventTranscript:
+		if event.Origin != agent.TranscriptOriginLocal {
 			m.markConnected()
 		}
 	case agent.EventUsage, agent.EventConversation, agent.EventTurnDone:

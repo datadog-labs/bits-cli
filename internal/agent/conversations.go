@@ -164,7 +164,7 @@ func (e *Engine) switchConversation(ctx context.Context, conversationID string, 
 	}
 
 	if conversationID == e.ConversationID() {
-		publishTerminal(ConversationSwitchResult{ConversationID: conversationID, Blocks: e.snapshot()})
+		publishTerminal(ConversationSwitchResult{ConversationID: conversationID, Blocks: e.snapshot().Blocks})
 		return
 	}
 
@@ -235,7 +235,7 @@ func (e *Engine) switchConversation(ctx context.Context, conversationID string, 
 
 // Snapshot returns a copy of the current transcript. Call it only while the
 // engine is idle or after synchronizing with the operation's result channel.
-func (e *Engine) Snapshot() []Block     { return e.snapshot() }
+func (e *Engine) Snapshot() []Block     { return e.snapshot().Blocks }
 func (e *Engine) OperationActive() bool { return e.active.Load() }
 
 // validConversationID implements the canonical lowercase UUID spelling emitted

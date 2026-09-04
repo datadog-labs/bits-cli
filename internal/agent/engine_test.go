@@ -81,6 +81,48 @@ func drain(ch <-chan Event) []Event {
 	return evs
 }
 
+func stateBlock(event Event, id string) (Block, bool) {
+	if event.Kind != EventTranscript {
+		return Block{}, false
+	}
+	for _, block := range event.Transcript.Blocks {
+		if block.ToolCallID() == id {
+			return block, true
+		}
+	}
+	return Block{}, false
+}
+
+func stateHasAssistant(event Event) bool {
+	if event.Kind != EventTranscript {
+		return false
+	}
+	for _, block := range event.Transcript.Blocks {
+		if block.Role == assistant.RoleAssistant {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSnapshotDerivesTranscriptViewState(t *testing.T) {
+	e := New(&scriptBackend{}, assistant.SendOptions{})
+	e.transcript.AppendMessage(assistant.AssistantMessage("tool", assistant.ToolCallContent("call-1", "search", "{}")))
+	if _, ok := e.transcript.MarkAwaitingApproval("call-1", ApprovalPrompt{}); !ok {
+		t.Fatal("MarkAwaitingApproval did not update tool")
+	}
+	e.transcript.AppendMessage(assistant.AssistantMessage("text", assistant.TextContent("partial")))
+
+	snapshot := e.snapshot()
+	if !snapshot.HasStreamingContent() {
+		t.Fatal("HasStreamingContent() = false, want true for open assistant text")
+	}
+	pending := snapshot.PendingApprovals()
+	if len(pending) != 1 || pending[0].ToolCallID() != "call-1" {
+		t.Fatalf("PendingApprovals() = %+v, want call-1", pending)
+	}
+}
+
 func kinds(evs []Event) []EventKind {
 	ks := make([]EventKind, len(evs))
 	for i, e := range evs {
@@ -172,11 +214,12 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 	}
 	var final Block
 	for _, event := range events {
-		if event.Kind != EventBlock || event.Update.Changed.ToolCallID() != "call-1" {
+		block, ok := stateBlock(event, "call-1")
+		if !ok {
 			continue
 		}
-		if event.Update.Changed.Tool != nil && event.Update.Changed.Tool.RenderState != nil {
-			final = event.Update.Changed
+		if block.Tool != nil && block.Tool.RenderState != nil {
+			final = block
 		}
 	}
 	state, ok := final.Tool.RenderState.(*streamedInputState)
@@ -266,12 +309,16 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	e := New(b, assistant.SendOptions{})
 
 	evs := drain(e.StartTurn(context.Background(), TurnInput{Message: "hi"}))
-	want := []EventKind{EventBlock, EventBlock, EventBlock, EventUsage, EventConversation, EventTurnDone}
+	want := []EventKind{EventTranscript, EventTranscript, EventTranscript, EventUsage, EventConversation, EventTurnDone}
 	if got := kinds(evs); !reflect.DeepEqual(got, want) {
 		t.Fatalf("event kinds = %v, want %v", got, want)
 	}
-	if changed := evs[2].Update.Changed; changed.Markdown == nil || changed.Markdown.Content != "Hello world" {
-		t.Fatalf("final text block = %+v", changed)
+	if evs[0].Origin != TranscriptOriginLocal || evs[1].Origin != TranscriptOriginRemote {
+		t.Fatalf("transcript origins = %v, %v; want local, remote", evs[0].Origin, evs[1].Origin)
+	}
+	blocks := evs[2].Transcript.Blocks
+	if len(blocks) == 0 || blocks[len(blocks)-1].Markdown == nil || blocks[len(blocks)-1].Markdown.Content != "Hello world" {
+		t.Fatalf("final text blocks = %+v", blocks)
 	}
 	if evs[4].ConvID != "conv-1" {
 		t.Fatalf("conv id = %q, want conv-1", evs[4].ConvID)
@@ -287,7 +334,7 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 	}, assistant.SendOptions{})
 
 	events := drain(e.StartTurn(context.Background(), TurnInput{Message: "question"}))
-	wantKinds := []EventKind{EventBlock, EventBlock, EventConversation, EventError}
+	wantKinds := []EventKind{EventTranscript, EventTranscript, EventConversation, EventError}
 	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
 	}
@@ -399,10 +446,13 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 	e := New(&historyBackend{resp: resp}, assistant.SendOptions{ConversationID: "conv-1"})
 
 	evs := drain(e.Restore(context.Background()))
-	if len(evs) != 1 || evs[0].Kind != EventBlock {
-		t.Fatalf("events = %v, want one EventBlock", kinds(evs))
+	if len(evs) != 1 || evs[0].Kind != EventTranscript {
+		t.Fatalf("events = %v, want one EventTranscript", kinds(evs))
 	}
-	blocks := evs[0].Update.Blocks
+	if evs[0].Origin != TranscriptOriginRestore {
+		t.Fatalf("restore origin = %v, want restore", evs[0].Origin)
+	}
+	blocks := evs[0].Transcript.Blocks
 	if len(blocks) != 3 || blocks[0].Kind != assistant.KindText || blocks[1].Kind != assistant.KindText || blocks[2].Kind != assistant.KindUnknown {
 		t.Fatalf("restored blocks = %+v, want text/text/unknown without technical markers", blocks)
 	}

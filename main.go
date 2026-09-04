@@ -105,13 +105,23 @@ func runEngineTurn(ctx context.Context, engine *agent.Engine, tools *agent.ToolS
 
 	// A headless gated run has no interactive approver. Deny each local gate
 	// and continue so the backend can adjust before the terminal response.
+	// Snapshots repeat every still-pending gate until the engine processes the
+	// deny, so decide each tool call once to avoid overflowing the command queue.
+	denied := make(map[string]struct{})
 	consume := func(event agent.Event) error {
 		if err := delivery.Consume(event); err != nil {
 			return err
 		}
-		if event.Kind == agent.EventBlock {
-			if err := autoDenyApproval(engine.Decide, event.Update.Changed); err != nil {
-				return err
+		if event.Kind == agent.EventTranscript {
+			for _, block := range event.Transcript.PendingApprovals() {
+				id := block.ToolCallID()
+				if _, done := denied[id]; done {
+					continue
+				}
+				if err := autoDenyApproval(engine.Decide, block); err != nil {
+					return err
+				}
+				denied[id] = struct{}{}
 			}
 		}
 		return nil

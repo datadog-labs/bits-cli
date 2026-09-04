@@ -167,7 +167,7 @@ func TestRunTurnConsumerFailureCancelsAndDrains(t *testing.T) {
 	engine := New(backend, assistant.SendOptions{})
 
 	result, err := engine.RunTurn(context.Background(), TurnInput{Message: "question"}, func(event Event) error {
-		if event.Kind == EventBlock && event.Update.Changed.Role == assistant.RoleAssistant {
+		if stateHasAssistant(event) {
 			return consumerErr
 		}
 		return nil

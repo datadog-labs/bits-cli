@@ -109,16 +109,24 @@ func runDelivery(t *testing.T, engine *agent.Engine, tools *agent.ToolSet, out i
 	if err := delivery.Start(headless.Start{StartedAt: time.Now(), RequestedModel: "test-model"}); err != nil {
 		return agent.TurnResult{}, err
 	}
+	denied := make(map[string]struct{})
 	consume := func(event agent.Event) error {
 		if err := delivery.Consume(event); err != nil {
 			return err
 		}
-		if event.Kind == agent.EventBlock {
-			block := event.Update.Changed
-			if block.Tool != nil && block.Tool.Status == agent.ToolAwaitingApproval {
-				if !engine.Decide(block.ToolCallID(), agent.ApprovalDeny) {
-					return errors.New("approval decision for " + block.ToolCallID() + " was not queued")
+		if event.Kind == agent.EventTranscript {
+			for _, block := range event.Transcript.PendingApprovals() {
+				if block.Tool == nil || block.Tool.Status != agent.ToolAwaitingApproval {
+					continue
 				}
+				id := block.ToolCallID()
+				if _, done := denied[id]; done {
+					continue
+				}
+				if !engine.Decide(id, agent.ApprovalDeny) {
+					return errors.New("approval decision for " + id + " was not queued")
+				}
+				denied[id] = struct{}{}
 			}
 		}
 		return nil
@@ -210,9 +218,10 @@ func TestDeliveryResponseOnlyIncludesObservedRunBlocks(t *testing.T) {
 	}
 	current := deliveryTextBlock("current", "current answer")
 	if err := delivery.Consume(agent.Event{
-		Kind:   agent.EventBlock,
-		Round:  1,
-		Update: agent.TranscriptUpdate{Changed: current},
+		Kind:       agent.EventTranscript,
+		Round:      1,
+		Origin:     agent.TranscriptOriginRemote,
+		Transcript: agent.TranscriptSnapshot{Blocks: []agent.Block{current}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +236,96 @@ func TestDeliveryResponseOnlyIncludesObservedRunBlocks(t *testing.T) {
 	finished := records[len(records)-1]
 	if finished["response"] != "current answer" {
 		t.Fatalf("response = %v, want only the block observed during this run", finished["response"])
+	}
+}
+
+func TestDeliveryLocalSnapshotBaselinesRestoredHistory(t *testing.T) {
+	var out bytes.Buffer
+	delivery := New(&out)
+	if err := delivery.Start(headless.Start{}); err != nil {
+		t.Fatal(err)
+	}
+
+	prior := deliveryTextBlock("prior", "prior answer")
+	user := agent.Block{
+		ID:       agent.BlockID{Scope: agent.ScopeLocal, Key: "1"},
+		Role:     assistant.RoleUser,
+		Kind:     assistant.KindText,
+		Markdown: assistant.TextContent("new question").Markdown,
+		Complete: true,
+	}
+	if err := delivery.Consume(agent.Event{
+		Kind:       agent.EventTranscript,
+		Origin:     agent.TranscriptOriginLocal,
+		Transcript: agent.TranscriptSnapshot{Blocks: []agent.Block{prior, user}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	current := deliveryTextBlock("current", "current answer")
+	if err := delivery.Consume(agent.Event{
+		Kind:       agent.EventTranscript,
+		Round:      1,
+		Origin:     agent.TranscriptOriginRemote,
+		Transcript: agent.TranscriptSnapshot{Blocks: []agent.Block{prior, user, current}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := delivery.Finish(headless.Finish{Result: agent.TurnResult{
+		Outcome: agent.TurnOutcomeCompleted,
+		Blocks:  []agent.Block{prior, user, current},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	records := parseDelivery(t, out.String())
+	finished := records[len(records)-1]
+	if finished["response"] != "current answer" {
+		t.Fatalf("response = %v, want only the current run's answer", finished["response"])
+	}
+}
+
+func TestDeliveryReconcilesEveryTerminalToolInState(t *testing.T) {
+	var out bytes.Buffer
+	delivery := New(&out)
+	if err := delivery.Start(headless.Start{}); err != nil {
+		t.Fatal(err)
+	}
+
+	toolBlock := func(id, name, output string) agent.Block {
+		tool := agent.ToolBlockOf(assistant.ToolCallContent(id, name, "{}").Tool)
+		tool.Status = agent.ToolSuccess
+		tool.Output = output
+		return agent.Block{
+			ID:   agent.BlockID{Scope: agent.ScopeTool, Key: id},
+			Kind: assistant.KindToolCall,
+			Tool: &tool,
+		}
+	}
+	state := []agent.Block{
+		toolBlock("tool-a", "read", "a"),
+		toolBlock("tool-b", "write", "b"),
+	}
+	if err := delivery.Consume(agent.Event{Kind: agent.EventTranscript, Round: 1, Origin: agent.TranscriptOriginRemote, Transcript: agent.TranscriptSnapshot{Blocks: state}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := delivery.Finish(headless.Finish{Result: agent.TurnResult{
+		Outcome: agent.TurnOutcomeCompleted,
+		Blocks:  state,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	results := map[string]bool{}
+	for _, record := range parseDelivery(t, out.String()) {
+		if record["type"] == "tool.result" {
+			results[toolOf(t, record)["id"].(string)] = true
+		}
+	}
+	for _, id := range []string{"tool-a", "tool-b"} {
+		if !results[id] {
+			t.Errorf("state reconciliation did not emit a terminal result for %q", id)
+		}
 	}
 }
 
@@ -420,13 +519,14 @@ func TestDeliveryFlushesEmptyArgumentPendingCallAtFinish(t *testing.T) {
 	}
 	block := agent.ToolBlockOf(assistant.ToolCallContent("pending-1", "search_logs", "").Tool)
 	if err := delivery.Consume(agent.Event{
-		Kind:  agent.EventBlock,
-		Round: 1,
-		Update: agent.TranscriptUpdate{Changed: agent.Block{
+		Kind:   agent.EventTranscript,
+		Round:  1,
+		Origin: agent.TranscriptOriginRemote,
+		Transcript: agent.TranscriptSnapshot{Blocks: []agent.Block{{
 			ID:   agent.BlockID{Scope: agent.ScopeTool, Key: "pending-1"},
 			Kind: assistant.KindToolCall,
 			Tool: &block,
-		}},
+		}}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -668,9 +768,9 @@ func TestDeliveryReportsNoRoundWithoutBackendSend(t *testing.T) {
 	}
 	userEcho := agent.Block{Role: assistant.RoleUser, Kind: assistant.KindText, Markdown: assistant.TextContent("investigate").Markdown}
 	if err := delivery.Consume(agent.Event{
-		Kind:   agent.EventBlock,
-		Round:  1,
-		Update: agent.TranscriptUpdate{Changed: userEcho},
+		Kind:       agent.EventTranscript,
+		Origin:     agent.TranscriptOriginLocal,
+		Transcript: agent.TranscriptSnapshot{Blocks: []agent.Block{userEcho}},
 	}); err != nil {
 		t.Fatal(err)
 	}

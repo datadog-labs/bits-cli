@@ -9,7 +9,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/browser"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
@@ -590,14 +589,10 @@ func (m *Model) cancelRemote() {
 func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
-	case agent.EventBlock:
-		m.blocks = ev.Update.Blocks
-		m.updatePendingApprovals()
-		// A still-open text/reasoning block means tokens are arriving. Restored
-		// (Complete) blocks and the bulk restore snapshot (zero Changed) don't
-		// flip the phase, so restore stays in PhaseLoading until its channel closes.
-		if k := ev.Update.Changed.Kind; !ev.Update.Changed.Complete &&
-			(k == assistant.KindText || k == assistant.KindReasoning) {
+	case agent.EventTranscript:
+		m.blocks = ev.Transcript.Blocks
+		m.updatePendingApprovals(ev.Transcript.PendingApprovals())
+		if ev.Transcript.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}
 	case agent.EventUsage:
@@ -624,17 +619,12 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	return nil
 }
 
-func (m *Model) updatePendingApprovals() {
+func (m *Model) updatePendingApprovals(pending []agent.Block) {
 	current := ""
 	if len(m.pendingApprovals) > 0 {
 		current = m.pendingApprovals[0].ToolCallID()
 	}
-	m.pendingApprovals = m.pendingApprovals[:0]
-	for _, block := range m.blocks {
-		if block.Tool != nil && block.Tool.Status == agent.ToolAwaitingApproval {
-			m.pendingApprovals = append(m.pendingApprovals, block)
-		}
-	}
+	m.pendingApprovals = pending
 	if len(m.pendingApprovals) == 0 || m.pendingApprovals[0].ToolCallID() != current {
 		m.approvalChoice = 0
 	}

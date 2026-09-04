@@ -793,7 +793,8 @@ func waitForToolStatusEvents(t *testing.T, events <-chan Event, id string, statu
 	var received []Event
 	for event := range events {
 		received = append(received, event)
-		if event.Kind == EventBlock && event.Update.Changed.ToolCallID() == id && event.Update.Changed.Tool.Status == status {
+		block, ok := stateBlock(event, id)
+		if ok && block.Tool != nil && block.Tool.Status == status {
 			return received
 		}
 	}
@@ -803,7 +804,8 @@ func waitForToolStatusEvents(t *testing.T, events <-chan Event, id string, statu
 
 func hasToolStatus(events []Event, id string, status ToolStatus) bool {
 	for _, event := range events {
-		if event.Kind == EventBlock && event.Update.Changed.ToolCallID() == id && event.Update.Changed.Tool.Status == status {
+		block, ok := stateBlock(event, id)
+		if ok && block.Tool != nil && block.Tool.Status == status {
 			return true
 		}
 	}
@@ -815,8 +817,8 @@ func hasToolStatus(events []Event, id string, status ToolStatus) bool {
 func hasDeniedToolBlock(t *testing.T, events []Event, id string) bool {
 	t.Helper()
 	for _, event := range events {
-		block := event.Update.Changed
-		if event.Kind != EventBlock || block.ToolCallID() != id || block.Tool == nil {
+		block, ok := stateBlock(event, id)
+		if !ok || block.Tool == nil {
 			continue
 		}
 		if block.Tool.Status == ToolError && block.Tool.Denied {
@@ -829,8 +831,8 @@ func hasDeniedToolBlock(t *testing.T, events []Event, id string) bool {
 func assertToolResult(t *testing.T, events []Event, id, title string) {
 	t.Helper()
 	for i := len(events) - 1; i >= 0; i-- {
-		block := events[i].Update.Changed
-		if block.ToolCallID() != id {
+		block, ok := stateBlock(events[i], id)
+		if !ok {
 			continue
 		}
 		if block.Tool == nil || block.Tool.Status != ToolError || block.Tool.Title != title {

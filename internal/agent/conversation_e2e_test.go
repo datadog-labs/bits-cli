@@ -33,7 +33,7 @@ func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 	firstTurn := e.StartTurn(turnCtx, TurnInput{Message: "Count from 1 to 200, with one number per line."})
 	cancelledActiveTurn := false
 	for event := range firstTurn {
-		if !cancelledActiveTurn && event.Kind == EventBlock && event.Update.Changed.Role == assistant.RoleAssistant {
+		if !cancelledActiveTurn && stateHasAssistant(event) {
 			cancelledActiveTurn = true
 			cancelTurn()
 		}

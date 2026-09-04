@@ -42,33 +42,66 @@ type CurrentUserBackend interface {
 type EventKind int
 
 const (
-	EventBlock        EventKind = iota // a block was created or updated; read Block
+	EventTranscript   EventKind = iota // full transcript snapshot; read Transcript
 	EventUsage                         // token usage update; read Usage
 	EventConversation                  // server-assigned/confirmed conversation id
 	EventTurnDone                      // the turn completed with no pending tool calls
 	EventError                         // the turn failed
 )
 
+// TranscriptOrigin identifies what caused an EventTranscript snapshot.
+type TranscriptOrigin int
+
+const (
+	TranscriptOriginLocal   TranscriptOrigin = iota // local user echo, before a backend send
+	TranscriptOriginRemote                          // a backend turn or its client-tool work
+	TranscriptOriginRestore                         // restored conversation history
+)
+
+// TranscriptSnapshot is a read-only view of the complete renderable transcript.
+// Its query methods centralize common block traversal and may gain indexes or
+// cached values without changing event consumers.
+type TranscriptSnapshot struct {
+	Blocks []Block
+}
+
+// HasStreamingContent reports whether an assistant text or reasoning block is
+// still open.
+func (s TranscriptSnapshot) HasStreamingContent() bool {
+	for _, block := range s.Blocks {
+		if !block.Complete && (block.Kind == assistant.KindText || block.Kind == assistant.KindReasoning) {
+			return true
+		}
+	}
+	return false
+}
+
+// PendingApprovals returns tool blocks awaiting an approval decision, in
+// transcript order.
+func (s TranscriptSnapshot) PendingApprovals() []Block {
+	var pending []Block
+	for _, block := range s.Blocks {
+		if block.Tool != nil && block.Tool.Status == ToolAwaitingApproval {
+			pending = append(pending, block)
+		}
+	}
+	return pending
+}
+
 // Event is one thing that happened during a turn. It is a plain value carried
 // on a channel, with only the fields relevant to Kind populated.
 type Event struct {
 	Kind           EventKind
-	Update         TranscriptUpdate // for EventBlock
-	Usage          *assistant.Usage // for EventUsage
-	ConvID         string           // for EventConversation
-	Err            error            // for EventError
-	BackendFailure bool             // EventError originated at the Assistant backend boundary
+	Transcript     TranscriptSnapshot // for EventTranscript; read-only full transcript snapshot
+	Origin         TranscriptOrigin   // for EventTranscript
+	Usage          *assistant.Usage   // for EventUsage
+	ConvID         string             // for EventConversation
+	Err            error              // for EventError
+	BackendFailure bool               // EventError originated at the Assistant backend boundary
 	// Round is the 1-based backend send the event belongs to (0 for
 	// out-of-turn events). Drained rounds after a denial count but emit
 	// no content events.
 	Round int
-}
-
-// TranscriptUpdate is the snapshot delivered on each block change: the full
-// ordered block list plus the block that changed.
-type TranscriptUpdate struct {
-	Blocks  []Block
-	Changed Block
 }
 
 // maxTurns caps the client-tool loop so a misbehaving backend can't spin
@@ -265,7 +298,7 @@ func (e *Engine) run(
 			completion.Err = ctx.Err()
 		}
 		completion.ConversationID = e.opts.ConversationID
-		completion.Blocks = e.snapshot()
+		completion.Blocks = e.snapshot().Blocks
 		e.active.Store(false)
 		completionOut <- completion
 		close(completionOut)
@@ -287,9 +320,8 @@ func (e *Engine) run(
 	}
 
 	// The user's turn opens the transcript; the engine owns the user block too.
-	userBlock := e.transcript.AppendUser(in.Message)
-	userBlocks := append([]Block(nil), e.transcript.Blocks()...)
-	if !send(Event{Kind: EventBlock, Round: 1, Update: TranscriptUpdate{Blocks: userBlocks, Changed: userBlock}}) {
+	e.transcript.AppendUser(in.Message)
+	if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
 		return
 	}
 
@@ -301,6 +333,9 @@ func (e *Engine) run(
 
 		emit := func(ev Event) bool {
 			ev.Round = round
+			if ev.Kind == EventTranscript {
+				ev.Origin = TranscriptOriginRemote
+			}
 			return send(ev)
 		}
 		fold := func(msg assistant.Message) bool {
@@ -313,11 +348,8 @@ func (e *Engine) run(
 				// update is folded. This ordering lets the emitted snapshot carry
 				// the reducer's state and keeps filesystem-aware reducers ahead of
 				// client-tool execution.
-				if reduced, reducedOK := e.reduceToolInput(ctx, tools, msg, b); reducedOK {
-					b = reduced
-				}
-				blocks := append([]Block(nil), e.transcript.Blocks()...)
-				if !emit(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: blocks, Changed: b}}) {
+				e.reduceToolInput(ctx, tools, msg, b)
+				if !emit(Event{Kind: EventTranscript, Transcript: e.snapshot()}) {
 					return false
 				}
 			}
@@ -357,9 +389,11 @@ func (e *Engine) run(
 			// the more specific diagnostic in the authoritative completion.
 			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
 				completion.Err = err
-				e.finalizeTranscript()
-				if id != "" && !emit(Event{Kind: EventConversation, ConvID: id}) {
-					return
+				e.transcript.FinalizeAll()
+				if id != "" {
+					if !emit(Event{Kind: EventConversation, ConvID: id}) {
+						return
+					}
 				}
 				emit(Event{Kind: EventError, Err: err, BackendFailure: true})
 				return
@@ -374,7 +408,7 @@ func (e *Engine) run(
 		emit(Event{Kind: EventConversation, ConvID: convID})
 
 		if len(calls) == 0 {
-			e.finalizeTranscript()
+			e.transcript.FinalizeAll()
 			completion.Completed = emit(Event{Kind: EventTurnDone})
 			return
 		}
@@ -382,7 +416,7 @@ func (e *Engine) run(
 		if err != nil {
 			completion.Err = err
 			completion.Denied = completion.Denied || toolRound.denied
-			e.finalizeTranscript()
+			e.transcript.FinalizeAll()
 			emit(Event{Kind: EventError, Err: err})
 			return
 		}
@@ -398,21 +432,21 @@ func (e *Engine) run(
 				}
 				if err != nil && (ctx.Err() == nil || !errors.Is(err, ctx.Err())) {
 					completion.Err = err
-					e.finalizeTranscript()
+					e.transcript.FinalizeAll()
 					send(Event{Kind: EventError, Round: terminalRound, Err: err, BackendFailure: true})
 					return
 				}
 				if ctx.Err() != nil {
 					return // cancelled: end the turn quietly
 				}
-				e.finalizeTranscript()
+				e.transcript.FinalizeAll()
 				completion.Completed = send(Event{Kind: EventTurnDone, Round: terminalRound})
 			}
 			return
 		}
 		if !toolRound.complete {
 			if ctx.Err() == nil {
-				e.finalizeTranscript()
+				e.transcript.FinalizeAll()
 				completion.Completed = emit(Event{Kind: EventTurnDone})
 			}
 			return
@@ -420,7 +454,7 @@ func (e *Engine) run(
 		next = toolRound.responses
 	}
 	completion.Err = ErrMaxTurns
-	e.finalizeTranscript()
+	e.transcript.FinalizeAll()
 	send(Event{Kind: EventError, Round: maxTurns, Err: ErrMaxTurns})
 }
 
@@ -501,12 +535,11 @@ func cloneInt(value *int) *int {
 
 // snapshot returns a copy of the current blocks, safe to send on the channel and
 // retain: the engine keeps mutating its own transcript on later folds.
-func (e *Engine) snapshot() []Block {
-	return append([]Block(nil), e.transcript.Blocks()...)
-}
-
-func (e *Engine) finalizeTranscript() {
-	e.transcript.FinalizeAll()
+func (e *Engine) snapshot() TranscriptSnapshot {
+	blocks := e.transcript.Blocks()
+	snapshot := TranscriptSnapshot{Blocks: make([]Block, len(blocks))}
+	copy(snapshot.Blocks, blocks)
+	return snapshot
 }
 
 // ConversationID reports the conversation the engine is bound to. It is set
@@ -605,8 +638,8 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 		e.transcript.AppendMessage(msg)
 	}
 	e.transcript.FinalizeAll()
-	if blocks := e.snapshot(); len(blocks) > 0 {
-		send(Event{Kind: EventBlock, Update: TranscriptUpdate{Blocks: blocks}})
+	if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
+		send(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
 	}
 }
 
@@ -645,43 +678,31 @@ func (e *Engine) runTools(
 	denied := false
 	stopRequested := false
 
-	emit := func(block Block, ok bool) bool {
-		return !ok || send(Event{
-			Kind: EventBlock,
-			Update: TranscriptUpdate{
-				Blocks:  e.snapshot(),
-				Changed: block,
-			},
-		})
-	}
-	finishBlock := func(item pendingTool, result ToolResult) bool {
+	completeTool := func(item pendingTool, result ToolResult) bool {
 		if resolved[item.call.ID] {
 			return true
 		}
 		resolved[item.call.ID] = true
 		outstanding--
-		result = tools.NormalizeResult(item.call, result)
-		block, ok := e.transcript.MarkToolExecuted(item.call.ID, result)
-		return emit(block, ok)
-	}
-	record := func(item pendingTool, result ToolResult) bool {
 		responses[item.index] = toolResponse(item.call, result)
-		return finishBlock(item, result)
-	}
-	// deny answers a gate refusal on the wire.
-	deny := func(item pendingTool, result ToolResult) bool {
-		denied = true
-		return record(item, result)
+		result = tools.NormalizeResult(item.call, result)
+		_, updated := e.transcript.MarkToolExecuted(item.call.ID, result)
+		if !updated {
+			return true
+		}
+		return send(Event{Kind: EventTranscript, Transcript: e.snapshot()})
 	}
 	launch := func(item pendingTool, approved bool) bool {
 		toolCtx, cancel := context.WithCancel(ctx)
 		running[item.call.ID] = cancel
 		if approved {
-			block, ok := e.transcript.MarkToolRunning(item.call.ID)
-			if !emit(block, ok) {
-				cancel()
-				delete(running, item.call.ID)
-				return false
+			_, updated := e.transcript.MarkToolRunning(item.call.ID)
+			if updated {
+				if !send(Event{Kind: EventTranscript, Transcript: e.snapshot()}) {
+					cancel()
+					delete(running, item.call.ID)
+					return false
+				}
 			}
 		}
 		go func() {
@@ -700,7 +721,7 @@ func (e *Engine) runTools(
 	stopPendingAfterDenial := func() bool {
 		for id, item := range pending {
 			delete(pending, id)
-			if !record(item, cancelledResult()) {
+			if !completeTool(item, cancelledResult()) {
 				cancelRunning()
 				return false
 			}
@@ -717,7 +738,7 @@ func (e *Engine) runTools(
 			if failed != nil && item.call.ID == failed.call.ID {
 				result = ToolResult{Title: "Tool failed", Output: err.Error(), IsError: true}
 			}
-			finishBlock(item, result)
+			completeTool(item, result)
 		}
 	}
 
@@ -726,12 +747,13 @@ func (e *Engine) runTools(
 			// A protocol gate, not a registered tool. Gated mode denies it with
 			// no interactive decision; the TUI flow is tracked in BCLI-41.
 			if tools.ApprovesServerGate() {
-				if !record(item, approvedResult()) {
+				if !completeTool(item, approvedResult()) {
 					cancelRunning()
 					return toolRound{denied: denied}, nil
 				}
 			} else {
-				if !deny(item, serverDeniedResult()) {
+				denied = true
+				if !completeTool(item, serverDeniedResult()) {
 					cancelRunning()
 					return toolRound{denied: denied}, nil
 				}
@@ -748,7 +770,7 @@ func (e *Engine) runTools(
 		_, granted := e.sessionGrants[requirement.Key]
 		if needsApproval && !granted {
 			if stopRequested {
-				if !record(item, cancelledResult()) {
+				if !completeTool(item, cancelledResult()) {
 					cancelRunning()
 					return toolRound{denied: denied}, nil
 				}
@@ -756,10 +778,12 @@ func (e *Engine) runTools(
 			}
 			item.key = requirement.Key
 			pending[item.call.ID] = item
-			block, ok := e.transcript.MarkAwaitingApproval(item.call.ID, requirement.Prompt)
-			if !emit(block, ok) {
-				cancelRunning()
-				return toolRound{denied: denied}, nil
+			_, updated := e.transcript.MarkAwaitingApproval(item.call.ID, requirement.Prompt)
+			if updated {
+				if !send(Event{Kind: EventTranscript, Transcript: e.snapshot()}) {
+					cancelRunning()
+					return toolRound{denied: denied}, nil
+				}
 			}
 			continue
 		}
@@ -778,7 +802,7 @@ func (e *Engine) runTools(
 			if command.cancel {
 				if item, ok := pending[command.id]; ok {
 					delete(pending, command.id)
-					if !record(item, cancelledResult()) {
+					if !completeTool(item, cancelledResult()) {
 						cancelRunning()
 						return toolRound{denied: denied}, nil
 					}
@@ -787,7 +811,7 @@ func (e *Engine) runTools(
 				if cancel, ok := running[command.id]; ok {
 					cancel()
 					delete(running, command.id)
-					if !record(byID[command.id], cancelledResult()) {
+					if !completeTool(byID[command.id], cancelledResult()) {
 						cancelRunning()
 						return toolRound{denied: denied}, nil
 					}
@@ -803,7 +827,8 @@ func (e *Engine) runTools(
 			if command.decision == ApprovalDeny {
 				// Answer the denial on the wire; siblings still resolve. Under
 				// DenyStop the round then aborts without a follow-up round.
-				if !deny(item, deniedResult()) {
+				denied = true
+				if !completeTool(item, deniedResult()) {
 					cancelRunning()
 					return toolRound{denied: denied}, nil
 				}
@@ -845,7 +870,7 @@ func (e *Engine) runTools(
 			if done.err != nil {
 				if stopRequested || denied {
 					// Record the failure so the round's batch still gets answered.
-					if !record(item, ToolResult{Title: "Tool failed", Output: done.err.Error(), IsError: true}) {
+					if !completeTool(item, ToolResult{Title: "Tool failed", Output: done.err.Error(), IsError: true}) {
 						cancelRunning()
 						return toolRound{denied: denied}, nil
 					}
@@ -854,7 +879,7 @@ func (e *Engine) runTools(
 				stopRound(&item, done.err)
 				return toolRound{denied: denied}, done.err
 			}
-			if !record(item, done.result) {
+			if !completeTool(item, done.result) {
 				cancelRunning()
 				return toolRound{denied: denied}, nil
 			}
