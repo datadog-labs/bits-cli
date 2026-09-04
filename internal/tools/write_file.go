@@ -95,7 +95,7 @@ func writeFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 		}
 		if before.State == filediff.SnapshotReady || before.State == filediff.SnapshotMissing {
 			previous := before.Raw
-			renderDiff, display := filediff.BuildWithDisplay("a/"+filePath, "b/"+filePath, previous, *args.Content, maxEditorDiffLines)
+			renderDiff, display := filediff.BuildWithDisplay("a/"+filePath, "b/"+filePath, previous, *args.Content)
 			result.Display = display
 			result.RenderState = agent.ReplaceRenderState(appliedEditorState(filePath, operation, renderDiff))
 		} else {

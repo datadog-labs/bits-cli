@@ -266,6 +266,23 @@ func TestWriteFileDisplayPreservesExactBOMAndLineEndingChanges(t *testing.T) {
 	}
 }
 
+func TestWriteFileAppliedDiffKeepsAllLines(t *testing.T) {
+	dir := t.TempDir()
+	tool, _ := newWriteTool(t, dir)
+	content := strings.Repeat("line\n", 2_001)
+	result := invokeWrite(t, tool, map[string]any{"path": "f.txt", "content": content})
+	if result.IsError || result.RenderState == nil {
+		t.Fatalf("result = %#v, want applied render state", result)
+	}
+	state, ok := result.RenderState.State.(*filediff.State)
+	if !ok || state.Change == nil || state.Change.Diff == nil {
+		t.Fatalf("state = %#v, want applied change diff", result.RenderState.State)
+	}
+	if got, want := state.Change.Diff.LineCount(), 2_001; got != want {
+		t.Fatalf("applied diff has %d lines, want %d", got, want)
+	}
+}
+
 func TestWriteFileRendersMixedEndingsAndBareCRPreimages(t *testing.T) {
 	for _, test := range []struct {
 		name       string

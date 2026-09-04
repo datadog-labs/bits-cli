@@ -39,9 +39,9 @@ const (
 	PreviewEdit
 )
 
-// Preview is bounded presentation data for a speculative change. Pending is
-// used only for an incomplete write prefix, where a normal Before/After diff
-// would falsely represent unreceived content as deleted.
+// Preview is presentation data for a speculative change. Pending is used only
+// for an incomplete write prefix, where a normal Before/After diff would
+// falsely represent unreceived content as deleted.
 type Preview struct {
 	Kind PreviewKind
 	Diff *Diff
@@ -52,7 +52,7 @@ type Preview struct {
 	InputPrefixBytes int
 	InputPrefixHash  uint64
 	Pending          bool
-	Truncated        bool
+	InputTruncated   bool
 }
 
 // Op identifies the mutation represented by a final change.
@@ -72,8 +72,8 @@ const (
 	ChangeUnavailable
 )
 
-// Change is a handler-authoritative mutation result. Diff is bounded for
-// presentation; the complete persisted diff belongs in the tool Display field.
+// Change is a handler-authoritative mutation result. The complete persisted
+// unified diff also belongs in the tool Display field.
 type Change struct {
 	Path  string
 	Op    Op

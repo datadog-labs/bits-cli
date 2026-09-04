@@ -5,7 +5,7 @@ import (
 )
 
 func TestBuildUnifiedDiffLines(t *testing.T) {
-	diff := Build("a/f.txt", "b/f.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n", 0)
+	diff := Build("a/f.txt", "b/f.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n")
 	if diff.Additions != 1 || diff.Deletions != 1 {
 		t.Fatalf("counts = +%d -%d, want +1 -1", diff.Additions, diff.Deletions)
 	}
@@ -28,7 +28,7 @@ func TestBuildUnifiedDiffLines(t *testing.T) {
 }
 
 func TestBuildWithDisplayRawUnifiedDiff(t *testing.T) {
-	renderDiff, display := BuildWithDisplay("a/f.txt", "b/f.txt", "before\n", "after\n", 0)
+	renderDiff, display := BuildWithDisplay("a/f.txt", "b/f.txt", "before\n", "after\n")
 	if len(renderDiff.Hunks) != 1 {
 		t.Fatalf("render diff = %#v", renderDiff)
 	}
@@ -39,7 +39,7 @@ func TestBuildWithDisplayRawUnifiedDiff(t *testing.T) {
 }
 
 func TestLineCountMatchesAllLines(t *testing.T) {
-	diff := Build("a/f.txt", "b/f.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\nfour\n", 0)
+	diff := Build("a/f.txt", "b/f.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\nfour\n")
 	if got, want := diff.LineCount(), len(diff.AllLines()); got != want {
 		t.Fatalf("LineCount() = %d, want %d", got, want)
 	}
@@ -49,7 +49,7 @@ func TestLineCountMatchesAllLines(t *testing.T) {
 }
 
 func TestParseUnifiedDiffRoundTrip(t *testing.T) {
-	built, display := BuildWithDisplay("a/f.txt", "b/f.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n", 0)
+	built, display := BuildWithDisplay("a/f.txt", "b/f.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n")
 	parsed, ok := ParseUnifiedDiff(display)
 	if !ok {
 		t.Fatal("ParseUnifiedDiff returned ok=false")
@@ -80,7 +80,7 @@ func TestParseUnifiedDiffRejectsNonDiff(t *testing.T) {
 }
 
 func TestBuildPreservesStructuredHunksAndNoFinalNewline(t *testing.T) {
-	diff := Build("a/f.txt", "b/f.txt", "old", "new", 0)
+	diff := Build("a/f.txt", "b/f.txt", "old", "new")
 	if len(diff.Hunks) != 1 || len(diff.AllLines()) < 4 {
 		t.Fatalf("structured diff = %#v", diff)
 	}
@@ -92,10 +92,5 @@ func TestBuildPreservesStructuredHunksAndNoFinalNewline(t *testing.T) {
 	}
 	if noNewline != 2 {
 		t.Fatalf("no-final-newline markers = %d, want 2", noNewline)
-	}
-
-	bounded := Build("a/f.txt", "b/f.txt", "old", "new", 3)
-	if !bounded.Truncated || bounded.Omitted == 0 {
-		t.Fatalf("bound = truncated=%v omitted=%d", bounded.Truncated, bounded.Omitted)
 	}
 }

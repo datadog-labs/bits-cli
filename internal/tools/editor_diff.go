@@ -15,8 +15,6 @@ import (
 	"github.com/DataDog/bits-cli/internal/filediff"
 )
 
-const maxEditorDiffLines = 2_000
-
 type editorInput struct {
 	Path        *string
 	Content     *string
@@ -269,9 +267,9 @@ func decodeJSONString(value jsontext.Value) (string, bool) {
 	return "", false
 }
 
-// writeFileInputReducer creates speculative, bounded write_file state from an
-// append-only argument prefix. It deliberately does not acquire the mutation
-// lock: a preview is informational only, while handlers remain authoritative.
+// writeFileInputReducer creates speculative write_file state from an append-only
+// argument prefix. It deliberately does not acquire the mutation lock: a
+// preview is informational only, while handlers remain authoritative.
 func writeFileInputReducer(r *os.Root) agent.ToolInputReducer {
 	return func(ctx context.Context, update agent.ToolInputUpdate, prior any) any {
 		previous, _ := prior.(*filediff.State)
@@ -293,27 +291,27 @@ func writeFileInputReducer(r *os.Root) agent.ToolInputReducer {
 			if streamPreviewUnchanged(previous, filediff.PreviewWritePrefix, bytes, hash, update.PreviewTruncated) {
 				return previous
 			}
-			prefixDiff := writePrefixDiff(filePath, content, maxEditorDiffLines)
+			prefixDiff := writePrefixDiff(filePath, content)
 			state.Preview = &filediff.Preview{
 				Kind:             filediff.PreviewWritePrefix,
 				Diff:             &prefixDiff,
 				InputPrefixBytes: bytes,
 				InputPrefixHash:  hash,
 				Pending:          true,
-				Truncated:        update.PreviewTruncated || prefixDiff.Truncated,
+				InputTruncated:   update.PreviewTruncated,
 			}
 			return state
 		}
 		state.Phase = filediff.PhaseReady
-		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Raw, content, maxEditorDiffLines)
-		state.Preview = &filediff.Preview{Kind: filediff.PreviewWritePrefix, Diff: &diff, Truncated: update.PreviewTruncated || diff.Truncated}
+		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Raw, content)
+		state.Preview = &filediff.Preview{Kind: filediff.PreviewWritePrefix, Diff: &diff, InputTruncated: update.PreviewTruncated}
 		return state
 	}
 }
 
-// editFileInputReducer creates speculative, bounded edit_file state from an
-// append-only argument prefix. Like the write reducer it never acquires the
-// mutation lock; the handler re-reads authoritatively beneath it.
+// editFileInputReducer creates speculative edit_file state from an append-only
+// argument prefix. Like the write reducer it never acquires the mutation lock;
+// the handler re-reads authoritatively beneath it.
 func editFileInputReducer(r *os.Root) agent.ToolInputReducer {
 	return func(ctx context.Context, update agent.ToolInputUpdate, prior any) any {
 		previous, _ := prior.(*filediff.State)
@@ -360,7 +358,7 @@ func editFileInputReducer(r *os.Root) agent.ToolInputReducer {
 			return state
 		}
 		after := filediff.ApplyReplacements(snapshot.Text, replacements)
-		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Text, after, maxEditorDiffLines)
+		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Text, after)
 		if pending {
 			appendPendingMarker(&diff, "awaiting more input")
 			// Streamed input only ever adds content, so a frame that resolves fewer
@@ -373,7 +371,7 @@ func editFileInputReducer(r *os.Root) agent.ToolInputReducer {
 		} else {
 			state.Phase = filediff.PhaseReady
 		}
-		state.Preview = &filediff.Preview{Kind: filediff.PreviewEdit, Diff: &diff, InputPrefixBytes: bytes, InputPrefixHash: hash, Pending: pending, Truncated: update.PreviewTruncated || diff.Truncated}
+		state.Preview = &filediff.Preview{Kind: filediff.PreviewEdit, Diff: &diff, InputPrefixBytes: bytes, InputPrefixHash: hash, Pending: pending, InputTruncated: update.PreviewTruncated}
 		return state
 	}
 }
@@ -386,8 +384,8 @@ func editorRawInput(update agent.ToolInputUpdate) string {
 }
 
 // editorPreviewState validates the streamed path and captures (or reuses) the
-// bounded display snapshot shared by both editor reducers. When the returned
-// bool is false the state is final and tool-specific rendering must not run.
+// display snapshot shared by both editor reducers. When the returned bool is
+// false the state is final and tool-specific rendering must not run.
 func editorPreviewState(ctx context.Context, r *os.Root, previous *filediff.State, input editorInput) (*filediff.State, *filediff.Snapshot, bool) {
 	if !usableWorkspacePath(input.Path) {
 		return &filediff.State{Phase: filediff.PhaseStreaming, Reason: "waiting for a workspace-relative path"}, nil, false
@@ -430,7 +428,7 @@ func streamPreviewUnchanged(previous *filediff.State, kind filediff.PreviewKind,
 		return false
 	}
 	preview := previous.Preview
-	return preview.Kind == kind && preview.Pending && preview.InputPrefixBytes == bytes && preview.InputPrefixHash == hash && preview.Truncated == truncated
+	return preview.Kind == kind && preview.Pending && preview.InputPrefixBytes == bytes && preview.InputPrefixHash == hash && preview.InputTruncated == truncated
 }
 
 func previewInputKey(value string) (int, uint64) {
@@ -546,7 +544,7 @@ func captureEditorSnapshot(ctx context.Context, r *os.Root, filePath string) *fi
 	return snapshot
 }
 
-func writePrefixDiff(filePath, content string, limit int) filediff.Diff {
+func writePrefixDiff(filePath, content string) filediff.Diff {
 	lines := strings.SplitAfter(content, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
@@ -556,10 +554,6 @@ func writePrefixDiff(filePath, content string, limit int) filediff.Diff {
 	for number, line := range lines {
 		hunk.NewCount++
 		diff.Additions++
-		if limit > 0 && len(hunk.Lines) >= limit {
-			diff.Truncated, diff.Omitted, hunk.Omitted = true, diff.Omitted+1, hunk.Omitted+1
-			continue
-		}
 		hunk.Lines = append(hunk.Lines, filediff.DiffLine{Kind: filediff.LineAdd, NewNumber: number + 1, Content: filediff.LogicalLineContent(line)})
 	}
 	hunk.Lines = append(hunk.Lines, filediff.DiffLine{Kind: filediff.LinePending, Content: "awaiting more input"})

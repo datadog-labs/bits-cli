@@ -28,14 +28,13 @@ type DiffLine struct {
 	Content   string
 }
 
-// Hunk is the bounded, renderer-neutral copy of one go-udiff hunk.
+// Hunk is a renderer-neutral copy of one go-udiff hunk.
 type Hunk struct {
 	FromLine int
 	ToLine   int
 	OldCount int
 	NewCount int
 	Lines    []DiffLine
-	Omitted  int
 }
 
 // TextFormat records source details that are intentionally removed from line
@@ -46,7 +45,7 @@ type TextFormat struct {
 	LineEnding string
 }
 
-// Diff is a bounded copy of go-udiff's structured unified representation.
+// Diff is a copy of go-udiff's structured unified representation.
 type Diff struct {
 	From         string
 	To           string
@@ -55,8 +54,6 @@ type Diff struct {
 	Hunks        []Hunk
 	Additions    int
 	Deletions    int
-	Truncated    bool
-	Omitted      int
 }
 
 // AllLines returns a flattened view for tests and simple consumers. Hunks
@@ -79,19 +76,18 @@ func (d Diff) LineCount() int {
 	return n
 }
 
-// Build constructs a bounded model directly from go-udiff's structured API.
-// It never formats and reparses unified text. A non-positive limit means
-// unlimited.
-func Build(fromName, toName, before, after string, limit int) Diff {
+// Build constructs a model directly from go-udiff's structured API. It never
+// formats and reparses unified text.
+func Build(fromName, toName, before, after string) Diff {
 	u, err := unified(fromName, toName, before, after)
 	if err != nil {
 		return Diff{From: fromName, To: toName}
 	}
-	return fromUnified(u, before, after, limit)
+	return fromUnified(u, before, after)
 }
 
-// BuildWithDisplay constructs a bounded local view and the complete raw unified
-// diff text for the durable Display field, from one go-udiff calculation.
+// BuildWithDisplay constructs a local view and the complete raw unified diff
+// text for the durable Display field, from one go-udiff calculation.
 //
 // NOTE: Editor mutations intentionally include the preimage in Display: a
 // workspace-write approval covers reading the target and the durable history
@@ -99,13 +95,13 @@ func Build(fromName, toName, before, after string, limit int) Diff {
 // TODO: Add a sanitizer/redactor here or at the client-response boundary when
 // product policy requires filtering sensitive workspace content.
 // TODO: Define an explicit durable Display byte budget when payload sizing
-// becomes a product concern; limit bounds only the local renderer's line count.
-func BuildWithDisplay(fromName, toName, before, after string, limit int) (Diff, string) {
+// becomes a product concern.
+func BuildWithDisplay(fromName, toName, before, after string) (Diff, string) {
 	u, err := unified(fromName, toName, before, after)
 	if err != nil {
 		return Diff{From: fromName, To: toName}, ""
 	}
-	return fromUnified(u, before, after, limit), strings.TrimSuffix(u.String(), "\n")
+	return fromUnified(u, before, after), strings.TrimSuffix(u.String(), "\n")
 }
 
 // ParseUnifiedDiff reconstructs a structured Diff from the raw unified diff
@@ -191,9 +187,8 @@ func unified(fromName, toName, before, after string) (udiff.UnifiedDiff, error) 
 	return udiff.ToUnifiedDiff(fromName, toName, before, udiff.Lines(before, after), udiff.DefaultContextLines)
 }
 
-func fromUnified(u udiff.UnifiedDiff, before, after string, limit int) Diff {
+func fromUnified(u udiff.UnifiedDiff, before, after string) Diff {
 	d := Diff{From: u.From, To: u.To, BeforeFormat: textFormat(before), AfterFormat: textFormat(after)}
-	used := 0
 	for _, sourceHunk := range u.Hunks {
 		if sourceHunk == nil {
 			continue
@@ -224,26 +219,13 @@ func fromUnified(u udiff.UnifiedDiff, before, after string, limit int) Diff {
 				hunk.OldCount++
 				hunk.NewCount++
 			}
-			if limit > 0 && used >= limit {
-				d.Truncated = true
-				d.Omitted++
-				hunk.Omitted++
-				continue
-			}
 			hunk.Lines = append(hunk.Lines, line)
-			used++
 		}
 		if len(hunk.Lines) > 0 {
 			d.Hunks = append(d.Hunks, hunk)
 		}
 	}
-	appendNoNewlineMarkersBounded(&d, before, after, limit, &used)
-	if d.Truncated {
-		marker := DiffLine{Kind: LineOmitted, Content: "diff lines omitted"}
-		if len(d.Hunks) > 0 {
-			d.Hunks[len(d.Hunks)-1].Lines = append(d.Hunks[len(d.Hunks)-1].Lines, marker)
-		}
-	}
+	appendNoNewlineMarkers(&d, before, after)
 	return d
 }
 
@@ -287,7 +269,7 @@ func lineKind(kind udiff.OpKind) LineKind {
 
 // appendNoNewlineMarkers derives markers from the source documents rather
 // than parsing go-udiff's textual representation.
-func appendNoNewlineMarkersBounded(d *Diff, before, after string, limit int, used *int) {
+func appendNoNewlineMarkers(d *Diff, before, after string) {
 	oldMissing := before != "" && !strings.HasSuffix(before, "\n")
 	newMissing := after != "" && !strings.HasSuffix(after, "\n")
 	oldLast := strings.Count(before, "\n") + btoi(before != "")
@@ -308,14 +290,6 @@ func appendNoNewlineMarkersBounded(d *Diff, before, after string, limit int, use
 				continue
 			}
 			marker := DiffLine{Kind: LineNoNewline, Content: "No newline at end of file"}
-			if used != nil && limit > 0 && *used >= limit {
-				d.Truncated = true
-				d.Omitted++
-				continue
-			}
-			if used != nil {
-				*used = *used + 1
-			}
 			h.Lines = append(h.Lines[:li+1], append([]DiffLine{marker}, h.Lines[li+1:]...)...)
 			li++
 		}

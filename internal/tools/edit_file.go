@@ -160,8 +160,8 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 		}
 
 		// The model sees only a concise summary; the complete raw diff travels out
-		// of its token band in Display, while RenderState stays capped.
-		renderDiff, display := filediff.BuildWithDisplay("a/"+filePath, "b/"+filePath, raw, final, maxEditorDiffLines)
+		// of its token band in Display for durable history.
+		renderDiff, display := filediff.BuildWithDisplay("a/"+filePath, "b/"+filePath, raw, final)
 		noun := "replacement"
 		if len(repls) != 1 {
 			noun = "replacements"

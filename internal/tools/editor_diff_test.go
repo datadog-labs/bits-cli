@@ -98,7 +98,7 @@ func FuzzParsePartialEditorInputNeverPanics(f *testing.F) {
 	})
 }
 
-func TestEditorInputReducerDoesNotRetainRawInput(t *testing.T) {
+func TestEditorInputReducerKeepsAllPreviewLines(t *testing.T) {
 	dir := t.TempDir()
 	r, err := os.OpenRoot(dir)
 	if err != nil {
@@ -106,10 +106,13 @@ func TestEditorInputReducerDoesNotRetainRawInput(t *testing.T) {
 	}
 	defer func() { _ = r.Close() }()
 	state := writeFileInputReducer(r)(context.Background(), agent.ToolInputUpdate{
-		RawPrefix: `{"path":"a.txt","content":"` + strings.Repeat("x", 50_000) + `"}`,
+		RawPrefix: `{"path":"a.txt","content":"` + strings.Repeat(`x\n`, 2_001) + `"}`,
 	}, nil).(*filediff.State)
-	if state.Preview == nil || state.Preview.Diff == nil || len(state.Preview.Diff.AllLines()) > maxEditorDiffLines+1 {
-		t.Fatalf("preview lines = %d, want bounded", len(state.Preview.Diff.AllLines()))
+	if state.Preview == nil || state.Preview.Diff == nil {
+		t.Fatalf("preview = %#v, want complete diff", state.Preview)
+	}
+	if got, want := len(state.Preview.Diff.AllLines()), 2_002; got != want {
+		t.Fatalf("preview lines = %d, want %d (all content lines plus pending marker)", got, want)
 	}
 }
 
@@ -165,8 +168,8 @@ func TestEditorInputReducerWriteKeepsPartialContentPending(t *testing.T) {
 
 func TestWritePrefixDiffMatchesFinalCRLFLineContent(t *testing.T) {
 	content := "one\r\ntwo\r\n"
-	prefix := writePrefixDiff("note.txt", content, 0)
-	final := filediff.Build("a/note.txt", "b/note.txt", "", content, 0)
+	prefix := writePrefixDiff("note.txt", content)
+	final := filediff.Build("a/note.txt", "b/note.txt", "", content)
 	for _, diff := range []*filediff.Diff{&prefix, &final} {
 		var additions []string
 		for _, line := range diff.AllLines() {
