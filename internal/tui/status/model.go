@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/components"
+	"github.com/DataDog/bits-cli/internal/tui/escape"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -172,7 +172,7 @@ func (m Model) panelBodyWidth() int {
 }
 
 func (m *Model) rebuild() {
-	model := safeDisplay(m.runtime.Model)
+	model := escape.SingleLine(m.runtime.Model)
 	if model == "" {
 		// TODO(BCLI-36): Replace this fallback with the backend-selected model
 		// once /api/v2/assistant exposes it in the public response contract.
@@ -211,7 +211,7 @@ func (m Model) renderSection(title string, rows []statusRow) string {
 	for _, row := range rows {
 		const labelWidth = 18
 		label := m.theme.Text.Muted.Render(fmt.Sprintf("  %-16s", row.label))
-		value := safeDisplay(row.value)
+		value := escape.SingleLine(row.value)
 		style := m.theme.Text.Body
 		if strings.HasPrefix(value, "unavailable") || value == "not applicable" || value == "not a Git repository" || value == "collecting…" {
 			style = m.theme.Text.Muted
@@ -278,8 +278,8 @@ func (m Model) workspaceRows() []statusRow {
 }
 
 func authentication(runtime Runtime) string {
-	mode := safeDisplay(runtime.AuthenticationMode)
-	state := safeDisplay(runtime.AuthenticationState)
+	mode := escape.SingleLine(runtime.AuthenticationMode)
+	state := escape.SingleLine(runtime.AuthenticationState)
 	switch {
 	case mode != "" && state != "":
 		return mode + " · " + state
@@ -293,7 +293,7 @@ func authentication(runtime Runtime) string {
 }
 
 func available(value, reason string) string {
-	if value = safeDisplay(value); value != "" {
+	if value = escape.SingleLine(value); value != "" {
 		return value
 	}
 	return "unavailable — " + reason
@@ -312,7 +312,7 @@ func usage(value *assistant.Usage) string {
 
 func repositoryLabel(repository Repository) string {
 	name := available(repository.Name, "repository name could not be determined")
-	root := safeDisplay(repository.Root)
+	root := escape.SingleLine(repository.Root)
 	if root == "" {
 		return name
 	}
@@ -352,20 +352,4 @@ func formatInteger(value int) string {
 		text = text[:i] + "," + text[i:]
 	}
 	return text
-}
-
-// safeDisplay strips terminal control sequences and collapses control
-// characters so backend IDs and unusual local paths cannot inject terminal UI.
-func safeDisplay(value string) string {
-	value = ansi.Strip(value)
-	value = strings.Map(func(r rune) rune {
-		if unicode.In(r, unicode.Cf) {
-			return -1
-		}
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, value)
-	return strings.Join(strings.Fields(value), " ")
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/escape"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -73,6 +74,7 @@ func (r *blockRenderer) renderText(it agent.Block, width int, sty Styles) string
 // single-space gutter match the editor prompt so a submitted message aligns
 // exactly with what was typed.
 func renderUser(text string, width int, sty Styles) string {
+	text = escape.Multiline(text)
 	marker := sty.Input.Prompt
 	w := sty.Input.PromptWidth()
 
@@ -96,7 +98,7 @@ func renderUser(text string, width int, sty Styles) string {
 // thinking has no body to show, so it renders a marker instead of nothing.
 // Collapsing (Ctrl+O) is deferred; the whole block is shown for now.
 func renderReasoning(it agent.Block, width int, sty Styles) string {
-	text := it.Thinking.Content
+	text := escape.Multiline(it.Thinking.Content)
 	if it.Thinking.Redacted && text == "" {
 		text = "[redacted]"
 	}
@@ -108,7 +110,7 @@ func renderReasoning(it agent.Block, width int, sty Styles) string {
 func renderWidget(it agent.Block, width int, sty Styles) string {
 	label := "widget"
 	if it.Widget != nil && it.Widget.Title != "" {
-		label = "widget: " + it.Widget.Title
+		label = "widget: " + escape.Inline(it.Widget.Title)
 	}
 	return sty.Meta.Render(wrap("["+label+"]", width))
 }
@@ -118,7 +120,7 @@ func renderWidget(it agent.Block, width int, sty Styles) string {
 func renderDashboard(it agent.Block, width int, sty Styles) string {
 	label := "dashboard"
 	if it.Dashboard != nil && it.Dashboard.Title != "" {
-		label = "dashboard: " + it.Dashboard.Title
+		label = "dashboard: " + escape.Inline(it.Dashboard.Title)
 	}
 	return sty.Meta.Render(wrap("["+label+"]", width))
 }
@@ -128,7 +130,7 @@ func renderProgress(it agent.Block, width int, sty Styles) string {
 	if it.Progress == nil {
 		return fallback(it, width, sty)
 	}
-	return sty.Meta.Render(wrap(it.Progress.Content, width))
+	return sty.Meta.Render(wrap(escape.Multiline(it.Progress.Content), width))
 }
 
 // toolOutputMaxLines caps how much tool output is shown before truncation.
@@ -151,11 +153,11 @@ func renderTool(it agent.Block, width int, sty Styles, frame int) string {
 	header += sty.ToolName.Render(toolName(tool))
 	lines := []string{ansi.Truncate(header, width, "…")}
 
-	if in := collapseWS(tool.Input); in != "" {
+	if in := collapseWS(escape.Inline(tool.Input)); in != "" {
 		summary := ansi.Truncate(in, max(1, width-4), "…")
 		lines = append(lines, sty.ToolDetail.Render("  ↳ "+summary))
 	}
-	if out := strings.TrimRight(tool.Output, "\n"); out != "" {
+	if out := strings.TrimRight(escape.Multiline(tool.Output), "\n"); out != "" {
 		body := clampLines(wrap(out, max(1, width-2)), toolOutputMaxLines)
 		lines = append(lines, indent(sty.ToolDetail.Render(body), 2))
 	}
@@ -166,7 +168,7 @@ func toolName(t *agent.ToolBlock) string {
 	if t.Name == "" {
 		return "tool"
 	}
-	return t.Name
+	return escape.Inline(t.Name)
 }
 
 // Rounded pill caps (powerline). Require a Nerd/Powerline font to render;

@@ -6,6 +6,7 @@ import (
 	"charm.land/glamour/v2"
 	"charm.land/glamour/v2/ansi"
 
+	"github.com/DataDog/bits-cli/internal/tui/escape"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -40,6 +41,7 @@ type markdownRenderer struct {
 // the terminal theme changes. Failed setup is cached too, avoiding repeated
 // setup attempts while the same fallback configuration remains active.
 func (r *markdownRenderer) Render(src string, width int, style ansi.StyleConfig) string {
+	src = escape.Multiline(src)
 	if width < 1 {
 		width = 1
 	}

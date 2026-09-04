@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/escape"
 )
 
 const (
@@ -123,13 +124,13 @@ func (m *Model) approvalView() string {
 
 	block := m.pendingApprovals[0]
 	prompt := block.Tool.Approval
-	title := "Run " + block.Tool.Name + "?"
+	title := "Run " + escape.Inline(block.Tool.Name) + "?"
 	detail := ""
 	if prompt != nil {
 		if prompt.Title != "" {
-			title = prompt.Title
+			title = escape.Inline(prompt.Title)
 		}
-		detail = prompt.Detail
+		detail = escape.Inline(prompt.Detail)
 	}
 
 	sty := m.styles.Approval
@@ -212,6 +213,6 @@ func (m *Model) noticeBar() string {
 			text += " (" + detail + ")"
 		}
 	}
-	text = ansi.Truncate(text, max(1, width-2), "…")
+	text = ansi.Truncate(escape.Inline(text), max(1, width-2), "…")
 	return m.chatStyles.Notice(m.notice.Level).Width(width).Render(text)
 }
