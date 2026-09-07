@@ -112,7 +112,7 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 	}
 	httpClient := issuer.Client()
 	httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Host != "api.datad0g.com" || req.URL.Path != "/oauth2/v1/token" {
+		if req.URL.Host != "api.datad0g.com" || req.URL.Path != "/api/v2/oauth2/token" {
 			t.Errorf("token exchange URL = %s", req.URL)
 		}
 		clone := req.Clone(req.Context())
@@ -278,7 +278,7 @@ func TestLoginRevokesUnpersistedGrant(t *testing.T) {
 	var revokedToken string
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/oauth2/v1/token":
+		case "/api/v2/oauth2/token":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`)
 		case "/oauth2/v1/revoke":
@@ -304,7 +304,7 @@ func TestLoginRevokesUnpersistedGrant(t *testing.T) {
 	openURL := callbackOpenURL(t)
 	_, err := login(context.Background(), SiteConfig{
 		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
-		TokenURL: issuer.URL + "/oauth2/v1/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
+		TokenURL: issuer.URL + "/api/v2/oauth2/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
 	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: openURL})
 	if err == nil || !strings.Contains(err.Error(), "persist new OAuth session") {
 		t.Fatalf("login error = %v", err)
@@ -324,7 +324,7 @@ func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
 	var revokedToken string
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/oauth2/v1/token":
+		case "/api/v2/oauth2/token":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`)
 		case "/oauth2/v1/revoke":
@@ -349,7 +349,7 @@ func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
 	})
 	_, err := login(context.Background(), SiteConfig{
 		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
-		TokenURL: issuer.URL + "/oauth2/v1/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
+		TokenURL: issuer.URL + "/api/v2/oauth2/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
 	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: callbackOpenURL(t)})
 	if err != nil {
 		t.Fatal(err)
@@ -368,7 +368,7 @@ func TestReplacementLoginDoesNotRevokeSharedRefreshToken(t *testing.T) {
 	var revokeCalls int
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/oauth2/v1/token":
+		case "/api/v2/oauth2/token":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"shared-refresh","token_type":"Bearer","expires_in":3600}`)
 		case "/oauth2/v1/revoke":
@@ -389,7 +389,7 @@ func TestReplacementLoginDoesNotRevokeSharedRefreshToken(t *testing.T) {
 
 	session, err := login(context.Background(), SiteConfig{
 		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
-		TokenURL: issuer.URL + "/oauth2/v1/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
+		TokenURL: issuer.URL + "/api/v2/oauth2/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
 	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: callbackOpenURL(t)})
 	if err != nil {
 		t.Fatal(err)
@@ -433,7 +433,7 @@ func callbackOpenURL(t *testing.T) func(string) error {
 
 func TestLoginReplacesCorruptCredential(t *testing.T) {
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/oauth2/v1/token" {
+		if r.URL.Path != "/api/v2/oauth2/token" {
 			t.Errorf("unexpected request path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -453,7 +453,7 @@ func TestLoginReplacesCorruptCredential(t *testing.T) {
 	}
 	session, err := login(context.Background(), SiteConfig{
 		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
-		TokenURL: issuer.URL + "/oauth2/v1/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
+		TokenURL: issuer.URL + "/api/v2/oauth2/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
 	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: callbackOpenURL(t)})
 	if err != nil {
 		t.Fatal(err)
@@ -568,7 +568,7 @@ func TestRevokeRefreshesExpiredAccessTokenBeforeRevoking(t *testing.T) {
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		switch r.URL.Path {
-		case "/oauth2/v1/token":
+		case "/api/v2/oauth2/token":
 			if r.Form.Get("grant_type") != "refresh_token" || r.Form.Get("refresh_token") != "old-refresh" {
 				t.Errorf("refresh form = %v", r.Form)
 			}
@@ -611,7 +611,7 @@ func TestRevokeRefreshesExpiredAccessTokenBeforeRevoking(t *testing.T) {
 
 func TestRevokeTreatsInvalidGrantAsAlreadyRevoked(t *testing.T) {
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/oauth2/v1/token" {
+		if r.URL.Path != "/api/v2/oauth2/token" {
 			t.Errorf("revoke should not be reached; path = %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")

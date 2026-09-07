@@ -110,7 +110,7 @@ func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
 		Domain:        domain,
 		ClientID:      clientID,
 		AuthorizeURL:  site + "/oauth2/v1/authorize",
-		TokenURL:      apiBase + "/oauth2/v1/token",
+		TokenURL:      apiBase + "/api/v2/oauth2/token",
 		RevokeURL:     apiBase + "/oauth2/v1/revoke",
 		RedirectURI:   DefaultRedirectURI,
 		AssistantBase: apiBase,
@@ -139,7 +139,7 @@ func (c SiteConfig) WithCallbackDomain(raw string) (SiteConfig, error) {
 	apiBase := "https://api." + domain
 	c.Site = apiBase
 	c.Domain = domain
-	c.TokenURL = apiBase + "/oauth2/v1/token"
+	c.TokenURL = apiBase + "/api/v2/oauth2/token"
 	c.RevokeURL = apiBase + "/oauth2/v1/revoke"
 	c.AssistantBase = apiBase
 	return c, nil

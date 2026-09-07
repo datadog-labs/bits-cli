@@ -625,8 +625,9 @@ func TestRetryAfterDelay(t *testing.T) {
 	}
 }
 
-func TestNewRequest_SetsOAuthBearerWithoutAPIKeys(t *testing.T) {
+func TestNewRequest_SetsJWTAccessTokenAsOpaqueOAuthBearerWithoutAPIKeys(t *testing.T) {
 	var authorization, apiKey, appKey string
+	const accessToken = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJiaXRzLWNsaSJ9.signature"
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		authorization = r.Header.Get("Authorization")
 		apiKey = r.Header.Get("DD-API-KEY")
@@ -634,11 +635,11 @@ func TestNewRequest_SetsOAuthBearerWithoutAPIKeys(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"data":{"attributes":{"flags":{}}}}`)
 	})
-	c.TokenSource = staticAccessToken("oauth-token")
+	c.TokenSource = staticAccessToken(accessToken)
 	if _, err := c.ExperimentalToolFlags(context.Background()); err != nil {
 		t.Fatalf("ExperimentalToolFlags: %v", err)
 	}
-	if authorization != "Bearer oauth-token" {
+	if authorization != "Bearer "+accessToken {
 		t.Errorf("Authorization = %q", authorization)
 	}
 	if apiKey != "" || appKey != "" {

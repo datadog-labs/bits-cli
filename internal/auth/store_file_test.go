@@ -25,6 +25,7 @@ func tempSessionPath(t *testing.T) string {
 func TestSessionFileRoundTrips(t *testing.T) {
 	path := tempSessionPath(t)
 	want := fileTestSession()
+	want.AccessToken = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJiaXRzLWNsaSJ9.signature"
 	if err := saveSessionFile(path, false, want); err != nil {
 		t.Fatalf("saveSessionFile: %v", err)
 	}
