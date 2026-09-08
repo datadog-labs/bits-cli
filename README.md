@@ -26,6 +26,12 @@ Use `bits --help` for the complete command list or `bits help login` for command
 | `/logout` | Sign out from your Datadog account and exit Bits. |
 | `/quit`, `/exit` | Exit Bits. |
 
+Type `@` after whitespace or punctuation to open a mixed picker of Datadog
+entities and files from the current workspace. Datadog selections appear in an
+`Attached` row and are sent as structured context for the next turn. Press
+`Ctrl+X` to remove the last attachment. Backspace does the same when the prompt
+is empty. File mentions remain plain prompt text.
+
 ## Noninteractive run
 
 `bits run` executes exactly one assistant turn without a TUI or interactive login. It writes only versioned JSONL to stdout; diagnostics go to stderr:

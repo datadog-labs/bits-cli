@@ -157,6 +157,7 @@ func TestExactNewCommandsExecuteOnFirstEnterWithCompletionOpen(t *testing.T) {
 
 func TestFileCompletionRemainsEditorOwned(t *testing.T) {
 	m := newModelWithSpy(t)
+	m.editor.SetFiles([]string{"README.md"})
 	m.convID = "conversation-preserved"
 	m.editor.Update(tea.PasteMsg{Content: "@README"})
 	if !m.editor.MenuOpen() {

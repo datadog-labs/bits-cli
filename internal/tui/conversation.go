@@ -44,6 +44,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	m.chatPhase = chat.PhaseIdle
 	m.pendingNew = false
 	m.editor.Reset()
+	m.stopEntitySearch()
 	m.clearNotice()
 	m.setMode(ModeChat)
 	m.list.ScrollToBottom()

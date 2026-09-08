@@ -56,6 +56,31 @@ func TestDifferentSeedsDiffer(t *testing.T) {
 	}
 }
 
+func TestEntitySearchIsDeterministicAndMixed(t *testing.T) {
+	f := &Fake{}
+	first, err := f.SearchEntities(context.Background(), assistant.SearchEntitiesInput{RawQuery: "checkout", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.SearchEntities(context.Background(), assistant.SearchEntitiesInput{RawQuery: "checkout", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Entities) < 2 || len(first.Entities) != len(second.Entities) {
+		t.Fatalf("fake search results = %#v", first.Entities)
+	}
+	types := make(map[assistant.EntityType]bool)
+	for index := range first.Entities {
+		if first.Entities[index].CandidateID != second.Entities[index].CandidateID {
+			t.Fatalf("fake search changed at rank %d", index)
+		}
+		types[first.Entities[index].EntityType] = true
+	}
+	if len(types) < 2 {
+		t.Fatalf("fake search returned one entity type: %#v", first.Entities)
+	}
+}
+
 func TestStreamsTextAndUsage(t *testing.T) {
 	f := &Fake{}
 	var text, usage int

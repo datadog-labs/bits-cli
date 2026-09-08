@@ -1,0 +1,195 @@
+package tui
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/assistant"
+)
+
+type blockingEntitySearcher struct {
+	started  chan assistant.SearchEntitiesInput
+	canceled chan struct{}
+}
+
+func (s *blockingEntitySearcher) SearchEntities(ctx context.Context, input assistant.SearchEntitiesInput) (assistant.SearchEntitiesResponse, error) {
+	s.started <- input
+	<-ctx.Done()
+	close(s.canceled)
+	return assistant.SearchEntitiesResponse{}, ctx.Err()
+}
+
+type staticEntitySearcher struct {
+	response assistant.SearchEntitiesResponse
+	err      error
+	inputs   []assistant.SearchEntitiesInput
+}
+
+func (s *staticEntitySearcher) SearchEntities(_ context.Context, input assistant.SearchEntitiesInput) (assistant.SearchEntitiesResponse, error) {
+	s.inputs = append(s.inputs, input)
+	return s.response, s.err
+}
+
+type acceptingBackend struct {
+	requests chan assistant.SendOptions
+}
+
+func (b *acceptingBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
+	b.requests <- opts
+	return "conversation-1", nil
+}
+
+func TestEntitySearchDebouncesThenCancelsSupersededRequest(t *testing.T) {
+	searcher := &blockingEntitySearcher{started: make(chan assistant.SearchEntitiesInput, 1), canceled: make(chan struct{})}
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{EntitySearcher: searcher})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "@checkout api"})
+	debounce := m.syncEntitySearch()
+	if debounce == nil {
+		t.Fatal("query did not arm debounce")
+	}
+	message, ok := debounce().(entitySearchDebounceMsg)
+	if !ok || message.query != "checkout api" {
+		t.Fatalf("debounce message = %#v", message)
+	}
+	request := m.beginEntitySearch(message)
+	result := make(chan tea.Msg, 1)
+	go func() { result <- request() }()
+	select {
+	case input := <-searcher.started:
+		if input.RawQuery != "checkout api" {
+			t.Fatalf("raw query = %q", input.RawQuery)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("search did not start")
+	}
+
+	m.editor.Reset()
+	m.editor.Update(tea.PasteMsg{Content: "@payments"})
+	if next := m.syncEntitySearch(); next == nil {
+		t.Fatal("new query did not arm another debounce")
+	}
+	select {
+	case <-searcher.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("superseded request was not canceled")
+	}
+	<-result
+}
+
+func TestEntitySearchRejectsStaleResponse(t *testing.T) {
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}))
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "@new"})
+	_ = m.syncEntitySearch()
+	currentGeneration := m.entitySearchGeneration
+	m.applyEntitySearchResult(entitySearchResultMsg{
+		generation: currentGeneration - 1,
+		query:      "old",
+		response: assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
+			CandidateID: "old", EntityID: "old", EntityType: "service", Name: "stale-service",
+		}}},
+	})
+	if strings.Contains(m.editor.MenuView(), "stale-service") {
+		t.Fatal("stale response replaced the current menu")
+	}
+}
+
+func TestEntitySearchUsesFreshBoundedCache(t *testing.T) {
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}))
+	m.editor.Focus()
+	response := assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
+		CandidateID: "cached", EntityID: "checkout", EntityType: "service", Name: "checkout",
+	}}}
+	m.storeEntitySearch("check", response, time.Now())
+	m.editor.Update(tea.PasteMsg{Content: "@check"})
+	if command := m.syncEntitySearch(); command != nil {
+		t.Fatal("fresh cache entry unexpectedly armed a request")
+	}
+	if !strings.Contains(m.editor.MenuView(), "DD") || !strings.Contains(m.editor.MenuView(), "service") {
+		t.Fatalf("cached menu = %q", m.editor.MenuView())
+	}
+	for i := range entitySearchCacheMax + 5 {
+		m.storeEntitySearch(string(rune('a'+i)), response, time.Now())
+	}
+	if len(m.entitySearchCache) > entitySearchCacheMax {
+		t.Fatalf("cache size = %d", len(m.entitySearchCache))
+	}
+}
+
+func TestSearchFailureLeavesSubmissionUsable(t *testing.T) {
+	backend := &acceptingBackend{requests: make(chan assistant.SendOptions, 1)}
+	searcher := &staticEntitySearcher{err: errors.New("search unavailable")}
+	m := New(agent.New(backend, assistant.SendOptions{}), Config{EntitySearcher: searcher})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "@missing entity"})
+	debounce := m.syncEntitySearch()
+	debounceMessage := debounce().(entitySearchDebounceMsg)
+	result := m.beginEntitySearch(debounceMessage)().(entitySearchResultMsg)
+	m.applyEntitySearchResult(result)
+	if !strings.Contains(m.editor.MenuView(), "search unavailable") {
+		t.Fatalf("error menu = %q", m.editor.MenuView())
+	}
+
+	_, wait := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if wait == nil {
+		t.Fatal("Enter did not submit from an error-only menu")
+	}
+	select {
+	case <-backend.requests:
+	case <-time.After(time.Second):
+		t.Fatal("prompt submission did not reach backend")
+	}
+}
+
+func TestSelectedEntityContextIsSentOnceAndClearedAfterSubmit(t *testing.T) {
+	backend := &acceptingBackend{requests: make(chan assistant.SendOptions, 2)}
+	m := New(agent.New(backend, assistant.SendOptions{}))
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "@check"})
+	_ = m.syncEntitySearch()
+	m.applyEntitySearchResult(entitySearchResultMsg{
+		generation: m.entitySearchGeneration,
+		query:      "check",
+		response: assistant.SearchEntitiesResponse{
+			SearchFlowID: "flow-1",
+			Entities: []assistant.SearchEntity{{
+				CandidateID: "candidate-1", EntityID: "checkout-api",
+				EntityType: "service", Name: "checkout-api",
+			}},
+		},
+	})
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(m.editor.Attachments()) != 1 {
+		t.Fatalf("selection did not attach entity: %#v", m.editor.Attachments())
+	}
+	m.editor.Update(tea.PasteMsg{Content: " inspect this"})
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	first := <-backend.requests
+	if first.Context == nil || len(first.Context.Entities) != 1 {
+		t.Fatalf("first request context = %#v", first.Context)
+	}
+	entity := first.Context.Entities[0]
+	if entity.Type != "service" || entity.ID != "checkout-api" || entity.Label != "checkout-api" {
+		t.Fatalf("first request entity = %#v", entity)
+	}
+	if len(m.editor.Attachments()) != 0 {
+		t.Fatalf("attachments survived submit: %#v", m.editor.Attachments())
+	}
+	for range m.turnEvents {
+	}
+	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.turnGen})
+
+	m.editor.Update(tea.PasteMsg{Content: "next independent turn"})
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	second := <-backend.requests
+	if second.Context != nil {
+		t.Fatalf("next turn reused context: %#v", second.Context)
+	}
+}

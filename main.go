@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -248,7 +251,8 @@ func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth
 		return nil, err
 	}
 	config := tui.Config{
-		Tools: toolSet,
+		Tools:          toolSet,
+		WorkspaceFiles: workspaceFileIndex(workspaceRoot),
 		Logout: func(logoutCtx context.Context) (bool, error, error) {
 			return auth.Logout(logoutCtx, store, nil)
 		},
@@ -287,4 +291,36 @@ func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth
 	return tui.NewWithLogin(ctx, loginModel, func(factoryCtx context.Context) (*agent.Engine, error) {
 		return startup.NewEngine(factoryCtx, engineOpts)
 	}, config), nil
+}
+
+const maxWorkspaceFiles = 10000
+
+// workspaceFileIndex snapshots local files once at TUI startup. Completion can
+// then filter without filesystem work on the input goroutine.
+func workspaceFileIndex(root string) []string {
+	files := make([]string, 0, 256)
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "node_modules", "vendor":
+				if path != root {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if len(files) >= maxWorkspaceFiles {
+			return filepath.SkipAll
+		}
+		relative, err := filepath.Rel(root, path)
+		if err == nil {
+			files = append(files, filepath.ToSlash(relative))
+		}
+		return nil
+	})
+	sort.Strings(files)
+	return files
 }

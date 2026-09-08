@@ -2,72 +2,73 @@ package editor
 
 import "strings"
 
-// maxCandidates caps how many completions the fake providers return so the menu
-// stays a bounded height.
-const maxCandidates = 8
+const maxLocalCandidates = 5
 
-// Completer returns candidates for the active word — the token being typed,
-// including its "@"/"/" trigger. It returns nil when nothing applies, which
-// keeps the menu closed.
-type Completer func(word string) []Candidate
+// CandidateKind is open so later completion sources do not require changing
+// editor navigation or rendering.
+type CandidateKind string
 
-// Candidate is one completion. Label is shown in the menu; Insert replaces the
-// active word when the candidate is accepted.
+const (
+	CandidateFile    CandidateKind = "file"
+	CandidateEntity  CandidateKind = "datadog_entity"
+	CandidateCommand CandidateKind = "command"
+)
+
+// Attachment preserves the canonical identity selected from remote search.
+// Candidate and search-flow IDs are retained for a future approved feedback
+// path; prompt text is never parsed to recreate these fields.
+type Attachment struct {
+	Type               string
+	ID                 string
+	Label              string
+	CandidateID        string
+	SearchFlowID       string
+	Rank               int
+	RankScore          *float64
+	TrackingAttributes map[string]string
+}
+
+// Candidate is one completion row. Kind and ID are stable source identities;
+// Label and Detail are presentation; Insert edits the prompt. Attachment is
+// non-nil only when selection should add structured turn context.
 type Candidate struct {
-	Label  string
-	Insert string
+	Kind       CandidateKind
+	ID         string
+	Label      string
+	Detail     string
+	Insert     string
+	Attachment *Attachment
 }
 
-// Dispatch routes the active word to a provider by its trigger character. Words
-// without an "@"/"/" trigger return nil (menu stays closed).
-func Dispatch(word string) []Candidate {
-	switch {
-	case strings.HasPrefix(word, "@"):
-		return FakeFiles(word[1:])
-	case strings.HasPrefix(word, "/"):
-		return FakeCommands(word[1:])
-	default:
-		return nil
-	}
-}
+// RemoteState describes the non-blocking Datadog half of an @ menu.
+type RemoteState int
 
-// fakeFiles is a hardcoded path list standing in for a real file index. Phase 6
-// ships fake data; a real index lands with client tools.
-var fakeFiles = []string{
-	"README.md",
-	"go.mod",
-	"main.go",
-	"internal/agent/engine.go",
-	"internal/agent/classify.go",
-	"internal/assistant/client.go",
-	"internal/assistant/types.go",
-	"internal/tui/model.go",
-	"internal/tui/update.go",
-	"internal/tui/chat/transcript.go",
-	"internal/tui/chat/render.go",
-	"internal/tui/editor/editor.go",
-}
+const (
+	RemoteIdle RemoteState = iota
+	RemoteLoading
+	RemoteReady
+	RemoteError
+)
 
-// FakeFiles returns @-file candidates whose path contains q (case-insensitive).
-func FakeFiles(q string) []Candidate {
+// FileCandidates returns local paths containing q, case-insensitively.
+func FileCandidates(files []string, q string) []Candidate {
 	q = strings.ToLower(q)
-	out := make([]Candidate, 0, maxCandidates)
-	for _, p := range fakeFiles {
-		if q != "" && !strings.Contains(strings.ToLower(p), q) {
+	out := make([]Candidate, 0, min(maxLocalCandidates, len(files)))
+	for _, path := range files {
+		if q != "" && !strings.Contains(strings.ToLower(path), q) {
 			continue
 		}
-		out = append(out, Candidate{Label: p, Insert: "@" + p})
-		if len(out) == maxCandidates {
+		out = append(out, Candidate{
+			Kind: CandidateFile, ID: path, Label: "file " + path,
+			Detail: "local", Insert: "@" + path,
+		})
+		if len(out) == maxLocalCandidates {
 			break
 		}
 	}
 	return out
 }
 
-// fakeCommands is the placeholder slash-command set. Execution is deferred; this
-// only drives the menu for now. Each entry may carry aliases; a query matching
-// any alias surfaces the command under its canonical name, so both spellings
-// are discoverable and aliases normalize to canonical on accept.
 var fakeCommands = []struct {
 	name    string
 	aliases []string
@@ -83,29 +84,30 @@ var fakeCommands = []struct {
 	{"quit", []string{"exit"}, "exit bits"},
 }
 
-// FakeCommands returns /-command candidates whose canonical name or any alias
-// is prefixed by q. Accepting a candidate inserts the canonical spelling, so
-// aliases normalize on accept; the label annotates aliases for discoverability.
+// FakeCommands returns slash-command candidates whose canonical name or alias
+// starts with q.
 func FakeCommands(q string) []Candidate {
 	q = strings.ToLower(q)
 	out := make([]Candidate, 0, len(fakeCommands))
-	for _, c := range fakeCommands {
-		if !commandMatches(c.name, c.aliases, q) {
+	for _, command := range fakeCommands {
+		if !commandMatches(command.name, command.aliases, q) {
 			continue
 		}
-		label := "/" + c.name + " — " + c.desc
-		out = append(out, Candidate{Label: label, Insert: "/" + c.name})
+		out = append(out, Candidate{
+			Kind: CandidateCommand, ID: command.name,
+			Label: "/" + command.name, Detail: command.desc,
+			Insert: "/" + command.name,
+		})
 	}
 	return out
 }
 
-// commandMatches reports whether q prefixes the canonical name or any alias.
 func commandMatches(name string, aliases []string, q string) bool {
 	if strings.HasPrefix(name, q) {
 		return true
 	}
-	for _, a := range aliases {
-		if strings.HasPrefix(a, q) {
+	for _, alias := range aliases {
+		if strings.HasPrefix(alias, q) {
 			return true
 		}
 	}

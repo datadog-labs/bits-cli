@@ -1,7 +1,5 @@
 // Package editor is the chat input: a multiline textarea plus an @/ completion
-// menu backed by a Completer. It owns key handling for menu navigation; the
-// parent tui routes keys to it and reads Value on submit. No agent/chat
-// dependency — it is pure input.
+// menu. The parent TUI owns remote work and feeds checked results into it.
 package editor
 
 import (
@@ -14,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/DataDog/bits-cli/internal/tui/components"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -28,15 +27,23 @@ const (
 	// the visible cap (maxHeight) — only at this larger hard limit. Without it,
 	// the textarea blocks new lines once it reaches maxHeight logical lines.
 	maxContentHeight = 500
+	// maxMenuCandidates bounds the combined local and remote result rows.
+	maxMenuCandidates = 10
 )
 
 // Editor is the chat input. The completion menu opens automatically for @
 // tokens and for a / token only when it is the first token in the prompt.
 type Editor struct {
-	ta       textarea.Model
-	complete Completer
-	styles   styles.Editor
-	menu     menu
+	ta                textarea.Model
+	styles            styles.Editor
+	menu              menu
+	files             []string
+	attachments       []Attachment
+	remoteQuery       string
+	remoteItems       []Candidate
+	remoteState       RemoteState
+	dismissedMentions []dismissedMention
+	dismissedValue    string
 
 	// inputStyle is the shared input-block contract. width is the block's total
 	// width; the textarea is sized to fit inside the block's horizontal frame.
@@ -52,11 +59,12 @@ type Editor struct {
 type menu struct {
 	open     bool
 	items    []Candidate
-	selected int
+	selector *components.Selector
+	status   string
 }
 
-// New returns a chat editor using the built-in fake completer. Call Focus to
-// start the cursor and receive its blink command.
+// New returns a chat editor. Call Focus to start the cursor and receive its
+// blink command.
 func New() *Editor {
 	defaultStyles := styles.Default(true)
 	ta := textarea.New()
@@ -82,10 +90,45 @@ func New() *Editor {
 
 	return &Editor{
 		ta:         ta,
-		complete:   Dispatch,
 		styles:     defaultStyles.Editor,
 		inputStyle: defaultStyles.Input,
 	}
+}
+
+// SetFiles replaces the sorted local-file index used by @ completion.
+func (e *Editor) SetFiles(files []string) {
+	e.files = append([]string(nil), files...)
+	e.recompute()
+}
+
+// ActiveEntityQuery returns the remote query associated with the @ trigger at
+// the cursor. Spaces are preserved.
+func (e *Editor) ActiveEntityQuery() (string, bool) {
+	span, ok := e.activeEntitySpan()
+	return span.query, ok
+}
+
+// SetEntityResults updates only the remote half of a mixed @ menu.
+func (e *Editor) SetEntityResults(query string, state RemoteState, items []Candidate) {
+	e.remoteQuery = query
+	e.remoteState = state
+	e.remoteItems = append([]Candidate(nil), items...)
+	e.recompute()
+}
+
+// Attachments returns a copy of the selected canonical Datadog identities.
+func (e *Editor) Attachments() []Attachment {
+	return append([]Attachment(nil), e.attachments...)
+}
+
+// RemoveLastAttachment removes the most recently selected Datadog entity.
+func (e *Editor) RemoveLastAttachment() bool {
+	if len(e.attachments) == 0 {
+		return false
+	}
+	e.attachments = e.attachments[:len(e.attachments)-1]
+	e.viewCached = false
+	return true
 }
 
 // SetInputStyles gives the editor the shared input-block look: a background
@@ -114,7 +157,10 @@ func (e *Editor) SetInputStyles(inputStyle styles.Input) {
 }
 
 // SetStyles updates the completion-menu appearance.
-func (e *Editor) SetStyles(menuStyles styles.Editor) { e.styles = menuStyles }
+func (e *Editor) SetStyles(menuStyles styles.Editor) {
+	e.styles = menuStyles
+	e.recompute()
+}
 
 // Focus focuses the textarea and returns its cursor-blink command.
 func (e *Editor) Focus() tea.Cmd {
@@ -163,6 +209,11 @@ func (e *Editor) Value() string { return e.ta.Value() }
 // Reset clears the input and closes the menu.
 func (e *Editor) Reset() {
 	e.ta.Reset()
+	e.attachments = nil
+	e.remoteItems = nil
+	e.remoteState = RemoteIdle
+	e.dismissedMentions = nil
+	e.dismissedValue = ""
 	e.closeMenu()
 	e.viewCached = false
 }
@@ -171,14 +222,21 @@ func (e *Editor) Reset() {
 // to decide whether Enter/Esc drive the menu or submit/cancel.
 func (e *Editor) MenuOpen() bool { return e.menu.open }
 
+// MenuHasCandidates distinguishes a selectable menu from a loading, empty, or
+// error status. Parents may submit directly when only status text is visible.
+func (e *Editor) MenuHasCandidates() bool { return len(e.menu.items) > 0 }
+
+// CloseMenu dismisses completion without changing the prompt.
+func (e *Editor) CloseMenu() { e.closeMenu() }
+
 // SelectedCommand returns the currently selected leading slash-command
 // completion, without modifying the input. The parent uses it to dispatch a
 // registered command directly when Enter is pressed.
 func (e *Editor) SelectedCommand() (string, bool) {
-	if !e.menu.open || len(e.menu.items) == 0 || !e.commandTriggerActive(e.ta.Word()) {
+	if !e.menu.open || len(e.menu.items) == 0 || e.menu.selector == nil || !e.commandTriggerActive(e.ta.Word()) {
 		return "", false
 	}
-	insert := e.menu.items[e.menu.selected].Insert
+	insert := e.menu.items[e.menu.selector.Index()].Insert
 	if !strings.HasPrefix(insert, "/") {
 		return "", false
 	}
@@ -197,18 +255,31 @@ func (e *Editor) Height() int {
 // (up/down/tab/enter/esc); otherwise the message is fed to the textarea and the
 // menu is recomputed from the resulting value.
 func (e *Editor) Update(msg tea.Msg) tea.Cmd {
+	if k, ok := msg.(tea.KeyPressMsg); ok {
+		if k.String() == "ctrl+x" && e.RemoveLastAttachment() {
+			return nil
+		}
+		if k.String() == "backspace" && e.ta.Value() == "" && e.RemoveLastAttachment() {
+			return nil
+		}
+	}
 	if k, ok := msg.(tea.KeyPressMsg); ok && e.menu.open {
 		switch k.String() {
 		case "up", "ctrl+p":
-			e.move(-1)
+			if e.menu.selector != nil {
+				e.menu.selector.UpdateKey("up")
+			}
 			return nil
 		case "down", "ctrl+n":
-			e.move(1)
+			if e.menu.selector != nil {
+				e.menu.selector.UpdateKey("down")
+			}
 			return nil
 		case "tab", "enter":
 			e.accept()
 			return nil
 		case "esc":
+			e.dismissActiveMention()
 			e.closeMenu()
 			return nil
 		}
@@ -216,6 +287,9 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 	e.viewCached = false
 	var cmd tea.Cmd
 	e.ta, cmd = e.ta.Update(msg)
+	if e.dismissedValue != "" && e.ta.Value() != e.dismissedValue {
+		e.dismissedValue = ""
+	}
 	e.recompute()
 	return cmd
 }
@@ -233,6 +307,9 @@ func (e *Editor) renderView() {
 		return
 	}
 	textareaView := e.ta.View()
+	if attached := e.attachmentsView(); attached != "" {
+		textareaView = attached + "\n" + textareaView
+	}
 	if e.width <= 0 {
 		e.view = e.inputStyle.Block.Render(textareaView)
 	} else {
@@ -255,21 +332,24 @@ func (e *Editor) MenuView() string {
 		return ""
 	}
 	w := e.menuWidth()
-	lines := make([]string, len(e.menu.items))
-	for i, it := range e.menu.items {
-		marker, st := "  ", e.styles.MenuItem
-		if i == e.menu.selected {
-			marker, st = "› ", e.styles.MenuSelected
-		}
-		lines[i] = st.Width(w).Render(ansi.Truncate(marker+it.Label, w, "…"))
+	parts := make([]string, 0, 2)
+	if e.menu.selector != nil && len(e.menu.items) > 0 {
+		parts = append(parts, e.menu.selector.View(w))
 	}
-	return strings.Join(lines, "\n")
+	if e.menu.status != "" {
+		parts = append(parts, e.styles.MenuItem.Width(w).Render(ansi.Truncate("  "+e.menu.status, w, "…")))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (e *Editor) menuWidth() int {
 	w := 0
 	for _, it := range e.menu.items {
-		w = max(w, ansi.StringWidth(it.Label)+2)
+		w = max(w, ansi.StringWidth(it.Label)+ansi.StringWidth(it.Detail)+4)
+	}
+	w = max(w, ansi.StringWidth(e.menu.status)+2)
+	if e.widthSet {
+		w = min(w, max(1, e.width-e.ContentOffset()))
 	}
 	return min(max(w, 12), menuMaxWidth)
 }
@@ -279,20 +359,65 @@ func (e *Editor) menuWidth() int {
 // kept when it still points at a valid item.
 func (e *Editor) recompute() {
 	word := e.ta.Word()
-	if strings.HasPrefix(word, "/") && !e.commandTriggerActive(word) {
+	if strings.HasPrefix(word, "/") {
+		if !e.commandTriggerActive(word) {
+			e.closeMenu()
+			return
+		}
+		e.setMenu(FakeCommands(word[1:]), "")
+		return
+	}
+	span, active := e.activeEntitySpan()
+	if !active {
 		e.closeMenu()
 		return
 	}
-	items := e.complete(word)
-	if len(items) == 0 {
-		e.closeMenu()
-		return
+	items := FileCandidates(e.files, span.query)
+	state := RemoteIdle
+	if span.query == e.remoteQuery {
+		items = append(items, e.remoteItems...)
+		state = e.remoteState
 	}
-	sel := 0
-	if e.menu.open && e.menu.selected < len(items) {
-		sel = e.menu.selected
+	if len(items) > maxMenuCandidates {
+		items = items[:maxMenuCandidates]
 	}
-	e.menu = menu{open: true, items: items, selected: sel}
+	status := ""
+	switch state {
+	case RemoteIdle:
+	case RemoteLoading:
+		status = "Searching Datadog…"
+	case RemoteError:
+		status = "Datadog search unavailable"
+	case RemoteReady:
+		if len(items) == 0 {
+			status = "No matching files or Datadog entities"
+		}
+	}
+	e.setMenu(items, status)
+}
+
+func (e *Editor) setMenu(items []Candidate, status string) {
+	previous := 0
+	if e.menu.selector != nil {
+		previous = e.menu.selector.Index()
+	}
+	choices := make([]components.Choice, len(items))
+	for i, item := range items {
+		choices[i] = components.Choice{Label: item.Label, Detail: item.Detail}
+	}
+	selector := components.NewSelector(choices, e.selectorStyles())
+	selector.SetCompactDetail(true)
+	selector.SetFillWidth(true)
+	selector.SetIndex(previous)
+	e.menu = menu{open: len(items) > 0 || status != "", items: items, selector: selector, status: status}
+}
+
+func (e *Editor) selectorStyles() styles.Selector {
+	return styles.Selector{
+		Item: e.styles.MenuItem, Selected: e.styles.MenuSelected,
+		Detail: e.styles.MenuItem, SelectedDetail: e.styles.MenuSelected,
+		Marker: "  ", SelectedMarker: "› ", ColumnGap: 2,
+	}
 }
 
 // commandTriggerActive reports whether word is the first token on the first
@@ -311,23 +436,17 @@ func (e *Editor) commandTriggerActive(word string) bool {
 	return start == 0
 }
 
-func (e *Editor) move(delta int) {
-	n := len(e.menu.items)
-	if n == 0 {
-		return
-	}
-	e.menu.selected = (e.menu.selected + delta + n) % n
-}
-
-// accept replaces the word at the cursor with the selected candidate's insert
+// accept replaces the active trigger span with the selected candidate's insert
 // text plus a trailing space, then closes the menu. The cursor lands after the
 // inserted space when the edit is on the final line (the common single-line
 // case); otherwise it falls back to the buffer end.
 func (e *Editor) accept() {
-	if !e.menu.open || len(e.menu.items) == 0 {
+	if !e.menu.open || len(e.menu.items) == 0 || e.menu.selector == nil {
+		e.closeMenu()
 		return
 	}
-	insert := e.menu.items[e.menu.selected].Insert
+	candidate := e.menu.items[e.menu.selector.Index()]
+	insert := candidate.Insert
 
 	lines := strings.Split(e.ta.Value(), "\n")
 	row := e.ta.Line()
@@ -338,6 +457,11 @@ func (e *Editor) accept() {
 	runes := []rune(lines[row])
 	col := min(max(e.ta.Column(), 0), len(runes))
 	start, end := wordBounds(runes, col)
+	if candidate.Kind != CandidateCommand {
+		if span, ok := e.activeEntitySpan(); ok {
+			start, end = span.start, span.end
+		}
+	}
 
 	repl := []rune(insert + " ")
 	lines[row] = string(runes[:start]) + string(repl) + string(runes[end:])
@@ -346,10 +470,90 @@ func (e *Editor) accept() {
 	if row == len(lines)-1 {
 		e.ta.SetCursorColumn(start + len(repl))
 	}
+	e.dismissedMentions = append(e.dismissedMentions, dismissedMention{text: insert})
+	if candidate.Attachment != nil {
+		e.addAttachment(*candidate.Attachment)
+	}
 	e.closeMenu()
 }
 
 func (e *Editor) closeMenu() { e.menu = menu{} }
+
+func (e *Editor) addAttachment(attachment Attachment) {
+	for _, existing := range e.attachments {
+		if existing.Type == attachment.Type && existing.ID == attachment.ID {
+			return
+		}
+	}
+	e.attachments = append(e.attachments, attachment)
+	e.viewCached = false
+}
+
+func (e *Editor) attachmentsView() string {
+	if len(e.attachments) == 0 {
+		return ""
+	}
+	labels := make([]string, len(e.attachments))
+	for i, attachment := range e.attachments {
+		labels[i] = "@" + attachment.Label + " [" + attachment.Type + "]"
+	}
+	line := "Attached: " + strings.Join(labels, ", ") + " · ctrl+x removes last"
+	width := max(1, e.width-e.inputStyle.Block.GetHorizontalFrameSize())
+	return e.styles.MenuItem.Render(ansi.Truncate(line, width, "…"))
+}
+
+type entitySpan struct {
+	start int
+	end   int
+	query string
+}
+
+type dismissedMention struct {
+	text string
+}
+
+// activeEntitySpan finds the last valid @ trigger before the cursor on the
+// current line. A letter, digit, or underscore immediately before @ makes it
+// ordinary word content. Query text may contain spaces.
+func (e *Editor) activeEntitySpan() (entitySpan, bool) {
+	if e.dismissedValue != "" && e.ta.Value() == e.dismissedValue {
+		return entitySpan{}, false
+	}
+	lines := strings.Split(e.ta.Value(), "\n")
+	row := e.ta.Line()
+	if row < 0 || row >= len(lines) {
+		return entitySpan{}, false
+	}
+	runes := []rune(lines[row])
+	col := min(max(e.ta.Column(), 0), len(runes))
+	for i := col - 1; i >= 0; i-- {
+		if runes[i] != '@' {
+			continue
+		}
+		if i > 0 && (unicode.IsLetter(runes[i-1]) || unicode.IsDigit(runes[i-1]) || runes[i-1] == '_') {
+			continue
+		}
+		dismissed := false
+		for _, location := range e.dismissedMentions {
+			end := i + len([]rune(location.text))
+			if end <= len(runes) && string(runes[i:end]) == location.text {
+				dismissed = true
+				break
+			}
+		}
+		if dismissed {
+			continue
+		}
+		return entitySpan{start: i, end: col, query: string(runes[i+1 : col])}, true
+	}
+	return entitySpan{}, false
+}
+
+func (e *Editor) dismissActiveMention() {
+	if _, ok := e.activeEntitySpan(); ok {
+		e.dismissedValue = e.ta.Value()
+	}
+}
 
 // wordBounds returns the [start, end) rune indices of the word at col, using the
 // same scan as textarea.Word (the reference char is col-1). It returns an empty
