@@ -26,6 +26,30 @@ func ConversationURL(apiSite, conversationID string) (string, error) {
 		return "", errors.New("conversation ID is empty")
 	}
 
+	webHost, err := webHostForAssistantSite(apiSite)
+	if err != nil {
+		return "", err
+	}
+	target := &url.URL{
+		Scheme:  "https",
+		Host:    webHost,
+		Path:    "/ask/" + conversationID,
+		RawPath: "/ask/" + url.PathEscape(conversationID),
+	}
+	return target.String(), nil
+}
+
+// SettingsURL returns the Assistant settings page on the Datadog site serving
+// the Assistant API.
+func SettingsURL(apiSite string) (string, error) {
+	webHost, err := webHostForAssistantSite(apiSite)
+	if err != nil {
+		return "", err
+	}
+	return (&url.URL{Scheme: "https", Host: webHost, Path: "/ask/settings"}).String(), nil
+}
+
+func webHostForAssistantSite(apiSite string) (string, error) {
 	parsedSite, err := url.Parse(strings.TrimSpace(apiSite))
 	if err != nil || parsedSite.Scheme != "https" || parsedSite.Hostname() == "" || parsedSite.Host != parsedSite.Hostname() ||
 		parsedSite.User != nil || parsedSite.RawQuery != "" || parsedSite.Fragment != "" || (parsedSite.Path != "" && parsedSite.Path != "/") {
@@ -35,14 +59,7 @@ func ConversationURL(apiSite, conversationID string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("unsupported Datadog Assistant site %q", apiSite)
 	}
-
-	target := &url.URL{
-		Scheme:  "https",
-		Host:    webHost,
-		Path:    "/ask/" + conversationID,
-		RawPath: "/ask/" + url.PathEscape(conversationID),
-	}
-	return target.String(), nil
+	return webHost, nil
 }
 
 // Open starts the operating system's browser launcher and waits long enough to

@@ -125,14 +125,20 @@ func TestFakeFilesFilter(t *testing.T) {
 }
 
 func TestFakeCommandsPrefix(t *testing.T) {
-	got := FakeCommands("m")
+	got := FakeCommands("s")
 	if len(got) == 0 {
-		t.Fatal("expected /model for prefix 'm'")
+		t.Fatal("expected slash commands for prefix 's'")
 	}
 	for _, c := range got {
-		if !strings.HasPrefix(c.Insert, "/m") {
-			t.Errorf("command insert %q should start with /m", c.Insert)
+		if !strings.HasPrefix(c.Insert, "/s") {
+			t.Errorf("command insert %q should start with /s", c.Insert)
 		}
+	}
+}
+
+func TestFakeCommandsDoesNotIncludeModel(t *testing.T) {
+	if got := FakeCommands("model"); len(got) != 0 {
+		t.Fatalf("model command candidates = %+v, want none", got)
 	}
 }
 

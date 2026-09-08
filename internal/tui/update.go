@@ -42,6 +42,10 @@ type (
 		url string
 		err error
 	}
+	settingsOpenResultMsg struct {
+		url string
+		err error
+	}
 	logoutResultMsg struct {
 		generation uint64
 		err        error
@@ -269,6 +273,12 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.showNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url), 0)
 		}
 		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Opened this conversation in your browser: %s", msg.url), 0)
+
+	case settingsOpenResultMsg:
+		if msg.err != nil {
+			return m, m.showNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url), 0)
+		}
+		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Opened Assistant settings in your browser: %s", msg.url), 0)
 	}
 
 	if m.focus() == focusPicker {
@@ -302,6 +312,23 @@ func (m *Model) openConversationInBrowser() tea.Cmd {
 	}
 	return func() tea.Msg {
 		return webOpenResultMsg{url: target, err: openURL(context.Background(), target)}
+	}
+}
+
+func (m *Model) openSettingsInBrowser() tea.Cmd {
+	if m.engine == nil {
+		return m.showNotice(notice(chat.NoticeError, nil, "Assistant settings have no Datadog web site."), 0)
+	}
+	target, err := browser.SettingsURL(m.engine.Site())
+	if err != nil {
+		return m.showNotice(notice(chat.NoticeError, err, "Could not build a web link for Assistant settings."), 0)
+	}
+	openURL := m.openURL
+	if openURL == nil {
+		openURL = browser.Open
+	}
+	return func() tea.Msg {
+		return settingsOpenResultMsg{url: target, err: openURL(context.Background(), target)}
 	}
 }
 
