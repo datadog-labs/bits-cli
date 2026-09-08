@@ -719,8 +719,12 @@ func (e *Engine) runTools(
 	// stopPendingAfterDenial answers still-pending approvals as cancelled;
 	// running siblings finish so their real results reach the wire batch.
 	stopPendingAfterDenial := func() bool {
-		for id, item := range pending {
-			delete(pending, id)
+		for _, ordered := range work {
+			item, ok := pending[ordered.call.ID]
+			if !ok {
+				continue
+			}
+			delete(pending, item.call.ID)
 			if !completeTool(item, cancelledResult()) {
 				cancelRunning()
 				return false
@@ -847,11 +851,15 @@ func (e *Engine) runTools(
 				cancelRunning()
 				return toolRound{denied: denied}, nil
 			}
-			for id, sibling := range pending {
+			for _, ordered := range work {
+				sibling, ok := pending[ordered.call.ID]
+				if !ok {
+					continue
+				}
 				if _, granted := e.sessionGrants[sibling.key]; !granted {
 					continue
 				}
-				delete(pending, id)
+				delete(pending, sibling.call.ID)
 				if !launch(sibling, true) {
 					cancelRunning()
 					return toolRound{denied: denied}, nil
