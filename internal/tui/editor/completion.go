@@ -76,7 +76,7 @@ var fakeCommands = []struct {
 	{"help", nil, "show help"},
 	{"new", []string{"clear"}, "start a new conversation"},
 	{"resume", nil, "resume a conversation"},
-	{"settings", nil, "open Assistant settings in Datadog"},
+	{"settings", nil, "open assistant settings"},
 	{"status", nil, "show session status"},
 	{"web", nil, "open this conversation in Datadog"},
 	{"logout", nil, "sign out from your Datadog account"},
