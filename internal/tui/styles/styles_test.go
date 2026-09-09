@@ -54,10 +54,13 @@ func TestDefaultPinsAModeSpecificBackground(t *testing.T) {
 func TestSurfacesSeparateFromTheirBackground(t *testing.T) {
 	// pendingElevation names roles that do not clear their background yet.
 	//
-	// TODO: dark's errorSurface fell to 1.022:1 when the background was pinned
-	// beneath it — the chip is there but invisible. Lifting it also needs dark's
-	// error foreground raised, which is dark-mode work; both land on their own
-	// branch, and this exemption goes with them.
+	// TODO: dark's errorSurface is at 1.022:1 against the pinned page, so the
+	// chip draws but its surface is indistinguishable from the transcript. It
+	// cannot be fixed from this side alone: lifting the surface pushes the label
+	// further under AA (see TestChipLabelsReadOnTheirOwnSurface), and dark's
+	// status colors are deliberately held to what they were. Resolving it means
+	// deciding whether the error chip keeps a surface at all — the same question
+	// StatusSuccess already answered by dropping one.
 	pendingElevation := map[string]map[string]bool{
 		"dark": {"errorSurface": true},
 	}
@@ -123,6 +126,47 @@ func TestForegroundTokensMeetNormalTextContrast(t *testing.T) {
 				"feedback error":   test.palette.feedbackError,
 			} {
 				if got := contrastRatio(foreground, test.palette.surface); got < 4.5 {
+					t.Errorf("%s contrast = %.2f:1, want at least 4.5:1", role, got)
+				}
+			}
+		})
+	}
+}
+
+// TestChipLabelsReadOnTheirOwnSurface covers the pairs that carry both their
+// foreground and their background from the palette — the status chips and code
+// spans — so neither half can be moved without the other.
+func TestChipLabelsReadOnTheirOwnSurface(t *testing.T) {
+	// unreachableAA names pairs that cannot meet 4.5:1 without changing a color
+	// that is deliberately fixed.
+	//
+	// dark's error pair is one. With error pinned at #D33043 the bound is not
+	// merely unmet, it is unreachable: 4.5:1 would need an errorSurface of
+	// negative luminance, and even pure black caps the pair at 4.27:1. Darkening
+	// the surface is the only direction that helps at all (#2F0A0F gives 3.65:1,
+	// black 4.27:1), and it trades away the elevation the chip needs to be
+	// visible at all. So this is a palette decision, not an oversight — see the
+	// TODO in TestSurfacesSeparateFromTheirBackground.
+	unreachableAA := map[string]map[string]bool{
+		"dark": {"error/errorSurface": true},
+	}
+	for _, test := range []struct {
+		name    string
+		palette palette
+	}{
+		{name: "dark", palette: darkPalette()},
+		{name: "light", palette: lightPalette()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for role, pair := range map[string][2]string{
+				"error/errorSurface":   {test.palette.error, test.palette.errorSurface},
+				"busy/busySurface":     {test.palette.busy, test.palette.busySurface},
+				"codeText/codeSurface": {test.palette.codeText, test.palette.codeSurface},
+			} {
+				if unreachableAA[test.name][role] {
+					continue
+				}
+				if got := contrastRatio(pair[0], pair[1]); got < 4.5 {
 					t.Errorf("%s contrast = %.2f:1, want at least 4.5:1", role, got)
 				}
 			}
