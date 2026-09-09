@@ -13,7 +13,6 @@ import (
 
 func TestViewCacheIsSharedByHeightAndView(t *testing.T) {
 	e := New()
-	e.SetFiles([]string{"README.md"})
 	_ = e.Height()
 	if !e.viewCached {
 		t.Fatal("Height did not populate the editor view cache")
@@ -101,7 +100,7 @@ func TestWordBounds(t *testing.T) {
 }
 
 func TestFileCandidatesFilter(t *testing.T) {
-	got := FileCandidates([]string{"README.md", "internal/agent/engine.go"}, "engine")
+	got := FileCandidates("engine")
 	if len(got) == 0 {
 		t.Fatal("expected a match for 'engine'")
 	}
@@ -156,7 +155,6 @@ func TestFakeCommandsAliasDiscoverable(t *testing.T) {
 
 func TestRecomputeOpensAndClosesMenu(t *testing.T) {
 	e := New()
-	e.SetFiles([]string{"internal/agent/engine.go"})
 
 	e.ta.SetValue("@eng")
 	e.recompute()
@@ -197,7 +195,6 @@ func TestSlashCompletionOnlyOpensForFirstPromptToken(t *testing.T) {
 
 func TestAcceptReplacesActiveWord(t *testing.T) {
 	e := New()
-	e.SetFiles([]string{"internal/agent/engine.go"})
 	e.ta.SetValue("look at @engine")
 	e.recompute()
 	if !e.MenuOpen() {
@@ -255,19 +252,18 @@ func TestAutocompleteDetailsFollowLabelsWithoutColumnGap(t *testing.T) {
 		}
 	}
 
-	e.SetFiles([]string{"README.md"})
 	e.ta.SetValue("@")
 	e.ta.SetCursorColumn(1)
 	e.SetEntityResults("", RemoteReady, []Candidate{{
-		Kind: CandidateEntity, ID: "c1", Label: "DD checkout-api",
-		Detail: "service · APM", Insert: "@checkout-api",
+		Kind: CandidateEntity, ID: "c1", Label: "◇ [Service] checkout-api",
+		Insert: `@"service:checkout-api"`,
 	}})
 	mentions := ansi.Strip(e.MenuView())
-	if !strings.Contains(mentions, "file README.md  local") {
-		t.Fatalf("file menu row has an unexpected label/detail gap: %q", mentions)
+	if !strings.Contains(mentions, "+ README.md") || strings.Contains(mentions, "local") {
+		t.Fatalf("file menu row contains unexpected presentation: %q", mentions)
 	}
-	if !strings.Contains(mentions, "DD checkout-api  service · APM") {
-		t.Fatalf("Datadog menu row has an unexpected label/detail gap: %q", mentions)
+	if !strings.Contains(mentions, "◇ [Service] checkout-api") || strings.Contains(mentions, "APM") {
+		t.Fatalf("Datadog menu row contains unexpected metadata: %q", mentions)
 	}
 	for lineNo, line := range strings.Split(e.MenuView(), "\n") {
 		if got, want := ansi.StringWidth(line), e.menuWidth(); got != want {
@@ -293,13 +289,12 @@ func TestEntityTriggerSupportsSpacesAndRejectsMiddleOfWord(t *testing.T) {
 
 func TestMixedCandidatesAttachCanonicalEntityAndCanRemoveIt(t *testing.T) {
 	e := New()
-	e.SetFiles([]string{"checkout.md"})
-	e.ta.SetValue("@checkout")
-	e.ta.SetCursorColumn(len([]rune("@checkout")))
+	e.ta.SetValue("@engine")
+	e.ta.SetCursorColumn(len([]rune("@engine")))
 	attachment := Attachment{Type: "service", ID: "checkout-api", Label: "checkout-api", CandidateID: "candidate-1", SearchFlowID: "flow-1"}
-	e.SetEntityResults("checkout", RemoteReady, []Candidate{{
-		Kind: CandidateEntity, ID: "candidate-1", Label: "DD checkout-api",
-		Detail: "service · APM", Insert: "@checkout-api", Attachment: &attachment,
+	e.SetEntityResults("engine", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Service] checkout-api",
+		Insert: `@"service:checkout-api"`, Attachment: &attachment,
 	}})
 	if len(e.menu.items) != 2 || e.menu.items[0].Kind != CandidateFile || e.menu.items[1].Kind != CandidateEntity {
 		t.Fatalf("mixed menu = %#v", e.menu.items)
@@ -309,12 +304,18 @@ func TestMixedCandidatesAttachCanonicalEntityAndCanRemoveIt(t *testing.T) {
 	if got := e.Attachments(); len(got) != 1 || !reflect.DeepEqual(got[0], attachment) {
 		t.Fatalf("attachments = %#v", got)
 	}
-	if !strings.Contains(e.Value(), "@checkout-api") {
+	if !strings.Contains(e.Value(), `@"service:checkout-api"`) {
 		t.Fatalf("visible prompt = %q", e.Value())
+	}
+	if strings.Contains(ansi.Strip(e.View()), "Attached:") {
+		t.Fatalf("editor rendered a separate attachment row: %q", ansi.Strip(e.View()))
 	}
 	e.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	if len(e.Attachments()) != 0 {
 		t.Fatalf("attachment was not removed: %#v", e.Attachments())
+	}
+	if strings.Contains(e.Value(), `@"service:checkout-api"`) {
+		t.Fatalf("attachment removal left its mention in the prompt: %q", e.Value())
 	}
 }
 
@@ -325,8 +326,8 @@ func TestMenuAndAttachmentsAreUnicodeSafeAtNarrowWidths(t *testing.T) {
 	e.ta.SetCursorColumn(len([]rune("@déplo")))
 	attachment := Attachment{Type: "workflow", ID: "w1", Label: "Déploiement 東京"}
 	e.SetEntityResults("déplo", RemoteReady, []Candidate{{
-		Kind: CandidateEntity, ID: "c1", Label: "DD Déploiement 東京 très long",
-		Detail: "workflow", Insert: "@Déploiement 東京", Attachment: &attachment,
+		Kind: CandidateEntity, ID: "c1", Label: "◇ [Workflow] Déploiement 東京 très long",
+		Insert: `@"workflow:Déploiement 東京"`, Attachment: &attachment,
 	}})
 	for _, line := range strings.Split(e.MenuView(), "\n") {
 		if width := ansi.StringWidth(line); width > 18 {

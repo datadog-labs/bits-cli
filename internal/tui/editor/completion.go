@@ -4,6 +4,23 @@ import "strings"
 
 const maxLocalCandidates = 5
 
+// fakeFiles preserves the original local-file completion behavior until
+// BCLI-59 adds workspace discovery.
+var fakeFiles = []string{
+	"README.md",
+	"go.mod",
+	"main.go",
+	"internal/agent/engine.go",
+	"internal/agent/classify.go",
+	"internal/assistant/client.go",
+	"internal/assistant/types.go",
+	"internal/tui/model.go",
+	"internal/tui/update.go",
+	"internal/tui/chat/transcript.go",
+	"internal/tui/chat/render.go",
+	"internal/tui/editor/editor.go",
+}
+
 // CandidateKind is open so later completion sources do not require changing
 // editor navigation or rendering.
 type CandidateKind string
@@ -50,17 +67,18 @@ const (
 	RemoteError
 )
 
-// FileCandidates returns local paths containing q, case-insensitively.
-func FileCandidates(files []string, q string) []Candidate {
+// FileCandidates returns hardcoded local paths containing q,
+// case-insensitively. BCLI-59 will replace this provider with workspace files.
+func FileCandidates(q string) []Candidate {
 	q = strings.ToLower(q)
-	out := make([]Candidate, 0, min(maxLocalCandidates, len(files)))
-	for _, path := range files {
+	out := make([]Candidate, 0, min(maxLocalCandidates, len(fakeFiles)))
+	for _, path := range fakeFiles {
 		if q != "" && !strings.Contains(strings.ToLower(path), q) {
 			continue
 		}
 		out = append(out, Candidate{
-			Kind: CandidateFile, ID: path, Label: "file " + path,
-			Detail: "local", Insert: "@" + path,
+			Kind: CandidateFile, ID: path, Label: "+ " + path,
+			Insert: "@" + path,
 		})
 		if len(out) == maxLocalCandidates {
 			break

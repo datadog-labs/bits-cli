@@ -34,16 +34,16 @@ const (
 // Editor is the chat input. The completion menu opens automatically for @
 // tokens and for a / token only when it is the first token in the prompt.
 type Editor struct {
-	ta                textarea.Model
-	styles            styles.Editor
-	menu              menu
-	files             []string
-	attachments       []Attachment
-	remoteQuery       string
-	remoteItems       []Candidate
-	remoteState       RemoteState
-	dismissedMentions []dismissedMention
-	dismissedValue    string
+	ta                 textarea.Model
+	styles             styles.Editor
+	menu               menu
+	attachments        []Attachment
+	attachmentMentions []string
+	remoteQuery        string
+	remoteItems        []Candidate
+	remoteState        RemoteState
+	dismissedMentions  []dismissedMention
+	dismissedValue     string
 
 	// inputStyle is the shared input-block contract. width is the block's total
 	// width; the textarea is sized to fit inside the block's horizontal frame.
@@ -95,12 +95,6 @@ func New() *Editor {
 	}
 }
 
-// SetFiles replaces the sorted local-file index used by @ completion.
-func (e *Editor) SetFiles(files []string) {
-	e.files = append([]string(nil), files...)
-	e.recompute()
-}
-
 // ActiveEntityQuery returns the remote query associated with the @ trigger at
 // the cursor. Spaces are preserved.
 func (e *Editor) ActiveEntityQuery() (string, bool) {
@@ -121,12 +115,19 @@ func (e *Editor) Attachments() []Attachment {
 	return append([]Attachment(nil), e.attachments...)
 }
 
-// RemoveLastAttachment removes the most recently selected Datadog entity.
+// RemoveLastAttachment removes the most recently selected Datadog entity and
+// its visible mention.
 func (e *Editor) RemoveLastAttachment() bool {
 	if len(e.attachments) == 0 {
 		return false
 	}
+	mention := e.attachmentMentions[len(e.attachmentMentions)-1]
 	e.attachments = e.attachments[:len(e.attachments)-1]
+	e.attachmentMentions = e.attachmentMentions[:len(e.attachmentMentions)-1]
+	if index := strings.LastIndex(e.ta.Value(), mention); index >= 0 {
+		value := e.ta.Value()
+		e.ta.SetValue(value[:index] + value[index+len(mention):])
+	}
 	e.viewCached = false
 	return true
 }
@@ -210,6 +211,7 @@ func (e *Editor) Value() string { return e.ta.Value() }
 func (e *Editor) Reset() {
 	e.ta.Reset()
 	e.attachments = nil
+	e.attachmentMentions = nil
 	e.remoteItems = nil
 	e.remoteState = RemoteIdle
 	e.dismissedMentions = nil
@@ -259,9 +261,6 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 		if k.String() == "ctrl+x" && e.RemoveLastAttachment() {
 			return nil
 		}
-		if k.String() == "backspace" && e.ta.Value() == "" && e.RemoveLastAttachment() {
-			return nil
-		}
 	}
 	if k, ok := msg.(tea.KeyPressMsg); ok && e.menu.open {
 		switch k.String() {
@@ -290,6 +289,7 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 	if e.dismissedValue != "" && e.ta.Value() != e.dismissedValue {
 		e.dismissedValue = ""
 	}
+	e.reconcileAttachments()
 	e.recompute()
 	return cmd
 }
@@ -307,9 +307,6 @@ func (e *Editor) renderView() {
 		return
 	}
 	textareaView := e.ta.View()
-	if attached := e.attachmentsView(); attached != "" {
-		textareaView = attached + "\n" + textareaView
-	}
 	if e.width <= 0 {
 		e.view = e.inputStyle.Block.Render(textareaView)
 	} else {
@@ -372,7 +369,7 @@ func (e *Editor) recompute() {
 		e.closeMenu()
 		return
 	}
-	items := FileCandidates(e.files, span.query)
+	items := FileCandidates(span.query)
 	state := RemoteIdle
 	if span.query == e.remoteQuery {
 		items = append(items, e.remoteItems...)
@@ -472,34 +469,37 @@ func (e *Editor) accept() {
 	}
 	e.dismissedMentions = append(e.dismissedMentions, dismissedMention{text: insert})
 	if candidate.Attachment != nil {
-		e.addAttachment(*candidate.Attachment)
+		e.addAttachment(*candidate.Attachment, insert)
 	}
 	e.closeMenu()
 }
 
 func (e *Editor) closeMenu() { e.menu = menu{} }
 
-func (e *Editor) addAttachment(attachment Attachment) {
+func (e *Editor) addAttachment(attachment Attachment, mention string) {
 	for _, existing := range e.attachments {
 		if existing.Type == attachment.Type && existing.ID == attachment.ID {
 			return
 		}
 	}
 	e.attachments = append(e.attachments, attachment)
+	e.attachmentMentions = append(e.attachmentMentions, mention)
 	e.viewCached = false
 }
 
-func (e *Editor) attachmentsView() string {
-	if len(e.attachments) == 0 {
-		return ""
-	}
-	labels := make([]string, len(e.attachments))
+func (e *Editor) reconcileAttachments() {
+	value := e.ta.Value()
+	attachments := e.attachments[:0]
+	mentions := e.attachmentMentions[:0]
 	for i, attachment := range e.attachments {
-		labels[i] = "@" + attachment.Label + " [" + attachment.Type + "]"
+		if i >= len(e.attachmentMentions) || !strings.Contains(value, e.attachmentMentions[i]) {
+			continue
+		}
+		attachments = append(attachments, attachment)
+		mentions = append(mentions, e.attachmentMentions[i])
 	}
-	line := "Attached: " + strings.Join(labels, ", ") + " · ctrl+x removes last"
-	width := max(1, e.width-e.inputStyle.Block.GetHorizontalFrameSize())
-	return e.styles.MenuItem.Render(ansi.Truncate(line, width, "…"))
+	e.attachments = attachments
+	e.attachmentMentions = mentions
 }
 
 type entitySpan struct {

@@ -27,10 +27,11 @@ Use `bits --help` for the complete command list or `bits help login` for command
 | `/quit`, `/exit` | Exit Bits. |
 
 Type `@` after whitespace or punctuation to open a mixed picker of Datadog
-entities and files from the current workspace. Datadog selections appear in an
-`Attached` row and are sent as structured context for the next turn. Press
-`Ctrl+X` to remove the last attachment. Backspace does the same when the prompt
-is empty. File mentions remain plain prompt text.
+entities and local-file suggestions. Prefix a query with a supported entity type,
+such as `@service:assistant`, to narrow the search. Datadog selections are
+inserted as typed mentions such as `@dashboard:"Test Dashboard"` and sent as
+structured context for the next turn. Editing or deleting the mention removes
+that entity from the structured context. File mentions remain plain prompt text.
 
 ## Noninteractive run
 

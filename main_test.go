@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -106,28 +103,5 @@ func TestStartupStoredOAuthEntersChatWithConversation(t *testing.T) {
 	}
 	if got := model.View().Content; strings.Contains(got, "Choose your Datadog site") {
 		t.Fatalf("stored OAuth unexpectedly entered login:\n%s", got)
-	}
-}
-
-func TestWorkspaceFileIndexIsSortedAndSkipsGeneratedTrees(t *testing.T) {
-	root := t.TempDir()
-	for path, contents := range map[string]string{
-		"z.go":                     "package example\n",
-		"docs/東京.md":               "hello\n",
-		".git/config":              "secret-ish metadata\n",
-		"vendor/example/code.go":   "package vendor\n",
-		"node_modules/pkg/file.js": "module.exports = {}\n",
-	} {
-		fullPath := filepath.Join(root, filepath.FromSlash(path))
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(fullPath, []byte(contents), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	want := []string{"docs/東京.md", "z.go"}
-	if got := workspaceFileIndex(root); !reflect.DeepEqual(got, want) {
-		t.Fatalf("workspace files = %#v, want %#v", got, want)
 	}
 }

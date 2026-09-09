@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -93,18 +94,46 @@ func (m *Model) beginEntitySearch(msg entitySearchDebounceMsg) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.entitySearchCancel = cancel
 	sessionID := m.searchSessionID
+	rawQuery, suggestionGroups := parseEntitySearchQuery(msg.query)
 	return func() tea.Msg {
 		response, err := searcher.SearchEntities(ctx, assistant.SearchEntitiesInput{
 			SearchSessionID:  sessionID,
-			RawQuery:         msg.query,
+			RawQuery:         rawQuery,
 			Limit:            10,
-			SuggestionGroups: assistant.DefaultEntitySuggestionGroups,
+			SuggestionGroups: suggestionGroups,
 		})
 		return entitySearchResultMsg{
 			generation: msg.generation, query: msg.query,
 			response: response, err: err,
 		}
 	}
+}
+
+// parseEntitySearchQuery translates @type:query syntax into the API's
+// suggestion_groups filter. A space after the colon or a leading quote keeps
+// the query literal, so @"service: Assistant API" still searches every type.
+func parseEntitySearchQuery(query string) (string, []string) {
+	groups := assistant.DefaultEntitySuggestionGroups
+	if strings.HasPrefix(query, `"`) {
+		return trimSearchQuotes(query), groups
+	}
+
+	prefix, remainder, found := strings.Cut(query, ":")
+	if !found || (remainder != "" && unicode.IsSpace([]rune(remainder)[0])) {
+		return query, groups
+	}
+	for _, group := range assistant.DefaultEntitySuggestionGroups {
+		if strings.EqualFold(prefix, group) {
+			return trimSearchQuotes(remainder), []string{group}
+		}
+	}
+	return query, groups
+}
+
+func trimSearchQuotes(query string) string {
+	query = strings.TrimPrefix(query, `"`)
+	query = strings.TrimSuffix(query, `"`)
+	return query
 }
 
 func (m *Model) applyEntitySearchResult(msg entitySearchResultMsg) {
@@ -127,6 +156,7 @@ func entityCandidates(response assistant.SearchEntitiesResponse) []editor.Candid
 	items := make([]editor.Candidate, 0, len(response.Entities))
 	for _, entity := range response.Entities {
 		label := entity.DisplayLabel()
+		typeName := displayEntityType(string(entity.EntityType))
 		id := entity.CandidateID
 		if id == "" {
 			id = string(entity.EntityType) + ":" + entity.EntityID
@@ -139,11 +169,30 @@ func entityCandidates(response assistant.SearchEntitiesResponse) []editor.Candid
 		}
 		items = append(items, editor.Candidate{
 			Kind: editor.CandidateEntity, ID: id,
-			Label: "DD " + label, Detail: entity.DisplayDetail(),
-			Insert: "@" + label, Attachment: &attachment,
+			Label:  "◇ [" + typeName + "] " + label,
+			Insert: entityMention(string(entity.EntityType), label), Attachment: &attachment,
 		})
 	}
 	return items
+}
+
+func displayEntityType(entityType string) string {
+	words := strings.Fields(strings.ReplaceAll(entityType, "_", " "))
+	for i, word := range words {
+		runes := []rune(word)
+		if len(runes) > 0 {
+			words[i] = string(unicode.ToUpper(runes[0])) + string(runes[1:])
+		}
+	}
+	if len(words) == 0 {
+		return "Entity"
+	}
+	return strings.Join(words, " ")
+}
+
+func entityMention(entityType, label string) string {
+	label = strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(label)
+	return "@" + entityType + `:"` + label + `"`
 }
 
 func (m *Model) cachedEntitySearch(query string, now time.Time) (assistant.SearchEntitiesResponse, bool) {

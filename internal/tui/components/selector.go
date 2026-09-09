@@ -93,16 +93,17 @@ func (s *Selector) View(width int) string {
 	markerWidth := max(ansi.StringWidth(s.styles.Marker), ansi.StringWidth(s.styles.SelectedMarker))
 	gap := max(0, s.styles.ColumnGap)
 	hasDetail := false
+	maxDetailWidth := 0
 	for _, choice := range s.choices {
 		if choice.Detail != "" {
 			hasDetail = true
-			break
+			maxDetailWidth = max(maxDetailWidth, ansi.StringWidth(choice.Detail))
 		}
 	}
 	if hasDetail && width-markerWidth-gap >= 8 {
 		// Reserve cells for type and metadata so one long label cannot erase
 		// the detail column for every row.
-		reservedDetail := min(16, max(4, width/3))
+		reservedDetail := min(maxDetailWidth, min(16, max(4, width/3)))
 		labelWidth = min(labelWidth, max(1, width-markerWidth-gap-reservedDetail))
 	}
 

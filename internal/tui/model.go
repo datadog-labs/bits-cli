@@ -46,7 +46,6 @@ type EntitySearcher interface {
 type Config struct {
 	Tools          *agent.ToolSet
 	EntitySearcher EntitySearcher
-	WorkspaceFiles []string
 	StatusProvider statusview.Provider
 	OpenURL        func(context.Context, string) error
 	Logout         LogoutFunc
@@ -201,9 +200,6 @@ func (m *Model) configure(configs []Config) {
 	}
 	if m.entitySearcher == nil && m.engine != nil {
 		m.entitySearcher = m.engine
-	}
-	if len(configs) > 0 {
-		m.editor.SetFiles(configs[0].WorkspaceFiles)
 	}
 	if m.openURL == nil {
 		m.openURL = browser.Open

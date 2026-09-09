@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +84,49 @@ func TestEntitySearchDebouncesThenCancelsSupersededRequest(t *testing.T) {
 	<-result
 }
 
+func TestEntitySearchTypePrefixNarrowsRequest(t *testing.T) {
+	searcher := &staticEntitySearcher{}
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{EntitySearcher: searcher})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: `@service:"Assistant API"`})
+	debounce := m.syncEntitySearch()
+	message := debounce().(entitySearchDebounceMsg)
+	_ = m.beginEntitySearch(message)()
+
+	if len(searcher.inputs) != 1 {
+		t.Fatalf("search requests = %d, want 1", len(searcher.inputs))
+	}
+	input := searcher.inputs[0]
+	if input.RawQuery != "Assistant API" {
+		t.Fatalf("raw query = %q, want %q", input.RawQuery, "Assistant API")
+	}
+	if !reflect.DeepEqual(input.SuggestionGroups, []string{"service"}) {
+		t.Fatalf("suggestion groups = %#v, want service only", input.SuggestionGroups)
+	}
+}
+
+func TestEntitySearchQuerySyntaxDistinguishesTypedAndLiteralSearch(t *testing.T) {
+	tests := []struct {
+		query  string
+		raw    string
+		groups []string
+	}{
+		{query: "service:assistant", raw: "assistant", groups: []string{"service"}},
+		{query: `service:"Assistant API"`, raw: "Assistant API", groups: []string{"service"}},
+		{query: "service: Assistant API", raw: "service: Assistant API", groups: assistant.DefaultEntitySuggestionGroups},
+		{query: `"service: Assistant API"`, raw: "service: Assistant API", groups: assistant.DefaultEntitySuggestionGroups},
+		{query: "unknown:assistant", raw: "unknown:assistant", groups: assistant.DefaultEntitySuggestionGroups},
+	}
+	for _, test := range tests {
+		t.Run(test.query, func(t *testing.T) {
+			raw, groups := parseEntitySearchQuery(test.query)
+			if raw != test.raw || !reflect.DeepEqual(groups, test.groups) {
+				t.Fatalf("parseEntitySearchQuery(%q) = (%q, %#v), want (%q, %#v)", test.query, raw, groups, test.raw, test.groups)
+			}
+		})
+	}
+}
+
 func TestEntitySearchRejectsStaleResponse(t *testing.T) {
 	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}))
 	m.editor.Focus()
@@ -112,7 +156,7 @@ func TestEntitySearchUsesFreshBoundedCache(t *testing.T) {
 	if command := m.syncEntitySearch(); command != nil {
 		t.Fatal("fresh cache entry unexpectedly armed a request")
 	}
-	if !strings.Contains(m.editor.MenuView(), "DD") || !strings.Contains(m.editor.MenuView(), "service") {
+	if !strings.Contains(m.editor.MenuView(), "◇ [Service] checkout") {
 		t.Fatalf("cached menu = %q", m.editor.MenuView())
 	}
 	for i := range entitySearchCacheMax + 5 {
@@ -191,5 +235,72 @@ func TestSelectedEntityContextIsSentOnceAndClearedAfterSubmit(t *testing.T) {
 	second := <-backend.requests
 	if second.Context != nil {
 		t.Fatalf("next turn reused context: %#v", second.Context)
+	}
+}
+
+func TestEditingSelectedMentionRemovesStructuredContext(t *testing.T) {
+	backend := &acceptingBackend{requests: make(chan assistant.SendOptions, 1)}
+	m := New(agent.New(backend, assistant.SendOptions{}))
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "@check"})
+	_ = m.syncEntitySearch()
+	m.applyEntitySearchResult(entitySearchResultMsg{
+		generation: m.entitySearchGeneration,
+		query:      "check",
+		response: assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
+			CandidateID: "candidate-1", EntityID: "dashboard-1",
+			EntityType: "dashboard", Title: "Test Dashboard",
+		}}},
+	})
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := m.editor.Value(); got != `@dashboard:"Test Dashboard" ` {
+		t.Fatalf("selected mention = %q", got)
+	}
+
+	// Remove the trailing space and then change the quoted mention itself.
+	m.editor.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m.editor.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if len(m.editor.Attachments()) != 0 {
+		t.Fatalf("edited mention retained context: %#v", m.editor.Attachments())
+	}
+	m.editor.CloseMenu()
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	request := <-backend.requests
+	if request.Context != nil {
+		t.Fatalf("edited mention sent structured context: %#v", request.Context)
+	}
+}
+
+func TestEntityCandidatePresentationAndQuotedMention(t *testing.T) {
+	response := assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
+		CandidateID: "candidate-1", EntityID: "dashboard-1", EntityType: "dashboard",
+		Title: "Test Dashboard", AuthorName: "Test User",
+	}}}
+	candidates := entityCandidates(response)
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+	if got, want := candidates[0].Label, "◇ [Dashboard] Test Dashboard"; got != want {
+		t.Fatalf("label = %q, want %q", got, want)
+	}
+	if got, want := candidates[0].Detail, ""; got != want {
+		t.Fatalf("detail = %q, want %q", got, want)
+	}
+	if got, want := candidates[0].Insert, `@dashboard:"Test Dashboard"`; got != want {
+		t.Fatalf("insert = %q, want %q", got, want)
+	}
+}
+
+func TestUnknownEntityCandidatePresentationEscapesQuotedMention(t *testing.T) {
+	response := assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
+		CandidateID: "candidate-1", EntityID: "custom-1", EntityType: "custom_widget",
+		Name: `A "quoted" widget`,
+	}}}
+	candidate := entityCandidates(response)[0]
+	if got, want := candidate.Label, `◇ [Custom Widget] A "quoted" widget`; got != want {
+		t.Fatalf("label = %q, want %q", got, want)
+	}
+	if got, want := candidate.Insert, `@custom_widget:"A \"quoted\" widget"`; got != want {
+		t.Fatalf("insert = %q, want %q", got, want)
 	}
 }
