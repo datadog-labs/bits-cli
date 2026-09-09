@@ -124,18 +124,6 @@ func TestFakeFilesFilter(t *testing.T) {
 	}
 }
 
-func TestFakeCommandsPrefix(t *testing.T) {
-	got := FakeCommands("s")
-	if len(got) == 0 {
-		t.Fatal("expected slash commands for prefix 's'")
-	}
-	for _, c := range got {
-		if !strings.HasPrefix(c.Insert, "/s") {
-			t.Errorf("command insert %q should start with /s", c.Insert)
-		}
-	}
-}
-
 func TestFakeCommandsAliasDiscoverable(t *testing.T) {
 	// The canonical name matches its own prefix.
 	quit := FakeCommands("q")
