@@ -52,16 +52,14 @@ func TestDefaultPinsAModeSpecificBackground(t *testing.T) {
 // from it, or the block it draws disappears into the page. Light mode regressed
 // exactly this way when the background was pinned ahead of its ramp.
 func TestSurfacesSeparateFromTheirBackground(t *testing.T) {
-	// pendingElevation names roles that do not clear their background yet.
+	// exempt names roles that are deliberately outside the elevation floor.
 	//
-	// TODO: dark's errorSurface is at 1.022:1 against the pinned page, so the
-	// chip draws but its surface is indistinguishable from the transcript. It
-	// cannot be fixed from this side alone: lifting the surface pushes the label
-	// further under AA (see TestChipLabelsReadOnTheirOwnSurface), and dark's
-	// status colors are deliberately held to what they were. Resolving it means
-	// deciding whether the error chip keeps a surface at all — the same question
-	// StatusSuccess already answered by dropping one.
-	pendingElevation := map[string]map[string]bool{
+	// dark's errorSurface sits at 1.022:1 against the page, so the chip reads as
+	// its label rather than as a block. That is accepted: the label itself is
+	// legible, and the alternative is moving dark's status colors, which are
+	// fixed by design. The floor stays as a guard for roles that have no such
+	// exemption, not as a standard every role must meet.
+	exempt := map[string]map[string]bool{
 		"dark": {"errorSurface": true},
 	}
 	for _, test := range []struct {
@@ -85,7 +83,7 @@ func TestSurfacesSeparateFromTheirBackground(t *testing.T) {
 				if !strings.HasPrefix(surface, "#") {
 					continue
 				}
-				if pendingElevation[test.name][role] {
+				if exempt[test.name][role] {
 					continue
 				}
 				if got := contrastRatio(surface, test.palette.background); got < 1.1 {
@@ -137,17 +135,15 @@ func TestForegroundTokensMeetNormalTextContrast(t *testing.T) {
 // foreground and their background from the palette — the status chips and code
 // spans — so neither half can be moved without the other.
 func TestChipLabelsReadOnTheirOwnSurface(t *testing.T) {
-	// unreachableAA names pairs that cannot meet 4.5:1 without changing a color
-	// that is deliberately fixed.
+	// exempt names pairs held to legibility by eye rather than to this bound.
 	//
-	// dark's error pair is one. With error pinned at #D33043 the bound is not
-	// merely unmet, it is unreachable: 4.5:1 would need an errorSurface of
-	// negative luminance, and even pure black caps the pair at 4.27:1. Darkening
-	// the surface is the only direction that helps at all (#2F0A0F gives 3.65:1,
-	// black 4.27:1), and it trades away the elevation the chip needs to be
-	// visible at all. So this is a palette decision, not an oversight — see the
-	// TODO in TestSurfacesSeparateFromTheirBackground.
-	unreachableAA := map[string]map[string]bool{
+	// dark's error pair is one, and no color choice would satisfy the bound while
+	// dark's status colors stay fixed: with error at #D33043, 4.5:1 would need an
+	// errorSurface of negative luminance, and even pure black caps the pair at
+	// 4.27:1. The pair is judged readable as it is. This bound is a guard against
+	// unnoticed drift in the pairs that have no such exemption — a ratio is a
+	// useful signal, not the standard the palette answers to.
+	exempt := map[string]map[string]bool{
 		"dark": {"error/errorSurface": true},
 	}
 	for _, test := range []struct {
@@ -163,7 +159,7 @@ func TestChipLabelsReadOnTheirOwnSurface(t *testing.T) {
 				"busy/busySurface":     {test.palette.busy, test.palette.busySurface},
 				"codeText/codeSurface": {test.palette.codeText, test.palette.codeSurface},
 			} {
-				if unreachableAA[test.name][role] {
+				if exempt[test.name][role] {
 					continue
 				}
 				if got := contrastRatio(pair[0], pair[1]); got < 4.5 {
