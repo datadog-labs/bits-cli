@@ -87,6 +87,10 @@ func TestSurfacesSeparateFromTheirBackground(t *testing.T) {
 			}
 		})
 	}
+	light := lightPalette()
+	if relativeLuminance(light.surface) >= relativeLuminance(light.background) {
+		t.Error("light surface should be darker than the background it sits on")
+	}
 }
 
 // TestElevationRunsAwayFromThePage guards the ramp's direction, which differs
