@@ -637,7 +637,7 @@ func (e *Editor) activeEntitySpan() (entitySpan, bool) {
 	var quote mentionQuote
 	// Scan forward so an @ inside a quoted query cannot become a trigger.
 	// Quotes in ordinary prose do not affect mention parsing.
-	for i := 0; i < col; i++ {
+	for i := range col {
 		if e.insideCompletedMention(lineStart + i) {
 			start = -1
 			quote = mentionQuote{}
@@ -646,10 +646,14 @@ func (e *Editor) activeEntitySpan() (entitySpan, bool) {
 		if start >= 0 && quote.consume(runes[i], i == quoteStart) {
 			continue
 		}
-		if runes[i] == '@' && (i == 0 || !(unicode.IsLetter(runes[i-1]) || unicode.IsDigit(runes[i-1]) || runes[i-1] == '_')) {
-			start = i
-			quoteStart = entityQuoteStart(runes, start)
+		if runes[i] != '@' {
+			continue
 		}
+		if i > 0 && (unicode.IsLetter(runes[i-1]) || unicode.IsDigit(runes[i-1]) || runes[i-1] == '_') {
+			continue
+		}
+		start = i
+		quoteStart = entityQuoteStart(runes, start)
 	}
 	if start < 0 {
 		return entitySpan{}, false
