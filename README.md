@@ -26,9 +26,9 @@ Use `bits --help` for the complete command list or `bits help login` for command
 | `/logout` | Sign out from your Datadog account and exit Bits. |
 | `/quit`, `/exit` | Exit Bits. |
 
-Type `@` after whitespace or punctuation to open a mixed picker of Datadog
-entities and local-file suggestions. Prefix a query with a supported entity type,
-such as `@service:assistant`, to narrow the search. Datadog selections are
+Type `@` after whitespace or punctuation to open a mixed picker of entities and
+local-file suggestions. Prefix a query with a supported entity type, such as
+`@service:assistant`, to narrow the search. Entity selections are
 inserted as typed mentions such as `@dashboard:"Test Dashboard"` and sent as
 structured context for the next turn. Editing or deleting the mention removes
 that entity from the structured context. File mentions remain plain prompt text.

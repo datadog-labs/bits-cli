@@ -3,6 +3,7 @@
 package editor
 
 import (
+	"slices"
 	"strings"
 	"unicode"
 
@@ -34,16 +35,15 @@ const (
 // Editor is the chat input. The completion menu opens automatically for @
 // tokens and for a / token only when it is the first token in the prompt.
 type Editor struct {
-	ta                 textarea.Model
-	styles             styles.Editor
-	menu               menu
-	attachments        []Attachment
-	attachmentMentions []string
-	remoteQuery        string
-	remoteItems        []Candidate
-	remoteState        RemoteState
-	dismissedMentions  []dismissedMention
-	dismissedValue     string
+	ta                textarea.Model
+	styles            styles.Editor
+	menu              menu
+	attachments       []trackedAttachment
+	remoteQuery       string
+	remoteItems       []Candidate
+	remoteState       RemoteState
+	dismissedMentions []dismissedMention
+	dismissedValue    string
 
 	// inputStyle is the shared input-block contract. width is the block's total
 	// width; the textarea is sized to fit inside the block's horizontal frame.
@@ -112,7 +112,18 @@ func (e *Editor) SetEntityResults(query string, state RemoteState, items []Candi
 
 // Attachments returns a copy of the selected canonical Datadog identities.
 func (e *Editor) Attachments() []Attachment {
-	return append([]Attachment(nil), e.attachments...)
+	attachments := make([]Attachment, 0, len(e.attachments))
+	type entityKey struct{ entityType, id string }
+	seen := make(map[entityKey]struct{}, len(e.attachments))
+	for _, tracked := range e.attachments {
+		key := entityKey{entityType: tracked.attachment.Type, id: tracked.attachment.ID}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		attachments = append(attachments, tracked.attachment)
+	}
+	return attachments
 }
 
 // RemoveLastAttachment removes the most recently selected Datadog entity and
@@ -121,12 +132,15 @@ func (e *Editor) RemoveLastAttachment() bool {
 	if len(e.attachments) == 0 {
 		return false
 	}
-	mention := e.attachmentMentions[len(e.attachmentMentions)-1]
-	e.attachments = e.attachments[:len(e.attachments)-1]
-	e.attachmentMentions = e.attachmentMentions[:len(e.attachmentMentions)-1]
-	if index := strings.LastIndex(e.ta.Value(), mention); index >= 0 {
-		value := e.ta.Value()
-		e.ta.SetValue(value[:index] + value[index+len(mention):])
+	tracked := e.attachments[len(e.attachments)-1]
+	before := e.ta.Value()
+	runes := []rune(before)
+	if tracked.start >= 0 && tracked.end <= len(runes) && tracked.start < tracked.end {
+		after := string(runes[:tracked.start]) + string(runes[tracked.end:])
+		e.ta.SetValue(after)
+		e.applyAttachmentEdit(tracked.start, tracked.end, tracked.start, after)
+	} else {
+		e.attachments = e.attachments[:len(e.attachments)-1]
 	}
 	e.viewCached = false
 	return true
@@ -211,7 +225,6 @@ func (e *Editor) Value() string { return e.ta.Value() }
 func (e *Editor) Reset() {
 	e.ta.Reset()
 	e.attachments = nil
-	e.attachmentMentions = nil
 	e.remoteItems = nil
 	e.remoteState = RemoteIdle
 	e.dismissedMentions = nil
@@ -284,12 +297,17 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 		}
 	}
 	e.viewCached = false
+	before := e.ta.Value()
+	beforeCursor := e.cursorOffset()
 	var cmd tea.Cmd
 	e.ta, cmd = e.ta.Update(msg)
+	after := e.ta.Value()
 	if e.dismissedValue != "" && e.ta.Value() != e.dismissedValue {
 		e.dismissedValue = ""
 	}
-	e.reconcileAttachments()
+	if start, oldEnd, newEnd, changed := textEditRange(before, after, beforeCursor, e.cursorOffset()); changed {
+		e.applyAttachmentEdit(start, oldEnd, newEnd, after)
+	}
 	e.recompute()
 	return cmd
 }
@@ -382,12 +400,12 @@ func (e *Editor) recompute() {
 	switch state {
 	case RemoteIdle:
 	case RemoteLoading:
-		status = "Searching Datadog…"
+		status = "Searching…"
 	case RemoteError:
-		status = "Datadog search unavailable"
+		status = "Search unavailable"
 	case RemoteReady:
 		if len(items) == 0 {
-			status = "No matching files or Datadog entities"
+			status = "No matching files or entities"
 		}
 	}
 	e.setMenu(items, status)
@@ -445,7 +463,8 @@ func (e *Editor) accept() {
 	candidate := e.menu.items[e.menu.selector.Index()]
 	insert := candidate.Insert
 
-	lines := strings.Split(e.ta.Value(), "\n")
+	before := e.ta.Value()
+	lines := strings.Split(before, "\n")
 	row := e.ta.Line()
 	if row < 0 || row >= len(lines) {
 		e.closeMenu()
@@ -453,59 +472,141 @@ func (e *Editor) accept() {
 	}
 	runes := []rune(lines[row])
 	col := min(max(e.ta.Column(), 0), len(runes))
+	lineStart := 0
+	for i := range row {
+		lineStart += len([]rune(lines[i])) + 1
+	}
 	start, end := wordBounds(runes, col)
 	if candidate.Kind != CandidateCommand {
 		if span, ok := e.activeEntitySpan(); ok {
-			start, end = span.start, span.end
+			start = span.start
+			end = span.replacementEnd
 		}
 	}
 
 	repl := []rune(insert + " ")
 	lines[row] = string(runes[:start]) + string(repl) + string(runes[end:])
-	e.ta.SetValue(strings.Join(lines, "\n"))
+	value := strings.Join(lines, "\n")
+	e.ta.SetValue(value)
+	// Completion is an edit like typing or pasting. Move or remove existing
+	// attachment spans before registering the entity selected by this edit.
+	e.applyAttachmentEdit(lineStart+start, lineStart+end, lineStart+start+len(repl), value)
 	e.viewCached = false
 	if row == len(lines)-1 {
 		e.ta.SetCursorColumn(start + len(repl))
 	}
 	e.dismissedMentions = append(e.dismissedMentions, dismissedMention{text: insert})
 	if candidate.Attachment != nil {
-		e.addAttachment(*candidate.Attachment, insert)
+		e.addAttachment(*candidate.Attachment, insert, lineStart+start)
 	}
 	e.closeMenu()
 }
 
 func (e *Editor) closeMenu() { e.menu = menu{} }
 
-func (e *Editor) addAttachment(attachment Attachment, mention string) {
-	for _, existing := range e.attachments {
-		if existing.Type == attachment.Type && existing.ID == attachment.ID {
-			return
-		}
-	}
-	e.attachments = append(e.attachments, attachment)
-	e.attachmentMentions = append(e.attachmentMentions, mention)
+func (e *Editor) addAttachment(attachment Attachment, mention string, start int) {
+	e.attachments = append(e.attachments, trackedAttachment{
+		attachment: attachment,
+		mention:    mention,
+		start:      start,
+		end:        start + len([]rune(mention)),
+	})
 	e.viewCached = false
 }
 
-func (e *Editor) reconcileAttachments() {
-	value := e.ta.Value()
-	attachments := e.attachments[:0]
-	mentions := e.attachmentMentions[:0]
-	for i, attachment := range e.attachments {
-		if i >= len(e.attachmentMentions) || !strings.Contains(value, e.attachmentMentions[i]) {
+type trackedAttachment struct {
+	attachment Attachment
+	mention    string
+	start      int
+	end        int
+}
+
+func (e *Editor) applyAttachmentEdit(start, oldEnd, newEnd int, after string) {
+	runes := []rune(after)
+	delta := newEnd - oldEnd
+	kept := e.attachments[:0]
+	for _, tracked := range e.attachments {
+		switch {
+		case oldEnd <= tracked.start:
+			tracked.start += delta
+			tracked.end += delta
+		case start >= tracked.end:
+			// The edit follows the mention.
+		default:
 			continue
 		}
-		attachments = append(attachments, attachment)
-		mentions = append(mentions, e.attachmentMentions[i])
+		if tracked.start < 0 || tracked.end > len(runes) || string(runes[tracked.start:tracked.end]) != tracked.mention {
+			continue
+		}
+		kept = append(kept, tracked)
 	}
-	e.attachments = attachments
-	e.attachmentMentions = mentions
+	e.attachments = kept
+}
+
+func (e *Editor) cursorOffset() int {
+	lines := strings.Split(e.ta.Value(), "\n")
+	row := min(max(e.ta.Line(), 0), len(lines)-1)
+	offset := 0
+	for i := range row {
+		offset += len([]rune(lines[i])) + 1
+	}
+	return offset + min(max(e.ta.Column(), 0), len([]rune(lines[row])))
+}
+
+func textEditRange(before, after string, beforeCursor, afterCursor int) (start, oldEnd, newEnd int, changed bool) {
+	oldRunes, newRunes := []rune(before), []rune(after)
+	if slices.Equal(oldRunes, newRunes) {
+		return 0, 0, 0, false
+	}
+	delta := len(newRunes) - len(oldRunes)
+	switch {
+	case delta > 0:
+		start, oldEnd, newEnd = beforeCursor, beforeCursor, beforeCursor+delta
+	case delta < 0 && afterCursor < beforeCursor:
+		start, oldEnd, newEnd = afterCursor, afterCursor-delta, afterCursor
+	case delta < 0:
+		start, oldEnd, newEnd = beforeCursor, beforeCursor-delta, beforeCursor
+	default:
+		start = 0
+		for start < len(oldRunes) && oldRunes[start] == newRunes[start] {
+			start++
+		}
+		oldEnd, newEnd = len(oldRunes), len(newRunes)
+		for oldEnd > start && newEnd > start && oldRunes[oldEnd-1] == newRunes[newEnd-1] {
+			oldEnd--
+			newEnd--
+		}
+	}
+	if validTextEdit(oldRunes, newRunes, start, oldEnd, newEnd) {
+		return start, oldEnd, newEnd, true
+	}
+	start = 0
+	for start < len(oldRunes) && start < len(newRunes) && oldRunes[start] == newRunes[start] {
+		start++
+	}
+	oldEnd, newEnd = len(oldRunes), len(newRunes)
+	for oldEnd > start && newEnd > start && oldRunes[oldEnd-1] == newRunes[newEnd-1] {
+		oldEnd--
+		newEnd--
+	}
+	return start, oldEnd, newEnd, true
+}
+
+func validTextEdit(before, after []rune, start, oldEnd, newEnd int) bool {
+	if start < 0 || start > oldEnd || oldEnd > len(before) || newEnd < start || newEnd > len(after) {
+		return false
+	}
+	rebuilt := make([]rune, 0, len(after))
+	rebuilt = append(rebuilt, before[:start]...)
+	rebuilt = append(rebuilt, after[start:newEnd]...)
+	rebuilt = append(rebuilt, before[oldEnd:]...)
+	return slices.Equal(rebuilt, after)
 }
 
 type entitySpan struct {
-	start int
-	end   int
-	query string
+	start          int
+	replacementEnd int
+	query          string
 }
 
 type dismissedMention struct {
@@ -526,8 +627,15 @@ func (e *Editor) activeEntitySpan() (entitySpan, bool) {
 	}
 	runes := []rune(lines[row])
 	col := min(max(e.ta.Column(), 0), len(runes))
+	lineStart := 0
+	for i := range row {
+		lineStart += len([]rune(lines[i])) + 1
+	}
 	for i := col - 1; i >= 0; i-- {
 		if runes[i] != '@' {
+			continue
+		}
+		if e.insideAttachedMention(lineStart + i) {
 			continue
 		}
 		if i > 0 && (unicode.IsLetter(runes[i-1]) || unicode.IsDigit(runes[i-1]) || runes[i-1] == '_') {
@@ -544,9 +652,58 @@ func (e *Editor) activeEntitySpan() (entitySpan, bool) {
 		if dismissed {
 			continue
 		}
-		return entitySpan{start: i, end: col, query: string(runes[i+1 : col])}, true
+		replacementEnd := entityReplacementEnd(runes, i, col)
+		for _, tracked := range e.attachments {
+			trackedStart := tracked.start - lineStart
+			if trackedStart > i && trackedStart < replacementEnd {
+				replacementEnd = trackedStart
+			}
+		}
+		return entitySpan{
+			start:          i,
+			replacementEnd: replacementEnd,
+			query:          string(runes[i+1 : col]),
+		}, true
 	}
 	return entitySpan{}, false
+}
+
+func entityReplacementEnd(runes []rune, start, col int) int {
+	_, end := wordBounds(runes, col)
+	inQuote, escaped := false, false
+	for i := start + 1; i < col; i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case runes[i] == '\\':
+			escaped = true
+		case runes[i] == '"':
+			inQuote = !inQuote
+		}
+	}
+	if !inQuote {
+		return end
+	}
+	for end = col; end < len(runes); end++ {
+		switch {
+		case escaped:
+			escaped = false
+		case runes[end] == '\\':
+			escaped = true
+		case runes[end] == '"':
+			return end + 1
+		}
+	}
+	return end
+}
+
+func (e *Editor) insideAttachedMention(position int) bool {
+	for _, tracked := range e.attachments {
+		if position >= tracked.start && position < tracked.end {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Editor) dismissActiveMention() {

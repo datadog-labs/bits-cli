@@ -14,6 +14,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/editor"
+	"github.com/DataDog/bits-cli/internal/tui/escape"
 )
 
 const (
@@ -156,7 +157,15 @@ func entityCandidates(response assistant.SearchEntitiesResponse) []editor.Candid
 	items := make([]editor.Candidate, 0, len(response.Entities))
 	for _, entity := range response.Entities {
 		label := entity.DisplayLabel()
-		typeName := displayEntityType(string(entity.EntityType))
+		displayLabel := escape.SingleLine(label)
+		if displayLabel == "" {
+			displayLabel = escape.SingleLine(entity.EntityID)
+		}
+		if displayLabel == "" {
+			displayLabel = "unknown entity"
+		}
+		displayType := escape.SingleLine(string(entity.EntityType))
+		typeName := displayEntityType(displayType)
 		id := entity.CandidateID
 		if id == "" {
 			id = string(entity.EntityType) + ":" + entity.EntityID
@@ -169,8 +178,8 @@ func entityCandidates(response assistant.SearchEntitiesResponse) []editor.Candid
 		}
 		items = append(items, editor.Candidate{
 			Kind: editor.CandidateEntity, ID: id,
-			Label:  "◇ [" + typeName + "] " + label,
-			Insert: entityMention(string(entity.EntityType), label), Attachment: &attachment,
+			Label:  "◇ [" + typeName + "] " + displayLabel,
+			Insert: entityMention(displayType, displayLabel), Attachment: &attachment,
 		})
 	}
 	return items
@@ -191,7 +200,9 @@ func displayEntityType(entityType string) string {
 }
 
 func entityMention(entityType, label string) string {
-	label = strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(label)
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	entityType = replacer.Replace(entityType)
+	label = replacer.Replace(label)
 	return "@" + entityType + `:"` + label + `"`
 }
 

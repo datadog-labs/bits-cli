@@ -9,9 +9,11 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/editor"
 )
 
 type blockingEntitySearcher struct {
@@ -177,7 +179,7 @@ func TestSearchFailureLeavesSubmissionUsable(t *testing.T) {
 	debounceMessage := debounce().(entitySearchDebounceMsg)
 	result := m.beginEntitySearch(debounceMessage)().(entitySearchResultMsg)
 	m.applyEntitySearchResult(result)
-	if !strings.Contains(m.editor.MenuView(), "search unavailable") {
+	if !strings.Contains(m.editor.MenuView(), "Search unavailable") {
 		t.Fatalf("error menu = %q", m.editor.MenuView())
 	}
 
@@ -302,5 +304,32 @@ func TestUnknownEntityCandidatePresentationEscapesQuotedMention(t *testing.T) {
 	}
 	if got, want := candidate.Insert, `@custom_widget:"A \"quoted\" widget"`; got != want {
 		t.Fatalf("insert = %q, want %q", got, want)
+	}
+}
+
+func TestEntityCandidateSanitizesTerminalControls(t *testing.T) {
+	unsafeLabel := "dashboard\x1b]52;c;Y2xpcGJvYXJk\a\nforged row"
+	unsafeType := assistant.EntityType("dashboard\x1b[31m")
+	candidate := entityCandidates(assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
+		CandidateID: "candidate-1", EntityID: "dashboard-1",
+		EntityType: unsafeType, Title: unsafeLabel,
+	}}})[0]
+
+	for field, value := range map[string]string{"label": candidate.Label, "insert": candidate.Insert} {
+		if strings.ContainsAny(value, "\x1b\a\n\r") {
+			t.Fatalf("%s retained terminal controls: %q", field, value)
+		}
+	}
+	if candidate.Attachment == nil || candidate.Attachment.ID != "dashboard-1" || candidate.Attachment.Type != string(unsafeType) {
+		t.Fatalf("sanitization changed canonical identity: %#v", candidate.Attachment)
+	}
+
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}))
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "@dash"})
+	m.editor.SetEntityResults("dash", editor.RemoteReady, []editor.Candidate{candidate})
+	menu := m.editor.MenuView()
+	if strings.Contains(menu, "\x1b]52;") || strings.Contains(ansi.Strip(menu), "\nforged row") {
+		t.Fatalf("menu rendered untrusted control sequence: %q", menu)
 	}
 }

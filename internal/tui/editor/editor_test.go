@@ -341,3 +341,167 @@ func TestMenuAndAttachmentsAreUnicodeSafeAtNarrowWidths(t *testing.T) {
 		}
 	}
 }
+
+func TestEditingOneOfTwoSameNamedMentionsRemovesOnlyItsIdentity(t *testing.T) {
+	e := New()
+	e.Focus()
+	e.ta.SetValue("@first")
+	e.ta.SetCursorColumn(len([]rune("@first")))
+	mention := `@dashboard:"Shared dashboard"`
+	first := Attachment{Type: "dashboard", ID: "dashboard-1", Label: "Shared dashboard"}
+	e.SetEntityResults("first", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Dashboard] Shared dashboard",
+		Insert: mention, Attachment: &first,
+	}})
+	e.accept()
+
+	e.Update(tea.PasteMsg{Content: "@second"})
+	second := Attachment{Type: "dashboard", ID: "dashboard-2", Label: "Shared dashboard"}
+	e.SetEntityResults("second", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-2", Label: "◇ [Dashboard] Shared dashboard",
+		Insert: mention, Attachment: &second,
+	}})
+	if query, active := e.ActiveEntityQuery(); !active || query != "second" {
+		t.Fatalf("second query = (%q, %v), value %q", query, active, e.Value())
+	}
+	if len(e.menu.items) != 1 || e.menu.items[0].ID != "candidate-2" {
+		t.Fatalf("second menu = %#v", e.menu.items)
+	}
+	e.accept()
+	if got := e.Attachments(); len(got) != 2 {
+		t.Fatalf("attachments before edit = %#v", got)
+	}
+
+	// Delete the closing quote from the first occurrence only.
+	e.ta.SetCursorColumn(len([]rune(mention)))
+	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	got := e.Attachments()
+	if len(got) != 1 || got[0].ID != "dashboard-2" {
+		t.Fatalf("attachments after editing first duplicate = %#v", got)
+	}
+}
+
+func TestBulkDeleteBeforeSameNamedMentionKeepsSurvivingIdentity(t *testing.T) {
+	e := New()
+	e.Focus()
+	mention := `@dashboard:"Same"`
+	first := Attachment{Type: "dashboard", ID: "d1", Label: "Same"}
+	second := Attachment{Type: "dashboard", ID: "d2", Label: "Same"}
+
+	e.ta.SetValue("@first")
+	e.ta.SetCursorColumn(len([]rune("@first")))
+	e.SetEntityResults("first", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Dashboard] Same",
+		Insert: mention, Attachment: &first,
+	}})
+	e.accept()
+	e.Update(tea.PasteMsg{Content: "@second"})
+	e.SetEntityResults("second", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-2", Label: "◇ [Dashboard] Same",
+		Insert: mention, Attachment: &second,
+	}})
+	e.accept()
+
+	secondStart := len([]rune(mention)) + 1
+	e.ta.SetCursorColumn(secondStart)
+	e.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	if got, want := e.Value(), mention+" "; got != want {
+		t.Fatalf("value after ctrl+u = %q, want %q", got, want)
+	}
+	got := e.Attachments()
+	if len(got) != 1 || got[0].ID != "d2" {
+		t.Fatalf("attachments after ctrl+u = %#v, want d2", got)
+	}
+}
+
+func TestAcceptMidTokenReplacesSuffixAfterCursor(t *testing.T) {
+	e := New()
+	e.ta.SetValue("@engine")
+	e.ta.SetCursorColumn(len([]rune("@eng")))
+	e.recompute()
+	if !e.MenuOpen() {
+		t.Fatal("mid-token query did not open completion")
+	}
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got, want := e.Value(), "@internal/agent/engine.go "; got != want {
+		t.Fatalf("accepted mid-token completion = %q, want %q", got, want)
+	}
+}
+
+func TestAtSignInsideSelectedEntityDoesNotRestartCompletion(t *testing.T) {
+	e := New()
+	e.ta.SetValue("@api")
+	e.ta.SetCursorColumn(len([]rune("@api")))
+	attachment := Attachment{Type: "dashboard", ID: "dashboard-1", Label: "API @ prod"}
+	e.SetEntityResults("api", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Dashboard] API @ prod",
+		Insert: `@dashboard:"API @ prod"`, Attachment: &attachment,
+	}})
+	e.accept()
+
+	if query, active := e.ActiveEntityQuery(); active {
+		t.Fatalf("selected entity restarted autocomplete with query %q", query)
+	}
+	e.recompute()
+	if e.MenuOpen() {
+		t.Fatal("selected entity reopened autocomplete")
+	}
+}
+
+func TestEntitySearchStatusesUseProductNeutralCopy(t *testing.T) {
+	e := New()
+	e.ta.SetValue("@missing")
+	e.ta.SetCursorColumn(len([]rune("@missing")))
+
+	for _, test := range []struct {
+		state RemoteState
+		want  string
+	}{
+		{state: RemoteLoading, want: "Searching…"},
+		{state: RemoteError, want: "Search unavailable"},
+		{state: RemoteReady, want: "No matching files or entities"},
+	} {
+		e.SetEntityResults("missing", test.state, nil)
+		view := ansi.Strip(e.MenuView())
+		if !strings.Contains(view, test.want) {
+			t.Fatalf("state %d view = %q, want %q", test.state, view, test.want)
+		}
+		if strings.Contains(view, "Datadog") {
+			t.Fatalf("state %d retained redundant product name: %q", test.state, view)
+		}
+	}
+}
+
+func TestCompletionBeforeEntityUpdatesExistingAttachmentSpan(t *testing.T) {
+	e := New()
+	e.Focus()
+	e.ta.SetValue("@dash")
+	e.ta.SetCursorColumn(len([]rune("@dash")))
+	mention := `@dashboard:"Test dashboard"`
+	attachment := Attachment{Type: "dashboard", ID: "dashboard-1", Label: "Test dashboard"}
+	e.SetEntityResults("dash", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Dashboard] Test dashboard",
+		Insert: mention, Attachment: &attachment,
+	}})
+	e.accept()
+
+	e.ta.SetCursorColumn(0)
+	e.Update(tea.PasteMsg{Content: "@eng"})
+	if len(e.attachments) != 1 {
+		t.Fatalf("typing before mention removed attachment: value=%q tracked=%#v", e.Value(), e.attachments)
+	}
+	if !e.MenuOpen() {
+		t.Fatal("file completion before entity did not open")
+	}
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !strings.Contains(e.Value(), mention) {
+		t.Fatalf("file completion removed visible entity mention: %q", e.Value())
+	}
+
+	e.ta.SetCursorColumn(len([]rune(e.Value())))
+	e.Update(tea.PasteMsg{Content: " inspect this"})
+	got := e.Attachments()
+	if len(got) != 1 || got[0].ID != "dashboard-1" {
+		t.Fatalf("attachment after completion and ordinary edit = %#v", got)
+	}
+}
