@@ -27,6 +27,7 @@ const (
 	commandResume
 	commandStatus
 	commandWeb
+	commandSettings
 	commandLogout
 )
 
@@ -63,6 +64,11 @@ var commandDefinitions = []commandDefinition{
 	{
 		id:               commandWeb,
 		name:             "web",
+		activeTurnPolicy: commandAllowedDuringTurn,
+	},
+	{
+		id:               commandSettings,
+		name:             "settings",
 		activeTurnPolicy: commandAllowedDuringTurn,
 	},
 	{
@@ -132,7 +138,7 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 				return m, m.requestNewConversation()
 			case commandLogout:
 				return m, m.requestLogout()
-			case commandQuit, commandResume, commandStatus, commandWeb:
+			case commandQuit, commandResume, commandStatus, commandWeb, commandSettings:
 				if m.cancelTurn != nil {
 					m.cancelTurn()
 				}
@@ -157,6 +163,8 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, m.openStatus()
 	case commandWeb:
 		return m, m.openConversationInBrowser()
+	case commandSettings:
+		return m, m.openSettingsInBrowser()
 	case commandLogout:
 		return m, m.startLogout()
 	default:

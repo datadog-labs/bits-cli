@@ -46,6 +46,36 @@ func TestConversationURLUsesAuthoritativeSiteMapping(t *testing.T) {
 	}
 }
 
+func TestSettingsURLUsesAuthoritativeSiteMapping(t *testing.T) {
+	tests := []struct {
+		name string
+		site string
+		want string
+	}{
+		{name: "US1", site: "https://api.datadoghq.com", want: "https://app.datadoghq.com/ask/settings"},
+		{name: "US3", site: "https://api.us3.datadoghq.com", want: "https://us3.datadoghq.com/ask/settings"},
+		{name: "EU1", site: "https://api.datadoghq.eu", want: "https://app.datadoghq.eu/ask/settings"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := SettingsURL(test.site)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("SettingsURL() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSettingsURLRejectsUnsupportedSite(t *testing.T) {
+	if got, err := SettingsURL("https://api.ddog-gov.com"); err == nil || got != "" {
+		t.Fatalf("SettingsURL() = %q, %v, want an error", got, err)
+	}
+}
+
 func TestConversationURLEncodesConversationID(t *testing.T) {
 	got, err := ConversationURL("https://api.datadoghq.com", " conversation/id?copy=yes ")
 	if err != nil {

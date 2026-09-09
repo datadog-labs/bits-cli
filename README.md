@@ -23,6 +23,7 @@ Use `bits --help` for the complete command list or `bits help login` for command
 | `/resume` | Resume an existing conversation. |
 | `/status` | Show the current session status. |
 | `/web` | Open the active conversation in the Datadog web app. |
+| `/settings` | Open Assistant settings in the Datadog web app. |
 | `/logout` | Sign out from your Datadog account and exit Bits. |
 | `/quit`, `/exit` | Exit Bits. |
 

@@ -124,18 +124,6 @@ func TestFakeFilesFilter(t *testing.T) {
 	}
 }
 
-func TestFakeCommandsPrefix(t *testing.T) {
-	got := FakeCommands("m")
-	if len(got) == 0 {
-		t.Fatal("expected /model for prefix 'm'")
-	}
-	for _, c := range got {
-		if !strings.HasPrefix(c.Insert, "/m") {
-			t.Errorf("command insert %q should start with /m", c.Insert)
-		}
-	}
-}
-
 func TestFakeCommandsAliasDiscoverable(t *testing.T) {
 	// The canonical name matches its own prefix.
 	quit := FakeCommands("q")

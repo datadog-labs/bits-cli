@@ -176,6 +176,114 @@ func TestWebIsRegisteredAndAllowedDuringTurn(t *testing.T) {
 	}
 }
 
+func TestSettingsIsRegisteredAndAllowedDuringTurn(t *testing.T) {
+	settings, ok := lookupCommand("settings")
+	if !ok || settings.id != commandSettings || settings.activeTurnPolicy != commandAllowedDuringTurn {
+		t.Fatalf("settings definition = %#v, registered=%v", settings, ok)
+	}
+}
+
+func TestSubmitSettingsOpensAssistantSettingsWithoutSending(t *testing.T) {
+	var opened string
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.us3.datadoghq.com"}, assistant.SendOptions{}), Config{
+		OpenURL: func(_ context.Context, target string) error {
+			opened = target
+			return nil
+		},
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/settings"})
+
+	_, cmd := m.submit()
+	if cmd == nil {
+		t.Fatal("/settings returned no launcher command")
+	}
+	msg := cmd()
+	_, _ = m.Update(msg)
+	want := "https://us3.datadoghq.com/ask/settings"
+	if opened != want {
+		t.Fatalf("opened URL = %q, want %q", opened, want)
+	}
+	if !strings.Contains(m.notice.Text, want) || m.notice.Level != chat.NoticeInfo {
+		t.Fatalf("success notice = %#v", m.notice)
+	}
+	if m.editor.Value() != "" {
+		t.Fatalf("editor still contains %q", m.editor.Value())
+	}
+}
+
+func TestSubmitSettingsUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
+	launched := false
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.ddog-gov.com"}, assistant.SendOptions{}), Config{
+		OpenURL: func(context.Context, string) error {
+			launched = true
+			return nil
+		},
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/settings"})
+
+	_, cmd := m.submit()
+	if cmd == nil || launched {
+		t.Fatalf("unsupported-site result: cmd=%v launched=%v", cmd != nil, launched)
+	}
+	if m.notice.Level != chat.NoticeError || !strings.Contains(m.notice.Text, "Could not build a web link") || m.notice.Err == nil {
+		t.Fatalf("unsupported-site notice = %#v", m.notice)
+	}
+}
+
+func TestSubmitSettingsLauncherFailureProvidesManualURL(t *testing.T) {
+	launchErr := errors.New("no graphical browser is available")
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, assistant.SendOptions{}), Config{
+		OpenURL: func(context.Context, string) error { return launchErr },
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/settings"})
+
+	_, cmd := m.submit()
+	msg := cmd()
+	_, _ = m.Update(msg)
+	if m.notice.Level != chat.NoticeError || !errors.Is(m.notice.Err, launchErr) {
+		t.Fatalf("launcher-failure notice = %#v", m.notice)
+	}
+	for _, want := range []string{"Could not open a browser", "https://app.datadoghq.com/ask/settings"} {
+		if !strings.Contains(m.notice.Text, want) {
+			t.Fatalf("launcher-failure notice %q does not contain %q", m.notice.Text, want)
+		}
+	}
+}
+
+func TestSubmitSettingsDuringActiveTurnDoesNotCancel(t *testing.T) {
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, assistant.SendOptions{}), Config{
+		OpenURL: func(context.Context, string) error { return nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.cancelTurn = cancel
+	m.turnEvents = make(chan agent.Event)
+	m.chatPhase = chat.PhaseStreaming
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "/settings"})
+
+	_, cmd := m.submit()
+	if cmd == nil {
+		t.Fatal("active-turn /settings returned no launcher command")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("/settings cancelled the active turn")
+	}
+}
+
+func TestSubmitModelIsUnknown(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.editor.Update(tea.PasteMsg{Content: "/model"})
+
+	_, cmd := m.submit()
+	if cmd == nil || m.notice.Level != chat.NoticeError || !strings.Contains(m.notice.Text, "Unknown command: /model") {
+		t.Fatalf("model command result: cmd=%v notice=%#v", cmd != nil, m.notice)
+	}
+}
+
 func TestSubmitWebOpensCurrentConversationWithoutSending(t *testing.T) {
 	var opened string
 	backend := &spyBackend{t: t, site: "https://api.us3.datadoghq.com"}
