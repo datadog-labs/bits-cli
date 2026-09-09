@@ -19,7 +19,7 @@ import (
 const historyLoadTimeout = 30 * time.Second
 
 // mouseWheelDelta is how many transcript lines one wheel notch scrolls,
-const mouseWheelDelta = 3
+const mouseWheelDelta = 1
 
 // defaultNoticeTTL is how long a transient status notice stays before it clears.
 const defaultNoticeTTL = 10 * time.Second
