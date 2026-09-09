@@ -625,9 +625,9 @@ func TestRetryAfterDelay(t *testing.T) {
 	}
 }
 
-func TestNewRequest_SetsJWTAccessTokenAsOpaqueOAuthBearerWithoutAPIKeys(t *testing.T) {
+func TestNewRequest_SetsOAuthBearerWithoutAPIKeys(t *testing.T) {
 	var authorization, apiKey, appKey string
-	const accessToken = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJiaXRzLWNsaSJ9.signature"
+	const accessToken = "opaque-access-token"
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		authorization = r.Header.Get("Authorization")
 		apiKey = r.Header.Get("DD-API-KEY")
