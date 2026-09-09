@@ -1,8 +1,8 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
-  - name: "Report a security vulnerability — see SECURITY.md"
-    url: mailto:security@datadoghq.com
-    about: Please do not report security vulnerabilities through public GitHub issues.
-  - name: Datadog support
+  - name: Datadog Community
+    url: https://community.datadoghq.com/
+    about: Ask questions and discuss with the Datadog community
+  - name: Datadog Support
     url: https://www.datadoghq.com/support/
-    about: Get help with Datadog products and services.
+    about: Get help from Datadog support team

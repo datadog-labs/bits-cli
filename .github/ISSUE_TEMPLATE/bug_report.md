@@ -3,8 +3,6 @@ name: Bug report
 about: Report something that is not working as expected
 ---
 
-Do not use this template to report security vulnerabilities — see SECURITY.md in the repository root.
-
 **Describe the bug**
 
 A clear and concise description of what the bug is.

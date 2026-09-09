@@ -64,11 +64,6 @@ license identifier and copyright holder of each module.
   excluded from the inventory by design: `tools/licenses` is a nested module,
   so its dependency tree never enters the root module's `go.sum`.
 
-## Conduct
-
-Be respectful of other contributors, as in any other Datadog open-source
-project.
-
 ## License
 
 By contributing to Bits CLI, you agree that your contributions will be licensed under the [Apache-2.0 License](LICENSE).
