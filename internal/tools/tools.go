@@ -8,16 +8,6 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 )
 
-// Tool names exposed to the assistant.
-const (
-	toolReadFile  = "read_file"
-	toolListFiles = "list_files"
-	toolGrepFiles = "grep_files"
-	toolWriteFile = "write_file"
-	toolEditFile  = "edit_file"
-	toolExec      = "exec_command"
-)
-
 // approvalKeyWorkspaceRead is the shared approval key used by the read-only
 // editor tools, so a single allow-session decision covers read_file,
 // list_files, and grep_files for the lifetime of the session.

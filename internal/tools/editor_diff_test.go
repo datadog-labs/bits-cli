@@ -9,6 +9,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/filediff"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 func TestParsePartialEditorInput(t *testing.T) {
@@ -129,7 +130,7 @@ func TestEditorInputReducerWriteKeepsPartialContentPending(t *testing.T) {
 	reduce := writeFileInputReducer(r)
 
 	state, ok := reduce(context.Background(), agent.ToolInputUpdate{
-		Name: toolWriteFile, RawPrefix: `{"path":"note.txt","content":"received`,
+		Name: spec.WriteFile, RawPrefix: `{"path":"note.txt","content":"received`,
 	}, nil).(*filediff.State)
 	if !ok || state.Snapshot == nil || state.Snapshot.Text != "before\n" {
 		t.Fatalf("first reducer state = %#v, want captured text snapshot", state)
@@ -138,13 +139,13 @@ func TestEditorInputReducerWriteKeepsPartialContentPending(t *testing.T) {
 		t.Fatalf("partial line state = %#v, want no visible preview before LF", state)
 	}
 	firstLine, ok := reduce(context.Background(), agent.ToolInputUpdate{
-		Name: toolWriteFile, RawPrefix: `{"path":"note.txt","content":"received\npartial`,
+		Name: spec.WriteFile, RawPrefix: `{"path":"note.txt","content":"received\npartial`,
 	}, state).(*filediff.State)
 	if !ok || firstLine.Preview == nil || firstLine.Preview.Diff == nil || !firstLine.Preview.Pending || len(firstLine.Preview.Diff.AllLines()) == 0 || firstLine.Preview.Diff.AllLines()[len(firstLine.Preview.Diff.AllLines())-1].Kind != filediff.LinePending {
 		t.Fatalf("first complete line preview = %#v, want pending prefix", firstLine.Preview)
 	}
 	stable, ok := reduce(context.Background(), agent.ToolInputUpdate{
-		Name: toolWriteFile, RawPrefix: `{"path":"note.txt","content":"received\npartial text`,
+		Name: spec.WriteFile, RawPrefix: `{"path":"note.txt","content":"received\npartial text`,
 	}, firstLine).(*filediff.State)
 	if !ok || stable != firstLine {
 		t.Fatalf("partial line update = %#v, want unchanged preview state", stable)
@@ -156,7 +157,7 @@ func TestEditorInputReducerWriteKeepsPartialContentPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	final, ok := reduce(context.Background(), agent.ToolInputUpdate{
-		Name: toolWriteFile, HasFinalInput: true, FinalInput: `{"path":"note.txt","content":"after\n"}`,
+		Name: spec.WriteFile, HasFinalInput: true, FinalInput: `{"path":"note.txt","content":"after\n"}`,
 	}, stable).(*filediff.State)
 	if !ok || final.Snapshot == nil || final.Snapshot.Text != "before\n" {
 		t.Fatalf("final reducer snapshot = %#v, want original snapshot", final)
@@ -196,14 +197,14 @@ func TestEditorInputReducerEditStreamsOnlyAfterCompleteOldText(t *testing.T) {
 	reduce := editFileInputReducer(r)
 
 	partialOld, ok := reduce(context.Background(), agent.ToolInputUpdate{
-		Name: toolEditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"ol`,
+		Name: spec.EditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"ol`,
 	}, nil).(*filediff.State)
 	if !ok || partialOld.Preview != nil {
 		t.Fatalf("partial old_text state = %#v, want no speculative edit", partialOld)
 	}
 
 	partialNew, ok := reduce(context.Background(), agent.ToolInputUpdate{
-		Name: toolEditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new\npartial`,
+		Name: spec.EditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new\npartial`,
 	}, partialOld).(*filediff.State)
 	if !ok || partialNew.Phase != filediff.PhaseStreaming || partialNew.Preview == nil || !partialNew.Preview.Pending || partialNew.Preview.Diff == nil {
 		t.Fatalf("partial new_text state = %#v, want pending speculative edit", partialNew)
@@ -219,25 +220,25 @@ func TestEditorInputReducerEditStreamsOnlyAfterCompleteOldText(t *testing.T) {
 	}
 	completeEdit, ok := reduce(context.Background(), agent.ToolInputUpdate{
 		// The edit array is complete, but the outer object is still streaming.
-		Name: toolEditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new"}],`,
+		Name: spec.EditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new"}],`,
 	}, partialNew).(*filediff.State)
 	if !ok || completeEdit.Phase != filediff.PhaseStreaming || completeEdit.Preview == nil || !completeEdit.Preview.Pending {
 		t.Fatalf("complete non-final edit state = %#v, want pending streaming preview", completeEdit)
 	}
 	stable, ok := reduce(context.Background(), agent.ToolInputUpdate{
-		Name: toolEditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new\nsecond`,
+		Name: spec.EditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new\nsecond`,
 	}, partialNew).(*filediff.State)
 	if !ok || stable != partialNew {
 		t.Fatalf("partial line update = %#v, want unchanged preview state", stable)
 	}
 	grown, ok := reduce(context.Background(), agent.ToolInputUpdate{
-		Name: toolEditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new\nsecond\n`,
+		Name: spec.EditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new\nsecond\n`,
 	}, stable).(*filediff.State)
 	if !ok || grown.Preview == nil || grown.Preview.Diff == nil || !strings.Contains(strings.Join(diffContents(grown.Preview.Diff), "\n"), "second") {
 		t.Fatalf("completed second line diff = %#v, want streamed second line", grown)
 	}
 	ready, ok := reduce(context.Background(), agent.ToolInputUpdate{
-		Name: toolEditFile, HasFinalInput: true, FinalInput: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new\nsecond"}]}`,
+		Name: spec.EditFile, HasFinalInput: true, FinalInput: `{"path":"note.txt","edits":[{"old_text":"old","new_text":"new\nsecond"}]}`,
 	}, grown).(*filediff.State)
 	if !ok || ready.Phase != filediff.PhaseReady || ready.Preview == nil || ready.Preview.Kind != filediff.PreviewEdit || ready.Preview.Pending {
 		t.Fatalf("complete edit state = %#v, want ready edit preview", ready)
@@ -294,7 +295,7 @@ func TestEditFileStreamingDoesNotFlickerHunksOnPartialEscape(t *testing.T) {
 	reduce := editReducerForFile(t, "f.txt", "alpha\nomega\n")
 
 	visible := reduce(context.Background(), agent.ToolInputUpdate{
-		Name:      toolEditFile,
+		Name:      spec.EditFile,
 		RawPrefix: `{"path":"f.txt","edits":[{"old_text":"alpha","new_text":"ALPHA"},{"old_text":"omega","new_text":"OMEGA\n`,
 	}, nil).(*filediff.State)
 	if !previewContains(visible, "OMEGA") {
@@ -303,7 +304,7 @@ func TestEditFileStreamingDoesNotFlickerHunksOnPartialEscape(t *testing.T) {
 
 	// The next streamed chunk ends on a lone backslash inside new_text.
 	flickered := reduce(context.Background(), agent.ToolInputUpdate{
-		Name:      toolEditFile,
+		Name:      spec.EditFile,
 		RawPrefix: `{"path":"f.txt","edits":[{"old_text":"alpha","new_text":"ALPHA"},{"old_text":"omega","new_text":"OMEGA\nfoo\`,
 	}, visible).(*filediff.State)
 	if !previewContains(flickered, "OMEGA") {
@@ -319,7 +320,7 @@ func TestEditFileStreamingKeepsEarlierHunkWhenTrailingEditUnresolvable(t *testin
 	reduce := editReducerForFile(t, "f.txt", "alpha\nomega\n")
 
 	first := reduce(context.Background(), agent.ToolInputUpdate{
-		Name:      toolEditFile,
+		Name:      spec.EditFile,
 		RawPrefix: `{"path":"f.txt","edits":[{"old_text":"alpha","new_text":"ALPHA"},`,
 	}, nil).(*filediff.State)
 	if !previewContains(first, "ALPHA") {
@@ -329,7 +330,7 @@ func TestEditFileStreamingKeepsEarlierHunkWhenTrailingEditUnresolvable(t *testin
 	// A trailing edit whose target is not present in the file (yet) must not
 	// discard the earlier valid hunk while streaming.
 	unresolvable := reduce(context.Background(), agent.ToolInputUpdate{
-		Name:      toolEditFile,
+		Name:      spec.EditFile,
 		RawPrefix: `{"path":"f.txt","edits":[{"old_text":"alpha","new_text":"ALPHA"},{"old_text":"zzz","new_text":"Z\n`,
 	}, first).(*filediff.State)
 	if !previewContains(unresolvable, "ALPHA") {

@@ -2,7 +2,11 @@
 
 package tools
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/DataDog/bits-cli/internal/tools/spec"
+)
 
 func TestNewClientToolsDoesNotAdvertiseExecCommandOnUnsupportedPlatforms(t *testing.T) {
 	clientTools, err := NewClientTools(t.TempDir())
@@ -10,7 +14,7 @@ func TestNewClientToolsDoesNotAdvertiseExecCommandOnUnsupportedPlatforms(t *test
 		t.Fatal(err)
 	}
 	for _, tool := range clientTools {
-		if tool.Definition.Name == toolExec {
+		if tool.Definition.Name == spec.ExecCommand {
 			t.Fatal("exec_command was advertised on an unsupported platform")
 		}
 	}

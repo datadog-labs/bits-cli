@@ -14,6 +14,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	exectool "github.com/DataDog/bits-cli/internal/tools/exec"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 type recordingExecRunner struct {
@@ -43,8 +44,8 @@ func (r *recordingExecRunner) lastRequest() exectool.ExecRequest {
 
 func TestExecCommandDefinitionIsStrictAndTruthful(t *testing.T) {
 	tool := newExecCommandTool(t.TempDir(), &recordingExecRunner{})
-	if tool.Definition.Name != toolExec {
-		t.Fatalf("name = %q, want %q", tool.Definition.Name, toolExec)
+	if tool.Definition.Name != spec.ExecCommand {
+		t.Fatalf("name = %q, want %q", tool.Definition.Name, spec.ExecCommand)
 	}
 	if tool.InputReducer != nil {
 		t.Fatal("exec_command registered a streamed-input reducer")
@@ -75,7 +76,7 @@ func TestExecCommandHandlerValidatesInput(t *testing.T) {
 		`{"cmd":""}`,
 	}
 	for _, input := range tests {
-		result, err := tool.Handler(context.Background(), agent.ToolCall{Name: toolExec, Input: input})
+		result, err := tool.Handler(context.Background(), agent.ToolCall{Name: spec.ExecCommand, Input: input})
 		if err != nil {
 			t.Fatalf("Handler(%q) error = %v", input, err)
 		}
@@ -107,7 +108,7 @@ func TestExecCommandResolvesWorkdirAtTheHandlerBoundary(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			before := runner.requestCount()
-			result, err := tool.Handler(context.Background(), agent.ToolCall{Name: toolExec, Input: test.input})
+			result, err := tool.Handler(context.Background(), agent.ToolCall{Name: spec.ExecCommand, Input: test.input})
 			if err != nil || result.IsError {
 				t.Fatalf("Handler() = (%+v, %v)", result, err)
 			}
@@ -129,7 +130,7 @@ func TestExecCommandApprovalShowsFinalCommandAndEffectiveWorkdir(t *testing.T) {
 	if !needed {
 		t.Fatal("valid exec command did not require approval")
 	}
-	if requirement.Key.Tool != toolExec || requirement.Key.Resource == "" {
+	if requirement.Key.Tool != spec.ExecCommand || requirement.Key.Resource == "" {
 		t.Fatalf("approval key = %+v", requirement.Key)
 	}
 	same, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./...","workdir":"subdir"}`})
@@ -153,7 +154,7 @@ func TestExecCommandApprovalShowsFinalCommandAndEffectiveWorkdir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, needed := allowAll.Approval(agent.ToolCall{Name: toolExec, Input: `{"cmd":"true"}`}); needed {
+	if _, needed := allowAll.Approval(agent.ToolCall{Name: spec.ExecCommand, Input: `{"cmd":"true"}`}); needed {
 		t.Fatal("allow-all did not suppress the exec command approval gate")
 	}
 }
@@ -188,7 +189,7 @@ func TestExecCommandTranslatesEveryTerminalOutcome(t *testing.T) {
 			if result.IsError != test.wantError || result.Cancelled != test.cancelled {
 				t.Fatalf("flags = error:%v cancelled:%v", result.IsError, result.Cancelled)
 			}
-			var model execCommandResult
+			var model spec.ExecCommandOutput
 			if err := json.Unmarshal([]byte(result.Output), &model); err != nil {
 				t.Fatalf("model output is invalid JSON: %v\n%s", err, result.Output)
 			}
@@ -248,7 +249,7 @@ func (b *execApprovalBackend) Send(_ context.Context, message any, _ assistant.S
 	if b.calls == 1 {
 		if b.preview != "" {
 			started := assistant.Content{Type: assistant.ContentToolCallStarted, Tool: &assistant.ToolPayload{
-				ToolCallID: "exec-1", ToolName: toolExec, IsClientSide: true,
+				ToolCallID: "exec-1", ToolName: spec.ExecCommand, IsClientSide: true,
 			}}
 			var response assistant.AssistantResponse
 			response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("exec-start", started)
@@ -263,7 +264,7 @@ func (b *execApprovalBackend) Send(_ context.Context, message any, _ assistant.S
 				return "conversation-1", err
 			}
 		}
-		content := assistant.ToolCallContent("exec-1", toolExec, b.input)
+		content := assistant.ToolCallContent("exec-1", spec.ExecCommand, b.input)
 		content.Type = assistant.ContentClientToolCall
 		var response assistant.AssistantResponse
 		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("exec-message", content)
@@ -384,7 +385,7 @@ func (b *execSessionScopeBackend) Send(_ context.Context, message any, _ assista
 	b.calls++
 	if b.calls <= len(b.inputs) {
 		callID := fmt.Sprintf("exec-%d", b.calls)
-		content := assistant.ToolCallContent(callID, toolExec, b.inputs[b.calls-1])
+		content := assistant.ToolCallContent(callID, spec.ExecCommand, b.inputs[b.calls-1])
 		content.Type = assistant.ContentClientToolCall
 		var response assistant.AssistantResponse
 		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("message-"+callID, content)

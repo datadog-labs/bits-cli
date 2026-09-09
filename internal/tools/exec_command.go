@@ -10,6 +10,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	exectool "github.com/DataDog/bits-cli/internal/tools/exec"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 const execCommandDescription = "Run one shell command and return its final stdout, stderr, and exit status. This V1 is unsandboxed: it inherits Bits' normal environment and can access your filesystem, network, credentials, and agent sockets. Commands receive no stdin, time out after 10 seconds, and run concurrently (up to four), so workspace effects may race. Descendant cleanup is best effort."
@@ -18,29 +19,10 @@ type execRunner interface {
 	Run(context.Context, exectool.ExecRequest) exectool.ExecOutcome
 }
 
-type execCommandArgs struct {
-	Command string `json:"cmd"`
-	Workdir string `json:"workdir,omitempty"`
-}
-
-type execCommandResult struct {
-	Status             exectool.ExecTerminalReason `json:"status"`
-	ExitCode           *int                        `json:"exit_code,omitempty"`
-	Signal             string                      `json:"signal,omitempty"`
-	DurationMS         int64                       `json:"duration_ms"`
-	Truncated          bool                        `json:"truncated"`
-	OutputIncomplete   bool                        `json:"output_incomplete"`
-	StdoutOmittedBytes int64                       `json:"stdout_omitted_bytes"`
-	StderrOmittedBytes int64                       `json:"stderr_omitted_bytes"`
-	Error              string                      `json:"error,omitempty"`
-	Stdout             string                      `json:"stdout"`
-	Stderr             string                      `json:"stderr"`
-}
-
 func newExecCommandTool(turnCWD string, runner execRunner) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:        toolExec,
+			Name:        spec.ExecCommand,
 			Description: execCommandDescription,
 			InputSchema: map[string]any{
 				"type": "object",
@@ -78,7 +60,7 @@ func execCommandApproval(turnCWD string) agent.ApprovalPolicy {
 				Title: "Run an unsandboxed command?",
 				Detail: fmt.Sprintf(
 					"cmd: %s · cwd: %s · unsandboxed",
-					args.Command, cwd,
+					args.Cmd, cwd,
 				),
 			},
 		}, true
@@ -102,7 +84,7 @@ func execCommandHandler(turnCWD string, runner execRunner) agent.ToolHandler {
 				IsError: true,
 			}, nil
 		}
-		outcome := runner.Run(ctx, exectool.ExecRequest{Command: args.Command, CWD: cwd})
+		outcome := runner.Run(ctx, exectool.ExecRequest{Command: args.Cmd, CWD: cwd})
 		output := marshalExecCommandResult(outcome)
 		return agent.ToolResult{
 			Title:     execResultTitle(outcome),
@@ -113,13 +95,13 @@ func execCommandHandler(turnCWD string, runner execRunner) agent.ToolHandler {
 	}
 }
 
-func parseExecCommandArgs(input, turnCWD string) (execCommandArgs, string, error) {
-	var args execCommandArgs
+func parseExecCommandArgs(input, turnCWD string) (spec.ExecCommandInput, string, error) {
+	var args spec.ExecCommandInput
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return execCommandArgs{}, "", err
+		return spec.ExecCommandInput{}, "", err
 	}
-	if args.Command == "" {
-		return execCommandArgs{}, "", fmt.Errorf("cmd must not be empty")
+	if args.Cmd == "" {
+		return spec.ExecCommandInput{}, "", fmt.Errorf("cmd must not be empty")
 	}
 	workdir := args.Workdir
 	if workdir == "" {
@@ -130,16 +112,16 @@ func parseExecCommandArgs(input, turnCWD string) (execCommandArgs, string, error
 	return args, filepath.Clean(workdir), nil
 }
 
-func execCommandApprovalKey(args execCommandArgs, cwd string) agent.ApprovalKey {
+func execCommandApprovalKey(args spec.ExecCommandInput, cwd string) agent.ApprovalKey {
 	// JSON encoding makes the tuple framing unambiguous even when either value
 	// contains control characters. The digest keeps arbitrary commands out of
 	// the authority-map key while making a session grant exact to this launch.
-	encoded, err := json.Marshal([2]string{args.Command, cwd})
+	encoded, err := json.Marshal([2]string{args.Cmd, cwd})
 	if err != nil {
 		panic("marshal exec approval authority: " + err.Error())
 	}
 	digest := sha256.Sum256(encoded)
-	return agent.ApprovalKey{Tool: toolExec, Resource: fmt.Sprintf("%x", digest)}
+	return agent.ApprovalKey{Tool: spec.ExecCommand, Resource: fmt.Sprintf("%x", digest)}
 }
 
 func execResultTitle(outcome exectool.ExecOutcome) string {
@@ -160,7 +142,7 @@ func execResultTitle(outcome exectool.ExecOutcome) string {
 }
 
 func marshalExecCommandResult(outcome exectool.ExecOutcome) string {
-	result := execCommandResult{
+	result := spec.ExecCommandOutput{
 		Status:             outcome.Reason,
 		ExitCode:           outcome.ExitCode,
 		Signal:             outcome.Signal,
@@ -179,7 +161,7 @@ func marshalExecCommandResult(outcome exectool.ExecOutcome) string {
 	return string(mustMarshalExecResult(result))
 }
 
-func mustMarshalExecResult(result execCommandResult) []byte {
+func mustMarshalExecResult(result spec.ExecCommandOutput) []byte {
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		panic("marshal exec command result: " + err.Error())

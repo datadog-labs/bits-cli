@@ -12,6 +12,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	exectool "github.com/DataDog/bits-cli/internal/tools/exec"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 func TestNewClientToolsAdvertisesExecCommandOnUnix(t *testing.T) {
@@ -21,7 +22,7 @@ func TestNewClientToolsAdvertisesExecCommandOnUnix(t *testing.T) {
 	}
 	var found int
 	for _, tool := range clientTools {
-		if tool.Definition.Name == toolExec {
+		if tool.Definition.Name == spec.ExecCommand {
 			found++
 		}
 	}
@@ -59,7 +60,7 @@ func TestExecCommandUnixEndToEndWorkdirsAndFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var model execCommandResult
+			var model spec.ExecCommandOutput
 			if err := json.Unmarshal([]byte(result.Output), &model); err != nil {
 				t.Fatalf("result is not JSON: %v\n%s", err, result.Output)
 			}

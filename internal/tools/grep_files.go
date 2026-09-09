@@ -17,6 +17,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 const (
@@ -31,7 +32,7 @@ var errGrepMatchLimit = errors.New("grep match limit reached")
 func newGrepFilesTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:        toolGrepFiles,
+			Name:        spec.GrepFiles,
 			Description: "Search workspace files using a Go regular expression. Returns file:line: text matches. Skips binary files. Respects .gitignore. Returns up to 200 matches.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -57,13 +58,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
 		}
-		var args struct {
-			Pattern       string `json:"pattern"`
-			Path          string `json:"path"`
-			Include       string `json:"include"`
-			CaseSensitive bool   `json:"case_sensitive"`
-			Offset        int    `json:"offset"`
-		}
+		var args spec.GrepFilesInput
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("invalid input: %s", err.Error()), nil
 		}

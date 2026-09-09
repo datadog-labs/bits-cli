@@ -10,6 +10,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 const (
@@ -24,7 +25,7 @@ const (
 func newListFilesTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:        toolListFiles,
+			Name:        spec.ListFiles,
 			Description: "List files and directories in the workspace. Directories end with /. Respects .gitignore. Returns up to 2000 entries.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -45,10 +46,7 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
 		}
-		var args struct {
-			Path  string `json:"path"`
-			Depth *int   `json:"depth"`
-		}
+		var args spec.ListFilesInput
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("invalid input: %s", err.Error()), nil
 		}

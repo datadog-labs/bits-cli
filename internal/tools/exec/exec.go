@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 const (
@@ -23,16 +25,18 @@ const (
 // a platform for which Bits does not provide direct command execution.
 var ErrExecUnsupportedPlatform = errors.New("exec command is unsupported on this platform")
 
-// ExecTerminalReason identifies why a one-shot command stopped. Output
+// ExecTerminalReason identifies why a one-shot command stopped. It aliases the
+// wire-contract type in package spec so the execution service and any importer
+// (tool handler, renderers) share a single terminal-status vocabulary. Output
 // truncation is orthogonal to this reason and is reported by ExecOutput.
-type ExecTerminalReason string
+type ExecTerminalReason = spec.ExecTerminalReason
 
 const (
-	ExecSucceeded    ExecTerminalReason = "success"
-	ExecNonZeroExit  ExecTerminalReason = "nonzero_exit"
-	ExecLaunchFailed ExecTerminalReason = "launch_failure"
-	ExecTimedOut     ExecTerminalReason = "timeout"
-	ExecCancelled    ExecTerminalReason = "cancellation"
+	ExecSucceeded    = spec.ExecSucceeded
+	ExecNonZeroExit  = spec.ExecNonZeroExit
+	ExecLaunchFailed = spec.ExecLaunchFailed
+	ExecTimedOut     = spec.ExecTimedOut
+	ExecCancelled    = spec.ExecCancelled
 )
 
 // ExecEnvironmentStrategy describes how a command receives its environment.

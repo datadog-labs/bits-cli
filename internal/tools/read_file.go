@@ -11,6 +11,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 const (
@@ -22,7 +23,7 @@ const (
 func newReadFileTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:        toolReadFile,
+			Name:        spec.ReadFile,
 			Description: "Read the contents of a file in the workspace.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -45,11 +46,7 @@ func readFileHandler(fsys fs.FS) agent.ToolHandler {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
 		}
-		var args struct {
-			Path   string `json:"path"`
-			Offset *int   `json:"offset"`
-			Limit  *int   `json:"limit"`
-		}
+		var args spec.ReadFileInput
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("%s", err.Error()), nil
 		}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/filediff"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 type editSpec struct {
@@ -34,7 +35,7 @@ func invokeEdit(t *testing.T, tool agent.Tool, path string, edits []editSpec) ag
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := tool.Handler(context.Background(), agent.ToolCall{ID: "e", Name: toolEditFile, Input: string(data)})
+	result, err := tool.Handler(context.Background(), agent.ToolCall{ID: "e", Name: spec.EditFile, Input: string(data)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +128,7 @@ func TestEditFileReplacements(t *testing.T) {
 		tool := newEditTool(t, dir)
 		// Raw input: old_text present, new_text absent. Must not be treated as a
 		// deletion of the matched text.
-		result, err := tool.Handler(context.Background(), agent.ToolCall{Name: toolEditFile, Input: `{"path":"f.txt","edits":[{"old_text":"alpha"}]}`})
+		result, err := tool.Handler(context.Background(), agent.ToolCall{Name: spec.EditFile, Input: `{"path":"f.txt","edits":[{"old_text":"alpha"}]}`})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,7 +238,7 @@ func TestEditFileReplacements(t *testing.T) {
 		tool := newEditTool(t, dir)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		_, err := tool.Handler(ctx, agent.ToolCall{Name: toolEditFile, Input: `{"path":"f.txt","edits":[{"old_text":"alpha","new_text":"beta"}]}`})
+		_, err := tool.Handler(ctx, agent.ToolCall{Name: spec.EditFile, Input: `{"path":"f.txt","edits":[{"old_text":"alpha","new_text":"beta"}]}`})
 		if err != context.Canceled {
 			t.Fatalf("error = %v, want context.Canceled", err)
 		}
