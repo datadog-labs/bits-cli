@@ -183,6 +183,10 @@ type override struct {
 	Detected  string `json:"detected,omitempty"`
 	Copyright string `json:"copyright,omitempty"`
 	Origin    string `json:"origin,omitempty"`
+	// Copyleft acknowledges a copyleft-licensed dependency. Without it the
+	// run fails on any copyleft license, so shipping one is always a
+	// deliberate, documented decision rather than an accident.
+	Copyleft bool `json:"copyleft,omitempty"`
 	// Reason documents why the override exists; loadOverrides rejects entries
 	// without one so the file stays self-explanatory.
 	Reason string `json:"reason"`
@@ -206,6 +210,22 @@ func loadOverrides(path string) (map[string]override, error) {
 		}
 	}
 	return overrides, nil
+}
+
+// copyleftPrefixes are the SPDX id families whose terms make the covered
+// code unusable in an Apache-2.0 distribution; the "-only" and
+// "-or-later" variants share the prefix, and an "AND"/"OR" combination
+// counts when any term is copyleft.
+var copyleftPrefixes = []string{"GPL-", "AGPL-", "LGPL-", "EPL-"}
+
+// isCopyleft reports whether a license value contains a copyleft SPDX term.
+func isCopyleft(license string) bool {
+	for _, prefix := range copyleftPrefixes {
+		if strings.Contains(license, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // csvHeader is the fixed contract of LICENSE-3rdparty.csv.
@@ -232,6 +252,7 @@ type row struct {
 func buildRows(modules []moduleInfo, overrides map[string]override) ([]row, error) {
 	var rows []row
 	var unresolved []string
+	var copyleft []string
 	consumed := make(map[string]bool, len(overrides))
 	for _, module := range modules {
 		detection, err := detectModule(module.Dir)
@@ -249,8 +270,10 @@ func buildRows(modules []moduleInfo, overrides map[string]override) ([]row, erro
 		if detection.Known {
 			r.License = detection.Licenses
 		}
+		ack := false
 		if ov, ok := overrides[module.Path]; ok {
 			consumed[module.Path] = true
+			ack = ov.Copyleft
 			if ov.License != "" {
 				if detection.Licenses != "" && detection.Licenses != ov.License && ov.Detected != detection.Licenses {
 					return nil, fmt.Errorf(
@@ -276,9 +299,17 @@ func buildRows(modules []moduleInfo, overrides map[string]override) ([]row, erro
 			unresolved = append(unresolved, fmt.Sprintf("%s@%s: no copyright statement found in %s", module.Path, module.Version, module.Dir))
 		case r.Origin == "":
 			unresolved = append(unresolved, fmt.Sprintf("%s@%s: upstream origin is not derivable from the module path", module.Path, module.Version))
+		case isCopyleft(r.License) && !ack:
+			copyleft = append(copyleft, fmt.Sprintf("%s@%s: %s", module.Path, module.Version, r.License))
 		default:
 			rows = append(rows, r)
 		}
+	}
+	if len(copyleft) > 0 {
+		return nil, fmt.Errorf(
+			"%d copyleft module(s) refused:\n  %s\n"+
+				"If a copyleft dependency is deliberate, acknowledge it with \"copyleft\": true and a reason in tools/licenses/overrides.json",
+			len(copyleft), strings.Join(copyleft, "\n  "))
 	}
 	if len(unresolved) > 0 {
 		return nil, fmt.Errorf(

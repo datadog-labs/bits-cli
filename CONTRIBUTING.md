@@ -60,6 +60,9 @@ license identifier and copyright holder of each module.
   one-line `reason` for each entry. Stale override keys and license overrides
   contradicting a confident detection fail the run, so corrections always
   stay deliberate.
+- The generator also refuses any copyleft dependency (GPL, AGPL, LGPL, EPL).
+  If one is ever deliberate, acknowledge it with `"copyleft": true` and a
+  reason in the same overrides file.
 - The generator's own dependencies (including the license detector) are
   excluded from the inventory by design: `tools/licenses` is a nested module,
   so its dependency tree never enters the root module's `go.sum`.

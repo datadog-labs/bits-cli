@@ -310,3 +310,65 @@ func TestLoadOverridesRejectsEntriesWithoutReason(t *testing.T) {
 		}
 	}
 }
+
+func TestIsCopyleft(t *testing.T) {
+	for _, tc := range []struct {
+		license string
+		want    bool
+	}{
+		{"MIT", false},
+		{"Apache-2.0", false},
+		{"BSD-3-Clause", false},
+		{"BSD-2-Clause", false},
+		{"ISC", false},
+		{"MPL-2.0", false},
+		{"MIT OR Apache-2.0", false},
+		{"GPL-2.0", true},
+		{"GPL-3.0-only", true},
+		{"GPL-2.0-or-later", true},
+		{"AGPL-3.0-only", true},
+		{"LGPL-2.1", true},
+		{"EPL-2.0", true},
+		{"MIT AND GPL-2.0", true},
+	} {
+		if got := isCopyleft(tc.license); got != tc.want {
+			t.Errorf("isCopyleft(%q) = %v, want %v", tc.license, got, tc.want)
+		}
+	}
+}
+
+func TestBuildRowsRefusesCopyleft(t *testing.T) {
+	gpl := writeModule(t, "github.com/example/gpl", map[string]string{
+		"LICENSE": "Some proprietary EULA. Do not redistribute.\n\nCopyright (c) 2026 A. Uthor\n",
+	})
+	_, err := buildRows([]moduleInfo{gpl}, map[string]override{
+		"github.com/example/gpl": {License: "GPL-3.0", Reason: "fixture"},
+	})
+	if err == nil {
+		t.Fatal("buildRows should have refused the copyleft license")
+	}
+	for _, fragment := range []string{
+		"1 copyleft module(s) refused",
+		"github.com/example/gpl@v1.0.0: GPL-3.0",
+		"\"copyleft\": true",
+	} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("error %q does not mention %q", err, fragment)
+		}
+	}
+}
+
+func TestBuildRowsAcceptsAcknowledgedCopyleft(t *testing.T) {
+	gpl := writeModule(t, "github.com/example/gpl", map[string]string{
+		"LICENSE": "Some proprietary EULA. Do not redistribute.\n\nCopyright (c) 2026 A. Uthor\n",
+	})
+	rows, err := buildRows([]moduleInfo{gpl}, map[string]override{
+		"github.com/example/gpl": {License: "GPL-3.0", Copyleft: true, Reason: "fixture: deliberate copyleft"},
+	})
+	if err != nil {
+		t.Fatalf("buildRows: %v", err)
+	}
+	if len(rows) != 1 || rows[0].License != "GPL-3.0" || rows[0].Component != "github.com/example/gpl" {
+		t.Fatalf("rows = %#v", rows)
+	}
+}
