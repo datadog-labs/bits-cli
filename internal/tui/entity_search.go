@@ -132,9 +132,24 @@ func parseEntitySearchQuery(query string) (string, []string) {
 }
 
 func trimSearchQuotes(query string) string {
-	query = strings.TrimPrefix(query, `"`)
-	query = strings.TrimSuffix(query, `"`)
-	return query
+	quoted, ok := strings.CutPrefix(query, `"`)
+	if !ok {
+		return query
+	}
+	// Decode only the escapes emitted by entityMention. Autocomplete also
+	// receives incomplete quotes/escapes, so a strict string decoder won't do.
+	var decoded strings.Builder
+	for i := 0; i < len(quoted); i++ {
+		c := quoted[i]
+		if c == '\\' && i+1 < len(quoted) && (quoted[i+1] == '\\' || quoted[i+1] == '"') {
+			i++
+			c = quoted[i]
+		} else if c == '"' && i == len(quoted)-1 {
+			break
+		}
+		decoded.WriteByte(c)
+	}
+	return decoded.String()
 }
 
 func (m *Model) applyEntitySearchResult(msg entitySearchResultMsg) {

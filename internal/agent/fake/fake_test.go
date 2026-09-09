@@ -3,6 +3,7 @@ package fake
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -78,6 +79,47 @@ func TestEntitySearchIsDeterministicAndMixed(t *testing.T) {
 	}
 	if len(types) < 2 {
 		t.Fatalf("fake search returned one entity type: %#v", first.Entities)
+	}
+}
+
+func TestEntitySearchFiltersGroupsBeforeLimit(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		groups []string
+		query  string
+		limit  int
+		want   []string
+	}{
+		{name: "app only", groups: []string{"app"}, limit: 10, want: []string{"app"}},
+		{name: "multiple groups", groups: []string{"app", "service"}, limit: 10, want: []string{"service", "app"}},
+		{name: "limit after filtering", groups: []string{"app", "service"}, limit: 1, want: []string{"service"}},
+		{name: "query and group", groups: []string{"app", "service"}, query: "helper", limit: 10, want: []string{"app"}},
+		{name: "default groups", limit: 2, want: []string{"dashboard", "monitor"}},
+		{name: "empty groups", groups: []string{}, limit: 10},
+		{name: "unknown group", groups: []string{"unknown"}, limit: 10},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response, err := (&Fake{}).SearchEntities(context.Background(), assistant.SearchEntitiesInput{
+				SuggestionGroups: test.groups, RawQuery: test.query, Limit: test.limit,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var types []string
+			for _, entity := range response.Entities {
+				types = append(types, string(entity.EntityType))
+			}
+			if !slices.Equal(types, test.want) {
+				t.Fatalf("entity types = %v, want %v", types, test.want)
+			}
+			groups := test.groups
+			if groups == nil {
+				groups = assistant.DefaultEntitySuggestionGroups
+			}
+			if !slices.Equal(response.ActiveSuggestionGroups, groups) {
+				t.Fatalf("active groups = %v, want %v", response.ActiveSuggestionGroups, groups)
+			}
+		})
 	}
 }
 

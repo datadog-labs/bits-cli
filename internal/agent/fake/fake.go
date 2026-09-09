@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -75,6 +76,10 @@ func (*Fake) SearchEntities(ctx context.Context, in assistant.SearchEntitiesInpu
 		{CandidateID: "fake-sheet", EntityID: "sheet-1", EntityType: "spreadsheet", Title: "Checkout metrics", AuthorName: "Demo User"},
 		{CandidateID: "fake-app", EntityID: "app-1", EntityType: "app", Name: "Incident helper"},
 	}
+	groups := in.SuggestionGroups
+	if groups == nil {
+		groups = assistant.DefaultEntitySuggestionGroups
+	}
 	query := strings.ToLower(strings.TrimSpace(in.RawQuery))
 	limit := in.Limit
 	if limit <= 0 {
@@ -82,6 +87,9 @@ func (*Fake) SearchEntities(ctx context.Context, in assistant.SearchEntitiesInpu
 	}
 	entities := make([]assistant.SearchEntity, 0, min(limit, len(catalog)))
 	for _, entity := range catalog {
+		if !slices.Contains(groups, string(entity.EntityType)) {
+			continue
+		}
 		haystack := strings.ToLower(entity.DisplayLabel() + " " + entity.DisplayDetail())
 		if query != "" && !strings.Contains(haystack, query) {
 			continue
@@ -94,7 +102,7 @@ func (*Fake) SearchEntities(ctx context.Context, in assistant.SearchEntitiesInpu
 	return assistant.SearchEntitiesResponse{
 		SearchFlowID:           "fake-search-flow",
 		Entities:               entities,
-		ActiveSuggestionGroups: append([]string(nil), assistant.DefaultEntitySuggestionGroups...),
+		ActiveSuggestionGroups: slices.Clone(groups),
 	}, nil
 }
 

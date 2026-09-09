@@ -472,6 +472,78 @@ func TestEntitySearchStatusesUseProductNeutralCopy(t *testing.T) {
 	}
 }
 
+func TestAcceptedMentionStopsSearchAtItsBoundary(t *testing.T) {
+	for _, kind := range []CandidateKind{CandidateFile, CandidateEntity} {
+		t.Run(string(kind), func(t *testing.T) {
+			e := New()
+			e.Focus()
+			e.Update(tea.PasteMsg{Content: "@unmatched @dash"})
+			candidate := Candidate{Kind: kind, Label: "API overview", Insert: `@dashboard:"API overview"`}
+			if kind == CandidateEntity {
+				candidate.Attachment = &Attachment{Type: "dashboard", ID: "d1", Label: "API overview"}
+			}
+			e.SetEntityResults("dash", RemoteReady, []Candidate{candidate})
+			e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+			for _, text := range []string{"", " investigate this"} {
+				e.Update(tea.PasteMsg{Content: text})
+				if query, active := e.ActiveEntityQuery(); active || e.MenuOpen() {
+					t.Fatalf("accepted mention restarted search: query=%q, value=%q", query, e.Value())
+				}
+			}
+			e.Update(tea.PasteMsg{Content: " @next"})
+			if query, active := e.ActiveEntityQuery(); !active || query != "next" {
+				t.Fatalf("new trigger = (%q, %v), want next", query, active)
+			}
+		})
+	}
+}
+
+func TestCompletedMentionIsScopedToItsOccurrence(t *testing.T) {
+	e := New()
+	e.Focus()
+	e.Update(tea.PasteMsg{Content: "@go"})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := e.Value(); got != "@go.mod " {
+		t.Fatalf("accepted file = %q", got)
+	}
+
+	// Inserting before the completion moves its rune-based span, even across lines.
+	e.ta.SetCursorColumn(0)
+	e.Update(tea.PasteMsg{Content: "東京\n"})
+	e.ta.CursorEnd()
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+	if query, active := e.ActiveEntityQuery(); active {
+		t.Fatalf("shifted completion restarted search: %q", query)
+	}
+	e.Update(tea.PasteMsg{Content: "@go.mod"})
+	if query, active := e.ActiveEntityQuery(); !active || query != "go.mod" || !e.MenuOpen() {
+		t.Fatalf("new occurrence = (%q, %v), value=%q", query, active, e.Value())
+	}
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if query, active := e.ActiveEntityQuery(); active {
+		t.Fatalf("second completion restarted search: %q", query)
+	}
+
+	// Deleting an occurrence must not leave dismissal attached to its old offset.
+	e.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	e.Update(tea.PasteMsg{Content: "@go.mod"})
+	if query, active := e.ActiveEntityQuery(); !active || query != "go.mod" {
+		t.Fatalf("replacement occurrence = (%q, %v)", query, active)
+	}
+}
+
+func TestEditingCompletedFileReopensSearch(t *testing.T) {
+	e := New()
+	e.Focus()
+	e.Update(tea.PasteMsg{Content: "@go"})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace}) // trailing space
+	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace}) // final letter
+	if query, active := e.ActiveEntityQuery(); !active || query != "go.mo" {
+		t.Fatalf("edited completion = (%q, %v)", query, active)
+	}
+}
+
 func TestCompletionBeforeEntityUpdatesExistingAttachmentSpan(t *testing.T) {
 	e := New()
 	e.Focus()

@@ -129,6 +129,37 @@ func TestEntitySearchQuerySyntaxDistinguishesTypedAndLiteralSearch(t *testing.T)
 	}
 }
 
+func TestEntityMentionQueryRoundTrip(t *testing.T) {
+	for _, label := range []string{`A "quoted" widget`, `path\to\service`, `trailing\`, `東京 \"quoted\"`} {
+		t.Run(label, func(t *testing.T) {
+			query := strings.TrimPrefix(entityMention("service", label), "@")
+			raw, groups := parseEntitySearchQuery(query)
+			if raw != label || !reflect.DeepEqual(groups, []string{"service"}) {
+				t.Fatalf("parseEntitySearchQuery(%q) = (%q, %v), want (%q, [service])", query, raw, groups, label)
+			}
+		})
+	}
+}
+
+func TestQuotedEntityQueryAcceptsIncompleteAndLiteralEscapes(t *testing.T) {
+	for _, test := range []struct{ query, want string }{
+		{`"A \"quoted\" widget"`, `A "quoted" widget`},
+		{`"A \"quoted\"`, `A "quoted"`}, // escaped final quote is not a closing delimiter
+		{`"path\\`, `path\`},
+		{`"path\`, `path\`},      // incomplete escape
+		{`"path\to"`, `path\to`}, // unknown escapes remain literal
+		{`service:path\to`, `path\to`},
+		{`service:name"`, `name"`}, // an unquoted trailing quote is literal
+	} {
+		t.Run(test.query, func(t *testing.T) {
+			raw, _ := parseEntitySearchQuery(test.query)
+			if raw != test.want {
+				t.Fatalf("parseEntitySearchQuery(%q) = %q, want %q", test.query, raw, test.want)
+			}
+		})
+	}
+}
+
 func TestEntitySearchRejectsStaleResponse(t *testing.T) {
 	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}))
 	m.editor.Focus()
