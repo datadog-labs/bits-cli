@@ -43,6 +43,10 @@ type entitySearchCacheEntry struct {
 // syncEntitySearch reconciles the editor's active @ span with remote work.
 // Every query change cancels the previous request and advances the generation.
 func (m *Model) syncEntitySearch() tea.Cmd {
+	if m.entitySearchBlocked() {
+		m.stopEntitySearch()
+		return nil
+	}
 	query, active := m.editor.ActiveEntityQuery()
 	if !active {
 		m.stopEntitySearch()
@@ -83,8 +87,12 @@ func (m *Model) stopEntitySearch() {
 	}
 }
 
+func (m *Model) entitySearchBlocked() bool {
+	return m.pendingLogout || m.logoutRunning || m.loggedOut
+}
+
 func (m *Model) beginEntitySearch(msg entitySearchDebounceMsg) tea.Cmd {
-	if msg.generation != m.entitySearchGeneration || msg.query != m.entitySearchQuery {
+	if m.entitySearchBlocked() || !m.entitySearchActive || msg.generation != m.entitySearchGeneration || msg.query != m.entitySearchQuery {
 		return nil
 	}
 	searcher := m.entitySearcher
@@ -97,6 +105,10 @@ func (m *Model) beginEntitySearch(msg entitySearchDebounceMsg) tea.Cmd {
 	sessionID := m.searchSessionID
 	rawQuery, suggestionGroups := parseEntitySearchQuery(msg.query)
 	return func() tea.Msg {
+		// The command can be queued until after logout has canceled its context.
+		if err := ctx.Err(); err != nil {
+			return entitySearchResultMsg{generation: msg.generation, query: msg.query, err: err}
+		}
 		response, err := searcher.SearchEntities(ctx, assistant.SearchEntitiesInput{
 			SearchSessionID:  sessionID,
 			RawQuery:         rawQuery,
@@ -153,7 +165,7 @@ func trimSearchQuotes(query string) string {
 }
 
 func (m *Model) applyEntitySearchResult(msg entitySearchResultMsg) {
-	if msg.generation != m.entitySearchGeneration || msg.query != m.entitySearchQuery {
+	if m.entitySearchBlocked() || !m.entitySearchActive || msg.generation != m.entitySearchGeneration || msg.query != m.entitySearchQuery {
 		return
 	}
 	if m.entitySearchCancel != nil {

@@ -633,61 +633,100 @@ func (e *Editor) activeEntitySpan() (entitySpan, bool) {
 	for i := range row {
 		lineStart += len([]rune(lines[i])) + 1
 	}
-	for i := col - 1; i >= 0; i-- {
-		if runes[i] != '@' {
-			continue
-		}
-		// A completed occurrence closes the preceding query, including when
-		// the cursor follows an @ embedded in the selected label.
+	start, quoteStart := -1, -1
+	var quote mentionQuote
+	// Scan forward so an @ inside a quoted query cannot become a trigger.
+	// Quotes in ordinary prose do not affect mention parsing.
+	for i := 0; i < col; i++ {
 		if e.insideCompletedMention(lineStart + i) {
-			return entitySpan{}, false
-		}
-		if i > 0 && (unicode.IsLetter(runes[i-1]) || unicode.IsDigit(runes[i-1]) || runes[i-1] == '_') {
+			start = -1
+			quote = mentionQuote{}
 			continue
 		}
-		replacementEnd := entityReplacementEnd(runes, i, col)
-		for _, tracked := range e.attachments {
-			trackedStart := tracked.start - lineStart
-			if trackedStart > i && trackedStart < replacementEnd {
-				replacementEnd = trackedStart
-			}
+		if start >= 0 && quote.consume(runes[i], i == quoteStart) {
+			continue
 		}
-		return entitySpan{
-			start:          i,
-			replacementEnd: replacementEnd,
-			query:          string(runes[i+1 : col]),
-		}, true
+		if runes[i] == '@' && (i == 0 || !(unicode.IsLetter(runes[i-1]) || unicode.IsDigit(runes[i-1]) || runes[i-1] == '_')) {
+			start = i
+			quoteStart = entityQuoteStart(runes, start)
+		}
 	}
-	return entitySpan{}, false
+	if start < 0 {
+		return entitySpan{}, false
+	}
+	replacementEnd := entityReplacementEnd(runes, start, col)
+	for _, tracked := range e.completedMentions {
+		trackedStart := tracked.start - lineStart
+		if trackedStart > start && trackedStart < replacementEnd {
+			replacementEnd = trackedStart
+		}
+	}
+	return entitySpan{
+		start:          start,
+		replacementEnd: replacementEnd,
+		query:          string(runes[start+1 : col]),
+	}, true
+}
+
+// entityQuoteStart recognizes only @"label" and @type:"label" openers.
+// Later quotes, including closing quotes around prose, are ordinary text.
+func entityQuoteStart(runes []rune, start int) int {
+	if start+1 < len(runes) && runes[start+1] == '"' {
+		return start + 1
+	}
+	for i := start + 1; i < len(runes); i++ {
+		if runes[i] == ':' {
+			if i > start+1 && i+1 < len(runes) && runes[i+1] == '"' {
+				return i + 1
+			}
+			return -1
+		}
+		if unicode.IsSpace(runes[i]) || runes[i] == '"' || runes[i] == '@' {
+			return -1
+		}
+	}
+	return -1
+}
+
+type mentionQuote struct {
+	quoted, escaped bool
+}
+
+// consume reports whether r is quote syntax or quoted content.
+func (q *mentionQuote) consume(r rune, opening bool) bool {
+	if !q.quoted && !opening {
+		return false
+	}
+	switch {
+	case q.escaped:
+		q.escaped = false
+	case r == '\\':
+		q.escaped = true
+	case r == '"':
+		q.quoted = !q.quoted
+	}
+	return true
 }
 
 func entityReplacementEnd(runes []rune, start, col int) int {
 	_, end := wordBounds(runes, col)
-	inQuote, escaped := false, false
-	for i := start + 1; i < col; i++ {
-		switch {
-		case escaped:
-			escaped = false
-		case runes[i] == '\\':
-			escaped = true
-		case runes[i] == '"':
-			inQuote = !inQuote
+	quoteStart := entityQuoteStart(runes, start)
+	var quote mentionQuote
+	// Include quotes ahead of the caret before deciding where the token ends.
+	for i := start + 1; i < len(runes); i++ {
+		if i >= end && !quote.quoted {
+			return i
+		}
+		if i >= col && runes[i] == '"' && !quote.quoted && i != quoteStart {
+			return i // preserve an ordinary prose quote after the caret
+		}
+		wasQuoted := quote.quoted
+		quote.consume(runes[i], i == quoteStart)
+		if i >= col && wasQuoted && !quote.quoted {
+			return i + 1
 		}
 	}
-	if !inQuote {
-		return end
-	}
-	for end = col; end < len(runes); end++ {
-		switch {
-		case escaped:
-			escaped = false
-		case runes[end] == '\\':
-			escaped = true
-		case runes[end] == '"':
-			return end + 1
-		}
-	}
-	return end
+	return len(runes)
 }
 
 func (e *Editor) insideCompletedMention(position int) bool {

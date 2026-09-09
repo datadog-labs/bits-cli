@@ -448,6 +448,93 @@ func TestAtSignInsideSelectedEntityDoesNotRestartCompletion(t *testing.T) {
 	}
 }
 
+func TestQuotedMentionKeepsEmbeddedTriggersLiteral(t *testing.T) {
+	for _, test := range []struct{ input, query string }{
+		{`@service:"API @prod"`, `service:"API @prod"`},
+		{`@service:"API \" @prod"`, `service:"API \" @prod"`},
+		{`@service:"API \\" @next`, `next`},
+		{`@service:"API @prod`, `service:"API @prod`},
+		{`say "hello @service:api`, `service:api`},
+		{`@service:"API @prod" @next`, `next`},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			e := New()
+			e.Focus()
+			e.Update(tea.PasteMsg{Content: test.input})
+			if query, active := e.ActiveEntityQuery(); !active || query != test.query {
+				t.Fatalf("query = (%q, %v), want %q", query, active, test.query)
+			}
+		})
+	}
+}
+
+func TestProseQuotesDoNotOpenQuotedMentions(t *testing.T) {
+	for _, input := range []string{`say "@service:api" @next`, `@service:api" @next`, `@service:api "prose @next`, `@"API" "prose @next`} {
+		e := New()
+		e.Focus()
+		e.Update(tea.PasteMsg{Content: input})
+		if query, active := e.ActiveEntityQuery(); !active || query != "next" {
+			t.Fatalf("%q: query = (%q, %v), want next", input, query, active)
+		}
+	}
+}
+
+func TestCompletionPreservesProseQuoteAndTrailingText(t *testing.T) {
+	for _, input := range []string{`"@go" keep this text`, `say "@go" keep this text`, `@go" keep this text`} {
+		e := New()
+		e.Focus()
+		e.Update(tea.PasteMsg{Content: input})
+		e.ta.SetCursorColumn(len([]rune(input[:strings.Index(input, "@go")])) + len("@go"))
+		e.recompute()
+		e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		if got, want := e.Value(), strings.Replace(input, "@go", "@go.mod ", 1); got != want {
+			t.Fatalf("%q: value = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestQuotedCompletionReplacesWholeMentionAtEveryCaretPosition(t *testing.T) {
+	for _, mention := range []string{`@service:"Checkout API"`, `@service:"東京 \"API\" @prod"`, `@"API @prod"`, `@service:"unfinished API`} {
+		for col := 1; col <= len([]rune(mention)); col++ {
+			e := New()
+			e.Focus()
+			e.Update(tea.PasteMsg{Content: mention})
+			e.ta.SetCursorColumn(col)
+			query, active := e.ActiveEntityQuery()
+			if !active || query != string([]rune(mention)[1:col]) {
+				t.Fatalf("%q at %d: query = (%q, %v)", mention, col, query, active)
+			}
+			e.SetEntityResults(query, RemoteReady, []Candidate{{
+				Kind: CandidateEntity, Label: "replacement", Insert: `@service:"replacement"`,
+				Attachment: &Attachment{Type: "service", ID: "replacement"},
+			}})
+			// Empty queries can also contain local-file rows.
+			e.menu.selector.SetIndex(len(e.menu.items) - 1)
+			e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+			if got, want := e.Value(), `@service:"replacement" `; got != want {
+				t.Fatalf("%q at %d: value = %q, want %q", mention, col, got, want)
+			}
+		}
+	}
+}
+
+func TestCompletionBeforeFilePreservesCompletedOccurrence(t *testing.T) {
+	e := New()
+	e.Focus()
+	e.Update(tea.PasteMsg{Content: "@go"})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	e.ta.SetCursorColumn(0)
+	e.Update(tea.PasteMsg{Content: "@eng"})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got, want := e.Value(), "@internal/agent/engine.go @go.mod "; got != want {
+		t.Fatalf("adjacent completion = %q, want %q", got, want)
+	}
+	e.ta.SetCursorColumn(len([]rune(e.Value())))
+	if query, active := e.ActiveEntityQuery(); active {
+		t.Fatalf("preserved file restarted search: %q", query)
+	}
+}
+
 func TestEntitySearchStatusesUseProductNeutralCopy(t *testing.T) {
 	e := New()
 	e.ta.SetValue("@missing")

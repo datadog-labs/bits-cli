@@ -107,6 +107,132 @@ func TestEntitySearchTypePrefixNarrowsRequest(t *testing.T) {
 	}
 }
 
+func TestQuotedEditorQueryReachesSearchIntact(t *testing.T) {
+	searcher := &staticEntitySearcher{}
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{EntitySearcher: searcher})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: `@service:"API \"東京\" @prod"`})
+	debounce := m.syncEntitySearch()
+	_ = m.beginEntitySearch(debounce().(entitySearchDebounceMsg))()
+	if len(searcher.inputs) != 1 {
+		t.Fatalf("search requests = %d, want 1", len(searcher.inputs))
+	}
+	input := searcher.inputs[0]
+	if input.RawQuery != `API "東京" @prod` || !reflect.DeepEqual(input.SuggestionGroups, []string{"service"}) {
+		t.Fatalf("quoted editor query = %#v", input)
+	}
+}
+
+func TestEntitySearchBlockedByLogoutState(t *testing.T) {
+	for _, state := range []string{"pending", "running", "completed"} {
+		t.Run(state, func(t *testing.T) {
+			searcher := &staticEntitySearcher{}
+			m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{EntitySearcher: searcher})
+			m.editor.Focus()
+			m.editor.Update(tea.PasteMsg{Content: "@check"})
+			_ = m.syncEntitySearch()
+			message := entitySearchDebounceMsg{generation: m.entitySearchGeneration, query: "check"}
+			m.pendingLogout = state == "pending"
+			m.logoutRunning = state == "running"
+			m.loggedOut = state == "completed"
+			if cmd := m.beginEntitySearch(message); cmd != nil {
+				t.Fatal("logout allowed queued search to start")
+			}
+			m.applyEntitySearchResult(entitySearchResultMsg{generation: message.generation, query: message.query})
+			if len(m.entitySearchCache) != 0 {
+				t.Fatal("logout accepted search results")
+			}
+			if cmd := m.syncEntitySearch(); cmd != nil || m.entitySearchActive {
+				t.Fatal("logout scheduled a search")
+			}
+		})
+	}
+}
+
+func TestLogoutCancelsEntitySearch(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(map[bool]string{false: "immediate", true: "pending turn drain"}[pending], func(t *testing.T) {
+			searcher := &blockingEntitySearcher{started: make(chan assistant.SearchEntitiesInput, 1), canceled: make(chan struct{})}
+			m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{
+				EntitySearcher: searcher,
+				Logout:         func(context.Context) (bool, error, error) { return true, nil, nil },
+			})
+			t.Cleanup(m.stopEntitySearch)
+			m.editor.Focus()
+			m.editor.Update(tea.PasteMsg{Content: "@check"})
+			_ = m.syncEntitySearch()
+			message := entitySearchDebounceMsg{generation: m.entitySearchGeneration, query: "check"}
+			request := m.beginEntitySearch(message)
+			result := make(chan tea.Msg, 1)
+			go func() { result <- request() }()
+			select {
+			case <-searcher.started:
+			case <-time.After(time.Second):
+				t.Fatal("search did not start")
+			}
+			if pending {
+				m.requestLogout()
+			} else {
+				m.startLogout()
+				t.Cleanup(m.logoutCancel)
+			}
+			select {
+			case <-searcher.canceled:
+			case <-time.After(time.Second):
+				t.Fatal("logout did not cancel search")
+			}
+			m.applyEntitySearchResult((<-result).(entitySearchResultMsg))
+			if m.entitySearchActive || m.editor.MenuOpen() || len(m.entitySearchCache) != 0 {
+				t.Fatal("search state survived logout transition")
+			}
+			if cmd := m.beginEntitySearch(message); cmd != nil {
+				t.Fatal("logout did not invalidate debounce")
+			}
+			m.editor.Update(tea.PasteMsg{Content: "out"})
+			if cmd := m.syncEntitySearch(); cmd != nil {
+				t.Fatal("typing during logout started a search")
+			}
+		})
+	}
+}
+
+func TestLogoutInvalidatesQueuedSearchAndFailureAllowsRetry(t *testing.T) {
+	searcher := &staticEntitySearcher{}
+	logoutErr := errors.New("credential store unavailable")
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{
+		EntitySearcher: searcher,
+		Logout:         func(context.Context) (bool, error, error) { return true, nil, logoutErr },
+	})
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "@check"})
+	_ = m.syncEntitySearch()
+	message := entitySearchDebounceMsg{generation: m.entitySearchGeneration, query: "check"}
+	queued := m.beginEntitySearch(message)
+	logout := m.startLogout()
+	result := queued().(entitySearchResultMsg)
+	if !errors.Is(result.err, context.Canceled) || len(searcher.inputs) != 0 {
+		t.Fatal("queued command called searcher after logout started")
+	}
+	m.applyLogoutResult(logout().(logoutResultMsg))
+	if m.beginEntitySearch(message) != nil {
+		t.Fatal("failed logout revived a stale debounce")
+	}
+	debounce := m.syncEntitySearch()
+	if debounce == nil {
+		t.Fatal("search did not resume after failed logout")
+	}
+	m.applyEntitySearchResult(m.beginEntitySearch(debounce().(entitySearchDebounceMsg))().(entitySearchResultMsg))
+	if len(searcher.inputs) != 1 {
+		t.Fatal("retried search did not reach backend")
+	}
+	logoutErr = nil
+	logout = m.startLogout()
+	m.applyLogoutResult(logout().(logoutResultMsg))
+	if m.entitySearcher != nil || m.entitySearchCancel != nil || m.syncEntitySearch() != nil {
+		t.Fatal("successful logout retained authenticated search")
+	}
+}
+
 func TestEntitySearchQuerySyntaxDistinguishesTypedAndLiteralSearch(t *testing.T) {
 	tests := []struct {
 		query  string
