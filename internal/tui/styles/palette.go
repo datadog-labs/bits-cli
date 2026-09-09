@@ -92,41 +92,53 @@ func darkPalette() palette {
 
 // lightPalette is the light-terminal palette.
 //
-// TODO: its surface roles predate background and have not been re-derived
-// against it. They were picked to sit on whatever the terminal supplied, so
-// they land at the same lightness as the pinned background — surface is only
-// 1.010:1 against it, leaving the input block and submitted user messages
-// reading as flat. The ramp below background needs recomputing (surface
-// ≈ #DBE0E8, surfaceRaised ≈ #D1D7E0, and codeSurface/errorSurface/busySurface
-// with it). Kept as follow-up so the background change stays reviewable alone.
+// Its surfaces are derived from background rather than picked against an
+// unknown terminal: each takes the background's hue and steps down in lightness
+// until it reaches its elevation target. Light elevates downward — a raised
+// surface is darker than the page, as in Nord and Solarized — because there is
+// no headroom above a 94%-lightness background.
+//
+// The targets are twice the separation the ramp originally carried: contrast
+// ratios near 1.0 mean "indistinguishable", so a role's useful signal is its
+// distance above 1.0, and each role doubles that distance rather than its ratio.
+// surface goes 1.150 -> 1.306, approvalSurface 1.279 -> 1.570, borderSubtle
+// 1.603 -> 2.207. A ratio-doubling reading would have put surface at 2.30:1,
+// which is dark-mode-inverted rather than a light theme with legible blocks.
+//
+// The foregrounds that ride on those surfaces are darkened to match. That is
+// not cosmetic: surfaces moved further from the page, which moves them toward
+// the text, and muted/interactive/error/feedback* would otherwise fall under
+// 4.5:1. Each is set against the darkest surface it actually renders on — see
+// builder.go for which those are — so it clears AA everywhere lighter too.
+// See TestForegroundTokensMeetNormalTextContrast.
 func lightPalette() palette {
 	return palette{
 		primary:         "#5e6dd6",
-		interactive:     "#4D58AF",
+		interactive:     "#3F4991",
 		secondary:       "#1d2140",
 		onAccent:        "#FFFFFF",
 		onWarning:       "#1A1A1A",
 		text:            "#1C2E38",
-		muted:           "#666666",
+		muted:           "#4F4F4F",
 		background:      "#ECEFF4",
-		surface:         "#EEF0F3",
-		surfaceRaised:   "#EEF0F3",
-		approvalSurface: "#E2E6EF",
+		surface:         "#CCD3DF",
+		surfaceRaised:   "#BDC5D3",
+		approvalSurface: "#B7C1D5",
 		inputRule:       "#383A40",
-		borderSubtle:    "#B8BCC4",
-		codeSurface:     "#EEEFF0",
+		borderSubtle:    "#9AA3B2",
+		codeSurface:     "#CED3DD",
 		codeText:        "#1C2E38",
 		link:            "#006bc2",
 		busy:            "#7A5200",
-		busySurface:     "#FFF3D0",
-		busyDim:         "#D9B15C",
+		busySurface:     "#E5D198",
+		busyDim:         "#D2A340",
 		busyHot:         "#4A3000",
 		success:         "#41C464",
 		successSurface:  "#EAFDED",
-		error:           "#EB364B",
-		errorSurface:    "#FDEBED",
-		feedbackSuccess: "#397A4A",
-		feedbackError:   "#B23A4A",
+		error:           "#B61225",
+		errorSurface:    "#F9C6CC",
+		feedbackSuccess: "#30663E",
+		feedbackError:   "#A13443",
 		critical:        "#C4314B",
 		info:            "#632CA6",
 		warning:         "#F5A623",

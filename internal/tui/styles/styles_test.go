@@ -47,21 +47,63 @@ func TestDefaultPinsAModeSpecificBackground(t *testing.T) {
 	}
 }
 
-// TestDarkSurfaceReadsAgainstItsBackground pins the elevation contract for the
-// dark ramp: the input block has to separate from the painted background, not
-// blend into it.
-//
-// Light is deliberately absent. Its surface tokens predate this background and
-// sit at the same lightness (1.010:1), so the same assertion would fail by
-// design; they are re-derived in follow-up work, and this test grows a light
-// case then.
-func TestDarkSurfaceReadsAgainstItsBackground(t *testing.T) {
-	p := darkPalette()
-	if got := contrastRatio(p.surface, p.background); got < 1.1 {
-		t.Errorf("surface/background contrast = %.3f:1, want at least 1.1:1", got)
+// TestSurfacesSeparateFromTheirBackground pins the elevation contract in both
+// modes: every surface painted over the background has to be distinguishable
+// from it, or the block it draws disappears into the page. Light mode regressed
+// exactly this way when the background was pinned ahead of its ramp.
+func TestSurfacesSeparateFromTheirBackground(t *testing.T) {
+	// pendingElevation names roles that do not clear their background yet.
+	//
+	// TODO: dark's errorSurface fell to 1.022:1 when the background was pinned
+	// beneath it — the chip is there but invisible. Lifting it also needs dark's
+	// error foreground raised, which is dark-mode work; both land on their own
+	// branch, and this exemption goes with them.
+	pendingElevation := map[string]map[string]bool{
+		"dark": {"errorSurface": true},
 	}
-	if relativeLuminance(p.surface) <= relativeLuminance(p.background) {
+	for _, test := range []struct {
+		name    string
+		palette palette
+	}{
+		{name: "dark", palette: darkPalette()},
+		{name: "light", palette: lightPalette()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for role, surface := range map[string]string{
+				"surface":         test.palette.surface,
+				"surfaceRaised":   test.palette.surfaceRaised,
+				"approvalSurface": test.palette.approvalSurface,
+				"codeSurface":     test.palette.codeSurface,
+				"errorSurface":    test.palette.errorSurface,
+				"busySurface":     test.palette.busySurface,
+			} {
+				// Some dark roles are still raw ANSI indices, which carry no hex
+				// luminance to measure; they are exempt until they join the ramp.
+				if !strings.HasPrefix(surface, "#") {
+					continue
+				}
+				if pendingElevation[test.name][role] {
+					continue
+				}
+				if got := contrastRatio(surface, test.palette.background); got < 1.1 {
+					t.Errorf("%s/background contrast = %.3f:1, want at least 1.1:1", role, got)
+				}
+			}
+		})
+	}
+}
+
+// TestElevationRunsAwayFromThePage guards the ramp's direction, which differs
+// by mode: dark elevates by getting lighter, light by getting darker, since a
+// 94%-lightness page has no headroom above it.
+func TestElevationRunsAwayFromThePage(t *testing.T) {
+	dark := darkPalette()
+	if relativeLuminance(dark.surface) <= relativeLuminance(dark.background) {
 		t.Error("dark surface should be lighter than the background it sits on")
+	}
+	light := lightPalette()
+	if relativeLuminance(light.surface) >= relativeLuminance(light.background) {
+		t.Error("light surface should be darker than the background it sits on")
 	}
 }
 
