@@ -46,6 +46,18 @@ func TestCombinedOutputLimitDoesNotDonateQuietStreamBudget(t *testing.T) {
 	}
 }
 
+func TestBoundedExecOutputNormalizesInvalidUTF8(t *testing.T) {
+	stdout := newHeadTailBuffer(16)
+	stderr := newHeadTailBuffer(16)
+	_, _ = stdout.Write([]byte{'o', 'k', 0xff})
+	_, _ = stderr.Write([]byte{0xfe, '!'})
+
+	output := boundedExecOutput(stdout, stderr)
+	if output.Stdout != "ok\uFFFD" || output.Stderr != "\uFFFD!" {
+		t.Fatalf("output = %+v, want invalid bytes replaced", output)
+	}
+}
+
 func TestSplitOutputLimit(t *testing.T) {
 	stdout, stderr := splitOutputLimit(11)
 	if stdout != 6 || stderr != 5 {

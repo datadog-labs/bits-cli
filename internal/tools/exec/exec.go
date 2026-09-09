@@ -61,9 +61,10 @@ type ExecPlan struct {
 	OutputLimit int
 }
 
-// ExecOutput contains the separately identified, bounded command streams.
-// Omitted byte counts refer to the original byte streams, before conversion to
-// strings. Their sum is non-zero exactly when Truncated is true.
+// ExecOutput contains the separately identified, bounded command streams as
+// UTF-8 text. Invalid output bytes become replacement characters. Omitted byte
+// counts refer to the original byte streams; their sum is non-zero exactly when
+// Truncated is true.
 type ExecOutput struct {
 	Stdout             string
 	Stderr             string

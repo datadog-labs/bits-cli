@@ -1,5 +1,7 @@
 package exec
 
+import "strings"
+
 // headTailBuffer retains the beginning and end of one byte stream while
 // continuing to consume all writes. One instance has a single writer.
 type headTailBuffer struct {
@@ -100,12 +102,19 @@ func boundedExecOutput(stdout, stderr *headTailBuffer) ExecOutput {
 	stdoutOmitted := stdout.total - int64(len(stdoutBytes))
 	stderrOmitted := stderr.total - int64(len(stderrBytes))
 	return ExecOutput{
-		Stdout:             string(stdoutBytes),
-		Stderr:             string(stderrBytes),
+		Stdout:             execOutputText(stdoutBytes),
+		Stderr:             execOutputText(stderrBytes),
 		StdoutOmittedBytes: stdoutOmitted,
 		StderrOmittedBytes: stderrOmitted,
 		Truncated:          stdoutOmitted != 0 || stderrOmitted != 0,
 	}
+}
+
+// execOutputText defines the runner's text boundary. Command streams may carry
+// arbitrary bytes, but tool results are UTF-8 text; invalid byte sequences are
+// made visible as replacement characters before JSON serialization.
+func execOutputText(bytes []byte) string {
+	return strings.ToValidUTF8(string(bytes), "\uFFFD")
 }
 
 func (b *headTailBuffer) limit() int {

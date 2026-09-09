@@ -64,11 +64,11 @@ func runRunWithStore(ctx context.Context, opts cmd.RunOptions, store auth.Creden
 	if err != nil {
 		return fmt.Errorf("determine workspace: %w", err)
 	}
-	workspaceTools, err := tools.NewEditorTools(workspaceRoot)
+	clientTools, err := tools.NewClientTools(workspaceRoot)
 	if err != nil {
 		return fmt.Errorf("open workspace: %w", err)
 	}
-	toolSet, err := agent.NewToolSet(opts.ApprovalMode, workspaceTools...)
+	toolSet, err := agent.NewToolSet(opts.ApprovalMode, clientTools...)
 	if err != nil {
 		return err
 	}
@@ -239,11 +239,11 @@ func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth
 	if err != nil {
 		return nil, fmt.Errorf("determine workspace: %w", err)
 	}
-	workspaceTools, err := tools.NewEditorTools(workspaceRoot)
+	clientTools, err := tools.NewClientTools(workspaceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("open workspace: %w", err)
 	}
-	toolSet, err := agent.NewToolSet(opts.ApprovalMode, workspaceTools...)
+	toolSet, err := agent.NewToolSet(opts.ApprovalMode, clientTools...)
 	if err != nil {
 		return nil, err
 	}

@@ -218,6 +218,27 @@ func TestErrorKeepsItsChip(t *testing.T) {
 	}
 }
 
+func TestGenericExecResultShowsTruncationMetadataBeforeLargeStreams(t *testing.T) {
+	block := agent.Block{
+		Kind: assistant.KindToolResult,
+		Tool: &agent.ToolBlock{
+			Name:   "exec_command",
+			Status: agent.ToolSuccess,
+			Output: `{"status":"success","duration_ms":17,"truncated":true,"output_incomplete":true,"stdout_omitted_bytes":2048,"stderr_omitted_bytes":1024,"stdout":"` +
+				strings.Repeat("command output ", 500) + `TAIL","stderr":""}`,
+		},
+	}
+	rendered := ansi.Strip(RenderBlock(block, 60, DefaultStyles(true), 0))
+	for _, want := range []string{`"duration_ms":17`, `"truncated":true`, `"output_incomplete":true`, `"stdout_omitted_bytes":2048`, `"stderr_omitted_bytes":1024`} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("generic exec rendering hid %s before its output clamp:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "TAIL") {
+		t.Fatalf("test fixture did not exercise the generic output clamp:\n%s", rendered)
+	}
+}
+
 // leadGlyphOf returns the first visible character of a rendered header, which
 // is the status glyph.
 func leadGlyphOf(header string) string {

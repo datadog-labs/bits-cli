@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 )
@@ -14,6 +15,7 @@ const (
 	toolGrepFiles = "grep_files"
 	toolWriteFile = "write_file"
 	toolEditFile  = "edit_file"
+	toolExec      = "exec_command"
 )
 
 // approvalKeyWorkspaceRead is the shared approval key used by the read-only
@@ -48,6 +50,21 @@ func NewEditorTools(root string) ([]agent.Tool, error) {
 		newWriteFileTool(r, root, locker),
 		newEditFileTool(r, root, locker),
 	}, nil
+}
+
+// NewClientTools returns every local tool available on the current platform.
+// The editor tools are available everywhere. Linux and macOS additionally get
+// the deliberately unsandboxed, one-shot exec_command tool.
+func NewClientTools(root string) ([]agent.Tool, error) {
+	turnCWD, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace %q: %w", root, err)
+	}
+	clientTools, err := NewEditorTools(turnCWD)
+	if err != nil {
+		return nil, err
+	}
+	return append(clientTools, platformExecTools(turnCWD)...), nil
 }
 
 // errorResult builds an error ToolResult with a formatted output message.
