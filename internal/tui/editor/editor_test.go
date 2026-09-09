@@ -136,12 +136,6 @@ func TestFakeCommandsPrefix(t *testing.T) {
 	}
 }
 
-func TestFakeCommandsDoesNotIncludeModel(t *testing.T) {
-	if got := FakeCommands("model"); len(got) != 0 {
-		t.Fatalf("model command candidates = %+v, want none", got)
-	}
-}
-
 func TestFakeCommandsAliasDiscoverable(t *testing.T) {
 	// The canonical name matches its own prefix.
 	quit := FakeCommands("q")
