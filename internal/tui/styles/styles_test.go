@@ -131,6 +131,34 @@ func TestForegroundTokensMeetNormalTextContrast(t *testing.T) {
 	}
 }
 
+// TestInputTextIsExplicitInBothModes covers the composer's foreground. It has
+// to be a real color rather than an unset style: the app paints the input
+// surface itself now, so an unset foreground means the terminal chooses the
+// text color on a background it did not choose.
+func TestInputTextIsExplicitInBothModes(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		theme   Theme
+		palette palette
+	}{
+		{name: "dark", theme: Default(true), palette: darkPalette()},
+		{name: "light", theme: Default(false), palette: lightPalette()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := test.theme.Input.Text.GetForeground()
+			if _, unset := got.(lipgloss.NoColor); unset {
+				t.Fatal("input text has no foreground; the terminal would pick it")
+			}
+			if want := lipgloss.Color(test.palette.inputText); got != want {
+				t.Errorf("input text = %v, want token %v", got, want)
+			}
+		})
+	}
+	if Default(true).Input.Text.GetForeground() == Default(false).Input.Text.GetForeground() {
+		t.Error("input text should differ between modes")
+	}
+}
+
 // TestChipLabelsReadOnTheirOwnSurface covers the pairs that carry both their
 // foreground and their background from the palette — the status chips and code
 // spans — so neither half can be moved without the other.

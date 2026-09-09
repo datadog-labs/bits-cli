@@ -19,7 +19,11 @@ type Input struct {
 	Background color.Color
 	Block      lipgloss.Style
 	Marker     lipgloss.Style
-	Text       lipgloss.Style
+
+	// Text styles what the user wrote, at both moments it is on screen: the live
+	// line in the editor and the submitted block in the transcript. One style
+	// serves both so a message does not change color on its way past Enter.
+	Text lipgloss.Style
 }
 
 // PromptWidth returns the number of cells occupied by the input prompt.

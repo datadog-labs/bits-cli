@@ -25,7 +25,14 @@ func build(isDark bool, p palette) Theme {
 			BorderForeground(lipgloss.Color(p.inputRule)).
 			BorderBackground(lipgloss.Color(p.surface)),
 		Marker: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)).Background(lipgloss.Color(p.surface)),
-		Text:   lipgloss.NewStyle().Background(lipgloss.Color(p.surface)),
+		// The foreground is explicit because the textarea's default Text style is
+		// empty, which means typed input inherits the terminal's own foreground.
+		// That was survivable while the terminal also supplied the background;
+		// now that the app paints the surface itself, an inherited foreground is
+		// a color we do not control sitting on one we do.
+		Text: lipgloss.NewStyle().
+			Background(lipgloss.Color(p.surface)).
+			Foreground(lipgloss.Color(p.inputText)),
 	}
 
 	text := Text{

@@ -25,6 +25,7 @@ type palette struct {
 	surfaceRaised   string
 	approvalSurface string
 	inputRule       string
+	inputText       string
 	borderSubtle    string
 	codeSurface     string
 	codeText        string
@@ -70,6 +71,7 @@ func darkPalette() palette {
 		surfaceRaised:   "236",
 		approvalSurface: "#2C3142",
 		inputRule:       "#383A40",
+		inputText:       "#FFFFFF",
 		borderSubtle:    "#474A54",
 		codeSurface:     "#343336",
 		codeText:        "#CECECE",
@@ -125,6 +127,7 @@ func lightPalette() palette {
 		surfaceRaised:   "#BDC5D3",
 		approvalSurface: "#B7C1D5",
 		inputRule:       "#383A40",
+		inputText:       "#000000",
 		borderSubtle:    "#9AA3B2",
 		codeSurface:     "#CED3DD",
 		codeText:        "#1C2E38",
