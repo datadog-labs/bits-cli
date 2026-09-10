@@ -20,21 +20,38 @@ func wrapBody(s string, width int) string {
 	return ansi.Hardwrap(s, width, false)
 }
 
-// delimiter is a dim full-width horizontal rule separating samples.
-func delimiter(width int) string {
+// delimiter is a dim full-width horizontal rule separating samples. chrome is
+// the guide's own text color, passed in rather than derived from Faint: the
+// guide paints the same pinned background the app does, so an unset foreground
+// here would be the terminal's, dimmed.
+func delimiter(width int, chrome lipgloss.Style) string {
 	if width < 1 {
 		width = 1
 	}
-	return lipgloss.NewStyle().Faint(true).Render(strings.Repeat("─", width))
+	return chrome.Render(strings.Repeat("─", width))
 }
 
-// renderSample pairs a dim label with its rendered sample beneath it.
-func renderSample(label, sample string) string {
-	return lipgloss.NewStyle().Faint(true).Render(label) + "\n" + sample
+// renderSample pairs a sample with the title naming it. The title takes the
+// primary level: it says what is being shown, so it is content rather than
+// chrome, even though the rules around it are not. tag, when set, brackets
+// the label to say what kind of page the sample lives on; see groupTag. A
+// blank row separates the title from what it names, so the two read as a
+// caption over a picture rather than one more line of it.
+func renderSample(title lipgloss.Style, tag, label, sample string) string {
+	return title.Render(tagLabel(tag, label)) + "\n\n" + sample
+}
+
+// tagLabel prefixes label with "[tag] " when tag is set, otherwise returns it
+// unchanged.
+func tagLabel(tag, label string) string {
+	if tag == "" {
+		return label
+	}
+	return "[" + tag + "] " + label
 }
 
 // footer is the always-visible status line: title, position, mode, key hints.
-func footer(width int, g group, isDark bool) string {
+func footer(width int, g group, isDark bool, chrome lipgloss.Style) string {
 	mode := "LIGHT"
 	if isDark {
 		mode = "DARK"
@@ -42,7 +59,7 @@ func footer(width int, g group, isDark bool) string {
 	left := fmt.Sprintf("%s  ·  %d / %d  ·  %s", g.title(), int(g)+1, int(numGroups), mode)
 	hints := "tab/→ next · shift+tab/← prev · ↑↓ scroll · t theme · q quit"
 	line := left + "   " + hints
-	return lipgloss.NewStyle().Faint(true).Render(ansi.Truncate(line, max(1, width), "…"))
+	return chrome.Render(ansi.Truncate(line, max(1, width), "…"))
 }
 
 // hexOf formats a color as #RRGGBB, or "—" when unset.
@@ -58,9 +75,9 @@ func hexOf(c color.Color) string {
 }
 
 // swatch renders a color chip, its hex, and a label.
-func swatch(label string, c color.Color) string {
+func swatch(title lipgloss.Style, label string, c color.Color) string {
 	chip := lipgloss.NewStyle().Background(c).Render("    ")
-	return chip + " " + hexOf(c) + "  " + lipgloss.NewStyle().Faint(true).Render(label)
+	return chip + " " + hexOf(c) + "  " + title.Render(label)
 }
 
 // visibleLines returns the height-line window of body starting at offset.
