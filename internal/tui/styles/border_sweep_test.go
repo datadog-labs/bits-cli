@@ -9,7 +9,7 @@ import (
 )
 
 func sweepColors() (dim, hot, bg color.Color) {
-	return lipgloss.Color("#383A40"), lipgloss.Color("#5e6dd6"), lipgloss.Color("#22252F")
+	return lipgloss.Color("#383A40"), lipgloss.Color("#A2C6FF"), lipgloss.Color("#22252F")
 }
 
 func TestBorderSweepRowWidthMatchesInput(t *testing.T) {
@@ -92,7 +92,7 @@ func TestThemeExposesSweepColors(t *testing.T) {
 			if got, want := in.SweepDim, lipgloss.Color(test.palette.inputRule); got != want {
 				t.Errorf("SweepDim = %v, want %v", got, want)
 			}
-			if got, want := in.SweepHot, lipgloss.Color(test.palette.primary); got != want {
+			if got, want := in.SweepHot, lipgloss.Color(test.palette.sweepHot); got != want {
 				t.Errorf("SweepHot = %v, want %v", got, want)
 			}
 		})

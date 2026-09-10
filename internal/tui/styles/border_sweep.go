@@ -9,10 +9,10 @@ import (
 
 // sweepBandWidth is the width, in cells, of the bright band that sweeps across
 // the composer's top border while Bits is working. It is fixed rather than
-// proportional to the composer width: 10 cells is wide enough for gradientRamp
-// to blend smoothly and narrow enough that most of the row stays at rest (dim)
-// at any instant, at the composer's typical widths (60-160 cols).
-const sweepBandWidth = 10
+// proportional to the composer width: 20 cells blends smoothly and still
+// leaves most of the row at rest (dim) at any instant, at the composer's
+// typical widths (60-160 cols).
+const sweepBandWidth = 20
 
 // sweepSpeedCellsPerFrame is how many cells the band advances per animation
 // frame. 1 keeps the sweep readable as smooth motion at borderSweepInterval

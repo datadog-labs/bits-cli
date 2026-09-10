@@ -32,6 +32,12 @@ type palette struct {
 	codeSurface     string
 	codeText        string
 
+	// sweepHot is the peak color of the composer's animated border sweep
+	// (styles.BorderSweepRow). Dedicated rather than reusing primary, the
+	// same way busyHot is dedicated rather than reusing it for the status
+	// chip's shimmer — it lets this specific animation be tuned on its own.
+	sweepHot string
+
 	link string
 
 	// busy roles style the in-flight status chip; busyDim/busyHot are the
@@ -70,6 +76,7 @@ func darkPalette() palette {
 		borderSubtle:    "#474A54",
 		codeSurface:     "#343336",
 		codeText:        "#CECECE",
+		sweepHot:        "#A2C6FF",
 		link:            "#3d8bd0",
 		busy:            "#F5C453",
 		busySurface:     "#2E2409",
@@ -109,6 +116,7 @@ func lightPalette() palette {
 		borderSubtle:    "#9AA3B2",
 		codeSurface:     "#CED3DD",
 		codeText:        "#1C2E38",
+		sweepHot:        "#A2C6FF",
 		link:            "#006bc2",
 		busy:            "#7A5200",
 		busySurface:     "#E5D198",
