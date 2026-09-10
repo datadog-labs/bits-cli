@@ -3,7 +3,10 @@ package tui
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
@@ -149,5 +152,55 @@ func TestBorderSweepIsIndependentOfToolAnimation(t *testing.T) {
 	m.Update(borderSweepTickMsg{generation: m.borderSweepGeneration})
 	if m.animFrame != animFrameAfterAnimTick {
 		t.Error("a border-sweep tick advanced the tool-activity frame")
+	}
+}
+
+func TestSubmitArmsTheBorderSweep(t *testing.T) {
+	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "new"}))
+	m.mode = ModeChat
+	m.resize(80, 24)
+	m.editor.Focus()
+
+	m.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if !m.borderSweepArmed {
+		t.Fatal("submitting a message did not arm the border sweep")
+	}
+}
+
+func TestTurnDoneDisarmsTheBorderSweep(t *testing.T) {
+	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
+	m.mode = ModeChat
+	m.resize(80, 24)
+	m.chatPhase = chat.PhaseStreaming
+	m.turnEvents = make(chan agent.Event)
+	m.turnGen = 1
+	m.syncBorderSweep()
+	if !m.borderSweepArmed {
+		t.Fatal("expected the border sweep to be armed while streaming")
+	}
+
+	m.Update(turnEventMsg{generation: 1, ev: agent.Event{Kind: agent.EventTurnDone}})
+
+	if m.borderSweepArmed {
+		t.Error("the border sweep is still armed after EventTurnDone")
+	}
+}
+
+func TestNewConversationDisarmsTheBorderSweep(t *testing.T) {
+	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
+	m.mode = ModeChat
+	m.resize(80, 24)
+	m.chatPhase = chat.PhaseWaiting
+	m.syncBorderSweep()
+	if !m.borderSweepArmed {
+		t.Fatal("expected the border sweep to be armed")
+	}
+
+	m.dispatchCommand("new")
+
+	if m.borderSweepArmed {
+		t.Error("the idle /new path left the border sweep armed")
 	}
 }
