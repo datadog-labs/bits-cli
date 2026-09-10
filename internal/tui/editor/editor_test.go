@@ -175,6 +175,117 @@ func TestSetWidthTracksRequestedOuterWidth(t *testing.T) {
 	}
 }
 
+func TestSetWorkingInvalidatesViewCache(t *testing.T) {
+	e := New()
+	e.SetWidth(40)
+	_ = e.View()
+	if !e.viewCached {
+		t.Fatal("test setup invalid: view should be cached before SetWorking")
+	}
+
+	e.SetWorking(true)
+	if e.viewCached {
+		t.Fatal("SetWorking(true) did not invalidate the view cache")
+	}
+
+	_ = e.View()
+	e.SetWorking(true)
+	if !e.viewCached {
+		t.Fatal("unchanged working state invalidated the view cache")
+	}
+
+	e.SetWorking(false)
+	if e.viewCached {
+		t.Fatal("SetWorking(false) did not invalidate the view cache")
+	}
+}
+
+func TestSetSweepFrameOnlyInvalidatesWhileWorking(t *testing.T) {
+	e := New()
+	e.SetWidth(40)
+	_ = e.View()
+
+	e.SetSweepFrame(1)
+	if !e.viewCached {
+		t.Fatal("SetSweepFrame while not working should not invalidate the view cache")
+	}
+
+	e.SetWorking(true)
+	_ = e.View()
+	e.SetSweepFrame(2)
+	if e.viewCached {
+		t.Fatal("SetSweepFrame while working did not invalidate the view cache")
+	}
+
+	_ = e.View()
+	e.SetSweepFrame(2)
+	if !e.viewCached {
+		t.Fatal("unchanged sweep frame invalidated the view cache")
+	}
+}
+
+func TestWorkingViewKeepsTheSameOverallHeight(t *testing.T) {
+	// The sweep row replaces the static top-border row (the block renders with
+	// BorderTop(false) while working), it does not add to it, so total height
+	// is unchanged: one row is removed from the block and one is added above
+	// it.
+	e := New()
+	e.SetWidth(40)
+	idleHeight := e.Height()
+
+	e.SetWorking(true)
+	workingHeight := e.Height()
+
+	if workingHeight != idleHeight {
+		t.Errorf("working height = %d, want idle height (%d)", workingHeight, idleHeight)
+	}
+}
+
+func TestWorkingViewTopRowWidthMatchesBlockWidth(t *testing.T) {
+	e := New()
+	e.SetWidth(40)
+	e.SetWorking(true)
+	lines := strings.Split(ansi.Strip(e.View()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 rendered lines, got %d", len(lines))
+	}
+	sweepWidth := ansi.StringWidth(lines[0])
+	blockWidth := ansi.StringWidth(lines[1])
+	if sweepWidth != blockWidth {
+		t.Errorf("sweep row width = %d, block row width = %d, want equal", sweepWidth, blockWidth)
+	}
+}
+
+func TestWorkingViewAnimatesAcrossFrames(t *testing.T) {
+	e := New()
+	e.SetWidth(40)
+	e.SetWorking(true)
+
+	first := e.View()
+	e.SetSweepFrame(5)
+	second := e.View()
+	if first == second {
+		t.Error("changing the sweep frame did not change the rendered view")
+	}
+}
+
+func TestReturningToIdleRestoresTheStaticTopBorder(t *testing.T) {
+	baseline := New()
+	baseline.SetWidth(40)
+	baselineView := baseline.View()
+
+	e := New()
+	e.SetWidth(40)
+	e.SetWorking(true)
+	e.SetSweepFrame(7)
+	_ = e.View()
+	e.SetWorking(false)
+
+	if got := e.View(); got != baselineView {
+		t.Error("returning to idle did not restore the original static-border rendering")
+	}
+}
+
 func TestWordBounds(t *testing.T) {
 	runes := []rune("look at @engine")
 	start, end := wordBounds(runes, len(runes)) // cursor at end

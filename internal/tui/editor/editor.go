@@ -56,6 +56,8 @@ type Editor struct {
 	viewCached bool
 	width      int
 	widthSet   bool
+	working    bool
+	sweepFrame int
 }
 
 // menu is the completion popup state rendered below the textarea.
@@ -237,6 +239,34 @@ func (e *Editor) SetPlaceholder(s string) {
 	}
 }
 
+// SetWorking toggles the animated border sweep shown while Bits is generating
+// a response. Editor only renders the state and frame it's given — it is a
+// passive renderer with no tea.Cmd-producing state of its own; the parent
+// model decides when to animate via chatPhase and drives frames through
+// SetSweepFrame.
+func (e *Editor) SetWorking(working bool) {
+	if e.working == working {
+		return
+	}
+	e.working = working
+	e.viewCached = false
+}
+
+// SetSweepFrame sets the current border-sweep animation frame. The parent
+// model's advanceBorderSweep calls this every tick, the same way
+// advanceAnimation calls list.SetFrame. A frame set while not working is
+// stored but does not invalidate the cache, since it has no visible effect
+// until SetWorking(true) is also called.
+func (e *Editor) SetSweepFrame(frame int) {
+	if e.sweepFrame == frame {
+		return
+	}
+	e.sweepFrame = frame
+	if e.working {
+		e.viewCached = false
+	}
+}
+
 // Value returns the current input text.
 func (e *Editor) Value() string { return e.ta.Value() }
 
@@ -348,11 +378,35 @@ func (e *Editor) renderView() {
 		return
 	}
 	textareaView := e.ta.View()
-	if e.width <= 0 {
-		e.view = e.inputStyle.Block.Render(textareaView)
-	} else {
-		e.view = e.inputStyle.Block.Width(e.width).Render(textareaView)
+	if !e.working {
+		if e.width <= 0 {
+			e.view = e.inputStyle.Block.Render(textareaView)
+		} else {
+			e.view = e.inputStyle.Block.Width(e.width).Render(textareaView)
+		}
+		e.viewHeight = lipgloss.Height(e.view)
+		e.viewCached = true
+		return
 	}
+
+	// While working, the top border is drawn manually as an animated sweep
+	// row, and the block below it renders with the top border disabled so the
+	// two don't double up. BorderTop(false) returns a new Style without
+	// mutating e.inputStyle.Block (lipgloss.Style is a plain value type), so
+	// the idle path above is unaffected.
+	block := e.inputStyle.Block.BorderTop(false)
+	var boxed string
+	if e.width <= 0 {
+		boxed = block.Render(textareaView)
+	} else {
+		boxed = block.Width(e.width).Render(textareaView)
+	}
+	rowWidth := e.width
+	if rowWidth <= 0 {
+		rowWidth = lipgloss.Width(boxed)
+	}
+	sweep := styles.BorderSweepRow(rowWidth, e.sweepFrame, e.inputStyle.SweepDim, e.inputStyle.SweepHot, e.inputStyle.Background)
+	e.view = sweep + "\n" + boxed
 	e.viewHeight = lipgloss.Height(e.view)
 	e.viewCached = true
 }
