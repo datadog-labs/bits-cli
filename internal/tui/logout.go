@@ -16,6 +16,8 @@ const logoutTimeout = 60 * time.Second
 // turn after its durable session has been removed.
 func (m *Model) requestLogout() tea.Cmd {
 	m.pendingLogout = true
+	m.stopEntitySearch()
+	m.editor.CloseMenu()
 	m.cancelRemote()
 	return m.showNotice(notice(chat.NoticeInfo, nil,
 		"Cancelling the current operation before logging out..."), 0)
@@ -30,6 +32,8 @@ func (m *Model) startLogout() tea.Cmd {
 	ctx, cancel := context.WithTimeout(context.Background(), logoutTimeout)
 	m.logoutCancel = cancel
 	m.logoutRunning = true
+	m.stopEntitySearch()
+	m.editor.CloseMenu()
 	m.clearNotice()
 	logout := m.logout
 	return func() tea.Msg {
@@ -54,7 +58,9 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 		return m, m.showNotice(noticeForError("could not log out", msg.err), 0)
 	}
 
-	// Discard the engine so it cannot make authenticated requests after logout.
+	// Discard authenticated collaborators and invalidate queued search results.
+	m.stopEntitySearch()
+	m.entitySearcher = nil
 	m.engine = nil
 	m.convID = ""
 	m.turnEvents = nil

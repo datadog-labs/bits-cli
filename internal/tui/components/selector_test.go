@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/tui/styles"
@@ -58,5 +59,41 @@ func TestSelectorSetIndexClamps(t *testing.T) {
 	selector.SetIndex(-1)
 	if selector.Index() != 0 {
 		t.Fatalf("low index = %d", selector.Index())
+	}
+}
+
+func TestSelectorCompactDetailDoesNotPadShortLabels(t *testing.T) {
+	selector := NewSelector([]Choice{
+		{Label: "/web", Detail: "open in Datadog"},
+		{Label: "/resume", Detail: "resume a conversation"},
+	}, styles.Default(true).Selector)
+	selector.SetCompactDetail(true)
+
+	plain := ansi.Strip(selector.View(40))
+	if !strings.Contains(plain, "/web  open in Datadog") {
+		t.Fatalf("compact selector padded short label: %q", plain)
+	}
+	if strings.Contains(plain, "/web     open in Datadog") {
+		t.Fatalf("compact selector retained aligned-column gap: %q", plain)
+	}
+}
+
+func TestSelectorFillWidthMakesEveryRowOpaqueWidth(t *testing.T) {
+	sty := styles.Default(true).Selector
+	sty.Item = sty.Item.Background(lipgloss.Color("#123456"))
+	sty.Selected = sty.Selected.Background(lipgloss.Color("#654321"))
+	sty.Detail = sty.Detail.Background(lipgloss.Color("#123456"))
+	sty.SelectedDetail = sty.SelectedDetail.Background(lipgloss.Color("#654321"))
+	selector := NewSelector([]Choice{
+		{Label: "short", Detail: "detail"},
+		{Label: "longer label", Detail: "more detail"},
+	}, sty)
+	selector.SetCompactDetail(true)
+	selector.SetFillWidth(true)
+
+	for lineNo, line := range strings.Split(selector.View(32), "\n") {
+		if got := ansi.StringWidth(line); got != 32 {
+			t.Fatalf("row %d width = %d, want 32: %q", lineNo+1, got, ansi.Strip(line))
+		}
 	}
 }

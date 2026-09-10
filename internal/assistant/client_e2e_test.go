@@ -75,6 +75,48 @@ func TestE2E_CurrentUser(t *testing.T) {
 	}
 }
 
+func TestE2E_SearchEntitiesReturnsMultipleTypes(t *testing.T) {
+	c := requireE2E(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	response, err := c.SearchEntities(ctx, SearchEntitiesInput{
+		SearchSessionID: "8fdc4cb4-1f3f-4b78-bd4c-8f50c3b8d9a1",
+		RawQuery:        "a",
+		Limit:           10,
+	})
+	if err != nil {
+		t.Fatalf("SearchEntities: %v", err)
+	}
+	types := make(map[EntityType]struct{})
+	attached := make([]ContextEntity, 0, 2)
+	for _, entity := range response.Entities {
+		if entity.EntityID == "" || entity.EntityType == "" {
+			t.Fatalf("entity lacks canonical identity: %#v", entity)
+		}
+		if _, seen := types[entity.EntityType]; !seen && len(attached) < 2 {
+			attached = append(attached, ContextEntity{
+				Type: entity.EntityType, ID: entity.EntityID, Label: entity.DisplayLabel(),
+			})
+		}
+		types[entity.EntityType] = struct{}{}
+	}
+	if len(types) < 2 {
+		t.Fatalf("entity search returned %d distinct types: %#v", len(types), response.Entities)
+	}
+	conversationID, err := c.Send(ctx, "Name the two attached Datadog entities.", SendOptions{
+		Context: &AssistantContext{Entities: attached},
+	}, nil)
+	if err != nil {
+		t.Fatalf("attach two entity types: %v", err)
+	}
+	if conversationID == "" {
+		t.Fatal("attachment verification returned no conversation id")
+	}
+	defer func() {
+		_ = c.DeleteConversation(context.Background(), DeleteConversationInput{ConversationID: conversationID})
+	}()
+}
+
 func TestE2E_ConversationLifecycle(t *testing.T) {
 	c := requireE2E(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

@@ -46,6 +46,25 @@ type conversationRecordingBackend struct {
 
 type cancellationIDBackend struct{ started chan struct{} }
 
+type contextRecordingBackend struct {
+	calls    int
+	contexts []*assistant.AssistantContext
+}
+
+func (b *contextRecordingBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	b.calls++
+	b.contexts = append(b.contexts, opts.Context)
+	var response assistant.AssistantResponse
+	if b.calls == 1 {
+		content := assistant.ToolCallContent("tool-call-1", "read", `{}`)
+		content.Type = assistant.ContentClientToolCall
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-message", content)
+		return "conversation-1", emit(response)
+	}
+	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer-message", assistant.TextContent("done"))
+	return "conversation-1", emit(response)
+}
+
 func (b *cancellationIDBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
 	close(b.started)
 	<-ctx.Done()
@@ -60,6 +79,35 @@ func (b *conversationRecordingBackend) Send(_ context.Context, message any, opts
 	}
 	b.messages[id] = append(b.messages[id], message.(string))
 	return id, nil
+}
+
+func TestTurnContextSurvivesToolContinuationsAndDoesNotLeak(t *testing.T) {
+	backend := &contextRecordingBackend{}
+	tools, err := NewToolSet(ModeAllowAll, Tool{
+		Definition: assistant.ClientTool{Name: "read"},
+		Handler: func(context.Context, ToolCall) (ToolResult, error) {
+			return ToolResult{Output: "ok"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := New(backend, assistant.SendOptions{})
+	turnContext := &assistant.AssistantContext{Entities: []assistant.ContextEntity{{
+		Type: "dashboard", ID: "dash-1", Label: "Checkout overview",
+	}}}
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "inspect", Tools: tools, Context: turnContext}))
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "next turn", Tools: tools}))
+
+	if len(backend.contexts) != 3 {
+		t.Fatalf("request contexts = %#v", backend.contexts)
+	}
+	if !reflect.DeepEqual(backend.contexts[0], turnContext) || !reflect.DeepEqual(backend.contexts[1], turnContext) {
+		t.Fatalf("initial/continuation contexts = %#v, want %#v", backend.contexts[:2], turnContext)
+	}
+	if backend.contexts[2] != nil {
+		t.Fatalf("next independent turn reused context: %#v", backend.contexts[2])
+	}
 }
 
 // historyBackend also serves conversation history.

@@ -1,10 +1,12 @@
 package editor
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
@@ -97,20 +99,8 @@ func TestWordBounds(t *testing.T) {
 	}
 }
 
-func TestDispatchTriggers(t *testing.T) {
-	if got := Dispatch("hello"); got != nil {
-		t.Errorf("plain word should not trigger, got %v", got)
-	}
-	if got := Dispatch("@"); len(got) == 0 {
-		t.Error("@ should return file candidates")
-	}
-	if got := Dispatch("/"); len(got) == 0 {
-		t.Error("/ should return command candidates")
-	}
-}
-
-func TestFakeFilesFilter(t *testing.T) {
-	got := FakeFiles("engine")
+func TestFileCandidatesFilter(t *testing.T) {
+	got := FileCandidates("engine")
 	if len(got) == 0 {
 		t.Fatal("expected a match for 'engine'")
 	}
@@ -224,12 +214,441 @@ func TestMoveWraps(t *testing.T) {
 		t.Fatalf("need >=2 candidates to test wrap, got %d", n)
 	}
 
-	e.move(-1) // wrap from 0 to last
-	if e.menu.selected != n-1 {
-		t.Errorf("move(-1) from 0 = %d, want %d", e.menu.selected, n-1)
+	e.menu.selector.UpdateKey("up")
+	if e.menu.selector.Index() != n-1 {
+		t.Errorf("up from 0 = %d, want %d", e.menu.selector.Index(), n-1)
 	}
-	e.move(1) // wrap back to 0
-	if e.menu.selected != 0 {
-		t.Errorf("move(1) from last = %d, want 0", e.menu.selected)
+	e.menu.selector.UpdateKey("down")
+	if e.menu.selector.Index() != 0 {
+		t.Errorf("down from last = %d, want 0", e.menu.selector.Index())
+	}
+}
+
+func TestAutocompleteDetailsFollowLabelsWithoutColumnGap(t *testing.T) {
+	e := New()
+	e.SetWidth(80)
+	e.ta.SetValue("/")
+	e.ta.SetCursorColumn(1)
+	e.recompute()
+	slash := ansi.Strip(e.MenuView())
+	if !strings.Contains(slash, "/help  show help") {
+		t.Fatalf("slash menu has an unexpected label/detail gap: %q", slash)
+	}
+	for lineNo, line := range strings.Split(e.MenuView(), "\n") {
+		if got, want := ansi.StringWidth(line), e.menuWidth(); got != want {
+			t.Fatalf("slash row %d width = %d, want opaque width %d", lineNo+1, got, want)
+		}
+	}
+
+	e.ta.SetValue("@")
+	e.ta.SetCursorColumn(1)
+	e.SetEntityResults("", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "c1", Label: "◇ [Service] checkout-api",
+		Insert: `@"service:checkout-api"`,
+	}})
+	mentions := ansi.Strip(e.MenuView())
+	if !strings.Contains(mentions, "+ README.md") || strings.Contains(mentions, "local") {
+		t.Fatalf("file menu row contains unexpected presentation: %q", mentions)
+	}
+	if !strings.Contains(mentions, "◇ [Service] checkout-api") || strings.Contains(mentions, "APM") {
+		t.Fatalf("Datadog menu row contains unexpected metadata: %q", mentions)
+	}
+	for lineNo, line := range strings.Split(e.MenuView(), "\n") {
+		if got, want := ansi.StringWidth(line), e.menuWidth(); got != want {
+			t.Fatalf("mention row %d width = %d, want opaque width %d", lineNo+1, got, want)
+		}
+	}
+}
+
+func TestEntityTriggerSupportsSpacesAndRejectsMiddleOfWord(t *testing.T) {
+	e := New()
+	e.ta.SetValue("investigate @checkout api")
+	e.ta.SetCursorColumn(len([]rune("investigate @checkout api")))
+	if query, ok := e.ActiveEntityQuery(); !ok || query != "checkout api" {
+		t.Fatalf("ActiveEntityQuery = (%q, %v), want checkout api", query, ok)
+	}
+
+	e.ta.SetValue("email@example.com")
+	e.ta.SetCursorColumn(len([]rune("email@example.com")))
+	if query, ok := e.ActiveEntityQuery(); ok {
+		t.Fatalf("middle-of-word trigger returned %q", query)
+	}
+}
+
+func TestMixedCandidatesAttachCanonicalEntityAndCanRemoveIt(t *testing.T) {
+	e := New()
+	e.ta.SetValue("@engine")
+	e.ta.SetCursorColumn(len([]rune("@engine")))
+	attachment := Attachment{Type: "service", ID: "checkout-api", Label: "checkout-api", CandidateID: "candidate-1", SearchFlowID: "flow-1"}
+	e.SetEntityResults("engine", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Service] checkout-api",
+		Insert: `@"service:checkout-api"`, Attachment: &attachment,
+	}})
+	if len(e.menu.items) != 2 || e.menu.items[0].Kind != CandidateFile || e.menu.items[1].Kind != CandidateEntity {
+		t.Fatalf("mixed menu = %#v", e.menu.items)
+	}
+	e.menu.selector.SetIndex(1)
+	e.accept()
+	if got := e.Attachments(); len(got) != 1 || !reflect.DeepEqual(got[0], attachment) {
+		t.Fatalf("attachments = %#v", got)
+	}
+	if !strings.Contains(e.Value(), `@"service:checkout-api"`) {
+		t.Fatalf("visible prompt = %q", e.Value())
+	}
+	if strings.Contains(ansi.Strip(e.View()), "Attached:") {
+		t.Fatalf("editor rendered a separate attachment row: %q", ansi.Strip(e.View()))
+	}
+	e.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	if len(e.Attachments()) != 0 {
+		t.Fatalf("attachment was not removed: %#v", e.Attachments())
+	}
+	if strings.Contains(e.Value(), `@"service:checkout-api"`) {
+		t.Fatalf("attachment removal left its mention in the prompt: %q", e.Value())
+	}
+}
+
+func TestMenuAndAttachmentsAreUnicodeSafeAtNarrowWidths(t *testing.T) {
+	e := New()
+	e.SetWidth(18)
+	e.ta.SetValue("@déplo")
+	e.ta.SetCursorColumn(len([]rune("@déplo")))
+	attachment := Attachment{Type: "workflow", ID: "w1", Label: "Déploiement 東京"}
+	e.SetEntityResults("déplo", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "c1", Label: "◇ [Workflow] Déploiement 東京 très long",
+		Insert: `@"workflow:Déploiement 東京"`, Attachment: &attachment,
+	}})
+	for _, line := range strings.Split(e.MenuView(), "\n") {
+		if width := ansi.StringWidth(line); width > 18 {
+			t.Fatalf("menu line is %d cells: %q", width, ansi.Strip(line))
+		}
+	}
+	e.accept()
+	for _, line := range strings.Split(e.View(), "\n") {
+		if width := ansi.StringWidth(line); width > 18 {
+			t.Fatalf("editor line is %d cells: %q", width, ansi.Strip(line))
+		}
+	}
+}
+
+func TestEditingOneOfTwoSameNamedMentionsRemovesOnlyItsIdentity(t *testing.T) {
+	e := New()
+	e.Focus()
+	e.ta.SetValue("@first")
+	e.ta.SetCursorColumn(len([]rune("@first")))
+	mention := `@dashboard:"Shared dashboard"`
+	first := Attachment{Type: "dashboard", ID: "dashboard-1", Label: "Shared dashboard"}
+	e.SetEntityResults("first", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Dashboard] Shared dashboard",
+		Insert: mention, Attachment: &first,
+	}})
+	e.accept()
+
+	e.Update(tea.PasteMsg{Content: "@second"})
+	second := Attachment{Type: "dashboard", ID: "dashboard-2", Label: "Shared dashboard"}
+	e.SetEntityResults("second", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-2", Label: "◇ [Dashboard] Shared dashboard",
+		Insert: mention, Attachment: &second,
+	}})
+	if query, active := e.ActiveEntityQuery(); !active || query != "second" {
+		t.Fatalf("second query = (%q, %v), value %q", query, active, e.Value())
+	}
+	if len(e.menu.items) != 1 || e.menu.items[0].ID != "candidate-2" {
+		t.Fatalf("second menu = %#v", e.menu.items)
+	}
+	e.accept()
+	if got := e.Attachments(); len(got) != 2 {
+		t.Fatalf("attachments before edit = %#v", got)
+	}
+
+	// Delete the closing quote from the first occurrence only.
+	e.ta.SetCursorColumn(len([]rune(mention)))
+	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	got := e.Attachments()
+	if len(got) != 1 || got[0].ID != "dashboard-2" {
+		t.Fatalf("attachments after editing first duplicate = %#v", got)
+	}
+}
+
+func TestBulkDeleteBeforeSameNamedMentionKeepsSurvivingIdentity(t *testing.T) {
+	e := New()
+	e.Focus()
+	mention := `@dashboard:"Same"`
+	first := Attachment{Type: "dashboard", ID: "d1", Label: "Same"}
+	second := Attachment{Type: "dashboard", ID: "d2", Label: "Same"}
+
+	e.ta.SetValue("@first")
+	e.ta.SetCursorColumn(len([]rune("@first")))
+	e.SetEntityResults("first", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Dashboard] Same",
+		Insert: mention, Attachment: &first,
+	}})
+	e.accept()
+	e.Update(tea.PasteMsg{Content: "@second"})
+	e.SetEntityResults("second", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-2", Label: "◇ [Dashboard] Same",
+		Insert: mention, Attachment: &second,
+	}})
+	e.accept()
+
+	secondStart := len([]rune(mention)) + 1
+	e.ta.SetCursorColumn(secondStart)
+	e.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	if got, want := e.Value(), mention+" "; got != want {
+		t.Fatalf("value after ctrl+u = %q, want %q", got, want)
+	}
+	got := e.Attachments()
+	if len(got) != 1 || got[0].ID != "d2" {
+		t.Fatalf("attachments after ctrl+u = %#v, want d2", got)
+	}
+}
+
+func TestAcceptMidTokenReplacesSuffixAfterCursor(t *testing.T) {
+	e := New()
+	e.ta.SetValue("@engine")
+	e.ta.SetCursorColumn(len([]rune("@eng")))
+	e.recompute()
+	if !e.MenuOpen() {
+		t.Fatal("mid-token query did not open completion")
+	}
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got, want := e.Value(), "@internal/agent/engine.go "; got != want {
+		t.Fatalf("accepted mid-token completion = %q, want %q", got, want)
+	}
+}
+
+func TestAtSignInsideSelectedEntityDoesNotRestartCompletion(t *testing.T) {
+	e := New()
+	e.ta.SetValue("@api")
+	e.ta.SetCursorColumn(len([]rune("@api")))
+	attachment := Attachment{Type: "dashboard", ID: "dashboard-1", Label: "API @ prod"}
+	e.SetEntityResults("api", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Dashboard] API @ prod",
+		Insert: `@dashboard:"API @ prod"`, Attachment: &attachment,
+	}})
+	e.accept()
+
+	if query, active := e.ActiveEntityQuery(); active {
+		t.Fatalf("selected entity restarted autocomplete with query %q", query)
+	}
+	e.recompute()
+	if e.MenuOpen() {
+		t.Fatal("selected entity reopened autocomplete")
+	}
+}
+
+func TestQuotedMentionKeepsEmbeddedTriggersLiteral(t *testing.T) {
+	for _, test := range []struct{ input, query string }{
+		{`@service:"API @prod"`, `service:"API @prod"`},
+		{`@service:"API \" @prod"`, `service:"API \" @prod"`},
+		{`@service:"API \\" @next`, `next`},
+		{`@service:"API @prod`, `service:"API @prod`},
+		{`say "hello @service:api`, `service:api`},
+		{`@service:"API @prod" @next`, `next`},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			e := New()
+			e.Focus()
+			e.Update(tea.PasteMsg{Content: test.input})
+			if query, active := e.ActiveEntityQuery(); !active || query != test.query {
+				t.Fatalf("query = (%q, %v), want %q", query, active, test.query)
+			}
+		})
+	}
+}
+
+func TestProseQuotesDoNotOpenQuotedMentions(t *testing.T) {
+	for _, input := range []string{`say "@service:api" @next`, `@service:api" @next`, `@service:api "prose @next`, `@"API" "prose @next`} {
+		e := New()
+		e.Focus()
+		e.Update(tea.PasteMsg{Content: input})
+		if query, active := e.ActiveEntityQuery(); !active || query != "next" {
+			t.Fatalf("%q: query = (%q, %v), want next", input, query, active)
+		}
+	}
+}
+
+func TestCompletionPreservesProseQuoteAndTrailingText(t *testing.T) {
+	for _, input := range []string{`"@go" keep this text`, `say "@go" keep this text`, `@go" keep this text`} {
+		e := New()
+		e.Focus()
+		e.Update(tea.PasteMsg{Content: input})
+		e.ta.SetCursorColumn(len([]rune(input[:strings.Index(input, "@go")])) + len("@go"))
+		e.recompute()
+		e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		if got, want := e.Value(), strings.Replace(input, "@go", "@go.mod ", 1); got != want {
+			t.Fatalf("%q: value = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestQuotedCompletionReplacesWholeMentionAtEveryCaretPosition(t *testing.T) {
+	for _, mention := range []string{`@service:"Checkout API"`, `@service:"東京 \"API\" @prod"`, `@"API @prod"`, `@service:"unfinished API`} {
+		for col := 1; col <= len([]rune(mention)); col++ {
+			e := New()
+			e.Focus()
+			e.Update(tea.PasteMsg{Content: mention})
+			e.ta.SetCursorColumn(col)
+			query, active := e.ActiveEntityQuery()
+			if !active || query != string([]rune(mention)[1:col]) {
+				t.Fatalf("%q at %d: query = (%q, %v)", mention, col, query, active)
+			}
+			e.SetEntityResults(query, RemoteReady, []Candidate{{
+				Kind: CandidateEntity, Label: "replacement", Insert: `@service:"replacement"`,
+				Attachment: &Attachment{Type: "service", ID: "replacement"},
+			}})
+			// Empty queries can also contain local-file rows.
+			e.menu.selector.SetIndex(len(e.menu.items) - 1)
+			e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+			if got, want := e.Value(), `@service:"replacement" `; got != want {
+				t.Fatalf("%q at %d: value = %q, want %q", mention, col, got, want)
+			}
+		}
+	}
+}
+
+func TestCompletionBeforeFilePreservesCompletedOccurrence(t *testing.T) {
+	e := New()
+	e.Focus()
+	e.Update(tea.PasteMsg{Content: "@go"})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	e.ta.SetCursorColumn(0)
+	e.Update(tea.PasteMsg{Content: "@eng"})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got, want := e.Value(), "@internal/agent/engine.go @go.mod "; got != want {
+		t.Fatalf("adjacent completion = %q, want %q", got, want)
+	}
+	e.ta.SetCursorColumn(len([]rune(e.Value())))
+	if query, active := e.ActiveEntityQuery(); active {
+		t.Fatalf("preserved file restarted search: %q", query)
+	}
+}
+
+func TestEntitySearchStatusesUseProductNeutralCopy(t *testing.T) {
+	e := New()
+	e.ta.SetValue("@missing")
+	e.ta.SetCursorColumn(len([]rune("@missing")))
+
+	for _, test := range []struct {
+		state RemoteState
+		want  string
+	}{
+		{state: RemoteLoading, want: "Searching…"},
+		{state: RemoteError, want: "Search unavailable"},
+		{state: RemoteReady, want: "No matching files or entities"},
+	} {
+		e.SetEntityResults("missing", test.state, nil)
+		view := ansi.Strip(e.MenuView())
+		if !strings.Contains(view, test.want) {
+			t.Fatalf("state %d view = %q, want %q", test.state, view, test.want)
+		}
+		if strings.Contains(view, "Datadog") {
+			t.Fatalf("state %d retained redundant product name: %q", test.state, view)
+		}
+	}
+}
+
+func TestAcceptedMentionStopsSearchAtItsBoundary(t *testing.T) {
+	for _, kind := range []CandidateKind{CandidateFile, CandidateEntity} {
+		t.Run(string(kind), func(t *testing.T) {
+			e := New()
+			e.Focus()
+			e.Update(tea.PasteMsg{Content: "@unmatched @dash"})
+			candidate := Candidate{Kind: kind, Label: "API overview", Insert: `@dashboard:"API overview"`}
+			if kind == CandidateEntity {
+				candidate.Attachment = &Attachment{Type: "dashboard", ID: "d1", Label: "API overview"}
+			}
+			e.SetEntityResults("dash", RemoteReady, []Candidate{candidate})
+			e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+			for _, text := range []string{"", " investigate this"} {
+				e.Update(tea.PasteMsg{Content: text})
+				if query, active := e.ActiveEntityQuery(); active || e.MenuOpen() {
+					t.Fatalf("accepted mention restarted search: query=%q, value=%q", query, e.Value())
+				}
+			}
+			e.Update(tea.PasteMsg{Content: " @next"})
+			if query, active := e.ActiveEntityQuery(); !active || query != "next" {
+				t.Fatalf("new trigger = (%q, %v), want next", query, active)
+			}
+		})
+	}
+}
+
+func TestCompletedMentionIsScopedToItsOccurrence(t *testing.T) {
+	e := New()
+	e.Focus()
+	e.Update(tea.PasteMsg{Content: "@go"})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := e.Value(); got != "@go.mod " {
+		t.Fatalf("accepted file = %q", got)
+	}
+
+	// Inserting before the completion moves its rune-based span, even across lines.
+	e.ta.SetCursorColumn(0)
+	e.Update(tea.PasteMsg{Content: "東京\n"})
+	e.ta.CursorEnd()
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+	if query, active := e.ActiveEntityQuery(); active {
+		t.Fatalf("shifted completion restarted search: %q", query)
+	}
+	e.Update(tea.PasteMsg{Content: "@go.mod"})
+	if query, active := e.ActiveEntityQuery(); !active || query != "go.mod" || !e.MenuOpen() {
+		t.Fatalf("new occurrence = (%q, %v), value=%q", query, active, e.Value())
+	}
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if query, active := e.ActiveEntityQuery(); active {
+		t.Fatalf("second completion restarted search: %q", query)
+	}
+
+	// Deleting an occurrence must not leave dismissal attached to its old offset.
+	e.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	e.Update(tea.PasteMsg{Content: "@go.mod"})
+	if query, active := e.ActiveEntityQuery(); !active || query != "go.mod" {
+		t.Fatalf("replacement occurrence = (%q, %v)", query, active)
+	}
+}
+
+func TestEditingCompletedFileReopensSearch(t *testing.T) {
+	e := New()
+	e.Focus()
+	e.Update(tea.PasteMsg{Content: "@go"})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace}) // trailing space
+	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace}) // final letter
+	if query, active := e.ActiveEntityQuery(); !active || query != "go.mo" {
+		t.Fatalf("edited completion = (%q, %v)", query, active)
+	}
+}
+
+func TestCompletionBeforeEntityUpdatesExistingAttachmentSpan(t *testing.T) {
+	e := New()
+	e.Focus()
+	e.ta.SetValue("@dash")
+	e.ta.SetCursorColumn(len([]rune("@dash")))
+	mention := `@dashboard:"Test dashboard"`
+	attachment := Attachment{Type: "dashboard", ID: "dashboard-1", Label: "Test dashboard"}
+	e.SetEntityResults("dash", RemoteReady, []Candidate{{
+		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Dashboard] Test dashboard",
+		Insert: mention, Attachment: &attachment,
+	}})
+	e.accept()
+
+	e.ta.SetCursorColumn(0)
+	e.Update(tea.PasteMsg{Content: "@eng"})
+	if len(e.attachments) != 1 {
+		t.Fatalf("typing before mention removed attachment: value=%q tracked=%#v", e.Value(), e.attachments)
+	}
+	if !e.MenuOpen() {
+		t.Fatal("file completion before entity did not open")
+	}
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !strings.Contains(e.Value(), mention) {
+		t.Fatalf("file completion removed visible entity mention: %q", e.Value())
+	}
+
+	e.ta.SetCursorColumn(len([]rune(e.Value())))
+	e.Update(tea.PasteMsg{Content: " inspect this"})
+	got := e.Attachments()
+	if len(got) != 1 || got[0].ID != "dashboard-1" {
+		t.Fatalf("attachment after completion and ordinary edit = %#v", got)
 	}
 }

@@ -27,6 +27,10 @@ type Backend interface {
 		fn func(assistant.AssistantResponse) error) (string, error)
 }
 
+type entitySearchBackend interface {
+	SearchEntities(context.Context, assistant.SearchEntitiesInput) (assistant.SearchEntitiesResponse, error)
+}
+
 // HistoryBackend adds conversation history loading
 type HistoryBackend interface {
 	ConversationHistory(ctx context.Context, in assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error)
@@ -189,9 +193,23 @@ func (e *Engine) Site() string {
 	return e.runtimeStatus.Backend.Site
 }
 
+// SearchEntities forwards autocomplete queries when the backend supports the
+// Datadog entity suggestions contract. Search does not claim the serialized
+// conversation-operation gate.
+func (e *Engine) SearchEntities(ctx context.Context, in assistant.SearchEntitiesInput) (assistant.SearchEntitiesResponse, error) {
+	backend, ok := e.backend.(entitySearchBackend)
+	if !ok {
+		return assistant.SearchEntitiesResponse{}, errors.New("entity search is unavailable")
+	}
+	return backend.SearchEntities(ctx, in)
+}
+
 type TurnInput struct {
 	Message string
 	Tools   *ToolSet
+	// Context belongs to this independent user turn. The engine resends it on
+	// client-tool continuations, but never stores it in its long-lived options.
+	Context *assistant.AssistantContext
 	// OnDeny is the turn's policy after a denial is answered on the wire.
 	OnDeny DenyPolicy
 }
@@ -364,6 +382,7 @@ func (e *Engine) run(
 		opts := e.opts
 		opts.ConversationID = convID
 		opts.ClientTools = defs
+		opts.Context = in.Context
 		opts.StreamToolCallInput = opts.StreamToolCallInput || tools.NeedsStreamedInput()
 
 		id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {

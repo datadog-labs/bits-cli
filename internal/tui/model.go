@@ -38,23 +38,37 @@ type EngineFactory func(context.Context) (*agent.Engine, error)
 // grant. It matches auth.Logout without coupling the TUI to a concrete store.
 type LogoutFunc func(context.Context) (hadSession bool, revokeErr, err error)
 
+// EntitySearcher is the narrow autocomplete dependency used by the TUI.
+type EntitySearcher interface {
+	SearchEntities(context.Context, assistant.SearchEntitiesInput) (assistant.SearchEntitiesResponse, error)
+}
+
 type Config struct {
 	Tools          *agent.ToolSet
+	EntitySearcher EntitySearcher
 	StatusProvider statusview.Provider
 	OpenURL        func(context.Context, string) error
 	Logout         LogoutFunc
 }
 
 // Model is the root Bubble Tea model. All state lives here and is mutated only
-// on the tea thread; the sole async source is the engine's event channel.
+// on the tea thread; engine and entity-search work return typed messages.
 type Model struct {
 	// Collaborators the model drives.
-	engine  *agent.Engine
-	tools   *agent.ToolSet
-	openURL func(context.Context, string) error
-	editor  *editor.Editor
-	picker  *conversationview.Model
-	status  *statusview.Model
+	engine                 *agent.Engine
+	tools                  *agent.ToolSet
+	openURL                func(context.Context, string) error
+	editor                 *editor.Editor
+	picker                 *conversationview.Model
+	status                 *statusview.Model
+	entitySearcher         EntitySearcher
+	searchSessionID        string
+	entitySearchQuery      string
+	entitySearchActive     bool
+	entitySearchGeneration uint64
+	entitySearchCancel     context.CancelFunc
+	entitySearchCache      map[string]entitySearchCacheEntry
+	entitySearchCacheOrder []string
 
 	statusProvider   statusview.Provider
 	statusGeneration uint64
@@ -177,11 +191,15 @@ func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory Engine
 func (m *Model) configure(configs []Config) {
 	if len(configs) > 0 {
 		m.tools = configs[0].Tools
+		m.entitySearcher = configs[0].EntitySearcher
 		if configs[0].StatusProvider != nil {
 			m.statusProvider = configs[0].StatusProvider
 		}
 		m.openURL = configs[0].OpenURL
 		m.logout = configs[0].Logout
+	}
+	if m.entitySearcher == nil && m.engine != nil {
+		m.entitySearcher = m.engine
 	}
 	if m.openURL == nil {
 		m.openURL = browser.Open
@@ -192,11 +210,13 @@ func newShell() *Model {
 	theme := styles.Default(true)
 	status := statusview.New(1, 1, theme)
 	m := &Model{
-		editor:         editor.New(),
-		list:           chat.NewList(),
-		status:         &status,
-		statusProvider: statusview.SystemProvider{},
-		styles:         theme,
+		editor:            editor.New(),
+		list:              chat.NewList(),
+		status:            &status,
+		statusProvider:    statusview.SystemProvider{},
+		styles:            theme,
+		searchSessionID:   newSearchSessionID(),
+		entitySearchCache: make(map[string]entitySearchCacheEntry),
 	}
 	m.applyStyles(m.styles)
 	return m

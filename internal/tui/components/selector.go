@@ -17,9 +17,11 @@ type Choice struct {
 
 // Selector owns static-list navigation and bounded two-column rendering.
 type Selector struct {
-	choices  []Choice
-	selected int
-	styles   styles.Selector
+	choices       []Choice
+	selected      int
+	styles        styles.Selector
+	compactDetail bool
+	fillWidth     bool
 }
 
 // NewSelector creates a selector and copies choices so callers cannot mutate
@@ -30,6 +32,16 @@ func NewSelector(choices []Choice, sty styles.Selector) *Selector {
 
 // SetStyles replaces the selector's theme-derived styles.
 func (s *Selector) SetStyles(sty styles.Selector) { s.styles = sty }
+
+// SetCompactDetail renders detail immediately after each label instead of
+// aligning it to the longest label. This is useful for autocomplete menus,
+// where column padding looks like an empty selectable area.
+func (s *Selector) SetCompactDetail(compact bool) { s.compactDetail = compact }
+
+// SetFillWidth pads each row to the requested view width using its active item
+// style. Popup callers use this to prevent the underlying view from showing
+// through between or after styled spans.
+func (s *Selector) SetFillWidth(fill bool) { s.fillWidth = fill }
 
 // SetIndex selects index, clamped to the available rows.
 func (s *Selector) SetIndex(index int) {
@@ -80,6 +92,20 @@ func (s *Selector) View(width int) string {
 	}
 	markerWidth := max(ansi.StringWidth(s.styles.Marker), ansi.StringWidth(s.styles.SelectedMarker))
 	gap := max(0, s.styles.ColumnGap)
+	hasDetail := false
+	maxDetailWidth := 0
+	for _, choice := range s.choices {
+		if choice.Detail != "" {
+			hasDetail = true
+			maxDetailWidth = max(maxDetailWidth, ansi.StringWidth(choice.Detail))
+		}
+	}
+	if hasDetail && width-markerWidth-gap >= 8 {
+		// Reserve cells for type and metadata so one long label cannot erase
+		// the detail column for every row.
+		reservedDetail := min(maxDetailWidth, min(16, max(4, width/3)))
+		labelWidth = min(labelWidth, max(1, width-markerWidth-gap-reservedDetail))
+	}
 
 	rows := make([]string, len(s.choices))
 	for i, choice := range s.choices {
@@ -95,13 +121,20 @@ func (s *Selector) View(width int) string {
 		availableAfterMarker := max(0, width-markerWidth)
 		rowLabelWidth := min(labelWidth, availableAfterMarker)
 		label := ansi.Truncate(choice.Label, rowLabelWidth, "…")
-		label = padRight(label, rowLabelWidth)
+		if !s.compactDetail {
+			label = padRight(label, rowLabelWidth)
+		} else {
+			rowLabelWidth = ansi.StringWidth(label)
+		}
 		prefix := labelStyle.Render(marker + label)
 
 		detailWidth := width - markerWidth - rowLabelWidth - gap
 		if choice.Detail != "" && detailWidth > 1 {
 			detail := ansi.Truncate(choice.Detail, detailWidth, "…")
-			prefix += strings.Repeat(" ", gap) + detailStyle.Render(detail)
+			prefix += labelStyle.Render(strings.Repeat(" ", gap)) + detailStyle.Render(detail)
+		}
+		if s.fillWidth {
+			prefix += labelStyle.Render(strings.Repeat(" ", max(0, width-ansi.StringWidth(prefix))))
 		}
 		rows[i] = ansi.Truncate(prefix, width, "…")
 	}
