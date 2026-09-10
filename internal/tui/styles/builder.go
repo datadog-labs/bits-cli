@@ -170,10 +170,6 @@ func build(isDark bool, p palette) Theme {
 }
 
 // markdown adapts glamour's stock config to the palette.
-//
-// TODO: cfg's Document color is left unset, so assistant prose still renders
-// at glamour's own gray rather than textSecondary — deferred because glamour's
-// inheritance rules make that a bigger change than the roles handled here.
 func markdown(isDark bool, p palette) glamouransi.StyleConfig {
 	cfg := glamourstyles.LightStyleConfig
 	if isDark {
