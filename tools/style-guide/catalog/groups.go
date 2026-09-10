@@ -125,7 +125,7 @@ func sharedComponentSamples(width int, theme styles.Theme) []string {
 	panelContent := components.PanelContent{
 		Title:          "Choose your Datadog site",
 		Dismiss:        "esc ×",
-		Body:           func(int) string { return theme.Text.Muted.Render("Select the site where your organization lives.") },
+		Body:           func(int) string { return theme.Text.Secondary.Render("Select the site where your organization lives.") },
 		FooterLeft:     "↑/↓ navigate",
 		FooterRight:    "enter to continue",
 		CompactTitle:   "Sign in to Bits",
@@ -151,9 +151,9 @@ func sharedComponentSamples(width int, theme styles.Theme) []string {
 
 	return []string{
 		renderSample("Text roles", lipgloss.JoinVertical(lipgloss.Left,
-			theme.Text.Body.Render("Body text"),
-			theme.Text.Muted.Render("Muted metadata"),
-			theme.Text.Help.Render("Keyboard help"),
+			theme.Text.Primary.Render("Body text"),
+			theme.Text.Secondary.Render("Muted metadata"),
+			theme.Text.Tertiary.Render("Keyboard help"),
 		)),
 		renderSample("Feedback states", lipgloss.JoinVertical(lipgloss.Left,
 			theme.Feedback.Progress.Render("⠋  Waiting for Datadog"),
@@ -195,8 +195,8 @@ func colorTokenSamples(theme styles.Theme) []string {
 		{"Notice info bg", sty.NoticeInfo.GetBackground()},
 		{"Notice warn bg", sty.NoticeWarn.GetBackground()},
 		{"Notice error bg", sty.NoticeError.GetBackground()},
-		{"Text body fg", theme.Text.Body.GetForeground()},
-		{"Text muted/help fg", theme.Text.Muted.GetForeground()},
+		{"Text body fg", theme.Text.Primary.GetForeground()},
+		{"Text muted/help fg", theme.Text.Secondary.GetForeground()},
 		{"Panel border", theme.Panel.Frame.GetBorderTopForeground()},
 		{"Selector selected fg", theme.Selector.Selected.GetForeground()},
 		{"Feedback progress fg", theme.Feedback.Progress.GetForeground()},
