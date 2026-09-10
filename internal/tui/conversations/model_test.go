@@ -8,10 +8,12 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/escape"
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 func pickerKey(code rune, text string) tea.KeyPressMsg {
@@ -370,10 +372,24 @@ func TestConversationDelegateEmphasizesTitleOverTimestamp(t *testing.T) {
 	if delegate.Styles.NormalDesc.GetBold() || delegate.Styles.SelectedDesc.GetBold() {
 		t.Fatal("timestamps should not be bold")
 	}
-	if !delegate.Styles.NormalDesc.GetFaint() || !delegate.Styles.SelectedDesc.GetFaint() {
-		t.Fatal("timestamps should use subdued intensity")
+	// Subdued means the tertiary text level, not Faint. Faint dims whatever
+	// foreground is already in play, so it used to dim the terminal's own default
+	// rather than a color the theme chose.
+	wantTimestamp := styles.Default(true).Text.Tertiary.GetForeground()
+	for name, style := range map[string]lipgloss.Style{
+		"NormalDesc":   delegate.Styles.NormalDesc,
+		"SelectedDesc": delegate.Styles.SelectedDesc,
+		"DimmedDesc":   delegate.Styles.DimmedDesc,
+	} {
+		if style.GetFaint() {
+			t.Errorf("%s sets Faint; the level supplies the dimming", name)
+		}
+		if got := style.GetForeground(); !reflect.DeepEqual(got, wantTimestamp) {
+			t.Errorf("%s foreground = %v, want tertiary %v", name, got, wantTimestamp)
+		}
 	}
+	// The selected row must not promote the timestamp to the title's accent.
 	if !reflect.DeepEqual(delegate.Styles.NormalDesc.GetForeground(), delegate.Styles.SelectedDesc.GetForeground()) {
-		t.Fatal("selected timestamp should remain muted instead of inheriting the title accent")
+		t.Fatal("selected timestamp should stay subdued instead of inheriting the title accent")
 	}
 }

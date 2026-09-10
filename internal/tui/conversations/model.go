@@ -177,10 +177,16 @@ func newConversationDelegate(themes ...styles.Theme) list.DefaultDelegate {
 		Foreground(theme.Selector.Selected.GetForeground()).Bold(true)
 	// Keep the timestamp subordinate to the title, including on the selected
 	// row where the default delegate otherwise gives both lines equal emphasis.
-	muted := theme.Selector.Detail.GetForeground()
-	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(muted).Bold(false).Faint(true)
-	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(muted).Bold(false).Faint(true)
-	delegate.Styles.DimmedDesc = delegate.Styles.DimmedDesc.Foreground(muted).Bold(false).Faint(true)
+	//
+	// The color is the tertiary text level, read directly rather than borrowed
+	// from Selector.Detail as it used to be: a timestamp is ambient, while the
+	// selector's detail column carries text the reader acts on, so the two roles
+	// no longer share a color. Faint is gone with it — the level is already the
+	// dim one, and Faint only dimmed whatever foreground happened to be in play.
+	timestamp := theme.Text.Tertiary.GetForeground()
+	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(timestamp).Bold(false)
+	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(timestamp).Bold(false)
+	delegate.Styles.DimmedDesc = delegate.Styles.DimmedDesc.Foreground(timestamp).Bold(false)
 	return delegate
 }
 
@@ -446,7 +452,7 @@ func (m Model) panelBody(width int) string {
 			body = m.theme.Feedback.Progress.Render("Loading conversations…")
 		}
 	case StateEmpty:
-		body = joinWarning(m.theme.Text.Muted.Render("No conversations found."), m.warning)
+		body = joinWarning(m.theme.Text.Secondary.Render("No conversations found."), m.warning)
 	case StateError:
 		message := m.errorMessage
 		if message == "" {
@@ -456,13 +462,13 @@ func (m Model) panelBody(width int) string {
 				message = "Could not load conversations."
 			}
 		}
-		body = m.theme.Feedback.Error.Render(message) + "\n\n" + m.theme.Text.Help.Render("enter retry")
+		body = m.theme.Feedback.Error.Render(message) + "\n\n" + m.theme.Text.Secondary.Render("enter retry")
 	case StateClosing:
 		body = m.theme.Feedback.Progress.Render("Closing…")
 	case StateReady:
 		body = m.list.View()
 		if m.warning != "" {
-			body = m.theme.Text.Muted.Render(m.warning) + "\n" + body
+			body = m.theme.Text.Secondary.Render(m.warning) + "\n" + body
 		}
 	default:
 		body = ""

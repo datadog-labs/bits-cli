@@ -89,6 +89,45 @@ func TestTypedTextIsPaintedNotInherited(t *testing.T) {
 	}
 }
 
+// TestPlaceholderIsPaintedNotHardcoded covers the empty composer. The textarea
+// hardcodes ANSI 240 for the placeholder in both of its default style sets, so
+// "Ask Bits…" answered to no token and looked identical in light and dark.
+//
+// This asserts on rendered output because placeholderView is a third render
+// path, separate from Text and computedCursorLine — the same class of trap that
+// made styling Text alone leave the typed line with no foreground at all.
+func TestPlaceholderIsPaintedNotHardcoded(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		isDark bool
+		want   string // truecolor SGR foreground the theme should emit
+	}{
+		{name: "dark", isDark: true, want: "38;2;162;163;166"},
+		{name: "light", isDark: false, want: "38;2;94;95;98"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			e := New()
+			e.SetWidth(40)
+			e.SetPlaceholder("Ask Bits…")
+			e.SetInputStyles(styles.Default(test.isDark).Input)
+			e.Focus()
+
+			view := e.View()
+			// The virtual cursor renders the first character in its own span, so
+			// the placeholder is only contiguous once the escapes are stripped.
+			if !strings.Contains(ansi.Strip(view), "Ask Bits…") {
+				t.Fatalf("placeholder missing from view: %q", view)
+			}
+			if strings.Contains(view, "38;5;240") || strings.Contains(view, "\x1b[38;5;240m") {
+				t.Errorf("placeholder still uses the textarea's hardcoded ANSI 240: %q", view)
+			}
+			if !strings.Contains(view, test.want) {
+				t.Errorf("placeholder does not set foreground %s; got %q", test.want, view)
+			}
+		})
+	}
+}
+
 // TestBlurredTextStaysDimmed guards the one state deliberately left alone: a
 // blurred editor means another surface owns input, so it should read inactive
 // rather than adopt the full-strength typed color.

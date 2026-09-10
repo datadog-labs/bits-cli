@@ -23,6 +23,11 @@ type Input struct {
 	// Text styles what the user wrote, shared by the live editor line and the
 	// submitted transcript block so it doesn't change color past Enter.
 	Text lipgloss.Style
+
+	// Placeholder styles the hint shown while the composer is empty. It is a
+	// theme role rather than the textarea's own default because that default is
+	// a hardcoded ANSI index, identical in both modes.
+	Placeholder lipgloss.Style
 }
 
 // PromptWidth returns the number of cells occupied by the input prompt.
@@ -88,11 +93,17 @@ type Editor struct {
 	MenuSelected lipgloss.Style
 }
 
-// Text contains shared semantic text roles used outside the transcript.
+// Text exposes the palette's three foreground levels to components outside the
+// transcript. The levels are ordered by how much attention the text should
+// draw; see the palette for what each one is for.
+//
+// Body/Muted/Help used to live here, but Muted and Help were the same color, so
+// the pair implied a distinction the theme never made. Naming the levels
+// directly means a call site picks an emphasis rather than a synonym.
 type Text struct {
-	Body  lipgloss.Style
-	Muted lipgloss.Style
-	Help  lipgloss.Style
+	Primary   lipgloss.Style
+	Secondary lipgloss.Style
+	Tertiary  lipgloss.Style
 }
 
 // Feedback contains shared progress and outcome roles.
