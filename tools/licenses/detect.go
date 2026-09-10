@@ -28,7 +28,13 @@ var canonicalOrder = []string{"MIT", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause
 // notice text: LICENSE, LICENSE.md, LICENSE-MIT, COPYING, NOTICE, ... The
 // extensions are restricted to documentation formats (or none) so Go source
 // files named license.go or copyright.go are not read as license text.
-var licenseFileRe = regexp.MustCompile(`(?i)^(licen[cs]e|copying|copyright|notice)[-_.0-9a-z]*(?:\.(?:txt|md|rst|html))?$`)
+var licenseFileRe = regexp.MustCompile(`(?i)^(licen[cs]e|copying|copyright|notice)[-_0-9a-z]*(?:\.(?:txt|md|rst|html))?$`)
+
+// licenseFileRe must not admit Go source: a file like license.go must fail
+// this match entirely, not merely fail detection. The variant class
+// excludes the dot for that reason — with a dot in the class, ".go" would
+// be consumed as a variant suffix and the extension group would match
+// empty.
 
 // dualLicenseRe matches statements by which a file declares itself dual
 // licensed (e.g. the go-yaml LICENSE: "This project is covered by two
