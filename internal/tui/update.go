@@ -210,6 +210,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case animTickMsg:
 		return m, m.advanceAnimation(msg)
 
+	case borderSweepTickMsg:
+		return m, m.advanceBorderSweep(msg)
+
 	case entitySearchDebounceMsg:
 		return m, m.beginEntitySearch(msg)
 

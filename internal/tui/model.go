@@ -159,6 +159,13 @@ type Model struct {
 	animGeneration uint64
 	animArmed      bool
 
+	// Composer border-sweep animation. Independent of the tool-activity clock
+	// above: it tracks m.chatPhase (Waiting/Streaming) rather than in-flight
+	// tool blocks, and runs on its own tick (borderSweepInterval).
+	borderSweepFrame      int
+	borderSweepGeneration uint64
+	borderSweepArmed      bool
+
 	// Terminal dimensions are cached so a chat installed after startup login can
 	// be laid out immediately; Bubble Tea does not replay its initial size event.
 	width  int
