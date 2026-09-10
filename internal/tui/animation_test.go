@@ -41,22 +41,12 @@ func animModel(status agent.ToolStatus) *Model {
 }
 
 func TestAnimationArmsWhileToolInFlight(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		status agent.ToolStatus
-	}{
-		{"running", agent.ToolRunning},
-		{"awaiting approval", agent.ToolAwaitingApproval},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			m := animModel(test.status)
-			if cmd := m.syncAnimation(); cmd == nil {
-				t.Fatal("syncAnimation() returned no command; the tick was never armed")
-			}
-			if !m.animArmed {
-				t.Error("model should report the animation as armed")
-			}
-		})
+	m := animModel(agent.ToolRunning)
+	if cmd := m.syncAnimation(); cmd == nil {
+		t.Fatal("syncAnimation() returned no command; the tick was never armed")
+	}
+	if !m.animArmed {
+		t.Error("model should report the animation as armed")
 	}
 }
 
@@ -67,6 +57,7 @@ func TestAnimationStaysIdleWhenNothingIsInFlight(t *testing.T) {
 		name   string
 		status agent.ToolStatus
 	}{
+		{"awaiting approval", agent.ToolAwaitingApproval},
 		{"success", agent.ToolSuccess},
 		{"error", agent.ToolError},
 	} {
@@ -152,65 +143,17 @@ func TestAnimationDisarmsWhenToolSettles(t *testing.T) {
 	}
 }
 
-// TestLowColorProfileDisablesMotion is the graceful degradation: lipgloss
-// always renders truecolor, so a 16-color terminal is detected here and the
-// theme is flattened rather than animated into mush.
-func TestLowColorProfileDisablesMotion(t *testing.T) {
-	for _, profile := range []colorprofile.Profile{colorprofile.ANSI, colorprofile.ASCII, colorprofile.NoTTY} {
+// TestColorProfileDoesNotDisableGlyphMotion documents that compact tool
+// motion is a spinner and fixed-width dots, not a color gradient.
+func TestColorProfileDoesNotDisableGlyphMotion(t *testing.T) {
+	for _, profile := range []colorprofile.Profile{colorprofile.ASCII, colorprofile.ANSI, colorprofile.ANSI256, colorprofile.TrueColor} {
 		t.Run(profile.String(), func(t *testing.T) {
 			m := animModel(agent.ToolRunning)
 			m.Update(tea.ColorProfileMsg{Profile: profile})
-
-			if m.chatStyles.StatusRunningLabel.Len() != 0 {
-				t.Error("theme should have been flattened for a terminal that cannot render a gradient")
-			}
-			if cmd := m.syncAnimation(); cmd != nil {
-				t.Error("no tick should be armed when motion is disabled")
-			}
-		})
-	}
-}
-
-// TestGradientCapableProfileKeepsMotion is the counterpart: a capable
-// terminal must keep the animation.
-func TestGradientCapableProfileKeepsMotion(t *testing.T) {
-	for _, profile := range []colorprofile.Profile{colorprofile.ANSI256, colorprofile.TrueColor} {
-		t.Run(profile.String(), func(t *testing.T) {
-			m := animModel(agent.ToolRunning)
-			m.Update(tea.ColorProfileMsg{Profile: profile})
-
-			if m.chatStyles.StatusRunningLabel.Len() == 0 {
-				t.Error("theme should keep its animated labels on a gradient-capable terminal")
-			}
 			if cmd := m.syncAnimation(); cmd == nil {
-				t.Error("the tick should arm on a gradient-capable terminal")
+				t.Error("color profile disabled compact tool motion")
 			}
 		})
-	}
-}
-
-// TestUnknownColorProfileStaysOptimistic keeps the animation working when the
-// terminal never reports a usable profile; Unknown means "not detected", not
-// "incapable".
-func TestUnknownColorProfileStaysOptimistic(t *testing.T) {
-	m := animModel(agent.ToolRunning)
-	m.Update(tea.ColorProfileMsg{Profile: colorprofile.Unknown})
-
-	if m.chatStyles.StatusRunningLabel.Len() == 0 {
-		t.Error("an undetected profile should not disable motion")
-	}
-}
-
-// TestThemeSwitchPreservesDisabledMotion guards the interaction between the
-// two theme inputs: re-deriving styles for a background change must not
-// resurrect an animation the color profile ruled out.
-func TestThemeSwitchPreservesDisabledMotion(t *testing.T) {
-	m := animModel(agent.ToolRunning)
-	m.Update(tea.ColorProfileMsg{Profile: colorprofile.ANSI})
-	m.setDarkBackground(!m.styles.IsDark)
-
-	if m.chatStyles.StatusRunningLabel.Len() != 0 {
-		t.Error("a background change re-enabled motion that the color profile disabled")
 	}
 }
 
@@ -226,41 +169,6 @@ func TestAnimationFrameReachesTheList(t *testing.T) {
 	}
 	if m.list.Render() == first {
 		t.Error("advancing the animation did not change the rendered transcript")
-	}
-}
-
-// TestColorProfileIsAppliedDuringLogin covers a gap the split exposed: Update
-// short-circuits to updateLogin whenever the login screen is showing, and Bubble
-// Tea sends the terminal's color profile exactly then — at startup. Without
-// handling it before that short-circuit, a low-color terminal reached through
-// login would never disable motion, and nothing re-requests the profile later.
-func TestColorProfileIsAppliedDuringLogin(t *testing.T) {
-	m := newShell()
-	m.mode = ModeLogin
-
-	m.Update(tea.ColorProfileMsg{Profile: colorprofile.ANSI})
-
-	if !m.motionDisabled {
-		t.Fatal("a low-color profile seen during login did not disable motion")
-	}
-	if m.chatStyles.StatusRunningLabel.Len() != 0 {
-		t.Error("the theme still carries an animated label after a low-color profile during login")
-	}
-}
-
-// TestColorProfileDuringLoginSurvivesTheHandoff is the other half: the profile
-// arrives before the engine exists, so the decision has to still hold once chat
-// takes over and re-derives its styles.
-func TestColorProfileDuringLoginSurvivesTheHandoff(t *testing.T) {
-	m := newShell()
-	m.mode = ModeLogin
-	m.Update(tea.ColorProfileMsg{Profile: colorprofile.ANSI})
-
-	m.setMode(ModeChat)
-	m.setDarkBackground(!m.styles.IsDark)
-
-	if m.chatStyles.StatusRunningLabel.Len() != 0 {
-		t.Error("motion came back after the login-to-chat handoff re-derived the theme")
 	}
 }
 
@@ -426,22 +334,5 @@ func TestConversationSwitchLeavesAnimationDisarmed(t *testing.T) {
 
 	if m.animArmed {
 		t.Error("the tick is armed after switching conversations with no active turn")
-	}
-}
-
-// TestColorProfileAppliesWhileInLoginModeItself is the narrowest form of the
-// review comment: the profile message must actually reach setColorProfile
-// while m.mode is still ModeLogin, not merely survive until later.
-func TestColorProfileAppliesWhileInLoginModeItself(t *testing.T) {
-	m := newShell()
-	m.mode = ModeLogin
-
-	m.Update(tea.ColorProfileMsg{Profile: colorprofile.ANSI})
-
-	if m.mode != ModeLogin {
-		t.Fatal("test setup invalid: expected to still be in login mode")
-	}
-	if !m.motionDisabled {
-		t.Error("motionDisabled was not set while still in ModeLogin")
 	}
 }

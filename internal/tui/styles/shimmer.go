@@ -91,18 +91,9 @@ func (sp shimmerPalette) shimmer(text string) Shimmer {
 	return Shimmer{frames: frames, static: flat}
 }
 
-// WithoutMotion returns the theme with every animation removed: labels flatten
-// to their static rendering and the status spinner drops its frames, so callers
-// fall back to a static glyph. The tui applies it when the terminal's reported
-// color profile cannot represent a gradient: lipgloss always renders truecolor
-// and the downsampling happens later, at the output writer, so a collapsed
-// sweep is not detectable from the rendered frames themselves.
-//
-// The spinner is included even though a braille glyph needs no color depth. The
-// tui also never arms its tick when motion is off, so nothing would advance
-// anyway — clearing it here makes "a flattened theme renders the same at every
-// frame" a property of the theme rather than something that holds only while
-// callers happen to leave the frame counter alone.
+// WithoutMotion returns a frame-independent theme for callers that explicitly
+// request reduced motion. Compact tool activity itself does not depend on color
+// gradients, so terminal color depth does not invoke this policy automatically.
 func (t Theme) WithoutMotion() Theme {
 	t.Chat.StatusRunningLabel = t.Chat.StatusRunningLabel.withoutMotion()
 	t.Chat.StatusAwaitingLabel = t.Chat.StatusAwaitingLabel.withoutMotion()

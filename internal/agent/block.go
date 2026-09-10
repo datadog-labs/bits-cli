@@ -41,6 +41,11 @@ func ToolStatusOf(s string) ToolStatus {
 // ToolBlock is the aggregated state of a tool call and its result.
 type ToolBlock struct {
 	Name string
+	// Namespace is the wire namespace. Together with Name and IsClientSide it
+	// forms the exact identity used by presentation-only tool classification.
+	// A nil namespace means the wire event did not provide one; a pointer to an
+	// empty string explicitly clears a namespace from an earlier event.
+	Namespace *string
 	// Input is the authoritative, final tool argument. HasFinalInput indicates
 	// that a final tool-call payload supplied it, including an intentionally
 	// empty argument.
@@ -78,6 +83,7 @@ func ToolBlockOf(tp *assistant.ToolPayload) ToolBlock {
 	}
 	if tp.Metadata != nil {
 		tc.Name, tc.Input, tc.Output = tp.Metadata.Name, tp.Metadata.Input, tp.Metadata.Output
+		tc.Namespace = tp.Metadata.Namespace
 	}
 	if tp.Detail != nil {
 		tc.Detail = tp.Detail.Content

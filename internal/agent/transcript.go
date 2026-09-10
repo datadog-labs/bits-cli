@@ -285,6 +285,9 @@ func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 		if tc.Name != "" {
 			merged.Name = tc.Name
 		}
+		if tc.Namespace != nil {
+			merged.Namespace = tc.Namespace
+		}
 		if hasFinalToolInput(msg) {
 			merged.Input = tc.Input
 			merged.HasFinalInput = true

@@ -11,11 +11,9 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
-// This page records a design decision: which animation replaces the static
-// word "running" inside the in-flight status chip. Exactly one candidate is
-// marked as the one being built; the rest are kept as the options it was
-// chosen over, so a reviewer can see the alternatives instead of taking the
-// result on faith.
+// This page records the status-animation alternatives. The selected row uses
+// the production compact tool renderer; the remaining rows preserve earlier
+// pill experiments for comparison.
 //
 // The leading glyph is a separate, later decision: the static dot became a
 // braille spinner (option C's idea, applied to the glyph rather than the
@@ -71,8 +69,8 @@ func statusPillMotionSamples(width int, sty chat.Styles, frame int) []string {
 	}{
 		{
 			marker: selectedMarker,
-			name:   "B · shimmer",
-			note:   "a low-to-high emphasis band sweeps across the letters; the word is never garbled and never changes width",
+			name:   "compact status",
+			note:   "the lifecycle is a bare animated glyph; the action and its argument keep their semantic colors without a status pill",
 		},
 		{
 			marker:      optionMarker,

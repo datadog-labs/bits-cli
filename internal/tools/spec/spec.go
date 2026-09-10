@@ -27,6 +27,13 @@ var (
 	ClientExecCommand = Identity{ClientSide: true, Name: ExecCommand}
 )
 
+// PathInput is the minimal path-bearing projection shared by local tools. It
+// lets presentation code decode a path without retaining unrelated input such
+// as write content or edit operations.
+type PathInput struct {
+	Path string `json:"path"`
+}
+
 type ReadFileInput struct {
 	Path   string `json:"path"`
 	Offset *int   `json:"offset"`

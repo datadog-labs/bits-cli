@@ -41,21 +41,21 @@ type Chat struct {
 	AssistantText   lipgloss.Style
 	Reasoning       lipgloss.Style
 	ToolName        lipgloss.Style
+	ToolArgument    lipgloss.Style
 	ToolDetail      lipgloss.Style
+	ToolError       lipgloss.Style
 	Diff            Diff
 	StatusRunning   lipgloss.Style
 	StatusSuccess   lipgloss.Style
 	StatusError     lipgloss.Style
 
-	// StatusRunningLabel and StatusAwaitingLabel are the pre-rendered animated
-	// labels for the two in-flight tool states. They replace the static words
-	// inside the status chip; see Shimmer.
+	// StatusRunningLabel and StatusAwaitingLabel are retained for the dev-only
+	// style catalog. Compact tool rendering uses StatusSpinner and group dots;
+	// an approval wait is static.
 	StatusRunningLabel  Shimmer
 	StatusAwaitingLabel Shimmer
 
-	// StatusSweepDim and StatusSweepHot are the low- and high-emphasis ends of
-	// the animated sweep, exposed so the style catalog can show the tokens and
-	// illustrate the motion without keeping its own copy of these colors.
+	// StatusSweepDim and StatusSweepHot are catalog-only sweep colors.
 	StatusSweepDim color.Color
 	StatusSweepHot color.Color
 

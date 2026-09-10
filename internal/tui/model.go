@@ -146,14 +146,12 @@ type Model struct {
 	chatStyles chat.Styles
 	styles     styles.Theme // terminal styles; dark until detected
 
-	// Status-chip animation. animFrame is the step handed to the transcript;
+	// Tool activity animation. animFrame is the step handed to the transcript;
 	// animGeneration stamps the armed tick chain so a superseded one dies
-	// instead of double-advancing the frame. motionDisabled is set when the
-	// terminal's reported color profile cannot render the sweep.
+	// instead of double-advancing the frame.
 	animFrame      int
 	animGeneration uint64
 	animArmed      bool
-	motionDisabled bool
 
 	// Terminal dimensions are cached so a chat installed after startup login can
 	// be laid out immediately; Bubble Tea does not replay its initial size event.

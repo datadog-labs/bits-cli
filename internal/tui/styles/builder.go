@@ -78,8 +78,8 @@ func build(isDark bool, p palette) Theme {
 		SelectedMarker: "› ",
 		ColumnGap:      2,
 	}
-	// The in-flight chip's labels are animated, so they are pre-rendered once
-	// per theme rather than styled per frame.
+	// The dev style catalog still illustrates the earlier label-sweep options,
+	// so it receives the palette without affecting compact tool rendering.
 	busy := shimmerPalette{
 		fg:  lipgloss.Color(p.busy),
 		bg:  lipgloss.Color(p.busySurface),
@@ -116,7 +116,9 @@ func build(isDark bool, p palette) Theme {
 			AssistantText:   lipgloss.NewStyle(),
 			Reasoning:       lipgloss.NewStyle().Faint(true).Italic(true),
 			ToolName:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
+			ToolArgument:    text.Body,
 			ToolDetail:      lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
+			ToolError:       feedback.Error,
 			Diff: Diff{
 				Add:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)).Background(lipgloss.Color(p.successSurface)),
 				Del:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)).Background(lipgloss.Color(p.errorSurface)),
@@ -125,8 +127,8 @@ func build(isDark bool, p palette) Theme {
 				Meta:       lipgloss.NewStyle().Faint(true),
 				SyntaxDark: isDark,
 			},
-			// The busy surface is what makes pill() draw caps for an in-flight
-			// chip; without a background it skips them and renders bare text.
+			// The catalog uses the busy surface for historical pill comparisons.
+			// The compact renderer removes the background from its status glyph.
 			StatusRunning: lipgloss.NewStyle().Foreground(lipgloss.Color(p.busy)).Background(lipgloss.Color(p.busySurface)),
 			// A succeeded tool renders as a bare glyph, so this style needs no
 			// surface; giving it one would leave a chip nothing ever draws.

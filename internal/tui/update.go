@@ -144,14 +144,6 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // routes the message to the owning surface, then reconciles editor focus so the
 // cursor always tracks the active surface.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// The color profile is handled ahead of the mode check because Bubble Tea
-	// reports it once, at startup — which is while the login screen owns the
-	// screen. Routing it through updateLogin would drop it, and nothing
-	// re-requests it after the handoff, so a low-color terminal reached through
-	// login would keep a truecolor sweep it cannot render.
-	if profile, ok := msg.(tea.ColorProfileMsg); ok {
-		return m, m.setColorProfile(profile.Profile)
-	}
 	if m.mode == ModeLogin {
 		return m.updateLogin(msg)
 	}
