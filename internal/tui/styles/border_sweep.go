@@ -19,10 +19,10 @@ const sweepBandWidth = 10
 // (see internal/tui/border_sweep.go) without feeling frantic.
 const sweepSpeedCellsPerFrame = 1
 
-// sweepGlyph is the top-border glyph the sweep recolors. It matches inputRule's
-// Top glyph (builder.go) so the animated row is indistinguishable in shape from
-// today's static rule — only the color animates.
-const sweepGlyph = "▔"
+// sweepGlyph is the top-border glyph the sweep recolors — inputRule.Top
+// (builder.go), so the animated row is indistinguishable in shape from
+// today's static rule; only the color animates.
+var sweepGlyph = inputRule.Top
 
 // BorderSweepRow renders one frame of the animated composer top border for the
 // given width in cells. dim is the resting color (the same gray as today's
