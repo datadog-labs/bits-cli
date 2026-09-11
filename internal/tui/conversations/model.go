@@ -175,14 +175,6 @@ func newConversationDelegate(themes ...styles.Theme) list.DefaultDelegate {
 		Foreground(theme.Selector.Item.GetForeground()).Bold(true)
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
 		Foreground(theme.Selector.Selected.GetForeground()).Bold(true)
-	// Keep the timestamp subordinate to the title, including on the selected
-	// row where the default delegate otherwise gives both lines equal emphasis.
-	//
-	// The color is the tertiary text level, read directly rather than borrowed
-	// from Selector.Detail as it used to be: a timestamp is ambient, while the
-	// selector's detail column carries text the reader acts on, so the two roles
-	// no longer share a color. Faint is gone with it — the level is already the
-	// dim one, and Faint only dimmed whatever foreground happened to be in play.
 	timestamp := theme.Text.Tertiary.GetForeground()
 	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(timestamp).Bold(false)
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(timestamp).Bold(false)

@@ -96,10 +96,6 @@ type Editor struct {
 // Text exposes the palette's three foreground levels to components outside the
 // transcript. The levels are ordered by how much attention the text should
 // draw; see the palette for what each one is for.
-//
-// Body/Muted/Help used to live here, but Muted and Help were the same color, so
-// the pair implied a distinction the theme never made. Naming the levels
-// directly means a call site picks an emphasis rather than a synonym.
 type Text struct {
 	Primary   lipgloss.Style
 	Secondary lipgloss.Style

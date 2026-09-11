@@ -31,10 +31,9 @@ func build(isDark bool, p palette) Theme {
 		Text: lipgloss.NewStyle().
 			Background(lipgloss.Color(p.surface)).
 			Foreground(lipgloss.Color(p.textPrimary)),
-		// Placeholder is set because the textarea hardcodes ANSI 240 for it in
-		// both of its default style sets, so "Ask Bits…" was the same gray in
-		// light and dark and answered to no token. It is secondary rather than
-		// tertiary: it is the only instruction the empty composer gives.
+		// Set explicitly: the textarea hardcodes ANSI 240 for the placeholder,
+		// ignoring theme colors. Secondary rather than tertiary since it's the
+		// only instruction the empty composer gives.
 		Placeholder: lipgloss.NewStyle().
 			Background(lipgloss.Color(p.surface)).
 			Foreground(lipgloss.Color(p.textSecondary)),
@@ -172,15 +171,9 @@ func build(isDark bool, p palette) Theme {
 
 // markdown adapts glamour's stock config to the palette.
 //
-// TODO: body prose still answers to glamour, not to the text levels. cfg's
-// Document color is left unset here, so assistant prose renders at glamour's
-// own 252 (dark) / 234 (light) — the largest block of text in the app, and the
-// only one outside the palette. The intended color is textSecondary, which
-// Chat.AssistantText already carries; wiring Document (and the block-level
-// styles that inherit from it) to match is deliberately deferred, because
-// glamour's config has its own inheritance rules and touching prose is a
-// bigger visual change than the roles handled here. Until then the style guide
-// shows AssistantText in secondary while live prose is glamour's gray.
+// TODO: cfg's Document color is left unset, so assistant prose still renders
+// at glamour's own gray rather than textSecondary — deferred because glamour's
+// inheritance rules make that a bigger change than the roles handled here.
 func markdown(isDark bool, p palette) glamouransi.StyleConfig {
 	cfg := glamourstyles.LightStyleConfig
 	if isDark {

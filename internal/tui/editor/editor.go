@@ -168,9 +168,8 @@ func (e *Editor) SetInputStyles(inputStyle styles.Input) {
 	st.Focused.CursorLine = typed
 	st.Blurred.CursorLine = lipgloss.NewStyle()
 	// The textarea hardcodes ANSI 240 for the placeholder in both of its default
-	// style sets, so the hint answered to no token and looked identical in light
-	// and dark. Both states get the theme's color: an empty composer reads the
-	// same whether or not it holds focus.
+	// style sets, ignoring theme colors. Both states get the theme's color so an
+	// empty composer reads the same whether or not it holds focus.
 	st.Focused.Placeholder, st.Blurred.Placeholder = inputStyle.Placeholder, inputStyle.Placeholder
 	e.ta.SetStyles(st)
 

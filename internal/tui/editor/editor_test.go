@@ -90,12 +90,11 @@ func TestTypedTextIsPaintedNotInherited(t *testing.T) {
 }
 
 // TestPlaceholderIsPaintedNotHardcoded covers the empty composer. The textarea
-// hardcodes ANSI 240 for the placeholder in both of its default style sets, so
-// "Ask Bits…" answered to no token and looked identical in light and dark.
+// hardcodes ANSI 240 for the placeholder in both of its default style sets,
+// ignoring theme colors.
 //
 // This asserts on rendered output because placeholderView is a third render
-// path, separate from Text and computedCursorLine — the same class of trap that
-// made styling Text alone leave the typed line with no foreground at all.
+// path, separate from Text and computedCursorLine.
 func TestPlaceholderIsPaintedNotHardcoded(t *testing.T) {
 	for _, test := range []struct {
 		name   string

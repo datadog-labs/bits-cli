@@ -372,9 +372,6 @@ func TestConversationDelegateEmphasizesTitleOverTimestamp(t *testing.T) {
 	if delegate.Styles.NormalDesc.GetBold() || delegate.Styles.SelectedDesc.GetBold() {
 		t.Fatal("timestamps should not be bold")
 	}
-	// Subdued means the tertiary text level, not Faint. Faint dims whatever
-	// foreground is already in play, so it used to dim the terminal's own default
-	// rather than a color the theme chose.
 	wantTimestamp := styles.Default(true).Text.Tertiary.GetForeground()
 	for name, style := range map[string]lipgloss.Style{
 		"NormalDesc":   delegate.Styles.NormalDesc,
