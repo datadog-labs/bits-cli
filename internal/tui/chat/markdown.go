@@ -41,7 +41,7 @@ type markdownRenderer struct {
 // the terminal theme changes. Failed setup is cached too, avoiding repeated
 // setup attempts while the same fallback configuration remains active.
 func (r *markdownRenderer) Render(src string, width int, style ansi.StyleConfig) string {
-	src = escape.Multiline(src)
+	src = escape.MarkdownSource(src)
 	if width < 1 {
 		width = 1
 	}
@@ -55,13 +55,13 @@ func (r *markdownRenderer) Render(src string, width int, style ansi.StyleConfig)
 		r.ready = true
 	}
 	if r.term == nil {
-		return wrap(src, width)
+		return wrap(escape.Multiline(src), width)
 	}
 	out, err := r.term.Render(src)
 	if err != nil {
 		r.term = nil
 		r.ready = false
-		return wrap(src, width)
+		return wrap(escape.Multiline(src), width)
 	}
-	return strings.Trim(out, "\n")
+	return strings.Trim(escape.StyledMultiline(out), "\n")
 }

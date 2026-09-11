@@ -13,9 +13,6 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/escape"
 )
 
-// tabExpansion normalizes tabs in diff rows.
-const tabExpansion = "    "
-
 // lexerCache memoizes filename matches.
 var (
 	lexerCacheMu sync.RWMutex
@@ -89,6 +86,6 @@ func formatter(rowStyle lipgloss.Style) chroma.Formatter {
 // processValue makes token text safe for one diff row.
 func processValue(value string) string {
 	value = strings.TrimSuffix(value, "\n")
-	value = strings.ReplaceAll(value, "\t", tabExpansion)
+	value = escape.RenderTabs(value)
 	return escape.Inline(value)
 }
