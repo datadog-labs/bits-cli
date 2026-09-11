@@ -87,6 +87,7 @@ func darkPalette() palette {
 	}
 }
 
+// lightPalette is the light-terminal palette. Surfaces elevate downward from
 // background (darker = raised, as in Nord/Solarized), since there is no
 // headroom above a 94%-lightness background. Foregrounds are darkened to
 // match, each checked against the darkest surface it renders on (builder.go).
