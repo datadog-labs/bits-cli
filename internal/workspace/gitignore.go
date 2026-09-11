@@ -1,4 +1,4 @@
-package tools
+package workspace
 
 import (
 	"context"
@@ -101,4 +101,16 @@ func loadIgnorer(ctx context.Context, fsys fs.FS, base string, baseIsDir bool) (
 		}
 	}
 	return ig, nil
+}
+
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.r.Read(p)
 }

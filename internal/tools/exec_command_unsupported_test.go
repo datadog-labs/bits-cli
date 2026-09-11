@@ -6,13 +6,16 @@ import (
 	"testing"
 
 	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 func TestNewClientToolsDoesNotAdvertiseExecCommandOnUnsupportedPlatforms(t *testing.T) {
-	clientTools, err := NewClientTools(t.TempDir())
+	workspace, err := workspace.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = workspace.Close() })
+	clientTools := NewClientTools(workspace)
 	for _, tool := range clientTools {
 		if tool.Definition.Name == spec.ExecCommand {
 			t.Fatal("exec_command was advertised on an unsupported platform")

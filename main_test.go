@@ -13,6 +13,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/auth"
 	"github.com/DataDog/bits-cli/internal/cmd"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 func TestPrintLoggedOutUsesOneSuccessMessage(t *testing.T) {
@@ -45,6 +46,16 @@ func validOAuthSession() auth.Session {
 	}
 }
 
+func testWorkspace(t *testing.T) *workspace.Workspace {
+	t.Helper()
+	workspace, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workspace.Close() })
+	return workspace
+}
+
 func TestStartupExplicitAPIKeyModeDoesNotFallThroughToFakeBackend(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
@@ -53,6 +64,7 @@ func TestStartupExplicitAPIKeyModeDoesNotFallThroughToFakeBackend(t *testing.T) 
 		context.Background(),
 		cmd.ChatOptions{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com", ApprovalMode: agent.ModeAllowAll},
 		stubCredentialStore{session: validOAuthSession()},
+		testWorkspace(t),
 	)
 	if err == nil || !strings.Contains(err.Error(), "DD_API_KEY and DD_APP_KEY must both be set") {
 		t.Fatalf("startup error = %v", err)
@@ -65,6 +77,7 @@ func TestStartupMissingOAuthSelectsInteractiveLogin(t *testing.T) {
 		context.Background(),
 		cmd.ChatOptions{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll},
 		stubCredentialStore{err: auth.ErrNoSession},
+		testWorkspace(t),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +95,7 @@ func TestStartupCredentialStoreFailureDoesNotSelectLogin(t *testing.T) {
 		context.Background(),
 		cmd.ChatOptions{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll},
 		stubCredentialStore{err: storeErr},
+		testWorkspace(t),
 	)
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("startup error = %v, want keyring failure", err)
@@ -94,6 +108,7 @@ func TestStartupStoredOAuthEntersChatWithConversation(t *testing.T) {
 		context.Background(),
 		cmd.ChatOptions{AuthMode: auth.ModeAuto, ConversationID: "conversation-1", ApprovalMode: agent.ModeAllowAll},
 		stubCredentialStore{session: validOAuthSession()},
+		testWorkspace(t),
 	)
 	if err != nil {
 		t.Fatal(err)

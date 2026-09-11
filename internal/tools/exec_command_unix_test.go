@@ -13,13 +13,16 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	exectool "github.com/DataDog/bits-cli/internal/tools/exec"
 	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 func TestNewClientToolsAdvertisesExecCommandOnUnix(t *testing.T) {
-	clientTools, err := NewClientTools(t.TempDir())
+	workspace, err := workspace.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = workspace.Close() })
+	clientTools := NewClientTools(workspace)
 	var found int
 	for _, tool := range clientTools {
 		if tool.Definition.Name == spec.ExecCommand {
