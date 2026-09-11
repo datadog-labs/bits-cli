@@ -57,6 +57,53 @@ func TestViewCacheIsSharedByHeightAndView(t *testing.T) {
 	}
 }
 
+// TestTypedTextIsPaintedNotInherited checks the rendered escape sequence, not
+// just the style struct, since the textarea's default Focused.Text is empty
+// and would otherwise let the terminal supply the typed color.
+func TestTypedTextIsPaintedNotInherited(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		isDark bool
+		want   string // truecolor SGR foreground the theme should emit
+	}{
+		{name: "dark", isDark: true, want: "38;2;255;255;255"},
+		{name: "light", isDark: false, want: "38;2;0;0;0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			e := New()
+			e.SetWidth(40)
+			e.SetInputStyles(styles.Default(test.isDark).Input)
+			e.Focus()
+			for _, r := range "hello" {
+				e.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+			}
+
+			view := e.View()
+			if !strings.Contains(view, "hello") {
+				t.Fatalf("typed text missing from view: %q", view)
+			}
+			if !strings.Contains(view, test.want) {
+				t.Errorf("view does not set the typed foreground %s; got %q", test.want, view)
+			}
+		})
+	}
+}
+
+// TestBlurredTextStaysDimmed guards the one state deliberately left alone: a
+// blurred editor means another surface owns input, so it should read inactive
+// rather than adopt the full-strength typed color.
+func TestBlurredTextStaysDimmed(t *testing.T) {
+	e := New()
+	e.SetWidth(40)
+	e.SetInputStyles(styles.Default(true).Input)
+
+	st := e.ta.Styles()
+	if st.Blurred.Text.GetForeground() == st.Focused.Text.GetForeground() {
+		t.Errorf("blurred text foreground = %v, want something dimmer than focused",
+			st.Blurred.Text.GetForeground())
+	}
+}
+
 func TestSetWidthTracksRequestedOuterWidth(t *testing.T) {
 	e := New()
 	e.SetWidth(80)

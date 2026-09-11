@@ -25,7 +25,12 @@ func build(isDark bool, p palette) Theme {
 			BorderForeground(lipgloss.Color(p.inputRule)).
 			BorderBackground(lipgloss.Color(p.surface)),
 		Marker: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)).Background(lipgloss.Color(p.surface)),
-		Text:   lipgloss.NewStyle().Background(lipgloss.Color(p.surface)),
+		// Foreground is explicit: the textarea's default Text is empty, which
+		// would leave typed input on the terminal's foreground over our painted
+		// surface.
+		Text: lipgloss.NewStyle().
+			Background(lipgloss.Color(p.surface)).
+			Foreground(lipgloss.Color(p.inputText)),
 	}
 
 	text := Text{
@@ -99,7 +104,9 @@ func build(isDark bool, p palette) Theme {
 	textInput.Cursor.Color = lipgloss.Color(p.interactive)
 
 	return Theme{
-		IsDark:    isDark,
+		IsDark:     isDark,
+		Background: lipgloss.Color(p.background),
+
 		Input:     input,
 		Text:      text,
 		Feedback:  feedback,

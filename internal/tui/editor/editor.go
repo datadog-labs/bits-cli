@@ -160,8 +160,12 @@ func (e *Editor) SetInputStyles(inputStyle styles.Input) {
 	st := e.ta.Styles()
 	st.Focused.Base, st.Blurred.Base = base, base
 	st.Focused.Prompt, st.Blurred.Prompt = inputStyle.Marker, inputStyle.Marker
-	// Drop the current-line highlight; it inherits Base's background instead.
-	st.Focused.CursorLine = lipgloss.NewStyle()
+	// CursorLine needs the same foreground as Text: the cursor's line renders
+	// through CursorLine, every other line through Text, so setting only Text
+	// would leave the active line on the terminal's foreground.
+	typed := lipgloss.NewStyle().Foreground(inputStyle.Text.GetForeground())
+	st.Focused.Text = inputStyle.Text
+	st.Focused.CursorLine = typed
 	st.Blurred.CursorLine = lipgloss.NewStyle()
 	e.ta.SetStyles(st)
 

@@ -179,5 +179,8 @@ func (m *Model) View() tea.View {
 		Content:   content,
 		AltScreen: true,
 		MouseMode: tea.MouseModeCellMotion,
+		// Paint the app's own pinned background so swatches are judged against
+		// the surface they'll actually sit on, not the author's terminal.
+		BackgroundColor: m.theme.Background,
 	}
 }

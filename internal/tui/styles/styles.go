@@ -19,7 +19,10 @@ type Input struct {
 	Background color.Color
 	Block      lipgloss.Style
 	Marker     lipgloss.Style
-	Text       lipgloss.Style
+
+	// Text styles what the user wrote, shared by the live editor line and the
+	// submitted transcript block so it doesn't change color past Enter.
+	Text lipgloss.Style
 }
 
 // PromptWidth returns the number of cells occupied by the input prompt.
@@ -143,7 +146,13 @@ type Selector struct {
 
 // Theme is the complete set of styles for one terminal background mode.
 type Theme struct {
-	IsDark    bool
+	IsDark bool
+
+	// Background is painted across the whole alt-screen by the root views,
+	// instead of inheriting the user's terminal theme. Unconditional for now;
+	// revisit if bits-cli ever gets a settings layer to opt out of it.
+	Background color.Color
+
 	Input     Input
 	Chat      Chat
 	Editor    Editor

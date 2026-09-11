@@ -27,6 +27,80 @@ func TestDefaultSelectsModeSpecificInputAndMenuStyles(t *testing.T) {
 	}
 }
 
+// TestDefaultPinsAModeSpecificBackground checks both modes set a background
+// and that they differ from each other.
+func TestDefaultPinsAModeSpecificBackground(t *testing.T) {
+	dark, light := Default(true), Default(false)
+
+	if dark.Background == nil || light.Background == nil {
+		t.Fatalf("background = dark:%v light:%v, want both set", dark.Background, light.Background)
+	}
+	if dark.Background == light.Background {
+		t.Error("background should differ between themes")
+	}
+	if got, want := dark.Background, lipgloss.Color(darkPalette().background); got != want {
+		t.Errorf("dark background = %v, want token %v", got, want)
+	}
+	if got, want := light.Background, lipgloss.Color(lightPalette().background); got != want {
+		t.Errorf("light background = %v, want token %v", got, want)
+	}
+}
+
+// TestSurfacesSeparateFromTheirBackground checks every surface is
+// distinguishable from the page it paints over, or the block disappears into
+// it.
+func TestSurfacesSeparateFromTheirBackground(t *testing.T) {
+	// dark's errorSurface is exempt: it sits at 1.022:1 against the page, but
+	// the label itself stays legible and dark's status colors are fixed.
+	exempt := map[string]map[string]bool{
+		"dark": {"errorSurface": true},
+	}
+	for _, test := range []struct {
+		name    string
+		palette palette
+	}{
+		{name: "dark", palette: darkPalette()},
+		{name: "light", palette: lightPalette()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for role, surface := range map[string]string{
+				"surface":         test.palette.surface,
+				"surfaceRaised":   test.palette.surfaceRaised,
+				"approvalSurface": test.palette.approvalSurface,
+				"codeSurface":     test.palette.codeSurface,
+				"errorSurface":    test.palette.errorSurface,
+				"busySurface":     test.palette.busySurface,
+			} {
+				// Some dark roles are still raw ANSI indices, which carry no hex
+				// luminance to measure; they are exempt until they join the ramp.
+				if !strings.HasPrefix(surface, "#") {
+					continue
+				}
+				if exempt[test.name][role] {
+					continue
+				}
+				if got := contrastRatio(surface, test.palette.background); got < 1.1 {
+					t.Errorf("%s/background contrast = %.3f:1, want at least 1.1:1", role, got)
+				}
+			}
+		})
+	}
+}
+
+// TestElevationRunsAwayFromThePage guards the ramp's direction, which differs
+// by mode: dark elevates by getting lighter, light by getting darker, since a
+// 94%-lightness page has no headroom above it.
+func TestElevationRunsAwayFromThePage(t *testing.T) {
+	dark := darkPalette()
+	if relativeLuminance(dark.surface) <= relativeLuminance(dark.background) {
+		t.Error("dark surface should be lighter than the background it sits on")
+	}
+	light := lightPalette()
+	if relativeLuminance(light.surface) >= relativeLuminance(light.background) {
+		t.Error("light surface should be darker than the background it sits on")
+	}
+}
+
 func TestForegroundTokensMeetNormalTextContrast(t *testing.T) {
 	for _, test := range []struct {
 		name    string
@@ -43,6 +117,65 @@ func TestForegroundTokensMeetNormalTextContrast(t *testing.T) {
 				"feedback error":   test.palette.feedbackError,
 			} {
 				if got := contrastRatio(foreground, test.palette.surface); got < 4.5 {
+					t.Errorf("%s contrast = %.2f:1, want at least 4.5:1", role, got)
+				}
+			}
+		})
+	}
+}
+
+// TestInputTextIsExplicitInBothModes checks the composer's foreground is a
+// real color, not unset — an unset foreground would let the terminal pick the
+// text color on a surface it doesn't own.
+func TestInputTextIsExplicitInBothModes(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		theme   Theme
+		palette palette
+	}{
+		{name: "dark", theme: Default(true), palette: darkPalette()},
+		{name: "light", theme: Default(false), palette: lightPalette()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := test.theme.Input.Text.GetForeground()
+			if _, unset := got.(lipgloss.NoColor); unset {
+				t.Fatal("input text has no foreground; the terminal would pick it")
+			}
+			if want := lipgloss.Color(test.palette.inputText); got != want {
+				t.Errorf("input text = %v, want token %v", got, want)
+			}
+		})
+	}
+	if Default(true).Input.Text.GetForeground() == Default(false).Input.Text.GetForeground() {
+		t.Error("input text should differ between modes")
+	}
+}
+
+// TestChipLabelsReadOnTheirOwnSurface checks the status-chip and code-span
+// pairs that carry both foreground and background from the palette.
+func TestChipLabelsReadOnTheirOwnSurface(t *testing.T) {
+	// dark's error pair is exempt: even pure black caps it at 4.27:1 with
+	// error fixed at #D33043, so it's judged readable as-is.
+	exempt := map[string]map[string]bool{
+		"dark": {"error/errorSurface": true},
+	}
+	for _, test := range []struct {
+		name    string
+		palette palette
+	}{
+		{name: "dark", palette: darkPalette()},
+		{name: "light", palette: lightPalette()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for role, pair := range map[string][2]string{
+				"error/errorSurface":   {test.palette.error, test.palette.errorSurface},
+				"busy/busySurface":     {test.palette.busy, test.palette.busySurface},
+				"codeText/codeSurface": {test.palette.codeText, test.palette.codeSurface},
+			} {
+				if exempt[test.name][role] {
+					continue
+				}
+				if got := contrastRatio(pair[0], pair[1]); got < 4.5 {
 					t.Errorf("%s contrast = %.2f:1, want at least 4.5:1", role, got)
 				}
 			}
