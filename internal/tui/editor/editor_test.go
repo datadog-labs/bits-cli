@@ -262,7 +262,10 @@ func TestWorkingViewAnimatesAcrossFrames(t *testing.T) {
 	e.SetWorking(true)
 
 	first := e.View()
-	e.SetSweepFrame(5)
+	// The sweep eases in/out (easeInOutSine), so motion near a bounce point
+	// is nearly imperceptible; probe well into the travel range instead of a
+	// few frames in.
+	e.SetSweepFrame(30)
 	second := e.View()
 	if first == second {
 		t.Error("changing the sweep frame did not change the rendered view")

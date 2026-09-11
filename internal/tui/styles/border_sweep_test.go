@@ -2,6 +2,7 @@ package styles
 
 import (
 	"image/color"
+	"strings"
 	"testing"
 
 	"charm.land/lipgloss/v2"
@@ -47,10 +48,12 @@ func TestBorderSweepRowAnimates(t *testing.T) {
 func TestBorderSweepRowLoops(t *testing.T) {
 	dim, hot, bg := sweepColors()
 	const width = 40
-	period := width + sweepBandWidth
+	fullTravel := width + sweepBandWidth
+	inset := fullTravel / 10
+	cycle := 2 * (fullTravel - 2*inset)
 	first := BorderSweepRow(width, 0, dim, hot, bg)
-	if got := BorderSweepRow(width, period, dim, hot, bg); got != first {
-		t.Error("frame period did not return to the starting row")
+	if got := BorderSweepRow(width, cycle, dim, hot, bg); got != first {
+		t.Error("frame cycle did not return to the starting row")
 	}
 }
 
@@ -65,16 +68,17 @@ func TestBorderSweepRowHandlesNegativeFrame(t *testing.T) {
 func TestBorderSweepRowRestsAtDim(t *testing.T) {
 	dim, hot, bg := sweepColors()
 	const width = 40
-	// At frame 0 the band leads at -sweepBandWidth, i.e. fully off-screen to
-	// the left, so every cell should be dim.
+	// At frame 0 the band leads at -sweepBandWidth+inset: inset back in from
+	// fully off-screen (mirroring the same inset applied at the right-hand
+	// bounce), so only the leading `inset` cells carry any band color and the
+	// rest of the row should be dim.
+	fullTravel := width + sweepBandWidth
+	inset := fullTravel / 10
 	row := BorderSweepRow(width, 0, dim, hot, bg)
-	cell := lipgloss.NewStyle().Foreground(dim).Background(bg).Render(sweepGlyph)
-	wantRow := ""
-	for i := 0; i < width; i++ {
-		wantRow += cell
-	}
-	if row != wantRow {
-		t.Error("frame 0 (band fully off-screen) should render every cell dim")
+	dimCell := lipgloss.NewStyle().Foreground(dim).Background(bg).Render(sweepGlyph)
+	wantSuffix := strings.Repeat(dimCell, width-inset)
+	if !strings.HasSuffix(row, wantSuffix) {
+		t.Error("frame 0 (band inset from off-screen) should render dim past the inset")
 	}
 }
 

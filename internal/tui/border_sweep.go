@@ -12,7 +12,7 @@ import (
 // It is a separate clock from animInterval (animation.go): tool-activity
 // motion and the composer border sweep are driven by unrelated ticks so
 // either can be retimed or disabled independently.
-const borderSweepInterval = 40 * time.Millisecond
+const borderSweepInterval = 17 * time.Millisecond
 
 // borderSweepTickMsg advances the composer border sweep. generation identifies
 // the armed tick chain, mirroring animTickMsg's guard against a superseded
