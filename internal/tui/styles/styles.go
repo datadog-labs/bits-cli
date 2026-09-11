@@ -20,9 +20,8 @@ type Input struct {
 	Block      lipgloss.Style
 	Marker     lipgloss.Style
 
-	// Text styles what the user wrote, at both moments it is on screen: the live
-	// line in the editor and the submitted block in the transcript. One style
-	// serves both so a message does not change color on its way past Enter.
+	// Text styles what the user wrote, shared by the live editor line and the
+	// submitted transcript block so it doesn't change color past Enter.
 	Text lipgloss.Style
 }
 
@@ -149,17 +148,9 @@ type Selector struct {
 type Theme struct {
 	IsDark bool
 
-	// Background is painted across the whole alt-screen by the root views, so
-	// the UI composes against a known color instead of the user's terminal
-	// theme. Bubble Tea emits the escape sequence itself when a view sets it and
-	// restores the terminal's own background on teardown.
-	//
-	// This is unconditional today. Crush, which this follows, lets users opt out
-	// via an `options.tui.transparent` config field that leaves the view's
-	// background unset; bits-cli has no user/client settings layer yet, so there
-	// is nowhere to hang that switch. When one lands, expose the same choice
-	// rather than assuming everyone wants a painted background — a terminal with
-	// a deliberate theme or a transparent window has a real claim to show it.
+	// Background is painted across the whole alt-screen by the root views,
+	// instead of inheriting the user's terminal theme. Unconditional for now;
+	// revisit if bits-cli ever gets a settings layer to opt out of it.
 	Background color.Color
 
 	Input     Input

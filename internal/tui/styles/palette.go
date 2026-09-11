@@ -13,12 +13,8 @@ type palette struct {
 	text      string
 	muted     string
 
-	// background is the app's own terminal background, painted across the whole
-	// alt-screen rather than inherited from whatever the user's terminal is set
-	// to. Pinning it means every other surface is composed against a known
-	// color, so the UI looks the same in a Solarized terminal as in a default
-	// one. It is the base of the elevation ramp: surface and the other surface*
-	// roles sit above it, away from it in lightness.
+	// background is painted across the alt-screen instead of inherited from the
+	// terminal, and is the base of the elevation ramp surface* sits above.
 	background string
 
 	surface         string
@@ -32,15 +28,8 @@ type palette struct {
 
 	link string
 
-	// busy roles style the in-flight status chip. busyDim and busyHot are the
-	// low- and high-emphasis ends of the sweep animated across its label, so in
-	// a light theme busyHot is the *darker* of the two.
-	//
-	// Open question for review: busy was previously raw ANSI ("11" dark / "3"
-	// light) and is now hex, matching success and error. A gradient needs real
-	// colors to interpolate between, so the sweep could not be built on the ANSI
-	// pair — but this does change the flat chip's color on 16-color terminals,
-	// which is a palette decision beyond the animation itself.
+	// busy roles style the in-flight status chip; busyDim/busyHot are the
+	// low/high-emphasis ends of the sweep animated across its label.
 	busy        string
 	busySurface string
 	busyDim     string
@@ -92,27 +81,10 @@ func darkPalette() palette {
 	}
 }
 
-// lightPalette is the light-terminal palette.
-//
-// Its surfaces are derived from background rather than picked against an
-// unknown terminal: each takes the background's hue and steps down in lightness
-// until it reaches its elevation target. Light elevates downward — a raised
-// surface is darker than the page, as in Nord and Solarized — because there is
-// no headroom above a 94%-lightness background.
-//
-// The targets are twice the separation the ramp originally carried: contrast
-// ratios near 1.0 mean "indistinguishable", so a role's useful signal is its
-// distance above 1.0, and each role doubles that distance rather than its ratio.
-// surface goes 1.150 -> 1.306, approvalSurface 1.279 -> 1.570, borderSubtle
-// 1.603 -> 2.207. A ratio-doubling reading would have put surface at 2.30:1,
-// which is dark-mode-inverted rather than a light theme with legible blocks.
-//
-// The foregrounds that ride on those surfaces are darkened to match. That is
-// not cosmetic: surfaces moved further from the page, which moves them toward
-// the text, and muted/interactive/error/feedback* would otherwise fall under
-// 4.5:1. Each is set against the darkest surface it actually renders on — see
-// builder.go for which those are — so it clears AA everywhere lighter too.
-// See TestForegroundTokensMeetNormalTextContrast.
+// lightPalette is the light-terminal palette. Surfaces elevate downward from
+// background (darker = raised, as in Nord/Solarized), since there is no
+// headroom above a 94%-lightness background. Foregrounds are darkened to
+// match, each checked against the darkest surface it renders on (builder.go).
 func lightPalette() palette {
 	return palette{
 		primary:         "#5e6dd6",

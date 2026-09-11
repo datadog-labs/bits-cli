@@ -27,9 +27,8 @@ func TestDefaultSelectsModeSpecificInputAndMenuStyles(t *testing.T) {
 	}
 }
 
-// TestDefaultPinsAModeSpecificBackground covers the painted alt-screen
-// background: both modes must supply one, and they must differ, since the whole
-// point is that the app stops inheriting the terminal's own background.
+// TestDefaultPinsAModeSpecificBackground checks both modes set a background
+// and that they differ from each other.
 func TestDefaultPinsAModeSpecificBackground(t *testing.T) {
 	dark, light := Default(true), Default(false)
 
@@ -47,18 +46,12 @@ func TestDefaultPinsAModeSpecificBackground(t *testing.T) {
 	}
 }
 
-// TestSurfacesSeparateFromTheirBackground pins the elevation contract in both
-// modes: every surface painted over the background has to be distinguishable
-// from it, or the block it draws disappears into the page. Light mode regressed
-// exactly this way when the background was pinned ahead of its ramp.
+// TestSurfacesSeparateFromTheirBackground checks every surface is
+// distinguishable from the page it paints over, or the block disappears into
+// it.
 func TestSurfacesSeparateFromTheirBackground(t *testing.T) {
-	// exempt names roles that are deliberately outside the elevation floor.
-	//
-	// dark's errorSurface sits at 1.022:1 against the page, so the chip reads as
-	// its label rather than as a block. That is accepted: the label itself is
-	// legible, and the alternative is moving dark's status colors, which are
-	// fixed by design. The floor stays as a guard for roles that have no such
-	// exemption, not as a standard every role must meet.
+	// dark's errorSurface is exempt: it sits at 1.022:1 against the page, but
+	// the label itself stays legible and dark's status colors are fixed.
 	exempt := map[string]map[string]bool{
 		"dark": {"errorSurface": true},
 	}
@@ -131,10 +124,9 @@ func TestForegroundTokensMeetNormalTextContrast(t *testing.T) {
 	}
 }
 
-// TestInputTextIsExplicitInBothModes covers the composer's foreground. It has
-// to be a real color rather than an unset style: the app paints the input
-// surface itself now, so an unset foreground means the terminal chooses the
-// text color on a background it did not choose.
+// TestInputTextIsExplicitInBothModes checks the composer's foreground is a
+// real color, not unset — an unset foreground would let the terminal pick the
+// text color on a surface it doesn't own.
 func TestInputTextIsExplicitInBothModes(t *testing.T) {
 	for _, test := range []struct {
 		name    string
@@ -159,18 +151,11 @@ func TestInputTextIsExplicitInBothModes(t *testing.T) {
 	}
 }
 
-// TestChipLabelsReadOnTheirOwnSurface covers the pairs that carry both their
-// foreground and their background from the palette — the status chips and code
-// spans — so neither half can be moved without the other.
+// TestChipLabelsReadOnTheirOwnSurface checks the status-chip and code-span
+// pairs that carry both foreground and background from the palette.
 func TestChipLabelsReadOnTheirOwnSurface(t *testing.T) {
-	// exempt names pairs held to legibility by eye rather than to this bound.
-	//
-	// dark's error pair is one, and no color choice would satisfy the bound while
-	// dark's status colors stay fixed: with error at #D33043, 4.5:1 would need an
-	// errorSurface of negative luminance, and even pure black caps the pair at
-	// 4.27:1. The pair is judged readable as it is. This bound is a guard against
-	// unnoticed drift in the pairs that have no such exemption — a ratio is a
-	// useful signal, not the standard the palette answers to.
+	// dark's error pair is exempt: even pure black caps it at 4.27:1 with
+	// error fixed at #D33043, so it's judged readable as-is.
 	exempt := map[string]map[string]bool{
 		"dark": {"error/errorSurface": true},
 	}

@@ -160,17 +160,9 @@ func (e *Editor) SetInputStyles(inputStyle styles.Input) {
 	st := e.ta.Styles()
 	st.Focused.Base, st.Blurred.Base = base, base
 	st.Focused.Prompt, st.Blurred.Prompt = inputStyle.Marker, inputStyle.Marker
-	// The textarea ships an empty Focused.Text, so typed input would take the
-	// terminal's foreground onto a background the app painted itself. Blurred
-	// keeps the textarea's own dimmed text: that state means another surface has
-	// input, and it should look inactive.
-	//
-	// The foreground has to be set on CursorLine as well as Text. The textarea
-	// renders the line holding the cursor through computedCursorLine (which is
-	// CursorLine inheriting Base) and every other line through Text, so styling
-	// Text alone colors every line except the one being typed on. Only the
-	// foreground is set: a background here is what draws the full-width
-	// current-line bar, and Inherit leaves Base to supply it instead.
+	// CursorLine needs the same foreground as Text: the cursor's line renders
+	// through CursorLine, every other line through Text, so setting only Text
+	// would leave the active line on the terminal's foreground.
 	typed := lipgloss.NewStyle().Foreground(inputStyle.Text.GetForeground())
 	st.Focused.Text = inputStyle.Text
 	st.Focused.CursorLine = typed

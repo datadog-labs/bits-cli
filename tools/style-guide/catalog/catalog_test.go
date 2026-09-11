@@ -24,10 +24,8 @@ func TestKeyToggleTheme(t *testing.T) {
 	}
 }
 
-// TestViewPaintsThemeBackgroundAndFollowsToggle keeps the catalog honest about
-// the surface it previews on: it has to paint the same background the app pins,
-// and the t toggle has to carry that background with the rest of the theme.
-// Without this the swatches are judged against the author's own terminal.
+// TestViewPaintsThemeBackgroundAndFollowsToggle checks the catalog paints the
+// app's pinned background and that the t toggle carries it along.
 func TestViewPaintsThemeBackgroundAndFollowsToggle(t *testing.T) {
 	m := New()
 	m.width, m.height = 80, 24

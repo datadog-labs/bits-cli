@@ -57,12 +57,9 @@ func TestViewCacheIsSharedByHeightAndView(t *testing.T) {
 	}
 }
 
-// TestTypedTextIsPaintedNotInherited asserts the typed line carries the theme's
-// own foreground all the way to the escape sequence. The textarea's default
-// Focused.Text is empty, which renders typed input with no color at all and
-// lets the terminal supply one — the exact inheritance the painted background
-// is meant to remove. Checking the rendered output rather than the style struct
-// is deliberate: the style is only correct if it survives to the terminal.
+// TestTypedTextIsPaintedNotInherited checks the rendered escape sequence, not
+// just the style struct, since the textarea's default Focused.Text is empty
+// and would otherwise let the terminal supply the typed color.
 func TestTypedTextIsPaintedNotInherited(t *testing.T) {
 	for _, test := range []struct {
 		name   string

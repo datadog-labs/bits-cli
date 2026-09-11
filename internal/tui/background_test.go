@@ -15,10 +15,8 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
-// TestViewsPaintTheThemeBackground covers the painted alt-screen background
-// across both root views and both terminal modes. Bubble Tea emits the escape
-// sequence for whatever a view sets here, so an unset field silently falls back
-// to the user's own terminal background — the thing this is meant to replace.
+// TestViewsPaintTheThemeBackground covers both root views and both modes: an
+// unset background would silently fall back to the terminal's own.
 func TestViewsPaintTheThemeBackground(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -59,10 +57,9 @@ func TestViewsPaintTheThemeBackground(t *testing.T) {
 	}
 }
 
-// TestBackgroundFollowsTerminalModeChange guards the late-arriving detection
-// path: the terminal's reply lands after the first frame, so the painted
-// background has to be rebuilt with the rest of the theme rather than staying
-// on the dark default.
+// TestBackgroundFollowsTerminalModeChange guards a late-arriving terminal
+// reply: the background must rebuild with the rest of the theme, not stay on
+// the dark default.
 func TestBackgroundFollowsTerminalModeChange(t *testing.T) {
 	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil),
 		func(context.Context) (*agent.Engine, error) {
