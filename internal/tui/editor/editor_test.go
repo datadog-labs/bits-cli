@@ -225,10 +225,8 @@ func TestSetSweepFrameOnlyInvalidatesWhileWorking(t *testing.T) {
 }
 
 func TestWorkingViewKeepsTheSameOverallHeight(t *testing.T) {
-	// The sweep row replaces the static top-border row (the block renders with
-	// BorderTop(false) while working), it does not add to it, so total height
-	// is unchanged: one row is removed from the block and one is added above
-	// it.
+	// The sweep row replaces the block's own top-border row, so height is
+	// unchanged.
 	e := New()
 	e.SetWidth(40)
 	idleHeight := e.Height()
@@ -262,9 +260,8 @@ func TestWorkingViewAnimatesAcrossFrames(t *testing.T) {
 	e.SetWorking(true)
 
 	first := e.View()
-	// The sweep eases in/out (easeInOutSine), so motion near a bounce point
-	// is nearly imperceptible; probe well into the travel range instead of a
-	// few frames in.
+	// Probe well into the travel range: motion near a bounce point is
+	// nearly imperceptible due to the ease-in-out.
 	e.SetSweepFrame(30)
 	second := e.View()
 	if first == second {

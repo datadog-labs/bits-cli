@@ -68,10 +68,8 @@ func TestBorderSweepRowHandlesNegativeFrame(t *testing.T) {
 func TestBorderSweepRowRestsAtDim(t *testing.T) {
 	dim, hot, bg := sweepColors()
 	const width = 40
-	// At frame 0 the band leads at -sweepBandWidth+inset: inset back in from
-	// fully off-screen (mirroring the same inset applied at the right-hand
-	// bounce), so only the leading `inset` cells carry any band color and the
-	// rest of the row should be dim.
+	// At frame 0 the band leads at -sweepBandWidth+inset, so only the
+	// leading `inset` cells carry any band color.
 	fullTravel := width + sweepBandWidth
 	inset := fullTravel / 10
 	row := BorderSweepRow(width, 0, dim, hot, bg)

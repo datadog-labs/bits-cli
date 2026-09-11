@@ -240,10 +240,8 @@ func (e *Editor) SetPlaceholder(s string) {
 }
 
 // SetWorking toggles the animated border sweep shown while Bits is generating
-// a response. Editor only renders the state and frame it's given — it is a
-// passive renderer with no tea.Cmd-producing state of its own; the parent
-// model decides when to animate via chatPhase and drives frames through
-// SetSweepFrame.
+// a response. Editor is a passive renderer — the parent model decides when to
+// animate and drives frames through SetSweepFrame.
 func (e *Editor) SetWorking(working bool) {
 	if e.working == working {
 		return
@@ -252,11 +250,9 @@ func (e *Editor) SetWorking(working bool) {
 	e.viewCached = false
 }
 
-// SetSweepFrame sets the current border-sweep animation frame. The parent
-// model's advanceBorderSweep calls this every tick, the same way
-// advanceAnimation calls list.SetFrame. A frame set while not working is
-// stored but does not invalidate the cache, since it has no visible effect
-// until SetWorking(true) is also called.
+// SetSweepFrame sets the current border-sweep animation frame. A frame set
+// while not working is stored but does not invalidate the cache, since it
+// has no visible effect until SetWorking(true).
 func (e *Editor) SetSweepFrame(frame int) {
 	if e.sweepFrame == frame {
 		return
@@ -389,11 +385,9 @@ func (e *Editor) renderView() {
 		return
 	}
 
-	// While working, the top border is drawn manually as an animated sweep
-	// row, and the block below it renders with the top border disabled so the
-	// two don't double up. BorderTop(false) returns a new Style without
-	// mutating e.inputStyle.Block (lipgloss.Style is a plain value type), so
-	// the idle path above is unaffected.
+	// The animated sweep row replaces the block's own top border, drawn
+	// separately above it. BorderTop(false) returns a new Style, leaving
+	// e.inputStyle.Block (and the idle path above) unaffected.
 	block := e.inputStyle.Block.BorderTop(false)
 	var boxed string
 	if e.width <= 0 {

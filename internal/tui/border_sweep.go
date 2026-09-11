@@ -9,18 +9,16 @@ import (
 )
 
 // borderSweepInterval is one frame of the composer's border-sweep animation.
-// It is a separate clock from animInterval (animation.go): tool-activity
-// motion and the composer border sweep are driven by unrelated ticks so
-// either can be retimed or disabled independently.
+// It is a separate clock from animInterval (animation.go), so either can be
+// retimed or disabled independently.
 const borderSweepInterval = 17 * time.Millisecond
 
-// borderSweepTickMsg advances the composer border sweep. generation identifies
-// the armed tick chain, mirroring animTickMsg's guard against a superseded
-// chain double-advancing the frame.
+// borderSweepTickMsg advances the composer border sweep. generation
+// identifies the armed tick chain, guarding against a superseded chain
+// double-advancing the frame.
 type borderSweepTickMsg struct{ generation uint64 }
 
-// borderSweepTick schedules the next border-sweep frame, stamped with the
-// chain it belongs to.
+// borderSweepTick schedules the next border-sweep frame.
 func borderSweepTick(generation uint64) tea.Cmd {
 	return tea.Tick(borderSweepInterval, func(time.Time) tea.Msg {
 		return borderSweepTickMsg{generation: generation}
