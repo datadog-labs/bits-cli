@@ -37,7 +37,7 @@ func TestBorderSweepRowAnimates(t *testing.T) {
 	dim, hot, bg := sweepColors()
 	const width = 80
 	distinct := map[string]bool{}
-	for frame := 0; frame < width+sweepBandWidth; frame++ {
+	for frame := range width + sweepBandWidth {
 		distinct[BorderSweepRow(width, frame, dim, hot, bg)] = true
 	}
 	if len(distinct) < 2 {
