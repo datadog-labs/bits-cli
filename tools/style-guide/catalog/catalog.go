@@ -174,7 +174,7 @@ func (m *Model) contentLines() int {
 func (m *Model) View() tea.View {
 	body := renderGroup(m.group, m.width, m.theme, m.frame)
 	visible := visibleLines(body, m.offset, m.viewHeight())
-	content := visible + "\n" + footer(m.width, m.group, m.isDark)
+	content := visible + "\n" + footer(m.width, m.group, m.isDark, m.theme.Text.Tertiary)
 	return tea.View{
 		Content:   content,
 		AltScreen: true,

@@ -207,14 +207,14 @@ type statusRow struct {
 }
 
 func (m Model) renderSection(title string, rows []statusRow) string {
-	lines := []string{m.theme.Text.Body.Bold(true).Render(title)}
+	lines := []string{m.theme.Text.Primary.Bold(true).Render(title)}
 	for _, row := range rows {
 		const labelWidth = 18
-		label := m.theme.Text.Muted.Render(fmt.Sprintf("  %-16s", row.label))
+		label := m.theme.Text.Secondary.Render(fmt.Sprintf("  %-16s", row.label))
 		value := escape.SingleLine(row.value)
-		style := m.theme.Text.Body
+		style := m.theme.Text.Primary
 		if strings.HasPrefix(value, "unavailable") || value == "not applicable" || value == "not a Git repository" || value == "collecting…" {
-			style = m.theme.Text.Muted
+			style = m.theme.Text.Secondary
 		}
 		wrapped := strings.Split(ansi.Wordwrap(value, max(1, m.bodyWidth-labelWidth), "-"), "\n")
 		lines = append(lines, label+style.Render(wrapped[0]))

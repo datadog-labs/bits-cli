@@ -22,26 +22,37 @@ const sampleText = "The quick brown fox jumps over the lazy dog."
 // animation step; only pages whose animates() is true consult it.
 func renderGroup(g group, width int, theme styles.Theme, frame int) string {
 	sty := chat.StylesFor(theme)
+	// The guide's own text splits by job. A sample's title names what is being
+	// shown and has to be read, so it takes the primary level. Rules and the end
+	// marker only divide the page, so they stay at tertiary and leave the
+	// attention on the samples.
+	title := theme.Text.Primary
+	rule := theme.Text.Tertiary
+	tag := groupTag(g)
 	var samples []string
 	switch g {
 	case groupTextAttrs:
-		samples = textAttrSamples()
+		samples = textAttrSamples(theme, title, tag)
 	case groupSemanticRoles:
-		samples = semanticRoleSamples(width, sty)
+		samples = semanticRoleSamples(width, sty, title, tag)
 	case groupSharedComponents:
-		samples = sharedComponentSamples(width, theme)
+		samples = sharedComponentSamples(width, theme, title, tag)
 	case groupMarkdown:
-		samples = markdownSamples(width, theme.IsDark)
+		samples = markdownSamples(width, theme.IsDark, title, tag)
 	case groupColorTokens:
-		samples = colorTokenSamples(theme)
+		samples = colorTokenSamples(theme, title)
 	case groupStatusPillMotion:
-		samples = statusPillMotionSamples(width, sty, frame)
+		samples = statusPillMotionSamples(width, sty, frame, title, tag)
 	default:
 		// numGroups is a count sentinel and is never rendered.
 	}
-	sep := "\n" + delimiter(width) + "\n"
+	// Two blank rows around each rule so a sample reads as its own block instead
+	// of as one more line of the page. Three "\n"s, not two: joining "a\n\nb"
+	// collapses to a single blank line between them, so two blank rows need the
+	// third newline that starts the second one.
+	sep := "\n\n\n" + delimiter(width, rule) + "\n\n\n"
 	body := strings.Join(samples, sep)
-	end := lipgloss.NewStyle().Faint(true).Render("— end —")
+	end := rule.Render("— end —")
 	// Hard-wrap to width so one logical ("\n") line renders as exactly one
 	// terminal row. The scroll model counts and slices by "\n" (contentLines /
 	// visibleLines); without this, long samples wrap in the terminal, the model
@@ -50,43 +61,68 @@ func renderGroup(g group, width int, theme styles.Theme, frame int) string {
 	return wrapBody(body+sep+end, width)
 }
 
-func textAttrSamples() []string {
+// groupTag names the kind of page a group is, shown as a bracketed prefix on
+// each of its sample titles. Semantic roles and shared components are both
+// pages of individually styled UI pieces, so they share one tag; color tokens
+// and the motion proposal are their own kind of page and get none.
+func groupTag(g group) string {
+	switch g {
+	case groupTextAttrs:
+		return "text attr"
+	case groupSemanticRoles, groupSharedComponents:
+		return "component"
+	case groupMarkdown:
+		return "markdown"
+	default:
+		return ""
+	}
+}
+
+func textAttrSamples(theme styles.Theme, title lipgloss.Style, tag string) []string {
+	// Each attribute builds on the primary level. These carried no foreground at
+	// all before, so the row demonstrated its attributes in whatever color the
+	// terminal happened to supply — on a background the app paints itself.
+	base := theme.Text.Primary
 	attrs := []struct {
 		label string
 		style lipgloss.Style
 	}{
-		{"Bold", lipgloss.NewStyle().Bold(true)},
-		{"Italic", lipgloss.NewStyle().Italic(true)},
-		{"Faint", lipgloss.NewStyle().Faint(true)},
-		{"Underline", lipgloss.NewStyle().Underline(true)},
-		{"Reverse", lipgloss.NewStyle().Reverse(true)},
-		{"Strikethrough", lipgloss.NewStyle().Strikethrough(true)},
+		{"Bold", base.Bold(true)},
+		{"Italic", base.Italic(true)},
+		// The only Faint left in the tree, and deliberately so: this page
+		// documents what the terminal attributes look like, so Faint is the
+		// subject here rather than a stand-in for a color. Everywhere else it was
+		// dimming an unset foreground, which meant dimming the terminal's own.
+		{"Faint", base.Faint(true)},
+		{"Underline", base.Underline(true)},
+		{"Reverse", base.Reverse(true)},
+		{"Strikethrough", base.Strikethrough(true)},
 	}
 	out := make([]string, len(attrs))
 	for i, a := range attrs {
-		out[i] = renderSample(a.label, a.style.Render(sampleText))
+		out[i] = renderSample(title, tag, a.label, a.style.Render(sampleText))
 	}
 	return out
 }
 
-func semanticRoleSamples(width int, sty chat.Styles) []string {
+func semanticRoleSamples(width int, sty chat.Styles, title lipgloss.Style, tag string) []string {
 	return []string{
-		renderSample("Input block", sty.Input.Block.Render(sty.Input.Marker.Render(sty.Input.Prompt)+sty.Input.Text.Render("show me error logs"))),
-		renderSample("AssistantText", sty.AssistantText.Render(sampleText)),
-		renderSample("Reasoning", sty.Reasoning.Render("thinking through the query plan…")),
-		renderSample("ToolName", sty.ToolName.Render("search_logs")),
-		renderSample("ToolDetail", sty.ToolDetail.Render("  ↳ {\"query\":\"timeout\"}")),
-		renderSample("Meta (separator)", "a"+sty.Meta.Render(" · ")+"b"),
+		renderSample(title, tag, "Input block", sty.Input.Block.Render(sty.Input.Marker.Render(sty.Input.Prompt)+sty.Input.Text.Render("show me error logs"))),
+		renderSample(title, tag, "AssistantText", sty.AssistantText.Render(sampleText)),
+		renderSample(title, tag, "Reasoning", sty.Reasoning.Render("thinking through the query plan…")),
+		renderSample(title, tag, "ToolName", sty.ToolName.Render("search_logs")),
+		renderSample(title, tag, "ToolDetail", sty.ToolDetail.Render("  ↳ {\"query\":\"timeout\"}")),
+		renderSample(title, tag, "Meta (separator)", "a"+sty.Meta.Render(" · ")+"b"),
 		// Status pills go through the real block renderer, so the catalog shows
 		// exactly what a transcript shows (glyph + name + pill chip). This page is
 		// a static reference, so the in-flight chip is pinned to its first frame;
 		// its motion is shown on the Status pill motion page.
-		renderSample("StatusRunning (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolRunning), width, sty, 0)),
-		renderSample("StatusSuccess (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolSuccess), width, sty, 0)),
-		renderSample("StatusError (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolError), width, sty, 0)),
-		renderSample("NoticeInfo", sty.NoticeInfo.Render(" heads up: restored 3 messages ")),
-		renderSample("NoticeWarn", sty.NoticeWarn.Render(" warning: partial results ")),
-		renderSample("NoticeError", sty.NoticeError.Render(" error: request failed ")),
+		renderSample(title, tag, "StatusRunning (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolRunning), width, sty, 0)),
+		renderSample(title, tag, "StatusSuccess (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolSuccess), width, sty, 0)),
+		renderSample(title, tag, "StatusError (via RenderBlock)", chat.RenderBlock(toolBlock(agent.ToolError), width, sty, 0)),
+		renderSample(title, tag, "NoticeInfo", sty.NoticeInfo.Render(" heads up: restored 3 messages ")),
+		renderSample(title, tag, "NoticeWarn", sty.NoticeWarn.Render(" warning: partial results ")),
+		renderSample(title, tag, "NoticeError", sty.NoticeError.Render(" error: request failed ")),
 	}
 }
 
@@ -103,7 +139,7 @@ func toolBlock(status agent.ToolStatus) agent.Block {
 	}
 }
 
-func markdownSamples(width int, isDark bool) []string {
+func markdownSamples(width int, isDark bool, title lipgloss.Style, tag string) []string {
 	docs := []struct{ label, src string }{
 		{"Headings H1–H6", "# H1 heading\n## H2 heading\n### H3 heading\n#### H4 heading\n##### H5 heading\n###### H6 heading"},
 		{"Inline formatting", "Prose with **bold**, *italic*, `inline code`, and a [link](https://docs.datadoghq.com)."},
@@ -115,17 +151,17 @@ func markdownSamples(width int, isDark bool) []string {
 	}
 	out := make([]string, len(docs))
 	for i, d := range docs {
-		out[i] = renderSample(d.label, chat.RenderMarkdown(d.src, width, isDark))
+		out[i] = renderSample(title, tag, d.label, chat.RenderMarkdown(d.src, width, isDark))
 	}
 	return out
 }
 
-func sharedComponentSamples(width int, theme styles.Theme) []string {
+func sharedComponentSamples(width int, theme styles.Theme, title lipgloss.Style, tag string) []string {
 	panel := components.NewPanel(theme.Panel)
 	panelContent := components.PanelContent{
 		Title:          "Choose your Datadog site",
 		Dismiss:        "esc ×",
-		Body:           func(int) string { return theme.Text.Muted.Render("Select the site where your organization lives.") },
+		Body:           func(int) string { return theme.Text.Secondary.Render("Select the site where your organization lives.") },
 		FooterLeft:     "↑/↓ navigate",
 		FooterRight:    "enter to continue",
 		CompactTitle:   "Sign in to Bits",
@@ -150,26 +186,26 @@ func sharedComponentSamples(width int, theme styles.Theme) []string {
 	blurred.Blur()
 
 	return []string{
-		renderSample("Text roles", lipgloss.JoinVertical(lipgloss.Left,
-			theme.Text.Body.Render("Body text"),
-			theme.Text.Muted.Render("Muted metadata"),
-			theme.Text.Help.Render("Keyboard help"),
+		renderSample(title, tag, "Text levels", lipgloss.JoinVertical(lipgloss.Left,
+			theme.Text.Primary.Render("Primary — what the reader came for"),
+			theme.Text.Secondary.Render("Secondary — supporting, still meant to be read"),
+			theme.Text.Tertiary.Render("Tertiary — present without competing"),
 		)),
-		renderSample("Feedback states", lipgloss.JoinVertical(lipgloss.Left,
+		renderSample(title, tag, "Feedback states", lipgloss.JoinVertical(lipgloss.Left,
 			theme.Feedback.Progress.Render("⠋  Waiting for Datadog"),
 			theme.Feedback.Success.Render("✓  Authentication complete"),
 			theme.Feedback.Error.Render("Login did not complete"),
 		)),
-		renderSample("Text input — focused / blurred", focused.View()+"\n"+blurred.View()),
-		renderSample("Panel — full", panel.View(width, 16, panelContent)),
-		renderSample("Panel — compact", panel.View(min(width, 32), 6, panelContent)),
-		renderSample("Panel — tiny", panel.View(min(width, 18), 2, panelContent)),
-		renderSample("Selector — selected", selector.View(width)),
-		renderSample("Selector — narrow", selector.View(min(width, 26))),
+		renderSample(title, tag, "Text input — focused / blurred", focused.View()+"\n"+blurred.View()),
+		renderSample(title, tag, "Panel — full", panel.View(width, 16, panelContent)),
+		renderSample(title, tag, "Panel — compact", panel.View(min(width, 32), 6, panelContent)),
+		renderSample(title, tag, "Panel — tiny", panel.View(min(width, 18), 2, panelContent)),
+		renderSample(title, tag, "Selector — selected", selector.View(width)),
+		renderSample(title, tag, "Selector — narrow", selector.View(min(width, 26))),
 	}
 }
 
-func colorTokenSamples(theme styles.Theme) []string {
+func colorTokenSamples(theme styles.Theme, title lipgloss.Style) []string {
 	sty := chat.StylesFor(theme)
 	tokens := []struct {
 		label string
@@ -195,8 +231,10 @@ func colorTokenSamples(theme styles.Theme) []string {
 		{"Notice info bg", sty.NoticeInfo.GetBackground()},
 		{"Notice warn bg", sty.NoticeWarn.GetBackground()},
 		{"Notice error bg", sty.NoticeError.GetBackground()},
-		{"Text body fg", theme.Text.Body.GetForeground()},
-		{"Text muted/help fg", theme.Text.Muted.GetForeground()},
+		{"Text primary fg", theme.Text.Primary.GetForeground()},
+		{"Text secondary fg", theme.Text.Secondary.GetForeground()},
+		{"Text tertiary fg", theme.Text.Tertiary.GetForeground()},
+		{"Composer placeholder fg", theme.Input.Placeholder.GetForeground()},
 		{"Panel border", theme.Panel.Frame.GetBorderTopForeground()},
 		{"Selector selected fg", theme.Selector.Selected.GetForeground()},
 		{"Feedback progress fg", theme.Feedback.Progress.GetForeground()},
@@ -218,7 +256,7 @@ func colorTokenSamples(theme styles.Theme) []string {
 		if _, ok := t.color.(lipgloss.NoColor); ok {
 			continue
 		}
-		out = append(out, swatch(t.label, t.color))
+		out = append(out, swatch(title, t.label, t.color))
 	}
 	return out
 }

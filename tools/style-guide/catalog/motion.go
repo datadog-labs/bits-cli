@@ -48,7 +48,7 @@ const (
 // together.
 const motionSteps = 60
 
-func statusPillMotionSamples(width int, sty chat.Styles, frame int) []string {
+func statusPillMotionSamples(width int, sty chat.Styles, frame int, title lipgloss.Style, tag string) []string {
 	fg := sty.StatusRunning.GetForeground()
 	bg := sty.StatusRunning.GetBackground()
 	dim, hot := sweepEnds(sty)
@@ -132,7 +132,7 @@ func statusPillMotionSamples(width int, sty chat.Styles, frame int) []string {
 			header = sty.StatusRunning.UnsetBackground().Render(glyph+" ") +
 				chip + " " + sty.ToolName.Render("search_logs")
 		}
-		out = append(out, renderSample(
+		out = append(out, renderSample(title, tag,
 			r.marker+"  "+r.name,
 			header+"\n"+sty.ToolDetail.Render("  "+r.note),
 		))
