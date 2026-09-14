@@ -8,14 +8,14 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
-// animInterval is one animation frame. Only in-flight tool items are
+// animInterval is one animation frame. Only in-flight activity items are
 // re-rendered per frame, so the cost does not grow with the transcript.
 //
-// The inspection-group dots advance every eight frames (400ms). The individual
-// spinner has the same tick so all live tool activity shares one repaint loop.
+// Activity ellipses advance every eight frames (400ms). The individual tool
+// spinner has the same tick so all live agent activity shares one repaint loop.
 const animInterval = 50 * time.Millisecond
 
-// animTickMsg advances tool-activity animation. generation identifies the
+// animTickMsg advances activity animation. generation identifies the
 // armed tick chain: arming and disarming both bump it, so a tick left over
 // from a superseded chain is dropped instead of advancing the frame a second
 // time per interval. Without this, re-arming while a chain is still live would
@@ -50,7 +50,7 @@ func (m *Model) syncAnimation() tea.Cmd {
 	m.animGeneration++
 	m.animArmed = want
 	if !want {
-		// Reset so the next in-flight tool starts from a clean indicator.
+		// Reset so the next in-flight activity starts from a clean indicator.
 		m.animFrame = 0
 		m.list.SetFrame(0)
 		return nil

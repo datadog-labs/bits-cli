@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/assistant"
 )
 
 // List is a lazily-rendered, vertically-stacked view of transcript items with an
@@ -135,9 +136,36 @@ func (l *List) invalidateAll() {
 	clear(l.cache)
 }
 
+// gapAfter keeps adjacent agent-activity rows together while preserving the
+// normal conversation spacing at either edge. It operates on presentation
+// items so an inspection group behaves as one stacked row regardless of how
+// many source tool blocks it contains.
+func (l *List) gapAfter(idx int) int {
+	if l.gap <= 0 || idx < 0 || idx+1 >= len(l.view) {
+		return max(l.gap, 0)
+	}
+	if l.stacksTight(l.view[idx]) && l.stacksTight(l.view[idx+1]) {
+		return 0
+	}
+	return l.gap
+}
+
+func (l *List) stacksTight(it presentationItem) bool {
+	if it.start < 0 || it.start >= len(l.items) {
+		return false
+	}
+	switch l.items[it.start].Kind {
+	case assistant.KindReasoning, assistant.KindToolCall, assistant.KindToolResult:
+		return true
+	default:
+		return false
+	}
+}
+
 // renderItem returns the block's rendered lines, cached by revision and width.
 // Animated items are re-rendered every call and never cached, so the per-frame
-// cost tracks the number of in-flight tools rather than transcript length.
+// cost tracks the number of in-flight activity rows rather than transcript
+// length.
 func (l *List) renderItem(idx int) []string {
 	it := l.view[idx]
 	if l.itemAnimated(it) {
@@ -165,7 +193,8 @@ func (l *List) renderPresentationItem(it presentationItem) string {
 // for approval is deliberately static because no work is progressing.
 func (l *List) itemAnimated(it presentationItem) bool {
 	for i := it.start; i < it.end; i++ {
-		if lifecycleOf(l.items[i].Tool) == lifecycleRunning {
+		block := l.items[i]
+		if lifecycleOf(block.Tool) == lifecycleRunning || (block.Kind == assistant.KindReasoning && !block.Complete) {
 			return true
 		}
 	}
@@ -202,8 +231,8 @@ func (l *List) AtBottom() bool {
 			return false
 		}
 		h := l.itemHeight(idx)
-		if l.gap > 0 && idx > l.offsetIdx {
-			h += l.gap
+		if idx > l.offsetIdx {
+			h += l.gapAfter(idx - 1)
 		}
 		total += h
 	}
@@ -217,8 +246,8 @@ func (l *List) lastOffsetItem() (int, int) {
 	idx := len(l.view) - 1
 	for ; idx >= 0; idx-- {
 		h := l.itemHeight(idx)
-		if l.gap > 0 && idx < len(l.view)-1 {
-			h += l.gap
+		if idx < len(l.view)-1 {
+			h += l.gapAfter(idx)
 		}
 		total += h
 		if total > l.height {
@@ -262,9 +291,7 @@ func (l *List) ScrollBy(lines int) {
 		l.offsetLine += lines
 		for l.offsetLine >= l.itemHeight(l.offsetIdx) {
 			l.offsetLine -= l.itemHeight(l.offsetIdx)
-			if l.gap > 0 {
-				l.offsetLine = max(0, l.offsetLine-l.gap)
-			}
+			l.offsetLine = max(0, l.offsetLine-l.gapAfter(l.offsetIdx))
 			l.offsetIdx++
 			if l.offsetIdx > len(l.view)-1 {
 				l.ScrollToBottom()
@@ -285,10 +312,7 @@ func (l *List) ScrollBy(lines int) {
 			l.ScrollToTop()
 			return
 		}
-		h := l.itemHeight(l.offsetIdx)
-		if l.gap > 0 {
-			h += l.gap
-		}
+		h := l.itemHeight(l.offsetIdx) + l.gapAfter(l.offsetIdx)
 		l.offsetLine += h
 	}
 }
@@ -317,6 +341,7 @@ func (l *List) Render() string {
 	for idx < len(l.view) && len(lines) < budget {
 		itemLines := l.renderItem(idx)
 		h := len(itemLines)
+		gap := l.gapAfter(idx)
 
 		if off >= 0 && off < h {
 			visible := itemLines[off:]
@@ -324,14 +349,14 @@ func (l *List) Render() string {
 				visible = visible[:rem]
 			}
 			lines = append(lines, visible...)
-			if l.gap > 0 {
-				for range min(budget-len(lines), l.gap) {
+			if gap > 0 {
+				for range min(budget-len(lines), gap) {
 					lines = append(lines, "")
 				}
 			}
 		} else {
 			// The offset starts inside the gap after this item.
-			gapRemaining := l.gap - (off - h)
+			gapRemaining := gap - (off - h)
 			if gapRemaining > 0 {
 				for range min(budget-len(lines), gapRemaining) {
 					lines = append(lines, "")

@@ -26,7 +26,7 @@ func (r *blockRenderer) RenderBlock(it agent.Block, width int, sty Styles, frame
 	case assistant.KindText:
 		return r.renderText(it, width, sty)
 	case assistant.KindReasoning:
-		return renderReasoning(it, width, sty)
+		return renderReasoning(it, width, sty, frame)
 	case assistant.KindToolCall, assistant.KindToolResult:
 		return renderTool(it, width, sty, frame)
 	case assistant.KindWidget:
@@ -74,13 +74,22 @@ func renderUser(text string, width int, sty Styles) string {
 	return sty.Input.Block.Width(width).Render(strings.Join(lines, "\n"))
 }
 
-// renderReasoning renders dimmed thinking.
-func renderReasoning(it agent.Block, width int, sty Styles) string {
-	text := escape.Multiline(it.Thinking.Content)
-	if it.Thinking.Redacted && text == "" {
-		text = "[redacted]"
+// renderReasoning keeps model thinking compact until reasoning expansion is
+// introduced. An open block uses the same low-frequency motion as an active
+// inspection group; once closed it settles into a quiet completed row.
+func renderReasoning(it agent.Block, width int, sty Styles, frame int) string {
+	if it.Thinking == nil {
+		return fallback(it, width, sty)
 	}
-	return sty.Reasoning.Render(wrap(text, width))
+
+	glyph, glyphStyle := statusGlyph(lifecycleSuccess, sty, frame)
+	label := "thought"
+	if !it.Complete {
+		glyph, glyphStyle = "•", sty.StatusRunning
+		label = "thinking" + activityEllipsis(frame, sty.StatusSpinner.Len() > 0)
+	}
+	header := glyphStyle.UnsetBackground().Render(glyph+" ") + sty.ToolName.Render(label)
+	return ansi.Truncate(header, max(1, width), "…")
 }
 
 // renderWidget summarizes a widget.

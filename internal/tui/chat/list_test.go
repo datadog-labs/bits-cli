@@ -142,6 +142,22 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 	}
 }
 
+func TestReasoningStacksWithToolPresentation(t *testing.T) {
+	list := NewList()
+	list.SetItems([]agent.Block{
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}},
+		inspectBlock("read", "read_file", `{"path":"README.md"}`, agent.ToolSuccess, "contents"),
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "answer", Kind: assistant.KindText}, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "answer"}},
+	})
+
+	if got := list.gapAfter(0); got != 0 {
+		t.Fatalf("reasoning-to-tool gap = %d, want 0", got)
+	}
+	if got := list.gapAfter(1); got != 1 {
+		t.Fatalf("tool-to-answer gap = %d, want 1", got)
+	}
+}
+
 func TestInspectionGroupKeepsMixedFailuresQuiet(t *testing.T) {
 	list := NewList()
 	list.SetStyles(DefaultStyles(true))

@@ -635,12 +635,7 @@ func renderInspectionGroup(blocks []agent.Block, presentations []toolPresentatio
 	case lifecycleRunning:
 		glyph = "•"
 		label = "inspecting"
-		if sty.StatusSpinner.Len() == 0 {
-			suffix = "..."
-		} else {
-			dots := frame/8%3 + 1 // the TUI ticks every 50ms: one step is 400ms.
-			suffix = fmt.Sprintf("%-3s", strings.Repeat(".", dots))
-		}
+		suffix = activityEllipsis(frame, sty.StatusSpinner.Len() > 0)
 	case lifecycleAwaiting:
 		label, suffix = "inspecting", " · awaiting approval"
 	case lifecycleSuccess:
@@ -696,6 +691,21 @@ func renderInspectionGroup(blocks []agent.Block, presentations []toolPresentatio
 		first, i = false, i+1
 	}
 	return strings.Join(lines, "\n")
+}
+
+// activityEllipsis returns a fixed-width, low-frequency progress indicator.
+// The shared TUI clock ticks every 50ms; holding each step for eight frames
+// makes the visible dots advance every 400ms without causing header reflow.
+func activityEllipsis(frame int, motion bool) string {
+	if !motion {
+		return "..."
+	}
+	step := frame / 8 % 3
+	if step < 0 {
+		step += 3
+	}
+	dots := step + 1
+	return fmt.Sprintf("%-3s", strings.Repeat(".", dots))
 }
 
 // inspectionDiagnostic returns the first available diagnostic only for a

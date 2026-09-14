@@ -239,8 +239,8 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.applyEvent(msg.ev)
 		m.syncStatus()
 		m.refreshViewport()
-		// Tool state only changes on engine events, so this is where the chip
-		// animation starts and stops.
+		// Live tool and reasoning state changes on engine events, so this is
+		// where transcript activity animation starts and stops.
 		return m, tea.Batch(cmd, m.syncAnimation(), waitEvent(msg.generation, m.turnEvents))
 
 	case turnClosedMsg:

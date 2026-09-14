@@ -31,6 +31,29 @@ func headerOf(s string) string {
 	return line
 }
 
+func TestReasoningRendersAsCompactActivity(t *testing.T) {
+	block := agent.Block{
+		Kind:     assistant.KindReasoning,
+		Thinking: &assistant.ThinkingPayload{Content: "private reasoning body"},
+	}
+	sty := DefaultStyles(true)
+
+	first := ansi.Strip(RenderBlock(block, 80, sty, 0))
+	second := ansi.Strip(RenderBlock(block, 80, sty, 8))
+	if !strings.Contains(first, "• thinking.") || first == second {
+		t.Fatalf("active reasoning did not render compact animated status: %q, %q", first, second)
+	}
+	if strings.Contains(first, block.Thinking.Content) {
+		t.Fatalf("active reasoning exposed its body: %q", first)
+	}
+
+	block.Complete = true
+	settled := ansi.Strip(RenderBlock(block, 80, sty, 16))
+	if settled != "✓ thought" {
+		t.Fatalf("completed reasoning = %q, want %q", settled, "✓ thought")
+	}
+}
+
 func TestGenericToolUsesQualifiedNameCompactInputAndQuietStatus(t *testing.T) {
 	for _, test := range []struct {
 		status agent.ToolStatus

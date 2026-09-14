@@ -25,9 +25,13 @@ func animToolBlock(status agent.ToolStatus) agent.Block {
 // in-flight status while a turn is active — the tests exercising the closed,
 // stale-block case set it back to nil explicitly.
 func animModel(status agent.ToolStatus) *Model {
+	return animModelWithBlock(animToolBlock(status))
+}
+
+func animModelWithBlock(block agent.Block) *Model {
 	m := newShell()
 	m.mode = ModeChat
-	m.blocks = []agent.Block{animToolBlock(status)}
+	m.blocks = []agent.Block{block}
 	m.turnEvents = make(chan agent.Event)
 	// resize is what propagates the width to the transcript list; setting the
 	// model's fields alone leaves the list at width 0, rendering nothing.
@@ -40,13 +44,19 @@ func animModel(status agent.ToolStatus) *Model {
 	return m
 }
 
-func TestAnimationArmsWhileToolInFlight(t *testing.T) {
-	m := animModel(agent.ToolRunning)
-	if cmd := m.syncAnimation(); cmd == nil {
-		t.Fatal("syncAnimation() returned no command; the tick was never armed")
+func TestAnimationArmsWhileActivityInFlight(t *testing.T) {
+	blocks := []agent.Block{
+		animToolBlock(agent.ToolRunning),
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Thinking: &assistant.ThinkingPayload{Content: "plan"}},
 	}
-	if !m.animArmed {
-		t.Error("model should report the animation as armed")
+	for _, block := range blocks {
+		m := animModelWithBlock(block)
+		if cmd := m.syncAnimation(); cmd == nil {
+			t.Fatal("syncAnimation() returned no command; the tick was never armed")
+		}
+		if !m.animArmed {
+			t.Error("model should report the animation as armed")
+		}
 	}
 }
 

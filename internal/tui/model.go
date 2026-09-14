@@ -153,7 +153,7 @@ type Model struct {
 	chatStyles chat.Styles
 	styles     styles.Theme // terminal styles; dark until detected
 
-	// Tool activity animation. animFrame is the step handed to the transcript;
+	// Agent activity animation. animFrame is the step handed to the transcript;
 	// animGeneration stamps the armed tick chain so a superseded one dies
 	// instead of double-advancing the frame.
 	animFrame      int
