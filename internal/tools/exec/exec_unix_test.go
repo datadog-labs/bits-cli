@@ -90,6 +90,7 @@ func TestExecServiceUnixFallsBackWhenConfiguredShellIsUnavailable(t *testing.T) 
 
 func TestExecServiceUnixDrainsBothStreamsUnderPressure(t *testing.T) {
 	service := newUnixTestExecService(5*time.Second, execOutputLimit)
+	const streamBytes = 768 << 10
 	// The two background pipelines concurrently write more than half the
 	// combined cap to each descriptor. Completion proves neither pipe can
 	// block the child while the other stream is being consumed.
@@ -105,9 +106,10 @@ func TestExecServiceUnixDrainsBothStreamsUnderPressure(t *testing.T) {
 	if got := len(outcome.Output.Stdout) + len(outcome.Output.Stderr); got != execOutputLimit {
 		t.Fatalf("retained output = %d bytes, want %d", got, execOutputLimit)
 	}
-	if outcome.Output.StdoutOmittedBytes != 262144 || outcome.Output.StderrOmittedBytes != 262144 {
-		t.Fatalf("omitted bytes = (%d, %d), want (262144, 262144)",
-			outcome.Output.StdoutOmittedBytes, outcome.Output.StderrOmittedBytes)
+	wantOmitted := int64(streamBytes - execOutputLimit/2)
+	if outcome.Output.StdoutOmittedBytes != wantOmitted || outcome.Output.StderrOmittedBytes != wantOmitted {
+		t.Fatalf("omitted bytes = (%d, %d), want (%d, %d)",
+			outcome.Output.StdoutOmittedBytes, outcome.Output.StderrOmittedBytes, wantOmitted, wantOmitted)
 	}
 }
 
