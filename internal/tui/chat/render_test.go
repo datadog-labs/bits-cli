@@ -92,11 +92,11 @@ func TestExecCommandDecodesEnvelopeAndBoundsOutput(t *testing.T) {
 	exit := 1
 	result := fmt.Sprintf(`{"status":"nonzero_exit","exit_code":%d,"duration_ms":19,"truncated":true,"output_incomplete":true,"stdout":"out-1\nout-2\nout-3","stderr":"err-1\nerr-2\nerr-3"}`, exit)
 	block := agent.Block{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{
-		Name: "exec_command", Input: `{"cmd":"go   test\n./...","workdir":"."}`, Output: result,
+		Name: "exec_command", Input: `{"cmd":"go   test\n./...","workdir":".","timeout_ms":30000}`, Output: result,
 		Status: agent.ToolError, IsClientSide: true,
 	}}
 	plain := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
-	for _, want := range []string{"execution failed go   test␊./... in . · exit 1", "stdout: out-1", "err-3", "… output truncated and incomplete"} {
+	for _, want := range []string{"execution failed go   test␊./... in . · timeout 30s · exit 1", "stdout: out-1", "err-3", "… output truncated and incomplete"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("exec rendering missing %q:\n%s", want, plain)
 		}

@@ -55,15 +55,13 @@ func TestExecCommandDefinitionIsStrictAndTruthful(t *testing.T) {
 		t.Fatal(err)
 	}
 	schema := string(encoded)
-	for _, want := range []string{`"required":["cmd"]`, `"additionalProperties":false`, `"workdir"`} {
+	for _, want := range []string{`"required":["cmd"]`, `"additionalProperties":false`, `"workdir"`, `"timeout_ms"`, `"minimum":1`, `"maximum":600000`} {
 		if !strings.Contains(schema, want) {
 			t.Errorf("schema %s does not contain %s", schema, want)
 		}
 	}
-	for _, want := range []string{"unsandboxed", "environment", "filesystem", "network", "credentials", "agent sockets", "race", "best effort"} {
-		if !strings.Contains(strings.ToLower(tool.Definition.Description), want) {
-			t.Errorf("description does not disclose %q: %s", want, tool.Definition.Description)
-		}
+	if got, want := tool.Definition.Description, execCommandDescription; got != want {
+		t.Errorf("description = %q, want %q", got, want)
 	}
 }
 
@@ -74,6 +72,8 @@ func TestExecCommandHandlerValidatesInput(t *testing.T) {
 		`not json`,
 		`{}`,
 		`{"cmd":""}`,
+		`{"cmd":"true","timeout_ms":0}`,
+		`{"cmd":"true","timeout_ms":600001}`,
 	}
 	for _, input := range tests {
 		result, err := tool.Handler(context.Background(), agent.ToolCall{Name: spec.ExecCommand, Input: input})
@@ -95,15 +95,17 @@ func TestExecCommandResolvesWorkdirAtTheHandlerBoundary(t *testing.T) {
 	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Reason: exectool.ExecSucceeded}}
 	tool := newExecCommandTool(turnCWD, runner)
 	tests := []struct {
-		name  string
-		input string
-		want  string
+		name        string
+		input       string
+		want        string
+		wantTimeout time.Duration
 	}{
 		{name: "default", input: `{"cmd":"pwd"}`, want: turnCWD},
 		{name: "empty defaults", input: `{"cmd":"pwd","workdir":""}`, want: turnCWD},
 		{name: "relative", input: `{"cmd":"pwd","workdir":"child/../target"}`, want: filepath.Join(turnCWD, "target")},
 		{name: "absolute", input: `{"cmd":"pwd","workdir":` + mustJSONString(t, abs) + `}`, want: abs},
 		{name: "outside workspace", input: `{"cmd":"pwd","workdir":"../outside"}`, want: filepath.Clean(filepath.Join(turnCWD, "../outside"))},
+		{name: "custom timeout", input: `{"cmd":"pwd","timeout_ms":2500}`, want: turnCWD, wantTimeout: 2500 * time.Millisecond},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -116,7 +118,7 @@ func TestExecCommandResolvesWorkdirAtTheHandlerBoundary(t *testing.T) {
 				t.Fatalf("runner calls = %d, want %d", got, before+1)
 			}
 			request := runner.lastRequest()
-			if request.Command != "pwd" || request.CWD != test.want || !filepath.IsAbs(request.CWD) {
+			if request.Command != "pwd" || request.CWD != test.want || request.Timeout != test.wantTimeout || !filepath.IsAbs(request.CWD) {
 				t.Fatalf("request = %+v, want command pwd and cwd %q", request, test.want)
 			}
 		})
@@ -126,26 +128,30 @@ func TestExecCommandResolvesWorkdirAtTheHandlerBoundary(t *testing.T) {
 func TestExecCommandApprovalShowsFinalCommandAndEffectiveWorkdir(t *testing.T) {
 	turnCWD := t.TempDir()
 	tool := newExecCommandTool(turnCWD, &recordingExecRunner{})
-	requirement, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./...","workdir":"subdir"}`})
+	requirement, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./...","workdir":"subdir","timeout_ms":30000}`})
 	if !needed {
 		t.Fatal("valid exec command did not require approval")
 	}
 	if requirement.Key.Tool != spec.ExecCommand || requirement.Key.Resource == "" {
 		t.Fatalf("approval key = %+v", requirement.Key)
 	}
-	same, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./...","workdir":"subdir"}`})
+	same, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./...","workdir":"subdir","timeout_ms":30000}`})
 	if !needed || same.Key != requirement.Key {
 		t.Fatalf("same launch tuple produced a different approval authority: %+v vs %+v", requirement.Key, same.Key)
 	}
-	different, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./other","workdir":"subdir"}`})
+	different, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./other","workdir":"subdir","timeout_ms":30000}`})
 	if !needed || different.Key == requirement.Key {
 		t.Fatalf("different launch tuple reused approval authority %+v", requirement.Key)
 	}
-	differentCWD, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./...","workdir":"other"}`})
+	differentCWD, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./...","workdir":"other","timeout_ms":30000}`})
 	if !needed || differentCWD.Key == requirement.Key {
 		t.Fatalf("different working directory reused approval authority %+v", requirement.Key)
 	}
-	for _, want := range []string{"cmd: go test ./...", "cwd: " + filepath.Join(turnCWD, "subdir"), "unsandboxed"} {
+	differentTimeout, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./...","workdir":"subdir","timeout_ms":30001}`})
+	if !needed || differentTimeout.Key == requirement.Key {
+		t.Fatalf("different timeout reused approval authority %+v", requirement.Key)
+	}
+	for _, want := range []string{"cmd: go test ./...", "cwd: " + filepath.Join(turnCWD, "subdir"), "timeout: 30s", "unsandboxed"} {
 		if !strings.Contains(requirement.Prompt.Detail, want) {
 			t.Errorf("approval detail does not contain %q: %s", want, requirement.Prompt.Detail)
 		}

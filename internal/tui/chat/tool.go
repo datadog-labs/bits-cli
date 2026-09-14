@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -30,6 +31,7 @@ type toolPresentation struct {
 	name       string
 	argument   string
 	context    string
+	timeout    string
 	group      string
 	validInput bool
 }
@@ -124,6 +126,9 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 		var in spec.ExecCommandInput
 		if decodeObject(input, &in) && in.Cmd != "" {
 			p.argument, p.context = escape.Inline(in.Cmd), escape.Inline(in.Workdir)
+			if in.TimeoutMS != nil && *in.TimeoutMS > 0 && *in.TimeoutMS <= spec.ExecMaxTimeoutMS {
+				p.timeout = (time.Duration(*in.TimeoutMS) * time.Millisecond).String()
+			}
 			p.validInput = true
 		}
 	default:
@@ -230,6 +235,9 @@ func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 		spans := actionArgument(action, p.argument)
 		if p.context != "" {
 			spans = append(spans, summarySpan{text: " in ", kind: spanMuted}, summarySpan{text: p.context, kind: spanArgument})
+		}
+		if p.timeout != "" {
+			spans = append(spans, summarySpan{text: " · timeout ", kind: spanMuted}, summarySpan{text: p.timeout, kind: spanArgument})
 		}
 		return spans
 	default:

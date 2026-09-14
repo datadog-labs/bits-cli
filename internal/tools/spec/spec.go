@@ -9,6 +9,9 @@ const (
 	WriteFile   = "write_file"
 	EditFile    = "edit_file"
 	ExecCommand = "exec_command"
+
+	ExecDefaultTimeoutMS int64 = 10_000
+	ExecMaxTimeoutMS     int64 = 10 * 60 * 1_000
 )
 
 // Identity is the complete identity needed for exact tool classification.
@@ -69,8 +72,9 @@ type Edit struct {
 }
 
 type ExecCommandInput struct {
-	Cmd     string `json:"cmd"`
-	Workdir string `json:"workdir"`
+	Cmd       string `json:"cmd"`
+	Workdir   string `json:"workdir"`
+	TimeoutMS *int64 `json:"timeout_ms"`
 }
 
 // ExecTerminalReason identifies why a one-shot command stopped. Output

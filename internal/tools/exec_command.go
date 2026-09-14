@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
@@ -13,7 +14,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
-const execCommandDescription = "Run one shell command and return its final stdout, stderr, and exit status. This V1 is unsandboxed: it inherits Bits' normal environment and can access your filesystem, network, credentials, and agent sockets. Commands receive no stdin, time out after 10 seconds, and run concurrently (up to four), so workspace effects may race. Descendant cleanup is best effort."
+const execCommandDescription = "Runs a non-interactive shell command to completion and returns its stdout, stderr, and terminal status. The process is terminated on timeout or cancellation and cannot be resumed."
 
 type execRunner interface {
 	Run(context.Context, exectool.ExecRequest) exectool.ExecOutcome
@@ -35,6 +36,12 @@ func newExecCommandTool(turnCWD string, runner execRunner) agent.Tool {
 					"workdir": map[string]any{
 						"type":        "string",
 						"description": "Working directory. Defaults to the turn working directory; relative paths resolve from it.",
+					},
+					"timeout_ms": map[string]any{
+						"type":        "integer",
+						"minimum":     1,
+						"maximum":     spec.ExecMaxTimeoutMS,
+						"description": "Maximum command runtime. Defaults to 10000 ms; maximum 600000 ms.",
 					},
 				},
 				"required":             []string{"cmd"},
@@ -59,8 +66,8 @@ func execCommandApproval(turnCWD string) agent.ApprovalPolicy {
 			Prompt: agent.ApprovalPrompt{
 				Title: "Run an unsandboxed command?",
 				Detail: fmt.Sprintf(
-					"cmd: %s · cwd: %s · unsandboxed",
-					args.Cmd, cwd,
+					"cmd: %s · cwd: %s%s · unsandboxed",
+					args.Cmd, cwd, execTimeoutApprovalDetail(args),
 				),
 			},
 		}, true
@@ -84,7 +91,7 @@ func execCommandHandler(turnCWD string, runner execRunner) agent.ToolHandler {
 				IsError: true,
 			}, nil
 		}
-		outcome := runner.Run(ctx, exectool.ExecRequest{Command: args.Cmd, CWD: cwd})
+		outcome := runner.Run(ctx, resolvedExecCommandRequest(args, cwd))
 		output := marshalExecCommandResult(outcome)
 		return agent.ToolResult{
 			Title:     execResultTitle(outcome),
@@ -103,6 +110,9 @@ func parseExecCommandArgs(input, turnCWD string) (spec.ExecCommandInput, string,
 	if args.Cmd == "" {
 		return spec.ExecCommandInput{}, "", fmt.Errorf("cmd must not be empty")
 	}
+	if args.TimeoutMS != nil && (*args.TimeoutMS < 1 || *args.TimeoutMS > spec.ExecMaxTimeoutMS) {
+		return spec.ExecCommandInput{}, "", fmt.Errorf("timeout_ms must be between 1 and %d", spec.ExecMaxTimeoutMS)
+	}
 	workdir := args.Workdir
 	if workdir == "" {
 		workdir = turnCWD
@@ -116,12 +126,27 @@ func execCommandApprovalKey(args spec.ExecCommandInput, cwd string) agent.Approv
 	// JSON encoding makes the tuple framing unambiguous even when either value
 	// contains control characters. The digest keeps arbitrary commands out of
 	// the authority-map key while making a session grant exact to this launch.
-	encoded, err := json.Marshal([2]string{args.Cmd, cwd})
+	encoded, err := json.Marshal(resolvedExecCommandRequest(args, cwd))
 	if err != nil {
 		panic("marshal exec approval authority: " + err.Error())
 	}
 	digest := sha256.Sum256(encoded)
 	return agent.ApprovalKey{Tool: spec.ExecCommand, Resource: fmt.Sprintf("%x", digest)}
+}
+
+func resolvedExecCommandRequest(args spec.ExecCommandInput, cwd string) exectool.ExecRequest {
+	request := exectool.ExecRequest{Command: args.Cmd, CWD: cwd}
+	if args.TimeoutMS != nil {
+		request.Timeout = time.Duration(*args.TimeoutMS) * time.Millisecond
+	}
+	return request
+}
+
+func execTimeoutApprovalDetail(args spec.ExecCommandInput) string {
+	if args.TimeoutMS == nil {
+		return ""
+	}
+	return " · timeout: " + (time.Duration(*args.TimeoutMS) * time.Millisecond).String()
 }
 
 func execResultTitle(outcome exectool.ExecOutcome) string {

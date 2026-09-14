@@ -16,9 +16,12 @@ import (
 
 const (
 	execConcurrencyLimit = 4
-	execTimeout          = 10 * time.Second
-	execOutputLimit      = 1 << 20
-	execTerminateGrace   = 100 * time.Millisecond
+	execTimeout          = time.Duration(spec.ExecDefaultTimeoutMS) * time.Millisecond
+	// MaxTimeout bounds a caller-selected execution deadline. It prevents a
+	// single unsandboxed command from holding one of the shared permits forever.
+	MaxTimeout         = time.Duration(spec.ExecMaxTimeoutMS) * time.Millisecond
+	execOutputLimit    = 1 << 20
+	execTerminateGrace = 100 * time.Millisecond
 )
 
 // ErrExecUnsupportedPlatform is returned when the Unix runner is invoked on
@@ -52,6 +55,8 @@ const (
 type ExecRequest struct {
 	Command string
 	CWD     string
+	// Timeout overrides the service default when non-zero.
+	Timeout time.Duration
 }
 
 // ExecPlan is the fully resolved, value-only description handed to a launcher.
@@ -251,12 +256,19 @@ func (s *ExecService) resolve(request ExecRequest) (ExecPlan, error) {
 	if shell == "" {
 		return ExecPlan{}, errors.New("no shell is available")
 	}
+	timeout := s.timeout
+	if request.Timeout != 0 {
+		if request.Timeout < time.Millisecond || request.Timeout > MaxTimeout {
+			return ExecPlan{}, fmt.Errorf("exec timeout %s must be between %s and %s", request.Timeout, time.Millisecond, MaxTimeout)
+		}
+		timeout = request.Timeout
+	}
 	return ExecPlan{
 		Command:     request.Command,
 		CWD:         cwd,
 		Shell:       shell,
 		Environment: ExecEnvironmentInherit,
-		Timeout:     s.timeout,
+		Timeout:     timeout,
 		OutputLimit: s.outputLimit,
 	}, nil
 }

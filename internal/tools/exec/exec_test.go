@@ -210,6 +210,42 @@ func TestExecServiceResolvesPlanBeforeLaunch(t *testing.T) {
 	}
 }
 
+func TestExecServiceUsesCallerTimeoutWithinBound(t *testing.T) {
+	var got ExecPlan
+	launcher := &recordingExecLauncher{
+		start: func(plan ExecPlan, _, _ io.Writer) (execProcess, error) {
+			got = plan
+			return immediateExecProcess(0), nil
+		},
+	}
+	service := testExecService(launcher, time.Second, 1024)
+	outcome := service.Run(context.Background(), ExecRequest{
+		Command: "true",
+		CWD:     t.TempDir(),
+		Timeout: 2500 * time.Millisecond,
+	})
+	if outcome.Reason != ExecSucceeded {
+		t.Fatalf("outcome = %+v, want success", outcome)
+	}
+	if got.Timeout != 2500*time.Millisecond {
+		t.Fatalf("plan timeout = %s, want 2.5s", got.Timeout)
+	}
+}
+
+func TestExecServiceRejectsOutOfRangeCallerTimeout(t *testing.T) {
+	launcher := &recordingExecLauncher{}
+	service := testExecService(launcher, time.Second, 1024)
+	for _, timeout := range []time.Duration{500 * time.Microsecond, MaxTimeout + time.Millisecond} {
+		outcome := service.Run(context.Background(), ExecRequest{Command: "true", CWD: t.TempDir(), Timeout: timeout})
+		if outcome.Reason != ExecLaunchFailed || outcome.Err == nil {
+			t.Errorf("Run(timeout=%s) = %+v, want launch failure", timeout, outcome)
+		}
+	}
+	if got := launcher.starts.Load(); got != 0 {
+		t.Fatalf("launcher starts = %d, want 0", got)
+	}
+}
+
 func TestExecServiceAdmissionLimitAndQueueCancellation(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{}, execConcurrencyLimit)
