@@ -23,6 +23,61 @@ type animationTickMsg struct {
 	at         time.Time
 }
 
+// animationClock owns the lifecycle of the single repaint chain. Sync bumps
+// its generation on both edges so a tick left over from an older chain is
+// harmless.
+type animationClock struct {
+	generation uint64
+	armed      bool
+}
+
+func (c *animationClock) Sync(want bool) bool {
+	if want == c.armed {
+		return false
+	}
+	c.generation++
+	c.armed = want
+	return true
+}
+
+// animationTimeline tracks one logical animation independently from the
+// shared repaint cadence.
+type animationTimeline struct {
+	step    time.Duration
+	started time.Time
+	frame   int
+	active  bool
+}
+
+func newAnimationTimeline(step time.Duration) animationTimeline {
+	return animationTimeline{step: step}
+}
+
+func (t *animationTimeline) Sync(want bool, now time.Time) bool {
+	if want == t.active {
+		return false
+	}
+	t.active = want
+	t.started = time.Time{}
+	t.frame = 0
+	if want {
+		t.started = now
+	}
+	return true
+}
+
+func (t *animationTimeline) Advance(now time.Time) (int, bool) {
+	if !t.active || now.Before(t.started) {
+		return t.frame, false
+	}
+	frame := int(now.Sub(t.started) / t.step)
+	if frame == t.frame {
+		return frame, false
+	}
+	t.frame = frame
+	return frame, true
+}
+
 func animationTick(generation uint64, interval time.Duration) tea.Cmd {
 	return tea.Tick(interval, func(at time.Time) tea.Msg {
 		return animationTickMsg{generation: generation, at: at}
@@ -40,82 +95,50 @@ func (m *Model) syncAnimationsAt(now time.Time) tea.Cmd {
 	wantTool := m.toolAnimationWanted()
 	wantSweep := m.borderSweepWanted()
 
-	if wantTool != m.toolAnimationActive {
-		m.toolAnimationActive = wantTool
-		m.animFrame = 0
+	if m.toolAnimation.Sync(wantTool, now) {
 		m.list.SetFrame(0)
-		if wantTool {
-			m.toolAnimationStarted = now
-		} else {
-			m.toolAnimationStarted = time.Time{}
-		}
 	}
 
-	if wantSweep != m.borderSweepActive {
-		m.borderSweepActive = wantSweep
-		m.borderSweepFrame = 0
+	if m.borderSweepAnimation.Sync(wantSweep, now) {
 		m.editor.SetSweepFrame(0)
 		m.editor.SetWorking(wantSweep)
-		if wantSweep {
-			m.borderSweepStarted = now
-		} else {
-			m.borderSweepStarted = time.Time{}
-		}
 	}
 
 	wantClock := wantTool || wantSweep
-	if wantClock == m.animationArmed {
+	if !m.animationClock.Sync(wantClock) {
 		return nil
 	}
-
-	m.animationGeneration++
-	m.animationArmed = wantClock
 	if !wantClock {
 		return nil
 	}
-	return animationTick(m.animationGeneration, m.animationRepaintInterval())
+	return animationTick(m.animationClock.generation, m.animationRepaintInterval())
 }
 
 // advanceAnimations samples both logical timelines and re-arms the shared
 // repaint clock. A tick from a superseded chain returns no command.
 func (m *Model) advanceAnimations(msg animationTickMsg) tea.Cmd {
-	if !m.animationArmed || msg.generation != m.animationGeneration {
+	if !m.animationClock.armed || msg.generation != m.animationClock.generation {
 		return nil
 	}
 
-	if m.toolAnimationActive {
-		frame := elapsedFrame(msg.at, m.toolAnimationStarted, toolAnimInterval)
-		if frame != m.animFrame {
-			m.animFrame = frame
-			m.list.SetFrame(frame)
-		}
+	if frame, changed := m.toolAnimation.Advance(msg.at); changed {
+		m.list.SetFrame(frame)
 	}
-	if m.borderSweepActive {
-		frame := elapsedFrame(msg.at, m.borderSweepStarted, borderSweepInterval)
-		if frame != m.borderSweepFrame {
-			m.borderSweepFrame = frame
-			m.editor.SetSweepFrame(frame)
-		}
+	if frame, changed := m.borderSweepAnimation.Advance(msg.at); changed {
+		m.editor.SetSweepFrame(frame)
 	}
 
-	return animationTick(m.animationGeneration, m.animationRepaintInterval())
+	return animationTick(m.animationClock.generation, m.animationRepaintInterval())
 }
 
 // animationRepaintInterval uses the faster cadence only while the sweep is
 // visible. Tool-only activity retains its native 50ms cadence instead of
 // paying for redraws whose logical tool frame cannot change.
 func (m *Model) animationRepaintInterval() time.Duration {
-	if m.borderSweepActive {
+	if m.borderSweepAnimation.active {
 		return animationInterval
 	}
 	return toolAnimInterval
-}
-
-func elapsedFrame(now, started time.Time, interval time.Duration) int {
-	if now.Before(started) {
-		return 0
-	}
-	return int(now.Sub(started) / interval)
 }
 
 // theme builds the terminal theme for the given background. Tool motion uses

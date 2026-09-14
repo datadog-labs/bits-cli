@@ -8,6 +8,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 func TestResetInvalidatesCacheAcrossConversationIdentityDomains(t *testing.T) {
@@ -65,6 +66,20 @@ func TestAwaitingApprovalDoesNotAnimate(t *testing.T) {
 	list.SetFrame(17)
 	if got := list.Render(); got != want {
 		t.Fatalf("approval wait changed with frame:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRunningToolWithoutMotionDoesNotAnimate(t *testing.T) {
+	list := listWithTool(agent.ToolRunning)
+	list.SetStyles(StylesFor(styles.Default(true).WithoutMotion()))
+	want := list.Render()
+
+	if list.HasAnimated() {
+		t.Fatal("motion-disabled running tool should not arm animation")
+	}
+	list.SetFrame(17)
+	if got := list.Render(); got != want {
+		t.Fatalf("motion-disabled running tool changed with frame:\n%s\nwant:\n%s", got, want)
 	}
 }
 
