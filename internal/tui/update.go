@@ -215,12 +215,12 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case entitySearchResultMsg:
 		m.applyEntitySearchResult(msg)
-		m.refreshViewport()
+		m.layoutTranscript()
 		return m, nil
 
 	case fileSearchSnapshotMsg:
 		cmd := m.applyFileSearchSnapshot(msg)
-		m.refreshViewport()
+		m.layoutTranscript()
 		return m, cmd
 
 	case fileSearchClosedMsg:
@@ -238,7 +238,11 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd := m.applyEvent(msg.ev)
 		m.syncStatus()
-		m.refreshViewport()
+		if msg.ev.Kind == agent.EventTranscript {
+			m.syncTranscript()
+		} else {
+			m.layoutTranscript()
+		}
 		return m, tea.Batch(cmd, waitEvent(msg.generation, m.turnEvents))
 
 	case turnClosedMsg:
@@ -305,7 +309,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// editor's height, so relayout. When the editor is not the focus it is
 	// blurred and ignores these, showing no cursor.
 	cmd := m.editor.Update(msg)
-	m.refreshViewport()
+	m.layoutTranscript()
 	return m, batchCommands(cmd, m.syncCompletionSearches())
 }
 
@@ -512,7 +516,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		cmd := m.editor.Update(msg)
-		m.refreshViewport()
+		m.layoutTranscript()
 		return m, batchCommands(cmd, m.syncCompletionSearches())
 	}
 
@@ -536,7 +540,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	cmd := m.editor.Update(msg)
-	m.refreshViewport()
+	m.layoutTranscript()
 	return m, batchCommands(cmd, m.syncCompletionSearches())
 }
 
@@ -598,7 +602,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()
-	m.refreshViewport()
+	m.layoutTranscript()
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
@@ -678,7 +682,7 @@ func (m *Model) setDarkBackground(isDark bool) {
 		return
 	}
 	m.applyStyles(m.theme(isDark))
-	m.refreshViewport()
+	m.layoutTranscript()
 }
 
 func (m *Model) resize(w, h int) {
@@ -695,15 +699,24 @@ func (m *Model) resize(w, h int) {
 		m.setMode(ModeChat)
 		return
 	}
-	m.refreshViewport()
+	m.layoutTranscript()
 }
 
-// refreshViewport re-syncs the transcript list and sizes it to the space left by
-// the notice, the (possibly multi-row) editor, and the metadata footer.
-func (m *Model) refreshViewport() {
+// layoutTranscript sizes the transcript to the space left by the notice row,
+// footer, and (possibly multi-row) editor without rebuilding presentation data.
+func (m *Model) layoutTranscript() {
 	if m.mode == ModeTermInit {
 		return
 	}
 	m.list.SetHeight(max(1, m.height-chatNoticeHeight-chatFooterHeight-m.composerHeight()))
+}
+
+// syncTranscript rebuilds presentation metadata only after m.blocks changes.
+// Editor, cursor, resize, theme, and mode updates need layoutTranscript only.
+func (m *Model) syncTranscript() {
+	if m.mode == ModeTermInit {
+		return
+	}
+	m.layoutTranscript()
 	m.list.SetItems(m.blocks)
 }

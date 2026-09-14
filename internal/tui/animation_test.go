@@ -30,6 +30,7 @@ func animModelWithBlock(block agent.Block) *Model {
 	m.blocks = []agent.Block{block}
 	m.turnEvents = make(chan agent.Event)
 	m.resize(80, 24)
+	m.syncTranscript()
 	m.editor.Focus()
 	return m
 }
@@ -44,7 +45,7 @@ func TestAnimationArmsWhileActivityInFlight(t *testing.T) {
 		if cmd := m.syncAnimations(); cmd == nil {
 			t.Fatal("syncAnimations() returned no command; the clock was never armed")
 		}
-		if !m.animationArmed {
+		if !m.animClock.armed {
 			t.Error("model should report the animation as armed")
 		}
 	}
@@ -78,8 +79,8 @@ func TestAnimationClockArmsOnceForBothAnimations(t *testing.T) {
 	if cmd := m.syncAnimationsAt(start); cmd == nil {
 		t.Fatal("first sync did not arm the shared clock")
 	}
-	if !m.animationClock.armed || !m.toolAnimation.active || !m.borderSweepAnimation.active {
-		t.Fatalf("armed=%v tool=%v sweep=%v, want all true", m.animationClock.armed, m.toolAnimation.active, m.borderSweepAnimation.active)
+	if !m.animClock.armed || !m.animTool.active || !m.animBorderSweep.active {
+		t.Fatalf("armed=%v tool=%v sweep=%v, want all true", m.animClock.armed, m.animTool.active, m.animBorderSweep.active)
 	}
 	if cmd := m.syncAnimationsAt(start); cmd != nil {
 		t.Fatal("second sync started a parallel clock chain")
@@ -93,17 +94,17 @@ func TestAnimationClockDerivesIndependentLogicalFrames(t *testing.T) {
 	m.syncAnimationsAt(start)
 
 	cmd := m.advanceAnimations(animationTickMsg{
-		generation: m.animationClock.generation,
+		generation: m.animClock.generation,
 		at:         start.Add(100 * time.Millisecond),
 	})
 	if cmd == nil {
 		t.Fatal("live clock tick did not re-arm")
 	}
-	if m.toolAnimation.frame != 2 {
-		t.Errorf("tool frame = %d, want 2 at 100ms", m.toolAnimation.frame)
+	if m.animTool.frame != 2 {
+		t.Errorf("tool frame = %d, want 2 at 100ms", m.animTool.frame)
 	}
-	if m.borderSweepAnimation.frame != 5 {
-		t.Errorf("sweep frame = %d, want 5 at 100ms", m.borderSweepAnimation.frame)
+	if m.animBorderSweep.frame != 5 {
+		t.Errorf("sweep frame = %d, want 5 at 100ms", m.animBorderSweep.frame)
 	}
 }
 
@@ -111,13 +112,13 @@ func TestStaleAnimationClockTickIsDropped(t *testing.T) {
 	m := animModel(agent.ToolRunning)
 	start := time.Unix(100, 0)
 	m.syncAnimationsAt(start)
-	live := m.animationClock.generation
+	live := m.animClock.generation
 
 	if cmd := m.advanceAnimations(animationTickMsg{generation: live - 1, at: start.Add(time.Second)}); cmd != nil {
 		t.Fatal("stale tick re-armed its clock chain")
 	}
-	if m.toolAnimation.frame != 0 {
-		t.Fatalf("stale tick advanced tool frame to %d", m.toolAnimation.frame)
+	if m.animTool.frame != 0 {
+		t.Fatalf("stale tick advanced tool frame to %d", m.animTool.frame)
 	}
 }
 
@@ -125,20 +126,20 @@ func TestAnimationClockDisarmsAfterClosedTurnWithStaleTool(t *testing.T) {
 	m := animModel(agent.ToolRunning)
 	start := time.Unix(100, 0)
 	m.syncAnimationsAt(start)
-	m.advanceAnimations(animationTickMsg{generation: m.animationClock.generation, at: start.Add(100 * time.Millisecond)})
-	staleGeneration := m.animationClock.generation
+	m.advanceAnimations(animationTickMsg{generation: m.animClock.generation, at: start.Add(100 * time.Millisecond)})
+	staleGeneration := m.animClock.generation
 
 	m.turnEvents = nil
 	if cmd := m.syncAnimationsAt(start.Add(time.Second)); cmd != nil {
 		t.Fatal("disarming unexpectedly returned a command")
 	}
-	if m.animationClock.armed || m.toolAnimation.active {
+	if m.animClock.armed || m.animTool.active {
 		t.Fatal("closed turn left the animation clock armed")
 	}
-	if m.toolAnimation.frame != 0 {
-		t.Fatalf("tool frame = %d after disarm, want 0", m.toolAnimation.frame)
+	if m.animTool.frame != 0 {
+		t.Fatalf("tool frame = %d after disarm, want 0", m.animTool.frame)
 	}
-	if m.animationClock.generation == staleGeneration {
+	if m.animClock.generation == staleGeneration {
 		t.Fatal("disarming did not invalidate the live tick chain")
 	}
 	if !m.list.HasAnimated() {
@@ -149,12 +150,12 @@ func TestAnimationClockDisarmsAfterClosedTurnWithStaleTool(t *testing.T) {
 func TestTurnClosedUpdateDisarmsDespiteStaleRunningBlock(t *testing.T) {
 	m := animModel(agent.ToolRunning)
 	m.syncAnimations()
-	if !m.animationClock.armed {
+	if !m.animClock.armed {
 		t.Fatal("test setup did not arm the clock")
 	}
 
 	m.Update(turnClosedMsg{generation: m.turnGen})
-	if m.animationClock.armed || m.toolAnimation.active || m.borderSweepAnimation.active {
+	if m.animClock.armed || m.animTool.active || m.animBorderSweep.active {
 		t.Fatal("turnClosedMsg left animations active")
 	}
 	if !m.list.HasAnimated() {
@@ -167,13 +168,13 @@ func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
 	m.mode = ModeChat
 	m.resize(80, 24)
 	m.blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
-	m.refreshViewport()
+	m.syncTranscript()
 	m.turnEvents = make(chan agent.Event)
 	m.pendingNew = true
 	m.syncAnimations()
 
 	m.Update(turnClosedMsg{generation: m.turnGen})
-	if m.animationClock.armed || m.toolAnimation.active || m.borderSweepAnimation.active {
+	if m.animClock.armed || m.animTool.active || m.animBorderSweep.active {
 		t.Fatal("pending /new left animations active")
 	}
 	if m.list.HasAnimated() || len(m.blocks) != 0 {
@@ -186,7 +187,7 @@ func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
 	m.mode = ModeChat
 	m.resize(80, 24)
 	m.blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
-	m.refreshViewport()
+	m.syncTranscript()
 	m.turnEvents = make(chan agent.Event)
 	m.syncAnimations()
 	m.Update(turnClosedMsg{generation: m.turnGen})
@@ -195,7 +196,7 @@ func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
 	// dispatchCommand is normally reached from Update; run the centralized
 	// reconciliation that Update performs after dispatch.
 	m.Update(struct{}{})
-	if m.animationClock.armed || m.list.HasAnimated() {
+	if m.animClock.armed || m.list.HasAnimated() {
 		t.Fatal("idle /new re-armed animation from stale transcript state")
 	}
 }
@@ -205,7 +206,7 @@ func TestConversationSwitchWithPersistedRunningBlockStaysDisarmed(t *testing.T) 
 	m.mode = ModeChat
 	m.resize(80, 24)
 	m.blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
-	m.refreshViewport()
+	m.syncTranscript()
 	m.turnEvents = make(chan agent.Event)
 	m.syncAnimations()
 	m.Update(turnClosedMsg{generation: m.turnGen})
@@ -224,7 +225,7 @@ func TestConversationSwitchWithPersistedRunningBlockStaysDisarmed(t *testing.T) 
 	})
 	m.Update(struct{}{})
 
-	if m.animationClock.armed || m.toolAnimation.active {
+	if m.animClock.armed || m.animTool.active {
 		t.Fatal("persisted running block armed clock without a live turn")
 	}
 	if !m.list.HasAnimated() {
@@ -243,7 +244,7 @@ func TestAnimationClockStaysIdleWithoutVisibleRunningWork(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := animModel(test.status)
-			if cmd := m.syncAnimations(); cmd != nil || m.animationClock.armed {
+			if cmd := m.syncAnimations(); cmd != nil || m.animClock.armed {
 				t.Fatal("clock armed without running work")
 			}
 		})
@@ -253,19 +254,19 @@ func TestAnimationClockStaysIdleWithoutVisibleRunningWork(t *testing.T) {
 func TestAnimationClockStopsWhileChatIsHiddenAndRestarts(t *testing.T) {
 	m := animModel(agent.ToolRunning)
 	m.syncAnimations()
-	if !m.animationClock.armed {
+	if !m.animClock.armed {
 		t.Fatal("clock did not start for visible running tool")
 	}
 
 	m.setMode(ModeStatus)
 	m.Update(struct{}{})
-	if m.animationClock.armed || m.toolAnimation.active {
+	if m.animClock.armed || m.animTool.active {
 		t.Fatal("hidden status view kept the animation clock running")
 	}
 
 	m.setMode(ModeChat)
 	m.Update(struct{}{})
-	if !m.animationClock.armed || !m.toolAnimation.active {
+	if !m.animClock.armed || !m.animTool.active {
 		t.Fatal("returning to chat did not restart tool animation")
 	}
 }
@@ -275,12 +276,12 @@ func TestAnimationClockStopsWhileChatIsTooSmallAndRestarts(t *testing.T) {
 	m.syncAnimations()
 
 	m.Update(tea.WindowSizeMsg{Width: minimumChatWidth - 1, Height: minimumChatHeight})
-	if m.animationClock.armed {
+	if m.animClock.armed {
 		t.Fatal("too-small chat kept the animation clock running")
 	}
 
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	if !m.animationClock.armed {
+	if !m.animClock.armed {
 		t.Fatal("resizing back did not restart the animation clock")
 	}
 }
@@ -290,7 +291,7 @@ func TestColorProfileDoesNotDisableToolMotion(t *testing.T) {
 		t.Run(profile.String(), func(t *testing.T) {
 			m := animModel(agent.ToolRunning)
 			m.Update(tea.ColorProfileMsg{Profile: profile})
-			if !m.toolAnimation.active {
+			if !m.animTool.active {
 				t.Fatal("color profile disabled compact tool motion")
 			}
 		})
@@ -302,7 +303,7 @@ func TestAnimationFrameReachesTheList(t *testing.T) {
 	start := time.Unix(100, 0)
 	m.syncAnimationsAt(start)
 	first := m.list.Render()
-	m.advanceAnimations(animationTickMsg{generation: m.animationClock.generation, at: start.Add(250 * time.Millisecond)})
+	m.advanceAnimations(animationTickMsg{generation: m.animClock.generation, at: start.Add(250 * time.Millisecond)})
 	if m.list.Render() == first {
 		t.Fatal("advancing the logical tool frame did not change the transcript")
 	}

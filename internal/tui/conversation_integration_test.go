@@ -103,7 +103,7 @@ func TestResumeListErrorRetryEmptyAndCancelPreserveChat(t *testing.T) {
 	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
 	m.resize(50, 12)
 	m.blocks = []agent.Block{textBlock("same-message-id", "OLD")}
-	m.refreshViewport()
+	m.syncTranscript()
 	_ = m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "draft survives"})
 
@@ -256,7 +256,7 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	m := New(engine)
 	m.resize(50, 12)
 	m.blocks = []agent.Block{textBlock("same-message-id", "OLD-CACHED")}
-	m.refreshViewport()
+	m.syncTranscript()
 	_ = m.list.Render() // populate the old conversation's render cache
 
 	summary := assistant.ConversationSummary{ConversationID: resumeConversationID, UpdatedAt: 10, Title: "New"}

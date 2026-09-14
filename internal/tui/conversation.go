@@ -208,7 +208,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	m.usage = nil
 	m.chatPhase = chat.PhaseIdle
 	m.list.Reset()
-	m.list.SetItems(m.blocks)
+	m.syncTranscript()
 	m.list.ScrollToBottom()
 	m.clearNotice()
 	m.conversationRetry = retryNone

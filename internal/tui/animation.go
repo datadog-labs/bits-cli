@@ -95,47 +95,47 @@ func (m *Model) syncAnimationsAt(now time.Time) tea.Cmd {
 	wantTool := m.toolAnimationWanted()
 	wantSweep := m.borderSweepWanted()
 
-	if m.toolAnimation.Sync(wantTool, now) {
+	if m.animTool.Sync(wantTool, now) {
 		m.list.SetFrame(0)
 	}
 
-	if m.borderSweepAnimation.Sync(wantSweep, now) {
+	if m.animBorderSweep.Sync(wantSweep, now) {
 		m.editor.SetSweepFrame(0)
 		m.editor.SetWorking(wantSweep)
 	}
 
 	wantClock := wantTool || wantSweep
-	if !m.animationClock.Sync(wantClock) {
+	if !m.animClock.Sync(wantClock) {
 		return nil
 	}
 	if !wantClock {
 		return nil
 	}
-	return animationTick(m.animationClock.generation, m.animationRepaintInterval())
+	return animationTick(m.animClock.generation, m.animationRepaintInterval())
 }
 
 // advanceAnimations samples both logical timelines and re-arms the shared
 // repaint clock. A tick from a superseded chain returns no command.
 func (m *Model) advanceAnimations(msg animationTickMsg) tea.Cmd {
-	if !m.animationClock.armed || msg.generation != m.animationClock.generation {
+	if !m.animClock.armed || msg.generation != m.animClock.generation {
 		return nil
 	}
 
-	if frame, changed := m.toolAnimation.Advance(msg.at); changed {
+	if frame, changed := m.animTool.Advance(msg.at); changed {
 		m.list.SetFrame(frame)
 	}
-	if frame, changed := m.borderSweepAnimation.Advance(msg.at); changed {
+	if frame, changed := m.animBorderSweep.Advance(msg.at); changed {
 		m.editor.SetSweepFrame(frame)
 	}
 
-	return animationTick(m.animationClock.generation, m.animationRepaintInterval())
+	return animationTick(m.animClock.generation, m.animationRepaintInterval())
 }
 
 // animationRepaintInterval uses the faster cadence only while the sweep is
 // visible. Tool-only activity retains its native 50ms cadence instead of
 // paying for redraws whose logical tool frame cannot change.
 func (m *Model) animationRepaintInterval() time.Duration {
-	if m.borderSweepAnimation.active {
+	if m.animBorderSweep.active {
 		return animationInterval
 	}
 	return toolAnimInterval

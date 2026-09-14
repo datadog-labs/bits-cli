@@ -155,9 +155,9 @@ type Model struct {
 	// One repaint clock samples independent elapsed-time timelines. Tool activity
 	// covers both per-tool spinners and grouped-tool dots; the second timeline
 	// drives the composer border sweep.
-	animationClock       animationClock
-	toolAnimation        animationTimeline
-	borderSweepAnimation animationTimeline
+	animClock       animationClock
+	animTool        animationTimeline
+	animBorderSweep animationTimeline
 
 	// Terminal dimensions are cached so a chat installed after startup login can
 	// be laid out immediately; Bubble Tea does not replay its initial size event.
@@ -215,15 +215,14 @@ func newShell() *Model {
 	theme := styles.Default(true)
 	status := statusview.New(1, 1, theme)
 	m := &Model{
-		editor:               editor.New(),
-		list:                 chat.NewList(),
-		toolAnimation:        newAnimationTimeline(toolAnimInterval),
-		borderSweepAnimation: newAnimationTimeline(borderSweepInterval),
-		status:               &status,
-		statusProvider:       statusview.SystemProvider{},
-		styles:               theme,
-		searchSessionID:      newSearchSessionID(),
-		entitySearchCache:    make(map[string]entitySearchCacheEntry),
+		editor:            editor.New(),
+		list:              chat.NewList(),
+		animTool:          newAnimationTimeline(toolAnimInterval),
+		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
+		status:            &status,
+		styles:            theme,
+		searchSessionID:   newSearchSessionID(),
+		entitySearchCache: make(map[string]entitySearchCacheEntry),
 	}
 	m.applyStyles(m.styles)
 	return m
@@ -268,8 +267,13 @@ func (m *Model) applyStyles(theme styles.Theme) {
 // changes so layout and refresh side effects stay centralized while startup
 // login hands control to chat without replacing or quitting the root model.
 func (m *Model) setMode(mode Mode) {
+	previous := m.mode
 	m.mode = mode
-	m.refreshViewport()
+	if previous == ModeTermInit && mode == ModeChat {
+		m.syncTranscript()
+		return
+	}
+	m.layoutTranscript()
 }
 
 // Init starts the active screen. Login owns initial color detection; a direct
