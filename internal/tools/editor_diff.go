@@ -554,7 +554,6 @@ func writePrefixDiff(filePath, content string) filediff.Diff {
 		diff.Additions++
 		hunk.Lines = append(hunk.Lines, filediff.DiffLine{Kind: filediff.LineAdd, NewNumber: number + 1, Content: filediff.LogicalLineContent(line)})
 	}
-	hunk.Lines = append(hunk.Lines, filediff.DiffLine{Kind: filediff.LinePending, Content: "awaiting more input"})
 	diff.Hunks = []filediff.Hunk{hunk}
 	return diff
 }

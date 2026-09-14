@@ -112,8 +112,8 @@ func TestEditorInputReducerKeepsAllPreviewLines(t *testing.T) {
 	if state.Preview == nil || state.Preview.Diff == nil {
 		t.Fatalf("preview = %#v, want complete diff", state.Preview)
 	}
-	if got, want := len(state.Preview.Diff.AllLines()), 2_002; got != want {
-		t.Fatalf("preview lines = %d, want %d (all content lines plus pending marker)", got, want)
+	if got, want := len(state.Preview.Diff.AllLines()), 2_001; got != want {
+		t.Fatalf("preview lines = %d, want %d content lines", got, want)
 	}
 }
 
@@ -141,7 +141,7 @@ func TestEditorInputReducerWriteKeepsPartialContentPending(t *testing.T) {
 	firstLine, ok := reduce(context.Background(), agent.ToolInputUpdate{
 		Name: spec.WriteFile, RawPrefix: `{"path":"note.txt","content":"received\npartial`,
 	}, state).(*filediff.State)
-	if !ok || firstLine.Preview == nil || firstLine.Preview.Diff == nil || !firstLine.Preview.Pending || len(firstLine.Preview.Diff.AllLines()) == 0 || firstLine.Preview.Diff.AllLines()[len(firstLine.Preview.Diff.AllLines())-1].Kind != filediff.LinePending {
+	if !ok || firstLine.Preview == nil || firstLine.Preview.Diff == nil || !firstLine.Preview.Pending || !previewContains(firstLine, "received") {
 		t.Fatalf("first complete line preview = %#v, want pending prefix", firstLine.Preview)
 	}
 	stable, ok := reduce(context.Background(), agent.ToolInputUpdate{
@@ -265,14 +265,13 @@ func TestEditorInputReducerEditStreamsOnlyAfterCompleteOldText(t *testing.T) {
 	if !ok || partialNew.Phase != filediff.PhaseStreaming || partialNew.Preview == nil || !partialNew.Preview.Pending || partialNew.Preview.Diff == nil {
 		t.Fatalf("partial new_text state = %#v, want pending speculative edit", partialNew)
 	}
-	var deletedOld, addedNew, pendingMarker bool
+	var deletedOld, addedNew bool
 	for _, line := range partialNew.Preview.Diff.AllLines() {
 		deletedOld = deletedOld || line.Kind == filediff.LineDelete && line.Content == "old"
 		addedNew = addedNew || line.Kind == filediff.LineAdd && line.Content == "new"
-		pendingMarker = pendingMarker || line.Kind == filediff.LinePending
 	}
-	if !deletedOld || !addedNew || pendingMarker {
-		t.Fatalf("partial new_text diff = %#v, want -old +new without a synthetic pending line", partialNew.Preview.Diff.AllLines())
+	if !deletedOld || !addedNew {
+		t.Fatalf("partial new_text diff = %#v, want -old +new", partialNew.Preview.Diff.AllLines())
 	}
 	completeEdit, ok := reduce(context.Background(), agent.ToolInputUpdate{
 		// The edit array is complete, but the outer object is still streaming.

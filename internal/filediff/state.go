@@ -39,9 +39,8 @@ const (
 	PreviewEdit
 )
 
-// Preview is presentation data for a speculative change. Pending is used only
-// for an incomplete write prefix, where a normal Before/After diff would
-// falsely represent unreceived content as deleted.
+// Preview is presentation data for a speculative change. Pending records that
+// more streamed input is expected; it is reducer state, not a rendered row.
 type Preview struct {
 	Kind PreviewKind
 	Diff *Diff

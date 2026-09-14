@@ -59,7 +59,7 @@ func renderLines(diff filediff.Diff, opts Options) []string {
 
 func renderLine(line filediff.DiffLine, digits int, opts Options) string {
 	switch line.Kind {
-	case filediff.LineNoNewline, filediff.LinePending, filediff.LineOmitted:
+	case filediff.LineNoNewline, filediff.LineOmitted:
 		return opts.Style.Meta.Render(ansi.Truncate("  "+line.Content, opts.Width, "…"))
 	default:
 	}

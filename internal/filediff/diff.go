@@ -15,7 +15,6 @@ const (
 	LineDelete
 	LineAdd
 	LineNoNewline
-	LinePending
 	LineOmitted
 )
 
