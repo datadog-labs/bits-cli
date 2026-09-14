@@ -16,7 +16,7 @@ func TestBuildUnifiedDiffLines(t *testing.T) {
 			deletion = line
 		case LineAdd:
 			addition = line
-		case LineContext, LineNoNewline, LinePending, LineOmitted:
+		case LineContext, LineNoNewline, LineOmitted:
 		}
 	}
 	if deletion.Content != "two" || deletion.OldNumber != 2 || deletion.NewNumber != 0 {

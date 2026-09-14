@@ -150,9 +150,6 @@ func TestRenderStreamingEditorPreviewShowsTailForWritesAndEdits(t *testing.T) {
 			for number := 1; number <= cap(lines); number++ {
 				lines = append(lines, filediff.DiffLine{Kind: filediff.LineAdd, NewNumber: number, Content: fmt.Sprintf("line%02d", number)})
 			}
-			if test.kind == filediff.PreviewWritePrefix {
-				lines = append(lines, filediff.DiffLine{Kind: filediff.LinePending, Content: "awaiting more input"})
-			}
 			diff := filediff.Diff{Hunks: []filediff.Hunk{{FromLine: 1, ToLine: 1, NewCount: len(lines), Lines: lines}}}
 			block := editorToolBlock(test.tool, "", &filediff.State{
 				Phase:    filediff.PhaseStreaming,
@@ -163,9 +160,6 @@ func TestRenderStreamingEditorPreviewShowsTailForWritesAndEdits(t *testing.T) {
 			got := ansi.Strip(renderer.RenderBlock(block, 80, DefaultStyles(true), 0))
 			if strings.Contains(got, "line01") || !strings.Contains(got, "line13") || !strings.Contains(got, "hidden") {
 				t.Fatalf("streaming tail render = %q", got)
-			}
-			if test.kind == filediff.PreviewWritePrefix && !strings.Contains(got, "awaiting more input") {
-				t.Fatalf("write pending marker missing: %q", got)
 			}
 		})
 	}
