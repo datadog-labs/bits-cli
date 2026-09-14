@@ -279,6 +279,12 @@ func writeFileInputReducer(r *os.Root) agent.ToolInputReducer {
 			return state
 		}
 		if input.Content == nil {
+			// An incomplete JSON escape can temporarily make the whole content
+			// string undecodable. Keep the last valid preview while streaming;
+			// final input remains authoritative and must not retain speculation.
+			if !update.HasFinalInput {
+				return preserveStreamingState(previous, state)
+			}
 			return state
 		}
 		content := *input.Content
@@ -331,7 +337,10 @@ func editFileInputReducer(r *os.Root) agent.ToolInputReducer {
 		filePath := snapshot.Path
 		visiblePending := input.PendingEdit != nil && (input.PendingEdit.NewText != "" || input.PendingEdit.NewTextComplete)
 		if len(input.Edits) == 0 && !visiblePending {
-			return preserveStreamingState(previous, state)
+			if !update.HasFinalInput {
+				return preserveStreamingState(previous, state)
+			}
+			return state
 		}
 		edits := append([]filediff.Edit(nil), input.Edits...)
 		if visiblePending {

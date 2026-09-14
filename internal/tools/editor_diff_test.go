@@ -167,6 +167,62 @@ func TestEditorInputReducerWriteKeepsPartialContentPending(t *testing.T) {
 	}
 }
 
+func TestWriteFileStreamingPreservesLastValidPreviewOnlyForSamePath(t *testing.T) {
+	dir := t.TempDir()
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	reduce := writeFileInputReducer(r)
+
+	visible := reduce(context.Background(), agent.ToolInputUpdate{
+		Name: spec.WriteFile, RawPrefix: `{"path":"a.txt","content":"first\npartial`,
+	}, nil).(*filediff.State)
+	if !previewContains(visible, "first") {
+		t.Fatalf("expected the first line to be visible, got %#v", visible)
+	}
+
+	// A chunk boundary on a lone backslash makes the partial JSON string
+	// temporarily undecodable. That is not evidence that the visible prefix was
+	// removed, because streamed tool input is append-only.
+	partialEscape := reduce(context.Background(), agent.ToolInputUpdate{
+		Name: spec.WriteFile, RawPrefix: `{"path":"a.txt","content":"first\npartial\`,
+	}, visible).(*filediff.State)
+	if partialEscape != visible {
+		t.Fatalf("partial escape replaced the last valid preview: %#v", partialEscape)
+	}
+
+	// A path change is semantic, not a parser gap: never show a.txt's preview
+	// under b.txt's header while the new content is still undecodable.
+	differentPath := reduce(context.Background(), agent.ToolInputUpdate{
+		Name: spec.WriteFile, RawPrefix: `{"path":"b.txt","content":"partial\`,
+	}, visible).(*filediff.State)
+	if differentPath == visible || differentPath.Snapshot == nil || differentPath.Snapshot.Path != "b.txt" || differentPath.Preview != nil {
+		t.Fatalf("different-path state = %#v, want a fresh preview-less state", differentPath)
+	}
+}
+
+func TestWriteFileFinalInputDoesNotPreserveStreamingPreview(t *testing.T) {
+	dir := t.TempDir()
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	reduce := writeFileInputReducer(r)
+
+	visible := reduce(context.Background(), agent.ToolInputUpdate{
+		Name: spec.WriteFile, RawPrefix: `{"path":"a.txt","content":"first\npartial`,
+	}, nil).(*filediff.State)
+	final := reduce(context.Background(), agent.ToolInputUpdate{
+		Name: spec.WriteFile, HasFinalInput: true, FinalInput: `{"path":"a.txt","content":"first\npartial\`,
+	}, visible).(*filediff.State)
+	if final == visible || final.Preview != nil {
+		t.Fatalf("final invalid input retained speculative preview: %#v", final)
+	}
+}
+
 func TestWritePrefixDiffMatchesFinalCRLFLineContent(t *testing.T) {
 	content := "one\r\ntwo\r\n"
 	prefix := writePrefixDiff("note.txt", content)
@@ -335,5 +391,25 @@ func TestEditFileStreamingKeepsEarlierHunkWhenTrailingEditUnresolvable(t *testin
 	}, first).(*filediff.State)
 	if !previewContains(unresolvable, "ALPHA") {
 		t.Fatalf("earlier hunk was cleared by an unresolvable trailing edit:\n%#v", unresolvable)
+	}
+}
+
+func TestEditFileFinalEmptyInputDoesNotPreserveStreamingPreview(t *testing.T) {
+	reduce := editReducerForFile(t, "f.txt", "alpha\n")
+
+	visible := reduce(context.Background(), agent.ToolInputUpdate{
+		Name: spec.EditFile, RawPrefix: `{"path":"f.txt","edits":[{"old_text":"alpha","new_text":"ALPHA"},`,
+	}, nil).(*filediff.State)
+	if !previewContains(visible, "ALPHA") {
+		t.Fatalf("expected the edit to be visible, got %#v", visible)
+	}
+
+	// The handler rejects an empty final edit list. The reducer must not carry
+	// an earlier speculative edit into that authoritative terminal input.
+	final := reduce(context.Background(), agent.ToolInputUpdate{
+		Name: spec.EditFile, HasFinalInput: true, FinalInput: `{"path":"f.txt","edits":[]}`,
+	}, visible).(*filediff.State)
+	if final == visible || final.Preview != nil {
+		t.Fatalf("final empty input retained speculative preview: %#v", final)
 	}
 }
