@@ -108,7 +108,7 @@ func TestLookupCommandResolvesClearAsExactNewAlias(t *testing.T) {
 func TestRegisteredCommandsAndCompletionAliasesStayConsistent(t *testing.T) {
 	for _, definition := range commandDefinitions {
 		for _, query := range append([]string{definition.name}, definition.aliases...) {
-			candidates := tuieditor.FakeCommands(query)
+			candidates := tuieditor.CommandCandidates(query)
 			found := false
 			for _, candidate := range candidates {
 				if candidate.Insert == "/"+definition.name {
@@ -159,6 +159,9 @@ func TestFileCompletionRemainsEditorOwned(t *testing.T) {
 	m := newModelWithSpy(t)
 	m.convID = "conversation-preserved"
 	m.editor.Update(tea.PasteMsg{Content: "@README"})
+	m.editor.SetFileResults("README", tuieditor.FileReady, []tuieditor.Candidate{{
+		Kind: tuieditor.CandidateFile, ID: "README.md", Label: "+ README.md", Insert: "@README.md",
+	}})
 	if !m.editor.MenuOpen() {
 		t.Fatal("expected completion menu to be open")
 	}

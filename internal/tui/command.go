@@ -156,15 +156,15 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 	case commandNew:
 		return m, m.startNewConversation()
 	case commandQuit:
-		return m, tea.Quit
+		return m.quit()
 	case commandResume:
-		return m, m.openConversationPicker()
+		return m, batchCommands(m.stopCompletionSearches(), m.openConversationPicker())
 	case commandStatus:
-		return m, m.openStatus()
+		return m, batchCommands(m.stopCompletionSearches(), m.openStatus())
 	case commandWeb:
-		return m, m.openConversationInBrowser()
+		return m, batchCommands(m.stopCompletionSearches(), m.openConversationInBrowser())
 	case commandSettings:
-		return m, m.openSettingsInBrowser()
+		return m, batchCommands(m.stopCompletionSearches(), m.openSettingsInBrowser())
 	case commandLogout:
 		return m, m.startLogout()
 	default:

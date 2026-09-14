@@ -1,5 +1,5 @@
 // Package editor is the chat input: a multiline textarea plus an @/ completion
-// menu. The parent TUI owns remote work and feeds checked results into it.
+// menu. The parent TUI owns search work and feeds checked results into it.
 package editor
 
 import (
@@ -39,6 +39,9 @@ type Editor struct {
 	styles            styles.Editor
 	menu              menu
 	attachments       []trackedAttachment
+	fileQuery         string
+	fileItems         []Candidate
+	fileState         FileState
 	remoteQuery       string
 	remoteItems       []Candidate
 	remoteState       RemoteState
@@ -95,11 +98,19 @@ func New() *Editor {
 	}
 }
 
-// ActiveEntityQuery returns the remote query associated with the @ trigger at
-// the cursor. Spaces are preserved.
+// ActiveEntityQuery returns the query associated with the @ trigger at the
+// cursor. Local-file and remote-entity search share it; spaces are preserved.
 func (e *Editor) ActiveEntityQuery() (string, bool) {
 	span, ok := e.activeEntitySpan()
 	return span.query, ok
+}
+
+// SetFileResults updates only the local-file half of a mixed @ menu.
+func (e *Editor) SetFileResults(query string, state FileState, items []Candidate) {
+	e.fileQuery = query
+	e.fileState = state
+	e.fileItems = append([]Candidate(nil), items...)
+	e.recompute()
 }
 
 // SetEntityResults updates only the remote half of a mixed @ menu.
@@ -233,6 +244,10 @@ func (e *Editor) Value() string { return e.ta.Value() }
 func (e *Editor) Reset() {
 	e.ta.Reset()
 	e.attachments = nil
+	e.fileQuery = ""
+	e.fileItems = nil
+	e.fileState = FileIdle
+	e.remoteQuery = ""
 	e.remoteItems = nil
 	e.remoteState = RemoteIdle
 	e.completedMentions = nil
@@ -387,7 +402,7 @@ func (e *Editor) recompute() {
 			e.closeMenu()
 			return
 		}
-		e.setMenu(FakeCommands(word[1:]), "")
+		e.setMenu(CommandCandidates(word[1:]), "")
 		return
 	}
 	span, active := e.activeEntitySpan()
@@ -395,34 +410,67 @@ func (e *Editor) recompute() {
 		e.closeMenu()
 		return
 	}
-	items := FileCandidates(span.query)
-	state := RemoteIdle
+	items := make([]Candidate, 0, maxMenuCandidates)
+	fileState := FileIdle
+	if span.query == e.fileQuery {
+		items = append(items, e.fileItems...)
+		fileState = e.fileState
+	}
+	remoteState := RemoteIdle
 	if span.query == e.remoteQuery {
 		items = append(items, e.remoteItems...)
-		state = e.remoteState
+		remoteState = e.remoteState
 	}
 	if len(items) > maxMenuCandidates {
 		items = items[:maxMenuCandidates]
 	}
-	status := ""
-	switch state {
-	case RemoteIdle:
-	case RemoteLoading:
-		status = "Searching…"
-	case RemoteError:
-		status = "Search unavailable"
-	case RemoteReady:
-		if len(items) == 0 {
-			status = "No matching files or entities"
-		}
-	}
+	status := completionStatus(fileState, remoteState, len(items))
 	e.setMenu(items, status)
+}
+
+func completionStatus(fileState FileState, remoteState RemoteState, itemCount int) string {
+	statuses := make([]string, 0, 2)
+	switch fileState {
+	case FileIdle, FileReady:
+	case FileIndexing:
+		statuses = append(statuses, "Indexing files…")
+	case FileError:
+		statuses = append(statuses, "File search unavailable")
+	}
+	switch remoteState {
+	case RemoteIdle, RemoteReady:
+	case RemoteLoading:
+		statuses = append(statuses, "Searching entities…")
+	case RemoteError:
+		statuses = append(statuses, "Entity search unavailable")
+	}
+	if len(statuses) == 0 && itemCount == 0 && fileState == FileReady && remoteState == RemoteReady {
+		return "No matching files or entities"
+	}
+	return strings.Join(statuses, " · ")
 }
 
 func (e *Editor) setMenu(items []Candidate, status string) {
 	previous := 0
+	var selected candidateIdentity
+	hasSelected := false
 	if e.menu.selector != nil {
 		previous = e.menu.selector.Index()
+		if previous >= 0 && previous < len(e.menu.items) {
+			item := e.menu.items[previous]
+			if item.ID != "" {
+				selected = candidateIdentity{kind: item.Kind, id: item.ID}
+				hasSelected = true
+			}
+		}
+	}
+	if hasSelected {
+		for i, item := range items {
+			if item.Kind == selected.kind && item.ID == selected.id {
+				previous = i
+				break
+			}
+		}
 	}
 	choices := make([]components.Choice, len(items))
 	for i, item := range items {
@@ -433,6 +481,13 @@ func (e *Editor) setMenu(items []Candidate, status string) {
 	selector.SetFillWidth(true)
 	selector.SetIndex(previous)
 	e.menu = menu{open: len(items) > 0 || status != "", items: items, selector: selector, status: status}
+}
+
+// candidateIdentity is the stable completion identity used to retain a
+// selection while asynchronous sources reorder the visible rows.
+type candidateIdentity struct {
+	kind CandidateKind
+	id   string
 }
 
 func (e *Editor) selectorStyles() styles.Selector {

@@ -11,6 +11,16 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
+func setTestFileResults(e *Editor, query string, paths ...string) {
+	items := make([]Candidate, 0, len(paths))
+	for _, path := range paths {
+		items = append(items, Candidate{
+			Kind: CandidateFile, ID: path, Label: "+ " + path, Insert: "@" + path,
+		})
+	}
+	e.SetFileResults(query, FileReady, items)
+}
+
 func TestViewCacheIsSharedByHeightAndView(t *testing.T) {
 	e := New()
 	_ = e.Height()
@@ -27,8 +37,8 @@ func TestViewCacheIsSharedByHeightAndView(t *testing.T) {
 		t.Fatal("editor update did not invalidate the view cache")
 	}
 
-	e.ta.SetValue("@")
-	e.recompute()
+	e.ta.SetValue("@go")
+	setTestFileResults(e, "go", "go.mod")
 	_ = e.View()
 	e.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if !e.viewCached {
@@ -184,24 +194,23 @@ func TestWordBounds(t *testing.T) {
 	}
 }
 
-func TestFileCandidatesFilter(t *testing.T) {
-	got := FileCandidates("engine")
-	if len(got) == 0 {
-		t.Fatal("expected a match for 'engine'")
+func TestSetFileResultsUsesParentProvidedCandidates(t *testing.T) {
+	e := New()
+	e.ta.SetValue("@engine")
+	e.ta.SetCursorColumn(len([]rune("@engine")))
+	setTestFileResults(e, "engine", "internal/agent/engine.go")
+	if len(e.menu.items) != 1 || e.menu.items[0].ID != "internal/agent/engine.go" {
+		t.Fatalf("file candidates = %#v", e.menu.items)
 	}
-	for _, c := range got {
-		if !strings.Contains(strings.ToLower(c.Label), "engine") {
-			t.Errorf("candidate %q does not contain query", c.Label)
-		}
-		if !strings.HasPrefix(c.Insert, "@") {
-			t.Errorf("file insert %q should start with @", c.Insert)
-		}
+	e.SetFileResults("stale", FileReady, []Candidate{{Kind: CandidateFile, ID: "stale"}})
+	if len(e.menu.items) != 0 {
+		t.Fatalf("stale file candidates = %#v, want none", e.menu.items)
 	}
 }
 
-func TestFakeCommandsAliasDiscoverable(t *testing.T) {
+func TestCommandCandidatesAliasDiscoverable(t *testing.T) {
 	// The canonical name matches its own prefix.
-	quit := FakeCommands("q")
+	quit := CommandCandidates("q")
 	if len(quit) == 0 {
 		t.Fatal("expected /quit for prefix 'q'")
 	}
@@ -212,7 +221,7 @@ func TestFakeCommandsAliasDiscoverable(t *testing.T) {
 	}
 
 	// The alias is discoverable by its own prefix and normalizes to canonical on accept.
-	exit := FakeCommands("ex")
+	exit := CommandCandidates("ex")
 	if len(exit) != 1 {
 		t.Fatalf("expected one candidate for alias prefix 'ex', got %d", len(exit))
 	}
@@ -220,7 +229,7 @@ func TestFakeCommandsAliasDiscoverable(t *testing.T) {
 		t.Errorf("alias accept should insert canonical /quit, got %q", exit[0].Insert)
 	}
 
-	clear := FakeCommands("cl")
+	clear := CommandCandidates("cl")
 	if len(clear) != 1 || clear[0].Insert != "/new" {
 		t.Fatalf("/clear alias candidate = %+v, want one canonical /new insertion", clear)
 	}
@@ -230,7 +239,7 @@ func TestRecomputeOpensAndClosesMenu(t *testing.T) {
 	e := New()
 
 	e.ta.SetValue("@eng")
-	e.recompute()
+	setTestFileResults(e, "eng", "internal/agent/engine.go")
 	if !e.MenuOpen() {
 		t.Fatal("menu should open on an @ trigger")
 	}
@@ -269,7 +278,8 @@ func TestSlashCompletionOnlyOpensForFirstPromptToken(t *testing.T) {
 func TestAcceptReplacesActiveWord(t *testing.T) {
 	e := New()
 	e.ta.SetValue("look at @engine")
-	e.recompute()
+	e.ta.SetCursorColumn(len([]rune("look at @engine")))
+	setTestFileResults(e, "engine", "internal/agent/engine.go")
 	if !e.MenuOpen() {
 		t.Fatal("menu should be open")
 	}
@@ -327,6 +337,7 @@ func TestAutocompleteDetailsFollowLabelsWithoutColumnGap(t *testing.T) {
 
 	e.ta.SetValue("@")
 	e.ta.SetCursorColumn(1)
+	setTestFileResults(e, "", "README.md")
 	e.SetEntityResults("", RemoteReady, []Candidate{{
 		Kind: CandidateEntity, ID: "c1", Label: "◇ [Service] checkout-api",
 		Insert: `@"service:checkout-api"`,
@@ -364,6 +375,7 @@ func TestMixedCandidatesAttachCanonicalEntityAndCanRemoveIt(t *testing.T) {
 	e := New()
 	e.ta.SetValue("@engine")
 	e.ta.SetCursorColumn(len([]rune("@engine")))
+	setTestFileResults(e, "engine", "internal/agent/engine.go")
 	attachment := Attachment{Type: "service", ID: "checkout-api", Label: "checkout-api", CandidateID: "candidate-1", SearchFlowID: "flow-1"}
 	e.SetEntityResults("engine", RemoteReady, []Candidate{{
 		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Service] checkout-api",
@@ -373,6 +385,10 @@ func TestMixedCandidatesAttachCanonicalEntityAndCanRemoveIt(t *testing.T) {
 		t.Fatalf("mixed menu = %#v", e.menu.items)
 	}
 	e.menu.selector.SetIndex(1)
+	// A partial local-file snapshot can prepend a higher-ranked file while the
+	// user has selected an entity. Keep the entity selected by its stable
+	// candidate identity rather than its old row index.
+	setTestFileResults(e, "engine", "README.md", "internal/agent/engine.go")
 	e.accept()
 	if got := e.Attachments(); len(got) != 1 || !reflect.DeepEqual(got[0], attachment) {
 		t.Fatalf("attachments = %#v", got)
@@ -491,7 +507,7 @@ func TestAcceptMidTokenReplacesSuffixAfterCursor(t *testing.T) {
 	e := New()
 	e.ta.SetValue("@engine")
 	e.ta.SetCursorColumn(len([]rune("@eng")))
-	e.recompute()
+	setTestFileResults(e, "eng", "internal/agent/engine.go")
 	if !e.MenuOpen() {
 		t.Fatal("mid-token query did not open completion")
 	}
@@ -558,7 +574,7 @@ func TestCompletionPreservesProseQuoteAndTrailingText(t *testing.T) {
 		e.Focus()
 		e.Update(tea.PasteMsg{Content: input})
 		e.ta.SetCursorColumn(len([]rune(input[:strings.Index(input, "@go")])) + len("@go"))
-		e.recompute()
+		setTestFileResults(e, "go", "go.mod")
 		e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 		if got, want := e.Value(), strings.Replace(input, "@go", "@go.mod ", 1); got != want {
 			t.Fatalf("%q: value = %q, want %q", input, got, want)
@@ -595,9 +611,11 @@ func TestCompletionBeforeFilePreservesCompletedOccurrence(t *testing.T) {
 	e := New()
 	e.Focus()
 	e.Update(tea.PasteMsg{Content: "@go"})
+	setTestFileResults(e, "go", "go.mod")
 	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	e.ta.SetCursorColumn(0)
 	e.Update(tea.PasteMsg{Content: "@eng"})
+	setTestFileResults(e, "eng", "internal/agent/engine.go")
 	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if got, want := e.Value(), "@internal/agent/engine.go @go.mod "; got != want {
 		t.Fatalf("adjacent completion = %q, want %q", got, want)
@@ -612,13 +630,14 @@ func TestEntitySearchStatusesUseProductNeutralCopy(t *testing.T) {
 	e := New()
 	e.ta.SetValue("@missing")
 	e.ta.SetCursorColumn(len([]rune("@missing")))
+	e.SetFileResults("missing", FileReady, nil)
 
 	for _, test := range []struct {
 		state RemoteState
 		want  string
 	}{
-		{state: RemoteLoading, want: "Searching…"},
-		{state: RemoteError, want: "Search unavailable"},
+		{state: RemoteLoading, want: "Searching entities…"},
+		{state: RemoteError, want: "Entity search unavailable"},
 		{state: RemoteReady, want: "No matching files or entities"},
 	} {
 		e.SetEntityResults("missing", test.state, nil)
@@ -628,6 +647,29 @@ func TestEntitySearchStatusesUseProductNeutralCopy(t *testing.T) {
 		}
 		if strings.Contains(view, "Datadog") {
 			t.Fatalf("state %d retained redundant product name: %q", test.state, view)
+		}
+	}
+}
+
+func TestMixedSearchStatusesDescribeIndependentWork(t *testing.T) {
+	e := New()
+	e.ta.SetValue("@missing")
+	e.ta.SetCursorColumn(len([]rune("@missing")))
+	e.SetFileResults("missing", FileIndexing, nil)
+	e.SetEntityResults("missing", RemoteLoading, nil)
+	view := ansi.Strip(e.MenuView())
+	for _, want := range []string{"Indexing files…", "Searching entities…"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("active search menu = %q, want %q", view, want)
+		}
+	}
+
+	e.SetFileResults("missing", FileError, nil)
+	e.SetEntityResults("missing", RemoteError, nil)
+	view = ansi.Strip(e.MenuView())
+	for _, want := range []string{"File search unavailable", "Entity search unavailable"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("failed search menu = %q, want %q", view, want)
 		}
 	}
 }
@@ -662,6 +704,7 @@ func TestCompletedMentionIsScopedToItsOccurrence(t *testing.T) {
 	e := New()
 	e.Focus()
 	e.Update(tea.PasteMsg{Content: "@go"})
+	setTestFileResults(e, "go", "go.mod")
 	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if got := e.Value(); got != "@go.mod " {
 		t.Fatalf("accepted file = %q", got)
@@ -676,6 +719,7 @@ func TestCompletedMentionIsScopedToItsOccurrence(t *testing.T) {
 		t.Fatalf("shifted completion restarted search: %q", query)
 	}
 	e.Update(tea.PasteMsg{Content: "@go.mod"})
+	setTestFileResults(e, "go.mod", "go.mod")
 	if query, active := e.ActiveEntityQuery(); !active || query != "go.mod" || !e.MenuOpen() {
 		t.Fatalf("new occurrence = (%q, %v), value=%q", query, active, e.Value())
 	}
@@ -687,6 +731,7 @@ func TestCompletedMentionIsScopedToItsOccurrence(t *testing.T) {
 	// Deleting an occurrence must not leave dismissal attached to its old offset.
 	e.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	e.Update(tea.PasteMsg{Content: "@go.mod"})
+	setTestFileResults(e, "go.mod", "go.mod")
 	if query, active := e.ActiveEntityQuery(); !active || query != "go.mod" {
 		t.Fatalf("replacement occurrence = (%q, %v)", query, active)
 	}
@@ -696,6 +741,7 @@ func TestEditingCompletedFileReopensSearch(t *testing.T) {
 	e := New()
 	e.Focus()
 	e.Update(tea.PasteMsg{Content: "@go"})
+	setTestFileResults(e, "go", "go.mod")
 	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace}) // trailing space
 	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace}) // final letter
@@ -719,6 +765,7 @@ func TestCompletionBeforeEntityUpdatesExistingAttachmentSpan(t *testing.T) {
 
 	e.ta.SetCursorColumn(0)
 	e.Update(tea.PasteMsg{Content: "@eng"})
+	setTestFileResults(e, "eng", "internal/agent/engine.go")
 	if len(e.attachments) != 1 {
 		t.Fatalf("typing before mention removed attachment: value=%q tracked=%#v", e.Value(), e.attachments)
 	}

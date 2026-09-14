@@ -17,6 +17,7 @@ import (
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
 	statusview "github.com/DataDog/bits-cli/internal/tui/status"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 // Mode is the top-level screen the model shows.
@@ -45,6 +46,7 @@ type EntitySearcher interface {
 
 type Config struct {
 	Tools          *agent.ToolSet
+	Workspace      *workspace.Workspace
 	EntitySearcher EntitySearcher
 	StatusProvider statusview.Provider
 	OpenURL        func(context.Context, string) error
@@ -61,6 +63,11 @@ type Model struct {
 	editor                 *editor.Editor
 	picker                 *conversationview.Model
 	status                 *statusview.Model
+	workspace              *workspace.Workspace
+	fileSearchSession      *workspace.FileSearchSession
+	fileSearchQuery        string
+	fileSearchGeneration   uint64
+	fileSearchWaiting      bool
 	entitySearcher         EntitySearcher
 	searchSessionID        string
 	entitySearchQuery      string
@@ -189,6 +196,7 @@ func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory Engine
 func (m *Model) configure(configs []Config) {
 	if len(configs) > 0 {
 		m.tools = configs[0].Tools
+		m.workspace = configs[0].Workspace
 		m.entitySearcher = configs[0].EntitySearcher
 		if configs[0].StatusProvider != nil {
 			m.statusProvider = configs[0].StatusProvider

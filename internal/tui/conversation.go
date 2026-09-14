@@ -22,8 +22,11 @@ import (
 func (m *Model) requestNewConversation() tea.Cmd {
 	m.pendingNew = true
 	m.cancelRemote()
-	return m.showNotice(notice(chat.NoticeInfo, nil,
-		"Cancelling the current operation before starting a new conversation…"), 0)
+	return batchCommands(
+		m.stopCompletionSearches(),
+		m.showNotice(notice(chat.NoticeInfo, nil,
+			"Cancelling the current operation before starting a new conversation…"), 0),
+	)
 }
 
 // startNewConversation resets only conversation-scoped state. It deliberately
@@ -44,11 +47,11 @@ func (m *Model) startNewConversation() tea.Cmd {
 	m.chatPhase = chat.PhaseIdle
 	m.pendingNew = false
 	m.editor.Reset()
-	m.stopEntitySearch()
+	closeFileSearch := m.stopCompletionSearches()
 	m.clearNotice()
 	m.setMode(ModeChat)
 	m.list.ScrollToBottom()
-	return nil // Update reconciles editor focus after the mode change.
+	return closeFileSearch // Update reconciles editor focus after the mode change.
 }
 
 type conversationRetry int

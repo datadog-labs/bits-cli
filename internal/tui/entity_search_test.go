@@ -336,7 +336,7 @@ func TestSearchFailureLeavesSubmissionUsable(t *testing.T) {
 	debounceMessage := debounce().(entitySearchDebounceMsg)
 	result := m.beginEntitySearch(debounceMessage)().(entitySearchResultMsg)
 	m.applyEntitySearchResult(result)
-	if !strings.Contains(m.editor.MenuView(), "Search unavailable") {
+	if !strings.Contains(m.editor.MenuView(), "Entity search unavailable") {
 		t.Fatalf("error menu = %q", m.editor.MenuView())
 	}
 

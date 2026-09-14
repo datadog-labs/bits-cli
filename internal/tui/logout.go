@@ -16,27 +16,36 @@ const logoutTimeout = 60 * time.Second
 // turn after its durable session has been removed.
 func (m *Model) requestLogout() tea.Cmd {
 	m.pendingLogout = true
-	m.stopEntitySearch()
+	closeFileSearch := m.stopCompletionSearches()
 	m.editor.CloseMenu()
 	m.cancelRemote()
-	return m.showNotice(notice(chat.NoticeInfo, nil,
-		"Cancelling the current operation before logging out..."), 0)
+	return batchCommands(
+		closeFileSearch,
+		m.showNotice(notice(chat.NoticeInfo, nil,
+			"Cancelling the current operation before logging out..."), 0),
+	)
 }
 
 func (m *Model) startLogout() tea.Cmd {
+	closeFileSearch := m.stopCompletionSearches()
 	if m.logout == nil {
-		return m.showNotice(notice(chat.NoticeError, nil, "Logout is unavailable."), 0)
+		return batchCommands(
+			closeFileSearch,
+			m.showNotice(notice(chat.NoticeError, nil, "Logout is unavailable."), 0),
+		)
 	}
 	m.logoutGeneration++
 	generation := m.logoutGeneration
 	ctx, cancel := context.WithTimeout(context.Background(), logoutTimeout)
 	m.logoutCancel = cancel
 	m.logoutRunning = true
-	m.stopEntitySearch()
 	m.editor.CloseMenu()
 	m.clearNotice()
 	logout := m.logout
 	return func() tea.Msg {
+		if closeFileSearch != nil {
+			_ = closeFileSearch()
+		}
 		_, _, err := logout(ctx)
 		return logoutResultMsg{
 			generation: generation,
@@ -59,7 +68,7 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Discard authenticated collaborators and invalidate queued search results.
-	m.stopEntitySearch()
+	closeFileSearch := m.stopCompletionSearches()
 	m.entitySearcher = nil
 	m.engine = nil
 	m.convID = ""
@@ -67,5 +76,11 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 	m.cancelTurn = nil
 	m.pendingApprovals = nil
 	m.loggedOut = true
-	return m, tea.Quit
+	if closeFileSearch == nil {
+		return m, tea.Quit
+	}
+	return m, func() tea.Msg {
+		_ = closeFileSearch()
+		return tea.Quit()
+	}
 }

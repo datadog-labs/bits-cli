@@ -181,10 +181,17 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 		m.cancelTurn()
 	}
 	m.stopEntitySearch()
+	closeFileSearch := m.stopFileSearch()
 	if m.logoutCancel != nil {
 		m.logoutCancel()
 	}
-	return m, tea.Quit
+	if closeFileSearch == nil {
+		return m, tea.Quit
+	}
+	return m, func() tea.Msg {
+		_ = closeFileSearch()
+		return tea.Quit()
+	}
 }
 
 // dispatch routes one message to the owning surface. Non-input messages (resize,
@@ -209,6 +216,14 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case entitySearchResultMsg:
 		m.applyEntitySearchResult(msg)
 		m.refreshViewport()
+		return m, nil
+
+	case fileSearchSnapshotMsg:
+		cmd := m.applyFileSearchSnapshot(msg)
+		m.refreshViewport()
+		return m, cmd
+
+	case fileSearchClosedMsg:
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -293,7 +308,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// blurred and ignores these, showing no cursor.
 	cmd := m.editor.Update(msg)
 	m.refreshViewport()
-	return m, batchCommands(cmd, m.syncEntitySearch())
+	return m, batchCommands(cmd, m.syncCompletionSearches())
 }
 
 func (m *Model) openConversationInBrowser() tea.Cmd {
@@ -513,7 +528,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		cmd := m.editor.Update(msg)
 		m.refreshViewport()
-		return m, batchCommands(cmd, m.syncEntitySearch())
+		return m, batchCommands(cmd, m.syncCompletionSearches())
 	}
 
 	switch msg.String() {
@@ -537,7 +552,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	cmd := m.editor.Update(msg)
 	m.refreshViewport()
-	return m, batchCommands(cmd, m.syncEntitySearch())
+	return m, batchCommands(cmd, m.syncCompletionSearches())
 }
 
 func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -591,7 +606,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	}
 	turnContext := contextFromAttachments(attachments)
 	m.editor.Reset()
-	m.stopEntitySearch()
+	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Context: turnContext})
@@ -603,7 +618,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
-	return m, wait
+	return m, batchCommands(closeFileSearch, wait)
 }
 
 func (m *Model) beginRemote(events <-chan agent.Event, cancel context.CancelFunc) tea.Cmd {
