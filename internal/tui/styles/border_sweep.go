@@ -31,7 +31,7 @@ func easeInOutSine(x float64) float64 {
 // out of the per-frame path.
 type BorderSweep struct {
 	width     int
-	dimCell   string
+	dimStyle  lipgloss.Style
 	rampCells []string
 }
 
@@ -47,7 +47,7 @@ func NewBorderSweep(width int, dim, hot, bg color.Color) BorderSweep {
 	}
 	return BorderSweep{
 		width:     width,
-		dimCell:   lipgloss.NewStyle().Foreground(dim).Background(bg).Render(sweepGlyph),
+		dimStyle:  lipgloss.NewStyle().Foreground(dim).Background(bg),
 		rampCells: rampCells,
 	}
 }
@@ -71,14 +71,19 @@ func (s BorderSweep) Row(frame int) string {
 	eased := int(math.Round(easeInOutSine(float64(t)/float64(travel)) * float64(travel)))
 	pos := eased - sweepBandWidth + inset
 
+	bandStart := min(width, max(0, pos))
+	bandEnd := min(width, max(0, pos+len(s.rampCells)))
+
 	var b strings.Builder
-	b.Grow(width * len(s.dimCell))
-	for i := range width {
-		cell := s.dimCell
-		if offset := i - pos; offset >= 0 && offset < len(s.rampCells) {
-			cell = s.rampCells[offset]
-		}
-		b.WriteString(cell)
+	b.Grow(width * len(sweepGlyph))
+	if bandStart > 0 {
+		b.WriteString(s.dimStyle.Render(strings.Repeat(sweepGlyph, bandStart)))
+	}
+	for offset := bandStart - pos; offset < bandEnd-pos; offset++ {
+		b.WriteString(s.rampCells[offset])
+	}
+	if bandEnd < width {
+		b.WriteString(s.dimStyle.Render(strings.Repeat(sweepGlyph, width-bandEnd)))
 	}
 	return b.String()
 }

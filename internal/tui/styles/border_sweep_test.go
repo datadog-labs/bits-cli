@@ -73,8 +73,8 @@ func TestBorderSweepRowRestsAtDim(t *testing.T) {
 	fullTravel := width + sweepBandWidth
 	inset := fullTravel / 10
 	row := BorderSweepRow(width, 0, dim, hot, bg)
-	dimCell := lipgloss.NewStyle().Foreground(dim).Background(bg).Render(sweepGlyph)
-	wantSuffix := strings.Repeat(dimCell, width-inset)
+	dimRun := lipgloss.NewStyle().Foreground(dim).Background(bg).Render(strings.Repeat(sweepGlyph, width-inset))
+	wantSuffix := dimRun
 	if !strings.HasSuffix(row, wantSuffix) {
 		t.Error("frame 0 (band inset from off-screen) should render dim past the inset")
 	}
