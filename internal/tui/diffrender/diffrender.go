@@ -77,7 +77,9 @@ func renderLine(line filediff.DiffLine, digits int, opts Options) string {
 	if line.Kind == filediff.LineDelete {
 		lineNumber = line.OldNumber
 	}
-	separator := "  "
+	// Keep source content in the same column for every diff row. Context rows
+	// still need a blank marker column to match the " - " and " + " gutters.
+	separator := "   "
 	if marker != " " {
 		separator = " " + marker + " "
 	}

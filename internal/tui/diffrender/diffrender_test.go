@@ -43,13 +43,30 @@ func TestRenderUsesOneLineNumberColumn(t *testing.T) {
 
 	diff := filediff.Build("a/f.txt", "b/f.txt", before.String(), after.String())
 	out := ansi.Strip(Render(diff, Options{Path: "f.txt", Width: 80}))
-	for _, want := range []string{"42 - line-42", "42 + LINE-42", "41  line-41", "43  line-43"} {
+	for _, want := range []string{"42 - line-42", "42 + LINE-42", "41   line-41", "43   line-43"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing %q:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "42    -") {
 		t.Fatalf("render retained separate old/new number columns:\n%s", out)
+	}
+}
+
+func TestRenderAlignsTabIndentedContentAcrossDiffRows(t *testing.T) {
+	diff := filediff.Diff{Hunks: []filediff.Hunk{{
+		Lines: []filediff.DiffLine{
+			{Kind: filediff.LineContext, NewNumber: 205, Content: "\tm.finishConversationOperation()"},
+			{Kind: filediff.LineDelete, OldNumber: 208, Content: "\tm.usage = nil"},
+			{Kind: filediff.LineAdd, NewNumber: 208, Content: "\tm.usage = msg.result.Usage"},
+		},
+	}}}
+
+	lines := strings.Split(ansi.Strip(Render(diff, Options{Path: "conversation.go", Width: 80})), "\n")
+	for _, line := range lines {
+		if got, want := strings.Index(line, "m."), 10; got != want {
+			t.Errorf("source content begins in column %d, want %d: %q", got+1, want+1, line)
+		}
 	}
 }
 
