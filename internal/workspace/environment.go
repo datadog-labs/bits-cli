@@ -1,6 +1,4 @@
-// Package status owns the native /status screen and its bounded local
-// workspace snapshot.
-package status
+package workspace
 
 import (
 	"bytes"
@@ -13,10 +11,10 @@ import (
 	"time"
 )
 
-const defaultCollectionTimeout = 2 * time.Second
+const snapshotTimeout = 2 * time.Second
 
-// RepositoryState distinguishes a known non-Git directory from a failed or
-// unavailable Git inspection. The UI can therefore avoid guessing.
+// RepositoryState distinguishes a known non-Git workspace from a failed or
+// unavailable Git inspection.
 type RepositoryState uint8
 
 const (
@@ -35,7 +33,7 @@ type Changes struct {
 	Conflicted bool
 }
 
-// Repository is the non-secret Git identity and state rendered by /status.
+// Repository is the local Git identity and working-tree state for a workspace.
 type Repository struct {
 	State    RepositoryState
 	Root     string
@@ -47,52 +45,29 @@ type Repository struct {
 	Changes  Changes
 }
 
-// Environment is the local snapshot collected each time /status opens.
+// Environment is the local workspace and Git state observed at one point in time.
 type Environment struct {
-	WorkingDirectory string
-	Repository       Repository
+	Path       string
+	Repository Repository
 }
 
-// Provider supplies a fresh environment snapshot. Implementations may perform
-// local I/O and must honor cancellation.
-type Provider interface {
-	Collect(context.Context) Environment
-}
-
-// SystemProvider reads the current directory and invokes Git directly, without
-// a shell, under one short deadline. Directory defaults to the process cwd.
-type SystemProvider struct {
-	Directory string
-	Timeout   time.Duration
-}
-
-// Collect returns independently useful fields when part of Git inspection is
-// unavailable. Command errors and stderr are never copied into the snapshot.
-func (p SystemProvider) Collect(parent context.Context) Environment {
-	directory := p.Directory
-	if directory == "" {
-		var err error
-		directory, err = os.Getwd()
-		if err != nil {
-			return Environment{Repository: Repository{State: RepositoryUnavailable}}
-		}
-	}
-	environment := Environment{
-		WorkingDirectory: directory,
-		Repository:       Repository{State: RepositoryUnavailable},
+// Snapshot inspects the workspace and its containing Git repository. Git is
+// invoked directly, without a shell, under one short cancellation-aware
+// deadline. Independently useful fields remain populated when part of the Git
+// inspection is unavailable.
+func (w *Workspace) Snapshot(parent context.Context) Environment {
+	snapshot := Environment{
+		Path:       w.path,
+		Repository: Repository{State: RepositoryUnavailable},
 	}
 
-	timeout := p.Timeout
-	if timeout <= 0 {
-		timeout = defaultCollectionTimeout
-	}
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	ctx, cancel := context.WithTimeout(parent, snapshotTimeout)
 	defer cancel()
 
-	root, err := git(ctx, directory, "rev-parse", "--show-toplevel")
+	root, err := git(ctx, w.path, "rev-parse", "--show-toplevel")
 	if err != nil {
-		environment.Repository.State = repositoryStateForRootError(err, ctx.Err())
-		return environment
+		snapshot.Repository.State = repositoryStateForRootError(err, ctx.Err())
+		return snapshot
 	}
 
 	repository := Repository{
@@ -100,20 +75,20 @@ func (p SystemProvider) Collect(parent context.Context) Environment {
 		Root:  root,
 		Name:  filepath.Base(root),
 	}
-	if branch, branchErr := git(ctx, directory, "symbolic-ref", "--quiet", "--short", "HEAD"); branchErr == nil {
+	if branch, branchErr := git(ctx, w.path, "symbolic-ref", "--quiet", "--short", "HEAD"); branchErr == nil {
 		repository.Branch = branch
 	}
-	if commit, commitErr := git(ctx, directory, "rev-parse", "--verify", "HEAD"); commitErr == nil {
+	if commit, commitErr := git(ctx, w.path, "rev-parse", "--verify", "HEAD"); commitErr == nil {
 		repository.Commit = commit
 		repository.Detached = repository.Branch == ""
 	} else if repository.Branch != "" && ctx.Err() == nil {
 		repository.Unborn = true
 	}
-	if raw, statusErr := gitBytes(ctx, directory, "status", "--porcelain=v1", "-z", "--untracked-files=normal"); statusErr == nil {
+	if raw, statusErr := gitBytes(ctx, w.path, "status", "--porcelain=v1", "-z", "--untracked-files=normal"); statusErr == nil {
 		repository.Changes = parsePorcelain(raw)
 	}
-	environment.Repository = repository
-	return environment
+	snapshot.Repository = repository
+	return snapshot
 }
 
 func repositoryStateForRootError(err, contextError error) RepositoryState {

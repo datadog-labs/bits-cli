@@ -1,3 +1,4 @@
+// Package status owns the native /status screen and its presentation state.
 package status
 
 import (
@@ -13,6 +14,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/components"
 	"github.com/DataDog/bits-cli/internal/tui/escape"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
+	workspacepkg "github.com/DataDog/bits-cli/internal/workspace"
 )
 
 // Connectivity is observed Assistant transport state. The separate current-user
@@ -48,15 +50,15 @@ type ClosedMsg struct{}
 // Model renders a responsive shared panel whose document body scrolls within
 // the available terminal height.
 type Model struct {
-	viewport         viewport.Model
-	panel            *components.Panel
-	theme            styles.Theme
-	runtime          Runtime
-	environment      Environment
-	environmentReady bool
-	width            int
-	height           int
-	bodyWidth        int
+	viewport       viewport.Model
+	panel          *components.Panel
+	theme          styles.Theme
+	runtime        Runtime
+	workspace      workspacepkg.Environment
+	workspaceReady bool
+	width          int
+	height         int
+	bodyWidth      int
 }
 
 // New creates a status model using the same theme and panel component as the
@@ -82,11 +84,11 @@ func New(width, height int, themes ...styles.Theme) Model {
 	return m
 }
 
-// Open resets scroll position and starts a new fresh environment collection.
+// Open resets scroll position and starts a fresh workspace collection.
 func (m *Model) Open(runtime Runtime) {
 	m.runtime = runtime
-	m.environment = Environment{}
-	m.environmentReady = false
+	m.workspace = workspacepkg.Environment{}
+	m.workspaceReady = false
 	m.rebuild()
 	m.viewport.GotoTop()
 }
@@ -97,10 +99,10 @@ func (m *Model) SetRuntime(runtime Runtime) {
 	m.rebuild()
 }
 
-// SetEnvironment installs the completed local snapshot.
-func (m *Model) SetEnvironment(environment Environment) {
-	m.environment = environment
-	m.environmentReady = true
+// SetWorkspace installs the completed local snapshot.
+func (m *Model) SetWorkspace(snapshot workspacepkg.Environment) {
+	m.workspace = snapshot
+	m.workspaceReady = true
 	m.rebuild()
 }
 
@@ -226,7 +228,7 @@ func (m Model) renderSection(title string, rows []statusRow) string {
 }
 
 func (m Model) workspaceRows() []statusRow {
-	if !m.environmentReady {
+	if !m.workspaceReady {
 		return []statusRow{
 			{label: "Directory", value: "collecting…"},
 			{label: "Repository", value: "collecting…"},
@@ -235,10 +237,10 @@ func (m Model) workspaceRows() []statusRow {
 			{label: "Working tree", value: "collecting…"},
 		}
 	}
-	directory := available(m.environment.WorkingDirectory, "working directory could not be read")
-	repository := m.environment.Repository
+	directory := available(m.workspace.Path, "working directory could not be read")
+	repository := m.workspace.Repository
 	switch repository.State {
-	case RepositoryAbsent:
+	case workspacepkg.RepositoryAbsent:
 		return []statusRow{
 			{label: "Directory", value: directory},
 			{label: "Repository", value: "not a Git repository"},
@@ -246,7 +248,7 @@ func (m Model) workspaceRows() []statusRow {
 			{label: "Commit", value: "not applicable"},
 			{label: "Working tree", value: "not applicable"},
 		}
-	case RepositoryPresent:
+	case workspacepkg.RepositoryPresent:
 		branch := repository.Branch
 		if repository.Detached {
 			branch = "detached HEAD"
@@ -310,7 +312,7 @@ func usage(value *assistant.Usage) string {
 	return used + " / " + formatInteger(value.MaxTokens)
 }
 
-func repositoryLabel(repository Repository) string {
+func repositoryLabel(repository workspacepkg.Repository) string {
 	name := available(repository.Name, "repository name could not be determined")
 	root := escape.SingleLine(repository.Root)
 	if root == "" {
@@ -319,7 +321,7 @@ func repositoryLabel(repository Repository) string {
 	return name + " · " + root
 }
 
-func changesLabel(changes Changes) string {
+func changesLabel(changes workspacepkg.Changes) string {
 	if !changes.Known {
 		return "unavailable — working-tree state could not be collected"
 	}

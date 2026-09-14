@@ -1,4 +1,4 @@
-package status
+package workspace
 
 import (
 	"context"
@@ -8,71 +8,71 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 )
 
-func TestSystemProviderCapturesGitSummaryWithoutFilenames(t *testing.T) {
+func TestEnvironmentSnapshotCapturesGitSummaryWithoutFilenames(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init", "-b", "main")
-	writeTestFile(t, repo, "committed.txt", "one\n")
-	writeTestFile(t, repo, "staged.txt", "one\n")
+	writeSnapshotTestFile(t, repo, "committed.txt", "one\n")
+	writeSnapshotTestFile(t, repo, "staged.txt", "one\n")
 	runGit(t, repo, "add", ".")
 	runGit(t, repo, "-c", "user.name=Bits Test", "-c", "user.email=bits@example.com", "commit", "-m", "initial")
 
-	writeTestFile(t, repo, "committed.txt", "two\n")
-	writeTestFile(t, repo, "staged.txt", "two\n")
+	writeSnapshotTestFile(t, repo, "committed.txt", "two\n")
+	writeSnapshotTestFile(t, repo, "staged.txt", "two\n")
 	runGit(t, repo, "add", "staged.txt")
-	writeTestFile(t, repo, "untracked-secret-name.txt", "three\n")
+	writeSnapshotTestFile(t, repo, "untracked-secret-name.txt", "three\n")
 
-	env := (SystemProvider{Directory: repo, Timeout: 2 * time.Second}).Collect(context.Background())
-	if env.WorkingDirectory != repo {
-		t.Fatalf("working directory = %q, want %q", env.WorkingDirectory, repo)
+	ws := openSnapshotTestWorkspace(t, repo)
+	snapshot := ws.Snapshot(context.Background())
+	if snapshot.Path != ws.Path() {
+		t.Fatalf("workspace path = %q, want %q", snapshot.Path, ws.Path())
 	}
 	resolvedRepo, err := filepath.EvalSymlinks(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if env.Repository.State != RepositoryPresent || env.Repository.Root != resolvedRepo || env.Repository.Name != filepath.Base(resolvedRepo) {
-		t.Fatalf("repository = %+v", env.Repository)
+	if snapshot.Repository.State != RepositoryPresent || snapshot.Repository.Root != resolvedRepo || snapshot.Repository.Name != filepath.Base(resolvedRepo) {
+		t.Fatalf("repository = %+v", snapshot.Repository)
 	}
-	if env.Repository.Branch != "main" || env.Repository.Commit == "" || env.Repository.Detached || env.Repository.Unborn {
-		t.Fatalf("git identity = %+v", env.Repository)
+	if snapshot.Repository.Branch != "main" || snapshot.Repository.Commit == "" || snapshot.Repository.Detached || snapshot.Repository.Unborn {
+		t.Fatalf("git identity = %+v", snapshot.Repository)
 	}
-	if got := env.Repository.Changes; !got.Known || !got.Staged || !got.Unstaged || !got.Untracked || got.Conflicted {
+	if got := snapshot.Repository.Changes; !got.Known || !got.Staged || !got.Unstaged || !got.Untracked || got.Conflicted {
 		t.Fatalf("changes = %+v", got)
 	}
 }
 
-func TestSystemProviderHandlesNonGitAndDetachedRepositories(t *testing.T) {
+func TestSnapshotHandlesNonGitAndDetachedRepositories(t *testing.T) {
 	t.Run("non git", func(t *testing.T) {
-		dir := t.TempDir()
-		env := (SystemProvider{Directory: dir}).Collect(context.Background())
-		if env.Repository.State != RepositoryAbsent || env.WorkingDirectory != dir {
-			t.Fatalf("environment = %+v", env)
+		ws := openSnapshotTestWorkspace(t, t.TempDir())
+		snapshot := ws.Snapshot(context.Background())
+		if snapshot.Repository.State != RepositoryAbsent || snapshot.Path != ws.Path() {
+			t.Fatalf("snapshot = %+v", snapshot)
 		}
 	})
 
 	t.Run("detached", func(t *testing.T) {
 		repo := t.TempDir()
 		runGit(t, repo, "init", "-b", "main")
-		writeTestFile(t, repo, "file.txt", "one\n")
+		writeSnapshotTestFile(t, repo, "file.txt", "one\n")
 		runGit(t, repo, "add", ".")
 		runGit(t, repo, "-c", "user.name=Bits Test", "-c", "user.email=bits@example.com", "commit", "-m", "initial")
 		runGit(t, repo, "checkout", "--detach")
 
-		env := (SystemProvider{Directory: repo}).Collect(context.Background())
-		if env.Repository.State != RepositoryPresent || !env.Repository.Detached || env.Repository.Branch != "" || env.Repository.Commit == "" {
-			t.Fatalf("detached repository = %+v", env.Repository)
+		snapshot := openSnapshotTestWorkspace(t, repo).Snapshot(context.Background())
+		if snapshot.Repository.State != RepositoryPresent || !snapshot.Repository.Detached || snapshot.Repository.Branch != "" || snapshot.Repository.Commit == "" {
+			t.Fatalf("detached repository = %+v", snapshot.Repository)
 		}
 	})
 }
 
-func TestSystemProviderMarksUnbornRepositoryExplicitly(t *testing.T) {
+func TestSnapshotMarksUnbornRepositoryExplicitly(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init", "-b", "future")
-	env := (SystemProvider{Directory: repo}).Collect(context.Background())
-	if env.Repository.State != RepositoryPresent || env.Repository.Branch != "future" || !env.Repository.Unborn || env.Repository.Commit != "" {
-		t.Fatalf("unborn repository = %+v", env.Repository)
+	snapshot := openSnapshotTestWorkspace(t, repo).Snapshot(context.Background())
+	if snapshot.Repository.State != RepositoryPresent || snapshot.Repository.Branch != "future" || !snapshot.Repository.Unborn || snapshot.Repository.Commit != "" {
+		t.Fatalf("unborn repository = %+v", snapshot.Repository)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestRepositoryStateForRootErrorOnlyCallsExplicitNonRepositoryAbsent(t *test
 	}
 }
 
-func TestSystemProviderUsesStableGitLocaleForNonRepositoryDetection(t *testing.T) {
+func TestSnapshotUsesStableGitLocaleForNonRepositoryDetection(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test helper uses a POSIX executable script")
 	}
@@ -127,22 +127,33 @@ exit 128
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("LC_ALL", "fr_FR.UTF-8")
 
-	environment := (SystemProvider{Directory: t.TempDir(), Timeout: 10 * time.Second}).Collect(context.Background())
-	if environment.Repository.State != RepositoryAbsent {
-		t.Fatalf("repository state = %v, want absent under a localized parent environment", environment.Repository.State)
+	snapshot := openSnapshotTestWorkspace(t, t.TempDir()).Snapshot(context.Background())
+	if snapshot.Repository.State != RepositoryAbsent {
+		t.Fatalf("repository state = %v, want absent under a localized parent environment", snapshot.Repository.State)
 	}
+}
+
+func openSnapshotTestWorkspace(t *testing.T, path string) *Workspace {
+	t.Helper()
+	ws, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ws.Close() })
+	return ws
 }
 
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "git", args...)
+	commandArgs := append([]string{"-c", "commit.gpgsign=false"}, args...)
+	cmd := exec.CommandContext(t.Context(), "git", commandArgs...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 }
 
-func writeTestFile(t *testing.T, dir, name, content string) {
+func writeSnapshotTestFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
 		t.Fatal(err)

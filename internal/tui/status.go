@@ -12,11 +12,12 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	statusview "github.com/DataDog/bits-cli/internal/tui/status"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
-type statusEnvironmentMsg struct {
-	generation  uint64
-	environment statusview.Environment
+type statusWorkspaceMsg struct {
+	generation uint64
+	snapshot   workspace.Environment
 }
 
 type statusIdentityMsg struct {
@@ -47,15 +48,15 @@ func (m *Model) openStatus() tea.Cmd {
 	m.status.Open(m.statusRuntime())
 	m.setMode(ModeStatus)
 	m.clearNotice()
-	provider := m.statusProvider
-	if provider == nil {
-		provider = statusview.SystemProvider{}
-	}
 	engine := m.engine
-	environmentCommand := func() tea.Msg {
-		return statusEnvironmentMsg{
-			generation:  generation,
-			environment: provider.Collect(statusContext),
+	workspaceCommand := func() tea.Msg {
+		snapshot := workspace.Environment{}
+		if m.workspace != nil {
+			snapshot = m.workspace.Snapshot(statusContext)
+		}
+		return statusWorkspaceMsg{
+			generation: generation,
+			snapshot:   snapshot,
 		}
 	}
 	identityCommand := func() tea.Msg {
@@ -65,7 +66,7 @@ func (m *Model) openStatus() tea.Cmd {
 		identity, err := engine.CurrentUser(statusContext)
 		return statusIdentityMsg{generation: generation, identity: identity, err: err}
 	}
-	return tea.Batch(environmentCommand, identityCommand)
+	return tea.Batch(workspaceCommand, identityCommand)
 }
 
 func (m *Model) closeStatus() {
@@ -77,11 +78,11 @@ func (m *Model) closeStatus() {
 	m.setMode(ModeChat)
 }
 
-func (m *Model) applyStatusEnvironment(message statusEnvironmentMsg) {
+func (m *Model) applyStatusWorkspace(message statusWorkspaceMsg) {
 	if m.mode != ModeStatus || message.generation != m.statusGeneration || m.status == nil {
 		return
 	}
-	m.status.SetEnvironment(message.environment)
+	m.status.SetWorkspace(message.snapshot)
 }
 
 func (m *Model) applyStatusIdentity(message statusIdentityMsg) {

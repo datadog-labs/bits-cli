@@ -48,7 +48,6 @@ type Config struct {
 	Tools          *agent.ToolSet
 	Workspace      *workspace.Workspace
 	EntitySearcher EntitySearcher
-	StatusProvider statusview.Provider
 	OpenURL        func(context.Context, string) error
 	Logout         LogoutFunc
 }
@@ -64,6 +63,7 @@ type Model struct {
 	picker                 *conversationview.Model
 	status                 *statusview.Model
 	workspace              *workspace.Workspace
+	workspaceDisplayPath   string
 	fileSearchSession      *workspace.FileSearchSession
 	fileSearchQuery        string
 	fileSearchGeneration   uint64
@@ -77,7 +77,6 @@ type Model struct {
 	entitySearchCache      map[string]entitySearchCacheEntry
 	entitySearchCacheOrder []string
 
-	statusProvider   statusview.Provider
 	statusGeneration uint64
 	statusIdentity   string
 	statusCancel     context.CancelFunc
@@ -197,10 +196,10 @@ func (m *Model) configure(configs []Config) {
 	if len(configs) > 0 {
 		m.tools = configs[0].Tools
 		m.workspace = configs[0].Workspace
-		m.entitySearcher = configs[0].EntitySearcher
-		if configs[0].StatusProvider != nil {
-			m.statusProvider = configs[0].StatusProvider
+		if m.workspace != nil {
+			m.workspaceDisplayPath = m.workspace.DisplayPath()
 		}
+		m.entitySearcher = configs[0].EntitySearcher
 		m.openURL = configs[0].OpenURL
 		m.logout = configs[0].Logout
 	}
@@ -219,7 +218,6 @@ func newShell() *Model {
 		editor:            editor.New(),
 		list:              chat.NewList(),
 		status:            &status,
-		statusProvider:    statusview.SystemProvider{},
 		styles:            theme,
 		searchSessionID:   newSearchSessionID(),
 		entitySearchCache: make(map[string]entitySearchCacheEntry),

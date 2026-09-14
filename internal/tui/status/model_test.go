@@ -9,6 +9,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 func TestModelRendersTruthfulRuntimeAndWorkspaceSnapshot(t *testing.T) {
@@ -24,15 +25,15 @@ func TestModelRendersTruthfulRuntimeAndWorkspaceSnapshot(t *testing.T) {
 		Connectivity:        ConnectivityConnected,
 		Usage:               &assistant.Usage{TokensUsed: 3200, MaxTokens: 16000},
 	})
-	m.SetEnvironment(Environment{
-		WorkingDirectory: "/work/bits-cli",
-		Repository: Repository{
-			State:  RepositoryPresent,
+	m.SetWorkspace(workspace.Environment{
+		Path: "/work/bits-cli",
+		Repository: workspace.Repository{
+			State:  workspace.RepositoryPresent,
 			Root:   "/work/bits-cli",
 			Name:   "bits-cli",
 			Branch: "main",
 			Commit: "0123456789abcdef0123456789abcdef01234567",
-			Changes: Changes{
+			Changes: workspace.Changes{
 				Known:     true,
 				Staged:    true,
 				Untracked: true,
@@ -70,9 +71,9 @@ func TestModelLabelsUnavailableNonGitAndUnauthenticatedValues(t *testing.T) {
 		Phase:               "idle",
 		Connectivity:        ConnectivityNotChecked,
 	})
-	m.SetEnvironment(Environment{
-		WorkingDirectory: "/tmp/scratch",
-		Repository:       Repository{State: RepositoryAbsent},
+	m.SetWorkspace(workspace.Environment{
+		Path:       "/tmp/scratch",
+		Repository: workspace.Repository{State: workspace.RepositoryAbsent},
 	})
 
 	view := ansi.Strip(m.View())
@@ -93,7 +94,7 @@ func TestModelLabelsUnavailableNonGitAndUnauthenticatedValues(t *testing.T) {
 func TestModelScrollsInsideSharedPanelAndEscapeCloses(t *testing.T) {
 	m := New(72, 16, styles.Default(true))
 	m.Open(Runtime{Phase: "idle", Connectivity: ConnectivityNotChecked})
-	m.SetEnvironment(Environment{Repository: Repository{State: RepositoryUnavailable}})
+	m.SetWorkspace(workspace.Environment{Repository: workspace.Repository{State: workspace.RepositoryUnavailable}})
 
 	before := ansi.Strip(m.View())
 	for range 30 {
@@ -132,7 +133,7 @@ func TestModelViewStaysWithinTerminalBounds(t *testing.T) {
 func TestNarrowValuesHangIndentUnderValueColumn(t *testing.T) {
 	m := New(72, 40, styles.Default(true))
 	m.Open(Runtime{Phase: "idle", Connectivity: ConnectivityNotChecked})
-	m.SetEnvironment(Environment{Repository: Repository{State: RepositoryAbsent}})
+	m.SetWorkspace(workspace.Environment{Repository: workspace.Repository{State: workspace.RepositoryAbsent}})
 	lines := strings.Split(ansi.Strip(m.View()), "\n")
 
 	valueColumn := -1

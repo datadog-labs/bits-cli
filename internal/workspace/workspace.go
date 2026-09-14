@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Workspace owns a confined filesystem root and its display path.
@@ -14,8 +15,9 @@ import (
 // longer needs it; values returned by OSRoot are borrowed and must not be
 // closed independently.
 type Workspace struct {
-	path string
-	root *os.Root
+	path        string
+	displayPath string
+	root        *os.Root
 }
 
 // Open resolves path and opens it as a confined workspace.
@@ -28,13 +30,23 @@ func Open(path string) (*Workspace, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open workspace %q: %w", abs, err)
 	}
-	return &Workspace{path: abs, root: root}, nil
+	displayPath := abs
+	if home, homeErr := os.UserHomeDir(); homeErr == nil {
+		displayPath = userRelativePath(abs, home)
+	}
+	return &Workspace{path: abs, displayPath: displayPath, root: root}, nil
 }
 
-// Path returns the absolute path used to identify the workspace to the user
-// and to processes launched in it.
+// Path returns the absolute path used to identify the workspace to processes
+// launched in it.
 func (w *Workspace) Path() string {
 	return w.path
+}
+
+// DisplayPath returns the stable user-facing form of Path. Locations inside
+// the user's home directory use a leading ~; other paths remain absolute.
+func (w *Workspace) DisplayPath() string {
+	return w.displayPath
 }
 
 // FS returns a read-only filesystem view confined to the workspace.
@@ -51,4 +63,22 @@ func (w *Workspace) OSRoot() *os.Root {
 // Close releases the workspace root.
 func (w *Workspace) Close() error {
 	return w.root.Close()
+}
+
+func userRelativePath(path, home string) string {
+	if home == "" {
+		return path
+	}
+	relative, err := filepath.Rel(home, path)
+	if err != nil {
+		return path
+	}
+	switch {
+	case relative == ".":
+		return "~"
+	case relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)):
+		return filepath.Join("~", relative)
+	default:
+		return path
+	}
 }

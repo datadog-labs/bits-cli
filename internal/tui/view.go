@@ -8,24 +8,27 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	"github.com/DataDog/bits-cli/internal/tui/escape"
 )
 
 const (
 	minimumChatWidth      = 12
-	minimumChatHeight     = 5
+	minimumChatHeight     = 6
 	minimumApprovalWidth  = 36
-	minimumApprovalHeight = 12
+	minimumApprovalHeight = 13
+	chatNoticeHeight      = 1
+	chatFooterHeight      = 1
 
 	// approvalCompactWidth is the terminal width below which the approval block
 	// switches to condensed action labels so the choice row still fits.
 	approvalCompactWidth = 50
 )
 
-// View lays out the transcript viewport, a status line, and the input. Alt-screen
-// and mouse tracking, which were program options in Bubble Tea v1, are now
-// declared on the returned view.
+// View lays out the transcript viewport, notice row, input, and metadata footer.
+// Alt-screen and mouse tracking, which were program options in Bubble Tea v1,
+// are now declared on the returned view.
 func (m *Model) View() tea.View {
 	if m.mode == ModeLogin && m.loginModel != nil {
 		return m.loginModel.View()
@@ -60,16 +63,17 @@ func (m *Model) View() tea.View {
 }
 
 // chatView stacks the transcript, an optional docked approval block, the notice
-// bar, and the editor. The approval block sits above the notice bar and editor
-// and pushes the transcript up instead of covering it; input is routed to the
-// approval while one is pending, so the editor stays visible but inert.
+// bar, the editor, and a persistent metadata footer. The approval block sits
+// above the notice bar and editor and pushes the transcript up instead of
+// covering it; input is routed to the approval while one is pending, so the
+// editor stays visible but inert.
 func (m *Model) chatView() string {
 	m.editor.SetPlaceholder(m.promptPlaceholder())
 	sections := []string{m.list.Render()}
 	if approval := m.approvalView(); approval != "" {
 		sections = append(sections, approval)
 	}
-	sections = append(sections, m.noticeBar(), m.editor.View())
+	sections = append(sections, m.noticeBar(), m.editor.View(), m.chatFooter())
 	base := strings.Join(sections, "\n")
 
 	if len(m.pendingApprovals) > 0 {
@@ -88,7 +92,7 @@ func (m *Model) chatView() string {
 	if width := m.list.Width(); x+menuW > width {
 		x = max(0, width-menuW)
 	}
-	y := max(0, m.height-m.editor.Height()-menuH)
+	y := max(0, m.height-chatFooterHeight-m.editor.Height()-menuH)
 	return lipgloss.NewCompositor(
 		lipgloss.NewLayer(base),
 		lipgloss.NewLayer(menu).X(x).Y(y).Z(1),
@@ -218,4 +222,77 @@ func (m *Model) noticeBar() string {
 	}
 	text = ansi.Truncate(escape.Inline(text), max(1, width-2), "…")
 	return m.chatStyles.Notice(m.notice.Level).Width(width).Render(text)
+}
+
+// chatFooter renders low-attention workspace and context usage metadata below
+// the editor. Transient notices keep their separate row above the editor.
+func (m *Model) chatFooter() string {
+	width := max(1, m.list.Width())
+	indent := min(m.editor.ContentOffset(), max(0, width-1))
+	text := chatFooterText(m.workspaceDisplayPath, m.usage, max(1, width-indent))
+	if text == "" {
+		return ""
+	}
+	return strings.Repeat(" ", indent) + m.styles.Text.Tertiary.Render(text)
+}
+
+func chatFooterText(path string, usage *assistant.Usage, width int) string {
+	path = escape.SingleLine(path)
+	used := ""
+	if usage != nil {
+		used = compactTokenCount(usage.TokensUsed) + " used"
+	}
+
+	switch {
+	case path == "":
+		return ansi.Truncate(used, width, "…")
+	case used == "":
+		return truncateLeft(path, width)
+	}
+
+	suffix := " · " + used
+	if ansi.StringWidth(suffix) >= width {
+		return ansi.Truncate(used, width, "…")
+	}
+	return truncateLeft(path, width-ansi.StringWidth(suffix)) + suffix
+}
+
+func truncateLeft(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	valueWidth := ansi.StringWidth(value)
+	if valueWidth <= width {
+		return value
+	}
+	if width == 1 {
+		return "…"
+	}
+	return ansi.TruncateLeft(value, valueWidth-width+1, "…")
+}
+
+func compactTokenCount(value int) string {
+	var unit int
+	var suffix string
+	switch {
+	case value >= 1_000_000_000:
+		unit, suffix = 1_000_000_000, "B"
+	case value >= 1_000_000:
+		unit, suffix = 1_000_000, "M"
+	case value >= 1_000:
+		unit, suffix = 1_000, "K"
+	default:
+		return strconv.Itoa(value)
+	}
+
+	whole := value / unit
+	remainder := value % unit
+	if tenths := remainder / (unit / 10); whole < 10 && tenths > 0 {
+		return strconv.Itoa(whole) + "." + strconv.Itoa(tenths) + suffix
+	}
+	rounded := whole
+	if remainder >= unit/2 {
+		rounded++
+	}
+	return strconv.Itoa(rounded) + suffix
 }

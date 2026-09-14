@@ -264,8 +264,8 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case conversationview.RetryMsg:
 		return m, m.retryConversationOperation()
 
-	case statusEnvironmentMsg:
-		m.applyStatusEnvironment(msg)
+	case statusWorkspaceMsg:
+		m.applyStatusWorkspace(msg)
 		return m, nil
 
 	case statusIdentityMsg:
@@ -612,7 +612,6 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Context: turnContext})
 	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
-	m.usage = nil
 	m.clearNotice()
 	m.refreshViewport()
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
@@ -715,11 +714,11 @@ func (m *Model) resize(w, h int) {
 }
 
 // refreshViewport re-syncs the transcript list and sizes it to the space left by
-// the status line and the (possibly multi-row) editor.
+// the notice, the (possibly multi-row) editor, and the metadata footer.
 func (m *Model) refreshViewport() {
 	if m.mode == ModeTermInit {
 		return
 	}
-	m.list.SetHeight(max(1, m.height-1-m.composerHeight()))
+	m.list.SetHeight(max(1, m.height-chatNoticeHeight-chatFooterHeight-m.composerHeight()))
 	m.list.SetItems(m.blocks)
 }

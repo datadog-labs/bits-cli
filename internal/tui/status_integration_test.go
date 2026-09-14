@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,6 +20,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	statusview "github.com/DataDog/bits-cli/internal/tui/status"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 type localStatusBackend struct{ t *testing.T }
@@ -43,42 +48,30 @@ func (*localStatusBackend) CurrentUser(context.Context) (assistant.CurrentUser, 
 	}, nil
 }
 
-type staticStatusProvider struct {
-	environment statusview.Environment
-	calls       int
-}
-
-func (p *staticStatusProvider) Collect(context.Context) statusview.Environment {
-	p.calls++
-	return p.environment
-}
-
-type cancelObservingStatusProvider struct {
-	started  chan struct{}
-	canceled chan struct{}
-}
-
-func (p *cancelObservingStatusProvider) Collect(ctx context.Context) statusview.Environment {
-	close(p.started)
-	<-ctx.Done()
-	close(p.canceled)
-	return statusview.Environment{}
-}
-
-func newStatusModel(t *testing.T, provider statusview.Provider) *Model {
+func newStatusModel(t *testing.T) *Model {
 	t.Helper()
-	return newStatusModelWithBackend(t, provider, &localStatusBackend{t: t})
+	return newStatusModelWithBackend(t, &localStatusBackend{t: t})
 }
 
-func newStatusModelWithBackend(t *testing.T, provider statusview.Provider, backend agent.Backend) *Model {
+func newStatusModelWithBackend(t *testing.T, backend agent.Backend) *Model {
+	t.Helper()
+	return newStatusModelAt(t, t.TempDir(), backend)
+}
+
+func newStatusModelAt(t *testing.T, root string, backend agent.Backend) *Model {
 	t.Helper()
 	tools, err := agent.NewToolSet(agent.ModeGated)
 	if err != nil {
 		t.Fatal(err)
 	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ws.Close() })
 	m := New(
 		agent.New(backend, assistant.SendOptions{Model: "model-x"}),
-		Config{Tools: tools, StatusProvider: provider},
+		Config{Tools: tools, Workspace: ws},
 	)
 	_ = m.editor.Focus()
 	return m
@@ -106,20 +99,14 @@ func runStatusLoad(t *testing.T, m *Model, command tea.Cmd) {
 }
 
 func TestSubmitStatusIsLocalAndLoadsFreshWorkspace(t *testing.T) {
-	provider := &staticStatusProvider{environment: statusview.Environment{
-		WorkingDirectory: "/work/bits-cli",
-		Repository: statusview.Repository{
-			State:  statusview.RepositoryPresent,
-			Root:   "/work/bits-cli",
-			Name:   "bits-cli",
-			Branch: "main",
-			Commit: "0123456789abcdef0123456789abcdef01234567",
-			Changes: statusview.Changes{
-				Known: true,
-			},
-		},
-	}}
-	m := newStatusModel(t, provider)
+	repo := t.TempDir()
+	runStatusGit(t, repo, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runStatusGit(t, repo, "add", ".")
+	runStatusGit(t, repo, "-c", "user.name=Bits Test", "-c", "user.email=bits@example.com", "commit", "-m", "initial")
+	m := newStatusModelAt(t, repo, &localStatusBackend{t: t})
 	m.resize(96, 40)
 	m.editor.Update(tea.PasteMsg{Content: "/status"})
 	_, command := m.submit()
@@ -130,23 +117,28 @@ func TestSubmitStatusIsLocalAndLoadsFreshWorkspace(t *testing.T) {
 		t.Fatalf("status did not show pending identity state:\n%s", view)
 	}
 	runStatusLoad(t, m, command)
-	if provider.calls != 1 {
-		t.Fatalf("workspace collections = %d, want 1", provider.calls)
-	}
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{
 		"https://api.us3.datadoghq.com", "oauth · authenticated", "cli", "model-x", "gated",
 		"Bits User · Bits Staging",
-		"/work/bits-cli", "bits-cli · /work/bits-cli", "main", "clean",
+		"Workspace", "Directory", "Repository", filepath.Base(repo), "main", "clean",
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("status missing %q:\n%s", want, view)
 		}
 	}
+
+	m.closeStatus()
+	runStatusGit(t, repo, "switch", "-c", "fresh-branch")
+	_, command = m.dispatchCommand("status")
+	runStatusLoad(t, m, command)
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "fresh-branch") {
+		t.Fatalf("reopened status did not load a fresh workspace snapshot:\n%s", view)
+	}
 }
 
 func TestStatusExecutesOnFirstEnterWithExactCompletionOpen(t *testing.T) {
-	m := newStatusModel(t, &staticStatusProvider{})
+	m := newStatusModel(t)
 	m.resize(80, 24)
 	m.editor.Update(tea.PasteMsg{Content: "/status"})
 	if !m.editor.MenuOpen() {
@@ -160,8 +152,7 @@ func TestStatusExecutesOnFirstEnterWithExactCompletionOpen(t *testing.T) {
 }
 
 func TestStatusDuringActiveTurnPreservesTurnAndTracksObservedState(t *testing.T) {
-	provider := &staticStatusProvider{}
-	m := newStatusModel(t, provider)
+	m := newStatusModel(t)
 	m.resize(96, 40)
 	turn := make(chan agent.Event)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -206,7 +197,7 @@ func TestStatusDuringActiveTurnPreservesTurnAndTracksObservedState(t *testing.T)
 }
 
 func TestLocalTurnErrorDoesNotBecomeAssistantConnectivityFailure(t *testing.T) {
-	m := newStatusModel(t, &staticStatusProvider{})
+	m := newStatusModel(t)
 	m.observeEvent(agent.Event{Kind: agent.EventError, Err: errors.New("local tool failed")})
 
 	if got := m.statusConnectivity(); got != statusview.ConnectivityNotChecked {
@@ -215,7 +206,7 @@ func TestLocalTurnErrorDoesNotBecomeAssistantConnectivityFailure(t *testing.T) {
 }
 
 func TestSuccessfulBackendEventConfirmsConfiguredAuthentication(t *testing.T) {
-	m := newStatusModel(t, &staticStatusProvider{})
+	m := newStatusModel(t)
 	m.observeEvent(agent.Event{Kind: agent.EventUsage})
 
 	if got := m.statusRuntime().AuthenticationState; got != "authenticated" {
@@ -238,7 +229,7 @@ func TestStatusExplainsMissingProfilePermissionWithoutRenderingServerError(t *te
 		localStatusBackend: &localStatusBackend{t: t},
 		err:                errors.Join(assistant.ErrForbidden, errors.New("sensitive upstream detail")),
 	}
-	m := newStatusModelWithBackend(t, &staticStatusProvider{}, backend)
+	m := newStatusModelWithBackend(t, backend)
 	m.resize(96, 40)
 
 	_, command := m.dispatchCommand("status")
@@ -260,7 +251,7 @@ func TestStatusMarksUnauthorizedIdentityLookupAsAuthenticationFailure(t *testing
 		localStatusBackend: &localStatusBackend{t: t},
 		err:                assistant.ErrUnauthorized,
 	}
-	m := newStatusModelWithBackend(t, &staticStatusProvider{}, backend)
+	m := newStatusModelWithBackend(t, backend)
 	m.resize(96, 40)
 
 	_, command := m.dispatchCommand("status")
@@ -276,7 +267,7 @@ func TestActiveTurnEventCannotClearNewerIdentityAuthenticationFailure(t *testing
 		localStatusBackend: &localStatusBackend{t: t},
 		err:                assistant.ErrUnauthorized,
 	}
-	m := newStatusModelWithBackend(t, &staticStatusProvider{}, backend)
+	m := newStatusModelWithBackend(t, backend)
 	m.resize(96, 40)
 	m.turnGen = 7
 	m.turnEvents = make(chan agent.Event)
@@ -321,7 +312,7 @@ func TestStatusReopenCancelsAndIgnoresStaleIdentity(t *testing.T) {
 		firstRelease:       make(chan struct{}),
 		firstDone:          make(chan bool, 1),
 	}
-	m := newStatusModelWithBackend(t, &staticStatusProvider{}, backend)
+	m := newStatusModelWithBackend(t, backend)
 	m.resize(96, 40)
 
 	_, firstLoad := m.dispatchCommand("status")
@@ -359,7 +350,7 @@ func TestStatusReopenCancelsAndIgnoresStaleIdentity(t *testing.T) {
 }
 
 func TestStatusReopenIgnoresStaleCloseMessage(t *testing.T) {
-	m := newStatusModel(t, &staticStatusProvider{})
+	m := newStatusModel(t)
 	m.resize(96, 40)
 	defer m.closeStatus()
 
@@ -379,20 +370,38 @@ func TestStatusReopenIgnoresStaleCloseMessage(t *testing.T) {
 }
 
 func TestCtrlCCancelsStatusCollectionAndQuits(t *testing.T) {
-	provider := &cancelObservingStatusProvider{
-		started:  make(chan struct{}),
-		canceled: make(chan struct{}),
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper uses a POSIX executable script")
 	}
-	m := newStatusModel(t, provider)
+	bin := t.TempDir()
+	started := filepath.Join(t.TempDir(), "started")
+	gitPath := filepath.Join(bin, "git")
+	script := "#!/bin/sh\n: > \"$BITS_STATUS_GIT_STARTED\"\nexec sleep 30\n"
+	if err := os.WriteFile(gitPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BITS_STATUS_GIT_STARTED", started)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	m := newStatusModel(t)
 	m.resize(96, 40)
 
 	_, load := m.dispatchCommand("status")
 	batch := statusBatch(t, load)
-	go func() { _ = batch[0]() }()
-	select {
-	case <-provider.started:
-	case <-time.After(time.Second):
-		t.Fatal("status collection did not start")
+	workspaceDone := make(chan struct{})
+	go func() {
+		_ = batch[0]()
+		close(workspaceDone)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("status collection did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	_, quit := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
@@ -403,11 +412,21 @@ func TestCtrlCCancelsStatusCollectionAndQuits(t *testing.T) {
 		t.Fatalf("ctrl+c command = %T, want tea.QuitMsg", quit())
 	}
 	select {
-	case <-provider.canceled:
+	case <-workspaceDone:
 	case <-time.After(time.Second):
 		t.Fatal("ctrl+c did not cancel status collection")
 	}
 	if m.statusCancel != nil {
 		t.Fatal("ctrl+c retained status cancellation handle")
+	}
+}
+
+func runStatusGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	commandArgs := append([]string{"-c", "commit.gpgsign=false"}, args...)
+	command := exec.CommandContext(t.Context(), "git", commandArgs...)
+	command.Dir = dir
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
 	}
 }
