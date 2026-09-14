@@ -30,7 +30,7 @@ func TestConfigForSite_Staging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WithCallbackDomain: %v", err)
 	}
-	if cfg.TokenURL != "https://api.datad0g.com/oauth2/v1/token" {
+	if cfg.TokenURL != "https://api.datad0g.com/api/v2/oauth2/token" {
 		t.Errorf("TokenURL = %q", cfg.TokenURL)
 	}
 	if cfg.AssistantBase != "https://api.datad0g.com" {
@@ -191,7 +191,7 @@ func TestWithCallbackDomain_UnknownRegionWorksByDefault(t *testing.T) {
 	if cfg.Site != apiBase || cfg.AssistantBase != apiBase {
 		t.Errorf("routing = Site %q, AssistantBase %q; want %q", cfg.Site, cfg.AssistantBase, apiBase)
 	}
-	if cfg.TokenURL != apiBase+"/oauth2/v1/token" || cfg.RevokeURL != apiBase+"/oauth2/v1/revoke" {
+	if cfg.TokenURL != apiBase+"/api/v2/oauth2/token" || cfg.RevokeURL != apiBase+"/oauth2/v1/revoke" {
 		t.Errorf("OAuth endpoints = token %q, revoke %q", cfg.TokenURL, cfg.RevokeURL)
 	}
 	if cfg.AuthorizeURL != initial.AuthorizeURL {
