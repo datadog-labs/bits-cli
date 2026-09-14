@@ -5,6 +5,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -152,19 +153,19 @@ type Model struct {
 	chatStyles chat.Styles
 	styles     styles.Theme // terminal styles; dark until detected
 
-	// Agent activity animation. animFrame is the step handed to the transcript;
-	// animGeneration stamps the armed tick chain so a superseded one dies
-	// instead of double-advancing the frame.
-	animFrame      int
-	animGeneration uint64
-	animArmed      bool
+	// One repaint clock samples independent elapsed-time timelines for tool
+	// activity and the composer sweep. Its generation drops ticks left over
+	// from a superseded armed chain.
+	animationGeneration uint64
+	animationArmed      bool
 
-	// Composer border-sweep animation. Independent of the tool-activity clock
-	// above: it tracks m.chatPhase (Waiting/Streaming) rather than in-flight
-	// tool blocks, and runs on its own tick (borderSweepInterval).
-	borderSweepFrame      int
-	borderSweepGeneration uint64
-	borderSweepArmed      bool
+	animFrame            int
+	toolAnimationActive  bool
+	toolAnimationStarted time.Time
+
+	borderSweepFrame   int
+	borderSweepActive  bool
+	borderSweepStarted time.Time
 
 	// Terminal dimensions are cached so a chat installed after startup login can
 	// be laid out immediately; Bubble Tea does not replay its initial size event.

@@ -51,7 +51,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	m.clearNotice()
 	m.setMode(ModeChat)
 	m.list.ScrollToBottom()
-	return batchCommands(closeFileSearch, m.syncBorderSweep()) // Update reconciles editor focus after the mode change.
+	return closeFileSearch // Update reconciles focus and animations after the mode change.
 }
 
 type conversationRetry int
@@ -216,7 +216,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	m.conversationClosing = false
 	m.picker = nil
 	m.setMode(ModeChat)
-	return m.syncBorderSweep() // Update reconciles editor focus after the mode change.
+	return nil // Update reconciles focus and animations after the mode change.
 }
 
 func (m *Model) retryConversationOperation() tea.Cmd {

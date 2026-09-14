@@ -91,6 +91,9 @@ func TestThemeExposesSweepColors(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			in := Default(test.isDark).Input
+			if !in.SweepMotion {
+				t.Error("SweepMotion = false, want true in the default theme")
+			}
 			if got, want := in.SweepDim, lipgloss.Color(test.palette.inputRule); got != want {
 				t.Errorf("SweepDim = %v, want %v", got, want)
 			}
@@ -98,5 +101,11 @@ func TestThemeExposesSweepColors(t *testing.T) {
 				t.Errorf("SweepHot = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+func TestThemeWithoutMotionDisablesBorderSweep(t *testing.T) {
+	if Default(true).WithoutMotion().Input.SweepMotion {
+		t.Error("WithoutMotion left the input border sweep enabled")
 	}
 }

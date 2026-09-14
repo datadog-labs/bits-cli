@@ -29,8 +29,10 @@ type Input struct {
 	Placeholder lipgloss.Style
 	// SweepDim and SweepHot are the border-sweep animation's resting and peak
 	// colors, used by editor.Editor while Bits is generating a response.
-	SweepDim color.Color
-	SweepHot color.Color
+	// SweepMotion lets reduced-motion themes keep the ordinary static border.
+	SweepDim    color.Color
+	SweepHot    color.Color
+	SweepMotion bool
 }
 
 // PromptWidth returns the number of cells occupied by the input prompt.

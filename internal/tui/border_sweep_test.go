@@ -2,205 +2,180 @@ package tui
 
 import (
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
-func TestBorderSweepArmsWhileWaitingOrStreaming(t *testing.T) {
-	for _, phase := range []chat.Phase{chat.PhaseWaiting, chat.PhaseStreaming} {
-		m := newShell()
-		m.mode = ModeChat
-		m.resize(80, 24)
-		m.chatPhase = phase
-		if cmd := m.syncBorderSweep(); cmd == nil {
-			t.Fatalf("phase %v: syncBorderSweep() returned no command; the tick was never armed", phase)
-		}
-		if !m.borderSweepArmed {
-			t.Errorf("phase %v: model should report the border sweep as armed", phase)
-		}
-	}
-}
-
-func TestBorderSweepStaysIdleOutsideWaitingOrStreaming(t *testing.T) {
-	for _, phase := range []chat.Phase{chat.PhaseIdle, chat.PhaseLoading, chat.PhaseError} {
-		m := newShell()
-		m.mode = ModeChat
-		m.resize(80, 24)
-		m.chatPhase = phase
-		if cmd := m.syncBorderSweep(); cmd != nil {
-			t.Errorf("phase %v: syncBorderSweep() armed a tick outside Waiting/Streaming", phase)
-		}
-		if m.borderSweepArmed {
-			t.Errorf("phase %v: model should not report the border sweep as armed", phase)
-		}
-	}
-}
-
-func TestBorderSweepArmsOnlyOnce(t *testing.T) {
+func sweepModel(phase chat.Phase) *Model {
 	m := newShell()
 	m.mode = ModeChat
 	m.resize(80, 24)
-	m.chatPhase = chat.PhaseWaiting
-	if cmd := m.syncBorderSweep(); cmd == nil {
-		t.Fatal("first sync should arm the tick")
-	}
-	if cmd := m.syncBorderSweep(); cmd != nil {
-		t.Error("second sync armed a parallel tick chain")
-	}
-}
-
-func TestBorderSweepTickAdvancesFrameAndRearms(t *testing.T) {
-	m := newShell()
-	m.mode = ModeChat
-	m.resize(80, 24)
-	// Production reaches this state through Init(), which focuses the editor
-	// before any tick fires. Without it, the first m.Update() call here would
-	// bundle reconcileFocus's own Focus() command into the result, muddying
-	// assertions about what the border-sweep path alone returned.
 	m.editor.Focus()
-	m.chatPhase = chat.PhaseWaiting
-	m.syncBorderSweep()
-
-	_, cmd := m.Update(borderSweepTickMsg{generation: m.borderSweepGeneration})
-	if cmd == nil {
-		t.Fatal("a live tick should re-arm the chain")
-	}
-	if m.borderSweepFrame != 1 {
-		t.Errorf("frame = %d, want 1", m.borderSweepFrame)
-	}
-}
-
-func TestStaleBorderSweepTickIsDropped(t *testing.T) {
-	m := newShell()
-	m.mode = ModeChat
-	m.resize(80, 24)
-	// See TestBorderSweepTickAdvancesFrameAndRearms: focus the editor up front
-	// so reconcileFocus's own Focus() command doesn't muddy the cmd assertion.
-	m.editor.Focus()
-	m.chatPhase = chat.PhaseWaiting
-	m.syncBorderSweep()
-	live := m.borderSweepGeneration
-
-	_, cmd := m.Update(borderSweepTickMsg{generation: live - 1})
-	if cmd != nil {
-		t.Error("a stale tick should not re-arm the chain")
-	}
-	if m.borderSweepFrame != 0 {
-		t.Errorf("frame = %d, want 0; a stale tick advanced the animation", m.borderSweepFrame)
-	}
-}
-
-func TestBorderSweepDisarmsWhenPhaseReturnsToIdle(t *testing.T) {
-	m := newShell()
-	m.mode = ModeChat
-	m.resize(80, 24)
-	// See TestBorderSweepTickAdvancesFrameAndRearms: focus the editor up front
-	// so reconcileFocus's own Focus() command doesn't muddy the cmd assertion.
-	m.editor.Focus()
-	m.chatPhase = chat.PhaseWaiting
-	m.syncBorderSweep()
-	m.Update(borderSweepTickMsg{generation: m.borderSweepGeneration})
-	if m.borderSweepFrame == 0 {
-		t.Fatal("expected the frame to have advanced")
-	}
-	stale := m.borderSweepGeneration
-
-	m.chatPhase = chat.PhaseIdle
-	if cmd := m.syncBorderSweep(); cmd != nil {
-		t.Error("syncBorderSweep() re-armed a tick after returning to idle")
-	}
-	if m.borderSweepArmed {
-		t.Error("border sweep should be disarmed once the phase is idle")
-	}
-	if m.borderSweepFrame != 0 {
-		t.Errorf("frame = %d, want it reset to 0", m.borderSweepFrame)
-	}
-	if m.borderSweepGeneration == stale {
-		t.Error("disarming should bump the generation so in-flight ticks are dropped")
-	}
-}
-
-func TestBorderSweepIsIndependentOfToolAnimation(t *testing.T) {
-	// Regression guard for the "must not reuse animation.go" requirement: a
-	// tool-activity tick must not move the border-sweep frame, and vice versa.
-	m := newShell()
-	m.mode = ModeChat
-	m.blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.turnEvents = make(chan agent.Event)
-	m.resize(80, 24)
-	// See TestBorderSweepTickAdvancesFrameAndRearms: focus the editor up front
-	// so reconcileFocus's own Focus() command doesn't muddy the cmd assertions.
-	m.editor.Focus()
-	m.chatPhase = chat.PhaseWaiting
+	m.chatPhase = phase
+	return m
+}
 
-	m.syncAnimation()
-	m.syncBorderSweep()
-
-	m.Update(animTickMsg{generation: m.animGeneration})
-	if m.borderSweepFrame != 0 {
-		t.Error("a tool-activity tick advanced the border-sweep frame")
-	}
-	animFrameAfterAnimTick := m.animFrame
-	if animFrameAfterAnimTick == 0 {
-		t.Fatal("expected the tool-activity tick to have advanced animFrame")
+func TestBorderSweepArmsOnlyForActiveTurnPhases(t *testing.T) {
+	for _, phase := range []chat.Phase{chat.PhaseWaiting, chat.PhaseStreaming} {
+		m := sweepModel(phase)
+		if cmd := m.syncAnimations(); cmd == nil || !m.borderSweepActive || !m.animationArmed {
+			t.Errorf("phase %v did not start sweep and clock", phase)
+		}
 	}
 
-	m.Update(borderSweepTickMsg{generation: m.borderSweepGeneration})
-	if m.animFrame != animFrameAfterAnimTick {
-		t.Error("a border-sweep tick advanced the tool-activity frame")
+	for _, phase := range []chat.Phase{chat.PhaseIdle, chat.PhaseLoading, chat.PhaseError} {
+		m := sweepModel(phase)
+		if cmd := m.syncAnimations(); cmd != nil || m.borderSweepActive || m.animationArmed {
+			t.Errorf("phase %v started sweep outside active work", phase)
+		}
 	}
 }
 
-func TestSubmitArmsTheBorderSweep(t *testing.T) {
+func TestBorderSweepRequiresLiveTurn(t *testing.T) {
+	m := sweepModel(chat.PhaseStreaming)
+	m.turnEvents = nil
+	if cmd := m.syncAnimations(); cmd != nil || m.borderSweepActive {
+		t.Fatal("stale streaming phase without a live turn started sweep")
+	}
+}
+
+func TestBorderSweepPausesWhenEverythingWaitsForApproval(t *testing.T) {
+	m := sweepModel(chat.PhaseWaiting)
+	m.blocks = []agent.Block{animToolBlock(agent.ToolAwaitingApproval)}
+	m.pendingApprovals = append([]agent.Block(nil), m.blocks...)
+	m.refreshViewport()
+
+	if cmd := m.syncAnimations(); cmd != nil || m.animationArmed || m.borderSweepActive {
+		t.Fatal("approval-only wait started an animation clock")
+	}
+}
+
+func TestBorderSweepContinuesWhenApprovalAndRunningToolCoexist(t *testing.T) {
+	m := sweepModel(chat.PhaseWaiting)
+	approval := animToolBlock(agent.ToolAwaitingApproval)
+	running := animToolBlock(agent.ToolRunning)
+	running.ID.Key = "call-2"
+	m.blocks = []agent.Block{approval, running}
+	m.pendingApprovals = []agent.Block{approval}
+	m.refreshViewport()
+
+	if cmd := m.syncAnimations(); cmd == nil {
+		t.Fatal("parallel running tool did not start shared clock")
+	}
+	if !m.toolAnimationActive || !m.borderSweepActive {
+		t.Fatalf("tool=%v sweep=%v, want both active", m.toolAnimationActive, m.borderSweepActive)
+	}
+}
+
+func TestWithoutMotionDisablesSweepButNotToolAnimation(t *testing.T) {
+	m := sweepModel(chat.PhaseWaiting)
+	m.blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
+	m.refreshViewport()
+	m.applyStyles(styles.Default(true).WithoutMotion())
+
+	if cmd := m.syncAnimations(); cmd == nil {
+		t.Fatal("running tool should still start the shared clock")
+	}
+	if m.borderSweepActive {
+		t.Fatal("WithoutMotion left border sweep active")
+	}
+	if !m.toolAnimationActive || !m.animationArmed {
+		t.Fatal("WithoutMotion disabled glyph-based tool activity")
+	}
+}
+
+func TestWithoutMotionKeepsSweepOnlyClockIdle(t *testing.T) {
+	m := sweepModel(chat.PhaseWaiting)
+	m.applyStyles(styles.Default(true).WithoutMotion())
+	if cmd := m.syncAnimations(); cmd != nil || m.animationArmed {
+		t.Fatal("motion-disabled sweep started a repaint clock")
+	}
+}
+
+func TestSweepStopsOutsideChatAndRestartsOnReturn(t *testing.T) {
+	m := sweepModel(chat.PhaseStreaming)
+	m.syncAnimations()
+	m.setMode(ModeStatus)
+	m.Update(struct{}{})
+	if m.animationArmed || m.borderSweepActive {
+		t.Fatal("hidden composer kept sweep clock running")
+	}
+
+	m.setMode(ModeChat)
+	m.Update(struct{}{})
+	if !m.animationArmed || !m.borderSweepActive {
+		t.Fatal("returning to chat did not restart sweep")
+	}
+}
+
+func TestSweepStopsAtApprovalMinimumSizeAndRestarts(t *testing.T) {
+	m := sweepModel(chat.PhaseWaiting)
+	running := animToolBlock(agent.ToolRunning)
+	approval := animToolBlock(agent.ToolAwaitingApproval)
+	approval.ID.Key = "approval"
+	m.blocks = []agent.Block{running, approval}
+	m.pendingApprovals = []agent.Block{approval}
+	m.refreshViewport()
+	m.syncAnimations()
+
+	m.Update(tea.WindowSizeMsg{Width: minimumApprovalWidth - 1, Height: minimumApprovalHeight})
+	if m.animationArmed {
+		t.Fatal("hidden approval/chat view kept shared clock running")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if !m.animationArmed || !m.borderSweepActive || !m.toolAnimationActive {
+		t.Fatal("resizing back did not restart animations")
+	}
+}
+
+func TestStoppingLastAnimationInvalidatesSharedClock(t *testing.T) {
+	m := sweepModel(chat.PhaseWaiting)
+	start := time.Unix(100, 0)
+	m.syncAnimationsAt(start)
+	m.advanceAnimations(animationTickMsg{generation: m.animationGeneration, at: start.Add(100 * time.Millisecond)})
+	stale := m.animationGeneration
+	m.chatPhase = chat.PhaseIdle
+	m.syncAnimationsAt(start.Add(time.Second))
+
+	if m.animationArmed || m.borderSweepActive || m.borderSweepFrame != 0 {
+		t.Fatal("idle phase did not reset and disarm sweep")
+	}
+	if m.animationGeneration == stale {
+		t.Fatal("disarm did not invalidate pending tick")
+	}
+}
+
+func TestSubmitArmsSharedClockForSweep(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "new"}))
 	m.mode = ModeChat
 	m.resize(80, 24)
 	m.editor.Focus()
-
 	m.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	if !m.borderSweepArmed {
-		t.Fatal("submitting a message did not arm the border sweep")
+	if !m.animationArmed || !m.borderSweepActive {
+		t.Fatal("submitting a message did not arm the sweep clock")
 	}
 }
 
-func TestTurnDoneDisarmsTheBorderSweep(t *testing.T) {
+func TestTurnDoneDisarmsSweepClock(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.resize(80, 24)
 	m.chatPhase = chat.PhaseStreaming
 	m.turnEvents = make(chan agent.Event)
 	m.turnGen = 1
-	m.syncBorderSweep()
-	if !m.borderSweepArmed {
-		t.Fatal("expected the border sweep to be armed while streaming")
-	}
-
+	m.syncAnimations()
 	m.Update(turnEventMsg{generation: 1, ev: agent.Event{Kind: agent.EventTurnDone}})
 
-	if m.borderSweepArmed {
-		t.Error("the border sweep is still armed after EventTurnDone")
-	}
-}
-
-func TestNewConversationDisarmsTheBorderSweep(t *testing.T) {
-	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
-	m.mode = ModeChat
-	m.resize(80, 24)
-	m.chatPhase = chat.PhaseWaiting
-	m.syncBorderSweep()
-	if !m.borderSweepArmed {
-		t.Fatal("expected the border sweep to be armed")
-	}
-
-	m.dispatchCommand("new")
-
-	if m.borderSweepArmed {
-		t.Error("the idle /new path left the border sweep armed")
+	if m.animationArmed || m.borderSweepActive {
+		t.Fatal("EventTurnDone left the sweep clock armed")
 	}
 }

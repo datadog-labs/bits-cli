@@ -3,55 +3,31 @@ package tui
 import (
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
-// borderSweepInterval is one frame of the composer's border-sweep animation.
-// It is a separate clock from animInterval (animation.go), so either can be
-// retimed or disabled independently.
+// borderSweepInterval is the composer's logical animation step. The shared
+// clock samples this timeline at its lower repaint rate, skipping intermediate
+// frames while preserving the sweep's speed.
 const borderSweepInterval = 17 * time.Millisecond
 
-// borderSweepTickMsg advances the composer border sweep. generation
-// identifies the armed tick chain, guarding against a superseded chain
-// double-advancing the frame.
-type borderSweepTickMsg struct{ generation uint64 }
-
-// borderSweepTick schedules the next border-sweep frame.
-func borderSweepTick(generation uint64) tea.Cmd {
-	return tea.Tick(borderSweepInterval, func(time.Time) tea.Msg {
-		return borderSweepTickMsg{generation: generation}
-	})
+func (m *Model) animationsVisible() bool {
+	return m.mode == ModeChat && !m.chatViewTooSmall()
 }
 
-// syncBorderSweep arms or disarms the border-sweep tick to match m.chatPhase.
-// It returns a command only when it starts a chain, so calling it from every
-// chatPhase-mutating site is safe and idempotent.
-func (m *Model) syncBorderSweep() tea.Cmd {
-	want := m.chatPhase == chat.PhaseWaiting || m.chatPhase == chat.PhaseStreaming
-	if want == m.borderSweepArmed {
-		return nil
-	}
-
-	m.borderSweepGeneration++
-	m.borderSweepArmed = want
-	m.editor.SetWorking(want)
-	if !want {
-		m.borderSweepFrame = 0
-		m.editor.SetSweepFrame(0)
-		return nil
-	}
-	return borderSweepTick(m.borderSweepGeneration)
+func (m *Model) toolAnimationWanted() bool {
+	return m.animationsVisible() && m.turnEvents != nil && m.list.HasAnimated()
 }
 
-// advanceBorderSweep handles one frame of the armed chain and re-arms it. A
-// tick from a superseded chain returns no command, ending that chain.
-func (m *Model) advanceBorderSweep(msg borderSweepTickMsg) tea.Cmd {
-	if !m.borderSweepArmed || msg.generation != m.borderSweepGeneration {
-		return nil
+// borderSweepWanted distinguishes active work from an approval-only wait. If
+// approvals coexist with a running tool, work is still progressing and the
+// sweep remains active.
+func (m *Model) borderSweepWanted() bool {
+	if !m.animationsVisible() || !m.styles.Input.SweepMotion || m.turnEvents == nil {
+		return false
 	}
-	m.borderSweepFrame++
-	m.editor.SetSweepFrame(m.borderSweepFrame)
-	return borderSweepTick(m.borderSweepGeneration)
+	if m.chatPhase != chat.PhaseWaiting && m.chatPhase != chat.PhaseStreaming {
+		return false
+	}
+	return len(m.pendingApprovals) == 0 || m.list.HasAnimated()
 }

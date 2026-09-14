@@ -224,6 +224,42 @@ func TestSetSweepFrameOnlyInvalidatesWhileWorking(t *testing.T) {
 	}
 }
 
+func TestSweepFrameReusesPreparedBody(t *testing.T) {
+	e := New()
+	e.SetWidth(40)
+	e.SetWorking(true)
+	_ = e.View()
+	body := e.body
+
+	e.SetSweepFrame(30)
+	if !e.bodyCached {
+		t.Fatal("SetSweepFrame invalidated the static composer body")
+	}
+	_ = e.View()
+	if e.body != body {
+		t.Fatal("rendering a new sweep frame rebuilt the static composer body")
+	}
+}
+
+func TestWithoutMotionUsesStaticBorderWhileWorking(t *testing.T) {
+	e := New()
+	e.SetWidth(40)
+	e.SetInputStyles(styles.Default(true).WithoutMotion().Input)
+	baseline := e.View()
+
+	e.SetWorking(true)
+	if !e.viewCached {
+		t.Fatal("SetWorking invalidated a reduced-motion editor with unchanged output")
+	}
+	e.SetSweepFrame(30)
+	if !e.viewCached {
+		t.Fatal("SetSweepFrame invalidated a reduced-motion editor")
+	}
+	if got := e.View(); got != baseline {
+		t.Error("working reduced-motion editor differs from its static baseline")
+	}
+}
+
 func TestWorkingViewKeepsTheSameOverallHeight(t *testing.T) {
 	// The sweep row replaces the block's own top-border row, so height is
 	// unchanged.
@@ -251,6 +287,28 @@ func TestWorkingViewTopRowWidthMatchesBlockWidth(t *testing.T) {
 	blockWidth := ansi.StringWidth(lines[1])
 	if sweepWidth != blockWidth {
 		t.Errorf("sweep row width = %d, block row width = %d, want equal", sweepWidth, blockWidth)
+	}
+}
+
+func TestPreparedSweepTracksResizeAndThemeChanges(t *testing.T) {
+	e := New()
+	e.SetWidth(40)
+	e.SetWorking(true)
+	_ = e.View()
+
+	e.SetWidth(64)
+	resized := e.View()
+	if got := ansi.StringWidth(strings.Split(resized, "\n")[0]); got != 64 {
+		t.Fatalf("sweep width after resize = %d, want 64", got)
+	}
+	if e.sweepWidth != 64 {
+		t.Fatalf("prepared sweep width = %d, want 64", e.sweepWidth)
+	}
+
+	e.SetInputStyles(styles.Default(false).Input)
+	light := e.View()
+	if light == resized {
+		t.Error("working view did not adopt the new theme")
 	}
 }
 

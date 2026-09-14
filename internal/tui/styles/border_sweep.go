@@ -26,18 +26,40 @@ func easeInOutSine(x float64) float64 {
 	return -(math.Cos(math.Pi*x) - 1) / 2
 }
 
-// BorderSweepRow renders one frame of the animated composer top border for the
-// given width in cells. dim is the resting color, hot is the band's peak
-// color, and bg is the composer's background.
-//
-// frame is a monotonically increasing (or decreasing) tick counter; the band
-// ping-pongs between the two edges, inset ~10% short of fully off-screen on
-// each side so the bounce reads as deliberate. It is computed fresh from
-// width and frame on every call, so it stays correct across a resize.
-func BorderSweepRow(width, frame int, dim, hot, bg color.Color) string {
+// BorderSweep is a prepared composer-border animation. Preparing it once when
+// the width or theme changes keeps color interpolation and lipgloss rendering
+// out of the per-frame path.
+type BorderSweep struct {
+	width     int
+	dimCell   string
+	rampCells []string
+}
+
+// NewBorderSweep prepares a composer-border sweep for repeated rendering.
+func NewBorderSweep(width int, dim, hot, bg color.Color) BorderSweep {
 	if width <= 0 {
+		return BorderSweep{}
+	}
+	ramp := gradientRamp(sweepBandWidth, dim, hot, dim)
+	rampCells := make([]string, len(ramp))
+	for i, c := range ramp {
+		rampCells[i] = lipgloss.NewStyle().Foreground(c).Background(bg).Render(sweepGlyph)
+	}
+	return BorderSweep{
+		width:     width,
+		dimCell:   lipgloss.NewStyle().Foreground(dim).Background(bg).Render(sweepGlyph),
+		rampCells: rampCells,
+	}
+}
+
+// Row renders one frame. frame is a monotonically increasing (or decreasing)
+// tick counter; the band ping-pongs between the edges, inset ~10% short of
+// fully off-screen on each side so the bounce reads as deliberate.
+func (s BorderSweep) Row(frame int) string {
+	if s.width <= 0 {
 		return ""
 	}
+	width := s.width
 	fullTravel := width + sweepBandWidth
 	inset := fullTravel / 10
 	travel := fullTravel - 2*inset
@@ -49,15 +71,21 @@ func BorderSweepRow(width, frame int, dim, hot, bg color.Color) string {
 	eased := int(math.Round(easeInOutSine(float64(t)/float64(travel)) * float64(travel)))
 	pos := eased - sweepBandWidth + inset
 
-	ramp := gradientRamp(sweepBandWidth, dim, hot, dim)
-
 	var b strings.Builder
+	b.Grow(width * len(s.dimCell))
 	for i := range width {
-		c := dim
-		if offset := i - pos; offset >= 0 && offset < sweepBandWidth && len(ramp) > 0 {
-			c = ramp[offset]
+		cell := s.dimCell
+		if offset := i - pos; offset >= 0 && offset < len(s.rampCells) {
+			cell = s.rampCells[offset]
 		}
-		b.WriteString(lipgloss.NewStyle().Foreground(c).Background(bg).Render(sweepGlyph))
+		b.WriteString(cell)
 	}
 	return b.String()
+}
+
+// BorderSweepRow renders one frame of an animated composer top border. Callers
+// drawing multiple frames should retain a BorderSweep instead, so preparation
+// is paid only when width or colors change.
+func BorderSweepRow(width, frame int, dim, hot, bg color.Color) string {
+	return NewBorderSweep(width, dim, hot, bg).Row(frame)
 }

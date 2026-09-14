@@ -164,7 +164,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	next, cmd := m.dispatch(msg)
-	return next, tea.Batch(cmd, m.reconcileFocus())
+	return next, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus())
 }
 
 func (m *Model) quit() (tea.Model, tea.Cmd) {
@@ -207,11 +207,8 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setDarkBackground(msg.IsDark())
 		return m, nil
 
-	case animTickMsg:
-		return m, m.advanceAnimation(msg)
-
-	case borderSweepTickMsg:
-		return m, m.advanceBorderSweep(msg)
+	case animationTickMsg:
+		return m, m.advanceAnimations(msg)
 
 	case entitySearchDebounceMsg:
 		return m, m.beginEntitySearch(msg)
@@ -242,10 +239,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.applyEvent(msg.ev)
 		m.syncStatus()
 		m.refreshViewport()
-		// Live tool and reasoning state changes on engine events, so this is
-		// where transcript activity animation starts and stops. chatPhase changes
-		// on the same events, so the border sweep resyncs here too.
-		return m, tea.Batch(cmd, m.syncAnimation(), m.syncBorderSweep(), waitEvent(msg.generation, m.turnEvents))
+		return m, tea.Batch(cmd, waitEvent(msg.generation, m.turnEvents))
 
 	case turnClosedMsg:
 		return m.handleTurnClosed(msg)
@@ -386,26 +380,13 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	m.syncStatus()
 	if m.pendingNew {
 		m.pendingNew = false
-		// Resync *after* the reset. A cancelled client tool can leave its
-		// block reporting ToolRunning, so syncing first would see no change
-		// and leave the chain armed — and the reset that follows empties the
-		// transcript with nothing left to disarm it.
-		return m, tea.Batch(m.startNewConversation(), m.syncAnimation(), m.syncBorderSweep())
+		return m, m.startNewConversation()
 	}
 	if m.pendingLogout {
 		m.pendingLogout = false
-		return m, tea.Batch(m.startLogout(), m.syncAnimation(), m.syncBorderSweep())
+		return m, m.startLogout()
 	}
-	// Resync in case the turn ended with nothing left in flight.
-	//
-	// Known gap: a cancelled turn does NOT settle its tools. The engine's
-	// tool loop returns on ctx.Done() after cancelling the per-tool
-	// contexts, without emitting a final block state, so after a Ctrl+C the
-	// blocks still report ToolRunning. This sync therefore sees no change
-	// and leaves the tick armed against a tool that is already dead, until
-	// the conversation is reset. Settling those blocks belongs in the
-	// engine, not here; accepted as out of scope for this change.
-	return m, tea.Batch(m.syncAnimation(), m.syncBorderSweep())
+	return m, nil
 }
 
 func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -621,7 +602,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
-	return m, batchCommands(closeFileSearch, wait, m.syncBorderSweep())
+	return m, batchCommands(closeFileSearch, wait)
 }
 
 func (m *Model) beginRemote(events <-chan agent.Event, cancel context.CancelFunc) tea.Cmd {
