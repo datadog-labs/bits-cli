@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"encoding/binary"
+	"hash/fnv"
 	"strings"
 
 	"github.com/DataDog/bits-cli/internal/agent"
@@ -26,9 +28,10 @@ type List struct {
 	follow bool
 
 	items []agent.Block
+	view  []presentationItem
 	sty   Styles
 
-	// frame is the animation step handed to in-flight status chips. It is not
+	// frame is the animation step handed to in-flight status indicators. It is not
 	// part of the cache key: animated blocks bypass the cache entirely (see
 	// renderItem), so advancing the frame never invalidates settled blocks.
 	frame int
@@ -37,10 +40,20 @@ type List struct {
 	renderer blockRenderer
 }
 
+// presentationItem points into List.items. It never copies or rewrites source
+// blocks; it only records the deterministic presentation grouping.
+type presentationItem struct {
+	id            agent.BlockID
+	rev           uint64
+	group         string
+	start, end    int
+	presentations []toolPresentation
+}
+
 // listLineEntry memoizes one block's rendered lines (height is len(lines)),
 // valid while the block's revision and the list width are unchanged.
 type listLineEntry struct {
-	rev   int
+	rev   uint64
 	width int
 	lines []string
 }
@@ -80,10 +93,14 @@ func (l *List) SetStyles(sty Styles) {
 
 // SetItems replaces the block slice, preserving the scroll offset but clamping
 // it so it never points past the end.
+//
+// TODO: Revisit the cost of rebuilding presentation data on UI-only updates if
+// large transcripts become common.
 func (l *List) SetItems(items []agent.Block) {
 	l.items = items
-	if l.offsetIdx >= len(l.items) {
-		l.offsetIdx = max(0, len(l.items)-1)
+	l.view = buildPresentation(items)
+	if l.offsetIdx >= len(l.view) {
+		l.offsetIdx = max(0, len(l.view)-1)
 		l.offsetLine = 0
 	}
 	l.clampOffset()
@@ -94,6 +111,7 @@ func (l *List) SetItems(items []agent.Block) {
 // block IDs and revisions from the previous conversation.
 func (l *List) Reset() {
 	l.items = nil
+	l.view = nil
 	l.offsetIdx = 0
 	l.offsetLine = 0
 	l.follow = true
@@ -103,7 +121,7 @@ func (l *List) Reset() {
 // clampOffset pulls the offset back so the view never scrolls past the last
 // content line.
 func (l *List) clampOffset() {
-	if len(l.items) == 0 || l.height <= 0 {
+	if len(l.view) == 0 || l.height <= 0 {
 		l.offsetIdx, l.offsetLine = 0, 0
 		return
 	}
@@ -118,51 +136,56 @@ func (l *List) invalidateAll() {
 }
 
 // renderItem returns the block's rendered lines, cached by revision and width.
-// Animated blocks are re-rendered every call and never cached, so the
-// per-frame cost tracks the number of in-flight tools rather than the length
-// of the transcript.
+// Animated items are re-rendered every call and never cached, so the per-frame
+// cost tracks the number of in-flight tools rather than transcript length.
 func (l *List) renderItem(idx int) []string {
-	it := l.items[idx]
-	if animated(it) {
-		return strings.Split(l.renderer.RenderBlock(it, l.width, l.sty, l.frame), "\n")
+	it := l.view[idx]
+	if l.itemAnimated(it) {
+		return strings.Split(l.renderPresentationItem(it), "\n")
 	}
-	if e, ok := l.cache[it.ID]; ok && e.rev == it.Rev && e.width == l.width {
+	if e, ok := l.cache[it.id]; ok && e.rev == it.rev && e.width == l.width {
 		return e.lines
 	}
-	lines := strings.Split(l.renderer.RenderBlock(it, l.width, l.sty, l.frame), "\n")
-	l.cache[it.ID] = listLineEntry{rev: it.Rev, width: l.width, lines: lines}
+	lines := strings.Split(l.renderPresentationItem(it), "\n")
+	l.cache[it.id] = listLineEntry{rev: it.rev, width: l.width, lines: lines}
 	return lines
 }
 
-// animated reports whether a block's rendering depends on the frame counter.
-// Only the two in-flight tool states carry an animated status chip.
-//
-// Open question for review: ToolAwaitingApproval is included, so the tick keeps
-// running for as long as the prompt is unanswered — indefinitely if the user
-// walks away. The motion is what draws the eye to something needing action,
-// which is why it is here; dropping it from this predicate is the one-line
-// change if the idle repaints matter more.
-func animated(it agent.Block) bool {
-	if it.Tool == nil {
-		return false
+func (l *List) renderPresentationItem(it presentationItem) string {
+	if it.group == inspectionGroupKey {
+		return renderInspectionGroup(l.items[it.start:it.end], it.presentations, l.width, l.sty, l.frame)
 	}
-	return it.Tool.Status == agent.ToolRunning || it.Tool.Status == agent.ToolAwaitingApproval
+	if len(it.presentations) == 1 {
+		return renderPresentedTool(l.items[it.start].Tool, it.presentations[0], l.width, l.sty, l.frame)
+	}
+	return l.renderer.RenderBlock(l.items[it.start], l.width, l.sty, l.frame)
 }
 
-// HasAnimated reports whether any block currently needs the frame counter to
-// advance. The tui uses it to arm and disarm the animation tick, so an idle
-// transcript costs nothing.
-func (l *List) HasAnimated() bool {
-	for _, it := range l.items {
-		if animated(it) {
+// itemAnimated reports whether rendering depends on the frame counter. Waiting
+// for approval is deliberately static because no work is progressing.
+func (l *List) itemAnimated(it presentationItem) bool {
+	for i := it.start; i < it.end; i++ {
+		if lifecycleOf(l.items[i].Tool) == lifecycleRunning {
 			return true
 		}
 	}
 	return false
 }
 
-// SetFrame sets the animation step used by in-flight status chips. It does not
-// touch the cache, since animated blocks do not use it.
+// HasAnimated reports whether any block currently needs the frame counter to
+// advance. The tui uses it to arm and disarm the animation tick, so an idle
+// transcript costs nothing.
+func (l *List) HasAnimated() bool {
+	for _, it := range l.view {
+		if l.itemAnimated(it) {
+			return true
+		}
+	}
+	return false
+}
+
+// SetFrame sets the animation step used by in-flight indicators. It does not
+// touch the cache, since animated items do not use it.
 func (l *List) SetFrame(frame int) { l.frame = frame }
 
 func (l *List) itemHeight(idx int) int { return len(l.renderItem(idx)) }
@@ -170,11 +193,11 @@ func (l *List) itemHeight(idx int) int { return len(l.renderItem(idx)) }
 // AtBottom reports whether the last item's bottom is visible. It stops once the
 // content exceeds one viewport, so it is O(viewport).
 func (l *List) AtBottom() bool {
-	if len(l.items) == 0 {
+	if len(l.view) == 0 {
 		return true
 	}
 	total := 0
-	for idx := l.offsetIdx; idx < len(l.items); idx++ {
+	for idx := l.offsetIdx; idx < len(l.view); idx++ {
 		if total > l.height {
 			return false
 		}
@@ -191,10 +214,10 @@ func (l *List) AtBottom() bool {
 // last content line at the bottom of the viewport.
 func (l *List) lastOffsetItem() (int, int) {
 	total := 0
-	idx := len(l.items) - 1
+	idx := len(l.view) - 1
 	for ; idx >= 0; idx-- {
 		h := l.itemHeight(idx)
-		if l.gap > 0 && idx < len(l.items)-1 {
+		if l.gap > 0 && idx < len(l.view)-1 {
 			h += l.gap
 		}
 		total += h
@@ -215,7 +238,7 @@ func (l *List) ScrollToTop() {
 // ScrollToBottom pins the view to the last content line and resumes following.
 func (l *List) ScrollToBottom() {
 	l.follow = true
-	if len(l.items) == 0 {
+	if len(l.view) == 0 {
 		l.offsetIdx = 0
 		l.offsetLine = 0
 		return
@@ -226,7 +249,7 @@ func (l *List) ScrollToBottom() {
 // ScrollBy scrolls by the given number of lines (positive is down), rendering
 // only the items it crosses.
 func (l *List) ScrollBy(lines int) {
-	if len(l.items) == 0 || lines == 0 {
+	if len(l.view) == 0 || lines == 0 {
 		return
 	}
 	// A manual scroll re-derives follow: at the bottom we follow, otherwise not.
@@ -243,7 +266,7 @@ func (l *List) ScrollBy(lines int) {
 				l.offsetLine = max(0, l.offsetLine-l.gap)
 			}
 			l.offsetIdx++
-			if l.offsetIdx > len(l.items)-1 {
+			if l.offsetIdx > len(l.view)-1 {
 				l.ScrollToBottom()
 				return
 			}
@@ -291,7 +314,7 @@ func (l *List) Render() string {
 
 	idx := l.offsetIdx
 	off := l.offsetLine
-	for idx < len(l.items) && len(lines) < budget {
+	for idx < len(l.view) && len(lines) < budget {
 		itemLines := l.renderItem(idx)
 		h := len(itemLines)
 
@@ -324,4 +347,78 @@ func (l *List) Render() string {
 		lines = append(lines, "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func buildPresentation(blocks []agent.Block) []presentationItem {
+	items := make([]presentationItem, 0, len(blocks))
+	for i := 0; i < len(blocks); {
+		p, isTool := presentationOfBlock(blocks[i])
+		if !isTool || p.group == "" {
+			var presentation []toolPresentation
+			if isTool {
+				presentation = []toolPresentation{p}
+			}
+			items = append(items, newPresentationItem(blocks, "", i, i+1, presentation))
+			i++
+			continue
+		}
+
+		presentations := []toolPresentation{p}
+		j := i + 1
+		for j < len(blocks) {
+			next, ok := presentationOfBlock(blocks[j])
+			if !ok || next.group != p.group {
+				break
+			}
+			presentations = append(presentations, next)
+			j++
+		}
+		items = append(items, newPresentationItem(blocks, p.group, i, j, presentations))
+		i = j
+	}
+	return items
+}
+
+func presentationOfBlock(block agent.Block) (toolPresentation, bool) {
+	if block.Tool == nil {
+		return toolPresentation{}, false
+	}
+	return classifyTool(block.Tool), true
+}
+
+func newPresentationItem(blocks []agent.Block, group string, start, end int, presentations []toolPresentation) presentationItem {
+	first := blocks[start].ID
+	it := presentationItem{
+		id:            first,
+		group:         group,
+		start:         start,
+		end:           end,
+		presentations: presentations,
+		rev:           presentationRevision(blocks, start, end),
+	}
+	return it
+}
+
+// presentationRevision is FNV-1a over every member identity and revision. The
+// stable first BlockID keys its cache entry, so appending to or updating a
+// group invalidates its cached rendering without moving the item.
+func presentationRevision(blocks []agent.Block, start, end int) uint64 {
+	h := fnv.New64a()
+	var bytes [8]byte
+	mixUint := func(v uint64) {
+		binary.LittleEndian.PutUint64(bytes[:], v)
+		_, _ = h.Write(bytes[:])
+	}
+	mixString := func(s string) {
+		_, _ = h.Write([]byte(s))
+		_, _ = h.Write([]byte{0xff})
+	}
+	for i := start; i < end; i++ {
+		block := blocks[i]
+		mixUint(uint64(block.ID.Scope))
+		mixString(block.ID.Key)
+		mixUint(uint64(block.ID.Kind))
+		mixUint(uint64(block.Rev))
+	}
+	return h.Sum64()
 }

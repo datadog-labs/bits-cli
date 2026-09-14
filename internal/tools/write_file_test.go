@@ -10,6 +10,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/filediff"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 // newWriteTool opens dir as a workspace root and returns the write_file tool
@@ -30,7 +31,7 @@ func invokeWrite(t *testing.T, tool agent.Tool, input any) agent.ToolResult {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := tool.Handler(context.Background(), agent.ToolCall{ID: "w", Name: toolWriteFile, Input: string(data)})
+	result, err := tool.Handler(context.Background(), agent.ToolCall{ID: "w", Name: spec.WriteFile, Input: string(data)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +216,7 @@ func TestWriteFileTool(t *testing.T) {
 		tool, _ := newWriteTool(t, dir)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		_, err := tool.Handler(ctx, agent.ToolCall{Name: toolWriteFile, Input: `{"path":"out.txt","content":"x"}`})
+		_, err := tool.Handler(ctx, agent.ToolCall{Name: spec.WriteFile, Input: `{"path":"out.txt","content":"x"}`})
 		if err != context.Canceled {
 			t.Fatalf("error = %v, want context.Canceled", err)
 		}

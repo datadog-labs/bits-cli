@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 func TestMutationLockerCancelWhileWaiting(t *testing.T) {
@@ -53,7 +54,7 @@ func TestWorkspaceWriteApproval(t *testing.T) {
 	policy := workspaceWriteApproval("/root")
 
 	t.Run("gates the whole workspace with one key", func(t *testing.T) {
-		req, needs := policy(agent.ToolCall{Name: toolWriteFile, Input: `{"path":"a/b.txt"}`})
+		req, needs := policy(agent.ToolCall{Name: spec.WriteFile, Input: `{"path":"a/b.txt"}`})
 		if !needs {
 			t.Fatal("mutation must require approval")
 		}
@@ -66,8 +67,8 @@ func TestWorkspaceWriteApproval(t *testing.T) {
 	})
 
 	t.Run("write_file and edit_file share one grant across paths", func(t *testing.T) {
-		w, _ := policy(agent.ToolCall{Name: toolWriteFile, Input: `{"path":"a.txt"}`})
-		e, _ := policy(agent.ToolCall{Name: toolEditFile, Input: `{"path":"b.txt"}`})
+		w, _ := policy(agent.ToolCall{Name: spec.WriteFile, Input: `{"path":"a.txt"}`})
+		e, _ := policy(agent.ToolCall{Name: spec.EditFile, Input: `{"path":"b.txt"}`})
 		if w.Key != e.Key {
 			t.Errorf("mutating tools do not share a grant: %+v vs %+v", w.Key, e.Key)
 		}
@@ -96,7 +97,7 @@ func TestEditFileSerializesConcurrentEdits(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := tool.Handler(context.Background(), agent.ToolCall{Name: toolEditFile, Input: in}); err != nil {
+			if _, err := tool.Handler(context.Background(), agent.ToolCall{Name: spec.EditFile, Input: in}); err != nil {
 				t.Error(err)
 			}
 		}()

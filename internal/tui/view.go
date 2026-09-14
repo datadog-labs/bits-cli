@@ -30,7 +30,7 @@ func (m *Model) View() tea.View {
 	if m.mode == ModeLogin && m.loginModel != nil {
 		return m.loginModel.View()
 	}
-	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion}
+	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion, BackgroundColor: m.styles.Background}
 	switch m.mode {
 	case ModeTermInit:
 		v.Content = "loading…"
@@ -147,6 +147,9 @@ func (m *Model) approvalView() string {
 		sty.Text.Render(indent + ansi.Truncate(title, textWidth, "…")),
 	}
 	if detail != "" {
+		// TODO: Give approvals structured, expandable command and resource
+		// fields when a richer confirmation surface is needed. V1 deliberately
+		// keeps a compact, single-line preview here.
 		lines = append(lines, sty.Detail.Render(indent+ansi.Truncate(detail, textWidth, "…")))
 	}
 

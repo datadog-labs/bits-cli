@@ -12,12 +12,13 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/filediff"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 func newWriteFileTool(r *os.Root, root string, locker *mutationLocker) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:        toolWriteFile,
+			Name:        spec.WriteFile,
 			Description: "Create a new file or fully overwrite an existing one in the workspace. Missing parent directories are created. Use edit_file for targeted changes to an existing file.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -40,10 +41,7 @@ func writeFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
 		}
-		var args struct {
-			Path    string  `json:"path"`
-			Content *string `json:"content"`
-		}
+		var args spec.WriteFileInput
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("invalid input: %s", err.Error()), nil
 		}

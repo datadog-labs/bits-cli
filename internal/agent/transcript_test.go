@@ -414,3 +414,31 @@ func TestClientToolCallDerivedClientSideWithoutEngineFold(t *testing.T) {
 		t.Fatal("replayed client tool call was not derived as client-side")
 	}
 }
+
+func TestToolNamespaceMergesByPresence(t *testing.T) {
+	namespace, empty := "datadog", ""
+	tr := NewTranscript()
+	tr.AppendMessage(assistant.AssistantMessage("call", assistant.Content{
+		Type: assistant.ContentToolCall,
+		Tool: &assistant.ToolPayload{ToolCallID: "tc", Metadata: &assistant.ToolMetadata{
+			Name: "search_logs", Namespace: &namespace,
+		}},
+	}))
+	// An omitted namespace is not an identity update and must preserve the call's
+	// namespace. An explicit empty namespace is an update and must clear it.
+	tr.AppendMessage(assistant.AssistantMessage("result-omitted", assistant.Content{
+		Type: assistant.ContentToolResponse,
+		Tool: &assistant.ToolPayload{ToolCallID: "tc", Metadata: &assistant.ToolMetadata{Name: "search_logs"}},
+	}))
+	if got := tr.Blocks()[0].Tool.Namespace; got == nil || *got != namespace {
+		t.Fatalf("omitted namespace changed to %v, want %q", got, namespace)
+	}
+	tr.AppendMessage(assistant.AssistantMessage("result-empty", assistant.Content{
+		Type: assistant.ContentToolResponse,
+		Tool: &assistant.ToolPayload{ToolCallID: "tc", Metadata: &assistant.ToolMetadata{Name: "search_logs", Namespace: &empty}},
+	}))
+	tool := tr.Blocks()[0].Tool
+	if tool.Namespace == nil || *tool.Namespace != "" {
+		t.Fatalf("explicit empty namespace did not clear identity: %+v", tool)
+	}
+}

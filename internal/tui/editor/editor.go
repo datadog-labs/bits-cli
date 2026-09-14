@@ -1,10 +1,9 @@
 // Package editor is the chat input: a multiline textarea plus an @/ completion
-// menu backed by a Completer. It owns key handling for menu navigation; the
-// parent tui routes keys to it and reads Value on submit. No agent/chat
-// dependency — it is pure input.
+// menu. The parent TUI owns remote work and feeds checked results into it.
 package editor
 
 import (
+	"slices"
 	"strings"
 	"unicode"
 
@@ -14,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/DataDog/bits-cli/internal/tui/components"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -28,15 +28,22 @@ const (
 	// the visible cap (maxHeight) — only at this larger hard limit. Without it,
 	// the textarea blocks new lines once it reaches maxHeight logical lines.
 	maxContentHeight = 500
+	// maxMenuCandidates bounds the combined local and remote result rows.
+	maxMenuCandidates = 10
 )
 
 // Editor is the chat input. The completion menu opens automatically for @
 // tokens and for a / token only when it is the first token in the prompt.
 type Editor struct {
-	ta       textarea.Model
-	complete Completer
-	styles   styles.Editor
-	menu     menu
+	ta                textarea.Model
+	styles            styles.Editor
+	menu              menu
+	attachments       []trackedAttachment
+	remoteQuery       string
+	remoteItems       []Candidate
+	remoteState       RemoteState
+	completedMentions []trackedMention
+	dismissedValue    string
 
 	// inputStyle is the shared input-block contract. width is the block's total
 	// width; the textarea is sized to fit inside the block's horizontal frame.
@@ -52,11 +59,12 @@ type Editor struct {
 type menu struct {
 	open     bool
 	items    []Candidate
-	selected int
+	selector *components.Selector
+	status   string
 }
 
-// New returns a chat editor using the built-in fake completer. Call Focus to
-// start the cursor and receive its blink command.
+// New returns a chat editor. Call Focus to start the cursor and receive its
+// blink command.
 func New() *Editor {
 	defaultStyles := styles.Default(true)
 	ta := textarea.New()
@@ -82,10 +90,60 @@ func New() *Editor {
 
 	return &Editor{
 		ta:         ta,
-		complete:   Dispatch,
 		styles:     defaultStyles.Editor,
 		inputStyle: defaultStyles.Input,
 	}
+}
+
+// ActiveEntityQuery returns the remote query associated with the @ trigger at
+// the cursor. Spaces are preserved.
+func (e *Editor) ActiveEntityQuery() (string, bool) {
+	span, ok := e.activeEntitySpan()
+	return span.query, ok
+}
+
+// SetEntityResults updates only the remote half of a mixed @ menu.
+func (e *Editor) SetEntityResults(query string, state RemoteState, items []Candidate) {
+	e.remoteQuery = query
+	e.remoteState = state
+	e.remoteItems = append([]Candidate(nil), items...)
+	e.recompute()
+}
+
+// Attachments returns a copy of the selected canonical Datadog identities.
+func (e *Editor) Attachments() []Attachment {
+	attachments := make([]Attachment, 0, len(e.attachments))
+	type entityKey struct{ entityType, id string }
+	seen := make(map[entityKey]struct{}, len(e.attachments))
+	for _, tracked := range e.attachments {
+		key := entityKey{entityType: tracked.attachment.Type, id: tracked.attachment.ID}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		attachments = append(attachments, tracked.attachment)
+	}
+	return attachments
+}
+
+// RemoveLastAttachment removes the most recently selected Datadog entity and
+// its visible mention.
+func (e *Editor) RemoveLastAttachment() bool {
+	if len(e.attachments) == 0 {
+		return false
+	}
+	tracked := e.attachments[len(e.attachments)-1]
+	before := e.ta.Value()
+	runes := []rune(before)
+	if tracked.start >= 0 && tracked.end <= len(runes) && tracked.start < tracked.end {
+		after := string(runes[:tracked.start]) + string(runes[tracked.end:])
+		e.ta.SetValue(after)
+		e.applyMentionEdit(tracked.start, tracked.end, tracked.start, after)
+	} else {
+		e.attachments = e.attachments[:len(e.attachments)-1]
+	}
+	e.viewCached = false
+	return true
 }
 
 // SetInputStyles gives the editor the shared input-block look: a background
@@ -102,9 +160,17 @@ func (e *Editor) SetInputStyles(inputStyle styles.Input) {
 	st := e.ta.Styles()
 	st.Focused.Base, st.Blurred.Base = base, base
 	st.Focused.Prompt, st.Blurred.Prompt = inputStyle.Marker, inputStyle.Marker
-	// Drop the current-line highlight; it inherits Base's background instead.
-	st.Focused.CursorLine = lipgloss.NewStyle()
+	// CursorLine needs the same foreground as Text: the cursor's line renders
+	// through CursorLine, every other line through Text, so setting only Text
+	// would leave the active line on the terminal's foreground.
+	typed := lipgloss.NewStyle().Foreground(inputStyle.Text.GetForeground())
+	st.Focused.Text = inputStyle.Text
+	st.Focused.CursorLine = typed
 	st.Blurred.CursorLine = lipgloss.NewStyle()
+	// The textarea hardcodes ANSI 240 for the placeholder in both of its default
+	// style sets, ignoring theme colors. Both states get the theme's color so an
+	// empty composer reads the same whether or not it holds focus.
+	st.Focused.Placeholder, st.Blurred.Placeholder = inputStyle.Placeholder, inputStyle.Placeholder
 	e.ta.SetStyles(st)
 
 	// Vertical padding only, matching the user block: the caret sits flush left
@@ -114,7 +180,10 @@ func (e *Editor) SetInputStyles(inputStyle styles.Input) {
 }
 
 // SetStyles updates the completion-menu appearance.
-func (e *Editor) SetStyles(menuStyles styles.Editor) { e.styles = menuStyles }
+func (e *Editor) SetStyles(menuStyles styles.Editor) {
+	e.styles = menuStyles
+	e.recompute()
+}
 
 // Focus focuses the textarea and returns its cursor-blink command.
 func (e *Editor) Focus() tea.Cmd {
@@ -163,6 +232,11 @@ func (e *Editor) Value() string { return e.ta.Value() }
 // Reset clears the input and closes the menu.
 func (e *Editor) Reset() {
 	e.ta.Reset()
+	e.attachments = nil
+	e.remoteItems = nil
+	e.remoteState = RemoteIdle
+	e.completedMentions = nil
+	e.dismissedValue = ""
 	e.closeMenu()
 	e.viewCached = false
 }
@@ -171,14 +245,21 @@ func (e *Editor) Reset() {
 // to decide whether Enter/Esc drive the menu or submit/cancel.
 func (e *Editor) MenuOpen() bool { return e.menu.open }
 
+// MenuHasCandidates distinguishes a selectable menu from a loading, empty, or
+// error status. Parents may submit directly when only status text is visible.
+func (e *Editor) MenuHasCandidates() bool { return len(e.menu.items) > 0 }
+
+// CloseMenu dismisses completion without changing the prompt.
+func (e *Editor) CloseMenu() { e.closeMenu() }
+
 // SelectedCommand returns the currently selected leading slash-command
 // completion, without modifying the input. The parent uses it to dispatch a
 // registered command directly when Enter is pressed.
 func (e *Editor) SelectedCommand() (string, bool) {
-	if !e.menu.open || len(e.menu.items) == 0 || !e.commandTriggerActive(e.ta.Word()) {
+	if !e.menu.open || len(e.menu.items) == 0 || e.menu.selector == nil || !e.commandTriggerActive(e.ta.Word()) {
 		return "", false
 	}
-	insert := e.menu.items[e.menu.selected].Insert
+	insert := e.menu.items[e.menu.selector.Index()].Insert
 	if !strings.HasPrefix(insert, "/") {
 		return "", false
 	}
@@ -197,25 +278,44 @@ func (e *Editor) Height() int {
 // (up/down/tab/enter/esc); otherwise the message is fed to the textarea and the
 // menu is recomputed from the resulting value.
 func (e *Editor) Update(msg tea.Msg) tea.Cmd {
+	if k, ok := msg.(tea.KeyPressMsg); ok {
+		if k.String() == "ctrl+x" && e.RemoveLastAttachment() {
+			return nil
+		}
+	}
 	if k, ok := msg.(tea.KeyPressMsg); ok && e.menu.open {
 		switch k.String() {
 		case "up", "ctrl+p":
-			e.move(-1)
+			if e.menu.selector != nil {
+				e.menu.selector.UpdateKey("up")
+			}
 			return nil
 		case "down", "ctrl+n":
-			e.move(1)
+			if e.menu.selector != nil {
+				e.menu.selector.UpdateKey("down")
+			}
 			return nil
 		case "tab", "enter":
 			e.accept()
 			return nil
 		case "esc":
+			e.dismissActiveMention()
 			e.closeMenu()
 			return nil
 		}
 	}
 	e.viewCached = false
+	before := e.ta.Value()
+	beforeCursor := e.cursorOffset()
 	var cmd tea.Cmd
 	e.ta, cmd = e.ta.Update(msg)
+	after := e.ta.Value()
+	if e.dismissedValue != "" && e.ta.Value() != e.dismissedValue {
+		e.dismissedValue = ""
+	}
+	if start, oldEnd, newEnd, changed := textEditRange(before, after, beforeCursor, e.cursorOffset()); changed {
+		e.applyMentionEdit(start, oldEnd, newEnd, after)
+	}
 	e.recompute()
 	return cmd
 }
@@ -255,21 +355,24 @@ func (e *Editor) MenuView() string {
 		return ""
 	}
 	w := e.menuWidth()
-	lines := make([]string, len(e.menu.items))
-	for i, it := range e.menu.items {
-		marker, st := "  ", e.styles.MenuItem
-		if i == e.menu.selected {
-			marker, st = "› ", e.styles.MenuSelected
-		}
-		lines[i] = st.Width(w).Render(ansi.Truncate(marker+it.Label, w, "…"))
+	parts := make([]string, 0, 2)
+	if e.menu.selector != nil && len(e.menu.items) > 0 {
+		parts = append(parts, e.menu.selector.View(w))
 	}
-	return strings.Join(lines, "\n")
+	if e.menu.status != "" {
+		parts = append(parts, e.styles.MenuItem.Width(w).Render(ansi.Truncate("  "+e.menu.status, w, "…")))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (e *Editor) menuWidth() int {
 	w := 0
 	for _, it := range e.menu.items {
-		w = max(w, ansi.StringWidth(it.Label)+2)
+		w = max(w, ansi.StringWidth(it.Label)+ansi.StringWidth(it.Detail)+4)
+	}
+	w = max(w, ansi.StringWidth(e.menu.status)+2)
+	if e.widthSet {
+		w = min(w, max(1, e.width-e.ContentOffset()))
 	}
 	return min(max(w, 12), menuMaxWidth)
 }
@@ -279,20 +382,65 @@ func (e *Editor) menuWidth() int {
 // kept when it still points at a valid item.
 func (e *Editor) recompute() {
 	word := e.ta.Word()
-	if strings.HasPrefix(word, "/") && !e.commandTriggerActive(word) {
+	if strings.HasPrefix(word, "/") {
+		if !e.commandTriggerActive(word) {
+			e.closeMenu()
+			return
+		}
+		e.setMenu(FakeCommands(word[1:]), "")
+		return
+	}
+	span, active := e.activeEntitySpan()
+	if !active {
 		e.closeMenu()
 		return
 	}
-	items := e.complete(word)
-	if len(items) == 0 {
-		e.closeMenu()
-		return
+	items := FileCandidates(span.query)
+	state := RemoteIdle
+	if span.query == e.remoteQuery {
+		items = append(items, e.remoteItems...)
+		state = e.remoteState
 	}
-	sel := 0
-	if e.menu.open && e.menu.selected < len(items) {
-		sel = e.menu.selected
+	if len(items) > maxMenuCandidates {
+		items = items[:maxMenuCandidates]
 	}
-	e.menu = menu{open: true, items: items, selected: sel}
+	status := ""
+	switch state {
+	case RemoteIdle:
+	case RemoteLoading:
+		status = "Searching…"
+	case RemoteError:
+		status = "Search unavailable"
+	case RemoteReady:
+		if len(items) == 0 {
+			status = "No matching files or entities"
+		}
+	}
+	e.setMenu(items, status)
+}
+
+func (e *Editor) setMenu(items []Candidate, status string) {
+	previous := 0
+	if e.menu.selector != nil {
+		previous = e.menu.selector.Index()
+	}
+	choices := make([]components.Choice, len(items))
+	for i, item := range items {
+		choices[i] = components.Choice{Label: item.Label, Detail: item.Detail}
+	}
+	selector := components.NewSelector(choices, e.selectorStyles())
+	selector.SetCompactDetail(true)
+	selector.SetFillWidth(true)
+	selector.SetIndex(previous)
+	e.menu = menu{open: len(items) > 0 || status != "", items: items, selector: selector, status: status}
+}
+
+func (e *Editor) selectorStyles() styles.Selector {
+	return styles.Selector{
+		Item: e.styles.MenuItem, Selected: e.styles.MenuSelected,
+		Detail: e.styles.MenuItem, SelectedDetail: e.styles.MenuSelected,
+		Marker: "  ", SelectedMarker: "› ", ColumnGap: 2,
+	}
 }
 
 // commandTriggerActive reports whether word is the first token on the first
@@ -311,25 +459,20 @@ func (e *Editor) commandTriggerActive(word string) bool {
 	return start == 0
 }
 
-func (e *Editor) move(delta int) {
-	n := len(e.menu.items)
-	if n == 0 {
-		return
-	}
-	e.menu.selected = (e.menu.selected + delta + n) % n
-}
-
-// accept replaces the word at the cursor with the selected candidate's insert
+// accept replaces the active trigger span with the selected candidate's insert
 // text plus a trailing space, then closes the menu. The cursor lands after the
 // inserted space when the edit is on the final line (the common single-line
 // case); otherwise it falls back to the buffer end.
 func (e *Editor) accept() {
-	if !e.menu.open || len(e.menu.items) == 0 {
+	if !e.menu.open || len(e.menu.items) == 0 || e.menu.selector == nil {
+		e.closeMenu()
 		return
 	}
-	insert := e.menu.items[e.menu.selected].Insert
+	candidate := e.menu.items[e.menu.selector.Index()]
+	insert := candidate.Insert
 
-	lines := strings.Split(e.ta.Value(), "\n")
+	before := e.ta.Value()
+	lines := strings.Split(before, "\n")
 	row := e.ta.Line()
 	if row < 0 || row >= len(lines) {
 		e.closeMenu()
@@ -337,19 +480,281 @@ func (e *Editor) accept() {
 	}
 	runes := []rune(lines[row])
 	col := min(max(e.ta.Column(), 0), len(runes))
+	lineStart := 0
+	for i := range row {
+		lineStart += len([]rune(lines[i])) + 1
+	}
 	start, end := wordBounds(runes, col)
+	if candidate.Kind != CandidateCommand {
+		if span, ok := e.activeEntitySpan(); ok {
+			start = span.start
+			end = span.replacementEnd
+		}
+	}
 
 	repl := []rune(insert + " ")
 	lines[row] = string(runes[:start]) + string(repl) + string(runes[end:])
-	e.ta.SetValue(strings.Join(lines, "\n"))
+	value := strings.Join(lines, "\n")
+	e.ta.SetValue(value)
+	// Completion is an edit like typing or pasting. Move or remove existing
+	// mention spans before registering this completion.
+	e.applyMentionEdit(lineStart+start, lineStart+end, lineStart+start+len(repl), value)
 	e.viewCached = false
 	if row == len(lines)-1 {
 		e.ta.SetCursorColumn(start + len(repl))
+	}
+	mention := trackedMention{text: insert, start: lineStart + start, end: lineStart + start + len([]rune(insert))}
+	if candidate.Kind != CandidateCommand {
+		e.completedMentions = append(e.completedMentions, mention)
+	}
+	if candidate.Attachment != nil {
+		e.attachments = append(e.attachments, trackedAttachment{attachment: *candidate.Attachment, trackedMention: mention})
 	}
 	e.closeMenu()
 }
 
 func (e *Editor) closeMenu() { e.menu = menu{} }
+
+type trackedMention struct {
+	text       string
+	start, end int // rune offsets in the entire prompt
+}
+
+type trackedAttachment struct {
+	attachment Attachment
+	trackedMention
+}
+
+// applyEdit shifts intact mentions and invalidates those touched by the edit.
+func (m *trackedMention) applyEdit(start, oldEnd, newEnd int, after []rune) bool {
+	switch {
+	case oldEnd <= m.start:
+		m.start += newEnd - oldEnd
+		m.end += newEnd - oldEnd
+	case start >= m.end:
+		// The edit follows the mention.
+	default:
+		return false
+	}
+	return m.start >= 0 && m.end <= len(after) && string(after[m.start:m.end]) == m.text
+}
+
+func (e *Editor) applyMentionEdit(start, oldEnd, newEnd int, after string) {
+	runes := []rune(after)
+	kept := e.attachments[:0]
+	for _, tracked := range e.attachments {
+		if tracked.applyEdit(start, oldEnd, newEnd, runes) {
+			kept = append(kept, tracked)
+		}
+	}
+	e.attachments = kept
+	completed := e.completedMentions[:0]
+	for _, mention := range e.completedMentions {
+		if mention.applyEdit(start, oldEnd, newEnd, runes) {
+			completed = append(completed, mention)
+		}
+	}
+	e.completedMentions = completed
+}
+
+func (e *Editor) cursorOffset() int {
+	lines := strings.Split(e.ta.Value(), "\n")
+	row := min(max(e.ta.Line(), 0), len(lines)-1)
+	offset := 0
+	for i := range row {
+		offset += len([]rune(lines[i])) + 1
+	}
+	return offset + min(max(e.ta.Column(), 0), len([]rune(lines[row])))
+}
+
+func textEditRange(before, after string, beforeCursor, afterCursor int) (start, oldEnd, newEnd int, changed bool) {
+	oldRunes, newRunes := []rune(before), []rune(after)
+	if slices.Equal(oldRunes, newRunes) {
+		return 0, 0, 0, false
+	}
+	delta := len(newRunes) - len(oldRunes)
+	switch {
+	case delta > 0:
+		start, oldEnd, newEnd = beforeCursor, beforeCursor, beforeCursor+delta
+	case delta < 0 && afterCursor < beforeCursor:
+		start, oldEnd, newEnd = afterCursor, afterCursor-delta, afterCursor
+	case delta < 0:
+		start, oldEnd, newEnd = beforeCursor, beforeCursor-delta, beforeCursor
+	default:
+		start = 0
+		for start < len(oldRunes) && oldRunes[start] == newRunes[start] {
+			start++
+		}
+		oldEnd, newEnd = len(oldRunes), len(newRunes)
+		for oldEnd > start && newEnd > start && oldRunes[oldEnd-1] == newRunes[newEnd-1] {
+			oldEnd--
+			newEnd--
+		}
+	}
+	if validTextEdit(oldRunes, newRunes, start, oldEnd, newEnd) {
+		return start, oldEnd, newEnd, true
+	}
+	start = 0
+	for start < len(oldRunes) && start < len(newRunes) && oldRunes[start] == newRunes[start] {
+		start++
+	}
+	oldEnd, newEnd = len(oldRunes), len(newRunes)
+	for oldEnd > start && newEnd > start && oldRunes[oldEnd-1] == newRunes[newEnd-1] {
+		oldEnd--
+		newEnd--
+	}
+	return start, oldEnd, newEnd, true
+}
+
+func validTextEdit(before, after []rune, start, oldEnd, newEnd int) bool {
+	if start < 0 || start > oldEnd || oldEnd > len(before) || newEnd < start || newEnd > len(after) {
+		return false
+	}
+	rebuilt := make([]rune, 0, len(after))
+	rebuilt = append(rebuilt, before[:start]...)
+	rebuilt = append(rebuilt, after[start:newEnd]...)
+	rebuilt = append(rebuilt, before[oldEnd:]...)
+	return slices.Equal(rebuilt, after)
+}
+
+type entitySpan struct {
+	start          int
+	replacementEnd int
+	query          string
+}
+
+// activeEntitySpan finds the last valid @ trigger before the cursor on the
+// current line. A letter, digit, or underscore immediately before @ makes it
+// ordinary word content. Query text may contain spaces.
+func (e *Editor) activeEntitySpan() (entitySpan, bool) {
+	if e.dismissedValue != "" && e.ta.Value() == e.dismissedValue {
+		return entitySpan{}, false
+	}
+	lines := strings.Split(e.ta.Value(), "\n")
+	row := e.ta.Line()
+	if row < 0 || row >= len(lines) {
+		return entitySpan{}, false
+	}
+	runes := []rune(lines[row])
+	col := min(max(e.ta.Column(), 0), len(runes))
+	lineStart := 0
+	for i := range row {
+		lineStart += len([]rune(lines[i])) + 1
+	}
+	start, quoteStart := -1, -1
+	var quote mentionQuote
+	// Scan forward so an @ inside a quoted query cannot become a trigger.
+	// Quotes in ordinary prose do not affect mention parsing.
+	for i := range col {
+		if e.insideCompletedMention(lineStart + i) {
+			start = -1
+			quote = mentionQuote{}
+			continue
+		}
+		if start >= 0 && quote.consume(runes[i], i == quoteStart) {
+			continue
+		}
+		if runes[i] != '@' {
+			continue
+		}
+		if i > 0 && (unicode.IsLetter(runes[i-1]) || unicode.IsDigit(runes[i-1]) || runes[i-1] == '_') {
+			continue
+		}
+		start = i
+		quoteStart = entityQuoteStart(runes, start)
+	}
+	if start < 0 {
+		return entitySpan{}, false
+	}
+	replacementEnd := entityReplacementEnd(runes, start, col)
+	for _, tracked := range e.completedMentions {
+		trackedStart := tracked.start - lineStart
+		if trackedStart > start && trackedStart < replacementEnd {
+			replacementEnd = trackedStart
+		}
+	}
+	return entitySpan{
+		start:          start,
+		replacementEnd: replacementEnd,
+		query:          string(runes[start+1 : col]),
+	}, true
+}
+
+// entityQuoteStart recognizes only @"label" and @type:"label" openers.
+// Later quotes, including closing quotes around prose, are ordinary text.
+func entityQuoteStart(runes []rune, start int) int {
+	if start+1 < len(runes) && runes[start+1] == '"' {
+		return start + 1
+	}
+	for i := start + 1; i < len(runes); i++ {
+		if runes[i] == ':' {
+			if i > start+1 && i+1 < len(runes) && runes[i+1] == '"' {
+				return i + 1
+			}
+			return -1
+		}
+		if unicode.IsSpace(runes[i]) || runes[i] == '"' || runes[i] == '@' {
+			return -1
+		}
+	}
+	return -1
+}
+
+type mentionQuote struct {
+	quoted, escaped bool
+}
+
+// consume reports whether r is quote syntax or quoted content.
+func (q *mentionQuote) consume(r rune, opening bool) bool {
+	if !q.quoted && !opening {
+		return false
+	}
+	switch {
+	case q.escaped:
+		q.escaped = false
+	case r == '\\':
+		q.escaped = true
+	case r == '"':
+		q.quoted = !q.quoted
+	}
+	return true
+}
+
+func entityReplacementEnd(runes []rune, start, col int) int {
+	_, end := wordBounds(runes, col)
+	quoteStart := entityQuoteStart(runes, start)
+	var quote mentionQuote
+	// Include quotes ahead of the caret before deciding where the token ends.
+	for i := start + 1; i < len(runes); i++ {
+		if i >= end && !quote.quoted {
+			return i
+		}
+		if i >= col && runes[i] == '"' && !quote.quoted && i != quoteStart {
+			return i // preserve an ordinary prose quote after the caret
+		}
+		wasQuoted := quote.quoted
+		quote.consume(runes[i], i == quoteStart)
+		if i >= col && wasQuoted && !quote.quoted {
+			return i + 1
+		}
+	}
+	return len(runes)
+}
+
+func (e *Editor) insideCompletedMention(position int) bool {
+	for _, tracked := range e.completedMentions {
+		if position >= tracked.start && position < tracked.end {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Editor) dismissActiveMention() {
+	if _, ok := e.activeEntitySpan(); ok {
+		e.dismissedValue = e.ta.Value()
+	}
+}
 
 // wordBounds returns the [start, end) rune indices of the word at col, using the
 // same scan as textarea.Word (the reference char is col-1). It returns an empty

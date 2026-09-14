@@ -19,7 +19,15 @@ type Input struct {
 	Background color.Color
 	Block      lipgloss.Style
 	Marker     lipgloss.Style
-	Text       lipgloss.Style
+
+	// Text styles what the user wrote, shared by the live editor line and the
+	// submitted transcript block so it doesn't change color past Enter.
+	Text lipgloss.Style
+
+	// Placeholder styles the hint shown while the composer is empty. It is a
+	// theme role rather than the textarea's own default because that default is
+	// a hardcoded ANSI index, identical in both modes.
+	Placeholder lipgloss.Style
 }
 
 // PromptWidth returns the number of cells occupied by the input prompt.
@@ -41,21 +49,21 @@ type Chat struct {
 	AssistantText   lipgloss.Style
 	Reasoning       lipgloss.Style
 	ToolName        lipgloss.Style
+	ToolArgument    lipgloss.Style
 	ToolDetail      lipgloss.Style
+	ToolError       lipgloss.Style
 	Diff            Diff
 	StatusRunning   lipgloss.Style
 	StatusSuccess   lipgloss.Style
 	StatusError     lipgloss.Style
 
-	// StatusRunningLabel and StatusAwaitingLabel are the pre-rendered animated
-	// labels for the two in-flight tool states. They replace the static words
-	// inside the status chip; see Shimmer.
+	// StatusRunningLabel and StatusAwaitingLabel are retained for the dev-only
+	// style catalog. Compact tool rendering uses StatusSpinner and group dots;
+	// an approval wait is static.
 	StatusRunningLabel  Shimmer
 	StatusAwaitingLabel Shimmer
 
-	// StatusSweepDim and StatusSweepHot are the low- and high-emphasis ends of
-	// the animated sweep, exposed so the style catalog can show the tokens and
-	// illustrate the motion without keeping its own copy of these colors.
+	// StatusSweepDim and StatusSweepHot are catalog-only sweep colors.
 	StatusSweepDim color.Color
 	StatusSweepHot color.Color
 
@@ -85,11 +93,13 @@ type Editor struct {
 	MenuSelected lipgloss.Style
 }
 
-// Text contains shared semantic text roles used outside the transcript.
+// Text exposes the palette's three foreground levels to components outside the
+// transcript. The levels are ordered by how much attention the text should
+// draw; see the palette for what each one is for.
 type Text struct {
-	Body  lipgloss.Style
-	Muted lipgloss.Style
-	Help  lipgloss.Style
+	Primary   lipgloss.Style
+	Secondary lipgloss.Style
+	Tertiary  lipgloss.Style
 }
 
 // Feedback contains shared progress and outcome roles.
@@ -143,7 +153,13 @@ type Selector struct {
 
 // Theme is the complete set of styles for one terminal background mode.
 type Theme struct {
-	IsDark    bool
+	IsDark bool
+
+	// Background is painted across the whole alt-screen by the root views,
+	// instead of inheriting the user's terminal theme. Unconditional for now;
+	// revisit if bits-cli ever gets a settings layer to opt out of it.
+	Background color.Color
+
 	Input     Input
 	Chat      Chat
 	Editor    Editor

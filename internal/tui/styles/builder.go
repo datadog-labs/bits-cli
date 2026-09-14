@@ -25,13 +25,24 @@ func build(isDark bool, p palette) Theme {
 			BorderForeground(lipgloss.Color(p.inputRule)).
 			BorderBackground(lipgloss.Color(p.surface)),
 		Marker: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)).Background(lipgloss.Color(p.surface)),
-		Text:   lipgloss.NewStyle().Background(lipgloss.Color(p.surface)),
+		// Foreground is explicit: the textarea's default Text is empty, which
+		// would leave typed input on the terminal's foreground over our painted
+		// surface.
+		Text: lipgloss.NewStyle().
+			Background(lipgloss.Color(p.surface)).
+			Foreground(lipgloss.Color(p.textPrimary)),
+		// Set explicitly: the textarea hardcodes ANSI 240 for the placeholder,
+		// ignoring theme colors. Secondary rather than tertiary since it's the
+		// only instruction the empty composer gives.
+		Placeholder: lipgloss.NewStyle().
+			Background(lipgloss.Color(p.surface)).
+			Foreground(lipgloss.Color(p.textSecondary)),
 	}
 
 	text := Text{
-		Body:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)),
-		Muted: lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
-		Help:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
+		Primary:   lipgloss.NewStyle().Foreground(lipgloss.Color(p.textPrimary)),
+		Secondary: lipgloss.NewStyle().Foreground(lipgloss.Color(p.textSecondary)),
+		Tertiary:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.textTertiary)),
 	}
 	feedback := Feedback{
 		Progress: lipgloss.NewStyle().Foreground(lipgloss.Color(p.interactive)),
@@ -40,14 +51,17 @@ func build(isDark bool, p palette) Theme {
 	}
 	panel := Panel{
 		Frame: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(p.text)).
+			Foreground(lipgloss.Color(p.textPrimary)).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(p.borderSubtle)).
 			Padding(1, 2),
-		Title:            text.Body,
-		Dismiss:          text.Help,
-		Compact:          text.Body,
-		Help:             text.Help,
+		Title:   text.Primary,
+		Dismiss: text.Primary,
+		Compact: text.Primary,
+		// Help renders the footer hints ("↑/↓ navigate", "enter to continue"):
+		// present but not something the reader has to read, so it takes the
+		// tertiary level rather than secondary.
+		Help:             text.Tertiary,
 		MaxWidth:         112,
 		HorizontalMargin: 2,
 		CompactMaxWidth:  34,
@@ -63,23 +77,23 @@ func build(isDark bool, p palette) Theme {
 			BorderForeground(lipgloss.Color(p.interactive)).
 			BorderBackground(approvalSurface),
 		Marker:   approvalBase.Bold(true).Foreground(lipgloss.Color(p.interactive)),
-		Title:    approvalBase.Bold(true).Foreground(lipgloss.Color(p.text)),
-		Text:     approvalBase.Foreground(lipgloss.Color(p.text)),
-		Detail:   approvalBase.Foreground(lipgloss.Color(p.muted)),
-		Action:   approvalBase.Foreground(lipgloss.Color(p.muted)),
+		Title:    approvalBase.Bold(true).Foreground(lipgloss.Color(p.textPrimary)),
+		Text:     approvalBase.Foreground(lipgloss.Color(p.textPrimary)),
+		Detail:   approvalBase.Foreground(lipgloss.Color(p.textSecondary)),
+		Action:   approvalBase.Foreground(lipgloss.Color(p.textSecondary)),
 		Selected: approvalBase.Bold(true).Foreground(lipgloss.Color(p.interactive)),
 	}
 	selector := Selector{
-		Item:           text.Body,
+		Item:           text.Primary,
 		Selected:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
-		Detail:         text.Help,
-		SelectedDetail: text.Body,
+		Detail:         text.Secondary,
+		SelectedDetail: text.Primary,
 		Marker:         "  ",
 		SelectedMarker: "› ",
 		ColumnGap:      2,
 	}
-	// The in-flight chip's labels are animated, so they are pre-rendered once
-	// per theme rather than styled per frame.
+	// The dev style catalog still illustrates the earlier label-sweep options,
+	// so it receives the palette without affecting compact tool rendering.
 	busy := shimmerPalette{
 		fg:  lipgloss.Color(p.busy),
 		bg:  lipgloss.Color(p.busySurface),
@@ -88,18 +102,20 @@ func build(isDark bool, p palette) Theme {
 	}
 
 	textInput := textinput.DefaultStyles(isDark)
-	textInput.Focused.Text = text.Body
-	textInput.Focused.Placeholder = text.Help
-	textInput.Focused.Suggestion = text.Help
+	textInput.Focused.Text = text.Primary
+	textInput.Focused.Placeholder = text.Secondary
+	textInput.Focused.Suggestion = text.Secondary
 	textInput.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(p.interactive))
-	textInput.Blurred.Text = text.Body
-	textInput.Blurred.Placeholder = text.Help
-	textInput.Blurred.Suggestion = text.Help
-	textInput.Blurred.Prompt = text.Muted
+	textInput.Blurred.Text = text.Primary
+	textInput.Blurred.Placeholder = text.Secondary
+	textInput.Blurred.Suggestion = text.Secondary
+	textInput.Blurred.Prompt = text.Secondary
 	textInput.Cursor.Color = lipgloss.Color(p.interactive)
 
 	return Theme{
-		IsDark:    isDark,
+		IsDark:     isDark,
+		Background: lipgloss.Color(p.background),
+
 		Input:     input,
 		Text:      text,
 		Feedback:  feedback,
@@ -113,16 +129,18 @@ func build(isDark bool, p palette) Theme {
 			MarkdownLink:    lipgloss.Color(p.link),
 			MarkdownCodeFg:  lipgloss.Color(p.codeText),
 			MarkdownCodeBg:  lipgloss.Color(p.codeSurface),
-			AssistantText:   lipgloss.NewStyle(),
-			Reasoning:       lipgloss.NewStyle().Faint(true).Italic(true),
+			AssistantText:   lipgloss.NewStyle().Foreground(lipgloss.Color(p.textSecondary)),
+			Reasoning:       lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color(p.textSecondary)),
 			ToolName:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
-			ToolDetail:      lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
+			ToolArgument:    text.Primary,
+			ToolDetail:      lipgloss.NewStyle().Foreground(lipgloss.Color(p.textTertiary)),
+			ToolError:       feedback.Error,
 			Diff: Diff{
-				Add:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)).Background(lipgloss.Color(p.successSurface)),
-				Del:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)).Background(lipgloss.Color(p.errorSurface)),
-				Context:    lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)),
-				Gutter:     lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)),
-				Meta:       lipgloss.NewStyle().Faint(true),
+				Add:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.textPrimary)).Background(lipgloss.Color(p.successSurface)),
+				Del:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.textPrimary)).Background(lipgloss.Color(p.errorSurface)),
+				Context:    lipgloss.NewStyle().Foreground(lipgloss.Color(p.textPrimary)),
+				Gutter:     lipgloss.NewStyle().Foreground(lipgloss.Color(p.textTertiary)),
+				Meta:       lipgloss.NewStyle().Foreground(lipgloss.Color(p.textTertiary)),
 				SyntaxDark: isDark,
 			},
 			// The busy surface is what makes pill() draw caps for an in-flight
@@ -137,18 +155,21 @@ func build(isDark bool, p palette) Theme {
 			StatusSweepDim:      busy.dim,
 			StatusSweepHot:      busy.hot,
 			StatusSpinner:       Spinner{frames: brailleFrames, stepsPerFrame: spinnerStepsPerFrame},
-			Meta:                lipgloss.NewStyle().Faint(true),
-			NoticeInfo:          lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.info)),
-			NoticeWarn:          lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onWarning)).Background(lipgloss.Color(p.warning)),
-			NoticeError:         lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.critical)),
+			// Transcript labels, progress lines and the idle dot: present so nothing
+			// is silently dropped, but not competing with the conversation.
+			Meta:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.textTertiary)),
+			NoticeInfo:  lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.info)),
+			NoticeWarn:  lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onWarning)).Background(lipgloss.Color(p.warning)),
+			NoticeError: lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.critical)),
 		},
 		Editor: Editor{
-			MenuItem:     lipgloss.NewStyle().Foreground(lipgloss.Color(p.text)).Background(lipgloss.Color(p.surfaceRaised)),
+			MenuItem:     lipgloss.NewStyle().Foreground(lipgloss.Color(p.textPrimary)).Background(lipgloss.Color(p.surfaceRaised)),
 			MenuSelected: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.primary)),
 		},
 	}
 }
 
+// markdown adapts glamour's stock config to the palette.
 func markdown(isDark bool, p palette) glamouransi.StyleConfig {
 	cfg := glamourstyles.LightStyleConfig
 	if isDark {

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -49,6 +50,60 @@ func (*Fake) BackendStatus() assistant.BackendStatus {
 		AuthenticationMode:  "none (fake backend)",
 		AuthenticationState: "unauthenticated",
 	}
+}
+
+// SearchEntities keeps demo mode useful without credentials or network access.
+// The fixed mixed catalog exercises the same labels and attachment path as the
+// real suggestions endpoint.
+func (*Fake) SearchEntities(ctx context.Context, in assistant.SearchEntitiesInput) (assistant.SearchEntitiesResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return assistant.SearchEntitiesResponse{}, err
+	}
+	installed := true
+	serviceAccount := false
+	catalog := []assistant.SearchEntity{
+		{CandidateID: "fake-dashboard", EntityID: "abc-def", EntityType: "dashboard", Title: "API overview", AuthorName: "Demo User"},
+		{CandidateID: "fake-monitor", EntityID: "12345", EntityType: "monitor", Name: "API latency is high", CreatorName: "Demo User"},
+		{CandidateID: "fake-service", EntityID: "checkout-api", EntityType: "service", Name: "checkout-api", ProductAreas: []string{"APM"}},
+		{CandidateID: "fake-incident", EntityID: "42", EntityType: "incident", Title: "Checkout errors", Severity: "SEV-2", State: "active"},
+		{CandidateID: "fake-notebook", EntityID: "notebook-1", EntityType: "notebook", Name: "Incident notes", AuthorName: "Demo User"},
+		{CandidateID: "fake-team", EntityID: "team-1", EntityType: "team", Name: "Checkout"},
+		{CandidateID: "fake-user", EntityID: "user-1", EntityType: "user", Name: "Demo User", Email: "demo@example.com", IsServiceAccount: &serviceAccount},
+		{CandidateID: "fake-integration", EntityID: "github", EntityType: "integration", Name: "GitHub", IsInstalled: &installed},
+		{CandidateID: "fake-workflow", EntityID: "workflow-1", EntityType: "workflow", Name: "Deploy checkout"},
+		{CandidateID: "fake-synthetic", EntityID: "synthetic-1", EntityType: "synthetic_test", Name: "Checkout availability"},
+		{CandidateID: "fake-resource", EntityID: "resource-1", EntityType: "resource", Name: "GET /checkout", URL: "/apm/resource/checkout"},
+		{CandidateID: "fake-sheet", EntityID: "sheet-1", EntityType: "spreadsheet", Title: "Checkout metrics", AuthorName: "Demo User"},
+		{CandidateID: "fake-app", EntityID: "app-1", EntityType: "app", Name: "Incident helper"},
+	}
+	groups := in.SuggestionGroups
+	if groups == nil {
+		groups = assistant.DefaultEntitySuggestionGroups
+	}
+	query := strings.ToLower(strings.TrimSpace(in.RawQuery))
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	entities := make([]assistant.SearchEntity, 0, min(limit, len(catalog)))
+	for _, entity := range catalog {
+		if !slices.Contains(groups, string(entity.EntityType)) {
+			continue
+		}
+		haystack := strings.ToLower(entity.DisplayLabel() + " " + entity.DisplayDetail())
+		if query != "" && !strings.Contains(haystack, query) {
+			continue
+		}
+		entities = append(entities, entity)
+		if len(entities) == limit {
+			break
+		}
+	}
+	return assistant.SearchEntitiesResponse{
+		SearchFlowID:           "fake-search-flow",
+		Entities:               entities,
+		ActiveSuggestionGroups: slices.Clone(groups),
+	}, nil
 }
 
 // Send implements agent.Backend. message seeds the output so the same prompt

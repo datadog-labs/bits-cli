@@ -122,10 +122,8 @@ func TestShimmerStaticIsTheFlatLabel(t *testing.T) {
 	}
 }
 
-// TestShimmerWithoutMotionIsStaticAtEveryStep is the graceful degradation.
-// lipgloss renders truecolor regardless of the terminal, so a low-color
-// terminal is detected in the tui (via tea.ColorProfileMsg) and the theme is
-// flattened here; the renderer then needs no special case at all.
+// TestShimmerWithoutMotionIsStaticAtEveryStep covers the explicit
+// reduced-motion theme policy.
 func TestShimmerWithoutMotionIsStaticAtEveryStep(t *testing.T) {
 	s := busyShimmer(true).shimmer("running").withoutMotion()
 	for _, step := range []int{0, 1, 7, 59, 60, 1000, -3} {

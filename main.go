@@ -21,6 +21,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tui"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 func main() {
@@ -60,15 +61,13 @@ func runRun(ctx context.Context, opts cmd.RunOptions) error {
 }
 
 func runRunWithStore(ctx context.Context, opts cmd.RunOptions, store auth.CredentialStore, out io.Writer) error {
-	workspaceRoot, err := os.Getwd()
+	workspace, err := openCurrentWorkspace()
 	if err != nil {
-		return fmt.Errorf("determine workspace: %w", err)
+		return err
 	}
-	workspaceTools, err := tools.NewEditorTools(workspaceRoot)
-	if err != nil {
-		return fmt.Errorf("open workspace: %w", err)
-	}
-	toolSet, err := agent.NewToolSet(opts.ApprovalMode, workspaceTools...)
+	defer func() { _ = workspace.Close() }()
+	clientTools := tools.NewClientTools(workspace)
+	toolSet, err := agent.NewToolSet(opts.ApprovalMode, clientTools...)
 	if err != nil {
 		return err
 	}
@@ -197,7 +196,12 @@ func printLoggedOut(w io.Writer) error {
 func runChat(parent context.Context, opts cmd.ChatOptions) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	root, err := startupModel(ctx, opts)
+	workspace, err := openCurrentWorkspace()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = workspace.Close() }()
+	root, err := startupModel(ctx, opts, workspace)
 	if err != nil {
 		return err
 	}
@@ -230,20 +234,21 @@ func runChat(parent context.Context, opts cmd.ChatOptions) error {
 	return nil
 }
 
-func startupModel(ctx context.Context, opts cmd.ChatOptions) (*tui.Model, error) {
-	return startupModelWithStore(ctx, opts, auth.DefaultStore())
-}
-
-func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth.CredentialStore) (*tui.Model, error) {
-	workspaceRoot, err := os.Getwd()
+func openCurrentWorkspace() (*workspace.Workspace, error) {
+	root, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("determine workspace: %w", err)
 	}
-	workspaceTools, err := tools.NewEditorTools(workspaceRoot)
-	if err != nil {
-		return nil, fmt.Errorf("open workspace: %w", err)
-	}
-	toolSet, err := agent.NewToolSet(opts.ApprovalMode, workspaceTools...)
+	return workspace.Open(root)
+}
+
+func startupModel(ctx context.Context, opts cmd.ChatOptions, workspace *workspace.Workspace) (*tui.Model, error) {
+	return startupModelWithStore(ctx, opts, auth.DefaultStore(), workspace)
+}
+
+func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace) (*tui.Model, error) {
+	clientTools := tools.NewClientTools(workspace)
+	toolSet, err := agent.NewToolSet(opts.ApprovalMode, clientTools...)
 	if err != nil {
 		return nil, err
 	}

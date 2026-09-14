@@ -7,10 +7,13 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 func TestDelimiterWidth(t *testing.T) {
-	if got := ansi.StringWidth(delimiter(10)); got != 10 {
+	chrome := styles.Default(true).Text.Tertiary
+	if got := ansi.StringWidth(delimiter(10, chrome)); got != 10 {
 		t.Fatalf("delimiter width = %d, want 10", got)
 	}
 }
@@ -28,7 +31,7 @@ func TestHexOf(t *testing.T) {
 }
 
 func TestFooterContainsPositionAndMode(t *testing.T) {
-	f := footer(200, groupMarkdown, true)
+	f := footer(200, groupMarkdown, true, styles.Default(true).Text.Tertiary)
 	if !strings.Contains(f, fmt.Sprintf("%d / %d", int(groupMarkdown)+1, numGroups)) {
 		t.Fatalf("footer missing position: %q", f)
 	}

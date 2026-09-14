@@ -116,16 +116,3 @@ func wrap(s string, width int) string {
 	}
 	return ansi.Wordwrap(s, width, "-")
 }
-
-// indent prefixes every line of s.
-func indent(s string, pad int) string {
-	if pad <= 0 || s == "" {
-		return s
-	}
-	prefix := strings.Repeat(" ", pad)
-	lines := strings.Split(s, "\n")
-	for i := range lines {
-		lines[i] = prefix + lines[i]
-	}
-	return strings.Join(lines, "\n")
-}

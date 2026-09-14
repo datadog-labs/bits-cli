@@ -26,7 +26,7 @@ test:
     - arch:arm64
   timeout: 10m
   script:
-    - go test ./...
+    - ./scripts/test.sh
   rules:
     - when: always
 

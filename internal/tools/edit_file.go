@@ -14,6 +14,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/filediff"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 const bom = "\ufeff"
@@ -21,7 +22,7 @@ const bom = "\ufeff"
 func newEditFileTool(r *os.Root, root string, locker *mutationLocker) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:        toolEditFile,
+			Name:        spec.EditFile,
 			Description: "Apply one or more exact text replacements to an existing workspace file. Each edit's old_text must match exactly one region of the current file. Edits are matched against the original file, not against each other; overlapping or ambiguous edits fail without modifying the file.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -56,10 +57,7 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
 		}
-		var args struct {
-			Path  string          `json:"path"`
-			Edits []filediff.Edit `json:"edits"`
-		}
+		var args spec.EditFileInput
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("invalid input: %s", err.Error()), nil
 		}
@@ -73,6 +71,10 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 			return errorResult("edits must contain at least one replacement"), nil
 		}
 
+		edits := make([]filediff.Edit, len(args.Edits))
+		for i, edit := range args.Edits {
+			edits[i] = filediff.Edit{OldText: edit.OldText, NewText: edit.NewText}
+		}
 		filePath := path.Clean(args.Path)
 
 		unlock, err := locker.lock(ctx)
@@ -138,7 +140,7 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 		}
 		base := filediff.NormalizeToLF(body)
 
-		repls, err := filediff.MatchEdits(base, args.Edits)
+		repls, err := filediff.MatchEdits(base, edits)
 		if err != nil {
 			return editMatchError(err, filePath), nil
 		}

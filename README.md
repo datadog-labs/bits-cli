@@ -23,8 +23,16 @@ Use `bits --help` for the complete command list or `bits help login` for command
 | `/resume` | Resume an existing conversation. |
 | `/status` | Show the current session status. |
 | `/web` | Open the active conversation in the Datadog web app. |
+| `/settings` | Open Assistant settings in the Datadog web app. |
 | `/logout` | Sign out from your Datadog account and exit Bits. |
 | `/quit`, `/exit` | Exit Bits. |
+
+Type `@` after whitespace or punctuation to open a mixed picker of entities and
+local-file suggestions. Prefix a query with a supported entity type, such as
+`@service:assistant`, to narrow the search. Entity selections are
+inserted as typed mentions such as `@dashboard:"Test Dashboard"` and sent as
+structured context for the next turn. Editing or deleting the mention removes
+that entity from the structured context. File mentions remain plain prompt text.
 
 ## Noninteractive run
 
@@ -106,3 +114,11 @@ Inside the TUI, `/logout` uses the same path and exits after invalidating the cu
 If Bits reports that the login expired or refresh was rejected, run `bits login` again. An unreadable credential can be cleared with `bits logout` before logging in again. If another process replaced the login with a different site or client, restart Bits to adopt it.
 
 An Assistant HTTP 401 is never retried automatically, especially for the non-idempotent streaming turn. It marks that exact access-token generation stale so the next independently initiated request refreshes safely.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the contribution workflow.
+
+## License
+
+Bits CLI is released under the [Apache-2.0 License](LICENSE). Third-party components and their licenses are listed in [LICENSE-3rdparty.csv](LICENSE-3rdparty.csv).

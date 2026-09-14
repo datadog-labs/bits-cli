@@ -360,7 +360,7 @@ func normalizeCustomSite(raw string) (string, error) {
 
 // View composes the login state into shared panel and selector components.
 func (m *Model) View() tea.View {
-	view := tea.View{AltScreen: true}
+	view := tea.View{AltScreen: true, BackgroundColor: m.theme.Background}
 	if m.width <= 0 || m.height <= 0 {
 		view.Content = "Loading…"
 		return view
@@ -401,7 +401,7 @@ func (m *Model) panelContent() components.PanelContent {
 }
 
 func (m *Model) authorizationLink(label string) string {
-	return ansi.SetHyperlink(m.authorizationURL) + m.theme.Text.Help.Render(label) + ansi.ResetHyperlink()
+	return ansi.SetHyperlink(m.authorizationURL) + m.theme.Text.Secondary.Render(label) + ansi.ResetHyperlink()
 }
 
 func (m *Model) title() string {
@@ -425,7 +425,7 @@ func (m *Model) bodyView(width int) string {
 	switch m.phase {
 	case phaseCustom:
 		parts := []string{
-			text.Muted.Render("Enter the hostname where your organization lives."),
+			text.Secondary.Render("Enter the hostname where your organization lives."),
 			"",
 			ansi.Truncate(m.custom.View(), width, "…"),
 		}
@@ -436,10 +436,10 @@ func (m *Model) bodyView(width int) string {
 	case phaseWaiting:
 		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 		parts := []string{
-			text.Muted.Render("Complete sign-in in the browser window."),
+			text.Secondary.Render("Complete sign-in in the browser window."),
 			"",
 			feedback.Progress.Render(frames[m.spinner%len(frames)] + "  Waiting for Datadog"),
-			text.Help.Render(strings.TrimPrefix(m.activeSite, "https://")),
+			text.Secondary.Render(strings.TrimPrefix(m.activeSite, "https://")),
 		}
 		if m.browserOpenErr != nil {
 			parts[0] = feedback.Error.Render("We couldn't open a browser: " + m.browserOpenErr.Error())
@@ -455,16 +455,16 @@ func (m *Model) bodyView(width int) string {
 		}
 		return strings.Join([]string{
 			feedback.Error.Render(ansi.Hardwrap(message, width, false)),
-			text.Help.Render(strings.TrimPrefix(m.activeSite, "https://")),
+			text.Secondary.Render(strings.TrimPrefix(m.activeSite, "https://")),
 		}, "\n")
 	case phaseComplete:
 		return strings.Join([]string{
 			feedback.Success.Render("✓  Authentication complete"),
-			text.Help.Render(strings.TrimPrefix(m.activeSite, "https://")),
+			text.Secondary.Render(strings.TrimPrefix(m.activeSite, "https://")),
 		}, "\n")
 	default:
 		return strings.Join([]string{
-			text.Muted.Render("Select the site where your organization lives."),
+			text.Secondary.Render("Select the site where your organization lives."),
 			"",
 			m.selector.View(width),
 		}, "\n")

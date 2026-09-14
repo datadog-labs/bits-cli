@@ -17,6 +17,8 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 const (
@@ -31,7 +33,7 @@ var errGrepMatchLimit = errors.New("grep match limit reached")
 func newGrepFilesTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:        toolGrepFiles,
+			Name:        spec.GrepFiles,
 			Description: "Search workspace files using a Go regular expression. Returns file:line: text matches. Skips binary files. Respects .gitignore. Returns up to 200 matches.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -57,13 +59,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
 		}
-		var args struct {
-			Pattern       string `json:"pattern"`
-			Path          string `json:"path"`
-			Include       string `json:"include"`
-			CaseSensitive bool   `json:"case_sensitive"`
-			Offset        int    `json:"offset"`
-		}
+		var args spec.GrepFilesInput
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("invalid input: %s", err.Error()), nil
 		}
@@ -100,14 +96,6 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 		info, err := fs.Stat(fsys, base)
 		if err != nil {
 			return errorResult("cannot access path: %s", err.Error()), nil
-		}
-
-		ig, err := loadIgnorer(ctx, fsys, base, info.IsDir())
-		if err != nil {
-			return errorResult("%s", err.Error()), nil
-		}
-		if base != "." && ig.Ignore(base, info.IsDir()) {
-			return agent.ToolResult{Output: "No matches found."}, nil
 		}
 
 		type match struct {
@@ -169,57 +157,25 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 		}
 
 		cappedByMatchLimit := false
-		if !info.IsDir() {
-			if includeMatcher != nil && !includeMatcher.MatchPath(base, false) {
-				return agent.ToolResult{Output: "No matches found."}, nil
+		walkErr := workspace.WalkFS(ctx, fsys, base, func(p string, d fs.DirEntry) error {
+			if d.IsDir() {
+				return nil
 			}
-			if err := searchFile(base, false); err != nil {
-				if !errors.Is(err, errGrepMatchLimit) {
-					if ctxErr := ctx.Err(); ctxErr != nil {
-						return agent.ToolResult{}, ctxErr
-					}
-					return errorResult("%s", err.Error()), nil
-				}
-				cappedByMatchLimit = true
+			if includeMatcher != nil && !includeMatcher.MatchPath(p, false) {
+				return nil
 			}
-		} else {
-			walkErr := fs.WalkDir(fsys, base, func(p string, d fs.DirEntry, err error) error {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if err != nil {
-					return nil
-				}
-				if d.Name() == ".git" && d.IsDir() {
-					return fs.SkipDir
-				}
-				if ig.Ignore(p, d.IsDir()) {
-					if d.IsDir() {
-						return fs.SkipDir
-					}
-					return nil
-				}
-				if d.IsDir() && p != base {
-					if err := ig.Add(ctx, fsys, p); err != nil {
-						return err
-					}
-				}
-				if d.IsDir() {
-					return nil
-				}
-				if includeMatcher != nil && !includeMatcher.MatchPath(p, false) {
-					return nil
-				}
-				return searchFile(p, true)
-			})
-			if errors.Is(walkErr, errGrepMatchLimit) {
-				cappedByMatchLimit = true
-			} else if walkErr != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return agent.ToolResult{}, ctxErr
-				}
+			return searchFile(p, info.IsDir())
+		})
+		if errors.Is(walkErr, errGrepMatchLimit) {
+			cappedByMatchLimit = true
+		} else if walkErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return agent.ToolResult{}, ctxErr
+			}
+			if info.IsDir() {
 				return errorResult("walk error: %s", walkErr.Error()), nil
 			}
+			return errorResult("%s", walkErr.Error()), nil
 		}
 
 		if seen == 0 {

@@ -42,7 +42,8 @@ type SendOptions struct {
 	// Must be resent on every turn.
 	SkillOverrides []SkillOverride
 	// Context puts Datadog objects (dashboards, monitors, services...) in scope
-	// for the turn. Must be resent on every turn.
+	// for one backend request. Agent loops must resend a turn's context on tool
+	// continuations and must not carry it to the next independent turn.
 	Context *AssistantContext
 	// Profile selects the server-side surface preset.
 	Profile Profile
@@ -153,8 +154,8 @@ const DefaultProfile = ProfileCLI
 
 // AssistantContext is the request-level `context`: Datadog objects in scope for
 // the turn. The server fetches each entity's details and injects them into the
-// prompt. Like ClientTools, it must be resent on every request in the
-// conversation; the agent engine carries it across turns via SendOptions.
+// prompt. It must be resent on every request that belongs to the same user
+// turn, including client-tool continuations.
 type AssistantContext struct {
 	Entities []ContextEntity `json:"entities,omitempty"`
 	// Resources is the sibling `resources` list. Its wire shape is not modeled

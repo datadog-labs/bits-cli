@@ -10,6 +10,8 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 const (
@@ -24,7 +26,7 @@ const (
 func newListFilesTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
-			Name:        toolListFiles,
+			Name:        spec.ListFiles,
 			Description: "List files and directories in the workspace. Directories end with /. Respects .gitignore. Returns up to 2000 entries.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -45,10 +47,7 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
 		}
-		var args struct {
-			Path  string `json:"path"`
-			Depth *int   `json:"depth"`
-		}
+		var args spec.ListFilesInput
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("invalid input: %s", err.Error()), nil
 		}
@@ -75,40 +74,12 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 			return errorResult("%s is not a directory", args.Path), nil
 		}
 
-		ig, err := loadIgnorer(ctx, fsys, base, true)
-		if err != nil {
-			return errorResult("%s", err.Error()), nil
-		}
-		if base != "." && ig.Ignore(base, true) {
-			return agent.ToolResult{Title: base, Output: "(empty)"}, nil
-		}
-
 		var entries []string
 		hitEntryLimit := false
 		hitByteLimit := false
 		byteCount := 0
 
-		err = fs.WalkDir(fsys, base, func(p string, d fs.DirEntry, err error) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err != nil {
-				return nil // skip unreadable entries
-			}
-			if d.Name() == ".git" && d.IsDir() {
-				return fs.SkipDir
-			}
-			if ig.Ignore(p, d.IsDir()) {
-				if d.IsDir() {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			if d.IsDir() && p != base {
-				if err := ig.Add(ctx, fsys, p); err != nil {
-					return err
-				}
-			}
+		err = workspace.WalkFS(ctx, fsys, base, func(p string, d fs.DirEntry) error {
 			if p == base {
 				return nil // skip the root entry itself
 			}

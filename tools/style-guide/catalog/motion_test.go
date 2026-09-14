@@ -236,12 +236,9 @@ func TestRowsLeadWithTheProductionGlyph(t *testing.T) {
 	}
 }
 
-// TestOptionRowsDrawPillCaps is the geometry claim this page makes: the option
-// rows must be drawn with the same rounded caps production uses, or they are
-// not comparable to the selected row, which renders through the real pill().
-// The "today" row is the exception — it reproduces the pre-change look, which
-// had no surface and therefore no caps.
-func TestOptionRowsDrawPillCaps(t *testing.T) {
+// The production compact row and the legacy "today" row are bare. Historical
+// pill alternatives keep their caps so the catalog still compares geometry.
+func TestOnlyCompactAndLegacyRowsOmitPillCaps(t *testing.T) {
 	body := renderGroup(groupStatusPillMotion, 100, styles.Default(true), 0)
 
 	var capped, bare int
@@ -261,7 +258,7 @@ func TestOptionRowsDrawPillCaps(t *testing.T) {
 	if capped < 2 {
 		t.Errorf("%d rows drew pill caps, want the option rows to be capped like production", capped)
 	}
-	if bare != 1 {
-		t.Errorf("%d rows drew no caps, want exactly 1 (the \"today\" row)", bare)
+	if bare != 2 {
+		t.Errorf("%d rows drew no caps, want exactly 2 (compact and legacy)", bare)
 	}
 }

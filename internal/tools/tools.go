@@ -2,18 +2,9 @@ package tools
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/DataDog/bits-cli/internal/agent"
-)
-
-// Tool names exposed to the assistant.
-const (
-	toolReadFile  = "read_file"
-	toolListFiles = "list_files"
-	toolGrepFiles = "grep_files"
-	toolWriteFile = "write_file"
-	toolEditFile  = "edit_file"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 // approvalKeyWorkspaceRead is the shared approval key used by the read-only
@@ -26,20 +17,18 @@ const approvalKeyWorkspaceRead = "workspace_read"
 // edit_file across the whole workspace for the lifetime of the session.
 const approvalKeyWorkspaceWrite = "workspace_write"
 
-// NewEditorTools opens root as a confined workspace and returns the editor
-// tools: the read-only read_file, list_files, and grep_files, plus the
-// mutating write_file and edit_file.
+// NewEditorTools returns the editor tools for workspace: the read-only
+// read_file, list_files, and grep_files, plus the mutating write_file and
+// edit_file.
 //
 // The three read-only tools share one approval key; the two mutating tools
 // share another. A single allow-session decision on either key covers all
 // tools in that group for the workspace. Mutations to the same path are
 // serialized through a shared locker.
-func NewEditorTools(root string) ([]agent.Tool, error) {
-	r, err := os.OpenRoot(root)
-	if err != nil {
-		return nil, fmt.Errorf("open workspace %q: %w", root, err)
-	}
-	fsys := r.FS()
+func NewEditorTools(ws *workspace.Workspace) []agent.Tool {
+	root := ws.Path()
+	r := ws.OSRoot()
+	fsys := ws.FS()
 	locker := newMutationLocker()
 	return []agent.Tool{
 		newReadFileTool(fsys, root),
@@ -47,7 +36,15 @@ func NewEditorTools(root string) ([]agent.Tool, error) {
 		newGrepFilesTool(fsys, root),
 		newWriteFileTool(r, root, locker),
 		newEditFileTool(r, root, locker),
-	}, nil
+	}
+}
+
+// NewClientTools returns every local tool available on the current platform.
+// The editor tools are available everywhere. Linux and macOS additionally get
+// the deliberately unsandboxed, one-shot exec_command tool.
+func NewClientTools(ws *workspace.Workspace) []agent.Tool {
+	clientTools := NewEditorTools(ws)
+	return append(clientTools, platformExecTools(ws.Path())...)
 }
 
 // errorResult builds an error ToolResult with a formatted output message.

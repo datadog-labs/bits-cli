@@ -10,8 +10,19 @@ type palette struct {
 
 	onAccent  string
 	onWarning string
-	text      string
-	muted     string
+
+	// The text levels are the foreground ramp, ordered by attention: primary is
+	// what the reader came for (input, titles, list items), secondary is still
+	// meant to be read (reasoning, help, placeholders), tertiary is texture
+	// (tool detail, labels, timestamps). Chosen by eye, not held to a contrast
+	// bound.
+	textPrimary   string
+	textSecondary string
+	textTertiary  string
+
+	// background is painted across the alt-screen instead of inherited from the
+	// terminal, and is the base of the elevation ramp surface* sits above.
+	background string
 
 	surface         string
 	surfaceRaised   string
@@ -23,15 +34,8 @@ type palette struct {
 
 	link string
 
-	// busy roles style the in-flight status chip. busyDim and busyHot are the
-	// low- and high-emphasis ends of the sweep animated across its label, so in
-	// a light theme busyHot is the *darker* of the two.
-	//
-	// Open question for review: busy was previously raw ANSI ("11" dark / "3"
-	// light) and is now hex, matching success and error. A gradient needs real
-	// colors to interpolate between, so the sweep could not be built on the ANSI
-	// pair — but this does change the flat chip's color on 16-color terminals,
-	// which is a palette decision beyond the animation itself.
+	// busy roles style the in-flight status chip; busyDim/busyHot are the
+	// low/high-emphasis ends of the sweep animated across its label.
 	busy        string
 	busySurface string
 	busyDim     string
@@ -55,8 +59,10 @@ func darkPalette() palette {
 		secondary:       "#3f4ca5",
 		onAccent:        "#FFFFFF",
 		onWarning:       "#1A1A1A",
-		text:            "252",
-		muted:           "#8C8F99",
+		textPrimary:     "#FFFFFF",
+		textSecondary:   "#A2A3A6",
+		textTertiary:    "#45474D",
+		background:      "#171921",
 		surface:         "#22252F",
 		surfaceRaised:   "236",
 		approvalSurface: "#2C3142",
@@ -81,33 +87,39 @@ func darkPalette() palette {
 	}
 }
 
+// background (darker = raised, as in Nord/Solarized), since there is no
+// headroom above a 94%-lightness background. Foregrounds are darkened to
+// match, each checked against the darkest surface it renders on (builder.go).
+// The three text levels are picked by eye; see the palette struct.
 func lightPalette() palette {
 	return palette{
 		primary:         "#5e6dd6",
-		interactive:     "#4D58AF",
+		interactive:     "#3F4991",
 		secondary:       "#1d2140",
 		onAccent:        "#FFFFFF",
 		onWarning:       "#1A1A1A",
-		text:            "#1C2E38",
-		muted:           "#666666",
-		surface:         "#EEF0F3",
-		surfaceRaised:   "#EEF0F3",
-		approvalSurface: "#E2E6EF",
+		textPrimary:     "#000000",
+		textSecondary:   "#5E5F62",
+		textTertiary:    "#989BA0",
+		background:      "#ECEFF4",
+		surface:         "#CCD3DF",
+		surfaceRaised:   "#BDC5D3",
+		approvalSurface: "#B7C1D5",
 		inputRule:       "#383A40",
-		borderSubtle:    "#B8BCC4",
-		codeSurface:     "#EEEFF0",
+		borderSubtle:    "#9AA3B2",
+		codeSurface:     "#CED3DD",
 		codeText:        "#1C2E38",
 		link:            "#006bc2",
 		busy:            "#7A5200",
-		busySurface:     "#FFF3D0",
-		busyDim:         "#D9B15C",
+		busySurface:     "#E5D198",
+		busyDim:         "#D2A340",
 		busyHot:         "#4A3000",
 		success:         "#41C464",
 		successSurface:  "#EAFDED",
-		error:           "#EB364B",
-		errorSurface:    "#FDEBED",
-		feedbackSuccess: "#397A4A",
-		feedbackError:   "#B23A4A",
+		error:           "#B61225",
+		errorSurface:    "#F9C6CC",
+		feedbackSuccess: "#30663E",
+		feedbackError:   "#A13443",
 		critical:        "#C4314B",
 		info:            "#632CA6",
 		warning:         "#F5A623",

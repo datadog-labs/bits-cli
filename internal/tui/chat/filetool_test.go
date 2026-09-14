@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func TestRenderEditorToolUsesLocalStructuredState(t *testing.T) {
 	})
 
 	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
-	for _, want := range []string{"edit_file", "f.go", "func old() {}", "func new() {}"} {
+	for _, want := range []string{"edited", "f.go", "func old() {}", "func new() {}"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("render missing %q:\n%s", want, got)
 		}
@@ -48,7 +49,7 @@ func TestRenderEditorToolRestoresRawDisplay(t *testing.T) {
 	block := editorToolBlock("edit_file", display, nil)
 
 	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(false), 0))
-	for _, want := range []string{"edit_file", "f.txt", "before", "after"} {
+	for _, want := range []string{"edited", "f.txt", "before", "after"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("restored render missing %q:\n%s", want, got)
 		}
@@ -62,7 +63,7 @@ func TestRenderEditorToolWithoutDiffFallsBackToGenericTool(t *testing.T) {
 		block.Tool.Output = "the tool returned an error"
 
 		got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(false), 0))
-		for _, want := range []string{"write_file", `{"path":"f.txt"}`, "the tool returned an error"} {
+		for _, want := range []string{"wrote", "f.txt", "not a unified diff"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("generic fallback missing %q:\n%s", want, got)
 			}
@@ -84,7 +85,7 @@ func TestRenderEditorToolAppliedChangeUsesActualTail(t *testing.T) {
 		Change: &filediff.Change{Path: "f.txt", Op: filediff.OpEdit, State: filediff.ChangeApplied, Diff: &diff},
 	})
 
-	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), collapsedEditorDiffLines))
+	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), collapsedDiffLines))
 	for _, want := range []string{"LINE-30", "format: CRLF + BOM → LF"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("render missing %q:\n%s", want, got)
@@ -145,7 +146,7 @@ func TestRenderStreamingEditorPreviewShowsTailForWritesAndEdits(t *testing.T) {
 		{name: "edit", tool: "edit_file", kind: filediff.PreviewEdit},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			lines := make([]filediff.DiffLine, 0, collapsedEditorDiffLines+5)
+			lines := make([]filediff.DiffLine, 0, collapsedDiffLines+5)
 			for number := 1; number <= cap(lines); number++ {
 				lines = append(lines, filediff.DiffLine{Kind: filediff.LineAdd, NewNumber: number, Content: fmt.Sprintf("line%02d", number)})
 			}
@@ -160,7 +161,7 @@ func TestRenderStreamingEditorPreviewShowsTailForWritesAndEdits(t *testing.T) {
 			})
 			var renderer blockRenderer
 			got := ansi.Strip(renderer.RenderBlock(block, 80, DefaultStyles(true), 0))
-			if strings.Contains(got, "line01") || !strings.Contains(got, "line25") || !strings.Contains(got, "hidden") {
+			if strings.Contains(got, "line01") || !strings.Contains(got, "line13") || !strings.Contains(got, "hidden") {
 				t.Fatalf("streaming tail render = %q", got)
 			}
 			if test.kind == filediff.PreviewWritePrefix && !strings.Contains(got, "awaiting more input") {
@@ -170,14 +171,60 @@ func TestRenderStreamingEditorPreviewShowsTailForWritesAndEdits(t *testing.T) {
 	}
 }
 
+func TestRenderStreamingWriteUsesPathFromDiffState(t *testing.T) {
+	block := editorToolBlock("write_file", "", &filediff.State{
+		Phase:    filediff.PhaseStreaming,
+		Snapshot: &filediff.Snapshot{Path: "f.txt"},
+		Preview:  &filediff.Preview{Kind: filediff.PreviewWritePrefix},
+	})
+	block.Tool.Input = `{"path":"f`
+	block.Tool.Status = agent.ToolRunning
+
+	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
+	if !strings.Contains(got, "writing f.txt") {
+		t.Fatalf("streaming write header = %q", got)
+	}
+	if strings.Contains(got, "writeing") || strings.Contains(got, "write_file") {
+		t.Fatalf("streaming write used an unhelpful label: %q", got)
+	}
+}
+
+func TestRenderUnavailableChangeShowsReasonWhileAwaitingApproval(t *testing.T) {
+	block := editorToolBlock("write_file", "", &filediff.State{
+		Phase:    filediff.PhaseUnavailable,
+		Snapshot: &filediff.Snapshot{Path: "binary.dat"},
+		Reason:   "binary file preview is unavailable",
+	})
+	block.Tool.Status = agent.ToolAwaitingApproval
+
+	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
+	for _, want := range []string{"writing binary.dat · awaiting approval", "binary file preview is unavailable"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("awaiting unavailable change missing %q: %q", want, got)
+		}
+	}
+}
+
 func editorToolBlock(name, detail string, renderState any) agent.Block {
+	path := ""
+	if state, ok := renderState.(*filediff.State); ok && state != nil {
+		path, _, _ = editorDiff(state)
+	}
+	if path == "" {
+		if diff, ok := filediff.ParseUnifiedDiff(detail); ok {
+			path = strings.TrimPrefix(diff.To, "b/")
+		}
+	}
+	input, _ := json.Marshal(map[string]string{"path": path})
 	return agent.Block{
 		Kind: assistant.KindToolResult,
 		Tool: &agent.ToolBlock{
-			Name:        name,
-			Detail:      detail,
-			RenderState: renderState,
-			Status:      agent.ToolSuccess,
+			Name:         name,
+			Input:        string(input),
+			Detail:       detail,
+			RenderState:  renderState,
+			Status:       agent.ToolSuccess,
+			IsClientSide: true,
 		},
 	}
 }

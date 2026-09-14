@@ -19,7 +19,7 @@ import (
 const historyLoadTimeout = 30 * time.Second
 
 // mouseWheelDelta is how many transcript lines one wheel notch scrolls,
-const mouseWheelDelta = 3
+const mouseWheelDelta = 1
 
 // defaultNoticeTTL is how long a transient status notice stays before it clears.
 const defaultNoticeTTL = 10 * time.Second
@@ -39,6 +39,10 @@ type (
 		err        error
 	}
 	webOpenResultMsg struct {
+		url string
+		err error
+	}
+	settingsOpenResultMsg struct {
 		url string
 		err error
 	}
@@ -140,14 +144,6 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // routes the message to the owning surface, then reconciles editor focus so the
 // cursor always tracks the active surface.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// The color profile is handled ahead of the mode check because Bubble Tea
-	// reports it once, at startup — which is while the login screen owns the
-	// screen. Routing it through updateLogin would drop it, and nothing
-	// re-requests it after the handoff, so a low-color terminal reached through
-	// login would keep a truecolor sweep it cannot render.
-	if profile, ok := msg.(tea.ColorProfileMsg); ok {
-		return m, m.setColorProfile(profile.Profile)
-	}
 	if m.mode == ModeLogin {
 		return m.updateLogin(msg)
 	}
@@ -184,6 +180,7 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.cancelTurn != nil {
 		m.cancelTurn()
 	}
+	m.stopEntitySearch()
 	if m.logoutCancel != nil {
 		m.logoutCancel()
 	}
@@ -205,6 +202,14 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case animTickMsg:
 		return m, m.advanceAnimation(msg)
+
+	case entitySearchDebounceMsg:
+		return m, m.beginEntitySearch(msg)
+
+	case entitySearchResultMsg:
+		m.applyEntitySearchResult(msg)
+		m.refreshViewport()
+		return m, nil
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -269,6 +274,12 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.showNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url), 0)
 		}
 		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Opened this conversation in your browser: %s", msg.url), 0)
+
+	case settingsOpenResultMsg:
+		if msg.err != nil {
+			return m, m.showNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url), 0)
+		}
+		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Opened Assistant settings in your browser: %s", msg.url), 0)
 	}
 
 	if m.focus() == focusPicker {
@@ -282,7 +293,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// blurred and ignores these, showing no cursor.
 	cmd := m.editor.Update(msg)
 	m.refreshViewport()
-	return m, cmd
+	return m, batchCommands(cmd, m.syncEntitySearch())
 }
 
 func (m *Model) openConversationInBrowser() tea.Cmd {
@@ -302,6 +313,23 @@ func (m *Model) openConversationInBrowser() tea.Cmd {
 	}
 	return func() tea.Msg {
 		return webOpenResultMsg{url: target, err: openURL(context.Background(), target)}
+	}
+}
+
+func (m *Model) openSettingsInBrowser() tea.Cmd {
+	if m.engine == nil {
+		return m.showNotice(notice(chat.NoticeError, nil, "Assistant settings have no Datadog web site."), 0)
+	}
+	target, err := browser.SettingsURL(m.engine.Site())
+	if err != nil {
+		return m.showNotice(notice(chat.NoticeError, err, "Could not build a web link for Assistant settings."), 0)
+	}
+	openURL := m.openURL
+	if openURL == nil {
+		openURL = browser.Open
+	}
+	return func() tea.Msg {
+		return settingsOpenResultMsg{url: target, err: openURL(context.Background(), target)}
 	}
 }
 
@@ -402,6 +430,9 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.engine = msg.engine
+		if m.entitySearcher == nil {
+			m.entitySearcher = msg.engine
+		}
 		m.convID = msg.engine.ConversationID()
 		m.loginModel = nil
 		m.engineFactory = nil
@@ -467,17 +498,22 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// enter to accept, esc to close). Enter dispatches the selected registered
 	// slash command directly, including a partial command completion.
 	if m.editor.MenuOpen() {
+		if msg.String() == "enter" && !m.editor.MenuHasCandidates() {
+			m.editor.CloseMenu()
+			return m.submit()
+		}
 		if msg.String() == "enter" {
 			if name, selected := m.editor.SelectedCommand(); selected {
 				if _, registered := lookupCommand(name); registered {
 					m.editor.Reset()
+					m.stopEntitySearch()
 					return m.dispatchCommand(name)
 				}
 			}
 		}
 		cmd := m.editor.Update(msg)
 		m.refreshViewport()
-		return m, cmd
+		return m, batchCommands(cmd, m.syncEntitySearch())
 	}
 
 	switch msg.String() {
@@ -501,7 +537,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	cmd := m.editor.Update(msg)
 	m.refreshViewport()
-	return m, cmd
+	return m, batchCommands(cmd, m.syncEntitySearch())
 }
 
 func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -532,13 +568,18 @@ func (m *Model) respondToApproval(decision agent.ApprovalDecision) {
 func (m *Model) submit() (tea.Model, tea.Cmd) {
 	raw := m.editor.Value()
 	text := strings.TrimSpace(raw)
-	if text == "" {
+	attachments := m.editor.Attachments()
+	if text == "" && len(attachments) == 0 {
 		return m, nil
+	}
+	if text == "" {
+		text = " "
 	}
 
 	// Slash commands are a native control plane: they never reach the model.
 	if name, ok := parseCommand(raw); ok {
 		m.editor.Reset()
+		m.stopEntitySearch()
 		return m.dispatchCommand(name)
 	}
 	if m.pendingLogout || m.logoutRunning {
@@ -548,10 +589,12 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	if m.turnEvents != nil || m.chatPhase == chat.PhaseLoading {
 		return m, nil
 	}
+	turnContext := contextFromAttachments(attachments)
 	m.editor.Reset()
+	m.stopEntitySearch()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools})
+	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Context: turnContext})
 	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.usage = nil
