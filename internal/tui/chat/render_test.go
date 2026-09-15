@@ -1,10 +1,12 @@
 package chat
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
@@ -119,18 +121,97 @@ func TestExecCommandDecodesEnvelopeAndBoundsOutput(t *testing.T) {
 		Status: agent.ToolError, IsClientSide: true,
 	}}
 	plain := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
-	for _, want := range []string{"execution failed go   test␊./... in . · timeout 30s · exit 1", "stdout: out-1", "err-3", "… output truncated and incomplete"} {
+	for _, want := range []string{"run failed go   test in . · timeout 30s · exit 1", "  │ ./...", "stdout: out-1", "err-3", "… output truncated and incomplete"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("exec rendering missing %q:\n%s", want, plain)
 		}
+	}
+	if strings.Contains(plain, "␊") {
+		t.Errorf("exec summary exposed a control picture:\n%s", plain)
 	}
 	for _, hidden := range []string{`"duration_ms"`, `"stdout"`, `"truncated"`} {
 		if strings.Contains(plain, hidden) {
 			t.Errorf("exec rendering exposed JSON field %q:\n%s", hidden, plain)
 		}
 	}
-	if got := strings.Count(plain, "\n") + 1; got > 1+execOutputMaxLines {
-		t.Fatalf("exec rendering used %d lines, want <= %d:\n%s", got, 1+execOutputMaxLines, plain)
+	if got, wantMax := strings.Count(plain, "\n")+1, 2+execOutputMaxLines; got > wantMax {
+		t.Fatalf("exec rendering used %d lines, want <= %d:\n%s", got, wantMax, plain)
+	}
+}
+
+func TestExecCommandPreservesSafeBoundedMultilineInvocation(t *testing.T) {
+	command := "python3 - <<'PY'\r\n\timport json\r\nprint('long command line that must be truncated at narrow widths')\r\nline-4\r\nline-5\r\nline-6\r\nline-7\r\nline-8\r\nline-9\r\nline-10\r\nline-11\r\nline-12\r\nPY\x1b"
+	input, err := json.Marshal(spec.ExecCommandInput{Cmd: command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := agent.Block{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{
+		Name: spec.ExecCommand, Input: string(input), Status: agent.ToolSuccess, IsClientSide: true,
+	}}
+
+	plain := ansi.Strip(RenderBlock(block, 32, DefaultStyles(true), 0))
+	want := strings.Join([]string{
+		"✓ ran python3 - <<'PY'",
+		"  │     import json",
+		"  │ print('long command line th…",
+		"  │ … +4 lines",
+		"  │ line-8",
+		"  │ line-9",
+		"  │ line-10",
+		"  │ line-11",
+		"  │ line-12",
+		"  │ PY␛",
+	}, "\n")
+	if plain != want {
+		t.Fatalf("multiline exec rendering:\n%s\nwant:\n%s", plain, want)
+	}
+	if got := strings.Count(plain, "\n") + 1; got != execCommandMaxLines {
+		t.Fatalf("multiline invocation used %d lines, want %d", got, execCommandMaxLines)
+	}
+	for _, row := range strings.Split(RenderBlock(block, 32, DefaultStyles(true), 0), "\n") {
+		if got := ansi.StringWidth(row); got > 32 {
+			t.Fatalf("row width = %d, want <= 32: %q", got, ansi.Strip(row))
+		}
+	}
+}
+
+func TestExecCommandHighlightsQuotedHeredocAsOneShellDocument(t *testing.T) {
+	input, err := json.Marshal(spec.ExecCommandInput{Cmd: "python3 - <<'PY'\nimport json\npayload = {\"enabled\": True}\nprint(payload[\"enabled\"])\nPY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := agent.Block{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{
+		Name: spec.ExecCommand, Input: string(input), Status: agent.ToolSuccess, IsClientSide: true,
+	}}
+	sty := DefaultStyles(true)
+	sty.StatusSuccess = lipgloss.NewStyle()
+	sty.ToolName = lipgloss.NewStyle()
+	sty.ToolArgument = lipgloss.NewStyle()
+	sty.ToolDetail = lipgloss.NewStyle()
+
+	rows := strings.Split(RenderBlock(block, 80, sty, 0), "\n")
+	if got, want := len(rows), 5; got != want {
+		t.Fatalf("rendered %d rows, want %d", got, want)
+	}
+	if !strings.ContainsRune(rows[0], '\x1b') {
+		t.Fatalf("exec header was not syntax highlighted: %q", rows[0])
+	}
+	var heredocStyle string
+	for i, row := range rows[1:] {
+		start := strings.Index(row, "\x1b[")
+		if start < 0 {
+			t.Fatalf("heredoc row %d was not highlighted: %q", i+1, row)
+		}
+		end := strings.Index(row[start:], "m")
+		if end < 0 {
+			t.Fatalf("heredoc row %d has an incomplete style: %q", i+1, row)
+		}
+		style := row[start : start+end+1]
+		if heredocStyle == "" {
+			heredocStyle = style
+		} else if style != heredocStyle {
+			t.Errorf("heredoc row %d style = %q, want literal style %q", i+1, style, heredocStyle)
+		}
 	}
 }
 
@@ -138,6 +219,7 @@ func TestToolRowsStayWithinWidth(t *testing.T) {
 	blocks := []agent.Block{
 		toolBlockOf(agent.ToolSuccess),
 		{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"a very long command with many arguments","workdir":"a/long/workdir"}`, Output: `{"status":"success","stdout":"a very long output line that must wrap safely","stderr":""}`, Status: agent.ToolSuccess, IsClientSide: true}},
+		{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"first line\nsecond very long command line with many arguments\nlast line"}`, Status: agent.ToolSuccess, IsClientSide: true}},
 	}
 	for _, width := range []int{12, 24} {
 		for _, block := range blocks {

@@ -19,6 +19,7 @@ import (
 
 const (
 	genericOutputMaxLines = 3
+	execCommandMaxLines   = 10
 	execOutputMaxLines    = 5
 	collapsedDiffLines    = 8
 	inspectionGroupKey    = "inspect"
@@ -125,7 +126,9 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 	case spec.ClientExecCommand:
 		var in spec.ExecCommandInput
 		if decodeObject(input, &in) && in.Cmd != "" {
-			p.argument, p.context = escape.Inline(in.Cmd), escape.Inline(in.Workdir)
+			// Preserve command line boundaries for the exec-specific renderer. The
+			// working directory remains compact metadata in the header.
+			p.argument, p.context = escape.Multiline(in.Cmd), escape.SingleLine(in.Workdir)
 			if in.TimeoutMS != nil && *in.TimeoutMS > 0 && *in.TimeoutMS <= spec.ExecMaxTimeoutMS {
 				p.timeout = (time.Duration(*in.TimeoutMS) * time.Millisecond).String()
 			}
@@ -222,14 +225,13 @@ func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 		}
 		return actionArgument(action, p.argument)
 	case spec.ClientExecCommand:
-		action := "execute"
+		action := "run"
 		switch state {
 		case lifecycleRunning, lifecycleAwaiting:
-			action = "executing"
 		case lifecycleSuccess:
-			action = "executed"
+			action = "ran"
 		case lifecycleError:
-			action = "execution failed"
+			action = "run failed"
 		case lifecycleUnknown, lifecycleDenied, lifecycleCancelled:
 		}
 		spans := actionArgument(action, p.argument)
@@ -394,7 +396,7 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty St
 	if decoded {
 		suffix = execSuffix(result)
 	}
-	header := renderToolHeader(tool, p.summary(tool), suffix, width, sty, frame)
+	header := renderExecInvocation(tool, p, suffix, width, sty, frame)
 	state := lifecycleOf(tool)
 	if tool.Output == "" {
 		return header
@@ -416,6 +418,40 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty St
 		return header
 	}
 	return header + "\n" + renderRows(rows, width, style, sty)
+}
+
+// renderExecInvocation keeps ordinary commands on the compact tool header.
+// For a multiline command, the first source line stays in the header and the
+// remaining lines form a bounded branch above the command output. This retains
+// shell structure (especially heredocs) without allowing an arbitrary tool
+// input to consume the transcript viewport.
+func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []summarySpan, width int, sty Styles, frame int) string {
+	command := strings.TrimRight(p.argument, "\n")
+	const shellPath = "command.sh"
+	lines := diffrender.HighlightLines(shellPath, command, sty.Diff.SyntaxDark, sty.ToolArgument)
+	p.argument = lines[0]
+	header := renderToolHeader(tool, p.summary(tool), suffix, width, sty, frame)
+	if len(lines) == 1 {
+		return header
+	}
+
+	sourceRows := lines[1:]
+	limit := execCommandMaxLines - 1
+	omissionRow := -1
+	if len(sourceRows) > limit {
+		omissionRow = min(2, limit-1)
+	}
+	rows := middleClamp(sourceRows, limit)
+	for i, row := range rows {
+		prefix := sty.ToolDetail.Render("  │ ")
+		body := row
+		if i == omissionRow {
+			body = sty.ToolDetail.Render(row)
+		}
+		body = ansi.Truncate(body, max(1, width-4), "…")
+		rows[i] = ansi.Truncate(prefix+body, max(1, width), "…")
+	}
+	return header + "\n" + strings.Join(rows, "\n")
 }
 
 func execSuffix(result spec.ExecCommandOutput) []summarySpan {

@@ -85,7 +85,7 @@ func renderLine(line filediff.DiffLine, digits int, opts Options) string {
 	}
 	gutter := lineStyle.Foreground(opts.Style.Gutter.GetForeground()).Render(gutterNumber(lineNumber, digits) + separator)
 	available := max(1, opts.Width-ansi.StringWidth(gutter))
-	content := ansi.Truncate(highlight(opts.Path, line.Content, opts.Style.SyntaxDark, lineStyle), available, "…")
+	content := ansi.Truncate(HighlightLine(opts.Path, line.Content, opts.Style.SyntaxDark, lineStyle), available, "…")
 	return gutter + content
 }
 
