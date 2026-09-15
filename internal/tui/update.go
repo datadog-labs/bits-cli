@@ -164,7 +164,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	next, cmd := m.dispatch(msg)
-	return next, tea.Batch(cmd, m.reconcileFocus())
+	return next, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus())
 }
 
 func (m *Model) quit() (tea.Model, tea.Cmd) {
@@ -207,20 +207,20 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setDarkBackground(msg.IsDark())
 		return m, nil
 
-	case animTickMsg:
-		return m, m.advanceAnimation(msg)
+	case animationTickMsg:
+		return m, m.advanceAnimations(msg)
 
 	case entitySearchDebounceMsg:
 		return m, m.beginEntitySearch(msg)
 
 	case entitySearchResultMsg:
 		m.applyEntitySearchResult(msg)
-		m.refreshViewport()
+		m.layoutTranscript()
 		return m, nil
 
 	case fileSearchSnapshotMsg:
 		cmd := m.applyFileSearchSnapshot(msg)
-		m.refreshViewport()
+		m.layoutTranscript()
 		return m, cmd
 
 	case fileSearchClosedMsg:
@@ -238,10 +238,12 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd := m.applyEvent(msg.ev)
 		m.syncStatus()
-		m.refreshViewport()
-		// Live tool and reasoning state changes on engine events, so this is
-		// where transcript activity animation starts and stops.
-		return m, tea.Batch(cmd, m.syncAnimation(), waitEvent(msg.generation, m.turnEvents))
+		if msg.ev.Kind == agent.EventTranscript {
+			m.syncTranscript()
+		} else {
+			m.layoutTranscript()
+		}
+		return m, tea.Batch(cmd, waitEvent(msg.generation, m.turnEvents))
 
 	case turnClosedMsg:
 		return m.handleTurnClosed(msg)
@@ -307,7 +309,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// editor's height, so relayout. When the editor is not the focus it is
 	// blurred and ignores these, showing no cursor.
 	cmd := m.editor.Update(msg)
-	m.refreshViewport()
+	m.layoutTranscript()
 	return m, batchCommands(cmd, m.syncCompletionSearches())
 }
 
@@ -382,26 +384,13 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	m.syncStatus()
 	if m.pendingNew {
 		m.pendingNew = false
-		// Resync *after* the reset. A cancelled client tool can leave its
-		// block reporting ToolRunning, so syncing first would see no change
-		// and leave the chain armed — and the reset that follows empties the
-		// transcript with nothing left to disarm it.
-		return m, tea.Batch(m.startNewConversation(), m.syncAnimation())
+		return m, m.startNewConversation()
 	}
 	if m.pendingLogout {
 		m.pendingLogout = false
-		return m, tea.Batch(m.startLogout(), m.syncAnimation())
+		return m, m.startLogout()
 	}
-	// Resync in case the turn ended with nothing left in flight.
-	//
-	// Known gap: a cancelled turn does NOT settle its tools. The engine's
-	// tool loop returns on ctx.Done() after cancelling the per-tool
-	// contexts, without emitting a final block state, so after a Ctrl+C the
-	// blocks still report ToolRunning. This sync therefore sees no change
-	// and leaves the tick armed against a tool that is already dead, until
-	// the conversation is reset. Settling those blocks belongs in the
-	// engine, not here; accepted as out of scope for this change.
-	return m, m.syncAnimation()
+	return m, nil
 }
 
 func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -527,7 +516,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		cmd := m.editor.Update(msg)
-		m.refreshViewport()
+		m.layoutTranscript()
 		return m, batchCommands(cmd, m.syncCompletionSearches())
 	}
 
@@ -551,7 +540,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	cmd := m.editor.Update(msg)
-	m.refreshViewport()
+	m.layoutTranscript()
 	return m, batchCommands(cmd, m.syncCompletionSearches())
 }
 
@@ -613,7 +602,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()
-	m.refreshViewport()
+	m.layoutTranscript()
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
@@ -693,7 +682,7 @@ func (m *Model) setDarkBackground(isDark bool) {
 		return
 	}
 	m.applyStyles(m.theme(isDark))
-	m.refreshViewport()
+	m.layoutTranscript()
 }
 
 func (m *Model) resize(w, h int) {
@@ -710,15 +699,24 @@ func (m *Model) resize(w, h int) {
 		m.setMode(ModeChat)
 		return
 	}
-	m.refreshViewport()
+	m.layoutTranscript()
 }
 
-// refreshViewport re-syncs the transcript list and sizes it to the space left by
-// the notice, the (possibly multi-row) editor, and the metadata footer.
-func (m *Model) refreshViewport() {
+// layoutTranscript sizes the transcript to the space left by the notice row,
+// footer, and (possibly multi-row) editor without rebuilding presentation data.
+func (m *Model) layoutTranscript() {
 	if m.mode == ModeTermInit {
 		return
 	}
 	m.list.SetHeight(max(1, m.height-chatNoticeHeight-chatFooterHeight-m.composerHeight()))
+}
+
+// syncTranscript rebuilds presentation metadata only after m.blocks changes.
+// Editor, cursor, resize, theme, and mode updates need layoutTranscript only.
+func (m *Model) syncTranscript() {
+	if m.mode == ModeTermInit {
+		return
+	}
+	m.layoutTranscript()
 	m.list.SetItems(m.blocks)
 }

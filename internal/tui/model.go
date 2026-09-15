@@ -152,12 +152,12 @@ type Model struct {
 	chatStyles chat.Styles
 	styles     styles.Theme // terminal styles; dark until detected
 
-	// Agent activity animation. animFrame is the step handed to the transcript;
-	// animGeneration stamps the armed tick chain so a superseded one dies
-	// instead of double-advancing the frame.
-	animFrame      int
-	animGeneration uint64
-	animArmed      bool
+	// One repaint clock samples independent elapsed-time timelines. Tool activity
+	// covers both per-tool spinners and grouped-tool dots; the second timeline
+	// drives the composer border sweep.
+	animClock       animationClock
+	animTool        animationTimeline
+	animBorderSweep animationTimeline
 
 	// Terminal dimensions are cached so a chat installed after startup login can
 	// be laid out immediately; Bubble Tea does not replay its initial size event.
@@ -217,6 +217,8 @@ func newShell() *Model {
 	m := &Model{
 		editor:            editor.New(),
 		list:              chat.NewList(),
+		animTool:          newAnimationTimeline(toolAnimInterval),
+		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
 		status:            &status,
 		styles:            theme,
 		searchSessionID:   newSearchSessionID(),
@@ -265,8 +267,13 @@ func (m *Model) applyStyles(theme styles.Theme) {
 // changes so layout and refresh side effects stay centralized while startup
 // login hands control to chat without replacing or quitting the root model.
 func (m *Model) setMode(mode Mode) {
+	previous := m.mode
 	m.mode = mode
-	m.refreshViewport()
+	if previous == ModeTermInit && mode == ModeChat {
+		m.syncTranscript()
+		return
+	}
+	m.layoutTranscript()
 }
 
 // Init starts the active screen. Login owns initial color detection; a direct

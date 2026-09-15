@@ -33,9 +33,8 @@ type List struct {
 	view  []presentationItem
 	sty   Styles
 
-	// frame is the animation step handed to in-flight status indicators. It is not
-	// part of the cache key: animated blocks bypass the cache entirely (see
-	// renderItem), so advancing the frame never invalidates settled blocks.
+	// frame is the animation step handed to in-flight status indicators. Animated
+	// cache entries include it in their identity, while settled entries ignore it.
 	frame int
 
 	cache    map[agent.BlockID]listLineEntry
@@ -52,12 +51,15 @@ type presentationItem struct {
 	presentations []toolPresentation
 }
 
-// listLineEntry memoizes one block's rendered lines (height is len(lines)),
-// valid while the block's revision and the list width are unchanged.
+// listLineEntry memoizes one block's rendered lines (height is len(lines)). An
+// animated entry is valid only for the frame that produced it; a settled entry
+// remains valid as the global animation frame advances.
 type listLineEntry struct {
-	rev   uint64
-	width int
-	lines []string
+	rev      uint64
+	width    int
+	animated bool
+	frame    int
+	lines    []string
 }
 
 // NewList returns an empty list with a one-row gap between blocks.
@@ -177,19 +179,25 @@ func (l *List) stacksTight(it presentationItem) bool {
 }
 
 // renderItem returns the block's rendered lines, cached by revision and width.
-// Animated items are re-rendered every call and never cached, so the per-frame
-// cost tracks the number of in-flight activity rows rather than transcript
-// length.
+// Animated entries additionally key on frame, so unrelated model updates at the
+// same frame do not render them again; settled entries remain cached as the
+// global animation frame advances.
 func (l *List) renderItem(idx int) []string {
 	it := l.view[idx]
-	if l.itemAnimated(it) {
-		return strings.Split(l.renderPresentationItem(it), "\n")
-	}
-	if e, ok := l.cache[it.id]; ok && e.rev == it.rev && e.width == l.width {
+	animated := l.itemAnimated(it)
+	if e, ok := l.cache[it.id]; ok &&
+		e.rev == it.rev && e.width == l.width && e.animated == animated &&
+		(!animated || e.frame == l.frame) {
 		return e.lines
 	}
 	lines := strings.Split(l.renderPresentationItem(it), "\n")
-	l.cache[it.id] = listLineEntry{rev: it.rev, width: l.width, lines: lines}
+	l.cache[it.id] = listLineEntry{
+		rev:      it.rev,
+		width:    l.width,
+		animated: animated,
+		frame:    l.frame,
+		lines:    lines,
+	}
 	return lines
 }
 
@@ -206,6 +214,11 @@ func (l *List) renderPresentationItem(it presentationItem) string {
 // itemAnimated reports whether rendering depends on the frame counter. Waiting
 // for approval is deliberately static because no work is progressing.
 func (l *List) itemAnimated(it presentationItem) bool {
+	// WithoutMotion replaces the spinner and grouped-tool dot cycle with static
+	// fallbacks, so running blocks no longer justify a repaint clock.
+	if l.sty.StatusSpinner.Len() == 0 {
+		return false
+	}
 	for i := it.start; i < it.end; i++ {
 		block := l.items[i]
 		if lifecycleOf(block.Tool) == lifecycleRunning || (block.Kind == assistant.KindReasoning && !block.Complete) {
@@ -227,8 +240,8 @@ func (l *List) HasAnimated() bool {
 	return false
 }
 
-// SetFrame sets the animation step used by in-flight indicators. It does not
-// touch the cache, since animated items do not use it.
+// SetFrame sets the animation step used by in-flight indicators. Cache entries
+// invalidate lazily: animated entries compare frames, settled entries do not.
 func (l *List) SetFrame(frame int) { l.frame = frame }
 
 func (l *List) itemHeight(idx int) int { return len(l.renderItem(idx)) }

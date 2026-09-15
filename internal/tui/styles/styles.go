@@ -19,7 +19,6 @@ type Input struct {
 	Background color.Color
 	Block      lipgloss.Style
 	Marker     lipgloss.Style
-
 	// Text styles what the user wrote, shared by the live editor line and the
 	// submitted transcript block so it doesn't change color past Enter.
 	Text lipgloss.Style
@@ -28,6 +27,12 @@ type Input struct {
 	// theme role rather than the textarea's own default because that default is
 	// a hardcoded ANSI index, identical in both modes.
 	Placeholder lipgloss.Style
+	// SweepDim and SweepHot are the border-sweep animation's resting and peak
+	// colors, used by editor.Editor while Bits is generating a response.
+	// SweepMotion lets reduced-motion themes keep the ordinary static border.
+	SweepDim    color.Color
+	SweepHot    color.Color
+	SweepMotion bool
 }
 
 // PromptWidth returns the number of cells occupied by the input prompt.

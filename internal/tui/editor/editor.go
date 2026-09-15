@@ -50,12 +50,20 @@ type Editor struct {
 
 	// inputStyle is the shared input-block contract. width is the block's total
 	// width; the textarea is sized to fit inside the block's horizontal frame.
-	inputStyle styles.Input
-	view       string
-	viewHeight int
-	viewCached bool
-	width      int
-	widthSet   bool
+	inputStyle  styles.Input
+	view        string
+	viewHeight  int
+	viewCached  bool
+	body        string
+	bodyHeight  int
+	bodyCached  bool
+	width       int
+	widthSet    bool
+	working     bool
+	sweepFrame  int
+	sweep       styles.BorderSweep
+	sweepWidth  int
+	sweepCached bool
 }
 
 // menu is the completion popup state rendered below the textarea.
@@ -153,7 +161,7 @@ func (e *Editor) RemoveLastAttachment() bool {
 	} else {
 		e.attachments = e.attachments[:len(e.attachments)-1]
 	}
-	e.viewCached = false
+	e.invalidateBody()
 	return true
 }
 
@@ -198,14 +206,14 @@ func (e *Editor) SetStyles(menuStyles styles.Editor) {
 
 // Focus focuses the textarea and returns its cursor-blink command.
 func (e *Editor) Focus() tea.Cmd {
-	e.viewCached = false
+	e.invalidateBody()
 	return e.ta.Focus()
 }
 
 // Blur removes focus from the textarea, hiding the cursor and making it ignore
 // input. Used while another surface (a pending tool approval) owns the composer.
 func (e *Editor) Blur() {
-	e.viewCached = false
+	e.invalidateBody()
 	e.ta.Blur()
 }
 
@@ -226,13 +234,41 @@ func (e *Editor) SetWidth(w int) {
 // resizeTextarea sizes the textarea to the width left inside the block frame.
 func (e *Editor) resizeTextarea() {
 	e.ta.SetWidth(max(1, e.width-e.inputStyle.Block.GetHorizontalFrameSize()))
-	e.viewCached = false
+	e.sweepCached = false
+	e.invalidateBody()
 }
 
 // SetPlaceholder sets the hint shown while the input is empty.
 func (e *Editor) SetPlaceholder(s string) {
 	if e.ta.Placeholder != s {
 		e.ta.Placeholder = s
+		e.invalidateBody()
+	}
+}
+
+// SetWorking toggles the animated border sweep shown while Bits is generating
+// a response. Editor is a passive renderer — the parent model decides when to
+// animate and drives frames through SetSweepFrame. Reduced-motion input styles
+// retain this state without changing the static border.
+func (e *Editor) SetWorking(working bool) {
+	if e.working == working {
+		return
+	}
+	e.working = working
+	if e.inputStyle.SweepMotion {
+		e.invalidateBody()
+	}
+}
+
+// SetSweepFrame sets the current border-sweep animation frame. A frame set
+// while not working is stored but does not invalidate the cache, since it
+// has no visible effect until SetWorking(true).
+func (e *Editor) SetSweepFrame(frame int) {
+	if e.sweepFrame == frame {
+		return
+	}
+	e.sweepFrame = frame
+	if e.working && e.inputStyle.SweepMotion {
 		e.viewCached = false
 	}
 }
@@ -253,7 +289,7 @@ func (e *Editor) Reset() {
 	e.completedMentions = nil
 	e.dismissedValue = ""
 	e.closeMenu()
-	e.viewCached = false
+	e.invalidateBody()
 }
 
 // MenuOpen reports whether the completion menu is showing. The parent uses this
@@ -319,7 +355,7 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 	}
-	e.viewCached = false
+	e.invalidateBody()
 	before := e.ta.Value()
 	beforeCursor := e.cursorOffset()
 	var cmd tea.Cmd
@@ -347,14 +383,48 @@ func (e *Editor) renderView() {
 	if e.viewCached {
 		return
 	}
-	textareaView := e.ta.View()
-	if e.width <= 0 {
-		e.view = e.inputStyle.Block.Render(textareaView)
-	} else {
-		e.view = e.inputStyle.Block.Width(e.width).Render(textareaView)
+	animated := e.working && e.inputStyle.SweepMotion
+	if !e.bodyCached {
+		block := e.inputStyle.Block
+		if animated {
+			// The sweep row replaces the block's own top border. BorderTop(false)
+			// returns a new Style, leaving the idle style unaffected.
+			block = block.BorderTop(false)
+		}
+		textareaView := e.ta.View()
+		if e.width <= 0 {
+			e.body = block.Render(textareaView)
+		} else {
+			e.body = block.Width(e.width).Render(textareaView)
+		}
+		e.bodyHeight = lipgloss.Height(e.body)
+		e.bodyCached = true
 	}
-	e.viewHeight = lipgloss.Height(e.view)
+	if !animated {
+		e.view = e.body
+		e.viewHeight = e.bodyHeight
+		e.viewCached = true
+		return
+	}
+	rowWidth := e.width
+	if rowWidth <= 0 {
+		rowWidth = lipgloss.Width(e.body)
+	}
+	if !e.sweepCached || e.sweepWidth != rowWidth {
+		e.sweep = styles.NewBorderSweep(rowWidth, e.inputStyle.SweepDim, e.inputStyle.SweepHot, e.inputStyle.Background)
+		e.sweepWidth = rowWidth
+		e.sweepCached = true
+	}
+	e.view = e.sweep.Row(e.sweepFrame) + "\n" + e.body
+	e.viewHeight = e.bodyHeight + 1
 	e.viewCached = true
+}
+
+// invalidateBody discards both layers of the composer cache. Animation frames
+// invalidate only viewCached, allowing the static textarea and box to survive.
+func (e *Editor) invalidateBody() {
+	e.bodyCached = false
+	e.viewCached = false
 }
 
 // ContentOffset returns the number of cells from the editor's left edge to its
@@ -554,7 +624,7 @@ func (e *Editor) accept() {
 	// Completion is an edit like typing or pasting. Move or remove existing
 	// mention spans before registering this completion.
 	e.applyMentionEdit(lineStart+start, lineStart+end, lineStart+start+len(repl), value)
-	e.viewCached = false
+	e.invalidateBody()
 	if row == len(lines)-1 {
 		e.ta.SetCursorColumn(start + len(repl))
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 func TestResetInvalidatesCacheAcrossConversationIdentityDomains(t *testing.T) {
@@ -43,8 +44,7 @@ func listWithTool(status agent.ToolStatus) *List {
 
 // TestSetFrameAnimatesInFlightBlocks is the whole point of the frame counter:
 // advancing it must change what an in-flight tool block renders, even though
-// the block's revision and the list width are unchanged. That means the render
-// cache has to be bypassed for these blocks.
+// the block's revision and the list width are unchanged.
 func TestSetFrameAnimatesInFlightBlocks(t *testing.T) {
 	list := listWithTool(agent.ToolRunning)
 	seen := map[string]bool{}
@@ -66,6 +66,20 @@ func TestAwaitingApprovalDoesNotAnimate(t *testing.T) {
 	list.SetFrame(17)
 	if got := list.Render(); got != want {
 		t.Fatalf("approval wait changed with frame:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRunningToolWithoutMotionDoesNotAnimate(t *testing.T) {
+	list := listWithTool(agent.ToolRunning)
+	list.SetStyles(StylesFor(styles.Default(true).WithoutMotion()))
+	want := list.Render()
+
+	if list.HasAnimated() {
+		t.Fatal("motion-disabled running tool should not arm animation")
+	}
+	list.SetFrame(17)
+	if got := list.Render(); got != want {
+		t.Fatalf("motion-disabled running tool changed with frame:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -100,16 +114,30 @@ func TestSettledBlocksStayCachedAcrossFrames(t *testing.T) {
 	}
 }
 
-// TestInFlightBlocksBypassCache is the same probe inverted: a running block
-// must pick the mutation up, proving it is re-rendered every frame.
-func TestInFlightBlocksBypassCache(t *testing.T) {
+func TestInFlightBlocksReuseCacheWithinFrame(t *testing.T) {
+	list := listWithTool(agent.ToolRunning)
+	first := list.renderItem(0)
+	second := list.renderItem(0)
+	if &first[0] != &second[0] {
+		t.Fatal("running block was re-rendered without an animation frame change")
+	}
+
+	list.SetFrame(5)
+	third := list.renderItem(0)
+	if &first[0] == &third[0] {
+		t.Fatal("running block reused cached lines after the animation frame changed")
+	}
+}
+
+func TestAnimationStateTransitionInvalidatesCache(t *testing.T) {
 	list := listWithTool(agent.ToolRunning)
 	list.Render()
 
+	// A transition out of the animated state must not reuse the running frame's
+	// cache entry, even before SetItems supplies the normal revision update.
 	list.items[0].Tool.Status = agent.ToolSuccess
-	list.SetFrame(5)
 	if got := ansi.Strip(list.Render()); !strings.Contains(got, "✓") {
-		t.Error("in-flight block was served from cache; it must re-render each frame")
+		t.Error("settled block was served from its running animation cache entry")
 	}
 }
 

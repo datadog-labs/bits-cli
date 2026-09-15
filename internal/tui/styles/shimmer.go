@@ -95,6 +95,7 @@ func (sp shimmerPalette) shimmer(text string) Shimmer {
 // request reduced motion. Compact tool activity itself does not depend on color
 // gradients, so terminal color depth does not invoke this policy automatically.
 func (t Theme) WithoutMotion() Theme {
+	t.Input.SweepMotion = false
 	t.Chat.StatusRunningLabel = t.Chat.StatusRunningLabel.withoutMotion()
 	t.Chat.StatusAwaitingLabel = t.Chat.StatusAwaitingLabel.withoutMotion()
 	t.Chat.StatusSpinner = t.Chat.StatusSpinner.withoutMotion()

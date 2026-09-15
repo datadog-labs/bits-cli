@@ -46,3 +46,20 @@ func BenchmarkEditorHeightAndViewAfterInvalidation(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkBorderSweepAfterInvalidation(b *testing.B) {
+	e := New()
+	e.SetWidth(80)
+	e.ta.SetValue("Show me error logs from the checkout service")
+	e.SetWorking(true)
+	frame := 0
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		frame++
+		e.SetSweepFrame(frame)
+		benchmarkEditorHeight = e.Height()
+		benchmarkEditorView = e.View()
+	}
+}

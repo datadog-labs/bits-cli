@@ -37,6 +37,9 @@ func build(isDark bool, p palette) Theme {
 		Placeholder: lipgloss.NewStyle().
 			Background(lipgloss.Color(p.surface)).
 			Foreground(lipgloss.Color(p.textSecondary)),
+		SweepDim:    lipgloss.Color(p.inputRule),
+		SweepHot:    lipgloss.Color(p.sweepHot),
+		SweepMotion: true,
 	}
 
 	text := Text{
