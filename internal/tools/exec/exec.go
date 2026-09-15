@@ -20,7 +20,7 @@ const (
 	// MaxTimeout bounds a caller-selected execution deadline. It prevents a
 	// single unsandboxed command from holding one of the shared permits forever.
 	MaxTimeout         = time.Duration(spec.ExecMaxTimeoutMS) * time.Millisecond
-	execOutputLimit    = 1 << 20
+	execOutputLimit    = 64 << 10
 	execTerminateGrace = 100 * time.Millisecond
 )
 
