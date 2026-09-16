@@ -110,7 +110,7 @@ type Event struct {
 
 // maxTurns caps the client-tool loop so a misbehaving backend can't spin
 // forever.
-const maxTurns = 20
+const maxTurns = 150
 
 // Engine drives the assistant turn loop over a Backend and streams events. It
 // owns the aggregated conversation transcript, folding streamed deltas into it
