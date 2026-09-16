@@ -166,8 +166,26 @@ func build(isDark bool, p palette) Theme {
 			NoticeError: lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.critical)),
 		},
 		Editor: Editor{
-			MenuItem:     lipgloss.NewStyle().Foreground(lipgloss.Color(p.textPrimary)).Background(lipgloss.Color(p.surfaceRaised)),
-			MenuSelected: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.primary)),
+			MenuFrame: lipgloss.NewStyle().
+				Background(lipgloss.Color(p.background)).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color(p.borderSubtle)).
+				BorderBackground(lipgloss.Color(p.background)),
+			MenuItem: lipgloss.NewStyle().
+				Foreground(lipgloss.Color(p.textSecondary)).
+				Background(lipgloss.Color(p.background)),
+			MenuDetail: lipgloss.NewStyle().
+				Foreground(lipgloss.Color(p.textTertiary)).
+				Background(lipgloss.Color(p.background)),
+			MenuSelected: lipgloss.NewStyle().Bold(true).
+				Foreground(lipgloss.Color(p.interactive)).
+				Background(lipgloss.Color(p.background)),
+			MenuSelectedDetail: lipgloss.NewStyle().Bold(true).
+				Foreground(lipgloss.Color(p.interactive)).
+				Background(lipgloss.Color(p.background)),
+			MenuHelp: lipgloss.NewStyle().
+				Foreground(lipgloss.Color(p.textPrimary)).
+				Background(lipgloss.Color(p.background)),
 		},
 	}
 }

@@ -94,8 +94,12 @@ type Diff struct {
 
 // Editor contains editor-specific styles derived from a Theme.
 type Editor struct {
-	MenuItem     lipgloss.Style
-	MenuSelected lipgloss.Style
+	MenuFrame          lipgloss.Style
+	MenuItem           lipgloss.Style
+	MenuDetail         lipgloss.Style
+	MenuSelected       lipgloss.Style
+	MenuSelectedDetail lipgloss.Style
+	MenuHelp           lipgloss.Style
 }
 
 // Text exposes the palette's three foreground levels to components outside the

@@ -97,3 +97,20 @@ func TestSelectorFillWidthMakesEveryRowOpaqueWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectorViewWindowKeepsSelectionVisible(t *testing.T) {
+	selector := NewSelector([]Choice{
+		{Label: "one"}, {Label: "two"}, {Label: "three"},
+		{Label: "four"}, {Label: "five"}, {Label: "six"},
+	}, styles.Default(true).Selector)
+	selector.SetIndex(5)
+
+	view, window := selector.ViewWindow(20, 3)
+	plain := ansi.Strip(view)
+	if window.Start != 3 || window.End != 6 || window.HiddenAbove != 3 || window.HiddenBelow != 0 {
+		t.Fatalf("window = %#v", window)
+	}
+	if !strings.Contains(plain, "six") || strings.Contains(plain, "one") {
+		t.Fatalf("window view = %q", plain)
+	}
+}

@@ -4,6 +4,7 @@ package editor
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -17,8 +18,15 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
-// menuMaxWidth caps the completion popup width in cells.
-const menuMaxWidth = 60
+const (
+	// The completion menu stays compact on wide terminals and collapses to the
+	// available editor width on narrow ones.
+	menuMaxWidth    = 112
+	menuMinWidth    = 40
+	menuVisibleRows = 5
+	menuSidePadding = 2
+	menuCloseHint   = "ESC x"
+)
 
 const (
 	// maxHeight caps the visible input rows; taller content scrolls within the
@@ -59,6 +67,7 @@ type Editor struct {
 	bodyCached  bool
 	width       int
 	widthSet    bool
+	menuHeight  int
 	working     bool
 	sweepFrame  int
 	sweep       styles.BorderSweep
@@ -431,6 +440,9 @@ func (e *Editor) invalidateBody() {
 // text content. Parents use it to align overlays with the input text.
 func (e *Editor) ContentOffset() int { return e.inputStyle.ContentOffset() }
 
+// SetMenuHeight limits the overlay to the rows available above the composer.
+func (e *Editor) SetMenuHeight(height int) { e.menuHeight = max(0, height) }
+
 // MenuView renders the completion menu as an opaque, fixed-width block, or ""
 // when closed. The parent floats it above the input; giving every row a
 // background makes it read as a popup over the transcript rather than letting
@@ -439,27 +451,78 @@ func (e *Editor) MenuView() string {
 	if !e.menu.open {
 		return ""
 	}
-	w := e.menuWidth()
-	parts := make([]string, 0, 2)
-	if e.menu.selector != nil && len(e.menu.items) > 0 {
-		parts = append(parts, e.menu.selector.View(w))
+	outerWidth := e.menuWidth()
+	frameWidth := e.styles.MenuFrame.GetHorizontalFrameSize()
+	innerWidth := max(1, outerWidth-frameWidth-2*menuSidePadding)
+	maxHeight := e.menuHeight
+	if maxHeight <= 0 {
+		maxHeight = menuVisibleRows + 5
+	}
+	if maxHeight < 4 || outerWidth < frameWidth+2*menuSidePadding+1 {
+		return ""
+	}
+
+	parts := []string{e.alignMenuRight(menuCloseHint, innerWidth)}
+	remaining := maxHeight - e.styles.MenuFrame.GetVerticalFrameSize() - len(parts)
+	statusRows := 0
+	if e.menu.status != "" {
+		statusRows = 1
+	}
+	rowBudget := min(menuVisibleRows, len(e.menu.items))
+	rowBudget = min(rowBudget, max(0, remaining-statusRows))
+	showFooter := len(e.menu.items) > rowBudget && remaining-statusRows >= 2
+	if showFooter {
+		rowBudget = min(rowBudget, remaining-statusRows-1)
+	}
+	showFooterGap := showFooter && remaining-statusRows-rowBudget-1 > 0
+
+	window := components.SelectionWindow{}
+	if e.menu.selector != nil && len(e.menu.items) > 0 && rowBudget > 0 {
+		selector, visible := e.menu.selector.ViewWindow(innerWidth, rowBudget)
+		parts = append(parts, selector)
+		window = visible
 	}
 	if e.menu.status != "" {
-		parts = append(parts, e.styles.MenuItem.Width(w).Render(ansi.Truncate("  "+e.menu.status, w, "…")))
+		parts = append(parts, e.menuLine(e.menu.status, innerWidth, e.styles.MenuHelp))
 	}
-	return strings.Join(parts, "\n")
+	if showFooter {
+		if showFooterGap {
+			parts = append(parts, e.menuLine("", innerWidth, e.styles.MenuHelp))
+		}
+		parts = append(parts, e.menuLine(overflowHint(window), innerWidth, e.styles.MenuHelp))
+	}
+	return e.styles.MenuFrame.Width(outerWidth).Padding(0, menuSidePadding).Render(strings.Join(parts, "\n"))
 }
 
 func (e *Editor) menuWidth() int {
-	w := 0
+	w := ansi.StringWidth(menuCloseHint)
 	for _, it := range e.menu.items {
 		w = max(w, ansi.StringWidth(it.Label)+ansi.StringWidth(it.Detail)+4)
 	}
-	w = max(w, ansi.StringWidth(e.menu.status)+2)
+	w = max(w, ansi.StringWidth(e.menu.status))
+	w += e.styles.MenuFrame.GetHorizontalFrameSize() + 2*menuSidePadding
+	w = min(max(w, menuMinWidth), menuMaxWidth)
 	if e.widthSet {
-		w = min(w, max(1, e.width-e.ContentOffset()))
+		return min(menuMaxWidth, max(1, e.width-e.ContentOffset()))
 	}
-	return min(max(w, 12), menuMaxWidth)
+	return w
+}
+
+func (e *Editor) alignMenuRight(value string, width int) string {
+	value = ansi.Truncate(value, width, "")
+	return e.styles.MenuHelp.Render(strings.Repeat(" ", max(0, width-ansi.StringWidth(value))) + value)
+}
+
+func (e *Editor) menuLine(value string, width int, style lipgloss.Style) string {
+	value = ansi.Truncate(value, width, "…")
+	return style.Render(value + strings.Repeat(" ", max(0, width-ansi.StringWidth(value))))
+}
+
+func overflowHint(window components.SelectionWindow) string {
+	if window.HiddenBelow == 0 {
+		return "↓ back to top"
+	}
+	return "↓ " + strconv.Itoa(window.HiddenBelow) + " more below"
 }
 
 // recompute refreshes the menu from the word at the cursor. An empty candidate
@@ -547,7 +610,6 @@ func (e *Editor) setMenu(items []Candidate, status string) {
 		choices[i] = components.Choice{Label: item.Label, Detail: item.Detail}
 	}
 	selector := components.NewSelector(choices, e.selectorStyles())
-	selector.SetCompactDetail(true)
 	selector.SetFillWidth(true)
 	selector.SetIndex(previous)
 	e.menu = menu{open: len(items) > 0 || status != "", items: items, selector: selector, status: status}
@@ -563,8 +625,8 @@ type candidateIdentity struct {
 func (e *Editor) selectorStyles() styles.Selector {
 	return styles.Selector{
 		Item: e.styles.MenuItem, Selected: e.styles.MenuSelected,
-		Detail: e.styles.MenuItem, SelectedDetail: e.styles.MenuSelected,
-		Marker: "  ", SelectedMarker: "› ", ColumnGap: 2,
+		Detail: e.styles.MenuDetail, SelectedDetail: e.styles.MenuSelectedDetail,
+		Marker: "", SelectedMarker: "", ColumnGap: 4,
 	}
 }
 

@@ -24,6 +24,12 @@ type Selector struct {
 	fillWidth     bool
 }
 
+// SelectionWindow describes the visible slice of a selector.
+type SelectionWindow struct {
+	Start, End               int
+	HiddenAbove, HiddenBelow int
+}
+
 // NewSelector creates a selector and copies choices so callers cannot mutate
 // its rows behind the component.
 func NewSelector(choices []Choice, sty styles.Selector) *Selector {
@@ -83,9 +89,20 @@ func (s *Selector) UpdateKey(key string) bool {
 // View renders all choices within width. Detail truncates before labels and is
 // omitted when the terminal cannot fit both columns.
 func (s *Selector) View(width int) string {
+	view, _ := s.ViewWindow(width, len(s.choices))
+	return view
+}
+
+// ViewWindow renders at most rows choices and keeps the selection visible.
+// The returned counts let a caller render its own overflow treatment.
+func (s *Selector) ViewWindow(width, rows int) (string, SelectionWindow) {
 	if width < 1 || len(s.choices) == 0 {
-		return ""
+		return "", SelectionWindow{}
 	}
+	rows = max(1, min(rows, len(s.choices)))
+	start := max(0, min(s.selected-rows+1, len(s.choices)-rows))
+	end := min(len(s.choices), start+rows)
+	window := SelectionWindow{Start: start, End: end, HiddenAbove: start, HiddenBelow: len(s.choices) - end}
 	labelWidth := 0
 	for _, choice := range s.choices {
 		labelWidth = max(labelWidth, ansi.StringWidth(choice.Label))
@@ -107,8 +124,9 @@ func (s *Selector) View(width int) string {
 		labelWidth = min(labelWidth, max(1, width-markerWidth-gap-reservedDetail))
 	}
 
-	rows := make([]string, len(s.choices))
-	for i, choice := range s.choices {
+	renderedRows := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		choice := s.choices[i]
 		selected := i == s.selected
 		marker := s.styles.Marker
 		labelStyle, detailStyle := s.styles.Item, s.styles.Detail
@@ -136,9 +154,9 @@ func (s *Selector) View(width int) string {
 		if s.fillWidth {
 			prefix += labelStyle.Render(strings.Repeat(" ", max(0, width-ansi.StringWidth(prefix))))
 		}
-		rows[i] = ansi.Truncate(prefix, width, "…")
+		renderedRows = append(renderedRows, ansi.Truncate(prefix, width, "…"))
 	}
-	return strings.Join(rows, "\n")
+	return strings.Join(renderedRows, "\n"), window
 }
 
 func padRight(value string, width int) string {
