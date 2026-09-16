@@ -15,6 +15,7 @@ import (
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	"github.com/DataDog/bits-cli/internal/tui/editor"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
+	"github.com/DataDog/bits-cli/internal/tui/splash"
 	statusview "github.com/DataDog/bits-cli/internal/tui/status"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 	"github.com/DataDog/bits-cli/internal/workspace"
@@ -46,6 +47,7 @@ type EntitySearcher interface {
 
 type Config struct {
 	Tools          *agent.ToolSet
+	Version        string
 	Workspace      *workspace.Workspace
 	EntitySearcher EntitySearcher
 	OpenURL        func(context.Context, string) error
@@ -167,6 +169,13 @@ type Model struct {
 	// Selection belongs to ModeChat; selection.go encapsulates its gesture and
 	// auto-scroll state while the model supplies rendered pane frames.
 	selection selection
+
+	// splashReady is set once the terminal has answered the Kitty graphics
+	// probe and the logo's pixels have been transmitted.
+	splashReady bool
+
+	// version is injected so the TUI stays independent of the command layer.
+	version string
 }
 
 // New builds the root model for the given engine. When the engine is bound to a
@@ -206,6 +215,7 @@ func (m *Model) configure(configs []Config) {
 		m.entitySearcher = configs[0].EntitySearcher
 		m.openURL = configs[0].OpenURL
 		m.logout = configs[0].Logout
+		m.version = configs[0].Version
 	}
 	if m.entitySearcher == nil && m.engine != nil {
 		m.entitySearcher = m.engine
@@ -291,9 +301,10 @@ func (m *Model) Init() tea.Cmd {
 			m.startupErr = errors.New("startup login is unavailable")
 			return tea.Quit
 		}
-		return m.loginModel.Init()
+		// Probe during login so the logo is ready at the handoff to chat.
+		return tea.Batch(m.loginModel.Init(), splash.Query())
 	}
-	return m.initChat()
+	return tea.Batch(m.initChat(), splash.Query())
 }
 
 // initChat focuses the editor and, when restoring a conversation, starts the

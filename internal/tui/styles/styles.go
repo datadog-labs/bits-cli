@@ -170,6 +170,10 @@ type Theme struct {
 	// revisit if bits-cli ever gets a settings layer to opt out of it.
 	Background color.Color
 
+	// Logo is the brand accent for the startup wordmark: decorative, with no
+	// state or interaction behind it.
+	Logo lipgloss.Style
+
 	Input     Input
 	Chat      Chat
 	Editor    Editor

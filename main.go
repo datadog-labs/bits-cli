@@ -254,6 +254,7 @@ func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth
 	}
 	config := tui.Config{
 		Tools:     toolSet,
+		Version:   cmd.BuildVersion(),
 		Workspace: workspace,
 		Logout: func(logoutCtx context.Context) (bool, error, error) {
 			return auth.Logout(logoutCtx, store, nil)

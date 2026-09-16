@@ -119,6 +119,8 @@ func build(isDark bool, p palette) Theme {
 		IsDark:     isDark,
 		Background: lipgloss.Color(p.background),
 
+		Logo: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
+
 		Input:     input,
 		Text:      text,
 		Feedback:  feedback,
