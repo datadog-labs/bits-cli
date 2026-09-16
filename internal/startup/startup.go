@@ -35,11 +35,25 @@ type EngineOptions struct {
 	UseFakeBackend bool
 }
 
+// defaultSkillOverrides keep Bits on its local-workspace tool path rather than
+// activating the remote code skills. They are sent with every Assistant
+// request, including client-tool continuations, by the engine. This policy
+// could move to the backend CLI profile once it is appropriate for every CLI
+// client, but stays here for now so the harness enforces it independently.
+var defaultSkillOverrides = []assistant.SkillOverride{
+	{Name: "code-investigation", Source: assistant.SkillSourceAssistant, Enabled: false},
+	{Name: "code-sandbox", Source: assistant.SkillSourceAssistant, Enabled: false},
+	{Name: "code-search", Source: assistant.SkillSourceDatadogMCP, Enabled: false},
+	{Name: "coding", Source: assistant.SkillSourceAssistant, Enabled: false},
+	{Name: "exploring-commit-history", Source: assistant.SkillSourceAssistant, Enabled: false},
+}
+
 // NewEngine constructs an engine backed by either the explicit fake backend or
 // an authenticated Assistant client. Explicit API-key mode takes precedence
 // over the fake backend so an invalid automation invocation cannot silently
 // become a demo session.
 func NewEngine(ctx context.Context, opts EngineOptions) (*agent.Engine, error) {
+	opts.Send = withDefaultSkillOverrides(opts.Send)
 	switch opts.Client.Mode {
 	case auth.ModeAuto:
 		if opts.UseFakeBackend {
@@ -59,6 +73,31 @@ func NewEngine(ctx context.Context, opts EngineOptions) (*agent.Engine, error) {
 		return nil, err
 	}
 	return agent.New(client, opts.Send), nil
+}
+
+// withDefaultSkillOverrides supplies this client's disabled-by-default skills
+// unless the caller explicitly configured that same skill. Explicit options
+// therefore remain an escape hatch for a future opt-in surface.
+func withDefaultSkillOverrides(opts assistant.SendOptions) assistant.SendOptions {
+	overrides := append([]assistant.SkillOverride(nil), opts.SkillOverrides...)
+	configured := make(map[skillKey]struct{}, len(overrides))
+	for _, override := range overrides {
+		configured[skillKey{name: override.Name, source: override.Source}] = struct{}{}
+	}
+	for _, override := range defaultSkillOverrides {
+		key := skillKey{name: override.Name, source: override.Source}
+		if _, ok := configured[key]; ok {
+			continue
+		}
+		overrides = append(overrides, override)
+	}
+	opts.SkillOverrides = overrides
+	return opts
+}
+
+type skillKey struct {
+	name   string
+	source assistant.SkillSource
 }
 
 // NewAuthenticatedClient constructs exactly the client selected by opts.Mode.
