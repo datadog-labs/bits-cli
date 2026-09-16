@@ -100,8 +100,12 @@ func TestSelectorFillWidthMakesEveryRowOpaqueWidth(t *testing.T) {
 
 func TestSelectorViewWindowKeepsSelectionVisible(t *testing.T) {
 	selector := NewSelector([]Choice{
-		{Label: "one"}, {Label: "two"}, {Label: "three"},
-		{Label: "four"}, {Label: "five"}, {Label: "six"},
+		{Label: "one"},
+		{Label: "two"},
+		{Label: "three"},
+		{Label: "four"},
+		{Label: "five"},
+		{Label: "six"},
 	}, styles.Default(true).Selector)
 	selector.SetIndex(5)
 
