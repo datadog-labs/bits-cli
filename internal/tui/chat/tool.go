@@ -108,21 +108,21 @@ const (
 )
 
 func (a toolAction) label(state toolLifecycle) string {
+	var label string
 	switch state {
 	case lifecycleRunning, lifecycleAwaiting:
-		if a.active != "" {
-			return a.active
-		}
+		label = a.active
 	case lifecycleSuccess:
-		if a.success != "" {
-			return a.success
-		}
+		label = a.success
 	case lifecycleError:
-		if a.failure != "" {
-			return a.failure
-		}
+		label = a.failure
+	case lifecycleUnknown, lifecycleDenied, lifecycleCancelled:
+		label = a.base
 	}
-	return a.base
+	if label == "" {
+		return a.base
+	}
+	return label
 }
 
 func lifecycleOf(tool *agent.ToolBlock) toolLifecycle {
