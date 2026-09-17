@@ -91,6 +91,16 @@ func TestExactToolIdentityControlsSpecialization(t *testing.T) {
 	}
 }
 
+func TestListFilesRendersExplicitDepth(t *testing.T) {
+	block := agent.Block{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{
+		Name: spec.ListFiles, Input: `{"path":"internal","depth":2}`, Status: agent.ToolSuccess, IsClientSide: true,
+	}}
+	plain := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
+	if !strings.Contains(plain, "list internal · depth 2") {
+		t.Fatalf("list_files summary = %q, want path and depth", plain)
+	}
+}
+
 func TestInvalidInspectionInputStillHidesSuccessfulOutput(t *testing.T) {
 	for _, test := range []struct {
 		name     string

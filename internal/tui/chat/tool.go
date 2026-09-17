@@ -110,12 +110,15 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			}
 		}
 	case spec.ClientListFiles:
-		var in spec.PathInput
+		var in spec.ListFilesInput
 		if decodeObject(input, &in) {
 			if in.Path == "" {
 				in.Path = "."
 			}
 			p.argument, p.group, p.validInput = escape.Inline(in.Path), inspectionGroupKey, true
+			if in.Depth != nil {
+				p.context = fmt.Sprintf("depth %d", *in.Depth)
+			}
 		}
 	case spec.ClientGrepFiles:
 		var in spec.GrepFilesInput
@@ -193,7 +196,11 @@ func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 	case spec.ClientReadFile:
 		return actionArgument("read", p.argument)
 	case spec.ClientListFiles:
-		return actionArgument("list", p.argument)
+		spans := actionArgument("list", p.argument)
+		if p.context != "" {
+			spans = append(spans, summarySpan{text: " · ", kind: spanMuted}, summarySpan{text: p.context, kind: spanMuted})
+		}
+		return spans
 	case spec.ClientGrepFiles:
 		spans := actionArgument("search", p.argument)
 		if p.context != "" && p.context != "." {
