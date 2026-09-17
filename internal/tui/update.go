@@ -156,12 +156,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// not transmitted before it. reconcileFocus is idempotent and runs on the
 	// next message, so skipping it here is safe.
 	if event, ok := msg.(uv.KittyGraphicsEvent); ok {
-		if m.splashReady || !splash.ProbeSucceeded(event) {
-			return m, nil
+		switch {
+		case splash.ImageRejected(event):
+			// The terminal took the probe but not the pixels; without this the
+			// slot would hold placeholder cells over nothing.
+			m.splashReady = false
+			m.layoutTranscript()
+		case !m.splashReady && splash.ProbeSucceeded(event):
+			m.splashReady = true
+			m.layoutTranscript()
+			return m, splash.Transmit()
 		}
-		m.splashReady = true
-		m.layoutTranscript()
-		return m, splash.Transmit()
+		return m, nil
 	}
 	if m.mode == ModeLogin {
 		return m.updateLogin(msg)

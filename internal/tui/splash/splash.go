@@ -45,14 +45,14 @@ const Rows = 6
 const imageCols = 12
 
 const (
-	// imageID is re-encoded as the placeholder cells' foreground color, which
+	// ImageID is re-encoded as the placeholder cells' foreground color, which
 	// is how the terminal resolves a placeholder to a stored image. Under
 	// 1<<24 so the color carries the whole id and the most-significant-byte
 	// diacritic can be omitted.
-	imageID = 0x0B1754
+	ImageID = 0x0B1754
 
-	// probeID is distinct from imageID so a probe reply cannot disturb the logo.
-	probeID = 31
+	// ProbeID is distinct from ImageID so a probe reply cannot disturb the logo.
+	ProbeID = 31
 )
 
 // Sourced from the Bits CLI's AsciiArt.ts. 28 columns by Rows rows.
@@ -77,7 +77,7 @@ func Query() tea.Cmd {
 	}
 	return tea.Raw(ansi.KittyGraphics(
 		[]byte("AAAA"),
-		"i="+strconv.Itoa(probeID), "s=1", "v=1", "a=q", "t=d", "f=24",
+		"i="+strconv.Itoa(ProbeID), "s=1", "v=1", "a=q", "t=d", "f=24",
 	))
 }
 
@@ -85,7 +85,14 @@ func Query() tea.Cmd {
 // answering OK. A failed query answers with an error name in place of OK, and
 // a reply carrying another id belongs to someone else's image.
 func ProbeSucceeded(event uv.KittyGraphicsEvent) bool {
-	return event.Options.ID == probeID && string(event.Payload) == "OK"
+	return event.Options.ID == ProbeID && string(event.Payload) == "OK"
+}
+
+// ImageRejected reports whether a reply says the logo itself failed to store.
+// Placeholder cells over a missing image paint nothing, so the caller must fall
+// back to the wordmark.
+func ImageRejected(event uv.KittyGraphicsEvent) bool {
+	return event.Options.ID == ImageID && string(event.Payload) != "OK"
 }
 
 // paintsPlaceholders reports whether the terminal is known to paint Unicode
@@ -97,6 +104,12 @@ func ProbeSucceeded(event uv.KittyGraphicsEvent) bool {
 // carries the rest.
 func paintsPlaceholders() bool {
 	term := os.Getenv("TERM")
+	// A multiplexer does not forward placements, yet the outer terminal may
+	// still answer the query — which would leave blank cells.
+	if os.Getenv("TMUX") != "" || os.Getenv("STY") != "" ||
+		strings.HasPrefix(term, "screen") || strings.HasPrefix(term, "tmux") {
+		return false
+	}
 	switch {
 	case strings.Contains(term, "kitty"), os.Getenv("KITTY_WINDOW_ID") != "":
 		return true
@@ -108,7 +121,7 @@ func paintsPlaceholders() bool {
 	return os.Getenv("GHOSTTY_RESOURCES_DIR") != "" && os.Getenv("TERM_PROGRAM") == ""
 }
 
-// Transmit stores and scales the logo under imageID. A virtual placement
+// Transmit stores and scales the logo under ImageID. A virtual placement
 // paints nothing until placeholder cells appear, so this write is invisible and
 // its cursor position irrelevant — which is what makes tea.Raw safe here.
 func Transmit() tea.Cmd {
@@ -121,14 +134,14 @@ func Transmit() tea.Cmd {
 		Action:           kitty.TransmitAndPut,
 		Transmission:     kitty.Direct,
 		Format:           kitty.PNG,
-		ID:               imageID,
+		ID:               ImageID,
 		Columns:          imageCols,
 		Rows:             Rows,
 		VirtualPlacement: true,
 		Chunk:            true,
-		// Suppress OK and error replies; either would arrive as an unhandled
-		// event mid-session.
-		Quiet: 2,
+		// Suppress the OK but keep errors: a rejected image would otherwise
+		// leave placeholder cells with nothing behind them.
+		Quiet: 1,
 	}); err != nil {
 		return nil
 	}
@@ -137,11 +150,11 @@ func Transmit() tea.Cmd {
 
 // Placeholder returns the cells that tell the terminal where to paint the
 // transmitted image: the placeholder rune plus row and column diacritics, over
-// a foreground naming imageID.
+// a foreground naming ImageID.
 func Placeholder() string { return placeholder() }
 
 var placeholder = sync.OnceValue(func() string {
-	style := lipgloss.NewStyle().Foreground(lipgloss.Color(fmt.Sprintf("#%06X", imageID)))
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color(fmt.Sprintf("#%06X", ImageID)))
 	rows := make([]string, Rows)
 	for y := range rows {
 		var row strings.Builder

@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/ansi/kitty"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/agent/fake"
@@ -185,5 +187,62 @@ func TestWelcomeVersionRenderedAsGiven(t *testing.T) {
 		if want := "bits " + version; first != want {
 			t.Errorf("version %q rendered as %q, want %q", version, first, want)
 		}
+	}
+}
+
+func graphicsReply(id int, payload string) uv.KittyGraphicsEvent {
+	return uv.KittyGraphicsEvent{Options: kitty.Options{ID: id}, Payload: []byte(payload)}
+}
+
+// The handler is where a regression would silently disable the image path or
+// enable it on a terminal that cannot paint, so the wiring is pinned here and
+// not only in the predicates it calls.
+func TestGraphicsReplyDrivesLogoForm(t *testing.T) {
+	for name, tc := range map[string]struct {
+		before    bool
+		event     uv.KittyGraphicsEvent
+		want      bool
+		wantTrans bool
+	}{
+		"probe ok enables the image": {
+			event: graphicsReply(splash.ProbeID, "OK"), want: true, wantTrans: true},
+		"probe error keeps the wordmark": {
+			event: graphicsReply(splash.ProbeID, "EINVAL:bad key")},
+		"another image's reply is ignored": {
+			event: graphicsReply(splash.ProbeID+7, "OK")},
+		"a second probe reply does not retransmit": {
+			before: true, event: graphicsReply(splash.ProbeID, "OK"), want: true},
+		"a rejected image falls back to the wordmark": {
+			before: true, event: graphicsReply(splash.ImageID, "ENOENT:no such file")},
+		"a stored image keeps the image": {
+			before: true, event: graphicsReply(splash.ImageID, "OK"), want: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := welcomeModel(100, 40)
+			m.mode = ModeChat
+			m.splashReady = tc.before
+
+			_, cmd := m.Update(tc.event)
+
+			if m.splashReady != tc.want {
+				t.Errorf("splashReady = %v, want %v", m.splashReady, tc.want)
+			}
+			if got := cmd != nil; got != tc.wantTrans {
+				t.Errorf("transmitted = %v, want %v", got, tc.wantTrans)
+			}
+		})
+	}
+}
+
+// The welcome block is only safe inside chatViewBase because it never coexists
+// with transcript content, which is what keeps selection row mapping correct.
+func TestWelcomeNeverShownWithTranscriptContent(t *testing.T) {
+	m := welcomeModel(100, 40)
+	if !m.showWelcome() {
+		t.Fatal("expected the welcome block on an empty transcript")
+	}
+	m.blocks = []agent.Block{{}}
+	if m.showWelcome() {
+		t.Error("welcome shown alongside transcript content")
 	}
 }

@@ -35,9 +35,9 @@ func TestWordmarkIsRectangular(t *testing.T) {
 // downsampled value paints nothing.
 func TestPlaceholderCarriesImageIDAsForeground(t *testing.T) {
 	want := "38;2;" +
-		strconv.Itoa((imageID>>16)&0xFF) + ";" +
-		strconv.Itoa((imageID>>8)&0xFF) + ";" +
-		strconv.Itoa(imageID&0xFF)
+		strconv.Itoa((ImageID>>16)&0xFF) + ";" +
+		strconv.Itoa((ImageID>>8)&0xFF) + ";" +
+		strconv.Itoa(ImageID&0xFF)
 	if !strings.Contains(Placeholder(), want) {
 		t.Fatalf("grid does not set foreground %q", want)
 	}
@@ -98,13 +98,26 @@ func TestPaintsPlaceholders(t *testing.T) {
 		"no term at all": {env: map[string]string{}, want: false},
 		// Ghostty exports its resource path to children, so a terminal launched
 		// from it inherits the variable without inheriting the capability.
+		// A multiplexer cannot paint a placement, but the outer terminal may
+		// still answer the query.
+		"ghostty inside tmux": {env: map[string]string{
+			"TERM": "tmux-256color", "TMUX": "/private/tmp/tmux-501/default,123,0",
+			"GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty",
+		}, want: false},
+		"kitty inside tmux": {env: map[string]string{
+			"TERM": "xterm-kitty", "TMUX": "/private/tmp/tmux-501/default,123,0",
+		}, want: false},
+		"kitty inside screen": {env: map[string]string{
+			"TERM": "screen.xterm-kitty", "STY": "1234.pts-0.host",
+		}, want: false},
+
 		"iterm2 launched from ghostty": {env: map[string]string{
 			"TERM": "xterm-256color", "TERM_PROGRAM": "iTerm.app",
 			"GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty",
 		}, want: false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			for _, key := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR"} {
+			for _, key := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "TMUX", "STY"} {
 				t.Setenv(key, tc.env[key])
 			}
 			if got := paintsPlaceholders(); got != tc.want {
@@ -145,15 +158,15 @@ func TestProbeSucceeded(t *testing.T) {
 		want  bool
 	}{
 		"ok": {event: uv.KittyGraphicsEvent{
-			Options: kitty.Options{ID: probeID}, Payload: []byte("OK")}, want: true},
+			Options: kitty.Options{ID: ProbeID}, Payload: []byte("OK")}, want: true},
 		"error reply": {event: uv.KittyGraphicsEvent{
-			Options: kitty.Options{ID: probeID}, Payload: []byte("EINVAL:bad key")}},
+			Options: kitty.Options{ID: ProbeID}, Payload: []byte("EINVAL:bad key")}},
 		"empty payload": {event: uv.KittyGraphicsEvent{
-			Options: kitty.Options{ID: probeID}}},
+			Options: kitty.Options{ID: ProbeID}}},
 		"another image": {event: uv.KittyGraphicsEvent{
-			Options: kitty.Options{ID: probeID + 1}, Payload: []byte("OK")}},
+			Options: kitty.Options{ID: ProbeID + 1}, Payload: []byte("OK")}},
 		"our logo echoed back": {event: uv.KittyGraphicsEvent{
-			Options: kitty.Options{ID: imageID}, Payload: []byte("OK")}},
+			Options: kitty.Options{ID: ImageID}, Payload: []byte("OK")}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := ProbeSucceeded(tc.event); got != tc.want {
