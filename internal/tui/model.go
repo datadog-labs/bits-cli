@@ -153,7 +153,7 @@ type Model struct {
 	styles     styles.Theme // terminal styles; dark until detected
 
 	// One repaint clock samples independent elapsed-time timelines. Tool activity
-	// covers both per-tool spinners and grouped-tool dots; the second timeline
+	// covers tool, thinking, and grouped-inspection spinners; the second timeline
 	// drives the composer border sweep.
 	animClock       animationClock
 	animTool        animationTimeline

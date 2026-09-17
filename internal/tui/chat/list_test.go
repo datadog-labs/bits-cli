@@ -150,7 +150,8 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 		inspectBlock("4", "grep_files", `{"pattern":"ToolBlock","path":"internal"}`, agent.ToolSuccess, "matches"),
 	}
 	list := NewList()
-	list.SetStyles(DefaultStyles(true))
+	sty := DefaultStyles(true)
+	list.SetStyles(sty)
 	list.SetWidth(100)
 	list.SetHeight(20)
 	list.SetItems(blocks)
@@ -158,7 +159,7 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 		t.Fatalf("presentation item count = %d, want 3", got)
 	}
 	plain := ansi.Strip(list.Render())
-	for _, want := range []string{"• inspecting", "read a.go, b.go", "between", "✓ inspected", "search ToolBlock in internal"} {
+	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "✓ inspected", "search ToolBlock in internal"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("group rendering missing %q:\n%s", want, plain)
 		}
@@ -280,7 +281,7 @@ func TestInspectionGroupRowsStayWithinWidth(t *testing.T) {
 	}
 }
 
-func TestInspectionDotAnimationKeepsHeaderWidth(t *testing.T) {
+func TestInspectionSpinnerAnimationKeepsHeaderWidth(t *testing.T) {
 	list := NewList()
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(80)
@@ -292,6 +293,9 @@ func TestInspectionDotAnimationKeepsHeaderWidth(t *testing.T) {
 		list.SetFrame(frame)
 		header := headerOf(list.Render())
 		seen[ansi.Strip(header)] = true
+		if got, want := string([]rune(ansi.Strip(header))[0]), list.sty.StatusSpinner.Frame(frame); got != want {
+			t.Fatalf("frame %d glyph = %q, want %q", frame, got, want)
+		}
 		if frame == 0 {
 			width = ansi.StringWidth(header)
 		} else if got := ansi.StringWidth(header); got != width {
@@ -299,7 +303,7 @@ func TestInspectionDotAnimationKeepsHeaderWidth(t *testing.T) {
 		}
 	}
 	if len(seen) != 3 {
-		t.Fatalf("dot animation rendered %d distinct frames, want 3", len(seen))
+		t.Fatalf("spinner animation rendered %d distinct frames, want 3", len(seen))
 	}
 }
 

@@ -75,21 +75,20 @@ func renderUser(text string, width int, sty Styles) string {
 }
 
 // renderReasoning keeps model thinking compact until reasoning expansion is
-// introduced. An open block uses the same low-frequency motion as an active
-// inspection group; once closed it settles into a quiet completed row.
+// introduced. An open block uses the same spinner as active tools and
+// inspection groups; once closed it settles into a quiet completed row.
 func renderReasoning(it agent.Block, width int, sty Styles, frame int) string {
 	if it.Thinking == nil {
 		return fallback(it, width, sty)
 	}
 
-	glyph, glyphStyle := statusGlyph(lifecycleSuccess, sty, frame)
+	state := lifecycleSuccess
 	label := "thought"
 	if !it.Complete {
-		glyph, glyphStyle = "•", sty.StatusRunning
+		state = lifecycleRunning
 		label = "thinking" + activityEllipsis(frame, sty.StatusSpinner.Len() > 0)
 	}
-	header := glyphStyle.UnsetBackground().Render(glyph+" ") + sty.ToolName.Render(label)
-	return ansi.Truncate(header, max(1, width), "…")
+	return renderActivityHeader(state, label, "", width, sty, frame)
 }
 
 // renderWidget summarizes a widget.

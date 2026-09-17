@@ -607,6 +607,18 @@ func statusGlyph(state toolLifecycle, sty Styles, frame int) (string, lipgloss.S
 	}
 }
 
+// renderActivityHeader renders the shared compact header used by thinking and
+// grouped inspection activity. Keeping the state-to-glyph mapping here makes
+// every progressing row use the same spinner and static fallbacks.
+func renderActivityHeader(state toolLifecycle, label, suffix string, width int, sty Styles, frame int) string {
+	glyph, glyphStyle := statusGlyph(state, sty, frame)
+	header := glyphStyle.UnsetBackground().Render(glyph+" ") + sty.ToolName.Render(label)
+	if suffix != "" {
+		header += sty.ToolDetail.Render(suffix)
+	}
+	return ansi.Truncate(header, max(1, width), "…")
+}
+
 func renderSpans(spans []summarySpan, sty Styles) string {
 	var b strings.Builder
 	for _, span := range spans {
@@ -664,12 +676,10 @@ func inspectionLifecycle(blocks []agent.Block) toolLifecycle {
 
 func renderInspectionGroup(blocks []agent.Block, presentations []toolPresentation, width int, sty Styles, frame int) string {
 	state := inspectionLifecycle(blocks)
-	glyph, glyphStyle := statusGlyph(state, sty, frame)
 	label := "inspect"
 	suffix := ""
 	switch state {
 	case lifecycleRunning:
-		glyph = "•"
 		label = "inspecting"
 		suffix = activityEllipsis(frame, sty.StatusSpinner.Len() > 0)
 	case lifecycleAwaiting:
@@ -685,8 +695,7 @@ func renderInspectionGroup(blocks []agent.Block, presentations []toolPresentatio
 	case lifecycleUnknown:
 		// Keep the neutral defaults.
 	}
-	header := glyphStyle.UnsetBackground().Render(glyph+" ") + sty.ToolName.Render(label) + sty.ToolDetail.Render(suffix)
-	lines := []string{ansi.Truncate(header, max(1, width), "…")}
+	lines := []string{renderActivityHeader(state, label, suffix, width, sty, frame)}
 	diagnosticIndex, diagnostic := inspectionDiagnostic(blocks, state)
 
 	first := true

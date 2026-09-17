@@ -137,7 +137,9 @@ func build(isDark bool, p palette) Theme {
 			ToolName:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
 			ToolArgument:    text.Primary,
 			ToolDetail:      lipgloss.NewStyle().Foreground(lipgloss.Color(p.textTertiary)),
-			ToolError:       feedback.Error,
+			// The status glyph carries the failure signal; diagnostic text is
+			// readable secondary copy rather than a wall of red.
+			ToolError: text.Secondary,
 			Diff: Diff{
 				Add:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.textPrimary)).Background(lipgloss.Color(p.successSurface)),
 				Del:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.textPrimary)).Background(lipgloss.Color(p.errorSurface)),

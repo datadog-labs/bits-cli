@@ -63,7 +63,7 @@ type Chat struct {
 	StatusError     lipgloss.Style
 
 	// StatusRunningLabel and StatusAwaitingLabel are retained for the dev-only
-	// style catalog. Compact tool rendering uses StatusSpinner and group dots;
+	// style catalog. Compact tool rendering uses StatusSpinner;
 	// an approval wait is static.
 	StatusRunningLabel  Shimmer
 	StatusAwaitingLabel Shimmer
@@ -72,9 +72,10 @@ type Chat struct {
 	StatusSweepDim color.Color
 	StatusSweepHot color.Color
 
-	// StatusSpinner is the glyph cycle shown in place of the static dot while a
-	// tool is running. It reports work in progress, so it is deliberately not
-	// used for a tool awaiting approval, which is blocked rather than busy.
+	// StatusSpinner is the shared glyph cycle shown in place of the static dot
+	// while work is progressing (tools, thinking, or inspection groups). It is
+	// deliberately not used for a tool awaiting approval, which is blocked
+	// rather than busy.
 	StatusSpinner Spinner
 
 	Meta        lipgloss.Style

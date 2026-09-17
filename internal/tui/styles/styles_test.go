@@ -255,6 +255,7 @@ func TestTextStylesResolveToALevel(t *testing.T) {
 				{"textSecondary", lipgloss.Color(test.palette.textSecondary), map[string]lipgloss.Style{
 					"Chat.Reasoning":                th.Chat.Reasoning,
 					"Chat.AssistantText":            th.Chat.AssistantText,
+					"Chat.ToolError":                th.Chat.ToolError,
 					"Text.Secondary":                th.Text.Secondary,
 					"Input.Placeholder":             th.Input.Placeholder,
 					"Approval.Detail":               th.Approval.Detail,
@@ -418,7 +419,7 @@ func TestSharedComponentStylesDeriveFromSemanticTokens(t *testing.T) {
 			if got, want := test.theme.Chat.ToolArgument.GetForeground(), lipgloss.Color(test.palette.textPrimary); got != want {
 				t.Errorf("tool argument = %v, want token %v", got, want)
 			}
-			if got, want := test.theme.Chat.ToolError.GetForeground(), lipgloss.Color(test.palette.feedbackError); got != want {
+			if got, want := test.theme.Chat.ToolError.GetForeground(), lipgloss.Color(test.palette.textSecondary); got != want {
 				t.Errorf("tool error = %v, want token %v", got, want)
 			}
 		})

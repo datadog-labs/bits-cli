@@ -243,8 +243,8 @@ func (l *List) renderPresentationItem(it presentationItem) string {
 // itemAnimated reports whether rendering depends on the frame counter. Waiting
 // for approval is deliberately static because no work is progressing.
 func (l *List) itemAnimated(it presentationItem) bool {
-	// WithoutMotion replaces the spinner and grouped-tool dot cycle with static
-	// fallbacks, so running blocks no longer justify a repaint clock.
+	// WithoutMotion replaces the shared spinner with static fallbacks, so
+	// running blocks no longer justify a repaint clock.
 	if l.sty.StatusSpinner.Len() == 0 {
 		return false
 	}
