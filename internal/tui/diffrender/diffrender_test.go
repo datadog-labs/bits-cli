@@ -64,7 +64,7 @@ func TestRenderAlignsTabIndentedContentAcrossDiffRows(t *testing.T) {
 
 	lines := strings.Split(ansi.Strip(Render(diff, Options{Path: "conversation.go", Width: 80})), "\n")
 	for _, line := range lines {
-		if got, want := strings.Index(line, "m."), 10; got != want {
+		if got, want := strings.Index(line, "m."), 12; got != want {
 			t.Errorf("source content begins in column %d, want %d: %q", got+1, want+1, line)
 		}
 	}

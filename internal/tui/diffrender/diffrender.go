@@ -16,6 +16,8 @@ import (
 // hunkSeparator separates rendered hunks.
 const hunkSeparator = "⋮"
 
+const diffLeftMargin = "  "
+
 // Options configures diff rendering.
 type Options struct {
 	// Path selects syntax highlighting.
@@ -48,7 +50,7 @@ func renderLines(diff filediff.Diff, opts Options) []string {
 	lines := make([]string, 0, diff.LineCount()+len(diff.Hunks))
 	for i, hunk := range diff.Hunks {
 		if i > 0 {
-			lines = append(lines, opts.Style.Meta.Render(ansi.Truncate("  "+hunkSeparator, opts.Width, "…")))
+			lines = append(lines, opts.Style.Meta.Render(ansi.Truncate(diffLeftMargin+"  "+hunkSeparator, opts.Width, "…")))
 		}
 		for _, line := range hunk.Lines {
 			lines = append(lines, renderLine(line, digits, opts))
@@ -60,7 +62,7 @@ func renderLines(diff filediff.Diff, opts Options) []string {
 func renderLine(line filediff.DiffLine, digits int, opts Options) string {
 	switch line.Kind {
 	case filediff.LineNoNewline, filediff.LineOmitted:
-		return opts.Style.Meta.Render(ansi.Truncate("  "+line.Content, opts.Width, "…"))
+		return opts.Style.Meta.Render(ansi.Truncate(diffLeftMargin+"  "+line.Content, opts.Width, "…"))
 	default:
 	}
 
@@ -83,7 +85,7 @@ func renderLine(line filediff.DiffLine, digits int, opts Options) string {
 	if marker != " " {
 		separator = " " + marker + " "
 	}
-	gutter := lineStyle.Foreground(opts.Style.Gutter.GetForeground()).Render(gutterNumber(lineNumber, digits) + separator)
+	gutter := lineStyle.Foreground(opts.Style.Gutter.GetForeground()).Render(diffLeftMargin + gutterNumber(lineNumber, digits) + separator)
 	available := max(1, opts.Width-ansi.StringWidth(gutter))
 	content := ansi.Truncate(HighlightLine(opts.Path, line.Content, opts.Style.SyntaxDark, lineStyle), available, "…")
 	return gutter + content
