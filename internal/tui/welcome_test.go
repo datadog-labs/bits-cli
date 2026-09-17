@@ -205,17 +205,23 @@ func TestGraphicsReplyDrivesLogoForm(t *testing.T) {
 		wantTrans bool
 	}{
 		"probe ok enables the image": {
-			event: graphicsReply(splash.ProbeID, "OK"), want: true, wantTrans: true},
+			event: graphicsReply(splash.ProbeID, "OK"), want: true, wantTrans: true,
+		},
 		"probe error keeps the wordmark": {
-			event: graphicsReply(splash.ProbeID, "EINVAL:bad key")},
+			event: graphicsReply(splash.ProbeID, "EINVAL:bad key"),
+		},
 		"another image's reply is ignored": {
-			event: graphicsReply(splash.ProbeID+7, "OK")},
+			event: graphicsReply(splash.ProbeID+7, "OK"),
+		},
 		"a second probe reply does not retransmit": {
-			before: true, event: graphicsReply(splash.ProbeID, "OK"), want: true},
+			before: true, event: graphicsReply(splash.ProbeID, "OK"), want: true,
+		},
 		"a rejected image falls back to the wordmark": {
-			before: true, event: graphicsReply(splash.ImageID, "ENOENT:no such file")},
+			before: true, event: graphicsReply(splash.ImageID, "ENOENT:no such file"),
+		},
 		"a stored image keeps the image": {
-			before: true, event: graphicsReply(splash.ImageID, "OK"), want: true},
+			before: true, event: graphicsReply(splash.ImageID, "OK"), want: true,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := welcomeModel(100, 40)

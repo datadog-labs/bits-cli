@@ -158,15 +158,20 @@ func TestProbeSucceeded(t *testing.T) {
 		want  bool
 	}{
 		"ok": {event: uv.KittyGraphicsEvent{
-			Options: kitty.Options{ID: ProbeID}, Payload: []byte("OK")}, want: true},
+			Options: kitty.Options{ID: ProbeID}, Payload: []byte("OK"),
+		}, want: true},
 		"error reply": {event: uv.KittyGraphicsEvent{
-			Options: kitty.Options{ID: ProbeID}, Payload: []byte("EINVAL:bad key")}},
+			Options: kitty.Options{ID: ProbeID}, Payload: []byte("EINVAL:bad key"),
+		}},
 		"empty payload": {event: uv.KittyGraphicsEvent{
-			Options: kitty.Options{ID: ProbeID}}},
+			Options: kitty.Options{ID: ProbeID},
+		}},
 		"another image": {event: uv.KittyGraphicsEvent{
-			Options: kitty.Options{ID: ProbeID + 1}, Payload: []byte("OK")}},
+			Options: kitty.Options{ID: ProbeID + 1}, Payload: []byte("OK"),
+		}},
 		"our logo echoed back": {event: uv.KittyGraphicsEvent{
-			Options: kitty.Options{ID: ImageID}, Payload: []byte("OK")}},
+			Options: kitty.Options{ID: ImageID}, Payload: []byte("OK"),
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := ProbeSucceeded(tc.event); got != tc.want {
