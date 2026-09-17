@@ -70,10 +70,7 @@ func TestPlaceholderOccupiesImageColsColumns(t *testing.T) {
 	}
 }
 
-func TestQueryAndTransmitProduceCommands(t *testing.T) {
-	if Query() == nil {
-		t.Fatal("Query returned no command")
-	}
+func TestTransmitProducesCommand(t *testing.T) {
 	if Transmit() == nil {
 		t.Fatal("Transmit returned no command; the embedded logo failed to decode")
 	}
@@ -116,12 +113,24 @@ func TestPaintsPlaceholders(t *testing.T) {
 	}
 }
 
-func TestQuerySkipsTerminalsWithoutPlaceholders(t *testing.T) {
-	t.Setenv("TERM", "xterm-256color")
-	t.Setenv("TERM_PROGRAM", "iTerm.app")
-	t.Setenv("KITTY_WINDOW_ID", "")
-	t.Setenv("GHOSTTY_RESOURCES_DIR", "")
-	if Query() != nil {
-		t.Fatal("queried a terminal that cannot paint placeholders")
+// Query's outcome must come from the pinned environment, never from whichever
+// terminal happens to be running the tests.
+func TestQueryFollowsTerminalCapability(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env   map[string]string
+		probe bool
+	}{
+		"kitty":  {env: map[string]string{"TERM": "xterm-kitty"}, probe: true},
+		"iterm2": {env: map[string]string{"TERM": "xterm-256color", "TERM_PROGRAM": "iTerm.app"}},
+		"ci":     {env: map[string]string{"TERM": "dumb"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, key := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR"} {
+				t.Setenv(key, tc.env[key])
+			}
+			if probed := Query() != nil; probed != tc.probe {
+				t.Errorf("Query() probed = %v, want %v", probed, tc.probe)
+			}
+		})
 	}
 }
