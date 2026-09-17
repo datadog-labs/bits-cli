@@ -155,8 +155,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// It is the only confirmation the image can be painted, so the pixels are
 	// not transmitted before it. reconcileFocus is idempotent and runs on the
 	// next message, so skipping it here is safe.
-	if _, ok := msg.(uv.KittyGraphicsEvent); ok {
-		if m.splashReady {
+	if event, ok := msg.(uv.KittyGraphicsEvent); ok {
+		if m.splashReady || !splash.ProbeSucceeded(event) {
 			return m, nil
 		}
 		m.splashReady = true

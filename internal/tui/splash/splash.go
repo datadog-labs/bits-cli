@@ -28,6 +28,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/ansi/kitty"
 )
@@ -78,6 +79,13 @@ func Query() tea.Cmd {
 		[]byte("AAAA"),
 		"i="+strconv.Itoa(probeID), "s=1", "v=1", "a=q", "t=d", "f=24",
 	))
+}
+
+// ProbeSucceeded reports whether a graphics reply is this package's probe
+// answering OK. A failed query answers with an error name in place of OK, and
+// a reply carrying another id belongs to someone else's image.
+func ProbeSucceeded(event uv.KittyGraphicsEvent) bool {
+	return event.Options.ID == probeID && string(event.Payload) == "OK"
 }
 
 // paintsPlaceholders reports whether the terminal is known to paint Unicode

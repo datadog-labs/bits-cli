@@ -16,7 +16,7 @@ import (
 func welcomeModel(width, height int) *Model {
 	m := newShell()
 	m.width, m.height = width, height
-	m.version = "0.1.2"
+	m.version = "v0.1.2"
 	m.workspaceDisplayPath = "~/go/src/github.com/DataDog/bits-cli"
 	return m
 }
@@ -172,5 +172,18 @@ func TestModelAndAuthJoinsKnownValues(t *testing.T) {
 	}
 	if got := modelAndAuth("claude-opus", ""); got != "claude-opus" {
 		t.Errorf("auth absent: got %q", got)
+	}
+}
+
+// BuildVersion already returns a v-prefixed module version, so the block must
+// not add one: an untagged build otherwise reads "vdev".
+func TestWelcomeVersionRenderedAsGiven(t *testing.T) {
+	for _, version := range []string{"v0.1.2", "dev", "dev-abc1234"} {
+		m := welcomeModel(120, 40)
+		m.version = version
+		first := strings.SplitN(ansi.Strip(m.welcomeFacts(60)), "\n", 2)[0]
+		if want := "bits " + version; first != want {
+			t.Errorf("version %q rendered as %q, want %q", version, first, want)
+		}
 	}
 }

@@ -79,7 +79,9 @@ func (m *Model) welcomeFacts(width int) string {
 
 	name := m.styles.Text.Primary.Bold(true).Render("bits")
 	if m.version != "" {
-		name += m.styles.Text.Secondary.Render(" v" + m.version)
+		// Rendered as given: module versions already carry a "v", and an
+		// untagged build reads "dev-abc1234".
+		name += m.styles.Text.Secondary.Render(" " + m.version)
 	}
 	lines := []string{ansi.Truncate(name, width, "…")}
 

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/ansi/kitty"
 )
@@ -130,6 +131,33 @@ func TestQueryFollowsTerminalCapability(t *testing.T) {
 			}
 			if probed := Query() != nil; probed != tc.probe {
 				t.Errorf("Query() probed = %v, want %v", probed, tc.probe)
+			}
+		})
+	}
+}
+
+// A graphics reply is not automatically good news: the protocol reports a
+// failed query with an error name in place of OK, and other images have their
+// own ids.
+func TestProbeSucceeded(t *testing.T) {
+	for name, tc := range map[string]struct {
+		event uv.KittyGraphicsEvent
+		want  bool
+	}{
+		"ok": {event: uv.KittyGraphicsEvent{
+			Options: kitty.Options{ID: probeID}, Payload: []byte("OK")}, want: true},
+		"error reply": {event: uv.KittyGraphicsEvent{
+			Options: kitty.Options{ID: probeID}, Payload: []byte("EINVAL:bad key")}},
+		"empty payload": {event: uv.KittyGraphicsEvent{
+			Options: kitty.Options{ID: probeID}}},
+		"another image": {event: uv.KittyGraphicsEvent{
+			Options: kitty.Options{ID: probeID + 1}, Payload: []byte("OK")}},
+		"our logo echoed back": {event: uv.KittyGraphicsEvent{
+			Options: kitty.Options{ID: imageID}, Payload: []byte("OK")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := ProbeSucceeded(tc.event); got != tc.want {
+				t.Errorf("ProbeSucceeded() = %v, want %v", got, tc.want)
 			}
 		})
 	}
