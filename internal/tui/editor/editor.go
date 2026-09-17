@@ -359,7 +359,7 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 			e.accept()
 			return nil
 		case "esc":
-			e.dismissActiveMention()
+			e.dismissCompletion()
 			e.closeMenu()
 			return nil
 		}
@@ -529,6 +529,10 @@ func overflowHint(window components.SelectionWindow) string {
 // set (no "@"/"/" trigger, or nothing matched) closes the menu; the selection is
 // kept when it still points at a valid item.
 func (e *Editor) recompute() {
+	if e.dismissedValue != "" && e.ta.Value() == e.dismissedValue {
+		e.closeMenu()
+		return
+	}
 	word := e.ta.Word()
 	if strings.HasPrefix(word, "/") {
 		if !e.commandTriggerActive(word) {
@@ -937,10 +941,8 @@ func (e *Editor) insideCompletedMention(position int) bool {
 	return false
 }
 
-func (e *Editor) dismissActiveMention() {
-	if _, ok := e.activeEntitySpan(); ok {
-		e.dismissedValue = e.ta.Value()
-	}
+func (e *Editor) dismissCompletion() {
+	e.dismissedValue = e.ta.Value()
 }
 
 // wordBounds returns the [start, end) rune indices of the word at col, using the

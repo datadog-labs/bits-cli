@@ -421,6 +421,56 @@ func TestRecomputeOpensAndClosesMenu(t *testing.T) {
 	}
 }
 
+func TestEscapeDismissesCompletionWithoutChangingPrompt(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		open  func(*Editor)
+	}{
+		{
+			name:  "slash command",
+			value: "/",
+			open: func(e *Editor) {
+				e.recompute()
+			},
+		},
+		{
+			name:  "mention",
+			value: "@",
+			open: func(e *Editor) {
+				setTestFileResults(e, "", "README.md")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			e := New()
+			e.ta.SetValue(test.value)
+			e.ta.SetCursorColumn(len([]rune(test.value)))
+			test.open(e)
+			if !e.MenuOpen() {
+				t.Fatal("menu did not open")
+			}
+
+			e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+			if e.MenuOpen() {
+				t.Fatal("Esc did not close menu")
+			}
+			if got := e.Value(); got != test.value {
+				t.Fatalf("value after Esc = %q, want %q", got, test.value)
+			}
+
+			// Theme and result updates can recompute completions without editing
+			// the prompt. They must not reopen a menu the user dismissed.
+			e.recompute()
+			if e.MenuOpen() {
+				t.Fatal("dismissed menu reopened without a prompt change")
+			}
+		})
+	}
+}
+
 func TestSlashCompletionOnlyOpensForFirstPromptToken(t *testing.T) {
 	e := New()
 

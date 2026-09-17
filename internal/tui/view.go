@@ -15,7 +15,7 @@ import (
 
 const (
 	minimumChatWidth      = 12
-	minimumChatHeight     = 6
+	minimumChatHeight     = 8
 	minimumApprovalWidth  = 36
 	minimumApprovalHeight = 13
 	chatNoticeHeight      = 1
