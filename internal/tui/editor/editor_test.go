@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/tui/styles"
@@ -488,15 +489,15 @@ func TestMoveWraps(t *testing.T) {
 	}
 }
 
-func TestAutocompleteDetailsFollowLabelsWithoutColumnGap(t *testing.T) {
+func TestAutocompleteDetailsUseAlignedColumns(t *testing.T) {
 	e := New()
 	e.SetWidth(80)
 	e.ta.SetValue("/")
 	e.ta.SetCursorColumn(1)
 	e.recompute()
 	slash := ansi.Strip(e.MenuView())
-	if !strings.Contains(slash, "/help  show help") {
-		t.Fatalf("slash menu has an unexpected label/detail gap: %q", slash)
+	if !strings.Contains(slash, "/help        show help") {
+		t.Fatalf("slash menu does not align label and detail columns: %q", slash)
 	}
 	for lineNo, line := range strings.Split(e.MenuView(), "\n") {
 		if got, want := ansi.StringWidth(line), e.menuWidth(); got != want {
@@ -522,6 +523,62 @@ func TestAutocompleteDetailsFollowLabelsWithoutColumnGap(t *testing.T) {
 		if got, want := ansi.StringWidth(line), e.menuWidth(); got != want {
 			t.Fatalf("mention row %d width = %d, want opaque width %d", lineNo+1, got, want)
 		}
+	}
+}
+
+func TestCompletionMenuUsesFramedResponsiveLayout(t *testing.T) {
+	for _, width := range []int{40, 80, 120} {
+		e := New()
+		e.SetWidth(width)
+		e.SetMenuHeight(10)
+		e.ta.SetValue("/")
+		e.ta.SetCursorColumn(1)
+		e.recompute()
+
+		view := e.MenuView()
+		plain := ansi.Strip(view)
+		if !strings.Contains(plain, "ESC x") || !strings.Contains(plain, "↓ 3 more below") {
+			t.Fatalf("width %d missing menu chrome: %q", width, plain)
+		}
+		if strings.Contains(plain, "›") {
+			t.Fatalf("width %d retained selection marker: %q", width, plain)
+		}
+		if got, want := lipgloss.Width(view), min(menuMaxWidth, width-e.ContentOffset()); got != want {
+			t.Fatalf("width %d menu width = %d, want %d", width, got, want)
+		}
+		if got := lipgloss.Height(view); got > 10 {
+			t.Fatalf("width %d menu height = %d, want <= 10", width, got)
+		}
+	}
+}
+
+func TestCompletionMenuCountsRowsActuallyHiddenBelow(t *testing.T) {
+	e := New()
+	e.SetWidth(80)
+	e.SetMenuHeight(10)
+	e.ta.SetValue("/")
+	e.ta.SetCursorColumn(1)
+	e.recompute()
+	if plain := ansi.Strip(e.MenuView()); !strings.Contains(plain, "↓ 3 more below") {
+		t.Fatalf("initial overflow hint = %q", plain)
+	}
+
+	for range 5 {
+		e.menu.selector.UpdateKey("down")
+	}
+	if plain := ansi.Strip(e.MenuView()); !strings.Contains(plain, "↓ 2 more below") {
+		t.Fatalf("scrolled overflow hint = %q", plain)
+	}
+
+	for range 2 {
+		e.menu.selector.UpdateKey("down")
+	}
+	plain := ansi.Strip(e.MenuView())
+	if strings.Contains(plain, "more above") || strings.Contains(plain, "↑") {
+		t.Fatalf("menu exposed an upward overflow hint: %q", plain)
+	}
+	if !strings.Contains(plain, "↓ back to top") {
+		t.Fatalf("bottom overflow hint = %q", plain)
 	}
 }
 

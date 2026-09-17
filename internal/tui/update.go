@@ -708,6 +708,7 @@ func (m *Model) layoutTranscript() {
 	if m.mode == ModeTermInit {
 		return
 	}
+	m.editor.SetMenuHeight(max(0, m.height-chatFooterHeight-m.editor.Height()))
 	m.list.SetHeight(max(1, m.height-chatNoticeHeight-chatFooterHeight-m.composerHeight()))
 }
 

@@ -29,6 +29,40 @@ func TestDefaultSelectsModeSpecificInputAndMenuStyles(t *testing.T) {
 	}
 }
 
+func TestEditorMenuUsesConversationBackground(t *testing.T) {
+	for _, theme := range []Theme{Default(true), Default(false)} {
+		for name, style := range map[string]lipgloss.Style{
+			"frame":           theme.Editor.MenuFrame,
+			"item":            theme.Editor.MenuItem,
+			"detail":          theme.Editor.MenuDetail,
+			"selected":        theme.Editor.MenuSelected,
+			"selected detail": theme.Editor.MenuSelectedDetail,
+			"help":            theme.Editor.MenuHelp,
+		} {
+			if got := style.GetBackground(); got != theme.Background {
+				t.Errorf("%s background = %v, want conversation background %v", name, got, theme.Background)
+			}
+		}
+	}
+}
+
+func TestEditorMenuSelectionUsesInteractiveForeground(t *testing.T) {
+	for _, test := range []struct {
+		theme Theme
+		want  color.Color
+	}{
+		{theme: Default(true), want: lipgloss.Color(darkPalette().interactive)},
+		{theme: Default(false), want: lipgloss.Color(lightPalette().interactive)},
+	} {
+		if got := test.theme.Editor.MenuSelected.GetForeground(); got != test.want {
+			t.Errorf("selected foreground = %v, want interactive %v", got, test.want)
+		}
+		if got := test.theme.Editor.MenuSelectedDetail.GetForeground(); got != test.want {
+			t.Errorf("selected detail foreground = %v, want interactive %v", got, test.want)
+		}
+	}
+}
+
 // TestDefaultPinsAModeSpecificBackground checks both modes set a background
 // and that they differ from each other.
 func TestDefaultPinsAModeSpecificBackground(t *testing.T) {
@@ -208,7 +242,7 @@ func TestTextStylesResolveToALevel(t *testing.T) {
 					"Text.Primary":            th.Text.Primary,
 					"Approval.Title":          th.Approval.Title,
 					"Approval.Text":           th.Approval.Text,
-					"Editor.MenuItem":         th.Editor.MenuItem,
+					"Editor.MenuHelp":         th.Editor.MenuHelp,
 					"Selector.Item":           th.Selector.Item,
 					"Selector.SelectedDetail": th.Selector.SelectedDetail,
 					"Panel.Frame":             th.Panel.Frame,
@@ -225,15 +259,17 @@ func TestTextStylesResolveToALevel(t *testing.T) {
 					"Input.Placeholder":             th.Input.Placeholder,
 					"Approval.Detail":               th.Approval.Detail,
 					"Approval.Action":               th.Approval.Action,
+					"Editor.MenuItem":               th.Editor.MenuItem,
 					"Selector.Detail":               th.Selector.Detail,
 					"TextInput.Focused.Placeholder": th.TextInput.Focused.Placeholder,
 					"TextInput.Blurred.Prompt":      th.TextInput.Blurred.Prompt,
 				}},
 				{"textTertiary", lipgloss.Color(test.palette.textTertiary), map[string]lipgloss.Style{
-					"Chat.ToolDetail": th.Chat.ToolDetail,
-					"Chat.Meta":       th.Chat.Meta,
-					"Text.Tertiary":   th.Text.Tertiary,
-					"Panel.Help":      th.Panel.Help,
+					"Chat.ToolDetail":   th.Chat.ToolDetail,
+					"Chat.Meta":         th.Chat.Meta,
+					"Editor.MenuDetail": th.Editor.MenuDetail,
+					"Text.Tertiary":     th.Text.Tertiary,
+					"Panel.Help":        th.Panel.Help,
 				}},
 			} {
 				for path, style := range level.styles {
