@@ -231,7 +231,7 @@ func (l *List) renderItem(idx int) []string {
 }
 
 func (l *List) renderPresentationItem(it presentationItem) string {
-	if it.group == inspectionGroupKey {
+	if it.group == inspectionGroupKey && len(it.presentations) > 1 {
 		return renderInspectionGroup(l.items[it.start:it.end], it.presentations, l.width, l.sty, l.frame)
 	}
 	if len(it.presentations) == 1 {

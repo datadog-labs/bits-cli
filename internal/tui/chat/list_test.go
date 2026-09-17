@@ -159,7 +159,7 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 		t.Fatalf("presentation item count = %d, want 3", got)
 	}
 	plain := ansi.Strip(list.Render())
-	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "✓ inspected", "search ToolBlock in internal"} {
+	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "✓ search ToolBlock in internal"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("group rendering missing %q:\n%s", want, plain)
 		}
@@ -168,6 +168,34 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 		if strings.Contains(plain, hidden) {
 			t.Errorf("group rendering exposed inspection output %q:\n%s", hidden, plain)
 		}
+	}
+}
+
+func TestSingletonInspectionRendersAsTool(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status agent.ToolStatus
+		want   string
+		hidden string
+	}{
+		{name: "running", status: agent.ToolRunning, want: "list .", hidden: "inspecting"},
+		{name: "settled", status: agent.ToolSuccess, want: "✓ list .", hidden: "inspected"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			list := NewList()
+			list.SetStyles(DefaultStyles(true))
+			list.SetWidth(80)
+			list.SetHeight(8)
+			list.SetItems([]agent.Block{inspectBlock("1", "list_files", `{"path":""}`, test.status, "listing")})
+
+			plain := ansi.Strip(list.Render())
+			if !strings.Contains(plain, test.want) {
+				t.Fatalf("singleton inspection rendering = %q, want %q", plain, test.want)
+			}
+			if strings.Contains(plain, test.hidden) || strings.Contains(plain, "└") {
+				t.Fatalf("singleton inspection retained grouped rendering: %q", plain)
+			}
+		})
 	}
 }
 
