@@ -58,6 +58,36 @@ func TestPanelBodyReceivesInnerWidth(t *testing.T) {
 	}
 }
 
+func TestPanelRenderReturnsNaturalHeight(t *testing.T) {
+	panel := NewPanel(styles.Default(true).Panel)
+	content := PanelContent{Title: "Permission required", Body: func(int) string { return "body" }}
+	rendered := panel.Render(80, 20, content)
+	if got := len(strings.Split(rendered, "\n")); got >= 20 {
+		t.Fatalf("rendered height = %d, want natural height below container height", got)
+	}
+	assertBounded(t, rendered, 80, 20)
+}
+
+func TestPanelCompactBodyReceivesCompactWidth(t *testing.T) {
+	theme := styles.Default(true)
+	panel := NewPanel(theme.Panel)
+	got := 0
+	rendered := panel.Render(80, 8, PanelContent{
+		Title: "Permission required",
+		Body:  func(int) string { return strings.Repeat("body\n", 20) },
+		CompactBody: func(width int) string {
+			got = width
+			return "compact actions"
+		},
+	})
+	if got != theme.Panel.CompactMaxWidth {
+		t.Fatalf("compact body width = %d, want %d", got, theme.Panel.CompactMaxWidth)
+	}
+	if plain := ansi.Strip(rendered); !strings.Contains(plain, "compact actions") {
+		t.Fatalf("compact body missing from %q", plain)
+	}
+}
+
 func assertBounded(t *testing.T, view string, width, height int) {
 	t.Helper()
 	lines := strings.Split(view, "\n")

@@ -240,8 +240,8 @@ func TestTextStylesResolveToALevel(t *testing.T) {
 				{"textPrimary", lipgloss.Color(test.palette.textPrimary), map[string]lipgloss.Style{
 					"Input.Text":              th.Input.Text,
 					"Text.Primary":            th.Text.Primary,
-					"Approval.Title":          th.Approval.Title,
-					"Approval.Text":           th.Approval.Text,
+					"Approval.Panel.Frame":    th.Approval.Panel.Frame,
+					"Approval.Panel.Compact":  th.Approval.Panel.Compact,
 					"Editor.MenuHelp":         th.Editor.MenuHelp,
 					"Selector.Item":           th.Selector.Item,
 					"Selector.SelectedDetail": th.Selector.SelectedDetail,
@@ -258,7 +258,7 @@ func TestTextStylesResolveToALevel(t *testing.T) {
 					"Chat.ToolError":                th.Chat.ToolError,
 					"Text.Secondary":                th.Text.Secondary,
 					"Input.Placeholder":             th.Input.Placeholder,
-					"Approval.Detail":               th.Approval.Detail,
+					"Approval.Text":                 th.Approval.Text,
 					"Approval.Action":               th.Approval.Action,
 					"Editor.MenuItem":               th.Editor.MenuItem,
 					"Selector.Detail":               th.Selector.Detail,
@@ -271,6 +271,9 @@ func TestTextStylesResolveToALevel(t *testing.T) {
 					"Editor.MenuDetail": th.Editor.MenuDetail,
 					"Text.Tertiary":     th.Text.Tertiary,
 					"Panel.Help":        th.Panel.Help,
+					"Approval.Detail":   th.Approval.Detail,
+					"Approval.Dismiss":  th.Approval.Panel.Dismiss,
+					"Approval.Help":     th.Approval.Panel.Help,
 				}},
 			} {
 				for path, style := range level.styles {
@@ -403,6 +406,12 @@ func TestSharedComponentStylesDeriveFromSemanticTokens(t *testing.T) {
 			}
 			if got, want := test.theme.Selector.Selected.GetForeground(), lipgloss.Color(test.palette.interactive); got != want {
 				t.Errorf("selector selected = %v, want token %v", got, want)
+			}
+			if got, want := test.theme.Approval.Panel.Title.GetForeground(), lipgloss.Color(test.palette.interactive); got != want {
+				t.Errorf("approval title = %v, want token %v", got, want)
+			}
+			if got, want := test.theme.Approval.Selected.GetBackground(), lipgloss.Color(test.palette.interactive); got != want {
+				t.Errorf("approval selection = %v, want token %v", got, want)
 			}
 			if got, want := test.theme.Feedback.Error.GetForeground(), lipgloss.Color(test.palette.feedbackError); got != want {
 				t.Errorf("feedback error = %v, want token %v", got, want)

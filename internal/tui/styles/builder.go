@@ -72,19 +72,21 @@ func build(isDark bool, p palette) Theme {
 		FooterSeparator:  "   ",
 	}
 	approvalSurface := lipgloss.Color(p.approvalSurface)
-	approvalBase := lipgloss.NewStyle().Background(approvalSurface)
+	approvalPanel := panel
+	approvalPanel.Title = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive))
+	approvalPanel.Dismiss = text.Tertiary
 	approval := Approval{
-		Prompt: prompt,
-		Block: lipgloss.NewStyle().Background(approvalSurface).
-			Border(inputRule, true, false, true, false).
-			BorderForeground(lipgloss.Color(p.interactive)).
-			BorderBackground(approvalSurface),
-		Marker:   approvalBase.Bold(true).Foreground(lipgloss.Color(p.interactive)),
-		Title:    approvalBase.Bold(true).Foreground(lipgloss.Color(p.textPrimary)),
-		Text:     approvalBase.Foreground(lipgloss.Color(p.textPrimary)),
-		Detail:   approvalBase.Foreground(lipgloss.Color(p.textSecondary)),
-		Action:   approvalBase.Foreground(lipgloss.Color(p.textSecondary)),
-		Selected: approvalBase.Bold(true).Foreground(lipgloss.Color(p.interactive)),
+		Panel:  approvalPanel,
+		Text:   text.Secondary,
+		Detail: text.Tertiary,
+		Action: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(p.textSecondary)).
+			Background(approvalSurface).
+			Padding(0, 1),
+		Selected: lipgloss.NewStyle().Bold(true).
+			Foreground(lipgloss.Color(p.onAccent)).
+			Background(lipgloss.Color(p.interactive)).
+			Padding(0, 1),
 	}
 	selector := Selector{
 		Item:           text.Primary,

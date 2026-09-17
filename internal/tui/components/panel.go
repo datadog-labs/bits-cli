@@ -21,6 +21,7 @@ type PanelContent struct {
 
 	CompactTitle   string
 	CompactMessage string
+	CompactBody    func(width int) string
 	TinyMessage    string
 }
 
@@ -41,12 +42,21 @@ func (p *Panel) View(width, height int, content PanelContent) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, p.Render(width, height, content))
+}
+
+// Render returns the panel at its natural height for embedding in another
+// layout. It uses the same bounded full and compact states as View without
+// adding the surrounding centering space.
+func (p *Panel) Render(width, height int, content PanelContent) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
 	full := p.full(width, content)
 	if full != "" && lipgloss.Width(full) <= width && lipgloss.Height(full) <= height {
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, full)
+		return full
 	}
-	compact := p.compact(width, height, content)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, compact)
+	return p.compact(width, height, content)
 }
 
 func (p *Panel) full(width int, content PanelContent) string {
@@ -122,16 +132,19 @@ func (p *Panel) compact(width, height int, content PanelContent) string {
 	}
 
 	title := content.CompactTitle
-	message := content.CompactMessage
 	if title == "" {
 		title = content.Title
-	}
-	if message == "" {
-		message = tiny
 	}
 	compactWidth := width
 	if p.styles.CompactMaxWidth > 0 {
 		compactWidth = min(compactWidth, p.styles.CompactMaxWidth)
+	}
+	message := content.CompactMessage
+	if content.CompactBody != nil {
+		message = content.CompactBody(compactWidth)
+	}
+	if message == "" {
+		message = tiny
 	}
 	candidate := p.styles.Compact.Width(compactWidth).Render(title + "\n\n" + message)
 	if lipgloss.Width(candidate) <= width && lipgloss.Height(candidate) <= height {
