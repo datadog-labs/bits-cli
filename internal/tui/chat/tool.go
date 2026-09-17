@@ -81,6 +81,11 @@ var (
 		spacing: itemSpacing{before: 1, after: 1},
 		action:  toolAction{base: "run", success: "ran", failure: "run failed"},
 	}
+	skillToolRenderSpec = &toolRenderSpec{
+		render:  renderSkillTool,
+		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "load", active: "loading", success: "loaded", failure: "load failed"},
+	}
 )
 
 type summarySpan struct {
@@ -201,6 +206,13 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			}
 			p.validInput = true
 		}
+	case spec.ServerSkill:
+		p.argument = "skill"
+		var in spec.SkillInput
+		if decodeObject(input, &in) && in.SkillName != "" {
+			p.argument = "skill " + escape.Inline(in.SkillName)
+		}
+		p.validInput = true
 	default:
 		p.argument, p.validInput = compactInput(input), true
 	}
@@ -221,6 +233,8 @@ func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 		return editToolRenderSpec
 	case spec.ClientExecCommand:
 		return execToolRenderSpec
+	case spec.ServerSkill:
+		return skillToolRenderSpec
 	default:
 		return simpleToolRenderSpec
 	}
@@ -342,6 +356,25 @@ func renderPresentedTool(tool *agent.ToolBlock, p toolPresentation, width int, s
 		return renderSimpleTool(tool, p, width, sty, frame)
 	}
 	return p.renderSpec.render(tool, p, width, sty, frame)
+}
+
+func renderSkillTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
+	state := lifecycleOf(tool)
+	header := renderToolHeader(tool, p.summary(tool), nil, width, sty, frame)
+	switch state {
+	case lifecycleRunning, lifecycleAwaiting, lifecycleDenied, lifecycleCancelled:
+		return header
+	case lifecycleUnknown, lifecycleSuccess, lifecycleError:
+	}
+
+	detail := tool.Detail
+	if detail == "" {
+		detail = tool.Output
+	}
+	if state == lifecycleError && detail != "" {
+		return header + "\n" + renderPreview(detail, width, genericOutputMaxLines, sty.ToolError, false, sty)
+	}
+	return header
 }
 
 func renderSimpleTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
