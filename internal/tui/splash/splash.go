@@ -7,6 +7,10 @@
 // virtual placement: pixels transmit out of band through tea.Raw, and the view
 // holds only printable placeholder cells marking where to paint them.
 //
+// Support needs two signals: the terminal must be on an allowlist known to
+// paint Unicode placeholders, and it must answer the graphics query. Neither
+// alone is sufficient — see paintsPlaceholders.
+//
 // Both forms are Rows tall, so the probe's asynchronous answer never changes
 // the caller's layout.
 package splash
@@ -17,6 +21,7 @@ import (
 	"fmt"
 	"image"
 	_ "image/png"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,14 +66,38 @@ const wordmark = "" +
 // Wordmark returns the unstyled wordmark.
 func Wordmark() string { return wordmark }
 
-// Query transmits a 1x1 pixel and requests a response. Supporting terminals
-// answer with an ultraviolet.KittyGraphicsEvent; others stay silent, so there
-// is nothing to time out.
+// Query transmits a 1x1 pixel and requests a response, or returns nil on a
+// terminal that must not be asked. Supporting terminals answer with an
+// ultraviolet.KittyGraphicsEvent; others stay silent, so there is nothing to
+// time out.
 func Query() tea.Cmd {
+	if !paintsPlaceholders() {
+		return nil
+	}
 	return tea.Raw(ansi.KittyGraphics(
 		[]byte("AAAA"),
 		"i="+strconv.Itoa(probeID), "s=1", "v=1", "a=q", "t=d", "f=24",
 	))
+}
+
+// paintsPlaceholders reports whether the terminal is known to paint Unicode
+// placeholders, the narrowest capability in the graphics protocol and the one
+// with no query of its own. Answering the graphics query does not imply it:
+// iTerm2 answers, accepts a virtual placement, ignores the U key, and renders
+// the placeholder rune as an unknown glyph. So the reply proves only that the
+// protocol is reachable — tmux and ssh can swallow it — and this allowlist
+// carries the rest.
+func paintsPlaceholders() bool {
+	term := os.Getenv("TERM")
+	switch {
+	case strings.Contains(term, "kitty"), os.Getenv("KITTY_WINDOW_ID") != "":
+		return true
+	case term == "xterm-ghostty", strings.EqualFold(os.Getenv("TERM_PROGRAM"), "ghostty"):
+		return true
+	}
+	// Ghostty's resource path is inherited by anything it launches, including
+	// other terminals, so it only counts while no other terminal claims TERM_PROGRAM.
+	return os.Getenv("GHOSTTY_RESOURCES_DIR") != "" && os.Getenv("TERM_PROGRAM") == ""
 }
 
 // Transmit stores and scales the logo under imageID. A virtual placement
