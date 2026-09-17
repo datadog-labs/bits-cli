@@ -178,7 +178,7 @@ func TestSingletonInspectionRendersAsTool(t *testing.T) {
 		want   string
 		hidden string
 	}{
-		{name: "running", status: agent.ToolRunning, want: "list .", hidden: "inspecting"},
+		{name: "running", status: agent.ToolRunning, want: "listing .", hidden: "inspecting"},
 		{name: "settled", status: agent.ToolSuccess, want: "✓ list .", hidden: "inspected"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

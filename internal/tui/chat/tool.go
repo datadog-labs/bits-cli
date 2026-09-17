@@ -43,20 +43,42 @@ type toolPresentation struct {
 // account for spacing during lazy height and scroll calculations.
 type toolRenderFunc func(*agent.ToolBlock, toolPresentation, int, Styles, int) string
 
+// toolAction contains the human-facing verb forms for a local tool. Empty
+// lifecycle forms fall back to base, which keeps tools with quiet terminal
+// states compact while allowing active work to use a natural progressive verb.
+type toolAction struct {
+	base    string
+	active  string
+	success string
+	failure string
+}
+
 type toolRenderSpec struct {
-	render  toolRenderFunc
-	spacing itemSpacing
+	render     toolRenderFunc
+	spacing    itemSpacing
+	action     toolAction
+	inspection bool
 }
 
 var (
 	simpleToolRenderSpec = &toolRenderSpec{render: renderSimpleTool}
-	changeToolRenderSpec = &toolRenderSpec{
+	readToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, inspection: true}
+	listToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, inspection: true}
+	grepToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "search", active: "searching"}, inspection: true}
+	writeToolRenderSpec  = &toolRenderSpec{
 		render:  renderChangeTool,
 		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "write", active: "writing", success: "wrote", failure: "write failed"},
+	}
+	editToolRenderSpec = &toolRenderSpec{
+		render:  renderChangeTool,
+		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "edit", active: "editing", success: "edited", failure: "edit failed"},
 	}
 	execToolRenderSpec = &toolRenderSpec{
 		render:  renderExecTool,
 		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "run", success: "ran", failure: "run failed"},
 	}
 )
 
@@ -84,6 +106,24 @@ const (
 	lifecycleDenied
 	lifecycleCancelled
 )
+
+func (a toolAction) label(state toolLifecycle) string {
+	switch state {
+	case lifecycleRunning, lifecycleAwaiting:
+		if a.active != "" {
+			return a.active
+		}
+	case lifecycleSuccess:
+		if a.success != "" {
+			return a.success
+		}
+	case lifecycleError:
+		if a.failure != "" {
+			return a.failure
+		}
+	}
+	return a.base
+}
 
 func lifecycleOf(tool *agent.ToolBlock) toolLifecycle {
 	if tool == nil {
@@ -168,8 +208,16 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 
 func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 	switch id {
-	case spec.ClientWriteFile, spec.ClientEditFile:
-		return changeToolRenderSpec
+	case spec.ClientReadFile:
+		return readToolRenderSpec
+	case spec.ClientListFiles:
+		return listToolRenderSpec
+	case spec.ClientGrepFiles:
+		return grepToolRenderSpec
+	case spec.ClientWriteFile:
+		return writeToolRenderSpec
+	case spec.ClientEditFile:
+		return editToolRenderSpec
 	case spec.ClientExecCommand:
 		return execToolRenderSpec
 	default:
@@ -223,58 +271,31 @@ func compactInput(input string) string {
 
 func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 	state := lifecycleOf(tool)
+	action := p.actionLabel(state)
 	if !p.validInput {
+		// Keep local inspection tools recognizable while their input is still
+		// streaming or malformed. Exact client identity is enough to choose the
+		// action; arguments remain omitted until decoding succeeds. Server tools
+		// stay generic so similarly named remote tools are not specialized.
+		if action != "" {
+			return actionArgument(action, "")
+		}
 		return []summarySpan{{text: p.name, kind: spanAction}}
 	}
 	switch p.identity {
-	case spec.ClientReadFile:
-		return actionArgument("read", p.argument)
 	case spec.ClientListFiles:
-		spans := actionArgument("list", p.argument)
+		spans := actionArgument(action, p.argument)
 		if p.context != "" {
 			spans = append(spans, summarySpan{text: " · ", kind: spanMuted}, summarySpan{text: p.context, kind: spanMuted})
 		}
 		return spans
 	case spec.ClientGrepFiles:
-		spans := actionArgument("search", p.argument)
+		spans := actionArgument(action, p.argument)
 		if p.context != "" && p.context != "." {
 			spans = append(spans, summarySpan{text: " in ", kind: spanMuted}, summarySpan{text: p.context, kind: spanArgument})
 		}
 		return spans
-	case spec.ClientWriteFile:
-		action := "write"
-		switch state {
-		case lifecycleRunning, lifecycleAwaiting:
-			action = "writing"
-		case lifecycleSuccess:
-			action = "wrote"
-		case lifecycleError:
-			action = "write failed"
-		case lifecycleUnknown, lifecycleDenied, lifecycleCancelled:
-		}
-		return actionArgument(action, p.argument)
-	case spec.ClientEditFile:
-		action := "edit"
-		switch state {
-		case lifecycleRunning, lifecycleAwaiting:
-			action = "editing"
-		case lifecycleSuccess:
-			action = "edited"
-		case lifecycleError:
-			action = "edit failed"
-		case lifecycleUnknown, lifecycleDenied, lifecycleCancelled:
-		}
-		return actionArgument(action, p.argument)
 	case spec.ClientExecCommand:
-		action := "run"
-		switch state {
-		case lifecycleRunning, lifecycleAwaiting:
-		case lifecycleSuccess:
-			action = "ran"
-		case lifecycleError:
-			action = "run failed"
-		case lifecycleUnknown, lifecycleDenied, lifecycleCancelled:
-		}
 		spans := actionArgument(action, p.argument)
 		if p.context != "" {
 			spans = append(spans, summarySpan{text: " in ", kind: spanMuted}, summarySpan{text: p.context, kind: spanArgument})
@@ -284,8 +305,18 @@ func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 		}
 		return spans
 	default:
+		if action != "" {
+			return actionArgument(action, p.argument)
+		}
 		return []summarySpan{{text: p.name, kind: spanAction}, {text: "(" + p.argument + ")", kind: spanArgument}}
 	}
+}
+
+func (p toolPresentation) actionLabel(state toolLifecycle) string {
+	if p.renderSpec == nil {
+		return ""
+	}
+	return p.renderSpec.action.label(state)
 }
 
 func actionArgument(action, argument string) []summarySpan {
@@ -338,12 +369,7 @@ func renderSimpleTool(tool *agent.ToolBlock, p toolPresentation, width int, sty 
 }
 
 func (p toolPresentation) inspection() bool {
-	switch p.identity {
-	case spec.ClientReadFile, spec.ClientListFiles, spec.ClientGrepFiles:
-		return true
-	default:
-		return false
-	}
+	return p.renderSpec != nil && p.renderSpec.inspection
 }
 
 func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {

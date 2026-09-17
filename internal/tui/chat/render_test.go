@@ -123,6 +123,66 @@ func TestInvalidInspectionInputStillHidesSuccessfulOutput(t *testing.T) {
 	}
 }
 
+func TestLocalInspectionActionsUseLifecycleVerbsForValidAndPartialInput(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		tool    string
+		input   string
+		partial bool
+		status  agent.ToolStatus
+		want    string
+		output  bool
+	}{
+		{name: "reading valid path", tool: spec.ReadFile, input: `{"path":"README.md"}`, status: agent.ToolRunning, want: "reading README.md"},
+		{name: "listing valid path", tool: spec.ListFiles, input: `{"path":""}`, status: agent.ToolRunning, want: "listing ."},
+		{name: "searching valid pattern", tool: spec.GrepFiles, input: `{"pattern":"TODO","path":"internal"}`, status: agent.ToolRunning, want: "searching TODO in internal"},
+		{name: "searching awaiting approval", tool: spec.GrepFiles, input: `{"pattern":"TODO","path":"internal"}`, status: agent.ToolAwaitingApproval, want: "searching TODO in internal · awaiting approval"},
+		{name: "reading partial input", tool: spec.ReadFile, input: `{"path":"READ`, partial: true, status: agent.ToolRunning, want: "reading"},
+		{name: "listing malformed settled input", tool: spec.ListFiles, input: `{"path":`, status: agent.ToolSuccess, want: "✓ list"},
+		{name: "searching malformed error input", tool: spec.GrepFiles, input: `{"pattern":`, status: agent.ToolError, want: "✗ search", output: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tool := &agent.ToolBlock{
+				Name:         test.tool,
+				Status:       test.status,
+				Output:       "inspection diagnostic",
+				IsClientSide: true,
+			}
+			if test.partial {
+				tool.InputPartial = test.input
+			} else {
+				tool.Input = test.input
+			}
+			block := agent.Block{Kind: assistant.KindToolResult, Tool: tool}
+
+			got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
+			if !strings.Contains(got, test.want) {
+				t.Fatalf("rendering = %q, want %q", got, test.want)
+			}
+			if test.output && !strings.Contains(got, "inspection diagnostic") {
+				t.Fatalf("inspection diagnostic was hidden: %q", got)
+			}
+			if !test.output && strings.Contains(got, "inspection diagnostic") {
+				t.Fatalf("inspection output was shown: %q", got)
+			}
+		})
+	}
+}
+
+func TestRemoteInspectionNamedToolStaysGenericWithPartialInput(t *testing.T) {
+	block := agent.Block{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{
+		Name:         spec.ReadFile,
+		Namespace:    new("remote"),
+		InputPartial: `{"path":"README`,
+		Status:       agent.ToolRunning,
+	}}
+
+	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
+	if !strings.Contains(got, "remote.read_file") || strings.Contains(got, "reading") {
+		t.Fatalf("remote partial inspection rendering = %q", got)
+	}
+}
+
 func TestExecCommandDecodesEnvelopeAndBoundsOutput(t *testing.T) {
 	exit := 1
 	result := fmt.Sprintf(`{"status":"nonzero_exit","exit_code":%d,"duration_ms":19,"truncated":true,"output_incomplete":true,"stdout":"out-1\nout-2\nout-3","stderr":"err-1\nerr-2\nerr-3"}`, exit)
