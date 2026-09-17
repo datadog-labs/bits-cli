@@ -151,15 +151,11 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // routes the message to the owning surface, then reconciles editor focus so the
 // cursor always tracks the active surface.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// The probe answer can land in any mode, and no surface has a use for it.
-	// It is the only confirmation the image can be painted, so the pixels are
-	// not transmitted before it. reconcileFocus is idempotent and runs on the
-	// next message, so skipping it here is safe.
+	// The probe answer can arrive in any mode and no surface uses it. Skipping
+	// reconcileFocus is safe: it is idempotent and runs on the next message.
 	if event, ok := msg.(uv.KittyGraphicsEvent); ok {
 		switch {
 		case splash.ImageRejected(event):
-			// The terminal took the probe but not the pixels; without this the
-			// slot would hold placeholder cells over nothing.
 			m.splashReady = false
 			m.layoutTranscript()
 		case !m.splashReady && splash.ProbeSucceeded(event):

@@ -19,8 +19,8 @@ const (
 	welcomeMinFactsWidth = 12
 )
 
-// showWelcome gates on both dimensions: content that does not fit wraps and
-// exceeds the height layoutTranscript reserved.
+// showWelcome gates on both dimensions: content that does not fit wraps past
+// the height layoutTranscript reserved.
 func (m *Model) showWelcome() bool {
 	if len(m.blocks) != 0 || m.height < minimumChatHeight+m.welcomeHeight() {
 		return false
@@ -79,8 +79,7 @@ func (m *Model) welcomeFacts(width int) string {
 
 	name := m.styles.Text.Primary.Bold(true).Render("bits")
 	if m.version != "" {
-		// Rendered as given: module versions already carry a "v", and an
-		// untagged build reads "dev-abc1234".
+		// As given: module versions already carry a "v".
 		name += m.styles.Text.Secondary.Render(" " + m.version)
 	}
 	lines := []string{ansi.Truncate(name, width, "…")}

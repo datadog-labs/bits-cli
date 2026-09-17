@@ -7,10 +7,6 @@
 // virtual placement: pixels transmit out of band through tea.Raw, and the view
 // holds only printable placeholder cells marking where to paint them.
 //
-// Support needs two signals: the terminal must be on an allowlist known to
-// paint Unicode placeholders, and it must answer the graphics query. Neither
-// alone is sufficient — see paintsPlaceholders.
-//
 // Both forms are Rows tall, so the probe's asynchronous answer never changes
 // the caller's layout.
 package splash
@@ -46,9 +42,8 @@ const imageCols = 12
 
 const (
 	// ImageID is re-encoded as the placeholder cells' foreground color, which
-	// is how the terminal resolves a placeholder to a stored image. Under
-	// 1<<24 so the color carries the whole id and the most-significant-byte
-	// diacritic can be omitted.
+	// is how the terminal resolves a placeholder to a stored image. Under 1<<24
+	// so the color carries it whole, without the extra diacritic.
 	ImageID = 0x0B1754
 
 	// ProbeID is distinct from ImageID so a probe reply cannot disturb the logo.
@@ -67,10 +62,9 @@ const wordmark = "" +
 // Wordmark returns the unstyled wordmark.
 func Wordmark() string { return wordmark }
 
-// Query transmits a 1x1 pixel and requests a response, or returns nil on a
-// terminal that must not be asked. Supporting terminals answer with an
-// ultraviolet.KittyGraphicsEvent; others stay silent, so there is nothing to
-// time out.
+// Query probes for placeholder support, or returns nil on a terminal that must
+// not be asked. Capable terminals answer; others stay silent, so there is
+// nothing to time out.
 func Query() tea.Cmd {
 	if !paintsPlaceholders() {
 		return nil
@@ -81,31 +75,27 @@ func Query() tea.Cmd {
 	))
 }
 
-// ProbeSucceeded reports whether a graphics reply is this package's probe
-// answering OK. A failed query answers with an error name in place of OK, and
-// a reply carrying another id belongs to someone else's image.
+// ProbeSucceeded reports whether a reply is this package's probe answering OK.
+// A failed query names an error instead, and another id is someone else's image.
 func ProbeSucceeded(event uv.KittyGraphicsEvent) bool {
 	return event.Options.ID == ProbeID && string(event.Payload) == "OK"
 }
 
-// ImageRejected reports whether a reply says the logo itself failed to store.
-// Placeholder cells over a missing image paint nothing, so the caller must fall
-// back to the wordmark.
+// ImageRejected reports whether the logo itself failed to store. Placeholder
+// cells over a missing image paint nothing.
 func ImageRejected(event uv.KittyGraphicsEvent) bool {
 	return event.Options.ID == ImageID && string(event.Payload) != "OK"
 }
 
 // paintsPlaceholders reports whether the terminal is known to paint Unicode
-// placeholders, the narrowest capability in the graphics protocol and the one
-// with no query of its own. Answering the graphics query does not imply it:
-// iTerm2 answers, accepts a virtual placement, ignores the U key, and renders
-// the placeholder rune as an unknown glyph. So the reply proves only that the
-// protocol is reachable — tmux and ssh can swallow it — and this allowlist
-// carries the rest.
+// placeholders, the one capability in the protocol with no query of its own.
+// Answering the graphics query does not imply it: iTerm2 answers, then ignores
+// the U key and draws the placeholder rune as an unknown glyph. The reply
+// proves only that the protocol is reachable.
 func paintsPlaceholders() bool {
 	term := os.Getenv("TERM")
 	// A multiplexer does not forward placements, yet the outer terminal may
-	// still answer the query — which would leave blank cells.
+	// still answer the query.
 	if os.Getenv("TMUX") != "" || os.Getenv("STY") != "" ||
 		strings.HasPrefix(term, "screen") || strings.HasPrefix(term, "tmux") {
 		return false
@@ -116,8 +106,8 @@ func paintsPlaceholders() bool {
 	case term == "xterm-ghostty", strings.EqualFold(os.Getenv("TERM_PROGRAM"), "ghostty"):
 		return true
 	}
-	// Ghostty's resource path is inherited by anything it launches, including
-	// other terminals, so it only counts while no other terminal claims TERM_PROGRAM.
+	// Ghostty exports this to anything it launches, so it only counts while no
+	// other terminal claims TERM_PROGRAM.
 	return os.Getenv("GHOSTTY_RESOURCES_DIR") != "" && os.Getenv("TERM_PROGRAM") == ""
 }
 
@@ -148,9 +138,9 @@ func Transmit() tea.Cmd {
 	return tea.Raw(buf.String())
 }
 
-// Placeholder returns the cells that tell the terminal where to paint the
-// transmitted image: the placeholder rune plus row and column diacritics, over
-// a foreground naming ImageID.
+// Placeholder returns the cells telling the terminal where to paint the image:
+// the placeholder rune with row and column diacritics, over a foreground
+// naming ImageID.
 func Placeholder() string { return placeholder() }
 
 var placeholder = sync.OnceValue(func() string {

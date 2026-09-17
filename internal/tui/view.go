@@ -102,8 +102,8 @@ func (m *Model) chatView() string {
 // in the same screen coordinate space as the normal chat view.
 func (m *Model) chatViewBase(transcript string) string {
 	sections := []string{}
-	// Only ever shown with an empty transcript, so it cannot offset the row
-	// mapping visibleSelectionFrame builds for a transcript selection.
+	// Only shown with an empty transcript, so it cannot offset the row mapping
+	// visibleSelectionFrame builds for a transcript selection.
 	if m.showWelcome() {
 		sections = append(sections, m.welcomeView())
 	}
