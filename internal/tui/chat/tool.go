@@ -325,6 +325,7 @@ func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, width int, sty 
 		p.argument, p.validInput = escape.Inline(path), true
 	}
 	header := renderToolHeader(tool, p.summary(tool), nil, width, sty, frame)
+	var content string
 	if diff != nil {
 		lines := []string{header}
 		if format := formatChange(*diff); format != "" {
@@ -334,28 +335,31 @@ func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, width int, sty 
 		if body != "" {
 			lines = append(lines, body)
 		}
-		return strings.Join(lines, "\n")
+		content = strings.Join(lines, "\n")
+	} else {
+		if fallbackDetail == "" {
+			fallbackDetail = tool.Detail
+		}
+		if fallbackDetail == "" {
+			fallbackDetail = tool.Output
+		}
+		state := lifecycleOf(tool)
+		if fallbackDetail == "" {
+			content = header
+		} else {
+			switch state {
+			case lifecycleRunning, lifecycleDenied, lifecycleCancelled:
+				content = header
+			case lifecycleUnknown, lifecycleAwaiting, lifecycleSuccess, lifecycleError:
+				style := sty.ToolDetail
+				if state == lifecycleError {
+					style = sty.ToolError
+				}
+				content = header + "\n" + renderPreview(fallbackDetail, width, genericOutputMaxLines, style, false, sty)
+			}
+		}
 	}
-	if fallbackDetail == "" {
-		fallbackDetail = tool.Detail
-	}
-	if fallbackDetail == "" {
-		fallbackDetail = tool.Output
-	}
-	state := lifecycleOf(tool)
-	if fallbackDetail == "" {
-		return header
-	}
-	switch state {
-	case lifecycleRunning, lifecycleDenied, lifecycleCancelled:
-		return header
-	case lifecycleUnknown, lifecycleAwaiting, lifecycleSuccess, lifecycleError:
-	}
-	style := sty.ToolDetail
-	if state == lifecycleError {
-		style = sty.ToolError
-	}
-	return header + "\n" + renderPreview(fallbackDetail, width, genericOutputMaxLines, style, false, sty)
+	return "\n" + content + "\n"
 }
 
 func editorDiff(state *filediff.State) (path string, diff *filediff.Diff, reason string) {
