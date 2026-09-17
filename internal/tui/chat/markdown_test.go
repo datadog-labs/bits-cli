@@ -94,3 +94,18 @@ func TestMarkdownRendererEscapesControlsBeforeRendering(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkdownRendererKeepsTableEmailAutolinksInTheirCells(t *testing.T) {
+	const source = "| User | Views |\n|---|---|\n| <ada@example.com> | 42 |"
+	plain := ansi.Strip(renderMarkdown(source, 80, markdownStyleConfig(true)))
+
+	if strings.Contains(plain, "[1]:") {
+		t.Fatalf("table link rendered as a footnote instead of inline: %q", plain)
+	}
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.Contains(line, "ada@example.com") && strings.Contains(line, "42") {
+			return
+		}
+	}
+	t.Fatalf("table link and its value did not share a row: %q", plain)
+}

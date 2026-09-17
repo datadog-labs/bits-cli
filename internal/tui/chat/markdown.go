@@ -49,6 +49,7 @@ func (r *markdownRenderer) Render(src string, width int, style ansi.StyleConfig)
 		r.term, _ = glamour.NewTermRenderer(
 			glamour.WithStyles(style),
 			glamour.WithWordWrap(width),
+			glamour.WithInlineTableLinks(true),
 		)
 		r.width = width
 		r.style = style
