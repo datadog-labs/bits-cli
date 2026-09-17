@@ -10,6 +10,13 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/escape"
 )
 
+// itemSpacing describes outer rows owned by a rendered transcript item. The
+// list collapses adjacent item spacing with its normal conversation gap.
+type itemSpacing struct {
+	before int
+	after  int
+}
+
 // RenderBlock renders a block without a trailing newline.
 func RenderBlock(it agent.Block, width int, sty Styles, frame int) string {
 	var r blockRenderer

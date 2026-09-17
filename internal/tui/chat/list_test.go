@@ -215,6 +215,59 @@ func TestReasoningStacksWithToolPresentation(t *testing.T) {
 	}
 }
 
+func TestToolMarginsCollapseAcrossAdjacentItems(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		blocks []agent.Block
+		first  string
+		second string
+	}{
+		{
+			name:   "write then exec",
+			blocks: []agent.Block{layoutToolBlock("write_file", `{"path":"one.txt"}`), layoutToolBlock("exec_command", `{"cmd":"pwd"}`)},
+			first:  "wrote one.txt",
+			second: "ran pwd",
+		},
+		{
+			name:   "exec then write",
+			blocks: []agent.Block{layoutToolBlock("exec_command", `{"cmd":"pwd"}`), layoutToolBlock("write_file", `{"path":"one.txt"}`)},
+			first:  "ran pwd",
+			second: "wrote one.txt",
+		},
+		{
+			name:   "write then edit",
+			blocks: []agent.Block{layoutToolBlock("write_file", `{"path":"one.txt"}`), layoutToolBlock("edit_file", `{"path":"one.txt"}`)},
+			first:  "wrote one.txt",
+			second: "edited one.txt",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			list := NewList()
+			list.SetStyles(DefaultStyles(true))
+			list.SetWidth(80)
+			list.SetHeight(8)
+			list.SetItems(test.blocks)
+
+			rows := strings.Split(ansi.Strip(list.Render()), "\n")
+			first, second := -1, -1
+			for i, row := range rows {
+				if strings.Contains(row, test.first) {
+					first = i
+				}
+				if strings.Contains(row, test.second) {
+					second = i
+				}
+			}
+			if first < 0 || second < 0 {
+				t.Fatalf("tool rows missing from render:\n%s", strings.Join(rows, "\n"))
+			}
+			if got, want := second-first-1, 1; got != want {
+				t.Fatalf("blank rows between tools = %d, want %d:\n%s", got, want, strings.Join(rows, "\n"))
+			}
+		})
+	}
+}
+
 func TestInspectionGroupKeepsMixedFailuresQuiet(t *testing.T) {
 	list := NewList()
 	list.SetStyles(DefaultStyles(true))
@@ -408,5 +461,13 @@ func inspectBlock(id, name, input string, status agent.ToolStatus, output string
 		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: id},
 		Kind: assistant.KindToolResult,
 		Tool: &agent.ToolBlock{Name: name, Input: input, Output: output, Status: status, IsClientSide: true},
+	}
+}
+
+func layoutToolBlock(name, input string) agent.Block {
+	return agent.Block{
+		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: name + input},
+		Kind: assistant.KindToolResult,
+		Tool: &agent.ToolBlock{Name: name, Input: input, Status: agent.ToolSuccess, IsClientSide: true},
 	}
 }

@@ -35,7 +35,30 @@ type toolPresentation struct {
 	timeout    string
 	group      string
 	validInput bool
+	renderSpec *toolRenderSpec
 }
+
+// toolRenderSpec keeps a tool renderer and its static transcript layout plan
+// together. The presentation layer selects it before rendering so List can
+// account for spacing during lazy height and scroll calculations.
+type toolRenderFunc func(*agent.ToolBlock, toolPresentation, int, Styles, int) string
+
+type toolRenderSpec struct {
+	render  toolRenderFunc
+	spacing itemSpacing
+}
+
+var (
+	simpleToolRenderSpec = &toolRenderSpec{render: renderSimpleTool}
+	changeToolRenderSpec = &toolRenderSpec{
+		render:  renderChangeTool,
+		spacing: itemSpacing{before: 1, after: 1},
+	}
+	execToolRenderSpec = &toolRenderSpec{
+		render:  renderExecTool,
+		spacing: itemSpacing{before: 1, after: 1},
+	}
+)
 
 type summarySpan struct {
 	text string
@@ -98,7 +121,7 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 	qualified := qualifiedToolName(tool)
 	input := toolInput(tool)
 	id := spec.Identity{ClientSide: tool.IsClientSide, Namespace: toolNamespace(tool), Name: tool.Name}
-	p := toolPresentation{identity: id, name: qualified}
+	p := toolPresentation{identity: id, name: qualified, renderSpec: toolRenderSpecFor(id)}
 
 	switch id {
 	case spec.ClientReadFile, spec.ClientWriteFile, spec.ClientEditFile:
@@ -141,6 +164,17 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 		p.argument, p.validInput = compactInput(input), true
 	}
 	return p
+}
+
+func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
+	switch id {
+	case spec.ClientWriteFile, spec.ClientEditFile:
+		return changeToolRenderSpec
+	case spec.ClientExecCommand:
+		return execToolRenderSpec
+	default:
+		return simpleToolRenderSpec
+	}
 }
 
 func decodeObject(input string, out any) bool {
@@ -272,14 +306,10 @@ func renderTool(it agent.Block, width int, sty Styles, frame int) string {
 }
 
 func renderPresentedTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
-	switch p.identity {
-	case spec.ClientWriteFile, spec.ClientEditFile:
-		return renderChangeTool(tool, p, width, sty, frame)
-	case spec.ClientExecCommand:
-		return renderExecTool(tool, p, width, sty, frame)
-	default:
+	if p.renderSpec == nil {
 		return renderSimpleTool(tool, p, width, sty, frame)
 	}
+	return p.renderSpec.render(tool, p, width, sty, frame)
 }
 
 func renderSimpleTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
@@ -366,7 +396,7 @@ func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, width int, sty 
 			}
 		}
 	}
-	return "\n" + content + "\n"
+	return content
 }
 
 func editorDiff(state *filediff.State) (path string, diff *filediff.Diff, reason string) {

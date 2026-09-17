@@ -44,6 +44,15 @@ func TestRenderEditorToolUsesLocalStructuredState(t *testing.T) {
 	}
 }
 
+func TestRenderEditorToolKeepsOuterSpacingOutOfContent(t *testing.T) {
+	block := editorToolBlock("write_file", "", nil)
+
+	got := RenderBlock(block, 80, DefaultStyles(true), 0)
+	if strings.HasPrefix(got, "\n") || strings.HasSuffix(got, "\n") {
+		t.Fatalf("editor renderer embedded outer spacing: %q", got)
+	}
+}
+
 func TestRenderEditorToolRestoresRawDisplay(t *testing.T) {
 	_, display := filediff.BuildWithDisplay("a/f.txt", "b/f.txt", "before\n", "after\n")
 	block := editorToolBlock("edit_file", display, nil)
