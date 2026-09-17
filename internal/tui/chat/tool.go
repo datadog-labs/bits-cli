@@ -21,7 +21,7 @@ const (
 	genericOutputMaxLines = 3
 	execCommandMaxLines   = 10
 	execOutputMaxLines    = 5
-	collapsedDiffLines    = 8
+	collapsedDiffLines    = 15
 	inspectionGroupKey    = "inspect"
 )
 
