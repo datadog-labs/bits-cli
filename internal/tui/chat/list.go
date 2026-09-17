@@ -231,6 +231,9 @@ func (l *List) renderItem(idx int) []string {
 }
 
 func (l *List) renderPresentationItem(it presentationItem) string {
+	if it.group == reasoningGroupKey {
+		return renderReasoningGroup(l.items[it.start:it.end], l.width, l.sty, l.frame)
+	}
 	if it.group == inspectionGroupKey && len(it.presentations) > 1 {
 		return renderInspectionGroup(l.items[it.start:it.end], it.presentations, l.width, l.sty, l.frame)
 	}
@@ -483,6 +486,16 @@ func (l *List) ScrollByChanged(lines int) bool {
 func buildPresentation(blocks []agent.Block) []presentationItem {
 	items := make([]presentationItem, 0, len(blocks))
 	for i := 0; i < len(blocks); {
+		if blocks[i].Kind == assistant.KindReasoning {
+			j := i + 1
+			for j < len(blocks) && blocks[j].Kind == assistant.KindReasoning {
+				j++
+			}
+			items = append(items, newPresentationItem(blocks, reasoningGroupKey, i, j, nil))
+			i = j
+			continue
+		}
+
 		p, isTool := presentationOfBlock(blocks[i])
 		if !isTool || p.group == "" {
 			var presentation []toolPresentation

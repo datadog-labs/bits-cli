@@ -88,12 +88,18 @@ func renderReasoning(it agent.Block, width int, sty Styles, frame int) string {
 	if it.Thinking == nil {
 		return fallback(it, width, sty)
 	}
+	return renderReasoningGroup([]agent.Block{it}, width, sty, frame)
+}
 
+func renderReasoningGroup(blocks []agent.Block, width int, sty Styles, frame int) string {
 	state := lifecycleSuccess
 	label := "thought"
-	if !it.Complete {
-		state = lifecycleRunning
-		label = "thinking" + activityEllipsis(frame, sty.StatusSpinner.Len() > 0)
+	for _, block := range blocks {
+		if !block.Complete {
+			state = lifecycleRunning
+			label = "thinking" + activityEllipsis(frame, sty.StatusSpinner.Len() > 0)
+			break
+		}
 	}
 	return renderActivityHeader(state, label, "", width, sty, frame)
 }

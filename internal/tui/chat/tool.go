@@ -23,6 +23,7 @@ const (
 	execOutputMaxLines    = 5
 	collapsedDiffLines    = 15
 	inspectionGroupKey    = "inspect"
+	reasoningGroupKey     = "reasoning"
 )
 
 // toolPresentation is derived solely for rendering. The source ToolBlock stays

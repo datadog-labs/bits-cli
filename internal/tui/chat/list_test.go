@@ -215,6 +215,45 @@ func TestReasoningStacksWithToolPresentation(t *testing.T) {
 	}
 }
 
+func TestAdjacentReasoningBlocksRenderAsOneActivity(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(8)
+	list.SetItems([]agent.Block{
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking-1", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "first"}},
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking-2", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "second"}},
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "answer", Kind: assistant.KindText}, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "answer"}},
+	})
+
+	if got := len(list.view); got != 2 {
+		t.Fatalf("presentation item count = %d, want 2", got)
+	}
+	plain := ansi.Strip(list.Render())
+	if got := strings.Count(plain, "✓ thought"); got != 1 {
+		t.Fatalf("settled reasoning rows = %d, want 1:\n%s", got, plain)
+	}
+}
+
+func TestReasoningGroupStaysActiveWhileMemberStreams(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(8)
+	list.SetItems([]agent.Block{
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking-1", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "first"}},
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking-2", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: false, Thinking: &assistant.ThinkingPayload{Content: "second"}},
+	})
+
+	plain := ansi.Strip(list.Render())
+	if !strings.Contains(plain, "thinking.") || strings.Contains(plain, "✓ thought") {
+		t.Fatalf("active reasoning group = %q", plain)
+	}
+	if !list.HasAnimated() {
+		t.Fatal("active reasoning group did not remain animated")
+	}
+}
+
 func TestToolMarginsCollapseAcrossAdjacentItems(t *testing.T) {
 	for _, test := range []struct {
 		name   string
