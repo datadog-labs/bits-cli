@@ -40,6 +40,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	// A reset is a new event identity domain even though active work was drained.
 	// This makes any delayed Bubble Tea message from the prior domain harmless.
 	m.turnGen++
+	m.clearSelection()
 	m.blocks = nil
 	m.list.Reset()
 	m.convID = ""

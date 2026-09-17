@@ -303,6 +303,74 @@ func TestInspectionDotAnimationKeepsHeaderWidth(t *testing.T) {
 	}
 }
 
+func TestVisibleSurfaceTracksPartiallyScrolledMarkdown(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(24)
+	list.SetHeight(1)
+	list.SetItems([]agent.Block{
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "first", Kind: assistant.KindText}, Role: assistant.RoleAssistant, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "first\n\nsecond"}},
+	})
+
+	list.ScrollToTop()
+	if !list.ScrollByChanged(1) {
+		t.Fatal("scrolling to the second Markdown row did not report a change")
+	}
+	if got := list.VisibleSurface().Top; got != 1 {
+		t.Fatalf("visible top = %d, want 1", got)
+	}
+}
+
+func TestResizeNormalizesScrolledOffsetAfterWrappingChanges(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(20)
+	list.SetHeight(4)
+	list.SetItems([]agent.Block{
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "first", Kind: assistant.KindText}, Role: assistant.RoleAssistant, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: strings.Repeat("first ", 20)}},
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "second", Kind: assistant.KindText}, Role: assistant.RoleAssistant, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: strings.Repeat("second ", 20)}},
+	})
+
+	list.ScrollToTop()
+	list.Render()
+	oldHeight := list.itemHeight(0)
+	list.offsetLine = oldHeight - 1
+
+	list.SetWidth(80)
+
+	if list.offsetIdx >= len(list.view) {
+		t.Fatalf("offset index = %d, want an item in the document", list.offsetIdx)
+	}
+	if got, limit := list.offsetLine, list.itemHeight(list.offsetIdx)+list.gapAfter(list.offsetIdx); got >= limit {
+		t.Fatalf("offset line = %d, want < %d after resize", got, limit)
+	}
+	surface := list.VisibleSurface()
+	documentRows := strings.Split(ansi.Strip(list.Document()), "\n")
+	visibleRows := strings.Split(ansi.Strip(surface.Content), "\n")
+	if surface.Top >= len(documentRows) || visibleRows[0] != documentRows[surface.Top] {
+		t.Fatalf("visible top/content desynchronized: top=%d visible=%q document=%q", surface.Top, visibleRows[0], documentRows[surface.Top])
+	}
+}
+
+func TestDocumentUsesFullRowsAndNoViewportFill(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(24)
+	list.SetHeight(10)
+	list.SetItems([]agent.Block{
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "first", Kind: assistant.KindText}, Role: assistant.RoleAssistant, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "first"}},
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "second", Kind: assistant.KindText}, Role: assistant.RoleAssistant, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "second"}},
+	})
+
+	document := list.Document()
+	if got := len(strings.Split(document, "\n")); got != 4 {
+		t.Fatalf("document rows = %d, want two items, gap, and trailing gap", got)
+	}
+	if strings.Count(document, "\n") >= list.Height() {
+		t.Fatalf("document unexpectedly includes viewport fill rows: %q", document)
+	}
+}
+
 func inspectBlock(id, name, input string, status agent.ToolStatus, output string) agent.Block {
 	return agent.Block{
 		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: id},

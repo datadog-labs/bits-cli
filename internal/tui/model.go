@@ -163,6 +163,10 @@ type Model struct {
 	// be laid out immediately; Bubble Tea does not replay its initial size event.
 	width  int
 	height int
+
+	// Selection belongs to ModeChat; selection.go encapsulates its gesture and
+	// auto-scroll state while the model supplies rendered pane frames.
+	selection selection
 }
 
 // New builds the root model for the given engine. When the engine is bound to a
@@ -268,6 +272,9 @@ func (m *Model) applyStyles(theme styles.Theme) {
 // login hands control to chat without replacing or quitting the root model.
 func (m *Model) setMode(mode Mode) {
 	previous := m.mode
+	if previous == ModeChat && mode != ModeChat {
+		m.clearSelection()
+	}
 	m.mode = mode
 	if previous == ModeTermInit && mode == ModeChat {
 		m.syncTranscript()

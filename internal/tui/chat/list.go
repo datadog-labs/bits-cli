@@ -41,6 +41,12 @@ type List struct {
 	renderer blockRenderer
 }
 
+// Surface is the visible transcript and its row offset in the full document.
+type Surface struct {
+	Content string
+	Top     int
+}
+
 // presentationItem points into List.items. It never copies or rewrites source
 // blocks; it only records the deterministic presentation grouping.
 type presentationItem struct {
@@ -77,6 +83,7 @@ func (l *List) SetWidth(w int) {
 		l.invalidateAll()
 	}
 	l.width = w
+	l.normalizeOffset()
 }
 
 // SetHeight sets the visible height. It does not affect wrapping, so the cache
@@ -133,6 +140,28 @@ func (l *List) clampOffset() {
 	if l.offsetIdx > lastIdx || (l.offsetIdx == lastIdx && l.offsetLine > lastLine) {
 		l.offsetIdx, l.offsetLine = lastIdx, lastLine
 	}
+}
+
+// normalizeOffset carries an offset past items whose rendered height changed.
+// This can happen after a resize changes wrapping while the list is scrolled.
+// Keep offsets inside an item or its following gap so rendering and document
+// coordinates continue to describe the same row.
+func (l *List) normalizeOffset() {
+	if len(l.view) == 0 {
+		l.offsetIdx, l.offsetLine = 0, 0
+		return
+	}
+	l.offsetLine = max(l.offsetLine, 0)
+	for l.offsetIdx < len(l.view) {
+		h := l.itemHeight(l.offsetIdx)
+		span := h + l.gapAfter(l.offsetIdx)
+		if l.offsetLine < span {
+			return
+		}
+		l.offsetLine -= span
+		l.offsetIdx++
+	}
+	l.clampOffset()
 }
 
 func (l *List) invalidateAll() {
@@ -354,15 +383,27 @@ func (l *List) PageDown() { l.ScrollBy(l.height) }
 // padded with blank lines so content stays top-aligned and the footer stays
 // pinned to the bottom.
 func (l *List) Render() string {
+	return l.renderSurface(false).Content
+}
+
+// VisibleSurface returns exactly Height() visible transcript lines, padded
+// with blank lines so content stays top-aligned and the footer stays pinned to
+// the bottom. Top is the full rendered transcript row represented by the
+// viewport's first row.
+func (l *List) VisibleSurface() Surface {
+	return l.renderSurface(true)
+}
+
+func (l *List) renderSurface(withPosition bool) Surface {
 	// Self-heal the tail pin: streaming growth or a resize can leave the offset
 	// above the true bottom, so re-anchor here, the single render boundary.
+	l.normalizeOffset()
 	if l.follow && !l.AtBottom() {
 		l.ScrollToBottom()
 	}
 
 	budget := max(l.height, 0)
 	lines := make([]string, 0, budget)
-
 	idx := l.offsetIdx
 	off := l.offsetLine
 	for idx < len(l.view) && len(lines) < budget {
@@ -398,7 +439,45 @@ func (l *List) Render() string {
 	for len(lines) < budget {
 		lines = append(lines, "")
 	}
+	top := 0
+	if withPosition {
+		top = l.offsetRow()
+	}
+	return Surface{Content: strings.Join(lines, "\n"), Top: top}
+}
+
+// Document renders the complete transcript without viewport fill rows or
+// changing the current scroll position.
+func (l *List) Document() string {
+	lines := make([]string, 0)
+	for idx := range l.view {
+		itemLines := l.renderItem(idx)
+		lines = append(lines, itemLines...)
+		for range max(l.gapAfter(idx), 0) {
+			lines = append(lines, "")
+		}
+	}
 	return strings.Join(lines, "\n")
+}
+
+// offsetRow converts the list's item/intra-item scroll state into the row
+// coordinate used by Document. It intentionally follows the same
+// item-plus-gap accounting as Render and AtBottom.
+func (l *List) offsetRow() int {
+	row := 0
+	for idx := 0; idx < l.offsetIdx && idx < len(l.view); idx++ {
+		row += l.itemHeight(idx) + l.gapAfter(idx)
+	}
+	return row + max(l.offsetLine, 0)
+}
+
+// ScrollByChanged scrolls by lines and reports whether the viewport position
+// (or its follow state) changed. The existing ScrollBy remains the mutating
+// primitive for callers that do not need the result.
+func (l *List) ScrollByChanged(lines int) bool {
+	idx, line, follow := l.offsetIdx, l.offsetLine, l.follow
+	l.ScrollBy(lines)
+	return idx != l.offsetIdx || line != l.offsetLine || follow != l.follow
 }
 
 func buildPresentation(blocks []agent.Block) []presentationItem {

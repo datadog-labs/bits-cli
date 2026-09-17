@@ -69,13 +69,11 @@ func (m *Model) View() tea.View {
 // editor stays visible but inert.
 func (m *Model) chatView() string {
 	m.editor.SetPlaceholder(m.promptPlaceholder())
-	sections := []string{m.list.Render()}
-	if approval := m.approvalView(); approval != "" {
-		sections = append(sections, approval)
+	if m.selection.selecting() || m.selection.selected() {
+		return m.selection.render(m.visibleSelectionFrame(m.selection.scope))
 	}
-	sections = append(sections, m.noticeBar(), m.editor.View(), m.chatFooter())
-	base := strings.Join(sections, "\n")
 
+	base := m.chatViewBase(m.list.Render())
 	if len(m.pendingApprovals) > 0 {
 		return base
 	}
@@ -97,6 +95,63 @@ func (m *Model) chatView() string {
 		lipgloss.NewLayer(base),
 		lipgloss.NewLayer(menu).X(x).Y(y).Z(1),
 	).Render()
+}
+
+// chatViewBase composes the chat surface without transient completion-menu
+// overlays. Selection uses this exact composition so every rendered row stays
+// in the same screen coordinate space as the normal chat view.
+func (m *Model) chatViewBase(transcript string) string {
+	sections := []string{transcript}
+	if approval := m.approvalView(); approval != "" {
+		sections = append(sections, approval)
+	}
+	sections = append(sections, m.noticeBar(), m.editor.View(), m.chatFooter())
+	return strings.Join(sections, "\n")
+}
+
+// visibleSelectionFrame returns the current terminal-sized chat surface in the
+// coordinate space of the pane that owns the selection. Transcript rows use
+// virtual document coordinates; the fixed lower pane uses screen coordinates.
+func (m *Model) visibleSelectionFrame(scope selectionScope) selectionFrame {
+	surface := m.list.VisibleSurface()
+	transcriptHeight := max(0, m.list.Height())
+	rows := make([]int, max(0, m.height))
+	for y := range rows {
+		switch {
+		case scope == selectionScopeLower:
+			rows[y] = y
+		case y < transcriptHeight:
+			rows[y] = surface.Top + y
+		default:
+			// Lower-pane rows do not belong to a transcript selection.
+			rows[y] = -1
+		}
+	}
+	return newSelectionFrame(
+		m.chatViewBase(surface.Content),
+		m.width,
+		m.height,
+		rows,
+	)
+}
+
+// transcriptSelectionFrame creates the full transcript used to copy a
+// transcript-scoped selection when the drag is released.
+func (m *Model) transcriptSelectionFrame() selectionFrame {
+	content := m.list.Document()
+	return newSelectionFrame(
+		content,
+		m.width,
+		selectionRowCount(content),
+		nil,
+	)
+}
+
+func selectionRowCount(content string) int {
+	if content == "" {
+		return 0
+	}
+	return strings.Count(content, "\n") + 1
 }
 
 // chatViewTooSmall reports whether the chat cannot be usably rendered, so View

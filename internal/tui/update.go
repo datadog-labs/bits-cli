@@ -24,6 +24,10 @@ const mouseWheelDelta = 1
 // defaultNoticeTTL is how long a transient status notice stays before it clears.
 const defaultNoticeTTL = 10 * time.Second
 
+// selectionAutoScrollInterval controls how often an active drag advances the
+// transcript while its pointer rests against a viewport edge.
+const selectionAutoScrollInterval = 25 * time.Millisecond
+
 // turnEventMsg carries one engine event into Update; turnClosedMsg signals the
 // turn's channel was closed (turn finished or cancelled). A history restore runs
 // through the same pump, so its events flow here too.
@@ -32,8 +36,9 @@ type (
 		generation uint64
 		ev         agent.Event
 	}
-	turnClosedMsg  struct{ generation uint64 }
-	engineReadyMsg struct {
+	turnClosedMsg    struct{ generation uint64 }
+	selectionTickMsg struct{ token uint64 }
+	engineReadyMsg   struct {
 		generation uint64
 		engine     *agent.Engine
 		err        error
@@ -159,7 +164,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// can be resized back.
 	if m.chatViewTooSmall() {
 		switch msg.(type) {
-		case tea.KeyPressMsg, tea.MouseWheelMsg, tea.PasteMsg:
+		case tea.KeyPressMsg, tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.PasteMsg:
 			return m, nil
 		}
 	}
@@ -231,6 +236,33 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseWheelMsg:
 		return m, m.handleMouseWheel(msg)
+
+	case tea.MouseClickMsg:
+		if m.mode == ModeChat {
+			if msg.Button == tea.MouseLeft {
+				return m, m.beginSelection(msg)
+			}
+			return m, nil
+		}
+
+	case tea.MouseMotionMsg:
+		if m.mode == ModeChat {
+			if m.selection.selecting() {
+				return m, m.extendSelection(msg)
+			}
+			return m, nil
+		}
+
+	case tea.MouseReleaseMsg:
+		if m.mode == ModeChat {
+			if m.selection.selecting() {
+				return m, m.finishSelection(msg)
+			}
+			return m, nil
+		}
+
+	case selectionTickMsg:
+		return m, m.advanceSelectionScroll(msg)
 
 	case turnEventMsg:
 		if !m.acceptRemoteMessage(msg.generation) {
@@ -348,6 +380,75 @@ func (m *Model) openSettingsInBrowser() tea.Cmd {
 	return func() tea.Msg {
 		return settingsOpenResultMsg{url: target, err: openURL(context.Background(), target)}
 	}
+}
+
+func (m *Model) beginSelection(msg tea.MouseClickMsg) tea.Cmd {
+	// A completion menu is an editor overlay, not part of the chat document.
+	// Close it before taking the frame so the click selects the underlying rows.
+	if m.editor.MenuOpen() {
+		m.editor.CloseMenu()
+	}
+	transcriptHeight := m.list.Height()
+	scope := selectionScopeAt(msg.Y, transcriptHeight)
+	frame := m.visibleSelectionFrame(scope)
+	m.selection.beginGesture(frame, scope, msg.X, msg.Y, transcriptHeight, m.height)
+	return nil
+}
+
+func (m *Model) extendSelection(msg tea.MouseMotionMsg) tea.Cmd {
+	if !m.selection.selecting() {
+		return nil
+	}
+	transcriptHeight := m.list.Height()
+	frame := m.visibleSelectionFrame(m.selection.scope)
+	m.selection.extendGesture(frame, msg.X, msg.Y, transcriptHeight, m.height)
+	return m.armSelectionScroll()
+}
+
+func (m *Model) finishSelection(msg tea.MouseReleaseMsg) tea.Cmd {
+	if !m.selection.selecting() {
+		return nil
+	}
+	transcriptHeight := m.list.Height()
+	frame := m.visibleSelectionFrame(m.selection.scope)
+	document := frame
+	if m.selection.scope == selectionScopeTranscript {
+		document = m.transcriptSelectionFrame()
+	}
+	text := m.selection.finishGesture(frame, msg.X, msg.Y, transcriptHeight, m.height, document)
+	if text == "" {
+		return nil
+	}
+	return tea.SetClipboard(text)
+}
+
+func (m *Model) armSelectionScroll() tea.Cmd {
+	token, ok := m.selection.armScroll()
+	if !ok {
+		return nil
+	}
+	return tea.Tick(selectionAutoScrollInterval, func(time.Time) tea.Msg {
+		return selectionTickMsg{token: token}
+	})
+}
+
+func (m *Model) advanceSelectionScroll(msg selectionTickMsg) tea.Cmd {
+	edge, ok := m.selection.consumeScrollTick(msg.token)
+	if !ok {
+		return nil
+	}
+	if !m.list.ScrollByChanged(edge) {
+		m.selection.stopScroll()
+		return nil
+	}
+	frame := m.visibleSelectionFrame(m.selection.scope)
+	pointer := m.selection.pointer
+	m.selection.extendGesture(frame, pointer.X, pointer.Y, m.list.Height(), m.height)
+	return m.armSelectionScroll()
+}
+
+func (m *Model) clearSelection() {
+	m.selection.clear()
 }
 
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
@@ -483,6 +584,10 @@ func (m *Model) stopStartup() {
 // handleKey routes a keypress to the surface that owns input. Global quit is
 // handled earlier in Update.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "esc" && (m.selection.selecting() || m.selection.selected()) {
+		m.clearSelection()
+		return m, nil
+	}
 	switch m.focus() {
 	case focusPicker:
 		return m, m.updateConversationPicker(msg)
@@ -686,6 +791,7 @@ func (m *Model) setDarkBackground(isDark bool) {
 }
 
 func (m *Model) resize(w, h int) {
+	m.clearSelection()
 	m.width, m.height = w, h
 	m.editor.SetWidth(w)
 	m.list.SetWidth(w)
