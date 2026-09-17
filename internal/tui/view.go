@@ -19,8 +19,12 @@ const (
 	minimumChatHeight     = 8
 	minimumApprovalWidth  = 36
 	minimumApprovalHeight = 13
-	chatNoticeHeight      = 1
-	chatFooterHeight      = 1
+	// The compact approval needs six rows to show its heading, request title,
+	// detail, and every action. Below that, input stays disabled behind the
+	// resize hint so a hidden choice cannot be confirmed.
+	minimumApprovalPanelHeight = 6
+	chatNoticeHeight           = 1
+	chatFooterHeight           = 1
 
 	// approvalCompactWidth is the terminal width below which the approval block
 	// switches to condensed action labels so the choice row still fits.
@@ -170,7 +174,9 @@ func (m *Model) chatViewTooSmall() bool {
 	// A pending approval needs more room than the bare chat; when it doesn't fit,
 	// its prompt is hidden behind the resize hint too.
 	return len(m.pendingApprovals) > 0 &&
-		(m.width < minimumApprovalWidth || m.height < minimumApprovalHeight)
+		(m.width < minimumApprovalWidth ||
+			m.height < minimumApprovalHeight ||
+			m.approvalAvailableHeight() < minimumApprovalPanelHeight)
 }
 
 // approvalView renders the docked approval panel, or "" when nothing awaits
@@ -204,16 +210,21 @@ func (m *Model) approvalView() string {
 		},
 		CompactTitle: queue,
 		CompactBody: func(width int) string {
-			return strings.Join([]string{
-				m.styles.Approval.Text.Render(ansi.Wordwrap(title, width, "-")),
-				"",
-				m.approvalActions(width),
-			}, "\n")
+			lines := []string{m.styles.Approval.Text.Render(ansi.Truncate(title, width, "…"))}
+			if detail != "" {
+				lines = append(lines, m.styles.Approval.Detail.Render(ansi.Truncate(detail, width, "…")))
+			}
+			lines = append(lines, "", m.approvalActions(width))
+			return strings.Join(lines, "\n")
 		},
 		TinyMessage: "Resize terminal to approve",
 	}
-	availableHeight := max(1, m.height-chatNoticeHeight-chatFooterHeight-m.editor.Height())
-	return components.NewPanel(m.styles.Approval.Panel).Render(m.width, availableHeight, content)
+	panel := components.NewPanel(m.styles.Approval.Panel).Render(m.width, max(1, m.approvalAvailableHeight()), content)
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, panel)
+}
+
+func (m *Model) approvalAvailableHeight() int {
+	return m.height - chatNoticeHeight - chatFooterHeight - m.editor.Height()
 }
 
 func (m *Model) approvalBody(width int, title, detail string) string {
