@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/conversations"
 	"github.com/DataDog/bits-cli/internal/tui/escape"
@@ -135,4 +138,20 @@ func (r *resume) hint(theme styles.Theme, width int) string {
 	left := remaining / 2
 	return theme.Text.Tertiary.Render(
 		strings.Repeat("─", left) + label + strings.Repeat("─", remaining-left))
+}
+
+type recentConversationsMsg struct{ result agent.ConversationListResult }
+
+// fetchRecentConversations reads the offer off the engine's ungated path, so it
+// cannot fail the user's first turn with ErrOperationActive.
+func (m *Model) fetchRecentConversations() tea.Cmd {
+	if m.engine == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
+	results := m.engine.RecentConversations(ctx)
+	return func() tea.Msg {
+		defer cancel()
+		return recentConversationsMsg{result: <-results}
+	}
 }

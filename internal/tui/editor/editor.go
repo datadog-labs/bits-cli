@@ -285,6 +285,10 @@ func (e *Editor) SetSweepFrame(frame int) {
 // Value returns the current input text.
 func (e *Editor) Value() string { return e.ta.Value() }
 
+// SetValue replaces the prompt text. Tests use it to drive composer state
+// without synthesising keypresses.
+func (e *Editor) SetValue(s string) { e.ta.SetValue(s) }
+
 // Reset clears the input and closes the menu.
 func (e *Editor) Reset() {
 	e.ta.Reset()

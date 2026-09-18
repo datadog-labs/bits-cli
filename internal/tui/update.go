@@ -165,6 +165,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if event, ok := msg.(recentConversationsMsg); ok {
+		// A failed background read the user never asked for stays silent.
+		if event.result.Err == nil {
+			m.resume.setConversations(event.result.Conversations)
+			m.layoutTranscript()
+		}
+		return m, nil
+	}
 	if m.mode == ModeLogin {
 		return m.updateLogin(msg)
 	}
@@ -831,11 +839,8 @@ func (m *Model) layoutTranscript() {
 		return
 	}
 	m.editor.SetMenuHeight(max(0, m.height-chatFooterHeight-m.editor.Height()))
-	height := m.transcriptRows()
-	if m.showWelcome() {
-		height -= m.welcomeHeight()
-	}
-	m.list.SetHeight(max(1, height))
+	m.list.SetHeight(m.transcriptHeight())
+	m.list.SetHeader(m.headerView())
 }
 
 // syncTranscript rebuilds presentation metadata only after m.blocks changes.

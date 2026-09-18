@@ -23,29 +23,18 @@ const (
 // on the current form keeps the probe's answer from changing visibility.
 var welcomeLogoWidth = max(lipgloss.Width(splash.Wordmark()), splash.Columns)
 
-// showWelcome gates on both dimensions: content that does not fit wraps past
-// the height layoutTranscript reserved.
-func (m *Model) showWelcome() bool {
-	if len(m.blocks) != 0 || m.height < minimumChatHeight {
-		return false
-	}
-	// Measured against the rows left after the composer, which grows with a
-	// multi-line draft, not against the terminal: the block would otherwise keep
-	// its rows and push the view past the bottom of the screen.
-	if m.transcriptRows()-m.welcomeHeight() < 1 {
+// showSplashPanel gates on both dimensions. The panel is the transcript's
+// first rows for the whole session, but a viewport that cannot hold it would
+// otherwise leave no room for the conversation.
+func (m *Model) showSplashPanel() bool {
+	if m.transcriptHeight() < m.splashPanelHeight() {
 		return false
 	}
 	return m.welcomeContentWidth() >= welcomeLogoWidth
 }
 
-// transcriptRows is what is left once the fixed chrome and the composer have
-// taken their share.
-func (m *Model) transcriptRows() int {
-	return m.height - chatNoticeHeight - chatFooterHeight - m.composerHeight()
-}
-
-// welcomeHeight is the logo slot plus the panel's border and padding.
-func (m *Model) welcomeHeight() int {
+// splashPanelHeight is the logo slot plus the panel's border and padding.
+func (m *Model) splashPanelHeight() int {
 	return splash.Rows + m.styles.Panel.Frame.GetVerticalFrameSize()
 }
 
@@ -68,7 +57,7 @@ func (m *Model) welcomeLogo() string {
 	return m.styles.Logo.Render(splash.Wordmark())
 }
 
-func (m *Model) welcomeView() string {
+func (m *Model) splashPanelView() string {
 	logo := m.welcomeLogo()
 	columns := []string{logo}
 	if facts := m.welcomeFacts(m.welcomeContentWidth() - lipgloss.Width(logo) - welcomeGap); facts != "" {
@@ -144,4 +133,53 @@ func authenticationLabel(mode string) string {
 	default:
 		return mode
 	}
+}
+
+// transcriptHeight is the viewport chat.List is given, which the header must
+// fit inside: a taller header would be scrolled off by follow mode at launch.
+func (m *Model) transcriptHeight() int {
+	return max(1, m.height-chatNoticeHeight-chatFooterHeight-m.composerHeight())
+}
+
+// showResume gates the offer on an empty transcript, an empty composer, a
+// non-empty fetch, and room for at least one row.
+func (m *Model) showResume() bool {
+	if len(m.blocks) != 0 || m.resume.empty() || m.editor.Value() != "" {
+		return false
+	}
+	if !m.showSplashPanel() {
+		return false
+	}
+	return m.resumeVisibleRows() > 0
+}
+
+// resumeVisibleRows is how many conversations fit below the panel, at most
+// resumeRows, and 0 when not even one fits.
+func (m *Model) resumeVisibleRows() int {
+	available := m.transcriptHeight() - m.splashPanelHeight() - 1
+	for rows := min(resumeRows, len(m.resume.conversations)); rows > 0; rows-- {
+		if resumeBlockHeight(rows) <= available {
+			return rows
+		}
+	}
+	return 0
+}
+
+// headerView is the transcript's leading content: the splash panel, plus the
+// resume offer separated by one blank row when it applies.
+func (m *Model) headerView() string {
+	if !m.showSplashPanel() {
+		return ""
+	}
+	header := m.splashPanelView()
+	if m.showResume() {
+		block := m.resume.view(m.styles, m.welcomeContentWidth(), m.resumeVisibleRows())
+		indent := strings.Repeat(" ", max(0, m.styles.Panel.HorizontalMargin))
+		rows := strings.Split(block, "\n")
+		for i, row := range rows {
+			rows[i] = indent + row
+		}
+		header += "\n\n" + strings.Join(rows, "\n")
+	}
+	return header
 }
