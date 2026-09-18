@@ -136,10 +136,15 @@ func (m *Model) SetClosing() {
 	m.list.StopSpinner()
 }
 
-// SetConversations drops entries without the canonical conversation_id. The
-// API's JSON:API item id is redundant today, but is not the documented request
-// key and must not silently substitute for malformed data.
-func (m *Model) SetConversations(summaries []assistant.ConversationSummary) tea.Cmd {
+// Ordered normalises a conversation list for display: entries without the
+// canonical conversation_id are dropped, and the rest are sorted newest first
+// with the id as a stable tiebreak. The API's JSON:API item id is redundant
+// today, but is not the documented request key and must not silently
+// substitute for malformed data.
+//
+// Both this picker and the startup resume offer call it, so the two cannot
+// drift on what "recent" means.
+func Ordered(summaries []assistant.ConversationSummary) []assistant.ConversationSummary {
 	ordered := make([]assistant.ConversationSummary, 0, len(summaries))
 	for _, summary := range summaries {
 		if strings.TrimSpace(summary.ConversationID) != "" {
@@ -152,6 +157,12 @@ func (m *Model) SetConversations(summaries []assistant.ConversationSummary) tea.
 		}
 		return ordered[i].ConversationID < ordered[j].ConversationID
 	})
+	return ordered
+}
+
+// SetConversations replaces the picker's rows with the normalised list.
+func (m *Model) SetConversations(summaries []assistant.ConversationSummary) tea.Cmd {
+	ordered := Ordered(summaries)
 	items := make([]list.Item, len(ordered))
 	for i := range ordered {
 		items[i] = conversationItem{summary: ordered[i], now: m.now}

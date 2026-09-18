@@ -324,6 +324,12 @@ func (m *Model) initChat() tea.Cmd {
 	if m.engine.ConversationID() == "" {
 		// A restored conversation fills the transcript, which hides the offer, so
 		// only an empty start is worth the read.
+		//
+		// This is the offer's only fetch for the life of the process. Skipping it
+		// here therefore leaves the offer empty for good: a later /new clears the
+		// transcript but shows no offer. That is deliberate -- a lazy fetch would
+		// have to read on the gated path and could fail the user's next message
+		// with ErrOperationActive, which is the whole reason this branch exists.
 		return tea.Batch(append(commands, m.fetchRecentConversations())...)
 	}
 	m.chatPhase = chat.PhaseLoading

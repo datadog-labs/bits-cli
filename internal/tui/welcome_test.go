@@ -489,3 +489,35 @@ func TestInitChatFetchesTheOfferOnlyWithoutAConversationToRestore(t *testing.T) 
 		t.Error("initChat fetched the offer despite a conversation to restore, which would gate it behind ErrOperationActive")
 	}
 }
+
+// At the tightest height the offer still fits, the header must be visible at
+// launch: follow mode pins the view to the tail, so a header one row too tall
+// scrolls the panel off before the user has typed anything.
+func TestHeaderVisibleAtLaunchAtTheTightestFittingHeight(t *testing.T) {
+	m := welcomeModel(120, 40)
+	m.mode = ModeChat
+	m.resume = *resumeFixture(32)
+
+	tightest := 0
+	for height := 1; height <= 60; height++ {
+		m.height = height
+		if m.showResume() {
+			tightest = height
+			break
+		}
+	}
+	if tightest == 0 {
+		t.Fatal("the offer never fit across the swept heights")
+	}
+
+	m.height = tightest
+	m.syncTranscript()
+	if !m.list.Following() {
+		t.Fatal("the list is not in follow mode at launch")
+	}
+	first := strings.TrimRight(strings.SplitN(m.headerView(), "\n", 2)[0], " ")
+	if !strings.Contains(m.list.Render(), first) {
+		t.Fatalf("height=%d: the panel's first row is not on screen at launch:\n%s",
+			tightest, m.list.Render())
+	}
+}

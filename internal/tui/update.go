@@ -652,10 +652,11 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// The offer is only visible with an empty composer, so these keys have no
 	// competing meaning: submit() already no-ops on empty input.
 	if m.showResume() {
-		switch msg.String() {
+		key := msg.String()
+		switch key {
 		case "up", "down":
 			delta := 1
-			if msg.String() == "up" {
+			if key == "up" {
 				delta = -1
 			}
 			m.resume.move(delta, m.resumeVisibleRows())

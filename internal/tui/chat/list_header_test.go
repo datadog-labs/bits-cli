@@ -85,3 +85,38 @@ func TestHeaderShiftsDocumentCoordinatesConsistently(t *testing.T) {
 		t.Fatal("header absent from the rendered surface")
 	}
 }
+
+// firstVisibleLine is the transcript row the viewport starts on, with the
+// blank fill rows the surface pads with ignored.
+func firstVisibleLine(l *List) string {
+	for _, line := range strings.Split(l.Render(), "\n") {
+		if strings.TrimSpace(line) != "" {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
+}
+
+// Adding or removing the header renumbers every presentation item. A scrolled
+// viewport must keep describing the same content row across that shift, or it
+// jumps by a whole block when showSplashPanel flips on a resize.
+func TestHeaderAppearanceKeepsTheScrolledRow(t *testing.T) {
+	l := headerList(t, 40, 3)
+	l.SetItems([]agent.Block{
+		textBlock("a", "AAA"), textBlock("b", "BBB"), textBlock("c", "CCC"),
+		textBlock("d", "DDD"), textBlock("e", "EEE"), textBlock("f", "FFF"),
+	})
+	l.ScrollBy(4) // two items plus their gaps: the viewport starts on CCC
+	if got := firstVisibleLine(l); got != "CCC" {
+		t.Fatalf("setup: viewport starts on %q, want CCC", got)
+	}
+
+	l.SetHeader("H1\nH2")
+	if got := firstVisibleLine(l); got != "CCC" {
+		t.Fatalf("the appearing header moved the viewport to %q, want CCC", got)
+	}
+	l.SetHeader("")
+	if got := firstVisibleLine(l); got != "CCC" {
+		t.Fatalf("the removed header moved the viewport to %q, want CCC", got)
+	}
+}

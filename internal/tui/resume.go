@@ -12,7 +12,6 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/conversations"
-	"github.com/DataDog/bits-cli/internal/tui/escape"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -25,7 +24,9 @@ const (
 	resumeColumnGap = 2
 
 	// Narrower than this, a title truncates to noise, so the row shows only its
-	// timestamp.
+	// timestamp. Eight columns is the narrowest that still leaves a readable
+	// word or two beside the ellipsis; below it every row truncates to the same
+	// few characters and the list stops distinguishing conversations at all.
 	resumeMinTitleWidth = 8
 )
 
@@ -33,18 +34,27 @@ const (
 // blank row, the rows separated by blanks, the scroll indicator, and the hint.
 func resumeBlockHeight(rows int) int { return 2*rows + 3 }
 
-// resume is the startup conversation offer. It owns selection and the scroll
-// window; visibility is the caller's decision.
+// resume is the startup conversation offer. It owns the selection and a scroll
+// hint; visibility is the caller's decision.
 type resume struct {
 	conversations []assistant.ConversationSummary
-	selected      int
-	top           int
-	now           func() time.Time
+
+	selected int
+
+	// top is a hint, not the window. The number of visible rows changes on
+	// every resize, so the rendered window is always derived from the selection
+	// by window(); top only remembers how far the user had scrolled when the
+	// selection alone does not pin it.
+	top int
+
+	now func() time.Time
 }
 
-// setConversations replaces the offer, returning to the first row.
+// setConversations replaces the offer, returning to the first row. It applies
+// the same normalisation as the full picker, so "recent" means the same thing
+// in both places whatever order the backend answered in.
 func (r *resume) setConversations(summaries []assistant.ConversationSummary) {
-	r.conversations = summaries
+	r.conversations = conversations.Ordered(summaries)
 	r.reset()
 }
 
@@ -53,14 +63,24 @@ func (r *resume) reset() { r.selected, r.top = 0, 0 }
 func (r *resume) empty() bool { return len(r.conversations) == 0 }
 
 // move walks the selection by delta, clamping at both ends, and slides the
-// window so the selection stays inside it.
+// scroll hint so the selection stays inside the window.
 func (r *resume) move(delta, visible int) {
 	if r.empty() || visible < 1 {
 		return
 	}
 	r.selected = min(max(r.selected+delta, 0), len(r.conversations)-1)
-	r.top = min(max(r.top, r.selected-visible+1), r.selected)
-	r.top = min(max(r.top, 0), max(0, len(r.conversations)-visible))
+	r.top = r.window(visible)
+}
+
+// window is the index of the first rendered row for a window of visible rows.
+// It is derived rather than stored: visible changes independently of the
+// selection (a resize, an approval block docking), so every path that renders
+// or measures the window must call this instead of reading r.top. A stored top
+// went stale in both directions -- a grown window walked past the end of the
+// slice, and a shrunken one left the selection off-screen.
+func (r *resume) window(visible int) int {
+	top := min(max(r.top, r.selected-visible+1), r.selected)
+	return min(max(top, 0), max(0, len(r.conversations)-visible))
 }
 
 func (r *resume) selectedID() (string, bool) {
@@ -77,12 +97,13 @@ func (r *resume) view(theme styles.Theme, width, visible int) string {
 		return ""
 	}
 	visible = min(max(visible, 1), len(r.conversations))
+	top := r.window(visible)
 	lines := []string{
 		ansi.Truncate(theme.Text.Primary.Bold(true).Render(resumeTitle), width, "…"),
 		"",
 	}
-	for i := r.top; i < r.top+visible; i++ {
-		if i > r.top {
+	for i := top; i < top+visible; i++ {
+		if i > top {
 			lines = append(lines, "")
 		}
 		lines = append(lines, r.row(theme, width, i))
@@ -107,7 +128,8 @@ func (r *resume) row(theme styles.Theme, width, index int) string {
 
 	title := ""
 	if titleWidth >= resumeMinTitleWidth {
-		title = ansi.Truncate(escape.SingleLine(conversations.SafeTitle(summary)), titleWidth, "…")
+		// SafeTitle already single-lines its input.
+		title = ansi.Truncate(conversations.SafeTitle(summary), titleWidth, "…")
 	}
 	pad := max(1, width-left-ansi.StringWidth(title)-ansi.StringWidth(stamp))
 	row := style.Render(marker+title) + strings.Repeat(" ", pad) + theme.Text.Tertiary.Render(stamp)
@@ -116,8 +138,11 @@ func (r *resume) row(theme styles.Theme, width, index int) string {
 
 // indicator reports what the window hides. The row is always present, blank
 // when everything is visible, so scrolling never changes the block's height.
+// It derives the window exactly as view does, so the counts can never describe
+// a window that was not rendered.
 func (r *resume) indicator(theme styles.Theme, width, visible int) string {
-	switch below, above := len(r.conversations)-r.top-visible, r.top; {
+	top := r.window(visible)
+	switch below, above := len(r.conversations)-top-visible, top; {
 	case below > 0:
 		return ansi.Truncate(theme.Text.Tertiary.Render(fmt.Sprintf("↓ %d more below", below)), width, "…")
 	case above > 0:

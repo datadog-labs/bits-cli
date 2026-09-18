@@ -13,6 +13,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/agent/fake"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/conversations"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -124,6 +125,77 @@ func TestResumeReservesTheIndicatorRowWhenNothingIsHidden(t *testing.T) {
 	}
 }
 
+// The window is derived from the selection at render time. Storing it as an
+// independent field and reconciling it only in move() let a later, larger
+// visible count walk past the end of the slice.
+func TestResumeViewSurvivesAGrowingWindow(t *testing.T) {
+	theme := styles.Default(true)
+	r := resumeFixture(32)
+	// Scroll to the end while the terminal is short enough to show one row.
+	for range 40 {
+		r.move(1, 1)
+	}
+	out := r.view(theme, 80, resumeRows)
+	if got := lipgloss.Height(out); got != resumeBlockHeight(resumeRows) {
+		t.Fatalf("grown window rendered %d rows, want %d", got, resumeBlockHeight(resumeRows))
+	}
+	if want := "28 more above"; !strings.Contains(ansi.Strip(out), want) {
+		t.Fatalf("indicator does not report %q after the window grew:\n%s", want, ansi.Strip(out))
+	}
+	if strings.Contains(ansi.Strip(out), "more below") {
+		t.Fatalf("indicator claims rows below while pinned to the end:\n%s", ansi.Strip(out))
+	}
+}
+
+// selectedRow returns the rendered row carrying the selection marker, so a
+// test can tell which conversation the user is looking at without reaching
+// into the window arithmetic under test.
+func selectedRow(t *testing.T, theme styles.Theme, out string) string {
+	t.Helper()
+	marker := strings.TrimSpace(theme.Selector.SelectedMarker)
+	for _, line := range strings.Split(ansi.Strip(out), "\n") {
+		if strings.Contains(line, marker) {
+			return strings.TrimRight(line, " ")
+		}
+	}
+	return ""
+}
+
+// Shrinking the terminal must pull the window onto the selection, or the block
+// renders rows the user did not choose while enter resumes an off-screen one.
+func TestResumeSelectionStaysInsideTheRenderedWindow(t *testing.T) {
+	theme := styles.Default(true)
+	r := resumeFixture(32)
+	for range 3 {
+		r.move(1, resumeRows)
+	}
+	if r.selected != 3 {
+		t.Fatalf("selected = %d, want 3", r.selected)
+	}
+	want := " " + conversations.RelativeUpdatedAt(r.conversations[r.selected].UpdatedAt, fixedNow())
+	out := r.view(theme, 80, 1)
+	if got := selectedRow(t, theme, out); !strings.HasSuffix(got, want) {
+		t.Fatalf("one-row window shows %q, want the selected row ending %q:\n%s", got, want, ansi.Strip(out))
+	}
+}
+
+// setConversations applies the picker's normalisation, so the offer's first
+// rows are the genuinely most recent ones whatever order the API returned.
+func TestResumeSortsConversationsNewestFirst(t *testing.T) {
+	summaries := resumeFixture(8).conversations
+	shuffled := []assistant.ConversationSummary{
+		summaries[5], summaries[0], summaries[7], summaries[2],
+		summaries[6], summaries[1], summaries[4], summaries[3],
+	}
+	r := &resume{now: fixedNow}
+	r.setConversations(shuffled)
+	for i := range r.conversations {
+		if got, want := r.conversations[i].ConversationID, summaries[i].ConversationID; got != want {
+			t.Fatalf("row %d is %q, want %q: the offer is not sorted newest first", i, got, want)
+		}
+	}
+}
+
 func TestResumeSelectedIDTracksSelection(t *testing.T) {
 	r := resumeFixture(4)
 	id, ok := r.selectedID()
@@ -223,5 +295,29 @@ func TestPageKeysDoNotMoveTheOffer(t *testing.T) {
 	m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	if m.resume.selected != 0 {
 		t.Fatalf("pgdown moved the offer to row %d", m.resume.selected)
+	}
+}
+
+// The spec requires /new to bring the offer back. startNewConversation never
+// calls layoutTranscript itself; it reaches it through setMode(ModeChat),
+// which still relays even when the mode is unchanged. Pin that, or a
+// same-mode early return in setMode would silently drop the requirement.
+func TestStartNewConversationBringsTheOfferBack(t *testing.T) {
+	m := resumeKeyModel(t)
+	m.blocks = []agent.Block{{
+		ID:       agent.BlockID{Scope: agent.ScopeLocal, Key: "a", Kind: assistant.KindText},
+		Kind:     assistant.KindText,
+		Complete: true,
+		Markdown: &assistant.MarkdownPayload{Content: "hello"},
+	}}
+	m.syncTranscript()
+	if strings.Contains(m.list.Render(), resumeTitle) {
+		t.Fatal("offer rendered while the transcript had content")
+	}
+
+	m.startNewConversation()
+
+	if !strings.Contains(m.list.Render(), resumeTitle) {
+		t.Fatalf("the offer did not return after /new:\n%s", m.list.Render())
 	}
 }
