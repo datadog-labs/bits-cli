@@ -32,6 +32,11 @@ type List struct {
 	view  []presentationItem
 	sty   Styles
 
+	// header is pre-rendered content occupying the document's first rows. It
+	// becomes a synthetic presentation item so the scroll, document-coordinate
+	// and selection paths need no knowledge of it.
+	header string
+
 	// frame is the animation step handed to in-flight status indicators. Animated
 	// cache entries include it in their identity, while settled entries ignore it.
 	frame int
@@ -55,6 +60,19 @@ type presentationItem struct {
 	start, end    int
 	presentations []toolPresentation
 }
+
+// headerGroupKey marks the synthetic header item. Its start/end are
+// headerSentinel: it has no backing block, and every reader of start must
+// tolerate that.
+const (
+	headerGroupKey = "header"
+	headerSentinel = -1
+)
+
+// headerBlockID keys the header's cache entry. The NUL-prefixed key cannot
+// collide with a client-minted or wire id, which keeps this a view-layer
+// concern rather than a new BlockScope in the agent package.
+var headerBlockID = agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00header"}
 
 // listLineEntry memoizes one block's rendered lines (height is len(lines)). An
 // animated entry is valid only for the frame that produced it; a settled entry
@@ -108,7 +126,7 @@ func (l *List) SetStyles(sty Styles) {
 // large transcripts become common.
 func (l *List) SetItems(items []agent.Block) {
 	l.items = items
-	l.view = buildPresentation(items)
+	l.view = buildPresentation(l.header, items)
 	if l.offsetIdx >= len(l.view) {
 		l.offsetIdx = max(0, len(l.view)-1)
 		l.offsetLine = 0
@@ -116,12 +134,28 @@ func (l *List) SetItems(items []agent.Block) {
 	l.clampOffset()
 }
 
+// SetHeader replaces the document's leading content. Passing "" removes it.
+func (l *List) SetHeader(header string) {
+	if header == l.header {
+		return
+	}
+	l.header = header
+	l.view = buildPresentation(l.header, l.items)
+	l.normalizeOffset()
+}
+
+func headerRevision(header string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(header))
+	return h.Sum64()
+}
+
 // Reset clears items, scroll state, and rendered-block cache. Conversation
 // resets need the cache clear because a new Transcript may reuse synthetic
 // block IDs and revisions from the previous conversation.
 func (l *List) Reset() {
 	l.items = nil
-	l.view = nil
+	l.view = buildPresentation(l.header, nil)
 	l.offsetIdx = 0
 	l.offsetLine = 0
 	l.follow = true
@@ -231,6 +265,11 @@ func (l *List) renderItem(idx int) []string {
 }
 
 func (l *List) renderPresentationItem(it presentationItem) string {
+	// First: the header has no backing block, so it must return before any
+	// branch indexes l.items.
+	if it.group == headerGroupKey {
+		return l.header
+	}
 	if it.group == reasoningGroupKey {
 		return renderReasoningGroup(l.items[it.start:it.end], l.width, l.sty, l.frame)
 	}
@@ -483,8 +522,17 @@ func (l *List) ScrollByChanged(lines int) bool {
 	return idx != l.offsetIdx || line != l.offsetLine || follow != l.follow
 }
 
-func buildPresentation(blocks []agent.Block) []presentationItem {
-	items := make([]presentationItem, 0, len(blocks))
+func buildPresentation(header string, blocks []agent.Block) []presentationItem {
+	items := make([]presentationItem, 0, len(blocks)+1)
+	if header != "" {
+		items = append(items, presentationItem{
+			id:    headerBlockID,
+			rev:   headerRevision(header),
+			group: headerGroupKey,
+			start: headerSentinel,
+			end:   headerSentinel,
+		})
+	}
 	for i := 0; i < len(blocks); {
 		if blocks[i].Kind == assistant.KindReasoning {
 			j := i + 1
