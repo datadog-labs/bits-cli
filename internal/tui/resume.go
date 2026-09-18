@@ -143,15 +143,17 @@ func (r *resume) hint(theme styles.Theme, width int) string {
 type recentConversationsMsg struct{ result agent.ConversationListResult }
 
 // fetchRecentConversations reads the offer off the engine's ungated path, so it
-// cannot fail the user's first turn with ErrOperationActive.
+// cannot fail the user's first turn with ErrOperationActive. The context and the
+// engine call both live inside the returned closure so the read's lifetime (and
+// the deadline it starts) begins only when Bubble Tea actually runs the command.
 func (m *Model) fetchRecentConversations() tea.Cmd {
 	if m.engine == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
-	results := m.engine.RecentConversations(ctx)
+	engine := m.engine
 	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
 		defer cancel()
-		return recentConversationsMsg{result: <-results}
+		return recentConversationsMsg{result: <-engine.RecentConversations(ctx)}
 	}
 }

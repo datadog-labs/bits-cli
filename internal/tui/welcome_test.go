@@ -282,15 +282,16 @@ func TestHeaderHeightMatchesItsParts(t *testing.T) {
 }
 
 func TestHeaderNeverExceedsTerminalWidth(t *testing.T) {
-	m := welcomeModel(0, 40)
-	m.resume = *resumeFixture(32)
-	for _, ready := range []bool{false, true} {
-		m.splashReady = ready
-		for width := minimumChatWidth; width <= 200; width++ {
-			m.width = width
-			for i, line := range strings.Split(m.headerView(), "\n") {
-				if got := ansi.StringWidth(line); got > width {
-					t.Fatalf("ready=%v width=%d line %d measures %d columns", ready, width, i, got)
+	for name, m := range welcomeModels(0, 40) {
+		m.resume = *resumeFixture(32)
+		for _, ready := range []bool{false, true} {
+			m.splashReady = ready
+			for width := minimumChatWidth; width <= 200; width++ {
+				m.width = width
+				for i, line := range strings.Split(m.headerView(), "\n") {
+					if got := ansi.StringWidth(line); got > width {
+						t.Fatalf("%s ready=%v width=%d line %d measures %d columns", name, ready, width, i, got)
+					}
 				}
 			}
 		}
@@ -298,11 +299,13 @@ func TestHeaderNeverExceedsTerminalWidth(t *testing.T) {
 }
 
 // The header must always fit the transcript viewport, or follow-mode scrolls
-// the panel off at launch. Rows degrade, then the offer drops entirely.
+// the panel off at launch. Rows degrade, then the offer drops entirely. The
+// test only proves that ladder happened if both ends of it are observed.
 func TestResumeRowsDegradeUntilTheHeaderFits(t *testing.T) {
 	m := welcomeModel(120, 40)
 	m.resume = *resumeFixture(32)
 	previous := resumeRows + 1
+	minRows, maxRows := resumeRows, 0
 	for height := 40; height >= 1; height-- {
 		m.height = height
 		rows := 0
@@ -316,7 +319,12 @@ func TestResumeRowsDegradeUntilTheHeaderFits(t *testing.T) {
 			t.Fatalf("height=%d: header %d rows exceeds the %d-row viewport",
 				height, lipgloss.Height(m.headerView()), m.transcriptHeight())
 		}
+		minRows, maxRows = min(minRows, rows), max(maxRows, rows)
 		previous = rows
+	}
+	if minRows != 0 || maxRows != resumeRows {
+		t.Fatalf("rows ranged [%d, %d] across the shrink, want [0, %d]: the degradation ladder never ran",
+			minRows, maxRows, resumeRows)
 	}
 }
 
@@ -360,7 +368,10 @@ func TestChatViewRendersTheHeaderOnlyThroughTheTranscript(t *testing.T) {
 	}
 }
 
-// A successful fetch must make the offer appear; a failure must leave it absent.
+// A successful fetch must make the offer appear; a failure must leave it
+// absent. Empty and failed both leave showResume false, which is also true
+// of a model that never received the message at all — the empty-conversations
+// assertion on the failed case is what actually pins the handler ran.
 func TestRecentConversationsResultDrivesTheOffer(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -377,6 +388,9 @@ func TestRecentConversationsResultDrivesTheOffer(t *testing.T) {
 			m.Update(recentConversationsMsg{result: test.result})
 			if got := m.showResume(); got != test.want {
 				t.Fatalf("showResume = %v, want %v", got, test.want)
+			}
+			if test.name == "failed" && !m.resume.empty() {
+				t.Fatal("a failed fetch must not populate the offer")
 			}
 		})
 	}
@@ -423,5 +437,55 @@ func TestWelcomeVisibilityUnchangedByTheProbe(t *testing.T) {
 			t.Fatalf("width=%d: visibility changed from %v to %v when the probe landed",
 				width, before, after)
 		}
+	}
+}
+
+// flattenMsgs executes cmd (and, recursively, every command a tea.BatchMsg
+// bundles) and collects the resulting messages. It never re-enters Update, so
+// it is only safe for commands whose channels resolve without further pumping
+// -- true here because the fake backend answers Restore and RecentConversations
+// immediately with an error (it implements neither optional interface).
+func flattenMsgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		var out []tea.Msg
+		for _, c := range msg {
+			out = append(out, flattenMsgs(t, c)...)
+		}
+		return out
+	default:
+		return []tea.Msg{msg}
+	}
+}
+
+// initChat must only fetch the offer when there is nothing to restore: a
+// gated read on a live conversation would fail the user's first message with
+// ErrOperationActive, which is the entire reason RecentConversations exists.
+func TestInitChatFetchesTheOfferOnlyWithoutAConversationToRestore(t *testing.T) {
+	hasFetch := func(m *Model) bool {
+		for _, msg := range flattenMsgs(t, m.initChat()) {
+			if _, ok := msg.(recentConversationsMsg); ok {
+				return true
+			}
+		}
+		return false
+	}
+
+	empty := welcomeModel(120, 40)
+	empty.mode = ModeChat
+	empty.engine = agent.New(fake.New(), assistant.SendOptions{})
+	if !hasFetch(empty) {
+		t.Error("initChat did not fetch the offer for an empty start")
+	}
+
+	restoring := welcomeModel(120, 40)
+	restoring.mode = ModeChat
+	restoring.engine = agent.New(fake.New(), assistant.SendOptions{ConversationID: "existing-conversation"})
+	if hasFetch(restoring) {
+		t.Error("initChat fetched the offer despite a conversation to restore, which would gate it behind ErrOperationActive")
 	}
 }

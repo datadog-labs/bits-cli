@@ -173,7 +173,7 @@ func (m *Model) headerView() string {
 	}
 	header := m.splashPanelView()
 	if m.showResume() {
-		block := m.resume.view(m.styles, m.welcomeContentWidth(), m.resumeVisibleRows())
+		block := m.resume.view(m.styles, m.welcomePanelWidth(), m.resumeVisibleRows())
 		indent := strings.Repeat(" ", max(0, m.styles.Panel.HorizontalMargin))
 		rows := strings.Split(block, "\n")
 		for i, row := range rows {
