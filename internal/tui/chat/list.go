@@ -146,19 +146,21 @@ func (l *List) SetHeader(header string) {
 	had, has := l.header != "", header != ""
 	l.header = header
 	l.view = buildPresentation(l.header, l.items)
-	if had != has {
-		switch {
-		case l.offsetIdx > 0:
-			if has {
-				l.offsetIdx++
-			} else {
-				l.offsetIdx--
-			}
-		case l.offsetLine > 0:
-			// The offset points inside item 0, which is now a different item, so
-			// there is no row to carry.
-			l.offsetLine = 0
+	switch {
+	case had == has:
+	case has:
+		// Every item moved down one, so an offset that points at content follows
+		// it and keeps describing the same row. An offset resting at the very top
+		// stays there, where the new header is what the user should see.
+		if l.offsetIdx > 0 || l.offsetLine > 0 {
+			l.offsetIdx++
 		}
+	case l.offsetIdx > 0:
+		l.offsetIdx--
+	default:
+		// The offset pointed inside the header, which is gone, so there is no
+		// row to carry.
+		l.offsetLine = 0
 	}
 	l.normalizeOffset()
 }

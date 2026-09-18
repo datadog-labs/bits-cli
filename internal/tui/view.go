@@ -130,19 +130,24 @@ func (m *Model) visibleSelectionFrame(scope selectionScope) selectionFrame {
 			// Lower-pane rows do not belong to a transcript selection.
 			rows[y] = -1
 		case document < headerRows:
-			// The startup header is decoration, not transcript: render skips an
-			// unmapped row, so the panel is never painted as selected.
+			// The startup header is decoration, not transcript.
 			rows[y] = -1
 		default:
 			rows[y] = document
 		}
+	}
+	// The lower pane is in screen coordinates, where the header's document rows
+	// mean nothing, so it keeps every row selectable.
+	floor := headerRows
+	if scope == selectionScopeLower {
+		floor = 0
 	}
 	return newSelectionFrame(
 		m.chatViewBase(surface.Content),
 		m.width,
 		m.height,
 		rows,
-		headerRows,
+		floor,
 	)
 }
 

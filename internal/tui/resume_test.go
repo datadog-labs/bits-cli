@@ -339,3 +339,21 @@ func TestSelectedRowTimestampTakesTheTitleAccent(t *testing.T) {
 		t.Fatalf("unfocused row does not keep the tertiary timestamp:\n%q", got)
 	}
 }
+
+// Submitting empties the composer but leaves m.blocks empty until the first
+// turn event, so the offer would flash back mid-turn and Enter would try to
+// switch conversations against a held engine gate.
+func TestResumeHiddenWhileATurnIsRunning(t *testing.T) {
+	m := welcomeModel(120, 40)
+	m.mode = ModeChat
+	m.resume = *resumeFixture(4)
+	if !m.showResume() {
+		t.Fatal("offer not shown while idle")
+	}
+
+	events := make(chan agent.Event)
+	m.turnEvents = events
+	if m.showResume() {
+		t.Fatal("offer shown while a turn was running")
+	}
+}

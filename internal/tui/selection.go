@@ -192,6 +192,11 @@ func (s *selection) render(frame selectionFrame) string {
 	lo, hi := orderedPoints(s.anchor, s.focus)
 	for y := range frame.height {
 		virtualY := frame.virtualRow(y)
+		// A drag anchored in the header makes lo.Y negative, which rowSpan does
+		// not reject, so unselectable rows are dropped here instead.
+		if virtualY < frame.floor {
+			continue
+		}
 		start, end, ok := rowSpan(lo, hi, virtualY, frame.width)
 		if !ok {
 			continue

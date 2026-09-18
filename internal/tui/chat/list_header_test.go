@@ -147,3 +147,28 @@ func TestHeaderRowsCountsTheHeaderAndItsGap(t *testing.T) {
 		t.Fatalf("transcript content is not at or after row %d:\n%s", rows, l.Document())
 	}
 }
+
+// A resize can make the header appear while the user is scrolled inside the
+// first transcript item. That item moves to index 1, so the intra-item line
+// must move with it rather than be discarded.
+func TestHeaderAppearingKeepsTheRowInsideTheFirstItem(t *testing.T) {
+	l := headerList(t, 40, 4)
+	l.SetItems([]agent.Block{textBlock("a", "L1\nL2\nL3\nL4\nL5\nL6\nL7\nL8\nL9\nL10")})
+	// ScrollToTop clears follow; while the list still follows the tail, every
+	// render re-anchors to the bottom and the offset under test is never read.
+	l.ScrollToTop()
+	l.ScrollBy(2)
+	if l.Following() {
+		t.Fatal("setup: the list is still following the tail")
+	}
+
+	top := strings.SplitN(l.Render(), "\n", 2)[0]
+	if !strings.Contains(top, "L3") {
+		t.Fatalf("setup: viewport starts on %q, want the third line", top)
+	}
+
+	l.SetHeader("H1\nH2")
+	if got := strings.SplitN(l.Render(), "\n", 2)[0]; !strings.Contains(got, "L3") {
+		t.Fatalf("viewport moved to %q when the header appeared, want to stay on L3", got)
+	}
+}

@@ -229,3 +229,24 @@ func TestHeaderRowsAreNotSelectableInTheVisibleFrame(t *testing.T) {
 		t.Fatalf("first transcript row maps to %d, want %d", row, headerRows)
 	}
 }
+
+// A drag that starts inside the header makes lo.Y negative, which rowSpan does
+// not reject, so the decorative rows would paint reversed even though they can
+// never be copied.
+func TestSelectionStartedInTheHeaderDoesNotPaintIt(t *testing.T) {
+	frame := newSelectionFrame("PANEL\nPANEL\nfghij\nklmno", 5, 4, []int{-1, -1, 2, 3}, 2)
+
+	var got selection
+	got.begin(frame, 0, 0)
+	got.extend(frame, 4, 3)
+
+	lines := strings.Split(got.render(frame), "\n")
+	for i := range 2 {
+		if strings.Contains(lines[i], "\x1b[7m") {
+			t.Fatalf("header row %d painted as selected: %q", i, lines[i])
+		}
+	}
+	if !strings.Contains(lines[2], "\x1b[7m") {
+		t.Fatalf("first transcript row not painted: %q", lines[2])
+	}
+}

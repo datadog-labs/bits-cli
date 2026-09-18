@@ -141,10 +141,13 @@ func (m *Model) transcriptHeight() int {
 	return max(1, m.height-chatNoticeHeight-chatFooterHeight-m.composerHeight())
 }
 
-// showResume gates the offer on an empty transcript, an empty composer, a
-// non-empty fetch, and room for at least one row.
+// showResume gates the offer on an idle, empty transcript, an empty composer,
+// a non-empty fetch, and room for at least one row.
 func (m *Model) showResume() bool {
-	if len(m.blocks) != 0 || m.resume.empty() || m.editor.Value() != "" {
+	// turnEvents, not just m.blocks: a submitted turn empties the composer and
+	// publishes no block until its first event, and resuming during it would
+	// hit the engine gate.
+	if len(m.blocks) != 0 || m.turnEvents != nil || m.resume.empty() || m.editor.Value() != "" {
 		return false
 	}
 	if !m.showSplashPanel() {
