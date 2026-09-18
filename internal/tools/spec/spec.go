@@ -1,5 +1,5 @@
-// Package spec defines the importable wire contract for built-in local tools.
-// It deliberately has no execution or TUI dependencies.
+// Package spec defines importable wire contracts for built-in tools and shared
+// tool payloads. It deliberately has no execution or TUI dependencies.
 package spec
 
 const (
@@ -9,6 +9,9 @@ const (
 	WriteFile   = "write_file"
 	EditFile    = "edit_file"
 	ExecCommand = "exec_command"
+
+	// Remote tools.
+	Skill = "Skill"
 
 	ExecDefaultTimeoutMS int64 = 10_000
 	ExecMaxTimeoutMS     int64 = 10 * 60 * 1_000
@@ -22,6 +25,7 @@ type Identity struct {
 }
 
 var (
+	ServerSkill       = Identity{Name: Skill}
 	ClientReadFile    = Identity{ClientSide: true, Name: ReadFile}
 	ClientListFiles   = Identity{ClientSide: true, Name: ListFiles}
 	ClientGrepFiles   = Identity{ClientSide: true, Name: GrepFiles}
@@ -35,6 +39,12 @@ var (
 // as write content or edit operations.
 type PathInput struct {
 	Path string `json:"path"`
+}
+
+// SkillInput is the request payload for the server-side Skill tool. It lives
+// here so presentation code and tool integrations share the same wire shape.
+type SkillInput struct {
+	SkillName string `json:"skill_name"`
 }
 
 type ReadFileInput struct {

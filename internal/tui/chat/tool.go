@@ -21,8 +21,9 @@ const (
 	genericOutputMaxLines = 3
 	execCommandMaxLines   = 10
 	execOutputMaxLines    = 5
-	collapsedDiffLines    = 8
+	collapsedDiffLines    = 15
 	inspectionGroupKey    = "inspect"
+	reasoningGroupKey     = "reasoning"
 )
 
 // toolPresentation is derived solely for rendering. The source ToolBlock stays
@@ -35,7 +36,57 @@ type toolPresentation struct {
 	timeout    string
 	group      string
 	validInput bool
+	renderSpec *toolRenderSpec
 }
+
+// toolRenderSpec keeps a tool renderer and its static transcript layout plan
+// together. The presentation layer selects it before rendering so List can
+// account for spacing during lazy height and scroll calculations.
+type toolRenderFunc func(*agent.ToolBlock, toolPresentation, int, Styles, int) string
+
+// toolAction contains the human-facing verb forms for a local tool. Empty
+// lifecycle forms fall back to base, which keeps tools with quiet terminal
+// states compact while allowing active work to use a natural progressive verb.
+type toolAction struct {
+	base    string
+	active  string
+	success string
+	failure string
+}
+
+type toolRenderSpec struct {
+	render     toolRenderFunc
+	spacing    itemSpacing
+	action     toolAction
+	inspection bool
+}
+
+var (
+	simpleToolRenderSpec = &toolRenderSpec{render: renderSimpleTool}
+	readToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, inspection: true}
+	listToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, inspection: true}
+	grepToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "search", active: "searching"}, inspection: true}
+	writeToolRenderSpec  = &toolRenderSpec{
+		render:  renderChangeTool,
+		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "write", active: "writing", success: "wrote", failure: "write failed"},
+	}
+	editToolRenderSpec = &toolRenderSpec{
+		render:  renderChangeTool,
+		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "edit", active: "editing", success: "edited", failure: "edit failed"},
+	}
+	execToolRenderSpec = &toolRenderSpec{
+		render:  renderExecTool,
+		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "run", success: "ran", failure: "run failed"},
+	}
+	skillToolRenderSpec = &toolRenderSpec{
+		render:  renderSkillTool,
+		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "load", active: "loading", success: "loaded", failure: "load failed"},
+	}
+)
 
 type summarySpan struct {
 	text string
@@ -61,6 +112,24 @@ const (
 	lifecycleDenied
 	lifecycleCancelled
 )
+
+func (a toolAction) label(state toolLifecycle) string {
+	var label string
+	switch state {
+	case lifecycleRunning, lifecycleAwaiting:
+		label = a.active
+	case lifecycleSuccess:
+		label = a.success
+	case lifecycleError:
+		label = a.failure
+	case lifecycleUnknown, lifecycleDenied, lifecycleCancelled:
+		label = a.base
+	}
+	if label == "" {
+		return a.base
+	}
+	return label
+}
 
 func lifecycleOf(tool *agent.ToolBlock) toolLifecycle {
 	if tool == nil {
@@ -98,7 +167,7 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 	qualified := qualifiedToolName(tool)
 	input := toolInput(tool)
 	id := spec.Identity{ClientSide: tool.IsClientSide, Namespace: toolNamespace(tool), Name: tool.Name}
-	p := toolPresentation{identity: id, name: qualified}
+	p := toolPresentation{identity: id, name: qualified, renderSpec: toolRenderSpecFor(id)}
 
 	switch id {
 	case spec.ClientReadFile, spec.ClientWriteFile, spec.ClientEditFile:
@@ -110,12 +179,15 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			}
 		}
 	case spec.ClientListFiles:
-		var in spec.PathInput
+		var in spec.ListFilesInput
 		if decodeObject(input, &in) {
 			if in.Path == "" {
 				in.Path = "."
 			}
 			p.argument, p.group, p.validInput = escape.Inline(in.Path), inspectionGroupKey, true
+			if in.Depth != nil {
+				p.context = fmt.Sprintf("depth %d", *in.Depth)
+			}
 		}
 	case spec.ClientGrepFiles:
 		var in spec.GrepFilesInput
@@ -134,10 +206,38 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			}
 			p.validInput = true
 		}
+	case spec.ServerSkill:
+		p.argument = "skill"
+		var in spec.SkillInput
+		if decodeObject(input, &in) && in.SkillName != "" {
+			p.argument = "skill " + escape.Inline(in.SkillName)
+		}
+		p.validInput = true
 	default:
 		p.argument, p.validInput = compactInput(input), true
 	}
 	return p
+}
+
+func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
+	switch id {
+	case spec.ClientReadFile:
+		return readToolRenderSpec
+	case spec.ClientListFiles:
+		return listToolRenderSpec
+	case spec.ClientGrepFiles:
+		return grepToolRenderSpec
+	case spec.ClientWriteFile:
+		return writeToolRenderSpec
+	case spec.ClientEditFile:
+		return editToolRenderSpec
+	case spec.ClientExecCommand:
+		return execToolRenderSpec
+	case spec.ServerSkill:
+		return skillToolRenderSpec
+	default:
+		return simpleToolRenderSpec
+	}
 }
 
 func decodeObject(input string, out any) bool {
@@ -186,54 +286,31 @@ func compactInput(input string) string {
 
 func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 	state := lifecycleOf(tool)
+	action := p.actionLabel(state)
 	if !p.validInput {
+		// Keep local inspection tools recognizable while their input is still
+		// streaming or malformed. Exact client identity is enough to choose the
+		// action; arguments remain omitted until decoding succeeds. Server tools
+		// stay generic so similarly named remote tools are not specialized.
+		if action != "" {
+			return actionArgument(action, "")
+		}
 		return []summarySpan{{text: p.name, kind: spanAction}}
 	}
 	switch p.identity {
-	case spec.ClientReadFile:
-		return actionArgument("read", p.argument)
 	case spec.ClientListFiles:
-		return actionArgument("list", p.argument)
+		spans := actionArgument(action, p.argument)
+		if p.context != "" {
+			spans = append(spans, summarySpan{text: " · ", kind: spanMuted}, summarySpan{text: p.context, kind: spanMuted})
+		}
+		return spans
 	case spec.ClientGrepFiles:
-		spans := actionArgument("search", p.argument)
+		spans := actionArgument(action, p.argument)
 		if p.context != "" && p.context != "." {
 			spans = append(spans, summarySpan{text: " in ", kind: spanMuted}, summarySpan{text: p.context, kind: spanArgument})
 		}
 		return spans
-	case spec.ClientWriteFile:
-		action := "write"
-		switch state {
-		case lifecycleRunning, lifecycleAwaiting:
-			action = "writing"
-		case lifecycleSuccess:
-			action = "wrote"
-		case lifecycleError:
-			action = "write failed"
-		case lifecycleUnknown, lifecycleDenied, lifecycleCancelled:
-		}
-		return actionArgument(action, p.argument)
-	case spec.ClientEditFile:
-		action := "edit"
-		switch state {
-		case lifecycleRunning, lifecycleAwaiting:
-			action = "editing"
-		case lifecycleSuccess:
-			action = "edited"
-		case lifecycleError:
-			action = "edit failed"
-		case lifecycleUnknown, lifecycleDenied, lifecycleCancelled:
-		}
-		return actionArgument(action, p.argument)
 	case spec.ClientExecCommand:
-		action := "run"
-		switch state {
-		case lifecycleRunning, lifecycleAwaiting:
-		case lifecycleSuccess:
-			action = "ran"
-		case lifecycleError:
-			action = "run failed"
-		case lifecycleUnknown, lifecycleDenied, lifecycleCancelled:
-		}
 		spans := actionArgument(action, p.argument)
 		if p.context != "" {
 			spans = append(spans, summarySpan{text: " in ", kind: spanMuted}, summarySpan{text: p.context, kind: spanArgument})
@@ -243,8 +320,18 @@ func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 		}
 		return spans
 	default:
+		if action != "" {
+			return actionArgument(action, p.argument)
+		}
 		return []summarySpan{{text: p.name, kind: spanAction}, {text: "(" + p.argument + ")", kind: spanArgument}}
 	}
+}
+
+func (p toolPresentation) actionLabel(state toolLifecycle) string {
+	if p.renderSpec == nil {
+		return ""
+	}
+	return p.renderSpec.action.label(state)
 }
 
 func actionArgument(action, argument string) []summarySpan {
@@ -265,14 +352,29 @@ func renderTool(it agent.Block, width int, sty Styles, frame int) string {
 }
 
 func renderPresentedTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
-	switch p.identity {
-	case spec.ClientWriteFile, spec.ClientEditFile:
-		return renderChangeTool(tool, p, width, sty, frame)
-	case spec.ClientExecCommand:
-		return renderExecTool(tool, p, width, sty, frame)
-	default:
+	if p.renderSpec == nil {
 		return renderSimpleTool(tool, p, width, sty, frame)
 	}
+	return p.renderSpec.render(tool, p, width, sty, frame)
+}
+
+func renderSkillTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
+	state := lifecycleOf(tool)
+	header := renderToolHeader(tool, p.summary(tool), nil, width, sty, frame)
+	switch state {
+	case lifecycleRunning, lifecycleAwaiting, lifecycleDenied, lifecycleCancelled:
+		return header
+	case lifecycleUnknown, lifecycleSuccess, lifecycleError:
+	}
+
+	detail := tool.Detail
+	if detail == "" {
+		detail = tool.Output
+	}
+	if state == lifecycleError && detail != "" {
+		return header + "\n" + renderPreview(detail, width, genericOutputMaxLines, sty.ToolError, false, sty)
+	}
+	return header
 }
 
 func renderSimpleTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
@@ -301,12 +403,7 @@ func renderSimpleTool(tool *agent.ToolBlock, p toolPresentation, width int, sty 
 }
 
 func (p toolPresentation) inspection() bool {
-	switch p.identity {
-	case spec.ClientReadFile, spec.ClientListFiles, spec.ClientGrepFiles:
-		return true
-	default:
-		return false
-	}
+	return p.renderSpec != nil && p.renderSpec.inspection
 }
 
 func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
@@ -325,6 +422,7 @@ func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, width int, sty 
 		p.argument, p.validInput = escape.Inline(path), true
 	}
 	header := renderToolHeader(tool, p.summary(tool), nil, width, sty, frame)
+	var content string
 	if diff != nil {
 		lines := []string{header}
 		if format := formatChange(*diff); format != "" {
@@ -334,28 +432,31 @@ func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, width int, sty 
 		if body != "" {
 			lines = append(lines, body)
 		}
-		return strings.Join(lines, "\n")
+		content = strings.Join(lines, "\n")
+	} else {
+		if fallbackDetail == "" {
+			fallbackDetail = tool.Detail
+		}
+		if fallbackDetail == "" {
+			fallbackDetail = tool.Output
+		}
+		state := lifecycleOf(tool)
+		if fallbackDetail == "" {
+			content = header
+		} else {
+			switch state {
+			case lifecycleRunning, lifecycleDenied, lifecycleCancelled:
+				content = header
+			case lifecycleUnknown, lifecycleAwaiting, lifecycleSuccess, lifecycleError:
+				style := sty.ToolDetail
+				if state == lifecycleError {
+					style = sty.ToolError
+				}
+				content = header + "\n" + renderPreview(fallbackDetail, width, genericOutputMaxLines, style, false, sty)
+			}
+		}
 	}
-	if fallbackDetail == "" {
-		fallbackDetail = tool.Detail
-	}
-	if fallbackDetail == "" {
-		fallbackDetail = tool.Output
-	}
-	state := lifecycleOf(tool)
-	if fallbackDetail == "" {
-		return header
-	}
-	switch state {
-	case lifecycleRunning, lifecycleDenied, lifecycleCancelled:
-		return header
-	case lifecycleUnknown, lifecycleAwaiting, lifecycleSuccess, lifecycleError:
-	}
-	style := sty.ToolDetail
-	if state == lifecycleError {
-		style = sty.ToolError
-	}
-	return header + "\n" + renderPreview(fallbackDetail, width, genericOutputMaxLines, style, false, sty)
+	return content
 }
 
 func editorDiff(state *filediff.State) (path string, diff *filediff.Diff, reason string) {

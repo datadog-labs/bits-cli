@@ -159,7 +159,7 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 		t.Fatalf("presentation item count = %d, want 3", got)
 	}
 	plain := ansi.Strip(list.Render())
-	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "✓ inspected", "search ToolBlock in internal"} {
+	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "✓ search ToolBlock in internal"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("group rendering missing %q:\n%s", want, plain)
 		}
@@ -168,6 +168,34 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 		if strings.Contains(plain, hidden) {
 			t.Errorf("group rendering exposed inspection output %q:\n%s", hidden, plain)
 		}
+	}
+}
+
+func TestSingletonInspectionRendersAsTool(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status agent.ToolStatus
+		want   string
+		hidden string
+	}{
+		{name: "running", status: agent.ToolRunning, want: "listing .", hidden: "inspecting"},
+		{name: "settled", status: agent.ToolSuccess, want: "✓ list .", hidden: "inspected"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			list := NewList()
+			list.SetStyles(DefaultStyles(true))
+			list.SetWidth(80)
+			list.SetHeight(8)
+			list.SetItems([]agent.Block{inspectBlock("1", "list_files", `{"path":""}`, test.status, "listing")})
+
+			plain := ansi.Strip(list.Render())
+			if !strings.Contains(plain, test.want) {
+				t.Fatalf("singleton inspection rendering = %q, want %q", plain, test.want)
+			}
+			if strings.Contains(plain, test.hidden) || strings.Contains(plain, "└") {
+				t.Fatalf("singleton inspection retained grouped rendering: %q", plain)
+			}
+		})
 	}
 }
 
@@ -184,6 +212,98 @@ func TestReasoningStacksWithToolPresentation(t *testing.T) {
 	}
 	if got := list.gapAfter(1); got != 1 {
 		t.Fatalf("tool-to-answer gap = %d, want 1", got)
+	}
+}
+
+func TestAdjacentReasoningBlocksRenderAsOneActivity(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(8)
+	list.SetItems([]agent.Block{
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking-1", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "first"}},
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking-2", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "second"}},
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "answer", Kind: assistant.KindText}, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "answer"}},
+	})
+
+	if got := len(list.view); got != 2 {
+		t.Fatalf("presentation item count = %d, want 2", got)
+	}
+	plain := ansi.Strip(list.Render())
+	if got := strings.Count(plain, "✓ thought"); got != 1 {
+		t.Fatalf("settled reasoning rows = %d, want 1:\n%s", got, plain)
+	}
+}
+
+func TestReasoningGroupStaysActiveWhileMemberStreams(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(8)
+	list.SetItems([]agent.Block{
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking-1", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "first"}},
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking-2", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: false, Thinking: &assistant.ThinkingPayload{Content: "second"}},
+	})
+
+	plain := ansi.Strip(list.Render())
+	if !strings.Contains(plain, "thinking.") || strings.Contains(plain, "✓ thought") {
+		t.Fatalf("active reasoning group = %q", plain)
+	}
+	if !list.HasAnimated() {
+		t.Fatal("active reasoning group did not remain animated")
+	}
+}
+
+func TestToolMarginsCollapseAcrossAdjacentItems(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		blocks []agent.Block
+		first  string
+		second string
+	}{
+		{
+			name:   "write then exec",
+			blocks: []agent.Block{layoutToolBlock("write_file", `{"path":"one.txt"}`), layoutToolBlock("exec_command", `{"cmd":"pwd"}`)},
+			first:  "wrote one.txt",
+			second: "ran pwd",
+		},
+		{
+			name:   "exec then write",
+			blocks: []agent.Block{layoutToolBlock("exec_command", `{"cmd":"pwd"}`), layoutToolBlock("write_file", `{"path":"one.txt"}`)},
+			first:  "ran pwd",
+			second: "wrote one.txt",
+		},
+		{
+			name:   "write then edit",
+			blocks: []agent.Block{layoutToolBlock("write_file", `{"path":"one.txt"}`), layoutToolBlock("edit_file", `{"path":"one.txt"}`)},
+			first:  "wrote one.txt",
+			second: "edited one.txt",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			list := NewList()
+			list.SetStyles(DefaultStyles(true))
+			list.SetWidth(80)
+			list.SetHeight(8)
+			list.SetItems(test.blocks)
+
+			rows := strings.Split(ansi.Strip(list.Render()), "\n")
+			first, second := -1, -1
+			for i, row := range rows {
+				if strings.Contains(row, test.first) {
+					first = i
+				}
+				if strings.Contains(row, test.second) {
+					second = i
+				}
+			}
+			if first < 0 || second < 0 {
+				t.Fatalf("tool rows missing from render:\n%s", strings.Join(rows, "\n"))
+			}
+			if got, want := second-first-1, 1; got != want {
+				t.Fatalf("blank rows between tools = %d, want %d:\n%s", got, want, strings.Join(rows, "\n"))
+			}
+		})
 	}
 }
 
@@ -380,5 +500,13 @@ func inspectBlock(id, name, input string, status agent.ToolStatus, output string
 		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: id},
 		Kind: assistant.KindToolResult,
 		Tool: &agent.ToolBlock{Name: name, Input: input, Output: output, Status: status, IsClientSide: true},
+	}
+}
+
+func layoutToolBlock(name, input string) agent.Block {
+	return agent.Block{
+		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: name + input},
+		Kind: assistant.KindToolResult,
+		Tool: &agent.ToolBlock{Name: name, Input: input, Status: agent.ToolSuccess, IsClientSide: true},
 	}
 }

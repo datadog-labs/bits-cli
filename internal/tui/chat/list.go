@@ -7,7 +7,6 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 // List is a lazily-rendered, vertically-stacked view of transcript items with an
@@ -173,26 +172,27 @@ func (l *List) invalidateAll() {
 // items so an inspection group behaves as one stacked row regardless of how
 // many source tool blocks it contains.
 func (l *List) gapAfter(idx int) int {
-	if idx < 0 || idx+1 >= len(l.view) {
+	if idx < 0 || idx >= len(l.view) {
 		return max(l.gap, 0)
 	}
-	// Commands benefit from a little separation from surrounding agent activity
-	// and output. Keep this at one row even though ordinary activity rows stack
-	// tightly.
-	if l.isExecItem(l.view[idx]) || l.isExecItem(l.view[idx+1]) {
-		return 1
+
+	left := l.view[idx]
+	base := max(l.gap, 0)
+	if idx+1 < len(l.view) {
+		right := l.view[idx+1]
+		if l.stacksTight(left) && l.stacksTight(right) {
+			base = 0
+		}
+		return max(base, left.spacing().after, right.spacing().before)
 	}
-	if l.gap <= 0 {
-		return 0
-	}
-	if l.stacksTight(l.view[idx]) && l.stacksTight(l.view[idx+1]) {
-		return 0
-	}
-	return l.gap
+	return max(base, left.spacing().after)
 }
 
-func (l *List) isExecItem(it presentationItem) bool {
-	return len(it.presentations) == 1 && it.presentations[0].identity == spec.ClientExecCommand
+func (it presentationItem) spacing() itemSpacing {
+	if it.group != "" || len(it.presentations) != 1 || it.presentations[0].renderSpec == nil {
+		return itemSpacing{}
+	}
+	return it.presentations[0].renderSpec.spacing
 }
 
 func (l *List) stacksTight(it presentationItem) bool {
@@ -231,7 +231,10 @@ func (l *List) renderItem(idx int) []string {
 }
 
 func (l *List) renderPresentationItem(it presentationItem) string {
-	if it.group == inspectionGroupKey {
+	if it.group == reasoningGroupKey {
+		return renderReasoningGroup(l.items[it.start:it.end], l.width, l.sty, l.frame)
+	}
+	if it.group == inspectionGroupKey && len(it.presentations) > 1 {
 		return renderInspectionGroup(l.items[it.start:it.end], it.presentations, l.width, l.sty, l.frame)
 	}
 	if len(it.presentations) == 1 {
@@ -483,6 +486,16 @@ func (l *List) ScrollByChanged(lines int) bool {
 func buildPresentation(blocks []agent.Block) []presentationItem {
 	items := make([]presentationItem, 0, len(blocks))
 	for i := 0; i < len(blocks); {
+		if blocks[i].Kind == assistant.KindReasoning {
+			j := i + 1
+			for j < len(blocks) && blocks[j].Kind == assistant.KindReasoning {
+				j++
+			}
+			items = append(items, newPresentationItem(blocks, reasoningGroupKey, i, j, nil))
+			i = j
+			continue
+		}
+
 		p, isTool := presentationOfBlock(blocks[i])
 		if !isTool || p.group == "" {
 			var presentation []toolPresentation
