@@ -361,7 +361,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		case "up":
 			if m.state == StateReady {
-				m.list.CursorUp()
+				if len(m.list.VisibleItems()) > 0 && m.list.Index() == 0 {
+					m.list.GoToEnd()
+				} else {
+					m.list.CursorUp()
+				}
 				m.syncWindowToSelection()
 			}
 			return m, nil
