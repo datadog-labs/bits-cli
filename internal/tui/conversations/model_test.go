@@ -528,8 +528,8 @@ func TestRelativeUpdatedAt(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := relativeUpdatedAt(tt.updatedAt, now); got != tt.want {
-				t.Fatalf("relativeUpdatedAt() = %q, want %q", got, tt.want)
+			if got := RelativeUpdatedAt(tt.updatedAt, now); got != tt.want {
+				t.Fatalf("RelativeUpdatedAt() = %q, want %q", got, tt.want)
 			}
 		})
 	}

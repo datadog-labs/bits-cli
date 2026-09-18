@@ -52,11 +52,11 @@ type conversationItem struct {
 	now     func() time.Time
 }
 
-func (i conversationItem) Title() string { return safeTitle(i.summary) }
+func (i conversationItem) Title() string { return SafeTitle(i.summary) }
 func (i conversationItem) Description() string {
-	return relativeUpdatedAt(i.summary.UpdatedAt, i.now())
+	return RelativeUpdatedAt(i.summary.UpdatedAt, i.now())
 }
-func (i conversationItem) FilterValue() string { return safeTitle(i.summary) }
+func (i conversationItem) FilterValue() string { return SafeTitle(i.summary) }
 
 type Model struct {
 	list         list.Model
@@ -270,7 +270,8 @@ func (m *Model) updateHelp() {
 	}
 }
 
-func relativeUpdatedAt(updatedAt int64, now time.Time) string {
+// RelativeUpdatedAt renders updatedAt relative to now for display.
+func RelativeUpdatedAt(updatedAt int64, now time.Time) string {
 	if updatedAt <= 0 {
 		return "Activity time unavailable"
 	}
@@ -652,7 +653,8 @@ func joinWarning(body, warning string) string {
 	return warning + "\n\n" + body
 }
 
-func safeTitle(summary assistant.ConversationSummary) string {
+// SafeTitle returns a display-safe title for the conversation summary.
+func SafeTitle(summary assistant.ConversationSummary) string {
 	if title := escape.SingleLine(summary.Title); title != "" {
 		return title
 	}
