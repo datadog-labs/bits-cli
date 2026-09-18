@@ -649,6 +649,25 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, batchCommands(cmd, m.syncCompletionSearches())
 	}
 
+	// The offer is only visible with an empty composer, so these keys have no
+	// competing meaning: submit() already no-ops on empty input.
+	if m.showResume() {
+		switch msg.String() {
+		case "up", "down":
+			delta := 1
+			if msg.String() == "up" {
+				delta = -1
+			}
+			m.resume.move(delta, m.resumeVisibleRows())
+			m.layoutTranscript()
+			return m, nil
+		case "enter":
+			if id, ok := m.resume.selectedID(); ok {
+				return m, m.resumeSelectedConversation(id)
+			}
+		}
+	}
+
 	switch msg.String() {
 	case "esc":
 		m.cancelRemote() // interrupt the running turn

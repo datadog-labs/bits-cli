@@ -6,9 +6,12 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/agent/fake"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
@@ -157,5 +160,68 @@ func TestResumeViewIsEmptyWithoutConversations(t *testing.T) {
 	r := &resume{now: fixedNow}
 	if got := r.view(theme, 80, resumeRows); got != "" {
 		t.Fatalf("view() = %q, want empty string for no conversations", got)
+	}
+}
+
+// resumeKeyModel builds a chat-mode model with the startup offer populated
+// and visible, ready to exercise handleEditorKey against it. newShell leaves
+// mode at its zero value (ModeTermInit), on which layoutTranscript
+// early-returns, so mode is forced to ModeChat here.
+func resumeKeyModel(t *testing.T) *Model {
+	t.Helper()
+	m := welcomeModel(120, 40)
+	m.mode = ModeChat
+	m.engine = agent.New(fake.New(), assistant.SendOptions{})
+	m.resume = *resumeFixture(32)
+	m.layoutTranscript()
+	return m
+}
+
+// Arrows browse the offer while it is visible.
+func TestArrowKeysBrowseTheOffer(t *testing.T) {
+	m := resumeKeyModel(t)
+	m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.resume.selected != 1 {
+		t.Fatalf("down selected row %d", m.resume.selected)
+	}
+	m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.resume.selected != 0 {
+		t.Fatalf("up selected row %d", m.resume.selected)
+	}
+}
+
+// With the offer hidden, arrows belong to the composer again.
+func TestArrowKeysIgnoredWhenTheOfferIsHidden(t *testing.T) {
+	m := resumeKeyModel(t)
+	m.editor.SetValue("draft")
+	m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.resume.selected != 0 {
+		t.Fatalf("arrows moved the hidden offer to row %d", m.resume.selected)
+	}
+}
+
+// Enter resumes the selected conversation rather than submitting.
+func TestEnterResumesTheSelectedConversation(t *testing.T) {
+	m := resumeKeyModel(t)
+	m.resume.move(1, resumeRows)
+	want, _ := m.resume.selectedID()
+	_, cmd := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter produced no command")
+	}
+	if m.mode != ModeConversations || m.picker == nil {
+		t.Fatalf("mode = %v, picker = %v", m.mode, m.picker)
+	}
+	if m.conversationSwitchID != want {
+		t.Fatalf("switching to %q, want %q", m.conversationSwitchID, want)
+	}
+}
+
+// pgup/pgdown stay transcript scrolling, not offer navigation.
+func TestPageKeysDoNotMoveTheOffer(t *testing.T) {
+	m := resumeKeyModel(t)
+	m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.resume.selected != 0 {
+		t.Fatalf("pgdown moved the offer to row %d", m.resume.selected)
 	}
 }
