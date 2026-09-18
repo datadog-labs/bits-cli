@@ -497,9 +497,9 @@ func TestSlashCompletionOnlyOpensForFirstPromptToken(t *testing.T) {
 
 func TestAcceptReplacesActiveWord(t *testing.T) {
 	e := New()
-	e.ta.SetValue("look at @engine")
-	e.ta.SetCursorColumn(len([]rune("look at @engine")))
-	setTestFileResults(e, "engine", "internal/agent/engine.go")
+	e.ta.SetValue("look at @internal")
+	e.ta.SetCursorColumn(len([]rune("look at @internal")))
+	setTestFileResults(e, "internal", "internal/tui/")
 	if !e.MenuOpen() {
 		t.Fatal("menu should be open")
 	}
@@ -509,7 +509,7 @@ func TestAcceptReplacesActiveWord(t *testing.T) {
 	if !strings.HasPrefix(got, "look at @") {
 		t.Errorf("head not preserved: %q", got)
 	}
-	if !strings.Contains(got, "engine.go") {
+	if !strings.Contains(got, "internal/tui/") {
 		t.Errorf("candidate not inserted: %q", got)
 	}
 	if !strings.HasSuffix(got, " ") {

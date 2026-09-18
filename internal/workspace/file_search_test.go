@@ -148,11 +148,19 @@ func TestFileSearchSessionUsesWorkspaceTraversal(t *testing.T) {
 	if snapshot.Err != nil {
 		t.Fatal(snapshot.Err)
 	}
-	if snapshot.CandidateCount != 4 {
-		t.Fatalf("candidate count = %d, want 4", snapshot.CandidateCount)
+	if snapshot.CandidateCount != 5 {
+		t.Fatalf("candidate count = %d, want 5", snapshot.CandidateCount)
 	}
 	if got := fileSearchResultPaths(snapshot.Results); !slices.Equal(got, []string{"src/visible.go"}) {
 		t.Fatalf("results = %v", got)
+	}
+
+	generation = session.UpdateQuery("src/")
+	snapshot = waitForFileSearchSnapshot(t, session.Updates(), func(snapshot FileSearchSnapshot) bool {
+		return snapshot.Generation == generation && snapshot.Complete
+	})
+	if !slices.Contains(fileSearchResultPaths(snapshot.Results), "src/") {
+		t.Fatalf("directory result missing trailing slash: %v", fileSearchResultPaths(snapshot.Results))
 	}
 }
 

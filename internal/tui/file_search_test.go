@@ -192,11 +192,17 @@ func TestFileSearchCleanupOnResetLogoutAndQuit(t *testing.T) {
 }
 
 func TestFileCandidatesEscapeDisplayAndInsertion(t *testing.T) {
-	items := fileCandidates([]workspace.FileSearchResult{{Path: "unsafe\x1b[31m.go"}})
-	if len(items) != 1 || strings.Contains(items[0].Label, "\x1b") || items[0].Insert != "@unsafe␛[31m.go" {
+	items := fileCandidates([]workspace.FileSearchResult{
+		{Path: "unsafe\x1b[31m.go"},
+		{Path: "internal/tui/"},
+	})
+	if len(items) != 2 || strings.Contains(items[0].Label, "\x1b") || items[0].Insert != "@unsafe␛[31m.go" {
 		t.Fatalf("file candidate = %#v", items)
 	}
 	if items[0].Kind != editor.CandidateFile {
 		t.Fatalf("candidate kind = %q, want file", items[0].Kind)
+	}
+	if items[1].Label != "+ internal/tui/" || items[1].Insert != "@internal/tui/" {
+		t.Fatalf("directory candidate = %#v", items[1])
 	}
 }

@@ -28,7 +28,9 @@ type FileSearchOptions struct {
 	Limit int
 }
 
-// FileSearchResult describes one regular file matched within the workspace.
+// FileSearchResult describes one file or directory matched within the workspace.
+// Directory paths end with a slash so callers can preserve the distinction in
+// completion labels and inserted prompt text.
 type FileSearchResult struct {
 	Path  string
 	Score int
@@ -137,15 +139,20 @@ func (s *FileSearchSession) run(ctx context.Context, walk fileSearchWalk, limit 
 	go func() {
 		defer walkers.Done()
 		err := walk(ctx, func(filePath string, entry fs.DirEntry) error {
-			if entry.IsDir() || entry.Type()&fs.ModeSymlink != 0 {
+			if entry.Type()&fs.ModeSymlink != 0 || (entry.IsDir() && filePath == ".") {
 				return nil
 			}
-			info, err := entry.Info()
-			if err != nil || !info.Mode().IsRegular() {
-				return nil
+			candidatePath := filePath
+			if entry.IsDir() {
+				candidatePath += "/"
+			} else {
+				info, err := entry.Info()
+				if err != nil || !info.Mode().IsRegular() {
+					return nil
+				}
 			}
 			select {
-			case candidates <- filePath:
+			case candidates <- candidatePath:
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
