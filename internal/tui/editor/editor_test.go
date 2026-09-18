@@ -589,7 +589,7 @@ func TestCompletionMenuUsesFramedResponsiveLayout(t *testing.T) {
 		view := e.MenuView()
 		plain := ansi.Strip(view)
 		wantOverflow := "↓ " + strconv.Itoa(len(e.menu.items)-menuVisibleRows) + " more below"
-		if !strings.Contains(plain, "ESC x") || !strings.Contains(plain, wantOverflow) {
+		if !strings.Contains(plain, wantOverflow) {
 			t.Fatalf("width %d missing menu chrome: %q", width, plain)
 		}
 		if strings.Contains(plain, "›") {

@@ -25,7 +25,6 @@ const (
 	menuMinWidth    = 40
 	menuVisibleRows = 5
 	menuSidePadding = 2
-	menuCloseHint   = "ESC x"
 )
 
 const (
@@ -462,7 +461,7 @@ func (e *Editor) MenuView() string {
 		return ""
 	}
 
-	parts := []string{e.alignMenuRight(menuCloseHint, innerWidth)}
+	parts := make([]string, 0, menuVisibleRows+2)
 	remaining := maxHeight - e.styles.MenuFrame.GetVerticalFrameSize() - len(parts)
 	statusRows := 0
 	if e.menu.status != "" {
@@ -495,7 +494,7 @@ func (e *Editor) MenuView() string {
 }
 
 func (e *Editor) menuWidth() int {
-	w := ansi.StringWidth(menuCloseHint)
+	w := 0
 	for _, it := range e.menu.items {
 		w = max(w, ansi.StringWidth(it.Label)+ansi.StringWidth(it.Detail)+4)
 	}
@@ -506,11 +505,6 @@ func (e *Editor) menuWidth() int {
 		return min(menuMaxWidth, max(1, e.width-e.ContentOffset()))
 	}
 	return w
-}
-
-func (e *Editor) alignMenuRight(value string, width int) string {
-	value = ansi.Truncate(value, width, "")
-	return e.styles.MenuHelp.Render(strings.Repeat(" ", max(0, width-ansi.StringWidth(value))) + value)
 }
 
 func (e *Editor) menuLine(value string, width int, style lipgloss.Style) string {
