@@ -121,7 +121,7 @@ func TestSearchLineNeverExceedsPickerWidth(t *testing.T) {
 	for _, width := range []int{20, 60} {
 		m := New(width, 12)
 		bodyWidth := m.panelBodyWidth()
-		wantInputWidth := max(0, bodyWidth-2-ansi.StringWidth(m.search.Prompt)-1)
+		wantInputWidth := max(0, bodyWidth-1-ansi.StringWidth(m.search.Prompt)-1)
 		if got := m.search.Width(); got != wantInputWidth {
 			t.Fatalf("width %d configured input width %d, want %d", width, got, wantInputWidth)
 		}

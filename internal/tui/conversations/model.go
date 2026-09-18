@@ -493,7 +493,7 @@ func (m Model) searchView(width int) string {
 	if width < 1 {
 		return ""
 	}
-	return lipgloss.NewStyle().Padding(0, 1).Width(width).Render(m.search.View())
+	return lipgloss.NewStyle().PaddingRight(1).Width(width).Render(m.search.View())
 }
 
 func (m Model) conversationListView(width int) string {
@@ -588,10 +588,10 @@ func (m *Model) resizeChildren() {
 }
 
 func (m *Model) resizeBody(width int) {
-	// The transparent search row has one padding cell per side. textinput
+	// The transparent search row has one right padding cell. textinput
 	// renders its prompt outside the configured text width, so reserve the
 	// prompt and cursor as well.
-	const searchPaddingWidth = 2
+	const searchPaddingWidth = 1
 	searchWidth := max(0, width-searchPaddingWidth-lipgloss.Width(m.search.Prompt)-1)
 	m.search.SetWidth(searchWidth)
 	// Full layout: panel frame, header, search row, footer, and the blank rows
