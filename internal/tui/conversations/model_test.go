@@ -224,9 +224,14 @@ func TestPickerPageKeysStillRouteToConversationList(t *testing.T) {
 	if !strings.Contains(page, "Conversation M") || !strings.Contains(page, "Conversation N") || strings.Contains(page, "Conversation L") {
 		t.Fatalf("partial final page pulled in rows from the previous page: %q", page)
 	}
-	if hint := m.overflowHint(); hint != "↓ back to top" {
-		t.Fatalf("final-page overflow hint = %q, want %q", hint, "↓ back to top")
+	if hint := m.overflowHint(); hint != "↓ 1 more below" {
+		t.Fatalf("final-page overflow hint = %q, want %q", hint, "↓ 1 more below")
 	}
+	m, _ = m.Update(pickerKey(tea.KeyDown, ""))
+	if hint := m.overflowHint(); hint != "↓ back to top" {
+		t.Fatalf("last-result overflow hint = %q, want %q", hint, "↓ back to top")
+	}
+	m, _ = m.Update(pickerKey(tea.KeyUp, ""))
 	m, _ = m.Update(pickerKey(tea.KeyLeft, ""))
 	if m.list.Paginator.Page != 1 || m.list.Index() != m.list.Paginator.PerPage {
 		t.Fatalf("left arrow did not return to the second page: page=%d index=%d", m.list.Paginator.Page, m.list.Index())
@@ -234,6 +239,33 @@ func TestPickerPageKeysStillRouteToConversationList(t *testing.T) {
 	m, _ = m.Update(pickerKey(tea.KeyLeft, ""))
 	if m.list.Paginator.Page != 0 || m.list.Index() != 0 {
 		t.Fatalf("left arrow did not return to the first result: page=%d index=%d", m.list.Paginator.Page, m.list.Index())
+	}
+}
+
+func TestPickerFillsVisibleWindowAfterHeightIncrease(t *testing.T) {
+	m := New(120, 15)
+	summaries := make([]assistant.ConversationSummary, 10)
+	for i := range summaries {
+		summaries[i] = assistant.ConversationSummary{
+			ConversationID: fmt.Sprintf("conversation-%d", i),
+			Title:          fmt.Sprintf("Conversation %d", i+1),
+		}
+	}
+	m.SetConversations(summaries)
+	for range 9 {
+		m, _ = m.Update(pickerKey(tea.KeyDown, ""))
+	}
+	if _, start, end := m.visibleWindow(); start != 7 || end != 10 {
+		t.Fatalf("small window = [%d:%d], want [7:10]", start, end)
+	}
+
+	m.SetSize(120, 18)
+	items, start, end := m.visibleWindow()
+	if len(items) != 6 || start != 4 || end != 10 {
+		t.Fatalf("resized window = [%d:%d] with %d items, want [4:10] with 6", start, end, len(items))
+	}
+	if got := m.list.Index(); got != 9 {
+		t.Fatalf("resized selection = %d, want 9", got)
 	}
 }
 

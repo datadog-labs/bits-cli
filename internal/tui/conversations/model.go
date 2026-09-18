@@ -531,10 +531,17 @@ func (m Model) conversationListView(width int) string {
 
 func (m Model) overflowHint() string {
 	items := len(m.list.VisibleItems())
+	if items == 0 {
+		return ""
+	}
 	_, _, end := m.visibleWindow()
 	hiddenBelow := items - end
-	if hiddenBelow == 0 {
+	selected := max(0, min(m.list.Index(), items-1))
+	if hiddenBelow == 0 && selected == items-1 {
 		return "↓ back to top"
+	}
+	if hiddenBelow == 0 {
+		hiddenBelow = items - selected - 1
 	}
 	return fmt.Sprintf("↓ %d more below", hiddenBelow)
 }
@@ -565,6 +572,16 @@ func (m *Model) syncWindowToSelection() {
 		start = selected - rows + 1
 	}
 	m.windowStart = max(0, min(start, items-1))
+}
+
+func (m *Model) fillVisibleWindow() {
+	items := len(m.list.VisibleItems())
+	if items == 0 {
+		m.windowStart = 0
+		return
+	}
+	rows := min(max(1, m.list.Height()), items)
+	m.windowStart = max(0, min(m.windowStart, items-rows))
 }
 
 func (m *Model) alignWindowToPage() {
@@ -612,8 +629,12 @@ func (m *Model) resizeBody(width int) {
 		availableHeight--
 	}
 	listHeight := max(1, min(maxVisibleConversationRows, availableHeight))
+	previousListHeight := m.list.Height()
 	m.list.SetSize(width, listHeight)
 	m.syncWindowToSelection()
+	if listHeight > previousListHeight {
+		m.fillVisibleWindow()
+	}
 }
 
 func (m Model) panelBodyWidth() int {
