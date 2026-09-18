@@ -600,3 +600,100 @@ func TestDispatchUnknownCommandPostsNotice(t *testing.T) {
 		t.Errorf("notice level = %v, want NoticeError", m.notice.Level)
 	}
 }
+
+func TestLatestCopyableAssistantResponse(t *testing.T) {
+	blocks := []agent.Block{
+		{
+			Role:     assistant.RoleAssistant,
+			Kind:     assistant.KindText,
+			Complete: true,
+			Markdown: &assistant.MarkdownPayload{Content: "earlier response"},
+		},
+		{
+			Role:     assistant.RoleAssistant,
+			Kind:     assistant.KindReasoning,
+			Complete: true,
+			Thinking: &assistant.ThinkingPayload{Content: "hidden reasoning"},
+		},
+		{
+			Role:     assistant.RoleAssistant,
+			Kind:     assistant.KindToolResult,
+			Complete: true,
+			Tool:     &agent.ToolBlock{Output: "credential-like tool output"},
+		},
+		{
+			Role:     assistant.RoleAssistant,
+			Kind:     assistant.KindText,
+			Complete: false,
+			Markdown: &assistant.MarkdownPayload{Content: "partial response"},
+		},
+		{
+			Role:     assistant.RoleAssistant,
+			Kind:     assistant.KindText,
+			Complete: true,
+			Markdown: &assistant.MarkdownPayload{Content: "\x1b[31mlatest\x1b[0m response"},
+		},
+	}
+
+	got, ok := latestCopyableAssistantResponse(blocks)
+	if !ok {
+		t.Fatal("latest completed assistant response was not found")
+	}
+	if want := "latest response"; got != want {
+		t.Fatalf("copied text = %q, want %q", got, want)
+	}
+}
+
+func TestCopyCommandWritesLatestAssistantResponseLocally(t *testing.T) {
+	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
+	m.editor.Focus()
+	m.blocks = []agent.Block{
+		{Role: assistant.RoleUser, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "prompt"}},
+		{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "answer"}},
+	}
+	m.editor.Update(tea.PasteMsg{Content: "/copy"})
+
+	_, cmd := m.submit()
+	if cmd == nil {
+		t.Fatal("/copy returned no clipboard command")
+	}
+	if m.notice.Level != chat.NoticeInfo || m.notice.Text != "Copied to clipboard." {
+		t.Fatalf("notice = %+v, want copy confirmation", m.notice)
+	}
+	if cmd() == nil {
+		t.Fatal("/copy clipboard command returned no message")
+	}
+}
+
+func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
+	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
+	m.editor.Focus()
+	m.blocks = []agent.Block{{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "previous answer"}}}
+	m.turnEvents = make(chan agent.Event)
+	m.chatPhase = chat.PhaseStreaming
+	m.editor.Update(tea.PasteMsg{Content: "/copy"})
+
+	_, cmd := m.submit()
+	if cmd == nil || m.notice.Empty() {
+		t.Fatal("streaming /copy should show a rejection notice")
+	}
+	if !strings.Contains(m.notice.Text, "Wait for the assistant response to finish") {
+		t.Fatalf("notice = %q, want active-turn rejection", m.notice.Text)
+	}
+}
+
+func TestCopyCommandReportsNoCompletedAssistantResponse(t *testing.T) {
+	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
+	m.blocks = []agent.Block{
+		{Role: assistant.RoleUser, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "prompt"}},
+		{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: false, Markdown: &assistant.MarkdownPayload{Content: "partial"}},
+	}
+
+	_, cmd := m.dispatchCommand("copy")
+	if cmd == nil || m.notice.Empty() {
+		t.Fatal("/copy without a completed response should show a notice")
+	}
+	if m.notice.Level != chat.NoticeWarn || !strings.Contains(m.notice.Text, "No completed assistant response") {
+		t.Fatalf("notice = %+v, want no-response warning", m.notice)
+	}
+}

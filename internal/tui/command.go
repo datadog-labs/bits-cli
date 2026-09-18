@@ -4,7 +4,10 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
+	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
@@ -26,6 +29,7 @@ const (
 	commandNew
 	commandResume
 	commandStatus
+	commandCopy
 	commandWeb
 	commandSettings
 	commandLogout
@@ -60,6 +64,11 @@ var commandDefinitions = []commandDefinition{
 		id:               commandStatus,
 		name:             "status",
 		activeTurnPolicy: commandAllowedDuringTurn,
+	},
+	{
+		id:               commandCopy,
+		name:             "copy",
+		activeTurnPolicy: commandRejectedDuringTurn,
 	},
 	{
 		id:               commandWeb,
@@ -131,6 +140,9 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 	if active {
 		switch definition.activeTurnPolicy {
 		case commandRejectedDuringTurn:
+			if definition.id == commandCopy {
+				return m, m.showNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response to finish before using /copy."), 0)
+			}
 			return m, m.showNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active turn: /%s", name), 0)
 		case commandCancelsTurn:
 			switch definition.id {
@@ -161,6 +173,8 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, batchCommands(m.stopCompletionSearches(), m.openConversationPicker())
 	case commandStatus:
 		return m, batchCommands(m.stopCompletionSearches(), m.openStatus())
+	case commandCopy:
+		return m, m.copyLatestAssistantResponse()
 	case commandWeb:
 		return m, batchCommands(m.stopCompletionSearches(), m.openConversationInBrowser())
 	case commandSettings:
@@ -170,4 +184,33 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 	default:
 		panic("unhandled registered command")
 	}
+}
+
+// copyLatestAssistantResponse copies the most recent completed assistant text
+// block. Transcript source, rather than terminal rendering, keeps Markdown
+// predictable and excludes styles, hidden reasoning, tools, and metadata. The
+// terminal owns the OSC 52 clipboard write, matching text selection behavior.
+func (m *Model) copyLatestAssistantResponse() tea.Cmd {
+	text, ok := latestCopyableAssistantResponse(m.blocks)
+	if !ok {
+		return m.showNotice(notice(chat.NoticeWarn, nil, "No completed assistant response is available to copy."), 0)
+	}
+	return tea.Batch(
+		m.showNotice(notice(chat.NoticeInfo, nil, "Copied to clipboard."), 0),
+		tea.SetClipboard(text),
+	)
+}
+
+func latestCopyableAssistantResponse(blocks []agent.Block) (string, bool) {
+	for i := len(blocks) - 1; i >= 0; i-- {
+		block := blocks[i]
+		if block.Role != assistant.RoleAssistant || block.Kind != assistant.KindText || !block.Complete || block.Markdown == nil {
+			continue
+		}
+		text := ansi.Strip(block.Markdown.Content)
+		if text != "" {
+			return text, true
+		}
+	}
+	return "", false
 }
