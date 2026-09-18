@@ -175,8 +175,8 @@ func TestPickerHeaderAndOverflowTrackSelection(t *testing.T) {
 	}
 	m, _ = m.Update(pickerKey(tea.KeyDown, ""))
 	view = escape.SingleLine(m.View())
-	if !strings.Contains(view, "Resume a session (10 of 10)") || !strings.Contains(view, "↓ back to top") {
-		t.Fatalf("down from the last result should remain clamped: %q", m.View())
+	if !strings.Contains(view, "Resume a session (1 of 10)") || !strings.Contains(view, "↓ 4 more below") {
+		t.Fatalf("down from the last result should return to the top: %q", m.View())
 	}
 
 	m, _ = m.Update(pickerKey('c', "c"))
