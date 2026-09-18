@@ -356,3 +356,29 @@ func TestResumeHiddenWhileATurnIsRunning(t *testing.T) {
 		t.Fatal("offer shown while a turn was running")
 	}
 }
+
+// Only the focused row takes the accent; the rest of the offer stays at the
+// secondary level so it reads as an aside rather than competing with chat.
+func TestUnfocusedRowTitleUsesSecondaryText(t *testing.T) {
+	theme := styles.Default(true)
+	r := resumeFixture(4)
+
+	focused, unfocused := r.row(theme, 80, 0), r.row(theme, 80, 1)
+
+	if !strings.Contains(unfocused, sgrFor(theme.Text.Secondary)) {
+		t.Fatalf("unfocused row is not secondary:\n%q", unfocused)
+	}
+	if strings.Contains(unfocused, sgrFor(theme.Selector.Selected)) {
+		t.Fatalf("unfocused row carries the focused accent:\n%q", unfocused)
+	}
+	if !strings.Contains(focused, sgrFor(theme.Selector.Selected)) {
+		t.Fatalf("focused row lost its accent:\n%q", focused)
+	}
+}
+
+// sgrFor renders a marker string in style and returns the escape prefix it
+// emits, so a test can assert which token painted a span.
+func sgrFor(style lipgloss.Style) string {
+	rendered := style.Render("x")
+	return strings.SplitN(rendered, "x", 2)[0]
+}

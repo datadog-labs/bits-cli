@@ -112,7 +112,9 @@ func (r *resume) view(theme styles.Theme, width, visible int) string {
 // row is a marker and title on the left with the relative timestamp flushed
 // right, padded so the whole row measures exactly width.
 func (r *resume) row(theme styles.Theme, width, index int) string {
-	marker, style := theme.Selector.Marker, theme.Selector.Item
+	// An unfocused title sits at the secondary level: the offer is an aside, so
+	// only the focused row competes with the transcript for attention.
+	marker, style := theme.Selector.Marker, theme.Text.Secondary
 	stampStyle := theme.Text.Tertiary
 	if index == r.selected {
 		marker, style = theme.Selector.SelectedMarker, theme.Selector.Selected
