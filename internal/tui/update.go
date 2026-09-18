@@ -831,7 +831,7 @@ func (m *Model) layoutTranscript() {
 		return
 	}
 	m.editor.SetMenuHeight(max(0, m.height-chatFooterHeight-m.editor.Height()))
-	height := m.height - chatNoticeHeight - chatFooterHeight - m.composerHeight()
+	height := m.transcriptRows()
 	if m.showWelcome() {
 		height -= m.welcomeHeight()
 	}

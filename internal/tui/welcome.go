@@ -19,13 +19,29 @@ const (
 	welcomeMinFactsWidth = 12
 )
 
+// welcomeLogoWidth is the wider of the two logo forms. Gating on it rather than
+// on the current form keeps the probe's answer from changing visibility.
+var welcomeLogoWidth = max(lipgloss.Width(splash.Wordmark()), splash.Columns)
+
 // showWelcome gates on both dimensions: content that does not fit wraps past
 // the height layoutTranscript reserved.
 func (m *Model) showWelcome() bool {
-	if len(m.blocks) != 0 || m.height < minimumChatHeight+m.welcomeHeight() {
+	if len(m.blocks) != 0 || m.height < minimumChatHeight {
 		return false
 	}
-	return m.welcomeContentWidth() >= lipgloss.Width(m.welcomeLogo())
+	// Measured against the rows left after the composer, which grows with a
+	// multi-line draft, not against the terminal: the block would otherwise keep
+	// its rows and push the view past the bottom of the screen.
+	if m.transcriptRows()-m.welcomeHeight() < 1 {
+		return false
+	}
+	return m.welcomeContentWidth() >= welcomeLogoWidth
+}
+
+// transcriptRows is what is left once the fixed chrome and the composer have
+// taken their share.
+func (m *Model) transcriptRows() int {
+	return m.height - chatNoticeHeight - chatFooterHeight - m.composerHeight()
 }
 
 // welcomeHeight is the logo slot plus the panel's border and padding.

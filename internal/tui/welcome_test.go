@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -128,9 +129,12 @@ func TestWelcomeFactsOmitOrganization(t *testing.T) {
 	}
 }
 
+// The block needs its own rows plus one transcript row, within what the notice,
+// footer and composer leave behind — so the boundary tracks the composer rather
+// than the terminal alone.
 func TestWelcomeHiddenUntilTerminalIsTallEnough(t *testing.T) {
 	tall := welcomeModel(100, 40)
-	needed := minimumChatHeight + tall.welcomeHeight()
+	needed := tall.welcomeHeight() + 1 + chatNoticeHeight + chatFooterHeight + tall.composerHeight()
 
 	if welcomeModel(100, needed-1).showWelcome() {
 		t.Error("welcome shown on a terminal too short to hold it")
@@ -250,5 +254,49 @@ func TestWelcomeNeverShownWithTranscriptContent(t *testing.T) {
 	m.blocks = []agent.Block{{}}
 	if m.showWelcome() {
 		t.Error("welcome shown alongside transcript content")
+	}
+}
+
+// A growing composer eats the rows the block reserved. Keeping the block would
+// clamp the transcript to one row and push the whole view past the bottom of
+// the terminal, hiding the composer the user is typing into.
+func TestWelcomeHiddenWhenTheComposerLeavesNoRoom(t *testing.T) {
+	for _, height := range []int{18, 19, 20, 21, 22} {
+		m := welcomeModel(120, height)
+		m.mode = ModeChat
+		// An unfocused editor ignores input, which would leave the composer one
+		// row tall and the loop asserting nothing.
+		m.editor.Focus()
+		for lines := 1; lines <= 12; lines++ {
+			m.editor.Reset()
+			m.editor.Update(tea.PasteMsg{Content: strings.Repeat("draft\n", lines)})
+			if m.editor.Value() == "" {
+				t.Fatalf("height=%d lines=%d: the composer took no input", height, lines)
+			}
+			m.layoutTranscript()
+
+			view := lipgloss.Height(m.chatViewBase(m.list.Render()))
+			if view > height {
+				t.Fatalf("height=%d lines=%d: view is %d rows, past the terminal (welcome shown=%v)",
+					height, lines, view, m.showWelcome())
+			}
+		}
+	}
+}
+
+// Both logo forms are the same height but not the same width, so a gate that
+// reads the current form flips when the probe answers.
+func TestWelcomeVisibilityUnchangedByTheProbe(t *testing.T) {
+	for width := minimumChatWidth; width <= 200; width++ {
+		m := welcomeModel(width, 40)
+		m.mode = ModeChat
+
+		m.splashReady = false
+		before := m.showWelcome()
+		m.splashReady = true
+		if after := m.showWelcome(); after != before {
+			t.Fatalf("width=%d: visibility changed from %v to %v when the probe landed",
+				width, before, after)
+		}
 	}
 }

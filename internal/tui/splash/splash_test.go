@@ -47,13 +47,13 @@ func TestPlaceholderCarriesImageIDAsForeground(t *testing.T) {
 // guess-from-previous-cell fallback.
 func TestPlaceholderCellsCarryRowAndColumn(t *testing.T) {
 	for y, line := range strings.Split(Placeholder(), "\n") {
-		if cells := strings.Count(line, string(kitty.Placeholder)); cells != imageCols {
-			t.Fatalf("row %d has %d placeholder cells, want %d", y, cells, imageCols)
+		if cells := strings.Count(line, string(kitty.Placeholder)); cells != Columns {
+			t.Fatalf("row %d has %d placeholder cells, want %d", y, cells, Columns)
 		}
 		if !strings.ContainsRune(line, kitty.Diacritic(y)) {
 			t.Fatalf("row %d is missing its row diacritic", y)
 		}
-		for x := range imageCols {
+		for x := range Columns {
 			if !strings.ContainsRune(line, kitty.Diacritic(x)) {
 				t.Fatalf("row %d is missing the column diacritic for cell %d", y, x)
 			}
@@ -65,8 +65,8 @@ func TestPlaceholderCellsCarryRowAndColumn(t *testing.T) {
 // join relies on.
 func TestPlaceholderOccupiesImageColsColumns(t *testing.T) {
 	for y, line := range strings.Split(Placeholder(), "\n") {
-		if got := ansi.StringWidth(line); got != imageCols {
-			t.Errorf("row %d measures %d columns, want %d", y, got, imageCols)
+		if got := ansi.StringWidth(line); got != Columns {
+			t.Errorf("row %d measures %d columns, want %d", y, got, Columns)
 		}
 	}
 }
@@ -115,6 +115,13 @@ func TestPaintsPlaceholders(t *testing.T) {
 			"TERM": "xterm-256color", "TERM_PROGRAM": "iTerm.app",
 			"GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty",
 		}, want: false},
+		"iterm2 launched from kitty": {env: map[string]string{
+			"TERM": "xterm-256color", "TERM_PROGRAM": "iTerm.app", "KITTY_WINDOW_ID": "1",
+		}, want: false},
+		// Nothing claims TERM_PROGRAM, so the inherited marker is kitty's own.
+		"kitty with a rewritten term": {env: map[string]string{
+			"TERM": "xterm-256color", "KITTY_WINDOW_ID": "1",
+		}, want: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, key := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "TMUX", "STY"} {
@@ -139,7 +146,9 @@ func TestQueryFollowsTerminalCapability(t *testing.T) {
 		"ci":     {env: map[string]string{"TERM": "dumb"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			for _, key := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR"} {
+			// TMUX and STY included: a run inside a multiplexer would otherwise
+			// inherit them and suppress the probe.
+			for _, key := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "TMUX", "STY"} {
 				t.Setenv(key, tc.env[key])
 			}
 			if probed := Query() != nil; probed != tc.probe {

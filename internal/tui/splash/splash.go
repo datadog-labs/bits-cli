@@ -36,9 +36,10 @@ var logoPNG []byte
 // form will be drawn.
 const Rows = 6
 
-// Cells are about twice as tall as wide, so imageCols x Rows is roughly square
-// and the square logo is not stretched.
-const imageCols = 12
+// Columns is the image form's width. Cells are about twice as tall as wide, so
+// Columns x Rows is roughly square and the square logo is not stretched. The
+// wordmark is wider, so a width gate must take the wider of the two.
+const Columns = 12
 
 const (
 	// ImageID is re-encoded as the placeholder cells' foreground color, which
@@ -101,14 +102,17 @@ func paintsPlaceholders() bool {
 		return false
 	}
 	switch {
-	case strings.Contains(term, "kitty"), os.Getenv("KITTY_WINDOW_ID") != "":
+	case strings.Contains(term, "kitty"):
 		return true
 	case term == "xterm-ghostty", strings.EqualFold(os.Getenv("TERM_PROGRAM"), "ghostty"):
 		return true
 	}
-	// Ghostty exports this to anything it launches, so it only counts while no
-	// other terminal claims TERM_PROGRAM.
-	return os.Getenv("GHOSTTY_RESOURCES_DIR") != "" && os.Getenv("TERM_PROGRAM") == ""
+	// Both terminals export their marker to whatever they launch, so a terminal
+	// that claims TERM_PROGRAM for itself is not the one that set it.
+	if os.Getenv("TERM_PROGRAM") != "" {
+		return false
+	}
+	return os.Getenv("KITTY_WINDOW_ID") != "" || os.Getenv("GHOSTTY_RESOURCES_DIR") != ""
 }
 
 // Transmit stores and scales the logo under ImageID. A virtual placement
@@ -125,7 +129,7 @@ func Transmit() tea.Cmd {
 		Transmission:     kitty.Direct,
 		Format:           kitty.PNG,
 		ID:               ImageID,
-		Columns:          imageCols,
+		Columns:          Columns,
 		Rows:             Rows,
 		VirtualPlacement: true,
 		Chunk:            true,
@@ -148,7 +152,7 @@ var placeholder = sync.OnceValue(func() string {
 	rows := make([]string, Rows)
 	for y := range rows {
 		var row strings.Builder
-		for x := range imageCols {
+		for x := range Columns {
 			row.WriteRune(kitty.Placeholder)
 			row.WriteRune(kitty.Diacritic(y))
 			row.WriteRune(kitty.Diacritic(x))
