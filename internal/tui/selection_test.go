@@ -230,9 +230,8 @@ func TestHeaderRowsAreNotSelectableInTheVisibleFrame(t *testing.T) {
 	}
 }
 
-// A drag that starts inside the header makes lo.Y negative, which rowSpan does
-// not reject, so the decorative rows would paint reversed even though they can
-// never be copied.
+// Excluding the header from the copy is not enough: an anchor inside it must
+// also leave the rows unpainted.
 func TestSelectionStartedInTheHeaderDoesNotPaintIt(t *testing.T) {
 	frame := newSelectionFrame("PANEL\nPANEL\nfghij\nklmno", 5, 4, []int{-1, -1, 2, 3}, 2)
 

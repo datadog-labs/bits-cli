@@ -23,10 +23,8 @@ const (
 	resumeHint      = " ↑/↓ browse · start typing for a new conversation "
 	resumeColumnGap = 2
 
-	// Narrower than this, a title truncates to noise, so the row shows only its
-	// timestamp. Eight columns is the narrowest that still leaves a readable
-	// word or two beside the ellipsis; below it every row truncates to the same
-	// few characters and the list stops distinguishing conversations at all.
+	// Narrower than this a title truncates to noise, so the row shows only its
+	// timestamp. Eight still leaves a word or two beside the ellipsis.
 	resumeMinTitleWidth = 8
 )
 
@@ -41,10 +39,7 @@ type resume struct {
 
 	selected int
 
-	// top is a hint, not the window. The number of visible rows changes on
-	// every resize, so the rendered window is always derived from the selection
-	// by window(); top only remembers how far the user had scrolled when the
-	// selection alone does not pin it.
+	// top is a hint that window() refines, never the rendered window itself.
 	top int
 
 	now func() time.Time

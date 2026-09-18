@@ -149,9 +149,8 @@ func (l *List) SetHeader(header string) {
 	switch {
 	case had == has:
 	case has:
-		// Every item moved down one, so an offset that points at content follows
-		// it and keeps describing the same row. An offset resting at the very top
-		// stays there, where the new header is what the user should see.
+		// Every item moved down one, so an offset into content follows it. One
+		// resting at the very top stays, or the new header is scrolled past.
 		if l.offsetIdx > 0 || l.offsetLine > 0 {
 			l.offsetIdx++
 		}

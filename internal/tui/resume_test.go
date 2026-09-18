@@ -340,9 +340,8 @@ func TestSelectedRowTimestampTakesTheTitleAccent(t *testing.T) {
 	}
 }
 
-// Submitting empties the composer but leaves m.blocks empty until the first
-// turn event, so the offer would flash back mid-turn and Enter would try to
-// switch conversations against a held engine gate.
+// An empty composer and an empty transcript both hold for a moment after
+// submitting, so the turn is the gate that closes the window.
 func TestResumeHiddenWhileATurnIsRunning(t *testing.T) {
 	m := welcomeModel(120, 40)
 	m.mode = ModeChat
