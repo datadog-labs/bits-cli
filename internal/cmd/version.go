@@ -2,9 +2,9 @@ package cmd
 
 import "runtime/debug"
 
-// buildVersion reports the module version when available, otherwise a
+// BuildVersion reports the module version when available, otherwise a
 // development version with the short VCS revision recorded by the toolchain.
-func buildVersion() string {
+func BuildVersion() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "dev"

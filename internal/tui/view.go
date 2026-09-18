@@ -106,7 +106,13 @@ func (m *Model) chatView() string {
 // overlays. Selection uses this exact composition so every rendered row stays
 // in the same screen coordinate space as the normal chat view.
 func (m *Model) chatViewBase(transcript string) string {
-	sections := []string{transcript}
+	sections := []string{}
+	// Only shown with an empty transcript, so it cannot offset the row mapping
+	// visibleSelectionFrame builds for a transcript selection.
+	if m.showWelcome() {
+		sections = append(sections, m.welcomeView())
+	}
+	sections = append(sections, transcript)
 	if approval := m.approvalView(); approval != "" {
 		sections = append(sections, approval)
 	}

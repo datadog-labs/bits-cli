@@ -97,7 +97,7 @@ func newRootCommand(actions Actions) *cobra.Command {
 		Short:         "Datadog Assistant in your terminal",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		Version:       buildVersion(),
+		Version:       BuildVersion(),
 		RunE: func(command *cobra.Command, args []string) error {
 			if err := cobra.NoArgs(command, args); err != nil {
 				return err

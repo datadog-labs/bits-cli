@@ -7,12 +7,14 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/browser"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
+	"github.com/DataDog/bits-cli/internal/tui/splash"
 )
 
 // historyLoadTimeout bounds the conversation-history fetch on startup.
@@ -149,6 +151,20 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // routes the message to the owning surface, then reconciles editor focus so the
 // cursor always tracks the active surface.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The probe answer can arrive in any mode and no surface uses it. Skipping
+	// reconcileFocus is safe: it is idempotent and runs on the next message.
+	if event, ok := msg.(uv.KittyGraphicsEvent); ok {
+		switch {
+		case splash.ImageRejected(event):
+			m.splashReady = false
+			m.layoutTranscript()
+		case !m.splashReady && splash.ProbeSucceeded(event):
+			m.splashReady = true
+			m.layoutTranscript()
+			return m, splash.Transmit()
+		}
+		return m, nil
+	}
 	if m.mode == ModeLogin {
 		return m.updateLogin(msg)
 	}
@@ -815,7 +831,11 @@ func (m *Model) layoutTranscript() {
 		return
 	}
 	m.editor.SetMenuHeight(max(0, m.height-chatFooterHeight-m.editor.Height()))
-	m.list.SetHeight(max(1, m.height-chatNoticeHeight-chatFooterHeight-m.composerHeight()))
+	height := m.transcriptRows()
+	if m.showWelcome() {
+		height -= m.welcomeHeight()
+	}
+	m.list.SetHeight(max(1, height))
 }
 
 // syncTranscript rebuilds presentation metadata only after m.blocks changes.
