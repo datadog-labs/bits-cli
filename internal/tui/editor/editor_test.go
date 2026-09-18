@@ -2,6 +2,7 @@ package editor
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -587,7 +588,8 @@ func TestCompletionMenuUsesFramedResponsiveLayout(t *testing.T) {
 
 		view := e.MenuView()
 		plain := ansi.Strip(view)
-		if !strings.Contains(plain, "ESC x") || !strings.Contains(plain, "↓ 3 more below") {
+		wantOverflow := "↓ " + strconv.Itoa(len(e.menu.items)-menuVisibleRows) + " more below"
+		if !strings.Contains(plain, "ESC x") || !strings.Contains(plain, wantOverflow) {
 			t.Fatalf("width %d missing menu chrome: %q", width, plain)
 		}
 		if strings.Contains(plain, "›") {
@@ -609,18 +611,20 @@ func TestCompletionMenuCountsRowsActuallyHiddenBelow(t *testing.T) {
 	e.ta.SetValue("/")
 	e.ta.SetCursorColumn(1)
 	e.recompute()
-	if plain := ansi.Strip(e.MenuView()); !strings.Contains(plain, "↓ 3 more below") {
+	wantOverflow := "↓ " + strconv.Itoa(len(e.menu.items)-menuVisibleRows) + " more below"
+	if plain := ansi.Strip(e.MenuView()); !strings.Contains(plain, wantOverflow) {
 		t.Fatalf("initial overflow hint = %q", plain)
 	}
 
-	for range 5 {
+	for range menuVisibleRows {
 		e.menu.selector.UpdateKey("down")
 	}
-	if plain := ansi.Strip(e.MenuView()); !strings.Contains(plain, "↓ 2 more below") {
+	wantOverflow = "↓ " + strconv.Itoa(len(e.menu.items)-menuVisibleRows-1) + " more below"
+	if plain := ansi.Strip(e.MenuView()); !strings.Contains(plain, wantOverflow) {
 		t.Fatalf("scrolled overflow hint = %q", plain)
 	}
 
-	for range 2 {
+	for range len(e.menu.items) - menuVisibleRows - 1 {
 		e.menu.selector.UpdateKey("down")
 	}
 	plain := ansi.Strip(e.MenuView())
