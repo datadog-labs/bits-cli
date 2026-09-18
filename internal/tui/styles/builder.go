@@ -20,7 +20,7 @@ func build(isDark bool, p palette) Theme {
 	input := Input{
 		Prompt:     prompt,
 		Background: lipgloss.Color(p.surface),
-		Cursor:     lipgloss.Color("7"),
+		Cursor:     lipgloss.Color(p.textPrimary),
 		Block: lipgloss.NewStyle().Background(lipgloss.Color(p.surface)).
 			Border(inputRule, true, false, true, false).
 			BorderForeground(lipgloss.Color(p.inputRule)).
