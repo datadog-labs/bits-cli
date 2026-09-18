@@ -167,10 +167,10 @@ func TestRunMissingOAuthFailsFastWithLoginHint(t *testing.T) {
 func TestRunGatedDenialExitsThree(t *testing.T) {
 	backend := &scriptBackend{rounds: [][]assistant.Message{
 		{
-			clientCallMessage("c1", "cli-1", "get_local_time", "{}"),
+			clientCallMessage("g1", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1","approval_message":"Delete it?"}`),
 		},
 		{
-			runTextMessage("a1", "I cannot read your clock."),
+			runTextMessage("a1", "I cannot delete the dashboard."),
 		},
 	}}
 	engine := agent.New(backend, assistant.SendOptions{})
@@ -189,14 +189,14 @@ func TestRunGatedDenialExitsThree(t *testing.T) {
 		t.Fatalf("response batches = %v", backend.batches)
 	}
 	response := backend.batches[0][0]
-	if response.ToolCallID != "cli-1" || response.Status != assistant.ToolStatusError {
+	if response.ToolCallID != "gate-1" || response.Status != assistant.ToolStatusError {
 		t.Fatalf("denial response = %+v", response)
 	}
 	if !strings.Contains(out.String(), `"type":"run.finished"`) ||
 		!strings.Contains(out.String(), `"outcome":"approval_denied"`) {
 		t.Fatalf("terminal record missing the approval_denied outcome:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "I cannot read your clock.") {
+	if !strings.Contains(out.String(), "I cannot delete the dashboard.") {
 		t.Fatal("the model's adjusted answer was not delivered")
 	}
 }
@@ -224,7 +224,7 @@ func TestAutoDenyApprovalReportsRejectedDecision(t *testing.T) {
 func TestRunAllowAllApprovesLocalAndServerGates(t *testing.T) {
 	backend := &scriptBackend{rounds: [][]assistant.Message{
 		{
-			clientCallMessage("gate", "gate-1", assistant.ApprovalRequestTool, `{"action":"delete_dashboard"}`),
+			clientCallMessage("gate", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1","approval_message":"Delete it?"}`),
 			clientCallMessage("c1", "cli-1", "get_local_time", "{}"),
 		},
 		{

@@ -1,5 +1,12 @@
 package agent
 
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/DataDog/bits-cli/internal/assistant"
+)
+
 type ApprovalDecision string
 
 const (
@@ -69,6 +76,59 @@ type ApprovalRequirement struct {
 
 type ApprovalPolicy func(ToolCall) (ApprovalRequirement, bool)
 
+type serverGateInput struct {
+	ToolName        string         `json:"tool_name"`
+	ToolArgs        map[string]any `json:"tool_args"`
+	ToolCallID      string         `json:"tool_call_id"`
+	ApprovalMessage string         `json:"approval_message"`
+}
+
+func parseServerGateInput(call ToolCall) (serverGateInput, error) {
+	var input serverGateInput
+	if err := json.Unmarshal([]byte(call.Input), &input); err != nil {
+		return serverGateInput{}, fmt.Errorf("decode approval request: %w", err)
+	}
+	if input.ToolName == "" {
+		return serverGateInput{}, fmt.Errorf("approval request has no tool_name")
+	}
+	if input.ToolArgs == nil {
+		return serverGateInput{}, fmt.Errorf("approval request has no tool_args object")
+	}
+	if input.ToolCallID == "" {
+		return serverGateInput{}, fmt.Errorf("approval request has no tool_call_id")
+	}
+	if input.ToolCallID != call.ID {
+		return serverGateInput{}, fmt.Errorf("approval request tool_call_id %q does not match outer call id %q", input.ToolCallID, call.ID)
+	}
+	return input, nil
+}
+
+func serverGateApprovalRequirement(call ToolCall) (ApprovalRequirement, bool) {
+	input, err := parseServerGateInput(call)
+	if err != nil {
+		return ApprovalRequirement{}, false
+	}
+	title := input.ApprovalMessage
+	if title == "" {
+		title = fmt.Sprintf("Allow the assistant to perform the %q action?", input.ToolName)
+	}
+	detail := "tool: " + input.ToolName
+	return ApprovalRequirement{
+		Key: ApprovalKey{Tool: assistant.ApprovalRequestTool, Resource: input.ToolName},
+		Prompt: ApprovalPrompt{
+			Title:  title,
+			Detail: detail,
+		},
+	}, true
+}
+
+func approvalDeniedResult(call ToolCall) ToolResult {
+	if call.Name == assistant.ApprovalRequestTool {
+		return serverDeniedResult()
+	}
+	return deniedResult()
+}
+
 func deniedResult() ToolResult {
 	return ToolResult{
 		Title:   "Permission denied",
@@ -82,6 +142,15 @@ func serverDeniedResult() ToolResult {
 	return ToolResult{
 		Title:   "Permission denied",
 		Output:  "the user denied this action",
+		IsError: true,
+		Denied:  true,
+	}
+}
+
+func invalidServerGateResult() ToolResult {
+	return ToolResult{
+		Title:   "Invalid approval request",
+		Output:  "the server approval request was invalid",
 		IsError: true,
 		Denied:  true,
 	}

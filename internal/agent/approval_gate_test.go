@@ -12,12 +12,15 @@ import (
 // gateBackend scripts a server-injected approval gate and optional siblings;
 // later sends record response batches and answer, or fail with failFollowUp.
 type gateBackend struct {
-	failFollowUp     error
-	includeSibling   bool
-	siblingFirst     bool
-	followUpToolCall bool
-	responses        [][]assistant.ClientToolResponse
-	calls            int
+	failFollowUp      error
+	includeSibling    bool
+	includeSecondGate bool
+	siblingFirst      bool
+	followUpToolCall  bool
+	gateInput         string
+	secondGateInput   string
+	responses         [][]assistant.ClientToolResponse
+	calls             int
 }
 
 func clientToolCall(convID, msgID, callID, name, input string) assistant.AssistantResponse {
@@ -40,8 +43,21 @@ func (b *gateBackend) Send(_ context.Context, message any, _ assistant.SendOptio
 				return "conversation-1", err
 			}
 		}
-		if err := emit(clientToolCall("conversation-1", "gate-message", "gate-1", assistant.ApprovalRequestTool, `{"action":"delete_dashboard"}`)); err != nil {
+		gateInput := b.gateInput
+		if gateInput == "" {
+			gateInput = `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1","approval_message":"Delete it?"}`
+		}
+		if err := emit(clientToolCall("conversation-1", "gate-message", "gate-1", assistant.ApprovalRequestTool, gateInput)); err != nil {
 			return "conversation-1", err
+		}
+		if b.includeSecondGate {
+			secondGateInput := b.secondGateInput
+			if secondGateInput == "" {
+				secondGateInput = `{"tool_name":"update_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-2","approval_message":"Update it?"}`
+			}
+			if err := emit(clientToolCall("conversation-1", "second-gate-message", "gate-2", assistant.ApprovalRequestTool, secondGateInput)); err != nil {
+				return "conversation-1", err
+			}
 		}
 		if b.includeSibling && !b.siblingFirst {
 			if err := emitSibling(); err != nil {
@@ -53,7 +69,10 @@ func (b *gateBackend) Send(_ context.Context, message any, _ assistant.SendOptio
 	responses, ok := message.([]assistant.ClientToolResponse)
 	wantResponses := 1
 	if b.calls == 2 && b.includeSibling {
-		wantResponses = 2
+		wantResponses++
+	}
+	if b.calls == 2 && b.includeSecondGate {
+		wantResponses++
 	}
 	if !ok || len(responses) != wantResponses {
 		return "conversation-1", errors.New("follow-up carried the wrong client tool response count")
@@ -89,6 +108,35 @@ func gatedToolSet(t *testing.T, mode ApprovalMode) *ToolSet {
 	return tools
 }
 
+func decideServerGate(engine *Engine, decision ApprovalDecision, observe func(Event) error) func(Event) error {
+	decisionIssued := false
+	return func(event Event) error {
+		if observe != nil {
+			if err := observe(event); err != nil {
+				return err
+			}
+		}
+		if event.Kind != EventTranscript {
+			return nil
+		}
+		if decisionIssued {
+			return nil
+		}
+		for _, block := range event.Transcript.PendingApprovals() {
+			if block.Tool == nil || block.Tool.Name != assistant.ApprovalRequestTool {
+				continue
+			}
+			id := block.ToolCallID()
+			if !engine.Decide(id, decision) {
+				return errors.New("server-gate approval decision was not queued")
+			}
+			decisionIssued = true
+			break
+		}
+		return nil
+	}
+}
+
 func TestEngineApprovalRequestGateAllowAllApproves(t *testing.T) {
 	backend := &gateBackend{}
 	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
@@ -113,13 +161,184 @@ func TestEngineApprovalRequestGateAllowAllApproves(t *testing.T) {
 	}
 }
 
-func TestEngineApprovalRequestGateGatedDeniesAndContinues(t *testing.T) {
+func TestEngineApprovalRequestGateNilToolsDenies(t *testing.T) {
 	backend := &gateBackend{}
 	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
 		Message: "write something",
-		Tools:   gatedToolSet(t, ModeGated),
 		OnDeny:  DenyContinue,
 	}, nil)
+	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
+		t.Fatalf("result/error = %+v, %v; want a typed denial", result, err)
+	}
+	if len(backend.responses) != 1 {
+		t.Fatalf("response batches = %d, want 1", len(backend.responses))
+	}
+	response := backend.responses[0][0]
+	if response.ToolCallID != "gate-1" || response.Status != assistant.ToolStatusError || response.Metadata.Output != "the user denied this action" {
+		t.Fatalf("gate response = %+v, want a server-gate denial", response)
+	}
+}
+
+func TestEngineMalformedApprovalRequestFailsClosed(t *testing.T) {
+	backend := &gateBackend{gateInput: `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"other"}`}
+	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+		Message: "write something",
+		Tools:   gatedToolSet(t, ModeAllowAll),
+	}, nil)
+	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
+		t.Fatalf("result/error = %+v, %v; want a typed denial", result, err)
+	}
+	if len(backend.responses) != 1 {
+		t.Fatalf("response batches = %d, want 1", len(backend.responses))
+	}
+	response := backend.responses[0][0]
+	if response.Status != assistant.ToolStatusError || response.Title != "Invalid approval request" || response.Metadata.Output != "the server approval request was invalid" {
+		t.Fatalf("gate response = %+v, want an invalid-request error", response)
+	}
+}
+
+func TestParseServerGateInputRejectsNonContractPayloads(t *testing.T) {
+	valid := `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"gate-1"}`
+	tests := map[string]string{
+		"missing tool name":    `{"tool_args":{},"tool_call_id":"gate-1"}`,
+		"missing tool args":    `{"tool_name":"delete_dashboard","tool_call_id":"gate-1"}`,
+		"missing call id":      `{"tool_name":"delete_dashboard","tool_args":{}}`,
+		"mismatched call id":   `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"other"}`,
+		"legacy action":        `{"action":"delete_dashboard"}`,
+		"non-object tool args": `{"tool_name":"delete_dashboard","tool_args":[],"tool_call_id":"gate-1"}`,
+		"invalid message":      `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"gate-1","approval_message":42}`,
+	}
+	if _, err := parseServerGateInput(ToolCall{ID: "gate-1", Input: valid}); err != nil {
+		t.Fatalf("valid approval request rejected: %v", err)
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseServerGateInput(ToolCall{ID: "gate-1", Input: input}); err == nil {
+				t.Fatalf("approval request accepted: %s", input)
+			}
+		})
+	}
+}
+
+func TestEngineApprovalRequestGateGatedApprovesInteractively(t *testing.T) {
+	backend := &gateBackend{}
+	engine := New(backend, assistant.SendOptions{})
+	sawPending := false
+	consume := decideServerGate(engine, ApprovalAllowOnce, func(event Event) error {
+		if event.Kind != EventTranscript {
+			return nil
+		}
+		for _, block := range event.Transcript.PendingApprovals() {
+			if block.Tool == nil || block.Tool.Name != assistant.ApprovalRequestTool {
+				continue
+			}
+			sawPending = true
+			if block.Tool.Approval == nil || block.Tool.Approval.Title != "Delete it?" || block.Tool.Approval.Detail != "tool: delete_dashboard" {
+				t.Fatalf("server-gate prompt = %+v, want the action-specific approval prompt", block.Tool.Approval)
+			}
+		}
+		return nil
+	})
+	result, err := engine.RunTurn(context.Background(), TurnInput{
+		Message: "write something",
+		Tools:   gatedToolSet(t, ModeGated),
+	}, consume)
+	if err != nil || result.Outcome != TurnOutcomeCompleted {
+		t.Fatalf("result/error = %+v, %v", result, err)
+	}
+	if !sawPending {
+		t.Fatal("gated server gate never surfaced as a pending approval")
+	}
+	if result.Denied {
+		t.Fatal("approved server gate was reported as denied")
+	}
+	if len(backend.responses) != 1 {
+		t.Fatalf("response batches = %d, want 1", len(backend.responses))
+	}
+	response := backend.responses[0][0]
+	if response.ToolCallID != "gate-1" || response.Status != assistant.ToolStatusSuccess {
+		t.Fatalf("gate response = %+v, want success for gate-1", response)
+	}
+}
+
+func TestEngineApprovalRequestGateAllowSessionIsToolScoped(t *testing.T) {
+	backend := &gateBackend{includeSecondGate: true}
+	engine := New(backend, assistant.SendOptions{})
+	decisions := 0
+	decided := make(map[string]struct{})
+	consume := func(event Event) error {
+		if event.Kind != EventTranscript {
+			return nil
+		}
+		for _, block := range event.Transcript.PendingApprovals() {
+			if block.Tool == nil || block.Tool.Name != assistant.ApprovalRequestTool {
+				continue
+			}
+			if _, done := decided[block.ToolCallID()]; done {
+				continue
+			}
+			decisions++
+			if !engine.Decide(block.ToolCallID(), ApprovalAllowSession) {
+				return errors.New("server-gate session approval was not queued")
+			}
+			decided[block.ToolCallID()] = struct{}{}
+			return nil
+		}
+		return nil
+	}
+	result, err := engine.RunTurn(context.Background(), TurnInput{
+		Message: "write something",
+		Tools:   gatedToolSet(t, ModeGated),
+	}, consume)
+	if err != nil || result.Outcome != TurnOutcomeCompleted {
+		t.Fatalf("result/error = %+v, %v", result, err)
+	}
+	if decisions != 2 {
+		t.Fatalf("server-gate decisions = %d, want one decision per action", decisions)
+	}
+	if len(backend.responses) != 1 || len(backend.responses[0]) != 2 {
+		t.Fatalf("response batches = %+v, want both server gates", backend.responses)
+	}
+	for _, response := range backend.responses[0] {
+		if response.Status != assistant.ToolStatusSuccess {
+			t.Fatalf("server-gate response = %+v, want success", response)
+		}
+	}
+}
+
+func TestEngineApprovalRequestGateAllowSessionCoversSameTool(t *testing.T) {
+	backend := &gateBackend{
+		includeSecondGate: true,
+		secondGateInput:   `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"def"},"tool_call_id":"gate-2","approval_message":"Delete another one?"}`,
+	}
+	engine := New(backend, assistant.SendOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := engine.RunTurn(ctx, TurnInput{
+		Message: "write something",
+		Tools:   gatedToolSet(t, ModeGated),
+	}, decideServerGate(engine, ApprovalAllowSession, nil))
+	if err != nil || result.Outcome != TurnOutcomeCompleted {
+		t.Fatalf("result/error = %+v, %v", result, err)
+	}
+	if len(backend.responses) != 1 || len(backend.responses[0]) != 2 {
+		t.Fatalf("response batches = %+v, want both same-tool gates", backend.responses)
+	}
+	for _, response := range backend.responses[0] {
+		if response.Status != assistant.ToolStatusSuccess {
+			t.Fatalf("server-gate response = %+v, want success", response)
+		}
+	}
+}
+
+func TestEngineApprovalRequestGateGatedDeniesAndContinues(t *testing.T) {
+	backend := &gateBackend{}
+	engine := New(backend, assistant.SendOptions{})
+	result, err := engine.RunTurn(context.Background(), TurnInput{
+		Message: "write something",
+		Tools:   gatedToolSet(t, ModeGated),
+		OnDeny:  DenyContinue,
+	}, decideServerGate(engine, ApprovalDeny, nil))
 	// The denial is typed and the turn continues with an adjusted answer.
 	if err != nil || result.Outcome != TurnOutcomeCompleted {
 		t.Fatalf("result/error = %+v, %v", result, err)
@@ -160,11 +379,12 @@ func TestEngineDeniedGatePreservesSiblingResultOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+	engine := New(backend, assistant.SendOptions{})
+	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   tools,
 		OnDeny:  DenyContinue,
-	}, nil)
+	}, decideServerGate(engine, ApprovalDeny, nil))
 	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
@@ -191,10 +411,11 @@ func TestDenyPolicyZeroValueStopsAfterWireAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+	engine := New(backend, assistant.SendOptions{})
+	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   tools,
-	}, nil)
+	}, decideServerGate(engine, ApprovalDeny, nil))
 	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
@@ -216,10 +437,11 @@ func TestDenyStopCancelsPendingSiblingBeforeServerGate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(ctx, TurnInput{
+	engine := New(backend, assistant.SendOptions{})
+	result, err := engine.RunTurn(ctx, TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeGated),
-	}, nil)
+	}, decideServerGate(engine, ApprovalDeny, nil))
 	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
@@ -238,15 +460,16 @@ func TestDenyStopCancelsPendingSiblingBeforeServerGate(t *testing.T) {
 func TestDenyStopDrainsFollowUpClientToolCalls(t *testing.T) {
 	backend := &gateBackend{followUpToolCall: true}
 	terminalRound := 0
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+	engine := New(backend, assistant.SendOptions{})
+	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeGated),
-	}, func(event Event) error {
+	}, decideServerGate(engine, ApprovalDeny, func(event Event) error {
 		if event.Kind == EventTurnDone {
 			terminalRound = event.Round
 		}
 		return nil
-	})
+	}))
 	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
@@ -274,15 +497,16 @@ func TestDenyStopBackendFailureRetainsBackendProvenance(t *testing.T) {
 	backendErr := errors.New("backend failed while recording denial")
 	backend := &gateBackend{failFollowUp: backendErr}
 	var failure Event
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+	engine := New(backend, assistant.SendOptions{})
+	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeGated),
-	}, func(event Event) error {
+	}, decideServerGate(engine, ApprovalDeny, func(event Event) error {
 		if event.Kind == EventError {
 			failure = event
 		}
 		return nil
-	})
+	}))
 
 	if !errors.Is(err, backendErr) || result.Outcome != TurnOutcomeFailed {
 		t.Fatalf("result/error = %+v, %v", result, err)
@@ -312,10 +536,11 @@ func TestDeniedGateRecordsFailingSiblingOnTheWire(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(ctx, TurnInput{
+	engine := New(backend, assistant.SendOptions{})
+	result, err := engine.RunTurn(ctx, TurnInput{
 		Message: "write something",
 		Tools:   tools,
-	}, nil)
+	}, decideServerGate(engine, ApprovalDeny, nil))
 	if err != nil || result.Outcome != TurnOutcomeCompleted {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
@@ -335,11 +560,12 @@ func TestDeniedGateRecordsFailingSiblingOnTheWire(t *testing.T) {
 func TestRunTurnDeniedGateThenBackendFailureFails(t *testing.T) {
 	backendErr := errors.New("backend failed after denial")
 	backend := &gateBackend{failFollowUp: backendErr}
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+	engine := New(backend, assistant.SendOptions{})
+	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeGated),
 		OnDeny:  DenyContinue,
-	}, nil)
+	}, decideServerGate(engine, ApprovalDeny, nil))
 	// Runtime failure wins; the denial evidence remains.
 	if !errors.Is(err, backendErr) || result.Outcome != TurnOutcomeFailed {
 		t.Fatalf("result/error = %+v, %v", result, err)
@@ -371,11 +597,12 @@ func TestDenyContinueRecordsFailingSiblingOnTheWire(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(ctx, TurnInput{
+	engine := New(backend, assistant.SendOptions{})
+	result, err := engine.RunTurn(ctx, TurnInput{
 		Message: "write something",
 		Tools:   tools,
 		OnDeny:  DenyContinue,
-	}, nil)
+	}, decideServerGate(engine, ApprovalDeny, nil))
 	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}

@@ -551,7 +551,8 @@ func TestToolSetApprovalModeGatesPolicyConsultation(t *testing.T) {
 	}
 
 	// Tools without a declared gate report none in both modes, as do calls to
-	// tools the set does not register (e.g. the server-injected approval_request).
+	// tools the set does not register. The server-injected approval_request is
+	// the one protocol-level exception: gated mode exposes it as an approval.
 	for _, mode := range []ApprovalMode{ModeAllowAll, ModeGated} {
 		set := newSet(mode)
 		if _, needs := set.Approval(ToolCall{Name: "read"}); needs {
@@ -560,6 +561,14 @@ func TestToolSetApprovalModeGatesPolicyConsultation(t *testing.T) {
 		if _, needs := set.Approval(ToolCall{Name: "unknown"}); needs {
 			t.Fatalf("%s Approval(unknown) reported a gate", mode)
 		}
+	}
+	requirement, needs = newSet(ModeGated).Approval(ToolCall{
+		ID:    "gate-1",
+		Name:  assistant.ApprovalRequestTool,
+		Input: `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1"}`,
+	})
+	if !needs || requirement.Key != (ApprovalKey{Tool: assistant.ApprovalRequestTool, Resource: "delete_dashboard"}) || requirement.Prompt.Title != `Allow the assistant to perform the "delete_dashboard" action?` || requirement.Prompt.Detail != "tool: delete_dashboard" {
+		t.Fatalf("gated Approval(approval_request) = (%+v, %v), want the server gate", requirement, needs)
 	}
 }
 

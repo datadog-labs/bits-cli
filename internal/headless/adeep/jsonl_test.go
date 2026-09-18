@@ -701,7 +701,7 @@ func TestDeliveryEmitsRunTimestamps(t *testing.T) {
 func TestDeliveryReportsServerGateAndCancelledSiblings(t *testing.T) {
 	backend := &turnBackend{rounds: [][]assistant.Message{
 		{
-			clientCallMsg("g1", "gate-1", assistant.ApprovalRequestTool, `{"action":"delete_dashboard"}`),
+			clientCallMsg("g1", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1","approval_message":"Delete it?"}`),
 			clientCallMsg("s1", "sibling-1", "write", `{"value":"exact"}`),
 		},
 		{textMsg("a2", "adjusted answer")},
@@ -715,10 +715,33 @@ func TestDeliveryReportsServerGateAndCancelledSiblings(t *testing.T) {
 
 	// DenyStop mirrors the interactive surface: the gate is denied, the pending
 	// sibling is cancelled into the same batch, and the drain closes the round.
+	denied := make(map[string]struct{})
+	consume := func(event agent.Event) error {
+		if err := delivery.Consume(event); err != nil {
+			return err
+		}
+		if event.Kind != agent.EventTranscript {
+			return nil
+		}
+		for _, block := range event.Transcript.PendingApprovals() {
+			if block.Tool == nil || block.Tool.Name != assistant.ApprovalRequestTool {
+				continue
+			}
+			id := block.ToolCallID()
+			if _, done := denied[id]; done {
+				continue
+			}
+			if !engine.Decide(id, agent.ApprovalDeny) {
+				return errors.New("server-gate denial was not queued")
+			}
+			denied[id] = struct{}{}
+		}
+		return nil
+	}
 	result, err := engine.RunTurn(t.Context(), agent.TurnInput{
 		Message: "write something",
 		Tools:   clientToolSet(t, agent.ModeGated),
-	}, delivery.Consume)
+	}, consume)
 	if finishErr := delivery.Finish(headless.Finish{Result: result, Err: err}); finishErr != nil {
 		t.Fatal(finishErr)
 	}

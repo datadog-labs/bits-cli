@@ -789,28 +789,41 @@ func (e *Engine) runTools(
 			completeTool(item, result)
 		}
 	}
+	denyServerGate := func(item pendingTool, result ToolResult) bool {
+		denied = true
+		if !completeTool(item, result) {
+			cancelRunning()
+			return false
+		}
+		if onDeny == DenyStop {
+			stopRequested = true
+			if !stopPendingAfterDenial() {
+				return false
+			}
+		}
+		return true
+	}
 
 	for _, item := range work {
 		if item.call.Name == assistant.ApprovalRequestTool {
-			// A protocol gate, not a registered tool. Gated mode denies it with
-			// no interactive decision; the TUI flow is tracked in BCLI-41.
-			if tools.ApprovesServerGate() {
-				if !completeTool(item, approvedResult()) {
+			if stopRequested {
+				if !completeTool(item, cancelledResult()) {
 					cancelRunning()
 					return toolRound{denied: denied}, nil
 				}
-			} else {
-				denied = true
-				if !completeTool(item, serverDeniedResult()) {
-					cancelRunning()
+				continue
+			}
+			if _, err := parseServerGateInput(item.call); err != nil {
+				if !denyServerGate(item, invalidServerGateResult()) {
 					return toolRound{denied: denied}, nil
 				}
-				if onDeny == DenyStop {
-					stopRequested = true
-					if !stopPendingAfterDenial() {
-						return toolRound{denied: denied}, nil
-					}
-				}
+				continue
+			}
+		}
+		if item.call.Name == assistant.ApprovalRequestTool && tools.ApprovesServerGate() {
+			if !completeTool(item, approvedResult()) {
+				cancelRunning()
+				return toolRound{denied: denied}, nil
 			}
 			continue
 		}
@@ -832,6 +845,19 @@ func (e *Engine) runTools(
 					cancelRunning()
 					return toolRound{denied: denied}, nil
 				}
+			}
+			continue
+		}
+		if item.call.Name == assistant.ApprovalRequestTool {
+			if !needsApproval {
+				if !denyServerGate(item, serverDeniedResult()) {
+					return toolRound{denied: denied}, nil
+				}
+				continue
+			}
+			if !completeTool(item, approvedResult()) {
+				cancelRunning()
+				return toolRound{denied: denied}, nil
 			}
 			continue
 		}
@@ -876,7 +902,7 @@ func (e *Engine) runTools(
 				// Answer the denial on the wire; siblings still resolve. Under
 				// DenyStop the round then aborts without a follow-up round.
 				denied = true
-				if !completeTool(item, deniedResult()) {
+				if !completeTool(item, approvalDeniedResult(item.call)) {
 					cancelRunning()
 					return toolRound{denied: denied}, nil
 				}
@@ -891,7 +917,13 @@ func (e *Engine) runTools(
 			if command.decision == ApprovalAllowSession {
 				e.sessionGrants[item.key] = struct{}{}
 			}
-			if !launch(item, true) {
+			approve := func(item pendingTool) bool {
+				if item.call.Name == assistant.ApprovalRequestTool {
+					return completeTool(item, approvedResult())
+				}
+				return launch(item, true)
+			}
+			if !approve(item) {
 				cancelRunning()
 				return toolRound{denied: denied}, nil
 			}
@@ -904,7 +936,7 @@ func (e *Engine) runTools(
 					continue
 				}
 				delete(pending, sibling.call.ID)
-				if !launch(sibling, true) {
+				if !approve(sibling) {
 					cancelRunning()
 					return toolRound{denied: denied}, nil
 				}

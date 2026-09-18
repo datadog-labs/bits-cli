@@ -233,8 +233,8 @@ type ClientTool struct {
 	// to true server-side; set the pointer to send false explicitly.
 	IsAvailable *bool `json:"is_available,omitempty"`
 
-	// RequiresApproval is intentionally not modeled: it drives a server-side
-	// approval gate that conflicts with our client-side approval.
+	// RequiresApproval is intentionally not modeled: the server emits its
+	// approval gate as the protocol-level approval_request client tool call.
 	//
 	// RequiresApproval ToolApproval `json:"requires_approval,omitempty"`
 }
