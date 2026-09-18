@@ -556,8 +556,6 @@ func TestConversationRowsUseSelectorTextRoles(t *testing.T) {
 	}
 }
 
-// Ordered is the shared normalisation the startup offer and the picker both
-// call, so a drift in either one would show up here.
 func TestOrderedSortsNewestFirstAndDropsUnidentifiedRecords(t *testing.T) {
 	const hour = int64(3_600_000)
 	got := Ordered([]assistant.ConversationSummary{

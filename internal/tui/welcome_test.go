@@ -47,8 +47,8 @@ func TestWelcomeFactsNeverExceedTheirWidth(t *testing.T) {
 	}
 }
 
-// layoutTranscript subtracts splashPanelHeight from the transcript, so the
-// rendered block must occupy exactly that many lines in either logo form.
+// resumeVisibleRows budgets the offer against splashPanelHeight, so the panel
+// must occupy exactly that many lines in either logo form.
 func TestWelcomeBlockHeightMatchesReservation(t *testing.T) {
 	for name, m := range welcomeModels(0, 40) {
 		for _, ready := range []bool{false, true} {
@@ -130,8 +130,8 @@ func TestWelcomeFactsOmitOrganization(t *testing.T) {
 	}
 }
 
-// The new height gate gauges against transcriptHeight (notice/footer/composer
-// subtracted), not the old minimumChatHeight reservation.
+// The gate is transcriptHeight, so the boundary moves with the notice, footer
+// and composer rather than with m.height alone.
 func TestWelcomeHiddenUntilTerminalIsTallEnough(t *testing.T) {
 	tall := welcomeModel(100, 40)
 	needed := tall.splashPanelHeight() + chatNoticeHeight + chatFooterHeight + tall.composerHeight()
@@ -244,7 +244,7 @@ func TestGraphicsReplyDrivesLogoForm(t *testing.T) {
 	}
 }
 
-// The panel is a session header now, so a filled transcript must not hide it.
+// The panel is a session header: a filled transcript must not hide it.
 func TestSplashPanelSurvivesTranscriptContent(t *testing.T) {
 	m := welcomeModel(120, 40)
 	m.blocks = []agent.Block{{
@@ -356,8 +356,8 @@ func TestResumeHiddenWhileComposerHasText(t *testing.T) {
 	}
 }
 
-// The header is the transcript's content now, not a section above it, so the
-// chat view must not paint it twice.
+// The header reaches the screen only through the transcript, so the chat view
+// must not paint it a second time.
 func TestChatViewRendersTheHeaderOnlyThroughTheTranscript(t *testing.T) {
 	m := welcomeModel(120, 40)
 	m.resume = *resumeFixture(4)
@@ -368,10 +368,9 @@ func TestChatViewRendersTheHeaderOnlyThroughTheTranscript(t *testing.T) {
 	}
 }
 
-// A successful fetch must make the offer appear; a failure must leave it
-// absent. Empty and failed both leave showResume false, which is also true
-// of a model that never received the message at all — the empty-conversations
-// assertion on the failed case is what actually pins the handler ran.
+// Empty and failed both leave showResume false, which is also true of a model
+// that never received the message, so the failed case also asserts the offer
+// stayed empty.
 func TestRecentConversationsResultDrivesTheOffer(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -442,8 +441,8 @@ func TestWelcomeVisibilityUnchangedByTheProbe(t *testing.T) {
 
 // flattenMsgs executes cmd (and, recursively, every command a tea.BatchMsg
 // bundles) and collects the resulting messages. It never re-enters Update, so
-// it is only safe for commands whose channels resolve without further pumping
-// -- true here because the fake backend answers Restore and RecentConversations
+// it is only safe for commands whose channels resolve without further pumping —
+// true here because the fake backend answers Restore and RecentConversations
 // immediately with an error (it implements neither optional interface).
 func flattenMsgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	t.Helper()

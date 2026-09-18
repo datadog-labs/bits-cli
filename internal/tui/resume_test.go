@@ -321,3 +321,21 @@ func TestStartNewConversationBringsTheOfferBack(t *testing.T) {
 		t.Fatalf("the offer did not return after /new:\n%s", m.list.Render())
 	}
 }
+
+// The focused row's timestamp takes the title's accent, so the whole row reads
+// as one selected unit; unfocused rows keep the tertiary level.
+func TestSelectedRowTimestampTakesTheTitleAccent(t *testing.T) {
+	theme := styles.Default(true)
+	r := resumeFixture(4)
+	stamp := conversations.RelativeUpdatedAt(r.conversations[0].UpdatedAt, fixedNow())
+
+	accented := theme.Text.Tertiary.Foreground(theme.Selector.Selected.GetForeground()).Render(stamp)
+	if got := r.row(theme, 80, 0); !strings.Contains(got, accented) {
+		t.Fatalf("focused row does not carry the accented timestamp:\n%q", got)
+	}
+
+	r.selected = 1
+	if got := r.row(theme, 80, 0); !strings.Contains(got, theme.Text.Tertiary.Render(stamp)) {
+		t.Fatalf("unfocused row does not keep the tertiary timestamp:\n%q", got)
+	}
+}

@@ -136,14 +136,9 @@ func (l *List) SetItems(items []agent.Block) {
 
 // SetHeader replaces the document's leading content. Passing "" removes it.
 //
-// The header is otherwise invisible to the scroll, document-coordinate and
-// selection paths, but this is the one place that premise does not hold:
-// adding or removing it renumbers every presentation item, so item k becomes
-// item k+1. normalizeOffset only carries an offset through items whose
-// *height* changed, not through a shifted *index*, so the offset is rebased
-// here. Without it the viewport jumps by a whole block whenever
-// showSplashPanel flips on a resize, or the composer grows and squeezes
-// transcriptHeight, while the user is scrolled.
+// Adding or removing the header renumbers every presentation item, and
+// normalizeOffset carries an offset only through a changed height, not a
+// shifted index, so a scrolled offset is rebased here.
 func (l *List) SetHeader(header string) {
 	if header == l.header {
 		return
@@ -160,9 +155,8 @@ func (l *List) SetHeader(header string) {
 				l.offsetIdx--
 			}
 		case l.offsetLine > 0:
-			// Degenerate case: the offset points inside item 0, which is now a
-			// different item entirely. There is no row to carry, so restart at the
-			// document's top rather than land on an unrelated row.
+			// The offset points inside item 0, which is now a different item, so
+			// there is no row to carry.
 			l.offsetLine = 0
 		}
 	}

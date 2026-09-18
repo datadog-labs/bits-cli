@@ -16,10 +16,9 @@ type selectionFrame struct {
 	width, height int
 	documentRows  []int
 
-	// floor is the first selectable document row. The transcript's leading rows
-	// are the startup header, whose cells are decoration — Kitty placeholder
-	// runes on the image path — so a selection reaching into them starts here
-	// instead.
+	// floor is the first selectable document row. The startup header sits above
+	// it, and its cells are decoration: Kitty placeholder runes on the image
+	// path, which copy as garbage.
 	floor int
 }
 
@@ -224,8 +223,6 @@ func extractSelection(frame selectionFrame, anchor, focus image.Point) string {
 
 	buf := frame.buffer()
 	lo, hi := orderedPoints(anchor, focus)
-	// A drag reaching into the header starts at the first selectable row rather
-	// than at row 0, which is the header itself.
 	firstY := max(frame.floor, lo.Y)
 	lastY := min(frame.height-1, hi.Y)
 	if firstY > lastY {

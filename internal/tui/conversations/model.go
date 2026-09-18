@@ -141,9 +141,8 @@ func (m *Model) SetClosing() {
 // with the id as a stable tiebreak. The API's JSON:API item id is redundant
 // today, but is not the documented request key and must not silently
 // substitute for malformed data.
-//
-// Both this picker and the startup resume offer call it, so the two cannot
-// drift on what "recent" means.
+// The picker and the startup resume offer both call it, so neither can drift
+// on what "recent" means.
 func Ordered(summaries []assistant.ConversationSummary) []assistant.ConversationSummary {
 	ordered := make([]assistant.ConversationSummary, 0, len(summaries))
 	for _, summary := range summaries {

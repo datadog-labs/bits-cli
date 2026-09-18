@@ -64,7 +64,7 @@ func TestHeaderCanBeCleared(t *testing.T) {
 
 // Text selection maps screen rows through Document coordinates. The header is
 // part of the document, so it must shift block rows by exactly its own height
-// plus the inter-item gap -- consistently in both Document and the surface.
+// plus the inter-item gap, consistently in both Document and the surface.
 func TestHeaderShiftsDocumentCoordinatesConsistently(t *testing.T) {
 	l := headerList(t, 40, 40)
 	l.SetItems([]agent.Block{textBlock("a", "BLOCK BODY")})

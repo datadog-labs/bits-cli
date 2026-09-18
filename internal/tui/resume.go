@@ -76,8 +76,8 @@ func (r *resume) move(delta, visible int) {
 // It is derived rather than stored: visible changes independently of the
 // selection (a resize, an approval block docking), so every path that renders
 // or measures the window must call this instead of reading r.top. A stored top
-// went stale in both directions -- a grown window walked past the end of the
-// slice, and a shrunken one left the selection off-screen.
+// goes stale in both directions — a grown window reads past the end of the
+// slice, a shrunken one leaves the selection off-screen.
 func (r *resume) window(visible int) int {
 	top := min(max(r.top, r.selected-visible+1), r.selected)
 	return min(max(top, 0), max(0, len(r.conversations)-visible))
@@ -118,8 +118,11 @@ func (r *resume) view(theme styles.Theme, width, visible int) string {
 // right, padded so the whole row measures exactly width.
 func (r *resume) row(theme styles.Theme, width, index int) string {
 	marker, style := theme.Selector.Marker, theme.Selector.Item
+	stampStyle := theme.Text.Tertiary
 	if index == r.selected {
 		marker, style = theme.Selector.SelectedMarker, theme.Selector.Selected
+		// The timestamp joins the title's accent, without taking its weight.
+		stampStyle = stampStyle.Foreground(style.GetForeground())
 	}
 	summary := r.conversations[index]
 	stamp := conversations.RelativeUpdatedAt(summary.UpdatedAt, r.now())
@@ -132,7 +135,7 @@ func (r *resume) row(theme styles.Theme, width, index int) string {
 		title = ansi.Truncate(conversations.SafeTitle(summary), titleWidth, "…")
 	}
 	pad := max(1, width-left-ansi.StringWidth(title)-ansi.StringWidth(stamp))
-	row := style.Render(marker+title) + strings.Repeat(" ", pad) + theme.Text.Tertiary.Render(stamp)
+	row := style.Render(marker+title) + strings.Repeat(" ", pad) + stampStyle.Render(stamp)
 	return ansi.Truncate(row, width, "…")
 }
 
