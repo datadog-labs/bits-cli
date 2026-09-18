@@ -56,6 +56,14 @@ func (*immediateConversationBackend) Send(_ context.Context, _ any, opts assista
 	return opts.ConversationID, nil
 }
 
+type streamingConversationBackend struct{}
+
+func (*streamingConversationBackend) Send(_ context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	var response assistant.AssistantResponse
+	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("done"))
+	return "conversation", emit(response)
+}
+
 func runConversationCmd(t *testing.T, cmd tea.Cmd) tea.Msg {
 	t.Helper()
 	if cmd == nil {
@@ -92,6 +100,20 @@ func drainConversationRemote(t *testing.T, m *Model) {
 	for m.turnEvents != nil {
 		msg := runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents))
 		_, _ = m.Update(msg)
+	}
+}
+
+func TestCompletedTurnAppliesFinalTranscriptSnapshot(t *testing.T) {
+	m := New(agent.New(&streamingConversationBackend{}, assistant.SendOptions{}))
+	setConversationInput(m, "prompt")
+	_, _ = m.submit()
+	drainConversationRemote(t, m)
+
+	if m.chatPhase != chat.PhaseIdle {
+		t.Fatalf("chat phase = %v, want idle", m.chatPhase)
+	}
+	if len(m.blocks) != 2 || !m.blocks[1].Complete {
+		t.Fatalf("blocks = %+v, want completed assistant response", m.blocks)
 	}
 }
 

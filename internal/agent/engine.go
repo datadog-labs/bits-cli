@@ -336,6 +336,21 @@ func (e *Engine) run(
 			return false
 		}
 	}
+	finalizeAndEmit := func(emit func(Event) bool) bool {
+		if !e.transcript.FinalizeAll() {
+			return true
+		}
+		return emit(Event{Kind: EventTranscript, Transcript: e.snapshot()})
+	}
+	emitAtRound := func(round int) func(Event) bool {
+		return func(ev Event) bool {
+			ev.Round = round
+			if ev.Kind == EventTranscript {
+				ev.Origin = TranscriptOriginRemote
+			}
+			return send(ev)
+		}
+	}
 
 	// The user's turn opens the transcript; the engine owns the user block too.
 	e.transcript.AppendUser(in.Message)
@@ -349,13 +364,7 @@ func (e *Engine) run(
 	for round := 1; round <= maxTurns; round++ {
 		var calls []assistant.Content
 
-		emit := func(ev Event) bool {
-			ev.Round = round
-			if ev.Kind == EventTranscript {
-				ev.Origin = TranscriptOriginRemote
-			}
-			return send(ev)
-		}
+		emit := emitAtRound(round)
 		fold := func(msg assistant.Message) bool {
 			if msg.Results != nil && msg.Results.Usage != nil {
 				completion.Usage = cloneUsage(msg.Results.Usage)
@@ -408,7 +417,9 @@ func (e *Engine) run(
 			// the more specific diagnostic in the authoritative completion.
 			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
 				completion.Err = err
-				e.transcript.FinalizeAll()
+				if !finalizeAndEmit(emit) {
+					return
+				}
 				if id != "" {
 					if !emit(Event{Kind: EventConversation, ConvID: id}) {
 						return
@@ -427,7 +438,9 @@ func (e *Engine) run(
 		emit(Event{Kind: EventConversation, ConvID: convID})
 
 		if len(calls) == 0 {
-			e.transcript.FinalizeAll()
+			if !finalizeAndEmit(emit) {
+				return
+			}
 			completion.Completed = emit(Event{Kind: EventTurnDone})
 			return
 		}
@@ -435,7 +448,9 @@ func (e *Engine) run(
 		if err != nil {
 			completion.Err = err
 			completion.Denied = completion.Denied || toolRound.denied
-			e.transcript.FinalizeAll()
+			if !finalizeAndEmit(emit) {
+				return
+			}
 			emit(Event{Kind: EventError, Err: err})
 			return
 		}
@@ -451,21 +466,29 @@ func (e *Engine) run(
 				}
 				if err != nil && (ctx.Err() == nil || !errors.Is(err, ctx.Err())) {
 					completion.Err = err
-					e.transcript.FinalizeAll()
+					emitTerminal := emitAtRound(terminalRound)
+					if !finalizeAndEmit(emitTerminal) {
+						return
+					}
 					send(Event{Kind: EventError, Round: terminalRound, Err: err, BackendFailure: true})
 					return
 				}
 				if ctx.Err() != nil {
 					return // cancelled: end the turn quietly
 				}
-				e.transcript.FinalizeAll()
-				completion.Completed = send(Event{Kind: EventTurnDone, Round: terminalRound})
+				emitTerminal := emitAtRound(terminalRound)
+				if !finalizeAndEmit(emitTerminal) {
+					return
+				}
+				completion.Completed = emitTerminal(Event{Kind: EventTurnDone})
 			}
 			return
 		}
 		if !toolRound.complete {
 			if ctx.Err() == nil {
-				e.transcript.FinalizeAll()
+				if !finalizeAndEmit(emit) {
+					return
+				}
 				completion.Completed = emit(Event{Kind: EventTurnDone})
 			}
 			return
@@ -473,7 +496,9 @@ func (e *Engine) run(
 		next = toolRound.responses
 	}
 	completion.Err = ErrMaxTurns
-	e.transcript.FinalizeAll()
+	if !finalizeAndEmit(emitAtRound(maxTurns)) {
+		return
+	}
 	send(Event{Kind: EventError, Round: maxTurns, Err: ErrMaxTurns})
 }
 

@@ -438,17 +438,21 @@ func (t *Transcript) closePrior(b Block) {
 // FinalizeAll marks every still-open block complete; called at turn end as the
 // backstop for the last open block (typically the answer text, which has no
 // status glyph). Mid-turn blocks are already closed incrementally by
-// closePrior, so this normally only touches that trailing block.
-func (t *Transcript) FinalizeAll() {
+// closePrior, so this normally only touches that trailing block. It reports
+// whether the transcript changed.
+func (t *Transcript) FinalizeAll() bool {
+	finalized := false
 	if t.hasOpen {
 		id := t.openStream
 		if i, ok := t.index[id]; ok && !t.blocks[i].Complete {
 			t.blocks[i].Complete = true
 			t.blocks[i].Rev++
+			finalized = true
 		}
 		t.releaseAccumulator(id)
 	}
 	t.hasOpen = false
+	return finalized
 }
 
 func (t *Transcript) accumulatorFor(id BlockID, existing string) *strings.Builder {

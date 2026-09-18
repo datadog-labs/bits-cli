@@ -357,7 +357,7 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	e := New(b, assistant.SendOptions{})
 
 	evs := drain(e.StartTurn(context.Background(), TurnInput{Message: "hi"}))
-	want := []EventKind{EventTranscript, EventTranscript, EventTranscript, EventUsage, EventConversation, EventTurnDone}
+	want := []EventKind{EventTranscript, EventTranscript, EventTranscript, EventUsage, EventConversation, EventTranscript, EventTurnDone}
 	if got := kinds(evs); !reflect.DeepEqual(got, want) {
 		t.Fatalf("event kinds = %v, want %v", got, want)
 	}
@@ -368,8 +368,15 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	if len(blocks) == 0 || blocks[len(blocks)-1].Markdown == nil || blocks[len(blocks)-1].Markdown.Content != "Hello world" {
 		t.Fatalf("final text blocks = %+v", blocks)
 	}
+	if blocks[len(blocks)-1].Complete {
+		t.Fatal("streaming transcript snapshot unexpectedly marked the answer complete")
+	}
 	if evs[4].ConvID != "conv-1" {
 		t.Fatalf("conv id = %q, want conv-1", evs[4].ConvID)
+	}
+	final := evs[5].Transcript.Blocks
+	if len(final) == 0 || !final[len(final)-1].Complete {
+		t.Fatalf("final transcript snapshot = %+v, want completed answer", final)
 	}
 }
 
@@ -382,12 +389,16 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 	}, assistant.SendOptions{})
 
 	events := drain(e.StartTurn(context.Background(), TurnInput{Message: "question"}))
-	wantKinds := []EventKind{EventTranscript, EventTranscript, EventConversation, EventError}
+	wantKinds := []EventKind{EventTranscript, EventTranscript, EventTranscript, EventConversation, EventError}
 	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
 	}
-	if events[2].ConvID != "created-before-error" || !errors.Is(events[3].Err, backendErr) || !events[3].BackendFailure {
+	if events[3].ConvID != "created-before-error" || !errors.Is(events[4].Err, backendErr) || !events[4].BackendFailure {
 		t.Fatalf("terminal events = %+v", events[2:])
+	}
+	final := events[2].Transcript.Blocks
+	if len(final) == 0 || !final[len(final)-1].Complete {
+		t.Fatalf("final transcript snapshot = %+v, want completed answer", final)
 	}
 	if got := e.ConversationID(); got != "created-before-error" {
 		t.Fatalf("conversation ID = %q", got)
