@@ -78,6 +78,23 @@ func TestSelectorCompactDetailDoesNotPadShortLabels(t *testing.T) {
 	}
 }
 
+func TestSelectorCanRightAlignDetail(t *testing.T) {
+	selector := NewSelector([]Choice{
+		{Label: "Short", Detail: "1 hour ago"},
+		{Label: "A longer title", Detail: "2 days ago"},
+	}, styles.Default(true).Selector)
+	selector.SetAlignDetailRight(true)
+
+	for lineNo, line := range strings.Split(ansi.Strip(selector.View(40)), "\n") {
+		if got := ansi.StringWidth(line); got != 40 {
+			t.Fatalf("row %d width = %d, want 40: %q", lineNo+1, got, line)
+		}
+		if !strings.HasSuffix(line, "ago") {
+			t.Fatalf("row %d did not anchor detail to the right: %q", lineNo+1, line)
+		}
+	}
+}
+
 func TestSelectorFillWidthMakesEveryRowOpaqueWidth(t *testing.T) {
 	sty := styles.Default(true).Selector
 	sty.Item = sty.Item.Background(lipgloss.Color("#123456"))

@@ -32,6 +32,8 @@ const (
 	StateClosing
 )
 
+const maxVisibleConversationRows = 10
+
 type Operation int
 
 const (
@@ -68,6 +70,7 @@ type Model struct {
 	warning      string
 	width        int
 	height       int
+	windowStart  int
 	now          func() time.Time
 }
 
@@ -76,7 +79,7 @@ func New(width, height int, themes ...styles.Theme) Model {
 	if len(themes) > 0 {
 		theme = themes[0]
 	}
-	delegate := newConversationDelegate(theme)
+	delegate := newConversationDelegate()
 	model := list.New(nil, delegate, max(width, 1), max(height, 1))
 	// Search narrows the API's newest-first order using a contiguous,
 	// case-insensitive title match. Fuzzy subsequence matching creates surprising
@@ -91,18 +94,19 @@ func New(width, height int, themes ...styles.Theme) Model {
 	model.SetFilteringEnabled(false)
 	model.SetShowHelp(false)
 	model.SetShowStatusBar(false)
+	model.SetShowPagination(false)
 	configureConversationHelp(&model)
 	search := textinput.New()
-	search.Prompt = " >  "
-	search.Placeholder = "Type to search"
+	search.Prompt = "⌕ "
+	search.Placeholder = "Type to Search"
 	search.CharLimit = 128
 	search.Focus()
 	m := Model{
-		list: model, search: search, panel: components.NewPanel(theme.Panel), theme: theme,
+		list: model, search: search, panel: components.NewPanel(resumePanelStyles(theme)), theme: theme,
 		state: StateLoading, operation: OperationList,
 		width: max(width, 1), height: max(height, 1), now: time.Now,
 	}
-	m.search.SetStyles(theme.TextInput)
+	m.search.SetStyles(resumeSearchStyles(theme))
 	m.resizeChildren()
 	return m
 }
@@ -160,26 +164,29 @@ func (m *Model) SetConversations(summaries []assistant.ConversationSummary) tea.
 	}
 	m.list.ResetFilter()
 	m.list.ResetSelected()
+	m.windowStart = 0
 	cmd := m.list.SetItems(items)
 	m.applySearch()
 	return cmd
 }
 
-func newConversationDelegate(themes ...styles.Theme) list.DefaultDelegate {
-	theme := styles.Default(true)
-	if len(themes) > 0 {
-		theme = themes[0]
-	}
+func newConversationDelegate() list.DefaultDelegate {
 	delegate := list.NewDefaultDelegate()
-	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.
-		Foreground(theme.Selector.Item.GetForeground()).Bold(true)
-	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
-		Foreground(theme.Selector.Selected.GetForeground()).Bold(true)
-	timestamp := theme.Text.Tertiary.GetForeground()
-	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(timestamp).Bold(false)
-	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(timestamp).Bold(false)
-	delegate.Styles.DimmedDesc = delegate.Styles.DimmedDesc.Foreground(timestamp).Bold(false)
+	delegate.ShowDescription = false
+	delegate.SetSpacing(0)
 	return delegate
+}
+
+func resumePanelStyles(theme styles.Theme) styles.Panel {
+	panel := theme.Panel
+	panel.Frame = panel.Frame.BorderForeground(theme.Selector.Selected.GetForeground())
+	return panel
+}
+
+func resumeSearchStyles(theme styles.Theme) textinput.Styles {
+	search := theme.TextInput
+	search.Cursor.Color = theme.Input.Cursor
+	return search
 }
 
 func configureConversationHelp(model *list.Model) {
@@ -319,9 +326,9 @@ func (m *Model) SetSize(width, height int) {
 // SetStyles applies the root terminal theme without resetting picker state.
 func (m *Model) SetStyles(theme styles.Theme) {
 	m.theme = theme
-	m.panel.SetStyles(theme.Panel)
-	m.search.SetStyles(theme.TextInput)
-	m.list.SetDelegate(newConversationDelegate(theme))
+	m.panel.SetStyles(resumePanelStyles(theme))
+	m.search.SetStyles(resumeSearchStyles(theme))
+	m.list.SetDelegate(newConversationDelegate())
 	m.resizeChildren()
 }
 
@@ -355,17 +362,20 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		case "up":
 			if m.state == StateReady {
 				m.list.CursorUp()
+				m.syncWindowToSelection()
 			}
 			return m, nil
 		case "down":
 			if m.state == StateReady {
 				m.list.CursorDown()
+				m.syncWindowToSelection()
 			}
 			return m, nil
 		case "left", "right", "pgup", "pgdown":
 			if m.state == StateReady {
 				var cmd tea.Cmd
 				m.list, cmd = m.list.Update(msg)
+				m.alignWindowToPage()
 				return m, cmd
 			}
 			return m, nil
@@ -393,22 +403,30 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	dismiss := "esc ×"
 	content := components.PanelContent{
-		Title:          "Resume a conversation",
-		Dismiss:        dismiss,
+		Title:          m.title(),
+		Dismiss:        "ESC x",
 		Body:           m.panelBody,
-		CompactTitle:   "Resume a conversation",
+		CompactTitle:   "Resume a session",
 		CompactMessage: m.compactMessage(),
 		TinyMessage:    "Resize terminal to resume",
 	}
-	if m.state == StateReady {
-		content.FooterLeft = "↑/↓ navigate"
-		if m.list.Paginator.TotalPages > 1 {
-			content.FooterLeft += "   ←/→ page"
-		}
+	if m.state == StateReady && len(m.list.VisibleItems()) > 0 {
+		content.FooterLeft = m.overflowHint()
 	}
 	return m.panel.View(m.width, m.height, content)
+}
+
+func (m Model) title() string {
+	if m.state != StateReady {
+		return "Resume a session"
+	}
+	total := len(m.list.VisibleItems())
+	selected := 0
+	if total > 0 {
+		selected = min(m.list.Index()+1, total)
+	}
+	return fmt.Sprintf("Resume a session (%d of %d)", selected, total)
 }
 
 func (m Model) compactMessage() string {
@@ -434,7 +452,7 @@ func (m Model) compactMessage() string {
 
 func (m Model) panelBody(width int) string {
 	m.resizeBody(width)
-	search := m.search.View()
+	search := m.searchView(width)
 	var body string
 	switch m.state {
 	case StateLoading:
@@ -458,7 +476,10 @@ func (m Model) panelBody(width int) string {
 	case StateClosing:
 		body = m.theme.Feedback.Progress.Render("Closing…")
 	case StateReady:
-		body = m.list.View()
+		body = m.conversationListView(width)
+		if len(m.list.VisibleItems()) == 0 && m.search.Value() != "" {
+			body = m.theme.Text.Secondary.Render("No conversations match your search.")
+		}
 		if m.warning != "" {
 			body = m.theme.Text.Secondary.Render(m.warning) + "\n" + body
 		}
@@ -468,16 +489,96 @@ func (m Model) panelBody(width int) string {
 	return search + "\n\n" + body
 }
 
+func (m Model) searchView(width int) string {
+	if width < 1 {
+		return ""
+	}
+	return lipgloss.NewStyle().Padding(0, 1).Width(width).Render(m.search.View())
+}
+
+func (m Model) conversationListView(width int) string {
+	items, start, _ := m.visibleWindow()
+	if len(items) == 0 || width < 1 {
+		return ""
+	}
+	choices := make([]components.Choice, 0, len(items))
+	for _, raw := range items {
+		item, ok := raw.(conversationItem)
+		if !ok {
+			continue
+		}
+		choices = append(choices, components.Choice{Label: item.Title(), Detail: item.Description()})
+	}
+	selectorStyles := m.theme.Selector
+	selectorStyles.Item = m.theme.Text.Secondary
+	selectorStyles.Detail = m.theme.Text.Tertiary
+	selectorStyles.SelectedDetail = selectorStyles.Selected
+	selector := components.NewSelector(choices, selectorStyles)
+	selector.SetAlignDetailRight(true)
+	selector.SetIndex(m.list.Index() - start)
+	return selector.View(width)
+}
+
+func (m Model) overflowHint() string {
+	items := len(m.list.VisibleItems())
+	_, _, end := m.visibleWindow()
+	hiddenBelow := items - end
+	if hiddenBelow == 0 {
+		return "↓ back to top"
+	}
+	return fmt.Sprintf("↓ %d more below", hiddenBelow)
+}
+
+func (m Model) visibleWindow() ([]list.Item, int, int) {
+	items := m.list.VisibleItems()
+	if len(items) == 0 {
+		return nil, 0, 0
+	}
+	rows := min(max(1, m.list.Height()), len(items))
+	start := max(0, min(m.windowStart, len(items)-1))
+	end := min(len(items), start+rows)
+	return items[start:end], start, end
+}
+
+func (m *Model) syncWindowToSelection() {
+	items := len(m.list.VisibleItems())
+	if items == 0 {
+		m.windowStart = 0
+		return
+	}
+	rows := min(max(1, m.list.Height()), items)
+	selected := max(0, min(m.list.Index(), items-1))
+	start := max(0, min(m.windowStart, items-1))
+	if selected < start {
+		start = selected
+	} else if selected >= start+rows {
+		start = selected - rows + 1
+	}
+	m.windowStart = max(0, min(start, items-1))
+}
+
+func (m *Model) alignWindowToPage() {
+	items := len(m.list.VisibleItems())
+	if items == 0 {
+		m.windowStart = 0
+		return
+	}
+	m.windowStart = m.list.Paginator.Page * m.list.Paginator.PerPage
+	m.syncWindowToSelection()
+}
+
 func (m *Model) applySearch() {
 	if m.search.Value() == "" {
 		m.list.SetStatusBarItemName("conversation", "conversations")
 		m.list.ResetFilter()
 		m.list.ResetSelected()
+		m.windowStart = 0
 		m.updateHelp()
 		return
 	}
 	m.list.SetStatusBarItemName("conversation matches your search", "conversations match your search")
 	m.list.SetFilterText(m.search.Value())
+	m.windowStart = 0
 	m.updateHelp()
 }
 
@@ -487,15 +588,22 @@ func (m *Model) resizeChildren() {
 }
 
 func (m *Model) resizeBody(width int) {
-	// textinput renders its prompt outside the configured text width. Reserve
-	// both the prompt and cursor so the complete search line cannot wrap.
-	searchWidth := max(0, width-lipgloss.Width(m.search.Prompt)-1)
+	// The transparent search row has one padding cell per side. textinput
+	// renders its prompt outside the configured text width, so reserve the
+	// prompt and cursor as well.
+	const searchPaddingWidth = 2
+	searchWidth := max(0, width-searchPaddingWidth-lipgloss.Width(m.search.Prompt)-1)
 	m.search.SetWidth(searchWidth)
-	listHeight := max(1, m.height-m.theme.Panel.Frame.GetVerticalFrameSize()-9)
+	// Full layout: panel frame, header, search row, footer, and the blank rows
+	// separating those sections. Everything left belongs to results.
+	const fixedHeight = 12
+	availableHeight := m.height - fixedHeight
 	if m.warning != "" && m.state == StateReady {
-		listHeight = max(1, listHeight-1)
+		availableHeight--
 	}
+	listHeight := max(1, min(maxVisibleConversationRows, availableHeight))
 	m.list.SetSize(width, listHeight)
+	m.syncWindowToSelection()
 }
 
 func (m Model) panelBodyWidth() int {

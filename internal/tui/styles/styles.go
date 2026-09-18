@@ -17,6 +17,7 @@ const prompt = "› "
 type Input struct {
 	Prompt     string
 	Background color.Color
+	Cursor     color.Color
 	Block      lipgloss.Style
 	Marker     lipgloss.Style
 	// Text styles what the user wrote, shared by the live editor line and the
