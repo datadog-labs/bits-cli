@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -120,7 +121,7 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	if !model.chatViewTooSmall() {
 		t.Fatal("chat not concealed at the reduced size")
 	}
-	if view := ansi.Strip(model.View().Content); strings.Contains(view, "Approval required") {
+	if view := ansi.Strip(model.View().Content); strings.Contains(view, "Permission Required") {
 		t.Fatalf("concealed approval still rendered:\n%s", view)
 	}
 
@@ -166,7 +167,7 @@ func TestToolApprovalComposerSuppressedInAllowAll(t *testing.T) {
 		t.Fatalf("allow-all surfaced %d approval prompts", len(model.pendingApprovals))
 	}
 	view := ansi.Strip(model.View().Content)
-	if strings.Contains(view, "Approval required") || strings.Contains(view, "Run the test action?") {
+	if strings.Contains(view, "Permission Required") || strings.Contains(view, "Run the test action?") {
 		t.Fatalf("approval composer rendered in allow-all mode:\n%s", view)
 	}
 	if !model.editor.Focused() {
@@ -177,6 +178,116 @@ func TestToolApprovalComposerSuppressedInAllowAll(t *testing.T) {
 	}
 }
 
+func TestApprovalPanelResponsiveLayout(t *testing.T) {
+	for _, width := range []int{40, 80, 120} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			backend := &approvalBackend{t: t}
+			tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+			if err != nil {
+				t.Fatal(err)
+			}
+			model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+			model.resize(width, 24)
+			setConversationInput(model, "Run the action")
+			_, _ = model.submit()
+			for len(model.pendingApprovals) == 0 {
+				msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
+				_, _ = model.Update(msg)
+			}
+
+			view := model.approvalView()
+			plain := ansi.Strip(view)
+			for _, want := range []string{"Permission Required", "ESC x", "Run the test action?", "This test tool requires", "Deny"} {
+				if !strings.Contains(plain, want) {
+					t.Errorf("approval panel missing %q:\n%s", want, plain)
+				}
+			}
+			for lineNo, line := range strings.Split(view, "\n") {
+				if got := ansi.StringWidth(line); got > width {
+					t.Fatalf("line %d width = %d, want <= %d", lineNo+1, got, width)
+				}
+			}
+			if width < approvalCompactWidth {
+				if !strings.Contains(plain, "Once") || !strings.Contains(plain, "Session") || strings.Contains(plain, "Allow once") {
+					t.Fatalf("compact actions not used:\n%s", plain)
+				}
+			} else if !strings.Contains(plain, "Allow once") || !strings.Contains(plain, "Allow for session") {
+				t.Fatalf("full actions missing:\n%s", plain)
+			}
+			if width == 120 {
+				firstLine := strings.Split(plain, "\n")[0]
+				if got, want := strings.Index(firstLine, "╭"), (width-model.styles.Approval.Panel.MaxWidth)/2; got != want {
+					t.Fatalf("wide panel left offset = %d, want %d:\n%s", got, want, plain)
+				}
+			}
+		})
+	}
+}
+
+func TestApprovalPanelRemainsUsableAtMinimumHeight(t *testing.T) {
+	backend := &approvalBackend{t: t}
+	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model.resize(80, minimumApprovalHeight)
+	setConversationInput(model, "Run the action")
+	_, _ = model.submit()
+	for len(model.pendingApprovals) == 0 {
+		msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
+		_, _ = model.Update(msg)
+	}
+
+	view := ansi.Strip(model.View().Content)
+	for _, want := range []string{"Permission Required", "Run the test action?", "This test tool requires approval", "Deny", "Once", "Session"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("minimum-height approval missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Resize terminal") {
+		t.Fatalf("minimum supported height rendered resize fallback:\n%s", view)
+	}
+}
+
+func TestTallDraftConcealsApprovalAndSuppressesInput(t *testing.T) {
+	backend := &approvalBackend{t: t}
+	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model.resize(80, minimumApprovalHeight)
+	setConversationInput(model, "Run the action")
+	_, _ = model.submit()
+	for len(model.pendingApprovals) == 0 {
+		msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
+		_, _ = model.Update(msg)
+	}
+
+	setConversationInput(model, strings.Repeat("draft\n", 12))
+	model.layoutTranscript()
+	if model.approvalAvailableHeight() >= minimumApprovalPanelHeight {
+		t.Fatalf("approval height = %d, test did not force the concealed state", model.approvalAvailableHeight())
+	}
+	if !model.chatViewTooSmall() {
+		t.Fatal("approval with a tall draft was not concealed")
+	}
+	if view := ansi.Strip(model.View().Content); !strings.Contains(view, "Resize terminal") {
+		t.Fatalf("concealed approval did not render the resize hint:\n%s", view)
+	}
+
+	for _, code := range []rune{tea.KeyRight, tea.KeyEnter, tea.KeyEscape} {
+		_, _ = model.Update(tea.KeyPressMsg{Code: code})
+	}
+	if len(model.pendingApprovals) == 0 {
+		t.Fatal("a concealed keypress answered the approval")
+	}
+	if backend.calls != 1 {
+		t.Fatalf("backend calls = %d while concealed, want 1", backend.calls)
+	}
+}
+
 func TestToolApprovalComposerE2E(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -184,9 +295,9 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 		deny      bool
 		selection string
 	}{
-		{name: "deny", deny: true, selection: "[ Deny ]"},
-		{name: "allow once", navigate: 1, selection: "[ Allow once ]"},
-		{name: "allow for session", navigate: 2, selection: "[ Allow for session ]"},
+		{name: "deny", deny: true, selection: "Deny"},
+		{name: "allow once", navigate: 1, selection: "Allow once"},
+		{name: "allow for session", navigate: 2, selection: "Allow for session"},
 	}
 
 	for _, tt := range tests {
@@ -209,8 +320,9 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
 			}
 
+			approval := model.approvalView()
 			view := ansi.Strip(model.View().Content)
-			if !strings.Contains(view, "Approval required") || !strings.Contains(view, "Run the test action?") || !strings.Contains(view, tt.selection) {
+			if !strings.Contains(view, "Permission Required") || !strings.Contains(view, "Run the test action?") || !strings.Contains(approval, model.styles.Approval.Selected.Render(tt.selection)) {
 				t.Fatalf("approval composer not rendered:\n%s", view)
 			}
 			lines := strings.Split(view, "\n")
@@ -234,7 +346,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 			}
 			drainConversationRemote(t, model)
 
-			if strings.Contains(ansi.Strip(model.View().Content), "Approval required") {
+			if strings.Contains(ansi.Strip(model.View().Content), "Permission Required") {
 				t.Fatal("approval composer remained after the decision")
 			}
 			if tt.deny {

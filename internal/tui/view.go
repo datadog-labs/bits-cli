@@ -10,6 +10,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 	"github.com/DataDog/bits-cli/internal/tui/escape"
 )
 
@@ -18,8 +19,12 @@ const (
 	minimumChatHeight     = 8
 	minimumApprovalWidth  = 36
 	minimumApprovalHeight = 13
-	chatNoticeHeight      = 1
-	chatFooterHeight      = 1
+	// The compact approval needs six rows to show its heading, request title,
+	// detail, and every action. Below that, input stays disabled behind the
+	// resize hint so a hidden choice cannot be confirmed.
+	minimumApprovalPanelHeight = 6
+	chatNoticeHeight           = 1
+	chatFooterHeight           = 1
 
 	// approvalCompactWidth is the terminal width below which the approval block
 	// switches to condensed action labels so the choice row still fits.
@@ -169,13 +174,14 @@ func (m *Model) chatViewTooSmall() bool {
 	// A pending approval needs more room than the bare chat; when it doesn't fit,
 	// its prompt is hidden behind the resize hint too.
 	return len(m.pendingApprovals) > 0 &&
-		(m.width < minimumApprovalWidth || m.height < minimumApprovalHeight)
+		(m.width < minimumApprovalWidth ||
+			m.height < minimumApprovalHeight ||
+			m.approvalAvailableHeight() < minimumApprovalPanelHeight)
 }
 
-// approvalView renders the docked approval block, or "" when nothing awaits
-// approval. It mirrors the editor block's shape (prompt marker, aligned indent,
-// top and bottom rules) on a distinct background so it reads as a sibling of
-// the input rather than an overlay.
+// approvalView renders the docked approval panel, or "" when nothing awaits
+// approval. It uses the shared bounded panel while keeping the action row and
+// its selection state local to the approval flow.
 func (m *Model) approvalView() string {
 	if len(m.pendingApprovals) == 0 || m.pendingApprovals[0].Tool == nil {
 		return ""
@@ -192,52 +198,62 @@ func (m *Model) approvalView() string {
 		detail = escape.Inline(prompt.Detail)
 	}
 
-	sty := m.styles.Approval
-	inner := max(1, m.width-sty.Block.GetHorizontalFrameSize())
-	indent := strings.Repeat(" ", ansi.StringWidth(sty.Prompt))
-	textWidth := max(1, inner-ansi.StringWidth(sty.Prompt))
-
-	queue := "Approval required"
+	queue := "Permission Required"
 	if count := len(m.pendingApprovals); count > 1 {
 		queue += " · " + strconv.Itoa(count) + " waiting"
 	}
-	lines := []string{
-		sty.Marker.Render(sty.Prompt) + sty.Title.Render(ansi.Truncate(queue, textWidth, "…")),
-		sty.Text.Render(indent + ansi.Truncate(title, textWidth, "…")),
+	content := components.PanelContent{
+		Title:   queue,
+		Dismiss: "ESC x",
+		Body: func(width int) string {
+			return m.approvalBody(width, title, detail)
+		},
+		CompactTitle: queue,
+		CompactBody: func(width int) string {
+			lines := []string{m.styles.Approval.Text.Render(ansi.Truncate(title, width, "…"))}
+			if detail != "" {
+				lines = append(lines, m.styles.Approval.Detail.Render(ansi.Truncate(detail, width, "…")))
+			}
+			lines = append(lines, "", m.approvalActions(width))
+			return strings.Join(lines, "\n")
+		},
+		TinyMessage: "Resize terminal to approve",
 	}
-	if detail != "" {
-		// TODO: Give approvals structured, expandable command and resource
-		// fields when a richer confirmation surface is needed. V1 deliberately
-		// keeps a compact, single-line preview here.
-		lines = append(lines, sty.Detail.Render(indent+ansi.Truncate(detail, textWidth, "…")))
-	}
+	panel := components.NewPanel(m.styles.Approval.Panel).Render(m.width, max(1, m.approvalAvailableHeight()), content)
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, panel)
+}
 
-	lines = append(lines,
-		sty.Action.Render(indent)+m.approvalActions(inner-ansi.StringWidth(indent)),
-		sty.Detail.Render(indent+ansi.Truncate("←/→ choose · Enter confirm · Esc deny", textWidth, "…")),
-	)
-	return sty.Block.Width(m.width).Render(strings.Join(lines, "\n"))
+func (m *Model) approvalAvailableHeight() int {
+	return m.height - chatNoticeHeight - chatFooterHeight - m.editor.Height()
+}
+
+func (m *Model) approvalBody(width int, title, detail string) string {
+	sty := m.styles.Approval
+	lines := []string{sty.Text.Render(ansi.Wordwrap(title, width, "-"))}
+	if detail != "" {
+		lines = append(lines, sty.Detail.Render(ansi.Wordwrap(detail, width, "-")))
+	}
+	lines = append(lines, "", m.approvalActions(width))
+	return strings.Join(lines, "\n")
 }
 
 // approvalActions renders the choice row within width, condensing labels on
-// narrow terminals. The focused choice is bracketed and emphasized.
+// narrow terminals. The focused choice uses the interactive fill.
 func (m *Model) approvalActions(width int) string {
 	sty := m.styles.Approval
 	labels := [...]string{"Deny", "Allow once", "Allow for session"}
-	if m.width < approvalCompactWidth {
+	if width < approvalCompactWidth {
 		labels = [...]string{"Deny", "Once", "Session"}
 	}
 	actions := make([]string, len(labels))
 	for i, label := range labels {
 		if i == m.approvalChoice {
-			actions[i] = sty.Selected.Render("[ " + label + " ]")
+			actions[i] = sty.Selected.Render(label)
 		} else {
-			actions[i] = sty.Action.Render("  " + label + "  ")
+			actions[i] = sty.Action.Render(label)
 		}
 	}
-	// Join with a background-carrying space so the block fill stays continuous
-	// between choices; a plain separator would leave gaps in the surface.
-	return ansi.Truncate(strings.Join(actions, sty.Action.Render(" ")), max(1, width), "")
+	return ansi.Truncate(strings.Join(actions, "  "), max(1, width), "")
 }
 
 func (m *Model) composerHeight() int {
