@@ -357,8 +357,6 @@ func TestResumeHiddenWhileATurnIsRunning(t *testing.T) {
 	}
 }
 
-// Only the focused row takes the accent; the rest of the offer stays at the
-// secondary level so it reads as an aside rather than competing with chat.
 func TestUnfocusedRowTitleUsesSecondaryText(t *testing.T) {
 	theme := styles.Default(true)
 	r := resumeFixture(4)
@@ -376,8 +374,8 @@ func TestUnfocusedRowTitleUsesSecondaryText(t *testing.T) {
 	}
 }
 
-// sgrFor renders a marker string in style and returns the escape prefix it
-// emits, so a test can assert which token painted a span.
+// sgrFor returns the escape prefix a style emits, so a test can assert which
+// token painted a span.
 func sgrFor(style lipgloss.Style) string {
 	rendered := style.Render("x")
 	return strings.SplitN(rendered, "x", 2)[0]
