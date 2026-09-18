@@ -120,16 +120,21 @@ func (m *Model) chatViewBase(transcript string) string {
 func (m *Model) visibleSelectionFrame(scope selectionScope) selectionFrame {
 	surface := m.list.VisibleSurface()
 	transcriptHeight := max(0, m.list.Height())
+	headerRows := m.list.HeaderRows()
 	rows := make([]int, max(0, m.height))
 	for y := range rows {
-		switch {
+		switch document := surface.Top + y; {
 		case scope == selectionScopeLower:
 			rows[y] = y
-		case y < transcriptHeight:
-			rows[y] = surface.Top + y
-		default:
+		case y >= transcriptHeight:
 			// Lower-pane rows do not belong to a transcript selection.
 			rows[y] = -1
+		case document < headerRows:
+			// The startup header is decoration, not transcript: render skips an
+			// unmapped row, so the panel is never painted as selected.
+			rows[y] = -1
+		default:
+			rows[y] = document
 		}
 	}
 	return newSelectionFrame(
@@ -137,6 +142,7 @@ func (m *Model) visibleSelectionFrame(scope selectionScope) selectionFrame {
 		m.width,
 		m.height,
 		rows,
+		headerRows,
 	)
 }
 
@@ -149,6 +155,7 @@ func (m *Model) transcriptSelectionFrame() selectionFrame {
 		m.width,
 		selectionRowCount(content),
 		nil,
+		m.list.HeaderRows(),
 	)
 }
 

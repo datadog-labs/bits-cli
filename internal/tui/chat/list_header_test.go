@@ -120,3 +120,30 @@ func TestHeaderAppearanceKeepsTheScrolledRow(t *testing.T) {
 		t.Fatalf("the removed header moved the viewport to %q, want CCC", got)
 	}
 }
+
+// Text selection needs to tell decoration from transcript, so the header's
+// document rows must be countable the same way Document lays them out.
+func TestHeaderRowsCountsTheHeaderAndItsGap(t *testing.T) {
+	l := headerList(t, 40, 20)
+	if got := l.HeaderRows(); got != 0 {
+		t.Fatalf("HeaderRows without a header = %d, want 0", got)
+	}
+
+	l.SetItems([]agent.Block{textBlock("a", "BLOCK BODY")})
+	l.SetHeader("H1\nH2\nH3")
+
+	rows := l.HeaderRows()
+	document := strings.Split(l.Document(), "\n")
+	if rows < 3 || rows > len(document) {
+		t.Fatalf("HeaderRows = %d, want at least the 3 header rows", rows)
+	}
+	// Everything the header owns, and nothing the transcript owns.
+	for i := range rows {
+		if strings.Contains(document[i], "BLOCK BODY") {
+			t.Fatalf("document row %d is transcript content, inside the header's %d rows", i, rows)
+		}
+	}
+	if !strings.Contains(strings.Join(document[rows:], "\n"), "BLOCK BODY") {
+		t.Fatalf("transcript content is not at or after row %d:\n%s", rows, l.Document())
+	}
+}

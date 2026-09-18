@@ -9,7 +9,7 @@ import (
 )
 
 func testSelectionFrame(content string, width, height int) selectionFrame {
-	return newSelectionFrame(content, width, height, nil)
+	return newSelectionFrame(content, width, height, nil, 0)
 }
 
 func TestSelectionCopiesRowsInEitherDirection(t *testing.T) {
@@ -79,7 +79,7 @@ func TestSelectionRemainsRenderedAfterFinishUntilCleared(t *testing.T) {
 }
 
 func TestSelectionUsesVirtualRowsAfterScrolling(t *testing.T) {
-	visible := newSelectionFrame("FGHIJ\nKLMNO", 5, 2, []int{5, 6})
+	visible := newSelectionFrame("FGHIJ\nKLMNO", 5, 2, []int{5, 6}, 0)
 	document := testSelectionFrame("a0000\nb1111\nc2222\nd3333\ne4444\nfghij\nklmno\np7777", 5, 8)
 
 	var got selection
@@ -173,5 +173,59 @@ func TestSelectionAutoScrollReversesWithPointer(t *testing.T) {
 	got.extendGesture(frame, 0, 0, 3, 3)
 	if got.edge != -1 {
 		t.Fatalf("reversed edge = %d, want -1", got.edge)
+	}
+}
+
+// The splash panel occupies the transcript document's first rows. Its cells are
+// Kitty placeholder runes carrying an image id, so copying them yields garbage;
+// a selection must start at the first transcript row instead.
+func TestSelectionSkipsTheHeaderRows(t *testing.T) {
+	const headerRows = 2
+	frame := newSelectionFrame("PANEL\nPANEL\nfghij\nklmno", 5, 4, nil, headerRows)
+
+	var got selection
+	// Drag from inside the panel down through both transcript rows.
+	got.begin(frame, 0, 0)
+	text := got.finish(frame, 4, 3, frame)
+
+	if strings.Contains(text, "PANEL") {
+		t.Fatalf("selection copied header content: %q", text)
+	}
+	if text != "fghij\nklmno" {
+		t.Fatalf("selection = %q, want the transcript rows only", text)
+	}
+}
+
+// A selection wholly inside the header has nothing to copy.
+func TestSelectionInsideTheHeaderCopiesNothing(t *testing.T) {
+	frame := newSelectionFrame("PANEL\nPANEL\nfghij", 5, 3, nil, 2)
+
+	var got selection
+	got.begin(frame, 0, 0)
+	if text := got.finish(frame, 4, 1, frame); text != "" {
+		t.Fatalf("selection inside the header copied %q", text)
+	}
+}
+
+// Header rows are excluded from the transcript's row mapping, so the panel is
+// never painted as selected.
+func TestHeaderRowsAreNotSelectableInTheVisibleFrame(t *testing.T) {
+	m := welcomeModel(120, 40)
+	m.mode = ModeChat
+	m.resume = *resumeFixture(8)
+	m.layoutTranscript()
+
+	frame := m.visibleSelectionFrame(selectionScopeTranscript)
+	headerRows := m.list.HeaderRows()
+	if headerRows == 0 {
+		t.Fatal("no header to exclude")
+	}
+	for y := range headerRows {
+		if row := frame.virtualRow(y); row != -1 {
+			t.Fatalf("screen row %d maps to document row %d, want -1 (header)", y, row)
+		}
+	}
+	if row := frame.virtualRow(headerRows); row != headerRows {
+		t.Fatalf("first transcript row maps to %d, want %d", row, headerRows)
 	}
 }

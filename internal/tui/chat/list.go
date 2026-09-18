@@ -513,6 +513,17 @@ func (l *List) renderSurface(withPosition bool) Surface {
 	return Surface{Content: strings.Join(lines, "\n"), Top: top}
 }
 
+// HeaderRows is how many document rows the header owns, including the gap
+// after it, and 0 when there is no header. Callers that read meaning from
+// document rows — text selection — need it to tell decoration from transcript.
+// It follows Document's item-plus-gap accounting.
+func (l *List) HeaderRows() int {
+	if l.header == "" || len(l.view) == 0 {
+		return 0
+	}
+	return len(l.renderItem(0)) + max(l.gapAfter(0), 0)
+}
+
 // Document renders the complete transcript without viewport fill rows or
 // changing the current scroll position.
 func (l *List) Document() string {
