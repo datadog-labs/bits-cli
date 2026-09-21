@@ -264,6 +264,10 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		if m.mode == ModeChat {
 			if msg.Button == tea.MouseLeft {
+				if id, ok := m.list.ZoneAt(msg.X, msg.Y); ok {
+					m.list.ToggleDisclosure(id)
+					return m, nil
+				}
 				return m, m.beginSelection(msg)
 			}
 			return m, nil
@@ -274,6 +278,8 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.selection.selecting() {
 				return m, m.extendSelection(msg)
 			}
+			id, ok := m.list.ZoneAt(msg.X, msg.Y)
+			m.list.SetHovered(id, ok)
 			return m, nil
 		}
 
@@ -675,6 +681,9 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m.submit()
+	case "ctrl+o":
+		m.list.ToggleAllDisclosure()
+		return m, nil
 	case "pgup", "pgdown":
 		// ctrl+u / ctrl+d are intentionally NOT scroll keys: the editor is always
 		// focused and owns them for line editing (ctrl+u = delete to line start,
