@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,30 @@ const (
 	approvalCompactWidth = 50
 )
 
+// terminalMultiplexerActive reports whether the process runs inside tmux,
+// Zellij, or screen. AllMotion forwards every pointer move, which these
+// multiplexers noticeably lag on, so hover degrades to CellMotion under them
+// (following earendil-works/pi's mouse handling).
+func terminalMultiplexerActive() bool {
+	for _, env := range []string{"TMUX", "ZELLIJ", "STY"} {
+		if os.Getenv(env) != "" {
+			return true
+		}
+	}
+	term := os.Getenv("TERM")
+	return strings.HasPrefix(term, "tmux") || strings.HasPrefix(term, "screen")
+}
+
+// chatMouseMode escalates to AllMotion so accordion hover can be reported,
+// following charmbracelet/crush's per-frame MouseMode computation. It never
+// escalates under a terminal multiplexer.
+func (m *Model) chatMouseMode() tea.MouseMode {
+	if terminalMultiplexerActive() {
+		return tea.MouseModeCellMotion
+	}
+	return tea.MouseModeAllMotion
+}
+
 // View lays out the transcript viewport, notice row, input, and metadata footer.
 // Alt-screen and mouse tracking, which were program options in Bubble Tea v1,
 // are now declared on the returned view.
@@ -49,6 +74,7 @@ func (m *Model) View() tea.View {
 			v.Content = lipgloss.Place(max(1, m.width), max(1, m.height), lipgloss.Center, lipgloss.Center, message)
 			break
 		}
+		v.MouseMode = m.chatMouseMode()
 		v.Content = m.chatView()
 	case ModeLogin:
 		// A valid login model returns above. Keep a bounded fallback for the
