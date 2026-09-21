@@ -40,8 +40,12 @@ func TestAccordionGlyphFollowsDisclosureState(t *testing.T) {
 func TestAccordionHoverReusesSelectedFill(t *testing.T) {
 	for _, dark := range []bool{true, false} {
 		theme := styles.Default(dark)
-		hover, _ := theme.Accordion.Hover.GetBackground().(interface{ RGBA() (uint32, uint32, uint32, uint32) })
-		selected, _ := theme.Approval.Selected.GetBackground().(interface{ RGBA() (uint32, uint32, uint32, uint32) })
+		hover, _ := theme.Accordion.Hover.GetBackground().(interface {
+			RGBA() (uint32, uint32, uint32, uint32)
+		})
+		selected, _ := theme.Approval.Selected.GetBackground().(interface {
+			RGBA() (uint32, uint32, uint32, uint32)
+		})
 		if hover == nil || selected == nil {
 			t.Fatalf("dark=%t: hover or selected background is unset", dark)
 		}

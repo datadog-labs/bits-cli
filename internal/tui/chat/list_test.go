@@ -615,7 +615,8 @@ func TestDocumentAgreesWithVisibleSurfaceOnTheGutter(t *testing.T) {
 	document := list.Document()
 	surfaceLines := strings.Split(surface.Content, "\n")
 	documentLines := strings.Split(document, "\n")
-	for i := 0; i < list.itemHeight(0); i++ {
+	height := list.itemHeight(0)
+	for i := range height {
 		if surfaceLines[i] != documentLines[i] {
 			t.Fatalf("row %d differs — surface %q, document %q", i, surfaceLines[i], documentLines[i])
 		}

@@ -20,6 +20,7 @@ type AccordionState struct {
 // span it occupies so a caller can hit-test a pointer against it.
 type Accordion struct {
 	styles styles.Accordion
+	width  int
 
 	// OnClick runs when Click reports a press on the control. It receives the
 	// state the control should move to, leaving the caller to store it.
@@ -27,10 +28,18 @@ type Accordion struct {
 }
 
 // NewAccordion creates a control with the supplied shared theme styles.
-func NewAccordion(sty styles.Accordion) *Accordion { return &Accordion{styles: sty} }
+func NewAccordion(sty styles.Accordion) *Accordion {
+	a := &Accordion{}
+	a.SetStyles(sty)
+	return a
+}
 
 // SetStyles replaces the control's theme-derived styles.
-func (a *Accordion) SetStyles(sty styles.Accordion) { a.styles = sty }
+func (a *Accordion) SetStyles(sty styles.Accordion) {
+	a.styles = sty
+	a.width = sty.Resting.GetHorizontalFrameSize() +
+		max(ansi.StringWidth(sty.Expanded), ansi.StringWidth(sty.Collapsed))
+}
 
 // Render draws the control in the given state.
 func (a *Accordion) Render(state AccordionState) string {
@@ -44,8 +53,7 @@ func (a *Accordion) Render(state AccordionState) string {
 // Width returns the cells the control occupies. It is state-independent, so a
 // header keeps its layout when the control is toggled or hovered.
 func (a *Accordion) Width() int {
-	return a.styles.Resting.GetHorizontalFrameSize() +
-		max(ansi.StringWidth(a.styles.Expanded), ansi.StringWidth(a.styles.Collapsed))
+	return a.width
 }
 
 // Click toggles the control and notifies OnClick. It reports the new state so
