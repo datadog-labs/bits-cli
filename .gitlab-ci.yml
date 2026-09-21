@@ -1,3 +1,5 @@
+include:
+  - local: .adms/go/gitlab.yaml
 variables:
   GIT_DEPTH: 1
   GIT_BASE_BRANCH: main
