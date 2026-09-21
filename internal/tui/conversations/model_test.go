@@ -571,7 +571,7 @@ func TestOrderedSortsNewestFirstAndDropsUnidentifiedRecords(t *testing.T) {
 	for i := range got {
 		ids[i] = got[i].ConversationID
 	}
-	if !reflect.DeepEqual(ids, want) {
+	if strings.Join(ids, ",") != strings.Join(want, ",") {
 		t.Fatalf("Ordered returned %v, want %v", ids, want)
 	}
 }
