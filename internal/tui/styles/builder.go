@@ -89,8 +89,10 @@ func build(isDark bool, p palette) Theme {
 			Background(lipgloss.Color(p.interactive)).
 			Padding(0, 1),
 	}
-	// The control is always drawn as a fixed fill, rather than blending into
-	// the row until hovered.
+	// The control is a background fill on its cells rather than a drawn
+	// border, so the one-cell padding is what gives the chevron its box. It's
+	// always drawn as a fixed fill, rather than blending into the row until
+	// hovered.
 	accordion := Accordion{
 		Expanded:  "▼",
 		Collapsed: "▶",

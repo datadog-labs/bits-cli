@@ -148,14 +148,12 @@ func (m *Model) reconcileFocus() tea.Cmd {
 	return nil
 }
 
-// reconcilePointerShape keeps the OS mouse pointer in sync with accordion
-// hover via OSC 22 (kitty implements it fully; xterm and foot carry an older,
-// simpler version of the same sequence; other terminals ignore it). Embedding
-// the escape in View's Content doesn't reach the terminal: Bubble Tea's
-// cursed renderer parses Content into a cell buffer that only special-cases
-// SGR and OSC 8, so any other sequence gets absorbed as ordinary cell text
-// instead of written to the wire. tea.Raw bypasses that pipeline, so this
-// runs as a reconciler alongside reconcileFocus instead.
+// reconcilePointerShape shows a hand over a clickable accordion row via OSC 22
+// (kitty implements it fully; xterm and foot carry an older, simpler version;
+// other terminals ignore it). It must go through tea.Raw rather than
+// View.Content: Bubble Tea's renderer parses Content into a cell buffer that
+// only special-cases SGR and OSC 8, silently swallowing any other escape
+// sequence instead of writing it to the terminal.
 func (m *Model) reconcilePointerShape() tea.Cmd {
 	want := m.mode == ModeChat && m.list.Hovered()
 	if want == m.pointerIsHand {
