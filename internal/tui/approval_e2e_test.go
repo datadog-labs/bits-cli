@@ -197,6 +197,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 
 			view := model.approvalView()
 			plain := ansi.Strip(view)
+			normalized := strings.Join(strings.Fields(plain), " ")
 			for _, want := range []string{"Permission Required", "ESC x", "Run the test action?", "This test tool requires", "Deny"} {
 				if !strings.Contains(plain, want) {
 					t.Errorf("approval panel missing %q:\n%s", want, plain)
@@ -211,7 +212,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 				if !strings.Contains(plain, "Allow") || !strings.Contains(plain, "Session") || strings.Contains(plain, "Allow for session") {
 					t.Fatalf("compact actions not used:\n%s", plain)
 				}
-			} else if !strings.Contains(plain, "Allow") || !strings.Contains(plain, "Allow for session") || strings.Contains(plain, "Allow once") {
+			} else if !strings.Contains(normalized, "Allow Allow for session Deny") || strings.Contains(plain, "Allow once") {
 				t.Fatalf("full actions missing:\n%s", plain)
 			}
 			if width == 120 {
