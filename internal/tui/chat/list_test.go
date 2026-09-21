@@ -409,11 +409,15 @@ func TestInspectionSpinnerAnimationKeepsHeaderWidth(t *testing.T) {
 	list.SetItems([]agent.Block{inspectBlock("1", "read_file", `{"path":"one"}`, agent.ToolRunning, "")})
 	var width int
 	seen := map[string]bool{}
+	// This single running tool is guttered, so its header line now carries the
+	// accordion's fixed-width gutter ahead of the tool's own content (Task 3);
+	// skip past it before checking the spinner glyph.
+	gutter := list.accordion.Width()
 	for _, frame := range []int{0, 8, 16} {
 		list.SetFrame(frame)
 		header := headerOf(list.Render())
 		seen[ansi.Strip(header)] = true
-		if got, want := string([]rune(ansi.Strip(header))[0]), list.sty.StatusSpinner.Frame(frame); got != want {
+		if got, want := string([]rune(ansi.Strip(header))[gutter]), list.sty.StatusSpinner.Frame(frame); got != want {
 			t.Fatalf("frame %d glyph = %q, want %q", frame, got, want)
 		}
 		if frame == 0 {
@@ -558,5 +562,159 @@ func TestGutteredItemStaysWithinTotalWidth(t *testing.T) {
 		if w := ansi.StringWidth(line); w > list.width {
 			t.Fatalf("rendered line %q is %d cells wide, want <= %d", line, w, list.width)
 		}
+	}
+}
+
+func TestToggleDisclosureCollapsesToHeaderLineAndBack(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	id := list.view[0].id
+	full := list.itemHeight(0)
+	if full <= 1 {
+		t.Fatalf("fixture tool did not produce a disclosable body, height = %d", full)
+	}
+
+	list.ToggleDisclosure(id)
+	if got := list.itemHeight(0); got != 1 {
+		t.Fatalf("collapsed height = %d, want 1", got)
+	}
+
+	list.ToggleDisclosure(id)
+	if got := list.itemHeight(0); got != full {
+		t.Fatalf("re-expanded height = %d, want %d", got, full)
+	}
+}
+
+func TestHeaderOnlyToolReservesGutterButDrawsNoChevron(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(4)
+	list.SetItems([]agent.Block{{
+		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"},
+		Kind: assistant.KindToolResult,
+		Tool: &agent.ToolBlock{Name: "list_monitors", Status: agent.ToolSuccess},
+	}})
+	list.Render() // populates zones for the current viewport
+
+	if height := list.itemHeight(0); height != 1 {
+		t.Fatalf("header-only tool rendered %d lines, want 1", height)
+	}
+	if _, ok := list.ZoneAt(0, 0); ok {
+		t.Fatal("header-only tool recorded a clickable zone")
+	}
+	lines := list.itemLines(0)
+	gutter := strings.Repeat(" ", list.accordion.Width())
+	if !strings.HasPrefix(lines[0], gutter) {
+		t.Fatalf("header-only tool did not reserve the gutter: %q", lines[0])
+	}
+}
+
+func TestDocumentAgreesWithVisibleSurfaceOnTheGutter(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	surface := list.VisibleSurface()
+	document := list.Document()
+	surfaceLines := strings.Split(surface.Content, "\n")
+	documentLines := strings.Split(document, "\n")
+	for i := 0; i < list.itemHeight(0); i++ {
+		if surfaceLines[i] != documentLines[i] {
+			t.Fatalf("row %d differs — surface %q, document %q", i, surfaceLines[i], documentLines[i])
+		}
+	}
+}
+
+func TestZoneNotRecordedWhenHeaderScrollsOffTop(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	// listWithTool's fixture is taller than the height set below, and List
+	// defaults to follow=true; without pinning to the top first, the
+	// pre-existing follow self-heal (renderSurface) would immediately scroll
+	// to the item's tail on the very first Render(), before this test's own
+	// explicit ScrollBy(1) gets a chance to exercise the scroll-off case it's
+	// named for. ScrollToTop also sets follow=false, giving a deterministic
+	// starting position with the header visible.
+	list.ScrollToTop()
+	list.SetHeight(1)
+	list.Render()
+	if _, ok := list.ZoneAt(0, 0); !ok {
+		t.Fatal("zone missing before scrolling")
+	}
+
+	list.ScrollBy(1)
+	list.Render()
+	if _, ok := list.ZoneAt(0, 0); ok {
+		t.Fatal("zone still recorded after its header scrolled off the top")
+	}
+}
+
+func TestToggleAllDisclosureAlternatesExpandFirst(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	full := list.itemHeight(0)
+
+	list.ToggleAllDisclosure() // first press: expand-first, a no-op from all-expanded
+	if got := list.itemHeight(0); got != full {
+		t.Fatalf("first ctrl+o changed height to %d, want %d (expand-first is a no-op)", got, full)
+	}
+
+	list.ToggleAllDisclosure() // second press: collapse
+	if got := list.itemHeight(0); got != 1 {
+		t.Fatalf("second ctrl+o height = %d, want 1", got)
+	}
+
+	list.ToggleAllDisclosure() // third press: expand again
+	if got := list.itemHeight(0); got != full {
+		t.Fatalf("third ctrl+o height = %d, want %d", got, full)
+	}
+}
+
+func TestToggleAllDisclosureOverridesAnIndividualToggle(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	id := list.view[0].id
+	full := list.itemHeight(0)
+
+	list.ToggleDisclosure(id)
+	if got := list.itemHeight(0); got != 1 {
+		t.Fatalf("individual collapse failed, height = %d", got)
+	}
+
+	list.ToggleAllDisclosure() // universally overrides: first press means expand
+	if got := list.itemHeight(0); got != full {
+		t.Fatalf("global expand did not override the individual collapse: height = %d, want %d", got, full)
+	}
+}
+
+func TestSetHoveredReportsChangeOnlyOnActualChange(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	id := list.view[0].id
+	other := agent.BlockID{Scope: agent.ScopeTool, Key: "call-2"}
+
+	if !list.SetHovered(id, true) {
+		t.Fatal("first hover should report a change")
+	}
+	if list.SetHovered(id, true) {
+		t.Fatal("repeating the same hover should not report a change")
+	}
+	if !list.SetHovered(other, true) {
+		t.Fatal("hovering a different block should report a change")
+	}
+	if !list.SetHovered(agent.BlockID{}, false) {
+		t.Fatal("clearing hover should report a change")
+	}
+	if list.SetHovered(agent.BlockID{}, false) {
+		t.Fatal("clearing hover twice should not report a change the second time")
+	}
+}
+
+func TestResetClearsDisclosureAndHoverState(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	id := list.view[0].id
+	list.ToggleDisclosure(id)
+	list.SetHovered(id, true)
+
+	list.Reset()
+
+	if list.collapsed[id] {
+		t.Fatal("Reset left a stale collapsed entry")
+	}
+	if list.hasHover {
+		t.Fatal("Reset left hover active")
 	}
 }
