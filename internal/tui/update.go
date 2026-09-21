@@ -171,6 +171,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if event, ok := msg.(recentConversationsMsg); ok {
+		// A failed background read the user never asked for stays silent.
+		if event.result.Err == nil {
+			m.resume.setConversations(event.result.Conversations)
+			m.layoutTranscript()
+		}
+		return m, nil
+	}
 	if m.mode == ModeLogin {
 		return m.updateLogin(msg)
 	}
@@ -647,6 +655,26 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, batchCommands(cmd, m.syncCompletionSearches())
 	}
 
+	// The offer is only visible with an empty composer, so these keys have no
+	// competing meaning: submit() already no-ops on empty input.
+	if m.showResume() {
+		key := msg.String()
+		switch key {
+		case "up", "down":
+			delta := 1
+			if key == "up" {
+				delta = -1
+			}
+			m.resume.move(delta, m.resumeVisibleRows())
+			m.layoutTranscript()
+			return m, nil
+		case "enter":
+			if id, ok := m.resume.selectedID(); ok {
+				return m, m.resumeSelectedConversation(id)
+			}
+		}
+	}
+
 	switch msg.String() {
 	case "esc":
 		m.cancelRemote() // interrupt the running turn
@@ -725,7 +753,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Context: turnContext})
+	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Context: turnContext, OnDeny: agent.DenyContinue})
 	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()
@@ -837,11 +865,8 @@ func (m *Model) layoutTranscript() {
 		return
 	}
 	m.editor.SetMenuHeight(max(0, m.height-chatFooterHeight-m.editor.Height()))
-	height := m.transcriptRows()
-	if m.showWelcome() {
-		height -= m.welcomeHeight()
-	}
-	m.list.SetHeight(max(1, height))
+	m.list.SetHeight(m.transcriptHeight())
+	m.list.SetHeader(m.headerView())
 }
 
 // syncTranscript rebuilds presentation metadata only after m.blocks changes.

@@ -299,3 +299,15 @@ func conversationErrorNotice(operation string, err error) chat.Notice {
 	n.Err = nil // never append raw backend detail in the notice bar
 	return n
 }
+
+// resumeSelectedConversation loads a conversation chosen from the startup
+// offer. It drives the switch through the /resume picker so the existing
+// loading, error and retry paths apply unchanged.
+func (m *Model) resumeSelectedConversation(conversationID string) tea.Cmd {
+	m.clearNotice()
+	m.conversationClosing = false
+	picker := conversationview.New(m.width, m.height, m.styles)
+	m.picker = &picker
+	m.setMode(ModeConversations)
+	return m.startConversationSwitch(conversationID)
+}

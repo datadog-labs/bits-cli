@@ -44,9 +44,10 @@ func newApprovalTool() agent.Tool {
 }
 
 type approvalBackend struct {
-	t         *testing.T
-	responses []assistant.ClientToolResponse
-	calls     int
+	t          *testing.T
+	responses  []assistant.ClientToolResponse
+	calls      int
+	serverGate bool
 }
 
 func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
@@ -54,6 +55,9 @@ func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendO
 	b.calls++
 	if b.calls == 1 {
 		content := assistant.ToolCallContent("tool-call", approvalToolName, `{}`)
+		if b.serverGate {
+			content = assistant.ToolCallContent("tool-call", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"tool-call","approval_message":"Delete it?"}`)
+		}
 		content.Type = assistant.ContentClientToolCall
 		var response assistant.AssistantResponse
 		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-message", content)
@@ -65,9 +69,62 @@ func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendO
 	if !ok {
 		b.t.Fatalf("tool follow-up has type %T", message)
 	}
-	var response assistant.AssistantResponse
-	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("Done."))
-	return "conversation-1", emit(response)
+	for _, chunk := range []string{"Do", "ne."} {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent(chunk))
+		if err := emit(response); err != nil {
+			return "conversation-1", err
+		}
+	}
+	return "conversation-1", nil
+}
+
+func TestApprovalDenialContinuesStreaming(t *testing.T) {
+	for _, serverGate := range []bool{false, true} {
+		for _, key := range []rune{tea.KeyEscape, tea.KeyEnter} {
+			t.Run(fmt.Sprintf("server_gate_%t/key_%d", serverGate, key), func(t *testing.T) {
+				backend := &approvalBackend{t: t, serverGate: serverGate}
+				tool := newApprovalTool()
+				tool.Handler = func(context.Context, agent.ToolCall) (agent.ToolResult, error) {
+					t.Error("denied tool executed")
+					return agent.ToolResult{}, nil
+				}
+				tools, err := agent.NewToolSet(agent.ModeGated, tool)
+				if err != nil {
+					t.Fatal(err)
+				}
+				model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+				model.resize(80, 24)
+				setConversationInput(model, "Run the action")
+				_, _ = model.submit()
+				for len(model.pendingApprovals) == 0 {
+					msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
+					_, _ = model.Update(msg)
+				}
+
+				_, _ = model.handleKey(tea.KeyPressMsg{Code: key})
+				sawPartial := false
+				for model.turnEvents != nil {
+					msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
+					_, _ = model.Update(msg)
+					for _, block := range model.blocks {
+						if block.Markdown != nil && block.Markdown.Content == "Do" && !block.Complete {
+							sawPartial = true
+						}
+					}
+				}
+				if backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError {
+					t.Fatalf("denial not sent: calls=%d responses=%+v", backend.calls, backend.responses)
+				}
+				if !sawPartial {
+					t.Error("model's follow-up response did not stream after denial")
+				}
+				if view := ansi.Strip(model.View().Content); !strings.Contains(view, "Done.") {
+					t.Fatalf("model's follow-up answer missing after denial:\n%s", view)
+				}
+			})
+		}
+	}
 }
 
 func TestApprovalBlursEditorUntilResolved(t *testing.T) {
@@ -139,15 +196,15 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	model.resize(80, 24)
 	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	drainConversationRemote(t, model)
-	// The denial is answered on the wire; the follow-up answer never renders.
+	// The denial is answered on the wire and the follow-up answer renders.
 	if backend.calls != 2 || len(backend.responses) != 1 {
 		t.Fatalf("deny after resize not honored: calls=%d responses=%d", backend.calls, len(backend.responses))
 	}
 	if backend.responses[0].Status != assistant.ToolStatusError || backend.responses[0].ToolCallID != "tool-call" {
 		t.Fatalf("denial response = %+v", backend.responses[0])
 	}
-	if view := ansi.Strip(model.View().Content); strings.Contains(view, "Done.") {
-		t.Fatalf("aborted deny still delivered the model's follow-up answer:\n%s", view)
+	if view := ansi.Strip(model.View().Content); !strings.Contains(view, "Done.") {
+		t.Fatalf("model's follow-up answer missing after denial:\n%s", view)
 	}
 }
 
@@ -347,15 +404,15 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				t.Fatal("approval composer remained after the decision")
 			}
 			if tt.deny {
-				// The denial is answered on the wire; the follow-up answer never renders.
+				// The denial is answered on the wire and the follow-up answer renders.
 				if backend.calls != 2 || len(backend.responses) != 1 {
 					t.Fatalf("backend calls = %d responses = %d, want the denial answered on the wire", backend.calls, len(backend.responses))
 				}
 				if backend.responses[0].Status != assistant.ToolStatusError || backend.responses[0].ToolCallID != "tool-call" {
 					t.Fatalf("denial response = %+v", backend.responses[0])
 				}
-				if strings.Contains(ansi.Strip(model.View().Content), "Done.") {
-					t.Fatal("aborted deny still delivered the model's follow-up answer")
+				if !strings.Contains(ansi.Strip(model.View().Content), "Done.") {
+					t.Fatal("model's follow-up answer missing after denial")
 				}
 				return
 			}

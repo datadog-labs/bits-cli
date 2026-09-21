@@ -528,8 +528,8 @@ func TestRelativeUpdatedAt(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := relativeUpdatedAt(tt.updatedAt, now); got != tt.want {
-				t.Fatalf("relativeUpdatedAt() = %q, want %q", got, tt.want)
+			if got := RelativeUpdatedAt(tt.updatedAt, now); got != tt.want {
+				t.Fatalf("RelativeUpdatedAt() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -553,5 +553,25 @@ func TestConversationRowsUseSelectorTextRoles(t *testing.T) {
 	if !strings.Contains(view, theme.Text.Secondary.Render("  Normal  ")) ||
 		!strings.Contains(view, theme.Text.Tertiary.Render("2 days ago")) {
 		t.Fatalf("normal title and timestamp use the wrong text roles: %q", view)
+	}
+}
+
+func TestOrderedSortsNewestFirstAndDropsUnidentifiedRecords(t *testing.T) {
+	const hour = int64(3_600_000)
+	got := Ordered([]assistant.ConversationSummary{
+		{ConversationID: "older", UpdatedAt: 5 * hour},
+		{ConversationID: "  ", UpdatedAt: 99 * hour},
+		{ConversationID: "newest", UpdatedAt: 9 * hour},
+		{ConversationID: "b-tie", UpdatedAt: 7 * hour},
+		{ConversationID: "", UpdatedAt: 98 * hour},
+		{ConversationID: "a-tie", UpdatedAt: 7 * hour},
+	})
+	want := []string{"newest", "a-tie", "b-tie", "older"}
+	ids := make([]string, len(got))
+	for i := range got {
+		ids[i] = got[i].ConversationID
+	}
+	if strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Fatalf("Ordered returned %v, want %v", ids, want)
 	}
 }
