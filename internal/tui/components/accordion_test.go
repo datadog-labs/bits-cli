@@ -31,4 +31,3 @@ func TestAccordionGlyphFollowsDisclosureState(t *testing.T) {
 		t.Fatalf("collapsed glyph = %q, want %q", got, sty.Collapsed)
 	}
 }
-
