@@ -159,7 +159,8 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 		t.Fatalf("presentation item count = %d, want 3", got)
 	}
 	plain := ansi.Strip(list.Render())
-	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "✓ search ToolBlock in internal"} {
+	gutter := strings.Repeat(" ", list.accordion.Width())
+	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "✓ " + gutter + "search ToolBlock in internal"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("group rendering missing %q:\n%s", want, plain)
 		}
@@ -179,7 +180,9 @@ func TestSingletonInspectionRendersAsTool(t *testing.T) {
 		hidden string
 	}{
 		{name: "running", status: agent.ToolRunning, want: "listing .", hidden: "inspecting"},
-		{name: "settled", status: agent.ToolSuccess, want: "✓ list .", hidden: "inspected"},
+		// The gutter sits between the settled glyph and the name, so the check
+		// is no longer immediately adjacent to "list .".
+		{name: "settled", status: agent.ToolSuccess, want: "✓ <gutter>list .", hidden: "inspected"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			list := NewList()
@@ -188,9 +191,11 @@ func TestSingletonInspectionRendersAsTool(t *testing.T) {
 			list.SetHeight(8)
 			list.SetItems([]agent.Block{inspectBlock("1", "list_files", `{"path":""}`, test.status, "listing")})
 
+			gutter := strings.Repeat(" ", list.accordion.Width())
 			plain := ansi.Strip(list.Render())
-			if !strings.Contains(plain, test.want) {
-				t.Fatalf("singleton inspection rendering = %q, want %q", plain, test.want)
+			want := strings.ReplaceAll(test.want, "<gutter>", gutter)
+			if !strings.Contains(plain, want) {
+				t.Fatalf("singleton inspection rendering = %q, want %q", plain, want)
 			}
 			if strings.Contains(plain, test.hidden) || strings.Contains(plain, "└") {
 				t.Fatalf("singleton inspection retained grouped rendering: %q", plain)
@@ -409,15 +414,13 @@ func TestInspectionSpinnerAnimationKeepsHeaderWidth(t *testing.T) {
 	list.SetItems([]agent.Block{inspectBlock("1", "read_file", `{"path":"one"}`, agent.ToolRunning, "")})
 	var width int
 	seen := map[string]bool{}
-	// This single running tool is guttered, so its header line now carries the
-	// accordion's fixed-width gutter ahead of the tool's own content (Task 3);
-	// skip past it before checking the spinner glyph.
-	gutter := list.accordion.Width()
+	// This single running tool is guttered, but the gutter is spliced in after
+	// the status glyph so the glyph stays the row's leftmost cell.
 	for _, frame := range []int{0, 8, 16} {
 		list.SetFrame(frame)
 		header := headerOf(list.Render())
 		seen[ansi.Strip(header)] = true
-		if got, want := string([]rune(ansi.Strip(header))[gutter]), list.sty.StatusSpinner.Frame(frame); got != want {
+		if got, want := string([]rune(ansi.Strip(header))[0]), list.sty.StatusSpinner.Frame(frame); got != want {
 			t.Fatalf("frame %d glyph = %q, want %q", frame, got, want)
 		}
 		if frame == 0 {
@@ -604,8 +607,10 @@ func TestHeaderOnlyToolReservesGutterButDrawsNoChevron(t *testing.T) {
 	}
 	lines := list.itemLines(0)
 	gutter := strings.Repeat(" ", list.accordion.Width())
-	if !strings.HasPrefix(lines[0], gutter) {
-		t.Fatalf("header-only tool did not reserve the gutter: %q", lines[0])
+	// The gutter sits right after the fixed-width status glyph, not before it,
+	// so the glyph stays the leftmost cell on the row.
+	if got := ansi.Strip(ansi.Cut(lines[0], statusGlyphWidth, statusGlyphWidth+list.accordion.Width())); got != gutter {
+		t.Fatalf("header-only tool did not reserve the gutter after the status glyph: %q", lines[0])
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"hash/fnv"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/components"
@@ -68,10 +70,13 @@ type List struct {
 	zones []accordionZone
 }
 
-// accordionZone is one guttered item's clickable header row, recorded during
+// accordionZone is one guttered item's header row, recorded during
 // renderSurface. row is a screen row of the viewport that produced it: 0 is
 // the surface's own top row, matching the coordinates a caller already has
-// from a mouse event over the transcript.
+// from a mouse event over the transcript. width spans the whole row: both
+// the click target and the hover fill cover it, and a mouse-down over it only
+// becomes a disclosure toggle if the gesture turns out not to be a drag (see
+// Model.finishSelection).
 type accordionZone struct {
 	id    agent.BlockID
 	row   int
@@ -369,9 +374,12 @@ func (l *List) SetHovered(id agent.BlockID, ok bool) bool {
 	return true
 }
 
-// ZoneAt reports the block whose accordion control occupies screen
-// coordinate (x, y), or false if none does. Coordinates are relative to the
-// top-left of the surface renderSurface last produced.
+// ZoneAt reports the block whose header row spans screen coordinate (x, y),
+// or false if none does. Coordinates are relative to the top-left of the
+// surface renderSurface last produced. It serves both hover (a pure
+// rendering concern) and click (Model defers the actual toggle to release,
+// so a plain click still toggles while a drag starting on the row still
+// selects text).
 func (l *List) ZoneAt(x, y int) (agent.BlockID, bool) {
 	for _, z := range l.zones {
 		if z.row == y && x >= 0 && x < z.width {
@@ -435,15 +443,20 @@ func (l *List) itemLines(idx int) []string {
 	gutterWidth := l.accordion.Width()
 	control := strings.Repeat(" ", gutterWidth)
 	if hasDisclosure {
-		control = l.accordion.Render(components.AccordionState{
-			Expanded: expanded,
-			Hovered:  hovered,
-		})
+		control = l.accordion.Render(components.AccordionState{Expanded: expanded})
 	}
 	pad := strings.Repeat(" ", gutterWidth)
 
 	out := make([]string, len(lines))
-	out[0] = control + lines[0]
+	// The status glyph stays the leftmost cell on the row: splice the control
+	// in right after it rather than ahead of it, so the check/✗/spinner is
+	// always aligned to the left edge regardless of disclosure state.
+	glyph := ansi.Cut(lines[0], 0, statusGlyphWidth)
+	rest := ansi.Cut(lines[0], statusGlyphWidth, ansi.StringWidth(lines[0]))
+	out[0] = glyph + control + rest
+	if hovered {
+		out[0] = components.PaintRowBackground(out[0], l.width, l.sty.Accordion.HoverBackground)
+	}
 	for i := 1; i < len(lines); i++ {
 		out[i] = pad + lines[i]
 	}
@@ -653,7 +666,7 @@ func (l *List) renderSurface(withPosition bool) Surface {
 
 		if off >= 0 && off < h {
 			if off == 0 && l.chevronDrawn(idx) {
-				l.zones = append(l.zones, accordionZone{id: l.view[idx].id, row: row, width: l.accordion.Width()})
+				l.zones = append(l.zones, accordionZone{id: l.view[idx].id, row: row, width: l.width})
 			}
 			visible := itemLines[off:]
 			if rem := budget - len(lines); len(visible) > rem {

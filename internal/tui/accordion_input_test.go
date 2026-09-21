@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
@@ -42,21 +43,44 @@ func accordionTestModel(t *testing.T) *Model {
 	return m
 }
 
+// clickAccordionZone simulates a plain click (press and release at the same
+// coordinates, no intervening motion) rather than a drag: the toggle only
+// fires at release, once finishSelection sees no real selection range formed.
+func clickAccordionZone(m *Model, x, y int) {
+	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: x, Y: y})
+	m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: x, Y: y})
+}
+
+// accordionRow locates the disclosure glyph's row in the document. The fixture
+// model's transcript may lead with the splash/resume header, so the accordion
+// row is not reliably row 0.
+func accordionRow(t *testing.T, m *Model) int {
+	t.Helper()
+	for i, line := range strings.Split(m.list.Document(), "\n") {
+		if plain := ansi.Strip(line); strings.ContainsAny(plain, "▼▶") {
+			return i
+		}
+	}
+	t.Fatal("no accordion row found in document")
+	return -1
+}
+
 func TestClickOnAccordionZoneTogglesWithoutStartingSelection(t *testing.T) {
 	m := accordionTestModel(t)
 	full := accordionDocumentLines(m)
+	row := accordionRow(t, m)
 
-	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 0, Y: 0})
+	clickAccordionZone(m, 0, row)
 
-	if m.selection.selecting() {
-		t.Fatal("clicking the accordion zone started a text selection")
+	if m.selection.selected() {
+		t.Fatal("clicking the accordion zone left a text selection")
 	}
 	if got := accordionDocumentLines(m); got >= full {
 		t.Fatalf("click did not collapse the block: document lines = %d, want fewer than %d", got, full)
 	}
 
 	m.list.Render()
-	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 0, Y: 0})
+	clickAccordionZone(m, 0, row)
 	if got := accordionDocumentLines(m); got != full {
 		t.Fatalf("second click did not re-expand the block: document lines = %d, want %d", got, full)
 	}
@@ -64,26 +88,34 @@ func TestClickOnAccordionZoneTogglesWithoutStartingSelection(t *testing.T) {
 
 func TestClickOffAccordionZoneStillStartsSelection(t *testing.T) {
 	m := accordionTestModel(t)
+	row := accordionRow(t, m)
 
-	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 60, Y: 0})
+	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 60, Y: row})
 
 	if !m.selection.selecting() {
 		t.Fatal("click off the accordion zone did not start a selection")
 	}
 }
 
-func TestMouseMotionSetsAndClearsHover(t *testing.T) {
+func TestMouseMotionHoverSpansWholeRowAndClearsOffIt(t *testing.T) {
 	m := accordionTestModel(t)
+	row := accordionRow(t, m)
 	resting := m.list.Document()
 
-	m.Update(tea.MouseMotionMsg{X: 0, Y: 0})
-	if hovered := m.list.Document(); hovered == resting {
-		t.Fatal("motion over the zone did not visibly change the gutter")
+	m.Update(tea.MouseMotionMsg{X: 0, Y: row})
+	overChevron := m.list.Document()
+	if overChevron == resting {
+		t.Fatal("motion over the chevron did not visibly change the row")
 	}
 
-	m.Update(tea.MouseMotionMsg{X: 60, Y: 0})
+	m.Update(tea.MouseMotionMsg{X: 60, Y: row})
+	if got := m.list.Document(); got != overChevron {
+		t.Fatal("motion elsewhere on the same header row changed or cleared the hover fill")
+	}
+
+	m.Update(tea.MouseMotionMsg{X: 60, Y: row + 1})
 	if cleared := m.list.Document(); cleared != resting {
-		t.Fatal("motion off the zone did not clear hover")
+		t.Fatal("motion off the header row did not clear hover")
 	}
 }
 

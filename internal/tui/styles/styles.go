@@ -145,9 +145,7 @@ type Approval struct {
 }
 
 // Accordion styles the disclosure control that expands and collapses a
-// transcript block's detail rows. Hover reuses the selected-fill recipe shared
-// with Approval.Selected rather than introducing a palette role, so every
-// pointer-selected surface in the UI reads the same.
+// transcript block's detail rows.
 type Accordion struct {
 	// Expanded and Collapsed are the disclosure glyphs. Both are one cell wide
 	// under the grapheme width model the transcript measures with, so the
@@ -155,8 +153,17 @@ type Accordion struct {
 	Expanded  string
 	Collapsed string
 
+	// Resting draws the control when idle. Its background matches the app
+	// background so the control disappears into the surrounding row until
+	// hovered.
 	Resting lipgloss.Style
-	Hover   lipgloss.Style
+
+	// HoverBackground is painted across the whole header row, not just the
+	// control's own cells, when that row is hovered. The caller (chat.List)
+	// repaints an already-rendered line's background cell-by-cell rather than
+	// wrapping it in a lipgloss style, since the line's own foreground colors
+	// must survive the repaint.
+	HoverBackground color.Color
 }
 
 // Selector styles the reusable two-column keyboard selector.

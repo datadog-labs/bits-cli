@@ -171,6 +171,14 @@ type Model struct {
 	// auto-scroll state while the model supplies rendered pane frames.
 	selection selection
 
+	// pendingAccordionToggle is the block a mouse-down landed on inside an
+	// accordion header row. Every left-click also begins a potential
+	// drag-select (see beginSelection), so the toggle stays pending until
+	// finishSelection sees the gesture through: it fires only if the release
+	// never turned it into a real selection range.
+	pendingAccordionToggle    agent.BlockID
+	hasPendingAccordionToggle bool
+
 	// splashReady is set once the terminal has answered the Kitty graphics
 	// probe and the logo's pixels have been transmitted.
 	splashReady bool

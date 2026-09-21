@@ -12,19 +12,16 @@ import (
 // rather than inside the control.
 type AccordionState struct {
 	Expanded bool
-	Hovered  bool
 }
 
-// Accordion is the clickable disclosure control that expands and collapses a
-// block's detail rows. It renders a fixed-width chevron box and reports the
-// span it occupies so a caller can hit-test a pointer against it.
+// Accordion renders the disclosure glyph for a block's detail rows. Toggling
+// is not this type's concern: the click target is the whole header row, and
+// deciding whether a mouse-up on that row is a toggle or the end of a text
+// drag requires the selection state Model already owns, so Model resolves
+// that gesture itself and calls chat.List.ToggleDisclosure directly.
 type Accordion struct {
 	styles styles.Accordion
 	width  int
-
-	// OnClick runs when Click reports a press on the control. It receives the
-	// state the control should move to, leaving the caller to store it.
-	OnClick func(next AccordionState)
 }
 
 // NewAccordion creates a control with the supplied shared theme styles.
@@ -41,30 +38,17 @@ func (a *Accordion) SetStyles(sty styles.Accordion) {
 		max(ansi.StringWidth(sty.Expanded), ansi.StringWidth(sty.Collapsed))
 }
 
-// Render draws the control in the given state.
+// Render draws the control's glyph. Hover is not reflected here: the caller
+// repaints the whole header row's background via PaintRowBackground, which
+// covers the control's own cells too.
 func (a *Accordion) Render(state AccordionState) string {
-	style := a.styles.Resting
-	if state.Hovered {
-		style = a.styles.Hover
-	}
-	return style.Render(a.glyph(state.Expanded))
+	return a.styles.Resting.Render(a.glyph(state.Expanded))
 }
 
 // Width returns the cells the control occupies. It is state-independent, so a
 // header keeps its layout when the control is toggled or hovered.
 func (a *Accordion) Width() int {
 	return a.width
-}
-
-// Click toggles the control and notifies OnClick. It reports the new state so
-// a caller that would rather read the result than register a handler can.
-func (a *Accordion) Click(state AccordionState) AccordionState {
-	next := state
-	next.Expanded = !state.Expanded
-	if a.OnClick != nil {
-		a.OnClick(next)
-	}
-	return next
 }
 
 func (a *Accordion) glyph(expanded bool) string {

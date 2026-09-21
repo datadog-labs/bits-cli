@@ -96,12 +96,9 @@ func build(isDark bool, p palette) Theme {
 		Collapsed: "▶",
 		Resting: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(p.textSecondary)).
-			Background(lipgloss.Color(p.surface)).
+			Background(lipgloss.Color(p.background)).
 			Padding(0, 1),
-		Hover: lipgloss.NewStyle().Bold(true).
-			Foreground(lipgloss.Color(p.onAccent)).
-			Background(lipgloss.Color(p.interactive)).
-			Padding(0, 1),
+		HoverBackground: lipgloss.Color(p.accordionHover),
 	}
 	selector := Selector{
 		Item:           text.Primary,

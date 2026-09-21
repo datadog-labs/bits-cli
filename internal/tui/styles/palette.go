@@ -32,6 +32,12 @@ type palette struct {
 	codeSurface     string
 	codeText        string
 
+	// accordionHover is the whole-row hover fill for the clickable disclosure
+	// header. Dark gets a dedicated tone since surfaceRaised there is an
+	// ANSI-256 index rather than a hex value that reads well as a fill; light
+	// just reuses surfaceRaised, which already sits one step above surface.
+	accordionHover string
+
 	// sweepHot is the peak color of the composer's animated border sweep
 	// (styles.BorderSweepRow). Dedicated rather than reusing primary, the
 	// same way busyHot is dedicated rather than reusing it for the status
@@ -76,6 +82,7 @@ func darkPalette() palette {
 		borderSubtle:    "#474A54",
 		codeSurface:     "#343336",
 		codeText:        "#CECECE",
+		accordionHover:  "#22242B",
 		sweepHot:        "#A2C6FF",
 		link:            "#3d8bd0",
 		busy:            "#F5C453",
@@ -116,6 +123,7 @@ func lightPalette() palette {
 		borderSubtle:    "#9AA3B2",
 		codeSurface:     "#CED3DD",
 		codeText:        "#1C2E38",
+		accordionHover:  "#BDC5D3",
 		sweepHot:        "#A2C6FF",
 		link:            "#006bc2",
 		busy:            "#7A5200",
