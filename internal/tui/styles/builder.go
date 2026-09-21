@@ -89,6 +89,20 @@ func build(isDark bool, p palette) Theme {
 			Background(lipgloss.Color(p.interactive)).
 			Padding(0, 1),
 	}
+	// The control is a background fill on its cells rather than a drawn border,
+	// so the one-cell padding is what gives the chevron its box.
+	accordion := Accordion{
+		Expanded:  "▼",
+		Collapsed: "▶",
+		Resting: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(p.textSecondary)).
+			Background(lipgloss.Color(p.surface)).
+			Padding(0, 1),
+		Hover: lipgloss.NewStyle().Bold(true).
+			Foreground(lipgloss.Color(p.onAccent)).
+			Background(lipgloss.Color(p.interactive)).
+			Padding(0, 1),
+	}
 	selector := Selector{
 		Item:           text.Primary,
 		Selected:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
@@ -129,6 +143,7 @@ func build(isDark bool, p palette) Theme {
 		Feedback:  feedback,
 		Panel:     panel,
 		Approval:  approval,
+		Accordion: accordion,
 		Selector:  selector,
 		TextInput: textInput,
 		Chat: Chat{

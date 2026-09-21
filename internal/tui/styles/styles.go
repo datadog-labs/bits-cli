@@ -144,6 +144,21 @@ type Approval struct {
 	Selected lipgloss.Style
 }
 
+// Accordion styles the disclosure control that expands and collapses a
+// transcript block's detail rows. Hover reuses the selected-fill recipe shared
+// with Approval.Selected rather than introducing a palette role, so every
+// pointer-selected surface in the UI reads the same.
+type Accordion struct {
+	// Expanded and Collapsed are the disclosure glyphs. Both are one cell wide
+	// under the grapheme width model the transcript measures with, so the
+	// control keeps a fixed width across states and never reflows the header.
+	Expanded  string
+	Collapsed string
+
+	Resting lipgloss.Style
+	Hover   lipgloss.Style
+}
+
 // Selector styles the reusable two-column keyboard selector.
 type Selector struct {
 	Item           lipgloss.Style
@@ -175,6 +190,7 @@ type Theme struct {
 	Feedback  Feedback
 	Panel     Panel
 	Approval  Approval
+	Accordion Accordion
 	Selector  Selector
 	TextInput textinput.Styles
 }
