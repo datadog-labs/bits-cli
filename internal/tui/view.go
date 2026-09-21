@@ -247,12 +247,12 @@ func (m *Model) approvalBody(width int, title, detail string) string {
 // narrow terminals. The focused choice uses the interactive fill.
 func (m *Model) approvalActions(width int) string {
 	sty := m.styles.Approval
-	labels := [...]string{"Deny", "Allow once", "Allow for session"}
-	if width < approvalCompactWidth {
-		labels = [...]string{"Deny", "Once", "Session"}
-	}
-	actions := make([]string, len(labels))
-	for i, label := range labels {
+	actions := make([]string, len(approvalChoices))
+	for i, choice := range approvalChoices {
+		label := choice.label
+		if width < approvalCompactWidth {
+			label = choice.compactLabel
+		}
 		if i == m.approvalChoice {
 			actions[i] = sty.Selected.Render(label)
 		} else {

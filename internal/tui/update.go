@@ -63,10 +63,16 @@ type (
 // guards against a stale timer clearing a newer notice.
 type noticeExpiredMsg struct{ seq int }
 
-var approvalChoices = [...]agent.ApprovalDecision{
-	agent.ApprovalDeny,
-	agent.ApprovalAllowOnce,
-	agent.ApprovalAllowSession,
+type approvalChoice struct {
+	decision     agent.ApprovalDecision
+	label        string
+	compactLabel string
+}
+
+var approvalChoices = [...]approvalChoice{
+	{decision: agent.ApprovalAllowOnce, label: "Allow", compactLabel: "Allow"},
+	{decision: agent.ApprovalAllowSession, label: "Allow for session", compactLabel: "Session"},
+	{decision: agent.ApprovalDeny, label: "Deny", compactLabel: "Deny"},
 }
 
 // showNotice sets the transient status notice and returns a command that clears
@@ -674,7 +680,7 @@ func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.respondToApproval(agent.ApprovalDeny)
 	case "enter":
-		m.respondToApproval(approvalChoices[m.approvalChoice])
+		m.respondToApproval(approvalChoices[m.approvalChoice].decision)
 	}
 	return m, nil
 }

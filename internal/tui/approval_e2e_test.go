@@ -208,10 +208,10 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 				}
 			}
 			if width < approvalCompactWidth {
-				if !strings.Contains(plain, "Once") || !strings.Contains(plain, "Session") || strings.Contains(plain, "Allow once") {
+				if !strings.Contains(plain, "Allow") || !strings.Contains(plain, "Session") || strings.Contains(plain, "Allow for session") {
 					t.Fatalf("compact actions not used:\n%s", plain)
 				}
-			} else if !strings.Contains(plain, "Allow once") || !strings.Contains(plain, "Allow for session") {
+			} else if !strings.Contains(plain, "Allow") || !strings.Contains(plain, "Allow for session") || strings.Contains(plain, "Allow once") {
 				t.Fatalf("full actions missing:\n%s", plain)
 			}
 			if width == 120 {
@@ -240,7 +240,7 @@ func TestApprovalPanelRemainsUsableAtMinimumHeight(t *testing.T) {
 	}
 
 	view := ansi.Strip(model.View().Content)
-	for _, want := range []string{"Permission Required", "Run the test action?", "This test tool requires approval", "Deny", "Once", "Session"} {
+	for _, want := range []string{"Permission Required", "Run the test action?", "This test tool requires approval", "Allow", "Session", "Deny"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("minimum-height approval missing %q:\n%s", want, view)
 		}
@@ -295,9 +295,9 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 		deny      bool
 		selection string
 	}{
-		{name: "deny", deny: true, selection: "Deny"},
-		{name: "allow once", navigate: 1, selection: "Allow once"},
-		{name: "allow for session", navigate: 2, selection: "Allow for session"},
+		{name: "allow", selection: "Allow"},
+		{name: "allow for session", navigate: 1, selection: "Allow for session"},
+		{name: "deny", navigate: 2, deny: true, selection: "Deny"},
 	}
 
 	for _, tt := range tests {
@@ -339,11 +339,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				t.Fatal("approval input leaked into the editor")
 			}
 
-			if tt.deny {
-				_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
-			} else {
-				_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-			}
+			_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 			drainConversationRemote(t, model)
 
 			if strings.Contains(ansi.Strip(model.View().Content), "Permission Required") {
