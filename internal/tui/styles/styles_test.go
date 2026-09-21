@@ -401,6 +401,9 @@ func TestSharedComponentStylesDeriveFromSemanticTokens(t *testing.T) {
 		{name: "light", theme: Default(false), palette: lightPalette()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			if got, want := test.theme.Input.Cursor, lipgloss.Color(test.palette.textPrimary); got != want {
+				t.Errorf("input cursor = %v, want token %v", got, want)
+			}
 			if got, want := test.theme.Panel.Frame.GetBorderTopForeground(), lipgloss.Color(test.palette.borderSubtle); got != want {
 				t.Errorf("panel border = %v, want token %v", got, want)
 			}

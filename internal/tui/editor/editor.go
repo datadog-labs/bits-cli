@@ -198,6 +198,7 @@ func (e *Editor) SetInputStyles(inputStyle styles.Input) {
 	// style sets, ignoring theme colors. Both states get the theme's color so an
 	// empty composer reads the same whether or not it holds focus.
 	st.Focused.Placeholder, st.Blurred.Placeholder = inputStyle.Placeholder, inputStyle.Placeholder
+	st.Cursor.Color = inputStyle.Cursor
 	e.ta.SetStyles(st)
 
 	// Vertical padding only, matching the user block: the caret sits flush left
