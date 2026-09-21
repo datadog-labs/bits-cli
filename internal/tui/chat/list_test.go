@@ -510,3 +510,53 @@ func layoutToolBlock(name, input string) agent.Block {
 		Tool: &agent.ToolBlock{Name: name, Input: input, Status: agent.ToolSuccess, IsClientSide: true},
 	}
 }
+
+func TestGutteredItemNarrowsForTheAccordion(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	it := list.view[0]
+	if !list.guttered(it) {
+		t.Fatal("a single-tool presentation item must be guttered")
+	}
+	want := list.width - list.accordion.Width()
+	if got := list.itemWidth(it); got != want {
+		t.Fatalf("itemWidth() = %d, want %d", got, want)
+	}
+}
+
+func TestNonGutteredItemUsesFullWidth(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(8)
+	list.SetItems([]agent.Block{
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}},
+	})
+	it := list.view[0]
+	if list.guttered(it) {
+		t.Fatal("a reasoning group must not be guttered")
+	}
+	if got := list.itemWidth(it); got != list.width {
+		t.Fatalf("itemWidth() = %d, want the full width %d", got, list.width)
+	}
+}
+
+func TestNarrowViewportDisablesTheGutter(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	list.SetWidth(list.accordion.Width())
+	it := list.view[0]
+	if list.hasGutterRoom() {
+		t.Fatal("width equal to the accordion's own width leaves no room for content")
+	}
+	if got := list.itemWidth(it); got != list.width {
+		t.Fatalf("itemWidth() = %d, want the unreduced width %d when there is no gutter room", got, list.width)
+	}
+}
+
+func TestGutteredItemStaysWithinTotalWidth(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	for _, line := range list.renderItem(0) {
+		if w := ansi.StringWidth(line); w > list.width {
+			t.Fatalf("rendered line %q is %d cells wide, want <= %d", line, w, list.width)
+		}
+	}
+}

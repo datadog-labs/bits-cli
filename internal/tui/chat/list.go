@@ -7,6 +7,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 )
 
 // List is a lazily-rendered, vertically-stacked view of transcript items with an
@@ -43,6 +44,11 @@ type List struct {
 
 	cache    map[agent.BlockID]listLineEntry
 	renderer blockRenderer
+
+	// accordion renders the disclosure control guttered items reserve space
+	// for. It is nil until the first SetStyles call; every real render path
+	// (newShell → applyStyles) calls SetStyles before any render happens.
+	accordion *components.Accordion
 }
 
 // Surface is the visible transcript and its row offset in the full document.
@@ -116,6 +122,11 @@ func (l *List) Height() int { return l.height }
 // SetStyles swaps the render styles and invalidates the cache (old palette).
 func (l *List) SetStyles(sty Styles) {
 	l.sty = sty
+	if l.accordion == nil {
+		l.accordion = components.NewAccordion(sty.Accordion)
+	} else {
+		l.accordion.SetStyles(sty.Accordion)
+	}
 	l.invalidateAll()
 }
 
@@ -261,22 +272,46 @@ func (l *List) stacksTight(it presentationItem) bool {
 	}
 }
 
+// guttered reports whether idx's presentation item reserves the accordion
+// gutter. Only a single tool renders one clickable control; reasoning groups
+// and multi-tool inspection groups keep their current left edge.
+func (l *List) guttered(it presentationItem) bool {
+	return len(it.presentations) == 1
+}
+
+// hasGutterRoom reports whether the viewport is wide enough to reserve the
+// accordion's fixed-width gutter and still leave room for content.
+func (l *List) hasGutterRoom() bool {
+	return l.accordion != nil && l.width > l.accordion.Width()
+}
+
+// itemWidth is the width renderPresentationItem wraps to: narrowed by the
+// gutter for a guttered item with room for one, the full width otherwise.
+// Total rendered output (gutter + content) never exceeds l.width.
+func (l *List) itemWidth(it presentationItem) int {
+	if l.guttered(it) && l.hasGutterRoom() {
+		return l.width - l.accordion.Width()
+	}
+	return l.width
+}
+
 // renderItem returns the block's rendered lines, cached by revision and width.
 // Animated entries additionally key on frame, so unrelated model updates at the
 // same frame do not render them again; settled entries remain cached as the
 // global animation frame advances.
 func (l *List) renderItem(idx int) []string {
 	it := l.view[idx]
+	width := l.itemWidth(it)
 	animated := l.itemAnimated(it)
 	if e, ok := l.cache[it.id]; ok &&
-		e.rev == it.rev && e.width == l.width && e.animated == animated &&
+		e.rev == it.rev && e.width == width && e.animated == animated &&
 		(!animated || e.frame == l.frame) {
 		return e.lines
 	}
-	lines := strings.Split(l.renderPresentationItem(it), "\n")
+	lines := strings.Split(l.renderPresentationItem(it, width), "\n")
 	l.cache[it.id] = listLineEntry{
 		rev:      it.rev,
-		width:    l.width,
+		width:    width,
 		animated: animated,
 		frame:    l.frame,
 		lines:    lines,
@@ -284,22 +319,22 @@ func (l *List) renderItem(idx int) []string {
 	return lines
 }
 
-func (l *List) renderPresentationItem(it presentationItem) string {
+func (l *List) renderPresentationItem(it presentationItem, width int) string {
 	// First: the header has no backing block, so it must return before any
 	// branch indexes l.items.
 	if it.group == headerGroupKey {
 		return l.header
 	}
 	if it.group == reasoningGroupKey {
-		return renderReasoningGroup(l.items[it.start:it.end], l.width, l.sty, l.frame)
+		return renderReasoningGroup(l.items[it.start:it.end], width, l.sty, l.frame)
 	}
 	if it.group == inspectionGroupKey && len(it.presentations) > 1 {
-		return renderInspectionGroup(l.items[it.start:it.end], it.presentations, l.width, l.sty, l.frame)
+		return renderInspectionGroup(l.items[it.start:it.end], it.presentations, width, l.sty, l.frame)
 	}
 	if len(it.presentations) == 1 {
-		return renderPresentedTool(l.items[it.start].Tool, it.presentations[0], l.width, l.sty, l.frame)
+		return renderPresentedTool(l.items[it.start].Tool, it.presentations[0], width, l.sty, l.frame)
 	}
-	return l.renderer.RenderBlock(l.items[it.start], l.width, l.sty, l.frame)
+	return l.renderer.RenderBlock(l.items[it.start], width, l.sty, l.frame)
 }
 
 // itemAnimated reports whether rendering depends on the frame counter. Waiting
