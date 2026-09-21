@@ -133,3 +133,22 @@ func TestCtrlOTogglesAllToolsWithExpandFirstAlternation(t *testing.T) {
 		t.Fatalf("second ctrl+o document lines = %d, want fewer than %d", got, full)
 	}
 }
+
+func TestViewSetsPointerShapeOverAnAccordionRow(t *testing.T) {
+	m := accordionTestModel(t)
+	row := accordionRow(t, m)
+
+	if got := m.View().Content; !strings.Contains(got, ansi.SetPointerShape("default")) {
+		t.Fatalf("resting view did not carry the default pointer shape: %q", got)
+	}
+
+	m.Update(tea.MouseMotionMsg{X: 0, Y: row})
+	if got := m.View().Content; !strings.Contains(got, ansi.SetPointerShape("pointer")) {
+		t.Fatalf("hovered view did not carry the pointer shape: %q", got)
+	}
+
+	m.Update(tea.MouseMotionMsg{X: 0, Y: row + 1})
+	if got := m.View().Content; !strings.Contains(got, ansi.SetPointerShape("default")) {
+		t.Fatalf("un-hovering the row did not reset the pointer shape: %q", got)
+	}
+}

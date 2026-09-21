@@ -374,6 +374,12 @@ func (l *List) SetHovered(id agent.BlockID, ok bool) bool {
 	return true
 }
 
+// Hovered reports whether the pointer currently sits over a clickable
+// accordion row.
+func (l *List) Hovered() bool {
+	return l.hasHover
+}
+
 // ZoneAt reports the block whose header row spans screen coordinate (x, y),
 // or false if none does. Coordinates are relative to the top-left of the
 // surface renderSurface last produced. It serves both hover (a pure

@@ -90,7 +90,21 @@ func (m *Model) View() tea.View {
 			v.Content = m.status.View()
 		}
 	}
+	v.Content += m.pointerShape()
 	return v
+}
+
+// pointerShape swaps the OS mouse pointer to a hand over a clickable
+// accordion row via OSC 22 (kitty implements it fully; xterm and foot carry
+// an older, simpler version of the same sequence; other terminals ignore it).
+// Appended once per frame rather than spliced into the hovered row itself, so
+// two rows changing hover state in the same frame can't race and leave the
+// terminal on the wrong shape.
+func (m *Model) pointerShape() string {
+	if m.mode == ModeChat && m.list.Hovered() {
+		return ansi.SetPointerShape("pointer")
+	}
+	return ansi.SetPointerShape("default")
 }
 
 // chatView stacks the transcript, an optional docked approval block, the notice
