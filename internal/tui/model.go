@@ -5,6 +5,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -174,6 +175,9 @@ type Model struct {
 	// probe and the logo's pixels have been transmitted.
 	splashReady bool
 
+	// resume is the startup conversation offer shown under the splash panel.
+	resume resume
+
 	// version is injected so the TUI stays independent of the command layer.
 	version string
 }
@@ -237,6 +241,7 @@ func newShell() *Model {
 		styles:            theme,
 		searchSessionID:   newSearchSessionID(),
 		entitySearchCache: make(map[string]entitySearchCacheEntry),
+		resume:            resume{now: time.Now},
 	}
 	m.applyStyles(m.styles)
 	return m
@@ -313,8 +318,15 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) initChat() tea.Cmd {
 	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
 	commands := []tea.Cmd{m.editor.Focus(), requestBG}
-	if m.engine == nil || m.engine.ConversationID() == "" {
+	if m.engine == nil {
 		return tea.Batch(commands...)
+	}
+	if m.engine.ConversationID() == "" {
+		// The offer's only fetch for the life of the process: skipping it for a
+		// restored conversation leaves the offer empty even after /new clears the
+		// transcript. Fetching later would read on the gated path, which can fail
+		// the next message with ErrOperationActive.
+		return tea.Batch(append(commands, m.fetchRecentConversations())...)
 	}
 	m.chatPhase = chat.PhaseLoading
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)

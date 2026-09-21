@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -46,20 +47,20 @@ func TestWelcomeFactsNeverExceedTheirWidth(t *testing.T) {
 	}
 }
 
-// layoutTranscript subtracts welcomeHeight from the transcript, so the rendered
-// block must occupy exactly that many lines in either logo form.
+// resumeVisibleRows budgets the offer against splashPanelHeight, so the panel
+// must occupy exactly that many lines in either logo form.
 func TestWelcomeBlockHeightMatchesReservation(t *testing.T) {
 	for name, m := range welcomeModels(0, 40) {
 		for _, ready := range []bool{false, true} {
 			m.splashReady = ready
 			for width := minimumChatWidth; width <= 200; width++ {
 				m.width = width
-				if !m.showWelcome() {
+				if !m.showSplashPanel() {
 					continue
 				}
-				if got := lipgloss.Height(m.welcomeView()); got != m.welcomeHeight() {
+				if got := lipgloss.Height(m.splashPanelView()); got != m.splashPanelHeight() {
 					t.Fatalf("%s ready=%v width=%d: block is %d rows, want %d",
-						name, ready, width, got, m.welcomeHeight())
+						name, ready, width, got, m.splashPanelHeight())
 				}
 			}
 		}
@@ -73,10 +74,10 @@ func TestWelcomeBlockNeverOverflowsTerminalWidth(t *testing.T) {
 			m.splashReady = ready
 			for width := minimumChatWidth; width <= 200; width++ {
 				m.width = width
-				if !m.showWelcome() {
+				if !m.showSplashPanel() {
 					continue
 				}
-				if got := lipgloss.Width(m.welcomeView()); got > width {
+				if got := lipgloss.Width(m.splashPanelView()); got > width {
 					t.Fatalf("%s ready=%v width=%d: block measures %d columns",
 						name, ready, width, got)
 				}
@@ -129,18 +130,17 @@ func TestWelcomeFactsOmitOrganization(t *testing.T) {
 	}
 }
 
-// The block needs its own rows plus one transcript row, within what the notice,
-// footer and composer leave behind — so the boundary tracks the composer rather
-// than the terminal alone.
+// The gate is transcriptHeight, so the boundary moves with the notice, footer
+// and composer rather than with m.height alone.
 func TestWelcomeHiddenUntilTerminalIsTallEnough(t *testing.T) {
 	tall := welcomeModel(100, 40)
-	needed := tall.welcomeHeight() + 1 + chatNoticeHeight + chatFooterHeight + tall.composerHeight()
+	needed := tall.splashPanelHeight() + chatNoticeHeight + chatFooterHeight + tall.composerHeight()
 
-	if welcomeModel(100, needed-1).showWelcome() {
-		t.Error("welcome shown on a terminal too short to hold it")
+	if welcomeModel(100, needed-1).showSplashPanel() {
+		t.Error("splash panel shown on a terminal too short to hold it")
 	}
-	if !welcomeModel(100, needed).showWelcome() {
-		t.Error("welcome hidden on a terminal tall enough to hold it")
+	if !welcomeModel(100, needed).showSplashPanel() {
+		t.Error("splash panel hidden on a terminal tall enough to hold it")
 	}
 }
 
@@ -244,23 +244,161 @@ func TestGraphicsReplyDrivesLogoForm(t *testing.T) {
 	}
 }
 
-// The welcome block is only safe inside chatViewBase because it never coexists
-// with transcript content, which is what keeps selection row mapping correct.
-func TestWelcomeNeverShownWithTranscriptContent(t *testing.T) {
-	m := welcomeModel(100, 40)
-	if !m.showWelcome() {
-		t.Fatal("expected the welcome block on an empty transcript")
+// The panel is a session header: a filled transcript must not hide it.
+func TestSplashPanelSurvivesTranscriptContent(t *testing.T) {
+	m := welcomeModel(120, 40)
+	m.blocks = []agent.Block{{
+		ID:       agent.BlockID{Scope: agent.ScopeLocal, Key: "a", Kind: assistant.KindText},
+		Kind:     assistant.KindText,
+		Complete: true,
+		Markdown: &assistant.MarkdownPayload{Content: "hello"},
+	}}
+	if !m.showSplashPanel() {
+		t.Fatal("panel hidden once the transcript had content")
 	}
-	m.blocks = []agent.Block{{}}
-	if m.showWelcome() {
-		t.Error("welcome shown alongside transcript content")
+	if m.showResume() {
+		t.Fatal("resume offered with a non-empty transcript")
 	}
 }
 
-// A growing composer eats the rows the block reserved. Keeping the block would
-// clamp the transcript to one row and push the whole view past the bottom of
-// the terminal, hiding the composer the user is typing into.
-func TestWelcomeHiddenWhenTheComposerLeavesNoRoom(t *testing.T) {
+// The header is one string handed to chat.List; its height must equal the two
+// blocks' computed heights plus the blank row between them.
+func TestHeaderHeightMatchesItsParts(t *testing.T) {
+	m := welcomeModel(120, 40)
+	m.resume = *resumeFixture(32)
+	for width := 40; width <= 200; width++ {
+		m.width = width
+		if !m.showSplashPanel() {
+			continue
+		}
+		want := m.splashPanelHeight()
+		if m.showResume() {
+			want += 1 + resumeBlockHeight(m.resumeVisibleRows())
+		}
+		if got := lipgloss.Height(m.headerView()); got != want {
+			t.Fatalf("width=%d: header is %d rows, want %d", width, got, want)
+		}
+	}
+}
+
+func TestHeaderNeverExceedsTerminalWidth(t *testing.T) {
+	for name, m := range welcomeModels(0, 40) {
+		m.resume = *resumeFixture(32)
+		for _, ready := range []bool{false, true} {
+			m.splashReady = ready
+			for width := minimumChatWidth; width <= 200; width++ {
+				m.width = width
+				for i, line := range strings.Split(m.headerView(), "\n") {
+					if got := ansi.StringWidth(line); got > width {
+						t.Fatalf("%s ready=%v width=%d line %d measures %d columns", name, ready, width, i, got)
+					}
+				}
+			}
+		}
+	}
+}
+
+// The header must always fit the transcript viewport, or follow-mode scrolls
+// the panel off at launch. Rows degrade, then the offer drops entirely. The
+// test only proves that ladder happened if both ends of it are observed.
+func TestResumeRowsDegradeUntilTheHeaderFits(t *testing.T) {
+	m := welcomeModel(120, 40)
+	m.resume = *resumeFixture(32)
+	previous := resumeRows + 1
+	minRows, maxRows := resumeRows, 0
+	for height := 40; height >= 1; height-- {
+		m.height = height
+		rows := 0
+		if m.showResume() {
+			rows = m.resumeVisibleRows()
+		}
+		if rows > previous {
+			t.Fatalf("height=%d: rows grew from %d to %d as the terminal shrank", height, previous, rows)
+		}
+		if rows > 0 && lipgloss.Height(m.headerView()) > m.transcriptHeight() {
+			t.Fatalf("height=%d: header %d rows exceeds the %d-row viewport",
+				height, lipgloss.Height(m.headerView()), m.transcriptHeight())
+		}
+		minRows, maxRows = min(minRows, rows), max(maxRows, rows)
+		previous = rows
+	}
+	if minRows != 0 || maxRows != resumeRows {
+		t.Fatalf("rows ranged [%d, %d] across the shrink, want [0, %d]: the degradation ladder never ran",
+			minRows, maxRows, resumeRows)
+	}
+}
+
+// An unanswered or failed fetch leaves no conversations, and the offer must
+// then contribute nothing.
+func TestResumeHiddenWithoutConversations(t *testing.T) {
+	m := welcomeModel(120, 40)
+	if m.showResume() {
+		t.Fatal("resume offered before any conversations arrived")
+	}
+	if got, want := lipgloss.Height(m.headerView()), m.splashPanelHeight(); got != want {
+		t.Fatalf("header is %d rows, want just the panel's %d", got, want)
+	}
+}
+
+func TestResumeHiddenWhileComposerHasText(t *testing.T) {
+	m := welcomeModel(120, 40)
+	m.resume = *resumeFixture(4)
+	if !m.showResume() {
+		t.Fatal("resume not offered with an empty composer")
+	}
+	m.editor.SetValue("draft")
+	if m.showResume() {
+		t.Fatal("resume still offered while the composer held text")
+	}
+	m.editor.SetValue("")
+	if !m.showResume() {
+		t.Fatal("resume did not return once the composer was cleared")
+	}
+}
+
+// The header reaches the screen only through the transcript, so the chat view
+// must not paint it a second time.
+func TestChatViewRendersTheHeaderOnlyThroughTheTranscript(t *testing.T) {
+	m := welcomeModel(120, 40)
+	m.resume = *resumeFixture(4)
+	m.mode = ModeChat
+	m.layoutTranscript()
+	if got := strings.Count(m.chatViewBase(m.list.Render()), resumeTitle); got != 1 {
+		t.Fatalf("resume title appears %d times in the chat view, want 1", got)
+	}
+}
+
+// Empty and failed both leave showResume false, which is also true of a model
+// that never received the message, so the failed case also asserts the offer
+// stayed empty.
+func TestRecentConversationsResultDrivesTheOffer(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		result agent.ConversationListResult
+		want   bool
+	}{
+		{"populated", agent.ConversationListResult{Conversations: resumeFixture(4).conversations}, true},
+		{"empty", agent.ConversationListResult{}, false},
+		{"failed", agent.ConversationListResult{Err: errors.New("offline")}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := welcomeModel(120, 40)
+			m.mode = ModeChat
+			m.Update(recentConversationsMsg{result: test.result})
+			if got := m.showResume(); got != test.want {
+				t.Fatalf("showResume = %v, want %v", got, test.want)
+			}
+			if test.name == "failed" && !m.resume.empty() {
+				t.Fatal("a failed fetch must not populate the offer")
+			}
+		})
+	}
+}
+
+// A growing composer eats the rows the header needs. Whatever the header shows,
+// the composed view must stay inside the terminal, or the composer the user is
+// typing into is pushed off the bottom.
+func TestHeaderNeverPushesTheViewPastTheTerminal(t *testing.T) {
 	for _, height := range []int{18, 19, 20, 21, 22} {
 		m := welcomeModel(120, height)
 		m.mode = ModeChat
@@ -277,8 +415,8 @@ func TestWelcomeHiddenWhenTheComposerLeavesNoRoom(t *testing.T) {
 
 			view := lipgloss.Height(m.chatViewBase(m.list.Render()))
 			if view > height {
-				t.Fatalf("height=%d lines=%d: view is %d rows, past the terminal (welcome shown=%v)",
-					height, lines, view, m.showWelcome())
+				t.Fatalf("height=%d lines=%d: view is %d rows, past the terminal (panel shown=%v)",
+					height, lines, view, m.showSplashPanel())
 			}
 		}
 	}
@@ -292,11 +430,93 @@ func TestWelcomeVisibilityUnchangedByTheProbe(t *testing.T) {
 		m.mode = ModeChat
 
 		m.splashReady = false
-		before := m.showWelcome()
+		before := m.showSplashPanel()
 		m.splashReady = true
-		if after := m.showWelcome(); after != before {
+		if after := m.showSplashPanel(); after != before {
 			t.Fatalf("width=%d: visibility changed from %v to %v when the probe landed",
 				width, before, after)
 		}
+	}
+}
+
+// flattenMsgs executes cmd (and, recursively, every command a tea.BatchMsg
+// bundles) and collects the resulting messages. It never re-enters Update, so
+// it is only safe for commands whose channels resolve without further pumping —
+// true here because the fake backend answers Restore and RecentConversations
+// immediately with an error (it implements neither optional interface).
+func flattenMsgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		var out []tea.Msg
+		for _, c := range msg {
+			out = append(out, flattenMsgs(t, c)...)
+		}
+		return out
+	default:
+		return []tea.Msg{msg}
+	}
+}
+
+// initChat must only fetch the offer when there is nothing to restore: a
+// gated read on a live conversation would fail the user's first message with
+// ErrOperationActive, which is the entire reason RecentConversations exists.
+func TestInitChatFetchesTheOfferOnlyWithoutAConversationToRestore(t *testing.T) {
+	hasFetch := func(m *Model) bool {
+		for _, msg := range flattenMsgs(t, m.initChat()) {
+			if _, ok := msg.(recentConversationsMsg); ok {
+				return true
+			}
+		}
+		return false
+	}
+
+	empty := welcomeModel(120, 40)
+	empty.mode = ModeChat
+	empty.engine = agent.New(fake.New(), assistant.SendOptions{})
+	if !hasFetch(empty) {
+		t.Error("initChat did not fetch the offer for an empty start")
+	}
+
+	restoring := welcomeModel(120, 40)
+	restoring.mode = ModeChat
+	restoring.engine = agent.New(fake.New(), assistant.SendOptions{ConversationID: "existing-conversation"})
+	if hasFetch(restoring) {
+		t.Error("initChat fetched the offer despite a conversation to restore, which would gate it behind ErrOperationActive")
+	}
+}
+
+// At the tightest height the offer still fits, the header must be visible at
+// launch: follow mode pins the view to the tail, so a header one row too tall
+// scrolls the panel off before the user has typed anything.
+func TestHeaderVisibleAtLaunchAtTheTightestFittingHeight(t *testing.T) {
+	m := welcomeModel(120, 40)
+	m.mode = ModeChat
+	m.resume = *resumeFixture(32)
+
+	tightest := 0
+	for height := 1; height <= 60; height++ {
+		m.height = height
+		if m.showResume() {
+			tightest = height
+			break
+		}
+	}
+	if tightest == 0 {
+		t.Fatal("the offer never fit across the swept heights")
+	}
+
+	m.height = tightest
+	m.syncTranscript()
+	if !m.list.Following() {
+		t.Fatal("the list is not in follow mode at launch")
+	}
+	first := strings.TrimRight(strings.SplitN(m.headerView(), "\n", 2)[0], " ")
+	if !strings.Contains(m.list.Render(), first) {
+		t.Fatalf("height=%d: the panel's first row is not on screen at launch:\n%s",
+			tightest, m.list.Render())
 	}
 }

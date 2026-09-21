@@ -245,6 +245,35 @@ func TestSwitchSameConversationReleasesBeforeResult(t *testing.T) {
 	}
 }
 
+// A startup read must not contend with turns: the gate belongs to operations
+// that mutate engine state, and listing mutates none.
+func TestRecentConversationsIgnoresTheOperationGate(t *testing.T) {
+	response := &assistant.UserConversationsResponse{}
+	response.Data.Type = "user-conversations-response"
+	response.Data.Attributes.Conversations = []assistant.ConversationSummary{
+		{ID: testConversationID, ConversationID: testConversationID, Title: "One"},
+	}
+	e := New(&conversationBackend{
+		list: func(context.Context) (*assistant.UserConversationsResponse, error) { return response, nil },
+	}, assistant.SendOptions{})
+
+	if !e.begin() {
+		t.Fatal("could not take the operation gate")
+	}
+	t.Cleanup(func() { e.active.Store(false) })
+
+	result := <-e.RecentConversations(context.Background())
+	if result.Err != nil {
+		t.Fatalf("read failed while the gate was held: %v", result.Err)
+	}
+	if len(result.Conversations) != 1 {
+		t.Fatalf("conversations = %+v", result.Conversations)
+	}
+	if !e.OperationActive() {
+		t.Fatal("the ungated read released an operation it never took")
+	}
+}
+
 func TestLifecycleOperationsRejectOverlap(t *testing.T) {
 	gate := make(chan struct{})
 	e := New(&blockingBackend{gate: gate}, assistant.SendOptions{ConversationID: "old"})

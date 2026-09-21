@@ -52,11 +52,11 @@ type conversationItem struct {
 	now     func() time.Time
 }
 
-func (i conversationItem) Title() string { return safeTitle(i.summary) }
+func (i conversationItem) Title() string { return SafeTitle(i.summary) }
 func (i conversationItem) Description() string {
-	return relativeUpdatedAt(i.summary.UpdatedAt, i.now())
+	return RelativeUpdatedAt(i.summary.UpdatedAt, i.now())
 }
-func (i conversationItem) FilterValue() string { return safeTitle(i.summary) }
+func (i conversationItem) FilterValue() string { return SafeTitle(i.summary) }
 
 type Model struct {
 	list         list.Model
@@ -136,10 +136,14 @@ func (m *Model) SetClosing() {
 	m.list.StopSpinner()
 }
 
-// SetConversations drops entries without the canonical conversation_id. The
-// API's JSON:API item id is redundant today, but is not the documented request
-// key and must not silently substitute for malformed data.
-func (m *Model) SetConversations(summaries []assistant.ConversationSummary) tea.Cmd {
+// Ordered normalises a conversation list for display: entries without the
+// canonical conversation_id are dropped, and the rest are sorted newest first
+// with the id as a stable tiebreak. The API's JSON:API item id is redundant
+// today, but is not the documented request key and must not silently
+// substitute for malformed data.
+// The picker and the startup resume offer both call it, so neither can drift
+// on what "recent" means.
+func Ordered(summaries []assistant.ConversationSummary) []assistant.ConversationSummary {
 	ordered := make([]assistant.ConversationSummary, 0, len(summaries))
 	for _, summary := range summaries {
 		if strings.TrimSpace(summary.ConversationID) != "" {
@@ -152,6 +156,12 @@ func (m *Model) SetConversations(summaries []assistant.ConversationSummary) tea.
 		}
 		return ordered[i].ConversationID < ordered[j].ConversationID
 	})
+	return ordered
+}
+
+// SetConversations replaces the picker's rows with the normalised list.
+func (m *Model) SetConversations(summaries []assistant.ConversationSummary) tea.Cmd {
+	ordered := Ordered(summaries)
 	items := make([]list.Item, len(ordered))
 	for i := range ordered {
 		items[i] = conversationItem{summary: ordered[i], now: m.now}
@@ -270,7 +280,8 @@ func (m *Model) updateHelp() {
 	}
 }
 
-func relativeUpdatedAt(updatedAt int64, now time.Time) string {
+// RelativeUpdatedAt renders updatedAt relative to now for display.
+func RelativeUpdatedAt(updatedAt int64, now time.Time) string {
 	if updatedAt <= 0 {
 		return "Activity time unavailable"
 	}
@@ -652,7 +663,8 @@ func joinWarning(body, warning string) string {
 	return warning + "\n\n" + body
 }
 
-func safeTitle(summary assistant.ConversationSummary) string {
+// SafeTitle returns a display-safe title for the conversation summary.
+func SafeTitle(summary assistant.ConversationSummary) string {
 	if title := escape.SingleLine(summary.Title); title != "" {
 		return title
 	}
