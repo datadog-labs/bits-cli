@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -134,21 +135,38 @@ func TestCtrlOTogglesAllToolsWithExpandFirstAlternation(t *testing.T) {
 	}
 }
 
-func TestViewSetsPointerShapeOverAnAccordionRow(t *testing.T) {
+// rawSequence extracts the string written by a tea.Raw command in cmd,
+// unwrapping tea.Batch. It returns "" if cmd carries no RawMsg — Update
+// batches reconcilePointerShape's result together with other reconcilers,
+// most of which return nil on a given tick.
+func rawSequence(cmd tea.Cmd) string {
+	if cmd == nil {
+		return ""
+	}
+	switch msg := cmd().(type) {
+	case tea.RawMsg:
+		return fmt.Sprint(msg.Msg)
+	case tea.BatchMsg:
+		for _, c := range msg {
+			if s := rawSequence(c); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func TestMouseMotionSetsPointerShapeOverAnAccordionRow(t *testing.T) {
 	m := accordionTestModel(t)
 	row := accordionRow(t, m)
 
-	if got := m.View().Content; !strings.Contains(got, ansi.SetPointerShape("default")) {
-		t.Fatalf("resting view did not carry the default pointer shape: %q", got)
+	_, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row})
+	if got := rawSequence(cmd); got != ansi.SetPointerShape("pointer") {
+		t.Fatalf("hovering the row did not set the pointer shape: got %q, want %q", got, ansi.SetPointerShape("pointer"))
 	}
 
-	m.Update(tea.MouseMotionMsg{X: 0, Y: row})
-	if got := m.View().Content; !strings.Contains(got, ansi.SetPointerShape("pointer")) {
-		t.Fatalf("hovered view did not carry the pointer shape: %q", got)
-	}
-
-	m.Update(tea.MouseMotionMsg{X: 0, Y: row + 1})
-	if got := m.View().Content; !strings.Contains(got, ansi.SetPointerShape("default")) {
-		t.Fatalf("un-hovering the row did not reset the pointer shape: %q", got)
+	_, cmd = m.Update(tea.MouseMotionMsg{X: 0, Y: row + 1})
+	if got := rawSequence(cmd); got != ansi.SetPointerShape("default") {
+		t.Fatalf("un-hovering the row did not reset the pointer shape: got %q, want %q", got, ansi.SetPointerShape("default"))
 	}
 }

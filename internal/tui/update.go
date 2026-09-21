@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/browser"
@@ -147,6 +148,26 @@ func (m *Model) reconcileFocus() tea.Cmd {
 	return nil
 }
 
+// reconcilePointerShape keeps the OS mouse pointer in sync with accordion
+// hover via OSC 22 (kitty implements it fully; xterm and foot carry an older,
+// simpler version of the same sequence; other terminals ignore it). Embedding
+// the escape in View's Content doesn't reach the terminal: Bubble Tea's
+// cursed renderer parses Content into a cell buffer that only special-cases
+// SGR and OSC 8, so any other sequence gets absorbed as ordinary cell text
+// instead of written to the wire. tea.Raw bypasses that pipeline, so this
+// runs as a reconciler alongside reconcileFocus instead.
+func (m *Model) reconcilePointerShape() tea.Cmd {
+	want := m.mode == ModeChat && m.list.Hovered()
+	if want == m.pointerIsHand {
+		return nil
+	}
+	m.pointerIsHand = want
+	if want {
+		return tea.Raw(ansi.SetPointerShape("pointer"))
+	}
+	return tea.Raw(ansi.SetPointerShape("default"))
+}
+
 // Update is the single message handler. Only this thread touches Model state. It
 // routes the message to the owning surface, then reconciles editor focus so the
 // cursor always tracks the active surface.
@@ -193,7 +214,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	next, cmd := m.dispatch(msg)
-	return next, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus())
+	return next, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
 }
 
 func (m *Model) quit() (tea.Model, tea.Cmd) {

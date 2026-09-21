@@ -179,6 +179,10 @@ type Model struct {
 	pendingAccordionToggle    agent.BlockID
 	hasPendingAccordionToggle bool
 
+	// pointerIsHand is the OS pointer shape last written to the terminal, so
+	// reconcilePointerShape only emits an OSC 22 sequence on a real change.
+	pointerIsHand bool
+
 	// splashReady is set once the terminal has answered the Kitty graphics
 	// probe and the logo's pixels have been transmitted.
 	splashReady bool
