@@ -22,6 +22,7 @@ import (
 )
 
 func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
+	clearMultiplexerEnv(t)
 	loginModel := loginui.New(context.Background(), nil)
 	factoryCalls := 0
 	root := NewWithLogin(context.Background(), loginModel, func(context.Context) (*agent.Engine, error) {
