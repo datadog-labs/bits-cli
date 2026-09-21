@@ -622,6 +622,56 @@ func TestDocumentAgreesWithVisibleSurfaceOnTheGutter(t *testing.T) {
 	}
 }
 
+// TestDocumentAgreesWithVisibleSurfaceAcrossCollapseHoverAndScroll extends the
+// single-item, top-of-viewport check above to the cases it can't catch: a
+// collapsed item, a hovered item, and a viewport scrolled to a non-zero
+// offset, all at once. It compares each visible row against the document row
+// it actually corresponds to (surface.Top + i), not just row 0..N, so a
+// scroll-position bug in either renderSurface's or Document's gutter/collapse
+// bookkeeping would show up here even though the two never start at the same
+// document row.
+func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseHoverAndScroll(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(3)
+
+	keys := []string{"call-0", "call-1", "call-2"}
+	blocks := make([]agent.Block, len(keys))
+	for i, key := range keys {
+		block := toolBlockOf(agent.ToolSuccess)
+		block.ID = agent.BlockID{Scope: agent.ScopeTool, Key: key}
+		blocks[i] = block
+	}
+	list.SetItems(blocks)
+
+	// item 0 collapsed, item 1 hovered, item 2 plain — and the viewport
+	// scrolled one line into item 1, so row 0 of the surface is NOT row 0 of
+	// the document.
+	list.ToggleDisclosure(list.view[0].id)
+	list.SetHovered(list.view[1].id, true)
+	list.ScrollToTop()
+	list.ScrollBy(1)
+
+	surface := list.VisibleSurface()
+	if surface.Top == 0 {
+		t.Fatal("fixture did not scroll into a non-zero document offset")
+	}
+	document := list.Document()
+	surfaceLines := strings.Split(surface.Content, "\n")
+	documentLines := strings.Split(document, "\n")
+
+	for i, line := range surfaceLines {
+		row := surface.Top + i
+		if row >= len(documentLines) {
+			break // remaining surface rows are viewport-fill padding past the document's end
+		}
+		if line != documentLines[row] {
+			t.Fatalf("surface row %d (document row %d) differs — surface %q, document %q", i, row, line, documentLines[row])
+		}
+	}
+}
+
 func TestZoneNotRecordedWhenHeaderScrollsOffTop(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
 	// listWithTool's fixture is taller than the height set below, and List
@@ -716,5 +766,55 @@ func TestResetClearsDisclosureAndHoverState(t *testing.T) {
 	}
 	if list.hasHover {
 		t.Fatal("Reset left hover active")
+	}
+}
+
+// TestHoveringABlockDoesNotChangeItemHeight pins down the spec's "hover state
+// is not persisted and has no bearing on itemHeight": hovering only changes
+// which style itemLines picks for the control glyph, never how many lines
+// the item occupies (that's collapsed's job alone).
+func TestHoveringABlockDoesNotChangeItemHeight(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	id := list.view[0].id
+	before := list.itemHeight(0)
+
+	if got := list.SetHovered(id, true); !got {
+		t.Fatal("hovering the block should report a change")
+	}
+	if got := list.itemHeight(0); got != before {
+		t.Fatalf("hovering changed itemHeight from %d to %d", before, got)
+	}
+
+	list.SetHovered(agent.BlockID{}, false)
+	if got := list.itemHeight(0); got != before {
+		t.Fatalf("clearing hover changed itemHeight from %d to %d", before, got)
+	}
+}
+
+// TestResetRestoresExpandAllAndClearsZones covers the two pieces of Reset's
+// state clearing that TestResetClearsDisclosureAndHoverState doesn't:
+// expandAll (so a fresh conversation's first ctrl+o is expand-first again,
+// not whatever direction the previous conversation left it pointing) and
+// zones (a stale zone would let ZoneAt report a hit for a row that belongs
+// to a conversation that no longer exists).
+func TestResetRestoresExpandAllAndClearsZones(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	list.Render() // populates zones for the current viewport
+	if len(list.zones) == 0 {
+		t.Fatal("fixture did not populate a zone before Reset")
+	}
+
+	list.ToggleAllDisclosure() // flips expandAll away from its post-NewList default
+	if list.expandAll {
+		t.Fatal("ToggleAllDisclosure did not flip expandAll")
+	}
+
+	list.Reset()
+
+	if !list.expandAll {
+		t.Fatal("Reset did not restore expandAll to true")
+	}
+	if len(list.zones) != 0 {
+		t.Fatal("Reset left stale zones")
 	}
 }

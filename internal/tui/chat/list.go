@@ -110,12 +110,26 @@ var headerBlockID = agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00header"}
 // listLineEntry memoizes one block's rendered lines (height is len(lines)). An
 // animated entry is valid only for the frame that produced it; a settled entry
 // remains valid as the global animation frame advances.
+//
+// decorated additionally memoizes itemLines' gutter/collapse output for a
+// guttered item, valid only while collapsed and hovered still match the
+// state that produced it (nil means "not decorated yet" — a fresh raw entry,
+// or one whose rev/width/animated/frame just changed, always starts with a
+// nil decorated so it's recomputed once, on demand). itemHeight sits on this
+// package's hottest path (normalizeOffset, AtBottom, lastOffsetItem,
+// ScrollBy, and offsetRow all call it in loops over the view), so redoing
+// the string-building in itemLines on every call — even when nothing
+// relevant changed — was measurably too slow on large transcripts.
 type listLineEntry struct {
 	rev      uint64
 	width    int
 	animated bool
 	frame    int
 	lines    []string
+
+	decorated []string
+	collapsed bool
+	hovered   bool
 }
 
 // NewList returns an empty list with a one-row gap between blocks.
@@ -394,7 +408,10 @@ func (l *List) renderItem(idx int) []string {
 // itemLines returns idx's rendered lines with collapse and the accordion
 // gutter applied. renderSurface, Document, and itemHeight all read through
 // this single helper so the visible surface and the copyable document never
-// disagree about which column a cell sits in.
+// disagree about which column a cell sits in. The decorated output is
+// memoized on the same cache entry renderItem uses, keyed additionally on
+// collapsed/hovered, so repeated calls (itemHeight is on several hot loops)
+// don't redo the string-building when nothing relevant changed.
 func (l *List) itemLines(idx int) []string {
 	it := l.view[idx]
 	lines := l.renderItem(idx)
@@ -402,8 +419,15 @@ func (l *List) itemLines(idx int) []string {
 		return lines
 	}
 
+	collapsed := l.collapsed[it.id]
+	hovered := l.hasHover && l.hovered == it.id
+	e := l.cache[it.id]
+	if e.decorated != nil && e.collapsed == collapsed && e.hovered == hovered {
+		return e.decorated
+	}
+
 	hasDisclosure := len(lines) > 1
-	expanded := !l.collapsed[it.id]
+	expanded := !collapsed
 	if hasDisclosure && !expanded {
 		lines = lines[:1]
 	}
@@ -413,7 +437,7 @@ func (l *List) itemLines(idx int) []string {
 	if hasDisclosure {
 		control = l.accordion.Render(components.AccordionState{
 			Expanded: expanded,
-			Hovered:  l.hasHover && l.hovered == it.id,
+			Hovered:  hovered,
 		})
 	}
 	pad := strings.Repeat(" ", gutterWidth)
@@ -423,6 +447,9 @@ func (l *List) itemLines(idx int) []string {
 	for i := 1; i < len(lines); i++ {
 		out[i] = pad + lines[i]
 	}
+
+	e.decorated, e.collapsed, e.hovered = out, collapsed, hovered
+	l.cache[it.id] = e
 	return out
 }
 
