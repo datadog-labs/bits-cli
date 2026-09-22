@@ -209,6 +209,91 @@ func TestExecCommandDecodesEnvelopeAndBoundsOutput(t *testing.T) {
 	}
 }
 
+func TestExecCommandRendersNoOutputForEmptyTerminalResults(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		result     spec.ExecCommandOutput
+		toolStatus agent.ToolStatus
+		cancelled  bool
+	}{
+		{name: "success", result: spec.ExecCommandOutput{Status: spec.ExecSucceeded}, toolStatus: agent.ToolSuccess},
+		{name: "nonzero exit", result: spec.ExecCommandOutput{Status: spec.ExecNonZeroExit}, toolStatus: agent.ToolError},
+		{name: "timeout", result: spec.ExecCommandOutput{Status: spec.ExecTimedOut}, toolStatus: agent.ToolError},
+		{name: "launch failure", result: spec.ExecCommandOutput{Status: spec.ExecLaunchFailed}, toolStatus: agent.ToolError},
+		{name: "cancelled", result: spec.ExecCommandOutput{Status: spec.ExecCancelled}, toolStatus: agent.ToolError, cancelled: true},
+		{name: "whitespace only", result: spec.ExecCommandOutput{Status: spec.ExecSucceeded, Stdout: " \t\n", Stderr: "\r\n"}, toolStatus: agent.ToolSuccess},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output, err := json.Marshal(test.result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			block := agent.Block{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{
+				Name: spec.ExecCommand, Input: `{"cmd":"true"}`, Output: string(output), Status: test.toolStatus,
+				Cancelled: test.cancelled, IsClientSide: true,
+			}}
+
+			plain := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
+			if !strings.Contains(plain, "  └ (no output)") {
+				t.Fatalf("exec rendering = %q, want no-output gutter", plain)
+			}
+			for _, width := range []int{6, 12, 80} {
+				for _, row := range strings.Split(RenderBlock(block, width, DefaultStyles(true), 0), "\n") {
+					if got := ansi.StringWidth(row); got > width {
+						t.Fatalf("row width = %d, want <= %d: %q", got, width, ansi.Strip(row))
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestExecCommandNoOutputOnlyAppearsForReturnedEmptyOutput(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		tool   agent.ToolBlock
+		absent string
+	}{
+		{
+			name: "running without result",
+			tool: agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"sleep 1"}`, Status: agent.ToolRunning, IsClientSide: true},
+		},
+		{
+			name: "awaiting approval without result",
+			tool: agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"true"}`, Status: agent.ToolAwaitingApproval, IsClientSide: true},
+		},
+		{
+			name: "denied without result",
+			tool: agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"true"}`, Status: agent.ToolError, Denied: true, IsClientSide: true},
+		},
+		{
+			name:   "incomplete output marker",
+			tool:   agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"true"}`, Output: `{"status":"success","output_incomplete":true,"stdout":"","stderr":""}`, Status: agent.ToolSuccess, IsClientSide: true},
+			absent: "… output incomplete",
+		},
+		{
+			name:   "malformed legacy result",
+			tool:   agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"true"}`, Output: "legacy output", Status: agent.ToolSuccess, IsClientSide: true},
+			absent: "legacy output",
+		},
+		{
+			name: "decoded result without terminal status",
+			tool: agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"true"}`, Output: `{}`, Status: agent.ToolSuccess, IsClientSide: true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			block := agent.Block{Kind: assistant.KindToolResult, Tool: &test.tool}
+			plain := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
+			if strings.Contains(plain, "(no output)") {
+				t.Fatalf("exec rendering unexpectedly included no-output marker: %q", plain)
+			}
+			if test.absent != "" && !strings.Contains(plain, test.absent) {
+				t.Fatalf("exec rendering = %q, want existing detail %q", plain, test.absent)
+			}
+		})
+	}
+}
+
 func TestExecCommandPreservesSafeBoundedMultilineInvocation(t *testing.T) {
 	command := "python3 - <<'PY'\r\n\timport json\r\nprint('long command line that must be truncated at narrow widths')\r\nline-4\r\nline-5\r\nline-6\r\nline-7\r\nline-8\r\nline-9\r\nline-10\r\nline-11\r\nline-12\r\nPY\x1b"
 	input, err := json.Marshal(spec.ExecCommandInput{Cmd: command})
