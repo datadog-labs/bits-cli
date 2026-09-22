@@ -88,6 +88,36 @@ func TestPanelCompactBodyReceivesCompactWidth(t *testing.T) {
 	}
 }
 
+func TestPanelOwnsScrollableBodyPaging(t *testing.T) {
+	panel := NewPanel(styles.Default(true).Panel)
+	rows := make([]string, 12)
+	for i := range rows {
+		rows[i] = fmt.Sprintf("detail-%02d", i+1)
+	}
+	content := PanelContent{
+		Title:          "Permission required",
+		BodyHeader:     func(int) string { return "Approve this command?" },
+		ScrollableBody: func(int) string { return strings.Join(rows, "\n") },
+		BodyFooter:     func(int) string { return "Deny  Allow" },
+		BodyFooterGap:  1,
+	}
+
+	first := panel.Render(60, 20, content)
+	assertBounded(t, first, 60, 20)
+	plain := ansi.Strip(first)
+	if !strings.Contains(plain, "detail-01") || strings.Contains(plain, "detail-12") || !strings.Contains(plain, "pgup/pgdown scroll") {
+		t.Fatalf("initial scroll window is incorrect:\n%s", plain)
+	}
+
+	panel.PageDown()
+	second := panel.Render(60, 20, content)
+	assertBounded(t, second, 60, 20)
+	plain = ansi.Strip(second)
+	if strings.Contains(plain, "detail-01") || !strings.Contains(plain, "detail-12") {
+		t.Fatalf("paged scroll window is incorrect:\n%s", plain)
+	}
+}
+
 func assertBounded(t *testing.T, view string, width, height int) {
 	t.Helper()
 	lines := strings.Split(view, "\n")

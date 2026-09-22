@@ -13,6 +13,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/browser"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	"github.com/DataDog/bits-cli/internal/tui/editor"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
@@ -121,6 +122,7 @@ type Model struct {
 
 	pendingApprovals []agent.Block
 	approvalChoice   int
+	approvalPanel    *components.Panel
 
 	// Top-level screen; transitions go through setMode.
 	mode Mode
@@ -238,6 +240,7 @@ func newShell() *Model {
 		animTool:          newAnimationTimeline(toolAnimInterval),
 		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
 		status:            &status,
+		approvalPanel:     components.NewPanel(theme.Approval.Panel),
 		styles:            theme,
 		searchSessionID:   newSearchSessionID(),
 		entitySearchCache: make(map[string]entitySearchCacheEntry),
@@ -274,6 +277,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	m.list.SetStyles(m.chatStyles)
 	m.editor.SetInputStyles(theme.Input)
 	m.editor.SetStyles(theme.Editor)
+	m.approvalPanel.SetStyles(theme.Approval.Panel)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
 	}

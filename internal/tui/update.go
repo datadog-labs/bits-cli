@@ -482,6 +482,15 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	if m.focus() == focusStatus {
 		return m.updateStatus(msg)
 	}
+	if m.focus() == focusApproval {
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.approvalPanel.ScrollBy(-mouseWheelDelta)
+		case tea.MouseWheelDown:
+			m.approvalPanel.ScrollBy(mouseWheelDelta)
+		}
+		return nil
+	}
 	switch msg.Button {
 	case tea.MouseWheelUp:
 		m.list.ScrollBy(-mouseWheelDelta)
@@ -501,6 +510,7 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	m.turnEvents = nil
 	m.pendingApprovals = nil
 	m.approvalChoice = 0
+	m.approvalPanel.ResetScroll()
 	if m.cancelTurn != nil && !m.cancelRequested {
 		m.cancelTurn() // release the turn/restore context
 	}
@@ -699,6 +709,10 @@ func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.approvalChoice = (m.approvalChoice + len(approvalChoices) - 1) % len(approvalChoices)
 	case "right", "tab":
 		m.approvalChoice = (m.approvalChoice + 1) % len(approvalChoices)
+	case "pgup":
+		m.approvalPanel.PageUp()
+	case "pgdown":
+		m.approvalPanel.PageDown()
 	case "esc":
 		m.respondToApproval(agent.ApprovalDeny)
 	case "enter":
@@ -822,6 +836,7 @@ func (m *Model) updatePendingApprovals(pending []agent.Block) {
 	m.pendingApprovals = pending
 	if len(m.pendingApprovals) == 0 || m.pendingApprovals[0].ToolCallID() != current {
 		m.approvalChoice = 0
+		m.approvalPanel.ResetScroll()
 	}
 }
 
