@@ -151,10 +151,13 @@ func TestExecCommandApprovalShowsFinalCommandAndEffectiveWorkdir(t *testing.T) {
 	if !needed || differentTimeout.Key == requirement.Key {
 		t.Fatalf("different timeout reused approval authority %+v", requirement.Key)
 	}
-	for _, want := range []string{"cmd: go test ./...", "cwd: " + filepath.Join(turnCWD, "subdir"), "timeout: 30s", "unsandboxed"} {
+	for _, want := range []string{"cwd: " + filepath.Join(turnCWD, "subdir"), "timeout: 30s", "unsandboxed"} {
 		if !strings.Contains(requirement.Prompt.Detail, want) {
 			t.Errorf("approval detail does not contain %q: %s", want, requirement.Prompt.Detail)
 		}
+	}
+	if strings.Contains(requirement.Prompt.Detail, "go test ./...") {
+		t.Fatalf("approval detail duplicates command input: %s", requirement.Prompt.Detail)
 	}
 	allowAll, err := agent.NewToolSet(agent.ModeAllowAll, tool)
 	if err != nil {

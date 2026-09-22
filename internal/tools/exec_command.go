@@ -66,8 +66,8 @@ func execCommandApproval(turnCWD string) agent.ApprovalPolicy {
 			Prompt: agent.ApprovalPrompt{
 				Title: "Run an unsandboxed command?",
 				Detail: fmt.Sprintf(
-					"cmd: %s · cwd: %s%s · unsandboxed",
-					args.Cmd, cwd, execTimeoutApprovalDetail(args),
+					"cwd: %s%s · unsandboxed",
+					cwd, execTimeoutApprovalDetail(args),
 				),
 			},
 		}, true

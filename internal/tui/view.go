@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	"github.com/DataDog/bits-cli/internal/tui/components"
@@ -207,7 +208,7 @@ func (m *Model) approvalView() string {
 		if prompt.Title != "" {
 			title = escape.Inline(prompt.Title)
 		}
-		detail = escape.Inline(prompt.Detail)
+		detail = prompt.Detail
 	}
 
 	queue := "Permission Required"
@@ -218,13 +219,15 @@ func (m *Model) approvalView() string {
 		Title:   queue,
 		Dismiss: "ESC x",
 		Body: func(width int) string {
-			return m.approvalBody(width, title, detail)
+			return m.approvalBody(block.Tool, width, title, detail)
 		},
 		CompactTitle: queue,
 		CompactBody: func(width int) string {
 			lines := []string{m.styles.Approval.Text.Render(ansi.Truncate(title, width, "…"))}
-			if detail != "" {
-				lines = append(lines, m.styles.Approval.Detail.Render(ansi.Truncate(detail, width, "…")))
+			if rendered, ok := chat.RenderToolApproval(block.Tool, width, m.chatStyles); ok {
+				lines = append(lines, rendered)
+			} else if detail != "" {
+				lines = append(lines, m.styles.Approval.Detail.Render(ansi.Truncate(escape.Inline(detail), width, "…")))
 			}
 			lines = append(lines, "", m.approvalActions(width))
 			return strings.Join(lines, "\n")
@@ -239,11 +242,13 @@ func (m *Model) approvalAvailableHeight() int {
 	return m.height - chatNoticeHeight - chatFooterHeight - m.editor.Height()
 }
 
-func (m *Model) approvalBody(width int, title, detail string) string {
+func (m *Model) approvalBody(tool *agent.ToolBlock, width int, title, detail string) string {
 	sty := m.styles.Approval
 	lines := []string{sty.Text.Render(ansi.Wordwrap(title, width, "-"))}
-	if detail != "" {
-		lines = append(lines, sty.Detail.Render(ansi.Wordwrap(detail, width, "-")))
+	if rendered, ok := chat.RenderToolApproval(tool, width, m.chatStyles); ok {
+		lines = append(lines, rendered)
+	} else if detail != "" {
+		lines = append(lines, sty.Detail.Render(ansi.Wordwrap(escape.Inline(detail), width, "-")))
 	}
 	lines = append(lines, "", m.approvalActions(width))
 	return strings.Join(lines, "\n")

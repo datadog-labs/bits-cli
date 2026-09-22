@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 const approvalToolName = "confirm_action"
@@ -278,6 +280,41 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
+	command := "python3 - <<'PY'\nprint('first')\nprint('second')\nPY"
+	input, err := json.Marshal(spec.ExecCommandInput{Cmd: command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := newShell()
+	model.resize(100, 30)
+	model.pendingApprovals = []agent.Block{{
+		Kind: assistant.KindToolCall,
+		Tool: &agent.ToolBlock{
+			Name:         spec.ExecCommand,
+			Input:        string(input),
+			Status:       agent.ToolAwaitingApproval,
+			IsClientSide: true,
+			Approval: &agent.ApprovalPrompt{
+				Title:  "Run an unsandboxed command?",
+				Detail: "cwd: /workspace · unsandboxed",
+			},
+		},
+	}}
+
+	plain := ansi.Strip(model.approvalView())
+	wants := []string{"Run an unsandboxed command?", "cwd: /workspace · unsandboxed", "Allow once"}
+	wants = append(wants, strings.Split(command, "\n")...)
+	for _, want := range wants {
+		if !strings.Contains(plain, want) {
+			t.Errorf("exec approval panel missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "␊") {
+		t.Fatalf("exec approval panel exposed newline as a control picture:\n%s", plain)
 	}
 }
 
