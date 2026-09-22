@@ -10,6 +10,7 @@ stages:
   - lint
   - build
   - benchmark
+  - publish
 
 lint:
   stage: lint
@@ -64,7 +65,31 @@ build:
     paths:
       - build/
   rules:
+    - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/'
+      when: never
     - when: always
+
+publish-to-dogbrew:
+  stage: publish
+  image: $GO_IMAGE
+  tags:
+    - arch:amd64
+  variables:
+    ADMS_TARGET: ci
+  before_script:
+    - VERSION="$(./scripts/version.sh)"
+    - mkdir -p dist
+    - for platform in darwin/arm64 linux/amd64 linux/arm64; do GOOS="${platform%/*}" GOARCH="${platform#*/}" BUILD_DIR=dist VERSION="${VERSION}" ./scripts/build.sh; done
+  script:
+    - ./scripts/dogbrew.sh --version "${VERSION}" --dist-dir dist --target "${ADMS_TARGET}" --publish
+  artifacts:
+    paths:
+      - dist/bits-*.tar.gz
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/'
+      when: manual
+    - when: never
 
 tui-benchmarks:
   stage: benchmark
@@ -107,4 +132,6 @@ tui-benchmarks:
       - benchmark-measures.json
       - benchmark-tags.json
   rules:
+    - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/'
+      when: never
     - when: always
