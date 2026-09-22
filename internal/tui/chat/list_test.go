@@ -518,6 +518,32 @@ func layoutToolBlock(name, input string) agent.Block {
 	}
 }
 
+func TestToggleAllDisclosureKeepsViewportAnchoredOnCollapse(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(2)
+	list.SetItems([]agent.Block{
+		inspectBlock("1", "list_files", `{"path":"a"}`, agent.ToolSuccess, "first"),
+		inspectBlock("2", "list_files", `{"path":"b"}`, agent.ToolSuccess, "second"),
+	})
+	list.Render() // populate the render cache ToggleAllDisclosure reads through
+
+	if h := list.itemHeight(0); h < 3 {
+		t.Fatalf("fixture item 0 height = %d, want at least 3 expanded lines to exercise the clamp", h)
+	}
+	list.offsetIdx, list.offsetLine = 0, 2 // scrolled two lines into item 0's body
+
+	list.ToggleAllDisclosure() // collapse everything
+
+	if list.offsetIdx != 0 {
+		t.Fatalf("collapsing walked the viewport to item %d, want it to stay anchored on item 0", list.offsetIdx)
+	}
+	if h := list.itemHeight(0); list.offsetLine >= h {
+		t.Fatalf("offsetLine %d falls outside item 0's collapsed height %d", list.offsetLine, h)
+	}
+}
+
 func TestGutteredItemNarrowsForTheAccordion(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
 	it := list.view[0]

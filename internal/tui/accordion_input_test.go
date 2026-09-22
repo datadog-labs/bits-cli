@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"image"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -135,6 +137,30 @@ func TestCtrlOTogglesAllToolsWithExpandFirstAlternation(t *testing.T) {
 	}
 }
 
+func TestCtrlOTogglesDisclosureEvenWhileCompletionMenuIsOpen(t *testing.T) {
+	m := accordionTestModel(t)
+	full := accordionDocumentLines(m)
+
+	// The first ctrl+o is a no-op (expand-first alternation, see
+	// TestCtrlOTogglesAllToolsWithExpandFirstAlternation); send it before
+	// opening the menu so the one under test is the collapsing press.
+	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+
+	m.editor.Update(tea.PasteMsg{Content: "/"})
+	if !m.editor.MenuOpen() {
+		t.Fatal("expected the completion menu to open on a leading slash")
+	}
+
+	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+
+	if !m.editor.MenuOpen() {
+		t.Fatal("ctrl+o must not close the completion menu")
+	}
+	if got := accordionDocumentLines(m); got >= full {
+		t.Fatalf("ctrl+o with the menu open did not collapse the block: document lines = %d, want fewer than %d", got, full)
+	}
+}
+
 // rawSequence extracts the string written by a tea.Raw command in cmd,
 // unwrapping tea.Batch. It returns "" if cmd carries no RawMsg — Update
 // batches reconcilePointerShape's result together with other reconcilers,
@@ -168,5 +194,126 @@ func TestMouseMotionSetsPointerShapeOverAnAccordionRow(t *testing.T) {
 	_, cmd = m.Update(tea.MouseMotionMsg{X: 0, Y: row + 1})
 	if got := rawSequence(cmd); got != ansi.SetPointerShape("default") {
 		t.Fatalf("un-hovering the row did not reset the pointer shape: got %q, want %q", got, ansi.SetPointerShape("default"))
+	}
+}
+
+// scrollableAccordionTestModel builds several identical tool blocks in a
+// viewport too short to show them all, so ScrollBy actually moves the
+// offset instead of no-oping at AtBottom().
+func scrollableAccordionTestModel(t *testing.T) *Model {
+	t.Helper()
+	clearMultiplexerEnv(t)
+	m := newShell()
+	m.mode = ModeChat
+	blocks := make([]agent.Block, 0, 6)
+	for i := 0; i < 6; i++ {
+		blocks = append(blocks, agent.Block{
+			ID:   agent.BlockID{Scope: agent.ScopeTool, Key: fmt.Sprintf("call-%d", i)},
+			Kind: assistant.KindToolResult,
+			Tool: &agent.ToolBlock{Name: "search_logs", Status: agent.ToolSuccess, Output: "ok: 4 results"},
+		})
+	}
+	m.blocks = blocks
+	m.resize(80, 8)
+	m.syncTranscript()
+	m.editor.Focus()
+	m.list.Render()
+	return m
+}
+
+// visibleAccordionRow locates the disclosure glyph's row within the current
+// viewport (as opposed to accordionRow's full, unclipped Document scan) —
+// needed once the list follows the bottom and the top block has scrolled
+// off-screen.
+func visibleAccordionRow(t *testing.T, m *Model) int {
+	t.Helper()
+	for i, line := range strings.Split(m.list.Render(), "\n") {
+		if plain := ansi.Strip(line); strings.ContainsAny(plain, "▼▶") {
+			return i
+		}
+	}
+	t.Fatal("no accordion row visible in the viewport")
+	return -1
+}
+
+func TestMouseWheelScrollRefreshesHoverUnderTheStationaryPointer(t *testing.T) {
+	m := scrollableAccordionTestModel(t)
+	m.list.ScrollToTop()
+	row := visibleAccordionRow(t, m)
+
+	m.Update(tea.MouseMotionMsg{X: 0, Y: row})
+	if !m.list.Hovered() {
+		t.Fatal("expected hovering the chevron to set hover")
+	}
+
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 0, Y: row})
+	if m.list.Hovered() {
+		t.Fatal("scrolling moved the accordion row out from under the pointer, but hover was not recomputed")
+	}
+}
+
+func TestAdvanceSelectionScrollRefreshesHoverAtThePointer(t *testing.T) {
+	m := scrollableAccordionTestModel(t)
+	m.list.ScrollToTop()
+	row := visibleAccordionRow(t, m)
+
+	m.Update(tea.MouseMotionMsg{X: 0, Y: row})
+	if !m.list.Hovered() {
+		t.Fatal("expected hovering the chevron to set hover")
+	}
+
+	m.selection.pointer = image.Point{X: 0, Y: row}
+	m.list.ScrollBy(1)
+	m.refreshHover(m.selection.pointer.X, m.selection.pointer.Y)
+
+	if m.list.Hovered() {
+		t.Fatal("refreshHover did not clear hover after the row scrolled out from under the pointer")
+	}
+}
+
+// sequencedCmds unwraps the batch of commands tea.Sequence produces. The
+// message type it returns (sequenceMsg) is unexported, so it can only be
+// inspected via reflection from outside package tea.
+func sequencedCmds(t *testing.T, cmd tea.Cmd) []tea.Cmd {
+	t.Helper()
+	msg := cmd()
+	v := reflect.ValueOf(msg)
+	if v.Kind() != reflect.Slice {
+		t.Fatalf("expected ctrl+c to return a sequenced command, got %T", msg)
+	}
+	cmds := make([]tea.Cmd, v.Len())
+	for i := range cmds {
+		c, ok := v.Index(i).Interface().(tea.Cmd)
+		if !ok {
+			t.Fatalf("sequence element %d was not a tea.Cmd", i)
+		}
+		cmds[i] = c
+	}
+	return cmds
+}
+
+func TestCtrlCResetsPointerShapeBeforeQuitting(t *testing.T) {
+	m := accordionTestModel(t)
+	row := accordionRow(t, m)
+
+	_, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row})
+	if got := rawSequence(cmd); got != ansi.SetPointerShape("pointer") {
+		t.Fatalf("hovering the row did not set the pointer shape: got %q", got)
+	}
+
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("ctrl+c returned no command")
+	}
+
+	cmds := sequencedCmds(t, cmd)
+	if len(cmds) < 2 {
+		t.Fatalf("ctrl+c command was not a sequence of at least 2 steps, got %d", len(cmds))
+	}
+	if got := rawSequence(cmds[0]); got != ansi.SetPointerShape("default") {
+		t.Fatalf("first step of the ctrl+c sequence did not reset the pointer shape: got %q", got)
+	}
+	if _, ok := cmds[len(cmds)-1]().(tea.QuitMsg); !ok {
+		t.Fatalf("last step of the ctrl+c sequence was not tea.Quit")
 	}
 }

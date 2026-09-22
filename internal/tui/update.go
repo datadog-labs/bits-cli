@@ -233,13 +233,23 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.logoutCancel != nil {
 		m.logoutCancel()
 	}
-	if closeFileSearch == nil {
-		return m, tea.Quit
+	var quitCmd tea.Cmd = tea.Quit
+	if closeFileSearch != nil {
+		quitCmd = func() tea.Msg {
+			_ = closeFileSearch()
+			return tea.Quit()
+		}
 	}
-	return m, func() tea.Msg {
-		_ = closeFileSearch()
-		return tea.Quit()
+	if m.pointerIsHand {
+		// ctrl+c returns here directly, bypassing the reconcilePointerShape
+		// batched into the normal Update path, so the terminal would
+		// otherwise keep the hand pointer after exit. Sequence, not Batch:
+		// only Sequence guarantees the raw write reaches the terminal before
+		// the quit message ends the event loop.
+		m.pointerIsHand = false
+		return m, tea.Sequence(tea.Raw(ansi.SetPointerShape("default")), quitCmd)
 	}
+	return m, quitCmd
 }
 
 // dispatch routes one message to the owning surface. Non-input messages (resize,
@@ -295,11 +305,11 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMotionMsg:
 		if m.mode == ModeChat {
+			id, ok := m.list.ZoneAt(msg.X, msg.Y)
+			m.list.SetHovered(id, ok)
 			if m.selection.selecting() {
 				return m, m.extendSelection(msg)
 			}
-			id, ok := m.list.ZoneAt(msg.X, msg.Y)
-			m.list.SetHovered(id, ok)
 			return m, nil
 		}
 
@@ -504,6 +514,7 @@ func (m *Model) advanceSelectionScroll(msg selectionTickMsg) tea.Cmd {
 	frame := m.visibleSelectionFrame(m.selection.scope)
 	pointer := m.selection.pointer
 	m.selection.extendGesture(frame, pointer.X, pointer.Y, m.list.Height(), m.height)
+	m.refreshHover(pointer.X, pointer.Y)
 	return m.armSelectionScroll()
 }
 
@@ -524,7 +535,21 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	case tea.MouseWheelDown:
 		m.list.ScrollBy(mouseWheelDelta)
 	}
+	if m.mode == ModeChat {
+		m.refreshHover(msg.X, msg.Y)
+	}
 	return nil
+}
+
+// refreshHover recomputes hover for the pointer at (x, y). Scrolling moves
+// the transcript's offset without a render pass, so the zones ZoneAt reads
+// would otherwise still describe the pre-scroll layout; rendering first
+// keeps hover (and the OSC 22 pointer shape derived from it) aligned with
+// what the pointer now actually sits over.
+func (m *Model) refreshHover(x, y int) {
+	m.list.Render()
+	id, ok := m.list.ZoneAt(x, y)
+	m.list.SetHovered(id, ok)
 }
 
 func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
@@ -679,6 +704,12 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					return m.dispatchCommand(name)
 				}
 			}
+		}
+		// ctrl+o is a global shortcut, not editor input, so it must not be
+		// swallowed by the menu's key handling below.
+		if msg.String() == "ctrl+o" {
+			m.list.ToggleAllDisclosure()
+			return m, nil
 		}
 		cmd := m.editor.Update(msg)
 		m.layoutTranscript()

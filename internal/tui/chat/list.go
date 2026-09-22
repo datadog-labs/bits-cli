@@ -362,6 +362,12 @@ func (l *List) ToggleAllDisclosure() {
 		}
 	}
 	l.expandAll = !l.expandAll
+	// Keep the viewport anchored to the current item's header instead of
+	// letting a now-shorter item's shrunk height carry the offset into
+	// later blocks.
+	if l.offsetIdx < len(l.view) {
+		l.offsetLine = min(l.offsetLine, max(l.itemHeight(l.offsetIdx)-1, 0))
+	}
 }
 
 // SetHovered updates which block's control is hovered and reports whether the
