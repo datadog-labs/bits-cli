@@ -102,6 +102,11 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 					_, _ = model.Update(msg)
 				}
 
+				if key == tea.KeyEnter {
+					// Move past Allow and Allow for session to select Deny.
+					_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+					_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+				}
 				_, _ = model.handleKey(tea.KeyPressMsg{Code: key})
 				sawPartial := false
 				for model.turnEvents != nil {
