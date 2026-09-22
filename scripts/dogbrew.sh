@@ -114,8 +114,9 @@ printf '%s  %s\n' "${sha}" /tmp/adms.tar.gz | sha256sum -c -
 tar -xzf /tmp/adms.tar.gz -C /tmp
 adms_bin=/tmp/adms-linux-amd64
 [[ -f "${adms_bin}" ]] || adms_bin=/tmp/adms
-install -m 0755 "${adms_bin}" /usr/local/bin/adms
+adms_cmd="${work_dir}/adms"
+install -m 0755 "${adms_bin}" "${adms_cmd}"
 
 for platform in darwin-arm64 linux-amd64 linux-arm64; do
-    adms first-party cli upload "${dist_dir}/bits-${platform}.tar.gz" --target="${target}"
+    "${adms_cmd}" first-party cli upload "${dist_dir}/bits-${platform}.tar.gz" --target="${target}"
 done
