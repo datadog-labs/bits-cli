@@ -206,7 +206,7 @@ func scrollableAccordionTestModel(t *testing.T) *Model {
 	m := newShell()
 	m.mode = ModeChat
 	blocks := make([]agent.Block, 0, 6)
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		blocks = append(blocks, agent.Block{
 			ID:   agent.BlockID{Scope: agent.ScopeTool, Key: fmt.Sprintf("call-%d", i)},
 			Kind: assistant.KindToolResult,
