@@ -10,33 +10,33 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
 
-// sendRandom streams a turn seeded by the message, so a prompt reproduces its
-// stream: thinking, interstitial text, and tool calls interleaved in a random
-// order, then a Markdown answer and usage.
-func sendRandom(out *emitter, seed string) error {
-	r := rand.New(rand.NewSource(int64(hashString(seed))))
-	totalWords := 0
+// streamRandom streams a pseudo-random answer from seed, so a seed always
+// reproduces its stream: thinking, interstitial text, and tool calls
+// interleaved in a random order, then a Markdown answer. It returns the
+// answer words streamed, which feed the turn's default usage.
+func streamRandom(out *emitter, seed int64) (words int, err error) {
+	r := rand.New(rand.NewSource(seed))
 
 	for range 2 + r.Intn(4) { // 2-5 pre-answer segments
 		switch r.Intn(4) {
 		case 0: // thinking
 			if err := emitWords(out, r, out.nextID(), assistant.ContentThinking, 4+r.Intn(8)); err != nil {
-				return err
+				return words, err
 			}
 		case 1: // a short interstitial remark
 			c := 5 + r.Intn(15)
-			totalWords += c
+			words += c
 			if err := emitWords(out, r, out.nextID(), assistant.ContentMarkdownFragment, c); err != nil {
-				return err
+				return words, err
 			}
 		default: // tool call + result (~half the time)
 			id := out.nextID()
 			toolID := id + "-tool"
 			if err := out.emit(assistant.AssistantMessage(id, toolCall(toolID, r))); err != nil {
-				return err
+				return words, err
 			}
 			if err := out.emit(assistant.AssistantMessage(id, toolResult(toolID, r))); err != nil {
-				return err
+				return words, err
 			}
 		}
 	}
@@ -44,11 +44,8 @@ func sendRandom(out *emitter, seed string) error {
 	// The final answer is a Markdown document streamed token by token so
 	// Markdown rendering (including transient partial code fences) is exercised.
 	doc := markdownAnswer(r)
-	totalWords += len(strings.Fields(doc))
-	if err := out.text(assistant.ContentMarkdownFragment, doc); err != nil {
-		return err
-	}
-	return out.emit(usageMessage(out.nextID(), totalWords))
+	words += len(strings.Fields(doc))
+	return words, out.text(assistant.ContentMarkdownFragment, doc)
 }
 
 // emitWords streams count words of the given content type as one segment:

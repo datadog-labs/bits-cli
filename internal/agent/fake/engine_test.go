@@ -87,7 +87,7 @@ func toolBlock(t *testing.T, blocks []agent.Block, name string) *agent.ToolBlock
 
 func TestParallelClientCalls(t *testing.T) {
 	engine := agent.New(&Fake{}, assistant.SendOptions{})
-	script := `:: rs = call([("list_files", {"path": "."}), ("read_file", {"path": "go.mod"}), ("grep_files", {"pattern": "TODO"})]); say(str(["go.mod" in rs[0].output, "module demo" in rs[1].output, "notes.txt" in rs[2].output]))`
+	script := `rs = call([("list_files", {"path": "."}), ("read_file", {"path": "go.mod"}), ("grep_files", {"pattern": "TODO"})]); say(str(["go.mod" in rs[0].output, "module demo" in rs[1].output, "notes.txt" in rs[2].output]))`
 	result, rounds := runTurn(t, engine, script, workspaceTools(t, agent.ModeAllowAll), agent.DenyContinue, nil)
 	if rounds != 2 {
 		t.Fatalf("backend rounds = %d, want 2", rounds)
@@ -98,7 +98,7 @@ func TestParallelClientCalls(t *testing.T) {
 }
 
 func TestServerGateWithClientCall(t *testing.T) {
-	script := `:: g, f = call([("approval_request", {"tool_name": "create_monitor", "tool_args": {}}), ("read_file", {"path": "go.mod"})]); say("created" if g.ok else "not created")`
+	script := `g, f = call([("approval_request", {"tool_name": "create_monitor", "tool_args": {}}), ("read_file", {"path": "go.mod"})]); say("created" if g.ok else "not created")`
 	decide := func(b agent.Block) agent.ApprovalDecision {
 		if b.Tool.Name == assistant.ApprovalRequestTool {
 			return agent.ApprovalDeny
@@ -130,7 +130,7 @@ func TestServerGateWithClientCall(t *testing.T) {
 
 func TestKitchen(t *testing.T) {
 	engine := agent.New(&Fake{}, assistant.SendOptions{})
-	result, _ := runTurn(t, engine, ":: kitchen()", workspaceTools(t, agent.ModeAllowAll), agent.DenyContinue, nil)
+	result, _ := runTurn(t, engine, "kitchen()", workspaceTools(t, agent.ModeAllowAll), agent.DenyContinue, nil)
 	kinds := map[assistant.ContentKind]bool{}
 	styles := chat.DefaultStyles(true)
 	for _, block := range result.Blocks {

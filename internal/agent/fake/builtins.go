@@ -22,15 +22,16 @@ import (
 // builtins are the functions a script can call. They know the wire protocol,
 // never tool input schemas.
 var builtins = starlark.StringDict{
-	"say":   starlark.NewBuiltin("say", builtinSay),
-	"think": starlark.NewBuiltin("think", builtinThink),
-	"tool":  starlark.NewBuiltin("tool", builtinTool),
-	"call":  starlark.NewBuiltin("call", builtinCall),
-	"raw":   starlark.NewBuiltin("raw", builtinRaw),
-	"fail":  starlark.NewBuiltin("fail", builtinFail),
-	"sleep": starlark.NewBuiltin("sleep", builtinSleep),
-	"help":  starlark.NewBuiltin("help", builtinHelp),
-	"json":  stjson.Module,
+	"say":    starlark.NewBuiltin("say", builtinSay),
+	"think":  starlark.NewBuiltin("think", builtinThink),
+	"tool":   starlark.NewBuiltin("tool", builtinTool),
+	"call":   starlark.NewBuiltin("call", builtinCall),
+	"raw":    starlark.NewBuiltin("raw", builtinRaw),
+	"random": starlark.NewBuiltin("random", builtinRandom),
+	"fail":   starlark.NewBuiltin("fail", builtinFail),
+	"sleep":  starlark.NewBuiltin("sleep", builtinSleep),
+	"help":   starlark.NewBuiltin("help", builtinHelp),
+	"json":   stjson.Module,
 }
 
 // spec is one tool call requested by a script.
@@ -180,6 +181,42 @@ func (r *run) emitToolCall(s spec, client, stream bool, namespace string) error 
 	return emitErr(r.out.emit(assistant.AssistantMessage(s.id, content)))
 }
 
+// builtinRandom streams a pseudo-random answer. An explicit string or int
+// seed always reproduces the same answer. Without one, the seed is the
+// turn's index in the conversation and the call's position in the script:
+// successive turns differ, yet a fresh conversation replays the same
+// sequence, and replayed rounds reproduce their seeds because the position
+// counts replayed calls too.
+func builtinRandom(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var seed starlark.Value = starlark.None
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "seed?", &seed); err != nil {
+		return nil, err
+	}
+	r := runOf(thread)
+	r.randoms++
+	var n int64
+	switch s := seed.(type) {
+	case starlark.NoneType:
+		n = int64(hashString(fmt.Sprintf("turn %d, random %d", r.turn, r.randoms)))
+	case starlark.String:
+		n = int64(hashString(string(s)))
+	case starlark.Int:
+		v, ok := s.Int64()
+		if !ok {
+			return nil, errors.New("random: seed out of int64 range")
+		}
+		n = v
+	default:
+		return nil, fmt.Errorf("random: seed must be a string or an int, not %s", seed.Type())
+	}
+	if !r.live() {
+		return starlark.None, nil
+	}
+	words, err := streamRandom(r.out, n)
+	r.words += words
+	return starlark.None, emitErr(err)
+}
+
 // builtinRaw emits one message whose content (and optional results) are
 // decoded by the real assistant decoders.
 func builtinRaw(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
@@ -291,12 +328,12 @@ func builtinHelp(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 }
 
 const helpText = "## Fake backend scripts\n\n" +
-	"A one-line Starlark script follows `::` and may separate statements with `;`, but `if`/`for` " +
-	"cannot follow `;`. A longer script is a fenced block opened by a line holding only " +
-	"` ```fake ` (Shift+Enter or Ctrl+J for a newline).\n\n" +
+	"Every message is a Starlark script. Statements may be separated by `;`, but `if`/`for` " +
+	"must start a new line (Shift+Enter or Ctrl+J).\n\n" +
 	"| Built-in | Emits |\n| --- | --- |\n" +
 	"| `say(text)` | streamed answer text |\n" +
 	"| `think(text)` | streamed reasoning |\n" +
+	"| `random(seed=None)` | a pseudo-random answer; without a seed, one per turn |\n" +
 	"| `tool(name, input, out=, err=, ns=, title=, detail=, stream=)` or `tool([(name, input, out), ...])` | server tool calls, then results |\n" +
 	"| `call(name, input, stream=)` or `call([(name, input), ...])` | one round of client tool calls; returns results (`ok`, `status`, `title`, `output`) |\n" +
 	"| `raw(content, results=, id=)` | any other wire content |\n" +

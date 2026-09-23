@@ -39,7 +39,7 @@ that entity from the structured context. File mentions remain plain prompt text.
 `bits run` executes exactly one assistant turn without a TUI or interactive login. It writes only versioned JSONL to stdout; diagnostics go to stderr:
 
 ```sh
-BITS_FAKE_BACKEND=1 bits run --prompt "Summarize the incident" --delivery adeep
+BITS_FAKE_BACKEND=1 bits run --prompt 'random()' --delivery adeep
 bits run --prompt "What changed?" --delivery adeep --auth api-key --site https://api.datadoghq.com --approval allow-all
 ```
 

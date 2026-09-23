@@ -22,13 +22,16 @@ type conversation struct {
 	title    string // first user message, cut to titleRunes
 	updated  int64  // Unix milliseconds of the last recorded message
 	messages []assistant.Message
-	turn     *scriptTurn // the latest scripted turn; nil after a random turn
+	turns    int         // user turns started, which index the next turn
+	turn     *scriptTurn // the latest turn; nil before the first
 }
 
-// scriptTurn is everything needed to re-execute a scripted turn: its source
-// and the tool responses received for each round so far.
+// scriptTurn is everything needed to re-execute a turn: its source, its
+// index in the conversation (random()'s default seed), and the tool
+// responses received for each round so far.
 type scriptTurn struct {
 	src     string
+	index   int
 	results [][]assistant.ClientToolResponse
 }
 
@@ -53,20 +56,17 @@ func (f *Fake) conversation(id string) *conversation {
 }
 
 // startTurn records the user message, sets the title if unset, and replaces
-// the pending scripted turn (nil for a random or malformed turn).
-func (f *Fake) startTurn(c *conversation, text string) (src string, scripted bool, err error) {
-	src, scripted, err = scriptSource(text)
+// the pending turn with one whose script is the message.
+func (f *Fake) startTurn(c *conversation, text string) scriptTurn {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.appendLocked(c, assistant.Message{Role: "user", MessageID: f.nextID(), Content: assistant.TextContent(text)})
 	if c.title == "" {
 		c.title = truncateRunes(strings.TrimSpace(text), titleRunes)
 	}
-	c.turn = nil
-	if scripted && err == nil {
-		c.turn = &scriptTurn{src: src}
-	}
-	return src, scripted, err
+	c.turn = &scriptTurn{src: strings.TrimSpace(text), index: c.turns}
+	c.turns++
+	return *c.turn
 }
 
 // resumeTurn records the responses as client_tool_response history messages,
@@ -81,7 +81,7 @@ func (f *Fake) resumeTurn(c *conversation, rs []assistant.ClientToolResponse) (s
 		return scriptTurn{}, false
 	}
 	c.turn.results = append(c.turn.results, rs)
-	return scriptTurn{src: c.turn.src, results: slices.Clone(c.turn.results)}, true
+	return scriptTurn{src: c.turn.src, index: c.turn.index, results: slices.Clone(c.turn.results)}, true
 }
 
 // record appends a delivered message to the conversation history.

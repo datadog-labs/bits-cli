@@ -1,7 +1,7 @@
-// Package fake provides an offline agent.Backend. A plain message streams
-// deterministic pseudo-random output seeded by the message; a "::" one-liner
-// or a ```fake block is a Starlark script whose built-ins emit exactly the
-// requested wire output (see script.go). It satisfies the same contract as
+// Package fake provides an offline agent.Backend. Every user message is a
+// Starlark script whose built-ins emit exactly the requested wire output,
+// including deterministic pseudo-random answers through random() (see
+// script.go). It satisfies the same contract as
 // *assistant.Client, including conversation history and listing, so it plugs
 // into the engine at the agent.Backend seam. Select it with
 // BITS_FAKE_BACKEND=1; it drives the real engine/classify/transcript/render
@@ -49,9 +49,9 @@ type Fake struct {
 // like a real stream.
 func New() *Fake { return &Fake{Delay: 10 * time.Millisecond} }
 
-// Send answers a user message (random or scripted) or the tool responses of
-// a scripted round. The returned id is the conversation's canonical id. It
-// honors ctx so Esc/Ctrl+C interrupt a turn.
+// Send runs a user message as a script, or resumes the current script with
+// the tool responses of its last round. The returned id is the
+// conversation's canonical id. It honors ctx so Esc/Ctrl+C interrupt a turn.
 func (f *Fake) Send(ctx context.Context, message any, opts assistant.SendOptions,
 	fn func(assistant.AssistantResponse) error,
 ) (string, error) {
@@ -63,19 +63,11 @@ func (f *Fake) Send(ctx context.Context, message any, opts assistant.SendOptions
 	}
 	switch m := message.(type) {
 	case string:
-		src, scripted, err := f.startTurn(c, m)
-		switch {
-		case err != nil:
-			return c.id, answerScriptError(out, err, "")
-		case !scripted:
-			return c.id, sendRandom(out, m)
-		default:
-			return c.id, runScript(out, opts, scriptTurn{src: src})
-		}
+		return c.id, runScript(out, opts, f.startTurn(c, m))
 	case []assistant.ClientToolResponse:
 		turn, ok := f.resumeTurn(c, m)
 		if !ok {
-			return c.id, errors.New("fake: tool responses without a scripted turn")
+			return c.id, errors.New("fake: tool responses without a turn")
 		}
 		return c.id, runScript(out, opts, turn)
 	default:

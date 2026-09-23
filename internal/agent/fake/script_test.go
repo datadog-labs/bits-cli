@@ -73,48 +73,47 @@ func TestBuiltinsEmit(t *testing.T) {
 		want    []string
 	}{
 		{
-			name: "say and think", message: `:: think("hmm"); say("Hello **world**")`,
+			name: "say and think", message: `think("hmm"); say("Hello **world**")`,
 			want: []string{"thinking:hmm", "markdown_fragment:Hello **world**", "usage"},
 		},
 		{
-			name: "tool with extras", message: `:: tool("search", {"q": "p95"}, out="3", err=True, ns="dd", title="T", detail="D")`,
+			name: "tool with extras", message: `tool("search", {"q": "p95"}, out="3", err=True, ns="dd", title="T", detail="D")`,
 			want: []string{`tool_call:dd.search {"q":"p95"}`, "tool_response:error 3 title=T detail=D", "usage"},
 		},
 		{
-			name: "tool list emits calls then results", message: `:: tool([("a", {}, "1"), ("b", None)], out="x")`,
+			name: "tool list emits calls then results", message: `tool([("a", {}, "1"), ("b", None)], out="x")`,
 			want: []string{"tool_call:a {}", "tool_call:b {}", "tool_response:success 1", "tool_response:success x", "usage"},
 		},
 		{
-			name: "string input is verbatim", message: `:: call("read_file", "{not json")`,
+			name: "string input is verbatim", message: `call("read_file", "{not json")`,
 			want: []string{"client_tool_call:read_file {not json", "usage"},
 		},
 		{
-			name: "approval request gets its call id", message: `:: call("approval_request", {"tool_name": "t", "tool_args": {}})`,
+			name: "approval request gets its call id", message: `call("approval_request", {"tool_name": "t", "tool_args": {}})`,
 			want: []string{`client_tool_call:approval_request {"tool_args":{},"tool_call_id":"fake-msg-3","tool_name":"t"}`, "usage"},
 		},
 		{
-			name: "raw content", message: `:: raw({"type": "widget_def", "title": "p95", "widget_def": {}})`,
+			name: "raw content", message: `raw({"type": "widget_def", "title": "p95", "widget_def": {}})`,
 			want: []string{"widget_def", "usage"},
 		},
 		{
-			name: "raw usage replaces the default", message: `:: raw({"type": "markdown_fragment", "content": ""}, results={"usage": {"tokens_used": 1, "max_tokens": 2}})`,
+			name: "raw usage replaces the default", message: `raw({"type": "markdown_fragment", "content": ""}, results={"usage": {"tokens_used": 1, "max_tokens": 2}})`,
 			want: []string{"usage"},
 		},
 		{
-			name: "streamed input", message: `:: tool("search", {"query": "a longer query than one chunk"}, out="ok")`, opts: stream,
+			name: "streamed input", message: `tool("search", {"query": "a longer query than one chunk"}, out="ok")`, opts: stream,
 			want: []string{"started:search", `delta:{"query":"a longer query than one chunk"}`, `tool_call:search {"query":"a longer query than one chunk"}`, "tool_response:success ok", "usage"},
 		},
 		{
-			name:    "indented fenced block",
-			message: "```fake\n    say(\"a\")\n    if True:\n        say(\"b\")\n    ```",
-			want:    []string{"markdown_fragment:a", "markdown_fragment:b", "usage"},
+			name: "multi-line script", message: "say(\"a\")\nif True:\n    say(\"b\")",
+			want: []string{"markdown_fragment:a", "markdown_fragment:b", "usage"},
 		},
 		{
-			name: "empty call batch continues", message: `:: rs = call([]); say("after %d" % len(rs))`,
+			name: "empty call batch continues", message: `rs = call([]); say("after %d" % len(rs))`,
 			want: []string{"markdown_fragment:after 0", "usage"},
 		},
 		{
-			name: "stream disabled per call", message: `:: call("list_files", {}, stream=False)`, opts: stream,
+			name: "stream disabled per call", message: `call("list_files", {}, stream=False)`, opts: stream,
 			want: []string{"client_tool_call:list_files {}", "usage"},
 		},
 	} {
@@ -133,7 +132,7 @@ func TestBuiltinsEmit(t *testing.T) {
 func TestReplayResumesAfterCall(t *testing.T) {
 	f := &Fake{}
 	opts := assistant.SendOptions{ConversationID: "conversation"}
-	first, err := send(t, f, `:: say("a"); r = call("x", {}); say("b " + r.output)`, opts)
+	first, err := send(t, f, `say("a"); r = call("x", {}); say("b " + r.output)`, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,14 +149,48 @@ func TestReplayResumesAfterCall(t *testing.T) {
 	}
 }
 
+// TestRandomDefaultSeed pins what random() without a seed promises: each
+// call in a turn and each turn differ, a fresh conversation replays the same
+// sequence, and a replayed round does not reuse an earlier call's seed.
+func TestRandomDefaultSeed(t *testing.T) {
+	answer := func(f *Fake, message any, id string) string {
+		t.Helper()
+		got, err := send(t, f, message, assistant.SendOptions{ConversationID: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = slices.DeleteFunc(got, func(s string) bool {
+			return s == "usage" || strings.HasPrefix(s, assistant.ContentClientToolCall)
+		})
+		return strings.Join(got, "\n")
+	}
+	f := &Fake{}
+	first := answer(f, `random(); call("x", {}); random()`, "a")
+	afterCall := answer(f, []assistant.ClientToolResponse{{Status: assistant.ToolStatusSuccess}}, "a")
+	nextTurn := answer(f, "random()", "a")
+	fresh := answer(&Fake{}, "random()", "b")
+	switch {
+	case first == "":
+		t.Fatal("random() streamed nothing")
+	case afterCall == first:
+		t.Fatal("the random() after a call reused the seed of the one before it")
+	case nextTurn == first:
+		t.Fatal("the next turn reused the first turn's seed")
+	case fresh != first:
+		t.Fatal("a fresh conversation did not replay the first turn")
+	}
+}
+
 func TestScriptErrors(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		script  string
+		answer  string           // a key substring of the answer, beyond the error marker
 		wantErr func(error) bool // nil: the error is answered, not returned
 	}{
 		{name: "syntax", script: `say(`},
-		{name: "multi-line one-liner", script: "say(\"a\")\nsay(\"b\")"},
+		{name: "prose", script: "why is latency high?", answer: "`random()`"},
+		{name: "if after semicolon", script: `say("a"); if True: say("b")`, answer: "new line"},
 		{name: "runtime", script: `say(1 + "a")`},
 		{name: "step limit", script: `for i in range(100000000): pass`},
 		{
@@ -174,7 +207,7 @@ func TestScriptErrors(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := send(t, &Fake{}, ":: "+test.script, assistant.SendOptions{})
+			got, err := send(t, &Fake{}, test.script, assistant.SendOptions{})
 			if test.wantErr != nil {
 				if !test.wantErr(err) {
 					t.Fatalf("error = %v", err)
@@ -187,7 +220,7 @@ func TestScriptErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("script error was returned instead of answered: %v", err)
 			}
-			if len(got) == 0 || !strings.Contains(got[0], "fake script error") {
+			if len(got) == 0 || !strings.Contains(got[0], "fake script error") || !strings.Contains(got[0], test.answer) {
 				t.Fatalf("answer = %q", got)
 			}
 		})

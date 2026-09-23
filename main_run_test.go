@@ -99,9 +99,11 @@ func TestRunFakeBackendStreamsVersionedJSONL(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")
+	opts := runOptions(agent.ModeAllowAll)
+	opts.Prompt = "random()"
 	var out bytes.Buffer
 
-	err := runRunWithStore(context.Background(), runOptions(agent.ModeAllowAll), stubCredentialStore{}, &out)
+	err := runRunWithStore(context.Background(), opts, stubCredentialStore{}, &out)
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -143,7 +145,7 @@ func TestRunFakeBackendScriptedRounds(t *testing.T) {
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")
 	opts := runOptions(agent.ModeAllowAll)
-	opts.Prompt = "```fake\ncall(\"list_files\", {\"path\": \".\"})\nsay(\"done\")\n```"
+	opts.Prompt = "call(\"list_files\", {\"path\": \".\"})\nsay(\"done\")"
 	var out bytes.Buffer
 
 	if err := runRunWithStore(context.Background(), opts, stubCredentialStore{}, &out); err != nil {
