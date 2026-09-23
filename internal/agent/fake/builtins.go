@@ -121,6 +121,9 @@ func builtinCall(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", b.Name(), err)
 	}
+	if len(specs) == 0 {
+		return starlark.Tuple{}, nil // no calls, no round: the script continues
+	}
 	r := runOf(thread)
 	if !r.live() {
 		return r.replayRound(len(specs), single)
@@ -386,14 +389,18 @@ func decodeInto(thread *starlark.Thread, v starlark.Value, dst any) error {
 // withToolCallID adds the tool_call_id an approval_request must repeat,
 // unless the input already has one or is not a JSON object.
 func withToolCallID(input, id string) string {
-	var fields map[string]any
+	var fields map[string]json.RawMessage // raw values keep numbers exact
 	if json.Unmarshal([]byte(input), &fields) != nil || fields == nil {
 		return input
 	}
 	if _, ok := fields["tool_call_id"]; ok {
 		return input
 	}
-	fields["tool_call_id"] = id
+	idJSON, err := json.Marshal(id)
+	if err != nil {
+		return input
+	}
+	fields["tool_call_id"] = idJSON
 	b, err := json.Marshal(fields)
 	if err != nil {
 		return input

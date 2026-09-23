@@ -110,6 +110,10 @@ func TestBuiltinsEmit(t *testing.T) {
 			want:    []string{"markdown_fragment:a", "markdown_fragment:b", "usage"},
 		},
 		{
+			name: "empty call batch continues", message: `:: rs = call([]); say("after %d" % len(rs))`,
+			want: []string{"markdown_fragment:after 0", "usage"},
+		},
+		{
 			name: "stream disabled per call", message: `:: call("list_files", {}, stream=False)`, opts: stream,
 			want: []string{"client_tool_call:list_files {}", "usage"},
 		},
