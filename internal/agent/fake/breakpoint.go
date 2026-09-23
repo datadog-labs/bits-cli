@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.starlark.net/starlark"
 )
@@ -82,5 +84,76 @@ func (r *run) stopAt(name string) error {
 			return &abort{r.out.ctx.Err()}
 		case <-tick.C:
 		}
+	}
+}
+
+// inputPosition is the type of START and END: where break_input stops,
+// distinct from text so an anchor can never be mistaken for a position.
+type inputPosition string
+
+const (
+	startPosition inputPosition = "START" // before any input
+	endPosition   inputPosition = "END"   // all input, before the final call
+)
+
+func (p inputPosition) String() string        { return string(p) }
+func (inputPosition) Type() string            { return "position" }
+func (inputPosition) Freeze()                 {}
+func (inputPosition) Truth() starlark.Bool    { return starlark.True }
+func (p inputPosition) Hash() (uint32, error) { return starlark.String(p).Hash() }
+
+// planBreaks validates a built-in's break arguments before anything is
+// emitted, so a mistake never leaves a half-streamed call behind. Anchors are
+// checked against each input as written; emitToolCall cuts the final input.
+func (r *run) planBreaks(specs []spec, stream bool, breakInput string, at starlark.Value, breakBefore string) error {
+	for _, name := range []string{breakInput, breakBefore} {
+		if err := checkBreakpoint(name); err != nil {
+			return err
+		}
+	}
+	if at != starlark.None && breakInput == "" {
+		return errors.New("at needs break_input")
+	}
+	for _, s := range specs {
+		if _, err := inputCut(s, at); err != nil {
+			return err
+		}
+	}
+	if breakInput != "" && (!stream || !r.opts.StreamToolCallInput) {
+		return errors.New("break_input needs streamed input, which is off here " +
+			"(stream=False, or the engine did not ask for streamed tool input)")
+	}
+	return nil
+}
+
+// inputCut is the byte offset in s.input where break_input stops: halfway
+// by default (at least one character), or as at says. Anchors match the
+// streamed input JSON, so the cut always falls on a character boundary.
+func inputCut(s spec, at starlark.Value) (int, error) {
+	switch at := at.(type) {
+	case starlark.NoneType:
+		half := (utf8.RuneCountInString(s.input) + 1) / 2
+		cut := 0
+		for range half {
+			_, size := utf8.DecodeRuneInString(s.input[cut:])
+			cut += size
+		}
+		return cut, nil
+	case inputPosition:
+		if at == startPosition {
+			return 0, nil
+		}
+		return len(s.input), nil
+	case starlark.String:
+		if at == "" {
+			return 0, errors.New("at needs non-empty text")
+		}
+		i := strings.Index(s.input, string(at))
+		if i < 0 {
+			return 0, fmt.Errorf("at: %q is not in the input of %s", string(at), s.name)
+		}
+		return i + len(at), nil
+	default:
+		return 0, fmt.Errorf("at must be START, END, or text, got %s", at.Type())
 	}
 }

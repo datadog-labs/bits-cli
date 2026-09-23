@@ -333,7 +333,10 @@ func TestRandomDefaultSeed(t *testing.T) {
 // continues it once, that Esc still cancels, and that replay never stops.
 func TestBreakpoints(t *testing.T) {
 	stream := assistant.SendOptions{StreamToolCallInput: true}
-	input := strings.Repeat("0123456789abcdef", 2) + "tail" // three chunks: the first two stream before the stop
+	input := strings.Repeat("0123456789abcdef", 2) + "tail" // 36 characters, three chunks
+	streamedWrite := func(streamed string) []string {
+		return []string{"started:write_file", "delta:" + streamed, "client_tool_call:write_file " + input, "usage"}
+	}
 	for _, test := range []struct {
 		name, script       string
 		opts               assistant.SendOptions
@@ -345,9 +348,29 @@ func TestBreakpoints(t *testing.T) {
 			continued: []string{"markdown_fragment:a", "markdown_fragment:b", "usage"},
 		},
 		{
-			name: "mid input", script: `call("write_file", "` + input + `", break_mid_input="x")`, opts: stream,
-			stopped:   []string{"started:write_file", "delta:" + input[:32]},
-			continued: []string{"started:write_file", "delta:" + input, "client_tool_call:write_file " + input, "usage"},
+			name: "input halfway", script: `call("write_file", "` + input + `", break_input="x")`, opts: stream,
+			stopped:   []string{"started:write_file", "delta:" + input[:18]},
+			continued: streamedWrite(input),
+		},
+		{
+			name: "input at start", script: `call("write_file", "` + input + `", break_input="x", at=START)`, opts: stream,
+			stopped:   []string{"started:write_file"},
+			continued: streamedWrite(input),
+		},
+		{
+			name: "input at end", script: `call("write_file", "` + input + `", break_input="x", at=END)`, opts: stream,
+			stopped:   []string{"started:write_file", "delta:" + input},
+			continued: streamedWrite(input),
+		},
+		{
+			name: "input after text", script: `call("write_file", "` + input + `", break_input="x", at="abcdef0")`, opts: stream,
+			stopped:   []string{"started:write_file", "delta:" + input[:17]},
+			continued: streamedWrite(input),
+		},
+		{
+			name: "server tool input", script: `tool("search", {"q": "p95 latency"}, out="ok", break_input="x", at="p95")`, opts: stream,
+			stopped:   []string{"started:search", `delta:{"q":"p95`},
+			continued: []string{"started:search", `delta:{"q":"p95 latency"}`, `tool_call:search {"q":"p95 latency"}`, "tool_response:success ok", "usage"},
 		},
 		{
 			name: "before results", script: `tool("search", {}, out="ok", break_before_results="x")`,
@@ -430,7 +453,10 @@ func TestScriptErrors(t *testing.T) {
 		{name: "if after semicolon", script: `say("a"); if True: say("b")`, answer: "new line"},
 		{name: "unnamed breakpoint", script: `breakpoint()`, answer: "a name is required"},
 		{name: "breakpoint name is not a path", script: `breakpoint("../x")`, answer: "must match"},
-		{name: "break mid input without streaming", script: `call("x", {}, break_mid_input="x")`, answer: "needs streamed input"},
+		{name: "break input without streaming", script: `call("x", {}, break_input="x")`, answer: "needs streamed input"},
+		{name: "at without break input", script: `call("x", {}, at=END)`, answer: "at needs break_input"},
+		{name: "at text not in input", script: `call([("a", {"k": "yes"}), ("b", {})], break_input="x", at="yes")`, answer: `at: "yes" is not in the input of b`},
+		{name: "at of the wrong type", script: `call("x", {}, break_input="x", at=3)`, answer: "at must be START, END, or text"},
 		{name: "runtime", script: `say(1 + "a")`},
 		{name: "step limit", script: `for i in range(100000000): pass`},
 		{

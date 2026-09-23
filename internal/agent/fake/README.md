@@ -29,8 +29,8 @@ help()
 | `load("file.star", "name", …)` | imports definitions/data from a local Starlark module |
 | `say(text)`, `think(text)` | streamed answer text or reasoning |
 | `random(seed=None)` | a pseudo-random answer: thinking, server tool calls, and Markdown |
-| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_mid_input=, break_before_results=)` or `tool([(name, input, out), …])` | server tool calls, then their results |
-| `call(name, input, stream=, break_mid_input=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
+| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_input=, at=, break_before_results=)` or `tool([(name, input, out), …])` | server tool calls, then their results |
+| `call(name, input, stream=, break_input=, at=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
 | `raw(content, results=, id=)` | any other wire content, decoded by the real decoder |
 | `fail(status)`, `fail("net")`, `fail("timeout")` | a backend failure after the output so far |
 | `sleep("2s")` | a stall |
@@ -88,16 +88,25 @@ say("| service | p95 |\n| --- | --- |\n| web | 42ms |"); breakpoint("table"); sa
 touch "${TMPDIR:-/tmp}/bits-fake/continue/table"   # continue "table"
 ```
 
-`help()` prints the exact continue directory. Two keyword arguments stop
-inside a built-in, and their value is the breakpoint's name:
+`help()` prints the exact continue directory. Keyword arguments stop inside
+a built-in; their value is the breakpoint's name:
 
 ```text
-call("write_file", {"path": "new.txt", "content": "a\nb\nc\n"}, break_mid_input="diff")
+call("write_file", {"path": "a.txt", "content": "alpha\nbravo\n"}, break_input="diff")
+call("write_file", {"path": "a.txt", "content": "alpha\nbravo\n"}, break_input="diff", at="bravo")
+call("write_file", {"path": "a.txt", "content": "alpha\nbravo\n"}, break_input="diff", at=START)
+call("write_file", {"path": "a.txt", "content": "alpha\nbravo\n"}, break_input="diff", at=END)
 tool("search_logs", {"query": "status:error"}, out="12 results", break_before_results="search")
 ```
 
-- `break_mid_input` stops halfway through a call's streamed input (at least
-  one chunk in), before the final call. It needs streamed input.
+- `break_input` stops while streaming each call's input, before its final
+  call, on `call()` and `tool()`. It needs streamed input. `at=` says where:
+  - omitted: halfway, with at least one character streamed;
+  - `START`: after `tool_call_started`, before any input;
+  - `END`: all input streamed, final call not sent;
+  - `"text"`: right after the first occurrence of `text` in the streamed
+    input JSON, e.g. `at="bravo"` or `at='"path":'`. It must be in every
+    call's input, or the script fails before anything is emitted.
 - `break_before_results` stops after `tool()`'s calls, before any result.
 - Each continue file continues one stop and is consumed, so the same script
   stops again next time. A file created before the script gets there

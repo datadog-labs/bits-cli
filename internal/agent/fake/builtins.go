@@ -33,6 +33,8 @@ var builtins = starlark.StringDict{
 	"sleep":      starlark.NewBuiltin("sleep", builtinSleep),
 	"help":       starlark.NewBuiltin("help", builtinHelp),
 	"breakpoint": starlark.NewBuiltin("breakpoint", builtinBreakpoint),
+	"START":      startPosition,
+	"END":        endPosition,
 	"json":       stjson.Module,
 }
 
@@ -74,17 +76,18 @@ func (r *run) text(typ, s string) error {
 	return emitErr(r.out.text(typ, s))
 }
 
-// builtinTool emits server tool calls, then their results. break_mid_input
-// stops at a breakpoint halfway through each call's streamed input;
-// break_before_results stops after the calls, before any result.
+// builtinTool emits server tool calls, then their results. break_input
+// stops at a breakpoint while streaming each call's input, at the position
+// at= names; break_before_results stops after the calls, before any result.
 func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var first, input starlark.Value
-	var out, ns, title, detail, breakMid, breakBefore string
+	var at starlark.Value = starlark.None
+	var out, ns, title, detail, breakInput, breakBefore string
 	isErr, stream := false, true
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"name_or_calls", &first, "input?", &input, "out?", &out, "err?", &isErr,
 		"ns?", &ns, "title?", &title, "detail?", &detail, "stream?", &stream,
-		"break_mid_input?", &breakMid, "break_before_results?", &breakBefore); err != nil {
+		"break_input?", &breakInput, "at?", &at, "break_before_results?", &breakBefore); err != nil {
 		return nil, err
 	}
 	specs, _, err := unpackSpecs(thread, first, input, out)
@@ -92,7 +95,7 @@ func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 		return nil, fmt.Errorf("%s: %w", b.Name(), err)
 	}
 	r := runOf(thread)
-	if err := r.checkBreaks(stream, breakMid, breakBefore); err != nil {
+	if err := r.planBreaks(specs, stream, breakInput, at, breakBefore); err != nil {
 		return nil, err
 	}
 	if err := r.sideEffectError(b.Name()); err != nil {
@@ -101,7 +104,7 @@ func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 	if !r.live() {
 		return starlark.None, nil
 	}
-	style := toolEmit{stream: stream, namespace: ns, breakMidInput: breakMid}
+	style := toolEmit{stream: stream, namespace: ns, breakInput: breakInput, at: at}
 	for i := range specs {
 		specs[i].id = r.out.nextID()
 		if err := r.emitToolCall(specs[i], style); err != nil {
@@ -130,27 +133,28 @@ func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 
 // builtinCall emits one round of client tool calls and ends the Send. On
 // re-execution it returns that round's recorded responses instead.
-// break_mid_input stops at a breakpoint halfway through each call's streamed
-// input.
+// break_input stops at a breakpoint while streaming each call's input, at
+// the position at= names.
 func builtinCall(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var first, input starlark.Value
-	var breakMid string
+	var at starlark.Value = starlark.None
+	var breakInput string
 	stream := true
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name_or_calls", &first, "input?", &input,
-		"stream?", &stream, "break_mid_input?", &breakMid); err != nil {
-		return nil, err
-	}
-	if err := runOf(thread).checkBreaks(stream, breakMid, ""); err != nil {
+		"stream?", &stream, "break_input?", &breakInput, "at?", &at); err != nil {
 		return nil, err
 	}
 	specs, single, err := unpackSpecs(thread, first, input, "")
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", b.Name(), err)
 	}
+	r := runOf(thread)
+	if err := r.planBreaks(specs, stream, breakInput, at, ""); err != nil {
+		return nil, err
+	}
 	if len(specs) == 0 {
 		return starlark.Tuple{}, nil // no calls, no round: the script continues
 	}
-	r := runOf(thread)
 	if err := r.sideEffectError(b.Name()); err != nil {
 		return nil, err
 	}
@@ -162,7 +166,7 @@ func builtinCall(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 		if s.name == assistant.ApprovalRequestTool {
 			s.input = withToolCallID(s.input, s.id)
 		}
-		if err := r.emitToolCall(s, toolEmit{client: true, stream: stream, breakMidInput: breakMid}); err != nil {
+		if err := r.emitToolCall(s, toolEmit{client: true, stream: stream, breakInput: breakInput, at: at}); err != nil {
 			return nil, err
 		}
 	}
@@ -188,25 +192,11 @@ func (r *run) replayRound(n int, single bool) (starlark.Value, error) {
 
 // toolEmit is how one tool call goes on the wire.
 type toolEmit struct {
-	client        bool   // client_tool_call rather than a server tool_call
-	stream        bool   // stream the input when the engine asks for it
-	namespace     string // server tools only
-	breakMidInput string // breakpoint halfway through the streamed input
-}
-
-// checkBreaks validates a built-in's break_* arguments before anything is
-// emitted, so a mistake never leaves a half-streamed call behind.
-func (r *run) checkBreaks(stream bool, breakMid, breakBefore string) error {
-	for _, name := range []string{breakMid, breakBefore} {
-		if err := checkBreakpoint(name); err != nil {
-			return err
-		}
-	}
-	if breakMid != "" && (!stream || !r.opts.StreamToolCallInput) {
-		return errors.New("break_mid_input needs streamed input, which is off here " +
-			"(stream=False, or the engine did not ask for streamed tool input)")
-	}
-	return nil
+	client     bool           // client_tool_call rather than a server tool_call
+	stream     bool           // stream the input when the engine asks for it
+	namespace  string         // server tools only
+	breakInput string         // breakpoint while streaming the input
+	at         starlark.Value // where break_input stops; None is halfway
 }
 
 // emitToolCall emits the call's streamed input when requested, then the
@@ -216,17 +206,20 @@ func (r *run) emitToolCall(s spec, style toolEmit) error {
 		if err := r.out.emit(assistant.AssistantMessage(s.id, toolCallStarted(s.id, s.name, style.client))); err != nil {
 			return emitErr(err)
 		}
-		// The first half always holds at least one chunk, so a stop mid-input
-		// shows some input even when it fits in a single chunk.
-		chunks := chunkRunes(s.input, inputChunkRunes)
-		half := (len(chunks) + 1) / 2
-		if err := r.emitDeltas(s.id, chunks[:half]); err != nil {
+		cut := len(s.input)
+		if style.breakInput != "" {
+			var err error
+			if cut, err = inputCut(s, style.at); err != nil {
+				return err
+			}
+		}
+		if err := r.emitDeltas(s.id, s.input[:cut]); err != nil {
 			return err
 		}
-		if err := r.stopAt(style.breakMidInput); err != nil {
+		if err := r.stopAt(style.breakInput); err != nil {
 			return err
 		}
-		if err := r.emitDeltas(s.id, chunks[half:]); err != nil {
+		if err := r.emitDeltas(s.id, s.input[cut:]); err != nil {
 			return err
 		}
 	}
@@ -240,9 +233,9 @@ func (r *run) emitToolCall(s spec, style toolEmit) error {
 	return emitErr(r.out.emit(assistant.AssistantMessage(s.id, content)))
 }
 
-// emitDeltas streams input chunks of one tool call.
-func (r *run) emitDeltas(id string, chunks []string) error {
-	for _, chunk := range chunks {
+// emitDeltas streams part of one tool call's input in chunks.
+func (r *run) emitDeltas(id, input string) error {
+	for _, chunk := range chunkRunes(input, inputChunkRunes) {
 		if err := r.out.emit(assistant.AssistantMessage(id, toolCallInputDelta(id, chunk))); err != nil {
 			return emitErr(err)
 		}
@@ -421,12 +414,14 @@ const helpText = "## Fake backend scripts\n\n" +
 	"| `say(text)` | streamed answer text |\n" +
 	"| `think(text)` | streamed reasoning |\n" +
 	"| `random(seed=None)` | a pseudo-random answer; without a seed, one per turn |\n" +
-	"| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_mid_input=, break_before_results=)` or `tool([(name, input, out), ...])` | server tool calls, then results |\n" +
-	"| `call(name, input, stream=, break_mid_input=)` or `call([(name, input), ...])` | one round of client tool calls; returns results (`ok`, `status`, `title`, `output`) |\n" +
+	"| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_input=, at=, break_before_results=)` or `tool([(name, input, out), ...])` | server tool calls, then results |\n" +
+	"| `call(name, input, stream=, break_input=, at=)` or `call([(name, input), ...])` | one round of client tool calls; returns results (`ok`, `status`, `title`, `output`) |\n" +
 	"| `raw(content, results=, id=)` | any other wire content |\n" +
 	"| `fail(429)`, `fail(\"net\")`, `fail(\"timeout\")` | a backend failure |\n" +
 	"| `sleep(\"2s\")` | a stall |\n" +
-	"| `breakpoint(name)` | stops until its continue file appears (see below); `break_*=name` stops inside `tool`/`call` |\n" +
+	"| `breakpoint(name)` | stops until its continue file appears (see below) |\n" +
+	"| `break_input=name, at=` on `tool`/`call` | stops while streaming input: halfway by default, or `at=START`, `at=END`, `at=\"text\"` (right after it) |\n" +
+	"| `break_before_results=name` on `tool` | stops after the calls, before any result |\n" +
 	"| `kitchen()` | every output type once |\n" +
 	"| `json.encode`, `json.decode`, `true`, `false`, `null` | JSON helpers |\n"
 
