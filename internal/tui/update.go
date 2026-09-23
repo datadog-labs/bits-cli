@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/browser"
@@ -153,6 +154,28 @@ func (m *Model) reconcileFocus() tea.Cmd {
 	return nil
 }
 
+// reconcilePointerShape shows a hand over a clickable accordion row via OSC 22
+// (kitty implements it fully; xterm and foot carry an older, simpler version;
+// other terminals ignore it). It must go through tea.Raw rather than
+// View.Content: Bubble Tea's renderer parses Content into a cell buffer that
+// only special-cases SGR and OSC 8, silently swallowing any other escape
+// sequence instead of writing it to the terminal.
+//
+// Exiting never resets it here: main resets the shape once the program has
+// stopped, which covers every quit path.
+func (m *Model) reconcilePointerShape() tea.Cmd {
+	hand := m.mode == ModeChat && !m.chatViewTooSmall() && m.list.Hovered()
+	if hand == m.pointerIsHand {
+		return nil
+	}
+	m.pointerIsHand = hand
+	shape := "default"
+	if hand {
+		shape = "pointer"
+	}
+	return tea.Raw(ansi.SetPointerShape(shape))
+}
+
 // Update is the single message handler. Only this thread touches Model state. It
 // routes the message to the owning surface, then reconciles editor focus so the
 // cursor always tracks the active surface.
@@ -199,7 +222,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	next, cmd := m.dispatch(msg)
-	return next, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus())
+	return next, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
 }
 
 func (m *Model) quit() (tea.Model, tea.Cmd) {
@@ -270,6 +293,11 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		if m.mode == ModeChat {
 			if msg.Button == tea.MouseLeft {
+				// The press might turn into a drag-select, so it isn't a toggle
+				// yet: arm it, and let finishSelection decide on release whether
+				// the gesture stayed a plain click or moved and became a
+				// selection.
+				m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.HeaderAt(msg.Y)
 				return m, m.beginSelection(msg)
 			}
 			return m, nil
@@ -277,6 +305,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMotionMsg:
 		if m.mode == ModeChat {
+			m.list.SetPointerRow(msg.Y)
 			if m.selection.selecting() {
 				return m, m.extendSelection(msg)
 			}
@@ -446,6 +475,16 @@ func (m *Model) finishSelection(msg tea.MouseReleaseMsg) tea.Cmd {
 		document = m.transcriptSelectionFrame()
 	}
 	text := m.selection.finishGesture(frame, msg.X, msg.Y, transcriptHeight, m.height, document)
+
+	// A gesture that never turned into a real range (anchor == focus) was a
+	// plain click, not a drag-select: if it started on an accordion row,
+	// that's a toggle. A real drag leaves anchor != focus even when the
+	// selected text trims to "", so this checks the range, not the text.
+	if m.hasPendingAccordionToggle && !m.selection.selected() {
+		m.list.ToggleDisclosure(m.pendingAccordionToggle)
+	}
+	m.hasPendingAccordionToggle = false
+
 	if text == "" {
 		return nil
 	}
@@ -626,6 +665,12 @@ func (m *Model) stopStartup() {
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" && (m.selection.selecting() || m.selection.selected()) {
 		m.clearSelection()
+		return m, nil
+	}
+	// ctrl+o toggles every tool block whenever the transcript is visible,
+	// whichever chat surface (editor, completion menu, approval) owns input.
+	if msg.String() == "ctrl+o" && m.mode == ModeChat {
+		m.list.ToggleAllDisclosure()
 		return m, nil
 	}
 	switch m.focus() {

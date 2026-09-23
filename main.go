@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
@@ -209,6 +210,10 @@ func runChat(parent context.Context, opts cmd.ChatOptions) error {
 	// Login and chat are modes of one Bubble Tea program. Keeping the same
 	// renderer alive prevents an alt-screen teardown flash after OAuth succeeds.
 	model, err := tea.NewProgram(root, tea.WithContext(ctx)).Run()
+	// The chat may leave an OSC 22 hand pointer over a clickable row. Reset it
+	// once the program has stopped, so every exit path (ctrl+c, /quit, /logout,
+	// errors) is covered. Terminals without OSC 22 ignore it.
+	fmt.Print(ansi.SetPointerShape("default"))
 	if err != nil {
 		return err
 	}

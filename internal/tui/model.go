@@ -173,6 +173,22 @@ type Model struct {
 	// auto-scroll state while the model supplies rendered pane frames.
 	selection selection
 
+	// pendingAccordionToggle is the block a mouse-down landed on inside an
+	// accordion header row. Every left-click also begins a potential
+	// drag-select (see beginSelection), so the toggle stays pending until
+	// finishSelection sees the gesture through: it fires only if the release
+	// never turned it into a real selection range.
+	pendingAccordionToggle    agent.BlockID
+	hasPendingAccordionToggle bool
+
+	// pointerIsHand is the OS pointer shape last written to the terminal, so
+	// reconcilePointerShape only emits an OSC 22 sequence on a real change.
+	pointerIsHand bool
+
+	// chatMouseMode is the chat surface's mouse tracking, resolved once from
+	// the environment (see chatMouseMode()).
+	chatMouseMode tea.MouseMode
+
 	// splashReady is set once the terminal has answered the Kitty graphics
 	// probe and the logo's pixels have been transmitted.
 	splashReady bool
@@ -245,6 +261,7 @@ func newShell() *Model {
 		searchSessionID:   newSearchSessionID(),
 		entitySearchCache: make(map[string]entitySearchCacheEntry),
 		resume:            resume{now: time.Now},
+		chatMouseMode:     chatMouseMode(),
 	}
 	m.applyStyles(m.styles)
 	return m
