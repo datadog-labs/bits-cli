@@ -30,12 +30,14 @@ type conversation struct {
 
 // scriptTurn is everything needed to re-execute a turn: its source, its
 // index in the conversation (random()'s default seed), the tool responses
-// received for each round so far, and the turn's replay-stable file snapshot.
+// received for each round so far, the turn's replay-stable file snapshot, and
+// where its breakpoints look for continue files.
 type scriptTurn struct {
-	src      string
-	index    int
-	results  [][]assistant.ClientToolResponse
-	snapshot *sourceSnapshot
+	src         string
+	index       int
+	results     [][]assistant.ClientToolResponse
+	snapshot    *sourceSnapshot
+	continueDir string
 }
 
 // conversation returns the conversation for id, creating it when unknown. An
@@ -68,9 +70,10 @@ func (f *Fake) startTurn(c *conversation, text string) scriptTurn {
 		c.title = truncateRunes(strings.TrimSpace(text), titleRunes)
 	}
 	c.turn = &scriptTurn{
-		src:      strings.TrimSpace(text),
-		index:    c.turns,
-		snapshot: newSourceSnapshot(f.scriptRoot()),
+		src:         strings.TrimSpace(text),
+		index:       c.turns,
+		snapshot:    newSourceSnapshot(f.scriptRoot()),
+		continueDir: cmp.Or(f.ContinueDir, defaultContinueDir()),
 	}
 	c.turns++
 	return *c.turn
@@ -107,10 +110,11 @@ func (f *Fake) resumeTurn(c *conversation, rs []assistant.ClientToolResponse) (s
 	}
 	c.turn.results = append(c.turn.results, rs)
 	return scriptTurn{
-		src:      c.turn.src,
-		index:    c.turn.index,
-		results:  slices.Clone(c.turn.results),
-		snapshot: c.turn.snapshot,
+		src:         c.turn.src,
+		index:       c.turn.index,
+		results:     slices.Clone(c.turn.results),
+		snapshot:    c.turn.snapshot,
+		continueDir: c.turn.continueDir,
 	}, true
 }
 

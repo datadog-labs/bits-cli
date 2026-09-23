@@ -51,6 +51,7 @@ type run struct {
 	turn        int                              // the turn's index in its conversation
 	randoms     int                              // random() invocations so far, replayed or live
 	moduleDepth int                              // nested module initialization depth
+	continueDir string                           // where breakpoints look for continue files
 }
 
 // live reports whether execution has passed every answered round. Built-ins
@@ -71,7 +72,7 @@ func (r *run) sideEffectError(name string) error {
 // output after them is emitted. Starlark is deterministic, so this reproduces
 // the same program state without keeping anything alive between Sends.
 func runScript(out *emitter, opts assistant.SendOptions, turn scriptTurn) error {
-	r := &run{out: out, opts: opts, results: turn.results, turn: turn.index}
+	r := &run{out: out, opts: opts, results: turn.results, turn: turn.index, continueDir: turn.continueDir}
 	loader := newModuleLoader(out.ctx, turn.snapshot, r)
 	thread := &starlark.Thread{Name: "fake", Print: func(*starlark.Thread, string) {}}
 	thread.SetLocal(runKey, r)

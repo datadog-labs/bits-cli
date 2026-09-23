@@ -8,29 +8,99 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
 
-// send runs one Send and summarizes the wire messages it emitted. Fragments
-// of one streamed text or input delta are merged into a single entry.
+// send runs one Send and summarizes the wire messages it emitted.
 func send(t *testing.T, f *Fake, message any, opts assistant.SendOptions) ([]string, error) {
 	t.Helper()
-	var got []string
-	lastKey := ""
+	var s summaries
 	_, err := f.Send(context.Background(), message, opts, func(ar assistant.AssistantResponse) error {
-		msg := ar.Data.Attributes.StructuredMessage
-		key, head, body := summarize(msg)
-		if key != "" && key == lastKey {
-			got[len(got)-1] += body
-			return nil
-		}
-		lastKey = key
-		got = append(got, head+body)
+		s.add(ar.Data.Attributes.StructuredMessage)
 		return nil
 	})
-	return got, err
+	return s.got, err
+}
+
+// summaries is one Send's output, one entry per wire message. Fragments of
+// one streamed text or input delta are merged into a single entry.
+type summaries struct {
+	got     []string
+	lastKey string
+}
+
+func (s *summaries) add(msg assistant.Message) {
+	key, head, body := summarize(msg)
+	if key != "" && key == s.lastKey {
+		s.got[len(s.got)-1] += body
+		return
+	}
+	s.lastKey = key
+	s.got = append(s.got, head+body)
+}
+
+// backgroundSend runs one Send concurrently, so a test can act while the
+// script is stopped at a breakpoint.
+type backgroundSend struct {
+	mu      sync.Mutex
+	out     summaries
+	changed chan struct{}
+	done    chan error
+}
+
+func startSend(ctx context.Context, f *Fake, message any, opts assistant.SendOptions) *backgroundSend {
+	b := &backgroundSend{changed: make(chan struct{}, 1), done: make(chan error, 1)}
+	go func() {
+		_, err := f.Send(ctx, message, opts, func(ar assistant.AssistantResponse) error {
+			b.mu.Lock()
+			b.out.add(ar.Data.Attributes.StructuredMessage)
+			b.mu.Unlock()
+			select {
+			case b.changed <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+		b.done <- err
+	}()
+	return b
+}
+
+func (b *backgroundSend) snapshot() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.out.got)
+}
+
+// waitFor returns once the output so far is exactly want.
+func (b *backgroundSend) waitFor(t *testing.T, want []string) {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	for !slices.Equal(b.snapshot(), want) {
+		select {
+		case <-b.changed:
+		case err := <-b.done:
+			t.Fatalf("Send ended (err %v) with %q, want it stopped at %q", err, b.snapshot(), want)
+		case <-timeout:
+			t.Fatalf("output %q, want %q", b.snapshot(), want)
+		}
+	}
+}
+
+// wait returns the Send's error and full output once it ends.
+func (b *backgroundSend) wait(t *testing.T) ([]string, error) {
+	t.Helper()
+	select {
+	case err := <-b.done:
+		return b.snapshot(), err
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Send did not end; output %q", b.snapshot())
+		return nil, nil
+	}
 }
 
 // summarize renders a message as head+body. key is non-empty for fragments
@@ -259,6 +329,95 @@ func TestRandomDefaultSeed(t *testing.T) {
 	}
 }
 
+// TestBreakpoints pins where each breakpoint stops, that a continue file
+// continues it once, that Esc still cancels, and that replay never stops.
+func TestBreakpoints(t *testing.T) {
+	stream := assistant.SendOptions{StreamToolCallInput: true}
+	input := strings.Repeat("0123456789abcdef", 2) + "tail" // three chunks: the first two stream before the stop
+	for _, test := range []struct {
+		name, script       string
+		opts               assistant.SendOptions
+		stopped, continued []string // output at the stop, and once continued
+	}{
+		{
+			name: "between built-ins", script: `say("a"); breakpoint("x"); say("b")`,
+			stopped:   []string{"markdown_fragment:a"},
+			continued: []string{"markdown_fragment:a", "markdown_fragment:b", "usage"},
+		},
+		{
+			name: "mid input", script: `call("write_file", "` + input + `", break_mid_input="x")`, opts: stream,
+			stopped:   []string{"started:write_file", "delta:" + input[:32]},
+			continued: []string{"started:write_file", "delta:" + input, "client_tool_call:write_file " + input, "usage"},
+		},
+		{
+			name: "before results", script: `tool("search", {}, out="ok", break_before_results="x")`,
+			stopped:   []string{"tool_call:search {}"},
+			continued: []string{"tool_call:search {}", "tool_response:success ok", "usage"},
+		},
+	} {
+		t.Run(test.name+"/continue", func(t *testing.T) {
+			f := &Fake{ContinueDir: t.TempDir()}
+			run := startSend(context.Background(), f, test.script, test.opts)
+			run.waitFor(t, test.stopped)
+			continueBreakpoint(t, f, "x")
+			got, err := run.wait(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, test.continued) {
+				t.Fatalf("got  %q\nwant %q", got, test.continued)
+			}
+			if _, err := os.Stat(filepath.Join(f.ContinueDir, "x")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("continue file was not consumed: %v", err)
+			}
+		})
+		t.Run(test.name+"/cancel", func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			run := startSend(ctx, &Fake{ContinueDir: t.TempDir()}, test.script, test.opts)
+			run.waitFor(t, test.stopped)
+			cancel()
+			got, err := run.wait(t)
+			if !errors.Is(err, context.Canceled) || !slices.Equal(got, test.stopped) {
+				t.Fatalf("after Esc: err %v, output %q, want %q", err, got, test.stopped)
+			}
+		})
+	}
+
+	t.Run("continue before arrival", func(t *testing.T) {
+		f := &Fake{ContinueDir: t.TempDir()}
+		continueBreakpoint(t, f, "x")
+		got, err := startSend(context.Background(), f, `breakpoint("x"); say("b")`, assistant.SendOptions{}).wait(t)
+		if err != nil || !slices.Equal(got, []string{"markdown_fragment:b", "usage"}) {
+			t.Fatalf("err %v, output %q", err, got)
+		}
+	})
+
+	t.Run("replay does not stop again", func(t *testing.T) {
+		f := &Fake{ContinueDir: t.TempDir()}
+		opts := assistant.SendOptions{ConversationID: "c"}
+		first := startSend(context.Background(), f, `breakpoint("x"); r = call("y", {}); say("b")`, opts)
+		first.waitFor(t, nil)
+		continueBreakpoint(t, f, "x")
+		if _, err := first.wait(t); err != nil {
+			t.Fatal(err)
+		}
+		responses := []assistant.ClientToolResponse{{Status: assistant.ToolStatusSuccess}}
+		got, err := startSend(context.Background(), f, responses, opts).wait(t)
+		if err != nil || !slices.Equal(got, []string{"markdown_fragment:b", "usage"}) {
+			t.Fatalf("second round: err %v, output %q", err, got)
+		}
+	})
+}
+
+// continueBreakpoint does what a person does from another terminal.
+func continueBreakpoint(t *testing.T, f *Fake, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(f.ContinueDir, name), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestScriptErrors(t *testing.T) {
 	for _, test := range []struct {
 		name    string
@@ -269,6 +428,9 @@ func TestScriptErrors(t *testing.T) {
 		{name: "syntax", script: `say(`},
 		{name: "prose", script: "why is latency high?", answer: "`random()`"},
 		{name: "if after semicolon", script: `say("a"); if True: say("b")`, answer: "new line"},
+		{name: "unnamed breakpoint", script: `breakpoint()`, answer: "a name is required"},
+		{name: "breakpoint name is not a path", script: `breakpoint("../x")`, answer: "must match"},
+		{name: "break mid input without streaming", script: `call("x", {}, break_mid_input="x")`, answer: "needs streamed input"},
 		{name: "runtime", script: `say(1 + "a")`},
 		{name: "step limit", script: `for i in range(100000000): pass`},
 		{

@@ -41,6 +41,12 @@ type Fake struct {
 	// starts.
 	ScriptRoot string
 
+	// ContinueDir holds breakpoint continue files: creating ContinueDir/<name>
+	// continues a script stopped at breakpoint(name). Empty means
+	// $TMPDIR/bits-fake/continue. Tests set a t.TempDir() so parallel runs
+	// never continue each other.
+	ContinueDir string
+
 	// seq hands out message, tool call, and conversation ids. It must not
 	// derive from the message: identical prompts would then collide and
 	// clobber earlier transcript items (keyed by message id).

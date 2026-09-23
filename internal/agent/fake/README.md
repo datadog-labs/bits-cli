@@ -29,11 +29,12 @@ help()
 | `load("file.star", "name", …)` | imports definitions/data from a local Starlark module |
 | `say(text)`, `think(text)` | streamed answer text or reasoning |
 | `random(seed=None)` | a pseudo-random answer: thinking, server tool calls, and Markdown |
-| `tool(name, input, out=, err=, ns=, title=, detail=, stream=)` or `tool([(name, input, out), …])` | server tool calls, then their results |
-| `call(name, input, stream=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
+| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_mid_input=, break_before_results=)` or `tool([(name, input, out), …])` | server tool calls, then their results |
+| `call(name, input, stream=, break_mid_input=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
 | `raw(content, results=, id=)` | any other wire content, decoded by the real decoder |
 | `fail(status)`, `fail("net")`, `fail("timeout")` | a backend failure after the output so far |
 | `sleep("2s")` | a stall |
+| `breakpoint(name)` | nothing: stops the script until it is continued (see [Breakpoints](#breakpoints)) |
 | `help()` | the built-ins and the declared client tools with their input schemas |
 | `kitchen()` | every output type once, read-only |
 
@@ -73,14 +74,50 @@ Notes:
 - `call` really runs local tools. Under the default `allow-all` approval mode,
   scripted `write_file`, `edit_file`, and `exec_command` change the workspace.
 
+## Breakpoints
+
+A breakpoint stops the script at a precise point of the stream, so you can
+look at the TUI, resize it, press keys, or cancel, and then let the turn go
+on. It is continued by creating a file named after it:
+
+```text
+say("| service | p95 |\n| --- | --- |\n| web | 42ms |"); breakpoint("table"); say("All services healthy.")
+```
+
+```sh
+touch "${TMPDIR:-/tmp}/bits-fake/continue/table"   # continue "table"
+```
+
+`help()` prints the exact continue directory. Two keyword arguments stop
+inside a built-in, and their value is the breakpoint's name:
+
+```text
+call("write_file", {"path": "new.txt", "content": "a\nb\nc\n"}, break_mid_input="diff")
+tool("search_logs", {"query": "status:error"}, out="12 results", break_before_results="search")
+```
+
+- `break_mid_input` stops halfway through a call's streamed input (at least
+  one chunk in), before the final call. It needs streamed input.
+- `break_before_results` stops after `tool()`'s calls, before any result.
+- Each continue file continues one stop and is consumed, so the same script
+  stops again next time. A file created before the script gets there
+  continues it on arrival.
+- Esc cancels a stopped turn as usual; a breakpoint nobody continues is how
+  to hold a state until you interrupt it.
+- Breakpoints in replayed rounds never stop again: they already passed.
+- Names match `[a-z0-9_-]+`, so a continue file never leaves its directory.
+- Tests set `Fake.ContinueDir` to a `t.TempDir()`. The script stops right
+  after its last output, so a test that sees that output knows the backend
+  is stopped, acts, then writes the continue file.
+
 ## How rounds work
 
 A `call` ends the current `Send`, as a real client tool call pauses the
 server stream. When the engine sends the tool results back, the script runs
 again from the top: earlier `call`s return their recorded results, output
 before them is not re-emitted, and execution stops at the next `call`.
-Apart from the snapshotted module sources, Starlark has no clock, ambient
-randomness, or I/O here, so every run is deterministic and nothing stays alive
+Apart from the snapshotted module sources and breakpoint continue files,
+Starlark has no clock, ambient randomness, or I/O here, so every run is deterministic and nothing stays alive
 between `Send`s.
 
 Built-ins know the wire protocol, never tool input schemas. Those are owned
