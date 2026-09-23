@@ -285,6 +285,44 @@ func TestExecCommandHighlightsQuotedHeredocAsOneShellDocument(t *testing.T) {
 	}
 }
 
+func TestExecCommandApprovalUsesSpecializedMultilineRenderer(t *testing.T) {
+	input, err := json.Marshal(spec.ExecCommandInput{Cmd: "python3 - <<'PY'\r\nprint('hello')\r\nPY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := &agent.ToolBlock{
+		Name:         spec.ExecCommand,
+		Input:        string(input),
+		Status:       agent.ToolAwaitingApproval,
+		IsClientSide: true,
+		Approval: &agent.ApprovalPrompt{
+			Detail: "cwd: /workspace · unsandboxed",
+		},
+	}
+	sty := DefaultStyles(true)
+	sty.ToolArgument = lipgloss.NewStyle()
+	sty.ToolDetail = lipgloss.NewStyle()
+
+	rendered, ok := RenderToolApproval(tool, 80, sty)
+	if !ok {
+		t.Fatal("exec_command did not select its approval renderer")
+	}
+	plain := ansi.Strip(rendered)
+	if want := "python3 - <<'PY'\nprint('hello')\nPY\ncwd: /workspace · unsandboxed"; plain != want {
+		t.Fatalf("exec approval rendering:\n%s\nwant:\n%s", plain, want)
+	}
+	if strings.Contains(plain, "␊") {
+		t.Fatalf("exec approval exposed newline as a control picture: %q", plain)
+	}
+	if !strings.ContainsRune(rendered, '\x1b') {
+		t.Fatalf("exec approval was not syntax highlighted: %q", rendered)
+	}
+
+	if rendered, ok := RenderToolApproval(&agent.ToolBlock{Name: "other", Approval: &agent.ApprovalPrompt{Detail: "generic"}}, 80, sty); ok || rendered != "" {
+		t.Fatalf("generic tool selected specialized approval rendering: %q, %v", rendered, ok)
+	}
+}
+
 func TestToolRowsStayWithinWidth(t *testing.T) {
 	blocks := []agent.Block{
 		toolBlockOf(agent.ToolSuccess),

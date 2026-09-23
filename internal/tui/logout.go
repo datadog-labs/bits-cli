@@ -75,6 +75,7 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 	m.turnEvents = nil
 	m.cancelTurn = nil
 	m.pendingApprovals = nil
+	m.approvalPanel.ResetScroll()
 	m.loggedOut = true
 	if closeFileSearch == nil {
 		return m, tea.Quit

@@ -207,7 +207,7 @@ func (m *Model) approvalView() string {
 		if prompt.Title != "" {
 			title = escape.Inline(prompt.Title)
 		}
-		detail = escape.Inline(prompt.Detail)
+		detail = prompt.Detail
 	}
 
 	queue := "Permission Required"
@@ -217,36 +217,38 @@ func (m *Model) approvalView() string {
 	content := components.PanelContent{
 		Title:   queue,
 		Dismiss: "ESC x",
-		Body: func(width int) string {
-			return m.approvalBody(width, title, detail)
+		BodyHeader: func(width int) string {
+			return m.styles.Approval.Text.Render(ansi.Wordwrap(title, width, "-"))
 		},
-		CompactTitle: queue,
+		ScrollableBody: func(width int) string {
+			if rendered, ok := chat.RenderToolApproval(block.Tool, width, m.chatStyles); ok {
+				return rendered
+			}
+			return m.styles.Approval.Detail.Render(ansi.Wordwrap(escape.Inline(detail), width, "-"))
+		},
+		BodyFooter: func(width int) string {
+			return m.approvalActions(width)
+		},
+		BodyFooterGap: 1,
+		CompactTitle:  queue,
 		CompactBody: func(width int) string {
 			lines := []string{m.styles.Approval.Text.Render(ansi.Truncate(title, width, "…"))}
-			if detail != "" {
-				lines = append(lines, m.styles.Approval.Detail.Render(ansi.Truncate(detail, width, "…")))
+			if rendered, ok := chat.RenderToolApproval(block.Tool, width, m.chatStyles); ok {
+				lines = append(lines, rendered)
+			} else if detail != "" {
+				lines = append(lines, m.styles.Approval.Detail.Render(ansi.Truncate(escape.Inline(detail), width, "…")))
 			}
 			lines = append(lines, "", m.approvalActions(width))
 			return strings.Join(lines, "\n")
 		},
 		TinyMessage: "Resize terminal to approve",
 	}
-	panel := components.NewPanel(m.styles.Approval.Panel).Render(m.width, max(1, m.approvalAvailableHeight()), content)
+	panel := m.approvalPanel.Render(m.width, max(1, m.approvalAvailableHeight()), content)
 	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, panel)
 }
 
 func (m *Model) approvalAvailableHeight() int {
 	return m.height - chatNoticeHeight - chatFooterHeight - m.editor.Height()
-}
-
-func (m *Model) approvalBody(width int, title, detail string) string {
-	sty := m.styles.Approval
-	lines := []string{sty.Text.Render(ansi.Wordwrap(title, width, "-"))}
-	if detail != "" {
-		lines = append(lines, sty.Detail.Render(ansi.Wordwrap(detail, width, "-")))
-	}
-	lines = append(lines, "", m.approvalActions(width))
-	return strings.Join(lines, "\n")
 }
 
 // approvalActions renders the choice row within width, condensing labels on

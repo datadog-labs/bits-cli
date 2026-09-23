@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 const approvalToolName = "confirm_action"
@@ -284,6 +286,79 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
+	command := "python3 - <<'PY'\nprint('first')\nprint('second')\nPY"
+	input, err := json.Marshal(spec.ExecCommandInput{Cmd: command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := newShell()
+	model.resize(100, 30)
+	model.pendingApprovals = []agent.Block{{
+		Kind: assistant.KindToolCall,
+		Tool: &agent.ToolBlock{
+			Name:         spec.ExecCommand,
+			Input:        string(input),
+			Status:       agent.ToolAwaitingApproval,
+			IsClientSide: true,
+			Approval: &agent.ApprovalPrompt{
+				Title:  "Run an unsandboxed command?",
+				Detail: "cwd: /workspace · unsandboxed",
+			},
+		},
+	}}
+
+	plain := ansi.Strip(model.approvalView())
+	wants := []string{"Run an unsandboxed command?", "cwd: /workspace · unsandboxed", "Allow once"}
+	wants = append(wants, strings.Split(command, "\n")...)
+	for _, want := range wants {
+		if !strings.Contains(plain, want) {
+			t.Errorf("exec approval panel missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "␊") {
+		t.Fatalf("exec approval panel exposed newline as a control picture:\n%s", plain)
+	}
+}
+
+func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
+	commandRows := make([]string, 20)
+	for i := range commandRows {
+		commandRows[i] = fmt.Sprintf("print(%d)", i+1)
+	}
+	input, err := json.Marshal(spec.ExecCommandInput{Cmd: strings.Join(commandRows, "\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := newShell()
+	model.resize(80, 20)
+	model.pendingApprovals = []agent.Block{{
+		Kind: assistant.KindToolCall,
+		Tool: &agent.ToolBlock{
+			Name:         spec.ExecCommand,
+			Input:        string(input),
+			Status:       agent.ToolAwaitingApproval,
+			IsClientSide: true,
+			Approval: &agent.ApprovalPrompt{
+				Title:  "Run an unsandboxed command?",
+				Detail: "cwd: /workspace · unsandboxed",
+			},
+		},
+	}}
+
+	first := ansi.Strip(model.approvalView())
+	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "pgup/pgdown scroll") || !strings.Contains(first, "Allow once") {
+		t.Fatalf("initial long-command approval window is incorrect:\n%s", first)
+	}
+	for range 10 {
+		_, _ = model.handleApprovalKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	}
+	last := ansi.Strip(model.approvalView())
+	if strings.Contains(last, "print(1)") || !strings.Contains(last, "print(20)") || !strings.Contains(last, "cwd: /workspace") || !strings.Contains(last, "Allow once") {
+		t.Fatalf("paged long-command approval window is incorrect:\n%s", last)
 	}
 }
 

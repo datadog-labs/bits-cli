@@ -42,7 +42,10 @@ type toolPresentation struct {
 // toolRenderSpec keeps a tool renderer and its static transcript layout plan
 // together. The presentation layer selects it before rendering so List can
 // account for spacing during lazy height and scroll calculations.
-type toolRenderFunc func(*agent.ToolBlock, toolPresentation, int, Styles, int) string
+type (
+	toolRenderFunc         func(*agent.ToolBlock, toolPresentation, int, Styles, int) string
+	toolApprovalRenderFunc func(*agent.ToolBlock, toolPresentation, int, Styles) string
+)
 
 // toolAction contains the human-facing verb forms for a local tool. Empty
 // lifecycle forms fall back to base, which keeps tools with quiet terminal
@@ -55,10 +58,11 @@ type toolAction struct {
 }
 
 type toolRenderSpec struct {
-	render     toolRenderFunc
-	spacing    itemSpacing
-	action     toolAction
-	inspection bool
+	render         toolRenderFunc
+	renderApproval toolApprovalRenderFunc
+	spacing        itemSpacing
+	action         toolAction
+	inspection     bool
 }
 
 var (
@@ -77,9 +81,10 @@ var (
 		action:  toolAction{base: "edit", active: "editing", success: "edited", failure: "edit failed"},
 	}
 	execToolRenderSpec = &toolRenderSpec{
-		render:  renderExecTool,
-		spacing: itemSpacing{before: 1, after: 1},
-		action:  toolAction{base: "run", success: "ran", failure: "run failed"},
+		render:         renderExecTool,
+		renderApproval: renderExecApproval,
+		spacing:        itemSpacing{before: 1, after: 1},
+		action:         toolAction{base: "run", success: "ran", failure: "run failed"},
 	}
 	skillToolRenderSpec = &toolRenderSpec{
 		render:  renderSkillTool,
@@ -358,6 +363,17 @@ func renderPresentedTool(tool *agent.ToolBlock, p toolPresentation, width int, s
 	return p.renderSpec.render(tool, p, width, sty, frame)
 }
 
+// RenderToolApproval renders the tool-specific portion of an approval prompt.
+// The caller retains ownership of the surrounding panel, title, and actions.
+// Tools without a specialized approval design use the caller's generic fallback.
+func RenderToolApproval(tool *agent.ToolBlock, width int, sty Styles) (string, bool) {
+	p := classifyTool(tool)
+	if p.renderSpec == nil || p.renderSpec.renderApproval == nil || !p.validInput {
+		return "", false
+	}
+	return p.renderSpec.renderApproval(tool, p, max(1, width), sty), true
+}
+
 func renderSkillTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
 	state := lifecycleOf(tool)
 	header := renderToolHeader(tool, p.summary(tool), nil, width, sty, frame)
@@ -521,6 +537,27 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty St
 	return header + "\n" + renderRows(rows, width, style, sty)
 }
 
+func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles) string {
+	command := strings.TrimRight(p.argument, "\n")
+	rows := highlightShellCommand(command, sty)
+	for i, row := range rows {
+		rows[i] = ansi.Hardwrap(row, width, true)
+	}
+
+	detail := ""
+	if tool.Approval != nil {
+		detail = escape.Inline(tool.Approval.Detail)
+	}
+	if detail != "" {
+		rows = append(rows, sty.ToolDetail.Render(ansi.Wordwrap(detail, width, "-")))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func highlightShellCommand(command string, sty Styles) []string {
+	return diffrender.HighlightLines("command.sh", command, sty.Diff.SyntaxDark, sty.ToolArgument)
+}
+
 // renderExecInvocation keeps ordinary commands on the compact tool header.
 // For a multiline command, the first source line stays in the header and the
 // remaining lines form a bounded branch above the command output. This retains
@@ -528,8 +565,7 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty St
 // input to consume the transcript viewport.
 func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []summarySpan, width int, sty Styles, frame int) string {
 	command := strings.TrimRight(p.argument, "\n")
-	const shellPath = "command.sh"
-	lines := diffrender.HighlightLines(shellPath, command, sty.Diff.SyntaxDark, sty.ToolArgument)
+	lines := highlightShellCommand(command, sty)
 	p.argument = lines[0]
 	header := renderToolHeader(tool, p.summary(tool), suffix, width, sty, frame)
 	if len(lines) == 1 {
