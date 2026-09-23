@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -259,50 +258,18 @@ func TestHoverFollowsContentMovingUnderTheStationaryPointer(t *testing.T) {
 	}
 }
 
-// sequencedCmds unwraps the batch of commands tea.Sequence produces. The
-// message type it returns (sequenceMsg) is unexported, so it can only be
-// inspected via reflection from outside package tea.
-func sequencedCmds(t *testing.T, cmd tea.Cmd) []tea.Cmd {
-	t.Helper()
-	msg := cmd()
-	v := reflect.ValueOf(msg)
-	if v.Kind() != reflect.Slice {
-		t.Fatalf("expected ctrl+c to return a sequenced command, got %T", msg)
-	}
-	cmds := make([]tea.Cmd, v.Len())
-	for i := range cmds {
-		c, ok := v.Index(i).Interface().(tea.Cmd)
-		if !ok {
-			t.Fatalf("sequence element %d was not a tea.Cmd", i)
-		}
-		cmds[i] = c
-	}
-	return cmds
-}
-
-func TestCtrlCResetsPointerShapeBeforeQuitting(t *testing.T) {
+func TestCtrlOTogglesDisclosureWhileAnApprovalIsOpen(t *testing.T) {
 	m := accordionTestModel(t)
-	row := accordionRow(t, m)
-
-	_, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row})
-	if got := rawSequence(cmd); got != ansi.SetPointerShape("pointer") {
-		t.Fatalf("hovering the row did not set the pointer shape: got %q", got)
+	full := accordionDocumentLines(m)
+	m.pendingApprovals = []agent.Block{accordionTestBlock()}
+	if m.focus() != focusApproval {
+		t.Fatal("fixture did not give the approval focus")
 	}
 
-	_, cmd = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	if cmd == nil {
-		t.Fatal("ctrl+c returned no command")
-	}
+	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 
-	cmds := sequencedCmds(t, cmd)
-	if len(cmds) < 2 {
-		t.Fatalf("ctrl+c command was not a sequence of at least 2 steps, got %d", len(cmds))
-	}
-	if got := rawSequence(cmds[0]); got != ansi.SetPointerShape("default") {
-		t.Fatalf("first step of the ctrl+c sequence did not reset the pointer shape: got %q", got)
-	}
-	if _, ok := cmds[len(cmds)-1]().(tea.QuitMsg); !ok {
-		t.Fatalf("last step of the ctrl+c sequence was not tea.Quit")
+	if got := accordionDocumentLines(m); got >= full {
+		t.Fatalf("ctrl+o during an approval did not collapse the block: document lines = %d, want fewer than %d", got, full)
 	}
 }
 

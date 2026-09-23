@@ -154,12 +154,11 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // View.Content: Bubble Tea's renderer parses Content into a cell buffer that
 // only special-cases SGR and OSC 8, silently swallowing any other escape
 // sequence instead of writing it to the terminal.
+//
+// Exiting never resets it here: main resets the shape once the program has
+// stopped, which covers every quit path.
 func (m *Model) reconcilePointerShape() tea.Cmd {
-	return m.setPointerHand(m.mode == ModeChat && !m.chatViewTooSmall() && m.list.Hovered())
-}
-
-// setPointerHand writes the pointer shape only on a real change.
-func (m *Model) setPointerHand(hand bool) tea.Cmd {
+	hand := m.mode == ModeChat && !m.chatViewTooSmall() && m.list.Hovered()
 	if hand == m.pointerIsHand {
 		return nil
 	}
@@ -238,18 +237,13 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.logoutCancel != nil {
 		m.logoutCancel()
 	}
-	var quitCmd tea.Cmd = tea.Quit
-	if closeFileSearch != nil {
-		quitCmd = func() tea.Msg {
-			_ = closeFileSearch()
-			return tea.Quit()
-		}
+	if closeFileSearch == nil {
+		return m, tea.Quit
 	}
-	// ctrl+c returns here directly, bypassing the reconcilePointerShape batched
-	// into the normal Update path, so reset a hand pointer here. Sequence, not
-	// Batch: only Sequence guarantees the raw write reaches the terminal before
-	// the quit message ends the event loop. It drops the nil when no reset is due.
-	return m, tea.Sequence(m.setPointerHand(false), quitCmd)
+	return m, func() tea.Msg {
+		_ = closeFileSearch()
+		return tea.Quit()
+	}
 }
 
 // dispatch routes one message to the owning surface. Non-input messages (resize,
@@ -657,6 +651,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.clearSelection()
 		return m, nil
 	}
+	// ctrl+o toggles every tool block whenever the transcript is visible,
+	// whichever chat surface (editor, completion menu, approval) owns input.
+	if msg.String() == "ctrl+o" && m.mode == ModeChat {
+		m.list.ToggleAllDisclosure()
+		return m, nil
+	}
 	switch m.focus() {
 	case focusPicker:
 		return m, m.updateConversationPicker(msg)
@@ -672,12 +672,6 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // handleEditorKey handles keys while the editor owns input. The completion menu,
 // when open, is a sub-state of the editor and intercepts navigation keys.
 func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	// ctrl+o is a global shortcut, not editor input, so it must not reach the
-	// completion menu or the editor.
-	if msg.String() == "ctrl+o" {
-		m.list.ToggleAllDisclosure()
-		return m, nil
-	}
 	// While the completion menu is open it owns navigation keys (arrows, tab,
 	// enter to accept, esc to close). Enter dispatches the selected registered
 	// slash command directly, including a partial command completion.
