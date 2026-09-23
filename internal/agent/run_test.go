@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -43,6 +44,32 @@ type historicalToolBackend struct {
 	started chan struct{}
 	once    sync.Once
 	calls   int
+}
+
+type backpressureCancelBackend struct {
+	filled chan struct{}
+}
+
+func (b *backpressureCancelBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	emitMessage := func(message assistant.Message) error {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = message
+		return emit(response)
+	}
+	if err := emitMessage(assistant.AssistantMessage("unfinished", assistant.ToolCallContent("unfinished", "search_logs", `{}`))); err != nil {
+		return "conversation", err
+	}
+
+	// The user echo plus the tool call plus these 62 snapshots fill the engine's
+	// 64-event buffer. The next emit then waits for either a consumer or cancel.
+	for i := 0; ; i++ {
+		if err := emitMessage(assistant.AssistantMessage("filler-"+strconv.Itoa(i), assistant.TextContent("filler"))); err != nil {
+			return "conversation", err
+		}
+		if i == 61 {
+			close(b.filled)
+		}
+	}
 }
 
 func (b *historicalToolBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
@@ -228,6 +255,33 @@ func TestRunTurnCancellationLeavesEarlierUnfinishedToolUntouched(t *testing.T) {
 	}
 	if result.Blocks[3].Tool == nil || !result.Blocks[3].Tool.Cancelled {
 		t.Fatalf("current tool = %+v, want cancelled", result.Blocks[3].Tool)
+	}
+}
+
+func TestStartTurnCancellationDeliversSettledSnapshotUnderBackpressure(t *testing.T) {
+	backend := &backpressureCancelBackend{filled: make(chan struct{})}
+	engine := New(backend, assistant.SendOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	events := engine.StartTurn(ctx, TurnInput{Message: "question"})
+
+	<-backend.filled
+	cancel()
+
+	var lastTool *ToolBlock
+	for event := range events {
+		if event.Kind != EventTranscript {
+			continue
+		}
+		for _, block := range event.Transcript.Blocks {
+			if block.Tool != nil && block.ID.Key == "unfinished" {
+				tool := *block.Tool
+				lastTool = &tool
+			}
+		}
+	}
+
+	if lastTool == nil || !lastTool.Cancelled || lastTool.Status != ToolError {
+		t.Fatalf("final tool = %+v, want cancelled terminal error", lastTool)
 	}
 }
 
