@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -146,6 +148,78 @@ func TestReplayResumesAfterCall(t *testing.T) {
 	}
 	if want := []string{"markdown_fragment:b out", "usage"}; !slices.Equal(second, want) {
 		t.Fatalf("second round %q, want %q", second, want)
+	}
+}
+
+func TestLoadModule(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "fixture.star"), []byte(`message = "loaded"
+
+def run():
+    say(message)`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := send(t, &Fake{ScriptRoot: dir}, "load(\"fixture.star\", \"run\")\nrun()", assistant.SendOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"markdown_fragment:loaded", "usage"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestLoadedModuleSnapshotSurvivesReplay(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fixture.star")
+	old := `def run():
+    call("search", {})
+    say("from snapshot")
+`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &Fake{ScriptRoot: dir}
+	opts := assistant.SendOptions{ConversationID: "load-replay"}
+	first, err := send(t, f, "load(\"fixture.star\", \"run\")\nrun()", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFirst := []string{"client_tool_call:search {}", "usage"}
+	if !slices.Equal(first, wantFirst) {
+		t.Fatalf("first round %q, want %q", first, wantFirst)
+	}
+
+	if err := os.WriteFile(path, []byte(`def run():
+    call("search", {})
+    say("changed on disk")
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := send(t, f, []assistant.ClientToolResponse{{Status: assistant.ToolStatusSuccess}}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSecond := []string{"markdown_fragment:from snapshot", "usage"}
+	if !slices.Equal(second, wantSecond) {
+		t.Fatalf("replayed round %q, want %q", second, wantSecond)
+	}
+}
+
+func TestLoadedModuleCannotEmitDuringInitialization(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "fixture.star"), []byte(`say("import side effect")`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := send(t, &Fake{ScriptRoot: dir}, `load("fixture.star", "unused")`, assistant.SendOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 || !strings.Contains(got[0], "cannot run while loading a module") {
+		t.Fatalf("answer = %q", got)
 	}
 }
 

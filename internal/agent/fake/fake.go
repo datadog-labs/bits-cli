@@ -36,6 +36,11 @@ type Fake struct {
 	// stream. Zero (the default in tests) streams instantly.
 	Delay time.Duration
 
+	// ScriptRoot is the directory from which Starlark load() resolves module
+	// paths. An empty root uses the process's current directory when a turn
+	// starts.
+	ScriptRoot string
+
 	// seq hands out message, tool call, and conversation ids. It must not
 	// derive from the message: identical prompts would then collide and
 	// clobber earlier transcript items (keyed by message id).

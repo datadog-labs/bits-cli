@@ -62,6 +62,9 @@ func streamText(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 
 // text emits s when live and counts its words for the default usage.
 func (r *run) text(typ, s string) error {
+	if err := r.sideEffectError("say/think"); err != nil {
+		return err
+	}
 	if !r.live() {
 		return nil
 	}
@@ -84,6 +87,9 @@ func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 		return nil, fmt.Errorf("%s: %w", b.Name(), err)
 	}
 	r := runOf(thread)
+	if err := r.sideEffectError(b.Name()); err != nil {
+		return nil, err
+	}
 	if !r.live() {
 		return starlark.None, nil
 	}
@@ -126,6 +132,9 @@ func builtinCall(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 		return starlark.Tuple{}, nil // no calls, no round: the script continues
 	}
 	r := runOf(thread)
+	if err := r.sideEffectError(b.Name()); err != nil {
+		return nil, err
+	}
 	if !r.live() {
 		return r.replayRound(len(specs), single)
 	}
@@ -194,6 +203,9 @@ func builtinRandom(thread *starlark.Thread, b *starlark.Builtin, args starlark.T
 	}
 	r := runOf(thread)
 	r.randoms++
+	if err := r.sideEffectError(b.Name()); err != nil {
+		return nil, err
+	}
 	var n int64
 	switch s := seed.(type) {
 	case starlark.NoneType:
@@ -227,6 +239,9 @@ func builtinRaw(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 		return nil, err
 	}
 	r := runOf(thread)
+	if err := r.sideEffectError(b.Name()); err != nil {
+		return nil, err
+	}
 	if !r.live() {
 		return starlark.None, nil
 	}
@@ -249,10 +264,13 @@ func builtinRaw(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 
 // builtinFail makes Send return the error the real client would return. It
 // never runs during replay: a failed round has no continuation.
-func builtinFail(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func builtinFail(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var kind starlark.Value
 	var msg string
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "kind", &kind, "msg?", &msg); err != nil {
+		return nil, err
+	}
+	if err := runOf(thread).sideEffectError(b.Name()); err != nil {
 		return nil, err
 	}
 	err := failure(kind, msg)
@@ -294,6 +312,9 @@ func builtinSleep(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tu
 		return nil, fmt.Errorf("%s: %w", b.Name(), err)
 	}
 	r := runOf(thread)
+	if err := r.sideEffectError(b.Name()); err != nil {
+		return nil, err
+	}
 	if !r.live() {
 		return starlark.None, nil
 	}
@@ -314,6 +335,9 @@ func builtinHelp(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 		return nil, err
 	}
 	r := runOf(thread)
+	if err := r.sideEffectError(b.Name()); err != nil {
+		return nil, err
+	}
 	var sb strings.Builder
 	sb.WriteString(helpText)
 	sb.WriteString("\n## Client tools\n\n")
@@ -331,6 +355,7 @@ const helpText = "## Fake backend scripts\n\n" +
 	"Every message is a Starlark script. Statements may be separated by `;`, but `if`/`for` " +
 	"must start a new line (Shift+Enter or Ctrl+J).\n\n" +
 	"| Built-in | Emits |\n| --- | --- |\n" +
+	"| `load(\"file.star\", \"name\", ...)` | imports definitions/data from a deterministic local Starlark module |\n" +
 	"| `say(text)` | streamed answer text |\n" +
 	"| `think(text)` | streamed reasoning |\n" +
 	"| `random(seed=None)` | a pseudo-random answer; without a seed, one per turn |\n" +

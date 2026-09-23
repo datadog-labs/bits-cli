@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -27,12 +29,13 @@ type conversation struct {
 }
 
 // scriptTurn is everything needed to re-execute a turn: its source, its
-// index in the conversation (random()'s default seed), and the tool
-// responses received for each round so far.
+// index in the conversation (random()'s default seed), the tool responses
+// received for each round so far, and the turn's replay-stable file snapshot.
 type scriptTurn struct {
-	src     string
-	index   int
-	results [][]assistant.ClientToolResponse
+	src      string
+	index    int
+	results  [][]assistant.ClientToolResponse
+	snapshot *sourceSnapshot
 }
 
 // conversation returns the conversation for id, creating it when unknown. An
@@ -64,9 +67,31 @@ func (f *Fake) startTurn(c *conversation, text string) scriptTurn {
 	if c.title == "" {
 		c.title = truncateRunes(strings.TrimSpace(text), titleRunes)
 	}
-	c.turn = &scriptTurn{src: strings.TrimSpace(text), index: c.turns}
+	c.turn = &scriptTurn{
+		src:      strings.TrimSpace(text),
+		index:    c.turns,
+		snapshot: newSourceSnapshot(f.scriptRoot()),
+	}
 	c.turns++
 	return *c.turn
+}
+
+// scriptRoot returns the fixed root for a new turn. Capturing the current
+// directory here, rather than while a module is loaded, keeps relative paths
+// stable if the process changes directory during the turn.
+func (f *Fake) scriptRoot() string {
+	root := f.ScriptRoot
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+	if root == "" {
+		return ""
+	}
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return root
+	}
+	return absolute
 }
 
 // resumeTurn records the responses as client_tool_response history messages,
@@ -81,7 +106,12 @@ func (f *Fake) resumeTurn(c *conversation, rs []assistant.ClientToolResponse) (s
 		return scriptTurn{}, false
 	}
 	c.turn.results = append(c.turn.results, rs)
-	return scriptTurn{src: c.turn.src, index: c.turn.index, results: slices.Clone(c.turn.results)}, true
+	return scriptTurn{
+		src:      c.turn.src,
+		index:    c.turn.index,
+		results:  slices.Clone(c.turn.results),
+		snapshot: c.turn.snapshot,
+	}, true
 }
 
 // record appends a delivered message to the conversation history.

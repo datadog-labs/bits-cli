@@ -12,6 +12,7 @@ script whose built-ins emit exactly the wire output you ask for:
 
 ```text
 random()
+load("fixtures/incident.star", "run"); run()
 say("# Title\n\n| a | b |\n| --- | --- |\n| 1 | 2 |")
 think("checking"); r = call("read_file", {"path": "go.mod"}); say("first line: " + r.output.splitlines()[0])
 a, b = call([("list_files", {"path": "."}), ("grep_files", {"pattern": "TODO"})])
@@ -25,6 +26,7 @@ help()
 
 | Built-in | Emits |
 | --- | --- |
+| `load("file.star", "name", …)` | imports definitions/data from a local Starlark module |
 | `say(text)`, `think(text)` | streamed answer text or reasoning |
 | `random(seed=None)` | a pseudo-random answer: thinking, server tool calls, and Markdown |
 | `tool(name, input, out=, err=, ns=, title=, detail=, stream=)` or `tool([(name, input, out), …])` | server tool calls, then their results |
@@ -46,6 +48,14 @@ else:
     fail(503)
 ```
 
+`load()` uses native Starlark module semantics. Files are resolved below the
+fake backend's script root, and loaded source is snapshotted for the lifetime
+of the current turn. This matters when a client tool pauses the stream: the
+continuation re-executes the script, but it still sees the same file bytes even
+if the file changed on disk. A new user turn gets a fresh snapshot. Loaded
+modules should define functions and data; wire-emitting built-ins are rejected
+during module initialization but work when called by an exported function.
+
 Notes:
 
 - `random("hello")` or `random(42)` always streams the same answer. Without a
@@ -59,6 +69,7 @@ Notes:
 - Tool input is streamed (`tool_call_started` and input deltas) whenever the
   engine asks for it; `stream=False` disables it for one call.
 - `approval_request` calls get their `tool_call_id` filled in automatically.
+- `load()` accepts Starlark source files, not arbitrary Python programs.
 - `call` really runs local tools. Under the default `allow-all` approval mode,
   scripted `write_file`, `edit_file`, and `exec_command` change the workspace.
 
@@ -68,8 +79,9 @@ A `call` ends the current `Send`, as a real client tool call pauses the
 server stream. When the engine sends the tool results back, the script runs
 again from the top: earlier `call`s return their recorded results, output
 before them is not re-emitted, and execution stops at the next `call`.
-Starlark has no clock, ambient randomness, or I/O here, so every run is
-deterministic and nothing stays alive between `Send`s.
+Apart from the snapshotted module sources, Starlark has no clock, ambient
+randomness, or I/O here, so every run is deterministic and nothing stays alive
+between `Send`s.
 
 Built-ins know the wire protocol, never tool input schemas. Those are owned
 by `internal/tools/spec` and listed at runtime by `help()`.

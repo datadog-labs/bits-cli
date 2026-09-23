@@ -42,19 +42,29 @@ func (a *abort) Unwrap() error { return a.err }
 // run is the state of one script execution, shared with the built-ins
 // through the Starlark thread.
 type run struct {
-	out      *emitter
-	opts     assistant.SendOptions
-	results  [][]assistant.ClientToolResponse // responses to earlier rounds
-	round    int                              // call() invocations so far
-	sawUsage bool                             // raw() sent usage in the live part
-	words    int                              // words said live, for default usage
-	turn     int                              // the turn's index in its conversation
-	randoms  int                              // random() invocations so far, replayed or live
+	out         *emitter
+	opts        assistant.SendOptions
+	results     [][]assistant.ClientToolResponse // responses to earlier rounds
+	round       int                              // call() invocations so far
+	sawUsage    bool                             // raw() sent usage in the live part
+	words       int                              // words said live, for default usage
+	turn        int                              // the turn's index in its conversation
+	randoms     int                              // random() invocations so far, replayed or live
+	moduleDepth int                              // nested module initialization depth
 }
 
 // live reports whether execution has passed every answered round. Built-ins
 // emit only when live; before that they replay silently.
 func (r *run) live() bool { return r.round == len(r.results) }
+
+// sideEffectError keeps module initialization declarative. Functions defined
+// by a module run later on the caller's thread and are allowed to emit.
+func (r *run) sideEffectError(name string) error {
+	if r.moduleDepth > 0 {
+		return fmt.Errorf("%s: cannot run while loading a module", name)
+	}
+	return nil
+}
 
 // runScript executes one round of a scripted turn by re-running the whole
 // script: earlier call()s return their recorded responses and only the
@@ -62,9 +72,12 @@ func (r *run) live() bool { return r.round == len(r.results) }
 // the same program state without keeping anything alive between Sends.
 func runScript(out *emitter, opts assistant.SendOptions, turn scriptTurn) error {
 	r := &run{out: out, opts: opts, results: turn.results, turn: turn.index}
+	loader := newModuleLoader(out.ctx, turn.snapshot, r)
 	thread := &starlark.Thread{Name: "fake", Print: func(*starlark.Thread, string) {}}
 	thread.SetLocal(runKey, r)
+	thread.SetLocal(modulePathKey, "")
 	thread.SetMaxExecutionSteps(maxSteps)
+	thread.Load = loader.Load
 
 	env, err := prelude(thread)
 	if err != nil {
