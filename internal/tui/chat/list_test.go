@@ -159,7 +159,7 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 		t.Fatalf("presentation item count = %d, want 3", got)
 	}
 	plain := ansi.Strip(list.Render())
-	gutter := strings.Repeat(" ", list.accordion.Width())
+	gutter := strings.Repeat(" ", list.gutterWidth)
 	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "✓ " + gutter + "search ToolBlock in internal"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("group rendering missing %q:\n%s", want, plain)
@@ -191,7 +191,7 @@ func TestSingletonInspectionRendersAsTool(t *testing.T) {
 			list.SetHeight(8)
 			list.SetItems([]agent.Block{inspectBlock("1", "list_files", `{"path":""}`, test.status, "listing")})
 
-			gutter := strings.Repeat(" ", list.accordion.Width())
+			gutter := strings.Repeat(" ", list.gutterWidth)
 			plain := ansi.Strip(list.Render())
 			want := strings.ReplaceAll(test.want, "<gutter>", gutter)
 			if !strings.Contains(plain, want) {
@@ -546,13 +546,11 @@ func TestToggleAllDisclosureKeepsViewportAnchoredOnCollapse(t *testing.T) {
 
 func TestGutteredItemNarrowsForTheAccordion(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
-	it := list.view[0]
-	if !list.guttered(it) {
-		t.Fatal("a single-tool presentation item must be guttered")
+	if got := list.gutter(list.view[0]); got != list.gutterWidth || got == 0 {
+		t.Fatalf("gutter() = %d, want the accordion width %d", got, list.gutterWidth)
 	}
-	want := list.width - list.accordion.Width()
-	if got := list.itemWidth(it); got != want {
-		t.Fatalf("itemWidth() = %d, want %d", got, want)
+	if got, want := list.entry(0).width, list.width-list.gutterWidth; got != want {
+		t.Fatalf("content width = %d, want %d", got, want)
 	}
 }
 
@@ -564,24 +562,16 @@ func TestNonGutteredItemUsesFullWidth(t *testing.T) {
 	list.SetItems([]agent.Block{
 		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}},
 	})
-	it := list.view[0]
-	if list.guttered(it) {
-		t.Fatal("a reasoning group must not be guttered")
-	}
-	if got := list.itemWidth(it); got != list.width {
-		t.Fatalf("itemWidth() = %d, want the full width %d", got, list.width)
+	if got := list.gutter(list.view[0]); got != 0 {
+		t.Fatalf("a reasoning group reserved a %d-cell gutter", got)
 	}
 }
 
 func TestNarrowViewportDisablesTheGutter(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
-	list.SetWidth(list.accordion.Width())
-	it := list.view[0]
-	if list.hasGutterRoom() {
-		t.Fatal("width equal to the accordion's own width leaves no room for content")
-	}
-	if got := list.itemWidth(it); got != list.width {
-		t.Fatalf("itemWidth() = %d, want the unreduced width %d when there is no gutter room", got, list.width)
+	list.SetWidth(list.gutterWidth)
+	if got := list.gutter(list.view[0]); got != 0 {
+		t.Fatalf("width equal to the accordion's own width reserved a %d-cell gutter", got)
 	}
 }
 
@@ -623,46 +613,26 @@ func TestHeaderOnlyToolReservesGutterButDrawsNoChevron(t *testing.T) {
 		Kind: assistant.KindToolResult,
 		Tool: &agent.ToolBlock{Name: "list_monitors", Status: agent.ToolSuccess},
 	}})
-	list.Render() // populates zones for the current viewport
 
 	if height := list.itemHeight(0); height != 1 {
 		t.Fatalf("header-only tool rendered %d lines, want 1", height)
 	}
-	if _, ok := list.ZoneAt(0, 0); ok {
-		t.Fatal("header-only tool recorded a clickable zone")
+	if _, ok := list.HeaderAt(0); ok {
+		t.Fatal("header-only tool is clickable")
 	}
-	lines := list.itemLines(0)
-	gutter := strings.Repeat(" ", list.accordion.Width())
+	lines := list.renderItem(0)
+	gutter := strings.Repeat(" ", list.gutterWidth)
 	// The gutter sits right after the fixed-width status glyph, not before it,
 	// so the glyph stays the leftmost cell on the row.
-	if got := ansi.Strip(ansi.Cut(lines[0], statusGlyphWidth, statusGlyphWidth+list.accordion.Width())); got != gutter {
+	if got := ansi.Strip(ansi.Cut(lines[0], statusGlyphWidth, statusGlyphWidth+list.gutterWidth)); got != gutter {
 		t.Fatalf("header-only tool did not reserve the gutter after the status glyph: %q", lines[0])
 	}
 }
 
-func TestDocumentAgreesWithVisibleSurfaceOnTheGutter(t *testing.T) {
-	list := listWithTool(agent.ToolSuccess)
-	surface := list.VisibleSurface()
-	document := list.Document()
-	surfaceLines := strings.Split(surface.Content, "\n")
-	documentLines := strings.Split(document, "\n")
-	height := list.itemHeight(0)
-	for i := range height {
-		if surfaceLines[i] != documentLines[i] {
-			t.Fatalf("row %d differs — surface %q, document %q", i, surfaceLines[i], documentLines[i])
-		}
-	}
-}
-
-// TestDocumentAgreesWithVisibleSurfaceAcrossCollapseHoverAndScroll extends the
-// single-item, top-of-viewport check above to the cases it can't catch: a
-// collapsed item, a hovered item, and a viewport scrolled to a non-zero
-// offset, all at once. It compares each visible row against the document row
-// it actually corresponds to (surface.Top + i), not just row 0..N, so a
-// scroll-position bug in either renderSurface's or Document's gutter/collapse
-// bookkeeping would show up here even though the two never start at the same
-// document row.
-func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseHoverAndScroll(t *testing.T) {
+// TestDocumentAgreesWithVisibleSurfaceAcrossCollapseAndScroll compares each
+// visible row against the document row it corresponds to (surface.Top + i)
+// with a collapsed item and a non-zero scroll offset.
+func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseAndScroll(t *testing.T) {
 	list := NewList()
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(80)
@@ -677,11 +647,7 @@ func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseHoverAndScroll(t *testing
 	}
 	list.SetItems(blocks)
 
-	// item 0 collapsed, item 1 hovered, item 2 plain — and the viewport
-	// scrolled one line into item 1, so row 0 of the surface is NOT row 0 of
-	// the document.
 	list.ToggleDisclosure(list.view[0].id)
-	list.SetHovered(list.view[1].id, true)
 	list.ScrollToTop()
 	list.ScrollBy(1)
 
@@ -689,14 +655,11 @@ func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseHoverAndScroll(t *testing
 	if surface.Top == 0 {
 		t.Fatal("fixture did not scroll into a non-zero document offset")
 	}
-	document := list.Document()
-	surfaceLines := strings.Split(surface.Content, "\n")
-	documentLines := strings.Split(document, "\n")
-
-	for i, line := range surfaceLines {
+	documentLines := strings.Split(list.Document(), "\n")
+	for i, line := range strings.Split(surface.Content, "\n") {
 		row := surface.Top + i
 		if row >= len(documentLines) {
-			break // remaining surface rows are viewport-fill padding past the document's end
+			break // viewport-fill padding past the document's end
 		}
 		if line != documentLines[row] {
 			t.Fatalf("surface row %d (document row %d) differs — surface %q, document %q", i, row, line, documentLines[row])
@@ -704,149 +667,106 @@ func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseHoverAndScroll(t *testing
 	}
 }
 
-func TestZoneNotRecordedWhenHeaderScrollsOffTop(t *testing.T) {
+func TestHeaderAtOnlyMatchesAVisibleHeaderRow(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
-	// listWithTool's fixture is taller than the height set below, and List
-	// defaults to follow=true; without pinning to the top first, the
-	// pre-existing follow self-heal (renderSurface) would immediately scroll
-	// to the item's tail on the very first Render(), before this test's own
-	// explicit ScrollBy(1) gets a chance to exercise the scroll-off case it's
-	// named for. ScrollToTop also sets follow=false, giving a deterministic
-	// starting position with the header visible.
-	list.ScrollToTop()
-	list.SetHeight(1)
-	list.Render()
-	if _, ok := list.ZoneAt(0, 0); !ok {
-		t.Fatal("zone missing before scrolling")
+	list.ScrollToTop() // drop follow so the header starts visible
+	list.SetHeight(2)
+	if id, ok := list.HeaderAt(0); !ok || id != list.view[0].id {
+		t.Fatalf("HeaderAt(0) = %v, %t, want the tool's header", id, ok)
+	}
+	if _, ok := list.HeaderAt(1); ok {
+		t.Fatal("HeaderAt matched a detail row")
+	}
+	if _, ok := list.HeaderAt(2); ok {
+		t.Fatal("HeaderAt matched a row outside the viewport")
 	}
 
+	list.SetHeight(1)
 	list.ScrollBy(1)
-	list.Render()
-	if _, ok := list.ZoneAt(0, 0); ok {
-		t.Fatal("zone still recorded after its header scrolled off the top")
+	if _, ok := list.HeaderAt(0); ok {
+		t.Fatal("HeaderAt matched after the header scrolled off the top")
 	}
 }
 
-func TestToggleAllDisclosureAlternatesExpandFirst(t *testing.T) {
+func TestHoverPaintsOnlyTheSurfaceNotTheDocument(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	list.ScrollToTop()
+	resting := list.Render()
+	document := list.Document()
+	height := list.itemHeight(0)
+
+	list.SetPointerRow(0)
+	if !list.Hovered() {
+		t.Fatal("pointer over the header did not hover it")
+	}
+	if list.Render() == resting {
+		t.Fatal("hover did not change the rendered surface")
+	}
+	if list.Document() != document || list.itemHeight(0) != height {
+		t.Fatal("hover leaked into the document or the item height")
+	}
+
+	list.SetPointerRow(1)
+	if list.Hovered() || list.Render() != resting {
+		t.Fatal("moving off the header row did not clear hover")
+	}
+}
+
+func TestToggleAllDisclosureCollapsesFirstThenExpands(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
 	full := list.itemHeight(0)
 
-	list.ToggleAllDisclosure() // first press: expand-first, a no-op from all-expanded
-	if got := list.itemHeight(0); got != full {
-		t.Fatalf("first ctrl+o changed height to %d, want %d (expand-first is a no-op)", got, full)
-	}
-
-	list.ToggleAllDisclosure() // second press: collapse
+	list.ToggleAllDisclosure()
 	if got := list.itemHeight(0); got != 1 {
-		t.Fatalf("second ctrl+o height = %d, want 1", got)
+		t.Fatalf("first ctrl+o height = %d, want 1", got)
 	}
 
-	list.ToggleAllDisclosure() // third press: expand again
+	list.ToggleAllDisclosure()
 	if got := list.itemHeight(0); got != full {
-		t.Fatalf("third ctrl+o height = %d, want %d", got, full)
+		t.Fatalf("second ctrl+o height = %d, want %d", got, full)
 	}
 }
 
 func TestToggleAllDisclosureOverridesAnIndividualToggle(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
 	id := list.view[0].id
-	full := list.itemHeight(0)
 
-	list.ToggleDisclosure(id)
+	list.ToggleDisclosure(id) // collapsed individually
+	list.ToggleAllDisclosure()
 	if got := list.itemHeight(0); got != 1 {
-		t.Fatalf("individual collapse failed, height = %d", got)
+		t.Fatalf("collapse-all height = %d, want 1", got)
 	}
-
-	list.ToggleAllDisclosure() // universally overrides: first press means expand
-	if got := list.itemHeight(0); got != full {
-		t.Fatalf("global expand did not override the individual collapse: height = %d, want %d", got, full)
-	}
-}
-
-func TestSetHoveredReportsChangeOnlyOnActualChange(t *testing.T) {
-	list := listWithTool(agent.ToolSuccess)
-	id := list.view[0].id
-	other := agent.BlockID{Scope: agent.ScopeTool, Key: "call-2"}
-
-	if !list.SetHovered(id, true) {
-		t.Fatal("first hover should report a change")
-	}
-	if list.SetHovered(id, true) {
-		t.Fatal("repeating the same hover should not report a change")
-	}
-	if !list.SetHovered(other, true) {
-		t.Fatal("hovering a different block should report a change")
-	}
-	if !list.SetHovered(agent.BlockID{}, false) {
-		t.Fatal("clearing hover should report a change")
-	}
-	if list.SetHovered(agent.BlockID{}, false) {
-		t.Fatal("clearing hover twice should not report a change the second time")
+	list.ToggleAllDisclosure() // expand-all discards the individual collapse
+	if got := list.itemHeight(0); got == 1 {
+		t.Fatal("expand-all left the individually collapsed block collapsed")
 	}
 }
 
-func TestResetClearsDisclosureAndHoverState(t *testing.T) {
+func TestCollapseAllAppliesToBlocksArrivingLater(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
-	id := list.view[0].id
-	list.ToggleDisclosure(id)
-	list.SetHovered(id, true)
+	list.ToggleAllDisclosure()
 
-	list.Reset()
-
-	if list.collapsed[id] {
-		t.Fatal("Reset left a stale collapsed entry")
-	}
-	if list.hasHover {
-		t.Fatal("Reset left hover active")
+	later := toolBlockOf(agent.ToolSuccess)
+	later.ID = agent.BlockID{Scope: agent.ScopeTool, Key: "call-2"}
+	list.SetItems(append(list.items, later))
+	if got := list.itemHeight(1); got != 1 {
+		t.Fatalf("a block arriving after collapse-all rendered %d lines, want 1", got)
 	}
 }
 
-// TestHoveringABlockDoesNotChangeItemHeight pins down the spec's "hover state
-// is not persisted and has no bearing on itemHeight": hovering only changes
-// which style itemLines picks for the control glyph, never how many lines
-// the item occupies (that's collapsed's job alone).
-func TestHoveringABlockDoesNotChangeItemHeight(t *testing.T) {
+func TestResetClearsDisclosureState(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
-	id := list.view[0].id
-	before := list.itemHeight(0)
-
-	if got := list.SetHovered(id, true); !got {
-		t.Fatal("hovering the block should report a change")
-	}
-	if got := list.itemHeight(0); got != before {
-		t.Fatalf("hovering changed itemHeight from %d to %d", before, got)
-	}
-
-	list.SetHovered(agent.BlockID{}, false)
-	if got := list.itemHeight(0); got != before {
-		t.Fatalf("clearing hover changed itemHeight from %d to %d", before, got)
-	}
-}
-
-// TestResetRestoresExpandAllAndClearsZones covers the two pieces of Reset's
-// state clearing that TestResetClearsDisclosureAndHoverState doesn't:
-// expandAll (so a fresh conversation's first ctrl+o is expand-first again,
-// not whatever direction the previous conversation left it pointing) and
-// zones (a stale zone would let ZoneAt report a hit for a row that belongs
-// to a conversation that no longer exists).
-func TestResetRestoresExpandAllAndClearsZones(t *testing.T) {
-	list := listWithTool(agent.ToolSuccess)
-	list.Render() // populates zones for the current viewport
-	if len(list.zones) == 0 {
-		t.Fatal("fixture did not populate a zone before Reset")
-	}
-
-	list.ToggleAllDisclosure() // flips expandAll away from its post-NewList default
-	if list.expandAll {
-		t.Fatal("ToggleAllDisclosure did not flip expandAll")
-	}
-
-	list.Reset()
-
-	if !list.expandAll {
-		t.Fatal("Reset did not restore expandAll to true")
-	}
-	if len(list.zones) != 0 {
-		t.Fatal("Reset left stale zones")
+	full := list.itemHeight(0)
+	blocks := list.items
+	for _, collapse := range []func(){
+		list.ToggleAllDisclosure,
+		func() { list.ToggleDisclosure(list.view[0].id) },
+	} {
+		collapse()
+		list.Reset()
+		list.SetItems(blocks)
+		if got := list.itemHeight(0); got != full {
+			t.Fatalf("after Reset height = %d, want the default expanded %d", got, full)
+		}
 	}
 }

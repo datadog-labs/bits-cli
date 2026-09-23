@@ -9,25 +9,21 @@ import (
 )
 
 func TestAccordionWidthIsStableAcrossStates(t *testing.T) {
-	accordion := NewAccordion(styles.Default(true).Accordion)
-	want := accordion.Width()
-	for _, state := range []AccordionState{
-		{},
-		{Expanded: true},
-	} {
-		if got := ansi.StringWidth(accordion.Render(state)); got != want {
-			t.Fatalf("state %+v rendered %d cells, want %d", state, got, want)
+	sty := styles.Default(true).Accordion
+	want := AccordionWidth(sty)
+	for _, expanded := range []bool{false, true} {
+		if got := ansi.StringWidth(Accordion(sty, expanded)); got != want {
+			t.Fatalf("expanded=%t rendered %d cells, want %d", expanded, got, want)
 		}
 	}
 }
 
 func TestAccordionGlyphFollowsDisclosureState(t *testing.T) {
 	sty := styles.Default(true).Accordion
-	accordion := NewAccordion(sty)
-	if got := ansi.Strip(accordion.Render(AccordionState{Expanded: true})); got != " "+sty.Expanded+" " {
+	if got := ansi.Strip(Accordion(sty, true)); got != " "+sty.Expanded+" " {
 		t.Fatalf("expanded glyph = %q, want %q", got, sty.Expanded)
 	}
-	if got := ansi.Strip(accordion.Render(AccordionState{})); got != " "+sty.Collapsed+" " {
+	if got := ansi.Strip(Accordion(sty, false)); got != " "+sty.Collapsed+" " {
 		t.Fatalf("collapsed glyph = %q, want %q", got, sty.Collapsed)
 	}
 }

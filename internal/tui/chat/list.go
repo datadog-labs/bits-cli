@@ -47,40 +47,20 @@ type List struct {
 	cache    map[agent.BlockID]listLineEntry
 	renderer blockRenderer
 
-	// accordion renders the disclosure control guttered items reserve space
-	// for. It is nil until the first SetStyles call; every real render path
-	// (newShell → applyStyles) calls SetStyles before any render happens.
-	accordion *components.Accordion
+	// gutterWidth is the accordion control's width, fixed per style set; 0
+	// (before the first SetStyles) disables the gutter.
+	gutterWidth int
 
-	// collapsed holds only blocks a user (or ctrl+o) has explicitly collapsed;
-	// absent means expanded. hovered/hasHover track pointer hover as an
-	// explicit pair because agent.BlockID is a comparable struct with no zero
-	// value that safely means "nothing".
-	collapsed map[agent.BlockID]bool
-	hovered   agent.BlockID
-	hasHover  bool
-	// expandAll is the state the next ToggleAllDisclosure call moves every
-	// guttered block to; it flips after each call. Starting true means the
-	// first ctrl+o expands, which is a no-op from the default all-expanded
-	// state — intentional, not a smoothing bug.
-	expandAll bool
+	// collapseAll is the ctrl+o default for every guttered block; toggled
+	// holds per-block clicks that invert it. ctrl+o clears toggled, so the
+	// default applies uniformly, including to blocks that arrive later.
+	collapseAll bool
+	toggled     map[agent.BlockID]bool
 
-	// zones records each guttered item's clickable header row for the most
-	// recent renderSurface call, in that surface's own screen coordinates.
-	zones []accordionZone
-}
-
-// accordionZone is one guttered item's header row, recorded during
-// renderSurface. row is a screen row of the viewport that produced it: 0 is
-// the surface's own top row, matching the coordinates a caller already has
-// from a mouse event over the transcript. width spans the whole row: both
-// the click target and the hover fill cover it, and a mouse-down over it only
-// becomes a disclosure toggle if the gesture turns out not to be a drag (see
-// Model.finishSelection).
-type accordionZone struct {
-	id    agent.BlockID
-	row   int
-	width int
+	// pointerY is the viewport row under the mouse, or -1 when unknown. Hover
+	// is derived from it at render time, so it can never go stale when the
+	// content moves under a stationary pointer.
+	pointerY int
 }
 
 // Surface is the visible transcript and its row offset in the full document.
@@ -112,34 +92,26 @@ const (
 // concern rather than a new BlockScope in the agent package.
 var headerBlockID = agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00header"}
 
-// listLineEntry memoizes one block's rendered lines (height is len(lines)). An
-// animated entry is valid only for the frame that produced it; a settled entry
-// remains valid as the global animation frame advances.
-//
-// decorated additionally memoizes itemLines' gutter/collapse output for a
-// guttered item, valid only while collapsed and hovered still match the
-// state that produced it (nil means "not decorated yet" — a fresh raw entry,
-// or one whose rev/width/animated/frame just changed, always starts with a
-// nil decorated so it's recomputed once, on demand). itemHeight sits on this
-// package's hottest path (normalizeOffset, AtBottom, lastOffsetItem,
-// ScrollBy, and offsetRow all call it in loops over the view), so redoing
-// the string-building in itemLines on every call — even when nothing
-// relevant changed — was measurably too slow on large transcripts.
+// listLineEntry memoizes one block's rendered lines (height is len(lines)),
+// including the accordion gutter and collapse. An animated entry is valid only
+// for the frame that produced it; a settled entry remains valid as the global
+// animation frame advances.
 type listLineEntry struct {
-	rev      uint64
-	width    int
-	animated bool
-	frame    int
-	lines    []string
-
-	decorated []string
+	rev       uint64
+	width     int
+	animated  bool
+	frame     int
 	collapsed bool
-	hovered   bool
+	lines     []string
+
+	// disclosable reports that the entry drew a clickable chevron: it has
+	// detail rows to hide, as opposed to a blank gutter.
+	disclosable bool
 }
 
 // NewList returns an empty list with a one-row gap between blocks.
 func NewList() *List {
-	return &List{gap: 1, follow: true, cache: map[agent.BlockID]listLineEntry{}, collapsed: map[agent.BlockID]bool{}, expandAll: true}
+	return &List{gap: 1, follow: true, cache: map[agent.BlockID]listLineEntry{}, toggled: map[agent.BlockID]bool{}, pointerY: -1}
 }
 
 // Following reports whether the view is pinned to the tail.
@@ -168,11 +140,7 @@ func (l *List) Height() int { return l.height }
 // SetStyles swaps the render styles and invalidates the cache (old palette).
 func (l *List) SetStyles(sty Styles) {
 	l.sty = sty
-	if l.accordion == nil {
-		l.accordion = components.NewAccordion(sty.Accordion)
-	} else {
-		l.accordion.SetStyles(sty.Accordion)
-	}
+	l.gutterWidth = components.AccordionWidth(sty.Accordion)
 	l.invalidateAll()
 }
 
@@ -236,11 +204,8 @@ func (l *List) Reset() {
 	l.offsetIdx = 0
 	l.offsetLine = 0
 	l.follow = true
-	l.collapsed = map[agent.BlockID]bool{}
-	l.hovered = agent.BlockID{}
-	l.hasHover = false
-	l.expandAll = true
-	l.zones = nil
+	l.collapseAll = false
+	clear(l.toggled)
 	l.invalidateAll()
 }
 
@@ -323,45 +288,28 @@ func (l *List) stacksTight(it presentationItem) bool {
 	}
 }
 
-// guttered reports whether idx's presentation item reserves the accordion
-// gutter. Only a single tool renders one clickable control; reasoning groups
-// and multi-tool inspection groups keep their current left edge.
-func (l *List) guttered(it presentationItem) bool {
-	return len(it.presentations) == 1
-}
-
-// hasGutterRoom reports whether the viewport is wide enough to reserve the
-// accordion's fixed-width gutter and still leave room for content.
-func (l *List) hasGutterRoom() bool {
-	return l.accordion != nil && l.width > l.accordion.Width()
-}
-
-// itemWidth is the width renderPresentationItem wraps to: narrowed by the
-// gutter for a guttered item with room for one, the full width otherwise.
-// Total rendered output (gutter + content) never exceeds l.width.
-func (l *List) itemWidth(it presentationItem) int {
-	if l.guttered(it) && l.hasGutterRoom() {
-		return l.width - l.accordion.Width()
+// gutter returns the accordion gutter width it reserves: the control's width
+// for a single tool when the viewport has room left for content, 0 otherwise.
+// Reasoning groups and multi-tool inspection groups keep their left edge.
+func (l *List) gutter(it presentationItem) int {
+	if len(it.presentations) != 1 || l.gutterWidth == 0 || l.width <= l.gutterWidth {
+		return 0
 	}
-	return l.width
+	return l.gutterWidth
 }
 
-// ToggleDisclosure flips one block's collapsed state. A block absent from
-// collapsed is expanded, so toggling an unseen id collapses it.
+func (l *List) collapsed(id agent.BlockID) bool { return l.collapseAll != l.toggled[id] }
+
+// ToggleDisclosure flips one block's collapsed state.
 func (l *List) ToggleDisclosure(id agent.BlockID) {
-	l.collapsed[id] = !l.collapsed[id]
+	l.toggled[id] = !l.toggled[id]
 }
 
-// ToggleAllDisclosure sets every guttered block to expandAll's value, then
-// flips expandAll so the next call reverses it. This universally overrides
-// any individual ToggleDisclosure calls.
+// ToggleAllDisclosure collapses every guttered block, or expands them all if
+// they were collapsed, discarding individual toggles.
 func (l *List) ToggleAllDisclosure() {
-	for _, it := range l.view {
-		if l.guttered(it) {
-			l.collapsed[it.id] = !l.expandAll
-		}
-	}
-	l.expandAll = !l.expandAll
+	l.collapseAll = !l.collapseAll
+	clear(l.toggled)
 	// Keep the viewport anchored to the current item's header instead of
 	// letting a now-shorter item's shrunk height carry the offset into
 	// later blocks.
@@ -370,119 +318,84 @@ func (l *List) ToggleAllDisclosure() {
 	}
 }
 
-// SetHovered updates which block's control is hovered and reports whether the
-// hover target actually changed, so a caller repaints only when it must.
-func (l *List) SetHovered(id agent.BlockID, ok bool) bool {
-	if ok == l.hasHover && (!ok || id == l.hovered) {
-		return false
-	}
-	l.hasHover, l.hovered = ok, id
-	return true
-}
+// SetPointerRow records the viewport row under the mouse; any row outside the
+// viewport clears hover.
+func (l *List) SetPointerRow(y int) { l.pointerY = y }
 
-// Hovered reports whether the pointer currently sits over a clickable
-// accordion row.
+// Hovered reports whether the pointer sits over a clickable accordion row.
 func (l *List) Hovered() bool {
-	return l.hasHover
+	_, ok := l.HeaderAt(l.pointerY)
+	return ok
 }
 
-// ZoneAt reports the block whose header row spans screen coordinate (x, y),
-// or false if none does. Coordinates are relative to the top-left of the
-// surface renderSurface last produced. It serves both hover (a pure
-// rendering concern) and click (Model defers the actual toggle to release,
-// so a plain click still toggles while a drag starting on the row still
-// selects text).
-func (l *List) ZoneAt(x, y int) (agent.BlockID, bool) {
-	for _, z := range l.zones {
-		if z.row == y && x >= 0 && x < z.width {
-			return z.id, true
+// HeaderAt returns the block whose clickable accordion header sits on viewport
+// row y. The whole row is the target, so only y matters.
+func (l *List) HeaderAt(y int) (agent.BlockID, bool) {
+	if y < 0 || y >= l.height {
+		return agent.BlockID{}, false
+	}
+	row := -l.offsetLine
+	for idx := l.offsetIdx; idx < len(l.view) && row <= y; idx++ {
+		e := l.entry(idx)
+		if row == y && e.disclosable {
+			return l.view[idx].id, true
 		}
+		row += len(e.lines) + l.gapAfter(idx)
 	}
 	return agent.BlockID{}, false
 }
 
-// renderItem returns the block's rendered lines, cached by revision and width.
-// Animated entries additionally key on frame, so unrelated model updates at the
-// same frame do not render them again; settled entries remain cached as the
-// global animation frame advances.
-func (l *List) renderItem(idx int) []string {
+func (l *List) renderItem(idx int) []string { return l.entry(idx).lines }
+
+// entry returns the block's rendered lines, cached by revision, width and
+// collapse state. Animated entries additionally key on frame, so unrelated
+// model updates at the same frame do not render them again; settled entries
+// remain cached as the global animation frame advances.
+func (l *List) entry(idx int) listLineEntry {
 	it := l.view[idx]
-	width := l.itemWidth(it)
+	gutter := l.gutter(it)
+	width := l.width - gutter
 	animated := l.itemAnimated(it)
+	collapsed := gutter > 0 && l.collapsed(it.id)
 	if e, ok := l.cache[it.id]; ok &&
-		e.rev == it.rev && e.width == width && e.animated == animated &&
+		e.rev == it.rev && e.width == width && e.animated == animated && e.collapsed == collapsed &&
 		(!animated || e.frame == l.frame) {
-		return e.lines
+		return e
 	}
-	lines := strings.Split(l.renderPresentationItem(it, width), "\n")
-	l.cache[it.id] = listLineEntry{
-		rev:      it.rev,
-		width:    width,
-		animated: animated,
-		frame:    l.frame,
-		lines:    lines,
+	e := listLineEntry{
+		rev:       it.rev,
+		width:     width,
+		animated:  animated,
+		frame:     l.frame,
+		collapsed: collapsed,
+		lines:     strings.Split(l.renderPresentationItem(it, width), "\n"),
 	}
-	return lines
-}
-
-// itemLines returns idx's rendered lines with collapse and the accordion
-// gutter applied. renderSurface, Document, and itemHeight all read through
-// this single helper so the visible surface and the copyable document never
-// disagree about which column a cell sits in. The decorated output is
-// memoized on the same cache entry renderItem uses, keyed additionally on
-// collapsed/hovered, so repeated calls (itemHeight is on several hot loops)
-// don't redo the string-building when nothing relevant changed.
-func (l *List) itemLines(idx int) []string {
-	it := l.view[idx]
-	lines := l.renderItem(idx)
-	if !l.guttered(it) || !l.hasGutterRoom() {
-		return lines
+	if gutter > 0 {
+		e.disclosable = len(e.lines) > 1
+		e.lines = l.addGutter(e.lines, e.disclosable, collapsed)
 	}
-
-	collapsed := l.collapsed[it.id]
-	hovered := l.hasHover && l.hovered == it.id
-	e := l.cache[it.id]
-	if e.decorated != nil && e.collapsed == collapsed && e.hovered == hovered {
-		return e.decorated
-	}
-
-	hasDisclosure := len(lines) > 1
-	expanded := !collapsed
-	if hasDisclosure && !expanded {
-		lines = lines[:1]
-	}
-
-	gutterWidth := l.accordion.Width()
-	control := strings.Repeat(" ", gutterWidth)
-	if hasDisclosure {
-		control = l.accordion.Render(components.AccordionState{Expanded: expanded})
-	}
-	pad := strings.Repeat(" ", gutterWidth)
-
-	out := make([]string, len(lines))
-	// The status glyph stays the leftmost cell on the row: splice the control
-	// in right after it rather than ahead of it, so the check/✗/spinner is
-	// always aligned to the left edge regardless of disclosure state.
-	glyph := ansi.Cut(lines[0], 0, statusGlyphWidth)
-	rest := ansi.Cut(lines[0], statusGlyphWidth, ansi.StringWidth(lines[0]))
-	out[0] = glyph + control + rest
-	if hovered {
-		out[0] = components.PaintRowBackground(out[0], l.width, l.sty.Accordion.HoverBackground)
-	}
-	for i := 1; i < len(lines); i++ {
-		out[i] = pad + lines[i]
-	}
-
-	e.decorated, e.collapsed, e.hovered = out, collapsed, hovered
 	l.cache[it.id] = e
-	return out
+	return e
 }
 
-// chevronDrawn reports whether idx's item actually drew a clickable chevron,
-// as opposed to reserving a blank gutter with nothing to disclose.
-func (l *List) chevronDrawn(idx int) bool {
-	it := l.view[idx]
-	return l.guttered(it) && l.hasGutterRoom() && len(l.renderItem(idx)) > 1
+// addGutter splices the accordion control into a tool's header and indents
+// its detail rows, dropping them when collapsed. The status glyph stays the
+// leftmost cell, so the control goes right after it.
+func (l *List) addGutter(lines []string, disclosable, collapsed bool) []string {
+	blank := strings.Repeat(" ", l.gutterWidth)
+	control := blank
+	if disclosable {
+		control = components.Accordion(l.sty.Accordion, !collapsed)
+		if collapsed {
+			lines = lines[:1]
+		}
+	}
+	out := make([]string, len(lines))
+	out[0] = ansi.Cut(lines[0], 0, statusGlyphWidth) + control + ansi.TruncateLeft(lines[0], statusGlyphWidth, "")
+	for i := 1; i < len(lines); i++ {
+		out[i] = blank + lines[i]
+	}
+	return out
 }
 
 func (l *List) renderPresentationItem(it presentationItem, width int) string {
@@ -536,7 +449,7 @@ func (l *List) HasAnimated() bool {
 // invalidate lazily: animated entries compare frames, settled entries do not.
 func (l *List) SetFrame(frame int) { l.frame = frame }
 
-func (l *List) itemHeight(idx int) int { return len(l.itemLines(idx)) }
+func (l *List) itemHeight(idx int) int { return len(l.renderItem(idx)) }
 
 // AtBottom reports whether the last item's bottom is visible. It stops once the
 // content exceeds one viewport, so it is O(viewport).
@@ -665,43 +578,33 @@ func (l *List) renderSurface(withPosition bool) Surface {
 		l.ScrollToBottom()
 	}
 
-	l.zones = l.zones[:0]
 	budget := max(l.height, 0)
 	lines := make([]string, 0, budget)
 	idx := l.offsetIdx
 	off := l.offsetLine
-	row := 0
 	for idx < len(l.view) && len(lines) < budget {
-		itemLines := l.itemLines(idx)
+		itemLines := l.renderItem(idx)
 		h := len(itemLines)
 		gap := l.gapAfter(idx)
 
 		if off >= 0 && off < h {
-			if off == 0 && l.chevronDrawn(idx) {
-				l.zones = append(l.zones, accordionZone{id: l.view[idx].id, row: row, width: l.width})
-			}
 			visible := itemLines[off:]
 			if rem := budget - len(lines); len(visible) > rem {
 				visible = visible[:rem]
 			}
 			lines = append(lines, visible...)
-			row += len(visible)
 			if gap > 0 {
-				n := min(budget-len(lines), gap)
-				for range n {
+				for range min(budget-len(lines), gap) {
 					lines = append(lines, "")
 				}
-				row += n
 			}
 		} else {
 			// The offset starts inside the gap after this item.
 			gapRemaining := gap - (off - h)
 			if gapRemaining > 0 {
-				n := min(budget-len(lines), gapRemaining)
-				for range n {
+				for range min(budget-len(lines), gapRemaining) {
 					lines = append(lines, "")
 				}
-				row += n
 			}
 		}
 
@@ -711,6 +614,9 @@ func (l *List) renderSurface(withPosition bool) Surface {
 
 	for len(lines) < budget {
 		lines = append(lines, "")
+	}
+	if l.Hovered() {
+		lines[l.pointerY] = components.PaintRowBackground(lines[l.pointerY], l.width, l.sty.Accordion.HoverBackground)
 	}
 	top := 0
 	if withPosition {
@@ -735,7 +641,7 @@ func (l *List) HeaderRows() int {
 func (l *List) Document() string {
 	lines := make([]string, 0)
 	for idx := range l.view {
-		lines = append(lines, l.itemLines(idx)...)
+		lines = append(lines, l.renderItem(idx)...)
 		for range max(l.gapAfter(idx), 0) {
 			lines = append(lines, "")
 		}

@@ -46,10 +46,9 @@ func terminalMultiplexerActive() bool {
 	return strings.HasPrefix(term, "tmux") || strings.HasPrefix(term, "screen")
 }
 
-// chatMouseMode escalates to AllMotion so accordion hover can be reported,
-// following charmbracelet/crush's per-frame MouseMode computation. It never
-// escalates under a terminal multiplexer.
-func (m *Model) chatMouseMode() tea.MouseMode {
+// chatMouseMode escalates to AllMotion so accordion hover can be reported. It
+// never escalates under a terminal multiplexer. Resolved once, in newShell.
+func chatMouseMode() tea.MouseMode {
 	if terminalMultiplexerActive() {
 		return tea.MouseModeCellMotion
 	}
@@ -74,7 +73,7 @@ func (m *Model) View() tea.View {
 			v.Content = lipgloss.Place(max(1, m.width), max(1, m.height), lipgloss.Center, lipgloss.Center, message)
 			break
 		}
-		v.MouseMode = m.chatMouseMode()
+		v.MouseMode = m.chatMouseMode
 		v.Content = m.chatView()
 	case ModeLogin:
 		// A valid login model returns above. Keep a bounded fallback for the

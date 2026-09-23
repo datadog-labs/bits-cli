@@ -22,7 +22,6 @@ import (
 )
 
 func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
-	clearMultiplexerEnv(t)
 	loginModel := loginui.New(context.Background(), nil)
 	factoryCalls := 0
 	root := NewWithLogin(context.Background(), loginModel, func(context.Context) (*agent.Engine, error) {
@@ -55,7 +54,7 @@ func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
 		t.Fatal("light terminal theme was lost during handoff")
 	}
 	chatView := root.View()
-	if !chatView.AltScreen || chatView.MouseMode != tea.MouseModeAllMotion {
+	if !chatView.AltScreen || chatView.MouseMode != root.chatMouseMode {
 		t.Fatalf("chat view alt=%t mouse=%v", chatView.AltScreen, chatView.MouseMode)
 	}
 

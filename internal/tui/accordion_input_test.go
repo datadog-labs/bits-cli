@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"image"
 	"reflect"
 	"strings"
 	"testing"
@@ -32,7 +31,6 @@ func accordionDocumentLines(m *Model) int {
 
 func accordionTestModel(t *testing.T) *Model {
 	t.Helper()
-	clearMultiplexerEnv(t)
 	m := newShell()
 	m.mode = ModeChat
 	m.blocks = []agent.Block{accordionTestBlock()}
@@ -42,7 +40,6 @@ func accordionTestModel(t *testing.T) *Model {
 	if full := accordionDocumentLines(m); full <= 1 {
 		t.Fatalf("fixture tool did not produce a disclosable body, document lines = %d", full)
 	}
-	m.list.Render() // populate zones for the current viewport
 	return m
 }
 
@@ -82,7 +79,6 @@ func TestClickOnAccordionZoneTogglesWithoutStartingSelection(t *testing.T) {
 		t.Fatalf("click did not collapse the block: document lines = %d, want fewer than %d", got, full)
 	}
 
-	m.list.Render()
 	clickAccordionZone(m, 0, row)
 	if got := accordionDocumentLines(m); got != full {
 		t.Fatalf("second click did not re-expand the block: document lines = %d, want %d", got, full)
@@ -103,48 +99,43 @@ func TestClickOffAccordionZoneStillStartsSelection(t *testing.T) {
 func TestMouseMotionHoverSpansWholeRowAndClearsOffIt(t *testing.T) {
 	m := accordionTestModel(t)
 	row := accordionRow(t, m)
-	resting := m.list.Document()
+	resting := m.list.Render()
 
 	m.Update(tea.MouseMotionMsg{X: 0, Y: row})
-	overChevron := m.list.Document()
+	overChevron := m.list.Render()
 	if overChevron == resting {
 		t.Fatal("motion over the chevron did not visibly change the row")
 	}
 
 	m.Update(tea.MouseMotionMsg{X: 60, Y: row})
-	if got := m.list.Document(); got != overChevron {
+	if got := m.list.Render(); got != overChevron {
 		t.Fatal("motion elsewhere on the same header row changed or cleared the hover fill")
 	}
 
 	m.Update(tea.MouseMotionMsg{X: 60, Y: row + 1})
-	if cleared := m.list.Document(); cleared != resting {
+	if cleared := m.list.Render(); cleared != resting {
 		t.Fatal("motion off the header row did not clear hover")
 	}
 }
 
-func TestCtrlOTogglesAllToolsWithExpandFirstAlternation(t *testing.T) {
+func TestCtrlOCollapsesThenExpandsAllTools(t *testing.T) {
 	m := accordionTestModel(t)
 	full := accordionDocumentLines(m)
 
 	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
-	if got := accordionDocumentLines(m); got != full {
-		t.Fatalf("first ctrl+o changed document lines to %d, want %d (expand-first is a no-op)", got, full)
+	if got := accordionDocumentLines(m); got >= full {
+		t.Fatalf("first ctrl+o document lines = %d, want fewer than %d", got, full)
 	}
 
 	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
-	if got := accordionDocumentLines(m); got >= full {
-		t.Fatalf("second ctrl+o document lines = %d, want fewer than %d", got, full)
+	if got := accordionDocumentLines(m); got != full {
+		t.Fatalf("second ctrl+o document lines = %d, want %d", got, full)
 	}
 }
 
 func TestCtrlOTogglesDisclosureEvenWhileCompletionMenuIsOpen(t *testing.T) {
 	m := accordionTestModel(t)
 	full := accordionDocumentLines(m)
-
-	// The first ctrl+o is a no-op (expand-first alternation, see
-	// TestCtrlOTogglesAllToolsWithExpandFirstAlternation); send it before
-	// opening the menu so the one under test is the collapsing press.
-	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 
 	m.editor.Update(tea.PasteMsg{Content: "/"})
 	if !m.editor.MenuOpen() {
@@ -202,7 +193,6 @@ func TestMouseMotionSetsPointerShapeOverAnAccordionRow(t *testing.T) {
 // offset instead of no-oping at AtBottom().
 func scrollableAccordionTestModel(t *testing.T) *Model {
 	t.Helper()
-	clearMultiplexerEnv(t)
 	m := newShell()
 	m.mode = ModeChat
 	blocks := make([]agent.Block, 0, 6)
@@ -217,7 +207,6 @@ func scrollableAccordionTestModel(t *testing.T) *Model {
 	m.resize(80, 8)
 	m.syncTranscript()
 	m.editor.Focus()
-	m.list.Render()
 	return m
 }
 
@@ -252,7 +241,7 @@ func TestMouseWheelScrollRefreshesHoverUnderTheStationaryPointer(t *testing.T) {
 	}
 }
 
-func TestAdvanceSelectionScrollRefreshesHoverAtThePointer(t *testing.T) {
+func TestHoverFollowsContentMovingUnderTheStationaryPointer(t *testing.T) {
 	m := scrollableAccordionTestModel(t)
 	m.list.ScrollToTop()
 	row := visibleAccordionRow(t, m)
@@ -262,12 +251,11 @@ func TestAdvanceSelectionScrollRefreshesHoverAtThePointer(t *testing.T) {
 		t.Fatal("expected hovering the chevron to set hover")
 	}
 
-	m.selection.pointer = image.Point{X: 0, Y: row}
+	// Any offset change (selection auto-scroll, streaming) moves the header
+	// away without a motion event; hover is derived, so it follows.
 	m.list.ScrollBy(1)
-	m.refreshHover(m.selection.pointer.X, m.selection.pointer.Y)
-
 	if m.list.Hovered() {
-		t.Fatal("refreshHover did not clear hover after the row scrolled out from under the pointer")
+		t.Fatal("hover did not clear after the row scrolled out from under the pointer")
 	}
 }
 

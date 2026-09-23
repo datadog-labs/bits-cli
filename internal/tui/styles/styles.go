@@ -153,9 +153,8 @@ type Accordion struct {
 	Expanded  string
 	Collapsed string
 
-	// Resting draws the control when idle. Its background matches the app
-	// background so the control disappears into the surrounding row until
-	// hovered.
+	// Resting draws the control: a fixed background fill whose padding gives
+	// the chevron its box.
 	Resting lipgloss.Style
 
 	// HoverBackground is painted across the whole header row, not just the

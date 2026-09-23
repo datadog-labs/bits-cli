@@ -183,6 +183,10 @@ type Model struct {
 	// reconcilePointerShape only emits an OSC 22 sequence on a real change.
 	pointerIsHand bool
 
+	// chatMouseMode is the chat surface's mouse tracking, resolved once from
+	// the environment (see chatMouseMode()).
+	chatMouseMode tea.MouseMode
+
 	// splashReady is set once the terminal has answered the Kitty graphics
 	// probe and the logo's pixels have been transmitted.
 	splashReady bool
@@ -254,6 +258,7 @@ func newShell() *Model {
 		searchSessionID:   newSearchSessionID(),
 		entitySearchCache: make(map[string]entitySearchCacheEntry),
 		resume:            resume{now: time.Now},
+		chatMouseMode:     chatMouseMode(),
 	}
 	m.applyStyles(m.styles)
 	return m

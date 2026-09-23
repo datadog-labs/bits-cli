@@ -16,8 +16,7 @@ func clearMultiplexerEnv(t *testing.T) {
 
 func TestChatMouseModeEscalatesToAllMotionOutsideAMultiplexer(t *testing.T) {
 	clearMultiplexerEnv(t)
-	m := newShell()
-	if got := m.chatMouseMode(); got != tea.MouseModeAllMotion {
+	if got := chatMouseMode(); got != tea.MouseModeAllMotion {
 		t.Fatalf("chatMouseMode() = %v, want AllMotion", got)
 	}
 }
@@ -37,8 +36,7 @@ func TestChatMouseModeDegradesUnderAMultiplexer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			clearMultiplexerEnv(t)
 			tc.set(t)
-			m := newShell()
-			if got := m.chatMouseMode(); got != tea.MouseModeCellMotion {
+			if got := chatMouseMode(); got != tea.MouseModeCellMotion {
 				t.Fatalf("chatMouseMode() = %v, want CellMotion", got)
 			}
 		})
@@ -46,8 +44,8 @@ func TestChatMouseModeDegradesUnderAMultiplexer(t *testing.T) {
 }
 
 func TestViewUsesChatMouseModeInModeChat(t *testing.T) {
-	clearMultiplexerEnv(t)
 	m := newShell()
+	m.chatMouseMode = tea.MouseModeAllMotion
 	m.mode = ModeChat
 	m.resize(80, 24)
 	if got := m.View().MouseMode; got != tea.MouseModeAllMotion {

@@ -155,15 +155,20 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // only special-cases SGR and OSC 8, silently swallowing any other escape
 // sequence instead of writing it to the terminal.
 func (m *Model) reconcilePointerShape() tea.Cmd {
-	want := m.mode == ModeChat && m.list.Hovered()
-	if want == m.pointerIsHand {
+	return m.setPointerHand(m.mode == ModeChat && m.list.Hovered())
+}
+
+// setPointerHand writes the pointer shape only on a real change.
+func (m *Model) setPointerHand(hand bool) tea.Cmd {
+	if hand == m.pointerIsHand {
 		return nil
 	}
-	m.pointerIsHand = want
-	if want {
-		return tea.Raw(ansi.SetPointerShape("pointer"))
+	m.pointerIsHand = hand
+	shape := "default"
+	if hand {
+		shape = "pointer"
 	}
-	return tea.Raw(ansi.SetPointerShape("default"))
+	return tea.Raw(ansi.SetPointerShape(shape))
 }
 
 // Update is the single message handler. Only this thread touches Model state. It
@@ -240,16 +245,11 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 			return tea.Quit()
 		}
 	}
-	if m.pointerIsHand {
-		// ctrl+c returns here directly, bypassing the reconcilePointerShape
-		// batched into the normal Update path, so the terminal would
-		// otherwise keep the hand pointer after exit. Sequence, not Batch:
-		// only Sequence guarantees the raw write reaches the terminal before
-		// the quit message ends the event loop.
-		m.pointerIsHand = false
-		return m, tea.Sequence(tea.Raw(ansi.SetPointerShape("default")), quitCmd)
-	}
-	return m, quitCmd
+	// ctrl+c returns here directly, bypassing the reconcilePointerShape batched
+	// into the normal Update path, so reset a hand pointer here. Sequence, not
+	// Batch: only Sequence guarantees the raw write reaches the terminal before
+	// the quit message ends the event loop. It drops the nil when no reset is due.
+	return m, tea.Sequence(m.setPointerHand(false), quitCmd)
 }
 
 // dispatch routes one message to the owning surface. Non-input messages (resize,
@@ -297,7 +297,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// yet: arm it, and let finishSelection decide on release whether
 				// the gesture stayed a plain click or moved and became a
 				// selection.
-				m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.ZoneAt(msg.X, msg.Y)
+				m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.HeaderAt(msg.Y)
 				return m, m.beginSelection(msg)
 			}
 			return m, nil
@@ -305,8 +305,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMotionMsg:
 		if m.mode == ModeChat {
-			id, ok := m.list.ZoneAt(msg.X, msg.Y)
-			m.list.SetHovered(id, ok)
+			m.list.SetPointerRow(msg.Y)
 			if m.selection.selecting() {
 				return m, m.extendSelection(msg)
 			}
@@ -514,7 +513,6 @@ func (m *Model) advanceSelectionScroll(msg selectionTickMsg) tea.Cmd {
 	frame := m.visibleSelectionFrame(m.selection.scope)
 	pointer := m.selection.pointer
 	m.selection.extendGesture(frame, pointer.X, pointer.Y, m.list.Height(), m.height)
-	m.refreshHover(pointer.X, pointer.Y)
 	return m.armSelectionScroll()
 }
 
@@ -535,21 +533,7 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	case tea.MouseWheelDown:
 		m.list.ScrollBy(mouseWheelDelta)
 	}
-	if m.mode == ModeChat {
-		m.refreshHover(msg.X, msg.Y)
-	}
 	return nil
-}
-
-// refreshHover recomputes hover for the pointer at (x, y). Scrolling moves
-// the transcript's offset without a render pass, so the zones ZoneAt reads
-// would otherwise still describe the pre-scroll layout; rendering first
-// keeps hover (and the OSC 22 pointer shape derived from it) aligned with
-// what the pointer now actually sits over.
-func (m *Model) refreshHover(x, y int) {
-	m.list.Render()
-	id, ok := m.list.ZoneAt(x, y)
-	m.list.SetHovered(id, ok)
 }
 
 func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
@@ -688,6 +672,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // handleEditorKey handles keys while the editor owns input. The completion menu,
 // when open, is a sub-state of the editor and intercepts navigation keys.
 func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// ctrl+o is a global shortcut, not editor input, so it must not reach the
+	// completion menu or the editor.
+	if msg.String() == "ctrl+o" {
+		m.list.ToggleAllDisclosure()
+		return m, nil
+	}
 	// While the completion menu is open it owns navigation keys (arrows, tab,
 	// enter to accept, esc to close). Enter dispatches the selected registered
 	// slash command directly, including a partial command completion.
@@ -704,12 +694,6 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					return m.dispatchCommand(name)
 				}
 			}
-		}
-		// ctrl+o is a global shortcut, not editor input, so it must not be
-		// swallowed by the menu's key handling below.
-		if msg.String() == "ctrl+o" {
-			m.list.ToggleAllDisclosure()
-			return m, nil
 		}
 		cmd := m.editor.Update(msg)
 		m.layoutTranscript()
@@ -742,9 +726,6 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m.submit()
-	case "ctrl+o":
-		m.list.ToggleAllDisclosure()
-		return m, nil
 	case "pgup", "pgdown":
 		// ctrl+u / ctrl+d are intentionally NOT scroll keys: the editor is always
 		// focused and owns them for line editing (ctrl+u = delete to line start,
