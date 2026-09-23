@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -161,7 +162,9 @@ func (f *Fake) ConversationHistory(ctx context.Context, in assistant.Conversatio
 		return nil, &assistant.APIError{StatusCode: http.StatusNotFound, Title: "Not Found"}
 	}
 	var r assistant.ConversationHistoryResponse
-	r.Data.ID = c.id
+	// The history resource has its own id, distinct from the conversation's,
+	// as the real API's contract says (see the assistant client e2e test).
+	r.Data.ID = "fake-history-" + strconv.FormatInt(f.seq.Add(1), 10)
 	r.Data.Type = "conversation-history-response"
 	r.Data.Attributes.Title = c.title
 	r.Data.Attributes.Messages = slices.Clone(c.messages)

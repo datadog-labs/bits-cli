@@ -5,6 +5,11 @@ with `bits run`. It implements `agent.Backend` plus conversation history,
 listing, and the current user, so the real engine, tools, transcript, and
 rendering run unchanged. Only the network is faked.
 
+Conversations live in memory for the life of the process: `/resume` and
+`/status` work within a session, but a new process knows no earlier
+conversation, so `--conversation` with an id from a previous run is not
+found.
+
 ## Scripts
 
 Every message is a [Starlark](https://github.com/bazelbuild/starlark)
@@ -115,6 +120,10 @@ tool("search_logs", {"query": "status:error"}, out="12 results", break_before_re
   to hold a state until you interrupt it.
 - Breakpoints in replayed rounds never stop again: they already passed.
 - Names match `[a-z0-9_-]+`, so a continue file never leaves its directory.
+- The continue directory is shared by every fake process of the user, so
+  the path stays predictable. Two sessions stopped at the same name race for
+  one continue file: give concurrent sessions distinct names, e.g.
+  `breakpoint("qa1-table")`.
 - Tests set `Fake.ContinueDir` to a `t.TempDir()`. The script stops right
   after its last output, so a test that sees that output knows the backend
   is stopped, acts, then writes the continue file.

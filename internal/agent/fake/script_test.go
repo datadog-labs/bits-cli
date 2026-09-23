@@ -244,41 +244,80 @@ def run():
 	}
 }
 
+// TestLoadedModuleSnapshotSurvivesReplay pins that a turn's continuation
+// sees the module bytes it loaded, whatever a client tool did to the file
+// in between.
 func TestLoadedModuleSnapshotSurvivesReplay(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(path string) error
+	}{
+		{name: "changed on disk", change: func(path string) error {
+			return os.WriteFile(path, []byte("def run():\n    call(\"search\", {})\n    say(\"changed on disk\")\n"), 0o600)
+		}},
+		{name: "removed from disk", change: os.Remove},
+		{name: "renamed on disk", change: func(path string) error { return os.Rename(path, path+".bak") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "fixture.star")
+			if err := os.WriteFile(path, []byte("def run():\n    call(\"search\", {})\n    say(\"from snapshot\")\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f := &Fake{ScriptRoot: dir}
+			opts := assistant.SendOptions{ConversationID: "load-replay"}
+			first, err := send(t, f, "load(\"fixture.star\", \"run\")\nrun()", opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"client_tool_call:search {}", "usage"}; !slices.Equal(first, want) {
+				t.Fatalf("first round %q, want %q", first, want)
+			}
+			if err := test.change(path); err != nil {
+				t.Fatal(err)
+			}
+			second, err := send(t, f, []assistant.ClientToolResponse{{Status: assistant.ToolStatusSuccess}}, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"markdown_fragment:from snapshot", "usage"}; !slices.Equal(second, want) {
+				t.Fatalf("replayed round %q, want %q", second, want)
+			}
+		})
+	}
+}
+
+// TestLoadStaysInsideScriptRoot pins that load() never reads outside the
+// script root, by path or through a symlink.
+func TestLoadStaysInsideScriptRoot(t *testing.T) {
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.star"), []byte(`x = 1`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.Symlink(filepath.Join(outside, "secret.star"), filepath.Join(root, "link.star")); err != nil {
+		t.Fatal(err)
+	}
+	for _, module := range []string{"../secret.star", "link.star"} {
+		t.Run(module, func(t *testing.T) {
+			got, err := send(t, &Fake{ScriptRoot: root}, `load("`+module+`", "x")`, assistant.SendOptions{})
+			if err != nil || len(got) == 0 || !strings.Contains(got[0], "escapes the script root") {
+				t.Fatalf("err %v, answer %q", err, got)
+			}
+		})
+	}
+}
+
+// TestOversizedModuleIsRejected pins the module size limit, which must hold
+// while reading rather than after the whole file is in memory.
+func TestOversizedModuleIsRejected(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "fixture.star")
-	old := `def run():
-    call("search", {})
-    say("from snapshot")
-`
-	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "big.star"), make([]byte, maxModuleSize+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	f := &Fake{ScriptRoot: dir}
-	opts := assistant.SendOptions{ConversationID: "load-replay"}
-	first, err := send(t, f, "load(\"fixture.star\", \"run\")\nrun()", opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantFirst := []string{"client_tool_call:search {}", "usage"}
-	if !slices.Equal(first, wantFirst) {
-		t.Fatalf("first round %q, want %q", first, wantFirst)
-	}
-
-	if err := os.WriteFile(path, []byte(`def run():
-    call("search", {})
-    say("changed on disk")
-`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	second, err := send(t, f, []assistant.ClientToolResponse{{Status: assistant.ToolStatusSuccess}}, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantSecond := []string{"markdown_fragment:from snapshot", "usage"}
-	if !slices.Equal(second, wantSecond) {
-		t.Fatalf("replayed round %q, want %q", second, wantSecond)
+	got, err := send(t, &Fake{ScriptRoot: dir}, `load("big.star", "x")`, assistant.SendOptions{})
+	if err != nil || len(got) == 0 || !strings.Contains(got[0], "is larger than") {
+		t.Fatalf("err %v, answer %q", err, got)
 	}
 }
 
@@ -457,6 +496,7 @@ func TestScriptErrors(t *testing.T) {
 		{name: "at without break input", script: `call("x", {}, at=END)`, answer: "at needs break_input"},
 		{name: "at text not in input", script: `call([("a", {"k": "yes"}), ("b", {})], break_input="x", at="yes")`, answer: `at: "yes" is not in the input of b`},
 		{name: "at of the wrong type", script: `call("x", {}, break_input="x", at=3)`, answer: "at must be START, END, or text"},
+		{name: "cyclic tool input", script: "x = []; x.append({\"self\": x}); call(\"x\", x)", answer: "cycle in JSON structure"},
 		{name: "runtime", script: `say(1 + "a")`},
 		{name: "step limit", script: `for i in range(100000000): pass`},
 		{

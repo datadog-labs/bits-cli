@@ -393,7 +393,8 @@ func builtinHelp(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 	}
 	var sb strings.Builder
 	sb.WriteString(helpText)
-	fmt.Fprintf(&sb, "\nContinue a script stopped at `breakpoint(name)` with `touch %s`. Esc cancels it instead.\n",
+	fmt.Fprintf(&sb, "\nContinue a script stopped at `breakpoint(name)` with `touch %s`. Esc cancels it instead. "+
+		"Every fake process shares that directory: use distinct names for concurrent sessions.\n",
 		filepath.Join(r.continueDir, "<name>"))
 	sb.WriteString("\n## Client tools\n\n")
 	for _, tool := range r.opts.ClientTools {
@@ -484,7 +485,7 @@ func toolInput(thread *starlark.Thread, v starlark.Value) (string, error) {
 	case starlark.String:
 		return string(v), nil
 	default:
-		return encodeOrdered(thread, v)
+		return encodeOrdered(thread, v, map[starlark.Value]bool{})
 	}
 }
 
@@ -492,7 +493,18 @@ func toolInput(thread *starlark.Thread, v starlark.Value) (string, error) {
 // were written in. json.encode sorts them, but input streams in key order,
 // and a real model writes "path" before "content": a sorted write_file
 // input would stop mid-input before its preview knows which file it is.
-func encodeOrdered(thread *starlark.Thread, v starlark.Value) (string, error) {
+// path holds the lists and dicts being encoded: like json.encode, a value
+// that contains itself is an error, not endless recursion that would crash
+// the process. Tuples cannot close a cycle without a list or dict.
+func encodeOrdered(thread *starlark.Thread, v starlark.Value, path map[starlark.Value]bool) (string, error) {
+	switch v.(type) {
+	case *starlark.Dict, *starlark.List:
+		if path[v] {
+			return "", errors.New("cycle in JSON structure")
+		}
+		path[v] = true
+		defer delete(path, v)
+	}
 	var parts []string
 	start, end := "[", "]"
 	switch v := v.(type) {
@@ -503,7 +515,7 @@ func encodeOrdered(thread *starlark.Thread, v starlark.Value) (string, error) {
 			if !ok {
 				return "", fmt.Errorf("tool input keys must be strings, got %s", item[0].Type())
 			}
-			value, err := encodeOrdered(thread, item[1])
+			value, err := encodeOrdered(thread, item[1], path)
 			if err != nil {
 				return "", err
 			}
@@ -515,7 +527,7 @@ func encodeOrdered(thread *starlark.Thread, v starlark.Value) (string, error) {
 		defer iter.Done()
 		var item starlark.Value
 		for iter.Next(&item) {
-			value, err := encodeOrdered(thread, item)
+			value, err := encodeOrdered(thread, item, path)
 			if err != nil {
 				return "", err
 			}

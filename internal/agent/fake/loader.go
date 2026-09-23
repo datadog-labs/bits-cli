@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -71,7 +72,7 @@ func newModuleLoader(ctx context.Context, snapshot *sourceSnapshot, r *run) *mod
 // statement. Module names are workspace-relative at the top level and
 // relative to their importing module below it.
 func (l *moduleLoader) Load(thread *starlark.Thread, module string) (starlark.StringDict, error) {
-	id, path, err := l.resolve(thread, module)
+	id, candidate, err := l.moduleID(thread, module)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +85,7 @@ func (l *moduleLoader) Load(thread *starlark.Thread, module string) (starlark.St
 	l.loading[id] = true
 	defer delete(l.loading, id)
 
-	src, err := l.snapshot.read(id, path)
+	src, err := l.snapshot.read(id, func() (string, error) { return l.verify(module, candidate) })
 	if err != nil {
 		entry := moduleEntry{err: err}
 		l.cache[id] = entry
@@ -114,10 +115,11 @@ func (l *moduleLoader) Load(thread *starlark.Thread, module string) (starlark.St
 	return globals, err
 }
 
-// resolve maps a requested module name to a logical module id and a verified
-// filesystem path. The logical id is used for cache keys and diagnostics;
-// the real path is used for the one read that populates the snapshot.
-func (l *moduleLoader) resolve(thread *starlark.Thread, module string) (string, string, error) {
+// moduleID maps a requested module name to its logical id, the key of the
+// cache and the turn's snapshot, and its lexical path below the script root.
+// It never touches the disk, so a replayed load finds its snapshot even if a
+// client tool removed or renamed the file in between.
+func (l *moduleLoader) moduleID(thread *starlark.Thread, module string) (id, candidate string, err error) {
 	if l.snapshot.root == "" {
 		return "", "", errors.New("load: script root is unavailable")
 	}
@@ -131,28 +133,33 @@ func (l *moduleLoader) resolve(thread *starlark.Thread, module string) (string, 
 	if parent != "" {
 		base = filepath.Join(base, filepath.Dir(filepath.FromSlash(parent)))
 	}
-	candidate := filepath.Clean(filepath.Join(base, requested))
+	candidate = filepath.Clean(filepath.Join(base, requested))
 	if !within(baseRoot(l.snapshot.root), candidate) {
 		return "", "", fmt.Errorf("load: module %q escapes the script root", module)
 	}
-
-	root, err := filepath.EvalSymlinks(baseRoot(l.snapshot.root))
-	if err != nil {
-		return "", "", fmt.Errorf("load: resolve script root: %w", err)
-	}
-	realPath, err := filepath.EvalSymlinks(candidate)
-	if err != nil {
-		return "", "", fmt.Errorf("load: resolve %q: %w", module, err)
-	}
-	if !within(root, realPath) {
-		return "", "", fmt.Errorf("load: module %q escapes the script root", module)
-	}
-
 	rel, err := filepath.Rel(baseRoot(l.snapshot.root), candidate)
 	if err != nil || rel == "." {
 		return "", "", fmt.Errorf("load: invalid module path %q", module)
 	}
-	return filepath.ToSlash(filepath.Clean(rel)), realPath, nil
+	return filepath.ToSlash(filepath.Clean(rel)), candidate, nil
+}
+
+// verify resolves symlinks in candidate and returns the real path to read,
+// rejecting a module whose real path escapes the script root. It runs only
+// for the read that populates the snapshot.
+func (l *moduleLoader) verify(module, candidate string) (string, error) {
+	root, err := filepath.EvalSymlinks(baseRoot(l.snapshot.root))
+	if err != nil {
+		return "", fmt.Errorf("load: resolve script root: %w", err)
+	}
+	realPath, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", fmt.Errorf("load: resolve %q: %w", module, err)
+	}
+	if !within(root, realPath) {
+		return "", fmt.Errorf("load: module %q escapes the script root", module)
+	}
+	return realPath, nil
 }
 
 func baseRoot(root string) string {
@@ -170,13 +177,26 @@ func within(root, path string) bool {
 	return rel != ".." && rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func (s *sourceSnapshot) read(id, path string) ([]byte, error) {
+// read returns module id's source: from the snapshot when this turn already
+// read it, otherwise from the path locate returns, which then joins the
+// snapshot. The read stops one byte past the size limit, so an oversized
+// file is rejected without being loaded into memory.
+func (s *sourceSnapshot) read(id string, locate func() (string, error)) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if src, ok := s.files[id]; ok {
 		return src, nil
 	}
-	src, err := os.ReadFile(path)
+	path, err := locate()
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %q: %w", id, err)
+	}
+	defer func() { _ = file.Close() }()
+	src, err := io.ReadAll(io.LimitReader(file, maxModuleSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read %q: %w", id, err)
 	}

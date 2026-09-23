@@ -57,6 +57,12 @@ func TestConversationRoundTrip(t *testing.T) {
 		t.Fatalf("restored blocks differ\n got %+v\nwant %+v", got, want)
 	}
 
+	// Like the real API, the history resource has its own id.
+	history, err := f.ConversationHistory(ctx, assistant.ConversationHistoryInput{ConversationID: id})
+	if err != nil || history.Data.ID == "" || history.Data.ID == id {
+		t.Fatalf("history data.id = %q (err %v), want a response id distinct from %s", history.Data.ID, err, id)
+	}
+
 	missing := <-agent.New(f, assistant.SendOptions{}).SwitchConversation(ctx, "00000000-0000-4000-8000-ffffffffffff")
 	if !errors.Is(missing.Err, assistant.ErrNotFound) {
 		t.Fatalf("unknown conversation error = %v", missing.Err)
