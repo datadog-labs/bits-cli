@@ -87,6 +87,10 @@ func TestBuiltinsEmit(t *testing.T) {
 			want: []string{"tool_call:a {}", "tool_call:b {}", "tool_response:success 1", "tool_response:success x", "usage"},
 		},
 		{
+			name: "dict input keeps key order", message: `call("write_file", {"path": "p", "content": "c", "n": [1, {"z": None, "a": (True, 2.5)}]})`,
+			want: []string{`client_tool_call:write_file {"path":"p","content":"c","n":[1,{"z":null,"a":[true,2.5]}]}`, "usage"},
+		},
+		{
 			name: "string input is verbatim", message: `call("read_file", "{not json")`,
 			want: []string{"client_tool_call:read_file {not json", "usage"},
 		},

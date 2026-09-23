@@ -426,8 +426,47 @@ func toolInput(thread *starlark.Thread, v starlark.Value) (string, error) {
 	case starlark.String:
 		return string(v), nil
 	default:
+		return encodeOrdered(thread, v)
+	}
+}
+
+// encodeOrdered is json.encode, except that dict keys keep the order they
+// were written in. json.encode sorts them, but input streams in key order,
+// and a real model writes "path" before "content": a sorted write_file
+// input would stop mid-input before its preview knows which file it is.
+func encodeOrdered(thread *starlark.Thread, v starlark.Value) (string, error) {
+	var parts []string
+	start, end := "[", "]"
+	switch v := v.(type) {
+	case *starlark.Dict:
+		start, end = "{", "}"
+		for _, item := range v.Items() {
+			key, ok := item[0].(starlark.String)
+			if !ok {
+				return "", fmt.Errorf("tool input keys must be strings, got %s", item[0].Type())
+			}
+			value, err := encodeOrdered(thread, item[1])
+			if err != nil {
+				return "", err
+			}
+			name, _ := json.Marshal(string(key))
+			parts = append(parts, string(name)+":"+value)
+		}
+	case *starlark.List, starlark.Tuple:
+		iter := starlark.Iterate(v)
+		defer iter.Done()
+		var item starlark.Value
+		for iter.Next(&item) {
+			value, err := encodeOrdered(thread, item)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, value)
+		}
+	default:
 		return encodeJSON(thread, v)
 	}
+	return start + strings.Join(parts, ",") + end, nil
 }
 
 // encodeJSON calls json.encode so Starlark owns value conversion.
