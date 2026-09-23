@@ -3,6 +3,10 @@ package fake
 import (
 	"context"
 	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -10,6 +14,48 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
+
+var update = flag.Bool("update", false, "rewrite golden files")
+
+// TestRandomStreamGolden pins random()'s content so refactors cannot change
+// what a seed produces. Message ids are excluded.
+func TestRandomStreamGolden(t *testing.T) {
+	var b strings.Builder
+	for _, seed := range []string{"hello", "why is latency high?"} {
+		fmt.Fprintf(&b, "# %s\n", seed)
+		_, err := (&Fake{}).Send(context.Background(), "random("+strconv.Quote(seed)+")", assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
+			fmt.Fprintln(&b, goldenLine(ar.Data.Attributes.StructuredMessage))
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join("testdata", "random.golden")
+	if *update {
+		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.String(); got != string(want) {
+		t.Fatalf("random stream changed; rerun with -update only if intended\n got:\n%s", got)
+	}
+}
+
+func goldenLine(msg assistant.Message) string {
+	c := msg.Content
+	if c.Tool != nil && c.Tool.Metadata != nil {
+		return fmt.Sprintf("%s\t%q %q %q", c.Type, c.Tool.Metadata.Name, c.Tool.Metadata.Input, c.Tool.Metadata.Output)
+	}
+	if msg.Results != nil && msg.Results.Usage != nil {
+		return fmt.Sprintf("usage\t%d/%d", msg.Results.Usage.TokensUsed, msg.Results.Usage.MaxTokens)
+	}
+	return fmt.Sprintf("%s\t%q", c.Type, c.TextBody())
+}
 
 // collect runs one turn and returns the streamed (type, text) pairs.
 func collect(t *testing.T, message string) [][2]string {
@@ -28,8 +74,8 @@ func collect(t *testing.T, message string) [][2]string {
 }
 
 func TestDeterministicPerSeed(t *testing.T) {
-	a := collect(t, "why is latency high?")
-	b := collect(t, "why is latency high?")
+	a := collect(t, `random("why is latency high?")`)
+	b := collect(t, `random("why is latency high?")`)
 	if len(a) != len(b) {
 		t.Fatalf("nondeterministic length: %d vs %d", len(a), len(b))
 	}
@@ -41,11 +87,11 @@ func TestDeterministicPerSeed(t *testing.T) {
 }
 
 func TestDifferentSeedsDiffer(t *testing.T) {
-	if len(collect(t, "one")) == 0 {
+	if len(collect(t, `random("one")`)) == 0 {
 		t.Fatal("expected output")
 	}
 	// Extremely unlikely to be identical streams for different inputs.
-	a, b := collect(t, "alpha"), collect(t, "bravo charlie delta")
+	a, b := collect(t, "random(1)"), collect(t, "random(2)")
 	same := len(a) == len(b)
 	for i := 0; same && i < len(a); i++ {
 		if a[i] != b[i] {
@@ -126,7 +172,7 @@ func TestEntitySearchFiltersGroupsBeforeLimit(t *testing.T) {
 func TestStreamsTextAndUsage(t *testing.T) {
 	f := &Fake{}
 	var text, usage int
-	_, err := f.Send(context.Background(), "hello", assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
+	_, err := f.Send(context.Background(), "random()", assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
 		msg := ar.Data.Attributes.StructuredMessage
 		if msg.Content.Type == assistant.ContentMarkdownFragment && msg.Content.TextBody() != "" {
 			text++
@@ -171,7 +217,7 @@ func TestFinalAnswerIsMarkdown(t *testing.T) {
 	// should also see fenced code and list markers at least once.
 	sawHeading, sawFence, sawList, sawTable := false, false, false, false
 	for i := range 30 {
-		for _, txt := range markdownMessages(t, "seed-"+strconv.Itoa(i)) {
+		for _, txt := range markdownMessages(t, "random("+strconv.Itoa(i)+")") {
 			if strings.HasPrefix(txt, "## ") {
 				sawHeading = true
 			}
@@ -203,7 +249,7 @@ func TestFinalAnswerIsMarkdown(t *testing.T) {
 func TestStreamReassemblesToDoc(t *testing.T) {
 	// Token-by-token streaming must reassemble byte-identically to a valid doc:
 	// the final answer starts with a heading and ends with a newline.
-	msgs := markdownMessages(t, "reassemble")
+	msgs := markdownMessages(t, `random("reassemble")`)
 	var final string
 	for _, txt := range msgs {
 		if strings.HasPrefix(txt, "## ") {
@@ -220,7 +266,7 @@ func TestStreamReassemblesToDoc(t *testing.T) {
 
 func TestReturnsConversationID(t *testing.T) {
 	f := &Fake{}
-	id, err := f.Send(context.Background(), "hi", assistant.SendOptions{ConversationID: "abc"}, func(assistant.AssistantResponse) error {
+	id, err := f.Send(context.Background(), `say("hi")`, assistant.SendOptions{ConversationID: "abc"}, func(assistant.AssistantResponse) error {
 		return nil
 	})
 	if err != nil {
@@ -237,7 +283,7 @@ func TestMessageIDsUniquePerTurn(t *testing.T) {
 	f := &Fake{}
 	id := func() string {
 		var got string
-		_, err := f.Send(context.Background(), "same prompt", assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
+		_, err := f.Send(context.Background(), `say("same prompt")`, assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
 			if got == "" {
 				got = ar.Data.Attributes.StructuredMessage.MessageID
 			}
@@ -256,7 +302,7 @@ func TestMessageIDsUniquePerTurn(t *testing.T) {
 func TestMultipleUniqueToolCalls(t *testing.T) {
 	f := &Fake{}
 	maxCalls := 0
-	for _, msg := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
+	for _, msg := range []string{`random("a")`, `random("b")`, `random("c")`, `random("d")`, `random("e")`, `random("f")`, `random("g")`, `random("h")`} {
 		seen := map[string]bool{}
 		calls := 0
 		_, err := f.Send(context.Background(), msg, assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
@@ -286,7 +332,7 @@ func TestContextCancellation(t *testing.T) {
 	cancel() // cancel before streaming
 
 	var n int
-	_, err := f.Send(ctx, "hello", assistant.SendOptions{}, func(assistant.AssistantResponse) error {
+	_, err := f.Send(ctx, "random()", assistant.SendOptions{}, func(assistant.AssistantResponse) error {
 		n++
 		return nil
 	})
@@ -301,7 +347,7 @@ func TestContextCancellation(t *testing.T) {
 func TestPropagatesCallbackError(t *testing.T) {
 	f := &Fake{}
 	boom := errors.New("boom")
-	_, err := f.Send(context.Background(), "hello", assistant.SendOptions{}, func(assistant.AssistantResponse) error {
+	_, err := f.Send(context.Background(), "random()", assistant.SendOptions{}, func(assistant.AssistantResponse) error {
 		return boom
 	})
 	if !errors.Is(err, boom) {

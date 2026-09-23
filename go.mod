@@ -19,6 +19,7 @@ require (
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/spf13/cobra v1.10.2
 	github.com/zalando/go-keyring v0.2.8
+	go.starlark.net v0.0.0-20260908191801-89a6a09411d5
 	golang.org/x/oauth2 v0.36.0
 )
 

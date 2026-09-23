@@ -99,9 +99,11 @@ func TestRunFakeBackendStreamsVersionedJSONL(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")
+	opts := runOptions(agent.ModeAllowAll)
+	opts.Prompt = "random()"
 	var out bytes.Buffer
 
-	err := runRunWithStore(context.Background(), runOptions(agent.ModeAllowAll), stubCredentialStore{}, &out)
+	err := runRunWithStore(context.Background(), opts, stubCredentialStore{}, &out)
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -133,6 +135,38 @@ func TestRunFakeBackendStreamsVersionedJSONL(t *testing.T) {
 	}
 	if finished == nil || finished["outcome"] != "completed" {
 		t.Fatalf("terminal record = %v, want completed", finished)
+	}
+}
+
+// A scripted fake turn with a client tool call is delivered as two rounds with
+// a correlated tool call and result.
+func TestRunFakeBackendScriptedRounds(t *testing.T) {
+	t.Setenv("BITS_FAKE_BACKEND", "1")
+	t.Setenv("DD_API_KEY", "")
+	t.Setenv("DD_APP_KEY", "")
+	opts := runOptions(agent.ModeAllowAll)
+	opts.Prompt = "call(\"list_files\", {\"path\": \".\"})\nsay(\"done\")"
+	var out bytes.Buffer
+
+	if err := runRunWithStore(context.Background(), opts, stubCredentialStore{}, &out); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	counts := map[string]int{}
+	var outcome any
+	for line := range strings.Lines(out.String()) {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("line is not JSON: %q: %v", line, err)
+		}
+		typ, _ := record["type"].(string)
+		counts[typ]++
+		if typ == "run.finished" {
+			outcome = record["outcome"]
+		}
+	}
+	if counts["round.started"] != 2 || counts["tool.call"] != 1 || counts["tool.result"] != 1 || outcome != "completed" {
+		t.Fatalf("records = %v, outcome = %v:\n%s", counts, outcome, out.String())
 	}
 }
 

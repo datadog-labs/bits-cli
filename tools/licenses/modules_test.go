@@ -117,8 +117,8 @@ func TestMembershipExcludesToolOnlyDeps(t *testing.T) {
 	// The exact count is pinned: a dependency change updates it together
 	// with the regenerated LICENSE-3rdparty.csv, so silent go.sum growth
 	// fails here rather than slipping into the inventory unnoticed.
-	if len(members) != 53 {
-		t.Errorf("membership = %d modules, want 53", len(members))
+	if len(members) != 56 {
+		t.Errorf("membership = %d modules, want 56", len(members))
 	}
 	// The testify assertion is a canary: root go.sum must still contain
 	// real (test-only) dependencies, otherwise the exclusion above would
