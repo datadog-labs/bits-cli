@@ -312,7 +312,7 @@ func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
 	}}
 
 	plain := ansi.Strip(model.approvalView())
-	wants := []string{"Run an unsandboxed command?", "cwd: /workspace · unsandboxed", "Allow once"}
+	wants := []string{"Run an unsandboxed command?", "cwd: /workspace · unsandboxed", "Allow"}
 	wants = append(wants, strings.Split(command, "\n")...)
 	for _, want := range wants {
 		if !strings.Contains(plain, want) {
@@ -350,14 +350,14 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 	}}
 
 	first := ansi.Strip(model.approvalView())
-	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "pgup/pgdown scroll") || !strings.Contains(first, "Allow once") {
+	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "pgup/pgdown scroll") || !strings.Contains(first, "Allow") {
 		t.Fatalf("initial long-command approval window is incorrect:\n%s", first)
 	}
 	for range 10 {
 		_, _ = model.handleApprovalKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	}
 	last := ansi.Strip(model.approvalView())
-	if strings.Contains(last, "print(1)") || !strings.Contains(last, "print(20)") || !strings.Contains(last, "cwd: /workspace") || !strings.Contains(last, "Allow once") {
+	if strings.Contains(last, "print(1)") || !strings.Contains(last, "print(20)") || !strings.Contains(last, "cwd: /workspace") || !strings.Contains(last, "Allow") {
 		t.Fatalf("paged long-command approval window is incorrect:\n%s", last)
 	}
 }

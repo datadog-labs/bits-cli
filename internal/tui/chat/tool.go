@@ -519,7 +519,12 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty St
 		return header
 	}
 	switch state {
-	case lifecycleRunning, lifecycleAwaiting, lifecycleDenied, lifecycleCancelled:
+	case lifecycleRunning, lifecycleAwaiting, lifecycleDenied:
+		return header
+	case lifecycleCancelled:
+		if decoded && execResultIsTerminal(result.Status) && len(execRows(result, max(1, width-4))) == 0 {
+			return header + "\n" + renderExecNoOutput(width, sty)
+		}
 		return header
 	case lifecycleUnknown, lifecycleSuccess, lifecycleError:
 	}
@@ -532,7 +537,10 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty St
 	}
 	rows := execRows(result, max(1, width-4))
 	if len(rows) == 0 {
-		return header
+		if !execResultIsTerminal(result.Status) {
+			return header
+		}
+		return header + "\n" + renderExecNoOutput(width, sty)
 	}
 	return header + "\n" + renderRows(rows, width, style, sty)
 }
@@ -556,6 +564,19 @@ func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, st
 
 func highlightShellCommand(command string, sty Styles) []string {
 	return diffrender.HighlightLines("command.sh", command, sty.Diff.SyntaxDark, sty.ToolArgument)
+}
+
+func execResultIsTerminal(status spec.ExecTerminalReason) bool {
+	switch status {
+	case spec.ExecSucceeded, spec.ExecNonZeroExit, spec.ExecLaunchFailed, spec.ExecTimedOut, spec.ExecCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func renderExecNoOutput(width int, sty Styles) string {
+	return renderRows([]string{"(no output)"}, width, sty.ToolDetail, sty)
 }
 
 // renderExecInvocation keeps ordinary commands on the compact tool header.
