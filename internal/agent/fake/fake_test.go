@@ -3,6 +3,10 @@ package fake
 import (
 	"context"
 	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -10,6 +14,48 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
+
+var update = flag.Bool("update", false, "rewrite golden files")
+
+// TestRandomStreamGolden pins the random stream's content so refactors cannot
+// change what existing prompts produce. Message ids are excluded.
+func TestRandomStreamGolden(t *testing.T) {
+	var b strings.Builder
+	for _, seed := range []string{"hello", "why is latency high?"} {
+		fmt.Fprintf(&b, "# %s\n", seed)
+		_, err := (&Fake{}).Send(context.Background(), seed, assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
+			fmt.Fprintln(&b, goldenLine(ar.Data.Attributes.StructuredMessage))
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join("testdata", "random.golden")
+	if *update {
+		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.String(); got != string(want) {
+		t.Fatalf("random stream changed; rerun with -update only if intended\n got:\n%s", got)
+	}
+}
+
+func goldenLine(msg assistant.Message) string {
+	c := msg.Content
+	if c.Tool != nil && c.Tool.Metadata != nil {
+		return fmt.Sprintf("%s\t%q %q %q", c.Type, c.Tool.Metadata.Name, c.Tool.Metadata.Input, c.Tool.Metadata.Output)
+	}
+	if msg.Results != nil && msg.Results.Usage != nil {
+		return fmt.Sprintf("usage\t%d/%d", msg.Results.Usage.TokensUsed, msg.Results.Usage.MaxTokens)
+	}
+	return fmt.Sprintf("%s\t%q", c.Type, c.TextBody())
+}
 
 // collect runs one turn and returns the streamed (type, text) pairs.
 func collect(t *testing.T, message string) [][2]string {
