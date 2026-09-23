@@ -656,7 +656,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if _, registered := lookupCommand(name); registered {
 					m.editor.Reset()
 					m.stopEntitySearch()
-					return m.dispatchCommand(name)
+					return m.dispatchCommand(name, "")
 				}
 			}
 		}
@@ -750,10 +750,10 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	}
 
 	// Slash commands are a native control plane: they never reach the model.
-	if name, ok := parseCommand(raw); ok {
+	if name, argument, ok := parseCommand(raw); ok {
 		m.editor.Reset()
 		m.stopEntitySearch()
-		return m.dispatchCommand(name)
+		return m.dispatchCommand(name, argument)
 	}
 	if m.pendingLogout || m.logoutRunning {
 		return m, nil

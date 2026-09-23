@@ -33,6 +33,7 @@ const (
 	commandWeb
 	commandSettings
 	commandLogout
+	commandPermissions
 )
 
 type commandDefinition struct {
@@ -85,6 +86,11 @@ var commandDefinitions = []commandDefinition{
 		name:             "logout",
 		activeTurnPolicy: commandCancelsTurn,
 	},
+	{
+		id:               commandPermissions,
+		name:             "permissions",
+		activeTurnPolicy: commandRejectedDuringTurn,
+	},
 }
 
 func lookupCommand(name string) (commandDefinition, bool) {
@@ -102,32 +108,36 @@ func lookupCommand(name string) (commandDefinition, bool) {
 }
 
 // parseCommand recognizes a submitted slash command. It returns the command
-// name (lowercased, no leading "/") and true when the input is a single leading
-// "/token" at the beginning of the prompt; anything after whitespace is
-// treated as arguments and ignored. A bare "/", a "/ word" form, or leading
-// whitespace before the slash is not a command, so it falls through to a normal
-// agent turn.
-func parseCommand(input string) (string, bool) {
+// name (lowercased, no leading "/") and its lowercased argument remainder
+// when the input is a single leading "/token" at the beginning of the
+// prompt. A bare "/", a "/ word" form, or leading whitespace before the
+// slash is not a command, so it falls through to a normal agent turn.
+func parseCommand(input string) (string, string, bool) {
 	if !strings.HasPrefix(input, "/") {
-		return "", false
+		return "", "", false
 	}
 	fields := strings.Fields(input)
 	if len(fields) == 0 {
-		return "", false
+		return "", "", false
 	}
 	name := strings.ToLower(strings.TrimPrefix(fields[0], "/"))
 	if name == "" {
-		return "", false
+		return "", "", false
 	}
-	return name, true
+	argument := ""
+	if len(fields) > 1 {
+		argument = strings.ToLower(strings.Join(fields[1:], " "))
+	}
+	return name, argument, true
 }
 
-// dispatchCommand routes a parsed slash command to its handler and returns the
-// (model, cmd) the caller returns from Update. Recognized commands own their
-// side effects (turn cancellation, notices). Unrecognized commands post a
-// transient notice rather than reaching the model, so the control plane never
-// leaks literal slash text into an agent turn.
-func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
+// dispatchCommand routes a parsed slash command and its argument remainder to
+// its handler and returns the (model, cmd) the caller returns from Update.
+// Recognized commands own their side effects (turn cancellation, notices).
+// Unrecognized commands post a transient notice rather than reaching the
+// model, so the control plane never leaks literal slash text into an agent
+// turn.
+func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 	definition, ok := lookupCommand(name)
 	if !ok {
 		return m, m.showNotice(notice(chat.NoticeError, nil, "Unknown command: /%s", name), 0)
@@ -136,12 +146,15 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Logout is already in progress."), 0)
 	}
 
-	active := m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading
+	active := m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading || len(m.pendingApprovals) > 0
 	if active {
 		switch definition.activeTurnPolicy {
 		case commandRejectedDuringTurn:
 			if definition.id == commandCopy {
 				return m, m.showNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response to finish before using /copy."), 0)
+			}
+			if definition.id == commandPermissions {
+				return m, m.showNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response and any permission request to finish before switching permissions."), 0)
 			}
 			return m, m.showNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active turn: /%s", name), 0)
 		case commandCancelsTurn:
@@ -181,6 +194,8 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, batchCommands(m.stopCompletionSearches(), m.openSettingsInBrowser())
 	case commandLogout:
 		return m, m.startLogout()
+	case commandPermissions:
+		return m, m.switchPermissions(argument)
 	default:
 		panic("unhandled registered command")
 	}

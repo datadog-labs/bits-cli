@@ -63,9 +63,8 @@ func runTextMessage(id, text string) assistant.Message {
 	return assistant.AssistantMessage(id, assistant.TextContent(text))
 }
 
-// runToolSet is the gated shape under test: a local clock tool with a declared
-// gate, plus an ungated reader.
-func runToolSet(t *testing.T, mode agent.ApprovalMode) *agent.ToolSet {
+// runToolSet is the shape under test: a local clock tool with a declared gate.
+func runToolSet(t *testing.T, mode agent.PermissionsMode) *agent.ToolSet {
 	t.Helper()
 	tools, err := agent.NewToolSet(mode,
 		agent.Tool{
@@ -84,9 +83,9 @@ func runToolSet(t *testing.T, mode agent.ApprovalMode) *agent.ToolSet {
 	return tools
 }
 
-func runOptions(approval agent.ApprovalMode) cmd.RunOptions {
+func runOptions() cmd.RunOptions {
 	return cmd.RunOptions{
-		ChatOptions: cmd.ChatOptions{AuthMode: "auto", ApprovalMode: approval},
+		ChatOptions: cmd.ChatOptions{AuthMode: "auto", PermissionsMode: agent.ModeSkipPermissions},
 		Prompt:      "what time is it?",
 		Delivery:    "adeep",
 		Model:       "test-model",
@@ -99,7 +98,7 @@ func TestRunFakeBackendStreamsVersionedJSONL(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")
-	opts := runOptions(agent.ModeAllowAll)
+	opts := runOptions()
 	opts.Prompt = "random()"
 	var out bytes.Buffer
 
@@ -144,7 +143,7 @@ func TestRunFakeBackendScriptedRounds(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")
-	opts := runOptions(agent.ModeAllowAll)
+	opts := runOptions()
 	opts.Prompt = "call(\"list_files\", {\"path\": \".\"})\nsay(\"done\")"
 	var out bytes.Buffer
 
@@ -176,7 +175,7 @@ func TestRunMissingOAuthFailsFastWithLoginHint(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	var out bytes.Buffer
 
-	err := runRunWithStore(context.Background(), runOptions(agent.ModeAllowAll), stubCredentialStore{err: auth.ErrNoSession}, &out)
+	err := runRunWithStore(context.Background(), runOptions(), stubCredentialStore{err: auth.ErrNoSession}, &out)
 	if err == nil {
 		t.Fatal("run succeeded without an OAuth session")
 	}
@@ -195,13 +194,10 @@ func TestRunMissingOAuthFailsFastWithLoginHint(t *testing.T) {
 	}
 }
 
-// Gated denial through the real run action: the denial reaches the backend,
-// the model's adjusted answer is delivered, and the process maps the typed
-// outcome to exit 3.
-func TestRunGatedDenialExitsThree(t *testing.T) {
+func TestRunInvalidServerGateExitsThree(t *testing.T) {
 	backend := &scriptBackend{rounds: [][]assistant.Message{
 		{
-			clientCallMessage("g1", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1","approval_message":"Delete it?"}`),
+			clientCallMessage("g1", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"mismatch","approval_message":"Delete it?"}`),
 		},
 		{
 			runTextMessage("a1", "I cannot delete the dashboard."),
@@ -210,7 +206,7 @@ func TestRunGatedDenialExitsThree(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	var out bytes.Buffer
 
-	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeGated), runOptions(agent.ModeGated), &out)
+	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), &out)
 	if err == nil {
 		t.Fatal("denial completed with exit 0")
 	}
@@ -235,27 +231,9 @@ func TestRunGatedDenialExitsThree(t *testing.T) {
 	}
 }
 
-func TestAutoDenyApprovalReportsRejectedDecision(t *testing.T) {
-	block := agent.Block{
-		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: "cli-1"},
-		Tool: &agent.ToolBlock{Status: agent.ToolAwaitingApproval},
-	}
-	called := false
-	err := autoDenyApproval(func(id string, decision agent.ApprovalDecision) bool {
-		called = true
-		if id != "cli-1" || decision != agent.ApprovalDeny {
-			t.Fatalf("decision = %q/%q", id, decision)
-		}
-		return false
-	}, block)
-	if !called || err == nil || err.Error() != "failed to auto-deny approval gate for tool call cli-1: command queue full" {
-		t.Fatalf("called/error = %v/%v", called, err)
-	}
-}
-
-// Allow-all approves both a local gated tool and the backend-injected
+// Skip-permissions approves both a local gated tool and the backend-injected
 // approval_request gate; both proceed and the run exits 0.
-func TestRunAllowAllApprovesLocalAndServerGates(t *testing.T) {
+func TestRunSkipPermissionsApprovesLocalAndServerGates(t *testing.T) {
 	backend := &scriptBackend{rounds: [][]assistant.Message{
 		{
 			clientCallMessage("gate", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1","approval_message":"Delete it?"}`),
@@ -268,9 +246,9 @@ func TestRunAllowAllApprovesLocalAndServerGates(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	var out bytes.Buffer
 
-	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeAllowAll), runOptions(agent.ModeAllowAll), &out)
+	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), &out)
 	if err != nil {
-		t.Fatalf("allow-all run failed: %v", err)
+		t.Fatalf("skip-permissions run failed: %v", err)
 	}
 	if len(backend.batches) != 1 || len(backend.batches[0]) != 2 {
 		t.Fatalf("response batches = %v", backend.batches)
@@ -293,7 +271,7 @@ func TestRunRuntimeFailureWinsOverDenial(t *testing.T) {
 	backendErr := errors.New("backend failed after denial")
 	backend := &scriptBackend{
 		rounds: [][]assistant.Message{
-			{clientCallMessage("c1", "cli-1", "get_local_time", "{}")},
+			{clientCallMessage("g1", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"mismatch","approval_message":"Delete it?"}`)},
 			{runTextMessage("a1", "unreachable")},
 		},
 		failOn:  2,
@@ -302,7 +280,7 @@ func TestRunRuntimeFailureWinsOverDenial(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	var out bytes.Buffer
 
-	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeGated), runOptions(agent.ModeGated), &out)
+	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), &out)
 	if !errors.Is(err, backendErr) {
 		t.Fatalf("error = %v, want the backend failure to win over exit 3", err)
 	}
@@ -328,7 +306,7 @@ func TestRunCancellationIsRuntimeFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runEngineTurn(ctx, engine, runToolSet(t, agent.ModeGated), runOptions(agent.ModeGated), &out)
+		done <- runEngineTurn(ctx, engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), &out)
 	}()
 	<-backend.started
 	cancel()
@@ -368,7 +346,7 @@ func TestRunWriterFailureIsRuntimeFailure(t *testing.T) {
 	}}
 	engine := agent.New(backend, assistant.SendOptions{})
 
-	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeAllowAll), runOptions(agent.ModeAllowAll), failRunWriter{err: writerErr})
+	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), failRunWriter{err: writerErr})
 	if !errors.Is(err, writerErr) {
 		t.Fatalf("error = %v, want the writer failure", err)
 	}
@@ -392,7 +370,7 @@ func TestRunExecutesExactlyOneTurn(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	var out bytes.Buffer
 
-	if err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeAllowAll), runOptions(agent.ModeAllowAll), &out); err != nil {
+	if err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), &out); err != nil {
 		t.Fatal(err)
 	}
 	if backend.calls != 2 {

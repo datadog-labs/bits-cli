@@ -91,7 +91,7 @@ func (b *gateBackend) Send(_ context.Context, message any, _ assistant.SendOptio
 }
 
 // gatedToolSet builds a set with one gated local tool, the same shape chat uses.
-func gatedToolSet(t *testing.T, mode ApprovalMode) *ToolSet {
+func gatedToolSet(t *testing.T, mode PermissionsMode) *ToolSet {
 	t.Helper()
 	tools, err := NewToolSet(mode, Tool{
 		Definition: assistant.ClientTool{Name: "write"},
@@ -137,17 +137,17 @@ func decideServerGate(engine *Engine, decision ApprovalDecision, observe func(Ev
 	}
 }
 
-func TestEngineApprovalRequestGateAllowAllApproves(t *testing.T) {
+func TestEngineApprovalRequestGateSkipPermissionsApproves(t *testing.T) {
 	backend := &gateBackend{}
 	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
 		Message: "write something",
-		Tools:   gatedToolSet(t, ModeAllowAll),
+		Tools:   gatedToolSet(t, ModeSkipPermissions),
 	}, nil)
 	if err != nil || result.Outcome != TurnOutcomeCompleted {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
 	if result.Denied {
-		t.Fatal("allow-all reported a denial")
+		t.Fatal("skip-permissions reported a denial")
 	}
 	if len(backend.responses) != 1 {
 		t.Fatalf("response batches = %d, want 1", len(backend.responses))
@@ -183,7 +183,7 @@ func TestEngineMalformedApprovalRequestFailsClosed(t *testing.T) {
 	backend := &gateBackend{gateInput: `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"other"}`}
 	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
 		Message: "write something",
-		Tools:   gatedToolSet(t, ModeAllowAll),
+		Tools:   gatedToolSet(t, ModeSkipPermissions),
 	}, nil)
 	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
 		t.Fatalf("result/error = %+v, %v; want a typed denial", result, err)
@@ -220,7 +220,7 @@ func TestParseServerGateInputRejectsNonContractPayloads(t *testing.T) {
 	}
 }
 
-func TestEngineApprovalRequestGateGatedApprovesInteractively(t *testing.T) {
+func TestEngineApprovalRequestGateManualApprovesInteractively(t *testing.T) {
 	backend := &gateBackend{}
 	engine := New(backend, assistant.SendOptions{})
 	sawPending := false
@@ -241,13 +241,13 @@ func TestEngineApprovalRequestGateGatedApprovesInteractively(t *testing.T) {
 	})
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
-		Tools:   gatedToolSet(t, ModeGated),
+		Tools:   gatedToolSet(t, ModeManual),
 	}, consume)
 	if err != nil || result.Outcome != TurnOutcomeCompleted {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
 	if !sawPending {
-		t.Fatal("gated server gate never surfaced as a pending approval")
+		t.Fatal("manual-mode server gate never surfaced as a pending approval")
 	}
 	if result.Denied {
 		t.Fatal("approved server gate was reported as denied")
@@ -288,7 +288,7 @@ func TestEngineApprovalRequestGateAllowSessionIsToolScoped(t *testing.T) {
 	}
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
-		Tools:   gatedToolSet(t, ModeGated),
+		Tools:   gatedToolSet(t, ModeManual),
 	}, consume)
 	if err != nil || result.Outcome != TurnOutcomeCompleted {
 		t.Fatalf("result/error = %+v, %v", result, err)
@@ -316,7 +316,7 @@ func TestEngineApprovalRequestGateAllowSessionCoversSameTool(t *testing.T) {
 	defer cancel()
 	result, err := engine.RunTurn(ctx, TurnInput{
 		Message: "write something",
-		Tools:   gatedToolSet(t, ModeGated),
+		Tools:   gatedToolSet(t, ModeManual),
 	}, decideServerGate(engine, ApprovalAllowSession, nil))
 	if err != nil || result.Outcome != TurnOutcomeCompleted {
 		t.Fatalf("result/error = %+v, %v", result, err)
@@ -331,12 +331,12 @@ func TestEngineApprovalRequestGateAllowSessionCoversSameTool(t *testing.T) {
 	}
 }
 
-func TestEngineApprovalRequestGateGatedDeniesAndContinues(t *testing.T) {
+func TestEngineApprovalRequestGateManualDeniesAndContinues(t *testing.T) {
 	backend := &gateBackend{}
 	engine := New(backend, assistant.SendOptions{})
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
-		Tools:   gatedToolSet(t, ModeGated),
+		Tools:   gatedToolSet(t, ModeManual),
 		OnDeny:  DenyContinue,
 	}, decideServerGate(engine, ApprovalDeny, nil))
 	// The denial is typed and the turn continues with an adjusted answer.
@@ -344,7 +344,7 @@ func TestEngineApprovalRequestGateGatedDeniesAndContinues(t *testing.T) {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
 	if !result.Denied {
-		t.Fatal("gated denial was not reported as a typed outcome")
+		t.Fatal("manual-mode denial was not reported as a typed outcome")
 	}
 	if len(backend.responses) != 1 {
 		t.Fatalf("response batches = %d, want 1", len(backend.responses))
@@ -370,7 +370,7 @@ func TestEngineApprovalRequestGateGatedDeniesAndContinues(t *testing.T) {
 
 func TestEngineDeniedGatePreservesSiblingResultOrder(t *testing.T) {
 	backend := &gateBackend{includeSibling: true}
-	tools, err := NewToolSet(ModeGated, Tool{
+	tools, err := NewToolSet(ModeManual, Tool{
 		Definition: assistant.ClientTool{Name: "write"},
 		Handler: func(context.Context, ToolCall) (ToolResult, error) {
 			return ToolResult{Output: "written"}, nil
@@ -402,7 +402,7 @@ func TestEngineDeniedGatePreservesSiblingResultOrder(t *testing.T) {
 
 func TestDenyPolicyZeroValueStopsAfterWireAnswer(t *testing.T) {
 	backend := &gateBackend{includeSibling: true}
-	tools, err := NewToolSet(ModeGated, Tool{
+	tools, err := NewToolSet(ModeManual, Tool{
 		Definition: assistant.ClientTool{Name: "write"},
 		Handler: func(context.Context, ToolCall) (ToolResult, error) {
 			return ToolResult{Output: "written"}, nil
@@ -440,7 +440,7 @@ func TestDenyStopCancelsPendingSiblingBeforeServerGate(t *testing.T) {
 	engine := New(backend, assistant.SendOptions{})
 	result, err := engine.RunTurn(ctx, TurnInput{
 		Message: "write something",
-		Tools:   gatedToolSet(t, ModeGated),
+		Tools:   gatedToolSet(t, ModeManual),
 	}, decideServerGate(engine, ApprovalDeny, nil))
 	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
 		t.Fatalf("result/error = %+v, %v", result, err)
@@ -463,7 +463,7 @@ func TestDenyStopDrainsFollowUpClientToolCalls(t *testing.T) {
 	engine := New(backend, assistant.SendOptions{})
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
-		Tools:   gatedToolSet(t, ModeGated),
+		Tools:   gatedToolSet(t, ModeManual),
 	}, decideServerGate(engine, ApprovalDeny, func(event Event) error {
 		if event.Kind == EventTurnDone {
 			terminalRound = event.Round
@@ -500,7 +500,7 @@ func TestDenyStopBackendFailureRetainsBackendProvenance(t *testing.T) {
 	engine := New(backend, assistant.SendOptions{})
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
-		Tools:   gatedToolSet(t, ModeGated),
+		Tools:   gatedToolSet(t, ModeManual),
 	}, decideServerGate(engine, ApprovalDeny, func(event Event) error {
 		if event.Kind == EventError {
 			failure = event
@@ -519,7 +519,7 @@ func TestDenyStopBackendFailureRetainsBackendProvenance(t *testing.T) {
 func TestDeniedGateRecordsFailingSiblingOnTheWire(t *testing.T) {
 	backend := &gateBackend{includeSibling: true}
 	release := make(chan struct{})
-	tools, err := NewToolSet(ModeGated, Tool{
+	tools, err := NewToolSet(ModeManual, Tool{
 		Definition: assistant.ClientTool{Name: "write"},
 		Handler: func(context.Context, ToolCall) (ToolResult, error) {
 			<-release
@@ -563,7 +563,7 @@ func TestRunTurnDeniedGateThenBackendFailureFails(t *testing.T) {
 	engine := New(backend, assistant.SendOptions{})
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
-		Tools:   gatedToolSet(t, ModeGated),
+		Tools:   gatedToolSet(t, ModeManual),
 		OnDeny:  DenyContinue,
 	}, decideServerGate(engine, ApprovalDeny, nil))
 	// Runtime failure wins; the denial evidence remains.
@@ -580,7 +580,7 @@ func TestRunTurnDeniedGateThenBackendFailureFails(t *testing.T) {
 func TestDenyContinueRecordsFailingSiblingOnTheWire(t *testing.T) {
 	backend := &gateBackend{includeSibling: true}
 	release := make(chan struct{})
-	tools, err := NewToolSet(ModeGated, Tool{
+	tools, err := NewToolSet(ModeManual, Tool{
 		Definition: assistant.ClientTool{Name: "write"},
 		Handler: func(context.Context, ToolCall) (ToolResult, error) {
 			<-release

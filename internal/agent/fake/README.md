@@ -76,8 +76,10 @@ Notes:
   engine asks for it; `stream=False` disables it for one call.
 - `approval_request` calls get their `tool_call_id` filled in automatically.
 - `load()` accepts Starlark source files, not arbitrary Python programs.
-- `call` really runs local tools. Under the default `allow-all` approval mode,
-  scripted `write_file`, `edit_file`, and `exec_command` change the workspace.
+- `call` really runs local tools. Under the default `manual` permissions mode,
+  scripted `write_file`, `edit_file`, and `exec_command` pause on the
+  permission panel before they change the workspace; under `skip-permissions`
+  they change it without asking.
 
 ## Breakpoints
 

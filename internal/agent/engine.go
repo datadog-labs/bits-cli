@@ -805,6 +805,7 @@ func (e *Engine) runTools(
 	}
 
 	for _, item := range work {
+		permissions := tools.snapshotPermissions()
 		if item.call.Name == assistant.ApprovalRequestTool {
 			if stopRequested {
 				if !completeTool(item, cancelledResult()) {
@@ -820,14 +821,14 @@ func (e *Engine) runTools(
 				continue
 			}
 		}
-		if item.call.Name == assistant.ApprovalRequestTool && tools.ApprovesServerGate() {
+		if item.call.Name == assistant.ApprovalRequestTool && permissions.approvesServerGate() {
 			if !completeTool(item, approvedResult()) {
 				cancelRunning()
 				return toolRound{denied: denied}, nil
 			}
 			continue
 		}
-		requirement, needsApproval := tools.Approval(item.call)
+		requirement, needsApproval := permissions.approval(item.call)
 		_, granted := e.sessionGrants[requirement.Key]
 		if needsApproval && !granted {
 			if stopRequested {

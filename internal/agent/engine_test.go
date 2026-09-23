@@ -83,7 +83,7 @@ func (b *conversationRecordingBackend) Send(_ context.Context, message any, opts
 
 func TestTurnContextSurvivesToolContinuationsAndDoesNotLeak(t *testing.T) {
 	backend := &contextRecordingBackend{}
-	tools, err := NewToolSet(ModeAllowAll, Tool{
+	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler: func(context.Context, ToolCall) (ToolResult, error) {
 			return ToolResult{Output: "ok"}, nil
@@ -232,7 +232,7 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 	backend := &streamedInputBackend{}
 	reducerCalls := 0
 	handlerSawReducer := false
-	tools, err := NewToolSet(ModeAllowAll, Tool{
+	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "preview"},
 		InputReducer: func(_ context.Context, update ToolInputUpdate, prior any) any {
 			reducerCalls++
@@ -279,7 +279,7 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
 	backend := &streamedInputBackend{server: true}
 	reducerCalls := 0
-	tools, err := NewToolSet(ModeAllowAll, Tool{
+	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "preview"},
 		InputReducer: func(context.Context, ToolInputUpdate, any) any {
 			reducerCalls++
@@ -301,7 +301,7 @@ func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
 
 func TestEnginePreservesPreconfiguredStreamToolCallInput(t *testing.T) {
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
-	tools, err := NewToolSet(ModeAllowAll, Tool{
+	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "ordinary"},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 	})

@@ -91,7 +91,7 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 					t.Error("denied tool executed")
 					return agent.ToolResult{}, nil
 				}
-				tools, err := agent.NewToolSet(agent.ModeGated, tool)
+				tools, err := agent.NewToolSet(agent.ModeManual, tool)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -136,7 +136,7 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 
 func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 
 func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,9 +215,9 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	}
 }
 
-func TestToolApprovalComposerSuppressedInAllowAll(t *testing.T) {
+func TestToolApprovalComposerSuppressedInSkipPermissions(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeAllowAll, newApprovalTool())
+	tools, err := agent.NewToolSet(agent.ModeSkipPermissions, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,11 +228,11 @@ func TestToolApprovalComposerSuppressedInAllowAll(t *testing.T) {
 	drainConversationRemote(t, model)
 
 	if len(model.pendingApprovals) != 0 {
-		t.Fatalf("allow-all surfaced %d approval prompts", len(model.pendingApprovals))
+		t.Fatalf("skip-permissions surfaced %d approval prompts", len(model.pendingApprovals))
 	}
 	view := ansi.Strip(model.View().Content)
 	if strings.Contains(view, "Permission Required") || strings.Contains(view, "Run the test action?") {
-		t.Fatalf("approval composer rendered in allow-all mode:\n%s", view)
+		t.Fatalf("approval composer rendered in skip-permissions mode:\n%s", view)
 	}
 	if !model.editor.Focused() {
 		t.Fatal("editor lost focus without an approval owning the composer")
@@ -246,7 +246,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 	for _, width := range []int{40, 80, 120} {
 		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
 			backend := &approvalBackend{t: t}
-			tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+			tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -364,7 +364,7 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 
 func TestApprovalPanelRemainsUsableAtMinimumHeight(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestApprovalPanelRemainsUsableAtMinimumHeight(t *testing.T) {
 
 func TestTallDraftConcealsApprovalAndSuppressesInput(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &approvalBackend{t: t}
-			tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+			tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -24,24 +24,24 @@ func (d ApprovalDecision) valid() bool {
 	}
 }
 
-// ApprovalMode decides how the ToolSet treats per-tool approval gates. It is
-// consulted once at gate time: ModeAllowAll suppresses every declared gate,
-// while ModeGated defers to each tool's ApprovalPolicy unchanged. Tool
-// policies stay declarative — they say what needs approval, the mode says
-// what happens.
-type ApprovalMode string
+// PermissionsMode decides how the ToolSet treats per-tool permission gates.
+// It is consulted once at gate time: ModeSkipPermissions suppresses every
+// declared gate, while ModeManual defers to each tool's ApprovalPolicy
+// unchanged. Tool policies stay declarative — they say what needs approval, the
+// mode says what happens.
+type PermissionsMode string
 
 const (
-	// ModeAllowAll runs every tool without consulting its approval policy.
-	ModeAllowAll ApprovalMode = "allow-all"
-	// ModeGated consults each tool's approval policy and pauses declared gates
+	// ModeManual consults each tool's approval policy and pauses declared gates
 	// until an explicit decision.
-	ModeGated ApprovalMode = "gated"
+	ModeManual PermissionsMode = "manual"
+	// ModeSkipPermissions runs every tool without consulting its approval policy.
+	ModeSkipPermissions PermissionsMode = "skip-permissions"
 )
 
-func (m ApprovalMode) valid() bool {
+func (m PermissionsMode) valid() bool {
 	switch m {
-	case ModeAllowAll, ModeGated:
+	case ModeManual, ModeSkipPermissions:
 		return true
 	default:
 		return false

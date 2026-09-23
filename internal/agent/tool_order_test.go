@@ -61,7 +61,7 @@ func approvalTransitionOrder(t *testing.T, decision ApprovalDecision) []string {
 			},
 		})
 	}
-	tools, err := NewToolSet(ModeGated, definitions...)
+	tools, err := NewToolSet(ModeManual, definitions...)
 	if err != nil {
 		t.Fatal(err)
 	}

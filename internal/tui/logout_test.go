@@ -64,7 +64,7 @@ func TestLogoutDuringActiveTurnCancelsAndDrainsBeforeDeleting(t *testing.T) {
 	m.turnEvents = make(chan agent.Event)
 	m.chatPhase = chat.PhaseStreaming
 
-	_, cmd := m.dispatchCommand("logout")
+	_, cmd := m.dispatchCommand("logout", "")
 	if cmd == nil || !m.pendingLogout {
 		t.Fatal("active-turn logout was not queued")
 	}
@@ -98,7 +98,7 @@ func TestLogoutLocalFailureKeepsAuthenticatedEngine(t *testing.T) {
 		},
 	})
 
-	_, cmd := m.dispatchCommand("logout")
+	_, cmd := m.dispatchCommand("logout", "")
 	msg := cmd()
 	_, next := m.Update(msg)
 	if m.engine != engine {
@@ -125,7 +125,7 @@ func TestAlreadyLoggedOutIsSafeAndInvalidatesEngine(t *testing.T) {
 		},
 	})
 
-	_, cmd := m.dispatchCommand("logout")
+	_, cmd := m.dispatchCommand("logout", "")
 	_, quit := m.Update(cmd())
 	if !m.LoggedOut() {
 		t.Fatal("already-logged-out result was not recorded")
@@ -143,7 +143,7 @@ func TestRemoteRevocationFailureStillInvalidatesLocalSession(t *testing.T) {
 		},
 	})
 
-	_, cmd := m.dispatchCommand("logout")
+	_, cmd := m.dispatchCommand("logout", "")
 	_, quit := m.Update(cmd())
 	if !m.LoggedOut() {
 		t.Fatal("revocation failure did not record local logout")
@@ -165,7 +165,7 @@ func TestQuitCancelsLogout(t *testing.T) {
 		},
 	})
 
-	_, cmd := m.dispatchCommand("logout")
+	_, cmd := m.dispatchCommand("logout", "")
 	result := make(chan tea.Msg, 1)
 	go func() { result <- cmd() }()
 	<-started
@@ -186,8 +186,8 @@ func TestRepeatedLogoutWhileRunningDoesNotStartAnotherDelete(t *testing.T) {
 		},
 	})
 
-	_, first := m.dispatchCommand("logout")
-	_, second := m.dispatchCommand("logout")
+	_, first := m.dispatchCommand("logout", "")
+	_, second := m.dispatchCommand("logout", "")
 	if second == nil || m.notice.Empty() {
 		t.Fatal("repeated logout did not report in-progress state")
 	}
