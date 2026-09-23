@@ -33,6 +33,68 @@ type errorAfterCancelRunBackend struct {
 	err     error
 }
 
+type unfinishedToolBackend struct {
+	started chan struct{}
+	client  bool
+	once    sync.Once
+}
+
+type historicalToolBackend struct {
+	started chan struct{}
+	once    sync.Once
+	calls   int
+}
+
+func (b *historicalToolBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	b.calls++
+	callID, toolName := "current", "search_logs"
+	if b.calls == 1 {
+		callID, toolName = "prior", "old_tool"
+	}
+	content := assistant.ToolCallContent(callID, toolName, `{}`)
+	var response assistant.AssistantResponse
+	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage(callID, content)
+	if err := emit(response); err != nil {
+		return "conversation", err
+	}
+	if b.calls == 1 {
+		return "conversation", nil
+	}
+	b.once.Do(func() { close(b.started) })
+	<-ctx.Done()
+	return "conversation", ctx.Err()
+}
+
+func (b *unfinishedToolBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	var messages []assistant.Message
+	if b.client {
+		messages = []assistant.Message{
+			assistant.AssistantMessage("started", assistant.Content{
+				Type: assistant.ContentToolCallStarted,
+				Tool: &assistant.ToolPayload{ToolCallID: "unfinished", ToolName: "write_file", IsClientSide: true},
+			}),
+			assistant.AssistantMessage("delta", assistant.Content{
+				Type: assistant.ContentToolCallInputDelta,
+				Tool: &assistant.ToolPayload{ToolCallID: "unfinished", PartialJSON: `{"path":"half.txt"}`},
+			}),
+		}
+	} else {
+		messages = []assistant.Message{
+			assistant.AssistantMessage("server-call", assistant.ToolCallContent("unfinished", "search_logs", `{"query":"x"}`)),
+		}
+	}
+	for _, message := range messages {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = message
+		if err := emit(response); err != nil {
+			return "conversation", err
+		}
+	}
+	b.once.Do(func() { close(b.started) })
+	<-ctx.Done()
+	return "conversation", ctx.Err()
+}
+
 func (b *errorAfterCancelRunBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
 	close(b.started)
 	<-ctx.Done()
@@ -94,6 +156,78 @@ func TestRunTurnReturnsPartialStateOnBackendError(t *testing.T) {
 	}
 	if len(result.Blocks) != 2 || result.Blocks[1].Markdown == nil || result.Blocks[1].Markdown.Content != "partial" || !result.Blocks[1].Complete {
 		t.Fatalf("partial blocks = %+v", result.Blocks)
+	}
+}
+
+func TestRunTurnCancellationSettlesUnfinishedTools(t *testing.T) {
+	tests := []struct {
+		name   string
+		client bool
+	}{
+		{name: "client input preview", client: true},
+		{name: "server call", client: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &unfinishedToolBackend{started: make(chan struct{}), client: tt.client}
+			engine := New(backend, assistant.SendOptions{})
+			ctx, cancel := context.WithCancel(context.Background())
+			resultCh := make(chan TurnResult, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				result, err := engine.RunTurn(ctx, TurnInput{Message: "question"}, nil)
+				resultCh <- result
+				errCh <- err
+			}()
+			<-backend.started
+			cancel()
+			result := <-resultCh
+			if err := <-errCh; !errors.Is(err, context.Canceled) {
+				t.Fatalf("error = %v, want context canceled", err)
+			}
+			if result.Outcome != TurnOutcomeCanceled {
+				t.Fatalf("outcome = %v, want canceled", result.Outcome)
+			}
+			if len(result.Blocks) != 2 || result.Blocks[1].Tool == nil {
+				t.Fatalf("blocks = %+v, want one tool block", result.Blocks)
+			}
+			tool := result.Blocks[1].Tool
+			if !tool.Cancelled || tool.Status == ToolRunning || tool.Status != ToolError {
+				t.Fatalf("tool = %+v, want cancelled terminal error", tool)
+			}
+		})
+	}
+}
+
+func TestRunTurnCancellationLeavesEarlierUnfinishedToolUntouched(t *testing.T) {
+	backend := &historicalToolBackend{started: make(chan struct{})}
+	engine := New(backend, assistant.SendOptions{})
+	if _, err := engine.RunTurn(context.Background(), TurnInput{Message: "first"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan TurnResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := engine.RunTurn(ctx, TurnInput{Message: "second"}, nil)
+		resultCh <- result
+		errCh <- err
+	}()
+	<-backend.started
+	cancel()
+	result := <-resultCh
+	if err := <-errCh; !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if result.Outcome != TurnOutcomeCanceled || len(result.Blocks) != 4 {
+		t.Fatalf("result = %+v, want cancelled turn with four blocks", result)
+	}
+	if result.Blocks[1].Tool == nil || result.Blocks[1].Tool.Cancelled {
+		t.Fatalf("earlier tool = %+v, want untouched", result.Blocks[1].Tool)
+	}
+	if result.Blocks[3].Tool == nil || !result.Blocks[3].Tool.Cancelled {
+		t.Fatalf("current tool = %+v, want cancelled", result.Blocks[3].Tool)
 	}
 }
 

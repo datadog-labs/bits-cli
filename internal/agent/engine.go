@@ -311,7 +311,16 @@ func (e *Engine) run(
 	generation uint64,
 ) {
 	completion := turnCompletion{}
+	turnStart := len(e.transcript.Blocks())
 	defer func() {
+		if ctx.Err() != nil && e.transcript.CancelUnfinishedTools(turnStart) {
+			// Cancellation makes send's context-aware select unavailable. Publish
+			// the settled snapshot without blocking if the consumer has gone away.
+			select {
+			case out <- Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()}:
+			default:
+			}
+		}
 		if completion.Err == nil && !completion.Completed && ctx.Err() != nil {
 			completion.Err = ctx.Err()
 		}
