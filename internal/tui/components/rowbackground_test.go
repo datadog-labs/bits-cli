@@ -1,6 +1,7 @@
 package components
 
 import (
+	"strings"
 	"testing"
 
 	"charm.land/lipgloss/v2"
@@ -14,13 +15,13 @@ func TestPaintRowBackgroundOverridesBackgroundOnly(t *testing.T) {
 
 	painted := PaintRowBackground(line, width, lipgloss.Color("#22242b"))
 
-	if !colorPresent(painted, "255;0;0") {
+	if !strings.Contains(painted, "255;0;0") {
 		t.Fatalf("painted row lost its foreground color: %q", painted)
 	}
-	if colorPresent(painted, "0;0;0") {
+	if strings.Contains(painted, "0;0;0") {
 		t.Fatalf("painted row kept its original background: %q", painted)
 	}
-	if !colorPresent(painted, "34;36;43") {
+	if !strings.Contains(painted, "34;36;43") {
 		t.Fatalf("painted row missing the new background (#22242b): %q", painted)
 	}
 }
@@ -31,13 +32,4 @@ func TestPaintRowBackgroundFillsBeyondContentWidth(t *testing.T) {
 	if got := ansi.StringWidth(ansi.Strip(painted)); got != 10 {
 		t.Fatalf("painted row width = %d, want 10", got)
 	}
-}
-
-func colorPresent(s, rgb string) bool {
-	for i := 0; i+len(rgb) <= len(s); i++ {
-		if s[i:i+len(rgb)] == rgb {
-			return true
-		}
-	}
-	return false
 }

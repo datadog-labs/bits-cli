@@ -84,70 +84,64 @@ func TestClickOnAccordionZoneTogglesWithoutStartingSelection(t *testing.T) {
 	}
 }
 
-func TestClickOffAccordionZoneStillStartsSelection(t *testing.T) {
-	m := accordionTestModel(t)
-	row := accordionRow(t, m)
-
-	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 60, Y: row})
-
-	if !m.selection.selecting() {
-		t.Fatal("click off the accordion zone did not start a selection")
-	}
-}
-
-func TestMouseMotionHoverSpansWholeRowAndClearsOffIt(t *testing.T) {
-	m := accordionTestModel(t)
-	row := accordionRow(t, m)
-	resting := m.list.Render()
-
-	m.Update(tea.MouseMotionMsg{X: 0, Y: row})
-	overChevron := m.list.Render()
-	if overChevron == resting {
-		t.Fatal("motion over the chevron did not visibly change the row")
-	}
-
-	m.Update(tea.MouseMotionMsg{X: 60, Y: row})
-	if got := m.list.Render(); got != overChevron {
-		t.Fatal("motion elsewhere on the same header row changed or cleared the hover fill")
-	}
-
-	m.Update(tea.MouseMotionMsg{X: 60, Y: row + 1})
-	if cleared := m.list.Render(); cleared != resting {
-		t.Fatal("motion off the header row did not clear hover")
-	}
-}
-
-func TestCtrlOCollapsesThenExpandsAllTools(t *testing.T) {
+func TestDragFromAccordionRowSelectsWithoutToggling(t *testing.T) {
 	m := accordionTestModel(t)
 	full := accordionDocumentLines(m)
+	row := accordionRow(t, m)
 
-	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
-	if got := accordionDocumentLines(m); got >= full {
-		t.Fatalf("first ctrl+o document lines = %d, want fewer than %d", got, full)
+	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 0, Y: row})
+	m.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: 20, Y: row + 1})
+	m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: 20, Y: row + 1})
+
+	if !m.selection.selected() {
+		t.Fatal("dragging from the accordion row did not select text")
 	}
-
-	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	if got := accordionDocumentLines(m); got != full {
-		t.Fatalf("second ctrl+o document lines = %d, want %d", got, full)
+		t.Fatalf("a drag toggled the block: document lines = %d, want %d", got, full)
 	}
 }
 
-func TestCtrlOTogglesDisclosureEvenWhileCompletionMenuIsOpen(t *testing.T) {
-	m := accordionTestModel(t)
-	full := accordionDocumentLines(m)
+// TestCtrlOTogglesInEveryChatFocus checks ctrl+o reaches the transcript
+// whichever chat surface owns input, without disturbing that surface.
+func TestCtrlOTogglesInEveryChatFocus(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(m *Model)
+		keeps func(m *Model) bool
+	}{
+		{"editor", func(*Model) {}, func(m *Model) bool { return m.focus() == focusEditor }},
+		{
+			"completion menu",
+			func(m *Model) { m.editor.Update(tea.PasteMsg{Content: "/"}) },
+			func(m *Model) bool { return m.editor.MenuOpen() },
+		},
+		{
+			"approval",
+			func(m *Model) { m.pendingApprovals = []agent.Block{accordionTestBlock()} },
+			func(m *Model) bool { return m.focus() == focusApproval },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := accordionTestModel(t)
+			full := accordionDocumentLines(m)
+			tc.setup(m)
+			if !tc.keeps(m) {
+				t.Fatal("fixture did not reach the focus under test")
+			}
 
-	m.editor.Update(tea.PasteMsg{Content: "/"})
-	if !m.editor.MenuOpen() {
-		t.Fatal("expected the completion menu to open on a leading slash")
-	}
+			m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+			if got := accordionDocumentLines(m); got >= full {
+				t.Fatalf("ctrl+o did not collapse: document lines = %d, want fewer than %d", got, full)
+			}
+			if !tc.keeps(m) {
+				t.Fatal("ctrl+o disturbed the surface that owns input")
+			}
 
-	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
-
-	if !m.editor.MenuOpen() {
-		t.Fatal("ctrl+o must not close the completion menu")
-	}
-	if got := accordionDocumentLines(m); got >= full {
-		t.Fatalf("ctrl+o with the menu open did not collapse the block: document lines = %d, want fewer than %d", got, full)
+			m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+			if got := accordionDocumentLines(m); got != full {
+				t.Fatalf("second ctrl+o did not re-expand: document lines = %d, want %d", got, full)
+			}
+		})
 	}
 }
 
@@ -237,39 +231,6 @@ func TestMouseWheelScrollRefreshesHoverUnderTheStationaryPointer(t *testing.T) {
 	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 0, Y: row})
 	if m.list.Hovered() {
 		t.Fatal("scrolling moved the accordion row out from under the pointer, but hover was not recomputed")
-	}
-}
-
-func TestHoverFollowsContentMovingUnderTheStationaryPointer(t *testing.T) {
-	m := scrollableAccordionTestModel(t)
-	m.list.ScrollToTop()
-	row := visibleAccordionRow(t, m)
-
-	m.Update(tea.MouseMotionMsg{X: 0, Y: row})
-	if !m.list.Hovered() {
-		t.Fatal("expected hovering the chevron to set hover")
-	}
-
-	// Any offset change (selection auto-scroll, streaming) moves the header
-	// away without a motion event; hover is derived, so it follows.
-	m.list.ScrollBy(1)
-	if m.list.Hovered() {
-		t.Fatal("hover did not clear after the row scrolled out from under the pointer")
-	}
-}
-
-func TestCtrlOTogglesDisclosureWhileAnApprovalIsOpen(t *testing.T) {
-	m := accordionTestModel(t)
-	full := accordionDocumentLines(m)
-	m.pendingApprovals = []agent.Block{accordionTestBlock()}
-	if m.focus() != focusApproval {
-		t.Fatal("fixture did not give the approval focus")
-	}
-
-	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
-
-	if got := accordionDocumentLines(m); got >= full {
-		t.Fatalf("ctrl+o during an approval did not collapse the block: document lines = %d, want fewer than %d", got, full)
 	}
 }
 

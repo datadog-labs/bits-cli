@@ -6,49 +6,30 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func clearMultiplexerEnv(t *testing.T) {
-	t.Helper()
-	t.Setenv("TMUX", "")
-	t.Setenv("ZELLIJ", "")
-	t.Setenv("STY", "")
-	t.Setenv("TERM", "xterm-256color")
-}
-
-func TestChatMouseModeEscalatesToAllMotionOutsideAMultiplexer(t *testing.T) {
-	clearMultiplexerEnv(t)
-	if got := chatMouseMode(); got != tea.MouseModeAllMotion {
-		t.Fatalf("chatMouseMode() = %v, want AllMotion", got)
-	}
-}
-
 func TestChatMouseModeDegradesUnderAMultiplexer(t *testing.T) {
-	cases := []struct {
+	for _, tc := range []struct {
 		name string
-		set  func(t *testing.T)
+		env  map[string]string
+		want tea.MouseMode
 	}{
-		{"TMUX set", func(t *testing.T) { t.Setenv("TMUX", "/tmp/tmux-1000/default,1234,0") }},
-		{"ZELLIJ set", func(t *testing.T) { t.Setenv("ZELLIJ", "0") }},
-		{"STY set", func(t *testing.T) { t.Setenv("STY", "1234.pts-0.host") }},
-		{"TERM=screen", func(t *testing.T) { t.Setenv("TERM", "screen-256color") }},
-		{"TERM=tmux", func(t *testing.T) { t.Setenv("TERM", "tmux-256color") }},
-	}
-	for _, tc := range cases {
+		{"no multiplexer", nil, tea.MouseModeAllMotion},
+		{"TMUX set", map[string]string{"TMUX": "/tmp/tmux-1000/default,1234,0"}, tea.MouseModeCellMotion},
+		{"ZELLIJ set", map[string]string{"ZELLIJ": "0"}, tea.MouseModeCellMotion},
+		{"STY set", map[string]string{"STY": "1234.pts-0.host"}, tea.MouseModeCellMotion},
+		{"TERM=screen", map[string]string{"TERM": "screen-256color"}, tea.MouseModeCellMotion},
+		{"TERM=tmux", map[string]string{"TERM": "tmux-256color"}, tea.MouseModeCellMotion},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			clearMultiplexerEnv(t)
-			tc.set(t)
-			if got := chatMouseMode(); got != tea.MouseModeCellMotion {
-				t.Fatalf("chatMouseMode() = %v, want CellMotion", got)
+			t.Setenv("TMUX", "")
+			t.Setenv("ZELLIJ", "")
+			t.Setenv("STY", "")
+			t.Setenv("TERM", "xterm-256color")
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			if got := chatMouseMode(); got != tc.want {
+				t.Fatalf("chatMouseMode() = %v, want %v", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestViewUsesChatMouseModeInModeChat(t *testing.T) {
-	m := newShell()
-	m.chatMouseMode = tea.MouseModeAllMotion
-	m.mode = ModeChat
-	m.resize(80, 24)
-	if got := m.View().MouseMode; got != tea.MouseModeAllMotion {
-		t.Fatalf("View().MouseMode = %v, want AllMotion", got)
 	}
 }

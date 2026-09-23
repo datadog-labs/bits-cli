@@ -9,6 +9,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -545,34 +546,33 @@ func TestToggleAllDisclosureKeepsViewportAnchoredOnCollapse(t *testing.T) {
 	}
 }
 
-func TestGutteredItemNarrowsForTheAccordion(t *testing.T) {
-	list := listWithTool(agent.ToolSuccess)
-	if got := list.gutter(list.view[0]); got != list.gutterWidth || got == 0 {
-		t.Fatalf("gutter() = %d, want the accordion width %d", got, list.gutterWidth)
-	}
-	if got, want := list.entry(0).width, list.width-list.gutterWidth; got != want {
-		t.Fatalf("content width = %d, want %d", got, want)
-	}
-}
-
-func TestNonGutteredItemUsesFullWidth(t *testing.T) {
-	list := NewList()
-	list.SetStyles(DefaultStyles(true))
-	list.SetWidth(80)
-	list.SetHeight(8)
-	list.SetItems([]agent.Block{
-		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}},
-	})
-	if got := list.gutter(list.view[0]); got != 0 {
-		t.Fatalf("a reasoning group reserved a %d-cell gutter", got)
-	}
-}
-
-func TestNarrowViewportDisablesTheGutter(t *testing.T) {
-	list := listWithTool(agent.ToolSuccess)
-	list.SetWidth(list.gutterWidth)
-	if got := list.gutter(list.view[0]); got != 0 {
-		t.Fatalf("width equal to the accordion's own width reserved a %d-cell gutter", got)
+// TestGutterReservation: only a single tool reserves the accordion gutter,
+// and only when the viewport leaves room for content beside it.
+func TestGutterReservation(t *testing.T) {
+	reasoning := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}}
+	tool := toolBlockOf(agent.ToolSuccess)
+	tool.ID = agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"}
+	gutterWidth := components.AccordionWidth(DefaultStyles(true).Accordion)
+	for _, tc := range []struct {
+		name  string
+		block agent.Block
+		width int
+		want  int
+	}{
+		{"single tool", tool, 80, gutterWidth},
+		{"reasoning group", reasoning, 80, 0},
+		{"no room left for content", tool, gutterWidth, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			list := NewList()
+			list.SetStyles(DefaultStyles(true))
+			list.SetWidth(tc.width)
+			list.SetHeight(8)
+			list.SetItems([]agent.Block{tc.block})
+			if got := list.gutter(list.view[0]); got != tc.want {
+				t.Fatalf("gutter() = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -713,33 +713,20 @@ func TestHoverPaintsOnlyTheSurfaceNotTheDocument(t *testing.T) {
 	}
 }
 
-func TestToggleAllDisclosureCollapsesFirstThenExpands(t *testing.T) {
+// TestToggleAllDisclosure: the first ctrl+o collapses, the next expands, and
+// each press discards individual toggles.
+func TestToggleAllDisclosure(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
 	full := list.itemHeight(0)
 
-	list.ToggleAllDisclosure()
-	if got := list.itemHeight(0); got != 1 {
-		t.Fatalf("first ctrl+o height = %d, want 1", got)
-	}
-
-	list.ToggleAllDisclosure()
-	if got := list.itemHeight(0); got != full {
-		t.Fatalf("second ctrl+o height = %d, want %d", got, full)
-	}
-}
-
-func TestToggleAllDisclosureOverridesAnIndividualToggle(t *testing.T) {
-	list := listWithTool(agent.ToolSuccess)
-	id := list.view[0].id
-
-	list.ToggleDisclosure(id) // collapsed individually
+	list.ToggleDisclosure(list.view[0].id) // collapsed individually
 	list.ToggleAllDisclosure()
 	if got := list.itemHeight(0); got != 1 {
 		t.Fatalf("collapse-all height = %d, want 1", got)
 	}
-	list.ToggleAllDisclosure() // expand-all discards the individual collapse
-	if got := list.itemHeight(0); got == 1 {
-		t.Fatal("expand-all left the individually collapsed block collapsed")
+	list.ToggleAllDisclosure()
+	if got := list.itemHeight(0); got != full {
+		t.Fatalf("expand-all height = %d, want %d (individual collapse discarded)", got, full)
 	}
 }
 

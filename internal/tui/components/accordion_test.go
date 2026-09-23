@@ -8,22 +8,17 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
-func TestAccordionWidthIsStableAcrossStates(t *testing.T) {
+// TestAccordionRendersStateGlyphAtFixedWidth: toggling swaps the glyph but
+// never the width, so a header does not reflow.
+func TestAccordionRendersStateGlyphAtFixedWidth(t *testing.T) {
 	sty := styles.Default(true).Accordion
-	want := AccordionWidth(sty)
-	for _, expanded := range []bool{false, true} {
-		if got := ansi.StringWidth(Accordion(sty, expanded)); got != want {
-			t.Fatalf("expanded=%t rendered %d cells, want %d", expanded, got, want)
+	for expanded, glyph := range map[bool]string{true: sty.Expanded, false: sty.Collapsed} {
+		got := Accordion(sty, expanded)
+		if plain := ansi.Strip(got); plain != " "+glyph+" " {
+			t.Errorf("expanded=%t rendered %q, want %q", expanded, plain, " "+glyph+" ")
 		}
-	}
-}
-
-func TestAccordionGlyphFollowsDisclosureState(t *testing.T) {
-	sty := styles.Default(true).Accordion
-	if got := ansi.Strip(Accordion(sty, true)); got != " "+sty.Expanded+" " {
-		t.Fatalf("expanded glyph = %q, want %q", got, sty.Expanded)
-	}
-	if got := ansi.Strip(Accordion(sty, false)); got != " "+sty.Collapsed+" " {
-		t.Fatalf("collapsed glyph = %q, want %q", got, sty.Collapsed)
+		if w := ansi.StringWidth(got); w != AccordionWidth(sty) {
+			t.Errorf("expanded=%t rendered %d cells, want %d", expanded, w, AccordionWidth(sty))
+		}
 	}
 }
