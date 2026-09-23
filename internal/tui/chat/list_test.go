@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -768,5 +769,49 @@ func TestResetClearsDisclosureState(t *testing.T) {
 		if got := list.itemHeight(0); got != full {
 			t.Fatalf("after Reset height = %d, want the default expanded %d", got, full)
 		}
+	}
+}
+
+// TestHoverFollowsTheTailPinBeforeRender: a streamed append while following
+// moves content under a stationary pointer. Hit-testing runs before the next
+// render (pointer-shape reconciliation), so it must see the re-anchored tail.
+func TestHoverFollowsTheTailPinBeforeRender(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(3)
+	blocks := make([]agent.Block, 0, 4)
+	for i := range 4 {
+		block := toolBlockOf(agent.ToolSuccess)
+		block.ID = agent.BlockID{Scope: agent.ScopeTool, Key: fmt.Sprintf("call-%d", i)}
+		blocks = append(blocks, block)
+	}
+	list.SetItems(blocks[:3])
+	chevronRow := func() int {
+		for i, line := range strings.Split(list.Render(), "\n") {
+			if strings.ContainsAny(ansi.Strip(line), "▼▶") {
+				return i
+			}
+		}
+		t.Fatal("no chevron visible")
+		return -1
+	}
+	row := chevronRow()
+	list.SetPointerRow(row)
+	if !list.Hovered() {
+		t.Fatal("pointer over the header did not hover it")
+	}
+
+	// Streamed append of a one-line (header-only) tool: the tail pin shifts
+	// content up by an odd row count, so a detail row lands under the pointer.
+	blocks[3] = agent.Block{
+		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: "call-3"},
+		Kind: assistant.KindToolResult,
+		Tool: &agent.ToolBlock{Name: "list_monitors", Status: agent.ToolSuccess},
+	}
+	list.SetItems(blocks)
+	hovered := list.Hovered()
+	if want := chevronRow() == row; hovered != want {
+		t.Fatalf("Hovered() before render = %t, but the rendered row under the pointer is a header: %t", hovered, want)
 	}
 }

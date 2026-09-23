@@ -334,6 +334,7 @@ func (l *List) HeaderAt(y int) (agent.BlockID, bool) {
 	if y < 0 || y >= l.height {
 		return agent.BlockID{}, false
 	}
+	l.settle()
 	row := -l.offsetLine
 	for idx := l.offsetIdx; idx < len(l.view) && row <= y; idx++ {
 		e := l.entry(idx)
@@ -570,13 +571,19 @@ func (l *List) VisibleSurface() Surface {
 	return l.renderSurface(true)
 }
 
-func (l *List) renderSurface(withPosition bool) Surface {
-	// Self-heal the tail pin: streaming growth or a resize can leave the offset
-	// above the true bottom, so re-anchor here, the single render boundary.
+// settle self-heals the tail pin: streaming growth or a resize can leave the
+// offset above the true bottom. Rendering and hit-testing both call it, so a
+// hit test between an update and the next render sees the rows that render
+// will draw.
+func (l *List) settle() {
 	l.normalizeOffset()
 	if l.follow && !l.AtBottom() {
 		l.ScrollToBottom()
 	}
+}
+
+func (l *List) renderSurface(withPosition bool) Surface {
+	l.settle()
 
 	budget := max(l.height, 0)
 	lines := make([]string, 0, budget)

@@ -305,3 +305,22 @@ func TestCtrlCResetsPointerShapeBeforeQuitting(t *testing.T) {
 		t.Fatalf("last step of the ctrl+c sequence was not tea.Quit")
 	}
 }
+
+func TestResizeToTooSmallResetsPointerShape(t *testing.T) {
+	m := scrollableAccordionTestModel(t)
+	m.list.ScrollToTop()
+	row := visibleAccordionRow(t, m)
+	if _, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row}); rawSequence(cmd) != ansi.SetPointerShape("pointer") {
+		t.Fatal("hovering the row did not set the pointer shape")
+	}
+
+	// Only the height drops below the minimum, so the row under the pointer is
+	// still a transcript header; the resize hint replacing the view must win.
+	_, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: minimumChatHeight - 1})
+	if !m.chatViewTooSmall() || !m.list.Hovered() {
+		t.Fatal("fixture must be too small while the list still reports hover")
+	}
+	if got := rawSequence(cmd); got != ansi.SetPointerShape("default") {
+		t.Fatalf("resize to the too-small view did not reset the pointer shape: got %q", got)
+	}
+}

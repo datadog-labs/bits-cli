@@ -155,7 +155,7 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // only special-cases SGR and OSC 8, silently swallowing any other escape
 // sequence instead of writing it to the terminal.
 func (m *Model) reconcilePointerShape() tea.Cmd {
-	return m.setPointerHand(m.mode == ModeChat && m.list.Hovered())
+	return m.setPointerHand(m.mode == ModeChat && !m.chatViewTooSmall() && m.list.Hovered())
 }
 
 // setPointerHand writes the pointer shape only on a real change.
