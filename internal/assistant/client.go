@@ -501,7 +501,7 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 		}
 		var ar AssistantResponse
 		if err := json.Unmarshal(trimmed, &ar); err != nil {
-			return conversationID, fmt.Errorf("decode stream line: %w: %s", err, trimmed)
+			return conversationID, fmt.Errorf("decode stream line: %w: %s", err, rawSnippet(trimmed))
 		}
 		// In-band errors arrive on a 200 as a JSON:API error document
 		// ({"errors":[...]}) with no data; a normal line has no "errors".
