@@ -17,6 +17,7 @@ script whose built-ins emit exactly the wire output you ask for:
 
 ```text
 random()
+random(size=400000)
 load("fixtures/incident.star", "run"); run()
 say("# Title\n\n| a | b |\n| --- | --- |\n| 1 | 2 |")
 think("checking"); r = call("read_file", {"path": "go.mod"}); say("first line: " + r.output.splitlines()[0])
@@ -33,7 +34,7 @@ help()
 | --- | --- |
 | `load("file.star", "name", …)` | imports definitions/data from a local Starlark module |
 | `say(text)`, `think(text)` | streamed answer text or reasoning |
-| `random(seed=None)` | a pseudo-random answer: thinking, server tool calls, and Markdown |
+| `random(seed=None, size=None)` | a pseudo-random answer; `size` requests at least that many Markdown bytes |
 | `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_input=, at=, break_before_results=)` or `tool([(name, input, out), …])` | server tool calls, then their results |
 | `call(name, input, stream=, break_input=, at=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
 | `raw(content, results=, id=)` | any other wire content, decoded by the real decoder |
@@ -68,6 +69,8 @@ Notes:
   seed, the answer depends on the turn's position in the conversation and the
   call's position in the script, so successive turns differ while a fresh
   conversation replays the same sequence.
+- `random(size=400000)` keeps the normal answer shape while repeating Markdown
+  sections until the final answer reaches the requested byte size.
 - Statements may be separated by `;`, but `if`/`for` must start a new line
   (or use `a if cond else b`).
 - A prose message is not a script: it is answered with the syntax error and a

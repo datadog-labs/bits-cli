@@ -251,7 +251,8 @@ func (r *run) emitDeltas(id, input string) error {
 // counts replayed calls too.
 func builtinRandom(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var seed starlark.Value = starlark.None
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "seed?", &seed); err != nil {
+	var sizeValue starlark.Value = starlark.None
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "seed?", &seed, "size?", &sizeValue); err != nil {
 		return nil, err
 	}
 	r := runOf(thread)
@@ -274,12 +275,33 @@ func builtinRandom(thread *starlark.Thread, b *starlark.Builtin, args starlark.T
 	default:
 		return nil, fmt.Errorf("random: seed must be a string or an int, not %s", seed.Type())
 	}
+	size, err := randomSize(sizeValue)
+	if err != nil {
+		return nil, err
+	}
 	if !r.live() {
 		return starlark.None, nil
 	}
-	words, err := streamRandom(r.out, n)
+	words, err := streamRandom(r.out, n, size)
 	r.words += words
 	return starlark.None, emitErr(err)
+}
+
+const maxRandomSize = 16 << 20
+
+func randomSize(value starlark.Value) (int, error) {
+	if value == starlark.None {
+		return 0, nil
+	}
+	size, ok := value.(starlark.Int)
+	if !ok {
+		return 0, fmt.Errorf("random: size must be an int, not %s", value.Type())
+	}
+	n, ok := size.Int64()
+	if !ok || n <= 0 || n > maxRandomSize {
+		return 0, fmt.Errorf("random: size must be between 1 and %d bytes", maxRandomSize)
+	}
+	return int(n), nil
 }
 
 // builtinRaw emits one message whose content (and optional results) are
@@ -414,7 +436,7 @@ const helpText = "## Fake backend scripts\n\n" +
 	"| `load(\"file.star\", \"name\", ...)` | imports definitions/data from a deterministic local Starlark module |\n" +
 	"| `say(text)` | streamed answer text |\n" +
 	"| `think(text)` | streamed reasoning |\n" +
-	"| `random(seed=None)` | a pseudo-random answer; without a seed, one per turn |\n" +
+	"| `random(seed=None, size=None)` | a pseudo-random answer; `size` requests at least that many Markdown bytes |\n" +
 	"| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_input=, at=, break_before_results=)` or `tool([(name, input, out), ...])` | server tool calls, then results |\n" +
 	"| `call(name, input, stream=, break_input=, at=)` or `call([(name, input), ...])` | one round of client tool calls; returns results (`ok`, `status`, `title`, `output`) |\n" +
 	"| `raw(content, results=, id=)` | any other wire content |\n" +

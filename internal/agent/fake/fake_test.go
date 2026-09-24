@@ -246,6 +246,35 @@ func TestFinalAnswerIsMarkdown(t *testing.T) {
 	}
 }
 
+func TestRandomSize(t *testing.T) {
+	const size = 80_000
+	for _, script := range []string{`random(size=80000)`, `random("sized", size=80000)`} {
+		var answer string
+		for _, text := range markdownMessages(t, script) {
+			if strings.HasPrefix(text, "## ") {
+				answer = text
+				break
+			}
+		}
+		if len(answer) < size {
+			t.Fatalf("%s produced %d Markdown bytes, want at least %d", script, len(answer), size)
+		}
+	}
+}
+
+func TestRandomSizeValidation(t *testing.T) {
+	for _, script := range []string{`random(size=0)`, `random(size=-1)`, `random(size="large")`} {
+		messages := collect(t, script)
+		var output strings.Builder
+		for _, message := range messages {
+			output.WriteString(message[1])
+		}
+		if !strings.Contains(output.String(), "random: size") {
+			t.Fatalf("%s returned %v, want a size error", script, messages)
+		}
+	}
+}
+
 func TestStreamReassemblesToDoc(t *testing.T) {
 	// Token-by-token streaming must reassemble byte-identically to a valid doc:
 	// the final answer starts with a heading and ends with a newline.
