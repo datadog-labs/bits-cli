@@ -647,7 +647,7 @@ func TestLatestCopyableAssistantResponse(t *testing.T) {
 func TestCopyCommandWritesLatestAssistantResponseLocally(t *testing.T) {
 	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
 	m.editor.Focus()
-	m.blocks = []agent.Block{
+	m.transcript.Blocks = []agent.Block{
 		{Role: assistant.RoleUser, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "prompt"}},
 		{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "answer"}},
 	}
@@ -668,7 +668,7 @@ func TestCopyCommandWritesLatestAssistantResponseLocally(t *testing.T) {
 func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
 	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
 	m.editor.Focus()
-	m.blocks = []agent.Block{{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "previous answer"}}}
+	m.transcript.Blocks = []agent.Block{{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "previous answer"}}}
 	m.turnEvents = make(chan agent.Event)
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "/copy"})
@@ -684,7 +684,7 @@ func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
 
 func TestCopyCommandReportsNoCompletedAssistantResponse(t *testing.T) {
 	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
-	m.blocks = []agent.Block{
+	m.transcript.Blocks = []agent.Block{
 		{Role: assistant.RoleUser, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "prompt"}},
 		{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: false, Markdown: &assistant.MarkdownPayload{Content: "partial"}},
 	}

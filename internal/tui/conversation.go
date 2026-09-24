@@ -41,7 +41,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	// This makes any delayed Bubble Tea message from the prior domain harmless.
 	m.turnGen++
 	m.clearSelection()
-	m.blocks = nil
+	m.transcript = agent.TranscriptSnapshot{}
 	m.list.Reset()
 	m.convID = ""
 	m.usage = nil
@@ -204,7 +204,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 		return m.showNotice(n, 0)
 	}
 	m.finishConversationOperation()
-	m.blocks = append([]agent.Block(nil), msg.result.Blocks...)
+	m.transcript = agent.TranscriptSnapshot{Blocks: append([]agent.Block(nil), msg.result.Blocks...)}
 	m.convID = msg.result.ConversationID
 	m.usage = nil
 	m.chatPhase = chat.PhaseIdle

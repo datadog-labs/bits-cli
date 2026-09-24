@@ -304,7 +304,7 @@ func TestPageKeysDoNotMoveTheOffer(t *testing.T) {
 // same-mode early return in setMode would silently drop the requirement.
 func TestStartNewConversationBringsTheOfferBack(t *testing.T) {
 	m := resumeKeyModel(t)
-	m.blocks = []agent.Block{{
+	m.transcript.Blocks = []agent.Block{{
 		ID:       agent.BlockID{Scope: agent.ScopeLocal, Key: "a", Kind: assistant.KindText},
 		Kind:     assistant.KindText,
 		Complete: true,

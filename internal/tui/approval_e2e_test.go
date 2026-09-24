@@ -114,7 +114,7 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 				for model.turnEvents != nil {
 					msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
 					_, _ = model.Update(msg)
-					for _, block := range model.blocks {
+					for _, block := range model.transcript.Blocks {
 						if block.Markdown != nil && block.Markdown.Content == "Do" && !block.Complete {
 							sawPartial = true
 						}

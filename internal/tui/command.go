@@ -191,7 +191,7 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 // predictable and excludes styles, hidden reasoning, tools, and metadata. The
 // terminal owns the OSC 52 clipboard write, matching text selection behavior.
 func (m *Model) copyLatestAssistantResponse() tea.Cmd {
-	text, ok := latestCopyableAssistantResponse(m.blocks)
+	text, ok := latestCopyableAssistantResponse(m.transcript.Blocks)
 	if !ok {
 		return m.showNotice(notice(chat.NoticeWarn, nil, "No completed assistant response is available to copy."), 0)
 	}
