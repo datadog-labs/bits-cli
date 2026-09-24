@@ -560,7 +560,7 @@ func (c *Client) ConversationHistory(ctx context.Context, in ConversationHistory
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var out ConversationHistoryResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := decodeJSONBody(&out, resp.Body, maxHistoryBodyBytes); err != nil {
 		return nil, fmt.Errorf("decode history: %w", err)
 	}
 	return &out, nil
@@ -599,7 +599,7 @@ func (c *Client) CurrentUser(ctx context.Context) (CurrentUser, error) {
 			} `json:"attributes"`
 		} `json:"included"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&document); err != nil {
+	if err := decodeJSONBody(&document, resp.Body, maxResponseBodyBytes); err != nil {
 		return CurrentUser{}, fmt.Errorf("decode current user: %w", err)
 	}
 
@@ -631,7 +631,7 @@ func (c *Client) UserConversations(ctx context.Context) (*UserConversationsRespo
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var out UserConversationsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := decodeJSONBody(&out, resp.Body, maxResponseBodyBytes); err != nil {
 		return nil, fmt.Errorf("decode conversations: %w", err)
 	}
 	return &out, nil
@@ -647,7 +647,7 @@ func (c *Client) ListSkills(ctx context.Context) ([]Skill, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var out SkillsListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := decodeJSONBody(&out, resp.Body, maxResponseBodyBytes); err != nil {
 		return nil, fmt.Errorf("decode skills: %w", err)
 	}
 	return out.Data.Attributes.Skills, nil
@@ -661,7 +661,7 @@ func (c *Client) ExperimentalToolFlags(ctx context.Context) (map[string]bool, er
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var out ExperimentalToolFlagsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := decodeJSONBody(&out, resp.Body, maxResponseBodyBytes); err != nil {
 		return nil, fmt.Errorf("decode flags: %w", err)
 	}
 	return out.Data.Attributes.Flags, nil
@@ -713,7 +713,7 @@ func (c *Client) ShareConversation(ctx context.Context, in ShareConversationInpu
 			Attributes ConversationSummary `json:"attributes"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := decodeJSONBody(&out, resp.Body, maxResponseBodyBytes); err != nil {
 		return nil, fmt.Errorf("decode sharing response: %w", err)
 	}
 	return &out.Data.Attributes, nil
