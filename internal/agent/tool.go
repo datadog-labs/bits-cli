@@ -169,6 +169,15 @@ func (s *ToolSet) Definitions() []assistant.ClientTool {
 	return append([]assistant.ClientTool(nil), s.definitions...)
 }
 
+// Has reports whether name is registered as a client tool for this turn.
+func (s *ToolSet) Has(name string) bool {
+	if s == nil {
+		return false
+	}
+	_, ok := s.tools[name]
+	return ok
+}
+
 // PermissionsMode reports the non-secret permissions mode selected for this
 // tool set.
 func (s *ToolSet) PermissionsMode() PermissionsMode {
