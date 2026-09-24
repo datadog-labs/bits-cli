@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -236,8 +237,12 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 	results := make(chan callbackResult, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc(u.Path, func(w http.ResponseWriter, r *http.Request) {
+		if !validCallbackHost(r.Host, tcpAddr.Port) {
+			writeLoginError(w, http.StatusBadRequest, "The login callback was sent to an unexpected host. Return to the terminal and try again.")
+			return
+		}
 		query := r.URL.Query()
-		if query.Get("state") != wantState {
+		if subtle.ConstantTimeCompare([]byte(query.Get("state")), []byte(wantState)) != 1 {
 			// Ignore unsolicited localhost probes rather than letting them cancel
 			// the real browser flow. A matching state remains mandatory.
 			writeLoginError(w, http.StatusBadRequest, "OAuth state did not match. Return to the terminal and try again.")
@@ -285,6 +290,21 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 		}
 	}()
 	return &callbackListener{server: server, redirectURI: actualRedirectURI}, results, nil
+}
+
+// validCallbackHost reports whether host is 127.0.0.1 or localhost on the
+// listener's exact port. The listener binds tcp4, so the IPv6 loopback
+// literal cannot reach it and is rejected like any other host form.
+func validCallbackHost(host string, port int) bool {
+	hostname, portText, err := net.SplitHostPort(host)
+	if err != nil || portText != strconv.Itoa(port) {
+		return false
+	}
+	switch hostname {
+	case "127.0.0.1", "localhost":
+		return true
+	}
+	return false
 }
 
 type revocationCredential struct {
