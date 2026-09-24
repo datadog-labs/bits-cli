@@ -245,7 +245,9 @@ func (e *Engine) beginTurn(ctx context.Context, in TurnInput) turnOperation {
 	return turnOperation{events: events, completion: completion}
 }
 
-// StartTurn preserves the event-only API used by interactive surfaces.
+// StartTurn preserves the event-only API used by interactive surfaces. Callers
+// must continue draining the returned channel until it closes after cancelling
+// the turn context.
 func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
 	return e.beginTurn(ctx, in).events
 }
@@ -311,7 +313,14 @@ func (e *Engine) run(
 	generation uint64,
 ) {
 	completion := turnCompletion{}
+	turnStart := len(e.transcript.Blocks())
 	defer func() {
+		if ctx.Err() != nil && e.transcript.CancelUnfinishedTools(turnStart) {
+			// Cancellation makes send's context-aware select unavailable, but this
+			// terminal snapshot must not be dropped. It is sent after all queued
+			// events and callers drain the channel after cancellation.
+			out <- Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()}
+		}
 		if completion.Err == nil && !completion.Completed && ctx.Err() != nil {
 			completion.Err = ctx.Err()
 		}

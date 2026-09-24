@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
@@ -54,11 +56,11 @@ func errorResult(format string, args ...any) agent.ToolResult {
 
 // workspaceReadApproval returns the shared approval policy for the read-only editor tools.
 func workspaceReadApproval(root string) agent.ApprovalPolicy {
-	return func(_ agent.ToolCall) (agent.ApprovalRequirement, bool) {
+	return func(call agent.ToolCall) (agent.ApprovalRequirement, bool) {
 		return agent.ApprovalRequirement{
 			Key: agent.ApprovalKey{Tool: approvalKeyWorkspaceRead, Resource: root},
 			Prompt: agent.ApprovalPrompt{
-				Title:  "Share workspace files?",
+				Title:  workspaceApprovalTitle(call, "Share workspace files?"),
 				Detail: "Bits will read files in " + root + " and share the requested content with the assistant",
 			},
 		}, true
@@ -70,13 +72,44 @@ func workspaceReadApproval(root string) agent.ApprovalPolicy {
 // allow-session decision authorizes every write_file and edit_file for the
 // session.
 func workspaceWriteApproval(root string) agent.ApprovalPolicy {
-	return func(_ agent.ToolCall) (agent.ApprovalRequirement, bool) {
+	return func(call agent.ToolCall) (agent.ApprovalRequirement, bool) {
 		return agent.ApprovalRequirement{
 			Key: agent.ApprovalKey{Tool: approvalKeyWorkspaceWrite, Resource: root},
 			Prompt: agent.ApprovalPrompt{
-				Title:  "Modify workspace files?",
+				Title:  workspaceApprovalTitle(call, "Modify workspace files?"),
 				Detail: "Bits will create, overwrite, and edit files in " + root,
 			},
 		}, true
+	}
+}
+
+// Name the requested target without changing the workspace-wide session grant.
+// Handlers still validate the input; malformed requests retain a generic prompt.
+func workspaceApprovalTitle(call agent.ToolCall, fallback string) string {
+	var args spec.PathInput
+	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+		return fallback
+	}
+	if args.Path == "" {
+		switch call.Name {
+		case spec.ListFiles, spec.GrepFiles:
+			args.Path = "."
+		default:
+			return fallback
+		}
+	}
+	switch call.Name {
+	case spec.ReadFile:
+		return fmt.Sprintf("Read %q?", args.Path)
+	case spec.ListFiles:
+		return fmt.Sprintf("List files in %q?", args.Path)
+	case spec.GrepFiles:
+		return fmt.Sprintf("Search files in %q?", args.Path)
+	case spec.WriteFile:
+		return fmt.Sprintf("Create or overwrite %q?", args.Path)
+	case spec.EditFile:
+		return fmt.Sprintf("Edit %q?", args.Path)
+	default:
+		return fallback
 	}
 }

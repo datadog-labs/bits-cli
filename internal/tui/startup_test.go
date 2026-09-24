@@ -54,7 +54,7 @@ func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
 		t.Fatal("light terminal theme was lost during handoff")
 	}
 	chatView := root.View()
-	if !chatView.AltScreen || chatView.MouseMode != tea.MouseModeCellMotion {
+	if !chatView.AltScreen || chatView.MouseMode != root.chatMouseMode {
 		t.Fatalf("chat view alt=%t mouse=%v", chatView.AltScreen, chatView.MouseMode)
 	}
 

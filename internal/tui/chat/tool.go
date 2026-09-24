@@ -720,6 +720,13 @@ func renderRows(rows []string, width int, style lipgloss.Style, sty Styles) stri
 	return strings.Join(rows, "\n")
 }
 
+// statusGlyphWidth is the header's leading glyph plus its trailing space.
+// Every status glyph (spinner frame, •, ✓, ✗) is one cell wide, so this is
+// fixed rather than measured. List splices the accordion control after these
+// two cells so the glyph stays the leftmost thing on the row regardless of
+// disclosure state.
+const statusGlyphWidth = 2
+
 func renderToolHeader(tool *agent.ToolBlock, summary, suffix []summarySpan, width int, sty Styles, frame int) string {
 	state := lifecycleOf(tool)
 	glyph, glyphStyle := statusGlyph(state, sty, frame)
