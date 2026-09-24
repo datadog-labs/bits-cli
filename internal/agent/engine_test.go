@@ -143,7 +143,7 @@ func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T
 				Type: assistant.ContentToolCallStarted,
 				Tool: &assistant.ToolPayload{ToolCallID: "read-1", ToolName: "read_file", HasClientSide: test.known},
 			})}}
-			tools, err := NewToolSet(ModeAllowAll, Tool{
+			tools, err := NewToolSet(ModeSkipPermissions, Tool{
 				Definition: assistant.ClientTool{Name: "read_file"},
 				Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 			})
