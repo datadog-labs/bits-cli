@@ -263,6 +263,7 @@ func newShell() *Model {
 		resume:            resume{now: time.Now},
 		chatMouseMode:     chatMouseMode(),
 	}
+	m.editor.SetHistorySource(func() []string { return m.transcript.UserPrompts() })
 	m.applyStyles(m.styles)
 	return m
 }

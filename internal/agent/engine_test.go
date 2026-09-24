@@ -171,6 +171,36 @@ func TestSnapshotDerivesTranscriptViewState(t *testing.T) {
 	}
 }
 
+func TestSnapshotUserPrompts(t *testing.T) {
+	user := func(text string) Block {
+		return Block{Role: assistant.RoleUser, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: text}}
+	}
+	answer := Block{Role: assistant.RoleAssistant, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "answer"}}
+	for _, test := range []struct {
+		name   string
+		blocks []Block
+		want   []string
+	}{
+		{name: "empty transcript"},
+		{
+			name:   "user text in order, repeats kept",
+			blocks: []Block{user("a"), answer, user("b\nc"), user("b\nc")},
+			want:   []string{"a", "b\nc", "b\nc"},
+		},
+		{
+			name:   "blank and body-less user blocks skipped",
+			blocks: []Block{user(" "), {Role: assistant.RoleUser, Kind: assistant.KindText}, user("kept")},
+			want:   []string{"kept"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := (TranscriptSnapshot{Blocks: test.blocks}).UserPrompts(); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("UserPrompts() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func kinds(evs []Event) []EventKind {
 	ks := make([]EventKind, len(evs))
 	for i, e := range evs {

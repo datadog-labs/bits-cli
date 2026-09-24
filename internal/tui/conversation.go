@@ -30,8 +30,9 @@ func (m *Model) requestNewConversation() tea.Cmd {
 }
 
 // startNewConversation resets only conversation-scoped state. It deliberately
-// leaves the editor object (and therefore local input history), styles, backend
-// client, and process-wide configuration intact.
+// leaves the editor object (and its prompt-history source), styles, backend
+// client, and process-wide configuration intact; resetting the editor only
+// ends any history browsing.
 func (m *Model) startNewConversation() tea.Cmd {
 	if err := m.engine.NewConversation(); err != nil {
 		return m.showNotice(noticeForError("could not start a new conversation", err), 0)
