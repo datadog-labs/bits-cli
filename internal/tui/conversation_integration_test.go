@@ -145,7 +145,7 @@ func TestResumeListErrorRetryEmptyAndCancelPreserveChat(t *testing.T) {
 	backend := newResumeBackend()
 	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
 	m.resize(50, 12)
-	m.blocks = []agent.Block{textBlock("same-message-id", "OLD")}
+	m.transcript.Blocks = []agent.Block{textBlock("same-message-id", "OLD")}
 	m.syncTranscript()
 	_ = m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "draft survives"})
@@ -164,8 +164,8 @@ func TestResumeListErrorRetryEmptyAndCancelPreserveChat(t *testing.T) {
 		t.Fatalf("retry state = %v", m.picker.State())
 	}
 	_, _ = m.Update(conversationview.CancelledMsg{})
-	if m.mode != ModeChat || m.picker != nil || m.convID != "old" || m.editor.Value() != "draft survives" || len(m.blocks) != 1 {
-		t.Fatalf("cancel changed chat: mode=%v picker=%v id=%q draft=%q blocks=%d", m.mode, m.picker != nil, m.convID, m.editor.Value(), len(m.blocks))
+	if m.mode != ModeChat || m.picker != nil || m.convID != "old" || m.editor.Value() != "draft survives" || len(m.transcript.Blocks) != 1 {
+		t.Fatalf("cancel changed chat: mode=%v picker=%v id=%q draft=%q blocks=%d", m.mode, m.picker != nil, m.convID, m.editor.Value(), len(m.transcript.Blocks))
 	}
 }
 
@@ -298,7 +298,7 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
 	m := New(engine)
 	m.resize(50, 12)
-	m.blocks = []agent.Block{textBlock("same-message-id", "OLD-CACHED")}
+	m.transcript.Blocks = []agent.Block{textBlock("same-message-id", "OLD-CACHED")}
 	m.syncTranscript()
 	_ = m.list.Render() // populate the old conversation's render cache
 
@@ -310,8 +310,8 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	backend.histories <- resumeHistoryReply{err: errors.New("network down")}
 	_, wait = m.Update(conversationview.SelectedMsg{Conversation: summary})
 	_, _ = m.Update(runResumeCmd(t, wait))
-	if m.picker.State() != conversationview.StateError || m.convID != "old" || engine.ConversationID() != "old" || m.blocks[0].Markdown.Content != "OLD-CACHED" {
-		t.Fatalf("failed load mutated state: picker=%v root=%q engine=%q blocks=%+v", m.picker.State(), m.convID, engine.ConversationID(), m.blocks)
+	if m.picker.State() != conversationview.StateError || m.convID != "old" || engine.ConversationID() != "old" || m.transcript.Blocks[0].Markdown.Content != "OLD-CACHED" {
+		t.Fatalf("failed load mutated state: picker=%v root=%q engine=%q blocks=%+v", m.picker.State(), m.convID, engine.ConversationID(), m.transcript.Blocks)
 	}
 
 	backend.histories <- resumeHistoryReply{response: history(
@@ -323,8 +323,8 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	if m.mode != ModeChat || m.picker != nil || m.convID != resumeConversationID || engine.ConversationID() != resumeConversationID {
 		t.Fatalf("success state: mode=%v picker=%v root=%q engine=%q", m.mode, m.picker != nil, m.convID, engine.ConversationID())
 	}
-	if len(m.blocks) != 1 || m.blocks[0].Markdown.Content != "NEW-TRANSCRIPT" {
-		t.Fatalf("new blocks = %+v", m.blocks)
+	if len(m.transcript.Blocks) != 1 || m.transcript.Blocks[0].Markdown.Content != "NEW-TRANSCRIPT" {
+		t.Fatalf("new blocks = %+v", m.transcript.Blocks)
 	}
 	if rendered := m.list.Render(); !strings.Contains(rendered, "NEW-TRANSCRIPT") || strings.Contains(rendered, "OLD-CACHED") {
 		t.Fatalf("cross-conversation render cache leaked: %q", rendered)
@@ -375,7 +375,7 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 	_, _ = m.submit()
 	// The backend waits right after its last delta, so once the TUI shows
 	// the partial input, the turn is parked mid-input.
-	for !hasPartialTool(m.blocks, "write_file", "bravo") {
+	for !hasPartialTool(m.transcript.Blocks, "write_file", "bravo") {
 		if m.turnEvents == nil {
 			t.Fatal("turn ended before the write_file input was half-streamed")
 		}
@@ -385,7 +385,7 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	drainConversationRemote(t, m)
 
-	tool := findToolBlock(m.blocks, "write_file")
+	tool := findToolBlock(m.transcript.Blocks, "write_file")
 	if tool == nil || !tool.Cancelled || tool.Status == agent.ToolRunning {
 		t.Fatalf("write_file block = %+v, want cancelled and not running", tool)
 	}
@@ -399,8 +399,8 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 	if m.chatPhase != chat.PhaseIdle || m.turnEvents != nil {
 		t.Fatalf("follow-up turn did not complete: phase=%v active=%t", m.chatPhase, m.turnEvents != nil)
 	}
-	if !hasTextBlock(m.blocks, "still alive") {
-		t.Fatalf("follow-up transcript = %+v, want normal answer", m.blocks)
+	if !hasTextBlock(m.transcript.Blocks, "still alive") {
+		t.Fatalf("follow-up transcript = %+v, want normal answer", m.transcript.Blocks)
 	}
 }
 

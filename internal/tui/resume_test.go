@@ -272,6 +272,39 @@ func TestArrowKeysIgnoredWhenTheOfferIsHidden(t *testing.T) {
 	}
 }
 
+// Once the transcript has prompts the offer is gone and Up recalls the newest
+// one, wherever the editor owns input.
+func TestArrowKeysRecallPromptsOutsideTheOffer(t *testing.T) {
+	user := func(text string) agent.Block {
+		return agent.Block{Role: assistant.RoleUser, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: text}}
+	}
+	for _, test := range []struct {
+		name  string
+		setup func(*Model)
+		want  string
+	}{
+		{name: "idle", want: "second"},
+		{name: "a running turn", setup: func(m *Model) { m.turnEvents = make(chan agent.Event) }, want: "second"},
+		{name: "a pending approval owns the keys", setup: func(m *Model) {
+			m.pendingApprovals = []agent.Block{animToolBlock(agent.ToolAwaitingApproval)}
+		}, want: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := resumeKeyModel(t)
+			m.transcript.Blocks = []agent.Block{user("first"), user("second")}
+			m.syncTranscript()
+			if test.setup != nil {
+				test.setup(m)
+			}
+			m.reconcileFocus() // as every Update does before the user can type
+			m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+			if got := m.editor.Value(); got != test.want {
+				t.Fatalf("editor value = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 // Enter resumes the selected conversation rather than submitting.
 func TestEnterResumesTheSelectedConversation(t *testing.T) {
 	m := resumeKeyModel(t)
@@ -304,7 +337,7 @@ func TestPageKeysDoNotMoveTheOffer(t *testing.T) {
 // same-mode early return in setMode would silently drop the requirement.
 func TestStartNewConversationBringsTheOfferBack(t *testing.T) {
 	m := resumeKeyModel(t)
-	m.blocks = []agent.Block{{
+	m.transcript.Blocks = []agent.Block{{
 		ID:       agent.BlockID{Scope: agent.ScopeLocal, Key: "a", Kind: assistant.KindText},
 		Kind:     assistant.KindText,
 		Complete: true,

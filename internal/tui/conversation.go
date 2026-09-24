@@ -30,8 +30,9 @@ func (m *Model) requestNewConversation() tea.Cmd {
 }
 
 // startNewConversation resets only conversation-scoped state. It deliberately
-// leaves the editor object (and therefore local input history), styles, backend
-// client, and process-wide configuration intact.
+// leaves the editor object (and its prompt-history source), styles, backend
+// client, and process-wide configuration intact; resetting the editor only
+// ends any history browsing.
 func (m *Model) startNewConversation() tea.Cmd {
 	if err := m.engine.NewConversation(); err != nil {
 		return m.showNotice(noticeForError("could not start a new conversation", err), 0)
@@ -41,7 +42,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	// This makes any delayed Bubble Tea message from the prior domain harmless.
 	m.turnGen++
 	m.clearSelection()
-	m.blocks = nil
+	m.transcript = agent.TranscriptSnapshot{}
 	m.list.Reset()
 	m.convID = ""
 	m.usage = nil
@@ -204,7 +205,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 		return m.showNotice(n, 0)
 	}
 	m.finishConversationOperation()
-	m.blocks = append([]agent.Block(nil), msg.result.Blocks...)
+	m.transcript = agent.TranscriptSnapshot{Blocks: append([]agent.Block(nil), msg.result.Blocks...)}
 	m.convID = msg.result.ConversationID
 	m.usage = nil
 	m.chatPhase = chat.PhaseIdle

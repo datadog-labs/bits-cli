@@ -144,10 +144,10 @@ func (m *Model) transcriptHeight() int {
 // showResume gates the offer on an idle, empty transcript, an empty composer,
 // a non-empty fetch, and room for at least one row.
 func (m *Model) showResume() bool {
-	// turnEvents, not just m.blocks: a submitted turn empties the composer and
-	// publishes no block until its first event, and resuming during it would
+	// turnEvents, not just the transcript: a submitted turn empties the composer
+	// and publishes no block until its first event, and resuming during it would
 	// hit the engine gate.
-	if len(m.blocks) != 0 || m.turnEvents != nil || m.resume.empty() || m.editor.Value() != "" {
+	if len(m.transcript.Blocks) != 0 || m.turnEvents != nil || m.resume.empty() || m.editor.Value() != "" {
 		return false
 	}
 	if !m.showSplashPanel() {

@@ -27,7 +27,7 @@ func animModel(status agent.ToolStatus) *Model {
 func animModelWithBlock(block agent.Block) *Model {
 	m := newShell()
 	m.mode = ModeChat
-	m.blocks = []agent.Block{block}
+	m.transcript.Blocks = []agent.Block{block}
 	m.turnEvents = make(chan agent.Event)
 	m.resize(80, 24)
 	m.syncTranscript()
@@ -167,7 +167,7 @@ func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.resize(80, 24)
-	m.blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
+	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
 	m.turnEvents = make(chan agent.Event)
 	m.pendingNew = true
@@ -177,7 +177,7 @@ func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
 	if m.animClock.armed || m.animTool.active || m.animBorderSweep.active {
 		t.Fatal("pending /new left animations active")
 	}
-	if m.list.HasAnimated() || len(m.blocks) != 0 {
+	if m.list.HasAnimated() || len(m.transcript.Blocks) != 0 {
 		t.Fatal("pending /new did not clear stale running transcript")
 	}
 }
@@ -186,7 +186,7 @@ func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.resize(80, 24)
-	m.blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
+	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
 	m.turnEvents = make(chan agent.Event)
 	m.syncAnimations()
@@ -205,7 +205,7 @@ func TestConversationSwitchWithPersistedRunningBlockStaysDisarmed(t *testing.T) 
 	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.resize(80, 24)
-	m.blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
+	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
 	m.turnEvents = make(chan agent.Event)
 	m.syncAnimations()

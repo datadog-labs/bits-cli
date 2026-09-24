@@ -850,7 +850,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
 	case agent.EventTranscript:
-		m.blocks = ev.Transcript.Blocks
+		m.transcript = ev.Transcript
 		m.updatePendingApprovals(ev.Transcript.PendingApprovals())
 		if ev.Transcript.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
@@ -929,12 +929,12 @@ func (m *Model) layoutTranscript() {
 	m.list.SetHeader(m.headerView())
 }
 
-// syncTranscript rebuilds presentation metadata only after m.blocks changes.
+// syncTranscript rebuilds presentation metadata only after m.transcript changes.
 // Editor, cursor, resize, theme, and mode updates need layoutTranscript only.
 func (m *Model) syncTranscript() {
 	if m.mode == ModeTermInit {
 		return
 	}
 	m.layoutTranscript()
-	m.list.SetItems(m.blocks)
+	m.list.SetItems(m.transcript.Blocks)
 }

@@ -1064,3 +1064,151 @@ func TestCompletionBeforeEntityUpdatesExistingAttachmentSpan(t *testing.T) {
 		t.Fatalf("attachment after completion and ordinary edit = %#v", got)
 	}
 }
+
+// historyStep is one input: a key name ("up", "ctrl+p", "left", …), "type:x"
+// for typed text, "set:x" for Editor.SetValue, "reset" for a submit-like
+// Editor.Reset, or "blur".
+func applyHistoryStep(e *Editor, step string) {
+	switch {
+	case step == "reset":
+		e.Reset()
+	case step == "blur":
+		e.Blur()
+	case strings.HasPrefix(step, "set:"):
+		e.SetValue(strings.TrimPrefix(step, "set:"))
+	case strings.HasPrefix(step, "type:"):
+		e.Update(tea.PasteMsg{Content: strings.TrimPrefix(step, "type:")})
+	default:
+		e.Update(historyKeyMsg(step))
+	}
+}
+
+func historyKeyMsg(name string) tea.KeyPressMsg {
+	switch name {
+	case "up":
+		return tea.KeyPressMsg{Code: tea.KeyUp}
+	case "down":
+		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "left":
+		return tea.KeyPressMsg{Code: tea.KeyLeft}
+	case "right":
+		return tea.KeyPressMsg{Code: tea.KeyRight}
+	case "end":
+		return tea.KeyPressMsg{Code: tea.KeyEnd}
+	case "ctrl+p":
+		return tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}
+	case "ctrl+n":
+		return tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl}
+	}
+	panic("unknown key " + name)
+}
+
+func TestPromptHistory(t *testing.T) {
+	three := []string{"first", "second", "third"}
+	for _, test := range []struct {
+		name    string
+		entries []string
+		steps   []string
+		want    string
+	}{
+		{name: "no source entries leaves up to the textarea", steps: []string{"up"}, want: ""},
+		{name: "up from empty loads the newest", entries: three, steps: []string{"up"}, want: "third"},
+		{name: "up walks older", entries: three, steps: []string{"up", "up"}, want: "second"},
+		{name: "up at the oldest is a no-op", entries: three, steps: []string{"up", "up", "up", "up"}, want: "first"},
+		{name: "down walks newer", entries: three, steps: []string{"up", "up", "up", "down"}, want: "second"},
+		{name: "down past the newest empties the prompt", entries: three, steps: []string{"up", "down"}, want: ""},
+		{name: "up after leaving via down re-enters at the newest", entries: three, steps: []string{"up", "up", "down", "down", "up"}, want: "third"},
+		{name: "down from an empty prompt does nothing", entries: three, steps: []string{"down"}, want: ""},
+		{name: "ctrl+p and ctrl+n navigate", entries: three, steps: []string{"ctrl+p", "ctrl+p", "ctrl+n"}, want: "third"},
+		{name: "repeated entries are kept", entries: []string{"a", "same", "same"}, steps: []string{"up", "up", "up"}, want: "a"},
+		{name: "a multi-line entry takes one keypress each way", entries: []string{"x", "one\ntwo\nthree", "y"}, steps: []string{"up", "up", "up"}, want: "x"},
+		{name: "down leaves a multi-line entry in one keypress", entries: []string{"one\ntwo\nthree", "y"}, steps: []string{"up", "up", "down"}, want: "y"},
+		{name: "a draft never enters history", entries: three, steps: []string{"type:draft", "up"}, want: "draft"},
+		{name: "typing leaves history", entries: three, steps: []string{"up", "type:!", "up"}, want: "third!"},
+		{name: "a cursor move leaves history", entries: three, steps: []string{"up", "left", "right", "up"}, want: "third"},
+		{name: "a cursor key that does not move keeps history", entries: three, steps: []string{"up", "end", "up"}, want: "second"},
+		{name: "an entry the textarea sanitizes keeps history", entries: []string{"x", "a\tb\r\nc"}, steps: []string{"up", "end", "up"}, want: "x"},
+		{name: "a blurred editor ignores up", entries: three, steps: []string{"blur", "up"}, want: ""},
+		{name: "set value leaves history", entries: three, steps: []string{"up", "set:third", "up"}, want: "third"},
+		{name: "reset leaves history", entries: three, steps: []string{"up", "up", "reset", "up"}, want: "third"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			e := New()
+			e.Focus()
+			if test.entries != nil {
+				e.SetHistorySource(func() []string { return test.entries })
+			}
+			for _, step := range test.steps {
+				applyHistoryStep(e, step)
+			}
+			if got := e.Value(); got != test.want {
+				t.Fatalf("value = %q, want %q", got, test.want)
+			}
+			if e.history.active() && e.cursorOffset() != len([]rune(e.Value())) {
+				t.Fatalf("cursor at %d in history mode, want the end of %q", e.cursorOffset(), e.Value())
+			}
+		})
+	}
+}
+
+// TestPromptHistoryRecallDoesNotTriggerCompletion covers recalled text whose
+// cursor sits on a completion trigger: nothing may open or start a search.
+func TestPromptHistoryRecallDoesNotTriggerCompletion(t *testing.T) {
+	for _, entry := range []string{"/help", "check @web-store"} {
+		t.Run(entry, func(t *testing.T) {
+			e := New()
+			e.Focus()
+			e.SetHistorySource(func() []string { return []string{entry} })
+			e.Update(historyKeyMsg("up"))
+			// End keeps the cursor in place but recomputes the menu like any
+			// later input would.
+			e.Update(historyKeyMsg("end"))
+			if e.Value() != entry {
+				t.Fatalf("value = %q, want %q", e.Value(), entry)
+			}
+			if e.MenuOpen() {
+				t.Fatal("recall opened the completion menu")
+			}
+			if query, ok := e.ActiveEntityQuery(); ok {
+				t.Fatalf("recall started an entity search for %q", query)
+			}
+		})
+	}
+}
+
+// TestPromptHistorySnapshotsOnEntry pins that a transcript growing while
+// browsing does not shift the recalled position.
+func TestPromptHistorySnapshotsOnEntry(t *testing.T) {
+	entries := []string{"first", "second"}
+	e := New()
+	e.Focus()
+	e.SetHistorySource(func() []string { return entries })
+	e.Update(historyKeyMsg("up"))
+	entries = append(entries, "streamed meanwhile")
+	e.Update(historyKeyMsg("up"))
+	if got := e.Value(); got != "first" {
+		t.Fatalf("value = %q, want %q", got, "first")
+	}
+}
+
+// TestPromptHistoryTallRecallShowsItsEnd pins E14: a recall taller than the
+// visible rows scrolls to its end, where the cursor is.
+func TestPromptHistoryTallRecallShowsItsEnd(t *testing.T) {
+	lines := make([]string, 3*maxHeight)
+	for i := range lines {
+		lines[i] = "line " + strconv.Itoa(i)
+	}
+	e := New()
+	e.SetWidth(80)
+	e.Focus()
+	e.SetHistorySource(func() []string { return []string{strings.Join(lines, "\n")} })
+	e.Update(historyKeyMsg("up"))
+	view := ansi.Strip(e.View())
+	visible := map[string]bool{}
+	for row := range strings.SplitSeq(view, "\n") {
+		visible[strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(row), "›"))] = true
+	}
+	if !visible[lines[len(lines)-1]] || visible[lines[0]] {
+		t.Fatalf("recalled view does not show the end of the prompt:\n%s", view)
+	}
+}

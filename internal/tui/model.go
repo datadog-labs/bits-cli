@@ -97,8 +97,8 @@ type Model struct {
 	startupPending    bool
 	startupErr        error
 
-	// blocks is the latest snapshot of the engine's aggregated transcript
-	blocks []agent.Block
+	// transcript is the latest snapshot of the engine's aggregated transcript.
+	transcript agent.TranscriptSnapshot
 
 	// Active turn: turnEvents is the running turn's event channel (nil when
 	// idle); cancelTurn interrupts it.
@@ -263,6 +263,7 @@ func newShell() *Model {
 		resume:            resume{now: time.Now},
 		chatMouseMode:     chatMouseMode(),
 	}
+	m.editor.SetHistorySource(func() []string { return m.transcript.UserPrompts() })
 	m.applyStyles(m.styles)
 	return m
 }
