@@ -154,6 +154,10 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 				return m, m.showNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response to finish before using /copy."), 0)
 			}
 			if definition.id == commandPermissions {
+				if argument == "" {
+					// A bare /permissions only reports the mode.
+					break
+				}
 				return m, m.showNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response and any permission request to finish before switching permissions."), 0)
 			}
 			return m, m.showNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active turn: /%s", name), 0)

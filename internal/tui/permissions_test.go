@@ -134,6 +134,38 @@ func TestPermissionsRejectedDuringActiveTurn(t *testing.T) {
 	}
 }
 
+func TestPermissionsQueryAllowedDuringActiveTurn(t *testing.T) {
+	m, _ := newPermissionsModel(t, agent.ModeManual)
+	m.turnEvents = make(chan agent.Event)
+	m.chatPhase = chat.PhaseStreaming
+	_, _ = m.dispatchCommand("permissions", "")
+	if m.notice.Level != chat.NoticeInfo || !strings.Contains(m.notice.Text, "Permissions: manual (this session).") {
+		t.Fatalf("notice = %#v, want the current-mode notice", m.notice)
+	}
+	if m.chatPhase != chat.PhaseStreaming || m.turnEvents == nil {
+		t.Fatal("the query disturbed the active turn")
+	}
+	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
+		t.Fatalf("mode = %q, want manual after the query", got)
+	}
+}
+
+func TestPermissionsSwitchRejectedDuringActiveTurn(t *testing.T) {
+	m, _ := newPermissionsModel(t, agent.ModeManual)
+	m.turnEvents = make(chan agent.Event)
+	m.chatPhase = chat.PhaseStreaming
+	_, _ = m.dispatchCommand("permissions", "manual")
+	if m.notice.Level != chat.NoticeWarn || !strings.Contains(m.notice.Text, "Wait for the assistant response") {
+		t.Fatalf("notice = %#v, want the active-turn rejection", m.notice)
+	}
+	if m.chatPhase != chat.PhaseStreaming {
+		t.Fatal("the rejected switch disturbed the active turn")
+	}
+	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
+		t.Fatalf("mode = %q, want manual after a rejected switch", got)
+	}
+}
+
 func TestPermissionsRejectedWhileApprovalsPending(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	m.pendingApprovals = []agent.Block{{
