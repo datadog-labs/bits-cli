@@ -129,6 +129,47 @@ func drain(ch <-chan Event) []Event {
 	return evs
 }
 
+func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		known bool
+		want  bool
+	}{
+		{name: "omitted marker", want: true},
+		{name: "explicit server marker", known: true, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &scriptBackend{msgs: []assistant.Message{assistant.AssistantMessage("started", assistant.Content{
+				Type: assistant.ContentToolCallStarted,
+				Tool: &assistant.ToolPayload{ToolCallID: "read-1", ToolName: "read_file", HasClientSide: test.known},
+			})}}
+			tools, err := NewToolSet(ModeAllowAll, Tool{
+				Definition: assistant.ClientTool{Name: "read_file"},
+				Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			events := drain(New(backend, assistant.SendOptions{}).StartTurn(context.Background(), TurnInput{Message: "read", Tools: tools}))
+			var got *ToolBlock
+			for _, event := range events {
+				if event.Kind != EventTranscript {
+					continue
+				}
+				for _, block := range event.Transcript.Blocks {
+					if block.Tool != nil && block.ToolCallID() == "read-1" {
+						value := *block.Tool
+						got = &value
+					}
+				}
+			}
+			if got == nil || got.IsClientSide != test.want {
+				t.Fatalf("streamed tool = %+v, want IsClientSide=%v", got, test.want)
+			}
+		})
+	}
+}
+
 func stateBlock(event Event, id string) (Block, bool) {
 	if event.Kind != EventTranscript {
 		return Block{}, false

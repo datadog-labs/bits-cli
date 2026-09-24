@@ -425,7 +425,11 @@ type ToolPayload struct {
 	Metadata     *ToolMetadata
 	ToolName     string // tool_call_started
 	IsClientSide bool   // tool_call_started
-	PartialJSON  string // tool_call_input_delta
+	// HasClientSide distinguishes an omitted wire field from explicit false.
+	// Streaming starts can be normalized from the registered client tools only
+	// when the provider did not state an identity.
+	HasClientSide bool
+	PartialJSON   string // tool_call_input_delta
 	// Detail is the nested display markdown ("content" on the wire), shown in the
 	// UI beside the call. Always a markdown fragment; nil when absent. The data
 	// passed back to the model lives in Metadata.
@@ -580,7 +584,7 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 		Status            string            `json:"status"`
 		Metadata          json.RawMessage   `json:"metadata"`
 		ToolName          string            `json:"tool_name"`
-		IsClientSide      bool              `json:"is_client_side"`
+		IsClientSide      *bool             `json:"is_client_side"`
 		PartialJSON       string            `json:"partial_json"`
 		WidgetDef         *WidgetDefinition `json:"widget_def"`
 		TileDef           json.RawMessage   `json:"tile_def"`
@@ -616,12 +620,15 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 		c.Stop = &StopPayload{Content: jsonString(a.Content)}
 	case ContentToolCall, ContentClientToolCall, ContentToolCallStarted, ContentToolCallInputDelta, ContentToolResponse, ContentClientToolResponse:
 		tp := &ToolPayload{
-			ToolCallID:   a.ToolCallID,
-			Title:        a.Title,
-			Status:       a.Status,
-			ToolName:     a.ToolName,
-			IsClientSide: a.IsClientSide,
-			PartialJSON:  a.PartialJSON,
+			ToolCallID:    a.ToolCallID,
+			Title:         a.Title,
+			Status:        a.Status,
+			ToolName:      a.ToolName,
+			HasClientSide: a.IsClientSide != nil,
+			PartialJSON:   a.PartialJSON,
+		}
+		if a.IsClientSide != nil {
+			tp.IsClientSide = *a.IsClientSide
 		}
 		if len(a.Metadata) > 0 {
 			_ = json.Unmarshal(a.Metadata, &tp.Metadata)

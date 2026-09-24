@@ -62,6 +62,14 @@ func (t *Transcript) MarkToolRunning(id string) (Block, bool) {
 	})
 }
 
+// MarkToolClientSide records client identity inferred from the registered tool
+// set when a provider omitted it from a streamed start event.
+func (t *Transcript) MarkToolClientSide(id string) (Block, bool) {
+	return t.markTool(id, func(tool *ToolBlock) {
+		tool.IsClientSide = true
+	})
+}
+
 // SetToolRenderState replaces the opaque local state carried by a tool block.
 // markTool copies the ToolBlock before swapping it, preserving snapshots held
 // by event consumers.

@@ -397,6 +397,15 @@ func (e *Engine) run(
 			}
 			b, ok := e.transcript.AppendMessage(msg)
 			if ok {
+				// Some providers omit is_client_side on a streamed start, then
+				// supply it only implicitly with the final client_tool_call. The
+				// registered tool set is authoritative for this turn, so recover
+				// that missing identity without overriding an explicit false server
+				// marker.
+				if msg.Content.Type == assistant.ContentToolCallStarted && msg.Content.Tool != nil &&
+					!msg.Content.Tool.HasClientSide && tools.Has(msg.Content.Tool.ToolName) {
+					e.transcript.MarkToolClientSide(msg.Content.Tool.ToolCallID)
+				}
 				// Reducers run in the engine goroutine immediately after the wire
 				// update is folded. This ordering lets the emitted snapshot carry
 				// the reducer's state and keeps filesystem-aware reducers ahead of
