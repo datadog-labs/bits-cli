@@ -192,7 +192,7 @@ func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
 	m.syncAnimations()
 	m.Update(turnClosedMsg{generation: m.turnGen})
 
-	m.dispatchCommand("new")
+	m.dispatchCommand("new", "")
 	// dispatchCommand is normally reached from Update; run the centralized
 	// reconciliation that Update performs after dispatch.
 	m.Update(struct{}{})
@@ -211,7 +211,7 @@ func TestConversationSwitchWithPersistedRunningBlockStaysDisarmed(t *testing.T) 
 	m.syncAnimations()
 	m.Update(turnClosedMsg{generation: m.turnGen})
 
-	m.dispatchCommand("resume")
+	m.dispatchCommand("resume", "")
 	if m.mode != ModeConversations {
 		t.Fatal("test setup did not open conversation picker")
 	}

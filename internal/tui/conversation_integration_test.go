@@ -364,7 +364,7 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ws.Close() })
-	toolSet, err := agent.NewToolSet(agent.ModeAllowAll, tools.NewClientTools(ws)...)
+	toolSet, err := agent.NewToolSet(agent.ModeSkipPermissions, tools.NewClientTools(ws)...)
 	if err != nil {
 		t.Fatal(err)
 	}

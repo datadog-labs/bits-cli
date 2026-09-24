@@ -15,7 +15,7 @@ func TestEditorApprovalIdentifiesTargetAndPreservesWorkspaceGrant(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ws.Close() })
-	set, err := agent.NewToolSet(agent.ModeGated, NewEditorTools(ws)...)
+	set, err := agent.NewToolSet(agent.ModeManual, NewEditorTools(ws)...)
 	if err != nil {
 		t.Fatal(err)
 	}

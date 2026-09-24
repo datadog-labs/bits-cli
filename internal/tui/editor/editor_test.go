@@ -547,7 +547,7 @@ func TestAutocompleteDetailsUseAlignedColumns(t *testing.T) {
 	e.ta.SetCursorColumn(1)
 	e.recompute()
 	slash := ansi.Strip(e.MenuView())
-	if !strings.Contains(slash, "/help        show help") {
+	if !strings.Contains(slash, "/help           show help") {
 		t.Fatalf("slash menu does not align label and detail columns: %q", slash)
 	}
 	for lineNo, line := range strings.Split(e.MenuView(), "\n") {

@@ -38,7 +38,7 @@ type Runtime struct {
 	ConversationID      string
 	Profile             string
 	Model               string
-	ApprovalMode        string
+	PermissionsMode     string
 	Phase               string
 	Connectivity        Connectivity
 	Usage               *assistant.Usage
@@ -189,7 +189,7 @@ func (m *Model) rebuild() {
 		{label: "Conversation", value: available(m.runtime.ConversationID, "no conversation has been created")},
 		{label: "Profile", value: available(m.runtime.Profile, "assistant profile is not known")},
 		{label: "Model", value: model},
-		{label: "Approval", value: available(m.runtime.ApprovalMode, "approval mode is not known")},
+		{label: "Permissions", value: available(m.runtime.PermissionsMode, "permissions mode is not known")},
 		{label: "Turn", value: available(m.runtime.Phase, "turn state is not known")},
 		{label: "Connectivity", value: available(string(m.runtime.Connectivity), "no backend activity has been observed")},
 		{label: "Context tokens", value: usage(m.runtime.Usage)},

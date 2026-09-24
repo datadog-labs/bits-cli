@@ -20,7 +20,7 @@ import (
 
 // workspaceTools returns the real client tools over a temp workspace holding
 // go.mod and a file containing TODO.
-func workspaceTools(t *testing.T, mode agent.ApprovalMode) *agent.ToolSet {
+func workspaceTools(t *testing.T, mode agent.PermissionsMode) *agent.ToolSet {
 	t.Helper()
 	dir := t.TempDir()
 	for name, content := range map[string]string{"go.mod": "module demo\n", "notes.txt": "TODO: ship\n"} {
@@ -88,7 +88,7 @@ func toolBlock(t *testing.T, blocks []agent.Block, name string) *agent.ToolBlock
 func TestParallelClientCalls(t *testing.T) {
 	engine := agent.New(&Fake{}, assistant.SendOptions{})
 	script := `rs = call([("list_files", {"path": "."}), ("read_file", {"path": "go.mod"}), ("grep_files", {"pattern": "TODO"})]); say(str(["go.mod" in rs[0].output, "module demo" in rs[1].output, "notes.txt" in rs[2].output]))`
-	result, rounds := runTurn(t, engine, script, workspaceTools(t, agent.ModeAllowAll), agent.DenyContinue, nil)
+	result, rounds := runTurn(t, engine, script, workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
 	if rounds != 2 {
 		t.Fatalf("backend rounds = %d, want 2", rounds)
 	}
@@ -108,7 +108,7 @@ func TestServerGateWithClientCall(t *testing.T) {
 
 	t.Run("deny continue", func(t *testing.T) {
 		engine := agent.New(&Fake{}, assistant.SendOptions{})
-		result, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeGated), agent.DenyContinue, decide)
+		result, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeManual), agent.DenyContinue, decide)
 		if got := texts(result.Blocks); !slices.Equal(got, []string{"not created"}) {
 			t.Fatalf("answer = %q", got)
 		}
@@ -118,7 +118,7 @@ func TestServerGateWithClientCall(t *testing.T) {
 	})
 	t.Run("deny stop", func(t *testing.T) {
 		engine := agent.New(&Fake{}, assistant.SendOptions{})
-		result, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeGated), agent.DenyStop, decide)
+		result, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeManual), agent.DenyStop, decide)
 		if !result.Denied || len(texts(result.Blocks)) != 0 {
 			t.Fatalf("denied = %t, answers = %q", result.Denied, texts(result.Blocks))
 		}
@@ -130,7 +130,7 @@ func TestServerGateWithClientCall(t *testing.T) {
 
 func TestKitchen(t *testing.T) {
 	engine := agent.New(&Fake{}, assistant.SendOptions{})
-	result, _ := runTurn(t, engine, "kitchen()", workspaceTools(t, agent.ModeAllowAll), agent.DenyContinue, nil)
+	result, _ := runTurn(t, engine, "kitchen()", workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
 	kinds := map[assistant.ContentKind]bool{}
 	styles := chat.DefaultStyles(true)
 	for _, block := range result.Blocks {

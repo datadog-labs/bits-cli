@@ -68,6 +68,7 @@ var commands = []struct {
 	{"resume", nil, "resume a conversation"},
 	{"settings", nil, "open assistant settings"},
 	{"status", nil, "show session status"},
+	{"permissions", nil, "show or switch the permissions mode"},
 	{"copy", nil, "copy the latest assistant response"},
 	{"web", nil, "open this conversation in Datadog"},
 	{"logout", nil, "sign out from your Datadog account"},

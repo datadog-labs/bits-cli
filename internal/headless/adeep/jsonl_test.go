@@ -76,7 +76,7 @@ func serverResultMsg(msgID, callID, name, output string) assistant.Message {
 	return assistant.AssistantMessage(msgID, assistant.ToolResultContent(callID, name, assistant.ToolStatusSuccess, output))
 }
 
-func clientToolSet(t *testing.T, mode agent.ApprovalMode) *agent.ToolSet {
+func clientToolSet(t *testing.T, mode agent.PermissionsMode) *agent.ToolSet {
 	t.Helper()
 	tools, err := agent.NewToolSet(mode,
 		agent.Tool{
@@ -376,7 +376,7 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	var out bytes.Buffer
 
-	result, err := runDelivery(t, engine, clientToolSet(t, agent.ModeAllowAll), &out)
+	result, err := runDelivery(t, engine, clientToolSet(t, agent.ModeSkipPermissions), &out)
 	if err != nil || result.Outcome != agent.TurnOutcomeCompleted {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
@@ -444,7 +444,7 @@ func TestDeliveryDenialsAndSiblingResultAreCorrelated(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	var out bytes.Buffer
 
-	result, err := runDelivery(t, engine, clientToolSet(t, agent.ModeGated), &out)
+	result, err := runDelivery(t, engine, clientToolSet(t, agent.ModeManual), &out)
 	if err != nil || !result.Denied {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
@@ -484,7 +484,7 @@ func TestDeliveryPendingCallAndExactMalformedPayloads(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	var out bytes.Buffer
 
-	result, err := runDelivery(t, engine, clientToolSet(t, agent.ModeAllowAll), &out)
+	result, err := runDelivery(t, engine, clientToolSet(t, agent.ModeSkipPermissions), &out)
 	if !errors.Is(err, backendErr) || result.Outcome != agent.TurnOutcomeFailed {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
@@ -585,7 +585,7 @@ func TestDeliveryWriterFailureUsesConsumerFailure(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	result, err := engine.RunTurn(context.Background(), agent.TurnInput{
 		Message: "investigate",
-		Tools:   clientToolSet(t, agent.ModeAllowAll),
+		Tools:   clientToolSet(t, agent.ModeSkipPermissions),
 	}, delivery.Consume)
 	if !errors.Is(err, writerErr) || result.Outcome != agent.TurnOutcomeConsumerFailed {
 		t.Fatalf("result/error = %+v, %v", result, err)
@@ -740,7 +740,7 @@ func TestDeliveryReportsServerGateAndCancelledSiblings(t *testing.T) {
 	}
 	result, err := engine.RunTurn(t.Context(), agent.TurnInput{
 		Message: "write something",
-		Tools:   clientToolSet(t, agent.ModeGated),
+		Tools:   clientToolSet(t, agent.ModeManual),
 	}, consume)
 	if finishErr := delivery.Finish(headless.Finish{Result: result, Err: err}); finishErr != nil {
 		t.Fatal(finishErr)

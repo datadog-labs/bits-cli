@@ -159,12 +159,12 @@ func TestExecCommandApprovalShowsFinalCommandAndEffectiveWorkdir(t *testing.T) {
 	if strings.Contains(requirement.Prompt.Detail, "go test ./...") {
 		t.Fatalf("approval detail duplicates command input: %s", requirement.Prompt.Detail)
 	}
-	allowAll, err := agent.NewToolSet(agent.ModeAllowAll, tool)
+	skipPermissions, err := agent.NewToolSet(agent.ModeSkipPermissions, tool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, needed := allowAll.Approval(agent.ToolCall{Name: spec.ExecCommand, Input: `{"cmd":"true"}`}); needed {
-		t.Fatal("allow-all did not suppress the exec command approval gate")
+	if _, needed := skipPermissions.Approval(agent.ToolCall{Name: spec.ExecCommand, Input: `{"cmd":"true"}`}); needed {
+		t.Fatal("skip-permissions did not suppress the exec command approval gate")
 	}
 }
 
@@ -289,14 +289,14 @@ func (b *execApprovalBackend) Send(_ context.Context, message any, _ assistant.S
 	return "conversation-1", emit(response)
 }
 
-func TestExecCommandGatedEngineDoesNotLaunchBeforeApproval(t *testing.T) {
+func TestExecCommandManualEngineDoesNotLaunchBeforeApproval(t *testing.T) {
 	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Reason: exectool.ExecSucceeded}}
 	backend := &execApprovalBackend{
 		t:       t,
 		preview: `{"cmd":"touch speculative"}`,
 		input:   `{"cmd":"true"}`,
 	}
-	set, err := agent.NewToolSet(agent.ModeGated, newExecCommandTool(t.TempDir(), runner))
+	set, err := agent.NewToolSet(agent.ModeManual, newExecCommandTool(t.TempDir(), runner))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestExecCommandGatedEngineDoesNotLaunchBeforeApproval(t *testing.T) {
 func TestExecCommandDenialNeverLaunches(t *testing.T) {
 	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Reason: exectool.ExecSucceeded}}
 	backend := &execApprovalBackend{t: t, input: `{"cmd":"true"}`}
-	set, err := agent.NewToolSet(agent.ModeGated, newExecCommandTool(t.TempDir(), runner))
+	set, err := agent.NewToolSet(agent.ModeManual, newExecCommandTool(t.TempDir(), runner))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestExecCommandSessionGrantIsScopedToExactLaunchTuple(t *testing.T) {
 		t:      t,
 		inputs: []string{`{"cmd":"printf first"}`, `{"cmd":"printf second"}`},
 	}
-	set, err := agent.NewToolSet(agent.ModeGated, newExecCommandTool(t.TempDir(), runner))
+	set, err := agent.NewToolSet(agent.ModeManual, newExecCommandTool(t.TempDir(), runner))
 	if err != nil {
 		t.Fatal(err)
 	}

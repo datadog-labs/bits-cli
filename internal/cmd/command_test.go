@@ -54,36 +54,36 @@ func TestCommandDispatch(t *testing.T) {
 	}{
 		{
 			name:  "chat",
-			chats: []ChatOptions{{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}},
+			chats: []ChatOptions{{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual}},
 		},
 		{
 			name:  "chat conversation",
 			args:  []string{"--conversation", "conversation-1"},
-			chats: []ChatOptions{{ConversationID: "conversation-1", AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}},
+			chats: []ChatOptions{{ConversationID: "conversation-1", AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual}},
 		},
 		{
 			name:  "chat conversation equals",
 			args:  []string{"--conversation=conversation-2"},
-			chats: []ChatOptions{{ConversationID: "conversation-2", AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}},
+			chats: []ChatOptions{{ConversationID: "conversation-2", AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual}},
 		},
 		{
 			name: "explicit API key mode",
 			args: []string{"--auth", "api-key", "--site=https://api.datadoghq.eu"},
 			chats: []ChatOptions{{
-				AuthMode:     auth.ModeAPIKey,
-				Site:         "https://api.datadoghq.eu",
-				ApprovalMode: agent.ModeAllowAll,
+				AuthMode:        auth.ModeAPIKey,
+				Site:            "https://api.datadoghq.eu",
+				PermissionsMode: agent.ModeManual,
 			}},
 		},
 		{
-			name:  "approval defaults to allow-all",
-			args:  []string{"--approval=allow-all"},
-			chats: []ChatOptions{{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}},
+			name:  "permissions default manual",
+			args:  []string{"--permissions=manual"},
+			chats: []ChatOptions{{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual}},
 		},
 		{
-			name:  "gated approval mode",
-			args:  []string{"--approval", "gated"},
-			chats: []ChatOptions{{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeGated}},
+			name:  "skip-permissions opt-in",
+			args:  []string{"--permissions", "skip-permissions"},
+			chats: []ChatOptions{{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeSkipPermissions}},
 		},
 		{
 			name:   "login defaults",
@@ -115,15 +115,15 @@ func TestCommandDispatch(t *testing.T) {
 
 func TestCommandTreesDoNotShareFlagState(t *testing.T) {
 	recorder := &commandRecorder{}
-	if _, _, err := executeForTest(t, []string{"--auth", "api-key", "--site", "api.datadoghq.eu", "--approval", "gated"}, recorder); err != nil {
+	if _, _, err := executeForTest(t, []string{"--auth", "api-key", "--site", "api.datadoghq.eu", "--permissions", "skip-permissions"}, recorder); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := executeForTest(t, nil, recorder); err != nil {
 		t.Fatal(err)
 	}
 	want := []ChatOptions{
-		{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.eu", ApprovalMode: agent.ModeGated},
-		{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll},
+		{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.eu", PermissionsMode: agent.ModeSkipPermissions},
+		{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 	}
 	if !reflect.DeepEqual(recorder.chats, want) {
 		t.Fatalf("chat options = %#v, want %#v", recorder.chats, want)
@@ -142,7 +142,7 @@ func TestCommandHelp(t *testing.T) {
 			args: []string{"-h"},
 			want: []string{
 				"Datadog Assistant in your terminal", "Available Commands:",
-				"login", "logout", "--auth", "auto or api-key", "--approval", "allow-all or gated", "--site",
+				"login", "logout", "--auth", "auto or api-key", "--permissions", "manual or skip-permissions", "--site",
 				"--conversation", "--help",
 			},
 			doNotWant: []string{"completion", "--client-id"},
@@ -150,7 +150,7 @@ func TestCommandHelp(t *testing.T) {
 		{
 			name: "root long",
 			args: []string{"--help"},
-			want: []string{"Available Commands:", "login", "logout", "--auth", "--approval", "--site"},
+			want: []string{"Available Commands:", "login", "logout", "--auth", "--permissions", "--site"},
 		},
 		{
 			name: "help login",
@@ -216,9 +216,12 @@ func TestCommandRejectsInvalidInputWithoutInvokingActions(t *testing.T) {
 		{name: "root auth flag on login", args: []string{"login", "--auth", "api-key"}, wantErr: "unknown flag: --auth"},
 		{name: "root flag on login", args: []string{"login", "--conversation", "conversation-1"}, wantErr: "unknown flag: --conversation"},
 		{name: "invalid authentication mode", args: []string{"--auth", "oauth"}, wantErr: `invalid authentication mode "oauth"; expected auto or api-key`},
-		{name: "invalid approval mode lists valid modes", args: []string{"--approval", "yes"}, wantErr: `invalid approval mode "yes"; expected allow-all or gated`},
-		{name: "approval flag on login", args: []string{"login", "--approval", "gated"}, wantErr: "unknown flag: --approval"},
-		{name: "single dash approval", args: []string{"-approval=gated"}, wantErr: "unknown shorthand flag: 'a'"},
+		{name: "invalid permissions mode lists valid modes", args: []string{"--permissions", "yes"}, wantErr: `invalid permissions mode "yes"; expected manual or skip-permissions`},
+		{name: "gated value rejected", args: []string{"--permissions", "gated"}, wantErr: `invalid permissions mode "gated"; expected manual or skip-permissions`},
+		{name: "allow-all value rejected", args: []string{"--permissions", "allow-all"}, wantErr: `invalid permissions mode "allow-all"; expected manual or skip-permissions`},
+		{name: "removed approval flag is unknown", args: []string{"--approval", "gated"}, wantErr: "unknown flag: --approval"},
+		{name: "permissions flag on login", args: []string{"login", "--permissions", "manual"}, wantErr: "unknown flag: --permissions"},
+		{name: "single dash permissions", args: []string{"-permissions=manual"}, wantErr: "unknown shorthand flag: 'p'"},
 		{name: "API key mode without site", args: []string{"--auth", "api-key"}, wantErr: "--auth api-key requires --site"},
 		{name: "API key mode with empty site", args: []string{"--auth", "api-key", "--site", " "}, wantErr: "--auth api-key requires --site"},
 		{name: "site in automatic mode", args: []string{"--site", "app.datadoghq.eu"}, wantErr: "--site requires --auth api-key"},

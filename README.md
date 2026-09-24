@@ -7,8 +7,8 @@ Bits CLI is a native terminal client for Datadog Assistant.
 Run `bits` to open chat. Process-level long flags use conventional double-dash syntax; `-h` is the only shorthand:
 
 ```sh
-bits [--conversation ID]
-bits --auth api-key --site API_SITE [--conversation ID]
+bits [--permissions MODE] [--conversation ID]
+bits --auth api-key --site API_SITE [--permissions MODE] [--conversation ID]
 bits run --prompt TEXT --delivery adeep [--model MODEL] [flags]
 bits login [--site SITE] [--client-id ID]
 bits logout
@@ -22,6 +22,7 @@ Use `bits --help` for the complete command list or `bits help login` for command
 | `/new`, `/clear` | Start a new conversation. |
 | `/resume` | Resume an existing conversation. |
 | `/status` | Show the current session status. |
+| `/permissions` | Show or switch the permissions mode for this session. |
 | `/web` | Open the active conversation in the Datadog web app. |
 | `/settings` | Open Assistant settings in the Datadog web app. |
 | `/logout` | Sign out from your Datadog account and exit Bits. |
@@ -34,18 +35,36 @@ inserted as typed mentions such as `@dashboard:"Test Dashboard"` and sent as
 structured context for the next turn. Editing or deleting the mention removes
 that entity from the structured context. File mentions remain plain prompt text.
 
+## Permissions
+
+Interactive `bits` defaults to `manual`: tools that can change your system or
+workspace — such as `exec_command`, `write_file`, and `edit_file` — pause with
+a permission panel before running. Run `bits --permissions skip-permissions`
+to run those tools without asking.
+
+Inside a session, `/permissions` shows the current mode, and
+`/permissions manual` or `/permissions skip-permissions` switches it for the
+rest of the session. The switch is never persisted: the next launch starts
+from the flag's default (`manual`). Switching is rejected while a turn or a
+permission request is active, and only typed input can change the mode — the
+assistant cannot switch it for you. Session-wide "allow" grants you gave
+earlier stay valid when you switch back to `manual`.
+
+`bits run` has no interactive approver, so it always runs in skip-permissions
+mode and has no permissions flag.
+
 ## Noninteractive run
 
 `bits run` executes exactly one assistant turn without a TUI or interactive login. It writes only versioned JSONL to stdout; diagnostics go to stderr:
 
 ```sh
 BITS_FAKE_BACKEND=1 bits run --prompt 'random()' --delivery adeep
-bits run --prompt "What changed?" --delivery adeep --auth api-key --site https://api.datadoghq.com --approval allow-all
+bits run --prompt "What changed?" --delivery adeep --auth api-key --site https://api.datadoghq.com
 ```
 
 `--prompt` is required and literal: positional and stdin prompts are not supported. The initial and only delivery is `adeep`, which emits `bits.delivery.adeep` v1 run/round lifecycle, correlated tool calls and results, usage, conversation updates, and one terminal record. Assistant Markdown appears only as `run.finished.response`. Without a working OAuth session, `run` fails fast with a `bits login` hint.
 
-Exit statuses are `0` for a completed turn, `1` for startup/runtime/delivery failure, `2` for command or flag misuse, and `3` when at least one approval gate was denied even though the backend could adjust and finish. In `--approval gated` mode there is no interactive approver, so gates are denied and returned to the model as error tool responses. `--approval allow-all` is the default.
+Exit statuses are `0` for a completed turn, `1` for startup/runtime/delivery failure, `2` for command or flag misuse, and `3` when at least one approval gate was denied even though the backend could adjust and finish. On the headless surface a denial can only come from a malformed server approval request, which is denied and returned to the model as an error tool response.
 
 `bits --version` prints the module version when available, otherwise `dev` with the short commit recorded in the build.
 

@@ -68,7 +68,7 @@ func runRunWithStore(ctx context.Context, opts cmd.RunOptions, store auth.Creden
 	}
 	defer func() { _ = workspace.Close() }()
 	clientTools := tools.NewClientTools(workspace)
-	toolSet, err := agent.NewToolSet(opts.ApprovalMode, clientTools...)
+	toolSet, err := agent.NewToolSet(opts.PermissionsMode, clientTools...)
 	if err != nil {
 		return err
 	}
@@ -102,32 +102,7 @@ func runEngineTurn(ctx context.Context, engine *agent.Engine, tools *agent.ToolS
 	if err := delivery.Start(headless.Start{StartedAt: time.Now(), RequestedModel: opts.Model}); err != nil {
 		return err
 	}
-
-	// A headless gated run has no interactive approver. Deny each pending gate
-	// and continue so the backend can adjust before the terminal response.
-	// Snapshots repeat every still-pending gate until the engine processes the
-	// deny, so decide each tool call once to avoid overflowing the command queue.
-	denied := make(map[string]struct{})
-	consume := func(event agent.Event) error {
-		if err := delivery.Consume(event); err != nil {
-			return err
-		}
-		if event.Kind == agent.EventTranscript {
-			for _, block := range event.Transcript.PendingApprovals() {
-				id := block.ToolCallID()
-				if _, done := denied[id]; done {
-					continue
-				}
-				if err := autoDenyApproval(engine.Decide, block); err != nil {
-					return err
-				}
-				denied[id] = struct{}{}
-			}
-		}
-		return nil
-	}
-
-	result, err := engine.RunTurn(ctx, agent.TurnInput{Message: opts.Prompt, Tools: tools, OnDeny: agent.DenyContinue}, consume) // no-dd-sa:datadog/go-promptinjection -- opts.Prompt is intentionally sent as the user's message for this one turn; it is never used as a system instruction
+	result, err := engine.RunTurn(ctx, agent.TurnInput{Message: opts.Prompt, Tools: tools, OnDeny: agent.DenyContinue}, delivery.Consume) // no-dd-sa:datadog/go-promptinjection -- opts.Prompt is intentionally sent as the user's message for this one turn; it is never used as a system instruction
 	finishErr := delivery.Finish(headless.Finish{EndedAt: time.Now(), Result: result, Err: err})
 
 	switch headless.ClassifyTurn(result) {
@@ -137,23 +112,13 @@ func runEngineTurn(ctx context.Context, engine *agent.Engine, tools *agent.ToolS
 		if finishErr != nil {
 			return finishErr
 		}
-		return &cmd.ExitError{Code: cmd.ExitApprovalDenied, Err: errors.New("an approval gate was denied; the turn finished with the backend's adjusted answer")}
+		return &cmd.ExitError{Code: cmd.ExitApprovalDenied, Err: errors.New("a server approval gate was denied; the turn finished with the backend's adjusted answer")}
 	default:
 		if err != nil {
 			return err
 		}
 		return finishErr
 	}
-}
-
-func autoDenyApproval(decide func(string, agent.ApprovalDecision) bool, block agent.Block) error {
-	if block.Tool == nil || block.Tool.Status != agent.ToolAwaitingApproval {
-		return nil
-	}
-	if !decide(block.ToolCallID(), agent.ApprovalDeny) {
-		return fmt.Errorf("failed to auto-deny approval gate for tool call %s: command queue full", block.ToolCallID())
-	}
-	return nil
 }
 
 func runLogin(ctx context.Context, opts cmd.LoginOptions) error {
@@ -253,7 +218,7 @@ func startupModel(ctx context.Context, opts cmd.ChatOptions, workspace *workspac
 
 func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace) (*tui.Model, error) {
 	clientTools := tools.NewClientTools(workspace)
-	toolSet, err := agent.NewToolSet(opts.ApprovalMode, clientTools...)
+	toolSet, err := agent.NewToolSet(opts.PermissionsMode, clientTools...)
 	if err != nil {
 		return nil, err
 	}

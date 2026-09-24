@@ -38,7 +38,7 @@ func TestConversationRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	f := &Fake{}
 	engine := agent.New(f, assistant.SendOptions{})
-	set := workspaceTools(t, agent.ModeAllowAll)
+	set := workspaceTools(t, agent.ModeSkipPermissions)
 	runTurn(t, engine, "random()", set, agent.DenyContinue, nil)
 	result, _ := runTurn(t, engine, `r = call("read_file", {"path": "go.mod"}); say(r.output)`, set, agent.DenyContinue, nil)
 	id := result.ConversationID

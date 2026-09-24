@@ -18,10 +18,10 @@ import (
 // ChatOptions carries the user-supplied root command flags resolved before
 // chat starts.
 type ChatOptions struct {
-	ConversationID string
-	AuthMode       auth.Mode
-	Site           string
-	ApprovalMode   agent.ApprovalMode
+	ConversationID  string
+	AuthMode        auth.Mode
+	Site            string
+	PermissionsMode agent.PermissionsMode
 }
 
 // RunOptions carries the shared execution flags plus one-turn run options.
@@ -86,9 +86,9 @@ func Execute(ctx context.Context, args []string, actions Actions, stdout, stderr
 }
 
 func newRootCommand(actions Actions) *cobra.Command {
-	opts := ChatOptions{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}
+	opts := ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual}
 	var authMode string
-	var approvalMode string
+	var permissionsMode string
 	// Keep root.Args nil so Cobra can identify unknown commands, suggest close
 	// matches, and reject unknown help topics during command discovery. The
 	// RunE check handles arguments after a -- terminator.
@@ -106,7 +106,7 @@ func newRootCommand(actions Actions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			approval, err := parseApprovalMode(approvalMode)
+			permissions, err := parsePermissionsMode(permissionsMode)
 			if err != nil {
 				return err
 			}
@@ -114,7 +114,7 @@ func newRootCommand(actions Actions) *cobra.Command {
 				return err
 			}
 			opts.AuthMode = mode
-			opts.ApprovalMode = approval
+			opts.PermissionsMode = permissions
 			return actions.Chat(command.Context(), opts)
 		},
 	}
@@ -123,7 +123,7 @@ func newRootCommand(actions Actions) *cobra.Command {
 		return fmt.Errorf("%w\nRun '%s --help' for usage", err, command.CommandPath())
 	})
 	root.Flags().StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
-	root.Flags().StringVar(&approvalMode, "approval", string(agent.ModeAllowAll), "approval mode: allow-all or gated")
+	root.Flags().StringVar(&permissionsMode, "permissions", string(agent.ModeManual), "permissions mode: manual or skip-permissions")
 	root.Flags().StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
 	root.Flags().StringVar(
 		&opts.ConversationID,
@@ -171,13 +171,13 @@ func parseAuthenticationMode(raw string) (auth.Mode, error) {
 	}
 }
 
-func parseApprovalMode(raw string) (agent.ApprovalMode, error) {
-	mode := agent.ApprovalMode(raw)
+func parsePermissionsMode(raw string) (agent.PermissionsMode, error) {
+	mode := agent.PermissionsMode(raw)
 	switch mode {
-	case agent.ModeAllowAll, agent.ModeGated:
+	case agent.ModeManual, agent.ModeSkipPermissions:
 		return mode, nil
 	default:
-		return "", fmt.Errorf("invalid approval mode %q; expected allow-all or gated", raw)
+		return "", fmt.Errorf("invalid permissions mode %q; expected manual or skip-permissions", raw)
 	}
 }
 

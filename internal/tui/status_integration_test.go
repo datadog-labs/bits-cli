@@ -60,7 +60,7 @@ func newStatusModelWithBackend(t *testing.T, backend agent.Backend) *Model {
 
 func newStatusModelAt(t *testing.T, root string, backend agent.Backend) *Model {
 	t.Helper()
-	tools, err := agent.NewToolSet(agent.ModeGated)
+	tools, err := agent.NewToolSet(agent.ModeManual)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestSubmitStatusIsLocalAndLoadsFreshWorkspace(t *testing.T) {
 	runStatusLoad(t, m, command)
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{
-		"https://api.us3.datadoghq.com", "oauth · authenticated", "cli", "model-x", "gated",
+		"https://api.us3.datadoghq.com", "oauth · authenticated", "cli", "model-x", "manual",
 		"Bits User · Bits Staging",
 		"Workspace", "Directory", "Repository", filepath.Base(repo), "main", "clean",
 	} {
@@ -130,7 +130,7 @@ func TestSubmitStatusIsLocalAndLoadsFreshWorkspace(t *testing.T) {
 
 	m.closeStatus()
 	runStatusGit(t, repo, "switch", "-c", "fresh-branch")
-	_, command = m.dispatchCommand("status")
+	_, command = m.dispatchCommand("status", "")
 	runStatusLoad(t, m, command)
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "fresh-branch") {
 		t.Fatalf("reopened status did not load a fresh workspace snapshot:\n%s", view)
@@ -163,7 +163,7 @@ func TestStatusDuringActiveTurnPreservesTurnAndTracksObservedState(t *testing.T)
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "draft survives"})
 
-	_, load := m.dispatchCommand("status")
+	_, load := m.dispatchCommand("status", "")
 	if load == nil || m.mode != ModeStatus || m.turnEvents != turn || ctx.Err() != nil {
 		t.Fatalf("opening status changed active turn: load=%v mode=%v turn=%v cancelled=%v", load != nil, m.mode, m.turnEvents == turn, ctx.Err() != nil)
 	}
@@ -232,7 +232,7 @@ func TestStatusExplainsMissingProfilePermissionWithoutRenderingServerError(t *te
 	m := newStatusModelWithBackend(t, backend)
 	m.resize(96, 40)
 
-	_, command := m.dispatchCommand("status")
+	_, command := m.dispatchCommand("status", "")
 	runStatusLoad(t, m, command)
 	view := ansi.Strip(m.View().Content)
 	if !strings.Contains(view, "unavailable — current login does not grant profile access") {
@@ -254,7 +254,7 @@ func TestStatusMarksUnauthorizedIdentityLookupAsAuthenticationFailure(t *testing
 	m := newStatusModelWithBackend(t, backend)
 	m.resize(96, 40)
 
-	_, command := m.dispatchCommand("status")
+	_, command := m.dispatchCommand("status", "")
 	runStatusLoad(t, m, command)
 	view := ansi.Strip(m.View().Content)
 	if !strings.Contains(view, "oauth · authentication failed") {
@@ -273,7 +273,7 @@ func TestActiveTurnEventCannotClearNewerIdentityAuthenticationFailure(t *testing
 	m.turnEvents = make(chan agent.Event)
 	m.chatPhase = chat.PhaseStreaming
 
-	_, command := m.dispatchCommand("status")
+	_, command := m.dispatchCommand("status", "")
 	runStatusLoad(t, m, command)
 	_, _ = m.Update(turnEventMsg{generation: 7, ev: agent.Event{Kind: agent.EventUsage}})
 	if got := m.statusRuntime().AuthenticationState; got != "authentication failed" {
@@ -315,7 +315,7 @@ func TestStatusReopenCancelsAndIgnoresStaleIdentity(t *testing.T) {
 	m := newStatusModelWithBackend(t, backend)
 	m.resize(96, 40)
 
-	_, firstLoad := m.dispatchCommand("status")
+	_, firstLoad := m.dispatchCommand("status", "")
 	firstBatch := statusBatch(t, firstLoad)
 	firstResult := make(chan tea.Msg, 1)
 	go func() { firstResult <- firstBatch[1]() }()
@@ -326,7 +326,7 @@ func TestStatusReopenCancelsAndIgnoresStaleIdentity(t *testing.T) {
 	}
 
 	m.closeStatus()
-	_, secondLoad := m.dispatchCommand("status")
+	_, secondLoad := m.dispatchCommand("status", "")
 	secondBatch := statusBatch(t, secondLoad)
 	_, _ = m.Update(secondBatch[1]())
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "New User · New Org") {
@@ -354,7 +354,7 @@ func TestStatusReopenIgnoresStaleCloseMessage(t *testing.T) {
 	m.resize(96, 40)
 	defer m.closeStatus()
 
-	_, _ = m.dispatchCommand("status")
+	_, _ = m.dispatchCommand("status", "")
 	firstClose := m.updateStatus(tea.KeyPressMsg{Code: tea.KeyEscape})
 	staleClose := m.updateStatus(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if firstClose == nil || staleClose == nil {
@@ -362,7 +362,7 @@ func TestStatusReopenIgnoresStaleCloseMessage(t *testing.T) {
 	}
 
 	_, _ = m.Update(firstClose())
-	_, _ = m.dispatchCommand("status")
+	_, _ = m.dispatchCommand("status", "")
 	_, _ = m.Update(staleClose())
 	if m.mode != ModeStatus {
 		t.Fatal("stale close message closed the reopened status panel")
@@ -386,7 +386,7 @@ func TestCtrlCCancelsStatusCollectionAndQuits(t *testing.T) {
 	m := newStatusModel(t)
 	m.resize(96, 40)
 
-	_, load := m.dispatchCommand("status")
+	_, load := m.dispatchCommand("status", "")
 	batch := statusBatch(t, load)
 	workspaceDone := make(chan struct{})
 	go func() {

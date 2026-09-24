@@ -12,11 +12,11 @@ import (
 
 // newRunCommand defines a one-turn noninteractive surface with command-local
 // execution flags. The prompt is always a literal flag value, never positional
-// input or stdin.
+// input or stdin. There is no permissions flag: a headless run has no
+// interactive approver.
 func newRunCommand(action func(context.Context, RunOptions) error) *cobra.Command {
-	opts := RunOptions{ChatOptions: ChatOptions{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll}}
+	opts := RunOptions{ChatOptions: ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeSkipPermissions}}
 	var authMode string
-	var approvalMode string
 	command := &cobra.Command{
 		Use:   "run",
 		Short: "Run one noninteractive assistant turn and stream a delivery on stdout",
@@ -42,10 +42,6 @@ func newRunCommand(action func(context.Context, RunOptions) error) *cobra.Comman
 			if err != nil {
 				return err
 			}
-			approval, err := parseApprovalMode(approvalMode)
-			if err != nil {
-				return err
-			}
 			if err := validateSiteSelection(mode, opts.Site, command.Flags().Changed("site")); err != nil {
 				return err
 			}
@@ -57,7 +53,6 @@ func newRunCommand(action func(context.Context, RunOptions) error) *cobra.Comman
 				opts.Site = site
 			}
 			opts.AuthMode = mode
-			opts.ApprovalMode = approval
 			opts.Delivery = delivery
 			return action(command.Context(), opts)
 		},
@@ -67,7 +62,6 @@ func newRunCommand(action func(context.Context, RunOptions) error) *cobra.Comman
 	flags.StringVar(&opts.Delivery, "delivery", "", "delivery streamed on stdout: adeep (required)")
 	flags.StringVar(&opts.Model, "model", "", "model override for this run")
 	flags.StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
-	flags.StringVar(&approvalMode, "approval", string(agent.ModeAllowAll), "approval mode: allow-all or gated")
 	flags.StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
 	flags.StringVar(&opts.ConversationID, "conversation", "", "resume an existing conversation by ID")
 	return command
