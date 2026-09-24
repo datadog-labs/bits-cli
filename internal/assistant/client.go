@@ -16,6 +16,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -66,7 +67,7 @@ type Client struct {
 	TokenSource AccessTokenSource
 	// HTTPClient handles non-streaming requests (history, conversations,
 	// skills, flags, rename, share, delete). Its Timeout bounds the whole
-	// request. Nil falls back to http.DefaultClient.
+	// request. Nil falls back to fallbackHTTPClient.
 	HTTPClient *http.Client
 	// StreamClient handles the streaming POST. It must NOT set an overall
 	// Timeout, since that would cap total turn duration; idle detection is
@@ -137,6 +138,44 @@ func newTransport() *http.Transport {
 	return tr
 }
 
+// checkRedirect follows redirects like the stdlib default but drops the
+// DD-* API key headers when the origin (scheme, host, or port) changes; the
+// stdlib only strips Authorization and Cookie.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	if len(via) > 0 && !sameOrigin(req.URL, via[0].URL) {
+		req.Header.Del("DD-API-KEY")
+		req.Header.Del("DD-APPLICATION-KEY")
+	}
+	return nil
+}
+
+// sameOrigin compares two URLs' origins with default ports normalized, so
+// https://h equals https://h:443 while a scheme change or any other host or
+// port difference does not.
+func sameOrigin(a, b *url.URL) bool {
+	if a.Scheme != b.Scheme ||
+		!strings.EqualFold(a.Hostname(), b.Hostname()) {
+		return false
+	}
+	port := func(u *url.URL) string {
+		if p := u.Port(); p != "" {
+			return p
+		}
+		if u.Scheme == "https" {
+			return "443"
+		}
+		return "80"
+	}
+	return port(a) == port(b)
+}
+
+// fallbackHTTPClient mirrors http.DefaultClient apart from the redirect
+// key-drop policy.
+var fallbackHTTPClient = &http.Client{CheckRedirect: checkRedirect}
+
 // NewAPIKeyClient builds the explicit developer/CI fallback client.
 func NewAPIKeyClient(baseURL, apiKey, appKey string) (*Client, error) {
 	if apiKey == "" || appKey == "" {
@@ -168,8 +207,8 @@ func newClient(baseURL string) *Client {
 	tr := newTransport()
 	return &Client{
 		BaseURL:           strings.TrimRight(baseURL, "/"),
-		HTTPClient:        &http.Client{Timeout: defaultRequestTimeout, Transport: tr},
-		StreamClient:      &http.Client{Transport: tr}, // no total timeout; idle-bounded
+		HTTPClient:        &http.Client{Timeout: defaultRequestTimeout, Transport: tr, CheckRedirect: checkRedirect},
+		StreamClient:      &http.Client{Transport: tr, CheckRedirect: checkRedirect}, // no total timeout; idle-bounded
 		StreamIdleTimeout: defaultStreamIdleTimeout,
 		MaxLineBytes:      defaultMaxLineBytes,
 		MaxRetries:        defaultMaxRetries,
@@ -181,7 +220,7 @@ func (c *Client) httpClient() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return http.DefaultClient
+	return fallbackHTTPClient
 }
 
 func (c *Client) streamClient() *http.Client {
