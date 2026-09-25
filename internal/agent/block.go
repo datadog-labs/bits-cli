@@ -19,6 +19,7 @@ const (
 	ToolUnknown ToolStatus = iota
 	ToolRunning
 	ToolAwaitingApproval
+	ToolAwaitingInput
 	ToolSuccess
 	ToolError
 )
@@ -65,6 +66,7 @@ type ToolBlock struct {
 	RenderState  any
 	IsClientSide bool
 	Approval     *ApprovalPrompt
+	InputRequest *InputRequest
 	// Denied marks an approval refusal, not a tool error.
 	Denied bool
 	// Cancelled marks a call ended by a user stop rather than a tool failure.

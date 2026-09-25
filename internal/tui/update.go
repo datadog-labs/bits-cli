@@ -115,6 +115,7 @@ type focus int
 
 const (
 	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
+	focusQuestion                 // an explicit user question is pending
 	focusApproval                 // a tool approval is pending
 	focusPicker                   // the /resume conversation picker
 	focusStatus                   // the local /status document
@@ -133,6 +134,9 @@ func (m *Model) focus() focus {
 	case ModePermissions:
 		return focusPermissions
 	case ModeChat, ModeTermInit:
+		if m.questions != nil {
+			return focusQuestion
+		}
 		if len(m.pendingApprovals) > 0 {
 			return focusApproval
 		}
@@ -294,6 +298,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleMouseWheel(msg)
 
 	case tea.MouseClickMsg:
+		if m.focus() == focusQuestion {
+			return m, m.clickQuestion(msg)
+		}
 		if m.mode == ModeChat {
 			if msg.Button == tea.MouseLeft {
 				// The press might turn into a drag-select, so it isn't a toggle
@@ -393,6 +400,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Opened Assistant settings in your browser: %s", msg.url), 0)
 	}
 
+	if m.focus() == focusQuestion {
+		return m, m.updateQuestions(msg)
+	}
 	if m.focus() == focusPicker {
 		return m, m.updateConversationPicker(msg)
 	}
@@ -527,6 +537,22 @@ func (m *Model) clearSelection() {
 }
 
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
+	if m.focus() == focusQuestion {
+		delta := 0
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			delta = -mouseWheelDelta
+		case tea.MouseWheelDown:
+			delta = mouseWheelDelta
+		}
+		if msg.Y < m.questionTop() {
+			m.list.ScrollBy(delta)
+		} else {
+			m.questions.scroll = max(0, m.questions.scroll+delta)
+			m.questions.follow = false
+		}
+		return nil
+	}
 	if m.focus() == focusPicker {
 		return m.updateConversationPicker(msg)
 	}
@@ -559,9 +585,15 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 		m.chatPhase = chat.PhaseIdle
 	}
 	m.turnEvents = nil
+	if m.cancelRequested {
+		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+		m.syncTranscript()
+	}
 	m.pendingApprovals = nil
+	m.questions = nil
 	m.approvalChoice = 0
 	m.approvalPanel.ResetScroll()
+	m.layoutTranscript()
 	if m.cancelTurn != nil && !m.cancelRequested {
 		m.cancelTurn() // release the turn/restore context
 	}
@@ -688,6 +720,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.focus() {
 	case focusPicker:
 		return m, m.updateConversationPicker(msg)
+	case focusQuestion:
+		return m, m.updateQuestions(msg)
 	case focusApproval:
 		return m.handleApprovalKey(msg)
 	case focusStatus:
@@ -826,7 +860,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Context: turnContext, OnDeny: agent.DenyContinue})
+	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Interactive: true, Context: turnContext, OnDeny: agent.DenyContinue})
 	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()
@@ -854,7 +888,9 @@ func (m *Model) cancelRemote() {
 		return
 	}
 	m.cancelRequested = true
+	m.questions = nil
 	m.cancelTurn()
+	m.layoutTranscript()
 }
 
 // applyEvent folds one engine event into the block snapshot / status. The switch
@@ -866,6 +902,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	case agent.EventTranscript:
 		m.transcript = ev.Transcript
 		m.updatePendingApprovals(ev.Transcript.PendingApprovals())
+		m.syncQuestions()
 		if ev.Transcript.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}
@@ -917,6 +954,9 @@ func (m *Model) setDarkBackground(isDark bool) {
 func (m *Model) resize(w, h int) {
 	m.clearSelection()
 	m.width, m.height = w, h
+	if m.questions != nil {
+		m.questions.follow = true
+	}
 	m.editor.SetWidth(w)
 	m.list.SetWidth(w)
 	if m.picker != nil {

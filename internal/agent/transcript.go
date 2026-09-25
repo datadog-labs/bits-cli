@@ -55,10 +55,18 @@ func (t *Transcript) MarkAwaitingApproval(id string, prompt ApprovalPrompt) (Blo
 	})
 }
 
+func (t *Transcript) MarkAwaitingInput(id string, request *InputRequest) (Block, bool) {
+	return t.markTool(id, func(tool *ToolBlock) {
+		tool.Status = ToolAwaitingInput
+		tool.InputRequest = request
+	})
+}
+
 func (t *Transcript) MarkToolRunning(id string) (Block, bool) {
 	return t.markTool(id, func(tool *ToolBlock) {
 		tool.Status = ToolRunning
 		tool.Approval = nil
+		tool.InputRequest = nil
 	})
 }
 
@@ -82,6 +90,7 @@ func (t *Transcript) SetToolRenderState(id string, state any) (Block, bool) {
 func (t *Transcript) MarkToolExecuted(id string, result ToolResult) (Block, bool) {
 	return t.markTool(id, func(tool *ToolBlock) {
 		tool.Approval = nil
+		tool.InputRequest = nil
 		tool.Status = ToolSuccess
 		if result.IsError {
 			tool.Status = ToolError

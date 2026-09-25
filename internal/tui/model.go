@@ -121,6 +121,7 @@ type Model struct {
 	logoutGeneration uint64
 	loggedOut        bool
 
+	questions         *questionForm
 	pendingApprovals  []agent.Block
 	approvalChoice    int
 	approvalPanel     *components.Panel

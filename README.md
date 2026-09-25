@@ -35,6 +35,22 @@ inserted as typed mentions such as `@dashboard:"Test Dashboard"` and sent as
 structured context for the next turn. Editing or deleting the mention removes
 that entity from the structured context. File mentions remain plain prompt text.
 
+When Bits asks a question, a tabbed picker replaces the composer while the
+conversation stays visible above it. Use the arrow keys, j/k, number shortcuts,
+or a mouse click to highlight an option, then Enter to select it. Highlighting
+Other focuses the custom answer field immediately. Tab and Shift+Tab move
+between questions and the review page; you can also click a tab. Enter on the
+review page submits all explicitly selected answers. Click a review answer to
+edit it. Escape dismisses the questions without submitting answers; Ctrl+X
+stops the turn. Page Up and Page Down scroll long questions or answers. The
+mouse wheel scrolls the conversation or picker, depending on where you point.
+
+To try the question flow locally without authentication, run
+`BITS_FAKE_BACKEND=1 go run . --permissions skip-permissions` and send
+`test ask_user_question`. The demo asks two questions and shows the returned
+answers after submission. Send the same prompt again to test dismissal or
+cancellation.
+
 ## Permissions
 
 Interactive `bits` defaults to `manual`: tools that can change your system or

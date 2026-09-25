@@ -61,9 +61,9 @@ func (f *Fake) conversation(id string) *conversation {
 	return c
 }
 
-// startTurn records the user message, sets the title if unset, and replaces
-// the pending turn with one whose script is the message.
-func (f *Fake) startTurn(c *conversation, text string) scriptTurn {
+// startTurn records the user's text and stores the source to run. They differ
+// for named demos, whose short prompt expands to a script.
+func (f *Fake) startTurn(c *conversation, text, source string) scriptTurn {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.appendLocked(c, assistant.Message{Role: "user", MessageID: f.nextID(), Content: assistant.TextContent(text)})
@@ -71,7 +71,7 @@ func (f *Fake) startTurn(c *conversation, text string) scriptTurn {
 		c.title = truncateRunes(strings.TrimSpace(text), titleRunes)
 	}
 	c.turn = &scriptTurn{
-		src:         strings.TrimSpace(text),
+		src:         strings.TrimSpace(source),
 		index:       c.turns,
 		snapshot:    newSourceSnapshot(f.scriptRoot()),
 		continueDir: cmp.Or(f.ContinueDir, defaultContinueDir()),

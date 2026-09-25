@@ -150,6 +150,13 @@ func build(isDark bool, p palette) Theme {
 		Accordion:   accordion,
 		Selector:    selector,
 		TextInput:   textInput,
+		Tabs: Tabs{
+			Item: text.Primary.Padding(0, 1),
+			Active: lipgloss.NewStyle().Bold(true).
+				Foreground(lipgloss.Color(p.onAccent)).
+				Background(lipgloss.Color(p.interactive)).
+				Padding(0, 1),
+		},
 		Chat: Chat{
 			Markdown:        markdown(isDark, p),
 			MarkdownHeading: lipgloss.Color(p.secondary),

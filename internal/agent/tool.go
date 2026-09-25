@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 type ToolCall struct {
@@ -204,6 +205,9 @@ func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 		if tool, ok := s.tools[call.Name]; ok {
 			return tool.handler(ctx, call)
 		}
+	}
+	if call.Name == spec.AskUserQuestion {
+		return ToolResult{Title: "Unsupported tool", Output: "ask_user_question is unsupported in noninteractive sessions", IsError: true}, nil
 	}
 	return ToolResult{
 		Title:   "Unknown tool",

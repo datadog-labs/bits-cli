@@ -108,7 +108,7 @@ func (m *Model) chatView() string {
 		// Spans the terminal with its own margin, so it does not track the composer.
 		return m.chatOverlay(base, m.permissionsView(), 0)
 	}
-	if len(m.pendingApprovals) > 0 {
+	if m.questions != nil || len(m.pendingApprovals) > 0 {
 		return base
 	}
 	menu := m.editor.MenuView()
@@ -140,6 +140,9 @@ func (m *Model) chatOverlay(base, menu string, x int) string {
 // in the same screen coordinate space as the normal chat view.
 func (m *Model) chatViewBase(transcript string) string {
 	sections := []string{transcript}
+	if m.questions != nil {
+		return strings.Join(append(sections, m.noticeBar(), m.questionView(), m.chatFooter()), "\n")
+	}
 	if approval := m.approvalView(); approval != "" {
 		sections = append(sections, approval)
 	}
@@ -215,6 +218,9 @@ func (m *Model) chatViewTooSmall() bool {
 	}
 	if m.width < minimumChatWidth || m.height < minimumChatHeight {
 		return true
+	}
+	if m.questions != nil {
+		return m.width < 36 || m.height < 14
 	}
 	// A pending approval needs more room than the bare chat; when it doesn't fit,
 	// its prompt is hidden behind the resize hint too.
@@ -304,6 +310,9 @@ func (m *Model) approvalActions(width int) string {
 }
 
 func (m *Model) composerHeight() int {
+	if m.questions != nil {
+		return m.questionHeight()
+	}
 	h := m.editor.Height()
 	if approval := m.approvalView(); approval != "" {
 		h += lipgloss.Height(approval)

@@ -68,11 +68,12 @@ type toolRenderSpec struct {
 }
 
 var (
-	simpleToolRenderSpec = &toolRenderSpec{render: renderSimpleTool}
-	readToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, inspection: true}
-	listToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, inspection: true}
-	grepToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "search", active: "searching"}, inspection: true}
-	writeToolRenderSpec  = &toolRenderSpec{
+	questionToolRenderSpec = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}}
+	simpleToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool}
+	readToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, inspection: true}
+	listToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, inspection: true}
+	grepToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "search", active: "searching"}, inspection: true}
+	writeToolRenderSpec    = &toolRenderSpec{
 		render:  renderChangeTool,
 		spacing: itemSpacing{before: 1, after: 1},
 		action:  toolAction{base: "write", active: "writing", success: "wrote", failure: "write failed"},
@@ -151,7 +152,7 @@ func lifecycleOf(tool *agent.ToolBlock) toolLifecycle {
 	switch tool.Status {
 	case agent.ToolRunning:
 		return lifecycleRunning
-	case agent.ToolAwaitingApproval:
+	case agent.ToolAwaitingApproval, agent.ToolAwaitingInput:
 		return lifecycleAwaiting
 	case agent.ToolSuccess:
 		return lifecycleSuccess
@@ -228,6 +229,8 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 
 func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 	switch id {
+	case spec.ClientAskUserQuestion:
+		return questionToolRenderSpec
 	case spec.ClientReadFile:
 		return readToolRenderSpec
 	case spec.ClientListFiles:
