@@ -44,6 +44,8 @@ review page submits all explicitly selected answers. Click a review answer to
 edit it. Escape dismisses the questions without submitting answers; Ctrl+X
 stops the turn. Page Up and Page Down scroll long questions or answers. The
 mouse wheel scrolls the conversation or picker, depending on where you point.
+If you exit before answering, reopening the conversation through `/resume`
+restores the question picker.
 
 To try the question flow locally without authentication, run
 `BITS_FAKE_BACKEND=1 go run . --permissions skip-permissions` and send

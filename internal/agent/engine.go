@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 var (
@@ -19,6 +20,7 @@ var (
 	ErrHistoryUnsupported     = errors.New("backend does not support loading conversation history")
 	ErrCurrentUserUnsupported = errors.New("backend does not support loading the current user")
 	ErrOperationActive        = errors.New("another conversation operation is active")
+	ErrNoPendingQuestion      = errors.New("no unanswered question to resume")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -148,6 +150,7 @@ type Engine struct {
 	opts                   assistant.SendOptions
 	runtimeStatus          RuntimeStatus
 	transcript             *Transcript
+	pendingQuestion        *assistant.Content
 	previousConversationID string
 	commands               chan toolCommand
 	sessionGrants          map[ApprovalKey]struct{}
@@ -256,13 +259,18 @@ type turnOperation struct {
 // channel closes only after the completion snapshot has been captured and the
 // engine operation has been released.
 func (e *Engine) beginTurn(ctx context.Context, in TurnInput) turnOperation {
+	return e.beginTurnWithCalls(ctx, in, nil)
+}
+
+func (e *Engine) beginTurnWithCalls(ctx context.Context, in TurnInput, pending []assistant.Content) turnOperation {
 	if !e.begin() {
 		return completedTurnOperation(ErrOperationActive)
 	}
+	e.pendingQuestion = nil
 	generation := e.operationGeneration.Load()
 	events := make(chan Event, 64)
 	completion := make(chan turnCompletion, 1)
-	go e.run(ctx, in, events, completion, generation)
+	go e.run(ctx, in, pending, events, completion, generation)
 	return turnOperation{events: events, completion: completion}
 }
 
@@ -271,6 +279,32 @@ func (e *Engine) beginTurn(ctx context.Context, in TurnInput) turnOperation {
 // the turn context.
 func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
 	return e.beginTurn(ctx, in).events
+}
+
+// ResumePendingQuestion continues the last unanswered question from restored
+// history without adding another user message to the conversation.
+func (e *Engine) ResumePendingQuestion(ctx context.Context, in TurnInput) <-chan Event {
+	if e.pendingQuestion == nil || !in.Interactive || in.Tools == nil || !in.Tools.Has(spec.AskUserQuestion) {
+		return eventResult(Event{Kind: EventError, Err: ErrNoPendingQuestion})
+	}
+	return e.beginTurnWithCalls(ctx, in, []assistant.Content{*e.pendingQuestion}).events
+}
+
+func (e *Engine) HasPendingQuestion() bool { return e.pendingQuestion != nil }
+
+func pendingQuestionFromHistory(messages []assistant.Message) *assistant.Content {
+	if len(messages) == 0 {
+		return nil
+	}
+	content := messages[len(messages)-1].Content
+	if content.Type != assistant.ContentClientToolCall || content.Tool == nil || content.Tool.Metadata == nil ||
+		content.Tool.Metadata.Name != spec.AskUserQuestion || content.Tool.ToolCallID == "" {
+		return nil
+	}
+	if _, err := spec.ParseQuestions(content.Tool.Metadata.Input); err != nil {
+		return nil
+	}
+	return &content
 }
 
 func completedTurnOperation(err error) turnOperation {
@@ -329,12 +363,16 @@ func (e *Engine) command(command toolCommand) bool {
 func (e *Engine) run(
 	ctx context.Context,
 	in TurnInput,
+	pending []assistant.Content,
 	out chan<- Event,
 	completionOut chan<- turnCompletion,
 	generation uint64,
 ) {
 	completion := turnCompletion{}
 	turnStart := len(e.transcript.Blocks())
+	if len(pending) > 0 {
+		turnStart = max(0, turnStart-1)
+	}
 	defer func() {
 		if ctx.Err() != nil && e.transcript.CancelUnfinishedTools(turnStart) {
 			// Cancellation makes send's context-aware select unavailable, but this
@@ -382,10 +420,13 @@ func (e *Engine) run(
 		}
 	}
 
-	// The user's turn opens the transcript; the engine owns the user block too.
-	e.transcript.AppendUser(in.Message)
-	if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
-		return
+	// A restored tool call is already in the transcript; only a new turn adds a
+	// user block before contacting the backend.
+	if len(pending) == 0 {
+		e.transcript.AppendUser(in.Message)
+		if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
+			return
+		}
 	}
 
 	var next any = in.Message
@@ -432,56 +473,60 @@ func (e *Engine) run(
 		opts.ClientTools = defs
 		opts.Context = in.Context
 		opts.StreamToolCallInput = opts.StreamToolCallInput || tools.NeedsStreamedInput()
+		if len(pending) > 0 {
+			calls = pending
+			pending = nil
+		} else {
+			id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {
+				msg := ar.Data.Attributes.StructuredMessage
+				// A client_tool_call pauses the stream until we answer it; collect it
+				// for execTools below.
+				if msg.Content.Type == assistant.ContentClientToolCall {
+					calls = append(calls, msg.Content)
+				}
+				if !fold(msg) {
+					return ctx.Err()
+				}
+				return nil
+			})
+			// Send may discover a server-assigned ID before a later stream failure or
+			// cancellation. Preserve it so every surface can report a resumable handle.
+			if id != "" {
+				e.opts.ConversationID = id
+			}
+			if err != nil {
+				// Context-derived cancellation remains quiet. An independent backend
+				// failure wins even if the caller canceled at the same time, preserving
+				// the more specific diagnostic in the authoritative completion.
+				if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
+					completion.Err = err
+					if !finalizeAndEmit(emit) {
+						return
+					}
+					if id != "" {
+						if !emit(Event{Kind: EventConversation, ConvID: id}) {
+							return
+						}
+					}
+					emit(Event{Kind: EventError, Err: err, BackendFailure: true})
+					return
+				}
+			}
+			if ctx.Err() != nil {
+				return // cancelled: end the turn quietly
+			}
 
-		id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {
-			msg := ar.Data.Attributes.StructuredMessage
-			// A client_tool_call pauses the stream until we answer it; collect it
-			// for execTools below.
-			if msg.Content.Type == assistant.ContentClientToolCall {
-				calls = append(calls, msg.Content)
-			}
-			if !fold(msg) {
-				return ctx.Err()
-			}
-			return nil
-		})
-		// Send may discover a server-assigned ID before a later stream failure or
-		// cancellation. Preserve it so every surface can report a resumable handle.
-		if id != "" {
-			e.opts.ConversationID = id
-		}
-		if err != nil {
-			// Context-derived cancellation remains quiet. An independent backend
-			// failure wins even if the caller canceled at the same time, preserving
-			// the more specific diagnostic in the authoritative completion.
-			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
-				completion.Err = err
+			convID = id
+			e.opts.ConversationID = convID
+			emit(Event{Kind: EventConversation, ConvID: convID})
+
+			if len(calls) == 0 {
 				if !finalizeAndEmit(emit) {
 					return
 				}
-				if id != "" {
-					if !emit(Event{Kind: EventConversation, ConvID: id}) {
-						return
-					}
-				}
-				emit(Event{Kind: EventError, Err: err, BackendFailure: true})
+				completion.Completed = emit(Event{Kind: EventTurnDone})
 				return
 			}
-		}
-		if ctx.Err() != nil {
-			return // cancelled: end the turn quietly
-		}
-
-		convID = id
-		e.opts.ConversationID = convID
-		emit(Event{Kind: EventConversation, ConvID: convID})
-
-		if len(calls) == 0 {
-			if !finalizeAndEmit(emit) {
-				return
-			}
-			completion.Completed = emit(Event{Kind: EventTurnDone})
-			return
 		}
 		toolRound, err := e.runTools(ctx, tools, calls, generation, emit, in.OnDeny, in.Interactive)
 		if err != nil {
@@ -671,6 +716,7 @@ func (e *Engine) NewConversation() error {
 	e.opts.ConversationID = ""
 	e.opts.MessageHistory = nil
 	e.transcript = NewTranscript()
+	e.pendingQuestion = nil
 	clear(e.sessionGrants)
 	return nil
 }
@@ -740,6 +786,7 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 	for _, msg := range resp.Data.Attributes.Messages {
 		e.transcript.AppendMessage(msg)
 	}
+	e.pendingQuestion = pendingQuestionFromHistory(resp.Data.Attributes.Messages)
 	e.transcript.FinalizeAll()
 	if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
 		send(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})

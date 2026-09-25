@@ -581,6 +581,8 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	if !m.acceptRemoteMessage(msg.generation) {
 		return m, nil
 	}
+	resumeQuestion := m.restoringHistory && !m.cancelRequested
+	m.restoringHistory = false
 	if m.chatPhase != chat.PhaseError {
 		m.chatPhase = chat.PhaseIdle
 	}
@@ -613,6 +615,9 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	if m.pendingLogout {
 		m.pendingLogout = false
 		return m, batchCommands(permissionsCommand, m.startLogout())
+	}
+	if resumeQuestion {
+		return m, batchCommands(permissionsCommand, m.resumePendingQuestion())
 	}
 	return m, permissionsCommand
 }
@@ -877,6 +882,18 @@ func (m *Model) beginRemote(events <-chan agent.Event, cancel context.CancelFunc
 	m.cancelTurn = cancel
 	m.cancelRequested = false
 	return waitEvent(m.turnGen, events)
+}
+
+func (m *Model) resumePendingQuestion() tea.Cmd {
+	if m.engine == nil || m.tools == nil || !m.engine.HasPendingQuestion() {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	events := m.engine.ResumePendingQuestion(ctx, agent.TurnInput{Tools: m.tools, Interactive: true, OnDeny: agent.DenyContinue})
+	m.chatPhase = chat.PhaseWaiting
+	m.layoutTranscript()
+	m.list.ScrollToBottom()
+	return m.beginRemote(events, cancel)
 }
 
 func (m *Model) acceptRemoteMessage(generation uint64) bool {

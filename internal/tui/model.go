@@ -103,10 +103,11 @@ type Model struct {
 
 	// Active turn: turnEvents is the running turn's event channel (nil when
 	// idle); cancelTurn interrupts it.
-	turnEvents      <-chan agent.Event
-	cancelTurn      context.CancelFunc
-	turnGen         uint64
-	cancelRequested bool
+	turnEvents       <-chan agent.Event
+	cancelTurn       context.CancelFunc
+	turnGen          uint64
+	cancelRequested  bool
+	restoringHistory bool
 
 	// /new and /clear cancel an active turn/restore once, then wait for its
 	// channel to close before resetting conversation state.
@@ -362,6 +363,7 @@ func (m *Model) initChat() tea.Cmd {
 		return tea.Batch(append(commands, m.fetchRecentConversations())...)
 	}
 	m.chatPhase = chat.PhaseLoading
+	m.restoringHistory = true
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
 	events := m.engine.Restore(ctx)
 	commands = append(commands, m.beginRemote(events, cancel))

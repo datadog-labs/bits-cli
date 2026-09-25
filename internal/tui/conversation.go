@@ -218,7 +218,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	m.conversationClosing = false
 	m.picker = nil
 	m.setMode(ModeChat)
-	return nil // Update reconciles focus and animations after the mode change.
+	return m.resumePendingQuestion() // Update reconciles focus and animations after the mode change.
 }
 
 func (m *Model) retryConversationOperation() tea.Cmd {
