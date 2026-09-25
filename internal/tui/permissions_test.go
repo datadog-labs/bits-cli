@@ -286,7 +286,7 @@ func TestPermissionsSwitchBackToManualClearsExistingSessionGrants(t *testing.T) 
 func TestPermissionsPickerNavigationAndCancel(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "")
-	if !strings.Contains(m.permissionsView(), "› Manual") {
+	if !strings.Contains(m.permissionsView(), "› Ask for Approval (current)") {
 		t.Fatal("picker did not focus manual")
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyDown})
@@ -308,10 +308,10 @@ func TestPermissionsPickerNavigationAndCancel(t *testing.T) {
 func TestPermissionsPickerCurrentModeAndResize(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
 	_, _ = m.dispatchCommand("permissions", "")
-	if m.permissionChoice != 1 || !strings.Contains(m.permissionsView(), "› Skip permissions") {
+	if m.permissionChoice != 1 || !strings.Contains(m.permissionsView(), "› Full access (current)") {
 		t.Fatal("picker did not focus the startup mode")
 	}
-	_, _ = m.Update(tea.WindowSizeMsg{Width: 42, Height: 18})
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 72, Height: 18})
 	if m.permissionChoice != 1 || m.tools.PermissionsMode() != agent.ModeSkipPermissions {
 		t.Fatal("resize changed the selected or active mode")
 	}
@@ -356,9 +356,9 @@ func TestPermissionsPickerSectionSpacing(t *testing.T) {
 		return -1
 	}
 	for _, pair := range [][2]string{
-		{"Permissions", "Manual"},
-		{"Manual", "Skip permissions"},
-		{"No approval prompts", "↑/↓ to choose"},
+		{"Permissions", "Ask for Approval"},
+		{"workspace", "Full access"},
+		{"behalf", "↑/↓ to choose"},
 	} {
 		start, end := find(pair[0]), find(pair[1])
 		if end-start != 2 || strings.TrimSpace(strings.Trim(rows[start+1], "│")) != "" {
@@ -374,22 +374,29 @@ func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
 	if !strings.Contains(view, m.styles.Panel.Title.Render("Permissions")) {
 		t.Fatal("picker title does not use the resume title style")
 	}
-	if !strings.Contains(view, m.styles.Selector.Selected.Render("› Skip permissions  Current")) {
+	if !strings.Contains(view, m.styles.Selector.Selected.Render("› Full access (current)")) {
 		t.Fatal("selected mode does not use the resume selected title style")
 	}
-	if !strings.Contains(view, m.styles.Selector.Selected.Render("No approval prompts")) {
+	inner := min(100, m.width-m.editor.ContentOffset()) - m.styles.Editor.MenuFrame.GetHorizontalFrameSize() - 2
+	labels := m.permissionOptionLabels()
+	leftWidth := max(ansi.StringWidth(labels[0]), ansi.StringWidth(labels[1])) + 2
+	detailWidth := inner - leftWidth - 2
+	selectedDetail := wrapPermissionDetail(permissionOptionDetails[1], detailWidth)[0]
+	if !strings.Contains(view, m.styles.Selector.Selected.Render(selectedDetail)) {
 		t.Fatal("selected explanation does not use the resume selected detail style")
 	}
-	if !strings.Contains(view, m.styles.Text.Tertiary.Render("Ask before gated tools")) {
+	unselectedDetail := wrapPermissionDetail(permissionOptionDetails[0], detailWidth)[0]
+	if !strings.Contains(view, m.styles.Text.Tertiary.Render(unselectedDetail)) {
 		t.Fatal("unselected explanation does not use the resume time style")
 	}
 	rows := strings.Split(ansi.Strip(view), "\n")
-	for _, row := range rows {
-		if strings.Contains(row, "Ask before gated tools") && !strings.Contains(row, "Manual") {
-			t.Fatal("manual explanation is not on the option row")
+	for _, pair := range [][2]string{{"Ask for Approval", unselectedDetail}, {"Full access", selectedDetail}} {
+		found := false
+		for _, row := range rows {
+			found = found || strings.Contains(row, pair[0]) && strings.Contains(row, pair[1])
 		}
-		if strings.Contains(row, "No approval prompts") && !strings.Contains(row, "Skip permissions") {
-			t.Fatal("skip explanation is not on the option row")
+		if !found {
+			t.Fatalf("%q explanation does not start on the same row", pair[0])
 		}
 	}
 }
@@ -407,7 +414,7 @@ func TestPermissionsPickerCompactResizeKeepsSelection(t *testing.T) {
 	}
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.permissionChoice != 1 || !strings.Contains(ansi.Strip(m.View().Content), "Skip permissions") {
+	if m.permissionChoice != 1 || !strings.Contains(ansi.Strip(m.View().Content), "Full access") {
 		t.Fatal("picker did not recover after resize")
 	}
 }

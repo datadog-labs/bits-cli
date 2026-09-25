@@ -9,10 +9,14 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
-	"github.com/DataDog/bits-cli/internal/tui/components"
 )
 
 var permissionModes = [...]agent.PermissionsMode{agent.ModeManual, agent.ModeSkipPermissions}
+
+var permissionOptionDetails = [...]string{
+	"Bits will ask for approval before making any changes in your workspace",
+	"Use with caution: Bits will execute actions on your behalf",
+}
 
 func (m *Model) permissionsBusy() bool {
 	return m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading || len(m.pendingApprovals) > 0
@@ -124,7 +128,7 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 func (m *Model) permissionsView() string {
 	style := m.styles.Editor
 	panel := m.styles.Panel
-	width := min(60, max(1, m.width-m.editor.ContentOffset()))
+	width := min(100, max(1, m.width-m.editor.ContentOffset()))
 	inner := max(1, width-style.MenuFrame.GetHorizontalFrameSize()-2)
 	line := func(value string, selected bool) string {
 		rowStyle := style.MenuItem
@@ -153,34 +157,71 @@ func (m *Model) permissionsView() string {
 			line("Enter to select", false),
 		)
 	} else {
-		manualLabel := "Manual"
-		skipLabel := "Skip permissions"
-		if m.tools.PermissionsMode() == agent.ModeManual {
-			manualLabel += "  Current"
-		} else {
-			skipLabel += "  Current"
-		}
-		selectorStyles := m.styles.Selector
-		selectorStyles.Item = m.styles.Text.Secondary
-		selectorStyles.Detail = m.styles.Text.Tertiary
-		selectorStyles.SelectedDetail = selectorStyles.Selected
-		selector := components.NewSelector([]components.Choice{
-			{Label: manualLabel, Detail: "Ask before gated tools"},
-			{Label: skipLabel, Detail: "No approval prompts"},
-		}, selectorStyles)
-		selector.SetAlignDetailRight(true)
-		selector.SetIndex(m.permissionChoice)
-		optionRows := strings.Split(selector.View(inner), "\n")
+		labels := m.permissionOptionLabels()
+		leftWidth := max(ansi.StringWidth(labels[0]), ansi.StringWidth(labels[1])) + 2
+		detailWidth := inner - leftWidth - 2
 		rows = append(rows,
 			line("", false),
-			optionRows[0],
-			line("", false),
-			optionRows[1],
-			line("", false),
-			m.styles.Panel.Help.Render("↑/↓ to choose · Enter to select"),
 		)
+		for i, label := range labels {
+			if i > 0 {
+				rows = append(rows, line("", false))
+			}
+			rows = append(rows, m.permissionOptionRows(label, permissionOptionDetails[i], inner, leftWidth, detailWidth, i == m.permissionChoice)...)
+		}
+		rows = append(rows, line("", false), m.styles.Panel.Help.Render("↑/↓ to choose · Enter to select"))
 	}
 	return style.MenuFrame.BorderForeground(m.styles.Selector.Selected.GetForeground()).Width(width).Padding(0, 1).Render(strings.Join(rows, "\n"))
+}
+
+func (m *Model) permissionOptionLabels() [2]string {
+	labels := [2]string{"Ask for Approval", "Full access"}
+	if m.tools.PermissionsMode() == agent.ModeManual {
+		labels[0] += " (current)"
+	} else {
+		labels[1] += " (current)"
+	}
+	return labels
+}
+
+func (m *Model) permissionOptionRows(label, detail string, width, leftWidth, detailWidth int, selected bool) []string {
+	labelStyle, detailStyle := m.styles.Text.Secondary, m.styles.Text.Tertiary
+	if selected {
+		labelStyle = m.styles.Selector.Selected
+		detailStyle = m.styles.Selector.Selected
+	}
+	wrapped := wrapPermissionDetail(detail, detailWidth)
+	rows := make([]string, 0, len(wrapped))
+	for i, part := range wrapped {
+		left := strings.Repeat(" ", leftWidth)
+		if i == 0 {
+			left = permissionMarker(selected) + label
+			left += strings.Repeat(" ", max(0, leftWidth-ansi.StringWidth(left)))
+		}
+		row := labelStyle.Render(left) + "  " + detailStyle.Render(part)
+		rows = append(rows, row+strings.Repeat(" ", max(0, width-ansi.StringWidth(row))))
+	}
+	return rows
+}
+
+func wrapPermissionDetail(value string, width int) []string {
+	width = max(1, width)
+	var lines []string
+	current := ""
+	for _, word := range strings.Fields(value) {
+		if current != "" && ansi.StringWidth(current)+1+ansi.StringWidth(word) > width {
+			lines = append(lines, current)
+			current = ""
+		}
+		if current != "" {
+			current += " "
+		}
+		current += word
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
 }
 
 func permissionMarker(selected bool) string {
@@ -191,5 +232,18 @@ func permissionMarker(selected bool) string {
 }
 
 func (m *Model) permissionsCompact() bool {
-	return m.width < 36 || m.height-chatFooterHeight-m.editor.Height() < 9
+	available := m.height - chatFooterHeight - m.editor.Height()
+	if m.permissionConfirm {
+		return m.width < 36 || available < 9
+	}
+	width := min(100, max(1, m.width-m.editor.ContentOffset()))
+	inner := width - m.styles.Editor.MenuFrame.GetHorizontalFrameSize() - 2
+	labels := m.permissionOptionLabels()
+	leftWidth := max(ansi.StringWidth(labels[0]), ansi.StringWidth(labels[1])) + 2
+	detailWidth := inner - leftWidth - 2
+	if detailWidth < 12 {
+		return true
+	}
+	height := 7 + len(wrapPermissionDetail(permissionOptionDetails[0], detailWidth)) + len(wrapPermissionDetail(permissionOptionDetails[1], detailWidth))
+	return available < height
 }
