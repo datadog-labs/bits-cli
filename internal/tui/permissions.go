@@ -18,6 +18,8 @@ var permissionOptionDetails = [...]string{
 	"Use with caution: Bits will execute actions on your behalf",
 }
 
+const fullAccessConfirmation = "Enabling full access will automatically approve all actions without requiring confirmation."
+
 func (m *Model) permissionsBusy() bool {
 	return m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading || len(m.pendingApprovals) > 0
 }
@@ -148,10 +150,11 @@ func (m *Model) permissionsView() string {
 	if m.permissionsCompact() {
 		rows = append(rows, line("Resize terminal to choose permissions", false))
 	} else if m.permissionConfirm {
+		rows = append(rows, line("", false))
+		for _, text := range wrapPermissionDetail(fullAccessConfirmation, inner) {
+			rows = append(rows, line(text, false))
+		}
 		rows = append(rows,
-			line("", false),
-			line("Tools will run without approval prompts.", false),
-			line("This includes local and server gated actions.", false),
 			line("", false),
 			line(permissionMarker(m.permissionAllow)+"Yes, enable full access", m.permissionAllow),
 			line(permissionMarker(!m.permissionAllow)+"Cancel", !m.permissionAllow),
@@ -234,7 +237,9 @@ func permissionMarker(selected bool) string {
 func (m *Model) permissionsCompact() bool {
 	available := m.height - chatFooterHeight - m.editor.Height()
 	if m.permissionConfirm {
-		return m.width < 36 || available < 10
+		width := min(100, max(1, m.width-m.editor.ContentOffset()))
+		inner := max(1, width-m.styles.Editor.MenuFrame.GetHorizontalFrameSize()-2)
+		return m.width < 36 || available < 8+len(wrapPermissionDetail(fullAccessConfirmation, inner))
 	}
 	width := min(100, max(1, m.width-m.editor.ContentOffset()))
 	inner := width - m.styles.Editor.MenuFrame.GetHorizontalFrameSize() - 2

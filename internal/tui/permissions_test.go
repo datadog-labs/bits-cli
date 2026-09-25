@@ -410,8 +410,12 @@ func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
 	if strings.Contains(strings.Join(rows, "\n"), "Enter to select") {
 		t.Fatal("confirmation still renders footer hints")
 	}
-	if !strings.Contains(rows[1], "Full access?") || strings.TrimSpace(strings.Trim(rows[2], "│")) != "" || !strings.Contains(rows[3], "Tools will run") {
+	if !strings.Contains(rows[1], "Full access?") || strings.TrimSpace(strings.Trim(rows[2], "│")) != "" || !strings.Contains(rows[3], "Enabling full access") {
 		t.Fatalf("confirmation title needs a blank row before its explanation: %q", rows)
+	}
+	explanation := strings.TrimSpace(strings.Trim(rows[3], "│")) + " " + strings.TrimSpace(strings.Trim(rows[4], "│"))
+	if explanation != "Enabling full access will automatically approve all actions without requiring confirmation." {
+		t.Fatalf("confirmation explanation = %q", explanation)
 	}
 	confirm, cancel := -1, -1
 	for i, row := range rows {
