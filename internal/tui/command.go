@@ -9,6 +9,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/editor"
 )
 
 // activeTurnPolicy declares how a command behaves while a turn or history
@@ -33,6 +34,7 @@ const (
 	commandWeb
 	commandSettings
 	commandLogout
+	commandPermissions
 )
 
 type commandDefinition struct {
@@ -40,6 +42,7 @@ type commandDefinition struct {
 	name             string
 	aliases          []string
 	activeTurnPolicy activeTurnPolicy
+	description      string
 }
 
 var commandDefinitions = []commandDefinition{
@@ -48,43 +51,65 @@ var commandDefinitions = []commandDefinition{
 		name:             "new",
 		aliases:          []string{"clear"},
 		activeTurnPolicy: commandCancelsTurn,
+		description:      "start a new conversation",
 	},
 	{
 		id:               commandQuit,
 		name:             "quit",
 		aliases:          []string{"exit"},
 		activeTurnPolicy: commandCancelsTurn,
+		description:      "exit bits",
 	},
 	{
 		id:               commandResume,
 		name:             "resume",
 		activeTurnPolicy: commandRejectedDuringTurn,
+		description:      "resume a conversation",
 	},
 	{
 		id:               commandStatus,
 		name:             "status",
 		activeTurnPolicy: commandAllowedDuringTurn,
+		description:      "show session status",
 	},
 	{
 		id:               commandCopy,
 		name:             "copy",
 		activeTurnPolicy: commandRejectedDuringTurn,
+		description:      "copy the latest assistant response",
 	},
 	{
 		id:               commandWeb,
 		name:             "web",
 		activeTurnPolicy: commandAllowedDuringTurn,
+		description:      "open this conversation in Datadog",
 	},
 	{
 		id:               commandSettings,
 		name:             "settings",
 		activeTurnPolicy: commandAllowedDuringTurn,
+		description:      "open assistant settings",
 	},
 	{
 		id:               commandLogout,
 		name:             "logout",
 		activeTurnPolicy: commandCancelsTurn,
+		description:      "sign out from your Datadog account",
 	},
+	{
+		id:               commandPermissions,
+		name:             "permissions",
+		activeTurnPolicy: commandRejectedDuringTurn,
+		description:      "show or switch the permissions mode",
+	},
+}
+
+func commandCompletionSpecs() []editor.CommandSpec {
+	specs := make([]editor.CommandSpec, 0, len(commandDefinitions))
+	for _, definition := range commandDefinitions {
+		specs = append(specs, editor.CommandSpec{Name: definition.name, Aliases: definition.aliases, Detail: definition.description})
+	}
+	return specs
 }
 
 func lookupCommand(name string) (commandDefinition, bool) {
@@ -102,32 +127,36 @@ func lookupCommand(name string) (commandDefinition, bool) {
 }
 
 // parseCommand recognizes a submitted slash command. It returns the command
-// name (lowercased, no leading "/") and true when the input is a single leading
-// "/token" at the beginning of the prompt; anything after whitespace is
-// treated as arguments and ignored. A bare "/", a "/ word" form, or leading
-// whitespace before the slash is not a command, so it falls through to a normal
-// agent turn.
-func parseCommand(input string) (string, bool) {
+// name (lowercased, no leading "/") and its lowercased argument remainder
+// when the input is a single leading "/token" at the beginning of the
+// prompt. A bare "/", a "/ word" form, or leading whitespace before the
+// slash is not a command, so it falls through to a normal agent turn.
+func parseCommand(input string) (string, string, bool) {
 	if !strings.HasPrefix(input, "/") {
-		return "", false
+		return "", "", false
 	}
 	fields := strings.Fields(input)
 	if len(fields) == 0 {
-		return "", false
+		return "", "", false
 	}
 	name := strings.ToLower(strings.TrimPrefix(fields[0], "/"))
 	if name == "" {
-		return "", false
+		return "", "", false
 	}
-	return name, true
+	argument := ""
+	if len(fields) > 1 {
+		argument = strings.ToLower(strings.Join(fields[1:], " "))
+	}
+	return name, argument, true
 }
 
-// dispatchCommand routes a parsed slash command to its handler and returns the
-// (model, cmd) the caller returns from Update. Recognized commands own their
-// side effects (turn cancellation, notices). Unrecognized commands post a
-// transient notice rather than reaching the model, so the control plane never
-// leaks literal slash text into an agent turn.
-func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
+// dispatchCommand routes a parsed slash command and its argument remainder to
+// its handler and returns the (model, cmd) the caller returns from Update.
+// Recognized commands own their side effects (turn cancellation, notices).
+// Unrecognized commands post a transient notice rather than reaching the
+// model, so the control plane never leaks literal slash text into an agent
+// turn.
+func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 	definition, ok := lookupCommand(name)
 	if !ok {
 		return m, m.showNotice(notice(chat.NoticeError, nil, "Unknown command: /%s", name), 0)
@@ -136,12 +165,19 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Logout is already in progress."), 0)
 	}
 
-	active := m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading
+	active := m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading || len(m.pendingApprovals) > 0
 	if active {
 		switch definition.activeTurnPolicy {
 		case commandRejectedDuringTurn:
 			if definition.id == commandCopy {
 				return m, m.showNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response to finish before using /copy."), 0)
+			}
+			if definition.id == commandPermissions {
+				if argument == "" {
+					// A bare /permissions reports the mode during active work.
+					break
+				}
+				return m, m.showNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response and any permission request to finish before switching permissions."), 0)
 			}
 			return m, m.showNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active turn: /%s", name), 0)
 		case commandCancelsTurn:
@@ -181,6 +217,8 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 		return m, batchCommands(m.stopCompletionSearches(), m.openSettingsInBrowser())
 	case commandLogout:
 		return m, m.startLogout()
+	case commandPermissions:
+		return m, batchCommands(m.stopCompletionSearches(), m.switchPermissions(argument))
 	default:
 		panic("unhandled registered command")
 	}
@@ -191,7 +229,7 @@ func (m *Model) dispatchCommand(name string) (tea.Model, tea.Cmd) {
 // predictable and excludes styles, hidden reasoning, tools, and metadata. The
 // terminal owns the OSC 52 clipboard write, matching text selection behavior.
 func (m *Model) copyLatestAssistantResponse() tea.Cmd {
-	text, ok := latestCopyableAssistantResponse(m.blocks)
+	text, ok := latestCopyableAssistantResponse(m.transcript.Blocks)
 	if !ok {
 		return m.showNotice(notice(chat.NoticeWarn, nil, "No completed assistant response is available to copy."), 0)
 	}

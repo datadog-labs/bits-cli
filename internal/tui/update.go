@@ -7,12 +7,15 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/browser"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
+	"github.com/DataDog/bits-cli/internal/tui/splash"
 )
 
 // historyLoadTimeout bounds the conversation-history fetch on startup.
@@ -61,10 +64,16 @@ type (
 // guards against a stale timer clearing a newer notice.
 type noticeExpiredMsg struct{ seq int }
 
-var approvalChoices = [...]agent.ApprovalDecision{
-	agent.ApprovalDeny,
-	agent.ApprovalAllowOnce,
-	agent.ApprovalAllowSession,
+type approvalChoice struct {
+	decision     agent.ApprovalDecision
+	label        string
+	compactLabel string
+}
+
+var approvalChoices = [...]approvalChoice{
+	{decision: agent.ApprovalAllowOnce, label: "Allow", compactLabel: "Allow"},
+	{decision: agent.ApprovalAllowSession, label: "Allow for session", compactLabel: "Session"},
+	{decision: agent.ApprovalDeny, label: "Deny", compactLabel: "Deny"},
 }
 
 // showNotice sets the transient status notice and returns a command that clears
@@ -105,11 +114,12 @@ func waitEvent(generation uint64, ch <-chan agent.Event) tea.Cmd {
 type focus int
 
 const (
-	focusEditor   focus = iota // transcript scroll + text input (and its completion menu)
-	focusApproval              // a tool approval is pending
-	focusPicker                // the /resume conversation picker
-	focusStatus                // the local /status document
-	focusLogin                 // startup OAuth
+	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
+	focusApproval                 // a tool approval is pending
+	focusPicker                   // the /resume conversation picker
+	focusStatus                   // the local /status document
+	focusPermissions              // the permissions picker
+	focusLogin                    // startup OAuth
 )
 
 func (m *Model) focus() focus {
@@ -120,6 +130,8 @@ func (m *Model) focus() focus {
 		return focusPicker
 	case ModeStatus:
 		return focusStatus
+	case ModePermissions:
+		return focusPermissions
 	case ModeChat, ModeTermInit:
 		if len(m.pendingApprovals) > 0 {
 			return focusApproval
@@ -145,10 +157,54 @@ func (m *Model) reconcileFocus() tea.Cmd {
 	return nil
 }
 
+// reconcilePointerShape shows a hand over a clickable accordion row via OSC 22
+// (kitty implements it fully; xterm and foot carry an older, simpler version;
+// other terminals ignore it). It must go through tea.Raw rather than
+// View.Content: Bubble Tea's renderer parses Content into a cell buffer that
+// only special-cases SGR and OSC 8, silently swallowing any other escape
+// sequence instead of writing it to the terminal.
+//
+// Exiting never resets it here: main resets the shape once the program has
+// stopped, which covers every quit path.
+func (m *Model) reconcilePointerShape() tea.Cmd {
+	hand := m.mode == ModeChat && !m.chatViewTooSmall() && m.list.Hovered()
+	if hand == m.pointerIsHand {
+		return nil
+	}
+	m.pointerIsHand = hand
+	shape := "default"
+	if hand {
+		shape = "pointer"
+	}
+	return tea.Raw(ansi.SetPointerShape(shape))
+}
+
 // Update is the single message handler. Only this thread touches Model state. It
 // routes the message to the owning surface, then reconciles editor focus so the
 // cursor always tracks the active surface.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The probe answer can arrive in any mode and no surface uses it. Skipping
+	// reconcileFocus is safe: it is idempotent and runs on the next message.
+	if event, ok := msg.(uv.KittyGraphicsEvent); ok {
+		switch {
+		case splash.ImageRejected(event):
+			m.splashReady = false
+			m.layoutTranscript()
+		case !m.splashReady && splash.ProbeSucceeded(event):
+			m.splashReady = true
+			m.layoutTranscript()
+			return m, splash.Transmit()
+		}
+		return m, nil
+	}
+	if event, ok := msg.(recentConversationsMsg); ok {
+		// A failed background read the user never asked for stays silent.
+		if event.result.Err == nil {
+			m.resume.setConversations(event.result.Conversations)
+			m.layoutTranscript()
+		}
+		return m, nil
+	}
 	if m.mode == ModeLogin {
 		return m.updateLogin(msg)
 	}
@@ -169,7 +225,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	next, cmd := m.dispatch(msg)
-	return next, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus())
+	return next, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
 }
 
 func (m *Model) quit() (tea.Model, tea.Cmd) {
@@ -240,6 +296,11 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		if m.mode == ModeChat {
 			if msg.Button == tea.MouseLeft {
+				// The press might turn into a drag-select, so it isn't a toggle
+				// yet: arm it, and let finishSelection decide on release whether
+				// the gesture stayed a plain click or moved and became a
+				// selection.
+				m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.HeaderAt(msg.Y)
 				return m, m.beginSelection(msg)
 			}
 			return m, nil
@@ -247,6 +308,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMotionMsg:
 		if m.mode == ModeChat {
+			m.list.SetPointerRow(msg.Y)
 			if m.selection.selecting() {
 				return m, m.extendSelection(msg)
 			}
@@ -337,6 +399,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.focus() == focusStatus {
 		return m, m.updateStatus(msg)
 	}
+	if m.focus() == focusPermissions {
+		return m, nil
+	}
 	// Paste, cursor blink, and other editor-bound input; a paste can change the
 	// editor's height, so relayout. When the editor is not the focus it is
 	// blurred and ignores these, showing no cursor.
@@ -416,6 +481,16 @@ func (m *Model) finishSelection(msg tea.MouseReleaseMsg) tea.Cmd {
 		document = m.transcriptSelectionFrame()
 	}
 	text := m.selection.finishGesture(frame, msg.X, msg.Y, transcriptHeight, m.height, document)
+
+	// A gesture that never turned into a real range (anchor == focus) was a
+	// plain click, not a drag-select: if it started on an accordion row,
+	// that's a toggle. A real drag leaves anchor != focus even when the
+	// selected text trims to "", so this checks the range, not the text.
+	if m.hasPendingAccordionToggle && !m.selection.selected() {
+		m.list.ToggleDisclosure(m.pendingAccordionToggle)
+	}
+	m.hasPendingAccordionToggle = false
+
 	if text == "" {
 		return nil
 	}
@@ -458,6 +533,15 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	if m.focus() == focusStatus {
 		return m.updateStatus(msg)
 	}
+	if m.focus() == focusApproval {
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.approvalPanel.ScrollBy(-mouseWheelDelta)
+		case tea.MouseWheelDown:
+			m.approvalPanel.ScrollBy(mouseWheelDelta)
+		}
+		return nil
+	}
 	switch msg.Button {
 	case tea.MouseWheelUp:
 		m.list.ScrollBy(-mouseWheelDelta)
@@ -477,6 +561,7 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	m.turnEvents = nil
 	m.pendingApprovals = nil
 	m.approvalChoice = 0
+	m.approvalPanel.ResetScroll()
 	if m.cancelTurn != nil && !m.cancelRequested {
 		m.cancelTurn() // release the turn/restore context
 	}
@@ -588,6 +673,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.clearSelection()
 		return m, nil
 	}
+	// ctrl+o toggles every tool block whenever the transcript is visible,
+	// whichever chat surface (editor, completion menu, approval) owns input.
+	if msg.String() == "ctrl+o" && m.mode == ModeChat {
+		m.list.ToggleAllDisclosure()
+		return m, nil
+	}
 	switch m.focus() {
 	case focusPicker:
 		return m, m.updateConversationPicker(msg)
@@ -595,6 +686,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleApprovalKey(msg)
 	case focusStatus:
 		return m, m.updateStatus(msg)
+	case focusPermissions:
+		return m, m.updatePermissionsKey(msg)
 	default:
 		return m.handleEditorKey(msg)
 	}
@@ -616,13 +709,33 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if _, registered := lookupCommand(name); registered {
 					m.editor.Reset()
 					m.stopEntitySearch()
-					return m.dispatchCommand(name)
+					return m.dispatchCommand(name, "")
 				}
 			}
 		}
 		cmd := m.editor.Update(msg)
 		m.layoutTranscript()
 		return m, batchCommands(cmd, m.syncCompletionSearches())
+	}
+
+	// The offer is only visible with an empty composer, so these keys have no
+	// competing meaning: submit() already no-ops on empty input.
+	if m.showResume() {
+		key := msg.String()
+		switch key {
+		case "up", "down":
+			delta := 1
+			if key == "up" {
+				delta = -1
+			}
+			m.resume.move(delta, m.resumeVisibleRows())
+			m.layoutTranscript()
+			return m, nil
+		case "enter":
+			if id, ok := m.resume.selectedID(); ok {
+				return m, m.resumeSelectedConversation(id)
+			}
+		}
 	}
 
 	switch msg.String() {
@@ -655,10 +768,14 @@ func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.approvalChoice = (m.approvalChoice + len(approvalChoices) - 1) % len(approvalChoices)
 	case "right", "tab":
 		m.approvalChoice = (m.approvalChoice + 1) % len(approvalChoices)
+	case "pgup":
+		m.approvalPanel.PageUp()
+	case "pgdown":
+		m.approvalPanel.PageDown()
 	case "esc":
 		m.respondToApproval(agent.ApprovalDeny)
 	case "enter":
-		m.respondToApproval(approvalChoices[m.approvalChoice])
+		m.respondToApproval(approvalChoices[m.approvalChoice].decision)
 	}
 	return m, nil
 }
@@ -686,10 +803,10 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	}
 
 	// Slash commands are a native control plane: they never reach the model.
-	if name, ok := parseCommand(raw); ok {
+	if name, argument, ok := parseCommand(raw); ok {
 		m.editor.Reset()
 		m.stopEntitySearch()
-		return m.dispatchCommand(name)
+		return m.dispatchCommand(name, argument)
 	}
 	if m.pendingLogout || m.logoutRunning {
 		return m, nil
@@ -703,7 +820,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Context: turnContext})
+	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Context: turnContext, OnDeny: agent.DenyContinue})
 	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()
@@ -741,7 +858,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
 	case agent.EventTranscript:
-		m.blocks = ev.Transcript.Blocks
+		m.transcript = ev.Transcript
 		m.updatePendingApprovals(ev.Transcript.PendingApprovals())
 		if ev.Transcript.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
@@ -778,6 +895,7 @@ func (m *Model) updatePendingApprovals(pending []agent.Block) {
 	m.pendingApprovals = pending
 	if len(m.pendingApprovals) == 0 || m.pendingApprovals[0].ToolCallID() != current {
 		m.approvalChoice = 0
+		m.approvalPanel.ResetScroll()
 	}
 }
 
@@ -815,15 +933,16 @@ func (m *Model) layoutTranscript() {
 		return
 	}
 	m.editor.SetMenuHeight(max(0, m.height-chatFooterHeight-m.editor.Height()))
-	m.list.SetHeight(max(1, m.height-chatNoticeHeight-chatFooterHeight-m.composerHeight()))
+	m.list.SetHeight(m.transcriptHeight())
+	m.list.SetHeader(m.headerView())
 }
 
-// syncTranscript rebuilds presentation metadata only after m.blocks changes.
+// syncTranscript rebuilds presentation metadata only after m.transcript changes.
 // Editor, cursor, resize, theme, and mode updates need layoutTranscript only.
 func (m *Model) syncTranscript() {
 	if m.mode == ModeTermInit {
 		return
 	}
 	m.layoutTranscript()
-	m.list.SetItems(m.blocks)
+	m.list.SetItems(m.transcript.Blocks)
 }

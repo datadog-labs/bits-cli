@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
@@ -159,7 +161,8 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 		t.Fatalf("presentation item count = %d, want 3", got)
 	}
 	plain := ansi.Strip(list.Render())
-	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "✓ search ToolBlock in internal"} {
+	gutter := strings.Repeat(" ", list.gutterWidth)
+	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "✓ " + gutter + "search ToolBlock in internal"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("group rendering missing %q:\n%s", want, plain)
 		}
@@ -179,7 +182,9 @@ func TestSingletonInspectionRendersAsTool(t *testing.T) {
 		hidden string
 	}{
 		{name: "running", status: agent.ToolRunning, want: "listing .", hidden: "inspecting"},
-		{name: "settled", status: agent.ToolSuccess, want: "✓ list .", hidden: "inspected"},
+		// The gutter sits between the settled glyph and the name, so the check
+		// is no longer immediately adjacent to "list .".
+		{name: "settled", status: agent.ToolSuccess, want: "✓ <gutter>list .", hidden: "inspected"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			list := NewList()
@@ -188,9 +193,11 @@ func TestSingletonInspectionRendersAsTool(t *testing.T) {
 			list.SetHeight(8)
 			list.SetItems([]agent.Block{inspectBlock("1", "list_files", `{"path":""}`, test.status, "listing")})
 
+			gutter := strings.Repeat(" ", list.gutterWidth)
 			plain := ansi.Strip(list.Render())
-			if !strings.Contains(plain, test.want) {
-				t.Fatalf("singleton inspection rendering = %q, want %q", plain, test.want)
+			want := strings.ReplaceAll(test.want, "<gutter>", gutter)
+			if !strings.Contains(plain, want) {
+				t.Fatalf("singleton inspection rendering = %q, want %q", plain, want)
 			}
 			if strings.Contains(plain, test.hidden) || strings.Contains(plain, "└") {
 				t.Fatalf("singleton inspection retained grouped rendering: %q", plain)
@@ -409,6 +416,8 @@ func TestInspectionSpinnerAnimationKeepsHeaderWidth(t *testing.T) {
 	list.SetItems([]agent.Block{inspectBlock("1", "read_file", `{"path":"one"}`, agent.ToolRunning, "")})
 	var width int
 	seen := map[string]bool{}
+	// This single running tool is guttered, but the gutter is spliced in after
+	// the status glyph so the glyph stays the row's leftmost cell.
 	for _, frame := range []int{0, 8, 16} {
 		list.SetFrame(frame)
 		header := headerOf(list.Render())
@@ -508,5 +517,288 @@ func layoutToolBlock(name, input string) agent.Block {
 		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: name + input},
 		Kind: assistant.KindToolResult,
 		Tool: &agent.ToolBlock{Name: name, Input: input, Status: agent.ToolSuccess, IsClientSide: true},
+	}
+}
+
+func TestToggleAllDisclosureKeepsViewportAnchoredOnCollapse(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(2)
+	list.SetItems([]agent.Block{
+		inspectBlock("1", "list_files", `{"path":"a"}`, agent.ToolSuccess, "first"),
+		inspectBlock("2", "list_files", `{"path":"b"}`, agent.ToolSuccess, "second"),
+	})
+	list.Render() // populate the render cache ToggleAllDisclosure reads through
+
+	if h := list.itemHeight(0); h < 3 {
+		t.Fatalf("fixture item 0 height = %d, want at least 3 expanded lines to exercise the clamp", h)
+	}
+	list.offsetIdx, list.offsetLine = 0, 2 // scrolled two lines into item 0's body
+
+	list.ToggleAllDisclosure() // collapse everything
+
+	if list.offsetIdx != 0 {
+		t.Fatalf("collapsing walked the viewport to item %d, want it to stay anchored on item 0", list.offsetIdx)
+	}
+	if h := list.itemHeight(0); list.offsetLine >= h {
+		t.Fatalf("offsetLine %d falls outside item 0's collapsed height %d", list.offsetLine, h)
+	}
+}
+
+// TestGutterReservation: only a single tool reserves the accordion gutter,
+// and only when the viewport leaves room for content beside it.
+func TestGutterReservation(t *testing.T) {
+	reasoning := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}}
+	tool := toolBlockOf(agent.ToolSuccess)
+	tool.ID = agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"}
+	gutterWidth := components.AccordionWidth(DefaultStyles(true).Accordion)
+	for _, tc := range []struct {
+		name  string
+		block agent.Block
+		width int
+		want  int
+	}{
+		{"single tool", tool, 80, gutterWidth},
+		{"reasoning group", reasoning, 80, 0},
+		{"no room left for content", tool, gutterWidth, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			list := NewList()
+			list.SetStyles(DefaultStyles(true))
+			list.SetWidth(tc.width)
+			list.SetHeight(8)
+			list.SetItems([]agent.Block{tc.block})
+			if got := list.gutter(list.view[0]); got != tc.want {
+				t.Fatalf("gutter() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGutteredItemStaysWithinTotalWidth(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	for _, line := range list.renderItem(0) {
+		if w := ansi.StringWidth(line); w > list.width {
+			t.Fatalf("rendered line %q is %d cells wide, want <= %d", line, w, list.width)
+		}
+	}
+}
+
+func TestToggleDisclosureCollapsesToHeaderLineAndBack(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	id := list.view[0].id
+	full := list.itemHeight(0)
+	if full <= 1 {
+		t.Fatalf("fixture tool did not produce a disclosable body, height = %d", full)
+	}
+
+	list.ToggleDisclosure(id)
+	if got := list.itemHeight(0); got != 1 {
+		t.Fatalf("collapsed height = %d, want 1", got)
+	}
+
+	list.ToggleDisclosure(id)
+	if got := list.itemHeight(0); got != full {
+		t.Fatalf("re-expanded height = %d, want %d", got, full)
+	}
+}
+
+func TestHeaderOnlyToolReservesGutterButDrawsNoChevron(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(4)
+	list.SetItems([]agent.Block{{
+		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"},
+		Kind: assistant.KindToolResult,
+		Tool: &agent.ToolBlock{Name: "list_monitors", Status: agent.ToolSuccess},
+	}})
+
+	if height := list.itemHeight(0); height != 1 {
+		t.Fatalf("header-only tool rendered %d lines, want 1", height)
+	}
+	if _, ok := list.HeaderAt(0); ok {
+		t.Fatal("header-only tool is clickable")
+	}
+	lines := list.renderItem(0)
+	gutter := strings.Repeat(" ", list.gutterWidth)
+	// The gutter sits right after the fixed-width status glyph, not before it,
+	// so the glyph stays the leftmost cell on the row.
+	if got := ansi.Strip(ansi.Cut(lines[0], statusGlyphWidth, statusGlyphWidth+list.gutterWidth)); got != gutter {
+		t.Fatalf("header-only tool did not reserve the gutter after the status glyph: %q", lines[0])
+	}
+}
+
+// TestDocumentAgreesWithVisibleSurfaceAcrossCollapseAndScroll compares each
+// visible row against the document row it corresponds to (surface.Top + i)
+// with a collapsed item and a non-zero scroll offset.
+func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseAndScroll(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(3)
+
+	keys := []string{"call-0", "call-1", "call-2"}
+	blocks := make([]agent.Block, len(keys))
+	for i, key := range keys {
+		block := toolBlockOf(agent.ToolSuccess)
+		block.ID = agent.BlockID{Scope: agent.ScopeTool, Key: key}
+		blocks[i] = block
+	}
+	list.SetItems(blocks)
+
+	list.ToggleDisclosure(list.view[0].id)
+	list.ScrollToTop()
+	list.ScrollBy(1)
+
+	surface := list.VisibleSurface()
+	if surface.Top == 0 {
+		t.Fatal("fixture did not scroll into a non-zero document offset")
+	}
+	documentLines := strings.Split(list.Document(), "\n")
+	for i, line := range strings.Split(surface.Content, "\n") {
+		row := surface.Top + i
+		if row >= len(documentLines) {
+			break // viewport-fill padding past the document's end
+		}
+		if line != documentLines[row] {
+			t.Fatalf("surface row %d (document row %d) differs — surface %q, document %q", i, row, line, documentLines[row])
+		}
+	}
+}
+
+func TestHeaderAtOnlyMatchesAVisibleHeaderRow(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	list.ScrollToTop() // drop follow so the header starts visible
+	list.SetHeight(2)
+	if id, ok := list.HeaderAt(0); !ok || id != list.view[0].id {
+		t.Fatalf("HeaderAt(0) = %v, %t, want the tool's header", id, ok)
+	}
+	if _, ok := list.HeaderAt(1); ok {
+		t.Fatal("HeaderAt matched a detail row")
+	}
+	if _, ok := list.HeaderAt(2); ok {
+		t.Fatal("HeaderAt matched a row outside the viewport")
+	}
+
+	list.SetHeight(1)
+	list.ScrollBy(1)
+	if _, ok := list.HeaderAt(0); ok {
+		t.Fatal("HeaderAt matched after the header scrolled off the top")
+	}
+}
+
+func TestHoverPaintsOnlyTheSurfaceNotTheDocument(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	list.ScrollToTop()
+	resting := list.Render()
+	document := list.Document()
+	height := list.itemHeight(0)
+
+	list.SetPointerRow(0)
+	if !list.Hovered() {
+		t.Fatal("pointer over the header did not hover it")
+	}
+	if list.Render() == resting {
+		t.Fatal("hover did not change the rendered surface")
+	}
+	if list.Document() != document || list.itemHeight(0) != height {
+		t.Fatal("hover leaked into the document or the item height")
+	}
+
+	list.SetPointerRow(1)
+	if list.Hovered() || list.Render() != resting {
+		t.Fatal("moving off the header row did not clear hover")
+	}
+}
+
+// TestToggleAllDisclosure: the first ctrl+o collapses, the next expands, and
+// each press discards individual toggles.
+func TestToggleAllDisclosure(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	full := list.itemHeight(0)
+
+	list.ToggleDisclosure(list.view[0].id) // collapsed individually
+	list.ToggleAllDisclosure()
+	if got := list.itemHeight(0); got != 1 {
+		t.Fatalf("collapse-all height = %d, want 1", got)
+	}
+	list.ToggleAllDisclosure()
+	if got := list.itemHeight(0); got != full {
+		t.Fatalf("expand-all height = %d, want %d (individual collapse discarded)", got, full)
+	}
+}
+
+func TestCollapseAllAppliesToBlocksArrivingLater(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	list.ToggleAllDisclosure()
+
+	later := toolBlockOf(agent.ToolSuccess)
+	later.ID = agent.BlockID{Scope: agent.ScopeTool, Key: "call-2"}
+	list.SetItems(append(list.items, later))
+	if got := list.itemHeight(1); got != 1 {
+		t.Fatalf("a block arriving after collapse-all rendered %d lines, want 1", got)
+	}
+}
+
+func TestResetClearsDisclosureState(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	full := list.itemHeight(0)
+	blocks := list.items
+	for _, collapse := range []func(){
+		list.ToggleAllDisclosure,
+		func() { list.ToggleDisclosure(list.view[0].id) },
+	} {
+		collapse()
+		list.Reset()
+		list.SetItems(blocks)
+		if got := list.itemHeight(0); got != full {
+			t.Fatalf("after Reset height = %d, want the default expanded %d", got, full)
+		}
+	}
+}
+
+// TestHoverFollowsTheTailPinBeforeRender: a streamed append while following
+// moves content under a stationary pointer. Hit-testing runs before the next
+// render (pointer-shape reconciliation), so it must see the re-anchored tail.
+func TestHoverFollowsTheTailPinBeforeRender(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(3)
+	blocks := make([]agent.Block, 0, 4)
+	for i := range 4 {
+		block := toolBlockOf(agent.ToolSuccess)
+		block.ID = agent.BlockID{Scope: agent.ScopeTool, Key: fmt.Sprintf("call-%d", i)}
+		blocks = append(blocks, block)
+	}
+	list.SetItems(blocks[:3])
+	chevronRow := func() int {
+		for i, line := range strings.Split(list.Render(), "\n") {
+			if strings.ContainsAny(ansi.Strip(line), "▼▶") {
+				return i
+			}
+		}
+		t.Fatal("no chevron visible")
+		return -1
+	}
+	row := chevronRow()
+	list.SetPointerRow(row)
+	if !list.Hovered() {
+		t.Fatal("pointer over the header did not hover it")
+	}
+
+	// Streamed append of a one-line (header-only) tool: the tail pin shifts
+	// content up by an odd row count, so a detail row lands under the pointer.
+	blocks[3] = agent.Block{
+		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: "call-3"},
+		Kind: assistant.KindToolResult,
+		Tool: &agent.ToolBlock{Name: "list_monitors", Status: agent.ToolSuccess},
+	}
+	list.SetItems(blocks)
+	hovered := list.Hovered()
+	if want := chevronRow() == row; hovered != want {
+		t.Fatalf("Hovered() before render = %t, but the rendered row under the pointer is a header: %t", hovered, want)
 	}
 }

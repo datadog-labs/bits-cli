@@ -32,3 +32,16 @@ func BenchmarkMarkdownRendererStableConfig(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkMarkdownRendererStreaming(b *testing.B) {
+	style := markdownStyleConfig(true)
+	doc := generatedMarkdown(40)
+	const fragment = 500
+	b.ReportAllocs()
+	for b.Loop() {
+		var r markdownRenderer
+		for n := fragment; n < len(doc)+fragment; n += fragment {
+			benchmarkMarkdown = r.Render(doc[:min(n, len(doc))], 80, style)
+		}
+	}
+}

@@ -72,54 +72,60 @@ func (e *Engine) ListConversations(ctx context.Context) <-chan ConversationListR
 	}
 	go func() {
 		defer close(out)
-		released := false
-		release := func() {
-			if !released {
-				e.active.Store(false)
-				released = true
-			}
-		}
-		defer release()
-		publish := func(result ConversationListResult) {
-			// Completion includes releasing ownership: after receive, the caller
-			// may immediately start the next engine operation.
-			release()
-			out <- result
-		}
-		backend, ok := e.backend.(ConversationListBackend)
-		if !ok {
-			publish(ConversationListResult{Err: ErrConversationListUnsupported})
-			return
-		}
-		response, err := backend.UserConversations(ctx)
-		if ctx.Err() != nil {
-			err = ctx.Err()
-		}
-		if err != nil {
-			publish(ConversationListResult{Err: err})
-			return
-		}
-		if response == nil {
-			publish(ConversationListResult{Err: ErrMalformedConversationList})
-			return
-		}
-		if response.Data.Type != "user-conversations-response" {
-			publish(ConversationListResult{Err: fmt.Errorf("%w: unexpected response type %q", ErrMalformedConversationList, response.Data.Type)})
-			return
-		}
-		conversations := make([]assistant.ConversationSummary, 0, len(response.Data.Attributes.Conversations))
-		omitted := 0
-		for _, summary := range response.Data.Attributes.Conversations {
-			id := strings.TrimSpace(summary.ConversationID)
-			if !validConversationID(id) || id != summary.ConversationID || summary.ID != summary.ConversationID {
-				omitted++
-				continue
-			}
-			conversations = append(conversations, summary)
-		}
-		publish(ConversationListResult{Conversations: conversations, Omitted: omitted})
+		result := e.fetchConversations(ctx)
+		// Completion includes releasing ownership: after receive, the caller may
+		// immediately start the next engine operation.
+		e.active.Store(false)
+		out <- result
 	}()
 	return out
+}
+
+// RecentConversations reads the list without taking the operation gate, so a
+// background read cannot fail the user's next turn with ErrOperationActive. It
+// mutates no engine state and e.backend is never reassigned after construction.
+func (e *Engine) RecentConversations(ctx context.Context) <-chan ConversationListResult {
+	out := make(chan ConversationListResult, 1)
+	go func() {
+		defer close(out)
+		out <- e.fetchConversations(ctx)
+	}()
+	return out
+}
+
+// fetchConversations is the backend read and record validation shared by both
+// entry points. Summaries are copied into a fresh slice, so callers never alias
+// backend storage.
+func (e *Engine) fetchConversations(ctx context.Context) ConversationListResult {
+	backend, ok := e.backend.(ConversationListBackend)
+	if !ok {
+		return ConversationListResult{Err: ErrConversationListUnsupported}
+	}
+	response, err := backend.UserConversations(ctx)
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		return ConversationListResult{Err: err}
+	}
+	if response == nil {
+		return ConversationListResult{Err: ErrMalformedConversationList}
+	}
+	if response.Data.Type != "user-conversations-response" {
+		return ConversationListResult{Err: fmt.Errorf("%w: unexpected response type %q",
+			ErrMalformedConversationList, response.Data.Type)}
+	}
+	conversations := make([]assistant.ConversationSummary, 0, len(response.Data.Attributes.Conversations))
+	omitted := 0
+	for _, summary := range response.Data.Attributes.Conversations {
+		id := strings.TrimSpace(summary.ConversationID)
+		if !validConversationID(id) || id != summary.ConversationID || summary.ID != summary.ConversationID {
+			omitted++
+			continue
+		}
+		conversations = append(conversations, summary)
+	}
+	return ConversationListResult{Conversations: conversations, Omitted: omitted}
 }
 
 // SwitchConversation loads into a temporary transcript and changes the

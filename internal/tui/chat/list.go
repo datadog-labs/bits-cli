@@ -5,8 +5,11 @@ import (
 	"hash/fnv"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 )
 
 // List is a lazily-rendered, vertically-stacked view of transcript items with an
@@ -32,12 +35,32 @@ type List struct {
 	view  []presentationItem
 	sty   Styles
 
+	// header is pre-rendered content occupying the document's first rows. It
+	// becomes a synthetic presentation item so the scroll, document-coordinate
+	// and selection paths need no knowledge of it.
+	header string
+
 	// frame is the animation step handed to in-flight status indicators. Animated
 	// cache entries include it in their identity, while settled entries ignore it.
 	frame int
 
 	cache    map[agent.BlockID]listLineEntry
 	renderer blockRenderer
+
+	// gutterWidth is the accordion control's width, fixed per style set; 0
+	// (before the first SetStyles) disables the gutter.
+	gutterWidth int
+
+	// collapseAll is the ctrl+o default for every guttered block; toggled
+	// holds per-block clicks that invert it. ctrl+o clears toggled, so the
+	// default applies uniformly, including to blocks that arrive later.
+	collapseAll bool
+	toggled     map[agent.BlockID]bool
+
+	// pointerY is the viewport row under the mouse, or -1 when unknown. Hover
+	// is derived from it at render time, so it can never go stale when the
+	// content moves under a stationary pointer.
+	pointerY int
 }
 
 // Surface is the visible transcript and its row offset in the full document.
@@ -56,20 +79,39 @@ type presentationItem struct {
 	presentations []toolPresentation
 }
 
-// listLineEntry memoizes one block's rendered lines (height is len(lines)). An
-// animated entry is valid only for the frame that produced it; a settled entry
-// remains valid as the global animation frame advances.
+// headerGroupKey marks the synthetic header item. Its start/end are
+// headerSentinel: it has no backing block, and every reader of start must
+// tolerate that.
+const (
+	headerGroupKey = "header"
+	headerSentinel = -1
+)
+
+// headerBlockID keys the header's cache entry. The NUL-prefixed key cannot
+// collide with a client-minted or wire id, which keeps this a view-layer
+// concern rather than a new BlockScope in the agent package.
+var headerBlockID = agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00header"}
+
+// listLineEntry memoizes one block's rendered lines (height is len(lines)),
+// including the accordion gutter and collapse. An animated entry is valid only
+// for the frame that produced it; a settled entry remains valid as the global
+// animation frame advances.
 type listLineEntry struct {
-	rev      uint64
-	width    int
-	animated bool
-	frame    int
-	lines    []string
+	rev       uint64
+	width     int
+	animated  bool
+	frame     int
+	collapsed bool
+	lines     []string
+
+	// disclosable reports that the entry drew a clickable chevron: it has
+	// detail rows to hide, as opposed to a blank gutter.
+	disclosable bool
 }
 
 // NewList returns an empty list with a one-row gap between blocks.
 func NewList() *List {
-	return &List{gap: 1, follow: true, cache: map[agent.BlockID]listLineEntry{}}
+	return &List{gap: 1, follow: true, cache: map[agent.BlockID]listLineEntry{}, toggled: map[agent.BlockID]bool{}, pointerY: -1}
 }
 
 // Following reports whether the view is pinned to the tail.
@@ -98,6 +140,7 @@ func (l *List) Height() int { return l.height }
 // SetStyles swaps the render styles and invalidates the cache (old palette).
 func (l *List) SetStyles(sty Styles) {
 	l.sty = sty
+	l.gutterWidth = components.AccordionWidth(sty.Accordion)
 	l.invalidateAll()
 }
 
@@ -108,7 +151,7 @@ func (l *List) SetStyles(sty Styles) {
 // large transcripts become common.
 func (l *List) SetItems(items []agent.Block) {
 	l.items = items
-	l.view = buildPresentation(items)
+	l.view = buildPresentation(l.header, items)
 	if l.offsetIdx >= len(l.view) {
 		l.offsetIdx = max(0, len(l.view)-1)
 		l.offsetLine = 0
@@ -116,15 +159,53 @@ func (l *List) SetItems(items []agent.Block) {
 	l.clampOffset()
 }
 
+// SetHeader replaces the document's leading content. Passing "" removes it.
+//
+// Adding or removing the header renumbers every presentation item, and
+// normalizeOffset carries an offset only through a changed height, not a
+// shifted index, so a scrolled offset is rebased here.
+func (l *List) SetHeader(header string) {
+	if header == l.header {
+		return
+	}
+	had, has := l.header != "", header != ""
+	l.header = header
+	l.view = buildPresentation(l.header, l.items)
+	switch {
+	case had == has:
+	case has:
+		// Every item moved down one, so an offset into content follows it. One
+		// resting at the very top stays, or the new header is scrolled past.
+		if l.offsetIdx > 0 || l.offsetLine > 0 {
+			l.offsetIdx++
+		}
+	case l.offsetIdx > 0:
+		l.offsetIdx--
+	default:
+		// The offset pointed inside the header, which is gone, so there is no
+		// row to carry.
+		l.offsetLine = 0
+	}
+	l.normalizeOffset()
+}
+
+func headerRevision(header string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(header))
+	return h.Sum64()
+}
+
 // Reset clears items, scroll state, and rendered-block cache. Conversation
 // resets need the cache clear because a new Transcript may reuse synthetic
 // block IDs and revisions from the previous conversation.
 func (l *List) Reset() {
 	l.items = nil
-	l.view = nil
+	l.view = buildPresentation(l.header, nil)
 	l.offsetIdx = 0
 	l.offsetLine = 0
 	l.follow = true
+	l.collapseAll = false
+	clear(l.toggled)
 	l.invalidateAll()
 }
 
@@ -207,40 +288,133 @@ func (l *List) stacksTight(it presentationItem) bool {
 	}
 }
 
-// renderItem returns the block's rendered lines, cached by revision and width.
-// Animated entries additionally key on frame, so unrelated model updates at the
-// same frame do not render them again; settled entries remain cached as the
-// global animation frame advances.
-func (l *List) renderItem(idx int) []string {
-	it := l.view[idx]
-	animated := l.itemAnimated(it)
-	if e, ok := l.cache[it.id]; ok &&
-		e.rev == it.rev && e.width == l.width && e.animated == animated &&
-		(!animated || e.frame == l.frame) {
-		return e.lines
+// gutter returns the accordion gutter width it reserves: the control's width
+// for a single tool when the viewport has room left for content, 0 otherwise.
+// Reasoning groups and multi-tool inspection groups keep their left edge.
+func (l *List) gutter(it presentationItem) int {
+	if len(it.presentations) != 1 || l.gutterWidth == 0 || l.width <= l.gutterWidth {
+		return 0
 	}
-	lines := strings.Split(l.renderPresentationItem(it), "\n")
-	l.cache[it.id] = listLineEntry{
-		rev:      it.rev,
-		width:    l.width,
-		animated: animated,
-		frame:    l.frame,
-		lines:    lines,
-	}
-	return lines
+	return l.gutterWidth
 }
 
-func (l *List) renderPresentationItem(it presentationItem) string {
+func (l *List) collapsed(id agent.BlockID) bool { return l.collapseAll != l.toggled[id] }
+
+// ToggleDisclosure flips one block's collapsed state.
+func (l *List) ToggleDisclosure(id agent.BlockID) {
+	l.toggled[id] = !l.toggled[id]
+}
+
+// ToggleAllDisclosure collapses every guttered block, or expands them all if
+// they were collapsed, discarding individual toggles.
+func (l *List) ToggleAllDisclosure() {
+	l.collapseAll = !l.collapseAll
+	clear(l.toggled)
+	// Keep the viewport anchored to the current item's header instead of
+	// letting a now-shorter item's shrunk height carry the offset into
+	// later blocks.
+	if l.offsetIdx < len(l.view) {
+		l.offsetLine = min(l.offsetLine, max(l.itemHeight(l.offsetIdx)-1, 0))
+	}
+}
+
+// SetPointerRow records the viewport row under the mouse; any row outside the
+// viewport clears hover.
+func (l *List) SetPointerRow(y int) { l.pointerY = y }
+
+// Hovered reports whether the pointer sits over a clickable accordion row.
+func (l *List) Hovered() bool {
+	_, ok := l.HeaderAt(l.pointerY)
+	return ok
+}
+
+// HeaderAt returns the block whose clickable accordion header sits on viewport
+// row y. The whole row is the target, so only y matters.
+func (l *List) HeaderAt(y int) (agent.BlockID, bool) {
+	if y < 0 || y >= l.height {
+		return agent.BlockID{}, false
+	}
+	l.settle()
+	row := -l.offsetLine
+	for idx := l.offsetIdx; idx < len(l.view) && row <= y; idx++ {
+		e := l.entry(idx)
+		if row == y && e.disclosable {
+			return l.view[idx].id, true
+		}
+		row += len(e.lines) + l.gapAfter(idx)
+	}
+	return agent.BlockID{}, false
+}
+
+func (l *List) renderItem(idx int) []string { return l.entry(idx).lines }
+
+// entry returns the block's rendered lines, cached by revision, width and
+// collapse state. Animated entries additionally key on frame, so unrelated
+// model updates at the same frame do not render them again; settled entries
+// remain cached as the global animation frame advances.
+func (l *List) entry(idx int) listLineEntry {
+	it := l.view[idx]
+	gutter := l.gutter(it)
+	width := l.width - gutter
+	animated := l.itemAnimated(it)
+	collapsed := gutter > 0 && l.collapsed(it.id)
+	if e, ok := l.cache[it.id]; ok &&
+		e.rev == it.rev && e.width == width && e.animated == animated && e.collapsed == collapsed &&
+		(!animated || e.frame == l.frame) {
+		return e
+	}
+	e := listLineEntry{
+		rev:       it.rev,
+		width:     width,
+		animated:  animated,
+		frame:     l.frame,
+		collapsed: collapsed,
+		lines:     strings.Split(l.renderPresentationItem(it, width), "\n"),
+	}
+	if gutter > 0 {
+		e.disclosable = len(e.lines) > 1
+		e.lines = l.addGutter(e.lines, e.disclosable, collapsed)
+	}
+	l.cache[it.id] = e
+	return e
+}
+
+// addGutter splices the accordion control into a tool's header and indents
+// its detail rows, dropping them when collapsed. The status glyph stays the
+// leftmost cell, so the control goes right after it.
+func (l *List) addGutter(lines []string, disclosable, collapsed bool) []string {
+	blank := strings.Repeat(" ", l.gutterWidth)
+	control := blank
+	if disclosable {
+		control = components.Accordion(l.sty.Accordion, !collapsed)
+		if collapsed {
+			lines = lines[:1]
+		}
+	}
+	out := make([]string, len(lines))
+	out[0] = ansi.Cut(lines[0], 0, statusGlyphWidth) + control + ansi.TruncateLeft(lines[0], statusGlyphWidth, "")
+	for i := 1; i < len(lines); i++ {
+		out[i] = blank + lines[i]
+	}
+	return out
+}
+
+func (l *List) renderPresentationItem(it presentationItem, width int) string {
+	// First: the header has no backing block, so it must return before any
+	// branch indexes l.items.
+	if it.group == headerGroupKey {
+		return l.header
+	}
 	if it.group == reasoningGroupKey {
-		return renderReasoningGroup(l.items[it.start:it.end], l.width, l.sty, l.frame)
+		return renderReasoningGroup(l.items[it.start:it.end], width, l.sty, l.frame)
 	}
 	if it.group == inspectionGroupKey && len(it.presentations) > 1 {
-		return renderInspectionGroup(l.items[it.start:it.end], it.presentations, l.width, l.sty, l.frame)
+		return renderInspectionGroup(l.items[it.start:it.end], it.presentations, width, l.sty, l.frame)
 	}
 	if len(it.presentations) == 1 {
-		return renderPresentedTool(l.items[it.start].Tool, it.presentations[0], l.width, l.sty, l.frame)
+		return renderPresentedTool(l.items[it.start].Tool, it.presentations[0], width, l.sty, l.frame)
 	}
-	return l.renderer.RenderBlock(l.items[it.start], l.width, l.sty, l.frame)
+	return l.renderer.RenderBlock(l.items[it.start], width, l.sty, l.frame)
 }
 
 // itemAnimated reports whether rendering depends on the frame counter. Waiting
@@ -397,13 +571,19 @@ func (l *List) VisibleSurface() Surface {
 	return l.renderSurface(true)
 }
 
-func (l *List) renderSurface(withPosition bool) Surface {
-	// Self-heal the tail pin: streaming growth or a resize can leave the offset
-	// above the true bottom, so re-anchor here, the single render boundary.
+// settle self-heals the tail pin: streaming growth or a resize can leave the
+// offset above the true bottom. Rendering and hit-testing both call it, so a
+// hit test between an update and the next render sees the rows that render
+// will draw.
+func (l *List) settle() {
 	l.normalizeOffset()
 	if l.follow && !l.AtBottom() {
 		l.ScrollToBottom()
 	}
+}
+
+func (l *List) renderSurface(withPosition bool) Surface {
+	l.settle()
 
 	budget := max(l.height, 0)
 	lines := make([]string, 0, budget)
@@ -442,6 +622,9 @@ func (l *List) renderSurface(withPosition bool) Surface {
 	for len(lines) < budget {
 		lines = append(lines, "")
 	}
+	if l.Hovered() {
+		lines[l.pointerY] = components.PaintRowBackground(lines[l.pointerY], l.width, l.sty.Accordion.HoverBackground)
+	}
 	top := 0
 	if withPosition {
 		top = l.offsetRow()
@@ -449,13 +632,23 @@ func (l *List) renderSurface(withPosition bool) Surface {
 	return Surface{Content: strings.Join(lines, "\n"), Top: top}
 }
 
+// HeaderRows is how many document rows the header owns, including the gap
+// after it, and 0 when there is no header. Callers that read meaning from
+// document rows — text selection — need it to tell decoration from transcript.
+// It follows Document's item-plus-gap accounting.
+func (l *List) HeaderRows() int {
+	if l.header == "" || len(l.view) == 0 {
+		return 0
+	}
+	return len(l.renderItem(0)) + max(l.gapAfter(0), 0)
+}
+
 // Document renders the complete transcript without viewport fill rows or
 // changing the current scroll position.
 func (l *List) Document() string {
 	lines := make([]string, 0)
 	for idx := range l.view {
-		itemLines := l.renderItem(idx)
-		lines = append(lines, itemLines...)
+		lines = append(lines, l.renderItem(idx)...)
 		for range max(l.gapAfter(idx), 0) {
 			lines = append(lines, "")
 		}
@@ -483,8 +676,17 @@ func (l *List) ScrollByChanged(lines int) bool {
 	return idx != l.offsetIdx || line != l.offsetLine || follow != l.follow
 }
 
-func buildPresentation(blocks []agent.Block) []presentationItem {
-	items := make([]presentationItem, 0, len(blocks))
+func buildPresentation(header string, blocks []agent.Block) []presentationItem {
+	items := make([]presentationItem, 0, len(blocks)+1)
+	if header != "" {
+		items = append(items, presentationItem{
+			id:    headerBlockID,
+			rev:   headerRevision(header),
+			group: headerGroupKey,
+			start: headerSentinel,
+			end:   headerSentinel,
+		})
+	}
 	for i := 0; i < len(blocks); {
 		if blocks[i].Kind == assistant.KindReasoning {
 			j := i + 1

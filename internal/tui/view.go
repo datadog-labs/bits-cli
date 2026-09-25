@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,29 @@ const (
 	approvalCompactWidth = 50
 )
 
+// terminalMultiplexerActive reports whether the process runs inside tmux,
+// Zellij, or screen. AllMotion forwards every pointer move, which these
+// multiplexers noticeably lag on, so hover degrades to CellMotion under them
+// (following earendil-works/pi's mouse handling).
+func terminalMultiplexerActive() bool {
+	for _, env := range []string{"TMUX", "ZELLIJ", "STY"} {
+		if os.Getenv(env) != "" {
+			return true
+		}
+	}
+	term := os.Getenv("TERM")
+	return strings.HasPrefix(term, "tmux") || strings.HasPrefix(term, "screen")
+}
+
+// chatMouseMode escalates to AllMotion so accordion hover can be reported. It
+// never escalates under a terminal multiplexer. Resolved once, in newShell.
+func chatMouseMode() tea.MouseMode {
+	if terminalMultiplexerActive() {
+		return tea.MouseModeCellMotion
+	}
+	return tea.MouseModeAllMotion
+}
+
 // View lays out the transcript viewport, notice row, input, and metadata footer.
 // Alt-screen and mouse tracking, which were program options in Bubble Tea v1,
 // are now declared on the returned view.
@@ -49,6 +73,7 @@ func (m *Model) View() tea.View {
 			v.Content = lipgloss.Place(max(1, m.width), max(1, m.height), lipgloss.Center, lipgloss.Center, message)
 			break
 		}
+		v.MouseMode = m.chatMouseMode
 		v.Content = m.chatView()
 	case ModeLogin:
 		// A valid login model returns above. Keep a bounded fallback for the
@@ -63,6 +88,8 @@ func (m *Model) View() tea.View {
 		if m.status != nil {
 			v.Content = m.status.View()
 		}
+	case ModePermissions:
+		v.Content = m.permissionsView()
 	}
 	return v
 }
@@ -120,23 +147,34 @@ func (m *Model) chatViewBase(transcript string) string {
 func (m *Model) visibleSelectionFrame(scope selectionScope) selectionFrame {
 	surface := m.list.VisibleSurface()
 	transcriptHeight := max(0, m.list.Height())
+	headerRows := m.list.HeaderRows()
 	rows := make([]int, max(0, m.height))
 	for y := range rows {
-		switch {
+		switch document := surface.Top + y; {
 		case scope == selectionScopeLower:
 			rows[y] = y
-		case y < transcriptHeight:
-			rows[y] = surface.Top + y
-		default:
+		case y >= transcriptHeight:
 			// Lower-pane rows do not belong to a transcript selection.
 			rows[y] = -1
+		case document < headerRows:
+			// The startup header is decoration, not transcript.
+			rows[y] = -1
+		default:
+			rows[y] = document
 		}
+	}
+	// The lower pane is in screen coordinates, where the header's document rows
+	// mean nothing, so it keeps every row selectable.
+	floor := headerRows
+	if scope == selectionScopeLower {
+		floor = 0
 	}
 	return newSelectionFrame(
 		m.chatViewBase(surface.Content),
 		m.width,
 		m.height,
 		rows,
+		floor,
 	)
 }
 
@@ -149,6 +187,7 @@ func (m *Model) transcriptSelectionFrame() selectionFrame {
 		m.width,
 		selectionRowCount(content),
 		nil,
+		m.list.HeaderRows(),
 	)
 }
 
@@ -195,7 +234,7 @@ func (m *Model) approvalView() string {
 		if prompt.Title != "" {
 			title = escape.Inline(prompt.Title)
 		}
-		detail = escape.Inline(prompt.Detail)
+		detail = prompt.Detail
 	}
 
 	queue := "Permission Required"
@@ -205,21 +244,33 @@ func (m *Model) approvalView() string {
 	content := components.PanelContent{
 		Title:   queue,
 		Dismiss: "ESC x",
-		Body: func(width int) string {
-			return m.approvalBody(width, title, detail)
+		BodyHeader: func(width int) string {
+			return m.styles.Approval.Text.Render(ansi.Wordwrap(title, width, "-"))
 		},
-		CompactTitle: queue,
+		ScrollableBody: func(width int) string {
+			if rendered, ok := chat.RenderToolApproval(block.Tool, width, m.chatStyles); ok {
+				return rendered
+			}
+			return m.styles.Approval.Detail.Render(ansi.Wordwrap(escape.Inline(detail), width, "-"))
+		},
+		BodyFooter: func(width int) string {
+			return m.approvalActions(width)
+		},
+		BodyFooterGap: 1,
+		CompactTitle:  queue,
 		CompactBody: func(width int) string {
 			lines := []string{m.styles.Approval.Text.Render(ansi.Truncate(title, width, "…"))}
-			if detail != "" {
-				lines = append(lines, m.styles.Approval.Detail.Render(ansi.Truncate(detail, width, "…")))
+			if rendered, ok := chat.RenderToolApproval(block.Tool, width, m.chatStyles); ok {
+				lines = append(lines, rendered)
+			} else if detail != "" {
+				lines = append(lines, m.styles.Approval.Detail.Render(ansi.Truncate(escape.Inline(detail), width, "…")))
 			}
 			lines = append(lines, "", m.approvalActions(width))
 			return strings.Join(lines, "\n")
 		},
 		TinyMessage: "Resize terminal to approve",
 	}
-	panel := components.NewPanel(m.styles.Approval.Panel).Render(m.width, max(1, m.approvalAvailableHeight()), content)
+	panel := m.approvalPanel.Render(m.width, max(1, m.approvalAvailableHeight()), content)
 	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, panel)
 }
 
@@ -227,26 +278,16 @@ func (m *Model) approvalAvailableHeight() int {
 	return m.height - chatNoticeHeight - chatFooterHeight - m.editor.Height()
 }
 
-func (m *Model) approvalBody(width int, title, detail string) string {
-	sty := m.styles.Approval
-	lines := []string{sty.Text.Render(ansi.Wordwrap(title, width, "-"))}
-	if detail != "" {
-		lines = append(lines, sty.Detail.Render(ansi.Wordwrap(detail, width, "-")))
-	}
-	lines = append(lines, "", m.approvalActions(width))
-	return strings.Join(lines, "\n")
-}
-
 // approvalActions renders the choice row within width, condensing labels on
 // narrow terminals. The focused choice uses the interactive fill.
 func (m *Model) approvalActions(width int) string {
 	sty := m.styles.Approval
-	labels := [...]string{"Deny", "Allow once", "Allow for session"}
-	if width < approvalCompactWidth {
-		labels = [...]string{"Deny", "Once", "Session"}
-	}
-	actions := make([]string, len(labels))
-	for i, label := range labels {
+	actions := make([]string, len(approvalChoices))
+	for i, choice := range approvalChoices {
+		label := choice.label
+		if width < approvalCompactWidth {
+			label = choice.compactLabel
+		}
 		if i == m.approvalChoice {
 			actions[i] = sty.Selected.Render(label)
 		} else {

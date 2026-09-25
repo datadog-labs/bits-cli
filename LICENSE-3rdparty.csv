@@ -26,6 +26,7 @@ github.com/dlclark/regexp2,https://github.com/dlclark/regexp2,MIT,Copyright (c) 
 github.com/git-pkgs/gitignore,https://github.com/git-pkgs/gitignore,MIT,Copyright (c) 2026 Andrew Nesbitt
 github.com/godbus/dbus/v5,https://github.com/godbus/dbus,BSD-2-Clause,"Copyright (c) 2013, Georg Reinke (<guelfey at gmail dot com>), Google"
 github.com/gofrs/flock,https://github.com/gofrs/flock,BSD-3-Clause,"Copyright (c) 2018-2025, The Gofrs; Copyright (c) 2015-2020, Tim Heckman"
+github.com/google/go-cmp,https://github.com/google/go-cmp,BSD-3-Clause,Copyright (c) 2017 The Go Authors. All rights reserved.
 github.com/gorilla/css,https://github.com/gorilla/css,BSD-3-Clause,Copyright (c) 2023 The Gorilla Authors. All rights reserved.
 github.com/hexops/gotextdiff,https://github.com/hexops/gotextdiff,BSD-3-Clause,Copyright (c) 2009 The Go Authors. All rights reserved.
 github.com/inconshreveable/mousetrap,https://github.com/inconshreveable/mousetrap,Apache-2.0,Copyright 2022 Alan Shreve (@inconshreveable)
@@ -45,10 +46,12 @@ github.com/xo/terminfo,https://github.com/xo/terminfo,MIT,Copyright (c) 2016 Anm
 github.com/yuin/goldmark,https://github.com/yuin/goldmark,MIT,Copyright (c) 2019 Yusuke Inuzuka
 github.com/yuin/goldmark-emoji,https://github.com/yuin/goldmark-emoji,MIT,Copyright (c) 2020 Yusuke Inuzuka
 github.com/zalando/go-keyring,https://github.com/zalando/go-keyring,MIT,Copyright (c) 2016 Zalando SE
+go.starlark.net,https://github.com/google/starlark-go,BSD-3-Clause,Copyright (c) 2017 The Bazel Authors.  All rights reserved.
 golang.org/x/exp,https://github.com/golang/exp,BSD-3-Clause,Copyright (c) 2009 The Go Authors. All rights reserved.
 golang.org/x/net,https://github.com/golang/net,BSD-3-Clause,Copyright 2009 The Go Authors.
 golang.org/x/oauth2,https://github.com/golang/oauth2,BSD-3-Clause,Copyright 2009 The Go Authors.
 golang.org/x/sync,https://github.com/golang/sync,BSD-3-Clause,Copyright 2009 The Go Authors.
 golang.org/x/sys,https://github.com/golang/sys,BSD-3-Clause,Copyright 2009 The Go Authors.
 golang.org/x/text,https://github.com/golang/text,BSD-3-Clause,Copyright 2009 The Go Authors.
+google.golang.org/protobuf,https://github.com/protocolbuffers/protobuf-go,BSD-3-Clause,Copyright (c) 2018 The Go Authors. All rights reserved.
 gopkg.in/yaml.v3,https://github.com/go-yaml/yaml,MIT AND Apache-2.0,Copyright (c) 2006-2010 Kirill Simonov; Copyright (c) 2006-2011 Kirill Simonov; Copyright (c) 2011-2019 Canonical Ltd; Copyright 2011-2016 Canonical Ltd.

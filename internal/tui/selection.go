@@ -15,6 +15,11 @@ type selectionFrame struct {
 	content       string
 	width, height int
 	documentRows  []int
+
+	// floor is the first selectable document row. The startup header sits above
+	// it, and its cells are decoration: Kitty placeholder runes on the image
+	// path, which copy as garbage.
+	floor int
 }
 
 type selectionScope uint8
@@ -24,12 +29,13 @@ const (
 	selectionScopeLower
 )
 
-func newSelectionFrame(content string, width, height int, documentRows []int) selectionFrame {
+func newSelectionFrame(content string, width, height int, documentRows []int, floor int) selectionFrame {
 	return selectionFrame{
 		content:      content,
 		width:        max(0, width),
 		height:       max(0, height),
 		documentRows: append([]int(nil), documentRows...),
+		floor:        max(0, floor),
 	}
 }
 
@@ -186,6 +192,11 @@ func (s *selection) render(frame selectionFrame) string {
 	lo, hi := orderedPoints(s.anchor, s.focus)
 	for y := range frame.height {
 		virtualY := frame.virtualRow(y)
+		// A drag anchored in the header makes lo.Y negative, which rowSpan does
+		// not reject, so unselectable rows are dropped here instead.
+		if virtualY < frame.floor {
+			continue
+		}
 		start, end, ok := rowSpan(lo, hi, virtualY, frame.width)
 		if !ok {
 			continue
@@ -217,7 +228,7 @@ func extractSelection(frame selectionFrame, anchor, focus image.Point) string {
 
 	buf := frame.buffer()
 	lo, hi := orderedPoints(anchor, focus)
-	firstY := max(0, lo.Y)
+	firstY := max(frame.floor, lo.Y)
 	lastY := min(frame.height-1, hi.Y)
 	if firstY > lastY {
 		return ""

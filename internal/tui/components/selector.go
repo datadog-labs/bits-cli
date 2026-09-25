@@ -17,11 +17,12 @@ type Choice struct {
 
 // Selector owns static-list navigation and bounded two-column rendering.
 type Selector struct {
-	choices       []Choice
-	selected      int
-	styles        styles.Selector
-	compactDetail bool
-	fillWidth     bool
+	choices          []Choice
+	selected         int
+	styles           styles.Selector
+	compactDetail    bool
+	alignDetailRight bool
+	fillWidth        bool
 }
 
 // SelectionWindow describes the visible slice of a selector.
@@ -43,6 +44,11 @@ func (s *Selector) SetStyles(sty styles.Selector) { s.styles = sty }
 // aligning it to the longest label. This is useful for autocomplete menus,
 // where column padding looks like an empty selectable area.
 func (s *Selector) SetCompactDetail(compact bool) { s.compactDetail = compact }
+
+// SetAlignDetailRight anchors detail text to the right edge of the row. This
+// is useful for metadata such as timestamps, where every row should share the
+// same endpoint regardless of label length.
+func (s *Selector) SetAlignDetailRight(align bool) { s.alignDetailRight = align }
 
 // SetFillWidth pads each row to the requested view width using its active item
 // style. Popup callers use this to prevent the underlying view from showing
@@ -149,7 +155,11 @@ func (s *Selector) ViewWindow(width, rows int) (string, SelectionWindow) {
 		detailWidth := width - markerWidth - rowLabelWidth - gap
 		if choice.Detail != "" && detailWidth > 1 {
 			detail := ansi.Truncate(choice.Detail, detailWidth, "…")
-			prefix += labelStyle.Render(strings.Repeat(" ", gap)) + detailStyle.Render(detail)
+			detailGap := gap
+			if s.alignDetailRight {
+				detailGap = max(gap, width-ansi.StringWidth(prefix)-ansi.StringWidth(detail))
+			}
+			prefix += labelStyle.Render(strings.Repeat(" ", detailGap)) + detailStyle.Render(detail)
 		}
 		if s.fillWidth {
 			prefix += labelStyle.Render(strings.Repeat(" ", max(0, width-ansi.StringWidth(prefix))))

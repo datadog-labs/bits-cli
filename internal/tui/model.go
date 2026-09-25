@@ -5,6 +5,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -12,9 +13,11 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/browser"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	"github.com/DataDog/bits-cli/internal/tui/editor"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
+	"github.com/DataDog/bits-cli/internal/tui/splash"
 	statusview "github.com/DataDog/bits-cli/internal/tui/status"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 	"github.com/DataDog/bits-cli/internal/workspace"
@@ -29,6 +32,7 @@ const (
 	ModeLogin
 	ModeConversations
 	ModeStatus
+	ModePermissions
 )
 
 // EngineFactory constructs the authenticated chat engine after startup login
@@ -46,6 +50,7 @@ type EntitySearcher interface {
 
 type Config struct {
 	Tools          *agent.ToolSet
+	Version        string
 	Workspace      *workspace.Workspace
 	EntitySearcher EntitySearcher
 	OpenURL        func(context.Context, string) error
@@ -93,8 +98,8 @@ type Model struct {
 	startupPending    bool
 	startupErr        error
 
-	// blocks is the latest snapshot of the engine's aggregated transcript
-	blocks []agent.Block
+	// transcript is the latest snapshot of the engine's aggregated transcript.
+	transcript agent.TranscriptSnapshot
 
 	// Active turn: turnEvents is the running turn's event channel (nil when
 	// idle); cancelTurn interrupts it.
@@ -116,8 +121,12 @@ type Model struct {
 	logoutGeneration uint64
 	loggedOut        bool
 
-	pendingApprovals []agent.Block
-	approvalChoice   int
+	pendingApprovals  []agent.Block
+	approvalChoice    int
+	approvalPanel     *components.Panel
+	permissionChoice  int
+	permissionConfirm bool
+	permissionAllow   bool
 
 	// Top-level screen; transitions go through setMode.
 	mode Mode
@@ -167,6 +176,32 @@ type Model struct {
 	// Selection belongs to ModeChat; selection.go encapsulates its gesture and
 	// auto-scroll state while the model supplies rendered pane frames.
 	selection selection
+
+	// pendingAccordionToggle is the block a mouse-down landed on inside an
+	// accordion header row. Every left-click also begins a potential
+	// drag-select (see beginSelection), so the toggle stays pending until
+	// finishSelection sees the gesture through: it fires only if the release
+	// never turned it into a real selection range.
+	pendingAccordionToggle    agent.BlockID
+	hasPendingAccordionToggle bool
+
+	// pointerIsHand is the OS pointer shape last written to the terminal, so
+	// reconcilePointerShape only emits an OSC 22 sequence on a real change.
+	pointerIsHand bool
+
+	// chatMouseMode is the chat surface's mouse tracking, resolved once from
+	// the environment (see chatMouseMode()).
+	chatMouseMode tea.MouseMode
+
+	// splashReady is set once the terminal has answered the Kitty graphics
+	// probe and the logo's pixels have been transmitted.
+	splashReady bool
+
+	// resume is the startup conversation offer shown under the splash panel.
+	resume resume
+
+	// version is injected so the TUI stays independent of the command layer.
+	version string
 }
 
 // New builds the root model for the given engine. When the engine is bound to a
@@ -206,6 +241,7 @@ func (m *Model) configure(configs []Config) {
 		m.entitySearcher = configs[0].EntitySearcher
 		m.openURL = configs[0].OpenURL
 		m.logout = configs[0].Logout
+		m.version = configs[0].Version
 	}
 	if m.entitySearcher == nil && m.engine != nil {
 		m.entitySearcher = m.engine
@@ -224,10 +260,15 @@ func newShell() *Model {
 		animTool:          newAnimationTimeline(toolAnimInterval),
 		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
 		status:            &status,
+		approvalPanel:     components.NewPanel(theme.Approval.Panel),
 		styles:            theme,
 		searchSessionID:   newSearchSessionID(),
 		entitySearchCache: make(map[string]entitySearchCacheEntry),
+		resume:            resume{now: time.Now},
+		chatMouseMode:     chatMouseMode(),
 	}
+	m.editor.SetHistorySource(func() []string { return m.transcript.UserPrompts() })
+	m.editor.SetCommands(commandCompletionSpecs())
 	m.applyStyles(m.styles)
 	return m
 }
@@ -259,6 +300,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	m.list.SetStyles(m.chatStyles)
 	m.editor.SetInputStyles(theme.Input)
 	m.editor.SetStyles(theme.Editor)
+	m.approvalPanel.SetStyles(theme.Approval.Panel)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
 	}
@@ -291,9 +333,10 @@ func (m *Model) Init() tea.Cmd {
 			m.startupErr = errors.New("startup login is unavailable")
 			return tea.Quit
 		}
-		return m.loginModel.Init()
+		// Probe during login so the logo is ready at the handoff to chat.
+		return tea.Batch(m.loginModel.Init(), splash.Query())
 	}
-	return m.initChat()
+	return tea.Batch(m.initChat(), splash.Query())
 }
 
 // initChat focuses the editor and, when restoring a conversation, starts the
@@ -302,8 +345,15 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) initChat() tea.Cmd {
 	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
 	commands := []tea.Cmd{m.editor.Focus(), requestBG}
-	if m.engine == nil || m.engine.ConversationID() == "" {
+	if m.engine == nil {
 		return tea.Batch(commands...)
+	}
+	if m.engine.ConversationID() == "" {
+		// The offer's only fetch for the life of the process: skipping it for a
+		// restored conversation leaves the offer empty even after /new clears the
+		// transcript. Fetching later would read on the gated path, which can fail
+		// the next message with ErrOperationActive.
+		return tea.Batch(append(commands, m.fetchRecentConversations())...)
 	}
 	m.chatPhase = chat.PhaseLoading
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)

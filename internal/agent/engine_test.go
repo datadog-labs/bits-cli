@@ -83,7 +83,7 @@ func (b *conversationRecordingBackend) Send(_ context.Context, message any, opts
 
 func TestTurnContextSurvivesToolContinuationsAndDoesNotLeak(t *testing.T) {
 	backend := &contextRecordingBackend{}
-	tools, err := NewToolSet(ModeAllowAll, Tool{
+	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler: func(context.Context, ToolCall) (ToolResult, error) {
 			return ToolResult{Output: "ok"}, nil
@@ -129,6 +129,47 @@ func drain(ch <-chan Event) []Event {
 	return evs
 }
 
+func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		known bool
+		want  bool
+	}{
+		{name: "omitted marker", want: true},
+		{name: "explicit server marker", known: true, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &scriptBackend{msgs: []assistant.Message{assistant.AssistantMessage("started", assistant.Content{
+				Type: assistant.ContentToolCallStarted,
+				Tool: &assistant.ToolPayload{ToolCallID: "read-1", ToolName: "read_file", HasClientSide: test.known},
+			})}}
+			tools, err := NewToolSet(ModeSkipPermissions, Tool{
+				Definition: assistant.ClientTool{Name: "read_file"},
+				Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			events := drain(New(backend, assistant.SendOptions{}).StartTurn(context.Background(), TurnInput{Message: "read", Tools: tools}))
+			var got *ToolBlock
+			for _, event := range events {
+				if event.Kind != EventTranscript {
+					continue
+				}
+				for _, block := range event.Transcript.Blocks {
+					if block.Tool != nil && block.ToolCallID() == "read-1" {
+						value := *block.Tool
+						got = &value
+					}
+				}
+			}
+			if got == nil || got.IsClientSide != test.want {
+				t.Fatalf("streamed tool = %+v, want IsClientSide=%v", got, test.want)
+			}
+		})
+	}
+}
+
 func stateBlock(event Event, id string) (Block, bool) {
 	if event.Kind != EventTranscript {
 		return Block{}, false
@@ -168,6 +209,36 @@ func TestSnapshotDerivesTranscriptViewState(t *testing.T) {
 	pending := snapshot.PendingApprovals()
 	if len(pending) != 1 || pending[0].ToolCallID() != "call-1" {
 		t.Fatalf("PendingApprovals() = %+v, want call-1", pending)
+	}
+}
+
+func TestSnapshotUserPrompts(t *testing.T) {
+	user := func(text string) Block {
+		return Block{Role: assistant.RoleUser, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: text}}
+	}
+	answer := Block{Role: assistant.RoleAssistant, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "answer"}}
+	for _, test := range []struct {
+		name   string
+		blocks []Block
+		want   []string
+	}{
+		{name: "empty transcript"},
+		{
+			name:   "user text in order, repeats kept",
+			blocks: []Block{user("a"), answer, user("b\nc"), user("b\nc")},
+			want:   []string{"a", "b\nc", "b\nc"},
+		},
+		{
+			name:   "blank and body-less user blocks skipped",
+			blocks: []Block{user(" "), {Role: assistant.RoleUser, Kind: assistant.KindText}, user("kept")},
+			want:   []string{"kept"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := (TranscriptSnapshot{Blocks: test.blocks}).UserPrompts(); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("UserPrompts() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -232,7 +303,7 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 	backend := &streamedInputBackend{}
 	reducerCalls := 0
 	handlerSawReducer := false
-	tools, err := NewToolSet(ModeAllowAll, Tool{
+	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "preview"},
 		InputReducer: func(_ context.Context, update ToolInputUpdate, prior any) any {
 			reducerCalls++
@@ -279,7 +350,7 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
 	backend := &streamedInputBackend{server: true}
 	reducerCalls := 0
-	tools, err := NewToolSet(ModeAllowAll, Tool{
+	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "preview"},
 		InputReducer: func(context.Context, ToolInputUpdate, any) any {
 			reducerCalls++
@@ -301,7 +372,7 @@ func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
 
 func TestEnginePreservesPreconfiguredStreamToolCallInput(t *testing.T) {
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
-	tools, err := NewToolSet(ModeAllowAll, Tool{
+	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "ordinary"},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 	})

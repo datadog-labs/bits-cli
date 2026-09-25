@@ -42,7 +42,10 @@ type toolPresentation struct {
 // toolRenderSpec keeps a tool renderer and its static transcript layout plan
 // together. The presentation layer selects it before rendering so List can
 // account for spacing during lazy height and scroll calculations.
-type toolRenderFunc func(*agent.ToolBlock, toolPresentation, int, Styles, int) string
+type (
+	toolRenderFunc         func(*agent.ToolBlock, toolPresentation, int, Styles, int) string
+	toolApprovalRenderFunc func(*agent.ToolBlock, toolPresentation, int, Styles) string
+)
 
 // toolAction contains the human-facing verb forms for a local tool. Empty
 // lifecycle forms fall back to base, which keeps tools with quiet terminal
@@ -55,10 +58,11 @@ type toolAction struct {
 }
 
 type toolRenderSpec struct {
-	render     toolRenderFunc
-	spacing    itemSpacing
-	action     toolAction
-	inspection bool
+	render         toolRenderFunc
+	renderApproval toolApprovalRenderFunc
+	spacing        itemSpacing
+	action         toolAction
+	inspection     bool
 }
 
 var (
@@ -77,9 +81,10 @@ var (
 		action:  toolAction{base: "edit", active: "editing", success: "edited", failure: "edit failed"},
 	}
 	execToolRenderSpec = &toolRenderSpec{
-		render:  renderExecTool,
-		spacing: itemSpacing{before: 1, after: 1},
-		action:  toolAction{base: "run", success: "ran", failure: "run failed"},
+		render:         renderExecTool,
+		renderApproval: renderExecApproval,
+		spacing:        itemSpacing{before: 1, after: 1},
+		action:         toolAction{base: "run", success: "ran", failure: "run failed"},
 	}
 	skillToolRenderSpec = &toolRenderSpec{
 		render:  renderSkillTool,
@@ -358,6 +363,17 @@ func renderPresentedTool(tool *agent.ToolBlock, p toolPresentation, width int, s
 	return p.renderSpec.render(tool, p, width, sty, frame)
 }
 
+// RenderToolApproval renders the tool-specific portion of an approval prompt.
+// The caller retains ownership of the surrounding panel, title, and actions.
+// Tools without a specialized approval design use the caller's generic fallback.
+func RenderToolApproval(tool *agent.ToolBlock, width int, sty Styles) (string, bool) {
+	p := classifyTool(tool)
+	if p.renderSpec == nil || p.renderSpec.renderApproval == nil || !p.validInput {
+		return "", false
+	}
+	return p.renderSpec.renderApproval(tool, p, max(1, width), sty), true
+}
+
 func renderSkillTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
 	state := lifecycleOf(tool)
 	header := renderToolHeader(tool, p.summary(tool), nil, width, sty, frame)
@@ -503,7 +519,12 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty St
 		return header
 	}
 	switch state {
-	case lifecycleRunning, lifecycleAwaiting, lifecycleDenied, lifecycleCancelled:
+	case lifecycleRunning, lifecycleAwaiting, lifecycleDenied:
+		return header
+	case lifecycleCancelled:
+		if decoded && execResultIsTerminal(result.Status) && len(execRows(result, max(1, width-4))) == 0 {
+			return header + "\n" + renderExecNoOutput(width, sty)
+		}
 		return header
 	case lifecycleUnknown, lifecycleSuccess, lifecycleError:
 	}
@@ -516,9 +537,46 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty St
 	}
 	rows := execRows(result, max(1, width-4))
 	if len(rows) == 0 {
-		return header
+		if !execResultIsTerminal(result.Status) {
+			return header
+		}
+		return header + "\n" + renderExecNoOutput(width, sty)
 	}
 	return header + "\n" + renderRows(rows, width, style, sty)
+}
+
+func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles) string {
+	command := strings.TrimRight(p.argument, "\n")
+	rows := highlightShellCommand(command, sty)
+	for i, row := range rows {
+		rows[i] = ansi.Hardwrap(row, width, true)
+	}
+
+	detail := ""
+	if tool.Approval != nil {
+		detail = escape.Inline(tool.Approval.Detail)
+	}
+	if detail != "" {
+		rows = append(rows, sty.ToolDetail.Render(ansi.Wordwrap(detail, width, "-")))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func highlightShellCommand(command string, sty Styles) []string {
+	return diffrender.HighlightLines("command.sh", command, sty.Diff.SyntaxDark, sty.ToolArgument)
+}
+
+func execResultIsTerminal(status spec.ExecTerminalReason) bool {
+	switch status {
+	case spec.ExecSucceeded, spec.ExecNonZeroExit, spec.ExecLaunchFailed, spec.ExecTimedOut, spec.ExecCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func renderExecNoOutput(width int, sty Styles) string {
+	return renderRows([]string{"(no output)"}, width, sty.ToolDetail, sty)
 }
 
 // renderExecInvocation keeps ordinary commands on the compact tool header.
@@ -528,8 +586,7 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty St
 // input to consume the transcript viewport.
 func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []summarySpan, width int, sty Styles, frame int) string {
 	command := strings.TrimRight(p.argument, "\n")
-	const shellPath = "command.sh"
-	lines := diffrender.HighlightLines(shellPath, command, sty.Diff.SyntaxDark, sty.ToolArgument)
+	lines := highlightShellCommand(command, sty)
 	p.argument = lines[0]
 	header := renderToolHeader(tool, p.summary(tool), suffix, width, sty, frame)
 	if len(lines) == 1 {
@@ -662,6 +719,13 @@ func renderRows(rows []string, width int, style lipgloss.Style, sty Styles) stri
 	}
 	return strings.Join(rows, "\n")
 }
+
+// statusGlyphWidth is the header's leading glyph plus its trailing space.
+// Every status glyph (spinner frame, •, ✓, ✗) is one cell wide, so this is
+// fixed rather than measured. List splices the accordion control after these
+// two cells so the glyph stays the leftmost thing on the row regardless of
+// disclosure state.
+const statusGlyphWidth = 2
 
 func renderToolHeader(tool *agent.ToolBlock, summary, suffix []summarySpan, width int, sty Styles, frame int) string {
 	state := lifecycleOf(tool)

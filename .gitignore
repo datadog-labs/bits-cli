@@ -9,3 +9,4 @@ go.work.sum
 
 # OS
 **/.DS_Store
+/.envrc.local

@@ -44,5 +44,13 @@
     "license": "MIT AND Apache-2.0",
     "detected": "MIT OR Apache-2.0",
     "reason": "per-file coverage, not a choice: the libyaml-derived files (apic.go, emitterc.go, parserc.go, readerc.go, scannerc.go, writerc.go, yamlh.go, yamlprivateh.go) are MIT (Kirill Simonov) and the remaining files are Apache-2.0, per the module's LICENSE"
+  },
+  "go.starlark.net": {
+    "origin": "https://github.com/google/starlark-go",
+    "reason": "go.starlark.net is a vanity domain, so the origin cannot be derived from the module path"
+  },
+  "google.golang.org/protobuf": {
+    "origin": "https://github.com/protocolbuffers/protobuf-go",
+    "reason": "google.golang.org is a vanity domain, so the origin cannot be derived from the module path"
   }
 }

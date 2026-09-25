@@ -39,7 +39,6 @@ func TestRunDispatchesResolvedOptions(t *testing.T) {
 		"--model", "claude-sonnet-4-6",
 		"--auth", "api-key",
 		"--site", "https://api.datadoghq.eu",
-		"--approval", "gated",
 		"--conversation", "conversation-9",
 	}, nil)
 	if err != nil {
@@ -50,10 +49,10 @@ func TestRunDispatchesResolvedOptions(t *testing.T) {
 	}
 	want := []RunOptions{{
 		ChatOptions: ChatOptions{
-			ConversationID: "conversation-9",
-			AuthMode:       auth.ModeAPIKey,
-			Site:           "https://api.datadoghq.eu",
-			ApprovalMode:   agent.ModeGated,
+			ConversationID:  "conversation-9",
+			AuthMode:        auth.ModeAPIKey,
+			Site:            "https://api.datadoghq.eu",
+			PermissionsMode: agent.ModeSkipPermissions,
 		},
 		Prompt:   "summarize the incident",
 		Model:    "claude-sonnet-4-6",
@@ -64,7 +63,7 @@ func TestRunDispatchesResolvedOptions(t *testing.T) {
 	}
 }
 
-func TestRunDefaultsMatchChatDefaults(t *testing.T) {
+func TestRunDefaultsToSkipPermissions(t *testing.T) {
 	_, _, recorded, err := executeRun(t, []string{"run", "--prompt", "hello", "--delivery", "adeep"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +72,8 @@ func TestRunDefaultsMatchChatDefaults(t *testing.T) {
 		t.Fatalf("runs = %d, want 1", len(recorded))
 	}
 	opts := recorded[0]
-	if opts.AuthMode != auth.ModeAuto || opts.ApprovalMode != agent.ModeAllowAll || opts.Site != "" || opts.ConversationID != "" || opts.Model != "" {
-		t.Fatalf("defaults = %#v, want chat defaults", opts.ChatOptions)
+	if opts.AuthMode != auth.ModeAuto || opts.PermissionsMode != agent.ModeSkipPermissions || opts.Site != "" || opts.ConversationID != "" || opts.Model != "" {
+		t.Fatalf("defaults = %#v, want skip-permissions with the shared chat defaults", opts.ChatOptions)
 	}
 }
 
@@ -93,7 +92,8 @@ func TestRunRejectsUsageBeforeAction(t *testing.T) {
 		{name: "positional prompt", args: []string{"run", "do things", "--prompt", "x", "--delivery", "adeep"}, wantErr: `unknown command "do things" for "bits run"`},
 		{name: "missing delivery", args: []string{"run", "--prompt", "hello"}, wantErr: `required flag "--delivery" was not set`},
 		{name: "unknown delivery", args: []string{"run", "--prompt", "hello", "--delivery", "plain"}, wantErr: `invalid delivery "plain"; expected adeep`},
-		{name: "invalid approval mode", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--approval", "yes"}, wantErr: `invalid approval mode "yes"; expected allow-all or gated`},
+		{name: "removed approval flag", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--approval", "allow-all"}, wantErr: "unknown flag: --approval"},
+		{name: "removed permissions flag", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--permissions", "manual"}, wantErr: "unknown flag: --permissions"},
 		{name: "invalid auth mode", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--auth", "oauth"}, wantErr: `invalid authentication mode "oauth"; expected auto or api-key`},
 		{name: "api key without site", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--auth", "api-key"}, wantErr: "--auth api-key requires --site"},
 		{name: "web console site", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--auth", "api-key", "--site", "https://app.datadoghq.com"}, wantErr: "datadog API site must use an api-prefixed hostname"},

@@ -139,9 +139,9 @@ func (m *Model) statusRuntime() statusview.Runtime {
 	if m.authStateOverride != "" {
 		authenticationState = m.authStateOverride
 	}
-	approvalMode := ""
+	permissionsMode := ""
 	if m.tools != nil {
-		approvalMode = string(m.tools.ApprovalMode())
+		permissionsMode = string(m.tools.PermissionsMode())
 	}
 	return statusview.Runtime{
 		Site:                runtime.Backend.Site,
@@ -151,7 +151,7 @@ func (m *Model) statusRuntime() statusview.Runtime {
 		ConversationID:      m.convID,
 		Profile:             string(runtime.Profile),
 		Model:               runtime.Model,
-		ApprovalMode:        approvalMode,
+		PermissionsMode:     permissionsMode,
 		Phase:               phaseName(m.chatPhase),
 		Connectivity:        m.statusConnectivity(),
 		Usage:               m.usage,

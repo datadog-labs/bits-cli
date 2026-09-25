@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
@@ -90,6 +91,22 @@ func (s TranscriptSnapshot) PendingApprovals() []Block {
 		}
 	}
 	return pending
+}
+
+// UserPrompts returns the text of the user messages, in transcript order.
+// Blank messages (an attachment-only submit is stored as " ") are skipped;
+// repeated messages are kept.
+func (s TranscriptSnapshot) UserPrompts() []string {
+	var prompts []string
+	for _, block := range s.Blocks {
+		if block.Role != assistant.RoleUser || block.Kind != assistant.KindText || block.Markdown == nil {
+			continue
+		}
+		if strings.TrimSpace(block.Markdown.Content) != "" {
+			prompts = append(prompts, block.Markdown.Content)
+		}
+	}
+	return prompts
 }
 
 // Event is one thing that happened during a turn. It is a plain value carried
@@ -245,7 +262,9 @@ func (e *Engine) beginTurn(ctx context.Context, in TurnInput) turnOperation {
 	return turnOperation{events: events, completion: completion}
 }
 
-// StartTurn preserves the event-only API used by interactive surfaces.
+// StartTurn preserves the event-only API used by interactive surfaces. Callers
+// must continue draining the returned channel until it closes after cancelling
+// the turn context.
 func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
 	return e.beginTurn(ctx, in).events
 }
@@ -311,7 +330,14 @@ func (e *Engine) run(
 	generation uint64,
 ) {
 	completion := turnCompletion{}
+	turnStart := len(e.transcript.Blocks())
 	defer func() {
+		if ctx.Err() != nil && e.transcript.CancelUnfinishedTools(turnStart) {
+			// Cancellation makes send's context-aware select unavailable, but this
+			// terminal snapshot must not be dropped. It is sent after all queued
+			// events and callers drain the channel after cancellation.
+			out <- Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()}
+		}
 		if completion.Err == nil && !completion.Completed && ctx.Err() != nil {
 			completion.Err = ctx.Err()
 		}
@@ -371,6 +397,15 @@ func (e *Engine) run(
 			}
 			b, ok := e.transcript.AppendMessage(msg)
 			if ok {
+				// Some providers omit is_client_side on a streamed start, then
+				// supply it only implicitly with the final client_tool_call. The
+				// registered tool set is authoritative for this turn, so recover
+				// that missing identity without overriding an explicit false server
+				// marker.
+				if msg.Content.Type == assistant.ContentToolCallStarted && msg.Content.Tool != nil &&
+					!msg.Content.Tool.HasClientSide && tools.Has(msg.Content.Tool.ToolName) {
+					e.transcript.MarkToolClientSide(msg.Content.Tool.ToolCallID)
+				}
 				// Reducers run in the engine goroutine immediately after the wire
 				// update is folded. This ordering lets the emitted snapshot carry
 				// the reducer's state and keeps filesystem-aware reducers ahead of
@@ -636,6 +671,26 @@ func (e *Engine) NewConversation() error {
 	return nil
 }
 
+// SetPermissionsMode changes the process tool mode while the engine is idle.
+// The engine owns session grants, so returning to manual clears them under the
+// same operation gate used by turns and conversation restores.
+func (e *Engine) SetPermissionsMode(tools *ToolSet, mode PermissionsMode) error {
+	if !e.active.CompareAndSwap(false, true) {
+		return ErrOperationActive
+	}
+	defer e.active.Store(false)
+	if tools == nil {
+		return fmt.Errorf("tool set is nil")
+	}
+	if err := tools.SetPermissionsMode(mode); err != nil {
+		return err
+	}
+	if mode == ModeManual {
+		clear(e.sessionGrants)
+	}
+	return nil
+}
+
 // Restore fetches the persisted history for the engine's conversation, folds it
 // into the transcript.
 func (e *Engine) Restore(ctx context.Context) <-chan Event {
@@ -805,6 +860,7 @@ func (e *Engine) runTools(
 	}
 
 	for _, item := range work {
+		permissions := tools.snapshotPermissions()
 		if item.call.Name == assistant.ApprovalRequestTool {
 			if stopRequested {
 				if !completeTool(item, cancelledResult()) {
@@ -820,14 +876,14 @@ func (e *Engine) runTools(
 				continue
 			}
 		}
-		if item.call.Name == assistant.ApprovalRequestTool && tools.ApprovesServerGate() {
+		if item.call.Name == assistant.ApprovalRequestTool && permissions.approvesServerGate() {
 			if !completeTool(item, approvedResult()) {
 				cancelRunning()
 				return toolRound{denied: denied}, nil
 			}
 			continue
 		}
-		requirement, needsApproval := tools.Approval(item.call)
+		requirement, needsApproval := permissions.approval(item.call)
 		_, granted := e.sessionGrants[requirement.Key]
 		if needsApproval && !granted {
 			if stopRequested {

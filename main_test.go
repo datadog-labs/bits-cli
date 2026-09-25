@@ -62,7 +62,7 @@ func TestStartupExplicitAPIKeyModeDoesNotFallThroughToFakeBackend(t *testing.T) 
 	t.Setenv("DD_APP_KEY", "")
 	_, err := startupModelWithStore(
 		context.Background(),
-		cmd.ChatOptions{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com", ApprovalMode: agent.ModeAllowAll},
+		cmd.ChatOptions{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com", PermissionsMode: agent.ModeManual},
 		stubCredentialStore{session: validOAuthSession()},
 		testWorkspace(t),
 	)
@@ -75,7 +75,7 @@ func TestStartupMissingOAuthSelectsInteractiveLogin(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	model, err := startupModelWithStore(
 		context.Background(),
-		cmd.ChatOptions{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll},
+		cmd.ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 		stubCredentialStore{err: auth.ErrNoSession},
 		testWorkspace(t),
 	)
@@ -93,7 +93,7 @@ func TestStartupCredentialStoreFailureDoesNotSelectLogin(t *testing.T) {
 	storeErr := errors.New("keyring unavailable")
 	_, err := startupModelWithStore(
 		context.Background(),
-		cmd.ChatOptions{AuthMode: auth.ModeAuto, ApprovalMode: agent.ModeAllowAll},
+		cmd.ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 		stubCredentialStore{err: storeErr},
 		testWorkspace(t),
 	)
@@ -106,7 +106,7 @@ func TestStartupStoredOAuthEntersChatWithConversation(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	model, err := startupModelWithStore(
 		context.Background(),
-		cmd.ChatOptions{AuthMode: auth.ModeAuto, ConversationID: "conversation-1", ApprovalMode: agent.ModeAllowAll},
+		cmd.ChatOptions{AuthMode: auth.ModeAuto, ConversationID: "conversation-1", PermissionsMode: agent.ModeManual},
 		stubCredentialStore{session: validOAuthSession()},
 		testWorkspace(t),
 	)

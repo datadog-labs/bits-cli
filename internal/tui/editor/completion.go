@@ -58,16 +58,18 @@ const (
 	FileError
 )
 
-var commands = []struct {
-	name    string
-	aliases []string
-	desc    string
-}{
-	{"help", nil, "show help"},
+type CommandSpec struct {
+	Name    string
+	Aliases []string
+	Detail  string
+}
+
+var commands = []CommandSpec{
 	{"new", []string{"clear"}, "start a new conversation"},
 	{"resume", nil, "resume a conversation"},
 	{"settings", nil, "open assistant settings"},
 	{"status", nil, "show session status"},
+	{"permissions", nil, "show or switch the permissions mode"},
 	{"copy", nil, "copy the latest assistant response"},
 	{"web", nil, "open this conversation in Datadog"},
 	{"logout", nil, "sign out from your Datadog account"},
@@ -77,16 +79,20 @@ var commands = []struct {
 // CommandCandidates returns slash-command candidates whose canonical name or alias
 // starts with q.
 func CommandCandidates(q string) []Candidate {
+	return CommandCandidatesFrom(commands, q)
+}
+
+func CommandCandidatesFrom(commands []CommandSpec, q string) []Candidate {
 	q = strings.ToLower(q)
 	out := make([]Candidate, 0, len(commands))
 	for _, command := range commands {
-		if !commandMatches(command.name, command.aliases, q) {
+		if !commandMatches(command.Name, command.Aliases, q) {
 			continue
 		}
 		out = append(out, Candidate{
-			Kind: CandidateCommand, ID: command.name,
-			Label: "/" + command.name, Detail: command.desc,
-			Insert: "/" + command.name,
+			Kind: CandidateCommand, ID: command.Name,
+			Label: "/" + command.Name, Detail: command.Detail,
+			Insert: "/" + command.Name,
 		})
 	}
 	return out

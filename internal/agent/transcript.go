@@ -62,6 +62,14 @@ func (t *Transcript) MarkToolRunning(id string) (Block, bool) {
 	})
 }
 
+// MarkToolClientSide records client identity inferred from the registered tool
+// set when a provider omitted it from a streamed start event.
+func (t *Transcript) MarkToolClientSide(id string) (Block, bool) {
+	return t.markTool(id, func(tool *ToolBlock) {
+		tool.IsClientSide = true
+	})
+}
+
 // SetToolRenderState replaces the opaque local state carried by a tool block.
 // markTool copies the ToolBlock before swapping it, preserving snapshots held
 // by event consumers.
@@ -93,6 +101,26 @@ func (t *Transcript) MarkToolExecuted(id string, result ToolResult) (Block, bool
 			tool.RenderState = result.RenderState.State
 		}
 	})
+}
+
+// CancelUnfinishedTools marks tool calls from blocks[from:] left open by a cancelled turn.
+func (t *Transcript) CancelUnfinishedTools(from int) bool {
+	changed := false
+	if from < 0 {
+		from = 0
+	}
+	if from >= len(t.blocks) {
+		return false
+	}
+	for _, block := range t.blocks[from:] {
+		if block.Tool == nil || block.Tool.Cancelled || block.Tool.Denied || block.Tool.Status == ToolSuccess || block.Tool.Status == ToolError {
+			continue
+		}
+		if _, updated := t.MarkToolExecuted(block.ID.Key, cancelledResult()); updated {
+			changed = true
+		}
+	}
+	return changed
 }
 
 func (t *Transcript) markTool(id string, mutate func(*ToolBlock)) (Block, bool) {

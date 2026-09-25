@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 const approvalToolName = "confirm_action"
@@ -44,9 +46,10 @@ func newApprovalTool() agent.Tool {
 }
 
 type approvalBackend struct {
-	t         *testing.T
-	responses []assistant.ClientToolResponse
-	calls     int
+	t          *testing.T
+	responses  []assistant.ClientToolResponse
+	calls      int
+	serverGate bool
 }
 
 func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
@@ -54,6 +57,9 @@ func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendO
 	b.calls++
 	if b.calls == 1 {
 		content := assistant.ToolCallContent("tool-call", approvalToolName, `{}`)
+		if b.serverGate {
+			content = assistant.ToolCallContent("tool-call", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"tool-call","approval_message":"Delete it?"}`)
+		}
 		content.Type = assistant.ContentClientToolCall
 		var response assistant.AssistantResponse
 		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-message", content)
@@ -65,14 +71,72 @@ func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendO
 	if !ok {
 		b.t.Fatalf("tool follow-up has type %T", message)
 	}
-	var response assistant.AssistantResponse
-	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("Done."))
-	return "conversation-1", emit(response)
+	for _, chunk := range []string{"Do", "ne."} {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent(chunk))
+		if err := emit(response); err != nil {
+			return "conversation-1", err
+		}
+	}
+	return "conversation-1", nil
+}
+
+func TestApprovalDenialContinuesStreaming(t *testing.T) {
+	for _, serverGate := range []bool{false, true} {
+		for _, key := range []rune{tea.KeyEscape, tea.KeyEnter} {
+			t.Run(fmt.Sprintf("server_gate_%t/key_%d", serverGate, key), func(t *testing.T) {
+				backend := &approvalBackend{t: t, serverGate: serverGate}
+				tool := newApprovalTool()
+				tool.Handler = func(context.Context, agent.ToolCall) (agent.ToolResult, error) {
+					t.Error("denied tool executed")
+					return agent.ToolResult{}, nil
+				}
+				tools, err := agent.NewToolSet(agent.ModeManual, tool)
+				if err != nil {
+					t.Fatal(err)
+				}
+				model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+				model.resize(80, 24)
+				setConversationInput(model, "Run the action")
+				_, _ = model.submit()
+				for len(model.pendingApprovals) == 0 {
+					msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
+					_, _ = model.Update(msg)
+				}
+
+				if key == tea.KeyEnter {
+					// Move past Allow and Allow for session to select Deny.
+					_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+					_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+				}
+				_, _ = model.handleKey(tea.KeyPressMsg{Code: key})
+				sawPartial := false
+				for model.turnEvents != nil {
+					msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
+					_, _ = model.Update(msg)
+					for _, block := range model.transcript.Blocks {
+						if block.Markdown != nil && block.Markdown.Content == "Do" && !block.Complete {
+							sawPartial = true
+						}
+					}
+				}
+				if backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError {
+					t.Fatalf("denial not sent: calls=%d responses=%+v", backend.calls, backend.responses)
+				}
+				if !sawPartial {
+					t.Error("model's follow-up response did not stream after denial")
+				}
+				if view := ansi.Strip(model.View().Content); !strings.Contains(view, "Done.") {
+					t.Fatalf("model's follow-up answer missing after denial:\n%s", view)
+				}
+			})
+		}
+	}
 }
 
 func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +166,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 
 func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,21 +203,21 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	model.resize(80, 24)
 	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	drainConversationRemote(t, model)
-	// The denial is answered on the wire; the follow-up answer never renders.
+	// The denial is answered on the wire and the follow-up answer renders.
 	if backend.calls != 2 || len(backend.responses) != 1 {
 		t.Fatalf("deny after resize not honored: calls=%d responses=%d", backend.calls, len(backend.responses))
 	}
 	if backend.responses[0].Status != assistant.ToolStatusError || backend.responses[0].ToolCallID != "tool-call" {
 		t.Fatalf("denial response = %+v", backend.responses[0])
 	}
-	if view := ansi.Strip(model.View().Content); strings.Contains(view, "Done.") {
-		t.Fatalf("aborted deny still delivered the model's follow-up answer:\n%s", view)
+	if view := ansi.Strip(model.View().Content); !strings.Contains(view, "Done.") {
+		t.Fatalf("model's follow-up answer missing after denial:\n%s", view)
 	}
 }
 
-func TestToolApprovalComposerSuppressedInAllowAll(t *testing.T) {
+func TestToolApprovalComposerSuppressedInSkipPermissions(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeAllowAll, newApprovalTool())
+	tools, err := agent.NewToolSet(agent.ModeSkipPermissions, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,11 +228,11 @@ func TestToolApprovalComposerSuppressedInAllowAll(t *testing.T) {
 	drainConversationRemote(t, model)
 
 	if len(model.pendingApprovals) != 0 {
-		t.Fatalf("allow-all surfaced %d approval prompts", len(model.pendingApprovals))
+		t.Fatalf("skip-permissions surfaced %d approval prompts", len(model.pendingApprovals))
 	}
 	view := ansi.Strip(model.View().Content)
 	if strings.Contains(view, "Permission Required") || strings.Contains(view, "Run the test action?") {
-		t.Fatalf("approval composer rendered in allow-all mode:\n%s", view)
+		t.Fatalf("approval composer rendered in skip-permissions mode:\n%s", view)
 	}
 	if !model.editor.Focused() {
 		t.Fatal("editor lost focus without an approval owning the composer")
@@ -182,7 +246,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 	for _, width := range []int{40, 80, 120} {
 		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
 			backend := &approvalBackend{t: t}
-			tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+			tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -197,6 +261,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 
 			view := model.approvalView()
 			plain := ansi.Strip(view)
+			normalized := strings.Join(strings.Fields(plain), " ")
 			for _, want := range []string{"Permission Required", "ESC x", "Run the test action?", "This test tool requires", "Deny"} {
 				if !strings.Contains(plain, want) {
 					t.Errorf("approval panel missing %q:\n%s", want, plain)
@@ -208,10 +273,10 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 				}
 			}
 			if width < approvalCompactWidth {
-				if !strings.Contains(plain, "Once") || !strings.Contains(plain, "Session") || strings.Contains(plain, "Allow once") {
+				if !strings.Contains(plain, "Allow") || !strings.Contains(plain, "Session") || strings.Contains(plain, "Allow for session") {
 					t.Fatalf("compact actions not used:\n%s", plain)
 				}
-			} else if !strings.Contains(plain, "Allow once") || !strings.Contains(plain, "Allow for session") {
+			} else if !strings.Contains(normalized, "Allow Allow for session Deny") || strings.Contains(plain, "Allow once") {
 				t.Fatalf("full actions missing:\n%s", plain)
 			}
 			if width == 120 {
@@ -224,9 +289,82 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 	}
 }
 
+func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
+	command := "python3 - <<'PY'\nprint('first')\nprint('second')\nPY"
+	input, err := json.Marshal(spec.ExecCommandInput{Cmd: command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := newShell()
+	model.resize(100, 30)
+	model.pendingApprovals = []agent.Block{{
+		Kind: assistant.KindToolCall,
+		Tool: &agent.ToolBlock{
+			Name:         spec.ExecCommand,
+			Input:        string(input),
+			Status:       agent.ToolAwaitingApproval,
+			IsClientSide: true,
+			Approval: &agent.ApprovalPrompt{
+				Title:  "Run an unsandboxed command?",
+				Detail: "cwd: /workspace · unsandboxed",
+			},
+		},
+	}}
+
+	plain := ansi.Strip(model.approvalView())
+	wants := []string{"Run an unsandboxed command?", "cwd: /workspace · unsandboxed", "Allow"}
+	wants = append(wants, strings.Split(command, "\n")...)
+	for _, want := range wants {
+		if !strings.Contains(plain, want) {
+			t.Errorf("exec approval panel missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "␊") {
+		t.Fatalf("exec approval panel exposed newline as a control picture:\n%s", plain)
+	}
+}
+
+func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
+	commandRows := make([]string, 20)
+	for i := range commandRows {
+		commandRows[i] = fmt.Sprintf("print(%d)", i+1)
+	}
+	input, err := json.Marshal(spec.ExecCommandInput{Cmd: strings.Join(commandRows, "\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := newShell()
+	model.resize(80, 20)
+	model.pendingApprovals = []agent.Block{{
+		Kind: assistant.KindToolCall,
+		Tool: &agent.ToolBlock{
+			Name:         spec.ExecCommand,
+			Input:        string(input),
+			Status:       agent.ToolAwaitingApproval,
+			IsClientSide: true,
+			Approval: &agent.ApprovalPrompt{
+				Title:  "Run an unsandboxed command?",
+				Detail: "cwd: /workspace · unsandboxed",
+			},
+		},
+	}}
+
+	first := ansi.Strip(model.approvalView())
+	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "pgup/pgdown scroll") || !strings.Contains(first, "Allow") {
+		t.Fatalf("initial long-command approval window is incorrect:\n%s", first)
+	}
+	for range 10 {
+		_, _ = model.handleApprovalKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	}
+	last := ansi.Strip(model.approvalView())
+	if strings.Contains(last, "print(1)") || !strings.Contains(last, "print(20)") || !strings.Contains(last, "cwd: /workspace") || !strings.Contains(last, "Allow") {
+		t.Fatalf("paged long-command approval window is incorrect:\n%s", last)
+	}
+}
+
 func TestApprovalPanelRemainsUsableAtMinimumHeight(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +378,7 @@ func TestApprovalPanelRemainsUsableAtMinimumHeight(t *testing.T) {
 	}
 
 	view := ansi.Strip(model.View().Content)
-	for _, want := range []string{"Permission Required", "Run the test action?", "This test tool requires approval", "Deny", "Once", "Session"} {
+	for _, want := range []string{"Permission Required", "Run the test action?", "This test tool requires approval", "Allow", "Session", "Deny"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("minimum-height approval missing %q:\n%s", want, view)
 		}
@@ -252,7 +390,7 @@ func TestApprovalPanelRemainsUsableAtMinimumHeight(t *testing.T) {
 
 func TestTallDraftConcealsApprovalAndSuppressesInput(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,15 +433,15 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 		deny      bool
 		selection string
 	}{
-		{name: "deny", deny: true, selection: "Deny"},
-		{name: "allow once", navigate: 1, selection: "Allow once"},
-		{name: "allow for session", navigate: 2, selection: "Allow for session"},
+		{name: "allow", selection: "Allow"},
+		{name: "allow for session", navigate: 1, selection: "Allow for session"},
+		{name: "deny", navigate: 2, deny: true, selection: "Deny"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &approvalBackend{t: t}
-			tools, err := agent.NewToolSet(agent.ModeGated, newApprovalTool())
+			tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -339,26 +477,22 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				t.Fatal("approval input leaked into the editor")
 			}
 
-			if tt.deny {
-				_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
-			} else {
-				_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-			}
+			_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 			drainConversationRemote(t, model)
 
 			if strings.Contains(ansi.Strip(model.View().Content), "Permission Required") {
 				t.Fatal("approval composer remained after the decision")
 			}
 			if tt.deny {
-				// The denial is answered on the wire; the follow-up answer never renders.
+				// The denial is answered on the wire and the follow-up answer renders.
 				if backend.calls != 2 || len(backend.responses) != 1 {
 					t.Fatalf("backend calls = %d responses = %d, want the denial answered on the wire", backend.calls, len(backend.responses))
 				}
 				if backend.responses[0].Status != assistant.ToolStatusError || backend.responses[0].ToolCallID != "tool-call" {
 					t.Fatalf("denial response = %+v", backend.responses[0])
 				}
-				if strings.Contains(ansi.Strip(model.View().Content), "Done.") {
-					t.Fatal("aborted deny still delivered the model's follow-up answer")
+				if !strings.Contains(ansi.Strip(model.View().Content), "Done.") {
+					t.Fatal("model's follow-up answer missing after denial")
 				}
 				return
 			}

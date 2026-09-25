@@ -2,9 +2,20 @@ package cmd
 
 import "runtime/debug"
 
-// buildVersion reports the module version when available, otherwise a
+// releaseVersion is set by the release build with -ldflags. Keeping it empty
+// for ordinary builds preserves the development version reported by the Go
+// toolchain.
+var releaseVersion string
+
+// BuildVersion reports the module version when available, otherwise a
 // development version with the short VCS revision recorded by the toolchain.
-func buildVersion() string {
+func BuildVersion() string {
+	if releaseVersion != "" {
+		// Release artifacts store their package version without a prefix, while
+		// the CLI presents versions in the same form as Go module versions.
+		return "v" + releaseVersion
+	}
+
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "dev"

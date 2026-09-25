@@ -8,7 +8,8 @@ import (
 
 // Styles holds the chat-specific styles the renderers use.
 type Styles struct {
-	Input styles.Input
+	Input     styles.Input
+	Accordion styles.Accordion
 	styles.Chat
 }
 
@@ -32,5 +33,5 @@ func DefaultStyles(isDark bool) Styles {
 
 // StylesFor selects the chat portion of an already-built shared theme.
 func StylesFor(theme styles.Theme) Styles {
-	return Styles{Input: theme.Input, Chat: theme.Chat}
+	return Styles{Input: theme.Input, Accordion: theme.Accordion, Chat: theme.Chat}
 }

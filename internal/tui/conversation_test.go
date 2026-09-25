@@ -112,8 +112,8 @@ func TestCompletedTurnAppliesFinalTranscriptSnapshot(t *testing.T) {
 	if m.chatPhase != chat.PhaseIdle {
 		t.Fatalf("chat phase = %v, want idle", m.chatPhase)
 	}
-	if len(m.blocks) != 2 || !m.blocks[1].Complete {
-		t.Fatalf("blocks = %+v, want completed assistant response", m.blocks)
+	if len(m.transcript.Blocks) != 2 || !m.transcript.Blocks[1].Complete {
+		t.Fatalf("blocks = %+v, want completed assistant response", m.transcript.Blocks)
 	}
 }
 
@@ -123,7 +123,7 @@ func TestNewAndClearResetConversationStateLocally(t *testing.T) {
 			m := newModelWithSpy(t)
 			m.engine = agent.New(&spyBackend{t: t}, assistant.SendOptions{ConversationID: "old"})
 			m.convID = "old"
-			m.blocks = []agent.Block{{Markdown: &assistant.MarkdownPayload{Content: "old transcript"}}}
+			m.transcript.Blocks = []agent.Block{{Markdown: &assistant.MarkdownPayload{Content: "old transcript"}}}
 			m.usage = &assistant.Usage{TokensUsed: 99, MaxTokens: 100}
 			m.chatPhase = chat.PhaseError
 			m.notice = notice(chat.NoticeError, errors.New("old error"), "old error")
@@ -133,8 +133,8 @@ func TestNewAndClearResetConversationStateLocally(t *testing.T) {
 			if !m.editor.Focused() {
 				t.Fatal("reset left the editor unfocused")
 			}
-			if m.convID != "" || m.engine.ConversationID() != "" || len(m.blocks) != 0 {
-				t.Fatalf("identity/transcript not reset: root=%q engine=%q blocks=%d", m.convID, m.engine.ConversationID(), len(m.blocks))
+			if m.convID != "" || m.engine.ConversationID() != "" || len(m.transcript.Blocks) != 0 {
+				t.Fatalf("identity/transcript not reset: root=%q engine=%q blocks=%d", m.convID, m.engine.ConversationID(), len(m.transcript.Blocks))
 			}
 			if m.usage != nil || m.chatPhase != chat.PhaseIdle || !m.notice.Empty() {
 				t.Fatalf("turn state not reset: usage=%v phase=%v notice=%+v", m.usage, m.chatPhase, m.notice)

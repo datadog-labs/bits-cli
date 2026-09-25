@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
@@ -78,7 +79,7 @@ type Tool struct {
 }
 
 type ToolSet struct {
-	mode        ApprovalMode
+	mode        atomic.Pointer[PermissionsMode]
 	definitions []assistant.ClientTool
 	tools       map[string]registeredTool
 }
@@ -89,14 +90,13 @@ type registeredTool struct {
 	inputReducer ToolInputReducer
 }
 
-func NewToolSet(mode ApprovalMode, tools ...Tool) (*ToolSet, error) {
-	if !mode.valid() {
-		return nil, fmt.Errorf("invalid approval mode %q; expected allow-all or gated", mode)
-	}
+func NewToolSet(mode PermissionsMode, tools ...Tool) (*ToolSet, error) {
 	set := &ToolSet{
-		mode:        mode,
 		definitions: make([]assistant.ClientTool, 0, len(tools)),
 		tools:       make(map[string]registeredTool, len(tools)),
+	}
+	if err := set.SetPermissionsMode(mode); err != nil {
+		return nil, err
 	}
 	for _, tool := range tools {
 		name := tool.Definition.Name
@@ -169,12 +169,34 @@ func (s *ToolSet) Definitions() []assistant.ClientTool {
 	return append([]assistant.ClientTool(nil), s.definitions...)
 }
 
-// ApprovalMode reports the non-secret policy selected for this tool set.
-func (s *ToolSet) ApprovalMode() ApprovalMode {
+// Has reports whether name is registered as a client tool for this turn.
+func (s *ToolSet) Has(name string) bool {
+	if s == nil {
+		return false
+	}
+	_, ok := s.tools[name]
+	return ok
+}
+
+// PermissionsMode reports the non-secret permissions mode selected for this
+// tool set.
+func (s *ToolSet) PermissionsMode() PermissionsMode {
 	if s == nil {
 		return ""
 	}
-	return s.mode
+	if mode := s.mode.Load(); mode != nil {
+		return *mode
+	}
+	return ""
+}
+
+// SetPermissionsMode switches the mode for the rest of the session.
+func (s *ToolSet) SetPermissionsMode(mode PermissionsMode) error {
+	if !mode.valid() {
+		return fmt.Errorf("invalid permissions mode %q; expected manual or skip-permissions", mode)
+	}
+	s.mode.Store(&mode)
+	return nil
 }
 
 func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
@@ -190,24 +212,44 @@ func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 	}, nil
 }
 
+type gateSnapshot struct {
+	set  *ToolSet
+	mode PermissionsMode
+}
+
+func (s *ToolSet) snapshotPermissions() gateSnapshot {
+	if s == nil {
+		return gateSnapshot{}
+	}
+	return gateSnapshot{set: s, mode: s.PermissionsMode()}
+}
+
 // ApprovesServerGate reports whether the server write gate is approved without
-// a local decision. Gated mode routes the gate through Approval instead.
+// a local decision. Manual mode routes the gate through Approval instead.
 func (s *ToolSet) ApprovesServerGate() bool {
-	return s != nil && s.mode == ModeAllowAll
+	return s.snapshotPermissions().approvesServerGate()
+}
+
+func (g gateSnapshot) approvesServerGate() bool {
+	return g.set != nil && g.mode == ModeSkipPermissions
 }
 
 // Approval reports whether call must wait for an approval decision before
-// it runs. The set's ApprovalMode is consulted first: ModeAllowAll suppresses
-// every declared gate, while ModeGated exposes the server gate and defers to
-// each registered tool's ApprovalPolicy.
+// it runs. The set's PermissionsMode is consulted first: ModeSkipPermissions
+// suppresses every declared gate, while ModeManual exposes the server gate and
+// defers to each registered tool's ApprovalPolicy.
 func (s *ToolSet) Approval(call ToolCall) (ApprovalRequirement, bool) {
-	if s == nil || s.mode != ModeGated {
+	return s.snapshotPermissions().approval(call)
+}
+
+func (g gateSnapshot) approval(call ToolCall) (ApprovalRequirement, bool) {
+	if g.set == nil || g.mode != ModeManual {
 		return ApprovalRequirement{}, false
 	}
 	if call.Name == assistant.ApprovalRequestTool {
 		return serverGateApprovalRequirement(call)
 	}
-	tool, ok := s.tools[call.Name]
+	tool, ok := g.set.tools[call.Name]
 	if !ok || tool.approval == nil {
 		return ApprovalRequirement{}, false
 	}

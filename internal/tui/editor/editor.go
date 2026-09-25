@@ -25,7 +25,6 @@ const (
 	menuMinWidth    = 40
 	menuVisibleRows = 5
 	menuSidePadding = 2
-	menuCloseHint   = "ESC x"
 )
 
 const (
@@ -43,6 +42,7 @@ const (
 // Editor is the chat input. The completion menu opens automatically for @
 // tokens and for a / token only when it is the first token in the prompt.
 type Editor struct {
+	commandSpecs      []CommandSpec
 	ta                textarea.Model
 	styles            styles.Editor
 	menu              menu
@@ -55,6 +55,7 @@ type Editor struct {
 	remoteState       RemoteState
 	completedMentions []trackedMention
 	dismissedValue    string
+	history           history
 
 	// inputStyle is the shared input-block contract. width is the block's total
 	// width; the textarea is sized to fit inside the block's horizontal frame.
@@ -73,6 +74,11 @@ type Editor struct {
 	sweep       styles.BorderSweep
 	sweepWidth  int
 	sweepCached bool
+}
+
+func (e *Editor) SetCommands(commands []CommandSpec) {
+	e.commandSpecs = append([]CommandSpec(nil), commands...)
+	e.recompute()
 }
 
 // menu is the completion popup state rendered below the textarea.
@@ -199,6 +205,7 @@ func (e *Editor) SetInputStyles(inputStyle styles.Input) {
 	// style sets, ignoring theme colors. Both states get the theme's color so an
 	// empty composer reads the same whether or not it holds focus.
 	st.Focused.Placeholder, st.Blurred.Placeholder = inputStyle.Placeholder, inputStyle.Placeholder
+	st.Cursor.Color = inputStyle.Cursor
 	e.ta.SetStyles(st)
 
 	// Vertical padding only, matching the user block: the caret sits flush left
@@ -285,7 +292,13 @@ func (e *Editor) SetSweepFrame(frame int) {
 // Value returns the current input text.
 func (e *Editor) Value() string { return e.ta.Value() }
 
-// Reset clears the input and closes the menu.
+// SetValue replaces the prompt text and leaves history mode.
+func (e *Editor) SetValue(s string) {
+	e.history.end()
+	e.ta.SetValue(s)
+}
+
+// Reset clears the input, closes the menu, and leaves history mode.
 func (e *Editor) Reset() {
 	e.ta.Reset()
 	e.attachments = nil
@@ -297,6 +310,7 @@ func (e *Editor) Reset() {
 	e.remoteState = RemoteIdle
 	e.completedMentions = nil
 	e.dismissedValue = ""
+	e.history.end()
 	e.closeMenu()
 	e.invalidateBody()
 }
@@ -335,8 +349,9 @@ func (e *Editor) Height() int {
 }
 
 // Update handles one message. When the menu is open it consumes navigation keys
-// (up/down/tab/enter/esc); otherwise the message is fed to the textarea and the
-// menu is recomputed from the resulting value.
+// (up/down/tab/enter/esc); otherwise up/down may recall a previous prompt (see
+// historyKey), and any other message is fed to the textarea and the menu is
+// recomputed from the resulting value.
 func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 	if k, ok := msg.(tea.KeyPressMsg); ok {
 		if k.String() == "ctrl+x" && e.RemoveLastAttachment() {
@@ -364,6 +379,12 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 	}
+	// Like the textarea, history ignores keys while blurred.
+	if k, ok := msg.(tea.KeyPressMsg); ok && e.ta.Focused() {
+		if cmd, handled := e.historyKey(k.String()); handled {
+			return cmd
+		}
+	}
 	e.invalidateBody()
 	before := e.ta.Value()
 	beforeCursor := e.cursorOffset()
@@ -376,6 +397,7 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 	if start, oldEnd, newEnd, changed := textEditRange(before, after, beforeCursor, e.cursorOffset()); changed {
 		e.applyMentionEdit(start, oldEnd, newEnd, after)
 	}
+	e.syncHistory()
 	e.recompute()
 	return cmd
 }
@@ -462,7 +484,7 @@ func (e *Editor) MenuView() string {
 		return ""
 	}
 
-	parts := []string{e.alignMenuRight(menuCloseHint, innerWidth)}
+	parts := make([]string, 0, menuVisibleRows+2)
 	remaining := maxHeight - e.styles.MenuFrame.GetVerticalFrameSize() - len(parts)
 	statusRows := 0
 	if e.menu.status != "" {
@@ -495,7 +517,7 @@ func (e *Editor) MenuView() string {
 }
 
 func (e *Editor) menuWidth() int {
-	w := ansi.StringWidth(menuCloseHint)
+	w := 0
 	for _, it := range e.menu.items {
 		w = max(w, ansi.StringWidth(it.Label)+ansi.StringWidth(it.Detail)+4)
 	}
@@ -506,11 +528,6 @@ func (e *Editor) menuWidth() int {
 		return min(menuMaxWidth, max(1, e.width-e.ContentOffset()))
 	}
 	return w
-}
-
-func (e *Editor) alignMenuRight(value string, width int) string {
-	value = ansi.Truncate(value, width, "")
-	return e.styles.MenuHelp.Render(strings.Repeat(" ", max(0, width-ansi.StringWidth(value))) + value)
 }
 
 func (e *Editor) menuLine(value string, width int, style lipgloss.Style) string {
@@ -539,7 +556,11 @@ func (e *Editor) recompute() {
 			e.closeMenu()
 			return
 		}
-		e.setMenu(CommandCandidates(word[1:]), "")
+		if e.commandSpecs != nil {
+			e.setMenu(CommandCandidatesFrom(e.commandSpecs, word[1:]), "")
+		} else {
+			e.setMenu(CommandCandidates(word[1:]), "")
+		}
 		return
 	}
 	span, active := e.activeEntitySpan()

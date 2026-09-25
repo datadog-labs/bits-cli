@@ -18,24 +18,31 @@ func TestParseCommand(t *testing.T) {
 	cases := []struct {
 		in       string
 		wantName string
+		wantArg  string
 		wantOk   bool
 	}{
-		{"/quit", "quit", true},
-		{"/exit", "exit", true},
-		{"/Quit", "quit", true},
-		{"/QUIT", "quit", true},
-		{"/quit now", "quit", true}, // trailing args ignored
-		{"hello", "", false},
-		{"", "", false},
-		{"/", "", false},      // bare slash is not a command
-		{"/ help", "", false}, // space before the name is not a command
-		{"hello /quit", "", false},
-		{" /quit", "", false}, // commands must start the prompt
+		{in: "/quit", wantName: "quit", wantOk: true},
+		{in: "/exit", wantName: "exit", wantOk: true},
+		{in: "/Quit", wantName: "quit", wantOk: true},
+		{in: "/QUIT", wantName: "quit", wantOk: true},
+		{in: "/quit now", wantName: "quit", wantArg: "now", wantOk: true}, // only /permissions consumes its argument
+		{in: "/permissions", wantName: "permissions", wantOk: true},
+		{in: "/permissions skip-permissions", wantName: "permissions", wantArg: "skip-permissions", wantOk: true},
+		{in: "/Permissions MANUAL", wantName: "permissions", wantArg: "manual", wantOk: true},
+		{in: "/permissions   manual", wantName: "permissions", wantArg: "manual", wantOk: true},
+		{in: "/Permissions   SKIP-PERMISSIONS extra", wantName: "permissions", wantArg: "skip-permissions extra", wantOk: true},
+		{in: "/permissions manual now extra", wantName: "permissions", wantArg: "manual now extra", wantOk: true},
+		{in: "hello", wantOk: false},
+		{in: "", wantOk: false},
+		{in: "/", wantOk: false},      // bare slash is not a command
+		{in: "/ help", wantOk: false}, // space before the name is not a command
+		{in: "hello /quit", wantOk: false},
+		{in: " /quit", wantOk: false}, // commands must start the prompt
 	}
 	for _, tc := range cases {
-		got, ok := parseCommand(tc.in)
-		if got != tc.wantName || ok != tc.wantOk {
-			t.Errorf("parseCommand(%q) = (%q, %v), want (%q, %v)", tc.in, got, ok, tc.wantName, tc.wantOk)
+		gotName, gotArg, ok := parseCommand(tc.in)
+		if ok != tc.wantOk || (ok && (gotName != tc.wantName || gotArg != tc.wantArg)) {
+			t.Errorf("parseCommand(%q) = (%q, %q, %v), want (%q, %q, %v)", tc.in, gotName, gotArg, ok, tc.wantName, tc.wantArg, tc.wantOk)
 		}
 	}
 }
@@ -88,6 +95,26 @@ func TestLookupCommandResolvesExitAlias(t *testing.T) {
 	}
 	if exit.id != quit.id || exit.activeTurnPolicy != commandCancelsTurn {
 		t.Fatalf("/exit resolved to %#v, want /quit with cancel policy", exit)
+	}
+}
+
+func TestCommandCompletionMatchesRegistry(t *testing.T) {
+	specs := commandCompletionSpecs()
+	if len(specs) != len(commandDefinitions) {
+		t.Fatalf("completion has %d entries, registry has %d", len(specs), len(commandDefinitions))
+	}
+	for _, candidate := range tuieditor.CommandCandidatesFrom(specs, "") {
+		if _, ok := lookupCommand(candidate.ID); !ok {
+			t.Fatalf("completion advertises unregistered command %q", candidate.ID)
+		}
+		if candidate.ID == "help" {
+			t.Fatal("/help remains in completion")
+		}
+	}
+	m := newModelWithSpy(t)
+	_, _ = m.dispatchCommand("help", "")
+	if !strings.Contains(m.notice.Text, "Unknown command: /help") {
+		t.Fatalf("/help notice = %q", m.notice.Text)
 	}
 }
 
@@ -456,7 +483,7 @@ func TestDispatchQuitCancelsRunningTurnAndQuits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelTurn = cancel
 
-	got, cmd := m.dispatchCommand("quit")
+	got, cmd := m.dispatchCommand("quit", "")
 	if got != m {
 		t.Fatal("dispatchCommand should return the same model")
 	}
@@ -473,7 +500,7 @@ func TestDispatchQuitCancelsRunningTurnAndQuits(t *testing.T) {
 
 func TestDispatchQuitWithNoRunningTurnStillQuits(t *testing.T) {
 	m := &Model{}
-	_, cmd := m.dispatchCommand("quit")
+	_, cmd := m.dispatchCommand("quit", "")
 	if cmd == nil {
 		t.Fatal("expected a quit command")
 	}
@@ -588,7 +615,7 @@ func TestSubmitUnknownCommandDuringActiveTurnDoesNotCancel(t *testing.T) {
 
 func TestDispatchUnknownCommandPostsNotice(t *testing.T) {
 	m := &Model{}
-	_, cmd := m.dispatchCommand("nope")
+	_, cmd := m.dispatchCommand("nope", "")
 	if cmd == nil {
 		t.Fatal("expected a notice clear-tick command")
 	}
@@ -647,7 +674,7 @@ func TestLatestCopyableAssistantResponse(t *testing.T) {
 func TestCopyCommandWritesLatestAssistantResponseLocally(t *testing.T) {
 	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
 	m.editor.Focus()
-	m.blocks = []agent.Block{
+	m.transcript.Blocks = []agent.Block{
 		{Role: assistant.RoleUser, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "prompt"}},
 		{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "answer"}},
 	}
@@ -668,7 +695,7 @@ func TestCopyCommandWritesLatestAssistantResponseLocally(t *testing.T) {
 func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
 	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
 	m.editor.Focus()
-	m.blocks = []agent.Block{{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "previous answer"}}}
+	m.transcript.Blocks = []agent.Block{{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "previous answer"}}}
 	m.turnEvents = make(chan agent.Event)
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "/copy"})
@@ -684,12 +711,12 @@ func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
 
 func TestCopyCommandReportsNoCompletedAssistantResponse(t *testing.T) {
 	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
-	m.blocks = []agent.Block{
+	m.transcript.Blocks = []agent.Block{
 		{Role: assistant.RoleUser, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "prompt"}},
 		{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: false, Markdown: &assistant.MarkdownPayload{Content: "partial"}},
 	}
 
-	_, cmd := m.dispatchCommand("copy")
+	_, cmd := m.dispatchCommand("copy", "")
 	if cmd == nil || m.notice.Empty() {
 		t.Fatal("/copy without a completed response should show a notice")
 	}
