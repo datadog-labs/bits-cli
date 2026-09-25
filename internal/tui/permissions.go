@@ -140,7 +140,7 @@ func (m *Model) permissionsView() string {
 	}
 	header := "Permissions"
 	if m.permissionConfirm {
-		header = "Skip permissions?"
+		header = "Full access?"
 	}
 	closeHint := "ESC x"
 	headerGap := strings.Repeat(" ", max(1, inner-ansi.StringWidth(header)-ansi.StringWidth(closeHint)))
@@ -149,11 +149,12 @@ func (m *Model) permissionsView() string {
 		rows = append(rows, line("Resize terminal to choose permissions", false))
 	} else if m.permissionConfirm {
 		rows = append(rows,
+			line("", false),
 			line("Tools will run without approval prompts.", false),
 			line("This includes local and server gated actions.", false),
 			line("", false),
 			line(permissionMarker(!m.permissionAllow)+"Cancel", !m.permissionAllow),
-			line(permissionMarker(m.permissionAllow)+"Switch to skip-permissions", m.permissionAllow),
+			line(permissionMarker(m.permissionAllow)+"Enable full access", m.permissionAllow),
 		)
 	} else {
 		labels := m.permissionOptionLabels()
@@ -233,7 +234,7 @@ func permissionMarker(selected bool) string {
 func (m *Model) permissionsCompact() bool {
 	available := m.height - chatFooterHeight - m.editor.Height()
 	if m.permissionConfirm {
-		return m.width < 36 || available < 9
+		return m.width < 36 || available < 10
 	}
 	width := min(100, max(1, m.width-m.editor.ContentOffset()))
 	inner := width - m.styles.Editor.MenuFrame.GetHorizontalFrameSize() - 2

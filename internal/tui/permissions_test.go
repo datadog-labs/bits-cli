@@ -406,8 +406,15 @@ func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
 func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
-	if strings.Contains(ansi.Strip(m.permissionsView()), "Enter to select") {
+	rows := strings.Split(ansi.Strip(m.permissionsView()), "\n")
+	if strings.Contains(strings.Join(rows, "\n"), "Enter to select") {
 		t.Fatal("confirmation still renders footer hints")
+	}
+	if !strings.Contains(rows[1], "Full access?") || strings.TrimSpace(strings.Trim(rows[2], "│")) != "" || !strings.Contains(rows[3], "Tools will run") {
+		t.Fatalf("confirmation title needs a blank row before its explanation: %q", rows)
+	}
+	if !strings.Contains(strings.Join(rows, "\n"), "Enable full access") {
+		t.Fatal("confirmation action does not match the picker label")
 	}
 }
 
