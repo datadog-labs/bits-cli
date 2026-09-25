@@ -358,12 +358,14 @@ func TestPermissionsPickerSectionSpacing(t *testing.T) {
 	for _, pair := range [][2]string{
 		{"Permissions", "Ask for Approval"},
 		{"workspace", "Full access"},
-		{"behalf", "↑/↓ to choose"},
 	} {
 		start, end := find(pair[0]), find(pair[1])
 		if end-start != 2 || strings.TrimSpace(strings.Trim(rows[start+1], "│")) != "" {
 			t.Fatalf("expected one blank row between %q and %q", pair[0], pair[1])
 		}
+	}
+	if strings.Contains(ansi.Strip(m.permissionsView()), "to choose") {
+		t.Fatal("picker still renders keyboard hints")
 	}
 }
 
@@ -398,6 +400,14 @@ func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
 		if !found {
 			t.Fatalf("%q explanation does not start on the same row", pair[0])
 		}
+	}
+}
+
+func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
+	m, _ := newPermissionsModel(t, agent.ModeManual)
+	_, _ = m.dispatchCommand("permissions", "skip-permissions")
+	if strings.Contains(ansi.Strip(m.permissionsView()), "Enter to select") {
+		t.Fatal("confirmation still renders footer hints")
 	}
 }
 

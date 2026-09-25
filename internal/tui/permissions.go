@@ -154,7 +154,6 @@ func (m *Model) permissionsView() string {
 			line("", false),
 			line(permissionMarker(!m.permissionAllow)+"Cancel", !m.permissionAllow),
 			line(permissionMarker(m.permissionAllow)+"Switch to skip-permissions", m.permissionAllow),
-			line("Enter to select", false),
 		)
 	} else {
 		labels := m.permissionOptionLabels()
@@ -169,7 +168,6 @@ func (m *Model) permissionsView() string {
 			}
 			rows = append(rows, m.permissionOptionRows(label, permissionOptionDetails[i], inner, leftWidth, detailWidth, i == m.permissionChoice)...)
 		}
-		rows = append(rows, line("", false), m.styles.Panel.Help.Render("↑/↓ to choose · Enter to select"))
 	}
 	return style.MenuFrame.Width(width).Padding(0, 1).Render(strings.Join(rows, "\n"))
 }
@@ -234,7 +232,7 @@ func permissionMarker(selected bool) string {
 func (m *Model) permissionsCompact() bool {
 	available := m.height - chatFooterHeight - m.editor.Height()
 	if m.permissionConfirm {
-		return m.width < 36 || available < 9
+		return m.width < 36 || available < 8
 	}
 	width := min(100, max(1, m.width-m.editor.ContentOffset()))
 	inner := width - m.styles.Editor.MenuFrame.GetHorizontalFrameSize() - 2
@@ -244,6 +242,6 @@ func (m *Model) permissionsCompact() bool {
 	if detailWidth < 12 {
 		return true
 	}
-	height := 7 + len(wrapPermissionDetail(permissionOptionDetails[0], detailWidth)) + len(wrapPermissionDetail(permissionOptionDetails[1], detailWidth))
+	height := 5 + len(wrapPermissionDetail(permissionOptionDetails[0], detailWidth)) + len(wrapPermissionDetail(permissionOptionDetails[1], detailWidth))
 	return available < height
 }
