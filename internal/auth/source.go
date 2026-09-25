@@ -43,7 +43,7 @@ func NewSource(session Session, store CredentialStore, httpClient *http.Client) 
 		return nil, fmt.Errorf("OAuth credential store is required")
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: refreshTimeout}
+		httpClient = newOAuthHTTPClient(refreshTimeout)
 	}
 	return &Source{
 		gate:       make(chan struct{}, 1),

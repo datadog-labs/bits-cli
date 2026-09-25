@@ -73,7 +73,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 		opts.Store = DefaultStore()
 	}
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+		opts.HTTPClient = newOAuthHTTPClient(30 * time.Second)
 	}
 	if opts.Out == nil {
 		opts.Out = io.Discard
@@ -328,7 +328,7 @@ func Revoke(ctx context.Context, session Session, httpClient *http.Client) error
 		return err
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Second}
+		httpClient = newOAuthHTTPClient(10 * time.Second)
 	}
 	if session.RefreshToken != "" && !session.token().Valid() {
 		refreshCtx := context.WithValue(ctx, oauth2.HTTPClient, httpClient)
@@ -359,7 +359,7 @@ func Revoke(ctx context.Context, session Session, httpClient *http.Client) error
 		return fmt.Errorf("revoke Datadog OAuth token: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		var oauthErr struct {
 			Code string `json:"error"`
