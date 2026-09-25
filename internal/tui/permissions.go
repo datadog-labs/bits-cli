@@ -171,7 +171,7 @@ func (m *Model) permissionsView() string {
 		}
 		rows = append(rows, line("", false), m.styles.Panel.Help.Render("↑/↓ to choose · Enter to select"))
 	}
-	return style.MenuFrame.BorderForeground(m.styles.Selector.Selected.GetForeground()).Width(width).Padding(0, 1).Render(strings.Join(rows, "\n"))
+	return style.MenuFrame.Width(width).Padding(0, 1).Render(strings.Join(rows, "\n"))
 }
 
 func (m *Model) permissionOptionLabels() [2]string {
