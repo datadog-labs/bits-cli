@@ -342,6 +342,31 @@ func TestPermissionsPickerOverlaysConversation(t *testing.T) {
 	}
 }
 
+func TestPermissionsPickerSectionSpacing(t *testing.T) {
+	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
+	_, _ = m.dispatchCommand("permissions", "")
+	rows := strings.Split(ansi.Strip(m.permissionsView()), "\n")
+	find := func(label string) int {
+		for i, row := range rows {
+			if strings.Contains(row, label) {
+				return i
+			}
+		}
+		t.Fatalf("missing %q from picker", label)
+		return -1
+	}
+	for _, pair := range [][2]string{
+		{"Permissions", "Manual"},
+		{"Ask for approval", "Skip permissions"},
+		{"Run tools without asking", "↑/↓ to choose"},
+	} {
+		start, end := find(pair[0]), find(pair[1])
+		if end-start != 2 || strings.TrimSpace(strings.Trim(rows[start+1], "│")) != "" {
+			t.Fatalf("expected one blank row between %q and %q", pair[0], pair[1])
+		}
+	}
+}
+
 func TestPermissionsPickerCompactResizeKeepsSelection(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "")

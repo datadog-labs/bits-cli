@@ -159,10 +159,13 @@ func (m *Model) permissionsView() string {
 			skipCurrent = "  Current"
 		}
 		rows = append(rows,
+			line("", false),
 			line(permissionMarker(m.permissionChoice == 0)+"Manual"+manualCurrent, m.permissionChoice == 0),
 			line("  Ask for approval when a tool requires it.", false),
+			line("", false),
 			line(permissionMarker(m.permissionChoice == 1)+"Skip permissions"+skipCurrent, m.permissionChoice == 1),
 			line("  Run tools without asking for approval.", false),
+			line("", false),
 			line("↑/↓ to choose · Enter to select", false),
 		)
 	}
@@ -177,5 +180,5 @@ func permissionMarker(selected bool) string {
 }
 
 func (m *Model) permissionsCompact() bool {
-	return m.width < 36 || m.height-chatFooterHeight-m.editor.Height() < 9
+	return m.width < 36 || m.height-chatFooterHeight-m.editor.Height() < 11
 }
