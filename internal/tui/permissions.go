@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
@@ -33,6 +32,7 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 		}
 		m.permissionConfirm = false
 		m.permissionAllow = false
+		m.editor.CloseMenu()
 		m.setMode(ModePermissions)
 		return nil
 	}
@@ -50,6 +50,7 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 		m.permissionChoice = 1
 		m.permissionConfirm = true
 		m.permissionAllow = false
+		m.editor.CloseMenu()
 		m.setMode(ModePermissions)
 		return nil
 	}
@@ -77,7 +78,7 @@ func (m *Model) applyPermissionsMode(mode agent.PermissionsMode) tea.Cmd {
 }
 
 func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
-	if m.width < 36 || m.height < 8 {
+	if m.permissionsCompact() {
 		if msg.String() == "esc" {
 			m.setMode(ModeChat)
 		}
@@ -120,28 +121,61 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) permissionsView() string {
-	if m.width < 36 || m.height < 8 {
-		return lipgloss.Place(max(1, m.width), max(1, m.height), lipgloss.Center, lipgloss.Center,
-			ansi.Truncate("Resize terminal to choose permissions", max(1, m.width), ""))
+	style := m.styles.Editor
+	width := min(60, max(1, m.width-m.editor.ContentOffset()))
+	inner := max(1, width-style.MenuFrame.GetHorizontalFrameSize()-2)
+	line := func(value string, selected bool) string {
+		rowStyle := style.MenuItem
+		if selected {
+			rowStyle = style.MenuSelected
+		}
+		value = ansi.Truncate(value, inner, "…")
+		return rowStyle.Render(value + strings.Repeat(" ", max(0, inner-ansi.StringWidth(value))))
 	}
-	var rows []string
+	header := "Permissions"
 	if m.permissionConfirm {
-		rows = []string{
-			"Switch to skip-permissions?", "", "Tools will run without approval prompts, including local and server gated actions.", "", "  Cancel", "  Switch to skip-permissions", "", "Enter to select · Esc to cancel",
-		}
-		if m.permissionAllow {
-			rows[5] = "› Switch to skip-permissions"
-		} else {
-			rows[4] = "› Cancel"
-		}
+		header = "Skip permissions?"
+	}
+	closeHint := "ESC x"
+	header += strings.Repeat(" ", max(1, inner-ansi.StringWidth(header)-ansi.StringWidth(closeHint))) + closeHint
+	rows := []string{line(header, false)}
+	if m.permissionsCompact() {
+		rows = append(rows, line("Resize terminal to choose permissions", false))
+	} else if m.permissionConfirm {
+		rows = append(rows,
+			line("Tools will run without approval prompts.", false),
+			line("This includes local and server gated actions.", false),
+			line("", false),
+			line(permissionMarker(!m.permissionAllow)+"Cancel", !m.permissionAllow),
+			line(permissionMarker(m.permissionAllow)+"Switch to skip-permissions", m.permissionAllow),
+			line("Enter to select", false),
+		)
 	} else {
-		rows = []string{"Permissions", "", "  Manual · Ask for approval when a tool requires it.", "  Skip permissions · Run tools without asking for approval.", "", "↑/↓ to choose · Enter to select · Esc to cancel"}
-		rows[2+m.permissionChoice] = "›" + rows[2+m.permissionChoice][1:]
+		manualCurrent := ""
+		skipCurrent := ""
+		if m.tools.PermissionsMode() == agent.ModeManual {
+			manualCurrent = "  Current"
+		} else {
+			skipCurrent = "  Current"
+		}
+		rows = append(rows,
+			line(permissionMarker(m.permissionChoice == 0)+"Manual"+manualCurrent, m.permissionChoice == 0),
+			line("  Ask for approval when a tool requires it.", false),
+			line(permissionMarker(m.permissionChoice == 1)+"Skip permissions"+skipCurrent, m.permissionChoice == 1),
+			line("  Run tools without asking for approval.", false),
+			line("↑/↓ to choose · Enter to select", false),
+		)
 	}
-	width := max(1, m.width)
-	for i, row := range rows {
-		rows[i] = ansi.Truncate(row, width, "")
+	return style.MenuFrame.Width(width).Padding(0, 1).Render(strings.Join(rows, "\n"))
+}
+
+func permissionMarker(selected bool) string {
+	if selected {
+		return "› "
 	}
-	content := strings.Join(rows, "\n")
-	return lipgloss.Place(width, max(1, m.height), lipgloss.Center, lipgloss.Center, content)
+	return "  "
+}
+
+func (m *Model) permissionsCompact() bool {
+	return m.width < 36 || m.height-chatFooterHeight-m.editor.Height() < 9
 }

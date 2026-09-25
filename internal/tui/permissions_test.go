@@ -7,9 +7,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"charm.land/lipgloss/v2"
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // turnBackend scripts an alternating conversation: odd sends request the
@@ -309,13 +311,52 @@ func TestPermissionsPickerCurrentModeAndResize(t *testing.T) {
 	if m.permissionChoice != 1 || !strings.Contains(m.permissionsView(), "› Skip permissions") {
 		t.Fatal("picker did not focus the startup mode")
 	}
-	_, _ = m.Update(tea.WindowSizeMsg{Width: 42, Height: 12})
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 42, Height: 18})
 	if m.permissionChoice != 1 || m.tools.PermissionsMode() != agent.ModeSkipPermissions {
 		t.Fatal("resize changed the selected or active mode")
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.mode != ModeChat || m.tools.PermissionsMode() != agent.ModeSkipPermissions {
 		t.Fatal("selecting current mode did not close as a no-op")
+	}
+}
+
+func TestPermissionsPickerOverlaysConversation(t *testing.T) {
+	m, _ := newPermissionsModel(t, agent.ModeManual)
+	setConversationInput(m, "draft message remains visible")
+	_, _ = m.dispatchCommand("permissions", "")
+	popup := m.permissionsView()
+	if lipgloss.Width(popup) >= m.width || lipgloss.Height(popup) >= m.height {
+		t.Fatalf("picker fills the terminal: %d×%d in %d×%d", lipgloss.Width(popup), lipgloss.Height(popup), m.width, m.height)
+	}
+	if !strings.Contains(ansi.Strip(popup), "ESC x") {
+		t.Fatal("picker lacks top-right Escape hint")
+	}
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "draft message remains visible") || !strings.Contains(view, "Permissions") {
+		t.Fatalf("picker replaced the conversation view: %q", view)
+	}
+	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if got := m.editor.Value(); got != "draft message remains visible" {
+		t.Fatalf("Escape lost composer input: %q", got)
+	}
+}
+
+func TestPermissionsPickerCompactResizeKeepsSelection(t *testing.T) {
+	m, _ := newPermissionsModel(t, agent.ModeManual)
+	_, _ = m.dispatchCommand("permissions", "")
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
+	if !strings.Contains(ansi.Strip(m.View().Content), "Resize") {
+		t.Fatal("compact picker lacks resize hint")
+	}
+	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.mode != ModePermissions || m.tools.PermissionsMode() != agent.ModeManual {
+		t.Fatal("hidden controls accepted Enter")
+	}
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.permissionChoice != 1 || !strings.Contains(ansi.Strip(m.View().Content), "Skip permissions") {
+		t.Fatal("picker did not recover after resize")
 	}
 }
 
