@@ -352,17 +352,44 @@ func TestPermissionsPickerSectionSpacing(t *testing.T) {
 				return i
 			}
 		}
-		t.Fatalf("missing %q from picker", label)
+		t.Fatalf("missing %q from picker: %q", label, ansi.Strip(m.permissionsView()))
 		return -1
 	}
 	for _, pair := range [][2]string{
 		{"Permissions", "Manual"},
-		{"Ask for approval", "Skip permissions"},
-		{"Run tools without asking", "↑/↓ to choose"},
+		{"Manual", "Skip permissions"},
+		{"No approval prompts", "↑/↓ to choose"},
 	} {
 		start, end := find(pair[0]), find(pair[1])
 		if end-start != 2 || strings.TrimSpace(strings.Trim(rows[start+1], "│")) != "" {
 			t.Fatalf("expected one blank row between %q and %q", pair[0], pair[1])
+		}
+	}
+}
+
+func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
+	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
+	_, _ = m.dispatchCommand("permissions", "")
+	view := m.permissionsView()
+	if !strings.Contains(view, m.styles.Panel.Title.Render("Permissions")) {
+		t.Fatal("picker title does not use the resume title style")
+	}
+	if !strings.Contains(view, m.styles.Selector.Selected.Render("› Skip permissions  Current")) {
+		t.Fatal("selected mode does not use the resume selected title style")
+	}
+	if !strings.Contains(view, m.styles.Selector.Selected.Render("No approval prompts")) {
+		t.Fatal("selected explanation does not use the resume selected detail style")
+	}
+	if !strings.Contains(view, m.styles.Text.Tertiary.Render("Ask before gated tools")) {
+		t.Fatal("unselected explanation does not use the resume time style")
+	}
+	rows := strings.Split(ansi.Strip(view), "\n")
+	for _, row := range rows {
+		if strings.Contains(row, "Ask before gated tools") && !strings.Contains(row, "Manual") {
+			t.Fatal("manual explanation is not on the option row")
+		}
+		if strings.Contains(row, "No approval prompts") && !strings.Contains(row, "Skip permissions") {
+			t.Fatal("skip explanation is not on the option row")
 		}
 	}
 }

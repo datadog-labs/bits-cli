@@ -9,6 +9,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 )
 
 var permissionModes = [...]agent.PermissionsMode{agent.ModeManual, agent.ModeSkipPermissions}
@@ -122,6 +123,7 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 
 func (m *Model) permissionsView() string {
 	style := m.styles.Editor
+	panel := m.styles.Panel
 	width := min(60, max(1, m.width-m.editor.ContentOffset()))
 	inner := max(1, width-style.MenuFrame.GetHorizontalFrameSize()-2)
 	line := func(value string, selected bool) string {
@@ -137,8 +139,8 @@ func (m *Model) permissionsView() string {
 		header = "Skip permissions?"
 	}
 	closeHint := "ESC x"
-	header += strings.Repeat(" ", max(1, inner-ansi.StringWidth(header)-ansi.StringWidth(closeHint))) + closeHint
-	rows := []string{line(header, false)}
+	headerGap := strings.Repeat(" ", max(1, inner-ansi.StringWidth(header)-ansi.StringWidth(closeHint)))
+	rows := []string{panel.Title.Render(header) + headerGap + panel.Dismiss.Render(closeHint)}
 	if m.permissionsCompact() {
 		rows = append(rows, line("Resize terminal to choose permissions", false))
 	} else if m.permissionConfirm {
@@ -151,25 +153,34 @@ func (m *Model) permissionsView() string {
 			line("Enter to select", false),
 		)
 	} else {
-		manualCurrent := ""
-		skipCurrent := ""
+		manualLabel := "Manual"
+		skipLabel := "Skip permissions"
 		if m.tools.PermissionsMode() == agent.ModeManual {
-			manualCurrent = "  Current"
+			manualLabel += "  Current"
 		} else {
-			skipCurrent = "  Current"
+			skipLabel += "  Current"
 		}
+		selectorStyles := m.styles.Selector
+		selectorStyles.Item = m.styles.Text.Secondary
+		selectorStyles.Detail = m.styles.Text.Tertiary
+		selectorStyles.SelectedDetail = selectorStyles.Selected
+		selector := components.NewSelector([]components.Choice{
+			{Label: manualLabel, Detail: "Ask before gated tools"},
+			{Label: skipLabel, Detail: "No approval prompts"},
+		}, selectorStyles)
+		selector.SetAlignDetailRight(true)
+		selector.SetIndex(m.permissionChoice)
+		optionRows := strings.Split(selector.View(inner), "\n")
 		rows = append(rows,
 			line("", false),
-			line(permissionMarker(m.permissionChoice == 0)+"Manual"+manualCurrent, m.permissionChoice == 0),
-			line("  Ask for approval when a tool requires it.", false),
+			optionRows[0],
 			line("", false),
-			line(permissionMarker(m.permissionChoice == 1)+"Skip permissions"+skipCurrent, m.permissionChoice == 1),
-			line("  Run tools without asking for approval.", false),
+			optionRows[1],
 			line("", false),
-			line("↑/↓ to choose · Enter to select", false),
+			m.styles.Panel.Help.Render("↑/↓ to choose · Enter to select"),
 		)
 	}
-	return style.MenuFrame.Width(width).Padding(0, 1).Render(strings.Join(rows, "\n"))
+	return style.MenuFrame.BorderForeground(m.styles.Selector.Selected.GetForeground()).Width(width).Padding(0, 1).Render(strings.Join(rows, "\n"))
 }
 
 func permissionMarker(selected bool) string {
@@ -180,5 +191,5 @@ func permissionMarker(selected bool) string {
 }
 
 func (m *Model) permissionsCompact() bool {
-	return m.width < 36 || m.height-chatFooterHeight-m.editor.Height() < 11
+	return m.width < 36 || m.height-chatFooterHeight-m.editor.Height() < 9
 }
