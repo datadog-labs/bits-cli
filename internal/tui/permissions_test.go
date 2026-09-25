@@ -107,8 +107,8 @@ func TestPermissionsExtraSpacesAroundModeStillSwitch(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
 	setConversationInput(m, "/permissions   manual")
 	_, _ = m.submit()
-	if m.notice.Level != chat.NoticeInfo || !strings.Contains(m.notice.Text, "Tools will ask before running") {
-		t.Fatalf("notice = %#v, want the manual switch notice", m.notice)
+	if !m.notice.Empty() {
+		t.Fatalf("notice = %#v, want no success notification", m.notice)
 	}
 	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
 		t.Fatalf("mode = %q, want manual", got)
@@ -118,8 +118,8 @@ func TestPermissionsExtraSpacesAroundModeStillSwitch(t *testing.T) {
 func TestPermissionsSwitchingToCurrentModeIsANoOp(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "manual")
-	if m.notice.Level != chat.NoticeInfo || !strings.Contains(m.notice.Text, "already manual") {
-		t.Fatalf("notice = %#v, want an already-manual notice", m.notice)
+	if !m.notice.Empty() {
+		t.Fatalf("notice = %#v, want no notification for the current mode", m.notice)
 	}
 }
 
@@ -203,8 +203,8 @@ func TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool(t *testing.T) {
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.notice.Level != chat.NoticeWarn || !strings.Contains(m.notice.Text, "without asking") {
-		t.Fatalf("notice = %#v, want the skip-permissions warning", m.notice)
+	if !m.notice.Empty() {
+		t.Fatalf("notice = %#v, want no success notification", m.notice)
 	}
 	if got := m.tools.PermissionsMode(); got != agent.ModeSkipPermissions {
 		t.Fatalf("mode = %q, want skip-permissions", got)
@@ -234,8 +234,8 @@ func TestPermissionsSwitchBackToManualPromptsAgain(t *testing.T) {
 	}
 
 	_, _ = m.dispatchCommand("permissions", "manual")
-	if m.notice.Level != chat.NoticeInfo || !strings.Contains(m.notice.Text, "Tools will ask before running") {
-		t.Fatalf("notice = %#v, want the manual switch notice", m.notice)
+	if !m.notice.Empty() {
+		t.Fatalf("notice = %#v, want no success notification", m.notice)
 	}
 	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
 		t.Fatalf("mode = %q, want manual", got)

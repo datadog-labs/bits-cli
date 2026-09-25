@@ -51,7 +51,7 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 	}
 	mode := agent.PermissionsMode(argument)
 	if mode == current {
-		return m.showNotice(notice(chat.NoticeInfo, nil, "Permissions: already %s.", mode), 0)
+		return nil
 	}
 	if current == agent.ModeManual && mode == agent.ModeSkipPermissions {
 		m.permissionChoice = 1
@@ -78,10 +78,8 @@ func (m *Model) applyPermissionsMode(mode agent.PermissionsMode) tea.Cmd {
 	}
 	m.setMode(ModeChat)
 	m.syncStatus()
-	if mode == agent.ModeSkipPermissions {
-		return m.showNotice(notice(chat.NoticeWarn, nil, "Permissions: skip-permissions. Tools will run without asking."), 0)
-	}
-	return m.showNotice(notice(chat.NoticeInfo, nil, "Permissions: manual. Tools will ask before running."), 0)
+	m.clearNotice()
+	return nil
 }
 
 func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
