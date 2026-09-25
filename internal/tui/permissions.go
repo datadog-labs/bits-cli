@@ -153,8 +153,8 @@ func (m *Model) permissionsView() string {
 			line("Tools will run without approval prompts.", false),
 			line("This includes local and server gated actions.", false),
 			line("", false),
+			line(permissionMarker(m.permissionAllow)+"Yes, enable full access", m.permissionAllow),
 			line(permissionMarker(!m.permissionAllow)+"Cancel", !m.permissionAllow),
-			line(permissionMarker(m.permissionAllow)+"Enable full access", m.permissionAllow),
 		)
 	} else {
 		labels := m.permissionOptionLabels()

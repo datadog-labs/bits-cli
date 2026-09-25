@@ -413,8 +413,17 @@ func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
 	if !strings.Contains(rows[1], "Full access?") || strings.TrimSpace(strings.Trim(rows[2], "│")) != "" || !strings.Contains(rows[3], "Tools will run") {
 		t.Fatalf("confirmation title needs a blank row before its explanation: %q", rows)
 	}
-	if !strings.Contains(strings.Join(rows, "\n"), "Enable full access") {
-		t.Fatal("confirmation action does not match the picker label")
+	confirm, cancel := -1, -1
+	for i, row := range rows {
+		if strings.Contains(row, "Yes, enable full access") {
+			confirm = i
+		}
+		if strings.Contains(row, "Cancel") {
+			cancel = i
+		}
+	}
+	if confirm < 0 || cancel != confirm+1 || !strings.Contains(rows[cancel], "› Cancel") {
+		t.Fatalf("confirmation actions are not ordered with Cancel selected: %q", rows)
 	}
 }
 
