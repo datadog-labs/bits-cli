@@ -70,6 +70,24 @@ func TestNewSourceDefaultClientRefusesRedirects(t *testing.T) {
 	}
 }
 
+// The nil-client defaults in login and Revoke must yield a redirect-refusing
+// client with the configured timeout, while an explicit client passes through
+// unchanged.
+func TestDefaultOAuthClientGuardsNilInput(t *testing.T) {
+	client := defaultOAuthClient(nil, loginHTTPTimeout)
+	if got := client.CheckRedirect(&http.Request{}, nil); got != http.ErrUseLastResponse {
+		t.Fatalf("CheckRedirect error = %v, want http.ErrUseLastResponse", got)
+	}
+	if client.Timeout != loginHTTPTimeout {
+		t.Fatalf("timeout = %v, want %v", client.Timeout, loginHTTPTimeout)
+	}
+
+	provided := &http.Client{Timeout: time.Second}
+	if got := defaultOAuthClient(provided, revokeHTTPTimeout); got != provided {
+		t.Fatalf("defaultOAuthClient returned %p, want the caller's client %p", got, provided)
+	}
+}
+
 // The login code exchange must error on a redirecting token endpoint instead of
 // replaying the authorization code and code_verifier to the redirect target.
 // The login default client cannot reach an httptest token endpoint directly
@@ -80,13 +98,14 @@ func TestNewSourceDefaultClientRefusesRedirects(t *testing.T) {
 func TestLoginExchangeDoesNotFollowTokenRedirect(t *testing.T) {
 	redirect, targetHits := redirectTestPair(t)
 
-	client := newOAuthHTTPClient(30 * time.Second)
+	client := newOAuthHTTPClient(loginHTTPTimeout)
 	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		clone := req.Clone(req.Context())
-		if clone.URL.Hostname() == "api.datad0g.com" {
-			clone.URL.Scheme = "http"
-			clone.URL.Host = strings.TrimPrefix(redirect.URL, "http://")
+		if req.URL.Hostname() != "api.datad0g.com" {
+			t.Errorf("token exchange host = %s, want api.datad0g.com", req.URL.Hostname())
 		}
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(redirect.URL, "http://")
 		return http.DefaultTransport.RoundTrip(clone)
 	})
 
@@ -111,17 +130,28 @@ func TestLoginExchangeDoesNotFollowTokenRedirect(t *testing.T) {
 }
 
 // Background refresh must error on a redirecting token endpoint instead of
-// replaying the refresh token to the redirect target. This drives the
-// refresh through Source.AccessToken with the same client NewSource installs
-// by default; NewSource itself resolves the production token URL from the
-// session's site, so it cannot be pointed at an httptest server without a
-// larger refactor.
+// replaying the refresh token to the redirect target. This drives the refresh
+// through Source.AccessToken with the same client NewSource installs by
+// default, routed to the fake endpoint through a transport rewrite.
 func TestSourceRefreshDoesNotFollowTokenRedirect(t *testing.T) {
 	redirect, targetHits := redirectTestPair(t)
 
 	initial := expiredSession()
 	store := newMemoryStore(initial)
-	source := testSource(t, initial, store, redirect.URL, newOAuthHTTPClient(refreshTimeout))
+	client := newOAuthHTTPClient(refreshTimeout)
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Hostname() != "api.dd.datad0g.com" {
+			t.Errorf("refresh host = %s, want api.dd.datad0g.com", req.URL.Hostname())
+		}
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(redirect.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+	source, err := NewSource(initial, store, client)
+	if err != nil {
+		t.Fatalf("NewSource: %v", err)
+	}
 
 	token, err := source.AccessToken(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "HTTP 307") {
@@ -143,13 +173,14 @@ func TestSourceRefreshDoesNotFollowTokenRedirect(t *testing.T) {
 func TestLogoutRevokeDoesNotFollowRedirect(t *testing.T) {
 	redirect, targetHits := redirectTestPair(t)
 
-	client := newOAuthHTTPClient(10 * time.Second)
+	client := newOAuthHTTPClient(revokeHTTPTimeout)
 	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		clone := req.Clone(req.Context())
-		if clone.URL.Hostname() == "api.dd.datad0g.com" {
-			clone.URL.Scheme = "http"
-			clone.URL.Host = strings.TrimPrefix(redirect.URL, "http://")
+		if req.URL.Hostname() != "api.dd.datad0g.com" {
+			t.Errorf("revoke host = %s, want api.dd.datad0g.com", req.URL.Hostname())
 		}
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(redirect.URL, "http://")
 		return http.DefaultTransport.RoundTrip(clone)
 	})
 

@@ -72,9 +72,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	if opts.Store == nil {
 		opts.Store = DefaultStore()
 	}
-	if opts.HTTPClient == nil {
-		opts.HTTPClient = newOAuthHTTPClient(30 * time.Second)
-	}
+	opts.HTTPClient = defaultOAuthClient(opts.HTTPClient, loginHTTPTimeout)
 	if opts.Out == nil {
 		opts.Out = io.Discard
 	}
@@ -327,9 +325,7 @@ func Revoke(ctx context.Context, session Session, httpClient *http.Client) error
 	if err != nil {
 		return err
 	}
-	if httpClient == nil {
-		httpClient = newOAuthHTTPClient(10 * time.Second)
-	}
+	httpClient = defaultOAuthClient(httpClient, revokeHTTPTimeout)
 	if session.RefreshToken != "" && !session.token().Valid() {
 		refreshCtx := context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 		refreshed, refreshErr := cfg.OAuth2Config().TokenSource(refreshCtx, session.token()).Token()
