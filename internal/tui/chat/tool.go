@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -799,6 +801,85 @@ func renderSpans(spans []summarySpan, sty Styles) string {
 	return b.String()
 }
 
+type summaryCluster struct {
+	text string
+	kind spanKind
+}
+
+// renderSummaryClusters styles complete rows, so every continuation starts
+// with its own color instead of relying on terminal state from the prior row.
+func renderSummaryClusters(clusters []summaryCluster, sty Styles) string {
+	var spans []summarySpan
+	var run strings.Builder
+	var kind spanKind
+	for _, cluster := range clusters {
+		if run.Len() > 0 && kind != cluster.kind {
+			spans = append(spans, summarySpan{text: run.String(), kind: kind})
+			run.Reset()
+		}
+		kind = cluster.kind
+		run.WriteString(cluster.text)
+	}
+	if run.Len() > 0 {
+		spans = append(spans, summarySpan{text: run.String(), kind: kind})
+	}
+	return renderSpans(spans, sty)
+}
+
+// wrapSummarySpans keeps colors attached to text while laying out rows.
+func wrapSummarySpans(spans []summarySpan, width int, sty Styles) []string {
+	var lines []string
+	var row, word, space []summaryCluster
+	rowWidth, wordWidth, spaceWidth := 0, 0, 0
+	flushSpace := func() {
+		row = append(row, space...)
+		rowWidth += spaceWidth
+		space = nil
+		spaceWidth = 0
+	}
+	flushWord := func() {
+		if len(word) == 0 {
+			return
+		}
+		flushSpace()
+		row = append(row, word...)
+		rowWidth += wordWidth
+		word = nil
+		wordWidth = 0
+	}
+	for _, span := range spans {
+		for text := span.text; text != ""; {
+			cluster, cellWidth := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
+			text = text[len(cluster):]
+			r, _ := utf8.DecodeRuneInString(cluster)
+			item := summaryCluster{text: cluster, kind: span.kind}
+			switch {
+			case unicode.IsSpace(r) && r != '\u00a0':
+				flushWord()
+				space = append(space, item)
+				spaceWidth += cellWidth
+			case cluster == "-":
+				flushSpace()
+				flushWord()
+				row = append(row, item)
+				rowWidth += cellWidth
+			default:
+				word = append(word, item)
+				wordWidth += cellWidth
+				if rowWidth+spaceWidth+wordWidth > width && wordWidth <= width {
+					if len(row) > 0 {
+						lines = append(lines, renderSummaryClusters(row, sty))
+					}
+					row, space = nil, nil
+					rowWidth, spaceWidth = 0, 0
+				}
+			}
+		}
+	}
+	flushWord()
+	return append(lines, renderSummaryClusters(row, sty))
+}
+
 func inspectionLifecycle(blocks []agent.Block) toolLifecycle {
 	states := make([]toolLifecycle, 0, len(blocks))
 	for i := range blocks {
@@ -980,7 +1061,7 @@ func renderInspectionChild(spans []summarySpan, first bool, width int, sty Style
 		line := sty.ToolDetail.Render(prefix) + actionRendered + sty.ToolDetail.Render(" ") + renderSpans(rest, sty)
 		return []string{ansi.Truncate(line, max(1, width), "…")}
 	}
-	wrapped := strings.Split(ansi.Wordwrap(renderSpans(rest, sty), bodyWidth, "-"), "\n")
+	wrapped := wrapSummarySpans(rest, bodyWidth, sty)
 	lines := make([]string, 0, len(wrapped))
 	for i, row := range wrapped {
 		lead := strings.Repeat(" ", indentWidth)

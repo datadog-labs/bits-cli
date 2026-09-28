@@ -3,9 +3,16 @@ package tui
 import (
 	"image"
 	"strings"
+	"time"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/clipperhouse/uax29/v2/words"
+)
+
+const (
+	multiClickInterval  = 400 * time.Millisecond
+	multiClickTolerance = 2
 )
 
 // selectionFrame is one rendered view of a terminal-sized document. Rows in
@@ -45,12 +52,43 @@ func newSelectionFrame(content string, width, height int, documentRows []int, fl
 type selection struct {
 	anchor, focus image.Point
 	pointer       image.Point
+	clickPoint    image.Point
 	scope         selectionScope
+	clicks        clickTracker
 	edge          int
 	dragging      bool
+	keepRange     bool
+	singleCell    bool
 	tickArmed     bool
 	scrollToken   uint64
 }
+
+type clickTracker struct {
+	lastAt time.Time
+	point  image.Point
+	scope  selectionScope
+	count  int
+}
+
+func (c *clickTracker) next(now time.Time, point image.Point, scope selectionScope) int {
+	elapsed := now.Sub(c.lastAt)
+	if !c.lastAt.IsZero() && elapsed >= 0 && elapsed <= multiClickInterval &&
+		c.scope == scope && c.point.Y == point.Y && abs(c.point.X-point.X) <= multiClickTolerance {
+		c.count++
+	} else {
+		c.count = 1
+	}
+	if c.count == 3 {
+		c.reset()
+		return 3
+	}
+	c.lastAt = now
+	c.point = point
+	c.scope = scope
+	return c.count
+}
+
+func (c *clickTracker) reset() { *c = clickTracker{} }
 
 func selectionScopeAt(y, transcriptHeight int) selectionScope {
 	if y < transcriptHeight {
@@ -76,9 +114,42 @@ func (s *selection) beginGesture(frame selectionFrame, scope selectionScope, x, 
 	s.edge = s.edgeForPointer(s.pointer.Y, transcriptHeight)
 }
 
+func (s *selection) beginClick(frame selectionFrame, scope selectionScope, x, y, transcriptHeight, height int, onControl bool, now time.Time) {
+	point := frame.point(x, y)
+	s.clickPoint = point
+	if onControl {
+		// A control starts a normal gesture so dragging can still select text,
+		// but repeated presses must not become word or line selections.
+		s.clicks.reset()
+		s.beginGesture(frame, scope, x, y, transcriptHeight, height)
+		return
+	}
+	clickCount := s.clicks.next(now, point, scope)
+	s.scope = scope
+	s.pointer = image.Pt(x, y)
+	switch clickCount {
+	case 2:
+		if anchor, focus, ok := wordRange(frame, point); ok {
+			s.beginRange(anchor, focus)
+			return
+		}
+	case 3:
+		if frame.width > 0 && point.Y >= frame.floor {
+			s.beginRange(image.Pt(0, point.Y), image.Pt(frame.width-1, point.Y))
+			return
+		}
+	}
+	s.beginGesture(frame, scope, x, y, transcriptHeight, height)
+}
+
 func (s *selection) extendGesture(frame selectionFrame, x, y, transcriptHeight, height int) {
 	s.pointer = image.Pt(x, y)
 	x, y = s.scope.clamp(x, y, transcriptHeight, height)
+	point := frame.point(x, y)
+	if point != s.focus {
+		s.keepRange = false
+		s.clicks.reset()
+	}
 	s.extend(frame, x, y)
 	s.edge = s.edgeForPointer(s.pointer.Y, transcriptHeight)
 }
@@ -86,7 +157,16 @@ func (s *selection) extendGesture(frame selectionFrame, x, y, transcriptHeight, 
 func (s *selection) finishGesture(frame selectionFrame, x, y, transcriptHeight, height int, document selectionFrame) string {
 	s.pointer = image.Pt(x, y)
 	x, y = s.scope.clamp(x, y, transcriptHeight, height)
-	text := s.finish(frame, x, y, document)
+	if frame.point(x, y) != s.clickPoint {
+		s.clicks.reset()
+		s.keepRange = false
+	}
+	text := ""
+	if s.keepRange {
+		text = s.finishCurrent(document)
+	} else {
+		text = s.finish(frame, x, y, document)
+	}
 	s.stopScroll()
 	return text
 }
@@ -138,6 +218,17 @@ func (s *selection) begin(frame selectionFrame, x, y int) {
 	s.anchor = p
 	s.focus = p
 	s.dragging = true
+	s.keepRange = false
+	s.singleCell = false
+}
+
+func (s *selection) beginRange(anchor, focus image.Point) {
+	s.stopScroll()
+	s.anchor = anchor
+	s.focus = focus
+	s.dragging = true
+	s.keepRange = true
+	s.singleCell = anchor == focus
 }
 
 // extend moves the focus of an active selection to a screen-cell coordinate.
@@ -145,7 +236,11 @@ func (s *selection) extend(frame selectionFrame, x, y int) {
 	if !s.dragging {
 		return
 	}
-	s.focus = frame.point(x, y)
+	point := frame.point(x, y)
+	if point != s.focus {
+		s.singleCell = false
+	}
+	s.focus = point
 }
 
 // finish extends and copies the selection from document. The document is
@@ -153,16 +248,23 @@ func (s *selection) extend(frame selectionFrame, x, y int) {
 // virtual document, not the currently visible frame.
 func (s *selection) finish(frame selectionFrame, x, y int, document selectionFrame) string {
 	s.extend(frame, x, y)
+	return s.finishCurrent(document)
+}
+
+func (s *selection) finishCurrent(document selectionFrame) string {
 	if !s.dragging {
 		return ""
 	}
-	if s.anchor == s.focus {
+	if s.anchor == s.focus && !s.singleCell {
+		clicks := s.clicks
 		s.clear()
+		s.clicks = clicks
 		return ""
 	}
 
 	text := extractSelection(document, s.anchor, s.focus)
 	s.dragging = false
+	s.keepRange = false
 	return text
 }
 
@@ -171,7 +273,11 @@ func (s *selection) clear() {
 	s.anchor = image.Point{}
 	s.focus = image.Point{}
 	s.pointer = image.Point{}
+	s.clickPoint = image.Point{}
 	s.dragging = false
+	s.keepRange = false
+	s.singleCell = false
+	s.clicks.reset()
 	s.stopScroll()
 }
 
@@ -179,7 +285,7 @@ func (s *selection) clear() {
 func (s *selection) selecting() bool { return s.dragging }
 
 // selected reports whether a non-empty range should remain visible.
-func (s *selection) selected() bool { return s.anchor != s.focus }
+func (s *selection) selected() bool { return s.anchor != s.focus || s.singleCell }
 
 // render paints the active selection over frame. The original frame content
 // is returned byte-for-byte when no cells are selected.
@@ -222,7 +328,7 @@ func (s *selection) render(frame selectionFrame) string {
 }
 
 func extractSelection(frame selectionFrame, anchor, focus image.Point) string {
-	if frame.width == 0 || frame.height == 0 || anchor == focus {
+	if frame.width == 0 || frame.height == 0 {
 		return ""
 	}
 
@@ -320,6 +426,82 @@ func (frame selectionFrame) buffer() uv.ScreenBuffer {
 	buf.Method = ansi.GraphemeWidth
 	uv.NewStyledString(frame.content).Draw(&buf, buf.Bounds())
 	return buf
+}
+
+func wordRange(frame selectionFrame, point image.Point) (image.Point, image.Point, bool) {
+	if point.Y < frame.floor || point.X < 0 || point.X >= frame.width {
+		return image.Point{}, image.Point{}, false
+	}
+	screenY := -1
+	for y := range frame.height {
+		if frame.virtualRow(y) == point.Y {
+			screenY = y
+			break
+		}
+	}
+	if screenY < 0 {
+		return image.Point{}, image.Point{}, false
+	}
+	line := frame.buffer().Lines[screenY]
+	type cellSpan struct {
+		byteStart, byteEnd int
+		cellStart, cellEnd int
+	}
+	spans := make([]cellSpan, 0, frame.width)
+	var text strings.Builder
+	clickedByte := -1
+	for x := 0; x < frame.width; {
+		start, end := cellUnit(line, x, frame.width)
+		if start < 0 {
+			start, end = x, x+1
+		}
+		content := line[start].Content
+		if content == "" {
+			content = " "
+		}
+		byteStart := text.Len()
+		text.WriteString(content)
+		span := cellSpan{byteStart: byteStart, byteEnd: text.Len(), cellStart: start, cellEnd: end}
+		spans = append(spans, span)
+		if point.X >= start && point.X < end {
+			clickedByte = byteStart
+		}
+		x = end
+	}
+	if clickedByte < 0 {
+		return image.Point{}, image.Point{}, false
+	}
+	iterator := words.FromString(text.String())
+	for iterator.Next() {
+		if clickedByte < iterator.Start() || clickedByte >= iterator.End() {
+			continue
+		}
+		if strings.TrimSpace(iterator.Value()) == "" {
+			return image.Point{}, image.Point{}, false
+		}
+		first, last := -1, -1
+		for _, span := range spans {
+			if span.byteEnd <= iterator.Start() || span.byteStart >= iterator.End() {
+				continue
+			}
+			if first < 0 {
+				first = span.cellStart
+			}
+			last = span.cellEnd - 1
+		}
+		if first >= 0 && last >= first {
+			return image.Pt(first, point.Y), image.Pt(last, point.Y), true
+		}
+		return image.Point{}, image.Point{}, false
+	}
+	return image.Point{}, image.Point{}, false
+}
+
+func abs(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 // cellUnit returns the logical cell range containing x. A zero-width cell is
