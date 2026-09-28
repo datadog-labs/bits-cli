@@ -120,9 +120,9 @@ func (m *Model) questionRows(width int) ([]questionRow, int) {
 		if i < len(question.Options) {
 			label, description = question.Options[i].Label, question.Options[i].Description
 		}
-		marker, style := m.styles.Selector.Marker, m.styles.Text.Primary
+		marker, style, descStyle := m.styles.Selector.Marker, m.styles.Text.Secondary, m.styles.Text.Tertiary
 		if i == q.choices[q.page] {
-			marker, style = m.styles.Selector.Selected.Render(m.styles.Selector.SelectedMarker), m.styles.Selector.Selected
+			marker, style, descStyle = m.styles.Selector.Selected.Render(m.styles.Selector.SelectedMarker), m.styles.Selector.Selected, m.styles.Text.Secondary
 			focusRow = len(rows)
 		}
 		add(fmt.Sprintf("%d. %s", i+1, label), style, i, -1, marker)
@@ -131,7 +131,7 @@ func (m *Model) questionRows(width int) ([]questionRow, int) {
 			focusRow = len(rows)
 			rows = append(rows, questionRow{text: marker + q.text.View(), choice: i, page: -1})
 		} else {
-			add(description, m.styles.Text.Secondary, i, -1, marker)
+			add(description, descStyle, i, -1, marker)
 		}
 		if i < len(question.Options) {
 			blank()
@@ -180,7 +180,7 @@ func (m *Model) questionView() string {
 	if ansi.StringWidth(help) > width {
 		help = "enter · tab/arrows · esc dismiss"
 	}
-	lines = append(lines, m.styles.Text.Secondary.Render(ansi.Truncate(help, width, "…")))
+	lines = append(lines, m.styles.Text.Tertiary.Render(ansi.Truncate(help, width, "…")))
 	return lipgloss.NewStyle().Padding(0, 2).Render(strings.Join(lines, "\n"))
 }
 

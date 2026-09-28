@@ -141,7 +141,9 @@ func (m *Model) chatOverlay(base, menu string, x int) string {
 func (m *Model) chatViewBase(transcript string) string {
 	sections := []string{transcript}
 	if m.questions != nil {
-		return strings.Join(append(sections, m.noticeBar(), m.questionView(), m.chatFooter()), "\n")
+		dim := lipgloss.NewStyle().Faint(true)
+		sections = []string{dim.Render(transcript)}
+		return strings.Join(append(sections, dim.Render(m.noticeBar()), m.questionView(), m.chatFooter()), "\n")
 	}
 	if approval := m.approvalView(); approval != "" {
 		sections = append(sections, approval)
@@ -354,6 +356,9 @@ func (m *Model) noticeBar() string {
 // chatFooter renders low-attention workspace and context usage metadata below
 // the editor. Transient notices keep their separate row above the editor.
 func (m *Model) chatFooter() string {
+	if m.questions != nil {
+		return ""
+	}
 	width := max(1, m.list.Width())
 	indent := min(m.editor.ContentOffset(), max(0, width-1))
 	text := chatFooterText(m.workspaceDisplayPath, m.usage, max(1, width-indent))
