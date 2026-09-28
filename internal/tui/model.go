@@ -124,6 +124,7 @@ type Model struct {
 	pendingApprovals  []agent.Block
 	approvalChoice    int
 	approvalPanel     *components.Panel
+	permissionsPanel  *components.Panel
 	permissionChoice  int
 	permissionConfirm bool
 	permissionAllow   bool
@@ -263,6 +264,7 @@ func newShell() *Model {
 		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
 		status:            &status,
 		approvalPanel:     components.NewPanel(theme.Approval.Panel),
+		permissionsPanel:  components.NewPanel(theme.Permissions),
 		styles:            theme,
 		searchSessionID:   newSearchSessionID(),
 		entitySearchCache: make(map[string]entitySearchCacheEntry),
@@ -303,6 +305,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	m.editor.SetInputStyles(theme.Input)
 	m.editor.SetStyles(theme.Editor)
 	m.approvalPanel.SetStyles(theme.Approval.Panel)
+	m.permissionsPanel.SetStyles(theme.Permissions)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
 	}

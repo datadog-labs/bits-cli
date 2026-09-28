@@ -105,7 +105,8 @@ func (m *Model) chatView() string {
 
 	base := m.chatViewBase(m.list.Render())
 	if m.mode == ModePermissions {
-		return m.chatOverlay(base, m.permissionsView())
+		// Spans the terminal with its own margin, so it does not track the composer.
+		return m.chatOverlay(base, m.permissionsView(), 0)
 	}
 	if len(m.pendingApprovals) > 0 {
 		return base
@@ -114,17 +115,16 @@ func (m *Model) chatView() string {
 	if menu == "" {
 		return base
 	}
-	return m.chatOverlay(base, menu)
+	return m.chatOverlay(base, menu, m.editor.ContentOffset())
 }
 
-// chatOverlay floats a compact popup above the input without reflowing the
-// transcript. Both slash completion and permissions use the same placement.
-func (m *Model) chatOverlay(base, menu string) string {
+// chatOverlay floats a popup above the input without reflowing the transcript,
+// anchored at x and clamped so it never overflows the transcript width.
+func (m *Model) chatOverlay(base, menu string, x int) string {
 	if menu == "" {
 		return base
 	}
 	menuW, menuH := lipgloss.Width(menu), lipgloss.Height(menu)
-	x := m.editor.ContentOffset()
 	if width := m.list.Width(); x+menuW > width {
 		x = max(0, width-menuW)
 	}

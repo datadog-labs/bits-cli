@@ -366,6 +366,10 @@ func TestPermissionsPickerOverlaysConversation(t *testing.T) {
 	}
 }
 
+// panelRowText strips a rendered row down to its copy, discarding the panel's
+// left indent and border columns.
+func panelRowText(row string) string { return strings.Trim(row, " │") }
+
 func TestPermissionsPickerSectionSpacing(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
 	_, _ = m.dispatchCommand("permissions", "")
@@ -379,12 +383,16 @@ func TestPermissionsPickerSectionSpacing(t *testing.T) {
 		t.Fatalf("missing %q from picker: %q", label, ansi.Strip(m.permissionsView()))
 		return -1
 	}
-	if note := find("Permission changes take effect on the next turn."); note != find("Manage Bits Permissions")+2 || strings.TrimSpace(strings.Trim(rows[note-1], "│")) != "" {
-		t.Fatalf("timing note needs one blank row after the title: %q", rows)
+	title := find("Manage Bits Permissions")
+	if panelRowText(rows[title-1]) != "" {
+		t.Fatalf("title needs one blank row of padding above it: %q", rows)
+	}
+	if note := find("Permission changes take effect on the next turn."); note != title+1 {
+		t.Fatalf("timing note should sit directly below the title: %q", rows)
 	}
 	for _, pair := range [][2]string{{"Permission changes take effect on the next turn.", "Ask for Approval"}, {"workspace", "Full Access"}} {
 		start, end := find(pair[0]), find(pair[1])
-		if end-start != 2 || strings.TrimSpace(strings.Trim(rows[start+1], "│")) != "" {
+		if end-start != 2 || panelRowText(rows[start+1]) != "" {
 			t.Fatalf("expected one blank row between %q and %q", pair[0], pair[1])
 		}
 	}
@@ -431,11 +439,11 @@ func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
 	_, _ = m.dispatchCommand("permissions", "")
 	view := m.permissionsView()
-	if !strings.Contains(view, m.styles.Panel.Title.Render("Manage Bits Permissions")) {
-		t.Fatal("picker title does not use the resume title style")
+	if !strings.Contains(view, m.styles.Permissions.Title.Render("Manage Bits Permissions")) {
+		t.Fatal("picker title does not use the permissions panel title style")
 	}
 	helper := "Permission changes take effect on the next turn."
-	inner := min(100, m.width-m.editor.ContentOffset()) - m.styles.Editor.MenuFrame.GetHorizontalFrameSize() - 2
+	inner := m.permissionsInnerWidth()
 	helper += strings.Repeat(" ", max(0, inner-ansi.StringWidth(helper)))
 	if !strings.Contains(view, m.styles.Editor.MenuDetail.Render(helper)) {
 		t.Fatal("timing note does not use the tertiary text color")
@@ -474,10 +482,10 @@ func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
 	if strings.Contains(strings.Join(rows, "\n"), "Enter to select") {
 		t.Fatal("confirmation still renders footer hints")
 	}
-	if !strings.Contains(rows[1], "Full Access") || strings.Contains(rows[1], "Full Access?") || strings.TrimSpace(strings.Trim(rows[2], "│")) != "" || !strings.Contains(rows[3], "Enabling full access") {
-		t.Fatalf("confirmation title needs a blank row before its explanation: %q", rows)
+	if panelRowText(rows[1]) != "" || !strings.Contains(rows[2], "Full Access") || strings.Contains(rows[2], "Full Access?") || !strings.Contains(rows[3], "Enabling full access") {
+		t.Fatalf("confirmation needs one blank row of padding above the title and its explanation directly below: %q", rows)
 	}
-	explanation := strings.TrimSpace(strings.Trim(rows[3], "│")) + " " + strings.TrimSpace(strings.Trim(rows[4], "│"))
+	explanation := panelRowText(rows[3]) + " " + panelRowText(rows[4])
 	if explanation != "Enabling full access will automatically approve all actions without requiring confirmation." {
 		t.Fatalf("confirmation explanation = %q", explanation)
 	}
@@ -490,7 +498,7 @@ func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
 			cancel = i
 		}
 	}
-	if confirm < 0 || cancel != confirm+2 || strings.TrimSpace(strings.Trim(rows[confirm+1], "│")) != "" || !strings.Contains(rows[confirm], "› Yes, enable full access") {
+	if confirm < 0 || cancel != confirm+2 || panelRowText(rows[confirm+1]) != "" || !strings.Contains(rows[confirm], "› Yes, enable full access") {
 		t.Fatalf("confirmation actions need one blank row with Yes selected: %q", rows)
 	}
 }

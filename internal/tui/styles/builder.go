@@ -76,6 +76,13 @@ func build(isDark bool, p palette) Theme {
 	approvalPanel := panel
 	approvalPanel.Title = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive))
 	approvalPanel.Dismiss = text.Tertiary
+	// Cleared MaxWidth spans the terminal like the splash banner rather than
+	// capping like a centered dialog.
+	permissionsPanel := approvalPanel
+	permissionsPanel.SectionGap = 0
+	permissionsPanel.Title = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.textPrimary))
+	permissionsPanel.Dismiss = text.Primary
+	permissionsPanel.MaxWidth = 0
 	approval := Approval{
 		Panel:  approvalPanel,
 		Text:   text.Secondary,
@@ -137,14 +144,15 @@ func build(isDark bool, p palette) Theme {
 
 		Logo: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
 
-		Input:     input,
-		Text:      text,
-		Feedback:  feedback,
-		Panel:     panel,
-		Approval:  approval,
-		Accordion: accordion,
-		Selector:  selector,
-		TextInput: textInput,
+		Input:       input,
+		Text:        text,
+		Feedback:    feedback,
+		Panel:       panel,
+		Approval:    approval,
+		Permissions: permissionsPanel,
+		Accordion:   accordion,
+		Selector:    selector,
+		TextInput:   textInput,
 		Chat: Chat{
 			Markdown:        markdown(isDark, p),
 			MarkdownHeading: lipgloss.Color(p.secondary),

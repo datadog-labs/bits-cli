@@ -9,6 +9,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 )
 
 var permissionModes = [...]agent.PermissionsMode{agent.ModeManual, agent.ModeSkipPermissions}
@@ -162,10 +163,30 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) permissionsView() string {
+	header := "Manage Bits Permissions"
+	if m.permissionConfirm {
+		header = "Full Access"
+	}
+	content := components.PanelContent{
+		Title:   header,
+		Dismiss: "ESC x",
+		Body:    m.permissionsBody,
+	}
+	panel := m.permissionsPanel.Render(max(1, m.width), m.height, content)
+	// Panel reserves its margin but does not draw it, so indent to span the
+	// full terminal.
+	indent := strings.Repeat(" ", max(0, m.styles.Permissions.HorizontalMargin))
+	rows := strings.Split(panel, "\n")
+	for i, row := range rows {
+		rows[i] = indent + row
+	}
+	return strings.Join(rows, "\n")
+}
+
+// permissionsBody renders the rows below the title; the panel supplies the
+// gap above them.
+func (m *Model) permissionsBody(inner int) string {
 	style := m.styles.Editor
-	panel := m.styles.Panel
-	width := min(100, max(1, m.width-m.editor.ContentOffset()))
-	inner := max(1, width-style.MenuFrame.GetHorizontalFrameSize()-2)
 	line := func(value string, selected bool) string {
 		rowStyle := style.MenuItem
 		if selected {
@@ -174,18 +195,11 @@ func (m *Model) permissionsView() string {
 		value = ansi.Truncate(value, inner, "…")
 		return rowStyle.Render(value + strings.Repeat(" ", max(0, inner-ansi.StringWidth(value))))
 	}
-	header := "Manage Bits Permissions"
-	if m.permissionConfirm {
-		header = "Full Access"
-	}
-	closeHint := "ESC x"
-	header = ansi.Truncate(header, max(1, inner-ansi.StringWidth(closeHint)-1), "…")
-	headerGap := strings.Repeat(" ", max(1, inner-ansi.StringWidth(header)-ansi.StringWidth(closeHint)))
-	rows := []string{panel.Title.Render(header) + headerGap + panel.Dismiss.Render(closeHint)}
-	if m.permissionsCompact() {
+	var rows []string
+	switch {
+	case m.permissionsCompact():
 		rows = append(rows, line("Resize terminal to choose permissions", false))
-	} else if m.permissionConfirm {
-		rows = append(rows, line("", false))
+	case m.permissionConfirm:
 		for _, text := range wrapPermissionDetail(fullAccessConfirmation, inner) {
 			rows = append(rows, line(text, false))
 		}
@@ -195,25 +209,18 @@ func (m *Model) permissionsView() string {
 			line("", false),
 			line(permissionMarker(!m.permissionAllow)+"Cancel", !m.permissionAllow),
 		)
-	} else {
+	default:
 		labels := m.permissionOptionLabels()
 		leftWidth := permissionLabelWidth()
 		detailWidth := inner - leftWidth - 2
 		helper := ansi.Truncate("Permission changes take effect on the next turn.", inner, "…")
-		rows = append(rows,
-			line("", false),
-			style.MenuDetail.Render(helper+strings.Repeat(" ", max(0, inner-ansi.StringWidth(helper)))),
-			line("", false),
-		)
+		rows = append(rows, style.MenuDetail.Render(helper+strings.Repeat(" ", max(0, inner-ansi.StringWidth(helper)))))
 		for i, label := range labels {
-			if i > 0 {
-				rows = append(rows, line("", false))
-			}
+			rows = append(rows, line("", false))
 			rows = append(rows, m.permissionOptionRows(label, permissionOptionDetails[i], inner, leftWidth, detailWidth, i == m.permissionChoice)...)
 		}
 	}
-	rows = append(rows, line("", false))
-	return style.MenuFrame.Width(width).Padding(0, 1).Render(strings.Join(rows, "\n"))
+	return strings.Join(rows, "\n")
 }
 
 func (m *Model) permissionOptionLabels() [2]string {
@@ -283,15 +290,24 @@ func permissionMarker(selected bool) string {
 	return "  "
 }
 
+// permissionsInnerWidth mirrors the body width the shared panel computes
+// internally, so the compactness check agrees with what will actually render.
+func (m *Model) permissionsInnerWidth() int {
+	sty := m.styles.Permissions
+	available := max(1, m.width) - 2*max(0, sty.HorizontalMargin)
+	outerWidth := available
+	if sty.MaxWidth > 0 {
+		outerWidth = min(outerWidth, sty.MaxWidth)
+	}
+	return max(1, outerWidth-sty.Frame.GetHorizontalFrameSize())
+}
+
 func (m *Model) permissionsCompact() bool {
 	available := m.height - chatFooterHeight - m.editor.Height()
+	inner := m.permissionsInnerWidth()
 	if m.permissionConfirm {
-		width := min(100, max(1, m.width-m.editor.ContentOffset()))
-		inner := max(1, width-m.styles.Editor.MenuFrame.GetHorizontalFrameSize()-2)
 		return m.width < 36 || available < 9+len(wrapPermissionDetail(fullAccessConfirmation, inner))
 	}
-	width := min(100, max(1, m.width-m.editor.ContentOffset()))
-	inner := width - m.styles.Editor.MenuFrame.GetHorizontalFrameSize() - 2
 	leftWidth := permissionLabelWidth()
 	detailWidth := inner - leftWidth - 2
 	if detailWidth < 12 {

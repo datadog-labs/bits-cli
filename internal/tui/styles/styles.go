@@ -189,16 +189,17 @@ type Theme struct {
 	// state or interaction behind it.
 	Logo lipgloss.Style
 
-	Input     Input
-	Chat      Chat
-	Editor    Editor
-	Text      Text
-	Feedback  Feedback
-	Panel     Panel
-	Approval  Approval
-	Accordion Accordion
-	Selector  Selector
-	TextInput textinput.Styles
+	Input       Input
+	Chat        Chat
+	Editor      Editor
+	Text        Text
+	Feedback    Feedback
+	Panel       Panel
+	Approval    Approval
+	Permissions Panel
+	Accordion   Accordion
+	Selector    Selector
+	TextInput   textinput.Styles
 }
 
 // Default returns the complete UI theme for a terminal background mode.
