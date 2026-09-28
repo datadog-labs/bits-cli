@@ -20,13 +20,6 @@ var permissionOptionDetails = [...]string{
 
 const fullAccessConfirmation = "Enabling full access will automatically approve all actions without requiring confirmation."
 
-func permissionModeLabel(mode agent.PermissionsMode) string {
-	if mode == agent.ModeSkipPermissions {
-		return "Full Access"
-	}
-	return "Ask for Approval"
-}
-
 func (m *Model) permissionsBusy() bool {
 	return m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading || len(m.pendingApprovals) > 0
 }
@@ -207,6 +200,7 @@ func (m *Model) permissionsView() string {
 		leftWidth := permissionLabelWidth()
 		detailWidth := inner - leftWidth - 2
 		rows = append(rows,
+			line("Permission changes take effect on the next turn.", false),
 			line("", false),
 		)
 		for i, label := range labels {
@@ -216,34 +210,26 @@ func (m *Model) permissionsView() string {
 			rows = append(rows, m.permissionOptionRows(label, permissionOptionDetails[i], inner, leftWidth, detailWidth, i == m.permissionChoice)...)
 		}
 	}
-	if m.permissionsBusy() {
-		timing := "Changes apply after this response."
-		if m.pendingPermissions != "" {
-			timing = permissionModeLabel(m.pendingPermissions) + " will apply after this response."
-		}
-		rows = append(rows, line("", false), line(timing, false))
-	}
 	rows = append(rows, line("", false))
 	return style.MenuFrame.Width(width).Padding(0, 1).Render(strings.Join(rows, "\n"))
 }
 
 func (m *Model) permissionOptionLabels() [2]string {
 	labels := [2]string{"Ask for Approval", "Full Access"}
-	if m.tools.PermissionsMode() == agent.ModeManual {
+	selected := m.tools.PermissionsMode()
+	if m.pendingPermissions != "" {
+		selected = m.pendingPermissions
+	}
+	if selected == agent.ModeManual {
 		labels[0] += " (current)"
 	} else {
 		labels[1] += " (current)"
 	}
-	if m.pendingPermissions == agent.ModeManual {
-		labels[0] += " (queued)"
-	} else if m.pendingPermissions == agent.ModeSkipPermissions {
-		labels[1] += " (queued)"
-	}
 	return labels
 }
 
-// Keep the detail column fixed when the current or queued suffix moves
-// between options, so wrapping and vertical spacing do not jump.
+// Keep the detail column fixed when the current suffix moves between options,
+// so wrapping and vertical spacing do not jump.
 func permissionLabelWidth() int {
 	return ansi.StringWidth("› Ask for Approval (current)") + 2
 }
@@ -297,9 +283,6 @@ func permissionMarker(selected bool) string {
 
 func (m *Model) permissionsCompact() bool {
 	available := m.height - chatFooterHeight - m.editor.Height()
-	if m.permissionsBusy() {
-		available -= 2 // timing line and its gap
-	}
 	if m.permissionConfirm {
 		width := min(100, max(1, m.width-m.editor.ContentOffset()))
 		inner := max(1, width-m.styles.Editor.MenuFrame.GetHorizontalFrameSize()-2)
@@ -312,6 +295,6 @@ func (m *Model) permissionsCompact() bool {
 	if detailWidth < 12 {
 		return true
 	}
-	height := 6 + len(wrapPermissionDetail(permissionOptionDetails[0], detailWidth)) + len(wrapPermissionDetail(permissionOptionDetails[1], detailWidth))
+	height := 7 + len(wrapPermissionDetail(permissionOptionDetails[0], detailWidth)) + len(wrapPermissionDetail(permissionOptionDetails[1], detailWidth))
 	return available < height
 }

@@ -347,18 +347,7 @@ func (m *Model) noticeBar() string {
 func (m *Model) chatFooter() string {
 	width := max(1, m.list.Width())
 	indent := min(m.editor.ContentOffset(), max(0, width-1))
-	available := max(1, width-indent)
-	text := chatFooterText(m.workspaceDisplayPath, m.usage, available)
-	if m.pendingPermissions != "" {
-		queued := permissionModeLabel(m.pendingPermissions) + " after this response"
-		remaining := available - ansi.StringWidth(queued) - 3
-		text = ansi.Truncate(queued, available, "…")
-		if remaining > 0 {
-			if other := chatFooterText(m.workspaceDisplayPath, m.usage, remaining); other != "" {
-				text += " · " + other
-			}
-		}
-	}
+	text := chatFooterText(m.workspaceDisplayPath, m.usage, max(1, width-indent))
 	if text == "" {
 		return ""
 	}

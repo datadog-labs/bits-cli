@@ -135,12 +135,12 @@ func TestPermissionsQueuesDuringActiveTurn(t *testing.T) {
 	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual {
 		t.Fatal("mode changed before the active turn closed")
 	}
-	if !strings.Contains(ansi.Strip(m.chatFooter()), "Full Access after this response") || !m.notice.Empty() {
-		t.Fatal("queued mode is not shown in the footer without a notification")
+	if strings.Contains(ansi.Strip(m.chatFooter()), "Full Access after this response") || !m.notice.Empty() {
+		t.Fatal("queuing a mode changed the footer or showed a notification")
 	}
 	_, _ = m.dispatchCommand("permissions", "")
-	if m.permissionChoice != 1 || !strings.Contains(ansi.Strip(m.permissionsView()), "Full Access (queued)") {
-		t.Fatal("picker did not show the queued choice")
+	if m.permissionChoice != 1 || strings.Contains(ansi.Strip(m.permissionsView()), "(queued)") || !strings.Contains(ansi.Strip(m.permissionsView()), "› Full Access (current)") {
+		t.Fatal("picker did not mark the selected choice as current")
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.mode != ModeChat || m.pendingPermissions != agent.ModeSkipPermissions {
@@ -157,7 +157,7 @@ func TestPermissionsPickerOpensDuringActiveTurn(t *testing.T) {
 	m.turnEvents = make(chan agent.Event)
 	m.chatPhase = chat.PhaseStreaming
 	_, _ = m.dispatchCommand("permissions", "")
-	if m.mode != ModePermissions || !strings.Contains(ansi.Strip(m.permissionsView()), "Changes apply after this response") {
+	if m.mode != ModePermissions || !strings.Contains(ansi.Strip(m.permissionsView()), "Permission changes take effect on the next turn.") {
 		t.Fatal("picker did not explain when changes take effect")
 	}
 	if m.chatPhase != chat.PhaseStreaming || m.turnEvents == nil {
@@ -379,10 +379,10 @@ func TestPermissionsPickerSectionSpacing(t *testing.T) {
 		t.Fatalf("missing %q from picker: %q", label, ansi.Strip(m.permissionsView()))
 		return -1
 	}
-	for _, pair := range [][2]string{
-		{"Manage Bits Permissions", "Ask for Approval"},
-		{"workspace", "Full Access"},
-	} {
+	if note := find("Permission changes take effect on the next turn."); note != find("Manage Bits Permissions")+1 {
+		t.Fatalf("timing note does not follow the title: %q", rows)
+	}
+	for _, pair := range [][2]string{{"Permission changes take effect on the next turn.", "Ask for Approval"}, {"workspace", "Full Access"}} {
 		start, end := find(pair[0]), find(pair[1])
 		if end-start != 2 || strings.TrimSpace(strings.Trim(rows[start+1], "│")) != "" {
 			t.Fatalf("expected one blank row between %q and %q", pair[0], pair[1])
