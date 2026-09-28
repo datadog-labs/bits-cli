@@ -360,7 +360,7 @@ func TestMultiClickDisplacedReleaseEndsClickSequence(t *testing.T) {
 	start := time.Unix(100, 0)
 	var got selection
 	got.clicks.next(start, image.Pt(1, 0), selectionScopeTranscript)
-	got.beginClick(frame, selectionScopeTranscript, 1, 0, 1, 1, start.Add(100*time.Millisecond))
+	got.beginClick(frame, selectionScopeTranscript, 1, 0, 1, 1, false, start.Add(100*time.Millisecond))
 	if !got.keepRange {
 		t.Fatal("double-click did not select a range")
 	}
@@ -369,5 +369,24 @@ func TestMultiClickDisplacedReleaseEndsClickSequence(t *testing.T) {
 	}
 	if got.clicks.count != 0 {
 		t.Fatalf("displaced release left click count at %d", got.clicks.count)
+	}
+}
+
+func TestControlClickBreaksMultiClickSequence(t *testing.T) {
+	frame := testSelectionFrame("hello", 5, 1)
+	start := time.Unix(100, 0)
+	var got selection
+	got.beginClick(frame, selectionScopeTranscript, 1, 0, 1, 1, false, start)
+	got.finishGesture(frame, 1, 0, 1, 1, frame)
+
+	got.beginClick(frame, selectionScopeTranscript, 1, 0, 1, 1, true, start.Add(100*time.Millisecond))
+	if got.selected() || got.clicks.count != 0 {
+		t.Fatalf("control press selected text or retained click count: selected=%t count=%d", got.selected(), got.clicks.count)
+	}
+	got.finishGesture(frame, 1, 0, 1, 1, frame)
+
+	got.beginClick(frame, selectionScopeTranscript, 1, 0, 1, 1, false, start.Add(200*time.Millisecond))
+	if got.selected() || got.clicks.count != 1 {
+		t.Fatalf("click after control continued the sequence: selected=%t count=%d", got.selected(), got.clicks.count)
 	}
 }
