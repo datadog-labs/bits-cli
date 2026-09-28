@@ -14,6 +14,7 @@ import (
 // approval policy: permission grants cannot answer a question for the user.
 func NewAskUserQuestionTool() agent.Tool {
 	return agent.Tool{
+		Resumable: true,
 		Definition: assistant.ClientTool{
 			Name:        spec.AskUserQuestion,
 			Description: `Ask the user one or more questions with distinct, concrete choices when clarification would improve your answer or the user should choose an approach. Use this tool instead of listing choices in prose. Do not use it for trivial questions, yes/no permission requests, or open-ended questions without meaningful options. Group all questions into one call. The UI adds a free-text Other option; do not include your own. Put a recommended option first and append "(Recommended)" to its label. Keep questions concise and options distinct.`,

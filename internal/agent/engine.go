@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
 var (
@@ -20,7 +19,7 @@ var (
 	ErrHistoryUnsupported     = errors.New("backend does not support loading conversation history")
 	ErrCurrentUserUnsupported = errors.New("backend does not support loading the current user")
 	ErrOperationActive        = errors.New("another conversation operation is active")
-	ErrNoPendingQuestion      = errors.New("no unanswered question to resume")
+	ErrNoPendingTools         = errors.New("no resumable client tools")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -150,7 +149,7 @@ type Engine struct {
 	opts                   assistant.SendOptions
 	runtimeStatus          RuntimeStatus
 	transcript             *Transcript
-	pendingQuestion        *assistant.Content
+	continuation           *toolContinuation
 	previousConversationID string
 	commands               chan toolCommand
 	sessionGrants          map[ApprovalKey]struct{}
@@ -171,6 +170,7 @@ type toolCommand struct {
 	id         string
 	decision   ApprovalDecision
 	cancel     bool
+	stop       bool
 }
 
 type pendingTool struct {
@@ -266,7 +266,7 @@ func (e *Engine) beginTurnWithCalls(ctx context.Context, in TurnInput, pending [
 	if !e.begin() {
 		return completedTurnOperation(ErrOperationActive)
 	}
-	e.pendingQuestion = nil
+	e.continuation = nil
 	generation := e.operationGeneration.Load()
 	events := make(chan Event, 64)
 	completion := make(chan turnCompletion, 1)
@@ -279,32 +279,6 @@ func (e *Engine) beginTurnWithCalls(ctx context.Context, in TurnInput, pending [
 // the turn context.
 func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
 	return e.beginTurn(ctx, in).events
-}
-
-// ResumePendingQuestion continues the last unanswered question from restored
-// history without adding another user message to the conversation.
-func (e *Engine) ResumePendingQuestion(ctx context.Context, in TurnInput) <-chan Event {
-	if e.pendingQuestion == nil || !in.Interactive || in.Tools == nil || !in.Tools.Has(spec.AskUserQuestion) {
-		return eventResult(Event{Kind: EventError, Err: ErrNoPendingQuestion})
-	}
-	return e.beginTurnWithCalls(ctx, in, []assistant.Content{*e.pendingQuestion}).events
-}
-
-func (e *Engine) HasPendingQuestion() bool { return e.pendingQuestion != nil }
-
-func pendingQuestionFromHistory(messages []assistant.Message) *assistant.Content {
-	if len(messages) == 0 {
-		return nil
-	}
-	content := messages[len(messages)-1].Content
-	if content.Type != assistant.ContentClientToolCall || content.Tool == nil || content.Tool.Metadata == nil ||
-		content.Tool.Metadata.Name != spec.AskUserQuestion || content.Tool.ToolCallID == "" {
-		return nil
-	}
-	if _, err := spec.ParseQuestions(content.Tool.Metadata.Input); err != nil {
-		return nil
-	}
-	return &content
 }
 
 func completedTurnOperation(err error) turnOperation {
@@ -351,6 +325,13 @@ func (e *Engine) CancelTool(toolCallID string) bool {
 	})
 }
 
+// StopTools cancels the active client-tool round and persists its cancellation
+// responses before ending the turn. Cancelling the turn context instead leaves
+// unanswered calls available for a later process to resume.
+func (e *Engine) StopTools() bool {
+	return e.command(toolCommand{generation: e.operationGeneration.Load(), stop: true})
+}
+
 func (e *Engine) command(command toolCommand) bool {
 	select {
 	case e.commands <- command:
@@ -371,7 +352,13 @@ func (e *Engine) run(
 	completion := turnCompletion{}
 	turnStart := len(e.transcript.Blocks())
 	if len(pending) > 0 {
-		turnStart = max(0, turnStart-1)
+		for i, block := range e.transcript.Blocks() {
+			for _, call := range pending {
+				if block.ToolCallID() == call.Tool.ToolCallID {
+					turnStart = min(turnStart, i)
+				}
+			}
+		}
 	}
 	defer func() {
 		if ctx.Err() != nil && e.transcript.CancelUnfinishedTools(turnStart) {
@@ -716,7 +703,7 @@ func (e *Engine) NewConversation() error {
 	e.opts.ConversationID = ""
 	e.opts.MessageHistory = nil
 	e.transcript = NewTranscript()
-	e.pendingQuestion = nil
+	e.continuation = nil
 	clear(e.sessionGrants)
 	return nil
 }
@@ -786,7 +773,7 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 	for _, msg := range resp.Data.Attributes.Messages {
 		e.transcript.AppendMessage(msg)
 	}
-	e.pendingQuestion = pendingQuestionFromHistory(resp.Data.Attributes.Messages)
+	e.continuation = continuationFromHistory(resp.Data.Attributes.Messages)
 	e.transcript.FinalizeAll()
 	if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
 		send(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
@@ -1013,6 +1000,11 @@ func (e *Engine) runTools(
 		select {
 		case command := <-e.commands:
 			if command.generation != generation {
+				continue
+			}
+			if command.stop {
+				stopRequested = true
+				stopRound(nil, nil)
 				continue
 			}
 			if command.cancel {

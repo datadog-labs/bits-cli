@@ -196,8 +196,8 @@ func TestQuestionsStopCancelsRequest(t *testing.T) {
 	if request.Pending() || request.Respond(spec.QuestionAnswers{Dismissed: true}) {
 		t.Fatal("cancelled request still accepts input")
 	}
-	if backend.calls != 1 || len(backend.responses) != 0 || m.questions != nil {
-		t.Fatal("stop continued the turn or left a form")
+	if backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError || m.questions != nil {
+		t.Fatal("stop failed to persist cancellation or left a form")
 	}
 	for _, block := range m.engine.Snapshot() {
 		if block.Tool != nil && (!block.Tool.Cancelled || block.Tool.InputRequest != nil) {

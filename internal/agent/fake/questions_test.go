@@ -1,6 +1,7 @@
 package fake_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -21,7 +22,7 @@ func TestQuestionDemo(t *testing.T) {
 			engine := agent.New(&fake.Fake{}, assistant.SendOptions{})
 			requests := 0
 			result, err := engine.RunTurn(t.Context(), agent.TurnInput{
-				Message: "test ask_user_question", Tools: set, Interactive: true,
+				Message: "load(\"testdata/questions.star\", \"demo\")\ndemo()", Tools: set, Interactive: true,
 			}, func(event agent.Event) error {
 				for _, block := range event.Transcript.Blocks {
 					if block.Tool == nil || block.Tool.InputRequest == nil || !block.Tool.InputRequest.Pending() {
@@ -47,15 +48,59 @@ func TestQuestionDemo(t *testing.T) {
 	}
 }
 
-func TestQuestionDemoWithoutInteractiveTool(t *testing.T) {
-	engine := agent.New(&fake.Fake{}, assistant.SendOptions{})
-	result, err := engine.RunTurn(t.Context(), agent.TurnInput{Message: "test ask_user_question"}, nil)
-	if err != nil || result.Outcome != agent.TurnOutcomeCompleted {
-		t.Fatalf("outcome=%s err=%v", result.Outcome, err)
+func TestQuestionScriptResumesAfterClientExit(t *testing.T) {
+	backend := &fake.Fake{}
+	set, err := agent.NewToolSet(agent.ModeManual, tools.NewAskUserQuestionTool())
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, block := range result.Blocks {
-		if block.Tool != nil {
-			t.Fatal("demo emitted an unavailable interactive tool")
+	original := agent.New(backend, assistant.SendOptions{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	prompted := false
+	for event := range original.StartTurn(ctx, agent.TurnInput{Message: "load(\"testdata/questions.star\", \"demo\")\ndemo()", Tools: set, Interactive: true}) {
+		if event.Err != nil {
+			t.Fatal(event.Err)
 		}
+		for _, block := range event.Transcript.Blocks {
+			if block.Tool != nil && block.Tool.InputRequest != nil && block.Tool.InputRequest.Pending() {
+				prompted = true
+				cancel()
+			}
+		}
+	}
+	if !prompted {
+		t.Fatal("script never requested input")
+	}
+	resumed := agent.New(backend, assistant.SendOptions{ConversationID: original.ConversationID()})
+	for event := range resumed.Restore(t.Context()) {
+		if event.Err != nil {
+			t.Fatal(event.Err)
+		}
+	}
+	if !resumed.CanResumeTools(set) {
+		t.Fatal("saved script call was not resumable")
+	}
+	completed, answers := false, 0
+	for event := range resumed.ResumePendingTools(t.Context(), agent.TurnInput{Tools: set, Interactive: true}) {
+		if event.Err != nil {
+			t.Fatal(event.Err)
+		}
+		completed = completed || event.Kind == agent.EventTurnDone
+		for _, block := range event.Transcript.Blocks {
+			if block.Tool != nil && block.Tool.InputRequest != nil && block.Tool.InputRequest.Pending() {
+				if block.Tool.InputRequest.Respond(spec.QuestionAnswers{Answers: []string{"EU", "Worker"}}) {
+					answers++
+				}
+			}
+		}
+	}
+	if !completed || answers != 1 {
+		t.Fatalf("completed=%v answers=%d", completed, answers)
+	}
+	blocks := resumed.Snapshot()
+	last := blocks[len(blocks)-1]
+	if last.Markdown == nil || !strings.Contains(last.Markdown.Content, "Worker") {
+		t.Fatalf("script failed to continue: %+v", last)
 	}
 }

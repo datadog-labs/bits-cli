@@ -74,11 +74,7 @@ func (f *Fake) Send(ctx context.Context, message any, opts assistant.SendOptions
 	}
 	switch m := message.(type) {
 	case string:
-		source := m
-		if strings.TrimSpace(m) == "test ask_user_question" {
-			source = questionDemoSource(opts)
-		}
-		return c.id, runScript(out, opts, f.startTurn(c, m, source))
+		return c.id, runScript(out, opts, f.startTurn(c, m))
 	case []assistant.ClientToolResponse:
 		turn, ok := f.resumeTurn(c, m)
 		if !ok {

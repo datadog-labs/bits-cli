@@ -38,7 +38,7 @@ func newQuestionForm(request *agent.InputRequest, input spec.AskUserQuestionInpu
 }
 
 func (m *Model) syncQuestions() {
-	if m.cancelRequested {
+	if m.cancelRequested || m.stoppingTools {
 		m.questions = nil
 		return
 	}
@@ -130,7 +130,11 @@ func (m *Model) updateQuestions(msg tea.Msg) tea.Cmd {
 			m.answerQuestions(true)
 			return nil
 		case "ctrl+x":
-			m.cancelRemote()
+			if m.engine.StopTools() {
+				m.stoppingTools = true
+				m.questions = nil
+				m.layoutTranscript()
+			}
 			return nil
 		case "tab", "ctrl+right":
 			return q.showPage(q.page + 1)

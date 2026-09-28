@@ -42,12 +42,12 @@ type ConversationSwitchResult struct {
 }
 
 type conversationCandidate struct {
-	transcript      *Transcript
-	pendingQuestion *assistant.Content
-	decision        chan bool
-	done            chan struct{}
-	err             error
-	once            sync.Once
+	transcript   *Transcript
+	continuation *toolContinuation
+	decision     chan bool
+	done         chan struct{}
+	err          error
+	once         sync.Once
 }
 
 func (r ConversationSwitchResult) Commit() error  { return r.finish(true) }
@@ -214,7 +214,7 @@ func (e *Engine) switchConversation(ctx context.Context, conversationID string, 
 	blocks := append([]Block(nil), temporary.Blocks()...)
 
 	candidate := &conversationCandidate{
-		transcript: temporary, pendingQuestion: pendingQuestionFromHistory(response.Data.Attributes.Messages),
+		transcript: temporary, continuation: continuationFromHistory(response.Data.Attributes.Messages),
 		decision: make(chan bool, 1), done: make(chan struct{}),
 	}
 	out <- ConversationSwitchResult{ConversationID: conversationID, Blocks: blocks, candidate: candidate}
@@ -233,7 +233,7 @@ func (e *Engine) switchConversation(ctx context.Context, conversationID string, 
 			e.opts.ConversationID = conversationID
 			e.opts.MessageHistory = nil
 			e.transcript = temporary
-			e.pendingQuestion = candidate.pendingQuestion
+			e.continuation = candidate.continuation
 		}
 	}
 	// candidate.done is the completion barrier observed by Commit/Discard. The

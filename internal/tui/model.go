@@ -108,6 +108,7 @@ type Model struct {
 	turnGen          uint64
 	cancelRequested  bool
 	restoringHistory bool
+	stoppingTools    bool
 
 	// /new and /clear cancel an active turn/restore once, then wait for its
 	// channel to close before resetting conversation state.
