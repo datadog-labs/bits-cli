@@ -127,6 +127,8 @@ type Model struct {
 	permissionChoice  int
 	permissionConfirm bool
 	permissionAllow   bool
+	// A mode selected during an active turn applies when that turn closes.
+	pendingPermissions agent.PermissionsMode
 
 	// Top-level screen; transitions go through setMode.
 	mode Mode

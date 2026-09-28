@@ -567,16 +567,22 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	}
 	m.cancelTurn = nil
 	m.cancelRequested = false
+	var permissionsCommand tea.Cmd
+	if m.pendingLogout {
+		m.pendingPermissions = ""
+	} else {
+		permissionsCommand = m.applyPendingPermissions()
+	}
 	m.syncStatus()
 	if m.pendingNew {
 		m.pendingNew = false
-		return m, m.startNewConversation()
+		return m, batchCommands(permissionsCommand, m.startNewConversation())
 	}
 	if m.pendingLogout {
 		m.pendingLogout = false
-		return m, m.startLogout()
+		return m, batchCommands(permissionsCommand, m.startLogout())
 	}
-	return m, nil
+	return m, permissionsCommand
 }
 
 func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {

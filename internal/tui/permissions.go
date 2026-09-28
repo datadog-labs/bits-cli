@@ -20,6 +20,13 @@ var permissionOptionDetails = [...]string{
 
 const fullAccessConfirmation = "Enabling full access will automatically approve all actions without requiring confirmation."
 
+func permissionModeLabel(mode agent.PermissionsMode) string {
+	if mode == agent.ModeSkipPermissions {
+		return "Full access"
+	}
+	return "Ask for Approval"
+}
+
 func (m *Model) permissionsBusy() bool {
 	return m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading || len(m.pendingApprovals) > 0
 }
@@ -30,11 +37,12 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 	}
 	current := m.tools.PermissionsMode()
 	if argument == "" {
-		if m.permissionsBusy() {
-			return m.showNotice(notice(chat.NoticeInfo, nil, "Permissions: %s (this session). Changes require an idle session.", current), 0)
+		selected := current
+		if m.pendingPermissions != "" {
+			selected = m.pendingPermissions
 		}
 		m.permissionChoice = 0
-		if current == agent.ModeSkipPermissions {
+		if selected == agent.ModeSkipPermissions {
 			m.permissionChoice = 1
 		}
 		m.permissionConfirm = false
@@ -46,11 +54,12 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 	if argument != string(agent.ModeManual) && argument != string(agent.ModeSkipPermissions) {
 		return m.showNotice(notice(chat.NoticeError, nil, "Unknown permissions mode %q. Use manual or skip-permissions.", argument), 0)
 	}
-	if m.permissionsBusy() {
-		return m.showNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response and any permission request to finish before switching permissions."), 0)
-	}
 	mode := agent.PermissionsMode(argument)
 	if mode == current {
+		m.pendingPermissions = ""
+		return nil
+	}
+	if mode == m.pendingPermissions {
 		return nil
 	}
 	if current == agent.ModeManual && mode == agent.ModeSkipPermissions {
@@ -66,19 +75,48 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 
 func (m *Model) applyPermissionsMode(mode agent.PermissionsMode) tea.Cmd {
 	if m.permissionsBusy() {
+		m.pendingPermissions = mode
 		m.setMode(ModeChat)
-		return m.showNotice(notice(chat.NoticeWarn, nil, "Permissions can change only in an idle session."), 0)
+		m.clearNotice()
+		return nil
 	}
-	if err := m.engine.SetPermissionsMode(m.tools, mode); err != nil {
+	if err := m.setPermissionsMode(mode); err != nil {
 		m.setMode(ModeChat)
 		if errors.Is(err, agent.ErrOperationActive) {
-			return m.showNotice(notice(chat.NoticeWarn, nil, "Permissions can change only in an idle session."), 0)
+			return m.showNotice(notice(chat.NoticeWarn, nil, "Permissions are still changing. Try again after this response."), 0)
 		}
 		return m.showNotice(notice(chat.NoticeError, err, "Could not switch the permissions mode."), 0)
 	}
 	m.setMode(ModeChat)
+	return nil
+}
+
+func (m *Model) setPermissionsMode(mode agent.PermissionsMode) error {
+	if err := m.engine.SetPermissionsMode(m.tools, mode); err != nil {
+		return err
+	}
+	m.pendingPermissions = ""
 	m.syncStatus()
 	m.clearNotice()
+	return nil
+}
+
+func (m *Model) applyPendingPermissions() tea.Cmd {
+	if m.pendingPermissions == "" {
+		return nil
+	}
+	mode := m.pendingPermissions
+	if err := m.setPermissionsMode(mode); err != nil {
+		m.pendingPermissions = ""
+		return m.showNotice(notice(chat.NoticeError, err, "Could not switch the permissions mode."), 0)
+	}
+	if m.mode == ModePermissions {
+		m.permissionConfirm = false
+		m.permissionChoice = 0
+		if mode == agent.ModeSkipPermissions {
+			m.permissionChoice = 1
+		}
+	}
 	return nil
 }
 
@@ -112,6 +150,11 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		mode := permissionModes[m.permissionChoice]
 		if mode == m.tools.PermissionsMode() {
+			m.pendingPermissions = ""
+			m.setMode(ModeChat)
+			return nil
+		}
+		if mode == m.pendingPermissions {
 			m.setMode(ModeChat)
 			return nil
 		}
@@ -171,6 +214,13 @@ func (m *Model) permissionsView() string {
 			rows = append(rows, m.permissionOptionRows(label, permissionOptionDetails[i], inner, leftWidth, detailWidth, i == m.permissionChoice)...)
 		}
 	}
+	if m.permissionsBusy() {
+		timing := "Changes apply after this response."
+		if m.pendingPermissions != "" {
+			timing = permissionModeLabel(m.pendingPermissions) + " will apply after this response."
+		}
+		rows = append(rows, line("", false), line(timing, false))
+	}
 	rows = append(rows, line("", false))
 	return style.MenuFrame.Width(width).Padding(0, 1).Render(strings.Join(rows, "\n"))
 }
@@ -181,6 +231,11 @@ func (m *Model) permissionOptionLabels() [2]string {
 		labels[0] += " (current)"
 	} else {
 		labels[1] += " (current)"
+	}
+	if m.pendingPermissions == agent.ModeManual {
+		labels[0] += " (queued)"
+	} else if m.pendingPermissions == agent.ModeSkipPermissions {
+		labels[1] += " (queued)"
 	}
 	return labels
 }
@@ -234,6 +289,9 @@ func permissionMarker(selected bool) string {
 
 func (m *Model) permissionsCompact() bool {
 	available := m.height - chatFooterHeight - m.editor.Height()
+	if m.permissionsBusy() {
+		available -= 2 // timing line and its gap
+	}
 	if m.permissionConfirm {
 		width := min(100, max(1, m.width-m.editor.ContentOffset()))
 		inner := max(1, width-m.styles.Editor.MenuFrame.GetHorizontalFrameSize()-2)

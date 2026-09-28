@@ -123,63 +123,83 @@ func TestPermissionsSwitchingToCurrentModeIsANoOp(t *testing.T) {
 	}
 }
 
-func TestPermissionsRejectedDuringActiveTurn(t *testing.T) {
+func TestPermissionsQueuesDuringActiveTurn(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	m.turnEvents = make(chan agent.Event)
 	m.chatPhase = chat.PhaseStreaming
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
-	if m.notice.Level != chat.NoticeWarn || m.notice.Empty() {
-		t.Fatalf("notice = %#v, want an active-turn rejection", m.notice)
+	if m.mode != ModePermissions || !m.permissionConfirm {
+		t.Fatal("full access did not require confirmation during the turn")
 	}
-	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
-		t.Fatalf("mode = %q, want manual after a rejected switch", got)
+	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual {
+		t.Fatal("mode changed before the active turn closed")
+	}
+	if !strings.Contains(ansi.Strip(m.chatFooter()), "Full access after this response") || !m.notice.Empty() {
+		t.Fatal("queued mode is not shown in the footer without a notification")
+	}
+	_, _ = m.dispatchCommand("permissions", "")
+	if m.permissionChoice != 1 || !strings.Contains(ansi.Strip(m.permissionsView()), "Full access (queued)") {
+		t.Fatal("picker did not show the queued choice")
+	}
+	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.mode != ModeChat || m.pendingPermissions != agent.ModeSkipPermissions {
+		t.Fatal("reselecting the queued choice changed it")
+	}
+	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.turnGen})
+	if m.pendingPermissions != "" || m.tools.PermissionsMode() != agent.ModeSkipPermissions {
+		t.Fatal("queued mode did not apply when the turn closed")
 	}
 }
 
-func TestPermissionsQueryAllowedDuringActiveTurn(t *testing.T) {
+func TestPermissionsPickerOpensDuringActiveTurn(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	m.turnEvents = make(chan agent.Event)
 	m.chatPhase = chat.PhaseStreaming
 	_, _ = m.dispatchCommand("permissions", "")
-	if m.notice.Level != chat.NoticeInfo || !strings.Contains(m.notice.Text, "Changes require an idle session") {
-		t.Fatalf("notice = %#v, want the current-mode notice", m.notice)
+	if m.mode != ModePermissions || !strings.Contains(ansi.Strip(m.permissionsView()), "Changes apply after this response") {
+		t.Fatal("picker did not explain when changes take effect")
 	}
 	if m.chatPhase != chat.PhaseStreaming || m.turnEvents == nil {
-		t.Fatal("the query disturbed the active turn")
+		t.Fatal("opening the picker disturbed the active turn")
 	}
 	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
-		t.Fatalf("mode = %q, want manual after the query", got)
+		t.Fatalf("mode = %q, want manual while the picker is open", got)
 	}
 }
 
-func TestPermissionsSwitchRejectedDuringActiveTurn(t *testing.T) {
+func TestPermissionsCurrentModeCancelsQueuedChange(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	m.turnEvents = make(chan agent.Event)
 	m.chatPhase = chat.PhaseStreaming
+	m.pendingPermissions = agent.ModeSkipPermissions
 	_, _ = m.dispatchCommand("permissions", "manual")
-	if m.notice.Level != chat.NoticeWarn || !strings.Contains(m.notice.Text, "Wait for the assistant response") {
-		t.Fatalf("notice = %#v, want the active-turn rejection", m.notice)
+	if m.pendingPermissions != "" || !m.notice.Empty() {
+		t.Fatal("selecting the current mode did not cancel the queued change")
 	}
 	if m.chatPhase != chat.PhaseStreaming {
-		t.Fatal("the rejected switch disturbed the active turn")
+		t.Fatal("cancelling the queued change disturbed the active turn")
 	}
 	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
-		t.Fatalf("mode = %q, want manual after a rejected switch", got)
+		t.Fatalf("mode = %q, want manual", got)
 	}
 }
 
-func TestPermissionsRejectedWhileApprovalsPending(t *testing.T) {
+func TestPermissionsQueuesWhileApprovalsPending(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	m.pendingApprovals = []agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{Status: agent.ToolAwaitingApproval},
 	}}
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
-	if m.notice.Level != chat.NoticeWarn || m.notice.Empty() {
-		t.Fatalf("notice = %#v, want a pending-approval rejection", m.notice)
+	if m.mode != ModePermissions || !m.permissionConfirm {
+		t.Fatal("pending approval prevented the confirmation from opening")
 	}
-	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
-		t.Fatalf("mode = %q, want manual after a rejected switch", got)
+	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual || len(m.pendingApprovals) != 1 {
+		t.Fatal("queued change altered the current approval")
 	}
 }
 
@@ -191,23 +211,28 @@ func TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool(t *testing.T) {
 		msg := runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents))
 		_, _ = m.Update(msg)
 	}
-	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape}) // deny the panel
-	drainConversationRemote(t, m)
-	if backend.calls != 2 {
-		t.Fatalf("backend calls = %d after the first turn", backend.calls)
-	}
-
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
 	if m.mode != ModePermissions || !m.permissionConfirm || m.tools.PermissionsMode() != agent.ModeManual {
 		t.Fatal("skip-permissions switched before confirmation")
+	}
+	if !strings.Contains(ansi.Strip(m.View().Content), "Full access?") {
+		t.Fatal("confirmation is hidden while an approval is pending")
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.notice.Empty() {
 		t.Fatalf("notice = %#v, want no success notification", m.notice)
 	}
-	if got := m.tools.PermissionsMode(); got != agent.ModeSkipPermissions {
-		t.Fatalf("mode = %q, want skip-permissions", got)
+	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual || len(m.pendingApprovals) != 1 {
+		t.Fatal("current tool approval changed before the turn ended")
+	}
+	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape}) // deny the current tool
+	drainConversationRemote(t, m)
+	if backend.calls != 2 {
+		t.Fatalf("backend calls = %d after the first turn", backend.calls)
+	}
+	if got := m.tools.PermissionsMode(); got != agent.ModeSkipPermissions || m.pendingPermissions != "" {
+		t.Fatalf("mode = %q, queued = %q; want full access applied after the turn", got, m.pendingPermissions)
 	}
 
 	setConversationInput(m, "Run the action")
@@ -228,17 +253,19 @@ func TestPermissionsSwitchBackToManualPromptsAgain(t *testing.T) {
 	m, backend := newPermissionsModel(t, agent.ModeSkipPermissions)
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
+	_, _ = m.dispatchCommand("permissions", "manual")
+	if m.pendingPermissions != agent.ModeManual || m.tools.PermissionsMode() != agent.ModeSkipPermissions {
+		t.Fatal("manual mode did not queue during the active turn")
+	}
 	drainConversationRemote(t, m)
 	if len(m.pendingApprovals) != 0 {
 		t.Fatalf("skip-permissions surfaced %d permission prompts", len(m.pendingApprovals))
 	}
-
-	_, _ = m.dispatchCommand("permissions", "manual")
 	if !m.notice.Empty() {
 		t.Fatalf("notice = %#v, want no success notification", m.notice)
 	}
-	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
-		t.Fatalf("mode = %q, want manual", got)
+	if got := m.tools.PermissionsMode(); got != agent.ModeManual || m.pendingPermissions != "" {
+		t.Fatalf("mode = %q, queued = %q; want manual after the first turn", got, m.pendingPermissions)
 	}
 
 	setConversationInput(m, "Run the action")
@@ -455,7 +482,7 @@ func TestPermissionsConfirmationCannotBypassNewActiveWork(t *testing.T) {
 	m.turnEvents = make(chan agent.Event)
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.tools.PermissionsMode() != agent.ModeManual || m.mode != ModeChat {
-		t.Fatal("stale confirmation changed mode during active work")
+	if m.tools.PermissionsMode() != agent.ModeManual || m.pendingPermissions != agent.ModeSkipPermissions || m.mode != ModeChat {
+		t.Fatal("stale confirmation did not queue the mode for the active turn")
 	}
 }
