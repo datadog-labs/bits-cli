@@ -4,6 +4,7 @@ import (
 	"image"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -124,6 +125,8 @@ func TestSelectionUsesGraphemeWidths(t *testing.T) {
 func TestSelectionClickWithoutMovementCopiesNothing(t *testing.T) {
 	frame := testSelectionFrame("hello", 5, 1)
 	var got selection
+	start := time.Unix(100, 0)
+	got.clicks.next(start, image.Pt(2, 0), selectionScopeTranscript)
 	got.begin(frame, 2, 0)
 	if text := got.finish(frame, 2, 0, frame); text != "" {
 		t.Fatalf("finish() = %q, want empty text", text)
@@ -133,6 +136,9 @@ func TestSelectionClickWithoutMovementCopiesNothing(t *testing.T) {
 	}
 	if got.selected() {
 		t.Fatal("click selection was retained")
+	}
+	if count := got.clicks.next(start.Add(100*time.Millisecond), image.Pt(2, 0), selectionScopeTranscript); count != 2 {
+		t.Fatalf("click after a no-movement release = %d, want 2", count)
 	}
 }
 
@@ -247,5 +253,121 @@ func TestSelectionStartedInTheHeaderDoesNotPaintIt(t *testing.T) {
 	}
 	if !strings.Contains(lines[2], "\x1b[7m") {
 		t.Fatalf("first transcript row not painted: %q", lines[2])
+	}
+}
+
+func TestClickTrackerRecognizesOnlyNearbySameRowClicks(t *testing.T) {
+	start := time.Unix(100, 0)
+	tests := []struct {
+		name   string
+		points []image.Point
+		scopes []selectionScope
+		waits  []time.Duration
+		want   []int
+	}{
+		{
+			name:   "double and triple",
+			points: []image.Point{image.Pt(4, 2), image.Pt(6, 2), image.Pt(5, 2), image.Pt(5, 2)},
+			scopes: []selectionScope{selectionScopeTranscript, selectionScopeTranscript, selectionScopeTranscript, selectionScopeTranscript},
+			waits:  []time.Duration{0, 100 * time.Millisecond, 200 * time.Millisecond, 250 * time.Millisecond},
+			want:   []int{1, 2, 3, 1},
+		},
+		{
+			name:   "new row",
+			points: []image.Point{image.Pt(4, 2), image.Pt(4, 3)},
+			scopes: []selectionScope{selectionScopeTranscript, selectionScopeTranscript},
+			waits:  []time.Duration{0, 100 * time.Millisecond},
+			want:   []int{1, 1},
+		},
+		{
+			name:   "new pane",
+			points: []image.Point{image.Pt(4, 2), image.Pt(4, 2)},
+			scopes: []selectionScope{selectionScopeTranscript, selectionScopeLower},
+			waits:  []time.Duration{0, 100 * time.Millisecond},
+			want:   []int{1, 1},
+		},
+		{
+			name:   "timeout",
+			points: []image.Point{image.Pt(4, 2), image.Pt(4, 2)},
+			scopes: []selectionScope{selectionScopeTranscript, selectionScopeTranscript},
+			waits:  []time.Duration{0, multiClickInterval + time.Millisecond},
+			want:   []int{1, 1},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var tracker clickTracker
+			for i, point := range tt.points {
+				got := tracker.next(start.Add(tt.waits[i]), point, tt.scopes[i])
+				if got != tt.want[i] {
+					t.Fatalf("click %d = %d, want %d", i+1, got, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestWordRangeUsesRenderedCells(t *testing.T) {
+	frame := testSelectionFrame("\x1b[31mhello\x1b[0m, 世界\nwrapped", 11, 2)
+	tests := []struct {
+		name string
+		at   image.Point
+		want string
+	}{
+		{name: "word", at: image.Pt(1, 0), want: "hello"},
+		{name: "punctuation", at: image.Pt(5, 0), want: ","},
+		{name: "wide grapheme continuation", at: image.Pt(8, 0), want: "世"},
+		{name: "wrapped row", at: image.Pt(3, 1), want: "wrapped"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			anchor, focus, ok := wordRange(frame, tt.at)
+			if !ok {
+				t.Fatal("wordRange() did not find a word")
+			}
+			if got := extractSelection(frame, anchor, focus); got != tt.want {
+				t.Fatalf("selected text = %q, range %v-%v, want %q", got, anchor, focus, tt.want)
+			}
+		})
+	}
+	if _, _, ok := wordRange(frame, image.Pt(6, 0)); ok {
+		t.Fatal("whitespace produced a word selection")
+	}
+	anchor, focus, _ := wordRange(frame, image.Pt(5, 0))
+	var selected selection
+	selected.beginRange(anchor, focus)
+	if text := selected.finishGesture(frame, 5, 0, 2, 2, frame); text != "," {
+		t.Fatalf("single-cell word selection copied %q, want comma", text)
+	}
+	if !selected.selected() {
+		t.Fatal("single-cell word selection was not retained")
+	}
+}
+
+func TestMultiClickRangeIsPreservedOnRelease(t *testing.T) {
+	frame := testSelectionFrame("first line\nsecond line", 11, 2)
+	var got selection
+	got.scope = selectionScopeTranscript
+	got.clickPoint = image.Pt(5, 1)
+	got.beginRange(image.Pt(0, 1), image.Pt(10, 1))
+	if text := got.finishGesture(frame, 5, 1, 2, 2, frame); text != "second line" {
+		t.Fatalf("finishGesture() = %q, want %q", text, "second line")
+	}
+}
+
+func TestMultiClickDisplacedReleaseEndsClickSequence(t *testing.T) {
+	frame := testSelectionFrame("hello", 5, 1)
+	start := time.Unix(100, 0)
+	var got selection
+	got.clicks.next(start, image.Pt(1, 0), selectionScopeTranscript)
+	got.beginClick(frame, selectionScopeTranscript, 1, 0, 1, 1, start.Add(100*time.Millisecond))
+	if !got.keepRange {
+		t.Fatal("double-click did not select a range")
+	}
+	if text := got.finishGesture(frame, 4, 0, 1, 1, frame); text != "hello" {
+		t.Fatalf("finishGesture() = %q, want %q", text, "hello")
+	}
+	if got.clicks.count != 0 {
+		t.Fatalf("displaced release left click count at %d", got.clicks.count)
 	}
 }
