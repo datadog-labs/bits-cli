@@ -195,13 +195,17 @@ func (m *Model) permissionsBody(inner int) string {
 		value = ansi.Truncate(value, inner, "…")
 		return rowStyle.Render(value + strings.Repeat(" ", max(0, inner-ansi.StringWidth(value))))
 	}
+	detail := func(value string) string {
+		value = ansi.Truncate(value, inner, "…")
+		return style.MenuDetail.Render(value + strings.Repeat(" ", max(0, inner-ansi.StringWidth(value))))
+	}
 	var rows []string
 	switch {
 	case m.permissionsCompact():
 		rows = append(rows, line("Resize terminal to choose permissions", false))
 	case m.permissionConfirm:
 		for _, text := range wrapPermissionDetail(fullAccessConfirmation, inner) {
-			rows = append(rows, line(text, false))
+			rows = append(rows, detail(text))
 		}
 		rows = append(rows,
 			line("", false),
@@ -213,8 +217,7 @@ func (m *Model) permissionsBody(inner int) string {
 		labels := m.permissionOptionLabels()
 		leftWidth := permissionLabelWidth()
 		detailWidth := inner - leftWidth - 2
-		helper := ansi.Truncate("Permission changes take effect on the next turn.", inner, "…")
-		rows = append(rows, style.MenuDetail.Render(helper+strings.Repeat(" ", max(0, inner-ansi.StringWidth(helper)))))
+		rows = append(rows, detail("Permission changes take effect on the next turn."))
 		for i, label := range labels {
 			rows = append(rows, line("", false))
 			rows = append(rows, m.permissionOptionRows(label, permissionOptionDetails[i], inner, leftWidth, detailWidth, i == m.permissionChoice)...)

@@ -475,6 +475,23 @@ func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
 	}
 }
 
+func TestPermissionsConfirmationExplanationUsesTertiary(t *testing.T) {
+	m, _ := newPermissionsModel(t, agent.ModeManual)
+	_, _ = m.dispatchCommand("permissions", "skip-permissions")
+	view := m.permissionsView()
+	inner := m.permissionsInnerWidth()
+	wrapped := wrapPermissionDetail(fullAccessConfirmation, inner)
+	if len(wrapped) < 2 {
+		t.Fatalf("confirmation copy = %q, want it to wrap onto a second row", wrapped)
+	}
+	for _, text := range wrapped {
+		padded := text + strings.Repeat(" ", max(0, inner-ansi.StringWidth(text)))
+		if !strings.Contains(view, m.styles.Editor.MenuDetail.Render(padded)) {
+			t.Fatalf("confirmation row %q does not use the tertiary text color", text)
+		}
+	}
+}
+
 func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
