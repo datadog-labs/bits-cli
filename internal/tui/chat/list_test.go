@@ -172,6 +172,89 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 			t.Errorf("group rendering exposed inspection output %q:\n%s", hidden, plain)
 		}
 	}
+
+	// Use the same grouped presentation to check narrow rows and span colors.
+	for _, test := range []struct {
+		name        string
+		input       string
+		bodyWidth   int
+		wantRows    []string
+		firstPrefix bool
+		wantMuted   string
+		wantAccent  string
+	}{
+		{
+			name: "wrapped search context", bodyWidth: 35,
+			input:       `{"pattern":"NewToolSet\\(|ClientTools\\(|Definition:|Name:.*navigate|navigate|ask_user_question","path":"internal"}`,
+			wantRows:    []string{"search NewToolSet", "in internal"},
+			firstPrefix: true,
+			wantMuted:   "in",
+			wantAccent:  "internal",
+		},
+		{
+			name: "argument continuation", bodyWidth: 6,
+			input:      `{"pattern":"alpha beta gamma","path":"."}`,
+			wantRows:   []string{"search alpha", "beta", "gamma"},
+			wantAccent: "gamma",
+		},
+		{
+			name: "hyphen break", bodyWidth: 7,
+			input:      `{"pattern":"foo -bar baz","path":"."}`,
+			wantRows:   []string{"search foo -", "bar baz"},
+			wantAccent: "bar baz",
+		},
+		{
+			name: "exact width ASCII", bodyWidth: 1,
+			input:      `{"pattern":"a b","path":"."}`,
+			wantRows:   []string{"search a", "b"},
+			wantAccent: "b",
+		},
+		{
+			name: "exact width wide rune", bodyWidth: 2,
+			input:      `{"pattern":"a 界","path":"."}`,
+			wantRows:   []string{"search a", "界"},
+			wantAccent: "界",
+		},
+	} {
+		for _, dark := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/dark=%t", test.name, dark), func(t *testing.T) {
+				sty := DefaultStyles(dark)
+				list := NewList()
+				list.SetStyles(sty)
+				// Child indentation and "search " take 11 cells before the body.
+				list.SetWidth(test.bodyWidth + 11)
+				list.SetItems([]agent.Block{
+					inspectBlock("read", "read_file", `{"path":"a.go"}`, agent.ToolSuccess, "contents"),
+					inspectBlock("search", "grep_files", test.input, agent.ToolSuccess, "matches"),
+				})
+				rows := list.renderItem(0)
+				if len(rows) != 2+len(test.wantRows) {
+					t.Fatalf("group rows = %q, want %d rows", rows, 2+len(test.wantRows))
+				}
+				for i, want := range test.wantRows {
+					got := strings.TrimSpace(ansi.Strip(rows[2+i]))
+					matches := got == want
+					if i == 0 && test.firstPrefix {
+						matches = strings.HasPrefix(got, want)
+					}
+					if !matches {
+						t.Errorf("search row %d = %q, want %q", i, got, want)
+					}
+				}
+				last := rows[len(rows)-1]
+				argument, _, _ := strings.Cut(sty.ToolArgument.Render(test.wantAccent), test.wantAccent)
+				if !strings.Contains(last, argument+test.wantAccent) {
+					t.Errorf("last row lost argument color: %q", last)
+				}
+				if test.wantMuted != "" {
+					muted, _, _ := strings.Cut(sty.ToolDetail.Render(test.wantMuted), test.wantMuted)
+					if !strings.Contains(last, muted+test.wantMuted) {
+						t.Errorf("last row lost muted color: %q", last)
+					}
+				}
+			})
+		}
+	}
 }
 
 func TestSingletonInspectionRendersAsTool(t *testing.T) {
