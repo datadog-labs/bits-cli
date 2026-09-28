@@ -22,7 +22,7 @@ const fullAccessConfirmation = "Enabling full access will automatically approve 
 
 func permissionModeLabel(mode agent.PermissionsMode) string {
 	if mode == agent.ModeSkipPermissions {
-		return "Full access"
+		return "Full Access"
 	}
 	return "Ask for Approval"
 }
@@ -46,7 +46,7 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 			m.permissionChoice = 1
 		}
 		m.permissionConfirm = false
-		m.permissionAllow = false
+		m.permissionAllow = true
 		m.editor.CloseMenu()
 		m.setMode(ModePermissions)
 		return nil
@@ -65,7 +65,7 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 	if current == agent.ModeManual && mode == agent.ModeSkipPermissions {
 		m.permissionChoice = 1
 		m.permissionConfirm = true
-		m.permissionAllow = false
+		m.permissionAllow = true
 		m.editor.CloseMenu()
 		m.setMode(ModePermissions)
 		return nil
@@ -160,7 +160,7 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		if mode == agent.ModeSkipPermissions {
 			m.permissionConfirm = true
-			m.permissionAllow = false
+			m.permissionAllow = true
 			return nil
 		}
 		return m.applyPermissionsMode(mode)
@@ -183,7 +183,7 @@ func (m *Model) permissionsView() string {
 	}
 	header := "Permissions"
 	if m.permissionConfirm {
-		header = "Full access?"
+		header = "Full Access"
 	}
 	closeHint := "ESC x"
 	headerGap := strings.Repeat(" ", max(1, inner-ansi.StringWidth(header)-ansi.StringWidth(closeHint)))
@@ -198,11 +198,12 @@ func (m *Model) permissionsView() string {
 		rows = append(rows,
 			line("", false),
 			line(permissionMarker(m.permissionAllow)+"Yes, enable full access", m.permissionAllow),
+			line("", false),
 			line(permissionMarker(!m.permissionAllow)+"Cancel", !m.permissionAllow),
 		)
 	} else {
 		labels := m.permissionOptionLabels()
-		leftWidth := max(ansi.StringWidth(labels[0]), ansi.StringWidth(labels[1])) + 2
+		leftWidth := permissionLabelWidth()
 		detailWidth := inner - leftWidth - 2
 		rows = append(rows,
 			line("", false),
@@ -226,7 +227,7 @@ func (m *Model) permissionsView() string {
 }
 
 func (m *Model) permissionOptionLabels() [2]string {
-	labels := [2]string{"Ask for Approval", "Full access"}
+	labels := [2]string{"Ask for Approval", "Full Access"}
 	if m.tools.PermissionsMode() == agent.ModeManual {
 		labels[0] += " (current)"
 	} else {
@@ -238,6 +239,12 @@ func (m *Model) permissionOptionLabels() [2]string {
 		labels[1] += " (queued)"
 	}
 	return labels
+}
+
+// Keep the detail column fixed when the current or queued suffix moves
+// between options, so wrapping and vertical spacing do not jump.
+func permissionLabelWidth() int {
+	return ansi.StringWidth("› Ask for Approval (current)") + 2
 }
 
 func (m *Model) permissionOptionRows(label, detail string, width, leftWidth, detailWidth int, selected bool) []string {
@@ -295,12 +302,11 @@ func (m *Model) permissionsCompact() bool {
 	if m.permissionConfirm {
 		width := min(100, max(1, m.width-m.editor.ContentOffset()))
 		inner := max(1, width-m.styles.Editor.MenuFrame.GetHorizontalFrameSize()-2)
-		return m.width < 36 || available < 8+len(wrapPermissionDetail(fullAccessConfirmation, inner))
+		return m.width < 36 || available < 9+len(wrapPermissionDetail(fullAccessConfirmation, inner))
 	}
 	width := min(100, max(1, m.width-m.editor.ContentOffset()))
 	inner := width - m.styles.Editor.MenuFrame.GetHorizontalFrameSize() - 2
-	labels := m.permissionOptionLabels()
-	leftWidth := max(ansi.StringWidth(labels[0]), ansi.StringWidth(labels[1])) + 2
+	leftWidth := permissionLabelWidth()
 	detailWidth := inner - leftWidth - 2
 	if detailWidth < 12 {
 		return true

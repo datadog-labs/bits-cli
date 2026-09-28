@@ -131,16 +131,15 @@ func TestPermissionsQueuesDuringActiveTurn(t *testing.T) {
 	if m.mode != ModePermissions || !m.permissionConfirm {
 		t.Fatal("full access did not require confirmation during the turn")
 	}
-	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual {
 		t.Fatal("mode changed before the active turn closed")
 	}
-	if !strings.Contains(ansi.Strip(m.chatFooter()), "Full access after this response") || !m.notice.Empty() {
+	if !strings.Contains(ansi.Strip(m.chatFooter()), "Full Access after this response") || !m.notice.Empty() {
 		t.Fatal("queued mode is not shown in the footer without a notification")
 	}
 	_, _ = m.dispatchCommand("permissions", "")
-	if m.permissionChoice != 1 || !strings.Contains(ansi.Strip(m.permissionsView()), "Full access (queued)") {
+	if m.permissionChoice != 1 || !strings.Contains(ansi.Strip(m.permissionsView()), "Full Access (queued)") {
 		t.Fatal("picker did not show the queued choice")
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -196,7 +195,6 @@ func TestPermissionsQueuesWhileApprovalsPending(t *testing.T) {
 	if m.mode != ModePermissions || !m.permissionConfirm {
 		t.Fatal("pending approval prevented the confirmation from opening")
 	}
-	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual || len(m.pendingApprovals) != 1 {
 		t.Fatal("queued change altered the current approval")
@@ -215,10 +213,9 @@ func TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool(t *testing.T) {
 	if m.mode != ModePermissions || !m.permissionConfirm || m.tools.PermissionsMode() != agent.ModeManual {
 		t.Fatal("skip-permissions switched before confirmation")
 	}
-	if !strings.Contains(ansi.Strip(m.View().Content), "Full access?") {
+	if !strings.Contains(ansi.Strip(m.View().Content), "Full Access") {
 		t.Fatal("confirmation is hidden while an approval is pending")
 	}
-	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.notice.Empty() {
 		t.Fatalf("notice = %#v, want no success notification", m.notice)
@@ -292,7 +289,6 @@ func TestPermissionsSwitchBackToManualClearsExistingSessionGrants(t *testing.T) 
 	drainConversationRemote(t, m)
 
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
-	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_, _ = m.dispatchCommand("permissions", "manual")
 	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
@@ -321,9 +317,10 @@ func TestPermissionsPickerNavigationAndCancel(t *testing.T) {
 	if !m.permissionConfirm || m.tools.PermissionsMode() != agent.ModeManual {
 		t.Fatal("picker did not require confirmation")
 	}
+	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.mode != ModeChat || m.tools.PermissionsMode() != agent.ModeManual {
-		t.Fatal("default cancel changed permissions")
+		t.Fatal("cancel changed permissions")
 	}
 	_, _ = m.dispatchCommand("permissions", "")
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -335,7 +332,7 @@ func TestPermissionsPickerNavigationAndCancel(t *testing.T) {
 func TestPermissionsPickerCurrentModeAndResize(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
 	_, _ = m.dispatchCommand("permissions", "")
-	if m.permissionChoice != 1 || !strings.Contains(m.permissionsView(), "› Full access (current)") {
+	if m.permissionChoice != 1 || !strings.Contains(m.permissionsView(), "› Full Access (current)") {
 		t.Fatal("picker did not focus the startup mode")
 	}
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 72, Height: 18})
@@ -384,7 +381,7 @@ func TestPermissionsPickerSectionSpacing(t *testing.T) {
 	}
 	for _, pair := range [][2]string{
 		{"Permissions", "Ask for Approval"},
-		{"workspace", "Full access"},
+		{"workspace", "Full Access"},
 	} {
 		start, end := find(pair[0]), find(pair[1])
 		if end-start != 2 || strings.TrimSpace(strings.Trim(rows[start+1], "│")) != "" {
@@ -396,6 +393,40 @@ func TestPermissionsPickerSectionSpacing(t *testing.T) {
 	}
 }
 
+func TestPermissionsPickerSpacingIsStableAcrossCurrentModes(t *testing.T) {
+	type layout struct{ firstRow, secondRow, firstDetailColumn, secondDetailColumn, height int }
+	measure := func(mode agent.PermissionsMode) layout {
+		m, _ := newPermissionsModel(t, mode)
+		_, _ = m.dispatchCommand("permissions", "")
+		rows := strings.Split(ansi.Strip(m.permissionsView()), "\n")
+		result := layout{height: len(rows)}
+		for i, row := range rows {
+			if strings.Contains(row, "Ask for Approval") {
+				result.firstRow = i
+				result.firstDetailColumn = -1
+				if start := strings.Index(row, "Bits will ask"); start >= 0 {
+					result.firstDetailColumn = ansi.StringWidth(row[:start])
+				}
+			}
+			if strings.Contains(row, "Full Access") {
+				result.secondRow = i
+				result.secondDetailColumn = -1
+				if start := strings.Index(row, "Use with caution"); start >= 0 {
+					result.secondDetailColumn = ansi.StringWidth(row[:start])
+				}
+			}
+		}
+		if result.firstDetailColumn < 0 || result.secondDetailColumn < 0 {
+			t.Fatalf("missing option details for %s: %q", mode, rows)
+		}
+		return result
+	}
+	manual, fullAccess := measure(agent.ModeManual), measure(agent.ModeSkipPermissions)
+	if manual != fullAccess {
+		t.Fatalf("picker layout changes with current mode: manual=%+v full access=%+v", manual, fullAccess)
+	}
+}
+
 func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
 	_, _ = m.dispatchCommand("permissions", "")
@@ -403,12 +434,13 @@ func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
 	if !strings.Contains(view, m.styles.Panel.Title.Render("Permissions")) {
 		t.Fatal("picker title does not use the resume title style")
 	}
-	if !strings.Contains(view, m.styles.Selector.Selected.Render("› Full access (current)")) {
+	selectedLabel := "› Full Access (current)"
+	selectedLabel += strings.Repeat(" ", max(0, permissionLabelWidth()-ansi.StringWidth(selectedLabel)))
+	if !strings.Contains(view, m.styles.Selector.Selected.Render(selectedLabel)) {
 		t.Fatal("selected mode does not use the resume selected title style")
 	}
 	inner := min(100, m.width-m.editor.ContentOffset()) - m.styles.Editor.MenuFrame.GetHorizontalFrameSize() - 2
-	labels := m.permissionOptionLabels()
-	leftWidth := max(ansi.StringWidth(labels[0]), ansi.StringWidth(labels[1])) + 2
+	leftWidth := permissionLabelWidth()
 	detailWidth := inner - leftWidth - 2
 	selectedDetail := wrapPermissionDetail(permissionOptionDetails[1], detailWidth)[0]
 	if !strings.Contains(view, m.styles.Selector.Selected.Render(selectedDetail)) {
@@ -419,7 +451,7 @@ func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
 		t.Fatal("unselected explanation does not use the resume time style")
 	}
 	rows := strings.Split(ansi.Strip(view), "\n")
-	for _, pair := range [][2]string{{"Ask for Approval", unselectedDetail}, {"Full access", selectedDetail}} {
+	for _, pair := range [][2]string{{"Ask for Approval", unselectedDetail}, {"Full Access", selectedDetail}} {
 		found := false
 		for _, row := range rows {
 			found = found || strings.Contains(row, pair[0]) && strings.Contains(row, pair[1])
@@ -437,7 +469,7 @@ func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
 	if strings.Contains(strings.Join(rows, "\n"), "Enter to select") {
 		t.Fatal("confirmation still renders footer hints")
 	}
-	if !strings.Contains(rows[1], "Full access?") || strings.TrimSpace(strings.Trim(rows[2], "│")) != "" || !strings.Contains(rows[3], "Enabling full access") {
+	if !strings.Contains(rows[1], "Full Access") || strings.Contains(rows[1], "Full Access?") || strings.TrimSpace(strings.Trim(rows[2], "│")) != "" || !strings.Contains(rows[3], "Enabling full access") {
 		t.Fatalf("confirmation title needs a blank row before its explanation: %q", rows)
 	}
 	explanation := strings.TrimSpace(strings.Trim(rows[3], "│")) + " " + strings.TrimSpace(strings.Trim(rows[4], "│"))
@@ -453,8 +485,8 @@ func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
 			cancel = i
 		}
 	}
-	if confirm < 0 || cancel != confirm+1 || !strings.Contains(rows[cancel], "› Cancel") {
-		t.Fatalf("confirmation actions are not ordered with Cancel selected: %q", rows)
+	if confirm < 0 || cancel != confirm+2 || strings.TrimSpace(strings.Trim(rows[confirm+1], "│")) != "" || !strings.Contains(rows[confirm], "› Yes, enable full access") {
+		t.Fatalf("confirmation actions need one blank row with Yes selected: %q", rows)
 	}
 }
 
@@ -471,7 +503,7 @@ func TestPermissionsPickerCompactResizeKeepsSelection(t *testing.T) {
 	}
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.permissionChoice != 1 || !strings.Contains(ansi.Strip(m.View().Content), "Full access") {
+	if m.permissionChoice != 1 || !strings.Contains(ansi.Strip(m.View().Content), "Full Access") {
 		t.Fatal("picker did not recover after resize")
 	}
 }
@@ -480,7 +512,6 @@ func TestPermissionsConfirmationCannotBypassNewActiveWork(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
 	m.turnEvents = make(chan agent.Event)
-	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.tools.PermissionsMode() != agent.ModeManual || m.pendingPermissions != agent.ModeSkipPermissions || m.mode != ModeChat {
 		t.Fatal("stale confirmation did not queue the mode for the active turn")
