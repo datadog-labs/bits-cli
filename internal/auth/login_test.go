@@ -690,3 +690,94 @@ func TestLogoutDeletesBeforeBestEffortRevocation(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestCallbackAcceptsLoopbackHostFormsOnBoundPort(t *testing.T) {
+	for _, hostForm := range []string{"127.0.0.1", "localhost"} {
+		t.Run(hostForm, func(t *testing.T) {
+			listener, results, err := listenForCallback(DefaultRedirectURI, "expected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_ = listener.server.Shutdown(ctx)
+			}()
+			redirectURL, err := url.Parse(listener.redirectURI)
+			if err != nil {
+				t.Fatal(err)
+			}
+			host := hostForm + ":" + redirectURL.Port()
+
+			req, err := http.NewRequest(http.MethodGet, listener.redirectURI+"?code=right&state=expected", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Host = host
+			resp, err := http.DefaultClient.Do(req) //nolint:gosec // loopback test callback
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("host %q status = %d, want 200", host, resp.StatusCode)
+			}
+			select {
+			case result := <-results:
+				if result.err != nil || result.code != "right" {
+					t.Fatalf("callback result for host %q = %#v", host, result)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("host %q did not complete the login", host)
+			}
+		})
+	}
+}
+
+func TestCallbackRejectsForeignHosts(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		host func(port string) string
+	}{
+		{"foreign name", func(string) string { return "evil.example" }},
+		{"foreign name+port", func(string) string { return "evil.example:443" }},
+		{"loopback, wrong port", func(string) string { return "127.0.0.1:1" }},
+		{"localhost, wrong port", func(string) string { return "localhost:80" }},
+		{"IPv6 loopback literal", func(port string) string { return "[::1]:" + port }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			listener, results, err := listenForCallback(DefaultRedirectURI, "expected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_ = listener.server.Shutdown(ctx)
+			}()
+			redirectURL, err := url.Parse(listener.redirectURI)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req, err := http.NewRequest(http.MethodGet, listener.redirectURI+"?code=right&state=expected", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Host = test.host(redirectURL.Port())
+			resp, err := http.DefaultClient.Do(req) //nolint:gosec // loopback test callback
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode < 400 || resp.StatusCode >= 500 {
+				t.Fatalf("host %q status = %d, want a 400-class rejection", req.Host, resp.StatusCode)
+			}
+			select {
+			case result := <-results:
+				t.Fatalf("host %q ended the login: %#v", req.Host, result)
+			default:
+			}
+		})
+	}
+}

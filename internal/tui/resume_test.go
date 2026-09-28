@@ -23,7 +23,7 @@ func fixedNow() time.Time { return time.Unix(1_700_000_000, 0) }
 func resumeFixture(count int) *resume {
 	summaries := make([]assistant.ConversationSummary, count)
 	for i := range summaries {
-		// Ids must be distinct and pass validConversationID, or a selection test
+		// Ids must be distinct and pass ValidConversationID, or a selection test
 		// passes for the wrong reason.
 		id := fmt.Sprintf("%08d-1234-1234-1234-123456781234", i)
 		summaries[i] = assistant.ConversationSummary{

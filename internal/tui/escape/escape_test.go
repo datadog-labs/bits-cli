@@ -44,6 +44,41 @@ func TestSingleLineStripsTerminalFormattingAndCollapsesWhitespace(t *testing.T) 
 	}
 }
 
+func TestBidiControlsAreNeutralizedWithVisibleMarkers(t *testing.T) {
+	bidi := "\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069\u200E\u200F\u061C"
+	want := "\\u202A\\u202B\\u202C\\u202D\\u202E\\u2066\\u2067\\u2068\\u2069\\u200E\\u200F\\u061C"
+	if got := Inline("safe" + bidi + "rm -rf x"); got != "safe"+want+"rm -rf x" {
+		t.Errorf("Inline() = %q", got)
+	}
+	if got := Multiline("a" + bidi + "b"); got != "a"+want+"b" {
+		t.Errorf("Multiline() = %q", got)
+	}
+	if got := MarkdownSource("a" + bidi + "b"); got != "a"+want+"b" {
+		t.Errorf("MarkdownSource() = %q", got)
+	}
+	styled := "\x1b[38;5;252m" + bidi + "\x1b[m"
+	if got := StyledMultiline(styled); got != "\x1b[38;5;252m"+want+"\x1b[m" {
+		t.Errorf("StyledMultiline() = %q", got)
+	}
+}
+
+func TestBidiNeutralizationKeepsJoinersAndVariationSelectors(t *testing.T) {
+	family := "\U0001F468\u200D\U0001F469\u200D\U0001F467"        // family ZWJ sequence
+	flag := "\U0001F3F3\uFE0F\u200D\U0001F308"                    // rainbow flag with VS16
+	persian := "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645" // ZWNJ inside Persian text
+	for _, value := range []string{family, flag, persian} {
+		if got := Inline(value); got != value {
+			t.Errorf("Inline(%q) = %q, want unchanged", value, got)
+		}
+		if got := Multiline(value); got != value {
+			t.Errorf("Multiline(%q) = %q, want unchanged", value, got)
+		}
+		if got := StyledMultiline(value); got != value {
+			t.Errorf("StyledMultiline(%q) = %q, want unchanged", value, got)
+		}
+	}
+}
+
 func TestCommonTextPassesThroughUnchanged(t *testing.T) {
 	const singleLine = "plain display text"
 	const multiline = "first line\nsecond line"

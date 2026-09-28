@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/DataDog/bits-cli/internal/textsafe"
 )
 
 // testClient points a Client at h with the httptest server's client for both
@@ -708,5 +711,156 @@ func TestClientBackendStatusReportsConfiguredAuthenticationWithoutCredentials(t 
 				}
 			}
 		})
+	}
+}
+
+func TestRawSnippetCapsInlinedErrorBytes(t *testing.T) {
+	body := []byte(strings.Repeat("x", 8192))
+	detail := httpError(body, http.StatusBadGateway, "GET", "/x").Detail
+	if !strings.HasSuffix(detail, "…[truncated]") {
+		t.Fatalf("detail = %q..., want a truncation marker", detail[:64])
+	}
+	if len(detail) > maxRawSnippetBytes+len("…[truncated]") {
+		t.Fatalf("detail length = %d, want at most the %d-byte cap plus marker", len(detail), maxRawSnippetBytes)
+	}
+	if got, want := httpError([]byte(" upstream exploded\n"), 502, "GET", "/x").Detail, "upstream exploded"; got != want {
+		t.Fatalf("short body detail = %q, want %q", got, want)
+	}
+}
+
+func TestRawSnippetNeutralizesTerminalControls(t *testing.T) {
+	body := []byte("boom\x1b]52;c;base64-payload\x07 and \x1b[31mred\x1b[0m\nalso\tTab\x07\x0b")
+	msg := httpError(body, http.StatusBadGateway, "GET", "/x").Error()
+	for _, bad := range []string{"\x1b", "\x07", "\n", "\t", "\x0b"} {
+		if strings.Contains(msg, bad) {
+			t.Fatalf("error message %q contains control %q", msg, bad)
+		}
+	}
+	if !strings.Contains(msg, "boom]52;c;base64-payload") {
+		t.Fatalf("error message %q lost the visible body text", msg)
+	}
+}
+
+func TestRawSnippetKeepsContentBeforeAnInvalidByte(t *testing.T) {
+	body := []byte("x\xff" + strings.Repeat("y", 600) + "z")
+	detail := httpError(body, http.StatusBadGateway, "GET", "/x").Detail
+	if !strings.HasPrefix(detail, "x\uFFFD") {
+		t.Fatalf("detail = %q, want the leading content kept with the invalid byte repaired", detail)
+	}
+	if !strings.HasSuffix(detail, "…[truncated]") {
+		t.Fatalf("detail = %q, want a truncation marker", detail)
+	}
+}
+
+func TestRawSnippetCutsOnARuneBoundary(t *testing.T) {
+	// 200 three-byte runes; the 512-byte cut lands mid-rune (170*3 = 510).
+	body := []byte(strings.Repeat("\u20ac", 200))
+	detail := httpError(body, http.StatusBadGateway, "GET", "/x").Detail
+	if got, want := strings.TrimSuffix(detail, "…[truncated]"), strings.Repeat("\u20ac", 170); got != want {
+		t.Fatalf("detail = %q, want %d whole runes plus the marker", detail, 170)
+	}
+}
+
+func TestRawSnippetRepairsUTF8BeforeCapping(t *testing.T) {
+	// Interleaving invalid bytes with valid ones is the worst case for repair
+	// after a byte cut: every invalid byte can triple past the cap.
+	bodies := [][]byte{
+		bytes.Repeat([]byte{0xFF}, 4096),
+		bytes.Repeat([]byte{0xFF, 'a'}, 2048),
+	}
+	for _, body := range bodies {
+		detail := httpError(body, http.StatusBadGateway, "GET", "/x").Detail
+		if len(detail) > maxRawSnippetBytes+len("…[truncated]") {
+			t.Fatalf("detail length = %d, want at most the %d-byte cap plus marker", len(detail), maxRawSnippetBytes)
+		}
+		if len(detail) > maxRawSnippetBytes && !strings.HasSuffix(detail, "…[truncated]") {
+			t.Fatalf("detail = %q, want a truncation marker", detail)
+		}
+	}
+}
+
+// envelopeDetail carries an OSC clipboard-injection escape, a bidi override,
+// and padding past the cap; none of it may reach Error() verbatim.
+var envelopeDetail = "\x1b]52;c;base64-payload\x07trojan\u202Ereversed" + strings.Repeat("x", 4096)
+
+func envelopeJSON(t *testing.T, detail string) []byte {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"errors": []map[string]any{
+			{"status": "502", "title": "Bad Gateway", "detail": detail, "code": "\u202Ecode"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func assertNoUnsafeControls(t *testing.T, msg string) {
+	t.Helper()
+	for _, r := range msg {
+		if r < 0x20 || r == 0x7f || r >= 0x80 && r <= 0x9f || textsafe.IsBidiControl(r) {
+			t.Fatalf("error message %q contains unsafe control %U", msg, r)
+		}
+	}
+}
+
+func assertSanitizedEnvelopeError(t *testing.T, err error) {
+	t.Helper()
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %v, want *APIError", err)
+	}
+	if apiErr.StatusCode != http.StatusBadGateway {
+		t.Fatalf("StatusCode = %d, want the envelope's 502", apiErr.StatusCode)
+	}
+	assertNoUnsafeControls(t, apiErr.Error())
+	if !strings.Contains(apiErr.Error(), "trojanreversed") {
+		t.Fatalf("error message %q lost the visible detail text", apiErr.Error())
+	}
+	if strings.Contains(apiErr.Error(), "\u202E") || strings.Contains(apiErr.Code, "\u202E") {
+		t.Fatalf("error message %q kept a bidi override", apiErr.Error())
+	}
+	if got, want := apiErr.Code, "code"; got != want {
+		t.Fatalf("Code = %q, want %q with the bidi control dropped", got, want)
+	}
+	if len(apiErr.Detail) > maxRawSnippetBytes+len("…[truncated]") {
+		t.Fatalf("detail length = %d, want at most the %d-byte cap plus marker", len(apiErr.Detail), maxRawSnippetBytes)
+	}
+}
+
+func TestHTTPAPIErrorSanitizesEnvelopeText(t *testing.T) {
+	body := envelopeJSON(t, envelopeDetail)
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write(body)
+	})
+	_, err := c.Send(context.Background(), "hi", SendOptions{}, nil)
+	assertSanitizedEnvelopeError(t, err)
+}
+
+func TestStreamAPIErrorSanitizesEnvelopeText(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeStream(t, w, string(envelopeJSON(t, envelopeDetail)))
+	})
+	_, err := c.Send(context.Background(), "hi", SendOptions{}, nil)
+	assertSanitizedEnvelopeError(t, err)
+}
+
+func TestSendDecodeErrorCapsRawLine(t *testing.T) {
+	long := `{"data":{"broken":"` + strings.Repeat("a", 4096)
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeStream(t, w, long)
+	})
+	_, err := c.Send(context.Background(), "hi", SendOptions{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "decode stream line") {
+		t.Fatalf("error = %v, want a decode stream line error", err)
+	}
+	if !strings.Contains(err.Error(), "…[truncated]") {
+		t.Fatalf("error = %v, want a truncation marker", err)
+	}
+	if len(err.Error()) > maxRawSnippetBytes+512 {
+		t.Fatalf("error length = %d, want the raw quote capped", len(err.Error()))
 	}
 }

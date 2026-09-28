@@ -198,10 +198,16 @@ func runChat(parent context.Context, opts cmd.ChatOptions) error {
 	// On a clean exit with an active conversation, surface how to get back to it.
 	// The conversation id is the server-side handle the Assistant API restores via
 	// --conversation; there is no local session store yet.
-	if m.ConversationID() != "" {
-		fmt.Printf("Resume this conversation with: bits --conversation %s\n", m.ConversationID())
+	return printResumeHint(os.Stdout, m.ConversationID())
+}
+
+// printResumeHint prints the resume line only for a backend-shaped conversation id.
+func printResumeHint(w io.Writer, conversationID string) error {
+	if !agent.ValidConversationID(conversationID) {
+		return nil
 	}
-	return nil
+	_, err := fmt.Fprintf(w, "Resume this conversation with: bits --conversation %s\n", conversationID)
+	return err
 }
 
 func openCurrentWorkspace() (*workspace.Workspace, error) {

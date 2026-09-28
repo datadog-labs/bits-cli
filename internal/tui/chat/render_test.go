@@ -462,3 +462,31 @@ func TestDeniedAndCancelledTakePrecedenceOverRawError(t *testing.T) {
 		})
 	}
 }
+
+func TestExecApprovalNeutralizesBidiReorderedCommand(t *testing.T) {
+	input, err := json.Marshal(spec.ExecCommandInput{Cmd: "echo safe\u202E;rm -rf x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := &agent.ToolBlock{
+		Name:         spec.ExecCommand,
+		Input:        string(input),
+		Status:       agent.ToolAwaitingApproval,
+		IsClientSide: true,
+	}
+	sty := DefaultStyles(true)
+	sty.ToolArgument = lipgloss.NewStyle()
+	sty.ToolDetail = lipgloss.NewStyle()
+
+	rendered, ok := RenderToolApproval(tool, 80, sty)
+	if !ok {
+		t.Fatal("exec_command did not select its approval renderer")
+	}
+	plain := ansi.Strip(rendered)
+	if !strings.Contains(plain, `echo safe\u202E;rm -rf x`) {
+		t.Fatalf("bidi control was not neutralized in the approval rendering:\n%q", plain)
+	}
+	if strings.ContainsRune(plain, '\u202E') {
+		t.Fatalf("approval rendering exposed a raw bidi control: %q", plain)
+	}
+}
