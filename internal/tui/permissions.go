@@ -199,8 +199,10 @@ func (m *Model) permissionsView() string {
 		labels := m.permissionOptionLabels()
 		leftWidth := permissionLabelWidth()
 		detailWidth := inner - leftWidth - 2
+		helper := ansi.Truncate("Permission changes take effect on the next turn.", inner, "…")
 		rows = append(rows,
-			line("Permission changes take effect on the next turn.", false),
+			line("", false),
+			style.MenuDetail.Render(helper+strings.Repeat(" ", max(0, inner-ansi.StringWidth(helper)))),
 			line("", false),
 		)
 		for i, label := range labels {
@@ -295,6 +297,6 @@ func (m *Model) permissionsCompact() bool {
 	if detailWidth < 12 {
 		return true
 	}
-	height := 7 + len(wrapPermissionDetail(permissionOptionDetails[0], detailWidth)) + len(wrapPermissionDetail(permissionOptionDetails[1], detailWidth))
+	height := 8 + len(wrapPermissionDetail(permissionOptionDetails[0], detailWidth)) + len(wrapPermissionDetail(permissionOptionDetails[1], detailWidth))
 	return available < height
 }

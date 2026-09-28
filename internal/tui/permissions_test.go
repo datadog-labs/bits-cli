@@ -379,8 +379,8 @@ func TestPermissionsPickerSectionSpacing(t *testing.T) {
 		t.Fatalf("missing %q from picker: %q", label, ansi.Strip(m.permissionsView()))
 		return -1
 	}
-	if note := find("Permission changes take effect on the next turn."); note != find("Manage Bits Permissions")+1 {
-		t.Fatalf("timing note does not follow the title: %q", rows)
+	if note := find("Permission changes take effect on the next turn."); note != find("Manage Bits Permissions")+2 || strings.TrimSpace(strings.Trim(rows[note-1], "│")) != "" {
+		t.Fatalf("timing note needs one blank row after the title: %q", rows)
 	}
 	for _, pair := range [][2]string{{"Permission changes take effect on the next turn.", "Ask for Approval"}, {"workspace", "Full Access"}} {
 		start, end := find(pair[0]), find(pair[1])
@@ -434,12 +434,17 @@ func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
 	if !strings.Contains(view, m.styles.Panel.Title.Render("Manage Bits Permissions")) {
 		t.Fatal("picker title does not use the resume title style")
 	}
+	helper := "Permission changes take effect on the next turn."
+	inner := min(100, m.width-m.editor.ContentOffset()) - m.styles.Editor.MenuFrame.GetHorizontalFrameSize() - 2
+	helper += strings.Repeat(" ", max(0, inner-ansi.StringWidth(helper)))
+	if !strings.Contains(view, m.styles.Editor.MenuDetail.Render(helper)) {
+		t.Fatal("timing note does not use the tertiary text color")
+	}
 	selectedLabel := "› Full Access (current)"
 	selectedLabel += strings.Repeat(" ", max(0, permissionLabelWidth()-ansi.StringWidth(selectedLabel)))
 	if !strings.Contains(view, m.styles.Selector.Selected.Render(selectedLabel)) {
 		t.Fatal("selected mode does not use the resume selected title style")
 	}
-	inner := min(100, m.width-m.editor.ContentOffset()) - m.styles.Editor.MenuFrame.GetHorizontalFrameSize() - 2
 	leftWidth := permissionLabelWidth()
 	detailWidth := inner - leftWidth - 2
 	selectedDetail := wrapPermissionDetail(permissionOptionDetails[1], detailWidth)[0]
