@@ -181,11 +181,12 @@ func (m *Model) permissionsView() string {
 		value = ansi.Truncate(value, inner, "…")
 		return rowStyle.Render(value + strings.Repeat(" ", max(0, inner-ansi.StringWidth(value))))
 	}
-	header := "Permissions"
+	header := "Manage Bits Permissions"
 	if m.permissionConfirm {
 		header = "Full Access"
 	}
 	closeHint := "ESC x"
+	header = ansi.Truncate(header, max(1, inner-ansi.StringWidth(closeHint)-1), "…")
 	headerGap := strings.Repeat(" ", max(1, inner-ansi.StringWidth(header)-ansi.StringWidth(closeHint)))
 	rows := []string{panel.Title.Render(header) + headerGap + panel.Dismiss.Render(closeHint)}
 	if m.permissionsCompact() {

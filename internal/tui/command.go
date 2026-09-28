@@ -100,7 +100,7 @@ var commandDefinitions = []commandDefinition{
 		id:               commandPermissions,
 		name:             "permissions",
 		activeTurnPolicy: commandAllowedDuringTurn,
-		description:      "show or switch the permissions mode",
+		description:      "choose what Bits is allowed to do",
 	},
 }
 

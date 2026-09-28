@@ -357,7 +357,7 @@ func TestPermissionsPickerOverlaysConversation(t *testing.T) {
 		t.Fatal("picker lacks top-right Escape hint")
 	}
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "draft message remains visible") || !strings.Contains(view, "Permissions") {
+	if !strings.Contains(view, "draft message remains visible") || !strings.Contains(view, "Manage Bits Permissions") {
 		t.Fatalf("picker replaced the conversation view: %q", view)
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -380,7 +380,7 @@ func TestPermissionsPickerSectionSpacing(t *testing.T) {
 		return -1
 	}
 	for _, pair := range [][2]string{
-		{"Permissions", "Ask for Approval"},
+		{"Manage Bits Permissions", "Ask for Approval"},
 		{"workspace", "Full Access"},
 	} {
 		start, end := find(pair[0]), find(pair[1])
@@ -431,7 +431,7 @@ func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
 	_, _ = m.dispatchCommand("permissions", "")
 	view := m.permissionsView()
-	if !strings.Contains(view, m.styles.Panel.Title.Render("Permissions")) {
+	if !strings.Contains(view, m.styles.Panel.Title.Render("Manage Bits Permissions")) {
 		t.Fatal("picker title does not use the resume title style")
 	}
 	selectedLabel := "› Full Access (current)"
