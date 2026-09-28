@@ -114,9 +114,16 @@ func (s *selection) beginGesture(frame selectionFrame, scope selectionScope, x, 
 	s.edge = s.edgeForPointer(s.pointer.Y, transcriptHeight)
 }
 
-func (s *selection) beginClick(frame selectionFrame, scope selectionScope, x, y, transcriptHeight, height int, now time.Time) {
+func (s *selection) beginClick(frame selectionFrame, scope selectionScope, x, y, transcriptHeight, height int, onControl bool, now time.Time) {
 	point := frame.point(x, y)
 	s.clickPoint = point
+	if onControl {
+		// A control starts a normal gesture so dragging can still select text,
+		// but repeated presses must not become word or line selections.
+		s.clicks.reset()
+		s.beginGesture(frame, scope, x, y, transcriptHeight, height)
+		return
+	}
 	clickCount := s.clicks.next(now, point, scope)
 	s.scope = scope
 	s.pointer = image.Pt(x, y)

@@ -450,7 +450,7 @@ func (m *Model) beginSelection(msg tea.MouseClickMsg) tea.Cmd {
 	transcriptHeight := m.list.Height()
 	scope := selectionScopeAt(msg.Y, transcriptHeight)
 	frame := m.visibleSelectionFrame(scope)
-	m.selection.beginClick(frame, scope, msg.X, msg.Y, transcriptHeight, m.height, time.Now())
+	m.selection.beginClick(frame, scope, msg.X, msg.Y, transcriptHeight, m.height, m.hasPendingAccordionToggle, time.Now())
 	return nil
 }
 
