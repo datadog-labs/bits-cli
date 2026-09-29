@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -11,6 +12,7 @@ import (
 )
 
 type toolUISession struct {
+	callID    string
 	component chat.ToolInteraction
 	ctx       context.Context
 	done      chan struct{}
@@ -30,7 +32,7 @@ func (h *ToolUI) Interact(ctx context.Context, call agent.ToolCall) (agent.ToolR
 	if !ok {
 		return agent.ToolResult{}, fmt.Errorf("no interactive UI for tool %q", call.Name)
 	}
-	session := &toolUISession{component: component, ctx: ctx, done: make(chan struct{})}
+	session := &toolUISession{callID: call.ID, component: component, ctx: ctx, done: make(chan struct{})}
 	select {
 	case h.requests <- session:
 	case <-ctx.Done():
@@ -70,15 +72,23 @@ func (m *Model) activateToolUI(session *toolUISession) {
 	m.layoutTranscript()
 }
 
+// nextToolUI shows the earliest queued call in transcript order: tools of one
+// batch run concurrently, so arrival order is up to the scheduler.
 func (m *Model) nextToolUI() {
 	m.activeToolUI = nil
-	for len(m.queuedToolUIs) > 0 {
-		session := m.queuedToolUIs[0]
-		m.queuedToolUIs = m.queuedToolUIs[1:]
-		if session.ctx.Err() == nil {
-			m.activeToolUI = session
-			break
+	m.queuedToolUIs = slices.DeleteFunc(m.queuedToolUIs, func(s *toolUISession) bool { return s.ctx.Err() != nil })
+	if len(m.queuedToolUIs) > 0 {
+		position := func(s *toolUISession) int {
+			return slices.IndexFunc(m.transcript.Blocks, func(b agent.Block) bool { return b.ToolCallID() == s.callID })
 		}
+		next := 0
+		for i, session := range m.queuedToolUIs {
+			if position(session) < position(m.queuedToolUIs[next]) {
+				next = i
+			}
+		}
+		m.activeToolUI = m.queuedToolUIs[next]
+		m.queuedToolUIs = slices.Delete(m.queuedToolUIs, next, next+1)
 	}
 	m.layoutTranscript()
 }

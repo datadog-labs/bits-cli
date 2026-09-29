@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -210,34 +211,41 @@ func TestQuestionsUnansweredDismissal(t *testing.T) {
 }
 
 func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
-	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 2)
-	waitQuestions(t, m)
-	// Cancelling one call must not strand the other, regardless of worker order.
-	m.engine.CancelTool("question-0")
-	cancelled := false
-	for !cancelled && m.turnEvents != nil {
+	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 3)
+	for m.activeToolUI == nil || len(m.queuedToolUIs) < 2 {
 		pumpToolUI(t, m)
-		for _, block := range m.transcript.Blocks {
-			if block.ToolCallID() == "question-0" && block.Tool.Cancelled {
-				cancelled = true
-			}
-		}
 	}
-	if !cancelled {
-		t.Fatal("per-tool cancellation was not applied")
+	for len(m.turnEvents) > 0 {
+		pumpToolUI(t, m)
 	}
+	// Arrival order is up to the scheduler; queued forms follow the transcript.
+	slices.Reverse(m.queuedToolUIs)
+	remaining := []string{m.queuedToolUIs[0].callID, m.queuedToolUIs[1].callID}
+	slices.Sort(remaining)
+	questionKey(m, tea.KeyEscape, 0)
+	if m.activeToolUI == nil || m.activeToolUI.callID != remaining[0] {
+		t.Fatalf("next form is not the earliest pending call %s", remaining[0])
+	}
+	// Cancelling a queued call must drop its form without stranding the others.
+	m.engine.CancelTool(remaining[1])
 	for m.turnEvents != nil {
 		if m.activeToolUI != nil {
+			if m.activeToolUI.callID == remaining[1] {
+				t.Fatal("cancelled call showed its form")
+			}
 			questionKey(m, tea.KeyEscape, 0)
 		}
 		pumpToolUI(t, m)
 	}
-	if backend.calls != 2 || len(backend.responses) != 2 {
+	if backend.calls != 2 || len(backend.responses) != 3 {
 		t.Fatalf("calls=%d responses=%+v", backend.calls, backend.responses)
 	}
 	for i, response := range backend.responses {
 		if response.ToolCallID != fmt.Sprintf("question-%d", i) {
 			t.Fatal("response order changed")
+		}
+		if cancelled := response.ToolCallID == remaining[1]; cancelled != strings.Contains(response.Metadata.Output, "cancelled") {
+			t.Fatalf("response %s = %q", response.ToolCallID, response.Metadata.Output)
 		}
 	}
 }
