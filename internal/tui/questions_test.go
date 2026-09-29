@@ -60,7 +60,7 @@ func (b *questionBackend) Send(_ context.Context, message any, opts assistant.Se
 func startQuestions(t *testing.T, mode agent.PermissionsMode, input string, count int) (*Model, *questionBackend) {
 	t.Helper()
 	backend := &questionBackend{t: t, input: input, count: count}
-	host := NewToolUI()
+	host := tools.NewUI()
 	set, err := agent.NewToolSet(mode, tools.NewAskUserQuestionTool(host))
 	if err != nil {
 		t.Fatal(err)
@@ -82,8 +82,8 @@ func startQuestions(t *testing.T, mode agent.PermissionsMode, input string, coun
 func pumpToolUI(t *testing.T, m *Model) {
 	t.Helper()
 	select {
-	case session := <-m.toolUI.requests:
-		_, _ = m.Update(toolUIOpenedMsg{session: session})
+	case request := <-m.toolUI.Requests():
+		_, _ = m.Update(toolUIOpenedMsg{request: request})
 	case ev, ok := <-m.turnEvents:
 		if ok {
 			_, _ = m.Update(turnEventMsg{generation: m.turnGen, ev: ev})
@@ -220,17 +220,17 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	}
 	// Arrival order is up to the scheduler; queued forms follow the transcript.
 	slices.Reverse(m.queuedToolUIs)
-	remaining := []string{m.queuedToolUIs[0].callID, m.queuedToolUIs[1].callID}
+	remaining := []string{m.queuedToolUIs[0].request.Call.ID, m.queuedToolUIs[1].request.Call.ID}
 	slices.Sort(remaining)
 	questionKey(m, tea.KeyEscape, 0)
-	if m.activeToolUI == nil || m.activeToolUI.callID != remaining[0] {
+	if m.activeToolUI == nil || m.activeToolUI.request.Call.ID != remaining[0] {
 		t.Fatalf("next form is not the earliest pending call %s", remaining[0])
 	}
 	// Cancelling a queued call must drop its form without stranding the others.
 	m.engine.CancelTool(remaining[1])
 	for m.turnEvents != nil {
 		if m.activeToolUI != nil {
-			if m.activeToolUI.callID == remaining[1] {
+			if m.activeToolUI.request.Call.ID == remaining[1] {
 				t.Fatal("cancelled call showed its form")
 			}
 			questionKey(m, tea.KeyEscape, 0)
@@ -356,7 +356,7 @@ func newResumedQuestionModel(t *testing.T, startup bool) (*Model, *resumedQuesti
 	backend.messages = append([]assistant.Message{user}, backend.messages...)
 	backend.messages = append(backend.messages, assistant.AssistantMessage("second", second), assistant.Message{Results: &assistant.Results{}}, assistant.AssistantMessage("end", assistant.Content{Type: assistant.ContentTurnStatus, TurnStatus: &assistant.TurnStatusPayload{Status: "ended"}}), assistant.AssistantMessage("internal", assistant.Content{Type: assistant.ContentProviderCompaction, Compaction: &assistant.CompactionPayload{Summary: "bookkeeping"}}))
 	backend.wantContext = &assistant.AssistantContext{Entities: []assistant.ContextEntity{{Type: assistant.EntityService, ID: "api"}}, Resources: []json.RawMessage{json.RawMessage(`{"name":"dashboard"}`)}}
-	host := NewToolUI()
+	host := tools.NewUI()
 	set, err := agent.NewToolSet(agent.ModeManual, tools.NewAskUserQuestionTool(host))
 	if err != nil {
 		t.Fatal(err)

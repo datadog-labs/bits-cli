@@ -12,6 +12,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/browser"
+	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	"github.com/DataDog/bits-cli/internal/tui/components"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
@@ -50,7 +51,7 @@ type EntitySearcher interface {
 
 type Config struct {
 	Tools          *agent.ToolSet
-	ToolUI         *ToolUI
+	ToolUI         *tools.UI
 	Version        string
 	Workspace      *workspace.Workspace
 	EntitySearcher EntitySearcher
@@ -124,7 +125,7 @@ type Model struct {
 	logoutGeneration uint64
 	loggedOut        bool
 
-	toolUI            *ToolUI
+	toolUI            *tools.UI
 	activeToolUI      *toolUISession
 	queuedToolUIs     []*toolUISession
 	pendingApprovals  []agent.Block

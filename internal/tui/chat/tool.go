@@ -79,7 +79,9 @@ type ToolInteraction interface {
 	Height() int
 	MinSize() (width, height int)
 	SetSize(width, height int, theme styles.Theme)
-	Result() (agent.ToolResult, bool) // ok once the user is done
+	// Result reports the user's answer once they are done. The tool, not the
+	// UI, turns it into the model-visible result.
+	Result() (any, bool)
 }
 
 // NewToolInteraction builds the interactive UI registered for a client tool.
@@ -1135,10 +1137,7 @@ func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, width int, s
 	return strings.Join(lines, "\n")
 }
 
-type questionInteraction struct {
-	*components.Questionnaire
-	input spec.AskUserQuestionInput
-}
+type questionInteraction struct{ *components.Questionnaire }
 
 func newQuestionInteraction(call agent.ToolCall) ToolInteraction {
 	input, err := spec.ParseQuestions(call.Input)
@@ -1152,21 +1151,13 @@ func newQuestionInteraction(call agent.ToolCall) ToolInteraction {
 			questions[i].Options = append(questions[i].Options, components.Option{Label: option.Label, Description: option.Description})
 		}
 	}
-	return questionInteraction{Questionnaire: components.NewQuestionnaire(questions), input: input}
+	return questionInteraction{components.NewQuestionnaire(questions)}
 }
 
-func (q questionInteraction) Result() (agent.ToolResult, bool) {
+func (q questionInteraction) Result() (any, bool) {
 	answers, dismissed, done := q.Answers()
 	if !done {
-		return agent.ToolResult{}, false
+		return nil, false
 	}
-	result, err := q.input.FormatAnswers(spec.QuestionAnswers{Answers: answers, Dismissed: dismissed})
-	if err != nil {
-		return agent.ToolResult{Title: "Questions", Output: "invalid question answers: " + err.Error(), IsError: true}, true
-	}
-	output, err := json.Marshal(result)
-	if err != nil {
-		return agent.ToolResult{Title: "Questions", Output: err.Error(), IsError: true}, true
-	}
-	return agent.ToolResult{Title: "Questions", Output: string(output), Display: result.Message, IsError: !result.Success}, true
+	return spec.QuestionAnswers{Answers: answers, Dismissed: dismissed}, true
 }

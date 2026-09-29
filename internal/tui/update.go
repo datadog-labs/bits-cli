@@ -265,7 +265,7 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case toolUIOpenedMsg:
-		m.activateToolUI(msg.session)
+		m.activateToolUI(msg.request)
 		return m, waitToolUI(m.toolUI)
 
 	case tea.WindowSizeMsg:

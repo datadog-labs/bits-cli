@@ -1,67 +1,44 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"slices"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
+// toolUISession pairs a pending tool request with the component answering it.
 type toolUISession struct {
-	callID    string
+	request   *tools.Request
 	component chat.ToolInteraction
-	ctx       context.Context
-	done      chan struct{}
 }
 
-// ToolUI carries interactive tool calls to the model's event loop.
-type ToolUI struct {
-	requests chan *toolUISession
-}
+func (s *toolUISession) cancelled() bool { return s.request.Context().Err() != nil }
 
-func NewToolUI() *ToolUI {
-	return &ToolUI{requests: make(chan *toolUISession)}
-}
+type toolUIOpenedMsg struct{ request *tools.Request }
 
-func (h *ToolUI) Interact(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
-	component, ok := chat.NewToolInteraction(call)
-	if !ok {
-		return agent.ToolResult{}, fmt.Errorf("no interactive UI for tool %q", call.Name)
-	}
-	session := &toolUISession{callID: call.ID, component: component, ctx: ctx, done: make(chan struct{})}
-	select {
-	case h.requests <- session:
-	case <-ctx.Done():
-		return agent.ToolResult{}, ctx.Err()
-	}
-	select {
-	case <-session.done:
-		// The event loop no longer touches the component once done is closed.
-		result, _ := component.Result()
-		return result, nil
-	case <-ctx.Done():
-		return agent.ToolResult{}, ctx.Err()
-	}
-}
-
-type toolUIOpenedMsg struct{ session *toolUISession }
-
-func waitToolUI(host *ToolUI) tea.Cmd {
-	if host == nil {
+func waitToolUI(ui *tools.UI) tea.Cmd {
+	if ui == nil {
 		return nil
 	}
-	return func() tea.Msg { return toolUIOpenedMsg{session: <-host.requests} }
+	return func() tea.Msg { return toolUIOpenedMsg{request: <-ui.Requests()} }
 }
 
-func (m *Model) activateToolUI(session *toolUISession) {
+func (m *Model) activateToolUI(request *tools.Request) {
 	// A tool may present before a requested stop reaches its context.
-	if session.ctx.Err() != nil || m.cancelRequested || m.stoppingTools {
+	if request.Context().Err() != nil || m.cancelRequested || m.stoppingTools {
 		return
 	}
+	component, ok := chat.NewToolInteraction(request.Call)
+	if !ok {
+		request.Respond(nil, fmt.Errorf("no interactive UI for tool %q", request.Call.Name))
+		return
+	}
+	session := &toolUISession{request: request, component: component}
 	if m.activeToolUI != nil {
 		m.queuedToolUIs = append(m.queuedToolUIs, session)
 		return
@@ -76,10 +53,10 @@ func (m *Model) activateToolUI(session *toolUISession) {
 // batch run concurrently, so arrival order is up to the scheduler.
 func (m *Model) nextToolUI() {
 	m.activeToolUI = nil
-	m.queuedToolUIs = slices.DeleteFunc(m.queuedToolUIs, func(s *toolUISession) bool { return s.ctx.Err() != nil })
+	m.queuedToolUIs = slices.DeleteFunc(m.queuedToolUIs, func(s *toolUISession) bool { return s.cancelled() })
 	if len(m.queuedToolUIs) > 0 {
 		position := func(s *toolUISession) int {
-			return slices.IndexFunc(m.transcript.Blocks, func(b agent.Block) bool { return b.ToolCallID() == s.callID })
+			return slices.IndexFunc(m.transcript.Blocks, func(b agent.Block) bool { return b.ToolCallID() == s.request.Call.ID })
 		}
 		next := 0
 		for i, session := range m.queuedToolUIs {
@@ -100,7 +77,7 @@ func (m *Model) clearToolUIs() {
 }
 
 func (m *Model) reconcileToolUI() {
-	if m.activeToolUI != nil && m.activeToolUI.ctx.Err() != nil {
+	if m.activeToolUI != nil && m.activeToolUI.cancelled() {
 		m.nextToolUI()
 	}
 }
@@ -132,8 +109,8 @@ func (m *Model) updateToolUI(msg tea.Msg) tea.Cmd {
 
 func (m *Model) forwardToolUI(msg tea.Msg) tea.Cmd {
 	cmd := m.activeToolUI.component.Update(msg)
-	if _, done := m.activeToolUI.component.Result(); done {
-		close(m.activeToolUI.done)
+	if answer, done := m.activeToolUI.component.Result(); done {
+		m.activeToolUI.request.Respond(answer, nil)
 		m.nextToolUI()
 	} else {
 		m.layoutTranscript()
