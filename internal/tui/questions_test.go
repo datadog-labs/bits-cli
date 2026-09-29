@@ -3,9 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/agent/fake"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tools/spec"
@@ -257,57 +256,23 @@ func TestQuestionsWheelTargetsTheHoveredPane(t *testing.T) {
 	t.Fatal("scrolled option was not visible")
 }
 
-type resumedQuestionBackend struct {
-	messages    []assistant.Message
-	answers     chan []assistant.ClientToolResponse
-	wantContext *assistant.AssistantContext
-}
-
-func (b *resumedQuestionBackend) Send(_ context.Context, message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
-	responses, ok := message.([]assistant.ClientToolResponse)
-	if !ok {
-		return "", errors.New("resumed question sent a new user message")
-	}
-	if opts.ConversationID != resumeConversationID {
-		return "", errors.New("resumed question used a different conversation")
-	}
-	if !reflect.DeepEqual(opts.Context, b.wantContext) {
-		return "", errors.New("resumed turn lost its context")
-	}
-	for _, r := range responses {
-		result := assistant.ToolResultContent(r.ToolCallID, r.Metadata.Name, r.Status, r.Metadata.Output)
-		result.Type = assistant.ContentClientToolResponse
-		b.messages = append(b.messages, assistant.Message{Role: "user", MessageID: r.ToolCallID + "-result", Content: result})
-	}
-	b.answers <- responses
-	return resumeConversationID, emitMessages(emit, assistant.AssistantMessage("continued", assistant.TextContent("Continuing after the answer.")))
-}
-
-func (b *resumedQuestionBackend) ConversationHistory(context.Context, assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
-	return history(b.messages...), nil
-}
-
-func (b *resumedQuestionBackend) UserConversations(context.Context) (*assistant.UserConversationsResponse, error) {
-	return summaries(assistant.ConversationSummary{ConversationID: resumeConversationID, Title: "Questions"}), nil
-}
-
-// newResumedQuestionModel opens a conversation whose last turn left two
-// questions unanswered. A nil backend starts a new saved conversation.
-func newResumedQuestionModel(t *testing.T, backend *resumedQuestionBackend, startup bool) (*Model, *resumedQuestionBackend) {
+// pushQuestions pushes a conversation an earlier session left with two
+// unanswered questions.
+func pushQuestions(t *testing.T) (*fake.Fake, string) {
 	t.Helper()
-	if backend == nil {
-		user := assistant.Message{MessageID: "original-user", Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api"}]`), ContextResources: json.RawMessage(`[{"name":"dashboard"}]`)}
-		backend = &resumedQuestionBackend{
-			messages:    []assistant.Message{user},
-			answers:     make(chan []assistant.ClientToolResponse, 1),
-			wantContext: &assistant.AssistantContext{Entities: []assistant.ContextEntity{{Type: assistant.EntityService, ID: "api"}}, Resources: []json.RawMessage{json.RawMessage(`{"name":"dashboard"}`)}},
-		}
-		for _, id := range []string{"resumed-question", "second-question"} {
-			call := assistant.ToolCallContent(id, spec.AskUserQuestion, questionInput)
-			call.Type = assistant.ContentClientToolCall
-			backend.messages = append(backend.messages, assistant.AssistantMessage(id+"-message", call))
-		}
+	f := &fake.Fake{ContinueDir: t.TempDir()}
+	script := fmt.Sprintf(`call([("ask_user_question", %q), ("ask_user_question", %q)]); say("Continuing after the answer.")`, questionInput, questionInput)
+	id, err := f.PushConversation(t.Context(), "Questions", script)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return f, id
+}
+
+// newResumedQuestionModel opens conversation id at startup, or idle so the
+// test can pick it with /resume.
+func newResumedQuestionModel(t *testing.T, f *fake.Fake, id string, startup bool) *Model {
+	t.Helper()
 	host := tools.NewUI()
 	set, err := agent.NewToolSet(agent.ModeManual, tools.NewAskUserQuestionTool(host))
 	if err != nil {
@@ -315,9 +280,9 @@ func newResumedQuestionModel(t *testing.T, backend *resumedQuestionBackend, star
 	}
 	opts := assistant.SendOptions{}
 	if startup {
-		opts.ConversationID = resumeConversationID
+		opts.ConversationID = id
 	}
-	m := New(agent.New(backend, opts), Config{Tools: set, ToolUI: host})
+	m := New(agent.New(f, opts), Config{Tools: set, ToolUI: host})
 	m.resize(100, 32)
 	if startup {
 		_ = m.initChat()
@@ -328,7 +293,31 @@ func newResumedQuestionModel(t *testing.T, backend *resumedQuestionBackend, star
 			drainConversationRemote(t, m)
 		}
 	})
-	return m, backend
+	return m
+}
+
+// continued reports whether the assistant answered after the questions. The
+// user block holds the same text as script source.
+func continued(m *Model) bool {
+	return slices.ContainsFunc(m.transcript.Blocks, func(b agent.Block) bool {
+		return b.Role == assistant.RoleAssistant && b.Markdown != nil && strings.Contains(b.Markdown.Content, "Continuing after the answer.")
+	})
+}
+
+// questionResponses returns the tool responses the conversation recorded.
+func questionResponses(t *testing.T, f *fake.Fake, id string) []assistant.Content {
+	t.Helper()
+	history, err := f.ConversationHistory(t.Context(), assistant.ConversationHistoryInput{ConversationID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var responses []assistant.Content
+	for _, message := range history.Data.Attributes.Messages {
+		if message.Content.Type == assistant.ContentClientToolResponse {
+			responses = append(responses, message.Content)
+		}
+	}
+	return responses
 }
 
 func TestPendingQuestionRestoresOnStartupAndResume(t *testing.T) {
@@ -338,18 +327,19 @@ func TestPendingQuestionRestoresOnStartupAndResume(t *testing.T) {
 			name = "startup restore"
 		}
 		t.Run(name, func(t *testing.T) {
-			m, backend := newResumedQuestionModel(t, nil, startup)
+			f, id := pushQuestions(t)
+			m := newResumedQuestionModel(t, f, id, startup)
 			if !startup {
 				cmd := m.openConversationPicker()
 				_, _ = m.Update(runResumeCmd(t, cmd))
-				_, cmd = m.Update(conversationview.SelectedMsg{Conversation: assistant.ConversationSummary{ConversationID: resumeConversationID}})
+				_, cmd = m.Update(conversationview.SelectedMsg{Conversation: assistant.ConversationSummary{ConversationID: id}})
 				_, _ = m.Update(runResumeCmd(t, cmd))
 				if m.turnEvents == nil {
 					t.Fatalf("resume failed: %+v", m.notice)
 				}
 			}
 			waitQuestions(t, m)
-			if len(backend.answers) != 0 {
+			if len(questionResponses(t, f, id)) != 0 {
 				t.Fatal("sent a response before the user answered")
 			}
 			for range 2 {
@@ -359,12 +349,12 @@ func TestPendingQuestionRestoresOnStartupAndResume(t *testing.T) {
 				questionKey(m, tea.KeyEnter, 0) // submit review
 			}
 			drainConversationRemote(t, m)
-			if len(backend.answers) != 1 {
-				t.Fatalf("backend received %d answer batches, want one", len(backend.answers))
-			}
-			responses := <-backend.answers
-			if len(responses) != 2 || responses[0].ToolCallID != "resumed-question" || responses[1].ToolCallID != "second-question" {
+			responses := questionResponses(t, f, id)
+			if len(responses) != 2 || responses[0].Tool.Status != string(assistant.ToolStatusSuccess) || responses[1].Tool.Status != string(assistant.ToolStatusSuccess) {
 				t.Fatalf("tool responses = %+v", responses)
+			}
+			if !continued(m) {
+				t.Fatal("the pushed turn did not continue")
 			}
 			if m.engine.CanResumeTools(m.tools) || m.activeToolUI != nil {
 				t.Fatal("question stayed pending after continuation")
@@ -383,27 +373,25 @@ func TestQuestionExitAndStopHaveDifferentPersistedOutcomes(t *testing.T) {
 		{"stop persists cancelled batch", func(m *Model) { questionKey(m, 'x', tea.ModCtrl) }, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m, backend := newResumedQuestionModel(t, nil, true)
+			f, id := pushQuestions(t)
+			m := newResumedQuestionModel(t, f, id, true)
 			waitQuestions(t, m)
 			tc.act(m)
 			drainConversationRemote(t, m)
-			var responses []assistant.ClientToolResponse
-			if len(backend.answers) > 0 {
-				responses = <-backend.answers
-			}
+			responses := questionResponses(t, f, id)
 			if len(responses) != tc.cancelled {
 				t.Fatalf("persisted responses = %+v", responses)
 			}
 			for _, r := range responses {
-				if r.Status != assistant.ToolStatusError {
+				if r.Tool.Status != string(assistant.ToolStatusError) {
 					t.Fatalf("response = %+v", r)
 				}
 			}
-			if hasTextBlock(m.transcript.Blocks, "Continuing after the answer.") {
+			if continued(m) {
 				t.Fatal("ended turn displayed a continuation")
 			}
 
-			reopened, _ := newResumedQuestionModel(t, backend, true)
+			reopened := newResumedQuestionModel(t, f, id, true)
 			if tc.cancelled > 0 {
 				drainConversationRemote(t, reopened)
 				if reopened.activeToolUI != nil || reopened.engine.CanResumeTools(reopened.tools) {

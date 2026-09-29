@@ -51,14 +51,32 @@ func TestContinuationHistoryBoundaries(t *testing.T) {
 	}
 }
 
+// optionsBackend records the options of the last Send.
+type optionsBackend struct{ opts assistant.SendOptions }
+
+func (b *optionsBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
+	b.opts = opts
+	return "conversation", nil
+}
+
 func TestContinuationKeepsOriginalTurnContext(t *testing.T) {
 	user := assistant.Message{Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api","label":"API"}]`), ContextResources: json.RawMessage(`[{"name":"dashboard","value":42}]`)}
-	c := continuationFromHistory([]assistant.Message{user, savedCall("one", "input")})
-	if c.err != nil || c.context == nil || c.context.Entities[0].ID != "api" || len(c.context.Resources) != 1 {
-		t.Fatalf("context = %+v", c)
+	set, err := NewToolSet(ModeSkipPermissions, Tool{
+		Definition: assistant.ClientTool{Name: "input"}, Resumable: true,
+		Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &optionsBackend{}
+	e := New(backend, assistant.SendOptions{ConversationID: "conversation"})
+	e.continuation = continuationFromHistory([]assistant.Message{user, savedCall("one", "input")})
+	drain(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
+	if got := backend.opts.Context; got == nil || got.Entities[0].ID != "api" || len(got.Resources) != 1 {
+		t.Fatalf("resumed turn context = %+v", got)
 	}
 	next := assistant.Message{Role: "user", Content: assistant.TextContent("new turn")}
-	c = continuationFromHistory([]assistant.Message{user, savedCall("one", "input"), next, savedCall("two", "input")})
+	c := continuationFromHistory([]assistant.Message{user, savedCall("one", "input"), next, savedCall("two", "input")})
 	if c.context != nil {
 		t.Fatal("context leaked across user turns")
 	}
