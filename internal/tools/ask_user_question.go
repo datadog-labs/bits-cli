@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 
 	"github.com/DataDog/bits-cli/internal/agent"
@@ -12,7 +11,7 @@ import (
 
 // NewAskUserQuestionTool is registered only by the interactive CLI. It has no
 // approval policy: permission grants cannot answer a question for the user.
-func NewAskUserQuestionTool() agent.Tool {
+func NewAskUserQuestionTool(ui Interactor) agent.Tool {
 	return agent.Tool{
 		Resumable: true,
 		Definition: assistant.ClientTool{
@@ -43,33 +42,22 @@ func NewAskUserQuestionTool() agent.Tool {
 				},
 			},
 		},
-		Handler: askUserQuestion,
+		Handler: func(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
+			return askUserQuestion(ctx, call, ui)
+		},
 	}
 }
 
-func askUserQuestion(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
-	input, err := spec.ParseQuestions(call.Input)
-	if err != nil {
+func askUserQuestion(ctx context.Context, call agent.ToolCall, ui Interactor) (agent.ToolResult, error) {
+	if _, err := spec.ParseQuestions(call.Input); err != nil {
 		return errorResult("invalid ask_user_question arguments: %v", err), nil
 	}
-	answer, err := agent.RequestInput(ctx, input)
+	result, err := ui.Interact(ctx, call)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return agent.ToolResult{Title: "Cancelled", Output: "User input was cancelled without answering.", IsError: true, Cancelled: true}, nil
 		}
 		return errorResult("ask_user_question: %v", err), nil
 	}
-	answers, ok := answer.(spec.QuestionAnswers)
-	if !ok {
-		return errorResult("invalid question answers"), nil
-	}
-	result, err := input.FormatAnswers(answers)
-	if err != nil {
-		return errorResult("invalid question answers: %v", err), nil
-	}
-	output, err := json.Marshal(result)
-	if err != nil {
-		return agent.ToolResult{}, err
-	}
-	return agent.ToolResult{Title: "Questions", Output: string(output), Display: result.Message, IsError: !result.Success}, nil
+	return result, nil
 }

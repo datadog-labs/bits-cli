@@ -1,4 +1,4 @@
-def demo():
+def ask_user_question():
     r = call("ask_user_question", {"questions": [
         {"question": "Which region should we investigate?", "options": [
             {"label": "US (Recommended)", "description": "Start with the US production environment."},

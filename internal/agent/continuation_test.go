@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -85,9 +86,60 @@ func TestResumeRequiresEveryHandlerToOptIn(t *testing.T) {
 		if e.CanResumeTools(set) {
 			t.Fatalf("batch containing %s is resumable", name)
 		}
-		events := drain(e.ResumePendingTools(t.Context(), TurnInput{Tools: set, Interactive: true}))
+		events := drain(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
 		if len(events) != 1 || !errors.Is(events[0].Err, ErrNoPendingTools) {
 			t.Fatalf("events = %+v", events)
 		}
+	}
+}
+
+func TestCancelledClientToolPublishesTerminalSnapshot(t *testing.T) {
+	for _, resumed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("resumed=%t", resumed), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			started, release := make(chan struct{}), make(chan struct{})
+			defer close(release)
+			set, err := NewToolSet(ModeManual, Tool{
+				Definition: assistant.ClientTool{Name: "input"}, Resumable: true,
+				Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+					close(started)
+					<-ctx.Done()
+					// Keep worker results out of the way so teardown itself must
+					// publish the final state through the public event stream.
+					<-release
+					return cancelledResult(), nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := savedCall("call-input", "input")
+			e := New(&scriptBackend{msgs: []assistant.Message{call}, convID: "conversation"}, assistant.SendOptions{ConversationID: "conversation"})
+			var events <-chan Event
+			if resumed {
+				e.transcript.AppendMessage(call)
+				e.continuation = continuationFromHistory([]assistant.Message{call})
+				events = e.ResumePendingTools(ctx, TurnInput{Tools: set})
+			} else {
+				events = e.StartTurn(ctx, TurnInput{Message: "ask", Tools: set})
+			}
+			<-started
+			cancel()
+			var last *ToolBlock
+			for event := range events {
+				if event.Kind != EventTranscript {
+					continue
+				}
+				for _, b := range event.Transcript.Blocks {
+					if b.ToolCallID() == "call-input" {
+						last = b.Tool
+					}
+				}
+			}
+			if last == nil || !last.Cancelled || last.Status != ToolError {
+				t.Fatalf("last delivered tool = %+v, want cancelled", last)
+			}
+		})
 	}
 }

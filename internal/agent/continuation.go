@@ -34,7 +34,7 @@ func (e *Engine) CanResumeTools(tools *ToolSet) bool {
 // ResumePendingTools restores safe handlers and sends their responses on the
 // original conversation, using the original user turn's context.
 func (e *Engine) ResumePendingTools(ctx context.Context, in TurnInput) <-chan Event {
-	if !in.Interactive || !e.CanResumeTools(in.Tools) {
+	if !e.CanResumeTools(in.Tools) {
 		return eventResult(Event{Kind: EventError, Err: ErrNoPendingTools})
 	}
 	if e.continuation.err != nil {

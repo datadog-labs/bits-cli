@@ -229,8 +229,6 @@ func (e *Engine) SearchEntities(ctx context.Context, in assistant.SearchEntities
 type TurnInput struct {
 	Message string
 	Tools   *ToolSet
-	// Interactive enables tool requests for explicit user input.
-	Interactive bool
 	// Context belongs to this independent user turn. The engine resends it on
 	// client-tool continuations, but never stores it in its long-lived options.
 	Context *assistant.AssistantContext
@@ -361,10 +359,12 @@ func (e *Engine) run(
 		}
 	}
 	defer func() {
-		if ctx.Err() != nil && e.transcript.CancelUnfinishedTools(turnStart) {
+		if ctx.Err() != nil {
+			e.transcript.CancelUnfinishedTools(turnStart)
 			// Cancellation makes send's context-aware select unavailable, but this
 			// terminal snapshot must not be dropped. It is sent after all queued
-			// events and callers drain the channel after cancellation.
+			// events and callers drain the channel after cancellation. Always flush,
+			// even if a worker completed while cancellation prevented its event send.
 			out <- Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()}
 		}
 		if completion.Err == nil && !completion.Completed && ctx.Err() != nil {
@@ -515,7 +515,7 @@ func (e *Engine) run(
 				return
 			}
 		}
-		toolRound, err := e.runTools(ctx, tools, calls, generation, emit, in.OnDeny, in.Interactive)
+		toolRound, err := e.runTools(ctx, tools, calls, generation, emit, in.OnDeny)
 		if err != nil {
 			completion.Err = err
 			completion.Denied = completion.Denied || toolRound.denied
@@ -789,7 +789,6 @@ func (e *Engine) runTools(
 	generation uint64,
 	send func(Event) bool,
 	onDeny DenyPolicy,
-	interactive bool,
 ) (toolRound, error) {
 	work := make([]pendingTool, len(contents))
 	seen := make(map[string]struct{}, len(contents))
@@ -812,12 +811,6 @@ func (e *Engine) runTools(
 	running := make(map[string]context.CancelFunc)
 	resolved := make(map[string]bool, len(work))
 	results := make(chan toolDone, len(work))
-	type toolInput struct {
-		id      string
-		request *InputRequest
-	}
-	inputs := make(chan toolInput, len(work))
-	awaitingInput := make(map[string]*InputRequest)
 	outstanding := len(work)
 	denied := false
 	stopRequested := false
@@ -827,7 +820,6 @@ func (e *Engine) runTools(
 			return true
 		}
 		resolved[item.call.ID] = true
-		delete(awaitingInput, item.call.ID)
 		outstanding--
 		responses[item.index] = toolResponse(item.call, result)
 		result = tools.NormalizeResult(item.call, result)
@@ -840,16 +832,6 @@ func (e *Engine) runTools(
 	launch := func(item pendingTool, approved bool) bool {
 		toolCtx, cancel := context.WithCancel(ctx)
 		running[item.call.ID] = cancel
-		if interactive {
-			toolCtx = context.WithValue(toolCtx, inputContextKey{}, inputSender(func(request *InputRequest) error {
-				select {
-				case inputs <- toolInput{id: item.call.ID, request: request}:
-					return nil
-				case <-request.ctx.Done():
-					return request.ctx.Err()
-				}
-			}))
-		}
 		if approved {
 			_, updated := e.transcript.MarkToolRunning(item.call.ID)
 			if updated {
@@ -871,27 +853,11 @@ func (e *Engine) runTools(
 			cancel()
 		}
 	}
-	defer func() {
-		cancelRunning()
-		if ctx.Err() != nil {
-			for _, item := range work {
-				if !resolved[item.call.ID] {
-					e.transcript.MarkToolExecuted(item.call.ID, tools.NormalizeResult(item.call, cancelledResult()))
-				}
-			}
-		}
-	}()
-	// stopPendingAfterDenial cancels pending approvals and input requests;
+	defer cancelRunning()
+	// stopPendingAfterDenial answers still-pending approvals as cancelled;
 	// running siblings finish so their real results reach the wire batch.
 	stopPendingAfterDenial := func() bool {
 		for _, ordered := range work {
-			if request := awaitingInput[ordered.call.ID]; request != nil && request.Pending() {
-				running[ordered.call.ID]()
-				delete(running, ordered.call.ID)
-				if !completeTool(ordered, cancelledResult()) {
-					return false
-				}
-			}
 			item, ok := pending[ordered.call.ID]
 			if !ok {
 				continue
@@ -1074,25 +1040,6 @@ func (e *Engine) runTools(
 					cancelRunning()
 					return toolRound{denied: denied}, nil
 				}
-			}
-
-		case input := <-inputs:
-			if resolved[input.id] || !input.request.Pending() {
-				continue
-			}
-			if stopRequested {
-				running[input.id]()
-				delete(running, input.id)
-				if !completeTool(byID[input.id], cancelledResult()) {
-					return toolRound{denied: denied}, nil
-				}
-				continue
-			}
-			awaitingInput[input.id] = input.request
-			e.transcript.MarkAwaitingInput(input.id, input.request)
-			if !send(Event{Kind: EventTranscript, Transcript: e.snapshot()}) {
-				cancelRunning()
-				return toolRound{denied: denied}, nil
 			}
 
 		case done := <-results:

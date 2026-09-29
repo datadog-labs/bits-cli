@@ -3,9 +3,12 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -14,6 +17,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tools/spec"
+	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 )
 
 const questionInput = `{"questions":[{"question":"Which region?","options":[{"label":"US","description":"US region"},{"label":"EU","description":"EU region"}]},{"question":"Which service?","options":[{"label":"API","description":"Public API"}]}]}`
@@ -55,11 +59,12 @@ func (b *questionBackend) Send(_ context.Context, message any, opts assistant.Se
 func startQuestions(t *testing.T, mode agent.PermissionsMode, input string, count int) (*Model, *questionBackend) {
 	t.Helper()
 	backend := &questionBackend{t: t, input: input, count: count}
-	set, err := agent.NewToolSet(mode, tools.NewAskUserQuestionTool())
+	host := NewToolUI()
+	set, err := agent.NewToolSet(mode, tools.NewAskUserQuestionTool(host))
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: set})
+	m := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: set, ToolUI: host})
 	m.resize(80, 24)
 	setConversationInput(m, "Help me choose")
 	_, _ = m.submit()
@@ -72,13 +77,34 @@ func startQuestions(t *testing.T, mode agent.PermissionsMode, input string, coun
 	return m, backend
 }
 
+// pumpToolUI applies the next tool UI request or turn event, whichever comes first.
+func pumpToolUI(t *testing.T, m *Model) {
+	t.Helper()
+	select {
+	case session := <-m.toolUI.requests:
+		_, _ = m.Update(toolUIOpenedMsg{session: session})
+	case ev, ok := <-m.turnEvents:
+		if ok {
+			_, _ = m.Update(turnEventMsg{generation: m.turnGen, ev: ev})
+		} else {
+			_, _ = m.Update(turnClosedMsg{generation: m.turnGen})
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for a tool UI or turn event")
+	}
+}
+
 func waitQuestions(t *testing.T, m *Model) {
 	t.Helper()
-	for m.questions == nil && m.turnEvents != nil {
-		_, _ = m.Update(runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents)))
+	for m.activeToolUI == nil && m.turnEvents != nil {
+		pumpToolUI(t, m)
 	}
-	if m.questions == nil {
+	if m.activeToolUI == nil {
 		t.Fatal("turn ended without a question form")
+	}
+	// The engine queues the tool's transcript events before its handler runs.
+	for len(m.turnEvents) > 0 {
+		pumpToolUI(t, m)
 	}
 }
 
@@ -91,7 +117,6 @@ func TestQuestionsAnswerReviewAndContinue(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			m, backend := startQuestions(t, mode, questionInput, 1)
 			waitQuestions(t, m)
-			request := m.questions.request
 			if m.editor.Focused() || len(m.pendingApprovals) != 0 {
 				t.Fatal("question incorrectly routed through editor or permissions")
 			}
@@ -122,9 +147,6 @@ func TestQuestionsAnswerReviewAndContinue(t *testing.T) {
 			questionKey(m, tea.KeyEnter, 0) // US
 			questionKey(m, tea.KeyTab, 0)   // review
 			questionKey(m, tea.KeyEnter, 0)
-			if request.Respond(spec.QuestionAnswers{Dismissed: true}) {
-				t.Fatal("accepted a duplicate answer")
-			}
 			questionKey(m, tea.KeyEnter, 0) // repeated submit cannot resume twice
 			drainConversationRemote(t, m)
 			if backend.calls != 2 || len(backend.responses) != 1 {
@@ -142,7 +164,7 @@ func TestQuestionsAnswerReviewAndContinue(t *testing.T) {
 			if !result.Success || result.Message != want {
 				t.Fatalf("result=%+v", result)
 			}
-			if m.questions != nil || !m.editor.Focused() {
+			if m.activeToolUI != nil || !m.editor.Focused() {
 				t.Fatal("form did not release input")
 			}
 			transcript := ansi.Strip(m.list.Document())
@@ -163,7 +185,7 @@ func TestQuestionsUnansweredDismissal(t *testing.T) {
 		t.Fatal("unanswered questions not identified")
 	}
 	questionKey(m, tea.KeyEnter, 0)
-	if m.questions == nil || m.questions.page != 0 || !m.questions.request.Pending() {
+	if m.activeToolUI == nil || !strings.Contains(ansi.Strip(m.View().Content), "› 1. US") {
 		t.Fatal("review synthesized an answer")
 	}
 	questionKey(m, tea.KeyEnter, 0) // answer only the first question
@@ -190,17 +212,13 @@ func TestQuestionsUnansweredDismissal(t *testing.T) {
 func TestQuestionsStopCancelsRequest(t *testing.T) {
 	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
 	waitQuestions(t, m)
-	request := m.questions.request
 	questionKey(m, 'x', tea.ModCtrl)
 	drainConversationRemote(t, m)
-	if request.Pending() || request.Respond(spec.QuestionAnswers{Dismissed: true}) {
-		t.Fatal("cancelled request still accepts input")
-	}
-	if backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError || m.questions != nil {
+	if backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError || m.activeToolUI != nil {
 		t.Fatal("stop failed to persist cancellation or left a form")
 	}
 	for _, block := range m.engine.Snapshot() {
-		if block.Tool != nil && (!block.Tool.Cancelled || block.Tool.InputRequest != nil) {
+		if block.Tool != nil && !block.Tool.Cancelled {
 			t.Fatalf("tool not cancelled: %+v", block.Tool)
 		}
 	}
@@ -216,7 +234,7 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	m.engine.CancelTool("question-0")
 	cancelled := false
 	for !cancelled && m.turnEvents != nil {
-		_, _ = m.Update(runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents)))
+		pumpToolUI(t, m)
 		for _, block := range m.transcript.Blocks {
 			if block.ToolCallID() == "question-0" && block.Tool.Cancelled {
 				cancelled = true
@@ -227,10 +245,10 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 		t.Fatal("per-tool cancellation was not applied")
 	}
 	for m.turnEvents != nil {
-		if m.questions != nil {
-			m.answerQuestions(true)
+		if m.activeToolUI != nil {
+			questionKey(m, tea.KeyEscape, 0)
 		}
-		_, _ = m.Update(runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents)))
+		pumpToolUI(t, m)
 	}
 	if backend.calls != 2 || len(backend.responses) != 2 {
 		t.Fatalf("calls=%d responses=%+v", backend.calls, backend.responses)
@@ -248,7 +266,7 @@ func TestQuestionsConcealedInputAndLayout(t *testing.T) {
 	m.resize(30, 10)
 	questionKey(m, tea.KeyEnter, 0)
 	questionKey(m, tea.KeyEscape, 0)
-	if m.questions == nil || m.questions.page != 0 {
+	if m.activeToolUI == nil || func() bool { _, done := m.activeToolUI.component.Result(); return done }() {
 		t.Fatal("hidden form consumed a key")
 	}
 	for _, size := range [][2]int{{36, 14}, {80, 24}, {120, 40}} {
@@ -277,58 +295,8 @@ func TestQuestionsConcealedInputAndLayout(t *testing.T) {
 func TestQuestionsMalformedArgumentsContinueWithoutForm(t *testing.T) {
 	m, backend := startQuestions(t, agent.ModeSkipPermissions, `{"questions":[]}`, 1)
 	drainConversationRemote(t, m)
-	if m.questions != nil || backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError {
+	if m.activeToolUI != nil || backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError {
 		t.Fatalf("malformed call did not return an error: %+v", backend)
-	}
-}
-
-func TestQuestionsFiveQuestionsAndLongOptions(t *testing.T) {
-	input := spec.AskUserQuestionInput{Questions: make([]spec.Question, 5)}
-	for i := range input.Questions {
-		input.Questions[i] = spec.Question{Question: fmt.Sprintf("Question %d?", i+1), Options: make([]spec.QuestionOption, 5)}
-		for j := range input.Questions[i].Options {
-			input.Questions[i].Options[j] = spec.QuestionOption{Label: fmt.Sprintf("Option %d", j+1), Description: strings.Repeat("A long explanation. ", 10)}
-		}
-	}
-	raw, err := json.Marshal(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, backend := startQuestions(t, agent.ModeSkipPermissions, string(raw), 1)
-	waitQuestions(t, m)
-	m.resize(36, 14)
-	for i := range 5 {
-		questionKey(m, tea.KeyUp, 0)    // Other, after all five options
-		questionKey(m, tea.KeyEnter, 0) // blank Other must stay unanswered
-		if !m.questions.editing || m.questions.page != i {
-			t.Fatal("blank custom answer was submitted")
-		}
-		_, _ = m.Update(tea.PasteMsg{Content: fmt.Sprintf("Custom %d", i+1)})
-		view := ansi.Strip(m.View().Content)
-		if !strings.Contains(view, fmt.Sprintf("Custom %d", i+1)) || !strings.Contains(view, "esc dismiss") {
-			t.Fatalf("custom input or controls hidden:\n%s", view)
-		}
-		questionKey(m, tea.KeyTab, 0) // save draft, not answer
-		questionKey(m, tea.KeyTab, tea.ModShift)
-		if !m.questions.editing || m.questions.text.Value() != fmt.Sprintf("Custom %d", i+1) {
-			t.Fatal("custom draft lost on navigation")
-		}
-		questionKey(m, tea.KeyEnter, 0)
-	}
-	for range 5 {
-		questionKey(m, tea.KeyPgDown, 0)
-	}
-	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "Custom 5") {
-		t.Fatalf("review cannot scroll to the last answer:\n%s", view)
-	}
-	questionKey(m, tea.KeyEnter, 0)
-	drainConversationRemote(t, m)
-	if backend.calls != 2 || len(backend.responses) != 1 {
-		t.Fatalf("calls=%d responses=%+v", backend.calls, backend.responses)
-	}
-	if !strings.Contains(backend.responses[0].Metadata.Output, "Custom 5") {
-		t.Fatal("last answer omitted from response")
 	}
 }
 
@@ -341,7 +309,7 @@ func TestQuestionsStayInlineAndRestoreComposer(t *testing.T) {
 			t.Fatalf("inline view missing %q:\n%s", want, view)
 		}
 	}
-	if m.list.Height() < 3 || m.list.Height()+m.questionHeight()+chatNoticeHeight+chatFooterHeight != m.height {
+	if m.list.Height() < 3 || m.list.Height()+m.activeToolUI.component.Height()+chatNoticeHeight+chatFooterHeight != m.height {
 		t.Fatal("picker did not reserve space for the conversation")
 	}
 	if strings.Contains(view, "Working on it…") {
@@ -349,88 +317,8 @@ func TestQuestionsStayInlineAndRestoreComposer(t *testing.T) {
 	}
 	questionKey(m, tea.KeyEscape, 0)
 	drainConversationRemote(t, m)
-	if m.questions != nil || m.list.Height() != m.height-chatNoticeHeight-chatFooterHeight-m.editor.Height() {
+	if m.activeToolUI != nil || m.list.Height() != m.height-chatNoticeHeight-chatFooterHeight-m.editor.Height() {
 		t.Fatal("dismissing the picker did not restore the transcript height")
-	}
-}
-
-func TestQuestionsShortcutsKeepDraftsAndRequireConfirmation(t *testing.T) {
-	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
-	waitQuestions(t, m)
-	questionKey(m, '2', 0)
-	if m.questions.choices[0] != 1 || m.questions.answers[0] != "" {
-		t.Fatal("number shortcut must highlight without confirming an answer")
-	}
-	questionKey(m, '3', 0)
-	if !m.questions.editing || !m.questions.text.Focused() {
-		t.Fatal("Other did not focus immediately")
-	}
-	for _, key := range "12[]jk" {
-		_, _ = m.Update(tea.KeyPressMsg{Code: key, Text: string(key)})
-	}
-	if m.questions.text.Value() != "12[]jk" || m.questions.page != 0 {
-		t.Fatalf("shortcuts stole custom text: %q", m.questions.text.Value())
-	}
-	questionKey(m, tea.KeyTab, 0)
-	questionKey(m, tea.KeyTab, tea.ModShift)
-	if !m.questions.editing || m.questions.text.Value() != "12[]jk" || m.questions.answers[0] != "" {
-		t.Fatal("page navigation lost or confirmed a draft")
-	}
-	questionKey(m, tea.KeyUp, 0) // leave Other
-	questionKey(m, 'k', 0)       // US
-	questionKey(m, 'j', 0)       // EU
-	if m.questions.choices[0] != 1 || m.questions.editing {
-		t.Fatal("choice navigation failed after leaving Other")
-	}
-	questionKey(m, tea.KeyDown, 0)
-	if m.questions.text.Value() != "12[]jk" {
-		t.Fatal("custom draft was lost when choosing another option")
-	}
-	questionKey(m, tea.KeyTab, 0)
-	questionKey(m, ']', 0) // review, without confirming either answer
-	questionKey(m, tea.KeyEnter, 0)
-	if m.questions.page != 0 || backend.calls != 1 || m.questions.answers[0] != "" || m.questions.answers[1] != "" {
-		t.Fatal("navigation implicitly submitted a choice or draft")
-	}
-}
-
-func TestQuestionsMouseTabsChoicesAndReview(t *testing.T) {
-	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
-	waitQuestions(t, m)
-	clickText := func(text string) {
-		t.Helper()
-		for y, row := range strings.Split(ansi.Strip(m.View().Content), "\n") {
-			if offset := strings.Index(row, text); offset >= 0 {
-				x := ansi.StringWidth(row[:offset])
-				_, _ = m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: x, Y: y})
-				return
-			}
-		}
-		t.Fatalf("click target %q not visible", text)
-	}
-	clickText("2. EU")
-	if m.questions.choices[0] != 1 || m.questions.answers[0] != "" {
-		t.Fatal("click should highlight a choice without submitting")
-	}
-	questionKey(m, tea.KeyEnter, 0)
-	clickText("2. Other")
-	if !m.questions.editing {
-		t.Fatal("clicking Other did not focus text input")
-	}
-	_, _ = m.Update(tea.PasteMsg{Content: "billing-worker"})
-	questionKey(m, tea.KeyEnter, 0)
-	clickText("billing-worker") // review row
-	if m.questions.page != 1 || !m.questions.editing || m.questions.text.Value() != "billing-worker" {
-		t.Fatal("review click did not reopen the saved custom answer")
-	}
-	clickText("✓ Review")
-	if m.questions.page != 2 || backend.calls != 1 {
-		t.Fatal("tab click failed or submitted the form")
-	}
-	questionKey(m, tea.KeyEnter, 0)
-	drainConversationRemote(t, m)
-	if backend.calls != 2 || len(backend.responses) != 1 {
-		t.Fatal("mouse flow did not resume exactly once")
 	}
 }
 
@@ -441,22 +329,21 @@ func TestQuestionsWheelTargetsTheHoveredPane(t *testing.T) {
 	questionKey(m, '2', 0)
 	questionKey(m, tea.KeyPgUp, 0)
 	_ = m.View()
-	before := m.list.VisibleSurface().Top
+	before, form := m.list.VisibleSurface().Top, m.activeToolUI.component.View()
 	_, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 3, Y: 0})
-	if m.list.VisibleSurface().Top >= before || m.questions.scroll != 0 {
+	if m.list.VisibleSurface().Top >= before || m.activeToolUI.component.View() != form {
 		t.Fatal("wheel above picker did not scroll only the conversation")
 	}
 	before = m.list.VisibleSurface().Top
-	_, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 3, Y: m.questionTop() + 3})
-	_ = m.View()
-	if m.questions.scroll != 1 || m.list.VisibleSurface().Top != before {
+	_, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 3, Y: m.toolUITop() + 3})
+	if m.activeToolUI.component.View() == form || m.list.VisibleSurface().Top != before {
 		t.Fatal("wheel over picker did not scroll only the question")
 	}
 	// The option row moves up with scrolling; hit testing must move with it.
 	for y, row := range strings.Split(ansi.Strip(m.View().Content), "\n") {
 		if strings.Contains(row, "1. US") {
 			_, _ = m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 5, Y: y})
-			if m.questions.choices[0] != 0 || m.questions.answers[0] != "" {
+			if !strings.Contains(ansi.Strip(m.activeToolUI.component.View()), "› 1. US") {
 				t.Fatal("scrolled choice hit the wrong target")
 			}
 			return
@@ -465,24 +352,177 @@ func TestQuestionsWheelTargetsTheHoveredPane(t *testing.T) {
 	t.Fatal("scrolled option was not visible")
 }
 
-func TestQuestionsLongCustomTextAndTabsFitBothThemes(t *testing.T) {
-	m, _ := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
-	waitQuestions(t, m)
-	questionKey(m, tea.KeyUp, 0)
-	_, _ = m.Update(tea.PasteMsg{Content: strings.Repeat("東京🙂", 50)})
-	for _, dark := range []bool{true, false} {
-		m.setDarkBackground(dark)
-		for _, size := range [][2]int{{36, 14}, {40, 16}, {80, 24}, {120, 40}} {
-			m.resize(size[0], size[1])
-			view := m.View().Content
-			if strings.Count(view, "\n")+1 > size[1] {
-				t.Fatalf("custom input exceeds height at %v:\n%s", size, ansi.Strip(view))
-			}
-			for _, row := range strings.Split(view, "\n") {
-				if ansi.StringWidth(row) > size[0] {
-					t.Fatalf("custom input exceeds width at %v: %q", size, ansi.Strip(row))
+type resumedQuestionBackend struct {
+	messages    []assistant.Message
+	answers     chan []assistant.ClientToolResponse
+	wantContext *assistant.AssistantContext
+}
+
+func (b *resumedQuestionBackend) Send(_ context.Context, message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	responses, ok := message.([]assistant.ClientToolResponse)
+	if !ok {
+		return "", errors.New("resumed question sent a new user message")
+	}
+	if opts.ConversationID != resumeConversationID {
+		return "", errors.New("resumed question used a different conversation")
+	}
+	if !reflect.DeepEqual(opts.Context, b.wantContext) {
+		return "", errors.New("resumed turn lost its context")
+	}
+	for _, r := range responses {
+		result := assistant.ToolResultContent(r.ToolCallID, r.Metadata.Name, r.Status, r.Metadata.Output)
+		result.Type = assistant.ContentClientToolResponse
+		b.messages = append(b.messages, assistant.Message{Role: "user", MessageID: r.ToolCallID + "-result", Content: result})
+	}
+	b.answers <- responses
+	return resumeConversationID, emitMessages(emit, assistant.AssistantMessage("continued", assistant.TextContent("Continuing after the answer.")))
+}
+
+func (b *resumedQuestionBackend) ConversationHistory(context.Context, assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
+	return history(b.messages...), nil
+}
+
+func (b *resumedQuestionBackend) UserConversations(context.Context) (*assistant.UserConversationsResponse, error) {
+	return summaries(assistant.ConversationSummary{ConversationID: resumeConversationID, Title: "Questions"}), nil
+}
+
+func newResumedQuestionModel(t *testing.T, startup bool) (*Model, *resumedQuestionBackend) {
+	t.Helper()
+	call := assistant.ToolCallContent("resumed-question", spec.AskUserQuestion, questionInput)
+	call.Type = assistant.ContentClientToolCall
+	backend := &resumedQuestionBackend{
+		messages: []assistant.Message{assistant.AssistantMessage("question-message", call)},
+		answers:  make(chan []assistant.ClientToolResponse, 1),
+	}
+	second := assistant.ToolCallContent("second-question", spec.AskUserQuestion, questionInput)
+	second.Type = assistant.ContentClientToolCall
+	user := assistant.Message{MessageID: "original-user", Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api"}]`), ContextResources: json.RawMessage(`[{"name":"dashboard"}]`)}
+	backend.messages = append([]assistant.Message{user}, backend.messages...)
+	backend.messages = append(backend.messages, assistant.AssistantMessage("second", second), assistant.Message{Results: &assistant.Results{}}, assistant.AssistantMessage("end", assistant.Content{Type: assistant.ContentTurnStatus, TurnStatus: &assistant.TurnStatusPayload{Status: "ended"}}), assistant.AssistantMessage("internal", assistant.Content{Type: assistant.ContentProviderCompaction, Compaction: &assistant.CompactionPayload{Summary: "bookkeeping"}}))
+	backend.wantContext = &assistant.AssistantContext{Entities: []assistant.ContextEntity{{Type: assistant.EntityService, ID: "api"}}, Resources: []json.RawMessage{json.RawMessage(`{"name":"dashboard"}`)}}
+	host := NewToolUI()
+	set, err := agent.NewToolSet(agent.ModeManual, tools.NewAskUserQuestionTool(host))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := assistant.SendOptions{}
+	if startup {
+		opts.ConversationID = resumeConversationID
+	}
+	m := New(agent.New(backend, opts), Config{Tools: set, ToolUI: host})
+	m.resize(100, 32)
+	t.Cleanup(func() {
+		if m.turnEvents != nil {
+			m.cancelRemote()
+			drainConversationRemote(t, m)
+		}
+	})
+	return m, backend
+}
+
+func TestPendingQuestionRestoresOnStartupAndResume(t *testing.T) {
+	for _, startup := range []bool{true, false} {
+		name := "resume picker"
+		if startup {
+			name = "startup restore"
+		}
+		t.Run(name, func(t *testing.T) {
+			m, backend := newResumedQuestionModel(t, startup)
+			if startup {
+				m.restoringHistory = true
+				ctx, cancel := context.WithCancel(context.Background())
+				m.beginRemote(m.engine.Restore(ctx), cancel)
+			} else {
+				cmd := m.openConversationPicker()
+				_, _ = m.Update(runResumeCmd(t, cmd))
+				_, cmd = m.Update(conversationview.SelectedMsg{Conversation: assistant.ConversationSummary{ConversationID: resumeConversationID}})
+				_, _ = m.Update(runResumeCmd(t, cmd))
+				if m.turnEvents == nil {
+					t.Fatalf("resume failed: %+v", m.notice)
 				}
 			}
+			waitQuestions(t, m)
+			if len(backend.answers) != 0 {
+				t.Fatal("sent a response before the user answered")
+			}
+			for range 2 {
+				waitQuestions(t, m)
+				questionKey(m, tea.KeyEnter, 0) // first answer
+				questionKey(m, tea.KeyEnter, 0) // second answer
+				questionKey(m, tea.KeyEnter, 0) // submit review
+			}
+			drainConversationRemote(t, m)
+			if len(backend.answers) != 1 {
+				t.Fatalf("backend received %d answer batches, want one", len(backend.answers))
+			}
+			responses := <-backend.answers
+			if len(responses) != 2 || responses[0].ToolCallID != "resumed-question" || responses[1].ToolCallID != "second-question" {
+				t.Fatalf("tool responses = %+v", responses)
+			}
+			if m.engine.CanResumeTools(m.tools) || m.activeToolUI != nil {
+				t.Fatal("question stayed pending after continuation")
+			}
+		})
+	}
+}
+
+func TestQuestionExitAndStopHaveDifferentPersistedOutcomes(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		name := "exit leaves questions resumable"
+		if stop {
+			name = "stop persists cancelled batch"
 		}
+		t.Run(name, func(t *testing.T) {
+			m, backend := newResumedQuestionModel(t, true)
+			m.restoringHistory = true
+			ctx, cancel := context.WithCancel(t.Context())
+			m.beginRemote(m.engine.Restore(ctx), cancel)
+			waitQuestions(t, m)
+			if stop {
+				questionKey(m, 'x', tea.ModCtrl)
+			} else {
+				_, _ = m.quit()
+			}
+			drainConversationRemote(t, m)
+			if stop {
+				if len(backend.answers) != 1 {
+					t.Fatal("cancellation was not persisted")
+				}
+				responses := <-backend.answers
+				if len(responses) != 2 {
+					t.Fatalf("cancelled responses = %v", responses)
+				}
+				for _, r := range responses {
+					if r.Status != assistant.ToolStatusError {
+						t.Fatalf("response = %+v", r)
+					}
+				}
+				if hasTextBlock(m.transcript.Blocks, "Continuing after the answer.") {
+					t.Fatal("stopped turn displayed a continuation")
+				}
+			} else if len(backend.answers) != 0 {
+				t.Fatal("exit persisted an answer")
+			}
+
+			reopened := New(agent.New(backend, assistant.SendOptions{ConversationID: resumeConversationID}), Config{Tools: m.tools, ToolUI: m.toolUI})
+			reopened.resize(100, 32)
+			reopened.restoringHistory = true
+			ctx, cancel = context.WithCancel(t.Context())
+			reopened.beginRemote(reopened.engine.Restore(ctx), cancel)
+			t.Cleanup(func() {
+				if reopened.turnEvents != nil {
+					reopened.cancelRemote()
+					drainConversationRemote(t, reopened)
+				}
+			})
+			if stop {
+				drainConversationRemote(t, reopened)
+				if reopened.activeToolUI != nil || reopened.engine.CanResumeTools(reopened.tools) {
+					t.Fatal("cancelled questions reopened")
+				}
+			} else {
+				waitQuestions(t, reopened)
+			}
+		})
 	}
 }

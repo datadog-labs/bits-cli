@@ -115,7 +115,7 @@ type focus int
 
 const (
 	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
-	focusQuestion                 // an explicit user question is pending
+	focusToolUI                   // a tool's interactive UI replaces the composer
 	focusApproval                 // a tool approval is pending
 	focusPicker                   // the /resume conversation picker
 	focusStatus                   // the local /status document
@@ -134,8 +134,8 @@ func (m *Model) focus() focus {
 	case ModePermissions:
 		return focusPermissions
 	case ModeChat, ModeTermInit:
-		if m.questions != nil {
-			return focusQuestion
+		if m.activeToolUI != nil {
+			return focusToolUI
 		}
 		if len(m.pendingApprovals) > 0 {
 			return focusApproval
@@ -264,6 +264,10 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 // mouse, and editor-bound input are routed by focus().
 func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case toolUIOpenedMsg:
+		m.activateToolUI(msg.session)
+		return m, waitToolUI(m.toolUI)
+
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 		return m, nil
@@ -298,8 +302,8 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleMouseWheel(msg)
 
 	case tea.MouseClickMsg:
-		if m.focus() == focusQuestion {
-			return m, m.clickQuestion(msg)
+		if m.focus() == focusToolUI {
+			return m, m.updateToolUI(msg)
 		}
 		if m.mode == ModeChat {
 			if msg.Button == tea.MouseLeft {
@@ -400,8 +404,8 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Opened Assistant settings in your browser: %s", msg.url), 0)
 	}
 
-	if m.focus() == focusQuestion {
-		return m, m.updateQuestions(msg)
+	if m.focus() == focusToolUI {
+		return m, m.updateToolUI(msg)
 	}
 	if m.focus() == focusPicker {
 		return m, m.updateConversationPicker(msg)
@@ -537,19 +541,15 @@ func (m *Model) clearSelection() {
 }
 
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
-	if m.focus() == focusQuestion {
-		delta := 0
+	if m.focus() == focusToolUI {
+		if msg.Y >= m.toolUITop() {
+			return m.updateToolUI(msg)
+		}
 		switch msg.Button {
 		case tea.MouseWheelUp:
-			delta = -mouseWheelDelta
+			m.list.ScrollBy(-mouseWheelDelta)
 		case tea.MouseWheelDown:
-			delta = mouseWheelDelta
-		}
-		if msg.Y < m.questionTop() {
-			m.list.ScrollBy(delta)
-		} else {
-			m.questions.scroll = max(0, m.questions.scroll+delta)
-			m.questions.follow = false
+			m.list.ScrollBy(mouseWheelDelta)
 		}
 		return nil
 	}
@@ -592,10 +592,9 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 		m.syncTranscript()
 	}
 	m.pendingApprovals = nil
-	m.questions = nil
 	m.approvalChoice = 0
 	m.approvalPanel.ResetScroll()
-	m.layoutTranscript()
+	m.clearToolUIs()
 	if m.cancelTurn != nil && !m.cancelRequested {
 		m.cancelTurn() // release the turn/restore context
 	}
@@ -726,8 +725,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.focus() {
 	case focusPicker:
 		return m, m.updateConversationPicker(msg)
-	case focusQuestion:
-		return m, m.updateQuestions(msg)
+	case focusToolUI:
+		return m, m.updateToolUI(msg)
 	case focusApproval:
 		return m.handleApprovalKey(msg)
 	case focusStatus:
@@ -866,7 +865,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Interactive: true, Context: turnContext, OnDeny: agent.DenyContinue})
+	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Context: turnContext, OnDeny: agent.DenyContinue})
 	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()
@@ -891,7 +890,7 @@ func (m *Model) resumePendingTools() tea.Cmd {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, Interactive: true, OnDeny: agent.DenyContinue})
+	events := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
 	m.chatPhase = chat.PhaseWaiting
 	m.layoutTranscript()
 	m.list.ScrollToBottom()
@@ -907,9 +906,8 @@ func (m *Model) cancelRemote() {
 		return
 	}
 	m.cancelRequested = true
-	m.questions = nil
 	m.cancelTurn()
-	m.layoutTranscript()
+	m.clearToolUIs()
 }
 
 // applyEvent folds one engine event into the block snapshot / status. The switch
@@ -921,7 +919,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	case agent.EventTranscript:
 		m.transcript = ev.Transcript
 		m.updatePendingApprovals(ev.Transcript.PendingApprovals())
-		m.syncQuestions()
+		m.reconcileToolUI()
 		if ev.Transcript.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}
@@ -973,9 +971,6 @@ func (m *Model) setDarkBackground(isDark bool) {
 func (m *Model) resize(w, h int) {
 	m.clearSelection()
 	m.width, m.height = w, h
-	if m.questions != nil {
-		m.questions.follow = true
-	}
 	m.editor.SetWidth(w)
 	m.list.SetWidth(w)
 	if m.picker != nil {
@@ -997,6 +992,7 @@ func (m *Model) layoutTranscript() {
 	if m.mode == ModeTermInit {
 		return
 	}
+	m.layoutToolUI()
 	m.editor.SetMenuHeight(max(0, m.height-chatFooterHeight-m.editor.Height()))
 	m.list.SetHeight(m.transcriptHeight())
 	m.list.SetHeader(m.headerView())

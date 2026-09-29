@@ -50,6 +50,7 @@ type EntitySearcher interface {
 
 type Config struct {
 	Tools          *agent.ToolSet
+	ToolUI         *ToolUI
 	Version        string
 	Workspace      *workspace.Workspace
 	EntitySearcher EntitySearcher
@@ -123,7 +124,9 @@ type Model struct {
 	logoutGeneration uint64
 	loggedOut        bool
 
-	questions         *questionForm
+	toolUI            *ToolUI
+	activeToolUI      *toolUISession
+	queuedToolUIs     []*toolUISession
 	pendingApprovals  []agent.Block
 	approvalChoice    int
 	approvalPanel     *components.Panel
@@ -240,6 +243,7 @@ func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory Engine
 func (m *Model) configure(configs []Config) {
 	if len(configs) > 0 {
 		m.tools = configs[0].Tools
+		m.toolUI = configs[0].ToolUI
 		m.workspace = configs[0].Workspace
 		if m.workspace != nil {
 			m.workspaceDisplayPath = m.workspace.DisplayPath()
@@ -352,7 +356,7 @@ func (m *Model) Init() tea.Cmd {
 // on login handoff because Bubble Tea calls Init only on the original model.
 func (m *Model) initChat() tea.Cmd {
 	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
-	commands := []tea.Cmd{m.editor.Focus(), requestBG}
+	commands := []tea.Cmd{m.editor.Focus(), requestBG, waitToolUI(m.toolUI)}
 	if m.engine == nil {
 		return tea.Batch(commands...)
 	}

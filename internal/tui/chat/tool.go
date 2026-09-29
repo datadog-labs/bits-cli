@@ -9,14 +9,17 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/filediff"
 	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 	"github.com/DataDog/bits-cli/internal/tui/diffrender"
 	"github.com/DataDog/bits-cli/internal/tui/escape"
+	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
 const (
@@ -65,10 +68,32 @@ type toolRenderSpec struct {
 	spacing        itemSpacing
 	action         toolAction
 	inspection     bool
+	interact       func(call agent.ToolCall) ToolInteraction // nil = not interactive
+}
+
+// ToolInteraction replaces the composer while a tool waits on the user.
+// Mouse coordinates are relative to its top-left corner.
+type ToolInteraction interface {
+	Update(tea.Msg) tea.Cmd
+	View() string
+	Height() int
+	MinSize() (width, height int)
+	SetSize(width, height int, theme styles.Theme)
+	Result() (agent.ToolResult, bool) // ok once the user is done
+}
+
+// NewToolInteraction builds the interactive UI registered for a client tool.
+func NewToolInteraction(call agent.ToolCall) (ToolInteraction, bool) {
+	renderSpec := toolRenderSpecFor(spec.Identity{ClientSide: true, Name: call.Name})
+	if renderSpec == nil || renderSpec.interact == nil {
+		return nil, false
+	}
+	interaction := renderSpec.interact(call)
+	return interaction, interaction != nil
 }
 
 var (
-	questionToolRenderSpec = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}}
+	questionToolRenderSpec = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, interact: newQuestionInteraction}
 	simpleToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool}
 	readToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, inspection: true}
 	listToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, inspection: true}
@@ -152,7 +177,7 @@ func lifecycleOf(tool *agent.ToolBlock) toolLifecycle {
 	switch tool.Status {
 	case agent.ToolRunning:
 		return lifecycleRunning
-	case agent.ToolAwaitingApproval, agent.ToolAwaitingInput:
+	case agent.ToolAwaitingApproval:
 		return lifecycleAwaiting
 	case agent.ToolSuccess:
 		return lifecycleSuccess
@@ -1079,3 +1104,69 @@ func renderInspectionChild(spans []summarySpan, first bool, width int, sty Style
 
 // collapseWS joins whitespace runs.
 func collapseWS(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, width int, sty Styles, frame int) string {
+	state := lifecycleOf(tool)
+	label := "questions"
+	if tool.Status == agent.ToolRunning && tool.HasFinalInput {
+		state, label = lifecycleAwaiting, "waiting for your answers"
+	}
+	if tool.Cancelled {
+		label = "questions cancelled"
+	}
+	header := renderActivityHeader(state, label, "", width, sty, frame)
+	input, err := spec.ParseQuestions(tool.Input)
+	if err != nil {
+		return header + "\n" + sty.ToolError.Render(wrap(escape.Multiline(tool.Output), width))
+	}
+	var result spec.AskUserQuestionOutput
+	if json.Unmarshal([]byte(tool.Output), &result) == nil && result.Success {
+		return header + "\n" + sty.ToolDetail.Render(wrap(escape.Multiline(result.Message), width))
+	}
+	lines := []string{header}
+	for _, question := range input.Questions {
+		lines = append(lines, sty.ToolDetail.Render(wrap(escape.Multiline("Q: "+question.Question), width)))
+	}
+	if result.Message != "" {
+		lines = append(lines, sty.ToolDetail.Render(wrap(escape.Multiline(result.Message), width)))
+	} else if tool.Output != "" {
+		lines = append(lines, sty.ToolDetail.Render(wrap(escape.Multiline(tool.Output), width)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+type questionInteraction struct {
+	*components.Questionnaire
+	input spec.AskUserQuestionInput
+}
+
+func newQuestionInteraction(call agent.ToolCall) ToolInteraction {
+	input, err := spec.ParseQuestions(call.Input)
+	if err != nil {
+		return nil
+	}
+	questions := make([]components.Question, len(input.Questions))
+	for i, question := range input.Questions {
+		questions[i].Prompt = question.Question
+		for _, option := range question.Options {
+			questions[i].Options = append(questions[i].Options, components.Option{Label: option.Label, Description: option.Description})
+		}
+	}
+	return questionInteraction{Questionnaire: components.NewQuestionnaire(questions), input: input}
+}
+
+func (q questionInteraction) Result() (agent.ToolResult, bool) {
+	answers, dismissed, done := q.Answers()
+	if !done {
+		return agent.ToolResult{}, false
+	}
+	result, err := q.input.FormatAnswers(spec.QuestionAnswers{Answers: answers, Dismissed: dismissed})
+	if err != nil {
+		return agent.ToolResult{Title: "Questions", Output: "invalid question answers: " + err.Error(), IsError: true}, true
+	}
+	output, err := json.Marshal(result)
+	if err != nil {
+		return agent.ToolResult{Title: "Questions", Output: err.Error(), IsError: true}, true
+	}
+	return agent.ToolResult{Title: "Questions", Output: string(output), Display: result.Message, IsError: !result.Success}, true
+}
