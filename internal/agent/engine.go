@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
@@ -126,6 +125,8 @@ type Event struct {
 	Round int
 }
 
+const maxQueuedCommands = 64
+
 // maxTurns caps the client-tool loop so a misbehaving backend can't spin
 // forever.
 const maxTurns = 150
@@ -148,9 +149,7 @@ type Engine struct {
 	runtimeStatus          RuntimeStatus
 	transcript             *Transcript
 	previousConversationID string
-	commandsMu             sync.Mutex
-	commands               []toolCommand
-	commandsReady          chan struct{}
+	commands               chan toolCommand
 	sessionGrants          map[ApprovalKey]struct{}
 	active                 atomic.Bool
 	operationGeneration    atomic.Uint64
@@ -202,7 +201,7 @@ func New(b Backend, opts assistant.SendOptions) *Engine {
 		opts:          opts,
 		runtimeStatus: runtimeStatus,
 		transcript:    NewTranscript(),
-		commandsReady: make(chan struct{}, 1),
+		commands:      make(chan toolCommand, maxQueuedCommands),
 		sessionGrants: make(map[ApprovalKey]struct{}),
 	}
 }
@@ -317,33 +316,12 @@ func (e *Engine) CancelTool(toolCallID string) bool {
 }
 
 func (e *Engine) command(command toolCommand) bool {
-	e.commandsMu.Lock()
-	e.commands = append(e.commands, command)
-	if len(e.commands) == 1 {
-		select {
-		case e.commandsReady <- struct{}{}:
-		default:
-		}
+	select {
+	case e.commands <- command:
+		return true
+	default:
+		return false
 	}
-	e.commandsMu.Unlock()
-	return true
-}
-
-// nextCommand is called only after receiving from commandsReady. The queue
-// keeps decisions in order without imposing a batch-size limit on callers.
-func (e *Engine) nextCommand() toolCommand {
-	e.commandsMu.Lock()
-	command := e.commands[0]
-	e.commands[0] = toolCommand{}
-	e.commands = e.commands[1:]
-	if len(e.commands) > 0 {
-		select {
-		case e.commandsReady <- struct{}{}:
-		default:
-		}
-	}
-	e.commandsMu.Unlock()
-	return command
 }
 
 func (e *Engine) run(
@@ -949,8 +927,7 @@ func (e *Engine) runTools(
 
 	for outstanding > 0 {
 		select {
-		case <-e.commandsReady:
-			command := e.nextCommand()
+		case command := <-e.commands:
 			if command.generation != generation {
 				continue
 			}

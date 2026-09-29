@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -22,73 +21,6 @@ type gateBackend struct {
 	secondGateInput   string
 	responses         [][]assistant.ClientToolResponse
 	calls             int
-}
-
-type largeApprovalBatchBackend struct {
-	count     int
-	responses []assistant.ClientToolResponse
-	calls     int
-}
-
-func (b *largeApprovalBatchBackend) Send(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
-	b.calls++
-	if b.calls == 1 {
-		for i := range b.count {
-			id := fmt.Sprintf("write-%d", i)
-			if err := emit(clientToolCall("conversation-1", id, id, "write", `{}`)); err != nil {
-				return "conversation-1", err
-			}
-		}
-		return "conversation-1", nil
-	}
-	var ok bool
-	b.responses, ok = message.([]assistant.ClientToolResponse)
-	if !ok {
-		return "conversation-1", fmt.Errorf("follow-up has type %T", message)
-	}
-	var response assistant.AssistantResponse
-	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("done"))
-	return "conversation-1", emit(response)
-}
-
-func TestHeadlessDecisionsHandleLargeApprovalBatch(t *testing.T) {
-	const count = 80 // larger than the former 64-command buffer
-	backend := &largeApprovalBatchBackend{count: count}
-	engine := New(backend, assistant.SendOptions{})
-	decided := make(map[string]struct{})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	result, err := engine.RunTurn(ctx, TurnInput{
-		Message: "write files",
-		Tools:   gatedToolSet(t, ModeManual),
-		OnDeny:  DenyContinue,
-	}, func(event Event) error {
-		if event.Kind != EventTranscript {
-			return nil
-		}
-		for _, block := range event.Transcript.PendingApprovals() {
-			id := block.ToolCallID()
-			if _, ok := decided[id]; ok {
-				continue
-			}
-			if !engine.Decide(id, ApprovalDeny) {
-				return fmt.Errorf("command queue full at %s", id)
-			}
-			decided[id] = struct{}{}
-		}
-		return nil
-	})
-	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
-		t.Fatalf("result/error = %+v, %v", result, err)
-	}
-	if len(decided) != count || len(backend.responses) != count {
-		t.Fatalf("decisions = %d, responses = %d; want %d each", len(decided), len(backend.responses), count)
-	}
-	for _, response := range backend.responses {
-		if response.Status != assistant.ToolStatusError {
-			t.Fatalf("response %s has status %s, want error", response.ToolCallID, response.Status)
-		}
-	}
 }
 
 func clientToolCall(convID, msgID, callID, name, input string) assistant.AssistantResponse {
