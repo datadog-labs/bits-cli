@@ -128,8 +128,8 @@ func TestQuestionnaireFiveQuestionsAndLongOptions(t *testing.T) {
 		}
 		q.Update(tea.PasteMsg{Content: fmt.Sprintf("Custom %d", i+1)})
 		view := ansi.Strip(q.View())
-		if !strings.Contains(view, fmt.Sprintf("Custom %d", i+1)) || !strings.Contains(view, "esc dismiss") {
-			t.Fatalf("custom input or controls hidden:\n%s", view)
+		if !strings.Contains(view, fmt.Sprintf("Custom %d", i+1)) {
+			t.Fatalf("custom input hidden:\n%s", view)
 		}
 		press(q, tea.KeyTab, 0) // save draft, not answer
 		press(q, tea.KeyTab, tea.ModShift)

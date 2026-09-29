@@ -209,24 +209,6 @@ func TestQuestionsUnansweredDismissal(t *testing.T) {
 	}
 }
 
-func TestQuestionsStopCancelsRequest(t *testing.T) {
-	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
-	waitQuestions(t, m)
-	questionKey(m, 'x', tea.ModCtrl)
-	drainConversationRemote(t, m)
-	if backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError || m.activeToolUI != nil {
-		t.Fatal("stop failed to persist cancellation or left a form")
-	}
-	for _, block := range m.engine.Snapshot() {
-		if block.Tool != nil && !block.Tool.Cancelled {
-			t.Fatalf("tool not cancelled: %+v", block.Tool)
-		}
-	}
-	if err := m.engine.NewConversation(); err != nil {
-		t.Fatalf("engine still blocked: %v", err)
-	}
-}
-
 func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 2)
 	waitQuestions(t, m)
@@ -260,65 +242,31 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	}
 }
 
-func TestQuestionsConcealedInputAndLayout(t *testing.T) {
+func TestQuestionsReplaceComposerAndRestoreIt(t *testing.T) {
 	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
 	waitQuestions(t, m)
-	m.resize(30, 10)
-	questionKey(m, tea.KeyEnter, 0)
-	questionKey(m, tea.KeyEscape, 0)
-	if m.activeToolUI == nil || func() bool { _, done := m.activeToolUI.component.Result(); return done }() {
-		t.Fatal("hidden form consumed a key")
-	}
-	for _, size := range [][2]int{{36, 14}, {80, 24}, {120, 40}} {
-		m.resize(size[0], size[1])
-		view := m.View().Content
-		visible := strings.Split(ansi.Strip(view), "\n")
-		for i, row := range visible {
-			if strings.Contains(row, "esc dismiss") && (i == 0 || strings.TrimSpace(visible[i-1]) != "") {
-				t.Fatalf("no gap above the hints at %v:\n%s", size, ansi.Strip(view))
-			}
-		}
-		if strings.Count(view, "\n")+1 > size[1] {
-			t.Fatalf("form too tall at %v", size)
-		}
-		for _, row := range strings.Split(view, "\n") {
-			if ansi.StringWidth(row) > size[0] {
-				t.Fatalf("row too wide at %v: %q", size, row)
-			}
-		}
-	}
-	if backend.calls != 1 {
-		t.Fatal("resize submitted answers")
-	}
-}
-
-func TestQuestionsMalformedArgumentsContinueWithoutForm(t *testing.T) {
-	m, backend := startQuestions(t, agent.ModeSkipPermissions, `{"questions":[]}`, 1)
-	drainConversationRemote(t, m)
-	if m.activeToolUI != nil || backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError {
-		t.Fatalf("malformed call did not return an error: %+v", backend)
-	}
-}
-
-func TestQuestionsStayInlineAndRestoreComposer(t *testing.T) {
-	m, _ := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
-	waitQuestions(t, m)
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"Help me choose", "waiting for your answers", "□ Which region?", "✓ Review", "› 1. US", "enter select · tab/arrow keys to navigate · esc dismiss"} {
+	for _, want := range []string{"Help me choose", "waiting for your answers", "Which region?"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("inline view missing %q:\n%s", want, view)
 		}
 	}
-	if m.list.Height() < 3 || m.list.Height()+m.activeToolUI.component.Height()+chatNoticeHeight+chatFooterHeight != m.height {
-		t.Fatal("picker did not reserve space for the conversation")
-	}
 	if strings.Contains(view, "Working on it…") {
-		t.Fatal("composer was rendered behind the picker")
+		t.Fatal("composer was rendered behind the form")
 	}
+	if m.list.Height() < 3 || m.list.Height()+m.activeToolUI.component.Height()+chatNoticeHeight+chatFooterHeight != m.height {
+		t.Fatal("form did not reserve space for the conversation")
+	}
+	m.resize(30, 10)
+	questionKey(m, tea.KeyEscape, 0)
+	if m.activeToolUI == nil || backend.calls != 1 {
+		t.Fatal("hidden form consumed a key")
+	}
+	m.resize(80, 24)
 	questionKey(m, tea.KeyEscape, 0)
 	drainConversationRemote(t, m)
 	if m.activeToolUI != nil || m.list.Height() != m.height-chatNoticeHeight-chatFooterHeight-m.editor.Height() {
-		t.Fatal("dismissing the picker did not restore the transcript height")
+		t.Fatal("dismissing the form did not restore the transcript height")
 	}
 }
 

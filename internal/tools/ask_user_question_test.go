@@ -62,3 +62,18 @@ func TestHeadlessUnexpectedQuestionReturnsUnsupported(t *testing.T) {
 		t.Fatalf("calls=%d response=%+v", b.calls, b.response)
 	}
 }
+
+type failingInteractor struct{ t *testing.T }
+
+func (f failingInteractor) Interact(context.Context, agent.ToolCall) (agent.ToolResult, error) {
+	f.t.Error("malformed arguments opened the question form")
+	return agent.ToolResult{}, nil
+}
+
+func TestQuestionMalformedArgumentsReturnErrorWithoutForm(t *testing.T) {
+	tool := NewAskUserQuestionTool(failingInteractor{t})
+	result, err := tool.Handler(t.Context(), agent.ToolCall{Name: spec.AskUserQuestion, Input: `{"questions":[]}`})
+	if err != nil || !result.IsError || !strings.Contains(result.Output, "invalid ask_user_question arguments") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
