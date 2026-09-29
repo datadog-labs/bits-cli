@@ -83,7 +83,7 @@ func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 	var first, input starlark.Value
 	var at starlark.Value = starlark.None
 	var out, ns, title, detail, breakInput, breakBefore string
-	isErr, stream := false, true
+	isErr, stream := false, false
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"name_or_calls", &first, "input?", &input, "out?", &out, "err?", &isErr,
 		"ns?", &ns, "title?", &title, "detail?", &detail, "stream?", &stream,
@@ -95,7 +95,7 @@ func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 		return nil, fmt.Errorf("%s: %w", b.Name(), err)
 	}
 	r := runOf(thread)
-	if err := r.planBreaks(specs, stream, breakInput, at, breakBefore); err != nil {
+	if err := r.planBreaks(specs, toolEmit{stream: stream}, breakInput, at, breakBefore); err != nil {
 		return nil, err
 	}
 	if err := r.sideEffectError(b.Name()); err != nil {
@@ -149,7 +149,7 @@ func builtinCall(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 		return nil, fmt.Errorf("%s: %w", b.Name(), err)
 	}
 	r := runOf(thread)
-	if err := r.planBreaks(specs, stream, breakInput, at, ""); err != nil {
+	if err := r.planBreaks(specs, toolEmit{client: true, stream: stream}, breakInput, at, ""); err != nil {
 		return nil, err
 	}
 	if len(specs) == 0 {
@@ -193,7 +193,7 @@ func (r *run) replayRound(n int, single bool) (starlark.Value, error) {
 // toolEmit is how one tool call goes on the wire.
 type toolEmit struct {
 	client     bool           // client_tool_call rather than a server tool_call
-	stream     bool           // stream the input when the engine asks for it
+	stream     bool           // allow provisional input for this call
 	namespace  string         // server tools only
 	breakInput string         // breakpoint while streaming the input
 	at         starlark.Value // where break_input stops; None is halfway
@@ -202,7 +202,7 @@ type toolEmit struct {
 // emitToolCall emits the call's streamed input when requested, then the
 // final call. The message id is the tool call id.
 func (r *run) emitToolCall(s spec, style toolEmit) error {
-	if style.stream && r.opts.StreamToolCallInput {
+	if r.streamsInput(s.name, style) {
 		if err := r.out.emit(assistant.AssistantMessage(s.id, toolCallStarted(s.id, s.name, style.client))); err != nil {
 			return emitErr(err)
 		}
@@ -231,6 +231,25 @@ func (r *run) emitToolCall(s spec, style toolEmit) error {
 		content.Tool.Metadata.Namespace = &style.namespace
 	}
 	return emitErr(r.out.emit(assistant.AssistantMessage(s.id, content)))
+}
+
+// streamsInput follows client tool opt-in; scripts own server tool selection.
+func (r *run) streamsInput(name string, style toolEmit) bool {
+	if !style.stream {
+		return false
+	}
+	if !style.client {
+		return true
+	}
+	if name == assistant.ApprovalRequestTool {
+		return false
+	}
+	for _, tool := range r.opts.ClientTools {
+		if tool.Name == name {
+			return tool.StreamInput && (tool.IsAvailable == nil || *tool.IsAvailable)
+		}
+	}
+	return false
 }
 
 // emitDeltas streams part of one tool call's input in chunks.

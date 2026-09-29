@@ -26,7 +26,7 @@ Every record carries:
 | `usage` | N | `usage{tokens_used, max_tokens, input_tokens?, output_tokens?}` |
 | `run.finished` | 0 | `outcome`, `conversation_id?`, `response?`, `rounds`, `ended_at?` (RFC3339), `error{message}?` |
 
-`tool.call` and `tool.result` correlate by `tool.id`. A call whose input never arrives is still emitted at `Finish`, with the exact (possibly empty) arguments and no invented result. The CLI does not negotiate the `stream_tool_call_input` capability, so arguments always come from the complete tool call; if that capability is ever enabled, partial streamed input must first be plumbed through `agent.ToolBlock` or an interrupted call would flush with empty arguments.
+`tool.call` and `tool.result` correlate by `tool.id`. A call whose input never arrives is still emitted at `Finish`, with the exact (possibly empty) arguments and no invented result. Tool definitions opt into provisional input events with `stream_input: true`. Arguments come from the authoritative final tool call; provisional input stays in the transcript preview and is not emitted as complete arguments.
 
 ## Tool status
 

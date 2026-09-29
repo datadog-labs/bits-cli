@@ -427,39 +427,31 @@ func TestToolSetReduceInputAllowsNilState(t *testing.T) {
 	}
 }
 
-func TestToolSetNeedsStreamedInput(t *testing.T) {
-	var nilSet *ToolSet
-	if nilSet.NeedsStreamedInput() {
-		t.Fatal("nil ToolSet needs streamed input")
-	}
-	ordinary, err := NewToolSet(ModeSkipPermissions, Tool{
+func TestToolSetPerToolInputStreaming(t *testing.T) {
+	ordinary := Tool{
 		Definition: assistant.ClientTool{Name: "ordinary"},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
-	})
+	}
+	withReducer := ordinary
+	withReducer.Definition.Name = "preview"
+	withReducer.InputReducer = func(context.Context, ToolInputUpdate, any) any { return nil }
+	explicit := ordinary
+	explicit.Definition.Name = "explicit"
+	explicit.Definition.StreamInput = true
+	set, err := NewToolSet(ModeSkipPermissions, ordinary, withReducer, explicit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ordinary.NeedsStreamedInput() {
-		t.Fatal("ordinary-only ToolSet needs streamed input")
+	defs := set.Definitions()
+	if defs[0].StreamInput || !defs[1].StreamInput || !defs[2].StreamInput {
+		t.Fatalf("streaming definitions = %+v", defs)
 	}
-	withReducer, err := NewToolSet(ModeSkipPermissions,
-		Tool{
-			Definition: assistant.ClientTool{Name: "ordinary"},
-			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
-		},
-		Tool{
-			Definition: assistant.ClientTool{Name: "reduce"},
-			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
-			InputReducer: func(context.Context, ToolInputUpdate, any) any {
-				return nil
-			},
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
+	if withReducer.Definition.StreamInput {
+		t.Fatal("registration mutated caller's definition")
 	}
-	if !withReducer.NeedsStreamedInput() {
-		t.Fatal("ToolSet with reducer does not need streamed input")
+	defs[1].StreamInput = false
+	if !set.Definitions()[1].StreamInput {
+		t.Fatal("mutating returned definitions changed registered streaming")
 	}
 }
 

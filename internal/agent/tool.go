@@ -116,7 +116,10 @@ func NewToolSet(mode PermissionsMode, tools ...Tool) (*ToolSet, error) {
 		if _, exists := set.tools[name]; exists {
 			return nil, fmt.Errorf("duplicate tool %q", name)
 		}
-		set.definitions = append(set.definitions, tool.Definition)
+		definition := tool.Definition
+		// Reducers consume provisional input; opt in only their owning tool.
+		definition.StreamInput = definition.StreamInput || tool.InputReducer != nil
+		set.definitions = append(set.definitions, definition)
 		set.tools[name] = registeredTool{resumable: tool.Resumable, handler: tool.Handler, approval: tool.Approval, inputReducer: tool.InputReducer}
 	}
 	return set, nil
@@ -134,21 +137,6 @@ func (s *ToolSet) ReduceInput(ctx context.Context, update ToolInputUpdate, prior
 		return nil, false
 	}
 	return tool.inputReducer(ctx, update, prior), true
-}
-
-// NeedsStreamedInput reports whether any registered client tool consumes
-// streamed input. The engine uses this to derive the request-wide server
-// capability; ordinary tools need not opt in individually on the wire.
-func (s *ToolSet) NeedsStreamedInput() bool {
-	if s == nil {
-		return false
-	}
-	for _, tool := range s.tools {
-		if tool.inputReducer != nil {
-			return true
-		}
-	}
-	return false
 }
 
 // NormalizeResult applies the terminal render-state safety rule for a tool.

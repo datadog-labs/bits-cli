@@ -105,7 +105,7 @@ func (p inputPosition) Hash() (uint32, error) { return starlark.String(p).Hash()
 // planBreaks validates a built-in's break arguments before anything is
 // emitted, so a mistake never leaves a half-streamed call behind. Anchors are
 // checked against each input as written; emitToolCall cuts the final input.
-func (r *run) planBreaks(specs []spec, stream bool, breakInput string, at starlark.Value, breakBefore string) error {
+func (r *run) planBreaks(specs []spec, style toolEmit, breakInput string, at starlark.Value, breakBefore string) error {
 	for _, name := range []string{breakInput, breakBefore} {
 		if err := checkBreakpoint(name); err != nil {
 			return err
@@ -119,9 +119,11 @@ func (r *run) planBreaks(specs []spec, stream bool, breakInput string, at starla
 			return err
 		}
 	}
-	if breakInput != "" && (!stream || !r.opts.StreamToolCallInput) {
-		return errors.New("break_input needs streamed input, which is off here " +
-			"(stream=False, or the engine did not ask for streamed tool input)")
+	for _, s := range specs {
+		if breakInput != "" && !r.streamsInput(s.name, style) {
+			return errors.New("break_input needs streamed input, which is off here " +
+				"(stream=False, or the tool did not opt into streamed input)")
+		}
 	}
 	return nil
 }

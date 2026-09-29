@@ -136,8 +136,37 @@ func summarize(msg assistant.Message) (key, head, body string) {
 	}
 }
 
+func TestPerToolInputStreaming(t *testing.T) {
+	unavailable := false
+	tools := []assistant.ClientTool{
+		{Name: "preview", StreamInput: true},
+		{Name: "ordinary"},
+		{Name: "disabled", StreamInput: false},
+		{Name: "unavailable", StreamInput: true, IsAvailable: &unavailable},
+	}
+	got, err := send(t, &Fake{}, `call([("preview", {}), ("ordinary", {}), ("disabled", {}), ("unavailable", {}), ("missing", {})])`, assistant.SendOptions{ClientTools: tools})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"started:preview", "delta:{}", "client_tool_call:preview {}", "client_tool_call:ordinary {}", "client_tool_call:disabled {}", "client_tool_call:unavailable {}", "client_tool_call:missing {}", "usage"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestInputBreakpointRequiresEveryToolToOptIn(t *testing.T) {
+	got, err := send(t, &Fake{}, `call([("preview", {}), ("ordinary", {})], break_input="x")`, assistant.SendOptions{
+		ClientTools: []assistant.ClientTool{{Name: "preview", StreamInput: true}, {Name: "ordinary"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || !strings.HasPrefix(got[0], "markdown_fragment:**fake script error**") || !strings.Contains(got[0], "break_input needs streamed input") || got[1] != "usage" {
+		t.Fatalf("unselected tool breakpoint emitted calls or no script error: %q", got)
+	}
+}
+
 func TestBuiltinsEmit(t *testing.T) {
-	stream := assistant.SendOptions{StreamToolCallInput: true}
 	for _, test := range []struct {
 		name    string
 		message string
@@ -177,7 +206,7 @@ func TestBuiltinsEmit(t *testing.T) {
 			want: []string{"usage"},
 		},
 		{
-			name: "streamed input", message: `tool("search", {"query": "a longer query than one chunk"}, out="ok")`, opts: stream,
+			name: "streamed input", message: `tool("search", {"query": "a longer query than one chunk"}, out="ok", stream=True)`,
 			want: []string{"started:search", `delta:{"query":"a longer query than one chunk"}`, `tool_call:search {"query":"a longer query than one chunk"}`, "tool_response:success ok", "usage"},
 		},
 		{
@@ -189,7 +218,7 @@ func TestBuiltinsEmit(t *testing.T) {
 			want: []string{"markdown_fragment:after 0", "usage"},
 		},
 		{
-			name: "stream disabled per call", message: `call("list_files", {}, stream=False)`, opts: stream,
+			name: "stream disabled per call", message: `call("list_files", {}, stream=False)`, opts: assistant.SendOptions{ClientTools: []assistant.ClientTool{{Name: "list_files", StreamInput: true}}},
 			want: []string{"client_tool_call:list_files {}", "usage"},
 		},
 	} {
@@ -371,7 +400,7 @@ func TestRandomDefaultSeed(t *testing.T) {
 // TestBreakpoints pins where each breakpoint stops, that a continue file
 // continues it once, that Esc still cancels, and that replay never stops.
 func TestBreakpoints(t *testing.T) {
-	stream := assistant.SendOptions{StreamToolCallInput: true}
+	stream := assistant.SendOptions{ClientTools: []assistant.ClientTool{{Name: "write_file", StreamInput: true}}}
 	input := strings.Repeat("0123456789abcdef", 2) + "tail" // 36 characters, three chunks
 	streamedWrite := func(streamed string) []string {
 		return []string{"started:write_file", "delta:" + streamed, "client_tool_call:write_file " + input, "usage"}
@@ -407,7 +436,7 @@ func TestBreakpoints(t *testing.T) {
 			continued: streamedWrite(input),
 		},
 		{
-			name: "server tool input", script: `tool("search", {"q": "p95 latency"}, out="ok", break_input="x", at="p95")`, opts: stream,
+			name: "server tool input", script: `tool("search", {"q": "p95 latency"}, out="ok", stream=True, break_input="x", at="p95")`,
 			stopped:   []string{"started:search", `delta:{"q":"p95`},
 			continued: []string{"started:search", `delta:{"q":"p95 latency"}`, `tool_call:search {"q":"p95 latency"}`, "tool_response:success ok", "usage"},
 		},

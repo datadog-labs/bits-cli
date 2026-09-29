@@ -44,8 +44,10 @@ load("internal/agent/fake/testdata/questions.star", "ask_user_question"); ask_us
   turn.
 - `call` really runs local tools: in `manual` mode writes and commands wait on
   the permission panel; in `skip-permissions` they run.
-- Tool input streams whenever the engine asks; `stream=False` turns it off
-  for one call. `approval_request` gets its `tool_call_id` filled in.
+- Client tool input streams only when its available definition has
+  `stream_input: true`; `stream=False` disables it for one call. Server tools
+  opt in through `tool(..., stream=True)`. `approval_request` gets its
+  `tool_call_id` filled in.
 - `random("x")` or `random(42)` always gives the same answer. Unseeded, it
   depends on the turn and call position, so a fresh conversation replays the
   same sequence.

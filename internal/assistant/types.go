@@ -67,11 +67,6 @@ type SendOptions struct {
 	// turn (e.g. {"user_memory": true} or {"mcp_tool__ask_widget_expert": true}).
 	// Values are usually bool; external MCP session flags carry string values.
 	ExperimentalToolOverrides map[string]any
-	// StreamToolCallInput opts into streamed tool-call input: the server emits a
-	// tool_call_started followed by tool_call_input_delta fragments before the
-	// final tool_call / client_tool_call. Off by default; without it those two
-	// content types are never sent.
-	StreamToolCallInput bool
 }
 
 // Request is the JSON:API-style envelope for POST /api/v2/assistant.
@@ -91,30 +86,20 @@ type RequestData struct {
 // Message is either a plain string (a user message) or a list of
 // ClientToolResponse objects (answering a client-tool / approval request).
 type RequestAttributes struct {
-	Message                   any                  `json:"message"`
-	ConversationID            string               `json:"conversation_id,omitempty"`
-	Model                     string               `json:"model,omitempty"`
-	InferenceMode             string               `json:"inference_mode,omitempty"`
-	Referrer                  string               `json:"referrer,omitempty"`
-	ClientTools               []ClientTool         `json:"client_tools,omitempty"`
-	SkillOverrides            []SkillOverride      `json:"skill_overrides,omitempty"`
-	Context                   *AssistantContext    `json:"context,omitempty"`
-	Profile                   Profile              `json:"profile,omitempty"`
-	CustomUserContext         string               `json:"custom_user_context,omitempty"`
-	EnableDebugMode           bool                 `json:"enable_debug_mode,omitempty"`
-	DebugTag                  string               `json:"debug_tag,omitempty"`
-	MessageHistory            []json.RawMessage    `json:"message_history,omitempty"`
-	ExperimentalToolOverrides map[string]any       `json:"experimental_tool_overrides,omitempty"`
-	Capabilities              *RequestCapabilities `json:"capabilities,omitempty"`
-}
-
-// RequestCapabilities declares optional response behaviors the client can
-// handle. Each capability defaults off server-side, so a behavior is only
-// enabled once explicitly requested.
-type RequestCapabilities struct {
-	// StreamToolCallInput requests streamed tool-call input (tool_call_started +
-	// tool_call_input_delta) ahead of the authoritative final tool call.
-	StreamToolCallInput bool `json:"stream_tool_call_input,omitempty"`
+	Message                   any               `json:"message"`
+	ConversationID            string            `json:"conversation_id,omitempty"`
+	Model                     string            `json:"model,omitempty"`
+	InferenceMode             string            `json:"inference_mode,omitempty"`
+	Referrer                  string            `json:"referrer,omitempty"`
+	ClientTools               []ClientTool      `json:"client_tools,omitempty"`
+	SkillOverrides            []SkillOverride   `json:"skill_overrides,omitempty"`
+	Context                   *AssistantContext `json:"context,omitempty"`
+	Profile                   Profile           `json:"profile,omitempty"`
+	CustomUserContext         string            `json:"custom_user_context,omitempty"`
+	EnableDebugMode           bool              `json:"enable_debug_mode,omitempty"`
+	DebugTag                  string            `json:"debug_tag,omitempty"`
+	MessageHistory            []json.RawMessage `json:"message_history,omitempty"`
+	ExperimentalToolOverrides map[string]any    `json:"experimental_tool_overrides,omitempty"`
 }
 
 // updateConversationRequest is the JSON:API body for renaming a conversation
@@ -229,6 +214,9 @@ type ClientTool struct {
 	Description string `json:"description"`
 	// InputSchema is a JSON Schema object describing the tool's arguments.
 	InputSchema map[string]any `json:"input_schema"`
+	// StreamInput allows provisional tool_call_started and tool_call_input_delta
+	// events for this tool. The final tool call remains authoritative.
+	StreamInput bool `json:"stream_input,omitempty"`
 	// IsDeferred marks the tool for deferred (search-based) loading rather than
 	// eager exposure.
 	IsDeferred bool `json:"is_deferred,omitempty"`
@@ -370,7 +358,7 @@ const (
 	// ContentDashboard is a whole generated dashboard (title + widgets).
 	ContentDashboard = "dashboard"
 
-	// --- On the POST stream only if capabilities.stream_tool_call_input is set ---
+	// --- Provisional POST events for tools with stream_input enabled ---
 
 	ContentToolCallStarted    = "tool_call_started"     // a tool call begins (before input arrives)
 	ContentToolCallInputDelta = "tool_call_input_delta" // streamed fragment of a tool call's input JSON
