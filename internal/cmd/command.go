@@ -19,6 +19,8 @@ import (
 // chat starts.
 type ChatOptions struct {
 	ConversationID  string
+	Model           string
+	InferenceMode   string
 	AuthMode        auth.Mode
 	Site            string
 	PermissionsMode agent.PermissionsMode
@@ -133,6 +135,17 @@ func newRootCommand(actions Actions) *cobra.Command {
 	)
 	root.AddCommand(newRunCommand(actions.Run), newLoginCommand(actions.Login), newLogoutCommand(actions.Logout))
 	return root
+}
+
+func parseInferenceMode(raw string) (string, error) {
+	switch raw {
+	case "":
+		return "", nil
+	case "fast", "deep":
+		return raw, nil
+	default:
+		return "", fmt.Errorf("invalid inference mode %q; expected fast or deep", raw)
+	}
 }
 
 func validateSiteSelection(mode auth.Mode, site string, siteChanged bool) error {

@@ -32,6 +32,8 @@ type SendOptions struct {
 	ConversationID string
 	// Model optionally overrides the model (e.g. "claude-sonnet-4-6").
 	Model string
+	// InferenceMode optionally requests the backend's fast or deep inference mode.
+	InferenceMode string
 	// Referrer is the Datadog page URL the user was on, used for context.
 	Referrer string
 	// ClientTools are client-side tools the caller can execute. Required to
@@ -92,6 +94,7 @@ type RequestAttributes struct {
 	Message                   any                  `json:"message"`
 	ConversationID            string               `json:"conversation_id,omitempty"`
 	Model                     string               `json:"model,omitempty"`
+	InferenceMode             string               `json:"inference_mode,omitempty"`
 	Referrer                  string               `json:"referrer,omitempty"`
 	ClientTools               []ClientTool         `json:"client_tools,omitempty"`
 	SkillOverrides            []SkillOverride      `json:"skill_overrides,omitempty"`

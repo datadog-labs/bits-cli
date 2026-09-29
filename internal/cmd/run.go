@@ -34,6 +34,11 @@ func newRunCommand(action func(context.Context, RunOptions) error) *cobra.Comman
 			if !command.Flags().Changed("delivery") {
 				return fmt.Errorf("required flag \"--delivery\" was not set; the first delivery is adeep")
 			}
+			inferenceMode, err := parseInferenceMode(opts.InferenceMode)
+			if err != nil {
+				return err
+			}
+			opts.InferenceMode = inferenceMode
 			delivery, err := parseDelivery(opts.Delivery)
 			if err != nil {
 				return err
@@ -60,7 +65,8 @@ func newRunCommand(action func(context.Context, RunOptions) error) *cobra.Comman
 	flags := command.Flags()
 	flags.StringVar(&opts.Prompt, "prompt", "", "literal prompt for the one assistant turn (required)")
 	flags.StringVar(&opts.Delivery, "delivery", "", "delivery streamed on stdout: adeep (required)")
-	flags.StringVar(&opts.Model, "model", "", "model override for this run")
+	flags.StringVar(&opts.Model, "model", "", "backend model ID override (for example, anthropic/claude-sonnet-4-6)")
+	flags.StringVar(&opts.InferenceMode, "reasoning", "", "reasoning mode: fast or deep (feature flagged by the backend)")
 	flags.StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
 	flags.StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
 	flags.StringVar(&opts.ConversationID, "conversation", "", "resume an existing conversation by ID")

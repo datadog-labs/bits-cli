@@ -37,6 +37,7 @@ func TestRunDispatchesResolvedOptions(t *testing.T) {
 		"--prompt", "summarize the incident",
 		"--delivery", "adeep",
 		"--model", "claude-sonnet-4-6",
+		"--reasoning", "fast",
 		"--auth", "api-key",
 		"--site", "https://api.datadoghq.eu",
 		"--conversation", "conversation-9",
@@ -50,6 +51,7 @@ func TestRunDispatchesResolvedOptions(t *testing.T) {
 	want := []RunOptions{{
 		ChatOptions: ChatOptions{
 			ConversationID:  "conversation-9",
+			InferenceMode:   "fast",
 			AuthMode:        auth.ModeAPIKey,
 			Site:            "https://api.datadoghq.eu",
 			PermissionsMode: agent.ModeSkipPermissions,
@@ -72,7 +74,7 @@ func TestRunDefaultsToSkipPermissions(t *testing.T) {
 		t.Fatalf("runs = %d, want 1", len(recorded))
 	}
 	opts := recorded[0]
-	if opts.AuthMode != auth.ModeAuto || opts.PermissionsMode != agent.ModeSkipPermissions || opts.Site != "" || opts.ConversationID != "" || opts.Model != "" {
+	if opts.AuthMode != auth.ModeAuto || opts.PermissionsMode != agent.ModeSkipPermissions || opts.Site != "" || opts.ConversationID != "" || opts.Model != "" || opts.InferenceMode != "" {
 		t.Fatalf("defaults = %#v, want skip-permissions with the shared chat defaults", opts.ChatOptions)
 	}
 }
@@ -95,6 +97,7 @@ func TestRunRejectsUsageBeforeAction(t *testing.T) {
 		{name: "removed approval flag", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--approval", "allow-all"}, wantErr: "unknown flag: --approval"},
 		{name: "removed permissions flag", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--permissions", "manual"}, wantErr: "unknown flag: --permissions"},
 		{name: "invalid auth mode", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--auth", "oauth"}, wantErr: `invalid authentication mode "oauth"; expected auto or api-key`},
+		{name: "invalid reasoning mode", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--reasoning", "normal"}, wantErr: `invalid inference mode "normal"; expected fast or deep`},
 		{name: "api key without site", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--auth", "api-key"}, wantErr: "--auth api-key requires --site"},
 		{name: "web console site", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--auth", "api-key", "--site", "https://app.datadoghq.com"}, wantErr: "datadog API site must use an api-prefixed hostname"},
 		{name: "site without api key", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--site", "app.datadoghq.eu"}, wantErr: "--site requires --auth api-key"},

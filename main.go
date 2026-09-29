@@ -80,7 +80,7 @@ func runRunWithStore(ctx context.Context, opts cmd.RunOptions, store auth.Creden
 			AppKey:  os.Getenv("DD_APP_KEY"),
 			APISite: opts.Site,
 		},
-		Send:           assistant.SendOptions{ConversationID: opts.ConversationID, Model: opts.Model},
+		Send:           assistant.SendOptions{ConversationID: opts.ConversationID, Model: opts.Model, InferenceMode: opts.InferenceMode},
 		UseFakeBackend: os.Getenv("BITS_FAKE_BACKEND") == "1",
 	})
 	if err != nil {
@@ -160,6 +160,12 @@ func printLoggedOut(w io.Writer) error {
 }
 
 func runChat(parent context.Context, opts cmd.ChatOptions) error {
+	if model, ok := os.LookupEnv("BITS_ASSISTANT_MODEL"); ok {
+		opts.Model = model
+	}
+	if inferenceMode, ok := os.LookupEnv("BITS_ASSISTANT_INFERENCE_MODE"); ok {
+		opts.InferenceMode = inferenceMode
+	}
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	workspace, err := openCurrentWorkspace()
@@ -244,7 +250,7 @@ func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth
 			AppKey:  os.Getenv("DD_APP_KEY"),
 			APISite: opts.Site,
 		},
-		Send:           assistant.SendOptions{ConversationID: opts.ConversationID},
+		Send:           assistant.SendOptions{ConversationID: opts.ConversationID, Model: opts.Model, InferenceMode: opts.InferenceMode},
 		UseFakeBackend: os.Getenv("BITS_FAKE_BACKEND") == "1",
 	}
 	engine, err := startup.NewEngine(ctx, engineOpts)

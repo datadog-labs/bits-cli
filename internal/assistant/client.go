@@ -425,6 +425,7 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 		Message:                   message,
 		ConversationID:            opts.ConversationID,
 		Model:                     opts.Model,
+		InferenceMode:             opts.InferenceMode,
 		Referrer:                  opts.Referrer,
 		ClientTools:               opts.ClientTools,
 		SkillOverrides:            opts.SkillOverrides,

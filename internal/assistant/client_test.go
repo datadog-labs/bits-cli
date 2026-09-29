@@ -263,6 +263,24 @@ func TestSend_EmptyConversationIDCreatesOnFirstTurn(t *testing.T) {
 	}
 }
 
+func TestSend_IncludesModelAndInferenceMode(t *testing.T) {
+	var request Request
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		writeStream(t, w)
+	})
+	_, err := c.Send(context.Background(), "hello", SendOptions{Model: "openai/gpt-5.5", InferenceMode: "deep"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs := request.Data.Attributes
+	if attrs.Model != "openai/gpt-5.5" || attrs.InferenceMode != "deep" {
+		t.Fatalf("model/inference mode = %q/%q, want openai/gpt-5.5/deep", attrs.Model, attrs.InferenceMode)
+	}
+}
+
 func TestSend_DefaultsToCLIProfile(t *testing.T) {
 	var gotProfile, gotSurface string
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {

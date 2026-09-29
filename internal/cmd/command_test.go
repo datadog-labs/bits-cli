@@ -145,7 +145,7 @@ func TestCommandHelp(t *testing.T) {
 				"login", "logout", "--auth", "auto or api-key", "--permissions", "manual or skip-permissions", "--site",
 				"--conversation", "--help",
 			},
-			doNotWant: []string{"completion", "--client-id"},
+			doNotWant: []string{"completion", "--client-id", "--model", "--reasoning"},
 		},
 		{
 			name: "root long",
