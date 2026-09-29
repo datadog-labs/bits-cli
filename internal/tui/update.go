@@ -114,11 +114,12 @@ func waitEvent(generation uint64, ch <-chan agent.Event) tea.Cmd {
 type focus int
 
 const (
-	focusEditor   focus = iota // transcript scroll + text input (and its completion menu)
-	focusApproval              // a tool approval is pending
-	focusPicker                // the /resume conversation picker
-	focusStatus                // the local /status document
-	focusLogin                 // startup OAuth
+	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
+	focusApproval                 // a tool approval is pending
+	focusPicker                   // the /resume conversation picker
+	focusStatus                   // the local /status document
+	focusPermissions              // the permissions picker
+	focusLogin                    // startup OAuth
 )
 
 func (m *Model) focus() focus {
@@ -129,6 +130,8 @@ func (m *Model) focus() focus {
 		return focusPicker
 	case ModeStatus:
 		return focusStatus
+	case ModePermissions:
+		return focusPermissions
 	case ModeChat, ModeTermInit:
 		if len(m.pendingApprovals) > 0 {
 			return focusApproval
@@ -396,6 +399,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.focus() == focusStatus {
 		return m, m.updateStatus(msg)
 	}
+	if m.focus() == focusPermissions {
+		return m, nil
+	}
 	// Paste, cursor blink, and other editor-bound input; a paste can change the
 	// editor's height, so relayout. When the editor is not the focus it is
 	// blurred and ignores these, showing no cursor.
@@ -561,16 +567,22 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	}
 	m.cancelTurn = nil
 	m.cancelRequested = false
+	var permissionsCommand tea.Cmd
+	if m.pendingLogout {
+		m.pendingPermissions = ""
+	} else {
+		permissionsCommand = m.applyPendingPermissions()
+	}
 	m.syncStatus()
 	if m.pendingNew {
 		m.pendingNew = false
-		return m, m.startNewConversation()
+		return m, batchCommands(permissionsCommand, m.startNewConversation())
 	}
 	if m.pendingLogout {
 		m.pendingLogout = false
-		return m, m.startLogout()
+		return m, batchCommands(permissionsCommand, m.startLogout())
 	}
-	return m, nil
+	return m, permissionsCommand
 }
 
 func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -680,6 +692,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleApprovalKey(msg)
 	case focusStatus:
 		return m, m.updateStatus(msg)
+	case focusPermissions:
+		return m, m.updatePermissionsKey(msg)
 	default:
 		return m.handleEditorKey(msg)
 	}

@@ -42,6 +42,7 @@ const (
 // Editor is the chat input. The completion menu opens automatically for @
 // tokens and for a / token only when it is the first token in the prompt.
 type Editor struct {
+	commandSpecs      []CommandSpec
 	ta                textarea.Model
 	styles            styles.Editor
 	menu              menu
@@ -73,6 +74,11 @@ type Editor struct {
 	sweep       styles.BorderSweep
 	sweepWidth  int
 	sweepCached bool
+}
+
+func (e *Editor) SetCommands(commands []CommandSpec) {
+	e.commandSpecs = append([]CommandSpec(nil), commands...)
+	e.recompute()
 }
 
 // menu is the completion popup state rendered below the textarea.
@@ -550,7 +556,11 @@ func (e *Editor) recompute() {
 			e.closeMenu()
 			return
 		}
-		e.setMenu(CommandCandidates(word[1:]), "")
+		if e.commandSpecs != nil {
+			e.setMenu(CommandCandidatesFrom(e.commandSpecs, word[1:]), "")
+		} else {
+			e.setMenu(CommandCandidates(word[1:]), "")
+		}
 		return
 	}
 	span, active := e.activeEntitySpan()

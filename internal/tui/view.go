@@ -66,7 +66,7 @@ func (m *Model) View() tea.View {
 	switch m.mode {
 	case ModeTermInit:
 		v.Content = "loading…"
-	case ModeChat:
+	case ModeChat, ModePermissions:
 		if m.chatViewTooSmall() {
 			v.MouseMode = tea.MouseModeNone
 			message := ansi.Truncate("Resize terminal to use Bits", max(1, m.width), "")
@@ -104,6 +104,10 @@ func (m *Model) chatView() string {
 	}
 
 	base := m.chatViewBase(m.list.Render())
+	if m.mode == ModePermissions {
+		// Spans the terminal with its own margin, so it does not track the composer.
+		return m.chatOverlay(base, m.permissionsView(), 0)
+	}
 	if len(m.pendingApprovals) > 0 {
 		return base
 	}
@@ -111,12 +115,16 @@ func (m *Model) chatView() string {
 	if menu == "" {
 		return base
 	}
+	return m.chatOverlay(base, menu, m.editor.ContentOffset())
+}
 
-	// Float the completion menu as a fixed overlay just above the input. The
-	// editor's Height excludes the menu, so opening it covers the transcript's
-	// bottom rows without reflowing the layout.
+// chatOverlay floats a popup above the input without reflowing the transcript,
+// anchored at x and clamped so it never overflows the transcript width.
+func (m *Model) chatOverlay(base, menu string, x int) string {
+	if menu == "" {
+		return base
+	}
 	menuW, menuH := lipgloss.Width(menu), lipgloss.Height(menu)
-	x := m.editor.ContentOffset()
 	if width := m.list.Width(); x+menuW > width {
 		x = max(0, width-menuW)
 	}
@@ -202,7 +210,7 @@ func selectionRowCount(content string) int {
 // composer, transcript scrolling — can be driven blind. Only the global quit
 // (ctrl+c) still works; the user resizes to interact.
 func (m *Model) chatViewTooSmall() bool {
-	if m.mode != ModeChat {
+	if m.mode != ModeChat && m.mode != ModePermissions {
 		return false
 	}
 	if m.width < minimumChatWidth || m.height < minimumChatHeight {

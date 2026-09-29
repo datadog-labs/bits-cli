@@ -9,6 +9,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/editor"
 )
 
 // activeTurnPolicy declares how a command behaves while a turn or history
@@ -41,6 +42,7 @@ type commandDefinition struct {
 	name             string
 	aliases          []string
 	activeTurnPolicy activeTurnPolicy
+	description      string
 }
 
 var commandDefinitions = []commandDefinition{
@@ -49,48 +51,65 @@ var commandDefinitions = []commandDefinition{
 		name:             "new",
 		aliases:          []string{"clear"},
 		activeTurnPolicy: commandCancelsTurn,
+		description:      "start a new conversation",
 	},
 	{
 		id:               commandQuit,
 		name:             "quit",
 		aliases:          []string{"exit"},
 		activeTurnPolicy: commandCancelsTurn,
+		description:      "exit bits",
 	},
 	{
 		id:               commandResume,
 		name:             "resume",
 		activeTurnPolicy: commandRejectedDuringTurn,
+		description:      "resume a conversation",
 	},
 	{
 		id:               commandStatus,
 		name:             "status",
 		activeTurnPolicy: commandAllowedDuringTurn,
+		description:      "show session status",
 	},
 	{
 		id:               commandCopy,
 		name:             "copy",
 		activeTurnPolicy: commandRejectedDuringTurn,
+		description:      "copy the latest assistant response",
 	},
 	{
 		id:               commandWeb,
 		name:             "web",
 		activeTurnPolicy: commandAllowedDuringTurn,
+		description:      "open this conversation in Datadog",
 	},
 	{
 		id:               commandSettings,
 		name:             "settings",
 		activeTurnPolicy: commandAllowedDuringTurn,
+		description:      "open assistant settings",
 	},
 	{
 		id:               commandLogout,
 		name:             "logout",
 		activeTurnPolicy: commandCancelsTurn,
+		description:      "sign out from your Datadog account",
 	},
 	{
 		id:               commandPermissions,
 		name:             "permissions",
-		activeTurnPolicy: commandRejectedDuringTurn,
+		activeTurnPolicy: commandAllowedDuringTurn,
+		description:      "choose what Bits is allowed to do",
 	},
+}
+
+func commandCompletionSpecs() []editor.CommandSpec {
+	specs := make([]editor.CommandSpec, 0, len(commandDefinitions))
+	for _, definition := range commandDefinitions {
+		specs = append(specs, editor.CommandSpec{Name: definition.name, Aliases: definition.aliases, Detail: definition.description})
+	}
+	return specs
 }
 
 func lookupCommand(name string) (commandDefinition, bool) {
@@ -153,13 +172,6 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 			if definition.id == commandCopy {
 				return m, m.showNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response to finish before using /copy."), 0)
 			}
-			if definition.id == commandPermissions {
-				if argument == "" {
-					// A bare /permissions only reports the mode.
-					break
-				}
-				return m, m.showNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response and any permission request to finish before switching permissions."), 0)
-			}
 			return m, m.showNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active turn: /%s", name), 0)
 		case commandCancelsTurn:
 			switch definition.id {
@@ -199,7 +211,7 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 	case commandLogout:
 		return m, m.startLogout()
 	case commandPermissions:
-		return m, m.switchPermissions(argument)
+		return m, batchCommands(m.stopCompletionSearches(), m.switchPermissions(argument))
 	default:
 		panic("unhandled registered command")
 	}

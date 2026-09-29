@@ -98,6 +98,26 @@ func TestLookupCommandResolvesExitAlias(t *testing.T) {
 	}
 }
 
+func TestCommandCompletionMatchesRegistry(t *testing.T) {
+	specs := commandCompletionSpecs()
+	if len(specs) != len(commandDefinitions) {
+		t.Fatalf("completion has %d entries, registry has %d", len(specs), len(commandDefinitions))
+	}
+	for _, candidate := range tuieditor.CommandCandidatesFrom(specs, "") {
+		if _, ok := lookupCommand(candidate.ID); !ok {
+			t.Fatalf("completion advertises unregistered command %q", candidate.ID)
+		}
+		if candidate.ID == "help" {
+			t.Fatal("/help remains in completion")
+		}
+	}
+	m := newModelWithSpy(t)
+	_, _ = m.dispatchCommand("help", "")
+	if !strings.Contains(m.notice.Text, "Unknown command: /help") {
+		t.Fatalf("/help notice = %q", m.notice.Text)
+	}
+}
+
 func TestLookupCommandResolvesClearAsExactNewAlias(t *testing.T) {
 	newCommand, ok := lookupCommand("new")
 	if !ok {

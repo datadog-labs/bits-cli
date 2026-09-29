@@ -125,6 +125,8 @@ type Event struct {
 	Round int
 }
 
+const maxQueuedCommands = 64
+
 // maxTurns caps the client-tool loop so a misbehaving backend can't spin
 // forever.
 const maxTurns = 150
@@ -199,7 +201,7 @@ func New(b Backend, opts assistant.SendOptions) *Engine {
 		opts:          opts,
 		runtimeStatus: runtimeStatus,
 		transcript:    NewTranscript(),
-		commands:      make(chan toolCommand, 64),
+		commands:      make(chan toolCommand, maxQueuedCommands),
 		sessionGrants: make(map[ApprovalKey]struct{}),
 	}
 }
@@ -668,6 +670,26 @@ func (e *Engine) NewConversation() error {
 	e.opts.MessageHistory = nil
 	e.transcript = NewTranscript()
 	clear(e.sessionGrants)
+	return nil
+}
+
+// SetPermissionsMode changes the process tool mode while the engine is idle.
+// The engine owns session grants, so returning to manual clears them under the
+// same operation gate used by turns and conversation restores.
+func (e *Engine) SetPermissionsMode(tools *ToolSet, mode PermissionsMode) error {
+	if !e.active.CompareAndSwap(false, true) {
+		return ErrOperationActive
+	}
+	defer e.active.Store(false)
+	if tools == nil {
+		return fmt.Errorf("tool set is nil")
+	}
+	if err := tools.SetPermissionsMode(mode); err != nil {
+		return err
+	}
+	if mode == ModeManual {
+		clear(e.sessionGrants)
+	}
 	return nil
 }
 

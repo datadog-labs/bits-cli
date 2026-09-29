@@ -32,6 +32,7 @@ const (
 	ModeLogin
 	ModeConversations
 	ModeStatus
+	ModePermissions
 )
 
 // EngineFactory constructs the authenticated chat engine after startup login
@@ -120,9 +121,15 @@ type Model struct {
 	logoutGeneration uint64
 	loggedOut        bool
 
-	pendingApprovals []agent.Block
-	approvalChoice   int
-	approvalPanel    *components.Panel
+	pendingApprovals  []agent.Block
+	approvalChoice    int
+	approvalPanel     *components.Panel
+	permissionsPanel  *components.Panel
+	permissionChoice  int
+	permissionConfirm bool
+	permissionAllow   bool
+	// A mode selected during an active turn applies when that turn closes.
+	pendingPermissions agent.PermissionsMode
 
 	// Top-level screen; transitions go through setMode.
 	mode Mode
@@ -257,6 +264,7 @@ func newShell() *Model {
 		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
 		status:            &status,
 		approvalPanel:     components.NewPanel(theme.Approval.Panel),
+		permissionsPanel:  components.NewPanel(theme.Permissions),
 		styles:            theme,
 		searchSessionID:   newSearchSessionID(),
 		entitySearchCache: make(map[string]entitySearchCacheEntry),
@@ -264,6 +272,7 @@ func newShell() *Model {
 		chatMouseMode:     chatMouseMode(),
 	}
 	m.editor.SetHistorySource(func() []string { return m.transcript.UserPrompts() })
+	m.editor.SetCommands(commandCompletionSpecs())
 	m.applyStyles(m.styles)
 	return m
 }
@@ -296,6 +305,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	m.editor.SetInputStyles(theme.Input)
 	m.editor.SetStyles(theme.Editor)
 	m.approvalPanel.SetStyles(theme.Approval.Panel)
+	m.permissionsPanel.SetStyles(theme.Permissions)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
 	}
