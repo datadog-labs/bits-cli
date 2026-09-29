@@ -74,13 +74,13 @@ func (f *Fake) Send(ctx context.Context, message any, opts assistant.SendOptions
 	}
 	switch m := message.(type) {
 	case string:
-		return c.id, runScript(out, opts, f.startTurn(c, m))
+		return c.id, f.runScript(c, out, opts, f.startTurn(c, m, nil))
 	case []assistant.ClientToolResponse:
 		turn, ok := f.resumeTurn(c, m)
 		if !ok {
 			return c.id, errors.New("fake: tool responses without a turn")
 		}
-		return c.id, runScript(out, opts, turn)
+		return c.id, f.runScript(c, out, opts, turn)
 	default:
 		return c.id, fmt.Errorf("fake: unsupported message type %T", message)
 	}

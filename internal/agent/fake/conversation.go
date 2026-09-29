@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go.starlark.net/starlark"
+
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
 
@@ -29,14 +31,17 @@ type conversation struct {
 	turn     *scriptTurn // the latest turn; nil before the first
 }
 
-// scriptTurn is everything needed to re-execute a turn: its source, its
-// index in the conversation (random()'s default seed), the tool responses
-// received for each round so far, the turn's replay-stable file snapshot, and
-// where its breakpoints look for continue files.
+// scriptTurn is everything needed to re-execute a turn: its source, or the
+// function push_conversation() received, its index in the conversation
+// (random()'s default seed), the tool responses received for each round so
+// far, the conversations it pushed, the turn's replay-stable file snapshot,
+// and where its breakpoints look for continue files.
 type scriptTurn struct {
 	src         string
+	fn          starlark.Callable
 	index       int
 	results     [][]assistant.ClientToolResponse
+	pushed      []string
 	snapshot    *sourceSnapshot
 	continueDir string
 }
@@ -61,8 +66,9 @@ func (f *Fake) conversation(id string) *conversation {
 	return c
 }
 
-// startTurn records the user's script and stores it for continuation.
-func (f *Fake) startTurn(c *conversation, text string) scriptTurn {
+// startTurn records the user's script and stores it for continuation. A
+// non-nil fn is run instead of text, which then only describes it.
+func (f *Fake) startTurn(c *conversation, text string, fn starlark.Callable) scriptTurn {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.appendLocked(c, assistant.Message{Role: "user", MessageID: f.nextID(), Content: assistant.TextContent(text)})
@@ -71,6 +77,7 @@ func (f *Fake) startTurn(c *conversation, text string) scriptTurn {
 	}
 	c.turn = &scriptTurn{
 		src:         strings.TrimSpace(text),
+		fn:          fn,
 		index:       c.turns,
 		snapshot:    newSourceSnapshot(f.scriptRoot()),
 		continueDir: cmp.Or(f.ContinueDir, defaultContinueDir()),
@@ -109,13 +116,20 @@ func (f *Fake) resumeTurn(c *conversation, rs []assistant.ClientToolResponse) (s
 		return scriptTurn{}, false
 	}
 	c.turn.results = append(c.turn.results, rs)
-	return scriptTurn{
-		src:         c.turn.src,
-		index:       c.turn.index,
-		results:     slices.Clone(c.turn.results),
-		snapshot:    c.turn.snapshot,
-		continueDir: c.turn.continueDir,
-	}, true
+	turn := *c.turn
+	turn.results = slices.Clone(turn.results)
+	turn.pushed = slices.Clone(turn.pushed)
+	return turn, true
+}
+
+// rememberPush records a conversation pushed by c's current turn, so a
+// replayed round returns its id instead of pushing it again.
+func (f *Fake) rememberPush(c *conversation, id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c.turn != nil {
+		c.turn.pushed = append(c.turn.pushed, id)
+	}
 }
 
 // record appends a delivered message to the conversation history.

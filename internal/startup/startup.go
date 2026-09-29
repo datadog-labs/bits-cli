@@ -63,7 +63,17 @@ func NewEngine(ctx context.Context, opts EngineOptions) (*agent.Engine, error) {
 	switch opts.Client.Mode {
 	case auth.ModeAuto:
 		if opts.UseFakeBackend {
-			return agent.New(fake.New(), opts.Send), nil
+			backend := fake.New()
+			// The fake also takes a script for --conversation: it becomes the
+			// first turn of a conversation an earlier session left behind.
+			if script := opts.Send.ConversationID; script != "" && !agent.ValidConversationID(script) {
+				id, err := backend.PushConversation(ctx, "", script)
+				if err != nil {
+					return nil, fmt.Errorf("fake --conversation script: %w", err)
+				}
+				opts.Send.ConversationID = id
+			}
+			return agent.New(backend, opts.Send), nil
 		}
 	case auth.ModeAPIKey:
 		// Continue below; API-key mode must validate its explicit credentials.

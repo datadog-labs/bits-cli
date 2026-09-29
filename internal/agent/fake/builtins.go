@@ -445,6 +445,7 @@ const helpText = "## Fake backend scripts\n\n" +
 	"| `breakpoint(name)` | stops until its continue file appears (see below) |\n" +
 	"| `break_input=name, at=` on `tool`/`call` | stops while streaming input: halfway by default, or `at=START`, `at=END`, `at=\"text\"` (right after it) |\n" +
 	"| `break_before_results=name` on `tool` | stops after the calls, before any result |\n" +
+	"| `push_conversation(fn, ..., title=)` | nothing: records a new conversation whose user turns are the functions, as an earlier session left it, and returns its id; open it with /resume |\n" +
 	"| `kitchen()` | every output type once |\n" +
 	"| `json.encode`, `json.decode`, `true`, `false`, `null` | JSON helpers |\n"
 

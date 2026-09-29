@@ -8,7 +8,8 @@ rendering run unchanged. Only the network is faked.
 Conversations live in memory for the life of the process: `/resume` and
 `/status` work within a session, but a new process knows no earlier
 conversation, so `--conversation` with an id from a previous run is not
-found.
+found. To come back to a conversation as if an earlier session had left it,
+[push one](#pushed-conversations) instead.
 
 ## Scripts
 
@@ -41,6 +42,7 @@ help()
 | `fail(status)`, `fail("net")`, `fail("timeout")` | a backend failure after the output so far |
 | `sleep("2s")` | a stall |
 | `breakpoint(name)` | nothing: stops the script until it is continued (see [Breakpoints](#breakpoints)) |
+| `push_conversation(fn, …, title=)` | nothing: records a new conversation and returns its id (see [Pushed conversations](#pushed-conversations)) |
 | `help()` | the built-ins and the declared client tools with their input schemas |
 | `kitchen()` | every output type once, read-only |
 
@@ -132,6 +134,41 @@ tool("search_logs", {"query": "status:error"}, out="12 results", break_before_re
 - Tests set `Fake.ContinueDir` to a `t.TempDir()`. The script stops right
   after its last output, so a test that sees that output knows the backend
   is stopped, acts, then writes the continue file.
+
+## Pushed conversations
+
+A pushed conversation is one an earlier session left behind: each of its
+user turns ran without an engine, so a `call()` left its round unanswered,
+as when the user quit while a tool was waiting. Opening it restores the
+history, and resumable tools such as `ask_user_question` pick up where it
+stopped.
+
+At startup, `--conversation` takes a script instead of an id. The script is
+the pushed conversation's only turn, and the conversation opens as a
+restored one:
+
+```sh
+BITS_FAKE_BACKEND=1 bits --conversation \
+  'load("internal/agent/fake/testdata/questions.star", "ask_user_question"); ask_user_question()'
+```
+
+In a session, `push_conversation(fn, …, title=)` pushes a conversation whose
+user turns are the functions, in order, and returns its id; `/resume` opens
+it:
+
+```text
+load("internal/agent/fake/testdata/questions.star", "ask_user_question"); say(push_conversation(ask_user_question, title="Pending question"))
+say(push_conversation(lambda: say("hi"), lambda: call("ask_user_question", {"questions": [{"question": "Which?", "options": [{"label": "A", "description": ""}]}]})))
+```
+
+- Several turns script other histories, e.g. a pending call followed by a
+  new user turn, which must not resume.
+- The title defaults to the first turn's text, the function name followed by
+  `()`. A lambda is named `lambda`, so a longer turn reads better as a `def`.
+- A turn is called again when its conversation resumes, so its function and
+  the globals it reaches are frozen when pushed.
+- A replayed round returns the id it pushed before instead of pushing again.
+- Tests push with `Fake.PushConversation(ctx, title, scripts...)`.
 
 ## How rounds work
 

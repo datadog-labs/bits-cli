@@ -52,6 +52,10 @@ type run struct {
 	randoms     int                              // random() invocations so far, replayed or live
 	moduleDepth int                              // nested module initialization depth
 	continueDir string                           // where breakpoints look for continue files
+	fake        *Fake                            // where push_conversation() records
+	conv        *conversation                    // the conversation running this turn
+	pushed      []string                         // conversations pushed by earlier runs of this turn
+	pushes      int                              // push_conversation() invocations so far, replayed or live
 }
 
 // live reports whether execution has passed every answered round. Built-ins
@@ -70,9 +74,13 @@ func (r *run) sideEffectError(name string) error {
 // runScript executes one round of a scripted turn by re-running the whole
 // script: earlier call()s return their recorded responses and only the
 // output after them is emitted. Starlark is deterministic, so this reproduces
-// the same program state without keeping anything alive between Sends.
-func runScript(out *emitter, opts assistant.SendOptions, turn scriptTurn) error {
-	r := &run{out: out, opts: opts, results: turn.results, turn: turn.index, continueDir: turn.continueDir}
+// the same program state without keeping anything alive between Sends. A
+// turn pushed as a function is re-run by calling it.
+func (f *Fake) runScript(c *conversation, out *emitter, opts assistant.SendOptions, turn scriptTurn) error {
+	r := &run{
+		out: out, opts: opts, results: turn.results, turn: turn.index, continueDir: turn.continueDir,
+		fake: f, conv: c, pushed: turn.pushed,
+	}
 	loader := newModuleLoader(out.ctx, turn.snapshot, r)
 	thread := &starlark.Thread{Name: "fake", Print: func(*starlark.Thread, string) {}}
 	thread.SetLocal(runKey, r)
@@ -88,7 +96,11 @@ func runScript(out *emitter, opts assistant.SendOptions, turn scriptTurn) error 
 	// than as a broken prelude.
 	stop := context.AfterFunc(out.ctx, func() { thread.Cancel("cancelled") })
 	defer stop()
-	_, err = starlark.ExecFileOptions(scriptOptions, thread, "script", turn.src, env)
+	if turn.fn != nil {
+		_, err = starlark.Call(thread, turn.fn, nil, nil)
+	} else {
+		_, err = starlark.ExecFileOptions(scriptOptions, thread, "script", turn.src, env)
+	}
 	if ctxErr := out.ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
