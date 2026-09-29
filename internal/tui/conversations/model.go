@@ -102,7 +102,7 @@ func New(width, height int, themes ...styles.Theme) Model {
 	search.CharLimit = 128
 	search.Focus()
 	m := Model{
-		list: model, search: search, panel: components.NewPanel(resumePanelStyles(theme)), theme: theme,
+		list: model, search: search, panel: components.NewPanel(theme.Panel), theme: theme,
 		state: StateLoading, operation: OperationList,
 		width: max(width, 1), height: max(height, 1), now: time.Now,
 	}
@@ -185,12 +185,6 @@ func newConversationDelegate() list.DefaultDelegate {
 	delegate.ShowDescription = false
 	delegate.SetSpacing(0)
 	return delegate
-}
-
-func resumePanelStyles(theme styles.Theme) styles.Panel {
-	panel := theme.Panel
-	panel.Frame = panel.Frame.BorderForeground(theme.Selector.Selected.GetForeground())
-	return panel
 }
 
 func resumeSearchStyles(theme styles.Theme) textinput.Styles {
@@ -337,7 +331,7 @@ func (m *Model) SetSize(width, height int) {
 // SetStyles applies the root terminal theme without resetting picker state.
 func (m *Model) SetStyles(theme styles.Theme) {
 	m.theme = theme
-	m.panel.SetStyles(resumePanelStyles(theme))
+	m.panel.SetStyles(theme.Panel)
 	m.search.SetStyles(resumeSearchStyles(theme))
 	m.list.SetDelegate(newConversationDelegate())
 	m.resizeChildren()

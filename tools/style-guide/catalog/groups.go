@@ -160,7 +160,7 @@ func sharedComponentSamples(width int, theme styles.Theme, title lipgloss.Style,
 	panel := components.NewPanel(theme.Panel)
 	panelContent := components.PanelContent{
 		Title:          "Choose your Datadog site",
-		Dismiss:        "esc ×",
+		Dismiss:        "ESC x",
 		Body:           func(int) string { return theme.Text.Secondary.Render("Select the site where your organization lives.") },
 		FooterLeft:     "↑/↓ navigate",
 		FooterRight:    "enter to continue",

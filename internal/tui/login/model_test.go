@@ -189,7 +189,7 @@ func TestViewContainsVisualHierarchyAndFits(t *testing.T) {
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	view := m.View().Content
 	plain := ansi.Strip(view)
-	for _, want := range []string{"Choose your Datadog site", "esc ×", "US1", "Enter another domain", "↑/↓ navigate"} {
+	for _, want := range []string{"Choose your Datadog site", "ESC x", "US1", "Enter another domain", "↑/↓ navigate"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("view missing %q:\n%s", want, plain)
 		}

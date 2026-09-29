@@ -43,7 +43,7 @@ func TestModelRendersTruthfulRuntimeAndWorkspaceSnapshot(t *testing.T) {
 
 	view := ansi.Strip(m.View())
 	for _, want := range []string{
-		"Bits status", "esc ×",
+		"Bits status", "ESC x",
 		"Datadog", "Site", "https://api.us3.datadoghq.com", "Authentication", "oauth · authenticated",
 		"User / org", "unavailable — authenticated identity is not exposed by this client",
 		"Assistant", "Conversation", "conversation-123", "Profile", "cli",
