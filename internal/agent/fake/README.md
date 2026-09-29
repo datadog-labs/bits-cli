@@ -1,184 +1,127 @@
 # Fake backend
 
-`BITS_FAKE_BACKEND=1` runs Bits offline against this package, in the TUI or
-with `bits run`. It implements `agent.Backend` plus conversation history,
-listing, and the current user, so the real engine, tools, transcript, and
-rendering run unchanged. Only the network is faked.
+An offline `agent.Backend`: the real engine, tools, transcript, and rendering
+run unchanged; only the network is faked. Every user message is a
+[Starlark](https://github.com/bazelbuild/starlark) script whose built-ins emit
+exactly the wire output asked for.
 
-Conversations live in memory for the life of the process: `/resume` and
-`/status` work within a session, but a new process knows no earlier
-conversation, so `--conversation` with an id from a previous run is not
-found. To come back to a conversation as if an earlier session had left it,
-[push one](#pushed-conversations) instead.
+```sh
+BITS_FAKE_BACKEND=1 bits                                   # TUI
+BITS_FAKE_BACKEND=1 bits run --delivery adeep --prompt 'say("hi")'
+```
+
+Conversations live in memory for the process: `/resume` works within a
+session, but an id from a previous run is not found.
 
 ## Scripts
 
-Every message is a [Starlark](https://github.com/bazelbuild/starlark)
-script whose built-ins emit exactly the wire output you ask for:
-
 ```text
-random()
-random(size=400000)
-load("fixtures/incident.star", "run"); run()
 say("# Title\n\n| a | b |\n| --- | --- |\n| 1 | 2 |")
-think("checking"); r = call("read_file", {"path": "go.mod"}); say("first line: " + r.output.splitlines()[0])
+think("checking"); r = call("read_file", {"path": "go.mod"}); say(r.output.splitlines()[0])
 a, b = call([("list_files", {"path": "."}), ("grep_files", {"pattern": "TODO"})])
 g = call("approval_request", {"tool_name": "delete_dashboard", "tool_args": {}}); say("deleted" if g.ok else "kept")
-tool("search", {"q": "p95"}, out="3 monitors", ns="datadog", detail="**3** monitors match")
-raw({"type": "widget_def", "title": "p95", "widget_def": {}})
-say("partial answer"); sleep("1s"); fail(503, "upstream overloaded")
-kitchen()
-help()
+load("internal/agent/fake/testdata/questions.star", "ask_user_question"); ask_user_question()
 ```
 
 | Built-in | Emits |
 | --- | --- |
-| `load("file.star", "name", …)` | imports definitions/data from a local Starlark module |
 | `say(text)`, `think(text)` | streamed answer text or reasoning |
-| `random(seed=None, size=None)` | a pseudo-random answer; `size` requests at least that many Markdown bytes |
-| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_input=, at=, break_before_results=)` or `tool([(name, input, out), …])` | server tool calls, then their results |
-| `call(name, input, stream=, break_input=, at=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
-| `raw(content, results=, id=)` | any other wire content, decoded by the real decoder |
+| `random(seed=None, size=None)` | a pseudo-random answer, at least `size` Markdown bytes |
+| `tool(name, input, out=, err=, ns=, title=, detail=, stream=)` or `tool([(name, input, out), …])` | server tool calls, then their results |
+| `call(name, input, stream=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
+| `raw(content, results=, id=)` | any other wire content, through the real decoder |
 | `fail(status)`, `fail("net")`, `fail("timeout")` | a backend failure after the output so far |
 | `sleep("2s")` | a stall |
-| `breakpoint(name)` | nothing: stops the script until it is continued (see [Breakpoints](#breakpoints)) |
-| `push_conversation(fn, …, title=)` | nothing: records a new conversation and returns its id (see [Pushed conversations](#pushed-conversations)) |
-| `help()` | the built-ins and the declared client tools with their input schemas |
+| `breakpoint(name)` | nothing; stops until continued ([Breakpoints](#breakpoints)) |
+| `push_conversation(fn, …, title=)` | nothing; records a new conversation, returns its id ([Pushed conversations](#pushed-conversations)) |
+| `load("file.star", "name", …)` | imports definitions from a module below the script root (the working directory) |
+| `help()` | the built-ins and the client tools' input schemas |
 | `kitchen()` | every output type once, read-only |
 
-A script may span several lines (Shift+Enter or Ctrl+J for a newline in the
-TUI):
+- `;` separates statements, but `if`/`for` start a new line (Shift+Enter or
+  Ctrl+J in the TUI).
+- A script error, prose included, is answered as text instead of failing the
+  turn.
+- `call` really runs local tools: in `manual` mode writes and commands wait on
+  the permission panel; in `skip-permissions` they run.
+- Tool input streams whenever the engine asks; `stream=False` turns it off
+  for one call. `approval_request` gets its `tool_call_id` filled in.
+- `random("x")` or `random(42)` always gives the same answer. Unseeded, it
+  depends on the turn and call position, so a fresh conversation replays the
+  same sequence.
+- Modules define functions and data; wire built-ins fail while a module
+  loads but work when its functions run.
+- Built-ins know the wire protocol, never tool schemas: those live in
+  `internal/tools/spec` and are listed by `help()`.
 
-```text
-r = call("read_file", {"path": "go.mod"})
-if r.ok:
-    say("first line: " + r.output.splitlines()[0])
-else:
-    fail(503)
-```
+## Rounds and replay
 
-`load()` uses native Starlark module semantics. Files are resolved below the
-fake backend's script root, and loaded source is snapshotted for the lifetime
-of the current turn. This matters when a client tool pauses the stream: the
-continuation re-executes the script, but it still sees the same file bytes even
-if the file changed on disk. A new user turn gets a fresh snapshot. Loaded
-modules should define functions and data; wire-emitting built-ins are rejected
-during module initialization but work when called by an exported function.
-
-Notes:
-
-- `random("hello")` or `random(42)` always streams the same answer. Without a
-  seed, the answer depends on the turn's position in the conversation and the
-  call's position in the script, so successive turns differ while a fresh
-  conversation replays the same sequence.
-- `random(size=400000)` keeps the normal answer shape while repeating Markdown
-  sections until the final answer reaches the requested byte size.
-- Statements may be separated by `;`, but `if`/`for` must start a new line
-  (or use `a if cond else b`).
-- A prose message is not a script: it is answered with the syntax error and a
-  hint, like any other script mistake, instead of failing the turn.
-- Tool input is streamed (`tool_call_started` and input deltas) whenever the
-  engine asks for it; `stream=False` disables it for one call.
-- `approval_request` calls get their `tool_call_id` filled in automatically.
-- `load()` accepts Starlark source files, not arbitrary Python programs.
-- `call` really runs local tools. Under the default `manual` permissions mode,
-  scripted `write_file`, `edit_file`, and `exec_command` pause on the
-  permission panel before they change the workspace; under `skip-permissions`
-  they change it without asking.
+A `call` ends the `Send`, as a real client tool call pauses the stream. When
+the engine sends the results back, the script runs again from the top:
+earlier `call`s return their recorded results, earlier output is not
+re-emitted, and execution stops at the next `call`. Starlark here has no
+clock, I/O, or ambient randomness, and loaded files are snapshotted for the
+turn, so every run is deterministic and nothing stays alive between `Send`s.
 
 ## Breakpoints
 
-A breakpoint stops the script at a precise point of the stream, so you can
-look at the TUI, resize it, press keys, or cancel, and then let the turn go
-on. It is continued by creating a file named after it:
+`breakpoint(name)` stops the stream until `$TMPDIR/bits-fake/continue/<name>`
+exists (`help()` prints the path); Esc cancels instead.
 
 ```text
-say("| service | p95 |\n| --- | --- |\n| web | 42ms |"); breakpoint("table"); say("All services healthy.")
-```
-
-```sh
-touch "${TMPDIR:-/tmp}/bits-fake/continue/table"   # continue "table"
-```
-
-`help()` prints the exact continue directory. Keyword arguments stop inside
-a built-in; their value is the breakpoint's name:
-
-```text
-call("write_file", {"path": "a.txt", "content": "alpha\nbravo\n"}, break_input="diff")
+say("| web | 42ms |"); breakpoint("table"); say("All services healthy.")
 call("write_file", {"path": "a.txt", "content": "alpha\nbravo\n"}, break_input="diff", at="bravo")
-call("write_file", {"path": "a.txt", "content": "alpha\nbravo\n"}, break_input="diff", at=START)
-call("write_file", {"path": "a.txt", "content": "alpha\nbravo\n"}, break_input="diff", at=END)
 tool("search_logs", {"query": "status:error"}, out="12 results", break_before_results="search")
 ```
 
-- `break_input` stops while streaming each call's input, before its final
-  call, on `call()` and `tool()`. It needs streamed input. `at=` says where:
-  - omitted: halfway, with at least one character streamed;
-  - `START`: after `tool_call_started`, before any input;
-  - `END`: all input streamed, final call not sent;
-  - `"text"`: right after the first occurrence of `text` in the streamed
-    input JSON, e.g. `at="bravo"` or `at='"path":'`. It must be in every
-    call's input, or the script fails before anything is emitted.
-- `break_before_results` stops after `tool()`'s calls, before any result.
-- Each continue file continues one stop and is consumed, so the same script
-  stops again next time. A file created before the script gets there
-  continues it on arrival.
-- Esc cancels a stopped turn as usual; a breakpoint nobody continues is how
-  to hold a state until you interrupt it.
-- Breakpoints in replayed rounds never stop again: they already passed.
-- Names match `[a-z0-9_-]+`, so a continue file never leaves its directory.
-- The continue directory is shared by every fake process of the user, so
-  the path stays predictable. Two sessions stopped at the same name race for
-  one continue file: give concurrent sessions distinct names, e.g.
-  `breakpoint("qa1-table")`.
-- Tests set `Fake.ContinueDir` to a `t.TempDir()`. The script stops right
-  after its last output, so a test that sees that output knows the backend
-  is stopped, acts, then writes the continue file.
+```sh
+touch "${TMPDIR:-/tmp}/bits-fake/continue/table"
+```
+
+- `break_input=name` on `call`/`tool` stops while input streams: halfway by
+  default, or `at=START`, `at=END`, or right after `at="text"` (which must
+  occur in every call's input).
+- `break_before_results=name` on `tool` stops after the calls, before any
+  result.
+- A continue file is consumed by one stop; one created early continues on
+  arrival. Replayed rounds never stop again.
+- Names match `[a-z0-9_-]+`. The directory is shared by every fake process,
+  so concurrent sessions need distinct names.
 
 ## Pushed conversations
 
-A pushed conversation is one an earlier session left behind: each of its
-user turns ran without an engine, so a `call()` left its round unanswered,
-as when the user quit while a tool was waiting. Opening it restores the
-history, and resumable tools such as `ask_user_question` pick up where it
-stopped.
+A pushed conversation is one an earlier session left behind. Its turns ran
+without an engine, so a `call()` left its round unanswered, as when the user
+quit while a tool waited. Opening it restores the history, and resumable
+tools such as `ask_user_question` continue.
 
-At startup, `--conversation` takes a script instead of an id. The script is
-the pushed conversation's only turn, and the conversation opens as a
-restored one:
+At startup, `--conversation` takes a script instead of an id; the script is
+the only turn of the conversation that opens:
 
 ```sh
-BITS_FAKE_BACKEND=1 bits --conversation \
-  'load("internal/agent/fake/testdata/questions.star", "ask_user_question"); ask_user_question()'
+BITS_FAKE_BACKEND=1 bits --conversation 'load("internal/agent/fake/testdata/questions.star", "ask_user_question"); ask_user_question()'
 ```
 
-In a session, `push_conversation(fn, …, title=)` pushes a conversation whose
-user turns are the functions, in order, and returns its id; `/resume` opens
-it:
+In a session, `push_conversation` takes functions as the turns, in order,
+and returns the id to open with `/resume`:
 
 ```text
 load("internal/agent/fake/testdata/questions.star", "ask_user_question"); say(push_conversation(ask_user_question, title="Pending question"))
-say(push_conversation(lambda: say("hi"), lambda: call("ask_user_question", {"questions": [{"question": "Which?", "options": [{"label": "A", "description": ""}]}]})))
+load("internal/agent/fake/testdata/questions.star", "ask_user_question"); say(push_conversation(lambda: say("hi"), ask_user_question))
 ```
 
-- Several turns script other histories, e.g. a pending call followed by a
-  new user turn, which must not resume.
-- The title defaults to the first turn's text, the function name followed by
-  `()`. A lambda is named `lambda`, so a longer turn reads better as a `def`.
-- A turn is called again when its conversation resumes, so its function and
-  the globals it reaches are frozen when pushed.
-- A replayed round returns the id it pushed before instead of pushing again.
-- Tests push with `Fake.PushConversation(ctx, title, scripts...)`.
+- Several turns script other histories, e.g. a pending call then a new user
+  turn, which must not resume.
+- The title defaults to the first turn, `name()`; a lambda shows as
+  `lambda()`, so prefer a `def`.
+- A turn is called again when it resumes, so its function and the globals it
+  reaches are frozen when pushed.
+- A replayed round returns its earlier id instead of pushing again.
 
-## How rounds work
+## Tests
 
-A `call` ends the current `Send`, as a real client tool call pauses the
-server stream. When the engine sends the tool results back, the script runs
-again from the top: earlier `call`s return their recorded results, output
-before them is not re-emitted, and execution stops at the next `call`.
-Apart from the snapshotted module sources and breakpoint continue files,
-Starlark has no clock, ambient randomness, or I/O here, so every run is deterministic and nothing stays alive
-between `Send`s.
-
-Built-ins know the wire protocol, never tool input schemas. Those are owned
-by `internal/tools/spec` and listed at runtime by `help()`.
+- `Fake{}` streams instantly; `New()` adds a 10 ms delay for interactive use.
+- `Fake.PushConversation(ctx, title, scripts...)` pushes from Go.
+- Set `Fake.ContinueDir` to a `t.TempDir()`. A breakpoint stops right after
+  its last output, so a test that sees that output acts, then writes the
+  continue file.
