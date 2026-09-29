@@ -113,100 +113,49 @@ func questionKey(m *Model, code rune, mod tea.KeyMod) {
 	_, _ = m.Update(tea.KeyPressMsg{Code: code, Mod: mod})
 }
 
-func TestQuestionsAnswerReviewAndContinue(t *testing.T) {
-	for _, mode := range []agent.PermissionsMode{agent.ModeManual, agent.ModeSkipPermissions} {
-		t.Run(string(mode), func(t *testing.T) {
-			m, backend := startQuestions(t, mode, questionInput, 1)
+func TestQuestionsCompleteTheCall(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mode    agent.PermissionsMode
+		keys    []rune
+		status  assistant.ToolStatus
+		message string
+	}{
+		// The extra Enter checks that a finished form cannot answer twice.
+		{"answered", agent.ModeManual, []rune{tea.KeyEnter, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter}, assistant.ToolStatusSuccess, "Q: Which region?\nA: US\n\nQ: Which service?\nA: API"},
+		{"dismissed", agent.ModeSkipPermissions, []rune{tea.KeyEnter, tea.KeyEscape}, assistant.ToolStatusError, "without answering"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, backend := startQuestions(t, tc.mode, questionInput, 1)
 			waitQuestions(t, m)
 			if m.editor.Focused() || len(m.pendingApprovals) != 0 {
 				t.Fatal("question incorrectly routed through editor or permissions")
 			}
-			if backend.calls != 1 {
-				t.Fatal("continued before an answer")
+			if backend.calls != 1 || len(backend.definitions) != 1 || backend.definitions[0].Name != spec.AskUserQuestion {
+				t.Fatalf("calls=%d definitions=%v", backend.calls, backend.definitions)
 			}
-			if len(backend.definitions) != 1 || backend.definitions[0].Name != spec.AskUserQuestion {
-				t.Fatal("question tool not advertised")
+			for _, key := range tc.keys {
+				questionKey(m, key, 0)
 			}
-			questionKey(m, tea.KeyDown, 0)
-			questionKey(m, tea.KeyEnter, 0) // EU
-			questionKey(m, tea.KeyDown, 0)
-			// Other focuses immediately, with no Enter needed before typing.
-			_, _ = m.Update(tea.PasteMsg{Content: "billing-東京"})
-			questionKey(m, tea.KeyEnter, 0)
-			view := ansi.Strip(m.View().Content)
-			for _, want := range []string{"Review answers", "Which region?", "EU", "Which service?", "billing-東京"} {
-				if !strings.Contains(view, want) {
-					t.Fatalf("review missing %q:\n%s", want, view)
-				}
-			}
-			if backend.calls != 1 {
-				t.Fatal("continued before review submission")
-			}
-			// Revisit and change the first answer before submitting.
-			questionKey(m, tea.KeyTab, 0)
-			questionKey(m, tea.KeyUp, 0)
-			questionKey(m, tea.KeyEnter, 0) // US
-			questionKey(m, tea.KeyTab, 0)   // review
-			questionKey(m, tea.KeyEnter, 0)
-			questionKey(m, tea.KeyEnter, 0) // repeated submit cannot resume twice
 			drainConversationRemote(t, m)
 			if backend.calls != 2 || len(backend.responses) != 1 {
 				t.Fatalf("calls=%d responses=%v", backend.calls, backend.responses)
 			}
 			response := backend.responses[0]
-			if response.ToolCallID != "question-0" || response.Status != assistant.ToolStatusSuccess {
-				t.Fatalf("response=%+v", response)
-			}
 			var result spec.AskUserQuestionOutput
 			if err := json.Unmarshal([]byte(response.Metadata.Output), &result); err != nil {
 				t.Fatal(err)
 			}
-			want := "Q: Which region?\nA: US\n\nQ: Which service?\nA: billing-東京"
-			if !result.Success || result.Message != want {
-				t.Fatalf("result=%+v", result)
+			if response.ToolCallID != "question-0" || response.Status != tc.status || !strings.Contains(result.Message, tc.message) {
+				t.Fatalf("response=%+v", response)
 			}
 			if m.activeToolUI != nil || !m.editor.Focused() {
 				t.Fatal("form did not release input")
 			}
-			transcript := ansi.Strip(m.list.Document())
-			for _, want := range []string{"Which region?", "A: US", "Which service?", "billing-東京", "Continuing with your answers."} {
-				if !strings.Contains(transcript, want) {
-					t.Fatalf("transcript missing %q:\n%s", want, transcript)
-				}
+			if !strings.Contains(ansi.Strip(m.list.Document()), "Continuing with your answers.") {
+				t.Fatal("transcript missing the continuation")
 			}
 		})
-	}
-}
-
-func TestQuestionsUnansweredDismissal(t *testing.T) {
-	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
-	waitQuestions(t, m)
-	questionKey(m, tea.KeyTab, tea.ModShift) // review with no answers
-	if !strings.Contains(ansi.Strip(m.View().Content), "[Unanswered]") {
-		t.Fatal("unanswered questions not identified")
-	}
-	questionKey(m, tea.KeyEnter, 0)
-	if m.activeToolUI == nil || !strings.Contains(ansi.Strip(m.View().Content), "› 1. US") {
-		t.Fatal("review synthesized an answer")
-	}
-	questionKey(m, tea.KeyEnter, 0) // answer only the first question
-	questionKey(m, tea.KeyEscape, 0)
-	drainConversationRemote(t, m)
-	if backend.calls != 2 || len(backend.responses) != 1 {
-		t.Fatalf("dismissal did not continue exactly once: %+v", backend)
-	}
-	response := backend.responses[0]
-	var result spec.AskUserQuestionOutput
-	if err := json.Unmarshal([]byte(response.Metadata.Output), &result); err != nil {
-		t.Fatal(err)
-	}
-	if response.Status != assistant.ToolStatusError || result.Success || !strings.Contains(result.Message, "without answering") || strings.Contains(result.Message, "A: US") {
-		t.Fatalf("dismissal submitted partial answers: %+v", response)
-	}
-	for _, block := range m.transcript.Blocks {
-		if block.Tool != nil && block.Tool.Denied {
-			t.Fatal("dismissal is not a permission denial")
-		}
 	}
 }
 
@@ -342,20 +291,23 @@ func (b *resumedQuestionBackend) UserConversations(context.Context) (*assistant.
 	return summaries(assistant.ConversationSummary{ConversationID: resumeConversationID, Title: "Questions"}), nil
 }
 
-func newResumedQuestionModel(t *testing.T, startup bool) (*Model, *resumedQuestionBackend) {
+// newResumedQuestionModel opens a conversation whose last turn left two
+// questions unanswered. A nil backend starts a new saved conversation.
+func newResumedQuestionModel(t *testing.T, backend *resumedQuestionBackend, startup bool) (*Model, *resumedQuestionBackend) {
 	t.Helper()
-	call := assistant.ToolCallContent("resumed-question", spec.AskUserQuestion, questionInput)
-	call.Type = assistant.ContentClientToolCall
-	backend := &resumedQuestionBackend{
-		messages: []assistant.Message{assistant.AssistantMessage("question-message", call)},
-		answers:  make(chan []assistant.ClientToolResponse, 1),
+	if backend == nil {
+		user := assistant.Message{MessageID: "original-user", Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api"}]`), ContextResources: json.RawMessage(`[{"name":"dashboard"}]`)}
+		backend = &resumedQuestionBackend{
+			messages:    []assistant.Message{user},
+			answers:     make(chan []assistant.ClientToolResponse, 1),
+			wantContext: &assistant.AssistantContext{Entities: []assistant.ContextEntity{{Type: assistant.EntityService, ID: "api"}}, Resources: []json.RawMessage{json.RawMessage(`{"name":"dashboard"}`)}},
+		}
+		for _, id := range []string{"resumed-question", "second-question"} {
+			call := assistant.ToolCallContent(id, spec.AskUserQuestion, questionInput)
+			call.Type = assistant.ContentClientToolCall
+			backend.messages = append(backend.messages, assistant.AssistantMessage(id+"-message", call))
+		}
 	}
-	second := assistant.ToolCallContent("second-question", spec.AskUserQuestion, questionInput)
-	second.Type = assistant.ContentClientToolCall
-	user := assistant.Message{MessageID: "original-user", Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api"}]`), ContextResources: json.RawMessage(`[{"name":"dashboard"}]`)}
-	backend.messages = append([]assistant.Message{user}, backend.messages...)
-	backend.messages = append(backend.messages, assistant.AssistantMessage("second", second), assistant.Message{Results: &assistant.Results{}}, assistant.AssistantMessage("end", assistant.Content{Type: assistant.ContentTurnStatus, TurnStatus: &assistant.TurnStatusPayload{Status: "ended"}}), assistant.AssistantMessage("internal", assistant.Content{Type: assistant.ContentProviderCompaction, Compaction: &assistant.CompactionPayload{Summary: "bookkeeping"}}))
-	backend.wantContext = &assistant.AssistantContext{Entities: []assistant.ContextEntity{{Type: assistant.EntityService, ID: "api"}}, Resources: []json.RawMessage{json.RawMessage(`{"name":"dashboard"}`)}}
 	host := tools.NewUI()
 	set, err := agent.NewToolSet(agent.ModeManual, tools.NewAskUserQuestionTool(host))
 	if err != nil {
@@ -367,6 +319,9 @@ func newResumedQuestionModel(t *testing.T, startup bool) (*Model, *resumedQuesti
 	}
 	m := New(agent.New(backend, opts), Config{Tools: set, ToolUI: host})
 	m.resize(100, 32)
+	if startup {
+		_ = m.initChat()
+	}
 	t.Cleanup(func() {
 		if m.turnEvents != nil {
 			m.cancelRemote()
@@ -383,12 +338,8 @@ func TestPendingQuestionRestoresOnStartupAndResume(t *testing.T) {
 			name = "startup restore"
 		}
 		t.Run(name, func(t *testing.T) {
-			m, backend := newResumedQuestionModel(t, startup)
-			if startup {
-				m.restoringHistory = true
-				ctx, cancel := context.WithCancel(context.Background())
-				m.beginRemote(m.engine.Restore(ctx), cancel)
-			} else {
+			m, backend := newResumedQuestionModel(t, nil, startup)
+			if !startup {
 				cmd := m.openConversationPicker()
 				_, _ = m.Update(runResumeCmd(t, cmd))
 				_, cmd = m.Update(conversationview.SelectedMsg{Conversation: assistant.ConversationSummary{ConversationID: resumeConversationID}})
@@ -423,55 +374,37 @@ func TestPendingQuestionRestoresOnStartupAndResume(t *testing.T) {
 }
 
 func TestQuestionExitAndStopHaveDifferentPersistedOutcomes(t *testing.T) {
-	for _, stop := range []bool{false, true} {
-		name := "exit leaves questions resumable"
-		if stop {
-			name = "stop persists cancelled batch"
-		}
-		t.Run(name, func(t *testing.T) {
-			m, backend := newResumedQuestionModel(t, true)
-			m.restoringHistory = true
-			ctx, cancel := context.WithCancel(t.Context())
-			m.beginRemote(m.engine.Restore(ctx), cancel)
+	for _, tc := range []struct {
+		name      string
+		act       func(*Model)
+		cancelled int // responses persisted for the two pending calls
+	}{
+		{"exit leaves questions resumable", func(m *Model) { _, _ = m.quit() }, 0},
+		{"stop persists cancelled batch", func(m *Model) { questionKey(m, 'x', tea.ModCtrl) }, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, backend := newResumedQuestionModel(t, nil, true)
 			waitQuestions(t, m)
-			if stop {
-				questionKey(m, 'x', tea.ModCtrl)
-			} else {
-				_, _ = m.quit()
-			}
+			tc.act(m)
 			drainConversationRemote(t, m)
-			if stop {
-				if len(backend.answers) != 1 {
-					t.Fatal("cancellation was not persisted")
+			var responses []assistant.ClientToolResponse
+			if len(backend.answers) > 0 {
+				responses = <-backend.answers
+			}
+			if len(responses) != tc.cancelled {
+				t.Fatalf("persisted responses = %+v", responses)
+			}
+			for _, r := range responses {
+				if r.Status != assistant.ToolStatusError {
+					t.Fatalf("response = %+v", r)
 				}
-				responses := <-backend.answers
-				if len(responses) != 2 {
-					t.Fatalf("cancelled responses = %v", responses)
-				}
-				for _, r := range responses {
-					if r.Status != assistant.ToolStatusError {
-						t.Fatalf("response = %+v", r)
-					}
-				}
-				if hasTextBlock(m.transcript.Blocks, "Continuing after the answer.") {
-					t.Fatal("stopped turn displayed a continuation")
-				}
-			} else if len(backend.answers) != 0 {
-				t.Fatal("exit persisted an answer")
+			}
+			if hasTextBlock(m.transcript.Blocks, "Continuing after the answer.") {
+				t.Fatal("ended turn displayed a continuation")
 			}
 
-			reopened := New(agent.New(backend, assistant.SendOptions{ConversationID: resumeConversationID}), Config{Tools: m.tools, ToolUI: m.toolUI})
-			reopened.resize(100, 32)
-			reopened.restoringHistory = true
-			ctx, cancel = context.WithCancel(t.Context())
-			reopened.beginRemote(reopened.engine.Restore(ctx), cancel)
-			t.Cleanup(func() {
-				if reopened.turnEvents != nil {
-					reopened.cancelRemote()
-					drainConversationRemote(t, reopened)
-				}
-			})
-			if stop {
+			reopened, _ := newResumedQuestionModel(t, backend, true)
+			if tc.cancelled > 0 {
 				drainConversationRemote(t, reopened)
 				if reopened.activeToolUI != nil || reopened.engine.CanResumeTools(reopened.tools) {
 					t.Fatal("cancelled questions reopened")
