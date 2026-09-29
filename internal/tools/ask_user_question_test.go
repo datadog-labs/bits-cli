@@ -58,7 +58,7 @@ func TestHeadlessUnexpectedQuestionReturnsUnsupported(t *testing.T) {
 	if err != nil || result.Outcome != agent.TurnOutcomeCompleted {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if b.calls != 2 || b.response.Status != assistant.ToolStatusError || !strings.Contains(b.response.Metadata.Output, "unsupported in noninteractive") {
+	if b.calls != 2 || b.response.Status != assistant.ToolStatusError || !strings.Contains(b.response.Metadata.Output, "no client tool named") {
 		t.Fatalf("calls=%d response=%+v", b.calls, b.response)
 	}
 }
