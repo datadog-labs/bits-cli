@@ -41,7 +41,11 @@ func (e *Engine) ResumePendingTools(ctx context.Context, in TurnInput) <-chan Ev
 		return eventResult(Event{Kind: EventError, Err: e.continuation.err})
 	}
 	in.Context = e.continuation.context
-	return e.beginTurnWithCalls(ctx, in, e.continuation.calls).events
+	calls := make([]ToolCall, len(e.continuation.calls))
+	for i, content := range e.continuation.calls {
+		calls[i] = toolCallOf(content)
+	}
+	return e.beginTurnWithCalls(ctx, in, calls).events
 }
 
 func continuationFromHistory(messages []assistant.Message) *toolContinuation {

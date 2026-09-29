@@ -260,7 +260,7 @@ func (e *Engine) beginTurn(ctx context.Context, in TurnInput) turnOperation {
 	return e.beginTurnWithCalls(ctx, in, nil)
 }
 
-func (e *Engine) beginTurnWithCalls(ctx context.Context, in TurnInput, pending []assistant.Content) turnOperation {
+func (e *Engine) beginTurnWithCalls(ctx context.Context, in TurnInput, resumed []ToolCall) turnOperation {
 	if !e.begin() {
 		return completedTurnOperation(ErrOperationActive)
 	}
@@ -268,7 +268,7 @@ func (e *Engine) beginTurnWithCalls(ctx context.Context, in TurnInput, pending [
 	generation := e.operationGeneration.Load()
 	events := make(chan Event, 64)
 	completion := make(chan turnCompletion, 1)
-	go e.run(ctx, in, pending, events, completion, generation)
+	go e.run(ctx, in, resumed, events, completion, generation)
 	return turnOperation{events: events, completion: completion}
 }
 
@@ -342,17 +342,17 @@ func (e *Engine) command(command toolCommand) bool {
 func (e *Engine) run(
 	ctx context.Context,
 	in TurnInput,
-	pending []assistant.Content,
+	resumed []ToolCall,
 	out chan<- Event,
 	completionOut chan<- turnCompletion,
 	generation uint64,
 ) {
 	completion := turnCompletion{}
 	turnStart := len(e.transcript.Blocks())
-	if len(pending) > 0 {
+	if len(resumed) > 0 {
 		for i, block := range e.transcript.Blocks() {
-			for _, call := range pending {
-				if block.ToolCallID() == call.Tool.ToolCallID {
+			for _, call := range resumed {
+				if block.ToolCallID() == call.ID {
 					turnStart = min(turnStart, i)
 				}
 			}
@@ -409,7 +409,7 @@ func (e *Engine) run(
 
 	// A restored tool call is already in the transcript; only a new turn adds a
 	// user block before contacting the backend.
-	if len(pending) == 0 {
+	if len(resumed) == 0 {
 		e.transcript.AppendUser(in.Message)
 		if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
 			return
@@ -419,10 +419,10 @@ func (e *Engine) run(
 	var next any = in.Message
 	convID := e.ConversationID()
 
-	for round := 1; round <= maxTurns; round++ {
-		var calls []assistant.Content
-
-		emit := emitAtRound(round)
+	// request sends one round and collects the client calls it pauses on. It
+	// returns false once the turn has ended.
+	request := func(emit func(Event) bool, opts assistant.SendOptions) ([]ToolCall, bool) {
+		var calls []ToolCall
 		fold := func(msg assistant.Message) bool {
 			if msg.Results != nil && msg.Results.Usage != nil {
 				completion.Usage = cloneUsage(msg.Results.Usage)
@@ -455,63 +455,71 @@ func (e *Engine) run(
 			return true
 		}
 
+		id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {
+			msg := ar.Data.Attributes.StructuredMessage
+			// A client_tool_call pauses the stream until we answer it; collect it
+			// for runTools.
+			if msg.Content.Type == assistant.ContentClientToolCall {
+				calls = append(calls, toolCallOf(msg.Content))
+			}
+			if !fold(msg) {
+				return ctx.Err()
+			}
+			return nil
+		})
+		// Send may discover a server-assigned ID before a later stream failure or
+		// cancellation. Preserve it so every surface can report a resumable handle.
+		if id != "" {
+			e.opts.ConversationID = id
+		}
+		if err != nil {
+			// Context-derived cancellation remains quiet. An independent backend
+			// failure wins even if the caller canceled at the same time, preserving
+			// the more specific diagnostic in the authoritative completion.
+			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
+				completion.Err = err
+				if !finalizeAndEmit(emit) {
+					return nil, false
+				}
+				if id != "" {
+					if !emit(Event{Kind: EventConversation, ConvID: id}) {
+						return nil, false
+					}
+				}
+				emit(Event{Kind: EventError, Err: err, BackendFailure: true})
+				return nil, false
+			}
+		}
+		if ctx.Err() != nil {
+			return nil, false // cancelled: end the turn quietly
+		}
+
+		convID = id
+		e.opts.ConversationID = convID
+		emit(Event{Kind: EventConversation, ConvID: convID})
+
+		if len(calls) == 0 {
+			if finalizeAndEmit(emit) {
+				completion.Completed = emit(Event{Kind: EventTurnDone})
+			}
+			return nil, false
+		}
+		return calls, true
+	}
+
+	for round := 1; round <= maxTurns; round++ {
+		emit := emitAtRound(round)
 		opts := e.opts
 		opts.ConversationID = convID
 		opts.ClientTools = defs
 		opts.Context = in.Context
 		opts.StreamToolCallInput = opts.StreamToolCallInput || tools.NeedsStreamedInput()
-		if len(pending) > 0 {
-			calls = pending
-			pending = nil
-		} else {
-			id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {
-				msg := ar.Data.Attributes.StructuredMessage
-				// A client_tool_call pauses the stream until we answer it; collect it
-				// for execTools below.
-				if msg.Content.Type == assistant.ContentClientToolCall {
-					calls = append(calls, msg.Content)
-				}
-				if !fold(msg) {
-					return ctx.Err()
-				}
-				return nil
-			})
-			// Send may discover a server-assigned ID before a later stream failure or
-			// cancellation. Preserve it so every surface can report a resumable handle.
-			if id != "" {
-				e.opts.ConversationID = id
-			}
-			if err != nil {
-				// Context-derived cancellation remains quiet. An independent backend
-				// failure wins even if the caller canceled at the same time, preserving
-				// the more specific diagnostic in the authoritative completion.
-				if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
-					completion.Err = err
-					if !finalizeAndEmit(emit) {
-						return
-					}
-					if id != "" {
-						if !emit(Event{Kind: EventConversation, ConvID: id}) {
-							return
-						}
-					}
-					emit(Event{Kind: EventError, Err: err, BackendFailure: true})
-					return
-				}
-			}
-			if ctx.Err() != nil {
-				return // cancelled: end the turn quietly
-			}
 
-			convID = id
-			e.opts.ConversationID = convID
-			emit(Event{Kind: EventConversation, ConvID: convID})
-
-			if len(calls) == 0 {
-				if !finalizeAndEmit(emit) {
-					return
-				}
-				completion.Completed = emit(Event{Kind: EventTurnDone})
+		calls := resumed
+		resumed = nil
+		if calls == nil {
+			var ok bool
+			if calls, ok = request(emit, opts); !ok {
 				return
 			}
 		}
@@ -785,16 +793,15 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 func (e *Engine) runTools(
 	ctx context.Context,
 	tools *ToolSet,
-	contents []assistant.Content,
+	calls []ToolCall,
 	generation uint64,
 	send func(Event) bool,
 	onDeny DenyPolicy,
 ) (toolRound, error) {
-	work := make([]pendingTool, len(contents))
-	seen := make(map[string]struct{}, len(contents))
-	byID := make(map[string]pendingTool, len(contents))
-	for i, content := range contents {
-		call := toolCallOf(content)
+	work := make([]pendingTool, len(calls))
+	seen := make(map[string]struct{}, len(calls))
+	byID := make(map[string]pendingTool, len(calls))
+	for i, call := range calls {
 		if call.ID == "" {
 			return toolRound{}, errors.New("client tool call has no id")
 		}
