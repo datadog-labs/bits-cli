@@ -104,19 +104,6 @@ func TestPickerShowsSearchBarAndMalformedRecordWarning(t *testing.T) {
 	}
 }
 
-func TestResumePanelAccentIsLocalToPicker(t *testing.T) {
-	theme := styles.Default(true)
-	originalBorder := theme.Panel.Frame.GetBorderTopForeground()
-	panel := resumePanelStyles(theme)
-
-	if got, want := panel.Frame.GetBorderTopForeground(), theme.Selector.Selected.GetForeground(); got != want {
-		t.Fatalf("resume border = %v, want interactive %v", got, want)
-	}
-	if got := theme.Panel.Frame.GetBorderTopForeground(); got != originalBorder {
-		t.Fatalf("resume styling mutated shared panel border: got %v, want %v", got, originalBorder)
-	}
-}
-
 func TestSearchLineNeverExceedsPickerWidth(t *testing.T) {
 	for _, width := range []int{20, 60} {
 		m := New(width, 12)

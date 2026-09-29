@@ -119,7 +119,7 @@ func (e *Engine) fetchConversations(ctx context.Context) ConversationListResult 
 	omitted := 0
 	for _, summary := range response.Data.Attributes.Conversations {
 		id := strings.TrimSpace(summary.ConversationID)
-		if !validConversationID(id) || id != summary.ConversationID || summary.ID != summary.ConversationID {
+		if !ValidConversationID(id) || id != summary.ConversationID || summary.ID != summary.ConversationID {
 			omitted++
 			continue
 		}
@@ -132,7 +132,7 @@ func (e *Engine) fetchConversations(ctx context.Context) ConversationListResult 
 // engine's identity only after the entire response has folded successfully.
 func (e *Engine) SwitchConversation(ctx context.Context, conversationID string) <-chan ConversationSwitchResult {
 	conversationID = strings.TrimSpace(conversationID)
-	if !validConversationID(conversationID) {
+	if !ValidConversationID(conversationID) {
 		return switchResult(ConversationSwitchResult{Err: ErrInvalidConversationID})
 	}
 	if !e.begin() {
@@ -244,9 +244,9 @@ func (e *Engine) switchConversation(ctx context.Context, conversationID string, 
 func (e *Engine) Snapshot() []Block     { return e.snapshot().Blocks }
 func (e *Engine) OperationActive() bool { return e.active.Load() }
 
-// validConversationID implements the canonical lowercase UUID spelling emitted
-// by the backend's uuid.UUID route/model without adding another dependency.
-func validConversationID(id string) bool {
+// ValidConversationID reports the canonical lowercase UUID spelling emitted
+// by the backend's uuid.UUID route/model, without adding another dependency.
+func ValidConversationID(id string) bool {
 	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' || id != strings.ToLower(id) {
 		return false
 	}

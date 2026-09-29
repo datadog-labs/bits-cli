@@ -372,7 +372,7 @@ func (m *Model) View() tea.View {
 func (m *Model) panelContent() components.PanelContent {
 	content := components.PanelContent{
 		Title:          m.title(),
-		Dismiss:        "esc ×",
+		Dismiss:        "ESC x",
 		Body:           m.bodyView,
 		CompactTitle:   "Sign in to Bits",
 		CompactMessage: "Resize the terminal to continue.",

@@ -135,7 +135,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 func (m *Model) View() string {
 	content := components.PanelContent{
 		Title:          "Bits status",
-		Dismiss:        "esc ×",
+		Dismiss:        "ESC x",
 		Body:           m.panelBody,
 		FooterLeft:     "↑/↓ scroll   pgup/pgdown page",
 		CompactTitle:   "Bits status",

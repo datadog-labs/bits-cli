@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/DataDog/bits-cli/internal/textsafe"
 )
 
 // Sentinel errors callers can match with errors.Is to branch on the outcome of
@@ -111,19 +114,67 @@ func decodeErrorEnvelope(body []byte) ([]apiErrorItem, bool) {
 	return env.Errors, true
 }
 
-// newAPIError builds an *APIError from decoded envelope items. httpStatus is the
-// fallback status (the real HTTP status for non-streaming errors, or 0 for
-// in-band errors where the status rides in the envelope).
+// newAPIError builds an *APIError from decoded envelope items. Server-supplied
+// text is sanitized and capped because Error() reaches the terminal in
+// headless mode. httpStatus is the fallback status (the real HTTP status for
+// non-streaming errors, or 0 for in-band errors where the status rides in the
+// envelope).
 func newAPIError(items []apiErrorItem, httpStatus int, method, path string) *APIError {
 	e := &APIError{StatusCode: httpStatus, Method: method, Path: path}
 	if len(items) > 0 {
 		it := items[0]
-		e.Title, e.Detail, e.Code = it.Title, it.Detail, it.Code
+		e.Title, e.Detail, e.Code = sanitizeServerText(it.Title), sanitizeServerText(it.Detail), sanitizeServerText(it.Code)
 		if s, err := strconv.Atoi(it.Status); err == nil && s != 0 {
 			e.StatusCode = s
 		}
 	}
 	return e
+}
+
+// maxRawSnippetBytes caps the raw response bytes inlined into error strings.
+const maxRawSnippetBytes = 512
+
+// rawSnippet quotes a raw response body in an error string, sanitizing and
+// capping it like server-supplied error text.
+func rawSnippet(body []byte) string {
+	return sanitizeServerText(string(body))
+}
+
+// sanitizeServerText makes server-supplied text safe to print and bounded:
+// invalid UTF-8 is repaired, terminal and bidi controls are neutralized, and
+// the result is cut at maxRawSnippetBytes on a rune boundary with the cut
+// marked so a truncated quote is recognizable. Repairing UTF-8 before the
+// cut keeps the result within the cap instead of tripling invalid bytes
+// after the cut.
+func sanitizeServerText(s string) string {
+	s = neutralizeControls(strings.ToValidUTF8(strings.TrimSpace(s), "\uFFFD"))
+	if len(s) <= maxRawSnippetBytes {
+		return s
+	}
+	cut := s[:maxRawSnippetBytes]
+	// Back off to the boundary before the rune the byte cut would split; a
+	// dangling lead byte would reappear as invalid UTF-8.
+	for len(cut) > 0 && !utf8.RuneStart(s[len(cut)]) {
+		cut = cut[:len(cut)-1]
+	}
+	return cut + "…[truncated]"
+}
+
+// neutralizeControls maps the whitespace controls to a space and drops the
+// remaining C0, DEL, C1, and bidi controls.
+func neutralizeControls(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			b.WriteByte(' ')
+		case r < 0x20 || r == 0x7f || r >= 0x80 && r <= 0x9f || textsafe.IsBidiControl(r):
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // httpError builds an *APIError from an error response body, preferring the
@@ -134,7 +185,7 @@ func httpError(body []byte, httpStatus int, method, path string) *APIError {
 	}
 	return &APIError{
 		StatusCode: httpStatus,
-		Detail:     strings.TrimSpace(string(body)),
+		Detail:     rawSnippet(body),
 		Method:     method,
 		Path:       path,
 	}

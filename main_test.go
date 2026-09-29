@@ -120,3 +120,29 @@ func TestStartupStoredOAuthEntersChatWithConversation(t *testing.T) {
 		t.Fatalf("stored OAuth unexpectedly entered login:\n%s", got)
 	}
 }
+
+func TestPrintResumeHintOnlyForValidConversationID(t *testing.T) {
+	var out bytes.Buffer
+	valid := "3f0d2b1c-9a4e-4f8b-b7c2-1d2e3f4a5b6c"
+	if err := printResumeHint(&out, valid); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Resume this conversation with: bits --conversation " + valid + "\n"; out.String() != want {
+		t.Fatalf("hint = %q, want %q", out.String(), want)
+	}
+
+	for name, id := range map[string]string{
+		"escape sequence": valid[:35] + "\x1b[2J",
+		"osc title":       "\x1b]0;pwned\x07" + valid,
+		"empty":           "",
+		"not a uuid":      "conversation-1",
+	} {
+		out.Reset()
+		if err := printResumeHint(&out, id); err != nil {
+			t.Fatal(err)
+		}
+		if out.Len() != 0 {
+			t.Fatalf("%s: hint = %q, want no output", name, out.String())
+		}
+	}
+}

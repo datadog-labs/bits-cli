@@ -242,6 +242,8 @@ func TestTextStylesResolveToALevel(t *testing.T) {
 					"Text.Primary":            th.Text.Primary,
 					"Approval.Panel.Frame":    th.Approval.Panel.Frame,
 					"Approval.Panel.Compact":  th.Approval.Panel.Compact,
+					"Approval.Panel.Title":    th.Approval.Panel.Title,
+					"Approval.Panel.Dismiss":  th.Approval.Panel.Dismiss,
 					"Editor.MenuHelp":         th.Editor.MenuHelp,
 					"Selector.Item":           th.Selector.Item,
 					"Selector.SelectedDetail": th.Selector.SelectedDetail,
@@ -272,7 +274,6 @@ func TestTextStylesResolveToALevel(t *testing.T) {
 					"Text.Tertiary":     th.Text.Tertiary,
 					"Panel.Help":        th.Panel.Help,
 					"Approval.Detail":   th.Approval.Detail,
-					"Approval.Dismiss":  th.Approval.Panel.Dismiss,
 					"Approval.Help":     th.Approval.Panel.Help,
 				}},
 			} {
@@ -409,9 +410,6 @@ func TestSharedComponentStylesDeriveFromSemanticTokens(t *testing.T) {
 			}
 			if got, want := test.theme.Selector.Selected.GetForeground(), lipgloss.Color(test.palette.interactive); got != want {
 				t.Errorf("selector selected = %v, want token %v", got, want)
-			}
-			if got, want := test.theme.Approval.Panel.Title.GetForeground(), lipgloss.Color(test.palette.interactive); got != want {
-				t.Errorf("approval title = %v, want token %v", got, want)
 			}
 			if got, want := test.theme.Approval.Selected.GetBackground(), lipgloss.Color(test.palette.interactive); got != want {
 				t.Errorf("approval selection = %v, want token %v", got, want)

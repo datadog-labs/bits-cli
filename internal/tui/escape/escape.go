@@ -8,14 +8,16 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/DataDog/bits-cli/internal/textsafe"
 )
 
 const renderedTab = "    "
 
 // Inline replaces control characters with visible representations so a value
 // intended for one terminal row cannot emit terminal control sequences or add
-// rows. C0 controls use their Unicode Control Picture; DEL and C1 controls use
-// unambiguous visible forms.
+// rows. C0 controls use their Unicode Control Picture; DEL, C1, and bidi
+// controls use unambiguous visible forms.
 func Inline(value string) string {
 	if !hasControls(value, false, false) {
 		return value
@@ -25,9 +27,10 @@ func Inline(value string) string {
 
 // Multiline makes untrusted multiline plain text ready for terminal layout.
 // CRLF is normalized to LF, each tab is rendered as four spaces, and every
-// other terminal control is replaced with a visible representation. The tab
-// replacement is deliberately a fixed display policy rather than terminal
-// tab-stop emulation; callers must retain the original value as source data.
+// other terminal or bidi control is replaced with a visible representation.
+// The tab replacement is deliberately a fixed display policy rather than
+// terminal tab-stop emulation; callers must retain the original value as
+// source data.
 func Multiline(value string) string {
 	return replaceControls(normalizeLineEndings(value), true, false)
 }
@@ -47,10 +50,10 @@ func RenderTabs(value string) string {
 }
 
 // StyledMultiline makes output from a trusted text renderer safe for the
-// terminal. It preserves the SGR styling and OSC 8 hyperlinks produced by the
-// renderer, while making every other control visible and rendering tabs with
-// the same fixed policy as Multiline. Untrusted text must be sanitized before
-// it is handed to the renderer.
+// terminal. It preserves the SGR styling and OSC 8 hyperlinks produced by
+// the renderer, while making every other control and bidi control visible
+// and rendering tabs with the same fixed policy as Multiline. Untrusted text
+// must be sanitized before it is handed to the renderer.
 func StyledMultiline(value string) string {
 	var b strings.Builder
 	b.Grow(len(value))
@@ -78,6 +81,8 @@ func StyledMultiline(value string) string {
 		case r == 0x7f:
 			b.WriteRune('\u2421')
 		case r >= 0x80 && r <= 0x9f:
+			fmt.Fprintf(&b, `\u%04X`, r)
+		case textsafe.IsBidiControl(r):
 			fmt.Fprintf(&b, `\u%04X`, r)
 		default:
 			b.WriteRune(r)
@@ -115,7 +120,7 @@ func hasControls(value string, preserveNewlines, preserveTabs bool) bool {
 		if preserveTabs && r == '\t' {
 			continue
 		}
-		if r <= 0x1f || (r >= 0x7f && r <= 0x9f) {
+		if r <= 0x1f || (r >= 0x7f && r <= 0x9f) || textsafe.IsBidiControl(r) {
 			return true
 		}
 	}
@@ -201,6 +206,8 @@ func replaceControls(value string, preserveNewlines, preserveTabs bool) string {
 		case r == 0x7f:
 			b.WriteRune('\u2421')
 		case r >= 0x80 && r <= 0x9f:
+			fmt.Fprintf(&b, `\u%04X`, r)
+		case textsafe.IsBidiControl(r):
 			fmt.Fprintf(&b, `\u%04X`, r)
 		default:
 			b.WriteRune(r)

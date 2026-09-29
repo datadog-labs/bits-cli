@@ -281,8 +281,12 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 			}
 			if width == 120 {
 				firstLine := strings.Split(plain, "\n")[0]
-				if got, want := strings.Index(firstLine, "╭"), (width-model.styles.Approval.Panel.MaxWidth)/2; got != want {
-					t.Fatalf("wide panel left offset = %d, want %d:\n%s", got, want, plain)
+				margin := model.styles.Approval.Panel.HorizontalMargin
+				if got := strings.Index(firstLine, "╭"); got != margin {
+					t.Fatalf("wide panel left offset = %d, want %d:\n%s", got, margin, plain)
+				}
+				if got, want := ansi.StringWidth(strings.TrimRight(firstLine, " ")), width-margin; got != want {
+					t.Fatalf("wide panel right edge = %d, want %d:\n%s", got, want, plain)
 				}
 			}
 		})

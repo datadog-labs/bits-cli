@@ -59,7 +59,7 @@ func build(isDark bool, p palette) Theme {
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(p.borderSubtle)).
 			Padding(1, 2),
-		Title:   text.Primary,
+		Title:   text.Primary.Bold(true),
 		Dismiss: text.Primary,
 		Compact: text.Primary,
 		// Help renders the footer hints ("↑/↓ navigate", "enter to continue"):
@@ -74,14 +74,11 @@ func build(isDark bool, p palette) Theme {
 	}
 	approvalSurface := lipgloss.Color(p.approvalSurface)
 	approvalPanel := panel
-	approvalPanel.Title = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive))
-	approvalPanel.Dismiss = text.Tertiary
 	// Cleared MaxWidth spans the terminal like the splash banner rather than
 	// capping like a centered dialog.
-	permissionsPanel := approvalPanel
+	approvalPanel.MaxWidth = 0
+	permissionsPanel := panel
 	permissionsPanel.SectionGap = 0
-	permissionsPanel.Title = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.textPrimary))
-	permissionsPanel.Dismiss = text.Primary
 	permissionsPanel.MaxWidth = 0
 	approval := Approval{
 		Panel:  approvalPanel,

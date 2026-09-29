@@ -263,7 +263,7 @@ func (c *Client) SearchEntities(ctx context.Context, in SearchEntitiesInput) (Se
 			} `json:"attributes"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
+	if err := decodeJSONBody(&wire, resp.Body, maxResponseBodyBytes); err != nil {
 		return SearchEntitiesResponse{}, fmt.Errorf("decode entity suggestions: %w", err)
 	}
 	if wire.Data == nil || wire.Data.Attributes == nil {
