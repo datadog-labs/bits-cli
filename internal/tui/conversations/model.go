@@ -9,7 +9,6 @@ import (
 	"time"
 	"unicode"
 
-	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -95,7 +94,7 @@ func New(width, height int, themes ...styles.Theme) Model {
 	model.SetShowHelp(false)
 	model.SetShowStatusBar(false)
 	model.SetShowPagination(false)
-	configureConversationHelp(&model)
+	configureConversationKeys(&model)
 	search := textinput.New()
 	search.Prompt = "⌕ "
 	search.Placeholder = "Type to Search"
@@ -111,8 +110,9 @@ func New(width, height int, themes ...styles.Theme) Model {
 	return m
 }
 
-func (m Model) State() State  { return m.state }
-func (m Model) Query() string { return m.search.Value() }
+func (m Model) State() State         { return m.state }
+func (m Model) Operation() Operation { return m.operation }
+func (m Model) Query() string        { return m.search.Value() }
 
 // SetFrame uses the root's shared animation clock; this component owns no ticks.
 func (m *Model) SetFrame(frame int) { m.frame = frame }
@@ -192,11 +192,10 @@ func resumeSearchStyles(theme styles.Theme) textinput.Styles {
 	return search
 }
 
-func configureConversationHelp(model *list.Model) {
-	// The persistent search field owns printable keys, Home, and End, so only
-	// advertise list shortcuts that the picker actually routes to the list.
+func configureConversationKeys(model *list.Model) {
+	// The persistent search field owns printable keys, Home, and End, so
+	// enable only shortcuts that the picker actually routes to the list.
 	model.KeyMap.CursorUp.SetKeys("up")
-	model.KeyMap.CursorUp.SetHelp("↑/↓", "navigate")
 	model.KeyMap.CursorDown.Unbind()
 	model.KeyMap.PrevPage.SetKeys("left", "pgup")
 	model.KeyMap.NextPage.SetKeys("right", "pgdown")
@@ -254,23 +253,6 @@ func runeSliceIndex(haystack, needle []rune) int {
 		}
 	}
 	return -1
-}
-
-func (m *Model) updateHelp() {
-	escapeDescription := "cancel"
-	if m.search.Value() != "" {
-		escapeDescription = "clear"
-	}
-	escapeKey := key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", escapeDescription))
-	selectKey := key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select"))
-	bindings := []key.Binding{escapeKey, selectKey}
-	if m.list.Paginator.TotalPages > 1 {
-		pageKey := key.NewBinding(key.WithKeys("left", "right"), key.WithHelp("←/→", "page"))
-		bindings = append([]key.Binding{pageKey}, bindings...)
-	}
-	m.list.AdditionalShortHelpKeys = func() []key.Binding {
-		return bindings
-	}
 }
 
 // RelativeUpdatedAt renders updatedAt relative to now for display.
@@ -433,9 +415,7 @@ func (m Model) View() string {
 		content.FooterLeft = m.loadingLabel()
 	case m.state == StateError && len(m.list.Items()) > 0:
 		content.FooterRight = "enter retry"
-		bodyWidth, _ := m.panel.BodySize(m.width, m.height, true)
-		message := ansi.Truncate(m.compactMessage(), max(1, bodyWidth-len(content.FooterRight)-1), "…")
-		content.FooterLeft = m.theme.Feedback.Error.Render(message)
+		content.FooterLeft = m.theme.Feedback.Error.Render(m.compactMessage())
 	case m.state == StateReady && len(m.list.VisibleItems()) > 0:
 		content.FooterLeft = m.overflowHint()
 	}
@@ -619,22 +599,17 @@ func (m *Model) alignWindowToPage() {
 
 func (m *Model) applySearch() {
 	if m.search.Value() == "" {
-		m.list.SetStatusBarItemName("conversation", "conversations")
 		m.list.ResetFilter()
 		m.list.ResetSelected()
 		m.windowStart = 0
-		m.updateHelp()
 		return
 	}
-	m.list.SetStatusBarItemName("conversation matches your search", "conversations match your search")
 	m.list.SetFilterText(m.search.Value())
 	m.windowStart = 0
-	m.updateHelp()
 }
 
 func (m *Model) resizeChildren() {
 	m.resizeBody(m.panel.BodySize(m.width, m.height, true))
-	m.updateHelp()
 }
 
 func (m *Model) resizeBody(width, height int) {

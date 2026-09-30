@@ -214,7 +214,6 @@ type Model struct {
 	// /resume operations are cancellable and generation-stamped. A late result
 	// from a cancelled list/load can never mutate the current conversation.
 	conversationTask     task
-	conversationRetry    conversationRetry
 	conversationSwitchID string
 
 	// Turn status, surfaced in the status line.

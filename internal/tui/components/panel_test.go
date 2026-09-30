@@ -35,6 +35,13 @@ func TestPanelFullAndFallbackViewsStayBounded(t *testing.T) {
 			t.Errorf("full panel missing %q", want)
 		}
 	}
+	content.FooterLeft = styles.Default(true).Feedback.Error.Render(strings.Repeat("Failed 界 ", 20))
+	content.FooterRight = "enter retry"
+	narrow := panel.View(40, 24, content)
+	assertBounded(t, narrow, 40, 24)
+	if !strings.Contains(ansi.Strip(narrow), "enter retry") {
+		t.Fatalf("long error hid the retry action: %q", narrow)
+	}
 	if tiny := ansi.Strip(panel.View(10, 2, content)); !strings.Contains(tiny, "Resize") {
 		t.Fatalf("tiny panel = %q", tiny)
 	}

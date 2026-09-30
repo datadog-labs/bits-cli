@@ -53,14 +53,6 @@ func (m *Model) startNewConversation() tea.Cmd {
 	return closeFileSearch // Update reconciles focus and animations after the mode change.
 }
 
-type conversationRetry int
-
-const (
-	retryNone conversationRetry = iota
-	retryList
-	retrySwitch
-)
-
 type conversationListResultMsg struct {
 	generation uint64
 	result     agent.ConversationListResult
@@ -86,7 +78,6 @@ func (m *Model) startConversationList() tea.Cmd {
 		return nil
 	}
 	m.picker.SetLoading(conversationview.OperationList)
-	m.conversationRetry = retryList
 	m.conversationSwitchID = ""
 	ctx, generation := m.conversationTask.start(context.Background(), historyLoadTimeout)
 	engine := m.engine
@@ -101,12 +92,10 @@ func (m *Model) applyConversationListResult(msg conversationListResultMsg) tea.C
 	}
 	m.conversationTask.done()
 	if msg.result.Err != nil {
-		m.conversationRetry = retryList
 		n := conversationErrorNotice("could not load conversations", msg.result.Err)
 		m.picker.SetError(n.Text, msg.result.Err)
 		return nil
 	}
-	m.conversationRetry = retryNone
 	cmd := m.picker.SetConversations(msg.result.Conversations)
 	if msg.result.Omitted > 0 {
 		m.picker.SetWarning(fmt.Sprintf("%d malformed conversation records omitted", msg.result.Omitted))
@@ -129,7 +118,6 @@ func (m *Model) startConversationSwitch(conversationID string) tea.Cmd {
 		return m.closeConversationPicker()
 	}
 	m.picker.SetLoading(conversationview.OperationOpen)
-	m.conversationRetry = retrySwitch
 	m.conversationSwitchID = conversationID
 	ctx, generation := m.conversationTask.start(context.Background(), historyLoadTimeout)
 	engine := m.engine
@@ -151,7 +139,6 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 		err = m.engine.InstallConversation(msg.ctx, msg.conversation)
 	}
 	if err != nil {
-		m.conversationRetry = retrySwitch
 		n := conversationErrorNotice("resume failed", err)
 		m.picker.SetError(n.Text, err)
 		return m.showNotice(n, 0)
@@ -172,10 +159,10 @@ func (m *Model) retryConversationOperation() tea.Cmd {
 	if m.picker == nil || m.picker.State() != conversationview.StateError {
 		return nil
 	}
-	switch m.conversationRetry {
-	case retrySwitch:
+	switch m.picker.Operation() {
+	case conversationview.OperationOpen:
 		return m.startConversationSwitch(m.conversationSwitchID)
-	case retryList:
+	case conversationview.OperationList:
 		return m.startConversationList()
 	default:
 		return nil
@@ -196,7 +183,6 @@ func (m *Model) closeConversationPicker() tea.Cmd {
 // the mode is ModeConversations.
 func (m *Model) dropConversationPicker() {
 	m.picker = nil
-	m.conversationRetry = retryNone
 	m.conversationSwitchID = ""
 	m.setMode(ModeChat)
 }
