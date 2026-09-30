@@ -97,7 +97,7 @@ func TestPickerShowsSearchBarAndMalformedRecordWarning(t *testing.T) {
 	if m.list.Height() != 3 {
 		t.Fatalf("list height = %d, want 3", m.list.Height())
 	}
-	body := m.panelBody(m.panelBodyWidth())
+	body := m.panelBody(m.panel.BodySize(m.width, m.height, true))
 	lines := strings.Split(body, "\n")
 	if len(lines) < 3 || lines[1] != "" {
 		t.Fatalf("search row should have a blank line before results: %q", body)
@@ -107,7 +107,7 @@ func TestPickerShowsSearchBarAndMalformedRecordWarning(t *testing.T) {
 func TestSearchLineNeverExceedsPickerWidth(t *testing.T) {
 	for _, width := range []int{20, 60} {
 		m := New(width, 12)
-		bodyWidth := m.panelBodyWidth()
+		bodyWidth, _ := m.panel.BodySize(m.width, m.height, true)
 		wantInputWidth := max(0, bodyWidth-1-ansi.StringWidth(m.search.Prompt)-1)
 		if got := m.search.Width(); got != wantInputWidth {
 			t.Fatalf("width %d configured input width %d, want %d", width, got, wantInputWidth)
@@ -199,7 +199,7 @@ func TestPickerPageKeysStillRouteToConversationList(t *testing.T) {
 	if m.list.Paginator.Page != 1 || m.list.Index() != m.list.Paginator.PerPage {
 		t.Fatalf("right arrow did not advance one result page: page=%d index=%d perPage=%d", m.list.Paginator.Page, m.list.Index(), m.list.Paginator.PerPage)
 	}
-	page := ansi.Strip(m.conversationListView(m.panelBodyWidth()))
+	page := ansi.Strip(m.conversationListView(m.list.Width()))
 	if !strings.Contains(page, "Conversation G") || !strings.Contains(page, "Conversation L") || strings.Contains(page, "Conversation B") {
 		t.Fatalf("right arrow rendered an overlapping page: %q", page)
 	}
@@ -207,7 +207,7 @@ func TestPickerPageKeysStillRouteToConversationList(t *testing.T) {
 		t.Fatalf("second-page overflow hint = %q, want %q", hint, "↓ 2 more below")
 	}
 	m, _ = m.Update(pickerKey(tea.KeyRight, ""))
-	page = ansi.Strip(m.conversationListView(m.panelBodyWidth()))
+	page = ansi.Strip(m.conversationListView(m.list.Width()))
 	if !strings.Contains(page, "Conversation M") || !strings.Contains(page, "Conversation N") || strings.Contains(page, "Conversation L") {
 		t.Fatalf("partial final page pulled in rows from the previous page: %q", page)
 	}

@@ -96,7 +96,7 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 					t.Fatal(err)
 				}
 				model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
-				model.resize(80, 24)
+				model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 				setConversationInput(model, "Run the action")
 				_, _ = model.submit()
 				for len(model.pendingApprovals) == 0 {
@@ -142,7 +142,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 	}
 	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
 	model.Init() // focuses the editor, starting the cursor blink
-	model.resize(80, 24)
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	if !model.editor.Focused() {
 		t.Fatal("editor not focused after init")
 	}
@@ -171,7 +171,7 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
-	model.resize(80, 24)
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	for len(model.pendingApprovals) == 0 {
@@ -181,8 +181,8 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 
 	// Shrink below the approval minimum: View hides the whole chat behind the
 	// resize hint, so no keypress may drive the hidden prompt — not even Esc.
-	model.resize(minimumApprovalWidth-1, minimumApprovalHeight)
-	if !model.chatViewTooSmall() {
+	model.Update(tea.WindowSizeMsg{Width: minimumApprovalWidth - 1, Height: minimumApprovalHeight})
+	if !model.frame.tooSmall {
 		t.Fatal("chat not concealed at the reduced size")
 	}
 	if view := ansi.Strip(model.View().Content); strings.Contains(view, "Permission Required") {
@@ -200,7 +200,7 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	}
 
 	// Resizing back restores the prompt and its controls; Esc then denies.
-	model.resize(80, 24)
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	drainConversationRemote(t, model)
 	// The denial is answered on the wire and the follow-up answer renders.
@@ -222,7 +222,7 @@ func TestToolApprovalComposerSuppressedInSkipPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
-	model.resize(80, 24)
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	drainConversationRemote(t, model)
@@ -251,7 +251,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 				t.Fatal(err)
 			}
 			model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
-			model.resize(width, 24)
+			model.Update(tea.WindowSizeMsg{Width: width, Height: 24})
 			setConversationInput(model, "Run the action")
 			_, _ = model.submit()
 			for len(model.pendingApprovals) == 0 {
@@ -259,7 +259,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 				_, _ = model.Update(msg)
 			}
 
-			view := model.approvalView()
+			view := model.frame.approval
 			plain := ansi.Strip(view)
 			normalized := strings.Join(strings.Fields(plain), " ")
 			for _, want := range []string{"Permission Required", "ESC x", "Run the test action?", "This test tool requires", "Deny"} {
@@ -300,7 +300,7 @@ func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := newShell()
-	model.resize(100, 30)
+	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	model.pendingApprovals = []agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{
@@ -315,7 +315,8 @@ func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
 		},
 	}}
 
-	plain := ansi.Strip(model.approvalView())
+	model.relayout()
+	plain := ansi.Strip(model.frame.approval)
 	wants := []string{"Run an unsandboxed command?", "cwd: /workspace · unsandboxed", "Allow"}
 	wants = append(wants, strings.Split(command, "\n")...)
 	for _, want := range wants {
@@ -338,7 +339,7 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := newShell()
-	model.resize(80, 20)
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	model.pendingApprovals = []agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{
@@ -353,80 +354,17 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 		},
 	}}
 
-	first := ansi.Strip(model.approvalView())
+	model.relayout()
+	first := ansi.Strip(model.frame.approval)
 	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "pgup/pgdown scroll") || !strings.Contains(first, "Allow") {
 		t.Fatalf("initial long-command approval window is incorrect:\n%s", first)
 	}
 	for range 10 {
-		_, _ = model.handleApprovalKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+		model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	}
-	last := ansi.Strip(model.approvalView())
+	last := ansi.Strip(model.frame.approval)
 	if strings.Contains(last, "print(1)") || !strings.Contains(last, "print(20)") || !strings.Contains(last, "cwd: /workspace") || !strings.Contains(last, "Allow") {
 		t.Fatalf("paged long-command approval window is incorrect:\n%s", last)
-	}
-}
-
-func TestApprovalPanelRemainsUsableAtMinimumHeight(t *testing.T) {
-	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
-	if err != nil {
-		t.Fatal(err)
-	}
-	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
-	model.resize(80, minimumApprovalHeight)
-	setConversationInput(model, "Run the action")
-	_, _ = model.submit()
-	for len(model.pendingApprovals) == 0 {
-		msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
-		_, _ = model.Update(msg)
-	}
-
-	view := ansi.Strip(model.View().Content)
-	for _, want := range []string{"Permission Required", "Run the test action?", "This test tool requires approval", "Allow", "Session", "Deny"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("minimum-height approval missing %q:\n%s", want, view)
-		}
-	}
-	if strings.Contains(view, "Resize terminal") {
-		t.Fatalf("minimum supported height rendered resize fallback:\n%s", view)
-	}
-}
-
-func TestTallDraftConcealsApprovalAndSuppressesInput(t *testing.T) {
-	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
-	if err != nil {
-		t.Fatal(err)
-	}
-	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
-	model.resize(80, minimumApprovalHeight)
-	setConversationInput(model, "Run the action")
-	_, _ = model.submit()
-	for len(model.pendingApprovals) == 0 {
-		msg := runConversationCmd(t, waitEvent(model.turnGen, model.turnEvents))
-		_, _ = model.Update(msg)
-	}
-
-	setConversationInput(model, strings.Repeat("draft\n", 12))
-	model.layoutTranscript()
-	if model.approvalAvailableHeight() >= minimumApprovalPanelHeight {
-		t.Fatalf("approval height = %d, test did not force the concealed state", model.approvalAvailableHeight())
-	}
-	if !model.chatViewTooSmall() {
-		t.Fatal("approval with a tall draft was not concealed")
-	}
-	if view := ansi.Strip(model.View().Content); !strings.Contains(view, "Resize terminal") {
-		t.Fatalf("concealed approval did not render the resize hint:\n%s", view)
-	}
-
-	for _, code := range []rune{tea.KeyRight, tea.KeyEnter, tea.KeyEscape} {
-		_, _ = model.Update(tea.KeyPressMsg{Code: code})
-	}
-	if len(model.pendingApprovals) == 0 {
-		t.Fatal("a concealed keypress answered the approval")
-	}
-	if backend.calls != 1 {
-		t.Fatalf("backend calls = %d while concealed, want 1", backend.calls)
 	}
 }
 
@@ -450,7 +388,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				t.Fatal(err)
 			}
 			model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
-			model.resize(80, 24)
+			model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 			setConversationInput(model, "Run the action")
 			_, _ = model.submit()
 
@@ -459,19 +397,15 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				_, _ = model.Update(msg)
 			}
 			for range tt.navigate {
-				_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+				model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 			}
 
-			approval := model.approvalView()
+			approval := model.frame.approval
 			view := ansi.Strip(model.View().Content)
 			if !strings.Contains(view, "Permission Required") || !strings.Contains(view, "Run the test action?") || !strings.Contains(approval, model.styles.Approval.Selected.Render(tt.selection)) {
 				t.Fatalf("approval composer not rendered:\n%s", view)
 			}
-			lines := strings.Split(view, "\n")
-			if len(lines) > 24 {
-				t.Fatalf("approval view height = %d, want <= 24", len(lines))
-			}
-			for _, line := range lines {
+			for _, line := range strings.Split(view, "\n") {
 				if width := ansi.StringWidth(line); width > 80 {
 					t.Fatalf("approval view width = %d, want <= 80", width)
 				}

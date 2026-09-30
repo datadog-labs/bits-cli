@@ -15,7 +15,7 @@ func TestPanelFullAndFallbackViewsStayBounded(t *testing.T) {
 	content := PanelContent{
 		Title:          "Choose an item",
 		Dismiss:        "esc ×",
-		Body:           func(width int) string { return "body at width " + strings.Repeat("x", max(0, width-14)) },
+		Body:           func(width, _ int) string { return "body at width " + strings.Repeat("x", max(0, width-14)) },
 		FooterLeft:     "↑/↓ navigate",
 		FooterRight:    "enter to continue",
 		CompactTitle:   "Choose an item",
@@ -46,7 +46,7 @@ func TestPanelBodyReceivesInnerWidth(t *testing.T) {
 	got := 0
 	_ = panel.View(80, 20, PanelContent{
 		Title: "Title",
-		Body: func(width int) string {
+		Body: func(width, _ int) string {
 			got = width
 			return "body"
 		},
@@ -60,7 +60,7 @@ func TestPanelBodyReceivesInnerWidth(t *testing.T) {
 
 func TestPanelRenderReturnsNaturalHeight(t *testing.T) {
 	panel := NewPanel(styles.Default(true).Panel)
-	content := PanelContent{Title: "Permission required", Body: func(int) string { return "body" }}
+	content := PanelContent{Title: "Permission required", Body: func(int, int) string { return "body" }}
 	rendered := panel.Render(80, 20, content)
 	if got := len(strings.Split(rendered, "\n")); got >= 20 {
 		t.Fatalf("rendered height = %d, want natural height below container height", got)
@@ -74,7 +74,7 @@ func TestPanelCompactBodyReceivesCompactWidth(t *testing.T) {
 	got := 0
 	rendered := panel.Render(80, 8, PanelContent{
 		Title: "Permission required",
-		Body:  func(int) string { return strings.Repeat("body\n", 20) },
+		Body:  func(int, int) string { return strings.Repeat("body\n", 20) },
 		CompactBody: func(width int) string {
 			got = width
 			return "compact actions"

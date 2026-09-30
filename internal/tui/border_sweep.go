@@ -12,7 +12,7 @@ import (
 const borderSweepInterval = 17 * time.Millisecond
 
 func (m *Model) animationsVisible() bool {
-	return m.mode == ModeChat && m.activeToolUI == nil && !m.chatViewTooSmall()
+	return m.mode == ModeChat && m.activeToolUI == nil && !m.frame.tooSmall
 }
 
 func (m *Model) toolAnimationWanted() bool {

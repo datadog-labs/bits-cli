@@ -419,7 +419,7 @@ func (m *Model) title() string {
 	}
 }
 
-func (m *Model) bodyView(width int) string {
+func (m *Model) bodyView(width, _ int) string {
 	text := m.theme.Text
 	feedback := m.theme.Feedback
 	switch m.phase {

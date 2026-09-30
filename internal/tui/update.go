@@ -171,7 +171,7 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // Exiting never resets it here: main resets the shape once the program has
 // stopped, which covers every quit path.
 func (m *Model) reconcilePointerShape() tea.Cmd {
-	hand := m.mode == ModeChat && !m.chatViewTooSmall() && m.list.Hovered()
+	hand := m.mode == ModeChat && !m.frame.tooSmall && m.list.Hovered()
 	if hand == m.pointerIsHand {
 		return nil
 	}
@@ -183,53 +183,58 @@ func (m *Model) reconcilePointerShape() tea.Cmd {
 	return tea.Raw(ansi.SetPointerShape(shape))
 }
 
-// Update is the single message handler. Only this thread touches Model state. It
-// routes the message to the owning surface, then reconciles editor focus so the
-// cursor always tracks the active surface.
+// Update is the single message handler. Only this thread touches Model state.
+// It routes the message to the owning surface, then derives everything that
+// follows from state — geometry, animations, editor focus, pointer shape — in
+// one place, so no handler has to remember to relayout.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// The probe answer can arrive in any mode and no surface uses it. Skipping
-	// reconcileFocus is safe: it is idempotent and runs on the next message.
-	if event, ok := msg.(uv.KittyGraphicsEvent); ok {
-		switch {
-		case splash.ImageRejected(event):
-			m.splashReady = false
-			m.layoutTranscript()
-		case !m.splashReady && splash.ProbeSucceeded(event):
-			m.splashReady = true
-			m.layoutTranscript()
-			return m, splash.Transmit()
-		}
-		return m, nil
-	}
-	if event, ok := msg.(recentConversationsMsg); ok {
-		// A failed background read the user never asked for stays silent.
-		if event.result.Err == nil {
-			m.resume.setConversations(event.result.Conversations)
-			m.layoutTranscript()
-		}
-		return m, nil
-	}
-	if m.mode == ModeLogin {
-		return m.updateLogin(msg)
-	}
-	// Global quit wins over every surface and must not reconcile focus (we are
-	// tearing down); the picker's in-flight request is abandoned on the way out.
-	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+	// Global quit wins over every chat surface and skips reconciliation (we are
+	// tearing down). Login handles its own ctrl+c.
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" && m.mode != ModeLogin {
 		return m.quit()
 	}
-	// When the chat is too small to render, View shows only a resize hint, so no
-	// surface is visible. Drop user input before it can drive a hidden surface
-	// (an approval granted blind, the composer, scrolling); ctrl+c already quit
-	// above. System and engine messages still flow so the app keeps working and
-	// can be resized back.
-	if m.chatViewTooSmall() {
-		switch msg.(type) {
-		case tea.KeyPressMsg, tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.PasteMsg:
-			return m, nil
+
+	var cmd tea.Cmd
+	switch msg := msg.(type) {
+	case uv.KittyGraphicsEvent:
+		// The probe answer can arrive in any mode, login included.
+		switch {
+		case splash.ImageRejected(msg):
+			m.splashReady = false
+		case !m.splashReady && splash.ProbeSucceeded(msg):
+			m.splashReady = true
+			cmd = splash.Transmit()
+		}
+	case recentConversationsMsg:
+		// A failed background read the user never asked for stays silent.
+		if msg.result.Err == nil {
+			m.resume.setConversations(msg.result.Conversations)
+		}
+	default:
+		switch {
+		case m.mode == ModeLogin:
+			cmd = m.updateLogin(msg)
+		case m.frame.tooSmall && isUserInput(msg):
+			// Only a resize hint is visible, so input must not drive a hidden
+			// surface. System and engine messages still flow.
+		default:
+			_, cmd = m.dispatch(msg)
 		}
 	}
-	next, cmd := m.dispatch(msg)
-	return next, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
+	if m.mode == ModeLogin {
+		return m, cmd
+	}
+
+	m.relayout()
+	return m, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
+}
+
+func isUserInput(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tea.KeyPressMsg, tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.PasteMsg:
+		return true
+	}
+	return false
 }
 
 func (m *Model) quit() (tea.Model, tea.Cmd) {
@@ -284,13 +289,10 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case entitySearchResultMsg:
 		m.applyEntitySearchResult(msg)
-		m.layoutTranscript()
 		return m, nil
 
 	case fileSearchSnapshotMsg:
-		cmd := m.applyFileSearchSnapshot(msg)
-		m.layoutTranscript()
-		return m, cmd
+		return m, m.applyFileSearchSnapshot(msg)
 
 	case fileSearchClosedMsg:
 		return m, nil
@@ -345,8 +347,6 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncStatus()
 		if msg.ev.Kind == agent.EventTranscript {
 			m.syncTranscript()
-		} else {
-			m.layoutTranscript()
 		}
 		return m, tea.Batch(cmd, waitEvent(msg.generation, m.turnEvents))
 
@@ -416,11 +416,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.focus() == focusPermissions {
 		return m, nil
 	}
-	// Paste, cursor blink, and other editor-bound input; a paste can change the
-	// editor's height, so relayout. When the editor is not the focus it is
-	// blurred and ignores these, showing no cursor.
+	// Paste, cursor blink, and other editor-bound input. When the editor is not
+	// the focus it is blurred and ignores these, showing no cursor.
 	cmd := m.editor.Update(msg)
-	m.layoutTranscript()
 	return m, batchCommands(cmd, m.syncCompletionSearches())
 }
 
@@ -467,10 +465,11 @@ func (m *Model) beginSelection(msg tea.MouseClickMsg) tea.Cmd {
 	if m.editor.MenuOpen() {
 		m.editor.CloseMenu()
 	}
-	transcriptHeight := m.list.Height()
-	scope := selectionScopeAt(msg.Y, transcriptHeight)
-	frame := m.visibleSelectionFrame(scope)
-	m.selection.beginClick(frame, scope, msg.X, msg.Y, transcriptHeight, m.height, m.hasPendingAccordionToggle, time.Now())
+	scope := selectionScopeLower
+	if msg.Y < m.frame.transcript.Max.Y {
+		scope = selectionScopeTranscript
+	}
+	m.selection.beginClick(m.visibleSelectionFrame(scope), scope, msg.X, msg.Y, m.hasPendingAccordionToggle, time.Now())
 	return nil
 }
 
@@ -478,9 +477,7 @@ func (m *Model) extendSelection(msg tea.MouseMotionMsg) tea.Cmd {
 	if !m.selection.selecting() {
 		return nil
 	}
-	transcriptHeight := m.list.Height()
-	frame := m.visibleSelectionFrame(m.selection.scope)
-	m.selection.extendGesture(frame, msg.X, msg.Y, transcriptHeight, m.height)
+	m.selection.extendGesture(m.visibleSelectionFrame(m.selection.scope), msg.X, msg.Y)
 	return m.armSelectionScroll()
 }
 
@@ -488,13 +485,12 @@ func (m *Model) finishSelection(msg tea.MouseReleaseMsg) tea.Cmd {
 	if !m.selection.selecting() {
 		return nil
 	}
-	transcriptHeight := m.list.Height()
 	frame := m.visibleSelectionFrame(m.selection.scope)
 	document := frame
 	if m.selection.scope == selectionScopeTranscript {
 		document = m.transcriptSelectionFrame()
 	}
-	text := m.selection.finishGesture(frame, msg.X, msg.Y, transcriptHeight, m.height, document)
+	text := m.selection.finishGesture(frame, msg.X, msg.Y, document)
 
 	// A gesture that never turned into a real range (anchor == focus) was a
 	// plain click, not a drag-select: if it started on an accordion row,
@@ -530,9 +526,8 @@ func (m *Model) advanceSelectionScroll(msg selectionTickMsg) tea.Cmd {
 		m.selection.stopScroll()
 		return nil
 	}
-	frame := m.visibleSelectionFrame(m.selection.scope)
 	pointer := m.selection.pointer
-	m.selection.extendGesture(frame, pointer.X, pointer.Y, m.list.Height(), m.height)
+	m.selection.extendGesture(m.visibleSelectionFrame(m.selection.scope), pointer.X, pointer.Y)
 	return m.armSelectionScroll()
 }
 
@@ -542,7 +537,7 @@ func (m *Model) clearSelection() {
 
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	if m.focus() == focusToolUI {
-		if msg.Y >= m.toolUITop() {
+		if msg.Y >= m.frame.dock.Min.Y {
 			return m.updateToolUI(msg)
 		}
 		switch msg.Button {
@@ -622,7 +617,7 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	return m, permissionsCommand
 }
 
-func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -630,7 +625,7 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setDarkBackground(msg.IsDark())
 	case loginui.CompletedMsg:
 		if m.startupPending || m.startupCanceled || m.startupStopping {
-			return m, nil
+			return nil
 		}
 		m.startupPending = true
 		m.startupGeneration++
@@ -638,7 +633,7 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 		factory := m.engineFactory
 		factoryCtx, cancel := context.WithCancel(m.startupCtx)
 		m.startupCancel = cancel
-		return m, func() tea.Msg {
+		return func() tea.Msg {
 			if factory == nil {
 				return engineReadyMsg{generation: generation, err: errors.New("authenticated chat is unavailable")}
 			}
@@ -647,7 +642,7 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case engineReadyMsg:
 		if msg.generation != m.startupGeneration || m.startupCanceled || m.startupStopping {
-			return m, nil
+			return nil
 		}
 		m.startupPending = false
 		if m.startupCancel != nil {
@@ -656,11 +651,11 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.startupErr = msg.err
-			return m, tea.Quit
+			return tea.Quit
 		}
 		if msg.engine == nil {
 			m.startupErr = errors.New("authenticated chat returned no engine")
-			return m, tea.Quit
+			return tea.Quit
 		}
 		m.engine = msg.engine
 		if m.entitySearcher == nil {
@@ -675,12 +670,12 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.SetWidth(m.width)
 		}
 		m.setMode(ModeChat)
-		return m, m.initChat()
+		return m.initChat()
 	}
 
 	if m.loginModel == nil {
 		m.startupErr = errors.New("startup login is unavailable")
-		return m, tea.Quit
+		return tea.Quit
 	}
 	next, cmd := m.loginModel.Update(msg)
 	if loginModel, ok := next.(*loginui.Model); ok {
@@ -693,7 +688,7 @@ func (m *Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.startupCanceled = true
 		m.stopStartup()
 	}
-	return m, cmd
+	return cmd
 }
 
 func (m *Model) stopStartup() {
@@ -759,7 +754,6 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		cmd := m.editor.Update(msg)
-		m.layoutTranscript()
 		return m, batchCommands(cmd, m.syncCompletionSearches())
 	}
 
@@ -774,7 +768,6 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				delta = -1
 			}
 			m.resume.move(delta, m.resumeVisibleRows())
-			m.layoutTranscript()
 			return m, nil
 		case "enter":
 			if id, ok := m.resume.selectedID(); ok {
@@ -803,7 +796,6 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	cmd := m.editor.Update(msg)
-	m.layoutTranscript()
 	return m, batchCommands(cmd, m.syncCompletionSearches())
 }
 
@@ -869,7 +861,6 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	wait := m.beginRemote(events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()
-	m.layoutTranscript()
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
@@ -899,7 +890,6 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	events := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
 	m.chatPhase = chat.PhaseWaiting
-	m.layoutTranscript()
 	m.list.ScrollToBottom()
 	return m.beginRemote(events, cancel)
 }
@@ -972,7 +962,6 @@ func (m *Model) setDarkBackground(isDark bool) {
 		return
 	}
 	m.applyStyles(m.theme(isDark))
-	m.layoutTranscript()
 }
 
 func (m *Model) resize(w, h int) {
@@ -988,29 +977,24 @@ func (m *Model) resize(w, h int) {
 	}
 	if m.mode == ModeTermInit {
 		m.setMode(ModeChat)
-		return
 	}
-	m.layoutTranscript()
 }
 
-// layoutTranscript sizes the transcript to the space left by the notice row,
-// footer, and (possibly multi-row) editor without rebuilding presentation data.
-func (m *Model) layoutTranscript() {
+// relayout derives the frame from current state and sizes the transcript to
+// it. Update calls it once, after every handler has run.
+func (m *Model) relayout() {
 	if m.mode == ModeTermInit {
 		return
 	}
 	m.layoutToolUI()
-	m.editor.SetMenuHeight(max(0, m.height-chatFooterHeight-m.editor.Height()))
-	m.list.SetHeight(m.transcriptHeight())
+	m.editor.SetPlaceholder(m.promptPlaceholder())
+	m.frame = m.layout()
+	m.editor.SetMenuHeight(m.frame.composerTop())
+	m.list.SetHeight(m.frame.transcript.Dy())
 	m.list.SetHeader(m.headerView())
 }
 
-// syncTranscript rebuilds presentation metadata only after m.transcript changes.
-// Editor, cursor, resize, theme, and mode updates need layoutTranscript only.
+// syncTranscript rebuilds presentation metadata after m.transcript changes.
 func (m *Model) syncTranscript() {
-	if m.mode == ModeTermInit {
-		return
-	}
-	m.layoutTranscript()
 	m.list.SetItems(m.transcript.Blocks)
 }

@@ -144,7 +144,7 @@ func textBlock(id, text string) agent.Block {
 func TestResumeListErrorRetryEmptyAndCancelPreserveChat(t *testing.T) {
 	backend := newResumeBackend()
 	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
-	m.resize(50, 12)
+	m.Update(tea.WindowSizeMsg{Width: 50, Height: 12})
 	m.transcript.Blocks = []agent.Block{textBlock("same-message-id", "OLD")}
 	m.syncTranscript()
 	_ = m.editor.Focus()
@@ -172,7 +172,7 @@ func TestResumeListErrorRetryEmptyAndCancelPreserveChat(t *testing.T) {
 func TestPickerBlursEditorUntilClosed(t *testing.T) {
 	backend := newResumeBackend()
 	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
-	m.resize(50, 12)
+	m.Update(tea.WindowSizeMsg{Width: 50, Height: 12})
 	_ = m.editor.Focus()
 	if !m.editor.Focused() {
 		t.Fatal("editor not focused before opening the picker")
@@ -227,7 +227,7 @@ func TestCancelPendingResumeWaitsForEngineDrainBeforeReturningToChat(t *testing.
 	backend := newResumeBackend()
 	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
 	m := New(engine)
-	m.resize(50, 12)
+	m.Update(tea.WindowSizeMsg{Width: 50, Height: 12})
 	_ = m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "draft survives"})
 	wait := m.openConversationPicker()
@@ -297,7 +297,7 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	backend := newResumeBackend()
 	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
 	m := New(engine)
-	m.resize(50, 12)
+	m.Update(tea.WindowSizeMsg{Width: 50, Height: 12})
 	m.transcript.Blocks = []agent.Block{textBlock("same-message-id", "OLD-CACHED")}
 	m.syncTranscript()
 	_ = m.list.Render() // populate the old conversation's render cache
@@ -369,7 +369,7 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := New(agent.New(&halfStreamedWriteBackend{}, assistant.SendOptions{}), Config{Tools: toolSet, Workspace: ws})
-	m.resize(100, 30)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	setConversationInput(m, "write half.txt")
 	_, _ = m.submit()

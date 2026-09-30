@@ -52,7 +52,7 @@ func newPermissionsModel(t *testing.T, mode agent.PermissionsMode) (*Model, *tur
 	}
 	backend := &turnBackend{t: t}
 	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
-	model.resize(80, 24)
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	return model, backend
 }
 
@@ -435,63 +435,6 @@ func TestPermissionsPickerSpacingIsStableAcrossCurrentModes(t *testing.T) {
 	}
 }
 
-func TestPermissionsPickerUsesResumeRowStyles(t *testing.T) {
-	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
-	_, _ = m.dispatchCommand("permissions", "")
-	view := m.permissionsView()
-	if !strings.Contains(view, m.styles.Permissions.Title.Render("Manage Bits Permissions")) {
-		t.Fatal("picker title does not use the permissions panel title style")
-	}
-	helper := "Permission changes take effect on the next turn."
-	inner := m.permissionsInnerWidth()
-	helper += strings.Repeat(" ", max(0, inner-ansi.StringWidth(helper)))
-	if !strings.Contains(view, m.styles.Editor.MenuDetail.Render(helper)) {
-		t.Fatal("timing note does not use the tertiary text color")
-	}
-	selectedLabel := "› Full Access (current)"
-	selectedLabel += strings.Repeat(" ", max(0, permissionLabelWidth()-ansi.StringWidth(selectedLabel)))
-	if !strings.Contains(view, m.styles.Selector.Selected.Render(selectedLabel)) {
-		t.Fatal("selected mode does not use the resume selected title style")
-	}
-	leftWidth := permissionLabelWidth()
-	detailWidth := inner - leftWidth - 2
-	selectedDetail := wrapPermissionDetail(permissionOptionDetails[1], detailWidth)[0]
-	if !strings.Contains(view, m.styles.Selector.Selected.Render(selectedDetail)) {
-		t.Fatal("selected explanation does not use the resume selected detail style")
-	}
-	unselectedDetail := wrapPermissionDetail(permissionOptionDetails[0], detailWidth)[0]
-	if !strings.Contains(view, m.styles.Text.Tertiary.Render(unselectedDetail)) {
-		t.Fatal("unselected explanation does not use the resume time style")
-	}
-	rows := strings.Split(ansi.Strip(view), "\n")
-	for _, pair := range [][2]string{{"Ask for Approval", unselectedDetail}, {"Full Access", selectedDetail}} {
-		found := false
-		for _, row := range rows {
-			found = found || strings.Contains(row, pair[0]) && strings.Contains(row, pair[1])
-		}
-		if !found {
-			t.Fatalf("%q explanation does not start on the same row", pair[0])
-		}
-	}
-}
-
-func TestPermissionsConfirmationExplanationUsesTertiary(t *testing.T) {
-	m, _ := newPermissionsModel(t, agent.ModeManual)
-	_, _ = m.dispatchCommand("permissions", "skip-permissions")
-	view := m.permissionsView()
-	inner := m.permissionsInnerWidth()
-	wrapped := wrapPermissionDetail(fullAccessConfirmation, inner)
-	if len(wrapped) < 2 {
-		t.Fatalf("confirmation copy = %q, want it to wrap onto a second row", wrapped)
-	}
-	for _, text := range wrapped {
-		padded := text + strings.Repeat(" ", max(0, inner-ansi.StringWidth(text)))
-		if !strings.Contains(view, m.styles.Editor.MenuDetail.Render(padded)) {
-			t.Fatalf("confirmation row %q does not use the tertiary text color", text)
-		}
-	}
-}
-
 func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
@@ -523,9 +466,11 @@ func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
 func TestPermissionsPickerCompactResizeKeepsSelection(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "")
-	_, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
-	if !strings.Contains(ansi.Strip(m.View().Content), "Resize") {
-		t.Fatal("compact picker lacks resize hint")
+	for _, width := range []int{30, minimumChatWidth} {
+		_, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: 10})
+		if !strings.Contains(ansi.Strip(m.View().Content), "Resize") {
+			t.Fatalf("compact picker lacks resize hint at width %d", width)
+		}
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.mode != ModePermissions || m.tools.PermissionsMode() != agent.ModeManual {

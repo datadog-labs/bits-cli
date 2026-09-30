@@ -236,16 +236,13 @@ func TestResumeViewIsEmptyWithoutConversations(t *testing.T) {
 }
 
 // resumeKeyModel builds a chat-mode model with the startup offer populated
-// and visible, ready to exercise handleEditorKey against it. newShell leaves
-// mode at its zero value (ModeTermInit), on which layoutTranscript
-// early-returns, so mode is forced to ModeChat here.
+// and visible, ready to exercise handleEditorKey against it.
 func resumeKeyModel(t *testing.T) *Model {
 	t.Helper()
 	m := welcomeModel(120, 40)
-	m.mode = ModeChat
 	m.engine = agent.New(fake.New(), assistant.SendOptions{})
 	m.resume = *resumeFixture(32)
-	m.layoutTranscript()
+	m.relayout()
 	return m
 }
 
@@ -331,11 +328,8 @@ func TestPageKeysDoNotMoveTheOffer(t *testing.T) {
 	}
 }
 
-// The spec requires /new to bring the offer back. startNewConversation never
-// calls layoutTranscript itself; it reaches it through setMode(ModeChat),
-// which still relays even when the mode is unchanged. Pin that, or a
-// same-mode early return in setMode would silently drop the requirement.
-func TestStartNewConversationBringsTheOfferBack(t *testing.T) {
+// The spec requires /new to bring the offer back.
+func TestNewConversationBringsTheOfferBack(t *testing.T) {
 	m := resumeKeyModel(t)
 	m.transcript.Blocks = []agent.Block{{
 		ID:       agent.BlockID{Scope: agent.ScopeLocal, Key: "a", Kind: assistant.KindText},
@@ -344,11 +338,13 @@ func TestStartNewConversationBringsTheOfferBack(t *testing.T) {
 		Markdown: &assistant.MarkdownPayload{Content: "hello"},
 	}}
 	m.syncTranscript()
+	m.relayout()
 	if strings.Contains(m.list.Render(), resumeTitle) {
 		t.Fatal("offer rendered while the transcript had content")
 	}
 
-	m.startNewConversation()
+	setConversationInput(m, "/new")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	if !strings.Contains(m.list.Render(), resumeTitle) {
 		t.Fatalf("the offer did not return after /new:\n%s", m.list.Render())

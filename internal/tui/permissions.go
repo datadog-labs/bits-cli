@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
@@ -115,7 +116,7 @@ func (m *Model) applyPendingPermissions() tea.Cmd {
 }
 
 func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
-	if m.permissionsCompact() {
+	if !m.permissionsPanel.Fits(max(1, m.width), m.frame.composerTop(), m.permissionsContent()) {
 		if msg.String() == "esc" {
 			m.setMode(ModeChat)
 		}
@@ -162,66 +163,60 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
+// permissionsView floats above the composer, so it fits the rows left there
+// and falls back to the panel's compact form when it does not.
 func (m *Model) permissionsView() string {
-	header := "Manage Bits Permissions"
-	if m.permissionConfirm {
-		header = "Full Access"
-	}
-	content := components.PanelContent{
-		Title:   header,
-		Dismiss: "ESC x",
-		Body:    m.permissionsBody,
-	}
-	panel := m.permissionsPanel.Render(max(1, m.width), m.height, content)
-	// Panel reserves its margin but does not draw it, so indent to span the
-	// full terminal.
-	indent := strings.Repeat(" ", max(0, m.styles.Permissions.HorizontalMargin))
-	rows := strings.Split(panel, "\n")
-	for i, row := range rows {
-		rows[i] = indent + row
-	}
-	return strings.Join(rows, "\n")
+	return m.permissionsPanel.Render(max(1, m.width), m.frame.composerTop(), m.permissionsContent())
 }
 
+func (m *Model) permissionsContent() components.PanelContent {
+	content := components.PanelContent{
+		Title:   "Manage Bits Permissions",
+		Dismiss: "ESC x",
+		Body:    m.permissionsBody,
+		// Narrower than this, the option details wrap a word per row.
+		MinBodyWidth:   permissionLabelWidth + 2 + 12,
+		CompactMessage: "Resize terminal to choose permissions",
+		TinyMessage:    "Resize to choose permissions",
+	}
+	if m.permissionConfirm {
+		// The body inside a 36-column terminal.
+		content.Title, content.MinBodyWidth = "Full Access", 26
+	}
+	return content
+}
+
+// permissionLabelWidth keeps the detail column fixed when the current suffix
+// moves between options, so wrapping and vertical spacing do not jump.
+var permissionLabelWidth = ansi.StringWidth("› Ask for Approval (current)") + 2
+
 // permissionsBody renders the rows below the title; the panel supplies the
-// gap above them.
-func (m *Model) permissionsBody(inner int) string {
+// gap above them. Every row fills the width so the popup stays opaque.
+func (m *Model) permissionsBody(width, _ int) string {
 	style := m.styles.Editor
-	line := func(value string, selected bool) string {
-		rowStyle := style.MenuItem
+	row := func(rowStyle lipgloss.Style, value string) string {
+		return rowStyle.Width(width).Render(ansi.Truncate(value, width, "…"))
+	}
+	choice := func(label string, selected bool) string {
 		if selected {
-			rowStyle = style.MenuSelected
+			return row(style.MenuSelected, "› "+label)
 		}
-		value = ansi.Truncate(value, inner, "…")
-		return rowStyle.Render(value + strings.Repeat(" ", max(0, inner-ansi.StringWidth(value))))
+		return row(style.MenuItem, "  "+label)
 	}
-	detail := func(value string) string {
-		value = ansi.Truncate(value, inner, "…")
-		return style.MenuDetail.Render(value + strings.Repeat(" ", max(0, inner-ansi.StringWidth(value))))
-	}
+	blank := row(style.MenuItem, "")
+
 	var rows []string
-	switch {
-	case m.permissionsCompact():
-		rows = append(rows, line("Resize terminal to choose permissions", false))
-	case m.permissionConfirm:
-		for _, text := range wrapPermissionDetail(fullAccessConfirmation, inner) {
-			rows = append(rows, detail(text))
+	if m.permissionConfirm {
+		for _, line := range wordwrap(fullAccessConfirmation, width) {
+			rows = append(rows, row(style.MenuDetail, line))
 		}
-		rows = append(rows,
-			line("", false),
-			line(permissionMarker(m.permissionAllow)+"Yes, enable full access", m.permissionAllow),
-			line("", false),
-			line(permissionMarker(!m.permissionAllow)+"Cancel", !m.permissionAllow),
-		)
-	default:
-		labels := m.permissionOptionLabels()
-		leftWidth := permissionLabelWidth()
-		detailWidth := inner - leftWidth - 2
-		rows = append(rows, detail("Permission changes take effect on the next turn."))
-		for i, label := range labels {
-			rows = append(rows, line("", false))
-			rows = append(rows, m.permissionOptionRows(label, permissionOptionDetails[i], inner, leftWidth, detailWidth, i == m.permissionChoice)...)
-		}
+		rows = append(rows, blank, choice("Yes, enable full access", m.permissionAllow), blank, choice("Cancel", !m.permissionAllow))
+		return strings.Join(rows, "\n")
+	}
+	rows = append(rows, row(style.MenuDetail, "Permission changes take effect on the next turn."))
+	for i, label := range m.permissionOptionLabels() {
+		rows = append(rows, blank)
+		rows = append(rows, m.permissionOptionRows(label, permissionOptionDetails[i], width, i == m.permissionChoice)...)
 	}
 	return strings.Join(rows, "\n")
 }
@@ -240,82 +235,26 @@ func (m *Model) permissionOptionLabels() [2]string {
 	return labels
 }
 
-// Keep the detail column fixed when the current suffix moves between options,
-// so wrapping and vertical spacing do not jump.
-func permissionLabelWidth() int {
-	return ansi.StringWidth("› Ask for Approval (current)") + 2
-}
-
-func (m *Model) permissionOptionRows(label, detail string, width, leftWidth, detailWidth int, selected bool) []string {
-	labelStyle, detailStyle := m.styles.Text.Secondary, m.styles.Text.Tertiary
+// permissionOptionRows puts the label in a fixed left column and wraps the
+// detail beside it.
+func (m *Model) permissionOptionRows(label, detail string, width int, selected bool) []string {
+	labelStyle, detailStyle, marker := m.styles.Text.Secondary, m.styles.Text.Tertiary, "  "
 	if selected {
-		labelStyle = m.styles.Selector.Selected
-		detailStyle = m.styles.Selector.Selected
+		labelStyle, detailStyle, marker = m.styles.Selector.Selected, m.styles.Selector.Selected, "› "
 	}
-	wrapped := wrapPermissionDetail(detail, detailWidth)
-	rows := make([]string, 0, len(wrapped))
-	for i, part := range wrapped {
-		left := strings.Repeat(" ", leftWidth)
+	left := labelStyle.Width(permissionLabelWidth)
+	var rows []string
+	for i, part := range wordwrap(detail, width-permissionLabelWidth-2) {
 		if i == 0 {
-			left = permissionMarker(selected) + label
-			left += strings.Repeat(" ", max(0, leftWidth-ansi.StringWidth(left)))
+			part = left.Render(marker+label) + "  " + detailStyle.Render(part)
+		} else {
+			part = strings.Repeat(" ", permissionLabelWidth+2) + detailStyle.Render(part)
 		}
-		row := labelStyle.Render(left) + "  " + detailStyle.Render(part)
-		rows = append(rows, row+strings.Repeat(" ", max(0, width-ansi.StringWidth(row))))
+		rows = append(rows, part+strings.Repeat(" ", max(0, width-ansi.StringWidth(part))))
 	}
 	return rows
 }
 
-func wrapPermissionDetail(value string, width int) []string {
-	width = max(1, width)
-	var lines []string
-	current := ""
-	for _, word := range strings.Fields(value) {
-		if current != "" && ansi.StringWidth(current)+1+ansi.StringWidth(word) > width {
-			lines = append(lines, current)
-			current = ""
-		}
-		if current != "" {
-			current += " "
-		}
-		current += word
-	}
-	if current != "" {
-		lines = append(lines, current)
-	}
-	return lines
-}
-
-func permissionMarker(selected bool) string {
-	if selected {
-		return "› "
-	}
-	return "  "
-}
-
-// permissionsInnerWidth mirrors the body width the shared panel computes
-// internally, so the compactness check agrees with what will actually render.
-func (m *Model) permissionsInnerWidth() int {
-	sty := m.styles.Permissions
-	available := max(1, m.width) - 2*max(0, sty.HorizontalMargin)
-	outerWidth := available
-	if sty.MaxWidth > 0 {
-		outerWidth = min(outerWidth, sty.MaxWidth)
-	}
-	return max(1, outerWidth-sty.Frame.GetHorizontalFrameSize())
-}
-
-func (m *Model) permissionsCompact() bool {
-	available := m.height - chatFooterHeight - m.editor.Height()
-	inner := m.permissionsInnerWidth()
-	if m.permissionConfirm {
-		return m.width < 36 || available < 9+len(wrapPermissionDetail(fullAccessConfirmation, inner))
-	}
-	leftWidth := permissionLabelWidth()
-	detailWidth := inner - leftWidth - 2
-	if detailWidth < 12 {
-		return true
-	}
-	height := 8 + len(wrapPermissionDetail(permissionOptionDetails[0], detailWidth)) + len(wrapPermissionDetail(permissionOptionDetails[1], detailWidth))
-	return available < height
+func wordwrap(value string, width int) []string {
+	return strings.Split(ansi.Wordwrap(value, max(1, width), ""), "\n")
 }

@@ -178,6 +178,9 @@ type Model struct {
 	animTool        animationTimeline
 	animBorderSweep animationTimeline
 
+	// frame is the chat geometry derived at the end of the last Update.
+	frame frame
+
 	// Terminal dimensions are cached so a chat installed after startup login can
 	// be laid out immediately; Bubble Tea does not replay its initial size event.
 	width  int
@@ -323,19 +326,13 @@ func (m *Model) applyStyles(theme styles.Theme) {
 }
 
 // setMode switches the top-level screen. It is the single entry point for mode
-// changes so layout and refresh side effects stay centralized while startup
-// login hands control to chat without replacing or quitting the root model.
+// changes; Update relayouts after every handler, so a startup login can hand
+// control to chat without replacing or quitting the root model.
 func (m *Model) setMode(mode Mode) {
-	previous := m.mode
-	if previous == ModeChat && mode != ModeChat {
+	if m.mode == ModeChat && mode != ModeChat {
 		m.clearSelection()
 	}
 	m.mode = mode
-	if previous == ModeTermInit && mode == ModeChat {
-		m.syncTranscript()
-		return
-	}
-	m.layoutTranscript()
 }
 
 // Init starts the active screen. Login owns initial color detection; a direct

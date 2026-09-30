@@ -79,7 +79,7 @@ func New(width, height int, themes ...styles.Theme) Model {
 		width:    max(1, width),
 		height:   max(1, height),
 	}
-	m.resizeBody(m.panelBodyWidth())
+	m.resizeBody(m.panel.BodySize(m.width, m.height, true))
 	m.rebuild()
 	return m
 }
@@ -110,14 +110,14 @@ func (m *Model) SetWorkspace(snapshot workspacepkg.Environment) {
 func (m *Model) SetSize(width, height int) {
 	m.width = max(1, width)
 	m.height = max(1, height)
-	m.resizeBody(m.panelBodyWidth())
+	m.resizeBody(m.panel.BodySize(m.width, m.height, true))
 }
 
 // SetStyles applies a complete theme change to the panel and document.
 func (m *Model) SetStyles(theme styles.Theme) {
 	m.theme = theme
 	m.panel.SetStyles(theme.Panel)
-	m.resizeBody(m.panelBodyWidth())
+	m.resizeBody(m.panel.BodySize(m.width, m.height, true))
 	m.rebuild()
 }
 
@@ -145,16 +145,12 @@ func (m *Model) View() string {
 	return m.panel.View(m.width, m.height, content)
 }
 
-func (m *Model) panelBody(width int) string {
-	m.resizeBody(width)
+func (m *Model) panelBody(width, height int) string {
+	m.resizeBody(width, height)
 	return m.viewport.View()
 }
 
-func (m *Model) resizeBody(width int) {
-	// Panel overhead is its frame plus one header, one footer, and the two
-	// section gaps between them and the body.
-	gap := max(1, m.theme.Panel.SectionGap+1)
-	height := m.height - m.theme.Panel.Frame.GetVerticalFrameSize() - 2 - 2*gap
+func (m *Model) resizeBody(width, height int) {
 	width = max(1, width)
 	widthChanged := width != m.bodyWidth
 	m.bodyWidth = width
@@ -163,14 +159,6 @@ func (m *Model) resizeBody(width int) {
 	if widthChanged {
 		m.rebuild()
 	}
-}
-
-func (m Model) panelBodyWidth() int {
-	available := m.width - 2*max(0, m.theme.Panel.HorizontalMargin)
-	if m.theme.Panel.MaxWidth > 0 {
-		available = min(available, m.theme.Panel.MaxWidth)
-	}
-	return max(1, available-m.theme.Panel.Frame.GetHorizontalFrameSize())
 }
 
 func (m *Model) rebuild() {

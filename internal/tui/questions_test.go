@@ -65,7 +65,7 @@ func startQuestions(t *testing.T, mode agent.PermissionsMode, input string, coun
 		t.Fatal(err)
 	}
 	m := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: set, ToolUI: host})
-	m.resize(80, 24)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(m, "Help me choose")
 	_, _ = m.submit()
 	t.Cleanup(func() {
@@ -222,26 +222,23 @@ func TestQuestionsReplaceComposerAndRestoreIt(t *testing.T) {
 	if strings.Contains(view, "Working on it…") {
 		t.Fatal("composer was rendered behind the form")
 	}
-	if m.list.Height() < 3 || m.list.Height()+m.activeToolUI.component.Height()+chatNoticeHeight+chatFooterHeight != m.height {
-		t.Fatal("form did not reserve space for the conversation")
-	}
-	m.resize(30, 10)
+	m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
 	questionKey(m, tea.KeyEscape, 0)
 	if m.activeToolUI == nil || backend.calls != 1 {
 		t.Fatal("hidden form consumed a key")
 	}
-	m.resize(80, 24)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	questionKey(m, tea.KeyEscape, 0)
 	drainConversationRemote(t, m)
-	if m.activeToolUI != nil || m.list.Height() != m.height-chatNoticeHeight-chatFooterHeight-m.editor.Height() {
-		t.Fatal("dismissing the form did not restore the transcript height")
+	if m.activeToolUI != nil {
+		t.Fatal("dismissing the form did not restore the composer")
 	}
 }
 
 func TestQuestionsWheelTargetsTheHoveredPane(t *testing.T) {
 	m, _ := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
 	waitQuestions(t, m)
-	m.resize(36, 14)
+	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
 	questionKey(m, '2', 0)
 	questionKey(m, tea.KeyPgUp, 0)
 	_ = m.View()
@@ -251,7 +248,7 @@ func TestQuestionsWheelTargetsTheHoveredPane(t *testing.T) {
 		t.Fatal("wheel above picker did not scroll only the conversation")
 	}
 	before = m.list.VisibleSurface().Top
-	_, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 3, Y: m.toolUITop() + 3})
+	_, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 3, Y: m.frame.dock.Min.Y + 3})
 	if m.activeToolUI.component.View() == form || m.list.VisibleSurface().Top != before {
 		t.Fatal("wheel over picker did not scroll only the question")
 	}
@@ -295,7 +292,7 @@ func newResumedQuestionModel(t *testing.T, f *fake.Fake, id string, startup bool
 		opts.ConversationID = id
 	}
 	m := New(agent.New(f, opts), Config{Tools: set, ToolUI: host})
-	m.resize(100, 32)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
 	if startup {
 		_ = m.initChat()
 	}

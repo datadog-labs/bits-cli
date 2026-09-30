@@ -9,8 +9,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// testSelectionFrame is a transcript-only frame: no lower pane, no header.
 func testSelectionFrame(content string, width, height int) selectionFrame {
-	return newSelectionFrame(content, width, height, nil, 0)
+	return selectionFrame{content: content, width: width, height: height, split: height}
 }
 
 func TestSelectionCopiesRowsInEitherDirection(t *testing.T) {
@@ -80,7 +81,7 @@ func TestSelectionRemainsRenderedAfterFinishUntilCleared(t *testing.T) {
 }
 
 func TestSelectionUsesVirtualRowsAfterScrolling(t *testing.T) {
-	visible := newSelectionFrame("FGHIJ\nKLMNO", 5, 2, []int{5, 6}, 0)
+	visible := selectionFrame{content: "FGHIJ\nKLMNO", width: 5, height: 2, documentRows: []int{5, 6}, split: 2}
 	document := testSelectionFrame("a0000\nb1111\nc2222\nd3333\ne4444\nfghij\nklmno\np7777", 5, 8)
 
 	var got selection
@@ -144,24 +145,25 @@ func TestSelectionClickWithoutMovementCopiesNothing(t *testing.T) {
 
 func TestSelectionGestureStaysInOriginPane(t *testing.T) {
 	frame := testSelectionFrame("aaaaa\nbbbbb\nccccc\nddddd", 5, 4)
+	frame.split = 2
 
 	var transcript selection
-	transcript.beginGesture(frame, selectionScopeTranscript, 0, 0, 2, 4)
-	transcript.extendGesture(frame, 4, 3, 2, 4)
+	transcript.beginGesture(frame, selectionScopeTranscript, 0, 0)
+	transcript.extendGesture(frame, 4, 3)
 	if transcript.focus != image.Pt(4, 1) || transcript.edge != 1 {
 		t.Fatalf("transcript focus/edge = %v/%d, want (4,1)/1", transcript.focus, transcript.edge)
 	}
-	if text := transcript.finishGesture(frame, 4, 3, 2, 4, frame); text != "aaaaa\nbbbbb" {
+	if text := transcript.finishGesture(frame, 4, 3, frame); text != "aaaaa\nbbbbb" {
 		t.Fatalf("transcript selection = %q", text)
 	}
 
 	var lower selection
-	lower.beginGesture(frame, selectionScopeLower, 4, 3, 2, 4)
-	lower.extendGesture(frame, 0, 0, 2, 4)
+	lower.beginGesture(frame, selectionScopeLower, 4, 3)
+	lower.extendGesture(frame, 0, 0)
 	if lower.focus != image.Pt(0, 2) || lower.edge != 0 {
 		t.Fatalf("lower focus/edge = %v/%d, want (0,2)/0", lower.focus, lower.edge)
 	}
-	if text := lower.finishGesture(frame, 0, 0, 2, 4, frame); text != "ccccc\nddddd" {
+	if text := lower.finishGesture(frame, 0, 0, frame); text != "ccccc\nddddd" {
 		t.Fatalf("lower selection = %q", text)
 	}
 }
@@ -170,13 +172,13 @@ func TestSelectionAutoScrollReversesWithPointer(t *testing.T) {
 	frame := testSelectionFrame("aaaaa\nbbbbb\nccccc", 5, 3)
 	var got selection
 
-	got.beginGesture(frame, selectionScopeTranscript, 0, 1, 3, 3)
-	got.extendGesture(frame, 4, 2, 3, 3)
+	got.beginGesture(frame, selectionScopeTranscript, 0, 1)
+	got.extendGesture(frame, 4, 2)
 	if got.edge != 1 {
 		t.Fatalf("forward edge = %d, want 1", got.edge)
 	}
 
-	got.extendGesture(frame, 0, 0, 3, 3)
+	got.extendGesture(frame, 0, 0)
 	if got.edge != -1 {
 		t.Fatalf("reversed edge = %d, want -1", got.edge)
 	}
@@ -187,7 +189,7 @@ func TestSelectionAutoScrollReversesWithPointer(t *testing.T) {
 // a selection must start at the first transcript row instead.
 func TestSelectionSkipsTheHeaderRows(t *testing.T) {
 	const headerRows = 2
-	frame := newSelectionFrame("PANEL\nPANEL\nfghij\nklmno", 5, 4, nil, headerRows)
+	frame := selectionFrame{content: "PANEL\nPANEL\nfghij\nklmno", width: 5, height: 4, floor: headerRows, split: 4}
 
 	var got selection
 	// Drag from inside the panel down through both transcript rows.
@@ -204,7 +206,7 @@ func TestSelectionSkipsTheHeaderRows(t *testing.T) {
 
 // A selection wholly inside the header has nothing to copy.
 func TestSelectionInsideTheHeaderCopiesNothing(t *testing.T) {
-	frame := newSelectionFrame("PANEL\nPANEL\nfghij", 5, 3, nil, 2)
+	frame := selectionFrame{content: "PANEL\nPANEL\nfghij", width: 5, height: 3, floor: 2, split: 3}
 
 	var got selection
 	got.begin(frame, 0, 0)
@@ -217,9 +219,8 @@ func TestSelectionInsideTheHeaderCopiesNothing(t *testing.T) {
 // never painted as selected.
 func TestHeaderRowsAreNotSelectableInTheVisibleFrame(t *testing.T) {
 	m := welcomeModel(120, 40)
-	m.mode = ModeChat
 	m.resume = *resumeFixture(8)
-	m.layoutTranscript()
+	m.relayout()
 
 	frame := m.visibleSelectionFrame(selectionScopeTranscript)
 	headerRows := m.list.HeaderRows()
@@ -239,7 +240,7 @@ func TestHeaderRowsAreNotSelectableInTheVisibleFrame(t *testing.T) {
 // Excluding the header from the copy is not enough: an anchor inside it must
 // also leave the rows unpainted.
 func TestSelectionStartedInTheHeaderDoesNotPaintIt(t *testing.T) {
-	frame := newSelectionFrame("PANEL\nPANEL\nfghij\nklmno", 5, 4, []int{-1, -1, 2, 3}, 2)
+	frame := selectionFrame{content: "PANEL\nPANEL\nfghij\nklmno", width: 5, height: 4, documentRows: []int{-1, -1, 2, 3}, floor: 2, split: 4}
 
 	var got selection
 	got.begin(frame, 0, 0)
@@ -336,7 +337,7 @@ func TestWordRangeUsesRenderedCells(t *testing.T) {
 	anchor, focus, _ := wordRange(frame, image.Pt(5, 0))
 	var selected selection
 	selected.beginRange(anchor, focus)
-	if text := selected.finishGesture(frame, 5, 0, 2, 2, frame); text != "," {
+	if text := selected.finishGesture(frame, 5, 0, frame); text != "," {
 		t.Fatalf("single-cell word selection copied %q, want comma", text)
 	}
 	if !selected.selected() {
@@ -350,7 +351,7 @@ func TestMultiClickRangeIsPreservedOnRelease(t *testing.T) {
 	got.scope = selectionScopeTranscript
 	got.clickPoint = image.Pt(5, 1)
 	got.beginRange(image.Pt(0, 1), image.Pt(10, 1))
-	if text := got.finishGesture(frame, 5, 1, 2, 2, frame); text != "second line" {
+	if text := got.finishGesture(frame, 5, 1, frame); text != "second line" {
 		t.Fatalf("finishGesture() = %q, want %q", text, "second line")
 	}
 }
@@ -360,11 +361,11 @@ func TestMultiClickDisplacedReleaseEndsClickSequence(t *testing.T) {
 	start := time.Unix(100, 0)
 	var got selection
 	got.clicks.next(start, image.Pt(1, 0), selectionScopeTranscript)
-	got.beginClick(frame, selectionScopeTranscript, 1, 0, 1, 1, false, start.Add(100*time.Millisecond))
+	got.beginClick(frame, selectionScopeTranscript, 1, 0, false, start.Add(100*time.Millisecond))
 	if !got.keepRange {
 		t.Fatal("double-click did not select a range")
 	}
-	if text := got.finishGesture(frame, 4, 0, 1, 1, frame); text != "hello" {
+	if text := got.finishGesture(frame, 4, 0, frame); text != "hello" {
 		t.Fatalf("finishGesture() = %q, want %q", text, "hello")
 	}
 	if got.clicks.count != 0 {
@@ -376,16 +377,16 @@ func TestControlClickBreaksMultiClickSequence(t *testing.T) {
 	frame := testSelectionFrame("hello", 5, 1)
 	start := time.Unix(100, 0)
 	var got selection
-	got.beginClick(frame, selectionScopeTranscript, 1, 0, 1, 1, false, start)
-	got.finishGesture(frame, 1, 0, 1, 1, frame)
+	got.beginClick(frame, selectionScopeTranscript, 1, 0, false, start)
+	got.finishGesture(frame, 1, 0, frame)
 
-	got.beginClick(frame, selectionScopeTranscript, 1, 0, 1, 1, true, start.Add(100*time.Millisecond))
+	got.beginClick(frame, selectionScopeTranscript, 1, 0, true, start.Add(100*time.Millisecond))
 	if got.selected() || got.clicks.count != 0 {
 		t.Fatalf("control press selected text or retained click count: selected=%t count=%d", got.selected(), got.clicks.count)
 	}
-	got.finishGesture(frame, 1, 0, 1, 1, frame)
+	got.finishGesture(frame, 1, 0, frame)
 
-	got.beginClick(frame, selectionScopeTranscript, 1, 0, 1, 1, false, start.Add(200*time.Millisecond))
+	got.beginClick(frame, selectionScopeTranscript, 1, 0, false, start.Add(200*time.Millisecond))
 	if got.selected() || got.clicks.count != 1 {
 		t.Fatalf("click after control continued the sequence: selected=%t count=%d", got.selected(), got.clicks.count)
 	}
