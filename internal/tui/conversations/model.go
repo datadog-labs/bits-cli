@@ -465,8 +465,8 @@ func (m Model) compactMessage() string {
 	}
 }
 
-func (m Model) panelBody(width int) string {
-	m.resizeBody(width)
+func (m Model) panelBody(width, height int) string {
+	m.resizeBody(width, height)
 	search := m.searchView(width)
 	var body string
 	switch m.state {
@@ -615,21 +615,19 @@ func (m *Model) applySearch() {
 }
 
 func (m *Model) resizeChildren() {
-	m.resizeBody(m.panelBodyWidth())
+	m.resizeBody(m.panel.BodySize(m.width, m.height, true))
 	m.updateHelp()
 }
 
-func (m *Model) resizeBody(width int) {
+func (m *Model) resizeBody(width, height int) {
 	// The transparent search row has one right padding cell. textinput
 	// renders its prompt outside the configured text width, so reserve the
 	// prompt and cursor as well.
 	const searchPaddingWidth = 1
 	searchWidth := max(0, width-searchPaddingWidth-lipgloss.Width(m.search.Prompt)-1)
 	m.search.SetWidth(searchWidth)
-	// Full layout: panel frame, header, search row, footer, and the blank rows
-	// separating those sections. Everything left belongs to results.
-	const fixedHeight = 12
-	availableHeight := m.height - fixedHeight
+	// The search row and the blank row below it sit above the results.
+	availableHeight := height - 2
 	if m.warning != "" && m.state == StateReady {
 		availableHeight--
 	}
@@ -640,14 +638,6 @@ func (m *Model) resizeBody(width int) {
 	if listHeight > previousListHeight {
 		m.fillVisibleWindow()
 	}
-}
-
-func (m Model) panelBodyWidth() int {
-	available := m.width - 2*max(0, m.theme.Panel.HorizontalMargin)
-	if m.theme.Panel.MaxWidth > 0 {
-		available = min(available, m.theme.Panel.MaxWidth)
-	}
-	return max(1, available-m.theme.Panel.Frame.GetHorizontalFrameSize())
 }
 
 func joinWarning(body, warning string) string {

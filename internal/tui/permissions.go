@@ -185,7 +185,7 @@ func (m *Model) permissionsView() string {
 
 // permissionsBody renders the rows below the title; the panel supplies the
 // gap above them.
-func (m *Model) permissionsBody(inner int) string {
+func (m *Model) permissionsBody(inner, _ int) string {
 	style := m.styles.Editor
 	line := func(value string, selected bool) string {
 		rowStyle := style.MenuItem

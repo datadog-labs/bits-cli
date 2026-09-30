@@ -159,9 +159,11 @@ func markdownSamples(width int, isDark bool, title lipgloss.Style, tag string) [
 func sharedComponentSamples(width int, theme styles.Theme, title lipgloss.Style, tag string) []string {
 	panel := components.NewPanel(theme.Panel)
 	panelContent := components.PanelContent{
-		Title:          "Choose your Datadog site",
-		Dismiss:        "ESC x",
-		Body:           func(int) string { return theme.Text.Secondary.Render("Select the site where your organization lives.") },
+		Title:   "Choose your Datadog site",
+		Dismiss: "ESC x",
+		Body: func(int, int) string {
+			return theme.Text.Secondary.Render("Select the site where your organization lives.")
+		},
 		FooterLeft:     "↑/↓ navigate",
 		FooterRight:    "enter to continue",
 		CompactTitle:   "Sign in to Bits",

@@ -4,6 +4,7 @@ package components
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -12,11 +13,15 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
 
-// PanelContent supplies screen-specific copy and a width-aware body to Panel.
+// PanelContent supplies screen-specific copy and a size-aware body to Panel.
 type PanelContent struct {
 	Title   string
 	Dismiss string
-	Body    func(width int) string
+	// Body renders into the area BodySize reports.
+	Body func(width, height int) string
+	// MinBodyWidth is the narrowest body the full layout renders; below it the
+	// panel falls back to its compact form.
+	MinBodyWidth int
 	// BodyHeader, ScrollableBody, and BodyFooter form an optional bounded
 	// layout whose scroll state is owned by Panel. ScrollableBody must return
 	// display-width-wrapped rows; Panel performs vertical paging only.
@@ -81,60 +86,64 @@ func (p *Panel) Render(width, height int, content PanelContent) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-	full := p.full(width, height, content)
-	if full != "" && lipgloss.Width(full) <= width && lipgloss.Height(full) <= height {
+	if full, ok := p.fit(width, height, content); ok {
 		return full
 	}
 	return p.compact(width, height, content)
 }
 
-func (p *Panel) full(width, height int, content PanelContent) string {
-	margin := max(0, p.styles.HorizontalMargin)
-	available := width - 2*margin
-	if available <= p.styles.Frame.GetHorizontalFrameSize() {
-		return ""
-	}
-	outerWidth := available
+// Fits reports whether Render shows the full layout rather than a compact
+// fallback, so a caller can disable controls the fallback hides.
+func (p *Panel) Fits(width, height int, content PanelContent) bool {
+	_, ok := p.fit(width, height, content)
+	return ok
+}
+
+func (p *Panel) fit(width, height int, content PanelContent) (string, bool) {
+	full := p.full(width, height, content)
+	return full, full != "" && lipgloss.Width(full) <= width && lipgloss.Height(full) <= height
+}
+
+// BodySize is the body area the full layout leaves at width×height, below a
+// header and above an optional footer. Components that size a list or a
+// document outside rendering read it instead of re-deriving the frame.
+func (p *Panel) BodySize(width, height int, footer bool) (int, int) {
+	outerWidth := width - 2*max(0, p.styles.HorizontalMargin)
 	if p.styles.MaxWidth > 0 {
 		outerWidth = min(outerWidth, p.styles.MaxWidth)
 	}
-	bodyWidth := outerWidth - p.styles.Frame.GetHorizontalFrameSize()
-	if bodyWidth < 1 {
+	bodyHeight := height - p.styles.Frame.GetVerticalFrameSize() - 1 - p.gapRows()
+	if footer {
+		bodyHeight -= 1 + p.gapRows()
+	}
+	return outerWidth - p.styles.Frame.GetHorizontalFrameSize(), bodyHeight
+}
+
+func (p *Panel) gapRows() int { return max(1, p.styles.SectionGap+1) }
+
+func (p *Panel) full(width, height int, content PanelContent) string {
+	hasFooter := content.FooterLeft != "" || content.FooterRight != ""
+	bodyWidth, bodyHeight := p.BodySize(width, height, hasFooter)
+	if bodyWidth < max(1, content.MinBodyWidth) {
 		return ""
 	}
 
-	header := p.header(bodyWidth, content.Title, content.Dismiss)
-	footer := ""
-	if content.FooterLeft != "" || content.FooterRight != "" {
-		footer = p.footer(bodyWidth, content.FooterLeft, content.FooterRight)
-	}
-	gapRows := max(1, p.styles.SectionGap+1)
-	bodyHeight := height - p.styles.Frame.GetVerticalFrameSize() - lipgloss.Height(header)
-	if content.Body != nil || content.ScrollableBody != nil {
-		bodyHeight -= gapRows
-	}
-	if footer != "" {
-		bodyHeight -= lipgloss.Height(footer) + gapRows
-	}
-
-	body := ""
-	if content.ScrollableBody != nil {
+	sections := []string{p.header(bodyWidth, content.Title, content.Dismiss)}
+	switch {
+	case content.ScrollableBody != nil:
 		if bodyHeight <= 0 {
 			return ""
 		}
-		body = p.scrollableBody(bodyWidth, bodyHeight, content)
-	} else if content.Body != nil {
-		body = content.Body(bodyWidth)
+		sections = append(sections, p.scrollableBody(bodyWidth, bodyHeight, content))
+	case content.Body != nil:
+		sections = append(sections, content.Body(bodyWidth, bodyHeight))
 	}
-	sections := []string{header}
-	if body != "" {
-		sections = append(sections, body)
+	if hasFooter {
+		sections = append(sections, p.footer(bodyWidth, content.FooterLeft, content.FooterRight))
 	}
-	if footer != "" {
-		sections = append(sections, footer)
-	}
-	gap := strings.Repeat("\n", gapRows)
-	return p.styles.Frame.Width(outerWidth).Render(strings.Join(sections, gap))
+	sections = slices.DeleteFunc(sections, func(section string) bool { return section == "" })
+	gap := strings.Repeat("\n", p.gapRows())
+	return p.styles.Frame.Width(bodyWidth + p.styles.Frame.GetHorizontalFrameSize()).Render(strings.Join(sections, gap))
 }
 
 func (p *Panel) scrollableBody(width, height int, content PanelContent) string {
