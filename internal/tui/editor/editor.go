@@ -556,11 +556,7 @@ func (e *Editor) recompute() {
 			e.closeMenu()
 			return
 		}
-		if e.commandSpecs != nil {
-			e.setMenu(CommandCandidatesFrom(e.commandSpecs, word[1:]), "")
-		} else {
-			e.setMenu(CommandCandidates(word[1:]), "")
-		}
+		e.setMenu(CommandCandidatesFrom(e.commandSpecs, word[1:]), "")
 		return
 	}
 	span, active := e.activeEntitySpan()

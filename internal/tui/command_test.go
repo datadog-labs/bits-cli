@@ -132,24 +132,6 @@ func TestLookupCommandResolvesClearAsExactNewAlias(t *testing.T) {
 	}
 }
 
-func TestRegisteredCommandsAndCompletionAliasesStayConsistent(t *testing.T) {
-	for _, definition := range commandDefinitions {
-		for _, query := range append([]string{definition.name}, definition.aliases...) {
-			candidates := tuieditor.CommandCandidates(query)
-			found := false
-			for _, candidate := range candidates {
-				if candidate.Insert == "/"+definition.name {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Errorf("completion query %q does not resolve registered command /%s", query, definition.name)
-			}
-		}
-	}
-}
-
 func TestResumeIsRegisteredWithRejectActivePolicy(t *testing.T) {
 	resume, ok := lookupCommand("resume")
 	if !ok || resume.id != commandResume || resume.activeTurnPolicy != commandRejectedDuringTurn {
