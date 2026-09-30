@@ -465,10 +465,11 @@ func (m *Model) beginSelection(msg tea.MouseClickMsg) tea.Cmd {
 	if m.editor.MenuOpen() {
 		m.editor.CloseMenu()
 	}
-	transcriptHeight := m.list.Height()
-	scope := selectionScopeAt(msg.Y, transcriptHeight)
-	frame := m.visibleSelectionFrame(scope)
-	m.selection.beginClick(frame, scope, msg.X, msg.Y, transcriptHeight, m.height, m.hasPendingAccordionToggle, time.Now())
+	scope := selectionScopeLower
+	if msg.Y < m.frame.transcript.Max.Y {
+		scope = selectionScopeTranscript
+	}
+	m.selection.beginClick(m.visibleSelectionFrame(scope), scope, msg.X, msg.Y, m.hasPendingAccordionToggle, time.Now())
 	return nil
 }
 
@@ -476,9 +477,7 @@ func (m *Model) extendSelection(msg tea.MouseMotionMsg) tea.Cmd {
 	if !m.selection.selecting() {
 		return nil
 	}
-	transcriptHeight := m.list.Height()
-	frame := m.visibleSelectionFrame(m.selection.scope)
-	m.selection.extendGesture(frame, msg.X, msg.Y, transcriptHeight, m.height)
+	m.selection.extendGesture(m.visibleSelectionFrame(m.selection.scope), msg.X, msg.Y)
 	return m.armSelectionScroll()
 }
 
@@ -486,13 +485,12 @@ func (m *Model) finishSelection(msg tea.MouseReleaseMsg) tea.Cmd {
 	if !m.selection.selecting() {
 		return nil
 	}
-	transcriptHeight := m.list.Height()
 	frame := m.visibleSelectionFrame(m.selection.scope)
 	document := frame
 	if m.selection.scope == selectionScopeTranscript {
 		document = m.transcriptSelectionFrame()
 	}
-	text := m.selection.finishGesture(frame, msg.X, msg.Y, transcriptHeight, m.height, document)
+	text := m.selection.finishGesture(frame, msg.X, msg.Y, document)
 
 	// A gesture that never turned into a real range (anchor == focus) was a
 	// plain click, not a drag-select: if it started on an accordion row,
@@ -528,9 +526,8 @@ func (m *Model) advanceSelectionScroll(msg selectionTickMsg) tea.Cmd {
 		m.selection.stopScroll()
 		return nil
 	}
-	frame := m.visibleSelectionFrame(m.selection.scope)
 	pointer := m.selection.pointer
-	m.selection.extendGesture(frame, pointer.X, pointer.Y, m.list.Height(), m.height)
+	m.selection.extendGesture(m.visibleSelectionFrame(m.selection.scope), pointer.X, pointer.Y)
 	return m.armSelectionScroll()
 }
 

@@ -226,14 +226,14 @@ func (m *Model) chatViewBase(transcript string) string {
 // virtual document coordinates; the fixed lower pane uses screen coordinates.
 func (m *Model) visibleSelectionFrame(scope selectionScope) selectionFrame {
 	surface := m.list.VisibleSurface()
-	transcriptHeight := max(0, m.list.Height())
+	split := m.frame.transcript.Max.Y
 	headerRows := m.list.HeaderRows()
 	rows := make([]int, max(0, m.height))
 	for y := range rows {
 		switch document := surface.Top + y; {
 		case scope == selectionScopeLower:
 			rows[y] = y
-		case y >= transcriptHeight:
+		case y >= split:
 			// Lower-pane rows do not belong to a transcript selection.
 			rows[y] = -1
 		case document < headerRows:
@@ -249,26 +249,26 @@ func (m *Model) visibleSelectionFrame(scope selectionScope) selectionFrame {
 	if scope == selectionScopeLower {
 		floor = 0
 	}
-	return newSelectionFrame(
-		m.chatViewBase(surface.Content),
-		m.width,
-		m.height,
-		rows,
-		floor,
-	)
+	return selectionFrame{
+		content:      m.chatViewBase(surface.Content),
+		width:        m.width,
+		height:       m.height,
+		documentRows: rows,
+		floor:        floor,
+		split:        split,
+	}
 }
 
 // transcriptSelectionFrame creates the full transcript used to copy a
 // transcript-scoped selection when the drag is released.
 func (m *Model) transcriptSelectionFrame() selectionFrame {
 	content := m.list.Document()
-	return newSelectionFrame(
-		content,
-		m.width,
-		selectionRowCount(content),
-		nil,
-		m.list.HeaderRows(),
-	)
+	return selectionFrame{
+		content: content,
+		width:   m.width,
+		height:  selectionRowCount(content),
+		floor:   m.list.HeaderRows(),
+	}
 }
 
 func selectionRowCount(content string) int {

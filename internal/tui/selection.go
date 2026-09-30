@@ -27,6 +27,10 @@ type selectionFrame struct {
 	// it, and its cells are decoration: Kitty placeholder runes on the image
 	// path, which copy as garbage.
 	floor int
+
+	// split is the first screen row of the lower pane; the transcript shows
+	// above it.
+	split int
 }
 
 type selectionScope uint8
@@ -36,14 +40,14 @@ const (
 	selectionScopeLower
 )
 
-func newSelectionFrame(content string, width, height int, documentRows []int, floor int) selectionFrame {
-	return selectionFrame{
-		content:      content,
-		width:        max(0, width),
-		height:       max(0, height),
-		documentRows: append([]int(nil), documentRows...),
-		floor:        max(0, floor),
+// clamp keeps a pointer inside the pane a gesture started in.
+func (frame selectionFrame) clamp(scope selectionScope, x, y int) (int, int) {
+	last := max(0, frame.height-1)
+	top, bottom := 0, max(0, frame.split-1)
+	if scope == selectionScopeLower {
+		top, bottom = min(frame.split, last), last
 	}
+	return x, max(top, min(bottom, y))
 }
 
 // selection owns one pane-scoped cell selection and its auto-scroll gesture.
@@ -90,38 +94,23 @@ func (c *clickTracker) next(now time.Time, point image.Point, scope selectionSco
 
 func (c *clickTracker) reset() { *c = clickTracker{} }
 
-func selectionScopeAt(y, transcriptHeight int) selectionScope {
-	if y < transcriptHeight {
-		return selectionScopeTranscript
-	}
-	return selectionScopeLower
-}
-
-func (scope selectionScope) clamp(x, y, transcriptHeight, height int) (int, int) {
-	if scope == selectionScopeTranscript {
-		return x, max(0, min(max(0, transcriptHeight-1), y))
-	}
-	first := min(max(0, transcriptHeight), max(0, height-1))
-	return x, max(first, min(max(0, height-1), y))
-}
-
-func (s *selection) beginGesture(frame selectionFrame, scope selectionScope, x, y, transcriptHeight, height int) {
+func (s *selection) beginGesture(frame selectionFrame, scope selectionScope, x, y int) {
 	s.stopScroll()
 	s.scope = scope
 	s.pointer = image.Pt(x, y)
-	x, y = scope.clamp(x, y, transcriptHeight, height)
+	x, y = frame.clamp(scope, x, y)
 	s.begin(frame, x, y)
-	s.edge = s.edgeForPointer(s.pointer.Y, transcriptHeight)
+	s.edge = s.edgeForPointer(s.pointer.Y, frame.split)
 }
 
-func (s *selection) beginClick(frame selectionFrame, scope selectionScope, x, y, transcriptHeight, height int, onControl bool, now time.Time) {
+func (s *selection) beginClick(frame selectionFrame, scope selectionScope, x, y int, onControl bool, now time.Time) {
 	point := frame.point(x, y)
 	s.clickPoint = point
 	if onControl {
 		// A control starts a normal gesture so dragging can still select text,
 		// but repeated presses must not become word or line selections.
 		s.clicks.reset()
-		s.beginGesture(frame, scope, x, y, transcriptHeight, height)
+		s.beginGesture(frame, scope, x, y)
 		return
 	}
 	clickCount := s.clicks.next(now, point, scope)
@@ -139,24 +128,24 @@ func (s *selection) beginClick(frame selectionFrame, scope selectionScope, x, y,
 			return
 		}
 	}
-	s.beginGesture(frame, scope, x, y, transcriptHeight, height)
+	s.beginGesture(frame, scope, x, y)
 }
 
-func (s *selection) extendGesture(frame selectionFrame, x, y, transcriptHeight, height int) {
+func (s *selection) extendGesture(frame selectionFrame, x, y int) {
 	s.pointer = image.Pt(x, y)
-	x, y = s.scope.clamp(x, y, transcriptHeight, height)
+	x, y = frame.clamp(s.scope, x, y)
 	point := frame.point(x, y)
 	if point != s.focus {
 		s.keepRange = false
 		s.clicks.reset()
 	}
 	s.extend(frame, x, y)
-	s.edge = s.edgeForPointer(s.pointer.Y, transcriptHeight)
+	s.edge = s.edgeForPointer(s.pointer.Y, frame.split)
 }
 
-func (s *selection) finishGesture(frame selectionFrame, x, y, transcriptHeight, height int, document selectionFrame) string {
+func (s *selection) finishGesture(frame selectionFrame, x, y int, document selectionFrame) string {
 	s.pointer = image.Pt(x, y)
-	x, y = s.scope.clamp(x, y, transcriptHeight, height)
+	x, y = frame.clamp(s.scope, x, y)
 	if frame.point(x, y) != s.clickPoint {
 		s.clicks.reset()
 		s.keepRange = false
