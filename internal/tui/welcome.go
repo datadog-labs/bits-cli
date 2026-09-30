@@ -71,8 +71,8 @@ func (m *Model) splashPanelBody() string {
 	if facts := m.welcomeFacts(width - welcomeLogoWidth - welcomeGap); facts != "" {
 		return lipgloss.JoinHorizontal(lipgloss.Center, m.welcomeLogo(), strings.Repeat(" ", welcomeGap), facts)
 	}
-	notice := make([]string, len(wordwrap(aiNotice, width)))
-	for i, line := range wordwrap(aiNotice, width) {
+	notice := wordwrap(aiNotice, width)
+	for i, line := range notice {
 		notice[i] = m.styles.Text.Secondary.Render(line)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, m.welcomeLogo(), "", strings.Join(notice, "\n"))

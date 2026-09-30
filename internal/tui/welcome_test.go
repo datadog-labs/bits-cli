@@ -178,8 +178,6 @@ func TestWelcomeNoticeSitsOneBlankRowBelowTheFacts(t *testing.T) {
 	}
 }
 
-// Between the logo's width and the facts' minimum column the panel has no room
-// for the side-by-side layout, so the notice must stand alone under the logo.
 func TestWelcomeNoticeStandsAloneBelowTheLogo(t *testing.T) {
 	for _, ready := range []bool{false, true} {
 		m := welcomeModels(45, 30)["engine"]
