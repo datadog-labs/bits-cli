@@ -33,7 +33,7 @@ func accordionTestModel(t *testing.T) *Model {
 	m := newShell()
 	m.mode = ModeChat
 	m.transcript.Blocks = []agent.Block{accordionTestBlock()}
-	m.resize(80, 24)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.syncTranscript()
 	m.editor.Focus()
 	if full := accordionDocumentLines(m); full <= 1 {
@@ -123,8 +123,9 @@ func TestCtrlOTogglesInEveryChatFocus(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := accordionTestModel(t)
-			full := accordionDocumentLines(m)
 			tc.setup(m)
+			m.relayout() // the setup may dock a surface, which changes the header
+			full := accordionDocumentLines(m)
 			if !tc.keeps(m) {
 				t.Fatal("fixture did not reach the focus under test")
 			}
@@ -197,7 +198,7 @@ func scrollableAccordionTestModel(t *testing.T) *Model {
 		})
 	}
 	m.transcript.Blocks = blocks
-	m.resize(80, 8)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
 	m.syncTranscript()
 	m.editor.Focus()
 	return m
@@ -245,7 +246,7 @@ func TestResizeToTooSmallResetsPointerShape(t *testing.T) {
 	// Only the height drops below the minimum, so the row under the pointer is
 	// still a transcript header; the resize hint replacing the view must win.
 	_, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: minimumChatHeight - 1})
-	if !m.chatViewTooSmall() || !m.list.Hovered() {
+	if !m.frame.tooSmall || !m.list.Hovered() {
 		t.Fatal("fixture must be too small while the list still reports hover")
 	}
 	if got := rawSequence(cmd); got != ansi.SetPointerShape("default") {

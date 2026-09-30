@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"image"
 	"os"
 	"strconv"
 	"strings"
@@ -67,7 +68,7 @@ func (m *Model) View() tea.View {
 	case ModeTermInit:
 		v.Content = "loading…"
 	case ModeChat, ModePermissions:
-		if m.chatViewTooSmall() {
+		if m.frame.tooSmall {
 			v.MouseMode = tea.MouseModeNone
 			message := ansi.Truncate("Resize terminal to use Bits", max(1, m.width), "")
 			v.Content = lipgloss.Place(max(1, m.width), max(1, m.height), lipgloss.Center, lipgloss.Center, message)
@@ -92,61 +93,129 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// chatView stacks the transcript, an optional docked approval block, the notice
-// bar, the editor, and a persistent metadata footer. The approval block sits
-// above the notice bar and editor and pushes the transcript up instead of
-// covering it; input is routed to the approval while one is pending, so the
-// editor stays visible but inert.
+// frame is the chat screen's geometry for one update. relayout derives it once
+// from state at the end of every Update; View, hit-testing, and every size
+// query read it instead of measuring again.
+//
+// Rows stack top to bottom: transcript, docked approval, notice, editor,
+// footer. A tool UI replaces the approval and the editor and sits below the
+// notice instead.
+type frame struct {
+	transcript image.Rectangle
+	dock       image.Rectangle // approval panel or tool UI; empty when neither shows
+	notice     image.Rectangle
+	editor     image.Rectangle // empty while a tool UI replaces the composer
+	footer     image.Rectangle
+
+	// approval is the docked approval panel, rendered once so it can be measured.
+	approval string
+
+	// tooSmall means the chat cannot be usably rendered, so View replaces the
+	// whole screen with a resize hint. The UI is then invisible and Update drops
+	// user input: nothing — a pending approval, the composer, transcript
+	// scrolling — can be driven blind. Only ctrl+c still works.
+	tooSmall bool
+}
+
+// composerTop is the first row of whatever fills the composer slot. Popups
+// float just above it.
+func (f frame) composerTop() int {
+	if f.editor.Empty() {
+		return f.dock.Min.Y
+	}
+	return f.editor.Min.Y
+}
+
+// layout stacks the chat bottom-up, so each surface is sized against the rows
+// left below the transcript, which takes the rest.
+func (m *Model) layout() frame {
+	var f frame
+	y := m.height
+	take := func(rows int) image.Rectangle {
+		y -= rows
+		return image.Rect(0, y, m.width, y+rows)
+	}
+
+	f.footer = take(chatFooterHeight)
+	approvalRows := 0
+	if m.activeToolUI != nil {
+		f.dock = take(m.activeToolUI.component.Height())
+		f.notice = take(chatNoticeHeight)
+	} else {
+		f.editor = take(m.editor.Height())
+		f.notice = take(chatNoticeHeight)
+		approvalRows = y
+		if f.approval = m.approvalView(max(1, y)); f.approval != "" {
+			f.dock = take(lipgloss.Height(f.approval))
+		}
+	}
+	f.transcript = image.Rect(0, 0, m.width, max(1, y))
+
+	switch {
+	case m.mode != ModeChat && m.mode != ModePermissions:
+	case m.width < minimumChatWidth || m.height < minimumChatHeight:
+		f.tooSmall = true
+	case m.activeToolUI != nil:
+		minWidth, minHeight := m.activeToolUI.component.MinSize()
+		f.tooSmall = m.width < minWidth || m.height < minHeight
+	case len(m.pendingApprovals) > 0:
+		// A pending approval needs more room than the bare chat; when it doesn't
+		// fit, its prompt is hidden behind the resize hint too.
+		f.tooSmall = m.width < minimumApprovalWidth ||
+			m.height < minimumApprovalHeight ||
+			approvalRows < minimumApprovalPanelHeight
+	}
+	return f
+}
+
+// chatView stacks the frame's surfaces and floats at most one popup — the
+// permissions picker or the completion menu — above the composer. Input is
+// routed to a docked approval or tool UI, so the editor stays visible but inert.
 func (m *Model) chatView() string {
-	m.editor.SetPlaceholder(m.promptPlaceholder())
 	if m.selection.selecting() || m.selection.selected() {
 		return m.selection.render(m.visibleSelectionFrame(m.selection.scope))
 	}
 
 	base := m.chatViewBase(m.list.Render())
-	if m.mode == ModePermissions {
+	switch {
+	case m.mode == ModePermissions:
 		// Spans the terminal with its own margin, so it does not track the composer.
 		return m.chatOverlay(base, m.permissionsView(), 0)
-	}
-	if m.activeToolUI != nil || len(m.pendingApprovals) > 0 {
+	case m.focus() == focusEditor:
+		return m.chatOverlay(base, m.editor.MenuView(), m.editor.ContentOffset())
+	default:
 		return base
 	}
-	menu := m.editor.MenuView()
-	if menu == "" {
-		return base
-	}
-	return m.chatOverlay(base, menu, m.editor.ContentOffset())
 }
 
-// chatOverlay floats a popup above the input without reflowing the transcript,
-// anchored at x and clamped so it never overflows the transcript width.
-func (m *Model) chatOverlay(base, menu string, x int) string {
-	if menu == "" {
+// chatOverlay floats a popup above the composer without reflowing the
+// transcript, anchored at x and clamped so it never overflows the width.
+func (m *Model) chatOverlay(base, popup string, x int) string {
+	if popup == "" {
 		return base
 	}
-	menuW, menuH := lipgloss.Width(menu), lipgloss.Height(menu)
-	if width := m.list.Width(); x+menuW > width {
-		x = max(0, width-menuW)
+	popupW, popupH := lipgloss.Size(popup)
+	if width := m.list.Width(); x+popupW > width {
+		x = max(0, width-popupW)
 	}
-	y := max(0, m.height-chatFooterHeight-m.editor.Height()-menuH)
+	y := max(0, m.frame.composerTop()-popupH)
 	return lipgloss.NewCompositor(
 		lipgloss.NewLayer(base),
-		lipgloss.NewLayer(menu).X(x).Y(y).Z(1),
+		lipgloss.NewLayer(popup).X(x).Y(y).Z(1),
 	).Render()
 }
 
-// chatViewBase composes the chat surface without transient completion-menu
-// overlays. Selection uses this exact composition so every rendered row stays
-// in the same screen coordinate space as the normal chat view.
+// chatViewBase composes the chat surface without popups. Selection uses this
+// exact composition so every rendered row stays in the same screen coordinate
+// space as the normal chat view.
 func (m *Model) chatViewBase(transcript string) string {
-	sections := []string{transcript}
 	if m.activeToolUI != nil {
 		dim := lipgloss.NewStyle().Faint(true)
-		sections = []string{dim.Render(transcript)}
-		return strings.Join(append(sections, dim.Render(m.noticeBar()), m.activeToolUI.component.View(), m.chatFooter()), "\n")
+		return strings.Join([]string{dim.Render(transcript), dim.Render(m.noticeBar()), m.activeToolUI.component.View(), m.chatFooter()}, "\n")
 	}
-	if approval := m.approvalView(); approval != "" {
-		sections = append(sections, approval)
+	sections := []string{transcript}
+	if m.frame.approval != "" {
+		sections = append(sections, m.frame.approval)
 	}
 	sections = append(sections, m.noticeBar(), m.editor.View(), m.chatFooter())
 	return strings.Join(sections, "\n")
@@ -209,34 +278,10 @@ func selectionRowCount(content string) int {
 	return strings.Count(content, "\n") + 1
 }
 
-// chatViewTooSmall reports whether the chat cannot be usably rendered, so View
-// replaces the whole screen with a resize hint. In that state the UI is
-// invisible, so Update suppresses user input: nothing — a pending approval, the
-// composer, transcript scrolling — can be driven blind. Only the global quit
-// (ctrl+c) still works; the user resizes to interact.
-func (m *Model) chatViewTooSmall() bool {
-	if m.mode != ModeChat && m.mode != ModePermissions {
-		return false
-	}
-	if m.width < minimumChatWidth || m.height < minimumChatHeight {
-		return true
-	}
-	if m.activeToolUI != nil {
-		minWidth, minHeight := m.activeToolUI.component.MinSize()
-		return m.width < minWidth || m.height < minHeight
-	}
-	// A pending approval needs more room than the bare chat; when it doesn't fit,
-	// its prompt is hidden behind the resize hint too.
-	return len(m.pendingApprovals) > 0 &&
-		(m.width < minimumApprovalWidth ||
-			m.height < minimumApprovalHeight ||
-			m.approvalAvailableHeight() < minimumApprovalPanelHeight)
-}
-
-// approvalView renders the docked approval panel, or "" when nothing awaits
-// approval. It uses the shared bounded panel while keeping the action row and
-// its selection state local to the approval flow.
-func (m *Model) approvalView() string {
+// approvalView renders the docked approval panel within height rows, or ""
+// when nothing awaits approval. It uses the shared bounded panel while keeping
+// the action row and its selection state local to the approval flow.
+func (m *Model) approvalView(height int) string {
 	if len(m.pendingApprovals) == 0 || m.pendingApprovals[0].Tool == nil {
 		return ""
 	}
@@ -285,12 +330,8 @@ func (m *Model) approvalView() string {
 		},
 		TinyMessage: "Resize terminal to approve",
 	}
-	panel := m.approvalPanel.Render(m.width, max(1, m.approvalAvailableHeight()), content)
+	panel := m.approvalPanel.Render(m.width, height, content)
 	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, panel)
-}
-
-func (m *Model) approvalAvailableHeight() int {
-	return m.height - chatNoticeHeight - chatFooterHeight - m.editor.Height()
 }
 
 // approvalActions renders the choice row within width, condensing labels on
@@ -310,17 +351,6 @@ func (m *Model) approvalActions(width int) string {
 		}
 	}
 	return ansi.Truncate(strings.Join(actions, "  "), max(1, width), "")
-}
-
-func (m *Model) composerHeight() int {
-	if m.activeToolUI != nil {
-		return m.activeToolUI.component.Height()
-	}
-	h := m.editor.Height()
-	if approval := m.approvalView(); approval != "" {
-		h += lipgloss.Height(approval)
-	}
-	return h
 }
 
 // promptPlaceholder returns the current editor prompt placeholder.

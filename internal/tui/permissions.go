@@ -306,7 +306,7 @@ func (m *Model) permissionsInnerWidth() int {
 }
 
 func (m *Model) permissionsCompact() bool {
-	available := m.height - chatFooterHeight - m.editor.Height()
+	available := m.frame.composerTop()
 	inner := m.permissionsInnerWidth()
 	if m.permissionConfirm {
 		return m.width < 36 || available < 9+len(wrapPermissionDetail(fullAccessConfirmation, inner))

@@ -46,7 +46,6 @@ func (m *Model) activateToolUI(request *tools.Request) {
 	m.activeToolUI = session
 	m.clearSelection()
 	m.editor.CloseMenu()
-	m.layoutTranscript()
 }
 
 // nextToolUI shows the earliest queued call in transcript order: tools of one
@@ -67,13 +66,11 @@ func (m *Model) nextToolUI() {
 		m.activeToolUI = m.queuedToolUIs[next]
 		m.queuedToolUIs = slices.Delete(m.queuedToolUIs, next, next+1)
 	}
-	m.layoutTranscript()
 }
 
 func (m *Model) clearToolUIs() {
 	m.activeToolUI = nil
 	m.queuedToolUIs = nil
-	m.layoutTranscript()
 }
 
 func (m *Model) reconcileToolUI() {
@@ -98,10 +95,10 @@ func (m *Model) updateToolUI(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 	case tea.MouseClickMsg:
-		msg.Y -= m.toolUITop()
+		msg.Y -= m.frame.dock.Min.Y
 		return m.forwardToolUI(msg)
 	case tea.MouseWheelMsg:
-		msg.Y -= m.toolUITop()
+		msg.Y -= m.frame.dock.Min.Y
 		return m.forwardToolUI(msg)
 	}
 	return m.forwardToolUI(msg)
@@ -112,14 +109,8 @@ func (m *Model) forwardToolUI(msg tea.Msg) tea.Cmd {
 	if answer, done := m.activeToolUI.component.Result(); done {
 		m.activeToolUI.request.Respond(answer, nil)
 		m.nextToolUI()
-	} else {
-		m.layoutTranscript()
 	}
 	return cmd
-}
-
-func (m *Model) toolUITop() int {
-	return m.list.Height() + chatNoticeHeight
 }
 
 func (m *Model) layoutToolUI() {

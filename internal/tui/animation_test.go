@@ -29,7 +29,7 @@ func animModelWithBlock(block agent.Block) *Model {
 	m.mode = ModeChat
 	m.transcript.Blocks = []agent.Block{block}
 	m.turnEvents = make(chan agent.Event)
-	m.resize(80, 24)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.syncTranscript()
 	m.editor.Focus()
 	return m
@@ -166,7 +166,7 @@ func TestTurnClosedUpdateDisarmsDespiteStaleRunningBlock(t *testing.T) {
 func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
 	m.mode = ModeChat
-	m.resize(80, 24)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
 	m.turnEvents = make(chan agent.Event)
@@ -185,7 +185,7 @@ func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
 func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
 	m.mode = ModeChat
-	m.resize(80, 24)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
 	m.turnEvents = make(chan agent.Event)
@@ -204,7 +204,7 @@ func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
 func TestConversationSwitchWithPersistedRunningBlockStaysDisarmed(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
 	m.mode = ModeChat
-	m.resize(80, 24)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
 	m.turnEvents = make(chan agent.Event)

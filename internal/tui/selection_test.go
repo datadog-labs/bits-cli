@@ -219,7 +219,7 @@ func TestHeaderRowsAreNotSelectableInTheVisibleFrame(t *testing.T) {
 	m := welcomeModel(120, 40)
 	m.mode = ModeChat
 	m.resume = *resumeFixture(8)
-	m.layoutTranscript()
+	m.relayout()
 
 	frame := m.visibleSelectionFrame(selectionScopeTranscript)
 	headerRows := m.list.HeaderRows()

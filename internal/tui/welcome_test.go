@@ -19,9 +19,9 @@ import (
 
 func welcomeModel(width, height int) *Model {
 	m := newShell()
-	m.width, m.height = width, height
 	m.version = "v0.1.2"
 	m.workspaceDisplayPath = "~/go/src/github.com/DataDog/bits-cli"
+	m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return m
 }
 
@@ -130,11 +130,11 @@ func TestWelcomeFactsOmitOrganization(t *testing.T) {
 	}
 }
 
-// The gate is transcriptHeight, so the boundary moves with the notice, footer
+// The gate is the transcript viewport, so the boundary moves with the notice, footer
 // and composer rather than with m.height alone.
 func TestWelcomeHiddenUntilTerminalIsTallEnough(t *testing.T) {
 	tall := welcomeModel(100, 40)
-	needed := tall.splashPanelHeight() + chatNoticeHeight + chatFooterHeight + tall.composerHeight()
+	needed := tall.splashPanelHeight() + chatNoticeHeight + chatFooterHeight + tall.editor.Height()
 
 	if welcomeModel(100, needed-1).showSplashPanel() {
 		t.Error("splash panel shown on a terminal too short to hold it")
@@ -308,6 +308,7 @@ func TestResumeRowsDegradeUntilTheHeaderFits(t *testing.T) {
 	minRows, maxRows := resumeRows, 0
 	for height := 40; height >= 1; height-- {
 		m.height = height
+		m.relayout()
 		rows := 0
 		if m.showResume() {
 			rows = m.resumeVisibleRows()
@@ -315,9 +316,9 @@ func TestResumeRowsDegradeUntilTheHeaderFits(t *testing.T) {
 		if rows > previous {
 			t.Fatalf("height=%d: rows grew from %d to %d as the terminal shrank", height, previous, rows)
 		}
-		if rows > 0 && lipgloss.Height(m.headerView()) > m.transcriptHeight() {
+		if rows > 0 && lipgloss.Height(m.headerView()) > m.frame.transcript.Dy() {
 			t.Fatalf("height=%d: header %d rows exceeds the %d-row viewport",
-				height, lipgloss.Height(m.headerView()), m.transcriptHeight())
+				height, lipgloss.Height(m.headerView()), m.frame.transcript.Dy())
 		}
 		minRows, maxRows = min(minRows, rows), max(maxRows, rows)
 		previous = rows
@@ -362,7 +363,7 @@ func TestChatViewRendersTheHeaderOnlyThroughTheTranscript(t *testing.T) {
 	m := welcomeModel(120, 40)
 	m.resume = *resumeFixture(4)
 	m.mode = ModeChat
-	m.layoutTranscript()
+	m.relayout()
 	if got := strings.Count(m.chatViewBase(m.list.Render()), resumeTitle); got != 1 {
 		t.Fatalf("resume title appears %d times in the chat view, want 1", got)
 	}
@@ -411,7 +412,7 @@ func TestHeaderNeverPushesTheViewPastTheTerminal(t *testing.T) {
 			if m.editor.Value() == "" {
 				t.Fatalf("height=%d lines=%d: the composer took no input", height, lines)
 			}
-			m.layoutTranscript()
+			m.relayout()
 
 			view := lipgloss.Height(m.chatViewBase(m.list.Render()))
 			if view > height {

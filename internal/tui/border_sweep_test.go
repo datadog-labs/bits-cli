@@ -15,7 +15,7 @@ import (
 func sweepModel(phase chat.Phase) *Model {
 	m := newShell()
 	m.mode = ModeChat
-	m.resize(80, 24)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.editor.Focus()
 	m.turnEvents = make(chan agent.Event)
 	m.chatPhase = phase
@@ -155,7 +155,7 @@ func TestStoppingLastAnimationInvalidatesSharedClock(t *testing.T) {
 func TestSubmitArmsSharedClockForSweep(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "new"}))
 	m.mode = ModeChat
-	m.resize(80, 24)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.editor.Focus()
 	m.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -168,7 +168,7 @@ func TestSubmitArmsSharedClockForSweep(t *testing.T) {
 func TestTurnDoneDisarmsSweepClock(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
 	m.mode = ModeChat
-	m.resize(80, 24)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.chatPhase = chat.PhaseStreaming
 	m.turnEvents = make(chan agent.Event)
 	m.turnGen = 1

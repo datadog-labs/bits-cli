@@ -107,7 +107,7 @@ func TestSubmitStatusIsLocalAndLoadsFreshWorkspace(t *testing.T) {
 	runStatusGit(t, repo, "add", ".")
 	runStatusGit(t, repo, "-c", "user.name=Bits Test", "-c", "user.email=bits@example.com", "commit", "-m", "initial")
 	m := newStatusModelAt(t, repo, &localStatusBackend{t: t})
-	m.resize(96, 40)
+	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
 	m.editor.Update(tea.PasteMsg{Content: "/status"})
 	_, command := m.submit()
 	if command == nil || m.mode != ModeStatus || m.status == nil {
@@ -139,7 +139,7 @@ func TestSubmitStatusIsLocalAndLoadsFreshWorkspace(t *testing.T) {
 
 func TestStatusExecutesOnFirstEnterWithExactCompletionOpen(t *testing.T) {
 	m := newStatusModel(t)
-	m.resize(80, 24)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.editor.Update(tea.PasteMsg{Content: "/status"})
 	if !m.editor.MenuOpen() {
 		t.Fatal("expected exact /status completion menu to be open")
@@ -153,7 +153,7 @@ func TestStatusExecutesOnFirstEnterWithExactCompletionOpen(t *testing.T) {
 
 func TestStatusDuringActiveTurnPreservesTurnAndTracksObservedState(t *testing.T) {
 	m := newStatusModel(t)
-	m.resize(96, 40)
+	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
 	turn := make(chan agent.Event)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -230,7 +230,7 @@ func TestStatusExplainsMissingProfilePermissionWithoutRenderingServerError(t *te
 		err:                errors.Join(assistant.ErrForbidden, errors.New("sensitive upstream detail")),
 	}
 	m := newStatusModelWithBackend(t, backend)
-	m.resize(96, 40)
+	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
 
 	_, command := m.dispatchCommand("status", "")
 	runStatusLoad(t, m, command)
@@ -252,7 +252,7 @@ func TestStatusMarksUnauthorizedIdentityLookupAsAuthenticationFailure(t *testing
 		err:                assistant.ErrUnauthorized,
 	}
 	m := newStatusModelWithBackend(t, backend)
-	m.resize(96, 40)
+	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
 
 	_, command := m.dispatchCommand("status", "")
 	runStatusLoad(t, m, command)
@@ -268,7 +268,7 @@ func TestActiveTurnEventCannotClearNewerIdentityAuthenticationFailure(t *testing
 		err:                assistant.ErrUnauthorized,
 	}
 	m := newStatusModelWithBackend(t, backend)
-	m.resize(96, 40)
+	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
 	m.turnGen = 7
 	m.turnEvents = make(chan agent.Event)
 	m.chatPhase = chat.PhaseStreaming
@@ -313,7 +313,7 @@ func TestStatusReopenCancelsAndIgnoresStaleIdentity(t *testing.T) {
 		firstDone:          make(chan bool, 1),
 	}
 	m := newStatusModelWithBackend(t, backend)
-	m.resize(96, 40)
+	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
 
 	_, firstLoad := m.dispatchCommand("status", "")
 	firstBatch := statusBatch(t, firstLoad)
@@ -351,7 +351,7 @@ func TestStatusReopenCancelsAndIgnoresStaleIdentity(t *testing.T) {
 
 func TestStatusReopenIgnoresStaleCloseMessage(t *testing.T) {
 	m := newStatusModel(t)
-	m.resize(96, 40)
+	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
 	defer m.closeStatus()
 
 	_, _ = m.dispatchCommand("status", "")
@@ -384,7 +384,7 @@ func TestCtrlCCancelsStatusCollectionAndQuits(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	m := newStatusModel(t)
-	m.resize(96, 40)
+	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
 
 	_, load := m.dispatchCommand("status", "")
 	batch := statusBatch(t, load)

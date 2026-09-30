@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -31,7 +32,7 @@ func TestChatFooterRendersBelowEditorWithoutGrowingView(t *testing.T) {
 	)
 	_ = m.editor.Focus()
 	m.usage = &assistant.Usage{TokensUsed: 330_000}
-	m.resize(120, 24)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 
 	view := m.chatView()
 	if got := lipgloss.Height(view); got != m.height {

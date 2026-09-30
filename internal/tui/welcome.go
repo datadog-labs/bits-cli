@@ -25,9 +25,10 @@ var welcomeLogoWidth = max(lipgloss.Width(splash.Wordmark()), splash.Columns)
 
 // showSplashPanel gates on both dimensions. The panel is the transcript's
 // first rows for the whole session, but a viewport that cannot hold it would
-// otherwise leave no room for the conversation.
+// otherwise leave no room for the conversation, and follow mode would scroll a
+// taller header off at launch.
 func (m *Model) showSplashPanel() bool {
-	if m.transcriptHeight() < m.splashPanelHeight() {
+	if m.frame.transcript.Dy() < m.splashPanelHeight() {
 		return false
 	}
 	return m.welcomeContentWidth() >= welcomeLogoWidth
@@ -135,12 +136,6 @@ func authenticationLabel(mode string) string {
 	}
 }
 
-// transcriptHeight is the viewport chat.List is given, which the header must
-// fit inside: a taller header would be scrolled off by follow mode at launch.
-func (m *Model) transcriptHeight() int {
-	return max(1, m.height-chatNoticeHeight-chatFooterHeight-m.composerHeight())
-}
-
 // showResume gates the offer on an idle, empty transcript, an empty composer,
 // a non-empty fetch, and room for at least one row.
 func (m *Model) showResume() bool {
@@ -159,7 +154,7 @@ func (m *Model) showResume() bool {
 // resumeVisibleRows is how many conversations fit below the panel, at most
 // resumeRows, and 0 when not even one fits.
 func (m *Model) resumeVisibleRows() int {
-	available := m.transcriptHeight() - m.splashPanelHeight() - 1
+	available := m.frame.transcript.Dy() - m.splashPanelHeight() - 1
 	for rows := min(resumeRows, len(m.resume.conversations)); rows > 0; rows-- {
 		if resumeBlockHeight(rows) <= available {
 			return rows
