@@ -67,11 +67,15 @@ func (m *Model) splashPanelView() string {
 }
 
 func (m *Model) splashPanelBody() string {
-	columns := []string{m.welcomeLogo()}
-	if facts := m.welcomeFacts(m.welcomeContentWidth() - welcomeLogoWidth - welcomeGap); facts != "" {
-		columns = append(columns, strings.Repeat(" ", welcomeGap), facts)
+	width := m.welcomeContentWidth()
+	if facts := m.welcomeFacts(width - welcomeLogoWidth - welcomeGap); facts != "" {
+		return lipgloss.JoinHorizontal(lipgloss.Center, m.welcomeLogo(), strings.Repeat(" ", welcomeGap), facts)
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Center, columns...)
+	notice := make([]string, len(wordwrap(aiNotice, width)))
+	for i, line := range wordwrap(aiNotice, width) {
+		notice[i] = m.styles.Text.Secondary.Render(line)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, m.welcomeLogo(), "", strings.Join(notice, "\n"))
 }
 
 func (m *Model) welcomeFacts(width int) string {

@@ -178,6 +178,35 @@ func TestWelcomeNoticeSitsOneBlankRowBelowTheFacts(t *testing.T) {
 	}
 }
 
+// Between the logo's width and the facts' minimum column the panel has no room
+// for the side-by-side layout, so the notice must stand alone under the logo.
+func TestWelcomeNoticeStandsAloneBelowTheLogo(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		m := welcomeModels(45, 30)["engine"]
+		m.splashReady = ready
+		if !m.showSplashPanel() {
+			t.Fatalf("ready=%v: splash panel hidden at 45 columns", ready)
+		}
+		rows := strings.Split(ansi.Strip(m.splashPanelBody()), "\n")
+		if len(rows) < splash.Rows+2 {
+			t.Fatalf("ready=%v: body is %d rows, want the logo, a blank row, and the notice", ready, len(rows))
+		}
+		if got := strings.TrimSpace(rows[splash.Rows]); got != "" {
+			t.Fatalf("ready=%v: row %d is %q, want one blank row between the logo and the notice", ready, splash.Rows, got)
+		}
+		lines := make([]string, 0, len(rows))
+		for _, row := range rows[splash.Rows+1:] {
+			if got := ansi.StringWidth(row); got > m.welcomeContentWidth() {
+				t.Fatalf("ready=%v: notice row %q measures %d columns, want at most %d", ready, row, got, m.welcomeContentWidth())
+			}
+			lines = append(lines, strings.TrimRight(row, " "))
+		}
+		if got := strings.Join(lines, " "); got != aiNotice {
+			t.Fatalf("ready=%v: notice reads %q, want %q", ready, got, aiNotice)
+		}
+	}
+}
+
 func columnText(rows []string, logoWidth int) []string {
 	out := make([]string, len(rows))
 	for i, row := range rows {
