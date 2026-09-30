@@ -275,8 +275,7 @@ func completedTurnOperation(err error) turnOperation {
 	return turnOperation{events: events, completion: completion}
 }
 
-// begin claims the engine for one operation. The operation owns the paired
-// release, including a loaded conversation awaiting the UI's commit decision.
+// begin claims the engine for one operation, which must release it on completion.
 func (e *Engine) begin() bool {
 	if !e.active.CompareAndSwap(false, true) {
 		return false
@@ -751,27 +750,15 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 	if conversationID == "" {
 		return
 	}
-	hb, ok := e.backend.(HistoryBackend)
-	if !ok {
-		send(Event{Kind: EventError, Err: ErrHistoryUnsupported})
-		return
-	}
-	resp, err := hb.ConversationHistory(ctx, assistant.ConversationHistoryInput{ConversationID: conversationID})
+	conversation, err := e.LoadConversation(ctx, conversationID)
 	if ctx.Err() != nil {
 		return // cancelled: end quietly
 	}
 	if err != nil {
-		send(Event{Kind: EventError, Err: err, BackendFailure: true})
+		send(Event{Kind: EventError, Err: err, BackendFailure: !errors.Is(err, ErrHistoryUnsupported) && !errors.Is(err, ErrInvalidConversationID)})
 		return
 	}
-	if resp == nil {
-		return
-	}
-	for _, msg := range resp.Data.Attributes.Messages {
-		e.transcript.AppendMessage(msg)
-	}
-	e.continuation = continuationFromHistory(resp.Data.Attributes.Messages)
-	e.transcript.FinalizeAll()
+	e.installConversation(conversation)
 	if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
 		send(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
 	}

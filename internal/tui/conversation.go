@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -54,42 +53,16 @@ func (m *Model) startNewConversation() tea.Cmd {
 	return closeFileSearch // Update reconciles focus and animations after the mode change.
 }
 
-type conversationRetry int
-
-const (
-	retryNone conversationRetry = iota
-	retryList
-	retrySwitch
-)
-
 type conversationListResultMsg struct {
 	generation uint64
 	result     agent.ConversationListResult
 }
 
 type conversationSwitchResultMsg struct {
-	generation uint64
-	result     agent.ConversationSwitchResult
-}
-
-func waitConversationList(generation uint64, results <-chan agent.ConversationListResult) tea.Cmd {
-	return func() tea.Msg {
-		result, ok := <-results
-		if !ok {
-			result.Err = errors.New("conversation list closed without a result")
-		}
-		return conversationListResultMsg{generation: generation, result: result}
-	}
-}
-
-func waitConversationSwitch(generation uint64, results <-chan agent.ConversationSwitchResult) tea.Cmd {
-	return func() tea.Msg {
-		result, ok := <-results
-		if !ok {
-			result.Err = errors.New("conversation load closed without a result")
-		}
-		return conversationSwitchResultMsg{generation: generation, result: result}
-	}
+	generation   uint64
+	ctx          context.Context
+	conversation *agent.Conversation
+	err          error
 }
 
 func (m *Model) openConversationPicker() tea.Cmd {
@@ -105,32 +78,24 @@ func (m *Model) startConversationList() tea.Cmd {
 		return nil
 	}
 	m.picker.SetLoading(conversationview.OperationList)
-	m.conversationRetry = retryList
 	m.conversationSwitchID = ""
 	ctx, generation := m.conversationTask.start(context.Background(), historyLoadTimeout)
-	return waitConversationList(generation, m.engine.ListConversations(ctx))
+	engine := m.engine
+	return func() tea.Msg {
+		return conversationListResultMsg{generation: generation, result: engine.ListConversations(ctx)}
+	}
 }
 
 func (m *Model) applyConversationListResult(msg conversationListResultMsg) tea.Cmd {
-	if msg.generation != m.conversationTask.gen {
-		return nil
-	}
-	if m.pickerClosing() {
-		m.conversationTask.done()
-		m.dropConversationPicker()
-		return nil
-	}
-	if m.picker == nil {
+	if msg.generation != m.conversationTask.gen || m.picker == nil {
 		return nil
 	}
 	m.conversationTask.done()
 	if msg.result.Err != nil {
-		m.conversationRetry = retryList
 		n := conversationErrorNotice("could not load conversations", msg.result.Err)
 		m.picker.SetError(n.Text, msg.result.Err)
 		return nil
 	}
-	m.conversationRetry = retryNone
 	cmd := m.picker.SetConversations(msg.result.Conversations)
 	if msg.result.Omitted > 0 {
 		m.picker.SetWarning(fmt.Sprintf("%d malformed conversation records omitted", msg.result.Omitted))
@@ -149,57 +114,37 @@ func (m *Model) startConversationSwitch(conversationID string) tea.Cmd {
 	if m.picker == nil {
 		return nil
 	}
+	if conversationID == m.convID {
+		return m.closeConversationPicker()
+	}
 	m.picker.SetLoading(conversationview.OperationOpen)
-	m.conversationRetry = retrySwitch
 	m.conversationSwitchID = conversationID
 	ctx, generation := m.conversationTask.start(context.Background(), historyLoadTimeout)
-	return waitConversationSwitch(generation, m.engine.SwitchConversation(ctx, conversationID))
+	engine := m.engine
+	return func() tea.Msg {
+		conversation, err := engine.LoadConversation(ctx, conversationID)
+		return conversationSwitchResultMsg{generation: generation, ctx: ctx, conversation: conversation, err: err}
+	}
 }
 
 func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) tea.Cmd {
-	if msg.generation != m.conversationTask.gen {
-		_ = msg.result.Discard()
+	if msg.generation != m.conversationTask.gen || m.picker == nil {
 		return nil
 	}
-	if m.pickerClosing() {
-		_ = msg.result.Discard()
-		m.conversationTask.done()
-		m.dropConversationPicker()
-		return nil
+	defer m.conversationTask.done()
+	// Install before changing the visible state; a failed or expired load
+	// leaves both the engine and the UI on the old conversation.
+	err := msg.err
+	if err == nil {
+		err = m.engine.InstallConversation(msg.ctx, msg.conversation)
 	}
-	if m.picker == nil {
-		_ = msg.result.Discard()
-		return nil
-	}
-	if msg.result.Err != nil {
-		m.conversationTask.done()
-		m.conversationRetry = retrySwitch
-		n := conversationErrorNotice("resume failed", msg.result.Err)
-		m.picker.SetError(n.Text, msg.result.Err)
-		return m.showNotice(n, 0)
-	}
-	if strings.TrimSpace(msg.result.ConversationID) == "" {
-		_ = msg.result.Discard()
-		m.conversationTask.done()
-		err := errors.New("conversation load returned no conversation id")
-		m.conversationRetry = retrySwitch
+	if err != nil {
 		n := conversationErrorNotice("resume failed", err)
 		m.picker.SetError(n.Text, err)
 		return m.showNotice(n, 0)
 	}
-
-	// Commit engine state first; only a successful commit changes the visible
-	// root state. Cancel/deadline failure therefore leaves both views on old data.
-	if err := msg.result.Commit(); err != nil {
-		m.conversationTask.done()
-		m.conversationRetry = retrySwitch
-		n := conversationErrorNotice("resume failed", err)
-		m.picker.SetError(n.Text, err)
-		return m.showNotice(n, 0)
-	}
-	m.conversationTask.done()
-	m.transcript = agent.TranscriptSnapshot{Blocks: append([]agent.Block(nil), msg.result.Blocks...)}
-	m.convID = msg.result.ConversationID
+	m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+	m.convID = m.engine.ConversationID()
 	m.usage = nil
 	m.chatPhase = chat.PhaseIdle
 	m.list.Reset()
@@ -214,51 +159,32 @@ func (m *Model) retryConversationOperation() tea.Cmd {
 	if m.picker == nil || m.picker.State() != conversationview.StateError {
 		return nil
 	}
-	switch m.conversationRetry {
-	case retrySwitch:
+	switch m.picker.Operation() {
+	case conversationview.OperationOpen:
 		return m.startConversationSwitch(m.conversationSwitchID)
-	case retryList:
+	case conversationview.OperationList:
 		return m.startConversationList()
 	default:
 		return nil
 	}
 }
 
-// closeConversationPicker closes at once when idle. With a request in flight,
-// the picker shows closing until that request's result drains.
+// closeConversationPicker invalidates pending reads and returns immediately.
 func (m *Model) closeConversationPicker() tea.Cmd {
-	if m.picker == nil || m.pickerClosing() {
+	if m.picker == nil {
 		return nil
 	}
-	if m.conversationTask.running() {
-		m.picker.SetClosing()
-		m.conversationTask.done()
-		return nil
-	}
+	m.conversationTask.stop()
 	m.dropConversationPicker()
 	return nil // Update reconciles editor focus after the mode change.
-}
-
-func (m *Model) pickerClosing() bool {
-	return m.picker != nil && m.picker.State() == conversationview.StateClosing
 }
 
 // dropConversationPicker returns to chat. The picker is non-nil exactly while
 // the mode is ModeConversations.
 func (m *Model) dropConversationPicker() {
 	m.picker = nil
-	m.conversationRetry = retryNone
 	m.conversationSwitchID = ""
 	m.setMode(ModeChat)
-}
-
-// abandonConversationPicker is the process-exit path. Unlike ordinary Escape,
-// quitting does not resume chat input, so the UI need not wait for the canceled
-// result before disappearing. The result still drains through its waiter and
-// stale-result handling.
-func (m *Model) abandonConversationPicker() {
-	m.conversationTask.stop()
-	m.dropConversationPicker()
 }
 
 func (m *Model) updateConversationPicker(msg tea.Msg) tea.Cmd {
@@ -283,6 +209,12 @@ func conversationErrorNotice(operation string, err error) chat.Notice {
 func (m *Model) resumeSelectedConversation(conversationID string) tea.Cmd {
 	m.clearNotice()
 	picker := conversationview.New(m.width, m.height, m.styles)
+	for _, summary := range m.resume.conversations {
+		if summary.ConversationID == conversationID {
+			picker.SetConversations([]assistant.ConversationSummary{summary})
+			break
+		}
+	}
 	m.picker = &picker
 	m.setMode(ModeConversations)
 	return m.startConversationSwitch(conversationID)

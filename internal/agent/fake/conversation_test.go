@@ -43,17 +43,20 @@ func TestConversationRoundTrip(t *testing.T) {
 	result, _ := runTurn(t, engine, `r = call("read_file", {"path": "go.mod"}); say(r.output)`, set, agent.DenyContinue, nil)
 	id := result.ConversationID
 
-	list := <-engine.ListConversations(ctx)
+	list := engine.ListConversations(ctx)
 	if list.Err != nil || len(list.Conversations) != 1 || list.Conversations[0].ConversationID != id {
 		t.Fatalf("list = %+v, want only %s", list, id)
 	}
 
-	switched := <-agent.New(f, assistant.SendOptions{}).SwitchConversation(ctx, id)
-	if switched.Err != nil {
-		t.Fatal(switched.Err)
+	restored := agent.New(f, assistant.SendOptions{})
+	conversation, err := restored.LoadConversation(ctx, id)
+	if err != nil {
+		t.Fatal(err)
 	}
-	defer func() { _ = switched.Discard() }()
-	if got, want := viewOf(switched.Blocks), viewOf(result.Blocks); !slices.Equal(got, want) {
+	if err := restored.InstallConversation(ctx, conversation); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := viewOf(restored.Snapshot()), viewOf(result.Blocks); !slices.Equal(got, want) {
 		t.Fatalf("restored blocks differ\n got %+v\nwant %+v", got, want)
 	}
 
@@ -63,9 +66,9 @@ func TestConversationRoundTrip(t *testing.T) {
 		t.Fatalf("history data.id = %q (err %v), want a response id distinct from %s", history.Data.ID, err, id)
 	}
 
-	missing := <-agent.New(f, assistant.SendOptions{}).SwitchConversation(ctx, "00000000-0000-4000-8000-ffffffffffff")
-	if !errors.Is(missing.Err, assistant.ErrNotFound) {
-		t.Fatalf("unknown conversation error = %v", missing.Err)
+	_, err = restored.LoadConversation(ctx, "00000000-0000-4000-8000-ffffffffffff")
+	if !errors.Is(err, assistant.ErrNotFound) {
+		t.Fatalf("unknown conversation error = %v", err)
 	}
 }
 

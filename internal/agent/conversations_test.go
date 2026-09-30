@@ -45,7 +45,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 	e := New(&conversationBackend{
 		list: func(context.Context) (*assistant.UserConversationsResponse, error) { return response, nil },
 	}, assistant.SendOptions{})
-	result := <-e.ListConversations(context.Background())
+	result := e.ListConversations(context.Background())
 	if result.Err != nil || len(result.Conversations) != 1 {
 		t.Fatalf("result = %+v", result)
 	}
@@ -58,7 +58,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 	}
 
 	unsupportedEngine := New(&scriptBackend{}, assistant.SendOptions{})
-	unsupported := <-unsupportedEngine.ListConversations(context.Background())
+	unsupported := unsupportedEngine.ListConversations(context.Background())
 	if !errors.Is(unsupported.Err, ErrConversationListUnsupported) {
 		t.Fatalf("unsupported error = %v", unsupported.Err)
 	}
@@ -69,7 +69,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 	malformed := New(&conversationBackend{
 		list: func(context.Context) (*assistant.UserConversationsResponse, error) { return nil, nil },
 	}, assistant.SendOptions{})
-	if got := (<-malformed.ListConversations(context.Background())).Err; !errors.Is(got, ErrMalformedConversationList) {
+	if got := malformed.ListConversations(context.Background()).Err; !errors.Is(got, ErrMalformedConversationList) {
 		t.Fatalf("nil response error = %v", got)
 	}
 	if malformed.OperationActive() {
@@ -84,7 +84,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 	malformed = New(&conversationBackend{
 		list: func(context.Context) (*assistant.UserConversationsResponse, error) { return badIDs, nil },
 	}, assistant.SendOptions{})
-	result = <-malformed.ListConversations(context.Background())
+	result = malformed.ListConversations(context.Background())
 	if result.Err != nil || result.Omitted != 1 || len(result.Conversations) != 1 || result.Conversations[0].ConversationID != testConversationID {
 		t.Fatalf("partially malformed result = %+v", result)
 	}
@@ -93,7 +93,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 	}
 }
 
-func TestSwitchConversationCommitIsAtomic(t *testing.T) {
+func TestLoadAndInstallConversation(t *testing.T) {
 	response := &assistant.ConversationHistoryResponse{}
 	response.Data.Type = "conversation-history-response"
 	response.Data.ID = "response-id-is-not-conversation-id"
@@ -115,94 +115,68 @@ func TestSwitchConversationCommitIsAtomic(t *testing.T) {
 	e := engineWithConversation(backend, "old", assistant.AssistantMessage("old", assistant.TextContent("keep")))
 	e.opts.MessageHistory = []json.RawMessage{json.RawMessage(`{"role":"user","content":"stale"}`)}
 	before := e.Snapshot()
-	result := <-e.SwitchConversation(context.Background(), " "+testConversationID+" ")
-	if result.Err != nil || result.ConversationID != testConversationID || len(result.Blocks) != 2 {
-		t.Fatalf("loaded result = %+v", result)
+	conversation, err := e.LoadConversation(context.Background(), " "+testConversationID+" ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := conversation.transcript.Blocks()
+	if conversation.id != testConversationID || len(blocks) != 2 {
+		t.Fatalf("loaded conversation = %+v", conversation)
 	}
 	if e.ConversationID() != "old" || !reflect.DeepEqual(e.Snapshot(), before) {
-		t.Fatal("load mutated engine before commit")
+		t.Fatal("load mutated engine before installation")
 	}
-	if result.Blocks[0].Markdown.Content != "Hello world" || result.Blocks[1].Kind != assistant.KindUnknown {
-		t.Fatalf("loaded blocks = %+v", result.Blocks)
+	if blocks[0].Markdown.Content != "Hello world" || blocks[1].Kind != assistant.KindUnknown {
+		t.Fatalf("loaded blocks = %+v", blocks)
 	}
-	if !e.OperationActive() {
-		t.Fatal("loaded candidate released ownership before commit/discard")
+	if e.OperationActive() {
+		t.Fatal("loading claimed engine ownership")
 	}
-	if err := result.Commit(); err != nil {
+	if err := e.InstallConversation(context.Background(), conversation); err != nil {
 		t.Fatal(err)
 	}
 	if e.OperationActive() {
-		t.Fatal("commit returned before releasing engine ownership")
+		t.Fatal("install retained engine ownership")
 	}
-	if e.ConversationID() != testConversationID || !reflect.DeepEqual(e.Snapshot(), result.Blocks) {
-		t.Fatal("commit did not atomically install candidate")
+	if e.ConversationID() != testConversationID || !reflect.DeepEqual(e.Snapshot(), blocks) {
+		t.Fatal("install did not replace the conversation")
 	}
 	history := e.opts.MessageHistory
 	if history != nil {
-		t.Fatalf("commit retained stale injected message history: %s", history)
+		t.Fatalf("install retained stale injected message history: %s", history)
 	}
 }
 
-func TestSwitchConversationDiscardFailureAndCancellationRollback(t *testing.T) {
-	t.Run("discard", func(t *testing.T) {
+func TestLoadConversationFailureAndCancellationPreserveState(t *testing.T) {
+	for _, cancelAfterLoad := range []bool{false, true} {
+		want := errors.New("gone")
 		response := &assistant.ConversationHistoryResponse{}
 		response.Data.Type = "conversation-history-response"
 		response.Data.Attributes.Messages = []assistant.Message{assistant.AssistantMessage("new", assistant.TextContent("new"))}
 		e := engineWithConversation(&conversationBackend{history: func(context.Context, assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
-			return response, nil
-		}}, "old", assistant.AssistantMessage("old", assistant.TextContent("keep")))
-		before := e.Snapshot()
-		result := <-e.SwitchConversation(context.Background(), testConversationID)
-		if err := result.Discard(); err != nil {
-			t.Fatal(err)
-		}
-		if e.OperationActive() {
-			t.Fatal("discard returned before releasing engine ownership")
-		}
-		if e.ConversationID() != "old" || !reflect.DeepEqual(e.Snapshot(), before) {
-			t.Fatal("discard mutated engine")
-		}
-	})
-
-	t.Run("backend failure", func(t *testing.T) {
-		want := errors.New("gone")
-		e := engineWithConversation(&conversationBackend{history: func(context.Context, assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
+			if cancelAfterLoad {
+				return response, nil
+			}
 			return nil, want
 		}}, "old", assistant.AssistantMessage("old", assistant.TextContent("keep")))
 		before := e.Snapshot()
-		result := <-e.SwitchConversation(context.Background(), testConversationID)
-		if !errors.Is(result.Err, want) || e.ConversationID() != "old" || !reflect.DeepEqual(e.Snapshot(), before) {
-			t.Fatalf("failure result/state = %+v/%q", result, e.ConversationID())
-		}
-		if e.OperationActive() {
-			t.Fatal("failure result retained engine ownership")
-		}
-	})
-
-	t.Run("cancel after load before commit", func(t *testing.T) {
-		response := &assistant.ConversationHistoryResponse{}
-		response.Data.Type = "conversation-history-response"
-		response.Data.Attributes.Messages = []assistant.Message{assistant.AssistantMessage("new", assistant.TextContent("new"))}
-		e := engineWithConversation(&conversationBackend{history: func(context.Context, assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
-			return response, nil
-		}}, "old", assistant.AssistantMessage("old", assistant.TextContent("keep")))
-		before := e.Snapshot()
 		ctx, cancel := context.WithCancel(context.Background())
-		result := <-e.SwitchConversation(ctx, testConversationID)
+		conversation, err := e.LoadConversation(ctx, testConversationID)
 		cancel()
-		if err := result.Commit(); !errors.Is(err, context.Canceled) {
-			t.Fatalf("commit error = %v", err)
+		if cancelAfterLoad {
+			if err != nil {
+				t.Fatal(err)
+			}
+			want = context.Canceled
+			err = e.InstallConversation(ctx, conversation)
 		}
-		if e.OperationActive() {
-			t.Fatal("cancelled commit returned before releasing ownership")
+		if !errors.Is(err, want) || e.ConversationID() != "old" || !reflect.DeepEqual(e.Snapshot(), before) || e.OperationActive() {
+			t.Fatalf("cancelAfterLoad=%v: error=%v id=%q active=%v", cancelAfterLoad, err, e.ConversationID(), e.OperationActive())
 		}
-		if e.ConversationID() != "old" || !reflect.DeepEqual(e.Snapshot(), before) {
-			t.Fatal("cancelled candidate mutated engine")
-		}
-	})
+	}
 }
 
-func TestSwitchConversationRejectsMalformedHistory(t *testing.T) {
+func TestConversationLoadingRejectsMalformedHistory(t *testing.T) {
 	for name, response := range map[string]*assistant.ConversationHistoryResponse{
 		"nil response":     nil,
 		"missing envelope": {},
@@ -221,9 +195,14 @@ func TestSwitchConversationRejectsMalformedHistory(t *testing.T) {
 			e := engineWithConversation(&conversationBackend{history: func(context.Context, assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
 				return response, nil
 			}}, "old")
-			result := <-e.SwitchConversation(context.Background(), testConversationID)
-			if !errors.Is(result.Err, ErrMalformedHistory) || e.ConversationID() != "old" {
-				t.Fatalf("result/id = %+v/%q", result, e.ConversationID())
+			_, err := e.LoadConversation(context.Background(), testConversationID)
+			if !errors.Is(err, ErrMalformedHistory) || e.ConversationID() != "old" {
+				t.Fatalf("error/id = %v/%q", err, e.ConversationID())
+			}
+			e.opts.ConversationID = testConversationID
+			events := drain(e.Restore(context.Background()))
+			if len(events) != 1 || !errors.Is(events[0].Err, ErrMalformedHistory) {
+				t.Fatalf("restore events = %+v", events)
 			}
 			if e.OperationActive() {
 				t.Fatal("malformed result retained engine ownership")
@@ -232,22 +211,9 @@ func TestSwitchConversationRejectsMalformedHistory(t *testing.T) {
 	}
 }
 
-func TestSwitchSameConversationReleasesBeforeResult(t *testing.T) {
-	e := engineWithConversation(&scriptBackend{}, testConversationID,
-		assistant.AssistantMessage("old", assistant.TextContent("keep")),
-	)
-	result := <-e.SwitchConversation(context.Background(), testConversationID)
-	if result.Err != nil || result.ConversationID != testConversationID {
-		t.Fatalf("same-conversation result = %+v", result)
-	}
-	if e.OperationActive() {
-		t.Fatal("same-conversation result published before releasing ownership")
-	}
-}
-
 // A startup read must not contend with turns: the gate belongs to operations
 // that mutate engine state, and listing mutates none.
-func TestRecentConversationsIgnoresTheOperationGate(t *testing.T) {
+func TestListConversationsIgnoresTheOperationGate(t *testing.T) {
 	response := &assistant.UserConversationsResponse{}
 	response.Data.Type = "user-conversations-response"
 	response.Data.Attributes.Conversations = []assistant.ConversationSummary{
@@ -262,7 +228,7 @@ func TestRecentConversationsIgnoresTheOperationGate(t *testing.T) {
 	}
 	t.Cleanup(func() { e.active.Store(false) })
 
-	result := <-e.RecentConversations(context.Background())
+	result := e.ListConversations(context.Background())
 	if result.Err != nil {
 		t.Fatalf("read failed while the gate was held: %v", result.Err)
 	}
@@ -274,19 +240,25 @@ func TestRecentConversationsIgnoresTheOperationGate(t *testing.T) {
 	}
 }
 
-func TestLifecycleOperationsRejectOverlap(t *testing.T) {
-	gate := make(chan struct{})
-	e := New(&blockingBackend{gate: gate}, assistant.SendOptions{ConversationID: "old"})
-	turn := e.StartTurn(context.Background(), TurnInput{Message: "busy"})
-	if got := (<-e.ListConversations(context.Background())).Err; !errors.Is(got, ErrOperationActive) {
-		t.Fatalf("list overlap = %v", got)
+func TestConversationLoadIgnoresActiveTurnButInstallRejectsIt(t *testing.T) {
+	response := &assistant.ConversationHistoryResponse{}
+	response.Data.Type = "conversation-history-response"
+	e := New(&historyBackend{resp: response}, assistant.SendOptions{ConversationID: "old"})
+	if !e.begin() {
+		t.Fatal("could not take the operation gate")
 	}
-	if got := (<-e.SwitchConversation(context.Background(), testConversationID)).Err; !errors.Is(got, ErrOperationActive) {
-		t.Fatalf("switch overlap = %v", got)
+	t.Cleanup(func() { e.active.Store(false) })
+	conversation, err := e.LoadConversation(context.Background(), testConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.InstallConversation(context.Background(), conversation); !errors.Is(err, ErrOperationActive) {
+		t.Fatalf("install overlap = %v", err)
 	}
 	if events := drain(e.Restore(context.Background())); len(events) != 1 || !errors.Is(events[0].Err, ErrOperationActive) {
 		t.Fatalf("restore overlap = %+v", events)
 	}
-	close(gate)
-	_ = drain(turn)
+	if !e.OperationActive() || e.ConversationID() != "old" {
+		t.Fatal("load or rejected install changed the active operation")
+	}
 }

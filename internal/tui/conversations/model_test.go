@@ -43,37 +43,33 @@ func TestPickerLoadingEmptyErrorRetryAndCancel(t *testing.T) {
 	}
 }
 
-func TestPickerClosingIsNonInteractive(t *testing.T) {
-	m := New(60, 16)
-	m.SetConversations([]assistant.ConversationSummary{{ConversationID: "one", Title: "One"}})
-	m.SetClosing()
-
-	for _, msg := range []tea.Msg{
-		pickerKey('x', "x"),
-		pickerKey(tea.KeyEnter, ""),
-		pickerKey(tea.KeyEscape, ""),
-	} {
-		var cmd tea.Cmd
-		m, cmd = m.Update(msg)
-		if cmd != nil {
-			t.Fatalf("closing picker emitted command for %T", msg)
-		}
-	}
-	if m.State() != StateClosing || m.Query() != "" || !strings.Contains(m.View(), "Closing…") {
-		t.Fatalf("closing picker changed state: state=%v query=%q view=%q", m.State(), m.Query(), m.View())
-	}
-}
-
 func TestPickerDistinguishesHistoryLoadingAndSanitizesErrors(t *testing.T) {
 	m := New(40, 12)
 	m.SetLoading(OperationOpen)
 	if view := m.View(); !strings.Contains(view, "Loading conversation…") || strings.Contains(view, "Loading conversations…") {
 		t.Fatalf("history loading view = %q", view)
 	}
+	m.SetSize(80, 24)
+	m.SetConversations([]assistant.ConversationSummary{
+		{ConversationID: "one", Title: "Alpha"},
+		{ConversationID: "two", Title: "Alpine"},
+	})
+	m, _ = m.Update(pickerKey('a', "a"))
+	m, _ = m.Update(pickerKey(tea.KeyDown, ""))
+	before := strings.Index(ansi.Strip(m.View()), "Alpine")
+	m.SetLoading(OperationOpen)
+	m, _ = m.Update(pickerKey('x', "x"))
+	m, _ = m.Update(pickerKey(tea.KeyUp, ""))
+	if m.Query() != "a" || m.list.Index() != 1 || strings.Index(ansi.Strip(m.View()), "Alpine") != before {
+		t.Fatalf("opening changed the query, selection, or layout: %q", m.View())
+	}
 	raw := errors.New("\x1b[31mraw\a backend detail")
 	m.SetError("Could not open conversation: \x1b[31mraw\x1b[0m\nbackend detail", raw)
 	if strings.ContainsAny(m.errorMessage, "\x1b\a\n") || m.errorMessage != "Could not open conversation: raw backend detail" {
 		t.Fatalf("sanitized error view = %q", m.View())
+	}
+	if view := m.View(); !strings.Contains(view, "Alpine") || !strings.Contains(view, "enter retry") {
+		t.Fatalf("failed open lost its selection or retry: %q", view)
 	}
 	if m.err != raw {
 		t.Fatal("original error was not retained for diagnostics")

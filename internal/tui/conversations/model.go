@@ -9,7 +9,6 @@ import (
 	"time"
 	"unicode"
 
-	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -29,7 +28,6 @@ const (
 	StateReady
 	StateEmpty
 	StateError
-	StateClosing
 )
 
 const maxVisibleConversationRows = 10
@@ -70,6 +68,7 @@ type Model struct {
 	warning      string
 	width        int
 	height       int
+	frame        int
 	windowStart  int
 	now          func() time.Time
 }
@@ -95,7 +94,7 @@ func New(width, height int, themes ...styles.Theme) Model {
 	model.SetShowHelp(false)
 	model.SetShowStatusBar(false)
 	model.SetShowPagination(false)
-	configureConversationHelp(&model)
+	configureConversationKeys(&model)
 	search := textinput.New()
 	search.Prompt = "⌕ "
 	search.Placeholder = "Type to Search"
@@ -111,8 +110,16 @@ func New(width, height int, themes ...styles.Theme) Model {
 	return m
 }
 
-func (m Model) State() State  { return m.state }
-func (m Model) Query() string { return m.search.Value() }
+func (m Model) State() State         { return m.state }
+func (m Model) Operation() Operation { return m.operation }
+func (m Model) Query() string        { return m.search.Value() }
+
+// SetFrame uses the root's shared animation clock; this component owns no ticks.
+func (m *Model) SetFrame(frame int) { m.frame = frame }
+
+func (m Model) Animating() bool {
+	return m.state == StateLoading && m.theme.Chat.StatusSpinner.Len() > 0
+}
 
 func (m *Model) SetLoading(operation Operation) {
 	m.state = StateLoading
@@ -120,20 +127,11 @@ func (m *Model) SetLoading(operation Operation) {
 	m.err = nil
 	m.errorMessage = ""
 	m.warning = ""
+	m.frame = 0
+	if operation == OperationOpen {
+		m.search.Blur()
+	}
 	m.resizeChildren()
-	m.list.StopSpinner()
-	_ = m.list.SetItems(nil)
-}
-
-// SetClosing makes the picker non-interactive while the root model waits for
-// its canceled engine operation to publish a terminal result and release
-// ownership.
-func (m *Model) SetClosing() {
-	m.state = StateClosing
-	m.err = nil
-	m.errorMessage = ""
-	m.warning = ""
-	m.list.StopSpinner()
 }
 
 // Ordered normalises a conversation list for display: entries without the
@@ -167,6 +165,7 @@ func (m *Model) SetConversations(summaries []assistant.ConversationSummary) tea.
 		items[i] = conversationItem{summary: ordered[i], now: m.now}
 	}
 	m.err = nil
+	m.search.Focus()
 	if len(items) == 0 {
 		m.state = StateEmpty
 	} else {
@@ -193,11 +192,10 @@ func resumeSearchStyles(theme styles.Theme) textinput.Styles {
 	return search
 }
 
-func configureConversationHelp(model *list.Model) {
-	// The persistent search field owns printable keys, Home, and End, so only
-	// advertise list shortcuts that the picker actually routes to the list.
+func configureConversationKeys(model *list.Model) {
+	// The persistent search field owns printable keys, Home, and End, so
+	// enable only shortcuts that the picker actually routes to the list.
 	model.KeyMap.CursorUp.SetKeys("up")
-	model.KeyMap.CursorUp.SetHelp("↑/↓", "navigate")
 	model.KeyMap.CursorDown.Unbind()
 	model.KeyMap.PrevPage.SetKeys("left", "pgup")
 	model.KeyMap.NextPage.SetKeys("right", "pgdown")
@@ -255,23 +253,6 @@ func runeSliceIndex(haystack, needle []rune) int {
 		}
 	}
 	return -1
-}
-
-func (m *Model) updateHelp() {
-	escapeDescription := "cancel"
-	if m.search.Value() != "" {
-		escapeDescription = "clear"
-	}
-	escapeKey := key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", escapeDescription))
-	selectKey := key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select"))
-	bindings := []key.Binding{escapeKey, selectKey}
-	if m.list.Paginator.TotalPages > 1 {
-		pageKey := key.NewBinding(key.WithKeys("left", "right"), key.WithHelp("←/→", "page"))
-		bindings = append([]key.Binding{pageKey}, bindings...)
-	}
-	m.list.AdditionalShortHelpKeys = func() []key.Binding {
-		return bindings
-	}
 }
 
 // RelativeUpdatedAt renders updatedAt relative to now for display.
@@ -342,10 +323,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.SetSize(size.Width, size.Height)
 		return m, nil
 	}
-	if m.state == StateClosing {
-		return m, nil
-	}
 	if key, ok := msg.(tea.KeyPressMsg); ok {
+		if m.operation == OperationOpen && m.state != StateReady && key.String() != "esc" && key.String() != "enter" {
+			return m, nil
+		}
 		switch key.String() {
 		case "esc":
 			if m.state == StateReady && m.search.Value() != "" {
@@ -426,14 +407,23 @@ func (m Model) View() string {
 		CompactMessage: m.compactMessage(),
 		TinyMessage:    "Resize terminal to resume",
 	}
-	if m.state == StateReady && len(m.list.VisibleItems()) > 0 {
+	if m.state == StateLoading {
+		content.CompactMessage = m.loadingLabel()
+	}
+	switch {
+	case m.state == StateLoading && len(m.list.Items()) > 0:
+		content.FooterLeft = m.loadingLabel()
+	case m.state == StateError && len(m.list.Items()) > 0:
+		content.FooterRight = "enter retry"
+		content.FooterLeft = m.theme.Feedback.Error.Render(m.compactMessage())
+	case m.state == StateReady && len(m.list.VisibleItems()) > 0:
 		content.FooterLeft = m.overflowHint()
 	}
 	return m.panel.View(m.width, m.height, content)
 }
 
 func (m Model) title() string {
-	if m.state != StateReady {
+	if len(m.list.Items()) == 0 {
 		return "Resume a session"
 	}
 	total := len(m.list.VisibleItems())
@@ -457,39 +447,47 @@ func (m Model) compactMessage() string {
 		if m.errorMessage != "" {
 			return m.errorMessage
 		}
+		if m.operation == OperationOpen {
+			return "Could not open conversation."
+		}
 		return "Could not load conversations."
-	case StateClosing:
-		return "Closing…"
 	default:
 		return "Resize terminal to choose a conversation"
 	}
 }
 
+// loadingLabel shares the compact layout's copy and the theme's activity glyph.
+func (m Model) loadingLabel() string {
+	glyph := m.theme.Chat.StatusSpinner.Frame(m.frame)
+	if glyph == "" {
+		glyph = "·"
+	}
+	return m.theme.Feedback.Progress.Render(glyph + " " + m.compactMessage())
+}
+
 func (m Model) panelBody(width, height int) string {
 	m.resizeBody(width, height)
-	search := m.searchView(width)
+	// Opening keeps the exact list, query, and selection in place. Only the
+	// footer changes; a failed open can retry without reconstructing the list.
+	if m.operation == OperationOpen && len(m.list.Items()) > 0 {
+		return m.searchView(width) + "\n\n" + m.conversationListView(width)
+	}
 	var body string
 	switch m.state {
 	case StateLoading:
+		detail := "Fetching your recent sessions"
 		if m.operation == OperationOpen {
-			body = m.theme.Feedback.Progress.Render("Loading conversation…")
-		} else {
-			body = m.theme.Feedback.Progress.Render("Loading conversations…")
+			detail = "Restoring your conversation"
 		}
+		body = m.loadingLabel() + "\n" + m.theme.Text.Tertiary.Render(detail)
+		if m.operation == OperationOpen {
+			return lipgloss.Place(width, min(5, max(2, height)), lipgloss.Center, lipgloss.Center, body)
+		}
+		return m.searchView(width) + "\n\n" + lipgloss.Place(width, min(3, max(2, height-2)), lipgloss.Center, lipgloss.Center, body)
 	case StateEmpty:
 		body = joinWarning(m.theme.Text.Secondary.Render("No conversations found."), m.warning)
 	case StateError:
-		message := m.errorMessage
-		if message == "" {
-			if m.operation == OperationOpen {
-				message = "Could not open conversation."
-			} else {
-				message = "Could not load conversations."
-			}
-		}
-		body = m.theme.Feedback.Error.Render(message) + "\n\n" + m.theme.Text.Secondary.Render("enter retry")
-	case StateClosing:
-		body = m.theme.Feedback.Progress.Render("Closing…")
+		body = m.theme.Feedback.Error.Render(m.compactMessage()) + "\n\n" + m.theme.Text.Secondary.Render("enter retry")
 	case StateReady:
 		body = m.conversationListView(width)
 		if len(m.list.VisibleItems()) == 0 && m.search.Value() != "" {
@@ -501,7 +499,7 @@ func (m Model) panelBody(width, height int) string {
 	default:
 		body = ""
 	}
-	return search + "\n\n" + body
+	return m.searchView(width) + "\n\n" + body
 }
 
 func (m Model) searchView(width int) string {
@@ -601,22 +599,17 @@ func (m *Model) alignWindowToPage() {
 
 func (m *Model) applySearch() {
 	if m.search.Value() == "" {
-		m.list.SetStatusBarItemName("conversation", "conversations")
 		m.list.ResetFilter()
 		m.list.ResetSelected()
 		m.windowStart = 0
-		m.updateHelp()
 		return
 	}
-	m.list.SetStatusBarItemName("conversation matches your search", "conversations match your search")
 	m.list.SetFilterText(m.search.Value())
 	m.windowStart = 0
-	m.updateHelp()
 }
 
 func (m *Model) resizeChildren() {
 	m.resizeBody(m.panel.BodySize(m.width, m.height, true))
-	m.updateHelp()
 }
 
 func (m *Model) resizeBody(width, height int) {

@@ -132,7 +132,6 @@ type Panel struct {
 	HorizontalMargin int
 	CompactMaxWidth  int
 	SectionGap       int
-	FooterSeparator  string
 }
 
 // Approval styles the docked tool-approval panel and its horizontal actions.

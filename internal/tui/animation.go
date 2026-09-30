@@ -12,8 +12,8 @@ const (
 	// animationInterval caps full-model redraws at roughly 30 FPS. Individual
 	// animations derive their logical frame from elapsed time, so sharing this
 	// repaint clock does not couple their speeds.
-	animationInterval = time.Second / 30
-	toolAnimInterval  = 50 * time.Millisecond
+	animationInterval    = time.Second / 30
+	activityAnimInterval = 50 * time.Millisecond
 )
 
 // animationTickMsg drives the one animation clock. generation identifies the
@@ -92,11 +92,19 @@ func (m *Model) syncAnimations() tea.Cmd {
 }
 
 func (m *Model) syncAnimationsAt(now time.Time) tea.Cmd {
-	wantTool := m.toolAnimationWanted()
-	wantSweep := m.borderSweepWanted()
+	var wantActivity, wantSweep bool
+	switch m.mode {
+	case ModeChat:
+		wantActivity = m.toolAnimationWanted()
+		wantSweep = m.borderSweepWanted()
+	case ModeConversations:
+		wantActivity = m.picker != nil && m.picker.Animating()
+	default:
+		// Other screens do not use the shared animation clock.
+	}
 
-	if m.animTool.Sync(wantTool, now) {
-		m.list.SetFrame(0)
+	if m.animActivity.Sync(wantActivity, now) {
+		m.setActivityFrame(0)
 	}
 
 	if m.animBorderSweep.Sync(wantSweep, now) {
@@ -104,7 +112,7 @@ func (m *Model) syncAnimationsAt(now time.Time) tea.Cmd {
 		m.editor.SetWorking(wantSweep)
 	}
 
-	wantClock := wantTool || wantSweep
+	wantClock := wantActivity || wantSweep
 	if !m.animClock.Sync(wantClock) {
 		return nil
 	}
@@ -121,8 +129,8 @@ func (m *Model) advanceAnimations(msg animationTickMsg) tea.Cmd {
 		return nil
 	}
 
-	if frame, changed := m.animTool.Advance(msg.at); changed {
-		m.list.SetFrame(frame)
+	if frame, changed := m.animActivity.Advance(msg.at); changed {
+		m.setActivityFrame(frame)
 	}
 	if frame, changed := m.animBorderSweep.Advance(msg.at); changed {
 		m.editor.SetSweepFrame(frame)
@@ -131,14 +139,21 @@ func (m *Model) advanceAnimations(msg animationTickMsg) tea.Cmd {
 	return animationTick(m.animClock.generation, m.animationRepaintInterval())
 }
 
+// setActivityFrame shares the activity timeline between chat and the picker.
+func (m *Model) setActivityFrame(frame int) {
+	m.list.SetFrame(frame)
+	if m.picker != nil {
+		m.picker.SetFrame(frame)
+	}
+}
+
 // animationRepaintInterval uses the faster cadence only while the sweep is
-// visible. Tool-only activity retains its native 50ms cadence instead of
-// paying for redraws whose logical tool frame cannot change.
+// visible. Chat and picker activity use the slower 50ms cadence.
 func (m *Model) animationRepaintInterval() time.Duration {
 	if m.animBorderSweep.active {
 		return animationInterval
 	}
-	return toolAnimInterval
+	return activityAnimInterval
 }
 
 // theme builds the terminal theme for the given background. Tool motion uses

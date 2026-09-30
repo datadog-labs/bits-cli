@@ -70,7 +70,6 @@ func build(isDark bool, p palette) Theme {
 		HorizontalMargin: 2,
 		CompactMaxWidth:  34,
 		SectionGap:       1,
-		FooterSeparator:  "   ",
 	}
 	approvalSurface := lipgloss.Color(p.approvalSurface)
 	approvalPanel := panel

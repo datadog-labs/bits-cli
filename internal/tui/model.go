@@ -214,7 +214,6 @@ type Model struct {
 	// /resume operations are cancellable and generation-stamped. A late result
 	// from a cancelled list/load can never mutate the current conversation.
 	conversationTask     task
-	conversationRetry    conversationRetry
 	conversationSwitchID string
 
 	// Turn status, surfaced in the status line.
@@ -238,11 +237,11 @@ type Model struct {
 	chatStyles chat.Styles
 	styles     styles.Theme // terminal styles; dark until detected
 
-	// One repaint clock samples independent elapsed-time timelines. Tool activity
-	// covers tool, thinking, and grouped-inspection spinners; the second timeline
-	// drives the composer border sweep.
+	// One repaint clock samples independent elapsed-time timelines. Activity
+	// covers chat spinners and picker loading; the second timeline drives the
+	// composer border sweep.
 	animClock       animationClock
-	animTool        animationTimeline
+	animActivity    animationTimeline
 	animBorderSweep animationTimeline
 
 	// frame is the chat geometry derived at the end of the last Update.
@@ -337,7 +336,7 @@ func newShell() *Model {
 	m := &Model{
 		editor:            editor.New(),
 		list:              chat.NewList(),
-		animTool:          newAnimationTimeline(toolAnimInterval),
+		animActivity:      newAnimationTimeline(activityAnimInterval),
 		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
 		status:            statusview.New(1, 1, theme),
 		approvalPanel:     components.NewPanel(theme.Approval.Panel),
@@ -424,10 +423,7 @@ func (m *Model) initChat() tea.Cmd {
 		return tea.Batch(commands...)
 	}
 	if m.engine.ConversationID() == "" {
-		// The offer's only fetch for the life of the process: skipping it for a
-		// restored conversation leaves the offer empty even after /new clears the
-		// transcript. Fetching later would read on the gated path, which can fail
-		// the next message with ErrOperationActive.
+		// Fetch the startup offer only when there is no history to restore.
 		return tea.Batch(append(commands, m.fetchRecentConversations())...)
 	}
 	m.chatPhase = chat.PhaseLoading

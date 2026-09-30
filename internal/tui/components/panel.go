@@ -230,12 +230,15 @@ func (p *Panel) footer(width int, left, right string) string {
 	if right == "" {
 		return ansi.Truncate(left, width, "…")
 	}
-	gap := width - ansi.StringWidth(left) - ansi.StringWidth(right)
-	if gap > 0 {
-		return lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right)
+	// Keep the action visible and give the remaining space to the status text.
+	right = ansi.Truncate(right, width, "…")
+	leftWidth := width - ansi.StringWidth(right) - 1
+	if leftWidth <= 0 {
+		return right
 	}
-	joined := left + p.styles.FooterSeparator + right
-	return ansi.Truncate(joined, width, "…")
+	left = ansi.Truncate(left, leftWidth, "…")
+	gap := width - ansi.StringWidth(left) - ansi.StringWidth(right)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right)
 }
 
 func (p *Panel) compact(width, height int, content PanelContent) string {

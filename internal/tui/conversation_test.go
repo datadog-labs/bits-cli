@@ -179,7 +179,7 @@ func TestNewDuringActiveTurnCancelsOnceAndDrainsBeforeReset(t *testing.T) {
 
 func TestNewDuringHistoryLoadingCancelsAndDrains(t *testing.T) {
 	backend := newCancellableConversationBackend()
-	engine := agent.New(backend, assistant.SendOptions{ConversationID: "loading"})
+	engine := agent.New(backend, assistant.SendOptions{ConversationID: resumeConversationID})
 	m := New(engine)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.chatPhase = chat.PhaseLoading
@@ -188,7 +188,7 @@ func TestNewDuringHistoryLoadingCancelsAndDrains(t *testing.T) {
 
 	setConversationInput(m, "/new")
 	_, _ = m.submit()
-	if m.convID != "loading" {
+	if m.convID != resumeConversationID {
 		t.Fatal("history-loading conversation reset before its operation drained")
 	}
 	drainConversationRemote(t, m)

@@ -241,7 +241,7 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	// /resume may own a live list/history request that must be cancelled before
 	// the application exits.
 	if m.focus() == focusPicker {
-		m.abandonConversationPicker()
+		m.closeConversationPicker()
 	}
 	m.statusTask.stop()
 	if m.op.cancel != nil {
