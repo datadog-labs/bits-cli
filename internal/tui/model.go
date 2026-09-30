@@ -12,6 +12,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/browser"
+	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	"github.com/DataDog/bits-cli/internal/tui/components"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
@@ -50,6 +51,7 @@ type EntitySearcher interface {
 
 type Config struct {
 	Tools          *agent.ToolSet
+	ToolUI         *tools.UI
 	Version        string
 	Workspace      *workspace.Workspace
 	EntitySearcher EntitySearcher
@@ -103,10 +105,12 @@ type Model struct {
 
 	// Active turn: turnEvents is the running turn's event channel (nil when
 	// idle); cancelTurn interrupts it.
-	turnEvents      <-chan agent.Event
-	cancelTurn      context.CancelFunc
-	turnGen         uint64
-	cancelRequested bool
+	turnEvents       <-chan agent.Event
+	cancelTurn       context.CancelFunc
+	turnGen          uint64
+	cancelRequested  bool
+	restoringHistory bool
+	stoppingTools    bool
 
 	// /new and /clear cancel an active turn/restore once, then wait for its
 	// channel to close before resetting conversation state.
@@ -121,6 +125,9 @@ type Model struct {
 	logoutGeneration uint64
 	loggedOut        bool
 
+	toolUI            *tools.UI
+	activeToolUI      *toolUISession
+	queuedToolUIs     []*toolUISession
 	pendingApprovals  []agent.Block
 	approvalChoice    int
 	approvalPanel     *components.Panel
@@ -237,6 +244,7 @@ func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory Engine
 func (m *Model) configure(configs []Config) {
 	if len(configs) > 0 {
 		m.tools = configs[0].Tools
+		m.toolUI = configs[0].ToolUI
 		m.workspace = configs[0].Workspace
 		if m.workspace != nil {
 			m.workspaceDisplayPath = m.workspace.DisplayPath()
@@ -349,7 +357,7 @@ func (m *Model) Init() tea.Cmd {
 // on login handoff because Bubble Tea calls Init only on the original model.
 func (m *Model) initChat() tea.Cmd {
 	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
-	commands := []tea.Cmd{m.editor.Focus(), requestBG}
+	commands := []tea.Cmd{m.editor.Focus(), requestBG, waitToolUI(m.toolUI)}
 	if m.engine == nil {
 		return tea.Batch(commands...)
 	}
@@ -361,6 +369,7 @@ func (m *Model) initChat() tea.Cmd {
 		return tea.Batch(append(commands, m.fetchRecentConversations())...)
 	}
 	m.chatPhase = chat.PhaseLoading
+	m.restoringHistory = true
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
 	events := m.engine.Restore(ctx)
 	commands = append(commands, m.beginRemote(events, cancel))

@@ -176,6 +176,12 @@ type Selector struct {
 	ColumnGap      int
 }
 
+// Tabs styles compact navigation with a filled active item.
+type Tabs struct {
+	Item   lipgloss.Style
+	Active lipgloss.Style
+}
+
 // Theme is the complete set of styles for one terminal background mode.
 type Theme struct {
 	IsDark bool
@@ -200,6 +206,7 @@ type Theme struct {
 	Accordion   Accordion
 	Selector    Selector
 	TextInput   textinput.Styles
+	Tabs        Tabs
 }
 
 // Default returns the complete UI theme for a terminal background mode.

@@ -122,7 +122,7 @@ func TestServerGateWithClientCall(t *testing.T) {
 		if !result.Denied || len(texts(result.Blocks)) != 0 {
 			t.Fatalf("denied = %t, answers = %q", result.Denied, texts(result.Blocks))
 		}
-		if read := toolBlock(t, result.Blocks, "read_file"); !read.Cancelled {
+		if read := toolBlock(t, result.Blocks, "read_file"); read.Status != agent.ToolCancelled {
 			t.Fatal("pending read was not cancelled by the denial")
 		}
 	})

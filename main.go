@@ -229,13 +229,15 @@ func startupModel(ctx context.Context, opts cmd.ChatOptions, workspace *workspac
 }
 
 func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace) (*tui.Model, error) {
-	clientTools := tools.NewClientTools(workspace)
+	toolUI := tools.NewUI()
+	clientTools := append(tools.NewClientTools(workspace), tools.NewAskUserQuestionTool(toolUI))
 	toolSet, err := agent.NewToolSet(opts.PermissionsMode, clientTools...)
 	if err != nil {
 		return nil, err
 	}
 	config := tui.Config{
 		Tools:     toolSet,
+		ToolUI:    toolUI,
 		Version:   cmd.BuildVersion(),
 		Workspace: workspace,
 		Logout: func(logoutCtx context.Context) (bool, error, error) {

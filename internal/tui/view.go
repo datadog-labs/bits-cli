@@ -108,7 +108,7 @@ func (m *Model) chatView() string {
 		// Spans the terminal with its own margin, so it does not track the composer.
 		return m.chatOverlay(base, m.permissionsView(), 0)
 	}
-	if len(m.pendingApprovals) > 0 {
+	if m.activeToolUI != nil || len(m.pendingApprovals) > 0 {
 		return base
 	}
 	menu := m.editor.MenuView()
@@ -140,6 +140,11 @@ func (m *Model) chatOverlay(base, menu string, x int) string {
 // in the same screen coordinate space as the normal chat view.
 func (m *Model) chatViewBase(transcript string) string {
 	sections := []string{transcript}
+	if m.activeToolUI != nil {
+		dim := lipgloss.NewStyle().Faint(true)
+		sections = []string{dim.Render(transcript)}
+		return strings.Join(append(sections, dim.Render(m.noticeBar()), m.activeToolUI.component.View(), m.chatFooter()), "\n")
+	}
 	if approval := m.approvalView(); approval != "" {
 		sections = append(sections, approval)
 	}
@@ -215,6 +220,10 @@ func (m *Model) chatViewTooSmall() bool {
 	}
 	if m.width < minimumChatWidth || m.height < minimumChatHeight {
 		return true
+	}
+	if m.activeToolUI != nil {
+		minWidth, minHeight := m.activeToolUI.component.MinSize()
+		return m.width < minWidth || m.height < minHeight
 	}
 	// A pending approval needs more room than the bare chat; when it doesn't fit,
 	// its prompt is hidden behind the resize hint too.
@@ -304,6 +313,9 @@ func (m *Model) approvalActions(width int) string {
 }
 
 func (m *Model) composerHeight() int {
+	if m.activeToolUI != nil {
+		return m.activeToolUI.component.Height()
+	}
 	h := m.editor.Height()
 	if approval := m.approvalView(); approval != "" {
 		h += lipgloss.Height(approval)
@@ -345,6 +357,9 @@ func (m *Model) noticeBar() string {
 // chatFooter renders low-attention workspace and context usage metadata below
 // the editor. Transient notices keep their separate row above the editor.
 func (m *Model) chatFooter() string {
+	if m.activeToolUI != nil {
+		return ""
+	}
 	width := max(1, m.list.Width())
 	indent := min(m.editor.ContentOffset(), max(0, width-1))
 	text := chatFooterText(m.workspaceDisplayPath, m.usage, max(1, width-indent))

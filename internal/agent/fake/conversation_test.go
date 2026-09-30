@@ -68,3 +68,43 @@ func TestConversationRoundTrip(t *testing.T) {
 		t.Fatalf("unknown conversation error = %v", missing.Err)
 	}
 }
+
+func TestPushedConversationResumesInANewEngine(t *testing.T) {
+	ctx := context.Background()
+	f := &Fake{}
+	set, err := agent.NewToolSet(agent.ModeSkipPermissions, agent.Tool{
+		Resumable:  true,
+		Definition: assistant.ClientTool{Name: "echo"},
+		Handler: func(context.Context, agent.ToolCall) (agent.ToolResult, error) {
+			return agent.ToolResult{Output: "resumed"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The push replays after the live turn's own call: it must return the
+	// same id rather than push again.
+	script := `id = push_conversation(lambda: say("earlier"), lambda: say("after " + call("echo", {}).output), title="Pending echo")
+call("echo", {})
+say(id)`
+	result, _ := runTurn(t, agent.New(f, assistant.SendOptions{}), script, set, agent.DenyContinue, nil)
+	id := texts(result.Blocks)[0]
+	list, err := f.UserConversations(ctx)
+	if err != nil || len(list.Data.Attributes.Conversations) != 2 || !slices.ContainsFunc(list.Data.Attributes.Conversations, func(c assistant.ConversationSummary) bool {
+		return c.ConversationID == id && c.Title == "Pending echo"
+	}) {
+		t.Fatalf("conversations = %+v, want one pushed %s", list, id)
+	}
+
+	engine := agent.New(f, assistant.SendOptions{ConversationID: id})
+	for range engine.Restore(ctx) {
+	}
+	for ev := range engine.ResumePendingTools(ctx, agent.TurnInput{Tools: set}) {
+		if ev.Err != nil {
+			t.Fatal(ev.Err)
+		}
+	}
+	if got := texts(engine.Snapshot()); !slices.Equal(got, []string{"earlier", "after resumed"}) {
+		t.Fatalf("answers = %q", got)
+	}
+}

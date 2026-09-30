@@ -115,6 +115,7 @@ type focus int
 
 const (
 	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
+	focusToolUI                   // a tool's interactive UI replaces the composer
 	focusApproval                 // a tool approval is pending
 	focusPicker                   // the /resume conversation picker
 	focusStatus                   // the local /status document
@@ -133,6 +134,9 @@ func (m *Model) focus() focus {
 	case ModePermissions:
 		return focusPermissions
 	case ModeChat, ModeTermInit:
+		if m.activeToolUI != nil {
+			return focusToolUI
+		}
 		if len(m.pendingApprovals) > 0 {
 			return focusApproval
 		}
@@ -260,6 +264,10 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 // mouse, and editor-bound input are routed by focus().
 func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case toolUIOpenedMsg:
+		m.activateToolUI(msg.request)
+		return m, waitToolUI(m.toolUI)
+
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 		return m, nil
@@ -294,6 +302,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleMouseWheel(msg)
 
 	case tea.MouseClickMsg:
+		if m.focus() == focusToolUI {
+			return m, m.updateToolUI(msg)
+		}
 		if m.mode == ModeChat {
 			if msg.Button == tea.MouseLeft {
 				// The press might turn into a drag-select, so it isn't a toggle
@@ -393,6 +404,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Opened Assistant settings in your browser: %s", msg.url), 0)
 	}
 
+	if m.focus() == focusToolUI {
+		return m, m.updateToolUI(msg)
+	}
 	if m.focus() == focusPicker {
 		return m, m.updateConversationPicker(msg)
 	}
@@ -527,6 +541,18 @@ func (m *Model) clearSelection() {
 }
 
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
+	if m.focus() == focusToolUI {
+		if msg.Y >= m.toolUITop() {
+			return m.updateToolUI(msg)
+		}
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.list.ScrollBy(-mouseWheelDelta)
+		case tea.MouseWheelDown:
+			m.list.ScrollBy(mouseWheelDelta)
+		}
+		return nil
+	}
 	if m.focus() == focusPicker {
 		return m.updateConversationPicker(msg)
 	}
@@ -555,18 +581,26 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	if !m.acceptRemoteMessage(msg.generation) {
 		return m, nil
 	}
+	resumeTools := m.restoringHistory && !m.cancelRequested
+	m.restoringHistory = false
 	if m.chatPhase != chat.PhaseError {
 		m.chatPhase = chat.PhaseIdle
 	}
 	m.turnEvents = nil
+	if m.cancelRequested {
+		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+		m.syncTranscript()
+	}
 	m.pendingApprovals = nil
 	m.approvalChoice = 0
 	m.approvalPanel.ResetScroll()
+	m.clearToolUIs()
 	if m.cancelTurn != nil && !m.cancelRequested {
 		m.cancelTurn() // release the turn/restore context
 	}
 	m.cancelTurn = nil
 	m.cancelRequested = false
+	m.stoppingTools = false
 	var permissionsCommand tea.Cmd
 	if m.pendingLogout {
 		m.pendingPermissions = ""
@@ -581,6 +615,9 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	if m.pendingLogout {
 		m.pendingLogout = false
 		return m, batchCommands(permissionsCommand, m.startLogout())
+	}
+	if resumeTools {
+		return m, batchCommands(permissionsCommand, m.resumePendingTools())
 	}
 	return m, permissionsCommand
 }
@@ -688,6 +725,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.focus() {
 	case focusPicker:
 		return m, m.updateConversationPicker(msg)
+	case focusToolUI:
+		return m, m.updateToolUI(msg)
 	case focusApproval:
 		return m.handleApprovalKey(msg)
 	case focusStatus:
@@ -842,7 +881,27 @@ func (m *Model) beginRemote(events <-chan agent.Event, cancel context.CancelFunc
 	m.turnEvents = events
 	m.cancelTurn = cancel
 	m.cancelRequested = false
+	m.stoppingTools = false
 	return waitEvent(m.turnGen, events)
+}
+
+func (m *Model) resumePendingTools() tea.Cmd {
+	if m.engine == nil {
+		return nil
+	}
+	if m.engine.SettleRestoredTools(m.tools) {
+		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+		m.syncTranscript()
+	}
+	if m.tools == nil || !m.engine.CanResumeTools(m.tools) {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	events := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
+	m.chatPhase = chat.PhaseWaiting
+	m.layoutTranscript()
+	m.list.ScrollToBottom()
+	return m.beginRemote(events, cancel)
 }
 
 func (m *Model) acceptRemoteMessage(generation uint64) bool {
@@ -855,6 +914,7 @@ func (m *Model) cancelRemote() {
 	}
 	m.cancelRequested = true
 	m.cancelTurn()
+	m.clearToolUIs()
 }
 
 // applyEvent folds one engine event into the block snapshot / status. The switch
@@ -866,6 +926,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	case agent.EventTranscript:
 		m.transcript = ev.Transcript
 		m.updatePendingApprovals(ev.Transcript.PendingApprovals())
+		m.reconcileToolUI()
 		if ev.Transcript.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}
@@ -938,6 +999,7 @@ func (m *Model) layoutTranscript() {
 	if m.mode == ModeTermInit {
 		return
 	}
+	m.layoutToolUI()
 	m.editor.SetMenuHeight(max(0, m.height-chatFooterHeight-m.editor.Height()))
 	m.list.SetHeight(m.transcriptHeight())
 	m.list.SetHeader(m.headerView())

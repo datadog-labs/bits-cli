@@ -386,7 +386,7 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 	drainConversationRemote(t, m)
 
 	tool := findToolBlock(m.transcript.Blocks, "write_file")
-	if tool == nil || !tool.Cancelled || tool.Status == agent.ToolRunning {
+	if tool == nil || tool.Status != agent.ToolCancelled {
 		t.Fatalf("write_file block = %+v, want cancelled and not running", tool)
 	}
 	if _, err := os.Stat(filepath.Join(ws.Path(), "half.txt")); !errors.Is(err, os.ErrNotExist) {

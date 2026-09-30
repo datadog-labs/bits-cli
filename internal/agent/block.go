@@ -21,7 +21,20 @@ const (
 	ToolAwaitingApproval
 	ToolSuccess
 	ToolError
+	ToolCancelled
+	ToolDenied
 )
+
+// IsTerminal reports whether the call has finished.
+func (s ToolStatus) IsTerminal() bool {
+	switch s {
+	case ToolSuccess, ToolError, ToolCancelled, ToolDenied:
+		return true
+	case ToolUnknown, ToolRunning, ToolAwaitingApproval:
+		return false
+	}
+	return false
+}
 
 // ToolStatusOf maps a wire tool_response status ("success" / "error", or
 // "running") to a ToolStatus.
@@ -65,10 +78,6 @@ type ToolBlock struct {
 	RenderState  any
 	IsClientSide bool
 	Approval     *ApprovalPrompt
-	// Denied marks an approval refusal, not a tool error.
-	Denied bool
-	// Cancelled marks a call ended by a user stop rather than a tool failure.
-	Cancelled bool
 }
 
 // ToolBlockOf builds the aggregated view of a tool content block.

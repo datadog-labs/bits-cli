@@ -72,6 +72,9 @@ func ClearRenderState() *RenderStateUpdate {
 }
 
 type Tool struct {
+	// Resumable opts a handler into restarting an unanswered call from history.
+	// Only handlers safe to restart without repeating side effects should opt in.
+	Resumable    bool
 	Definition   assistant.ClientTool
 	Handler      ToolHandler
 	Approval     ApprovalPolicy
@@ -85,6 +88,7 @@ type ToolSet struct {
 }
 
 type registeredTool struct {
+	resumable    bool
 	handler      ToolHandler
 	approval     ApprovalPolicy
 	inputReducer ToolInputReducer
@@ -113,7 +117,7 @@ func NewToolSet(mode PermissionsMode, tools ...Tool) (*ToolSet, error) {
 			return nil, fmt.Errorf("duplicate tool %q", name)
 		}
 		set.definitions = append(set.definitions, tool.Definition)
-		set.tools[name] = registeredTool{handler: tool.Handler, approval: tool.Approval, inputReducer: tool.InputReducer}
+		set.tools[name] = registeredTool{resumable: tool.Resumable, handler: tool.Handler, approval: tool.Approval, inputReducer: tool.InputReducer}
 	}
 	return set, nil
 }

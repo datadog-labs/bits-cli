@@ -19,6 +19,7 @@ var (
 	ErrHistoryUnsupported     = errors.New("backend does not support loading conversation history")
 	ErrCurrentUserUnsupported = errors.New("backend does not support loading the current user")
 	ErrOperationActive        = errors.New("another conversation operation is active")
+	ErrNoPendingTools         = errors.New("no resumable client tools")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -148,6 +149,7 @@ type Engine struct {
 	opts                   assistant.SendOptions
 	runtimeStatus          RuntimeStatus
 	transcript             *Transcript
+	continuation           *toolContinuation
 	previousConversationID string
 	commands               chan toolCommand
 	sessionGrants          map[ApprovalKey]struct{}
@@ -168,6 +170,7 @@ type toolCommand struct {
 	id         string
 	decision   ApprovalDecision
 	cancel     bool
+	stop       bool
 }
 
 type pendingTool struct {
@@ -254,13 +257,18 @@ type turnOperation struct {
 // channel closes only after the completion snapshot has been captured and the
 // engine operation has been released.
 func (e *Engine) beginTurn(ctx context.Context, in TurnInput) turnOperation {
+	return e.beginTurnWithCalls(ctx, in, nil)
+}
+
+func (e *Engine) beginTurnWithCalls(ctx context.Context, in TurnInput, resumed []ToolCall) turnOperation {
 	if !e.begin() {
 		return completedTurnOperation(ErrOperationActive)
 	}
+	e.continuation = nil
 	generation := e.operationGeneration.Load()
 	events := make(chan Event, 64)
 	completion := make(chan turnCompletion, 1)
-	go e.run(ctx, in, events, completion, generation)
+	go e.run(ctx, in, resumed, events, completion, generation)
 	return turnOperation{events: events, completion: completion}
 }
 
@@ -315,6 +323,13 @@ func (e *Engine) CancelTool(toolCallID string) bool {
 	})
 }
 
+// StopTools cancels the active client-tool round and persists its cancellation
+// responses before ending the turn. Cancelling the turn context instead leaves
+// unanswered calls available for a later process to resume.
+func (e *Engine) StopTools() bool {
+	return e.command(toolCommand{generation: e.operationGeneration.Load(), stop: true})
+}
+
 func (e *Engine) command(command toolCommand) bool {
 	select {
 	case e.commands <- command:
@@ -327,17 +342,29 @@ func (e *Engine) command(command toolCommand) bool {
 func (e *Engine) run(
 	ctx context.Context,
 	in TurnInput,
+	resumed []ToolCall,
 	out chan<- Event,
 	completionOut chan<- turnCompletion,
 	generation uint64,
 ) {
 	completion := turnCompletion{}
 	turnStart := len(e.transcript.Blocks())
+	if len(resumed) > 0 {
+		for i, block := range e.transcript.Blocks() {
+			for _, call := range resumed {
+				if block.ToolCallID() == call.ID {
+					turnStart = min(turnStart, i)
+				}
+			}
+		}
+	}
 	defer func() {
-		if ctx.Err() != nil && e.transcript.CancelUnfinishedTools(turnStart) {
+		if ctx.Err() != nil {
+			e.transcript.CancelUnfinishedTools(turnStart)
 			// Cancellation makes send's context-aware select unavailable, but this
 			// terminal snapshot must not be dropped. It is sent after all queued
-			// events and callers drain the channel after cancellation.
+			// events and callers drain the channel after cancellation. Always flush,
+			// even if a worker completed while cancellation prevented its event send.
 			out <- Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()}
 		}
 		if completion.Err == nil && !completion.Completed && ctx.Err() != nil {
@@ -380,19 +407,22 @@ func (e *Engine) run(
 		}
 	}
 
-	// The user's turn opens the transcript; the engine owns the user block too.
-	e.transcript.AppendUser(in.Message)
-	if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
-		return
+	// A restored tool call is already in the transcript; only a new turn adds a
+	// user block before contacting the backend.
+	if len(resumed) == 0 {
+		e.transcript.AppendUser(in.Message)
+		if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
+			return
+		}
 	}
 
 	var next any = in.Message
 	convID := e.ConversationID()
 
-	for round := 1; round <= maxTurns; round++ {
-		var calls []assistant.Content
-
-		emit := emitAtRound(round)
+	// request sends one round and collects the client calls it pauses on. It
+	// returns false once the turn has ended.
+	request := func(emit func(Event) bool, opts assistant.SendOptions) ([]ToolCall, bool) {
+		var calls []ToolCall
 		fold := func(msg assistant.Message) bool {
 			if msg.Results != nil && msg.Results.Usage != nil {
 				completion.Usage = cloneUsage(msg.Results.Usage)
@@ -425,18 +455,12 @@ func (e *Engine) run(
 			return true
 		}
 
-		opts := e.opts
-		opts.ConversationID = convID
-		opts.ClientTools = defs
-		opts.Context = in.Context
-		opts.StreamToolCallInput = opts.StreamToolCallInput || tools.NeedsStreamedInput()
-
 		id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {
 			msg := ar.Data.Attributes.StructuredMessage
 			// A client_tool_call pauses the stream until we answer it; collect it
-			// for execTools below.
+			// for runTools.
 			if msg.Content.Type == assistant.ContentClientToolCall {
-				calls = append(calls, msg.Content)
+				calls = append(calls, toolCallOf(msg.Content))
 			}
 			if !fold(msg) {
 				return ctx.Err()
@@ -455,19 +479,19 @@ func (e *Engine) run(
 			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
 				completion.Err = err
 				if !finalizeAndEmit(emit) {
-					return
+					return nil, false
 				}
 				if id != "" {
 					if !emit(Event{Kind: EventConversation, ConvID: id}) {
-						return
+						return nil, false
 					}
 				}
 				emit(Event{Kind: EventError, Err: err, BackendFailure: true})
-				return
+				return nil, false
 			}
 		}
 		if ctx.Err() != nil {
-			return // cancelled: end the turn quietly
+			return nil, false // cancelled: end the turn quietly
 		}
 
 		convID = id
@@ -475,11 +499,29 @@ func (e *Engine) run(
 		emit(Event{Kind: EventConversation, ConvID: convID})
 
 		if len(calls) == 0 {
-			if !finalizeAndEmit(emit) {
+			if finalizeAndEmit(emit) {
+				completion.Completed = emit(Event{Kind: EventTurnDone})
+			}
+			return nil, false
+		}
+		return calls, true
+	}
+
+	for round := 1; round <= maxTurns; round++ {
+		emit := emitAtRound(round)
+		opts := e.opts
+		opts.ConversationID = convID
+		opts.ClientTools = defs
+		opts.Context = in.Context
+		opts.StreamToolCallInput = opts.StreamToolCallInput || tools.NeedsStreamedInput()
+
+		calls := resumed
+		resumed = nil
+		if calls == nil {
+			var ok bool
+			if calls, ok = request(emit, opts); !ok {
 				return
 			}
-			completion.Completed = emit(Event{Kind: EventTurnDone})
-			return
 		}
 		toolRound, err := e.runTools(ctx, tools, calls, generation, emit, in.OnDeny)
 		if err != nil {
@@ -669,6 +711,7 @@ func (e *Engine) NewConversation() error {
 	e.opts.ConversationID = ""
 	e.opts.MessageHistory = nil
 	e.transcript = NewTranscript()
+	e.continuation = nil
 	clear(e.sessionGrants)
 	return nil
 }
@@ -738,6 +781,7 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 	for _, msg := range resp.Data.Attributes.Messages {
 		e.transcript.AppendMessage(msg)
 	}
+	e.continuation = continuationFromHistory(resp.Data.Attributes.Messages)
 	e.transcript.FinalizeAll()
 	if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
 		send(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
@@ -749,16 +793,15 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 func (e *Engine) runTools(
 	ctx context.Context,
 	tools *ToolSet,
-	contents []assistant.Content,
+	calls []ToolCall,
 	generation uint64,
 	send func(Event) bool,
 	onDeny DenyPolicy,
 ) (toolRound, error) {
-	work := make([]pendingTool, len(contents))
-	seen := make(map[string]struct{}, len(contents))
-	byID := make(map[string]pendingTool, len(contents))
-	for i, content := range contents {
-		call := toolCallOf(content)
+	work := make([]pendingTool, len(calls))
+	seen := make(map[string]struct{}, len(calls))
+	byID := make(map[string]pendingTool, len(calls))
+	for i, call := range calls {
 		if call.ID == "" {
 			return toolRound{}, errors.New("client tool call has no id")
 		}
@@ -817,6 +860,7 @@ func (e *Engine) runTools(
 			cancel()
 		}
 	}
+	defer cancelRunning()
 	// stopPendingAfterDenial answers still-pending approvals as cancelled;
 	// running siblings finish so their real results reach the wire batch.
 	stopPendingAfterDenial := func() bool {
@@ -929,6 +973,11 @@ func (e *Engine) runTools(
 		select {
 		case command := <-e.commands:
 			if command.generation != generation {
+				continue
+			}
+			if command.stop {
+				stopRequested = true
+				stopRound(nil, nil)
 				continue
 			}
 			if command.cancel {

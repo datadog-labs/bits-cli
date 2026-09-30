@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/auth"
 )
@@ -169,20 +170,25 @@ func TestNewAuthenticatedClientRejectsInvalidConfiguration(t *testing.T) {
 
 func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 	t.Run("automatic fake bypasses OAuth", func(t *testing.T) {
-		store := &observedStore{err: errors.New("must not load")}
-		engine, err := NewEngine(context.Background(), EngineOptions{
-			Client:         ClientOptions{Mode: auth.ModeAuto, Store: store},
-			Send:           assistant.SendOptions{ConversationID: "conversation-1"},
-			UseFakeBackend: true,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if store.loads != 0 {
-			t.Fatalf("store loads = %d", store.loads)
-		}
-		if got := engine.ConversationID(); got != "conversation-1" {
-			t.Fatalf("conversation ID = %q", got)
+		const id = "11111111-1111-4111-8111-111111111111"
+		// A script instead of an id pushes the conversation it opens.
+		for _, conversation := range []string{id, `say("earlier")`} {
+			store := &observedStore{err: errors.New("must not load")}
+			engine, err := NewEngine(context.Background(), EngineOptions{
+				Client:         ClientOptions{Mode: auth.ModeAuto, Store: store},
+				Send:           assistant.SendOptions{ConversationID: conversation},
+				UseFakeBackend: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if store.loads != 0 {
+				t.Fatalf("store loads = %d", store.loads)
+			}
+			got := engine.ConversationID()
+			if (conversation == id) != (got == id) || !agent.ValidConversationID(got) {
+				t.Fatalf("conversation ID = %q", got)
+			}
 		}
 	})
 

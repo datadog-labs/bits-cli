@@ -359,7 +359,7 @@ func TestEngineApprovalRequestGateManualDeniesAndContinues(t *testing.T) {
 	// The denial is typed on the tool block.
 	denied := false
 	for _, block := range result.Blocks {
-		if block.ToolCallID() == "gate-1" && block.Tool != nil && block.Tool.Denied && block.Tool.Status == ToolError {
+		if block.ToolCallID() == "gate-1" && block.Tool != nil && block.Tool.Status == ToolDenied {
 			denied = true
 		}
 	}
