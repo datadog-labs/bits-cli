@@ -177,6 +177,7 @@ func (m *Model) permissionsContent() components.PanelContent {
 		// Narrower than this, the option details wrap a word per row.
 		MinBodyWidth:   permissionLabelWidth + 2 + 12,
 		CompactMessage: "Resize terminal to choose permissions",
+		TinyMessage:    "Resize to choose permissions",
 	}
 	if m.permissionConfirm {
 		// The body inside a 36-column terminal.

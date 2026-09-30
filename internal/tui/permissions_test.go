@@ -466,9 +466,11 @@ func TestPermissionsConfirmationHasNoFooterHints(t *testing.T) {
 func TestPermissionsPickerCompactResizeKeepsSelection(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "")
-	_, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
-	if !strings.Contains(ansi.Strip(m.View().Content), "Resize") {
-		t.Fatal("compact picker lacks resize hint")
+	for _, width := range []int{30, minimumChatWidth} {
+		_, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: 10})
+		if !strings.Contains(ansi.Strip(m.View().Content), "Resize") {
+			t.Fatalf("compact picker lacks resize hint at width %d", width)
+		}
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.mode != ModePermissions || m.tools.PermissionsMode() != agent.ModeManual {
