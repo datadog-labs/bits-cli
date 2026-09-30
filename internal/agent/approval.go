@@ -37,11 +37,13 @@ const (
 	ModeManual PermissionsMode = "manual"
 	// ModeSkipPermissions runs every tool without consulting its approval policy.
 	ModeSkipPermissions PermissionsMode = "skip-permissions"
+	// ModeDeny denies every declared gate without asking.
+	ModeDeny PermissionsMode = "deny"
 )
 
 func (m PermissionsMode) valid() bool {
 	switch m {
-	case ModeManual, ModeSkipPermissions:
+	case ModeManual, ModeSkipPermissions, ModeDeny:
 		return true
 	default:
 		return false
@@ -133,6 +135,15 @@ func deniedResult() ToolResult {
 	return ToolResult{
 		Title:   "Permission denied",
 		Output:  "local execution was denied by the user",
+		IsError: true,
+		Denied:  true,
+	}
+}
+
+func modeDeniedResult() ToolResult {
+	return ToolResult{
+		Title:   "Permission denied",
+		Output:  "this action was denied by the run's permissions mode",
 		IsError: true,
 		Denied:  true,
 	}

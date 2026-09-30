@@ -54,7 +54,7 @@ func TestRunDispatchesResolvedOptions(t *testing.T) {
 			InferenceMode:   "fast",
 			AuthMode:        auth.ModeAPIKey,
 			Site:            "https://api.datadoghq.eu",
-			PermissionsMode: agent.ModeSkipPermissions,
+			PermissionsMode: agent.ModeDeny,
 		},
 		Prompt:   "summarize the incident",
 		Model:    "claude-sonnet-4-6",
@@ -65,7 +65,7 @@ func TestRunDispatchesResolvedOptions(t *testing.T) {
 	}
 }
 
-func TestRunDefaultsToSkipPermissions(t *testing.T) {
+func TestRunDefaultsToDeny(t *testing.T) {
 	_, _, recorded, err := executeRun(t, []string{"run", "--prompt", "hello", "--delivery", "adeep"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -74,8 +74,8 @@ func TestRunDefaultsToSkipPermissions(t *testing.T) {
 		t.Fatalf("runs = %d, want 1", len(recorded))
 	}
 	opts := recorded[0]
-	if opts.AuthMode != auth.ModeAuto || opts.PermissionsMode != agent.ModeSkipPermissions || opts.Site != "" || opts.ConversationID != "" || opts.Model != "" || opts.InferenceMode != "" {
-		t.Fatalf("defaults = %#v, want skip-permissions with the shared chat defaults", opts.ChatOptions)
+	if opts.AuthMode != auth.ModeAuto || opts.PermissionsMode != agent.ModeDeny || opts.Site != "" || opts.ConversationID != "" || opts.Model != "" || opts.InferenceMode != "" {
+		t.Fatalf("defaults = %#v, want deny with the shared chat defaults", opts.ChatOptions)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestRunRejectsUsageBeforeAction(t *testing.T) {
 		{name: "missing delivery", args: []string{"run", "--prompt", "hello"}, wantErr: `required flag "--delivery" was not set`},
 		{name: "unknown delivery", args: []string{"run", "--prompt", "hello", "--delivery", "plain"}, wantErr: `invalid delivery "plain"; expected adeep`},
 		{name: "removed approval flag", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--approval", "allow-all"}, wantErr: "unknown flag: --approval"},
-		{name: "removed permissions flag", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--permissions", "manual"}, wantErr: "unknown flag: --permissions"},
+		{name: "manual permissions", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--permissions", "manual"}, wantErr: `invalid permissions mode "manual"; expected deny or skip-permissions`},
 		{name: "invalid auth mode", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--auth", "oauth"}, wantErr: `invalid authentication mode "oauth"; expected auto or api-key`},
 		{name: "invalid reasoning mode", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--reasoning", "normal"}, wantErr: `invalid inference mode "normal"; expected fast or deep`},
 		{name: "api key without site", args: []string{"run", "--prompt", "x", "--delivery", "adeep", "--auth", "api-key"}, wantErr: "--auth api-key requires --site"},

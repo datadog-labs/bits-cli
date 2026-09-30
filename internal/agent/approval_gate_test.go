@@ -161,6 +161,31 @@ func TestEngineApprovalRequestGateSkipPermissionsApproves(t *testing.T) {
 	}
 }
 
+func TestEngineDenyModeDeniesLocalAndServerGatesWithoutApprover(t *testing.T) {
+	backend := &gateBackend{includeSibling: true}
+	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+		Message: "write something",
+		Tools:   gatedToolSet(t, ModeDeny),
+		OnDeny:  DenyContinue,
+	}, func(event Event) error {
+		if event.Kind == EventTranscript && len(event.Transcript.PendingApprovals()) > 0 {
+			return errors.New("deny mode exposed a pending approval")
+		}
+		return nil
+	})
+	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
+		t.Fatalf("result/error = %+v, %v; want a completed turn with a denial", result, err)
+	}
+	if len(backend.responses) != 1 || len(backend.responses[0]) != 2 {
+		t.Fatalf("response batches = %v, want one batch with both calls", backend.responses)
+	}
+	for _, response := range backend.responses[0] {
+		if response.Status != assistant.ToolStatusError || response.Metadata.Output != "this action was denied by the run's permissions mode" {
+			t.Fatalf("response %s = %+v, want a permissions-mode denial", response.ToolCallID, response)
+		}
+	}
+}
+
 func TestEngineApprovalRequestGateNilToolsDenies(t *testing.T) {
 	backend := &gateBackend{}
 	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{

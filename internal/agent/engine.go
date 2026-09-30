@@ -939,6 +939,12 @@ func (e *Engine) runTools(
 				}
 				continue
 			}
+			if permissions.deniesGates() {
+				if !denyServerGate(item, modeDeniedResult()) {
+					return toolRound{denied: denied}, nil
+				}
+				continue
+			}
 			item.key = requirement.Key
 			pending[item.call.ID] = item
 			_, updated := e.transcript.MarkAwaitingApproval(item.call.ID, requirement.Prompt)

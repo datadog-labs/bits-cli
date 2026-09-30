@@ -50,8 +50,9 @@ permission request is active, and only typed input can change the mode — the
 assistant cannot switch it for you. Session-wide "allow" grants you gave
 earlier stay valid when you switch back to `manual`.
 
-`bits run` has no interactive approver, so it always runs in skip-permissions
-mode and has no permissions flag.
+`bits run` has no interactive approver, so it denies every gated action by
+default (`--permissions deny`). Pass `--permissions skip-permissions` to run
+everything without asking.
 
 ## Noninteractive run
 
@@ -64,7 +65,7 @@ bits run --prompt "What changed?" --delivery adeep --auth api-key --site https:/
 
 `--prompt` is required and literal: positional and stdin prompts are not supported. The initial and only delivery is `adeep`, which emits `bits.delivery.adeep` v1 run/round lifecycle, correlated tool calls and results, usage, conversation updates, and one terminal record. Assistant Markdown appears only as `run.finished.response`. Without a working OAuth session, `run` fails fast with a `bits login` hint.
 
-Exit statuses are `0` for a completed turn, `1` for startup/runtime/delivery failure, `2` for command or flag misuse, and `3` when at least one approval gate was denied even though the backend could adjust and finish. On the headless surface a denial can only come from a malformed server approval request, which is denied and returned to the model as an error tool response.
+Exit statuses are `0` for a completed turn, `1` for startup/runtime/delivery failure, `2` for command or flag misuse, and `3` when at least one approval gate was denied even though the backend could adjust and finish. On the headless surface a denial comes from a gated action under `--permissions deny`, or from a malformed server approval request; each is returned to the model as an error tool response.
 
 `bits --version` prints the module version when available, otherwise `dev` with the short commit recorded in the build.
 

@@ -265,6 +265,42 @@ func TestRunSkipPermissionsApprovesLocalAndServerGates(t *testing.T) {
 	}
 }
 
+// Deny mode refuses both a local gated tool and the backend-injected
+// approval_request gate without an approver; the model adjusts and the run
+// exits 3.
+func TestRunDenyModeDeniesLocalAndServerGates(t *testing.T) {
+	backend := &scriptBackend{rounds: [][]assistant.Message{
+		{
+			clientCallMessage("gate", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1","approval_message":"Delete it?"}`),
+			clientCallMessage("c1", "cli-1", "get_local_time", "{}"),
+		},
+		{
+			runTextMessage("a1", "I could not check the time."),
+		},
+	}}
+	engine := agent.New(backend, assistant.SendOptions{})
+	opts := runOptions()
+	opts.PermissionsMode = agent.ModeDeny
+	var out bytes.Buffer
+
+	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeDeny), opts, &out)
+	var exitErr *cmd.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != cmd.ExitApprovalDenied {
+		t.Fatalf("error = %v, want exit %d", err, cmd.ExitApprovalDenied)
+	}
+	if len(backend.batches) != 1 || len(backend.batches[0]) != 2 {
+		t.Fatalf("response batches = %v", backend.batches)
+	}
+	for _, response := range backend.batches[0] {
+		if response.Status != assistant.ToolStatusError || response.Metadata.Output == "noon" {
+			t.Fatalf("response %s = %+v, want a denial", response.ToolCallID, response)
+		}
+	}
+	if !strings.Contains(out.String(), `"outcome":"approval_denied"`) || !strings.Contains(out.String(), "I could not check the time.") {
+		t.Fatalf("delivery missing the denial outcome or adjusted answer:\n%s", out.String())
+	}
+}
+
 // Denial followed by a backend failure: the runtime failure wins over exit 3,
 // while the denial evidence stays in the stream.
 func TestRunRuntimeFailureWinsOverDenial(t *testing.T) {

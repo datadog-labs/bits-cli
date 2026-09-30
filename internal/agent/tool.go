@@ -238,6 +238,10 @@ func (g gateSnapshot) approvesServerGate() bool {
 	return g.set != nil && g.mode == ModeSkipPermissions
 }
 
+func (g gateSnapshot) deniesGates() bool {
+	return g.set != nil && g.mode == ModeDeny
+}
+
 // Approval reports whether call must wait for an approval decision before
 // it runs. The set's PermissionsMode is consulted first: ModeSkipPermissions
 // suppresses every declared gate, while ModeManual exposes the server gate and
@@ -247,7 +251,7 @@ func (s *ToolSet) Approval(call ToolCall) (ApprovalRequirement, bool) {
 }
 
 func (g gateSnapshot) approval(call ToolCall) (ApprovalRequirement, bool) {
-	if g.set == nil || g.mode != ModeManual {
+	if g.set == nil || (g.mode != ModeManual && g.mode != ModeDeny) {
 		return ApprovalRequirement{}, false
 	}
 	if call.Name == assistant.ApprovalRequestTool {

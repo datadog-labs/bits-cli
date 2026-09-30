@@ -112,7 +112,7 @@ func runEngineTurn(ctx context.Context, engine *agent.Engine, tools *agent.ToolS
 		if finishErr != nil {
 			return finishErr
 		}
-		return &cmd.ExitError{Code: cmd.ExitApprovalDenied, Err: errors.New("a server approval gate was denied; the turn finished with the backend's adjusted answer")}
+		return &cmd.ExitError{Code: cmd.ExitApprovalDenied, Err: errors.New("an approval gate was denied; the turn finished with the backend's adjusted answer")}
 	default:
 		if err != nil {
 			return err
