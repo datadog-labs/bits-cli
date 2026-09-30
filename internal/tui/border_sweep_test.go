@@ -69,8 +69,8 @@ func TestBorderSweepContinuesWhenApprovalAndRunningToolCoexist(t *testing.T) {
 	if cmd := m.syncAnimations(); cmd == nil {
 		t.Fatal("parallel running tool did not start shared clock")
 	}
-	if !m.animTool.active || !m.animBorderSweep.active {
-		t.Fatalf("tool=%v sweep=%v, want both active", m.animTool.active, m.animBorderSweep.active)
+	if !m.animActivity.active || !m.animBorderSweep.active {
+		t.Fatalf("tool=%v sweep=%v, want both active", m.animActivity.active, m.animBorderSweep.active)
 	}
 }
 
@@ -86,7 +86,7 @@ func TestWithoutMotionKeepsAnimationClockIdle(t *testing.T) {
 	if m.animBorderSweep.active {
 		t.Fatal("WithoutMotion left border sweep active")
 	}
-	if m.animTool.active || m.animClock.armed {
+	if m.animActivity.active || m.animClock.armed {
 		t.Fatal("WithoutMotion kept tool animation active")
 	}
 }
@@ -130,7 +130,7 @@ func TestSweepStopsAtApprovalMinimumSizeAndRestarts(t *testing.T) {
 		t.Fatal("hidden approval/chat view kept shared clock running")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	if !m.animClock.armed || !m.animBorderSweep.active || !m.animTool.active {
+	if !m.animClock.armed || !m.animBorderSweep.active || !m.animActivity.active {
 		t.Fatal("resizing back did not restart animations")
 	}
 }

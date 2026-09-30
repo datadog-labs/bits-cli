@@ -69,6 +69,7 @@ type Model struct {
 	warning      string
 	width        int
 	height       int
+	frame        int
 	windowStart  int
 	now          func() time.Time
 }
@@ -113,15 +114,24 @@ func New(width, height int, themes ...styles.Theme) Model {
 func (m Model) State() State  { return m.state }
 func (m Model) Query() string { return m.search.Value() }
 
+// SetFrame uses the root's shared animation clock; this component owns no ticks.
+func (m *Model) SetFrame(frame int) { m.frame = frame }
+
+func (m Model) Animating() bool {
+	return m.state == StateLoading && m.theme.Chat.StatusSpinner.Len() > 0 && m.width >= 20 && m.height >= 3
+}
+
 func (m *Model) SetLoading(operation Operation) {
 	m.state = StateLoading
 	m.operation = operation
 	m.err = nil
 	m.errorMessage = ""
 	m.warning = ""
+	m.frame = 0
+	if operation == OperationOpen {
+		m.search.Blur()
+	}
 	m.resizeChildren()
-	m.list.StopSpinner()
-	_ = m.list.SetItems(nil)
 }
 
 // Ordered normalises a conversation list for display: entries without the
@@ -155,6 +165,7 @@ func (m *Model) SetConversations(summaries []assistant.ConversationSummary) tea.
 		items[i] = conversationItem{summary: ordered[i], now: m.now}
 	}
 	m.err = nil
+	m.search.Focus()
 	if len(items) == 0 {
 		m.state = StateEmpty
 	} else {
@@ -331,6 +342,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if key, ok := msg.(tea.KeyPressMsg); ok {
+		if m.operation == OperationOpen && m.state != StateReady && key.String() != "esc" && key.String() != "enter" {
+			return m, nil
+		}
 		switch key.String() {
 		case "esc":
 			if m.state == StateReady && m.search.Value() != "" {
@@ -411,14 +425,25 @@ func (m Model) View() string {
 		CompactMessage: m.compactMessage(),
 		TinyMessage:    "Resize terminal to resume",
 	}
-	if m.state == StateReady && len(m.list.VisibleItems()) > 0 {
+	if m.state == StateLoading {
+		content.CompactMessage = m.loadingLabel()
+	}
+	switch {
+	case m.state == StateLoading && len(m.list.Items()) > 0:
+		content.FooterLeft = m.loadingLabel()
+	case m.state == StateError && len(m.list.Items()) > 0:
+		content.FooterRight = "enter retry"
+		bodyWidth, _ := m.panel.BodySize(m.width, m.height, true)
+		message := ansi.Truncate(m.compactMessage(), max(1, bodyWidth-len(content.FooterRight)-1), "…")
+		content.FooterLeft = m.theme.Feedback.Error.Render(message)
+	case m.state == StateReady && len(m.list.VisibleItems()) > 0:
 		content.FooterLeft = m.overflowHint()
 	}
 	return m.panel.View(m.width, m.height, content)
 }
 
 func (m Model) title() string {
-	if m.state != StateReady {
+	if len(m.list.Items()) == 0 {
 		return "Resume a session"
 	}
 	total := len(m.list.VisibleItems())
@@ -442,35 +467,47 @@ func (m Model) compactMessage() string {
 		if m.errorMessage != "" {
 			return m.errorMessage
 		}
+		if m.operation == OperationOpen {
+			return "Could not open conversation."
+		}
 		return "Could not load conversations."
 	default:
 		return "Resize terminal to choose a conversation"
 	}
 }
 
+// loadingLabel shares the compact layout's copy and the theme's activity glyph.
+func (m Model) loadingLabel() string {
+	glyph := m.theme.Chat.StatusSpinner.Frame(m.frame)
+	if glyph == "" {
+		glyph = "·"
+	}
+	return m.theme.Feedback.Progress.Render(glyph + " " + m.compactMessage())
+}
+
 func (m Model) panelBody(width, height int) string {
 	m.resizeBody(width, height)
-	search := m.searchView(width)
+	// Opening keeps the exact list, query, and selection in place. Only the
+	// footer changes; a failed open can retry without reconstructing the list.
+	if m.operation == OperationOpen && len(m.list.Items()) > 0 {
+		return m.searchView(width) + "\n\n" + m.conversationListView(width)
+	}
 	var body string
 	switch m.state {
 	case StateLoading:
+		detail := "Fetching your recent sessions"
 		if m.operation == OperationOpen {
-			body = m.theme.Feedback.Progress.Render("Loading conversation…")
-		} else {
-			body = m.theme.Feedback.Progress.Render("Loading conversations…")
+			detail = "Restoring your conversation"
 		}
+		body = m.loadingLabel() + "\n" + m.theme.Text.Tertiary.Render(detail)
+		if m.operation == OperationOpen {
+			return lipgloss.Place(width, min(5, max(2, height)), lipgloss.Center, lipgloss.Center, body)
+		}
+		return m.searchView(width) + "\n\n" + lipgloss.Place(width, min(3, max(2, height-2)), lipgloss.Center, lipgloss.Center, body)
 	case StateEmpty:
 		body = joinWarning(m.theme.Text.Secondary.Render("No conversations found."), m.warning)
 	case StateError:
-		message := m.errorMessage
-		if message == "" {
-			if m.operation == OperationOpen {
-				message = "Could not open conversation."
-			} else {
-				message = "Could not load conversations."
-			}
-		}
-		body = m.theme.Feedback.Error.Render(message) + "\n\n" + m.theme.Text.Secondary.Render("enter retry")
+		body = m.theme.Feedback.Error.Render(m.compactMessage()) + "\n\n" + m.theme.Text.Secondary.Render("enter retry")
 	case StateReady:
 		body = m.conversationListView(width)
 		if len(m.list.VisibleItems()) == 0 && m.search.Value() != "" {
@@ -482,7 +519,7 @@ func (m Model) panelBody(width, height int) string {
 	default:
 		body = ""
 	}
-	return search + "\n\n" + body
+	return m.searchView(width) + "\n\n" + body
 }
 
 func (m Model) searchView(width int) string {

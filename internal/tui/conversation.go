@@ -223,6 +223,12 @@ func conversationErrorNotice(operation string, err error) chat.Notice {
 func (m *Model) resumeSelectedConversation(conversationID string) tea.Cmd {
 	m.clearNotice()
 	picker := conversationview.New(m.width, m.height, m.styles)
+	for _, summary := range m.resume.conversations {
+		if summary.ConversationID == conversationID {
+			picker.SetConversations([]assistant.ConversationSummary{summary})
+			break
+		}
+	}
 	m.picker = &picker
 	m.setMode(ModeConversations)
 	return m.startConversationSwitch(conversationID)

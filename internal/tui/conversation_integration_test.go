@@ -121,7 +121,16 @@ func runResumeCmd(t *testing.T, cmd tea.Cmd) tea.Msg {
 		t.Fatal("expected command")
 	}
 	result := make(chan tea.Msg, 1)
-	go func() { result <- cmd() }()
+	go func() {
+		for _, msg := range flattenMsgs(t, cmd) {
+			switch msg.(type) {
+			case conversationListResultMsg, conversationSwitchResultMsg:
+				result <- msg
+				return
+			}
+		}
+		result <- nil
+	}()
 	select {
 	case msg := <-result:
 		return msg

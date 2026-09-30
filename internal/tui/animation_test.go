@@ -60,8 +60,8 @@ func TestAnimationClockUsesThirtyFPSRepaintCadence(t *testing.T) {
 func TestAnimationRepaintCadenceFollowsActiveVisuals(t *testing.T) {
 	m := animModel(agent.ToolRunning)
 	m.syncAnimations()
-	if got := m.animationRepaintInterval(); got != toolAnimInterval {
-		t.Fatalf("tool-only repaint interval = %s, want %s", got, toolAnimInterval)
+	if got := m.animationRepaintInterval(); got != activityAnimInterval {
+		t.Fatalf("tool-only repaint interval = %s, want %s", got, activityAnimInterval)
 	}
 
 	m.chatPhase = chat.PhaseWaiting
@@ -79,8 +79,8 @@ func TestAnimationClockArmsOnceForBothAnimations(t *testing.T) {
 	if cmd := m.syncAnimationsAt(start); cmd == nil {
 		t.Fatal("first sync did not arm the shared clock")
 	}
-	if !m.animClock.armed || !m.animTool.active || !m.animBorderSweep.active {
-		t.Fatalf("armed=%v tool=%v sweep=%v, want all true", m.animClock.armed, m.animTool.active, m.animBorderSweep.active)
+	if !m.animClock.armed || !m.animActivity.active || !m.animBorderSweep.active {
+		t.Fatalf("armed=%v tool=%v sweep=%v, want all true", m.animClock.armed, m.animActivity.active, m.animBorderSweep.active)
 	}
 	if cmd := m.syncAnimationsAt(start); cmd != nil {
 		t.Fatal("second sync started a parallel clock chain")
@@ -100,8 +100,8 @@ func TestAnimationClockDerivesIndependentLogicalFrames(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("live clock tick did not re-arm")
 	}
-	if m.animTool.frame != 2 {
-		t.Errorf("tool frame = %d, want 2 at 100ms", m.animTool.frame)
+	if m.animActivity.frame != 2 {
+		t.Errorf("tool frame = %d, want 2 at 100ms", m.animActivity.frame)
 	}
 	if m.animBorderSweep.frame != 5 {
 		t.Errorf("sweep frame = %d, want 5 at 100ms", m.animBorderSweep.frame)
@@ -117,8 +117,8 @@ func TestStaleAnimationClockTickIsDropped(t *testing.T) {
 	if cmd := m.advanceAnimations(animationTickMsg{generation: live - 1, at: start.Add(time.Second)}); cmd != nil {
 		t.Fatal("stale tick re-armed its clock chain")
 	}
-	if m.animTool.frame != 0 {
-		t.Fatalf("stale tick advanced tool frame to %d", m.animTool.frame)
+	if m.animActivity.frame != 0 {
+		t.Fatalf("stale tick advanced tool frame to %d", m.animActivity.frame)
 	}
 }
 
@@ -133,11 +133,11 @@ func TestAnimationClockDisarmsAfterClosedTurnWithStaleTool(t *testing.T) {
 	if cmd := m.syncAnimationsAt(start.Add(time.Second)); cmd != nil {
 		t.Fatal("disarming unexpectedly returned a command")
 	}
-	if m.animClock.armed || m.animTool.active {
+	if m.animClock.armed || m.animActivity.active {
 		t.Fatal("closed turn left the animation clock armed")
 	}
-	if m.animTool.frame != 0 {
-		t.Fatalf("tool frame = %d after disarm, want 0", m.animTool.frame)
+	if m.animActivity.frame != 0 {
+		t.Fatalf("tool frame = %d after disarm, want 0", m.animActivity.frame)
 	}
 	if m.animClock.generation == staleGeneration {
 		t.Fatal("disarming did not invalidate the live tick chain")
@@ -155,7 +155,7 @@ func TestTurnClosedUpdateDisarmsDespiteStaleRunningBlock(t *testing.T) {
 	}
 
 	m.Update(turnClosedMsg{generation: m.op.gen})
-	if m.animClock.armed || m.animTool.active || m.animBorderSweep.active {
+	if m.animClock.armed || m.animActivity.active || m.animBorderSweep.active {
 		t.Fatal("turnClosedMsg left animations active")
 	}
 	if !m.list.HasAnimated() {
@@ -174,7 +174,7 @@ func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
 	m.syncAnimations()
 
 	m.Update(turnClosedMsg{generation: m.op.gen})
-	if m.animClock.armed || m.animTool.active || m.animBorderSweep.active {
+	if m.animClock.armed || m.animActivity.active || m.animBorderSweep.active {
 		t.Fatal("pending /new left animations active")
 	}
 	if m.list.HasAnimated() || len(m.transcript.Blocks) != 0 {
@@ -223,7 +223,7 @@ func TestConversationSwitchSettlesPersistedRunningBlockAndStaysDisarmed(t *testi
 	_, _ = m.Update(runResumeCmd(t, m.startConversationSwitch(resumeConversationID)))
 	m.Update(struct{}{})
 
-	if m.animClock.armed || m.animTool.active {
+	if m.animClock.armed || m.animActivity.active {
 		t.Fatal("persisted running block armed clock without a live turn")
 	}
 	if tool := findToolBlock(m.transcript.Blocks, "server_tool"); tool == nil || tool.Status != agent.ToolCancelled {
@@ -258,13 +258,13 @@ func TestAnimationClockStopsWhileChatIsHiddenAndRestarts(t *testing.T) {
 
 	m.setMode(ModeStatus)
 	m.Update(struct{}{})
-	if m.animClock.armed || m.animTool.active {
+	if m.animClock.armed || m.animActivity.active {
 		t.Fatal("hidden status view kept the animation clock running")
 	}
 
 	m.setMode(ModeChat)
 	m.Update(struct{}{})
-	if !m.animClock.armed || !m.animTool.active {
+	if !m.animClock.armed || !m.animActivity.active {
 		t.Fatal("returning to chat did not restart tool animation")
 	}
 }
@@ -289,7 +289,7 @@ func TestColorProfileDoesNotDisableToolMotion(t *testing.T) {
 		t.Run(profile.String(), func(t *testing.T) {
 			m := animModel(agent.ToolRunning)
 			m.Update(tea.ColorProfileMsg{Profile: profile})
-			if !m.animTool.active {
+			if !m.animActivity.active {
 				t.Fatal("color profile disabled compact tool motion")
 			}
 		})
@@ -304,5 +304,27 @@ func TestAnimationFrameReachesTheList(t *testing.T) {
 	m.advanceAnimations(animationTickMsg{generation: m.animClock.generation, at: start.Add(250 * time.Millisecond)})
 	if m.list.Render() == first {
 		t.Fatal("advancing the logical tool frame did not change the transcript")
+	}
+}
+
+func TestPickerLoadingUsesSharedClockAndStopsOnClose(t *testing.T) {
+	m := New(agent.New(newResumeBackend(), assistant.SendOptions{}))
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.openConversationPicker()
+	if cmd := m.syncAnimations(); cmd == nil || !m.animClock.armed || m.animBorderSweep.active {
+		t.Fatal("picker did not start just the shared activity clock")
+	}
+	generation := m.animClock.generation
+	m.advanceAnimations(animationTickMsg{generation: generation, at: time.Now().Add(time.Second)})
+	m.closeConversationPicker()
+	m.syncAnimations()
+	if m.animClock.armed || m.advanceAnimations(animationTickMsg{generation: generation, at: time.Now()}) != nil {
+		t.Fatal("closed picker kept its clock alive")
+	}
+	m.applyStyles(m.styles.WithoutMotion())
+	m.openConversationPicker()
+	t.Cleanup(func() { m.closeConversationPicker() })
+	if cmd := m.syncAnimations(); cmd != nil || m.animClock.armed {
+		t.Fatal("reduced-motion picker started an animation")
 	}
 }

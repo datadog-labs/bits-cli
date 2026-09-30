@@ -49,10 +49,27 @@ func TestPickerDistinguishesHistoryLoadingAndSanitizesErrors(t *testing.T) {
 	if view := m.View(); !strings.Contains(view, "Loading conversation…") || strings.Contains(view, "Loading conversations…") {
 		t.Fatalf("history loading view = %q", view)
 	}
+	m.SetSize(80, 24)
+	m.SetConversations([]assistant.ConversationSummary{
+		{ConversationID: "one", Title: "Alpha"},
+		{ConversationID: "two", Title: "Alpine"},
+	})
+	m, _ = m.Update(pickerKey('a', "a"))
+	m, _ = m.Update(pickerKey(tea.KeyDown, ""))
+	before := strings.Index(ansi.Strip(m.View()), "Alpine")
+	m.SetLoading(OperationOpen)
+	m, _ = m.Update(pickerKey('x', "x"))
+	m, _ = m.Update(pickerKey(tea.KeyUp, ""))
+	if m.Query() != "a" || m.list.Index() != 1 || strings.Index(ansi.Strip(m.View()), "Alpine") != before {
+		t.Fatalf("opening changed the query, selection, or layout: %q", m.View())
+	}
 	raw := errors.New("\x1b[31mraw\a backend detail")
 	m.SetError("Could not open conversation: \x1b[31mraw\x1b[0m\nbackend detail", raw)
 	if strings.ContainsAny(m.errorMessage, "\x1b\a\n") || m.errorMessage != "Could not open conversation: raw backend detail" {
 		t.Fatalf("sanitized error view = %q", m.View())
+	}
+	if view := m.View(); !strings.Contains(view, "Alpine") || !strings.Contains(view, "enter retry") {
+		t.Fatalf("failed open lost its selection or retry: %q", view)
 	}
 	if m.err != raw {
 		t.Fatal("original error was not retained for diagnostics")

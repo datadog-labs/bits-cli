@@ -238,11 +238,11 @@ type Model struct {
 	chatStyles chat.Styles
 	styles     styles.Theme // terminal styles; dark until detected
 
-	// One repaint clock samples independent elapsed-time timelines. Tool activity
-	// covers tool, thinking, and grouped-inspection spinners; the second timeline
-	// drives the composer border sweep.
+	// One repaint clock samples independent elapsed-time timelines. Activity
+	// covers chat spinners and picker loading; the second timeline drives the
+	// composer border sweep.
 	animClock       animationClock
-	animTool        animationTimeline
+	animActivity    animationTimeline
 	animBorderSweep animationTimeline
 
 	// frame is the chat geometry derived at the end of the last Update.
@@ -337,7 +337,7 @@ func newShell() *Model {
 	m := &Model{
 		editor:            editor.New(),
 		list:              chat.NewList(),
-		animTool:          newAnimationTimeline(toolAnimInterval),
+		animActivity:      newAnimationTimeline(activityAnimInterval),
 		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
 		status:            statusview.New(1, 1, theme),
 		approvalPanel:     components.NewPanel(theme.Approval.Panel),
