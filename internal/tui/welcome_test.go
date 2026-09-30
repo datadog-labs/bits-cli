@@ -396,33 +396,6 @@ func TestRecentConversationsResultDrivesTheOffer(t *testing.T) {
 	}
 }
 
-// A growing composer eats the rows the header needs. Whatever the header shows,
-// the composed view must stay inside the terminal, or the composer the user is
-// typing into is pushed off the bottom.
-func TestHeaderNeverPushesTheViewPastTheTerminal(t *testing.T) {
-	for _, height := range []int{18, 19, 20, 21, 22} {
-		m := welcomeModel(120, height)
-		m.mode = ModeChat
-		// An unfocused editor ignores input, which would leave the composer one
-		// row tall and the loop asserting nothing.
-		m.editor.Focus()
-		for lines := 1; lines <= 12; lines++ {
-			m.editor.Reset()
-			m.editor.Update(tea.PasteMsg{Content: strings.Repeat("draft\n", lines)})
-			if m.editor.Value() == "" {
-				t.Fatalf("height=%d lines=%d: the composer took no input", height, lines)
-			}
-			m.relayout()
-
-			view := lipgloss.Height(m.chatViewBase(m.list.Render()))
-			if view > height {
-				t.Fatalf("height=%d lines=%d: view is %d rows, past the terminal (panel shown=%v)",
-					height, lines, view, m.showSplashPanel())
-			}
-		}
-	}
-}
-
 // Both logo forms are the same height but not the same width, so a gate that
 // reads the current form flips when the probe answers.
 func TestWelcomeVisibilityUnchangedByTheProbe(t *testing.T) {

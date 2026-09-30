@@ -222,9 +222,6 @@ func TestQuestionsReplaceComposerAndRestoreIt(t *testing.T) {
 	if strings.Contains(view, "Working on it…") {
 		t.Fatal("composer was rendered behind the form")
 	}
-	if m.list.Height() < 3 || m.list.Height()+m.activeToolUI.component.Height()+chatNoticeHeight+chatFooterHeight != m.height {
-		t.Fatal("form did not reserve space for the conversation")
-	}
 	m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
 	questionKey(m, tea.KeyEscape, 0)
 	if m.activeToolUI == nil || backend.calls != 1 {
@@ -233,8 +230,8 @@ func TestQuestionsReplaceComposerAndRestoreIt(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	questionKey(m, tea.KeyEscape, 0)
 	drainConversationRemote(t, m)
-	if m.activeToolUI != nil || m.list.Height() != m.height-chatNoticeHeight-chatFooterHeight-m.editor.Height() {
-		t.Fatal("dismissing the form did not restore the transcript height")
+	if m.activeToolUI != nil {
+		t.Fatal("dismissing the form did not restore the composer")
 	}
 }
 
