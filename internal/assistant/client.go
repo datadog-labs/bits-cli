@@ -440,9 +440,6 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 		MessageHistory:            opts.MessageHistory,
 		ExperimentalToolOverrides: opts.ExperimentalToolOverrides,
 	}
-	if opts.StreamToolCallInput {
-		attrs.Capabilities = &RequestCapabilities{StreamToolCallInput: true}
-	}
 	reqBody := Request{Data: RequestData{
 		Type:       "assistant-request",
 		ID:         "assistant-request",

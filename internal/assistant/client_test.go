@@ -281,6 +281,51 @@ func TestSend_IncludesModelAndInferenceMode(t *testing.T) {
 	}
 }
 
+func TestSend_PerToolInputStreaming(t *testing.T) {
+	tools := []ClientTool{
+		{Name: "preview", StreamInput: true},
+		{Name: "ordinary"},
+		{Name: "disabled", StreamInput: false},
+	}
+	requests := 0
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Data struct {
+				Attributes map[string]json.RawMessage `json:"attributes"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		requests++
+		attrs := req.Data.Attributes
+		if _, exists := attrs["capabilities"]; exists {
+			t.Error("request includes removed capabilities field")
+		}
+		var definitions []struct {
+			Name        string `json:"name"`
+			StreamInput bool   `json:"stream_input"`
+		}
+		if err := json.Unmarshal(attrs["client_tools"], &definitions); err != nil {
+			t.Error(err)
+			return
+		}
+		if len(definitions) != 3 || !definitions[0].StreamInput || definitions[1].StreamInput || definitions[2].StreamInput {
+			t.Errorf("per-tool streaming flags = %+v", definitions)
+		}
+		writeStream(t, w, textLine("conv-1", "ok"))
+	})
+	for _, message := range []any{"go", []ClientToolResponse{{Status: ToolStatusSuccess}}} {
+		if _, err := c.Send(context.Background(), message, SendOptions{ConversationID: "conv-1", ClientTools: tools}, func(AssistantResponse) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
 func TestSend_DefaultsToCLIProfile(t *testing.T) {
 	var gotProfile, gotSurface string
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {

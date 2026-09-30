@@ -501,7 +501,6 @@ func (e *Engine) run(
 		opts.ConversationID = convID
 		opts.ClientTools = defs
 		opts.Context = in.Context
-		opts.StreamToolCallInput = opts.StreamToolCallInput || tools.NeedsStreamedInput()
 
 		calls := resumed
 		resumed = nil

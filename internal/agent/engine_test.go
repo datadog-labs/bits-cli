@@ -317,13 +317,21 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 			handlerSawReducer = reducerCalls == 4
 			return ToolResult{Output: "ok"}, nil
 		},
+	}, Tool{
+		Definition: assistant.ClientTool{Name: "ordinary"},
+		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	events := drain(New(backend, assistant.SendOptions{}).StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
-	if len(backend.opts) == 0 || !backend.opts[0].StreamToolCallInput {
-		t.Fatalf("stream capability not requested: %+v", backend.opts)
+	if len(backend.opts) != 2 {
+		t.Fatalf("backend requests = %d, want initial and continuation", len(backend.opts))
+	}
+	for _, opts := range backend.opts {
+		if len(opts.ClientTools) != 2 || !opts.ClientTools[0].StreamInput || opts.ClientTools[1].StreamInput {
+			t.Fatalf("per-tool streaming flags = %+v", opts.ClientTools)
+		}
 	}
 	if reducerCalls != 4 {
 		t.Fatalf("reducer calls = %d, want 4", reducerCalls)
@@ -365,24 +373,24 @@ func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
 	if reducerCalls != 0 {
 		t.Fatalf("server-side tool triggered %d reductions", reducerCalls)
 	}
-	if len(backend.opts) == 0 || !backend.opts[0].StreamToolCallInput {
-		t.Fatalf("stream capability not requested for reducer-backed tool: %+v", backend.opts)
+	if len(backend.opts) == 0 || !backend.opts[0].ClientTools[0].StreamInput {
+		t.Fatalf("per-tool streaming not requested for reducer-backed tool: %+v", backend.opts)
 	}
 }
 
-func TestEnginePreservesPreconfiguredStreamToolCallInput(t *testing.T) {
+func TestEnginePreservesPerToolInputStreaming(t *testing.T) {
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
 	tools, err := NewToolSet(ModeSkipPermissions, Tool{
-		Definition: assistant.ClientTool{Name: "ordinary"},
+		Definition: assistant.ClientTool{Name: "ordinary", StreamInput: true},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := New(backend, assistant.SendOptions{StreamToolCallInput: true})
+	e := New(backend, assistant.SendOptions{})
 	_ = drain(e.StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
-	if len(backend.opts) == 0 || !backend.opts[0].StreamToolCallInput {
-		t.Fatalf("caller-provided stream capability was disabled: %+v", backend.opts)
+	if len(backend.opts) == 0 || !backend.opts[0].ClientTools[0].StreamInput {
+		t.Fatalf("caller-provided per-tool streaming was disabled: %+v", backend.opts)
 	}
 }
 
