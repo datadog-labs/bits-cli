@@ -615,10 +615,10 @@ func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
 	case tea.BackgroundColorMsg:
 		m.setDarkBackground(msg.IsDark())
 	case loginui.CompletedMsg:
-		if m.startupPending || m.startupCanceled || m.startupStopping {
+		// A running factory owns startupCancel.
+		if m.startupCancel != nil || m.startupStopping {
 			return nil
 		}
-		m.startupPending = true
 		m.startupGeneration++
 		generation := m.startupGeneration
 		factory := m.engineFactory
@@ -632,10 +632,10 @@ func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
 			return engineReadyMsg{generation: generation, engine: engine, err: err}
 		}
 	case engineReadyMsg:
-		if msg.generation != m.startupGeneration || m.startupCanceled || m.startupStopping {
+		// stopStartup advances the generation, so a stopped factory's result drops.
+		if msg.generation != m.startupGeneration {
 			return nil
 		}
-		m.startupPending = false
 		if m.startupCancel != nil {
 			m.startupCancel()
 			m.startupCancel = nil
@@ -676,7 +676,6 @@ func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
 		m.stopStartup()
 	}
 	if m.loginModel.Canceled() {
-		m.startupCanceled = true
 		m.stopStartup()
 	}
 	return cmd
@@ -688,7 +687,6 @@ func (m *Model) stopStartup() {
 	}
 	m.startupStopping = true
 	m.startupGeneration++
-	m.startupPending = false
 	if m.startupCancel != nil {
 		m.startupCancel()
 		m.startupCancel = nil

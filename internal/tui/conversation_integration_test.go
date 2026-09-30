@@ -235,8 +235,8 @@ func TestCancelPendingResumeWaitsForEngineDrainBeforeReturningToChat(t *testing.
 	if cmd := m.closeConversationPicker(); cmd != nil {
 		t.Fatal("pending close focused chat before the engine drained")
 	}
-	if m.mode != ModeConversations || m.picker == nil || m.picker.State() != conversationview.StateClosing || !m.conversationClosing {
-		t.Fatalf("pending close state: mode=%v picker=%v state=%v closing=%v", m.mode, m.picker != nil, m.picker.State(), m.conversationClosing)
+	if m.mode != ModeConversations || !m.pickerClosing() {
+		t.Fatalf("pending close state: mode=%v picker=%v", m.mode, m.picker != nil)
 	}
 	if m.editor.Value() != "draft survives" {
 		t.Fatalf("pending close changed draft: %q", m.editor.Value())
@@ -244,8 +244,8 @@ func TestCancelPendingResumeWaitsForEngineDrainBeforeReturningToChat(t *testing.
 
 	msg := runResumeCmd(t, wait)
 	_, _ = m.Update(msg)
-	if m.mode != ModeChat || m.picker != nil || m.conversationClosing || engine.OperationActive() {
-		t.Fatalf("drained close state: mode=%v picker=%v closing=%v active=%v", m.mode, m.picker != nil, m.conversationClosing, engine.OperationActive())
+	if m.mode != ModeChat || m.picker != nil || engine.OperationActive() {
+		t.Fatalf("drained close state: mode=%v picker=%v active=%v", m.mode, m.picker != nil, engine.OperationActive())
 	}
 	if m.editor.Value() != "draft survives" {
 		t.Fatalf("drained close lost draft: %q", m.editor.Value())

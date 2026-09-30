@@ -144,11 +144,9 @@ type Model struct {
 	startupCtx        context.Context
 	startupCancel     context.CancelFunc
 	startupGeneration uint64
-	startupCanceled   bool
 	startupStopping   bool
 	loginModel        *loginui.Model
 	engineFactory     EngineFactory
-	startupPending    bool
 	startupErr        error
 
 	// transcript is the latest snapshot of the engine's aggregated transcript.
@@ -184,7 +182,6 @@ type Model struct {
 	conversationCancel     context.CancelFunc
 	conversationRetry      conversationRetry
 	conversationSwitchID   string
-	conversationClosing    bool
 
 	// Turn status, surfaced in the status line.
 	chatPhase chat.Phase
@@ -194,7 +191,6 @@ type Model struct {
 	// it with connecting/connected when building the status snapshot.
 	connectivity          statusview.Connectivity
 	authStateOverride     string
-	authFailureObserved   bool
 	authFailureGeneration uint64
 
 	// notice is the transient status message (error/warn/info) shown in the
@@ -335,7 +331,8 @@ func (m *Model) LoggedOut() bool { return m.loggedOut }
 // StartupError reports why login could not transition into chat. Cancellation
 // remains distinguishable from post-login client construction failures.
 func (m *Model) StartupError() error {
-	if m.startupCanceled || (m.mode == ModeLogin && m.loginModel != nil && m.loginModel.Canceled()) {
+	// The login model is kept until the handoff to chat, which a cancel prevents.
+	if m.loginModel != nil && m.loginModel.Canceled() {
 		return loginui.ErrCanceled
 	}
 	if m.startupErr != nil {

@@ -253,9 +253,16 @@ func (m *Model) observeEvent(event agent.Event) {
 	}
 }
 
+// Observed authentication outcomes override the backend's configured state.
+const (
+	authStateAuthenticated = "authenticated"
+	authStateFailed        = "authentication failed"
+)
+
 func (m *Model) markConnected() {
 	m.connectivity = statusview.ConnectivityConnected
-	if m.authFailureObserved && m.op.gen <= m.authFailureGeneration {
+	// A failure outlives successes from the operation that observed it.
+	if m.authStateOverride == authStateFailed && m.op.gen <= m.authFailureGeneration {
 		return
 	}
 	if m.engine == nil {
@@ -268,12 +275,10 @@ func (m *Model) markConnected() {
 }
 
 func (m *Model) markAuthenticationFailed() {
-	m.authStateOverride = "authentication failed"
-	m.authFailureObserved = true
+	m.authStateOverride = authStateFailed
 	m.authFailureGeneration = m.op.gen
 }
 
 func (m *Model) markAuthenticated() {
-	m.authStateOverride = "authenticated"
-	m.authFailureObserved = false
+	m.authStateOverride = authStateAuthenticated
 }

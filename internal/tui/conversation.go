@@ -94,7 +94,6 @@ func waitConversationSwitch(generation uint64, results <-chan agent.Conversation
 
 func (m *Model) openConversationPicker() tea.Cmd {
 	m.clearNotice()
-	m.conversationClosing = false
 	picker := conversationview.New(m.width, m.height, m.styles)
 	m.picker = &picker
 	m.setMode(ModeConversations)
@@ -119,11 +118,12 @@ func (m *Model) applyConversationListResult(msg conversationListResultMsg) tea.C
 	if msg.generation != m.conversationGeneration {
 		return nil
 	}
-	if m.conversationClosing {
+	if m.pickerClosing() {
 		m.finishConversationOperation()
-		return m.finishClosingConversationPicker()
+		m.dropConversationPicker()
+		return nil
 	}
-	if m.picker == nil || m.mode != ModeConversations {
+	if m.picker == nil {
 		return nil
 	}
 	m.finishConversationOperation()
@@ -142,7 +142,7 @@ func (m *Model) applyConversationListResult(msg conversationListResultMsg) tea.C
 }
 
 func (m *Model) selectConversation(summary assistant.ConversationSummary) tea.Cmd {
-	if m.picker == nil || m.mode != ModeConversations || m.conversationClosing || m.picker.State() != conversationview.StateReady {
+	if m.picker == nil || m.picker.State() != conversationview.StateReady {
 		return nil
 	}
 	return m.startConversationSwitch(strings.TrimSpace(summary.ConversationID))
@@ -167,12 +167,13 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 		_ = msg.result.Discard()
 		return nil
 	}
-	if m.conversationClosing {
+	if m.pickerClosing() {
 		_ = msg.result.Discard()
 		m.finishConversationOperation()
-		return m.finishClosingConversationPicker()
+		m.dropConversationPicker()
+		return nil
 	}
-	if m.picker == nil || m.mode != ModeConversations {
+	if m.picker == nil {
 		_ = msg.result.Discard()
 		return nil
 	}
@@ -211,16 +212,12 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	m.syncTranscript()
 	m.list.ScrollToBottom()
 	m.clearNotice()
-	m.conversationRetry = retryNone
-	m.conversationSwitchID = ""
-	m.conversationClosing = false
-	m.picker = nil
-	m.setMode(ModeChat)
+	m.dropConversationPicker()
 	return m.resumePendingTools() // Update reconciles focus and animations after the mode change.
 }
 
 func (m *Model) retryConversationOperation() tea.Cmd {
-	if m.picker == nil || m.mode != ModeConversations || m.conversationClosing || m.picker.State() != conversationview.StateError {
+	if m.picker == nil || m.picker.State() != conversationview.StateError {
 		return nil
 	}
 	switch m.conversationRetry {
@@ -233,29 +230,32 @@ func (m *Model) retryConversationOperation() tea.Cmd {
 	}
 }
 
+// closeConversationPicker closes at once when idle. With a request in flight,
+// the picker shows closing until that request's result drains.
 func (m *Model) closeConversationPicker() tea.Cmd {
-	if m.mode != ModeConversations {
-		return nil
-	}
-	if m.conversationClosing {
+	if m.picker == nil || m.pickerClosing() {
 		return nil
 	}
 	if m.conversationCancel != nil {
-		m.conversationClosing = true
 		m.picker.SetClosing()
 		m.conversationCancel()
 		return nil
 	}
-	return m.finishClosingConversationPicker()
+	m.dropConversationPicker()
+	return nil // Update reconciles editor focus after the mode change.
 }
 
-func (m *Model) finishClosingConversationPicker() tea.Cmd {
+func (m *Model) pickerClosing() bool {
+	return m.picker != nil && m.picker.State() == conversationview.StateClosing
+}
+
+// dropConversationPicker returns to chat. The picker is non-nil exactly while
+// the mode is ModeConversations.
+func (m *Model) dropConversationPicker() {
 	m.picker = nil
-	m.conversationClosing = false
 	m.conversationRetry = retryNone
 	m.conversationSwitchID = ""
 	m.setMode(ModeChat)
-	return nil // Update reconciles editor focus after the mode change.
 }
 
 // abandonConversationPicker is the process-exit path. Unlike ordinary Escape,
@@ -264,11 +264,7 @@ func (m *Model) finishClosingConversationPicker() tea.Cmd {
 // stale-result handling.
 func (m *Model) abandonConversationPicker() {
 	m.invalidateConversationOperation()
-	m.picker = nil
-	m.conversationClosing = false
-	m.conversationRetry = retryNone
-	m.conversationSwitchID = ""
-	m.setMode(ModeChat)
+	m.dropConversationPicker()
 }
 
 func (m *Model) updateConversationPicker(msg tea.Msg) tea.Cmd {
@@ -304,7 +300,6 @@ func conversationErrorNotice(operation string, err error) chat.Notice {
 // loading, error and retry paths apply unchanged.
 func (m *Model) resumeSelectedConversation(conversationID string) tea.Cmd {
 	m.clearNotice()
-	m.conversationClosing = false
 	picker := conversationview.New(m.width, m.height, m.styles)
 	m.picker = &picker
 	m.setMode(ModeConversations)
