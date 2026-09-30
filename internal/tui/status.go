@@ -32,17 +32,7 @@ type statusClosedMsg struct{ generation uint64 }
 // identity state asynchronously. Active engine events continue through the
 // root Update loop while the surface is open.
 func (m *Model) openStatus() tea.Cmd {
-	if m.status == nil {
-		status := statusview.New(m.width, m.height, m.styles)
-		m.status = &status
-	}
-	m.statusGeneration++
-	generation := m.statusGeneration
-	if m.statusCancel != nil {
-		m.statusCancel()
-	}
-	statusContext, cancel := context.WithCancel(context.Background())
-	m.statusCancel = cancel
+	statusContext, generation := m.statusTask.start(context.Background(), 0)
 	m.statusIdentity = "collecting…"
 	m.status.SetSize(m.width, m.height)
 	m.status.Open(m.statusRuntime())
@@ -70,23 +60,21 @@ func (m *Model) openStatus() tea.Cmd {
 }
 
 func (m *Model) closeStatus() {
-	m.statusGeneration++
-	if m.statusCancel != nil {
-		m.statusCancel()
-		m.statusCancel = nil
-	}
+	m.statusTask.stop()
 	m.setMode(ModeChat)
 }
 
+// Status results carry the generation openStatus stamped; closeStatus
+// advances it, so results for a closed screen drop.
 func (m *Model) applyStatusWorkspace(message statusWorkspaceMsg) {
-	if m.mode != ModeStatus || message.generation != m.statusGeneration || m.status == nil {
+	if message.generation != m.statusTask.gen {
 		return
 	}
 	m.status.SetWorkspace(message.snapshot)
 }
 
 func (m *Model) applyStatusIdentity(message statusIdentityMsg) {
-	if m.mode != ModeStatus || message.generation != m.statusGeneration || m.status == nil {
+	if message.generation != m.statusTask.gen {
 		return
 	}
 	switch {
@@ -106,12 +94,9 @@ func (m *Model) applyStatusIdentity(message statusIdentityMsg) {
 }
 
 func (m *Model) updateStatus(message tea.Msg) tea.Cmd {
-	if m.status == nil {
-		return nil
-	}
-	generation := m.statusGeneration
+	generation := m.statusTask.gen
 	next, command := m.status.Update(message)
-	*m.status = next
+	m.status = next
 	if command == nil {
 		return nil
 	}
@@ -125,7 +110,7 @@ func (m *Model) updateStatus(message tea.Msg) tea.Cmd {
 }
 
 func (m *Model) syncStatus() {
-	if m.mode == ModeStatus && m.status != nil {
+	if m.mode == ModeStatus {
 		m.status.SetRuntime(m.statusRuntime())
 	}
 }
@@ -253,9 +238,16 @@ func (m *Model) observeEvent(event agent.Event) {
 	}
 }
 
+// Observed authentication outcomes override the backend's configured state.
+const (
+	authStateAuthenticated = "authenticated"
+	authStateFailed        = "authentication failed"
+)
+
 func (m *Model) markConnected() {
 	m.connectivity = statusview.ConnectivityConnected
-	if m.authFailureObserved && m.turnGen <= m.authFailureGeneration {
+	// A failure outlives successes from the operation that observed it.
+	if m.authStateOverride == authStateFailed && m.op.gen <= m.authFailureGeneration {
 		return
 	}
 	if m.engine == nil {
@@ -268,12 +260,10 @@ func (m *Model) markConnected() {
 }
 
 func (m *Model) markAuthenticationFailed() {
-	m.authStateOverride = "authentication failed"
-	m.authFailureObserved = true
-	m.authFailureGeneration = m.turnGen
+	m.authStateOverride = authStateFailed
+	m.authFailureGeneration = m.op.gen
 }
 
 func (m *Model) markAuthenticated() {
-	m.authStateOverride = "authenticated"
-	m.authFailureObserved = false
+	m.authStateOverride = authStateAuthenticated
 }

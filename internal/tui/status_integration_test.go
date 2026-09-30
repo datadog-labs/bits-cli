@@ -110,8 +110,8 @@ func TestSubmitStatusIsLocalAndLoadsFreshWorkspace(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
 	m.editor.Update(tea.PasteMsg{Content: "/status"})
 	_, command := m.submit()
-	if command == nil || m.mode != ModeStatus || m.status == nil {
-		t.Fatalf("status open state: command=%v mode=%v model=%v", command != nil, m.mode, m.status != nil)
+	if command == nil || m.mode != ModeStatus {
+		t.Fatalf("status open state: command=%v mode=%v", command != nil, m.mode)
 	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "User / org") || !strings.Contains(view, "collecting…") {
 		t.Fatalf("status did not show pending identity state:\n%s", view)
@@ -157,15 +157,13 @@ func TestStatusDuringActiveTurnPreservesTurnAndTracksObservedState(t *testing.T)
 	turn := make(chan agent.Event)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m.turnEvents = turn
-	m.turnGen = 7
-	m.cancelTurn = cancel
+	m.op = operation{kind: opTurn, gen: 7, events: turn, cancel: cancel}
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "draft survives"})
 
 	_, load := m.dispatchCommand("status", "")
-	if load == nil || m.mode != ModeStatus || m.turnEvents != turn || ctx.Err() != nil {
-		t.Fatalf("opening status changed active turn: load=%v mode=%v turn=%v cancelled=%v", load != nil, m.mode, m.turnEvents == turn, ctx.Err() != nil)
+	if load == nil || m.mode != ModeStatus || m.op.events != turn || ctx.Err() != nil {
+		t.Fatalf("opening status changed active turn: load=%v mode=%v turn=%v cancelled=%v", load != nil, m.mode, m.op.events == turn, ctx.Err() != nil)
 	}
 	runStatusLoad(t, m, load)
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "streaming") || !strings.Contains(view, "connected") {
@@ -191,8 +189,8 @@ func TestStatusDuringActiveTurnPreservesTurnAndTracksObservedState(t *testing.T)
 		t.Fatal("status escape returned no close command")
 	}
 	_, _ = m.Update(closeCommand())
-	if m.mode != ModeChat || m.editor.Value() != "draft survives" || m.turnEvents != turn || ctx.Err() != nil {
-		t.Fatalf("closing status changed chat: mode=%v draft=%q turn=%v cancelled=%v", m.mode, m.editor.Value(), m.turnEvents == turn, ctx.Err() != nil)
+	if m.mode != ModeChat || m.editor.Value() != "draft survives" || m.op.events != turn || ctx.Err() != nil {
+		t.Fatalf("closing status changed chat: mode=%v draft=%q turn=%v cancelled=%v", m.mode, m.editor.Value(), m.op.events == turn, ctx.Err() != nil)
 	}
 }
 
@@ -269,8 +267,7 @@ func TestActiveTurnEventCannotClearNewerIdentityAuthenticationFailure(t *testing
 	}
 	m := newStatusModelWithBackend(t, backend)
 	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
-	m.turnGen = 7
-	m.turnEvents = make(chan agent.Event)
+	m.op = operation{kind: opTurn, gen: 7, events: make(chan agent.Event)}
 	m.chatPhase = chat.PhaseStreaming
 
 	_, command := m.dispatchCommand("status", "")
@@ -280,7 +277,7 @@ func TestActiveTurnEventCannotClearNewerIdentityAuthenticationFailure(t *testing
 		t.Fatalf("same-turn event changed authentication state to %q", got)
 	}
 
-	m.turnGen = 8
+	m.op.gen = 8
 	_, _ = m.Update(turnEventMsg{generation: 8, ev: agent.Event{Kind: agent.EventUsage}})
 	if got := m.statusRuntime().AuthenticationState; got != "authenticated" {
 		t.Fatalf("newer-turn success left authentication state at %q", got)
@@ -416,7 +413,7 @@ func TestCtrlCCancelsStatusCollectionAndQuits(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("ctrl+c did not cancel status collection")
 	}
-	if m.statusCancel != nil {
+	if m.statusTask.running() {
 		t.Fatal("ctrl+c retained status cancellation handle")
 	}
 }

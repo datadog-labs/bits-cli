@@ -243,18 +243,12 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.focus() == focusPicker {
 		m.abandonConversationPicker()
 	}
-	if m.statusCancel != nil {
-		m.statusCancel()
-		m.statusCancel = nil
-	}
-	if m.cancelTurn != nil {
-		m.cancelTurn()
+	m.statusTask.stop()
+	if m.op.cancel != nil {
+		m.op.cancel()
 	}
 	m.stopEntitySearch()
 	closeFileSearch := m.stopFileSearch()
-	if m.logoutCancel != nil {
-		m.logoutCancel()
-	}
 	if closeFileSearch == nil {
 		return m, tea.Quit
 	}
@@ -340,7 +334,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.advanceSelectionScroll(msg)
 
 	case turnEventMsg:
-		if !m.acceptRemoteMessage(msg.generation) {
+		if !m.op.accepts(msg.generation) {
 			return m, nil
 		}
 		cmd := m.applyEvent(msg.ev)
@@ -348,7 +342,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ev.Kind == agent.EventTranscript {
 			m.syncTranscript()
 		}
-		return m, tea.Batch(cmd, waitEvent(msg.generation, m.turnEvents))
+		return m, tea.Batch(cmd, waitEvent(msg.generation, m.op.events))
 
 	case turnClosedMsg:
 		return m.handleTurnClosed(msg)
@@ -380,7 +374,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case statusClosedMsg:
-		if msg.generation == m.statusGeneration && m.mode == ModeStatus {
+		if msg.generation == m.statusTask.gen {
 			m.closeStatus()
 		}
 		return m, nil
@@ -572,46 +566,40 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	return nil
 }
 
+// handleTurnClosed ends the engine operation whose channel closed, then runs
+// what was queued behind it.
 func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
-	if !m.acceptRemoteMessage(msg.generation) {
+	if !m.op.accepts(msg.generation) {
 		return m, nil
 	}
-	resumeTools := m.restoringHistory && !m.cancelRequested
-	m.restoringHistory = false
+	done := m.op
+	m.op = operation{gen: done.gen}
 	if m.chatPhase != chat.PhaseError {
 		m.chatPhase = chat.PhaseIdle
 	}
-	m.turnEvents = nil
-	if m.cancelRequested {
+	if done.stop == stopAll {
 		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
 		m.syncTranscript()
+	} else if done.cancel != nil {
+		done.cancel() // release the turn/restore context
 	}
 	m.pendingApprovals = nil
 	m.approvalChoice = 0
 	m.approvalPanel.ResetScroll()
 	m.clearToolUIs()
-	if m.cancelTurn != nil && !m.cancelRequested {
-		m.cancelTurn() // release the turn/restore context
-	}
-	m.cancelTurn = nil
-	m.cancelRequested = false
-	m.stoppingTools = false
-	var permissionsCommand tea.Cmd
-	if m.pendingLogout {
+
+	if done.then == thenLogout {
+		// Logging out makes a queued permissions mode moot.
 		m.pendingPermissions = ""
-	} else {
-		permissionsCommand = m.applyPendingPermissions()
+		m.syncStatus()
+		return m, m.startLogout()
 	}
+	permissionsCommand := m.applyPendingPermissions()
 	m.syncStatus()
-	if m.pendingNew {
-		m.pendingNew = false
+	switch {
+	case done.then == thenNewConversation:
 		return m, batchCommands(permissionsCommand, m.startNewConversation())
-	}
-	if m.pendingLogout {
-		m.pendingLogout = false
-		return m, batchCommands(permissionsCommand, m.startLogout())
-	}
-	if resumeTools {
+	case done.kind == opRestore && done.stop != stopAll:
 		return m, batchCommands(permissionsCommand, m.resumePendingTools())
 	}
 	return m, permissionsCommand
@@ -624,15 +612,11 @@ func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
 	case tea.BackgroundColorMsg:
 		m.setDarkBackground(msg.IsDark())
 	case loginui.CompletedMsg:
-		if m.startupPending || m.startupCanceled || m.startupStopping {
+		if m.startupTask.running() || m.startupStopping {
 			return nil
 		}
-		m.startupPending = true
-		m.startupGeneration++
-		generation := m.startupGeneration
 		factory := m.engineFactory
-		factoryCtx, cancel := context.WithCancel(m.startupCtx)
-		m.startupCancel = cancel
+		factoryCtx, generation := m.startupTask.start(m.startupCtx, 0)
 		return func() tea.Msg {
 			if factory == nil {
 				return engineReadyMsg{generation: generation, err: errors.New("authenticated chat is unavailable")}
@@ -641,14 +625,11 @@ func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
 			return engineReadyMsg{generation: generation, engine: engine, err: err}
 		}
 	case engineReadyMsg:
-		if msg.generation != m.startupGeneration || m.startupCanceled || m.startupStopping {
+		// stopStartup advances the generation, so a stopped factory's result drops.
+		if msg.generation != m.startupTask.gen {
 			return nil
 		}
-		m.startupPending = false
-		if m.startupCancel != nil {
-			m.startupCancel()
-			m.startupCancel = nil
-		}
+		m.startupTask.done()
 		if msg.err != nil {
 			m.startupErr = msg.err
 			return tea.Quit
@@ -685,7 +666,6 @@ func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
 		m.stopStartup()
 	}
 	if m.loginModel.Canceled() {
-		m.startupCanceled = true
 		m.stopStartup()
 	}
 	return cmd
@@ -696,18 +676,13 @@ func (m *Model) stopStartup() {
 		return
 	}
 	m.startupStopping = true
-	m.startupGeneration++
-	m.startupPending = false
-	if m.startupCancel != nil {
-		m.startupCancel()
-		m.startupCancel = nil
-	}
+	m.startupTask.stop()
 }
 
 // handleKey routes a keypress to the surface that owns input. Global quit is
 // handled earlier in Update.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "esc" && (m.selection.selecting() || m.selection.selected()) {
+	if msg.String() == "esc" && m.selection.active() {
 		m.clearSelection()
 		return m, nil
 	}
@@ -778,7 +753,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
-		m.cancelRemote() // interrupt the running turn
+		m.cancelOperation() // interrupt the running turn
 		return m, nil
 	case "enter":
 		return m.submit()
@@ -845,11 +820,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		m.stopEntitySearch()
 		return m.dispatchCommand(name, argument)
 	}
-	if m.pendingLogout || m.logoutRunning {
-		return m, nil
-	}
-
-	if m.turnEvents != nil || m.chatPhase == chat.PhaseLoading {
+	if m.op.busy() {
 		return m, nil
 	}
 	turnContext := contextFromAttachments(attachments)
@@ -858,7 +829,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Context: turnContext, OnDeny: agent.DenyContinue})
-	wait := m.beginRemote(events, cancel)
+	wait := m.begin(opTurn, events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
@@ -867,13 +838,14 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	return m, batchCommands(closeFileSearch, wait)
 }
 
-func (m *Model) beginRemote(events <-chan agent.Event, cancel context.CancelFunc) tea.Cmd {
-	m.turnGen++
-	m.turnEvents = events
-	m.cancelTurn = cancel
-	m.cancelRequested = false
-	m.stoppingTools = false
-	return waitEvent(m.turnGen, events)
+// begin starts an exclusive operation. Its generation drops any late message
+// from an earlier one.
+func (m *Model) begin(kind opKind, events <-chan agent.Event, cancel context.CancelFunc) tea.Cmd {
+	m.op = operation{kind: kind, gen: m.op.gen + 1, events: events, cancel: cancel}
+	if events == nil {
+		return nil
+	}
+	return waitEvent(m.op.gen, events)
 }
 
 func (m *Model) resumePendingTools() tea.Cmd {
@@ -891,20 +863,25 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	events := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
 	m.chatPhase = chat.PhaseWaiting
 	m.list.ScrollToBottom()
-	return m.beginRemote(events, cancel)
+	return m.begin(opTurn, events, cancel)
 }
 
-func (m *Model) acceptRemoteMessage(generation uint64) bool {
-	return m.turnEvents != nil && generation == m.turnGen
-}
-
-func (m *Model) cancelRemote() {
-	if m.cancelTurn == nil || m.cancelRequested {
+// cancelOperation cancels a running engine operation once and drops its tool
+// UIs. Logout is never interrupted this way.
+func (m *Model) cancelOperation() {
+	if m.op.events == nil || m.op.stop == stopAll {
 		return
 	}
-	m.cancelRequested = true
-	m.cancelTurn()
+	m.op.stop = stopAll
+	m.op.cancel()
 	m.clearToolUIs()
+}
+
+// after queues next for when the running operation ends, and cancels the
+// operation so that happens soon.
+func (m *Model) after(next followUp) {
+	m.op.then = max(m.op.then, next)
+	m.cancelOperation()
 }
 
 // applyEvent folds one engine event into the block snapshot / status. The switch
@@ -929,7 +906,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	case agent.EventError:
 		// A failure during restore is benign: drop to idle with a notice so the
 		// user can still type. A failure mid-turn is the turn's error state.
-		if m.chatPhase == chat.PhaseLoading {
+		if m.op.kind == opRestore {
 			m.chatPhase = chat.PhaseIdle
 			if ev.Err != nil {
 				return m.showNotice(noticeForError("restore failed", ev.Err), 0)
@@ -972,9 +949,7 @@ func (m *Model) resize(w, h int) {
 	if m.picker != nil {
 		m.picker.SetSize(w, h)
 	}
-	if m.status != nil {
-		m.status.SetSize(w, h)
-	}
+	m.status.SetSize(w, h)
 	if m.mode == ModeTermInit {
 		m.setMode(ModeChat)
 	}

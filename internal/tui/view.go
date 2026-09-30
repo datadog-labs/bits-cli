@@ -86,9 +86,7 @@ func (m *Model) View() tea.View {
 			v.Content = m.picker.View()
 		}
 	case ModeStatus:
-		if m.status != nil {
-			v.Content = m.status.View()
-		}
+		v.Content = m.status.View()
 	}
 	return v
 }
@@ -172,7 +170,7 @@ func (m *Model) layout() frame {
 // permissions picker or the completion menu — above the composer. Input is
 // routed to a docked approval or tool UI, so the editor stays visible but inert.
 func (m *Model) chatView() string {
-	if m.selection.selecting() || m.selection.selected() {
+	if m.selection.active() {
 		return m.selection.render(m.visibleSelectionFrame(m.selection.scope))
 	}
 

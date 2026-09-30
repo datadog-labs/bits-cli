@@ -196,8 +196,8 @@ func TestCtrlCCancelsResumeOperationAndQuits(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
 	m := New(engine)
 	wait := m.openConversationPicker()
-	if m.mode != ModeConversations || m.conversationCancel == nil {
-		t.Fatalf("resume did not start: mode=%v cancel=%v", m.mode, m.conversationCancel != nil)
+	if m.mode != ModeConversations || !m.conversationTask.running() {
+		t.Fatalf("resume did not start: mode=%v cancel=%v", m.mode, m.conversationTask.running())
 	}
 
 	_, quit := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
@@ -207,8 +207,8 @@ func TestCtrlCCancelsResumeOperationAndQuits(t *testing.T) {
 	if _, ok := quit().(tea.QuitMsg); !ok {
 		t.Fatalf("ctrl+c command = %T, want tea.QuitMsg", quit())
 	}
-	if m.mode != ModeChat || m.picker != nil || m.conversationCancel != nil {
-		t.Fatalf("ctrl+c left resume active: mode=%v picker=%v cancel=%v", m.mode, m.picker != nil, m.conversationCancel != nil)
+	if m.mode != ModeChat || m.picker != nil || m.conversationTask.running() {
+		t.Fatalf("ctrl+c left resume active: mode=%v picker=%v cancel=%v", m.mode, m.picker != nil, m.conversationTask.running())
 	}
 
 	// The waiter must also complete after cancellation; otherwise the engine
@@ -235,8 +235,8 @@ func TestCancelPendingResumeWaitsForEngineDrainBeforeReturningToChat(t *testing.
 	if cmd := m.closeConversationPicker(); cmd != nil {
 		t.Fatal("pending close focused chat before the engine drained")
 	}
-	if m.mode != ModeConversations || m.picker == nil || m.picker.State() != conversationview.StateClosing || !m.conversationClosing {
-		t.Fatalf("pending close state: mode=%v picker=%v state=%v closing=%v", m.mode, m.picker != nil, m.picker.State(), m.conversationClosing)
+	if m.mode != ModeConversations || !m.pickerClosing() {
+		t.Fatalf("pending close state: mode=%v picker=%v", m.mode, m.picker != nil)
 	}
 	if m.editor.Value() != "draft survives" {
 		t.Fatalf("pending close changed draft: %q", m.editor.Value())
@@ -244,8 +244,8 @@ func TestCancelPendingResumeWaitsForEngineDrainBeforeReturningToChat(t *testing.
 
 	msg := runResumeCmd(t, wait)
 	_, _ = m.Update(msg)
-	if m.mode != ModeChat || m.picker != nil || m.conversationClosing || engine.OperationActive() {
-		t.Fatalf("drained close state: mode=%v picker=%v closing=%v active=%v", m.mode, m.picker != nil, m.conversationClosing, engine.OperationActive())
+	if m.mode != ModeChat || m.picker != nil || engine.OperationActive() {
+		t.Fatalf("drained close state: mode=%v picker=%v active=%v", m.mode, m.picker != nil, engine.OperationActive())
 	}
 	if m.editor.Value() != "draft survives" {
 		t.Fatalf("drained close lost draft: %q", m.editor.Value())
@@ -376,10 +376,10 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 	// The backend waits right after its last delta, so once the TUI shows
 	// the partial input, the turn is parked mid-input.
 	for !hasPartialTool(m.transcript.Blocks, "write_file", "bravo") {
-		if m.turnEvents == nil {
+		if m.op.events == nil {
 			t.Fatal("turn ended before the write_file input was half-streamed")
 		}
-		_, _ = m.Update(runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents)))
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.op.gen, m.op.events)))
 	}
 
 	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -396,8 +396,8 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 	setConversationInput(m, "are you there?")
 	_, _ = m.submit()
 	drainConversationRemote(t, m)
-	if m.chatPhase != chat.PhaseIdle || m.turnEvents != nil {
-		t.Fatalf("follow-up turn did not complete: phase=%v active=%t", m.chatPhase, m.turnEvents != nil)
+	if m.chatPhase != chat.PhaseIdle || m.op.events != nil {
+		t.Fatalf("follow-up turn did not complete: phase=%v active=%t", m.chatPhase, m.op.events != nil)
 	}
 	if !hasTextBlock(m.transcript.Blocks, "still alive") {
 		t.Fatalf("follow-up transcript = %+v, want normal answer", m.transcript.Blocks)

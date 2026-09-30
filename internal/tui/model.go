@@ -36,6 +36,94 @@ const (
 	ModePermissions
 )
 
+// operation is the one exclusive session operation: a turn (resumed client
+// tools included), a history restore, or logout. Anything that asks "can I
+// start something?" or "what happens when it ends?" reads it; chatPhase only
+// drives what the chat displays.
+type operation struct {
+	kind   opKind
+	gen    uint64             // stamps the operation's messages; never reset, so stale ones drop
+	events <-chan agent.Event // engine operations only
+	cancel context.CancelFunc
+	stop   stopLevel
+	then   followUp
+}
+
+type opKind uint8
+
+const (
+	opIdle    opKind = iota
+	opTurn           // a user turn or resumed client tools
+	opRestore        // conversation history loading at startup
+	opLogout         // credential deletion; the session quits once it succeeds
+)
+
+// stopLevel only rises within an operation: stopping its tools never undoes a
+// full cancel.
+type stopLevel uint8
+
+const (
+	stopNone  stopLevel = iota
+	stopTools           // the engine stops client tools; the turn continues
+	stopAll             // the operation's context is cancelled
+)
+
+// followUp runs once the operation ends. It only rises, so a queued logout
+// wins over a queued new conversation.
+type followUp uint8
+
+const (
+	thenNothing followUp = iota
+	thenNewConversation
+	thenLogout
+)
+
+func (o operation) busy() bool { return o.kind != opIdle }
+
+func (o operation) loggingOut() bool { return o.kind == opLogout || o.then == thenLogout }
+
+// accepts reports whether an engine message belongs to the running operation.
+func (o operation) accepts(generation uint64) bool {
+	return o.events != nil && generation == o.gen
+}
+
+// task is one cancellable request whose results carry its generation.
+// Starting or stopping advances the generation, so a result from an earlier
+// request drops.
+type task struct {
+	gen    uint64
+	cancel context.CancelFunc
+}
+
+// start stops any running request and returns the next one's context and
+// generation. A zero timeout means no deadline.
+func (t *task) start(parent context.Context, timeout time.Duration) (context.Context, uint64) {
+	t.stop()
+	var ctx context.Context
+	if timeout > 0 {
+		ctx, t.cancel = context.WithTimeout(parent, timeout)
+	} else {
+		ctx, t.cancel = context.WithCancel(parent)
+	}
+	return ctx, t.gen
+}
+
+// stop cancels the running request and invalidates its results.
+func (t *task) stop() {
+	t.gen++
+	t.done()
+}
+
+// done releases a finished request's context; its results stay current.
+func (t *task) done() {
+	if t.cancel != nil {
+		t.cancel()
+		t.cancel = nil
+	}
+}
+
+func (t *task) running() bool { return t.cancel != nil }
+
 // EngineFactory constructs the authenticated chat engine after startup login
 // has persisted a session.
 type EngineFactory func(context.Context) (*agent.Engine, error)
@@ -68,7 +156,7 @@ type Model struct {
 	openURL                func(context.Context, string) error
 	editor                 *editor.Editor
 	picker                 *conversationview.Model
-	status                 *statusview.Model
+	status                 statusview.Model
 	workspace              *workspace.Workspace
 	workspaceDisplayPath   string
 	fileSearchSession      *workspace.FileSearchSession
@@ -79,62 +167,44 @@ type Model struct {
 	searchSessionID        string
 	entitySearchQuery      string
 	entitySearchActive     bool
-	entitySearchGeneration uint64
-	entitySearchCancel     context.CancelFunc
+	entitySearchTask       task
 	entitySearchCache      map[string]entitySearchCacheEntry
 	entitySearchCacheOrder []string
 
-	statusGeneration uint64
-	statusIdentity   string
-	statusCancel     context.CancelFunc
+	statusTask     task
+	statusIdentity string
 
 	// Startup login stays inside this root model so Bubble Tea owns the
 	// alternate screen continuously while switching from login to chat.
-	startupCtx        context.Context
-	startupCancel     context.CancelFunc
-	startupGeneration uint64
-	startupCanceled   bool
-	startupStopping   bool
-	loginModel        *loginui.Model
-	engineFactory     EngineFactory
-	startupPending    bool
-	startupErr        error
+	startupCtx      context.Context
+	startupTask     task
+	startupStopping bool
+	loginModel      *loginui.Model
+	engineFactory   EngineFactory
+	startupErr      error
 
 	// transcript is the latest snapshot of the engine's aggregated transcript.
 	transcript agent.TranscriptSnapshot
 
-	// Active turn: turnEvents is the running turn's event channel (nil when
-	// idle); cancelTurn interrupts it.
-	turnEvents       <-chan agent.Event
-	cancelTurn       context.CancelFunc
-	turnGen          uint64
-	cancelRequested  bool
-	restoringHistory bool
-	stoppingTools    bool
-
-	// /new and /clear cancel an active turn/restore once, then wait for its
-	// channel to close before resetting conversation state.
-	pendingNew bool
+	// op is the one exclusive session operation; see operation.
+	op operation
 
 	// /logout stops active work before deleting credentials, then discards the
 	// authenticated engine.
-	logout           LogoutFunc
-	pendingLogout    bool
-	logoutRunning    bool
-	logoutCancel     context.CancelFunc
-	logoutGeneration uint64
-	loggedOut        bool
+	logout    LogoutFunc
+	loggedOut bool
 
-	toolUI            *tools.UI
-	activeToolUI      *toolUISession
-	queuedToolUIs     []*toolUISession
-	pendingApprovals  []agent.Block
-	approvalChoice    int
-	approvalPanel     *components.Panel
-	permissionsPanel  *components.Panel
-	permissionChoice  int
+	toolUI           *tools.UI
+	activeToolUI     *toolUISession
+	queuedToolUIs    []*toolUISession
+	pendingApprovals []agent.Block
+	approvalChoice   int
+	approvalPanel    *components.Panel
+	permissionsPanel *components.Panel
+	// The picker shows the options, or the full-access confirmation; the
+	// cursor is the row on the page shown (on the confirmation, 0 is Yes).
 	permissionConfirm bool
-	permissionAllow   bool
+	permissionCursor  int
 	// A mode selected during an active turn applies when that turn closes.
 	pendingPermissions agent.PermissionsMode
 
@@ -143,11 +213,9 @@ type Model struct {
 
 	// /resume operations are cancellable and generation-stamped. A late result
 	// from a cancelled list/load can never mutate the current conversation.
-	conversationGeneration uint64
-	conversationCancel     context.CancelFunc
-	conversationRetry      conversationRetry
-	conversationSwitchID   string
-	conversationClosing    bool
+	conversationTask     task
+	conversationRetry    conversationRetry
+	conversationSwitchID string
 
 	// Turn status, surfaced in the status line.
 	chatPhase chat.Phase
@@ -157,7 +225,6 @@ type Model struct {
 	// it with connecting/connected when building the status snapshot.
 	connectivity          statusview.Connectivity
 	authStateOverride     string
-	authFailureObserved   bool
 	authFailureGeneration uint64
 
 	// notice is the transient status message (error/warn/info) shown in the
@@ -267,13 +334,12 @@ func (m *Model) configure(configs []Config) {
 
 func newShell() *Model {
 	theme := styles.Default(true)
-	status := statusview.New(1, 1, theme)
 	m := &Model{
 		editor:            editor.New(),
 		list:              chat.NewList(),
 		animTool:          newAnimationTimeline(toolAnimInterval),
 		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
-		status:            &status,
+		status:            statusview.New(1, 1, theme),
 		approvalPanel:     components.NewPanel(theme.Approval.Panel),
 		permissionsPanel:  components.NewPanel(theme.Permissions),
 		styles:            theme,
@@ -298,7 +364,8 @@ func (m *Model) LoggedOut() bool { return m.loggedOut }
 // StartupError reports why login could not transition into chat. Cancellation
 // remains distinguishable from post-login client construction failures.
 func (m *Model) StartupError() error {
-	if m.startupCanceled || (m.mode == ModeLogin && m.loginModel != nil && m.loginModel.Canceled()) {
+	// The login model is kept until the handoff to chat, which a cancel prevents.
+	if m.loginModel != nil && m.loginModel.Canceled() {
 		return loginui.ErrCanceled
 	}
 	if m.startupErr != nil {
@@ -320,9 +387,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
 	}
-	if m.status != nil {
-		m.status.SetStyles(theme)
-	}
+	m.status.SetStyles(theme)
 }
 
 // setMode switches the top-level screen. It is the single entry point for mode
@@ -366,9 +431,7 @@ func (m *Model) initChat() tea.Cmd {
 		return tea.Batch(append(commands, m.fetchRecentConversations())...)
 	}
 	m.chatPhase = chat.PhaseLoading
-	m.restoringHistory = true
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
-	events := m.engine.Restore(ctx)
-	commands = append(commands, m.beginRemote(events, cancel))
+	commands = append(commands, m.begin(opRestore, m.engine.Restore(ctx), cancel))
 	return tea.Batch(commands...)
 }

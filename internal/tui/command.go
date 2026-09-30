@@ -161,12 +161,11 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, m.showNotice(notice(chat.NoticeError, nil, "Unknown command: /%s", name), 0)
 	}
-	if m.pendingLogout || m.logoutRunning {
+	if m.op.loggingOut() {
 		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Logout is already in progress."), 0)
 	}
 
-	active := m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading || len(m.pendingApprovals) > 0
-	if active {
+	if m.op.busy() {
 		switch definition.activeTurnPolicy {
 		case commandRejectedDuringTurn:
 			if definition.id == commandCopy {
@@ -179,10 +178,8 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 				return m, m.requestNewConversation()
 			case commandLogout:
 				return m, m.requestLogout()
-			case commandQuit, commandResume, commandStatus, commandWeb, commandSettings:
-				if m.cancelTurn != nil {
-					m.cancelTurn()
-				}
+			case commandQuit:
+				// quit cancels the running operation itself.
 			default:
 				panic("unhandled command cancellation policy")
 			}

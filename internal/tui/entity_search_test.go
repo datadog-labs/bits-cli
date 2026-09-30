@@ -131,9 +131,13 @@ func TestEntitySearchBlockedByLogoutState(t *testing.T) {
 			m.editor.Focus()
 			m.editor.Update(tea.PasteMsg{Content: "@check"})
 			_ = m.syncEntitySearch()
-			message := entitySearchDebounceMsg{generation: m.entitySearchGeneration, query: "check"}
-			m.pendingLogout = state == "pending"
-			m.logoutRunning = state == "running"
+			message := entitySearchDebounceMsg{generation: m.entitySearchTask.gen, query: "check"}
+			if state == "pending" {
+				m.op.then = thenLogout
+			}
+			if state == "running" {
+				m.op.kind = opLogout
+			}
 			m.loggedOut = state == "completed"
 			if cmd := m.beginEntitySearch(message); cmd != nil {
 				t.Fatal("logout allowed queued search to start")
@@ -161,7 +165,7 @@ func TestLogoutCancelsEntitySearch(t *testing.T) {
 			m.editor.Focus()
 			m.editor.Update(tea.PasteMsg{Content: "@check"})
 			_ = m.syncEntitySearch()
-			message := entitySearchDebounceMsg{generation: m.entitySearchGeneration, query: "check"}
+			message := entitySearchDebounceMsg{generation: m.entitySearchTask.gen, query: "check"}
 			request := m.beginEntitySearch(message)
 			result := make(chan tea.Msg, 1)
 			go func() { result <- request() }()
@@ -174,7 +178,7 @@ func TestLogoutCancelsEntitySearch(t *testing.T) {
 				m.requestLogout()
 			} else {
 				m.startLogout()
-				t.Cleanup(m.logoutCancel)
+				t.Cleanup(m.op.cancel)
 			}
 			select {
 			case <-searcher.canceled:
@@ -206,7 +210,7 @@ func TestLogoutInvalidatesQueuedSearchAndFailureAllowsRetry(t *testing.T) {
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "@check"})
 	_ = m.syncEntitySearch()
-	message := entitySearchDebounceMsg{generation: m.entitySearchGeneration, query: "check"}
+	message := entitySearchDebounceMsg{generation: m.entitySearchTask.gen, query: "check"}
 	queued := m.beginEntitySearch(message)
 	logout := m.startLogout()
 	result := queued().(entitySearchResultMsg)
@@ -228,7 +232,7 @@ func TestLogoutInvalidatesQueuedSearchAndFailureAllowsRetry(t *testing.T) {
 	logoutErr = nil
 	logout = m.startLogout()
 	m.applyLogoutResult(logout().(logoutResultMsg))
-	if m.entitySearcher != nil || m.entitySearchCancel != nil || m.syncEntitySearch() != nil {
+	if m.entitySearcher != nil || m.entitySearchTask.running() || m.syncEntitySearch() != nil {
 		t.Fatal("successful logout retained authenticated search")
 	}
 }
@@ -291,7 +295,7 @@ func TestEntitySearchRejectsStaleResponse(t *testing.T) {
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "@new"})
 	_ = m.syncEntitySearch()
-	currentGeneration := m.entitySearchGeneration
+	currentGeneration := m.entitySearchTask.gen
 	m.applyEntitySearchResult(entitySearchResultMsg{
 		generation: currentGeneration - 1,
 		query:      "old",
@@ -358,7 +362,7 @@ func TestSelectedEntityContextIsSentOnceAndClearedAfterSubmit(t *testing.T) {
 	m.editor.Update(tea.PasteMsg{Content: "@check"})
 	_ = m.syncEntitySearch()
 	m.applyEntitySearchResult(entitySearchResultMsg{
-		generation: m.entitySearchGeneration,
+		generation: m.entitySearchTask.gen,
 		query:      "check",
 		response: assistant.SearchEntitiesResponse{
 			SearchFlowID: "flow-1",
@@ -385,9 +389,9 @@ func TestSelectedEntityContextIsSentOnceAndClearedAfterSubmit(t *testing.T) {
 	if len(m.editor.Attachments()) != 0 {
 		t.Fatalf("attachments survived submit: %#v", m.editor.Attachments())
 	}
-	for range m.turnEvents {
+	for range m.op.events {
 	}
-	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.turnGen})
+	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
 
 	m.editor.Update(tea.PasteMsg{Content: "next independent turn"})
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -404,7 +408,7 @@ func TestEditingSelectedMentionRemovesStructuredContext(t *testing.T) {
 	m.editor.Update(tea.PasteMsg{Content: "@check"})
 	_ = m.syncEntitySearch()
 	m.applyEntitySearchResult(entitySearchResultMsg{
-		generation: m.entitySearchGeneration,
+		generation: m.entitySearchTask.gen,
 		query:      "check",
 		response: assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
 			CandidateID: "candidate-1", EntityID: "dashboard-1",

@@ -60,12 +60,13 @@ func TestLogoutDuringActiveTurnCancelsAndDrainsBeforeDeleting(t *testing.T) {
 		},
 	})
 	turnCtx, cancelTurn := context.WithCancel(context.Background())
-	m.cancelTurn = cancelTurn
-	m.turnEvents = make(chan agent.Event)
+	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancelTurn}
 	m.chatPhase = chat.PhaseStreaming
 
+	// A /new queued first must not swallow the logout.
+	_, _ = m.dispatchCommand("new", "")
 	_, cmd := m.dispatchCommand("logout", "")
-	if cmd == nil || !m.pendingLogout {
+	if cmd == nil || m.op.then != thenLogout {
 		t.Fatal("active-turn logout was not queued")
 	}
 	if turnCtx.Err() == nil {
@@ -75,8 +76,8 @@ func TestLogoutDuringActiveTurnCancelsAndDrainsBeforeDeleting(t *testing.T) {
 		t.Fatal("credentials were deleted before the turn drained")
 	}
 
-	_, cmd = m.handleTurnClosed(turnClosedMsg{generation: m.turnGen})
-	if cmd == nil || !m.logoutRunning {
+	_, cmd = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
+	if cmd == nil || m.op.kind != opLogout {
 		t.Fatal("logout did not start after the turn closed")
 	}
 	msg := cmd()
@@ -104,7 +105,7 @@ func TestLogoutLocalFailureKeepsAuthenticatedEngine(t *testing.T) {
 	if m.engine != engine {
 		t.Fatal("local deletion failure invalidated the usable engine")
 	}
-	if m.logoutRunning {
+	if m.op.kind == opLogout {
 		t.Fatal("logout remained active after failure")
 	}
 	if !errors.Is(m.notice.Err, want) || m.notice.Level != chat.NoticeError {

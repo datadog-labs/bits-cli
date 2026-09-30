@@ -15,10 +15,9 @@ const logoutTimeout = 60 * time.Second
 // deletion. This ordering prevents an authenticated client from continuing a
 // turn after its durable session has been removed.
 func (m *Model) requestLogout() tea.Cmd {
-	m.pendingLogout = true
 	closeFileSearch := m.stopCompletionSearches()
 	m.editor.CloseMenu()
-	m.cancelRemote()
+	m.after(thenLogout)
 	return batchCommands(
 		closeFileSearch,
 		m.showNotice(notice(chat.NoticeInfo, nil,
@@ -34,11 +33,9 @@ func (m *Model) startLogout() tea.Cmd {
 			m.showNotice(notice(chat.NoticeError, nil, "Logout is unavailable."), 0),
 		)
 	}
-	m.logoutGeneration++
-	generation := m.logoutGeneration
 	ctx, cancel := context.WithTimeout(context.Background(), logoutTimeout)
-	m.logoutCancel = cancel
-	m.logoutRunning = true
+	m.begin(opLogout, nil, cancel)
+	generation := m.op.gen
 	m.editor.CloseMenu()
 	m.clearNotice()
 	logout := m.logout
@@ -55,14 +52,11 @@ func (m *Model) startLogout() tea.Cmd {
 }
 
 func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
-	if msg.generation != m.logoutGeneration || !m.logoutRunning {
+	if m.op.kind != opLogout || msg.generation != m.op.gen {
 		return m, nil
 	}
-	if m.logoutCancel != nil {
-		m.logoutCancel()
-		m.logoutCancel = nil
-	}
-	m.logoutRunning = false
+	m.op.cancel()
+	m.op = operation{gen: m.op.gen}
 	if msg.err != nil {
 		return m, m.showNotice(noticeForError("could not log out", msg.err), 0)
 	}
@@ -72,8 +66,6 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 	m.entitySearcher = nil
 	m.engine = nil
 	m.convID = ""
-	m.turnEvents = nil
-	m.cancelTurn = nil
 	m.pendingApprovals = nil
 	m.approvalPanel.ResetScroll()
 	m.loggedOut = true
