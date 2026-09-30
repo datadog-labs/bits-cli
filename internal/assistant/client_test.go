@@ -710,12 +710,12 @@ func TestClientBackendStatusReportsConfiguredAuthenticationWithoutCredentials(t 
 		{
 			name: "oauth",
 			got:  oauthClient.BackendStatus(),
-			want: BackendStatus{Site: "https://api.us3.datadoghq.com", AuthenticationMode: "oauth", AuthenticationState: "configured, not verified"},
+			want: BackendStatus{Site: "https://api.us3.datadoghq.com", AuthenticationMode: "oauth", AuthenticationState: "configured, not verified", HasCredentials: true},
 		},
 		{
 			name: "api key",
 			got:  apiClient.BackendStatus(),
-			want: BackendStatus{Site: "https://api.datadoghq.eu", AuthenticationMode: "api-key", AuthenticationState: "configured, not verified"},
+			want: BackendStatus{Site: "https://api.datadoghq.eu", AuthenticationMode: "api-key", AuthenticationState: "configured, not verified", HasCredentials: true},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

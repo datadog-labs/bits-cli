@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/agent/fake"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	statusview "github.com/DataDog/bits-cli/internal/tui/status"
@@ -35,6 +36,7 @@ func (*localStatusBackend) BackendStatus() assistant.BackendStatus {
 		Site:                "https://api.us3.datadoghq.com",
 		AuthenticationMode:  "oauth",
 		AuthenticationState: "configured, not verified",
+		HasCredentials:      true,
 	}
 }
 
@@ -209,6 +211,15 @@ func TestSuccessfulBackendEventConfirmsConfiguredAuthentication(t *testing.T) {
 
 	if got := m.statusRuntime().AuthenticationState; got != "authenticated" {
 		t.Fatalf("authentication after successful backend event = %q, want authenticated", got)
+	}
+}
+
+func TestSuccessfulBackendEventDoesNotAuthenticateBackendWithoutCredentials(t *testing.T) {
+	m := newStatusModelWithBackend(t, fake.New())
+	m.observeEvent(agent.Event{Kind: agent.EventUsage})
+
+	if got := m.statusRuntime().AuthenticationState; got != "unauthenticated" {
+		t.Fatalf("authentication after fake backend event = %q, want unauthenticated", got)
 	}
 }
 

@@ -618,6 +618,7 @@ func (b *statusBackend) BackendStatus() assistant.BackendStatus {
 		Site:                "https://api.us5.datadoghq.com",
 		AuthenticationMode:  "oauth",
 		AuthenticationState: "authenticated",
+		HasCredentials:      true,
 	}
 }
 
@@ -635,6 +636,7 @@ func TestEngineStatusReportsEffectiveNonSecretRuntimeConfiguration(t *testing.T)
 		Site:                "https://api.us5.datadoghq.com",
 		AuthenticationMode:  "oauth",
 		AuthenticationState: "authenticated",
+		HasCredentials:      true,
 	}) {
 		t.Fatalf("backend status = %+v", got.Backend)
 	}

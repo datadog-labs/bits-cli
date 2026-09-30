@@ -254,7 +254,7 @@ func (m *Model) markConnected() {
 		return
 	}
 	backend := m.engine.Status().Backend
-	if backend.AuthenticationMode != "" && backend.AuthenticationState != "unauthenticated" {
+	if backend.HasCredentials {
 		m.markAuthenticated()
 	}
 }
