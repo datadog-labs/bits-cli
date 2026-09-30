@@ -629,17 +629,15 @@ func cloneUsage(usage *assistant.Usage) *assistant.Usage {
 		return nil
 	}
 	copied := *usage
-	copied.InputTokens = cloneInt(usage.InputTokens)
-	copied.OutputTokens = cloneInt(usage.OutputTokens)
-	copied.TimeToFirstChunkMs = cloneInt(usage.TimeToFirstChunkMs)
-	return &copied
-}
-
-func cloneInt(value *int) *int {
-	if value == nil {
-		return nil
+	if usage.InputTokens != nil {
+		copied.InputTokens = new(*usage.InputTokens)
 	}
-	copied := *value
+	if usage.OutputTokens != nil {
+		copied.OutputTokens = new(*usage.OutputTokens)
+	}
+	if usage.TimeToFirstChunkMs != nil {
+		copied.TimeToFirstChunkMs = new(*usage.TimeToFirstChunkMs)
+	}
 	return &copied
 }
 
