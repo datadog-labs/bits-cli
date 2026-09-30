@@ -74,6 +74,34 @@ func TestToolCallMergesWithResult(t *testing.T) {
 	}
 }
 
+func TestWireResultPreservesLocalToolOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result ToolResult
+		status ToolStatus
+	}{
+		{"denied", deniedResult(), ToolDenied},
+		{"cancelled", cancelledResult(), ToolCancelled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := NewTranscript()
+			tr.AppendMessage(assistant.AssistantMessage("call", assistant.ToolCallContent("tc1", "write_file", `{}`)))
+			before, _ := tr.MarkToolExecuted("tc1", tc.result)
+			tr.AppendMessage(assistant.AssistantMessage("response", assistant.ToolResultContent("tc1", "", assistant.ToolStatusError, "wire output")))
+			tool := tr.Blocks()[0].Tool
+			if tool.Status != tc.status {
+				t.Fatalf("status = %v, want %v after wire result", tool.Status, tc.status)
+			}
+			if tool.Output != "wire output" {
+				t.Fatalf("output = %q, want wire output", tool.Output)
+			}
+			if before.Tool.Output != tc.result.Output || before.Tool.Status != tc.status {
+				t.Fatal("wire result mutated an earlier snapshot")
+			}
+		})
+	}
+}
+
 func TestStreamedToolInputFoldsIntoOneOrderedBlock(t *testing.T) {
 	tr := NewTranscript()
 	tr.AppendMessage(streamedToolStarted("start", "tc1", "write_file"))

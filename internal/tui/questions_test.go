@@ -175,7 +175,19 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 		t.Fatalf("next form is not the earliest pending call %s", remaining[0])
 	}
 	// Cancelling a queued call must drop its form without stranding the others.
-	m.engine.CancelTool(remaining[1])
+	if !m.engine.CancelTool(remaining[1]) {
+		t.Fatal("cancellation command was not queued")
+	}
+	// CancelTool queues a command; wait for the engine to apply it before
+	// dismissing the active form and advancing to the queued call.
+	for !slices.ContainsFunc(m.transcript.Blocks, func(b agent.Block) bool {
+		return b.ToolCallID() == remaining[1] && b.Tool.Status == agent.ToolCancelled
+	}) {
+		if m.turnEvents == nil {
+			t.Fatal("turn ended before queued call was cancelled")
+		}
+		pumpToolUI(t, m)
+	}
 	for m.turnEvents != nil {
 		if m.activeToolUI != nil {
 			if m.activeToolUI.request.Call.ID == remaining[1] {

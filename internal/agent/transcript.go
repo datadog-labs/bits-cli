@@ -335,8 +335,14 @@ func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 		if tc.Detail != "" {
 			merged.Detail = tc.Detail
 		}
-		if tc.Status != ToolUnknown {
-			merged.Status = tc.Status
+		switch merged.Status {
+		case ToolDenied, ToolCancelled:
+			// Wire statuses cannot represent these local outcomes. Preserve them
+			// when an echoed response supplies only a generic error status.
+		case ToolUnknown, ToolRunning, ToolAwaitingApproval, ToolSuccess, ToolError:
+			if tc.Status != ToolUnknown {
+				merged.Status = tc.Status
+			}
 		}
 		merged.IsClientSide = merged.IsClientSide || tc.IsClientSide
 		if msg.Content.Type == assistant.ContentToolCallStarted {
