@@ -30,7 +30,6 @@ type ChatOptions struct {
 type RunOptions struct {
 	ChatOptions
 	Prompt   string
-	Model    string
 	Delivery string
 }
 

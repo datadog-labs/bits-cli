@@ -85,10 +85,9 @@ func runToolSet(t *testing.T, mode agent.PermissionsMode) *agent.ToolSet {
 
 func runOptions() cmd.RunOptions {
 	return cmd.RunOptions{
-		ChatOptions: cmd.ChatOptions{AuthMode: "auto", PermissionsMode: agent.ModeSkipPermissions},
+		ChatOptions: cmd.ChatOptions{AuthMode: "auto", Model: "test-model", PermissionsMode: agent.ModeSkipPermissions},
 		Prompt:      "what time is it?",
 		Delivery:    "adeep",
-		Model:       "test-model",
 	}
 }
 
