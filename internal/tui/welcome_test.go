@@ -416,7 +416,7 @@ func TestWelcomeVisibilityUnchangedByTheProbe(t *testing.T) {
 // flattenMsgs executes cmd (and, recursively, every command a tea.BatchMsg
 // bundles) and collects the resulting messages. It never re-enters Update, so
 // it is only safe for commands whose channels resolve without further pumping —
-// true here because the fake backend answers Restore and RecentConversations
+// true here because the fake backend answers Restore and ListConversations
 // immediately with an error (it implements neither optional interface).
 func flattenMsgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	t.Helper()
@@ -435,9 +435,7 @@ func flattenMsgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	}
 }
 
-// initChat must only fetch the offer when there is nothing to restore: a
-// gated read on a live conversation would fail the user's first message with
-// ErrOperationActive, which is the entire reason RecentConversations exists.
+// The startup offer is only relevant when there is no conversation to restore.
 func TestInitChatFetchesTheOfferOnlyWithoutAConversationToRestore(t *testing.T) {
 	hasFetch := func(m *Model) bool {
 		for _, msg := range flattenMsgs(t, m.initChat()) {
@@ -459,7 +457,7 @@ func TestInitChatFetchesTheOfferOnlyWithoutAConversationToRestore(t *testing.T) 
 	restoring.mode = ModeChat
 	restoring.engine = agent.New(fake.New(), assistant.SendOptions{ConversationID: "existing-conversation"})
 	if hasFetch(restoring) {
-		t.Error("initChat fetched the offer despite a conversation to restore, which would gate it behind ErrOperationActive")
+		t.Error("initChat fetched the offer despite a conversation to restore")
 	}
 }
 

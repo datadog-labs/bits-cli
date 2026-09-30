@@ -424,10 +424,7 @@ func (m *Model) initChat() tea.Cmd {
 		return tea.Batch(commands...)
 	}
 	if m.engine.ConversationID() == "" {
-		// The offer's only fetch for the life of the process: skipping it for a
-		// restored conversation leaves the offer empty even after /new clears the
-		// transcript. Fetching later would read on the gated path, which can fail
-		// the next message with ErrOperationActive.
+		// Fetch the startup offer only when there is no history to restore.
 		return tea.Batch(append(commands, m.fetchRecentConversations())...)
 	}
 	m.chatPhase = chat.PhaseLoading

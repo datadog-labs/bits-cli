@@ -201,8 +201,9 @@ func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
 	}
 }
 
-func TestConversationSwitchWithPersistedRunningBlockStaysDisarmed(t *testing.T) {
-	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
+func TestConversationSwitchSettlesPersistedRunningBlockAndStaysDisarmed(t *testing.T) {
+	backend := newResumeBackend()
+	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
@@ -215,21 +216,18 @@ func TestConversationSwitchWithPersistedRunningBlockStaysDisarmed(t *testing.T) 
 	if m.mode != ModeConversations {
 		t.Fatal("test setup did not open conversation picker")
 	}
-	generation := m.conversationTask.gen
-	m.applyConversationSwitchResult(conversationSwitchResultMsg{
-		generation: generation,
-		result: agent.ConversationSwitchResult{
-			ConversationID: "other",
-			Blocks:         []agent.Block{animToolBlock(agent.ToolRunning)},
-		},
-	})
+	backend.histories <- resumeHistoryReply{response: history(assistant.AssistantMessage("tool", assistant.Content{
+		Type: assistant.ContentToolCallStarted,
+		Tool: &assistant.ToolPayload{ToolCallID: "tool", ToolName: "server_tool", Status: "running"},
+	}))}
+	_, _ = m.Update(runResumeCmd(t, m.startConversationSwitch(resumeConversationID)))
 	m.Update(struct{}{})
 
 	if m.animClock.armed || m.animTool.active {
 		t.Fatal("persisted running block armed clock without a live turn")
 	}
-	if !m.list.HasAnimated() {
-		t.Fatal("test setup invalid: switched transcript should report running")
+	if tool := findToolBlock(m.transcript.Blocks, "server_tool"); tool == nil || tool.Status != agent.ToolCancelled {
+		t.Fatalf("restored tool = %+v, want cancelled", tool)
 	}
 }
 

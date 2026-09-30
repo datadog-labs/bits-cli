@@ -211,8 +211,7 @@ func TestCtrlCCancelsResumeOperationAndQuits(t *testing.T) {
 		t.Fatalf("ctrl+c left resume active: mode=%v picker=%v cancel=%v", m.mode, m.picker != nil, m.conversationTask.running())
 	}
 
-	// The waiter must also complete after cancellation; otherwise the engine
-	// still owns a leaked resume operation while the application exits.
+	// The pending read must also complete after cancellation.
 	msg := runResumeCmd(t, wait)
 	result, ok := msg.(conversationListResultMsg)
 	if !ok || result.result.Err == nil {
@@ -223,7 +222,7 @@ func TestCtrlCCancelsResumeOperationAndQuits(t *testing.T) {
 	}
 }
 
-func TestCancelPendingResumeWaitsForEngineDrainBeforeReturningToChat(t *testing.T) {
+func TestCancelPendingResumeReturnsImmediatelyAndIgnoresLateResult(t *testing.T) {
 	backend := newResumeBackend()
 	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
 	m := New(engine)
@@ -233,9 +232,9 @@ func TestCancelPendingResumeWaitsForEngineDrainBeforeReturningToChat(t *testing.
 	wait := m.openConversationPicker()
 
 	if cmd := m.closeConversationPicker(); cmd != nil {
-		t.Fatal("pending close focused chat before the engine drained")
+		t.Fatal("closing returned an unexpected command")
 	}
-	if m.mode != ModeConversations || !m.pickerClosing() {
+	if m.mode != ModeChat || m.picker != nil || engine.OperationActive() {
 		t.Fatalf("pending close state: mode=%v picker=%v", m.mode, m.picker != nil)
 	}
 	if m.editor.Value() != "draft survives" {
@@ -329,6 +328,11 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	if rendered := m.list.Render(); !strings.Contains(rendered, "NEW-TRANSCRIPT") || strings.Contains(rendered, "OLD-CACHED") {
 		t.Fatalf("cross-conversation render cache leaked: %q", rendered)
 	}
+	backend.lists <- resumeListReply{response: summaries(summary)}
+	_, _ = m.Update(runResumeCmd(t, m.openConversationPicker()))
+	if cmd := m.selectConversation(summary); cmd != nil || m.mode != ModeChat {
+		t.Fatal("selecting the current conversation should close without reloading")
+	}
 }
 
 func TestCancelLoadedButUnappliedResultCannotSwitchEngine(t *testing.T) {
@@ -343,14 +347,16 @@ func TestCancelLoadedButUnappliedResultCannotSwitchEngine(t *testing.T) {
 	backend.histories <- resumeHistoryReply{response: history(assistant.AssistantMessage("m", assistant.TextContent("new")))}
 	_, wait = m.Update(conversationview.SelectedMsg{Conversation: summary})
 	loadedMsg := runResumeCmd(t, wait)
-	// Escape wins the event race: the picker stays non-interactive until this
-	// already-loaded candidate is discarded and engine ownership is released.
+	// Escape wins the event race: close immediately and ignore the loaded result.
 	_, _ = m.Update(conversationview.CancelledMsg{})
-	if m.mode != ModeConversations || m.picker == nil || m.picker.State() != conversationview.StateClosing {
-		t.Fatalf("cancel did not wait for loaded candidate drain: mode=%v picker=%v", m.mode, m.picker != nil)
+	if m.mode != ModeChat || m.picker != nil {
+		t.Fatalf("cancel did not close immediately: mode=%v picker=%v", m.mode, m.picker != nil)
 	}
+	// Reopening must not let the previous load replace the current request.
+	backend.lists <- resumeListReply{response: summaries(summary)}
+	_, _ = m.Update(runResumeCmd(t, m.openConversationPicker()))
 	_, _ = m.Update(loadedMsg)
-	if m.mode != ModeChat || m.convID != "old" || engine.ConversationID() != "old" {
+	if m.mode != ModeConversations || m.picker.State() != conversationview.StateReady || m.convID != "old" || engine.ConversationID() != "old" {
 		t.Fatalf("stale loaded result switched state: mode=%v root=%q engine=%q", m.mode, m.convID, engine.ConversationID())
 	}
 }

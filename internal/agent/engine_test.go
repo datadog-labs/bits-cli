@@ -573,6 +573,7 @@ func TestNewConversationRejectsActiveTurnWithoutMutation(t *testing.T) {
 
 func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 	resp := &assistant.ConversationHistoryResponse{}
+	resp.Data.Type = "conversation-history-response"
 	resp.Data.Attributes.Messages = []assistant.Message{
 		assistant.AssistantMessage("m1", assistant.TextContent("Hello")),
 		assistant.AssistantMessage("turn", assistant.Content{Type: assistant.ContentTurnStatus, TurnStatus: &assistant.TurnStatusPayload{Status: "ended"}}),
@@ -581,7 +582,7 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 		assistant.AssistantMessage("m2", assistant.TextContent("World")),
 		assistant.AssistantMessage("future", assistant.Content{Type: "future_content"}),
 	}
-	e := New(&historyBackend{resp: resp}, assistant.SendOptions{ConversationID: "conv-1"})
+	e := New(&historyBackend{resp: resp}, assistant.SendOptions{ConversationID: testConversationID})
 
 	evs := drain(e.Restore(context.Background()))
 	if len(evs) != 1 || evs[0].Kind != EventTranscript {
@@ -597,7 +598,7 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 }
 
 func TestRestoreUnsupportedBackendErrors(t *testing.T) {
-	e := New(&scriptBackend{}, assistant.SendOptions{ConversationID: "conv-1"})
+	e := New(&scriptBackend{}, assistant.SendOptions{ConversationID: testConversationID})
 
 	evs := drain(e.Restore(context.Background()))
 	if len(evs) != 1 || evs[0].Kind != EventError || !errors.Is(evs[0].Err, ErrHistoryUnsupported) {
@@ -607,7 +608,9 @@ func TestRestoreUnsupportedBackendErrors(t *testing.T) {
 
 // An empty history folds to no blocks, so the len>0 guard emits nothing.
 func TestRestoreEmptyEmitsNothing(t *testing.T) {
-	e := New(&historyBackend{resp: &assistant.ConversationHistoryResponse{}}, assistant.SendOptions{ConversationID: "conv-1"})
+	resp := &assistant.ConversationHistoryResponse{}
+	resp.Data.Type = "conversation-history-response"
+	e := New(&historyBackend{resp: resp}, assistant.SendOptions{ConversationID: testConversationID})
 
 	if evs := drain(e.Restore(context.Background())); len(evs) != 0 {
 		t.Fatalf("events = %v, want none", kinds(evs))

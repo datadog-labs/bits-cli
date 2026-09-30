@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
@@ -30,74 +29,18 @@ type ConversationListResult struct {
 	Err           error
 }
 
-// ConversationSwitchResult is a fully loaded but not yet active conversation.
-// Commit is the only mutation point; Discard releases the engine gate without
-// changing identity. This handshake prevents a cancelled/stale UI result from
-// switching the engine behind the visible transcript.
-type ConversationSwitchResult struct {
-	ConversationID string
-	Blocks         []Block
-	Err            error
-	candidate      *conversationCandidate
-}
-
-type conversationCandidate struct {
+// Conversation is a validated history ready to install. Loading it does not
+// read or change the engine's current conversation. Install transfers ownership
+// to the engine; a Conversation must only be installed once.
+type Conversation struct {
+	id           string
 	transcript   *Transcript
 	continuation *toolContinuation
-	decision     chan bool
-	done         chan struct{}
-	err          error
-	once         sync.Once
 }
 
-func (r ConversationSwitchResult) Commit() error  { return r.finish(true) }
-func (r ConversationSwitchResult) Discard() error { return r.finish(false) }
-
-func (r ConversationSwitchResult) finish(commit bool) error {
-	if r.candidate == nil {
-		return r.Err
-	}
-	r.candidate.once.Do(func() { r.candidate.decision <- commit })
-	<-r.candidate.done
-	return r.candidate.err
-}
-
-// ListConversations owns the engine operation gate until the backend call has
-// returned. Results are copied so the UI can safely retain them.
-func (e *Engine) ListConversations(ctx context.Context) <-chan ConversationListResult {
-	out := make(chan ConversationListResult, 1)
-	if !e.begin() {
-		out <- ConversationListResult{Err: ErrOperationActive}
-		close(out)
-		return out
-	}
-	go func() {
-		defer close(out)
-		result := e.fetchConversations(ctx)
-		// Completion includes releasing ownership: after receive, the caller may
-		// immediately start the next engine operation.
-		e.active.Store(false)
-		out <- result
-	}()
-	return out
-}
-
-// RecentConversations reads the list without taking the operation gate, so a
-// background read cannot fail the user's next turn with ErrOperationActive. It
-// mutates no engine state and e.backend is never reassigned after construction.
-func (e *Engine) RecentConversations(ctx context.Context) <-chan ConversationListResult {
-	out := make(chan ConversationListResult, 1)
-	go func() {
-		defer close(out)
-		out <- e.fetchConversations(ctx)
-	}()
-	return out
-}
-
-// fetchConversations is the backend read and record validation shared by both
-// entry points. Summaries are copied into a fresh slice, so callers never alias
-// backend storage.
-func (e *Engine) fetchConversations(ctx context.Context) ConversationListResult {
+// ListConversations reads and validates summaries without taking the engine's
+// operation gate. The returned slice does not alias backend storage.
+func (e *Engine) ListConversations(ctx context.Context) ConversationListResult {
 	backend, ok := e.backend.(ConversationListBackend)
 	if !ok {
 		return ConversationListResult{Err: ErrConversationListUnsupported}
@@ -129,117 +72,70 @@ func (e *Engine) fetchConversations(ctx context.Context) ConversationListResult 
 	return ConversationListResult{Conversations: conversations, Omitted: omitted}
 }
 
-// SwitchConversation loads into a temporary transcript and changes the
-// engine's identity only after the entire response has folded successfully.
-func (e *Engine) SwitchConversation(ctx context.Context, conversationID string) <-chan ConversationSwitchResult {
+// LoadConversation fetches and folds history without claiming engine state.
+// Callers may drop a stale result without any cleanup or rollback.
+func (e *Engine) LoadConversation(ctx context.Context, conversationID string) (*Conversation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	conversationID = strings.TrimSpace(conversationID)
 	if !ValidConversationID(conversationID) {
-		return switchResult(ConversationSwitchResult{Err: ErrInvalidConversationID})
+		return nil, ErrInvalidConversationID
 	}
-	if !e.begin() {
-		return switchResult(ConversationSwitchResult{Err: ErrOperationActive})
-	}
-	out := make(chan ConversationSwitchResult, 1)
-	go e.switchConversation(ctx, conversationID, out)
-	return out
-}
-
-func switchResult(result ConversationSwitchResult) <-chan ConversationSwitchResult {
-	out := make(chan ConversationSwitchResult, 1)
-	out <- result
-	close(out)
-	return out
-}
-
-func (e *Engine) switchConversation(ctx context.Context, conversationID string, out chan<- ConversationSwitchResult) {
-	defer close(out)
-	released := false
-	release := func() {
-		if !released {
-			e.active.Store(false)
-			released = true
-		}
-	}
-	defer release()
-	publishTerminal := func(result ConversationSwitchResult) {
-		release()
-		out <- result
-	}
-	if err := ctx.Err(); err != nil {
-		publishTerminal(ConversationSwitchResult{Err: err})
-		return
-	}
-
-	if conversationID == e.ConversationID() {
-		publishTerminal(ConversationSwitchResult{ConversationID: conversationID, Blocks: e.snapshot().Blocks})
-		return
-	}
-
 	backend, ok := e.backend.(HistoryBackend)
 	if !ok {
-		publishTerminal(ConversationSwitchResult{Err: ErrHistoryUnsupported})
-		return
+		return nil, ErrHistoryUnsupported
 	}
 	response, err := backend.ConversationHistory(ctx, assistant.ConversationHistoryInput{ConversationID: conversationID})
 	if ctx.Err() != nil {
-		publishTerminal(ConversationSwitchResult{Err: ctx.Err()})
-		return
+		return nil, ctx.Err()
 	}
 	if err != nil {
-		publishTerminal(ConversationSwitchResult{Err: err})
-		return
+		return nil, err
 	}
 	if response == nil {
-		publishTerminal(ConversationSwitchResult{Err: ErrMalformedHistory})
-		return
+		return nil, ErrMalformedHistory
 	}
 	if response.Data.Type != "conversation-history-response" {
-		publishTerminal(ConversationSwitchResult{Err: fmt.Errorf("%w: unexpected response type %q", ErrMalformedHistory, response.Data.Type)})
-		return
+		return nil, fmt.Errorf("%w: unexpected response type %q", ErrMalformedHistory, response.Data.Type)
 	}
-
-	temporary := NewTranscript()
+	transcript := NewTranscript()
 	for i, message := range response.Data.Attributes.Messages {
 		if err := validateHistoryMessage(message); err != nil {
-			publishTerminal(ConversationSwitchResult{Err: fmt.Errorf("%w: message %d: %w", ErrMalformedHistory, i, err)})
-			return
+			return nil, fmt.Errorf("%w: message %d: %w", ErrMalformedHistory, i, err)
 		}
-		temporary.AppendMessage(message)
+		transcript.AppendMessage(message)
 	}
-	temporary.FinalizeAll()
+	transcript.FinalizeAll()
 	if err := ctx.Err(); err != nil {
-		publishTerminal(ConversationSwitchResult{Err: err})
-		return
+		return nil, err
 	}
-	blocks := append([]Block(nil), temporary.Blocks()...)
+	return &Conversation{
+		id: conversationID, transcript: transcript,
+		continuation: continuationFromHistory(response.Data.Attributes.Messages),
+	}, nil
+}
 
-	candidate := &conversationCandidate{
-		transcript: temporary, continuation: continuationFromHistory(response.Data.Attributes.Messages),
-		decision: make(chan bool, 1), done: make(chan struct{}),
+// InstallConversation replaces the current conversation while idle. The caller
+// must first check that the load still belongs to its current request.
+func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversation) error {
+	if !e.begin() {
+		return ErrOperationActive
 	}
-	out <- ConversationSwitchResult{ConversationID: conversationID, Blocks: blocks, candidate: candidate}
-	commit := false
-	select {
-	case commit = <-candidate.decision:
-	case <-ctx.Done():
-		candidate.err = ctx.Err()
+	defer e.active.Store(false)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	if commit && candidate.err == nil {
-		if err := ctx.Err(); err != nil {
-			candidate.err = err
-		} else {
-			// The response's data.id is intentionally ignored: it is a fresh
-			// response UUID, not the selected conversation identity.
-			e.opts.ConversationID = conversationID
-			e.opts.MessageHistory = nil
-			e.transcript = temporary
-			e.continuation = candidate.continuation
-		}
-	}
-	// candidate.done is the completion barrier observed by Commit/Discard. The
-	// operation gate must already be free when that receive unblocks.
-	release()
-	close(candidate.done)
+	e.installConversation(conversation)
+	return nil
+}
+
+// installConversation runs only while the caller owns the operation gate.
+func (e *Engine) installConversation(conversation *Conversation) {
+	e.opts.ConversationID = conversation.id
+	e.opts.MessageHistory = nil
+	e.transcript = conversation.transcript
+	e.continuation = conversation.continuation
 }
 
 // Snapshot returns a copy of the current transcript. Call it only while the
