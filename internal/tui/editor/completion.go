@@ -64,24 +64,6 @@ type CommandSpec struct {
 	Detail  string
 }
 
-var commands = []CommandSpec{
-	{"new", []string{"clear"}, "start a new conversation"},
-	{"resume", nil, "resume a conversation"},
-	{"settings", nil, "open assistant settings"},
-	{"status", nil, "show session status"},
-	{"permissions", nil, "show or switch the permissions mode"},
-	{"copy", nil, "copy the latest assistant response"},
-	{"web", nil, "open this conversation in Datadog"},
-	{"logout", nil, "sign out from your Datadog account"},
-	{"quit", []string{"exit"}, "exit bits"},
-}
-
-// CommandCandidates returns slash-command candidates whose canonical name or alias
-// starts with q.
-func CommandCandidates(q string) []Candidate {
-	return CommandCandidatesFrom(commands, q)
-}
-
 func CommandCandidatesFrom(commands []CommandSpec, q string) []Candidate {
 	q = strings.ToLower(q)
 	out := make([]Candidate, 0, len(commands))

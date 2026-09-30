@@ -114,7 +114,7 @@ func (m *Model) searchesBlocked() bool {
 }
 
 func (m *Model) syncCompletionSearches() tea.Cmd {
-	return batchCommands(m.syncEntitySearch(), m.syncFileSearch())
+	return tea.Batch(m.syncEntitySearch(), m.syncFileSearch())
 }
 
 func (m *Model) stopCompletionSearches() tea.Cmd {

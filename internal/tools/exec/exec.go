@@ -324,8 +324,7 @@ func cloneInt(value *int) *int {
 	if value == nil {
 		return nil
 	}
-	cloned := *value
-	return &cloned
+	return new(*value)
 }
 
 type execLauncher interface {

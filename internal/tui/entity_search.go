@@ -287,20 +287,3 @@ func contextFromAttachments(attachments []editor.Attachment) *assistant.Assistan
 	}
 	return &assistant.AssistantContext{Entities: entities}
 }
-
-func batchCommands(commands ...tea.Cmd) tea.Cmd {
-	nonNil := commands[:0]
-	for _, command := range commands {
-		if command != nil {
-			nonNil = append(nonNil, command)
-		}
-	}
-	switch len(nonNil) {
-	case 0:
-		return nil
-	case 1:
-		return nonNil[0]
-	default:
-		return tea.Batch(nonNil...)
-	}
-}

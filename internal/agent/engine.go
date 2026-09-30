@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -171,19 +172,6 @@ type toolCommand struct {
 	decision   ApprovalDecision
 	cancel     bool
 	stop       bool
-}
-
-type pendingTool struct {
-	call  ToolCall
-	index int
-	key   ApprovalKey
-}
-
-type toolDone struct {
-	call   ToolCall
-	index  int
-	result ToolResult
-	err    error
 }
 
 // New returns an Engine. opts carries the per-request defaults (profile, model,
@@ -534,8 +522,11 @@ func (e *Engine) run(
 			return
 		}
 		completion.Denied = completion.Denied || toolRound.denied
-		if toolRound.stopped {
-			// A denial was answered on the wire; discard the follow-up and end the turn.
+		switch toolRound.outcome {
+		case roundAborted:
+			return // cancelled: end the turn quietly
+		case roundStopped:
+			// The round was answered on the wire; discard the follow-up and end the turn.
 			if ctx.Err() == nil {
 				opts.ConversationID = convID
 				id, drainRounds, err := e.drainStoppedToolCalls(ctx, toolRound.responses, opts)
@@ -562,17 +553,9 @@ func (e *Engine) run(
 				completion.Completed = emitTerminal(Event{Kind: EventTurnDone})
 			}
 			return
+		case roundAnswered:
+			next = toolRound.responses
 		}
-		if !toolRound.complete {
-			if ctx.Err() == nil {
-				if !finalizeAndEmit(emit) {
-					return
-				}
-				completion.Completed = emit(Event{Kind: EventTurnDone})
-			}
-			return
-		}
-		next = toolRound.responses
 	}
 	completion.Err = ErrMaxTurns
 	if !finalizeAndEmit(emitAtRound(maxTurns)) {
@@ -629,12 +612,21 @@ func (e *Engine) drainStoppedToolCalls(
 	return conversationID, rounds, ErrMaxTurns
 }
 
-// toolRound is one client-tool round trip's wire responses and outcome.
+// roundOutcome is how a client-tool round ended.
+type roundOutcome uint8
+
+const (
+	roundAborted  roundOutcome = iota // the turn was cancelled; nothing is answered
+	roundAnswered                     // send the responses as the next round
+	roundStopped                      // answer on the wire, drain follow-ups, end the turn
+)
+
+// toolRound is one client-tool round trip's outcome and wire responses.
+// Responses are set unless the round was aborted.
 type toolRound struct {
+	outcome   roundOutcome
 	responses []assistant.ClientToolResponse
-	complete  bool
 	denied    bool
-	stopped   bool
 }
 
 func cloneUsage(usage *assistant.Usage) *assistant.Usage {
@@ -642,17 +634,15 @@ func cloneUsage(usage *assistant.Usage) *assistant.Usage {
 		return nil
 	}
 	copied := *usage
-	copied.InputTokens = cloneInt(usage.InputTokens)
-	copied.OutputTokens = cloneInt(usage.OutputTokens)
-	copied.TimeToFirstChunkMs = cloneInt(usage.TimeToFirstChunkMs)
-	return &copied
-}
-
-func cloneInt(value *int) *int {
-	if value == nil {
-		return nil
+	if usage.InputTokens != nil {
+		copied.InputTokens = new(*usage.InputTokens)
 	}
-	copied := *value
+	if usage.OutputTokens != nil {
+		copied.OutputTokens = new(*usage.OutputTokens)
+	}
+	if usage.TimeToFirstChunkMs != nil {
+		copied.TimeToFirstChunkMs = new(*usage.TimeToFirstChunkMs)
+	}
 	return &copied
 }
 
@@ -788,6 +778,49 @@ func (e *Engine) restore(ctx context.Context, out chan<- Event) {
 	}
 }
 
+// callStatus is where one client tool call is within its round.
+type callStatus int
+
+const (
+	callQueued callStatus = iota // not yet dispatched
+	callAwaitingApproval
+	callRunning
+	callResolved // its wire response is recorded
+)
+
+// roundCall is the engine goroutine's state for one client tool call.
+type roundCall struct {
+	call     ToolCall
+	status   callStatus
+	key      ApprovalKey                  // set while awaiting approval
+	cancel   context.CancelFunc           // set once launched
+	response assistant.ClientToolResponse // set once resolved
+}
+
+func unresolved(c *roundCall) bool { return c.status != callResolved }
+
+type toolDone struct {
+	call   *roundCall
+	result ToolResult
+	err    error
+}
+
+// toolRoundState is one runTools invocation. Only the engine goroutine touches
+// it; handler goroutines report back through results.
+type toolRoundState struct {
+	e             *Engine
+	ctx           context.Context // parent of every handler context
+	cancelRound   context.CancelFunc
+	tools         *ToolSet
+	send          func(Event) bool
+	onDeny        DenyPolicy
+	calls         []*roundCall // in wire order
+	byID          map[string]*roundCall
+	results       chan toolDone
+	denied        bool
+	stopRequested bool
+}
+
 // Workers only execute handlers. The engine goroutine owns approvals,
 // transcript changes, and response ordering.
 func (e *Engine) runTools(
@@ -798,295 +831,258 @@ func (e *Engine) runTools(
 	send func(Event) bool,
 	onDeny DenyPolicy,
 ) (toolRound, error) {
-	work := make([]pendingTool, len(calls))
-	seen := make(map[string]struct{}, len(calls))
-	byID := make(map[string]pendingTool, len(calls))
+	roundCtx, cancelRound := context.WithCancel(ctx)
+	defer cancelRound()
+	r := &toolRoundState{
+		e:           e,
+		ctx:         roundCtx,
+		cancelRound: cancelRound,
+		tools:       tools,
+		send:        send,
+		onDeny:      onDeny,
+		calls:       make([]*roundCall, len(calls)),
+		byID:        make(map[string]*roundCall, len(calls)),
+		results:     make(chan toolDone, len(calls)),
+	}
 	for i, call := range calls {
 		if call.ID == "" {
 			return toolRound{}, errors.New("client tool call has no id")
 		}
-		if _, exists := seen[call.ID]; exists {
+		if _, exists := r.byID[call.ID]; exists {
 			return toolRound{}, fmt.Errorf("duplicate client tool call id %q", call.ID)
 		}
-		seen[call.ID] = struct{}{}
-		work[i] = pendingTool{call: call, index: i}
-		byID[call.ID] = work[i]
+		r.calls[i] = &roundCall{call: call}
+		r.byID[call.ID] = r.calls[i]
 	}
 
-	responses := make([]assistant.ClientToolResponse, len(work))
-	pending := make(map[string]pendingTool)
-	running := make(map[string]context.CancelFunc)
-	resolved := make(map[string]bool, len(work))
-	results := make(chan toolDone, len(work))
-	outstanding := len(work)
-	denied := false
-	stopRequested := false
-
-	completeTool := func(item pendingTool, result ToolResult) bool {
-		if resolved[item.call.ID] {
-			return true
-		}
-		resolved[item.call.ID] = true
-		outstanding--
-		responses[item.index] = toolResponse(item.call, result)
-		result = tools.NormalizeResult(item.call, result)
-		_, updated := e.transcript.MarkToolExecuted(item.call.ID, result)
-		if !updated {
-			return true
-		}
-		return send(Event{Kind: EventTranscript, Transcript: e.snapshot()})
-	}
-	launch := func(item pendingTool, approved bool) bool {
-		toolCtx, cancel := context.WithCancel(ctx)
-		running[item.call.ID] = cancel
-		if approved {
-			_, updated := e.transcript.MarkToolRunning(item.call.ID)
-			if updated {
-				if !send(Event{Kind: EventTranscript, Transcript: e.snapshot()}) {
-					cancel()
-					delete(running, item.call.ID)
-					return false
-				}
-			}
-		}
-		go func() {
-			result, err := tools.Run(toolCtx, item.call)
-			results <- toolDone{call: item.call, index: item.index, result: result, err: err}
-		}()
-		return true
-	}
-	cancelRunning := func() {
-		for _, cancel := range running {
-			cancel()
+	// ok turns false once an event can no longer be delivered or the turn is
+	// cancelled; the round then ends without responses.
+	ok := true
+	for _, c := range r.calls {
+		if ok = r.dispatch(c); !ok {
+			break
 		}
 	}
-	defer cancelRunning()
-	// stopPendingAfterDenial answers still-pending approvals as cancelled;
-	// running siblings finish so their real results reach the wire batch.
-	stopPendingAfterDenial := func() bool {
-		for _, ordered := range work {
-			item, ok := pending[ordered.call.ID]
-			if !ok {
-				continue
-			}
-			delete(pending, item.call.ID)
-			if !completeTool(item, cancelledResult()) {
-				cancelRunning()
-				return false
-			}
-		}
-		return true
-	}
-	stopRound := func(failed *pendingTool, err error) {
-		cancelRunning()
-		for _, item := range work {
-			if resolved[item.call.ID] {
-				continue
-			}
-			result := cancelledResult()
-			if failed != nil && item.call.ID == failed.call.ID {
-				result = ToolResult{Title: "Tool failed", Output: err.Error(), IsError: true}
-			}
-			completeTool(item, result)
-		}
-	}
-	denyServerGate := func(item pendingTool, result ToolResult) bool {
-		denied = true
-		if !completeTool(item, result) {
-			cancelRunning()
-			return false
-		}
-		if onDeny == DenyStop {
-			stopRequested = true
-			if !stopPendingAfterDenial() {
-				return false
-			}
-		}
-		return true
-	}
-
-	for _, item := range work {
-		permissions := tools.snapshotPermissions()
-		if item.call.Name == assistant.ApprovalRequestTool {
-			if stopRequested {
-				if !completeTool(item, cancelledResult()) {
-					cancelRunning()
-					return toolRound{denied: denied}, nil
-				}
-				continue
-			}
-			if _, err := parseServerGateInput(item.call); err != nil {
-				if !denyServerGate(item, invalidServerGateResult()) {
-					return toolRound{denied: denied}, nil
-				}
-				continue
-			}
-		}
-		if item.call.Name == assistant.ApprovalRequestTool && permissions.approvesServerGate() {
-			if !completeTool(item, approvedResult()) {
-				cancelRunning()
-				return toolRound{denied: denied}, nil
-			}
-			continue
-		}
-		requirement, needsApproval := permissions.approval(item.call)
-		_, granted := e.sessionGrants[requirement.Key]
-		if needsApproval && !granted {
-			if stopRequested {
-				if !completeTool(item, cancelledResult()) {
-					cancelRunning()
-					return toolRound{denied: denied}, nil
-				}
-				continue
-			}
-			if permissions.deniesGates() {
-				if !denyServerGate(item, modeDeniedResult()) {
-					return toolRound{denied: denied}, nil
-				}
-				continue
-			}
-			item.key = requirement.Key
-			pending[item.call.ID] = item
-			_, updated := e.transcript.MarkAwaitingApproval(item.call.ID, requirement.Prompt)
-			if updated {
-				if !send(Event{Kind: EventTranscript, Transcript: e.snapshot()}) {
-					cancelRunning()
-					return toolRound{denied: denied}, nil
-				}
-			}
-			continue
-		}
-		if item.call.Name == assistant.ApprovalRequestTool {
-			if !needsApproval {
-				if !denyServerGate(item, serverDeniedResult()) {
-					return toolRound{denied: denied}, nil
-				}
-				continue
-			}
-			if !completeTool(item, approvedResult()) {
-				cancelRunning()
-				return toolRound{denied: denied}, nil
-			}
-			continue
-		}
-		if !launch(item, false) {
-			cancelRunning()
-			return toolRound{denied: denied}, nil
-		}
-	}
-
-	for outstanding > 0 {
+	for ok && slices.ContainsFunc(r.calls, unresolved) {
 		select {
 		case command := <-e.commands:
-			if command.generation != generation {
-				continue
-			}
-			if command.stop {
-				stopRequested = true
-				stopRound(nil, nil)
-				continue
-			}
-			if command.cancel {
-				if item, ok := pending[command.id]; ok {
-					delete(pending, command.id)
-					if !completeTool(item, cancelledResult()) {
-						cancelRunning()
-						return toolRound{denied: denied}, nil
-					}
-					continue
-				}
-				if cancel, ok := running[command.id]; ok {
-					cancel()
-					delete(running, command.id)
-					if !completeTool(byID[command.id], cancelledResult()) {
-						cancelRunning()
-						return toolRound{denied: denied}, nil
-					}
-				}
-				continue
+			if command.generation == generation {
+				ok = r.handleCommand(command)
 			}
 
-			item, ok := pending[command.id]
-			if !ok {
-				continue
+		case done := <-r.results:
+			c := done.call
+			if c.status == callResolved {
+				continue // cancelled or stopped before its handler returned
 			}
-			delete(pending, command.id)
-			if command.decision == ApprovalDeny {
-				// Answer the denial on the wire; siblings still resolve. Under
-				// DenyStop the round then aborts without a follow-up round.
-				denied = true
-				if !completeTool(item, approvalDeniedResult(item.call)) {
-					cancelRunning()
-					return toolRound{denied: denied}, nil
-				}
-				if onDeny == DenyStop {
-					stopRequested = true
-					if !stopPendingAfterDenial() {
-						return toolRound{denied: denied}, nil
-					}
-				}
-				continue
-			}
-			if command.decision == ApprovalAllowSession {
-				e.sessionGrants[item.key] = struct{}{}
-			}
-			approve := func(item pendingTool) bool {
-				if item.call.Name == assistant.ApprovalRequestTool {
-					return completeTool(item, approvedResult())
-				}
-				return launch(item, true)
-			}
-			if !approve(item) {
-				cancelRunning()
-				return toolRound{denied: denied}, nil
-			}
-			for _, ordered := range work {
-				sibling, ok := pending[ordered.call.ID]
-				if !ok {
-					continue
-				}
-				if _, granted := e.sessionGrants[sibling.key]; !granted {
-					continue
-				}
-				delete(pending, sibling.call.ID)
-				if !approve(sibling) {
-					cancelRunning()
-					return toolRound{denied: denied}, nil
-				}
-			}
-
-		case done := <-results:
-			if resolved[done.call.ID] {
-				continue
-			}
-			if cancel, ok := running[done.call.ID]; ok {
-				cancel()
-				delete(running, done.call.ID)
-			}
-			item := work[done.index]
-			if done.err != nil {
-				if stopRequested || denied {
-					// Record the failure so the round's batch still gets answered.
-					if !completeTool(item, ToolResult{Title: "Tool failed", Output: done.err.Error(), IsError: true}) {
-						cancelRunning()
-						return toolRound{denied: denied}, nil
-					}
-					continue
-				}
-				stopRound(&item, done.err)
-				return toolRound{denied: denied}, done.err
-			}
-			if !completeTool(item, done.result) {
-				cancelRunning()
-				return toolRound{denied: denied}, nil
+			c.cancel()
+			switch {
+			case done.err == nil:
+				ok = r.resolve(c, done.result)
+			case r.stopRequested || r.denied:
+				// Record the failure so the round's batch still gets answered.
+				ok = r.resolve(c, toolFailedResult(done.err))
+			default:
+				r.stopRound(c, done.err)
+				return toolRound{denied: r.denied}, done.err
 			}
 
 		case <-ctx.Done():
-			cancelRunning()
-			return toolRound{denied: denied}, nil
+			ok = false
 		}
 	}
-	return toolRound{responses: responses, complete: true, denied: denied, stopped: stopRequested}, nil
+	if !ok {
+		return toolRound{outcome: roundAborted, denied: r.denied}, nil
+	}
+	round := toolRound{
+		outcome:   roundAnswered,
+		responses: make([]assistant.ClientToolResponse, len(r.calls)),
+		denied:    r.denied,
+	}
+	if r.stopRequested {
+		round.outcome = roundStopped
+	}
+	for i, c := range r.calls {
+		round.responses[i] = c.response
+	}
+	return round, nil
+}
+
+// dispatch decides how a call starts: answered locally, parked for approval,
+// or launched.
+func (r *toolRoundState) dispatch(c *roundCall) bool {
+	permissions := r.tools.snapshotPermissions()
+	if c.call.Name != assistant.ApprovalRequestTool {
+		requirement, needsApproval := permissions.approval(c.call)
+		_, granted := r.e.sessionGrants[requirement.Key]
+		switch {
+		case !needsApproval || granted:
+			return r.launch(c, false)
+		case r.stopRequested:
+			return r.resolve(c, cancelledResult())
+		case permissions.deniesGates():
+			return r.deny(c, modeDeniedResult())
+		default:
+			return r.awaitApproval(c, requirement)
+		}
+	}
+
+	// The server write gate never runs a handler; it is answered locally.
+	if r.stopRequested {
+		return r.resolve(c, cancelledResult())
+	}
+	if _, err := parseServerGateInput(c.call); err != nil {
+		return r.deny(c, invalidServerGateResult())
+	}
+	if permissions.approvesServerGate() {
+		return r.resolve(c, approvedResult())
+	}
+	requirement, needsApproval := permissions.approval(c.call)
+	if !needsApproval {
+		return r.deny(c, serverDeniedResult())
+	}
+	if _, granted := r.e.sessionGrants[requirement.Key]; granted {
+		return r.resolve(c, approvedResult())
+	}
+	if permissions.deniesGates() {
+		return r.deny(c, modeDeniedResult())
+	}
+	return r.awaitApproval(c, requirement)
+}
+
+func (r *toolRoundState) handleCommand(command toolCommand) bool {
+	if command.stop {
+		r.stopRequested = true
+		r.stopRound(nil, nil)
+		return true
+	}
+	c, ok := r.byID[command.id]
+	if !ok {
+		return true
+	}
+	if command.cancel {
+		switch c.status {
+		case callAwaitingApproval:
+			return r.resolve(c, cancelledResult())
+		case callRunning:
+			c.cancel()
+			return r.resolve(c, cancelledResult())
+		default:
+			return true
+		}
+	}
+
+	if c.status != callAwaitingApproval {
+		return true
+	}
+	if command.decision == ApprovalDeny {
+		return r.deny(c, approvalDeniedResult(c.call))
+	}
+	if command.decision == ApprovalAllowSession {
+		r.e.sessionGrants[c.key] = struct{}{}
+	}
+	if !r.approve(c) {
+		return false
+	}
+	for _, sibling := range r.calls {
+		if sibling.status != callAwaitingApproval {
+			continue
+		}
+		if _, granted := r.e.sessionGrants[sibling.key]; granted && !r.approve(sibling) {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *toolRoundState) awaitApproval(c *roundCall, requirement ApprovalRequirement) bool {
+	c.status = callAwaitingApproval
+	c.key = requirement.Key
+	if _, updated := r.e.transcript.MarkAwaitingApproval(c.call.ID, requirement.Prompt); !updated {
+		return true
+	}
+	return r.send(Event{Kind: EventTranscript, Transcript: r.e.snapshot()})
+}
+
+func (r *toolRoundState) approve(c *roundCall) bool {
+	if c.call.Name == assistant.ApprovalRequestTool {
+		return r.resolve(c, approvedResult())
+	}
+	return r.launch(c, true)
+}
+
+// deny answers the denial on the wire; siblings still resolve. Under DenyStop
+// still-pending approvals are answered as cancelled and the round then ends
+// without a follow-up round, while running siblings finish so their real
+// results reach the wire batch.
+func (r *toolRoundState) deny(c *roundCall, result ToolResult) bool {
+	r.denied = true
+	if !r.resolve(c, result) {
+		return false
+	}
+	if r.onDeny != DenyStop {
+		return true
+	}
+	r.stopRequested = true
+	for _, sibling := range r.calls {
+		if sibling.status == callAwaitingApproval && !r.resolve(sibling, cancelledResult()) {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *toolRoundState) launch(c *roundCall, approved bool) bool {
+	toolCtx, cancel := context.WithCancel(r.ctx)
+	c.status = callRunning
+	c.cancel = cancel
+	if approved {
+		if _, updated := r.e.transcript.MarkToolRunning(c.call.ID); updated {
+			if !r.send(Event{Kind: EventTranscript, Transcript: r.e.snapshot()}) {
+				return false
+			}
+		}
+	}
+	call := c.call
+	go func() {
+		result, err := r.tools.Run(toolCtx, call)
+		r.results <- toolDone{call: c, result: result, err: err}
+	}()
+	return true
+}
+
+// stopRound cancels every handler and answers each unresolved call as
+// cancelled, or as failed for the call whose handler failed.
+func (r *toolRoundState) stopRound(failed *roundCall, err error) {
+	r.cancelRound()
+	for _, c := range r.calls {
+		if c.status == callResolved {
+			continue
+		}
+		result := cancelledResult()
+		if c == failed {
+			result = toolFailedResult(err)
+		}
+		r.resolve(c, result)
+	}
+}
+
+// resolve records the call's wire response once and publishes its result.
+func (r *toolRoundState) resolve(c *roundCall, result ToolResult) bool {
+	if c.status == callResolved {
+		return true
+	}
+	c.status = callResolved
+	c.response = toolResponse(c.call, result)
+	result = r.tools.NormalizeResult(c.call, result)
+	if _, updated := r.e.transcript.MarkToolExecuted(c.call.ID, result); !updated {
+		return true
+	}
+	return r.send(Event{Kind: EventTranscript, Transcript: r.e.snapshot()})
+}
+
+func toolFailedResult(err error) ToolResult {
+	return ToolResult{Title: "Tool failed", Output: err.Error(), IsError: true}
 }
 
 func toolCallOf(content assistant.Content) ToolCall {

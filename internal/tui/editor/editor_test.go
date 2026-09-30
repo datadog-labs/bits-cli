@@ -381,7 +381,7 @@ func TestSetFileResultsUsesParentProvidedCandidates(t *testing.T) {
 
 func TestCommandCandidatesAliasDiscoverable(t *testing.T) {
 	// The canonical name matches its own prefix.
-	quit := CommandCandidates("q")
+	quit := CommandCandidatesFrom(testCommands, "q")
 	if len(quit) == 0 {
 		t.Fatal("expected /quit for prefix 'q'")
 	}
@@ -392,7 +392,7 @@ func TestCommandCandidatesAliasDiscoverable(t *testing.T) {
 	}
 
 	// The alias is discoverable by its own prefix and normalizes to canonical on accept.
-	exit := CommandCandidates("ex")
+	exit := CommandCandidatesFrom(testCommands, "ex")
 	if len(exit) != 1 {
 		t.Fatalf("expected one candidate for alias prefix 'ex', got %d", len(exit))
 	}
@@ -400,7 +400,7 @@ func TestCommandCandidatesAliasDiscoverable(t *testing.T) {
 		t.Errorf("alias accept should insert canonical /quit, got %q", exit[0].Insert)
 	}
 
-	clear := CommandCandidates("cl")
+	clear := CommandCandidatesFrom(testCommands, "cl")
 	if len(clear) != 1 || clear[0].Insert != "/new" {
 		t.Fatalf("/clear alias candidate = %+v, want one canonical /new insertion", clear)
 	}
@@ -420,6 +420,20 @@ func TestRecomputeOpensAndClosesMenu(t *testing.T) {
 	if e.MenuOpen() {
 		t.Fatal("menu should close without a trigger")
 	}
+}
+
+// testCommands is a fixture; production injects the TUI's command table.
+// It has more entries than menuVisibleRows so overflow paths are exercised.
+var testCommands = []CommandSpec{
+	{Name: "new", Aliases: []string{"clear"}, Detail: "start a new conversation"},
+	{Name: "resume", Detail: "resume a conversation"},
+	{Name: "settings", Detail: "open assistant settings"},
+	{Name: "status", Detail: "show session status"},
+	{Name: "permissions", Detail: "choose what Bits is allowed to do"},
+	{Name: "copy", Detail: "copy the latest assistant response"},
+	{Name: "web", Detail: "open this conversation in Datadog"},
+	{Name: "logout", Detail: "sign out from your Datadog account"},
+	{Name: "quit", Aliases: []string{"exit"}, Detail: "exit bits"},
 }
 
 func TestEscapeDismissesCompletionWithoutChangingPrompt(t *testing.T) {
@@ -447,6 +461,7 @@ func TestEscapeDismissesCompletionWithoutChangingPrompt(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			e := New()
+			e.SetCommands(testCommands)
 			e.ta.SetValue(test.value)
 			e.ta.SetCursorColumn(len([]rune(test.value)))
 			test.open(e)
@@ -474,6 +489,7 @@ func TestEscapeDismissesCompletionWithoutChangingPrompt(t *testing.T) {
 
 func TestSlashCompletionOnlyOpensForFirstPromptToken(t *testing.T) {
 	e := New()
+	e.SetCommands(testCommands)
 
 	e.ta.SetValue("/new")
 	e.ta.SetCursorColumn(len([]rune("/new")))
@@ -523,6 +539,7 @@ func TestAcceptReplacesActiveWord(t *testing.T) {
 
 func TestMoveWraps(t *testing.T) {
 	e := New()
+	e.SetCommands(testCommands)
 	e.ta.SetValue("/")
 	e.recompute()
 	n := len(e.menu.items)
@@ -542,6 +559,7 @@ func TestMoveWraps(t *testing.T) {
 
 func TestAutocompleteDetailsUseAlignedColumns(t *testing.T) {
 	e := New()
+	e.SetCommands(testCommands)
 	e.SetWidth(80)
 	e.ta.SetValue("/")
 	e.ta.SetCursorColumn(1)
@@ -580,6 +598,7 @@ func TestAutocompleteDetailsUseAlignedColumns(t *testing.T) {
 func TestCompletionMenuUsesFramedResponsiveLayout(t *testing.T) {
 	for _, width := range []int{40, 80, 120} {
 		e := New()
+		e.SetCommands(testCommands)
 		e.SetWidth(width)
 		e.SetMenuHeight(10)
 		e.ta.SetValue("/")
@@ -606,6 +625,7 @@ func TestCompletionMenuUsesFramedResponsiveLayout(t *testing.T) {
 
 func TestCompletionMenuCountsRowsActuallyHiddenBelow(t *testing.T) {
 	e := New()
+	e.SetCommands(testCommands)
 	e.SetWidth(80)
 	e.SetMenuHeight(10)
 	e.ta.SetValue("/")

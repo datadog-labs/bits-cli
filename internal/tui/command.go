@@ -196,19 +196,19 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 	case commandQuit:
 		return m.quit()
 	case commandResume:
-		return m, batchCommands(m.stopCompletionSearches(), m.openConversationPicker())
+		return m, tea.Batch(m.stopCompletionSearches(), m.openConversationPicker())
 	case commandStatus:
-		return m, batchCommands(m.stopCompletionSearches(), m.openStatus())
+		return m, tea.Batch(m.stopCompletionSearches(), m.openStatus())
 	case commandCopy:
 		return m, m.copyLatestAssistantResponse()
 	case commandWeb:
-		return m, batchCommands(m.stopCompletionSearches(), m.openConversationInBrowser())
+		return m, tea.Batch(m.stopCompletionSearches(), m.openConversationInBrowser())
 	case commandSettings:
-		return m, batchCommands(m.stopCompletionSearches(), m.openSettingsInBrowser())
+		return m, tea.Batch(m.stopCompletionSearches(), m.openSettingsInBrowser())
 	case commandLogout:
 		return m, m.startLogout()
 	case commandPermissions:
-		return m, batchCommands(m.stopCompletionSearches(), m.switchPermissions(argument))
+		return m, tea.Batch(m.stopCompletionSearches(), m.switchPermissions(argument))
 	default:
 		panic("unhandled registered command")
 	}

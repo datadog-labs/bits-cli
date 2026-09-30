@@ -826,6 +826,71 @@ func TestEngineCancelRunningTool(t *testing.T) {
 	}
 }
 
+// StopTools answers every unresolved call in the round as cancelled, persists
+// that batch, and ends the turn without folding the backend's follow-up.
+func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
+	backend := &batchToolBackend{t: t, toolNames: []string{"run", "gated"}}
+	started := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	tools, err := NewToolSet(ModeManual,
+		Tool{Definition: assistant.ClientTool{Name: "run"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+			close(started)
+			<-ctx.Done()
+			handlerErr <- ctx.Err()
+			return ToolResult{}, ctx.Err()
+		}},
+		Tool{Definition: assistant.ClientTool{Name: "gated"}, Approval: func(ToolCall) (ApprovalRequirement, bool) {
+			return ApprovalRequirement{Key: ApprovalKey{Tool: "gated"}}, true
+		}, Handler: func(context.Context, ToolCall) (ToolResult, error) {
+			t.Error("stopped tool awaiting approval ran")
+			return ToolResult{}, nil
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	engine := New(backend, assistant.SendOptions{})
+	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
+	<-started
+	waitForToolStatus(t, events, "call-gated", ToolAwaitingApproval)
+	if !engine.StopTools() {
+		t.Fatal("StopTools was not accepted during an active round")
+	}
+	rest := drain(events)
+
+	if err := <-handlerErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("running handler context error = %v, want canceled", err)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("turn only ended through its context (%v); StopTools must end it", err)
+	}
+	if len(rest) == 0 || rest[len(rest)-1].Kind != EventTurnDone {
+		t.Fatalf("stopped turn did not end with EventTurnDone: %+v", rest)
+	}
+	if backend.calls != 2 || len(backend.responses) != 2 {
+		t.Fatalf("backend calls/responses = %d/%d, want 2/2", backend.calls, len(backend.responses))
+	}
+	for i, id := range []string{"call-run", "call-gated"} {
+		response := backend.responses[i]
+		if response.ToolCallID != id || response.Title != "Cancelled" || response.Status != assistant.ToolStatusError {
+			t.Fatalf("response %d = %+v, want cancelled %s", i, response, id)
+		}
+		if !hasToolStatus(rest, id, ToolCancelled) {
+			t.Fatalf("tool %s never reached cancelled status", id)
+		}
+	}
+	for _, event := range rest {
+		for _, block := range event.Transcript.Blocks {
+			if block.Markdown != nil && block.Markdown.Content == "done" {
+				t.Fatal("follow-up after StopTools was folded into the transcript")
+			}
+		}
+	}
+}
+
 func gatedHandler(started, finished chan<- string, gates map[string]chan struct{}) ToolHandler {
 	return func(_ context.Context, call ToolCall) (ToolResult, error) {
 		started <- call.Name

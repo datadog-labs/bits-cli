@@ -97,6 +97,8 @@ type BackendStatus struct {
 	Site                string
 	AuthenticationMode  string
 	AuthenticationState string
+	// HasCredentials means a successful request proves these credentials.
+	HasCredentials bool
 }
 
 // CurrentUser is the small, non-secret subset of the Datadog user profile that
@@ -122,6 +124,7 @@ func (c *Client) BackendStatus() BackendStatus {
 		Site:                c.BaseURL,
 		AuthenticationMode:  mode,
 		AuthenticationState: "configured, not verified",
+		HasCredentials:      true,
 	}
 }
 

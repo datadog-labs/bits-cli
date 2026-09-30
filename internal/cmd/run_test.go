@@ -51,13 +51,13 @@ func TestRunDispatchesResolvedOptions(t *testing.T) {
 	want := []RunOptions{{
 		ChatOptions: ChatOptions{
 			ConversationID:  "conversation-9",
+			Model:           "claude-sonnet-4-6",
 			InferenceMode:   "fast",
 			AuthMode:        auth.ModeAPIKey,
 			Site:            "https://api.datadoghq.eu",
 			PermissionsMode: agent.ModeDeny,
 		},
 		Prompt:   "summarize the incident",
-		Model:    "claude-sonnet-4-6",
 		Delivery: "adeep",
 	}}
 	if !reflect.DeepEqual(recorded, want) {

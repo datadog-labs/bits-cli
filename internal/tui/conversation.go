@@ -21,7 +21,7 @@ import (
 // idempotent and keeps cleanup from cancelling a second time.
 func (m *Model) requestNewConversation() tea.Cmd {
 	m.after(thenNewConversation)
-	return batchCommands(
+	return tea.Batch(
 		m.stopCompletionSearches(),
 		m.showNotice(notice(chat.NoticeInfo, nil,
 			"Cancelling the current operation before starting a new conversation…"), 0),

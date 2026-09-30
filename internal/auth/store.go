@@ -467,20 +467,10 @@ func keyringDelete() error {
 	return nil
 }
 
-var (
-	keyringAvailableOnce sync.Once
-	keyringAvailableMemo bool
-)
-
 // keyringAvailableCached probes the OS keyring once per process. Availability
 // does not change within a short-lived CLI invocation, so a single probe keeps
 // the store's backend choice stable and avoids repeated D-Bus round trips.
-func keyringAvailableCached() bool {
-	keyringAvailableOnce.Do(func() {
-		keyringAvailableMemo = KeyringAvailable()
-	})
-	return keyringAvailableMemo
-}
+var keyringAvailableCached = sync.OnceValue(KeyringAvailable)
 
 func defaultConfigDir() (string, error) {
 	currentUser, err := user.Current()

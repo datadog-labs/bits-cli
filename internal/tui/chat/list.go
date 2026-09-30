@@ -427,7 +427,7 @@ func (l *List) itemAnimated(it presentationItem) bool {
 	}
 	for i := it.start; i < it.end; i++ {
 		block := l.items[i]
-		if lifecycleOf(block.Tool) == lifecycleRunning || (block.Kind == assistant.KindReasoning && !block.Complete) {
+		if statusOf(block.Tool) == agent.ToolRunning || (block.Kind == assistant.KindReasoning && !block.Complete) {
 			return true
 		}
 	}
