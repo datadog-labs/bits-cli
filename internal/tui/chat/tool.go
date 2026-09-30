@@ -170,13 +170,11 @@ func lifecycleOf(tool *agent.ToolBlock) toolLifecycle {
 	if tool == nil {
 		return lifecycleUnknown
 	}
-	if tool.Denied {
-		return lifecycleDenied
-	}
-	if tool.Cancelled {
-		return lifecycleCancelled
-	}
 	switch tool.Status {
+	case agent.ToolDenied:
+		return lifecycleDenied
+	case agent.ToolCancelled:
+		return lifecycleCancelled
 	case agent.ToolRunning:
 		return lifecycleRunning
 	case agent.ToolAwaitingApproval:
@@ -185,9 +183,10 @@ func lifecycleOf(tool *agent.ToolBlock) toolLifecycle {
 		return lifecycleSuccess
 	case agent.ToolError:
 		return lifecycleError
-	default:
+	case agent.ToolUnknown:
 		return lifecycleUnknown
 	}
+	return lifecycleUnknown
 }
 
 // classifyTool uses the complete wire identity. In particular, server tools
@@ -1113,7 +1112,7 @@ func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, width int, s
 	if tool.Status == agent.ToolRunning && tool.HasFinalInput {
 		state, label = lifecycleAwaiting, "waiting for your answers"
 	}
-	if tool.Cancelled {
+	if tool.Status == agent.ToolCancelled {
 		label = "questions cancelled"
 	}
 	header := renderActivityHeader(state, label, "", width, sty, frame)

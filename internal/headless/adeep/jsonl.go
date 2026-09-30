@@ -354,16 +354,15 @@ func toolStatus(tool *agent.ToolBlock) (string, bool) {
 	case agent.ToolSuccess:
 		return "success", true
 	case agent.ToolError:
-		if tool.Denied {
-			return "denied", true
-		}
-		if tool.Cancelled {
-			return "cancelled", true
-		}
 		return "error", true
-	default:
+	case agent.ToolDenied:
+		return "denied", true
+	case agent.ToolCancelled:
+		return "cancelled", true
+	case agent.ToolUnknown, agent.ToolRunning, agent.ToolAwaitingApproval:
 		return "", false
 	}
+	return "", false
 }
 
 func assistantResponse(blocks []agent.Block, included map[agent.BlockID]struct{}) string {

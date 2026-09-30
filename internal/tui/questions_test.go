@@ -426,7 +426,7 @@ func TestRestoredCallsThatWillNotResumeSettle(t *testing.T) {
 				t.Fatal("a call that cannot resume opened")
 			}
 			for _, block := range m.transcript.Blocks {
-				if block.Tool != nil && !block.Tool.Cancelled {
+				if block.Tool != nil && block.Tool.Status != agent.ToolCancelled {
 					t.Fatalf("restored %s still looks running", block.Tool.Name)
 				}
 			}

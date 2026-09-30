@@ -219,7 +219,7 @@ func TestRunTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 				t.Fatalf("blocks = %+v, want one tool block", result.Blocks)
 			}
 			tool := result.Blocks[1].Tool
-			if !tool.Cancelled || tool.Status == ToolRunning || tool.Status != ToolError {
+			if tool.Status != ToolCancelled {
 				t.Fatalf("tool = %+v, want cancelled terminal error", tool)
 			}
 		})
@@ -250,10 +250,10 @@ func TestRunTurnCancellationLeavesEarlierUnfinishedToolUntouched(t *testing.T) {
 	if result.Outcome != TurnOutcomeCanceled || len(result.Blocks) != 4 {
 		t.Fatalf("result = %+v, want cancelled turn with four blocks", result)
 	}
-	if result.Blocks[1].Tool == nil || result.Blocks[1].Tool.Cancelled {
+	if result.Blocks[1].Tool == nil || result.Blocks[1].Tool.Status == ToolCancelled {
 		t.Fatalf("earlier tool = %+v, want untouched", result.Blocks[1].Tool)
 	}
-	if result.Blocks[3].Tool == nil || !result.Blocks[3].Tool.Cancelled {
+	if result.Blocks[3].Tool == nil || result.Blocks[3].Tool.Status != ToolCancelled {
 		t.Fatalf("current tool = %+v, want cancelled", result.Blocks[3].Tool)
 	}
 }
@@ -280,7 +280,7 @@ func TestStartTurnCancellationDeliversSettledSnapshotUnderBackpressure(t *testin
 		}
 	}
 
-	if lastTool == nil || !lastTool.Cancelled || lastTool.Status != ToolError {
+	if lastTool == nil || lastTool.Status != ToolCancelled {
 		t.Fatalf("final tool = %+v, want cancelled terminal error", lastTool)
 	}
 }

@@ -75,11 +75,11 @@ func approvalTransitionOrder(t *testing.T, decision ApprovalDecision) []string {
 		t.Fatal("decision for call-a was not queued")
 	}
 
-	wantStatus := ToolError
+	wantStatuses := []ToolStatus{ToolDenied, ToolCancelled}
 	var afterDecision []Event
 	if decision == ApprovalAllowSession {
-		wantStatus = ToolRunning
-		for len(toolTransitionOrder(afterDecision, ids, wantStatus)) < len(ids) {
+		wantStatuses = []ToolStatus{ToolRunning}
+		for len(toolTransitionOrder(afterDecision, ids, wantStatuses...)) < len(ids) {
 			select {
 			case event, ok := <-events:
 				if !ok {
@@ -97,10 +97,10 @@ func approvalTransitionOrder(t *testing.T, decision ApprovalDecision) []string {
 	if got := afterDecision[len(afterDecision)-1].Kind; got != EventTurnDone {
 		t.Fatalf("last event = %v, want EventTurnDone", got)
 	}
-	return toolTransitionOrder(afterDecision, ids, wantStatus)
+	return toolTransitionOrder(afterDecision, ids, wantStatuses...)
 }
 
-func toolTransitionOrder(events []Event, ids []string, status ToolStatus) []string {
+func toolTransitionOrder(events []Event, ids []string, statuses ...ToolStatus) []string {
 	seen := make(map[string]bool, len(ids))
 	var order []string
 	for _, event := range events {
@@ -112,7 +112,7 @@ func toolTransitionOrder(events []Event, ids []string, status ToolStatus) []stri
 				continue
 			}
 			block, ok := stateBlock(event, id)
-			if ok && block.Tool != nil && block.Tool.Status == status {
+			if ok && block.Tool != nil && slices.Contains(statuses, block.Tool.Status) {
 				seen[id] = true
 				order = append(order, id)
 			}

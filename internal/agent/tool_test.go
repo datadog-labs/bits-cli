@@ -297,8 +297,8 @@ func TestEngineApprovalScope(t *testing.T) {
 				if response := backend.responses[1][0]; response.ToolCallID != "call-c" || response.Status != assistant.ToolStatusError || response.Metadata.Output != "tool execution was cancelled by the user" {
 					t.Fatalf("follow-up response = %+v, want the cancelled result sent on the wire", response)
 				}
-				assertToolResult(t, all, "call-a", "Permission denied")
-				assertToolResult(t, all, "call-b", "Cancelled")
+				assertToolResult(t, all, "call-a", "Permission denied", ToolDenied)
+				assertToolResult(t, all, "call-b", "Cancelled", ToolCancelled)
 				if !hasDeniedToolBlock(t, all, "call-a") {
 					t.Fatal("tool call-a denial was not recorded as a typed outcome")
 				}
@@ -865,7 +865,7 @@ func hasToolStatus(events []Event, id string, status ToolStatus) bool {
 }
 
 // hasDeniedToolBlock reports whether id's terminal block carries the typed
-// denial flag rather than a plain error.
+// denial status rather than a plain error.
 func hasDeniedToolBlock(t *testing.T, events []Event, id string) bool {
 	t.Helper()
 	for _, event := range events {
@@ -873,22 +873,22 @@ func hasDeniedToolBlock(t *testing.T, events []Event, id string) bool {
 		if !ok || block.Tool == nil {
 			continue
 		}
-		if block.Tool.Status == ToolError && block.Tool.Denied {
+		if block.Tool.Status == ToolDenied {
 			return true
 		}
 	}
 	return false
 }
 
-func assertToolResult(t *testing.T, events []Event, id, title string) {
+func assertToolResult(t *testing.T, events []Event, id, title string, status ToolStatus) {
 	t.Helper()
 	for i := len(events) - 1; i >= 0; i-- {
 		block, ok := stateBlock(events[i], id)
 		if !ok {
 			continue
 		}
-		if block.Tool == nil || block.Tool.Status != ToolError || block.Tool.Title != title {
-			t.Fatalf("tool %q result = %+v, want error titled %q", id, block.Tool, title)
+		if block.Tool == nil || block.Tool.Status != status || block.Tool.Title != title {
+			t.Fatalf("tool %q result = %+v, want status %v titled %q", id, block.Tool, status, title)
 		}
 		return
 	}

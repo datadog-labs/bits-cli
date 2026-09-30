@@ -214,13 +214,12 @@ func TestExecCommandRendersNoOutputForEmptyTerminalResults(t *testing.T) {
 		name       string
 		result     spec.ExecCommandOutput
 		toolStatus agent.ToolStatus
-		cancelled  bool
 	}{
 		{name: "success", result: spec.ExecCommandOutput{Status: spec.ExecSucceeded}, toolStatus: agent.ToolSuccess},
 		{name: "nonzero exit", result: spec.ExecCommandOutput{Status: spec.ExecNonZeroExit}, toolStatus: agent.ToolError},
 		{name: "timeout", result: spec.ExecCommandOutput{Status: spec.ExecTimedOut}, toolStatus: agent.ToolError},
 		{name: "launch failure", result: spec.ExecCommandOutput{Status: spec.ExecLaunchFailed}, toolStatus: agent.ToolError},
-		{name: "cancelled", result: spec.ExecCommandOutput{Status: spec.ExecCancelled}, toolStatus: agent.ToolError, cancelled: true},
+		{name: "cancelled", result: spec.ExecCommandOutput{Status: spec.ExecCancelled}, toolStatus: agent.ToolCancelled},
 		{name: "whitespace only", result: spec.ExecCommandOutput{Status: spec.ExecSucceeded, Stdout: " \t\n", Stderr: "\r\n"}, toolStatus: agent.ToolSuccess},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -230,7 +229,7 @@ func TestExecCommandRendersNoOutputForEmptyTerminalResults(t *testing.T) {
 			}
 			block := agent.Block{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{
 				Name: spec.ExecCommand, Input: `{"cmd":"true"}`, Output: string(output), Status: test.toolStatus,
-				Cancelled: test.cancelled, IsClientSide: true,
+				IsClientSide: true,
 			}}
 
 			plain := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
@@ -264,7 +263,7 @@ func TestExecCommandNoOutputOnlyAppearsForReturnedEmptyOutput(t *testing.T) {
 		},
 		{
 			name: "denied without result",
-			tool: agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"true"}`, Status: agent.ToolError, Denied: true, IsClientSide: true},
+			tool: agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"true"}`, Status: agent.ToolDenied, IsClientSide: true},
 		},
 		{
 			name:   "incomplete output marker",
@@ -443,14 +442,14 @@ func TestOnlyRunningToolAnimationDependsOnFrame(t *testing.T) {
 	}
 }
 
-func TestDeniedAndCancelledTakePrecedenceOverRawError(t *testing.T) {
+func TestDeniedAndCancelledRenderDistinctOutcomes(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		set  func(*agent.ToolBlock)
 		want string
 	}{
-		{"denied", func(tool *agent.ToolBlock) { tool.Denied = true }, "• datadog.search_logs({\"query\":\"timeout\"}) · denied"},
-		{"cancelled", func(tool *agent.ToolBlock) { tool.Cancelled = true }, "• datadog.search_logs({\"query\":\"timeout\"}) · stopped"},
+		{"denied", func(tool *agent.ToolBlock) { tool.Status = agent.ToolDenied }, "• datadog.search_logs({\"query\":\"timeout\"}) · denied"},
+		{"cancelled", func(tool *agent.ToolBlock) { tool.Status = agent.ToolCancelled }, "• datadog.search_logs({\"query\":\"timeout\"}) · stopped"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			block := toolBlockOf(agent.ToolError)

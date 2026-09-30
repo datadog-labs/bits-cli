@@ -48,7 +48,7 @@ func (e *Engine) SettleRestoredTools(tools *ToolSet) bool {
 	changed := false
 	for _, block := range e.transcript.Blocks() {
 		tool := block.Tool
-		if tool == nil || resuming[block.ID.Key] || tool.Cancelled || tool.Denied || tool.Status == ToolSuccess || tool.Status == ToolError {
+		if tool == nil || resuming[block.ID.Key] || tool.Status.IsTerminal() {
 			continue
 		}
 		if _, updated := e.transcript.MarkToolExecuted(block.ID.Key, ToolResult{

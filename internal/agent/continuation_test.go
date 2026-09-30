@@ -155,7 +155,7 @@ func TestCancelledClientToolPublishesTerminalSnapshot(t *testing.T) {
 					}
 				}
 			}
-			if last == nil || !last.Cancelled || last.Status != ToolError {
+			if last == nil || last.Status != ToolCancelled {
 				t.Fatalf("last delivered tool = %+v, want cancelled", last)
 			}
 		})
