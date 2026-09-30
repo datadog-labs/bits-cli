@@ -41,7 +41,9 @@ type entitySearchCacheEntry struct {
 }
 
 // syncEntitySearch reconciles the editor's active @ span with remote work.
-// Every query change cancels the previous request and advances the generation.
+// Every query change cancels the previous request and advances the generation;
+// stopping advances it too, so a matching generation means this query is still
+// the active one.
 func (m *Model) syncEntitySearch() tea.Cmd {
 	if m.searchesBlocked() {
 		m.stopEntitySearch()
@@ -88,7 +90,7 @@ func (m *Model) stopEntitySearch() {
 }
 
 func (m *Model) beginEntitySearch(msg entitySearchDebounceMsg) tea.Cmd {
-	if m.searchesBlocked() || !m.entitySearchActive || msg.generation != m.entitySearchGeneration || msg.query != m.entitySearchQuery {
+	if m.searchesBlocked() || msg.generation != m.entitySearchGeneration {
 		return nil
 	}
 	searcher := m.entitySearcher
@@ -161,7 +163,7 @@ func trimSearchQuotes(query string) string {
 }
 
 func (m *Model) applyEntitySearchResult(msg entitySearchResultMsg) {
-	if m.searchesBlocked() || !m.entitySearchActive || msg.generation != m.entitySearchGeneration || msg.query != m.entitySearchQuery {
+	if m.searchesBlocked() || msg.generation != m.entitySearchGeneration {
 		return
 	}
 	if m.entitySearchCancel != nil {

@@ -110,8 +110,8 @@ func TestSubmitStatusIsLocalAndLoadsFreshWorkspace(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
 	m.editor.Update(tea.PasteMsg{Content: "/status"})
 	_, command := m.submit()
-	if command == nil || m.mode != ModeStatus || m.status == nil {
-		t.Fatalf("status open state: command=%v mode=%v model=%v", command != nil, m.mode, m.status != nil)
+	if command == nil || m.mode != ModeStatus {
+		t.Fatalf("status open state: command=%v mode=%v", command != nil, m.mode)
 	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "User / org") || !strings.Contains(view, "collecting…") {
 		t.Fatalf("status did not show pending identity state:\n%s", view)

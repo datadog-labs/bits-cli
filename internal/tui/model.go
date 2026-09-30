@@ -119,7 +119,7 @@ type Model struct {
 	openURL                func(context.Context, string) error
 	editor                 *editor.Editor
 	picker                 *conversationview.Model
-	status                 *statusview.Model
+	status                 statusview.Model
 	workspace              *workspace.Workspace
 	workspaceDisplayPath   string
 	fileSearchSession      *workspace.FileSearchSession
@@ -300,13 +300,12 @@ func (m *Model) configure(configs []Config) {
 
 func newShell() *Model {
 	theme := styles.Default(true)
-	status := statusview.New(1, 1, theme)
 	m := &Model{
 		editor:            editor.New(),
 		list:              chat.NewList(),
 		animTool:          newAnimationTimeline(toolAnimInterval),
 		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
-		status:            &status,
+		status:            statusview.New(1, 1, theme),
 		approvalPanel:     components.NewPanel(theme.Approval.Panel),
 		permissionsPanel:  components.NewPanel(theme.Permissions),
 		styles:            theme,
@@ -354,9 +353,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
 	}
-	if m.status != nil {
-		m.status.SetStyles(theme)
-	}
+	m.status.SetStyles(theme)
 }
 
 // setMode switches the top-level screen. It is the single entry point for mode

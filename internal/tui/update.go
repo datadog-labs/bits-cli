@@ -377,7 +377,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case statusClosedMsg:
-		if msg.generation == m.statusGeneration && m.mode == ModeStatus {
+		if msg.generation == m.statusGeneration {
 			m.closeStatus()
 		}
 		return m, nil
@@ -696,7 +696,7 @@ func (m *Model) stopStartup() {
 // handleKey routes a keypress to the surface that owns input. Global quit is
 // handled earlier in Update.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "esc" && (m.selection.selecting() || m.selection.selected()) {
+	if msg.String() == "esc" && m.selection.active() {
 		m.clearSelection()
 		return m, nil
 	}
@@ -883,7 +883,7 @@ func (m *Model) resumePendingTools() tea.Cmd {
 // cancelOperation cancels a running engine operation once and drops its tool
 // UIs. Logout is never interrupted this way.
 func (m *Model) cancelOperation() {
-	if m.op.events == nil || m.op.cancel == nil || m.op.stop == stopAll {
+	if m.op.events == nil || m.op.stop == stopAll {
 		return
 	}
 	m.op.stop = stopAll
@@ -963,9 +963,7 @@ func (m *Model) resize(w, h int) {
 	if m.picker != nil {
 		m.picker.SetSize(w, h)
 	}
-	if m.status != nil {
-		m.status.SetSize(w, h)
-	}
+	m.status.SetSize(w, h)
 	if m.mode == ModeTermInit {
 		m.setMode(ModeChat)
 	}

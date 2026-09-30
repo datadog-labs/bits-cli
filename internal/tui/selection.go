@@ -276,6 +276,9 @@ func (s *selection) selecting() bool { return s.dragging }
 // selected reports whether a non-empty range should remain visible.
 func (s *selection) selected() bool { return s.anchor != s.focus || s.singleCell }
 
+// active reports whether a drag or a kept range owns the chat surface.
+func (s *selection) active() bool { return s.selecting() || s.selected() }
+
 // render paints the active selection over frame. The original frame content
 // is returned byte-for-byte when no cells are selected.
 func (s *selection) render(frame selectionFrame) string {
