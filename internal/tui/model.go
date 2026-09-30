@@ -160,16 +160,17 @@ type Model struct {
 	logout    LogoutFunc
 	loggedOut bool
 
-	toolUI            *tools.UI
-	activeToolUI      *toolUISession
-	queuedToolUIs     []*toolUISession
-	pendingApprovals  []agent.Block
-	approvalChoice    int
-	approvalPanel     *components.Panel
-	permissionsPanel  *components.Panel
-	permissionChoice  int
+	toolUI           *tools.UI
+	activeToolUI     *toolUISession
+	queuedToolUIs    []*toolUISession
+	pendingApprovals []agent.Block
+	approvalChoice   int
+	approvalPanel    *components.Panel
+	permissionsPanel *components.Panel
+	// The picker shows the options, or the full-access confirmation; the
+	// cursor is the row on the page shown (on the confirmation, 0 is Yes).
 	permissionConfirm bool
-	permissionAllow   bool
+	permissionCursor  int
 	// A mode selected during an active turn applies when that turn closes.
 	pendingPermissions agent.PermissionsMode
 

@@ -61,8 +61,8 @@ func TestPermissionsShowsCurrentMode(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			m, _ := newPermissionsModel(t, mode)
 			_, _ = m.dispatchCommand("permissions", "")
-			if m.mode != ModePermissions || m.permissionChoice != map[agent.PermissionsMode]int{agent.ModeManual: 0, agent.ModeSkipPermissions: 1}[mode] {
-				t.Fatalf("picker = (%v, %d), want %q selected", m.mode, m.permissionChoice, mode)
+			if m.mode != ModePermissions || m.permissionCursor != map[agent.PermissionsMode]int{agent.ModeManual: 0, agent.ModeSkipPermissions: 1}[mode] {
+				t.Fatalf("picker = (%v, %d), want %q selected", m.mode, m.permissionCursor, mode)
 			}
 			if got := m.tools.PermissionsMode(); got != mode {
 				t.Fatalf("mode = %q, want it unchanged by the query", got)
@@ -139,7 +139,7 @@ func TestPermissionsQueuesDuringActiveTurn(t *testing.T) {
 		t.Fatal("queuing a mode changed the footer or showed a notification")
 	}
 	_, _ = m.dispatchCommand("permissions", "")
-	if m.permissionChoice != 1 || strings.Contains(ansi.Strip(m.permissionsView()), "(queued)") || !strings.Contains(ansi.Strip(m.permissionsView()), "› Full Access (current)") {
+	if m.permissionCursor != 1 || strings.Contains(ansi.Strip(m.permissionsView()), "(queued)") || !strings.Contains(ansi.Strip(m.permissionsView()), "› Full Access (current)") {
 		t.Fatal("picker did not mark the selected choice as current")
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -334,11 +334,11 @@ func TestPermissionsPickerNavigationAndCancel(t *testing.T) {
 func TestPermissionsPickerCurrentModeAndResize(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
 	_, _ = m.dispatchCommand("permissions", "")
-	if m.permissionChoice != 1 || !strings.Contains(m.permissionsView(), "› Full Access (current)") {
+	if m.permissionCursor != 1 || !strings.Contains(m.permissionsView(), "› Full Access (current)") {
 		t.Fatal("picker did not focus the startup mode")
 	}
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 72, Height: 18})
-	if m.permissionChoice != 1 || m.tools.PermissionsMode() != agent.ModeSkipPermissions {
+	if m.permissionCursor != 1 || m.tools.PermissionsMode() != agent.ModeSkipPermissions {
 		t.Fatal("resize changed the selected or active mode")
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -480,7 +480,7 @@ func TestPermissionsPickerCompactResizeKeepsSelection(t *testing.T) {
 	}
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.permissionChoice != 1 || !strings.Contains(ansi.Strip(m.View().Content), "Full Access") {
+	if m.permissionCursor != 1 || !strings.Contains(ansi.Strip(m.View().Content), "Full Access") {
 		t.Fatal("picker did not recover after resize")
 	}
 }

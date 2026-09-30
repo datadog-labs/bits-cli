@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -32,12 +33,7 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 		if m.pendingPermissions != "" {
 			selected = m.pendingPermissions
 		}
-		m.permissionChoice = 0
-		if selected == agent.ModeSkipPermissions {
-			m.permissionChoice = 1
-		}
-		m.permissionConfirm = false
-		m.permissionAllow = true
+		m.permissionConfirm, m.permissionCursor = false, slices.Index(permissionModes[:], selected)
 		m.editor.CloseMenu()
 		m.setMode(ModePermissions)
 		return nil
@@ -54,9 +50,7 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 		return nil
 	}
 	if current == agent.ModeManual && mode == agent.ModeSkipPermissions {
-		m.permissionChoice = 1
-		m.permissionConfirm = true
-		m.permissionAllow = true
+		m.permissionConfirm, m.permissionCursor = true, 0
 		m.editor.CloseMenu()
 		m.setMode(ModePermissions)
 		return nil
@@ -102,11 +96,7 @@ func (m *Model) applyPendingPermissions() tea.Cmd {
 		return m.showNotice(notice(chat.NoticeError, err, "Could not switch the permissions mode."), 0)
 	}
 	if m.mode == ModePermissions {
-		m.permissionConfirm = false
-		m.permissionChoice = 0
-		if mode == agent.ModeSkipPermissions {
-			m.permissionChoice = 1
-		}
+		m.permissionConfirm, m.permissionCursor = false, slices.Index(permissionModes[:], mode)
 	}
 	return nil
 }
@@ -122,14 +112,11 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "esc":
 		m.setMode(ModeChat)
 	case "up", "down", "left", "right", "tab", "shift+tab":
-		if m.permissionConfirm {
-			m.permissionAllow = !m.permissionAllow
-		} else {
-			m.permissionChoice = 1 - m.permissionChoice
-		}
+		// Both pages have two rows.
+		m.permissionCursor = 1 - m.permissionCursor
 	case "enter":
 		if m.permissionConfirm {
-			if !m.permissionAllow {
+			if m.permissionCursor != 0 {
 				m.setMode(ModeChat)
 				return nil
 			}
@@ -139,7 +126,7 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			return m.applyPermissionsMode(agent.ModeSkipPermissions)
 		}
-		mode := permissionModes[m.permissionChoice]
+		mode := permissionModes[m.permissionCursor]
 		if mode == m.tools.PermissionsMode() {
 			m.pendingPermissions = ""
 			m.setMode(ModeChat)
@@ -150,8 +137,7 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if mode == agent.ModeSkipPermissions {
-			m.permissionConfirm = true
-			m.permissionAllow = true
+			m.permissionConfirm, m.permissionCursor = true, 0
 			return nil
 		}
 		return m.applyPermissionsMode(mode)
@@ -206,13 +192,13 @@ func (m *Model) permissionsBody(width, _ int) string {
 		for _, line := range wordwrap(fullAccessConfirmation, width) {
 			rows = append(rows, row(style.MenuDetail, line))
 		}
-		rows = append(rows, blank, choice("Yes, enable full access", m.permissionAllow), blank, choice("Cancel", !m.permissionAllow))
+		rows = append(rows, blank, choice("Yes, enable full access", m.permissionCursor == 0), blank, choice("Cancel", m.permissionCursor == 1))
 		return strings.Join(rows, "\n")
 	}
 	rows = append(rows, row(style.MenuDetail, "Permission changes take effect on the next turn."))
 	for i, label := range m.permissionOptionLabels() {
 		rows = append(rows, blank)
-		rows = append(rows, m.permissionOptionRows(label, permissionOptionDetails[i], width, i == m.permissionChoice)...)
+		rows = append(rows, m.permissionOptionRows(label, permissionOptionDetails[i], width, i == m.permissionCursor)...)
 	}
 	return strings.Join(rows, "\n")
 }
