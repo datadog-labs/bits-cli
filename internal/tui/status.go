@@ -32,13 +32,7 @@ type statusClosedMsg struct{ generation uint64 }
 // identity state asynchronously. Active engine events continue through the
 // root Update loop while the surface is open.
 func (m *Model) openStatus() tea.Cmd {
-	m.statusGeneration++
-	generation := m.statusGeneration
-	if m.statusCancel != nil {
-		m.statusCancel()
-	}
-	statusContext, cancel := context.WithCancel(context.Background())
-	m.statusCancel = cancel
+	statusContext, generation := m.statusTask.start(context.Background(), 0)
 	m.statusIdentity = "collecting…"
 	m.status.SetSize(m.width, m.height)
 	m.status.Open(m.statusRuntime())
@@ -66,25 +60,21 @@ func (m *Model) openStatus() tea.Cmd {
 }
 
 func (m *Model) closeStatus() {
-	m.statusGeneration++
-	if m.statusCancel != nil {
-		m.statusCancel()
-		m.statusCancel = nil
-	}
+	m.statusTask.stop()
 	m.setMode(ModeChat)
 }
 
 // Status results carry the generation openStatus stamped; closeStatus
 // advances it, so results for a closed screen drop.
 func (m *Model) applyStatusWorkspace(message statusWorkspaceMsg) {
-	if message.generation != m.statusGeneration {
+	if message.generation != m.statusTask.gen {
 		return
 	}
 	m.status.SetWorkspace(message.snapshot)
 }
 
 func (m *Model) applyStatusIdentity(message statusIdentityMsg) {
-	if message.generation != m.statusGeneration {
+	if message.generation != m.statusTask.gen {
 		return
 	}
 	switch {
@@ -104,7 +94,7 @@ func (m *Model) applyStatusIdentity(message statusIdentityMsg) {
 }
 
 func (m *Model) updateStatus(message tea.Msg) tea.Cmd {
-	generation := m.statusGeneration
+	generation := m.statusTask.gen
 	next, command := m.status.Update(message)
 	m.status = next
 	if command == nil {

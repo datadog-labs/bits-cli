@@ -87,6 +87,43 @@ func (o operation) accepts(generation uint64) bool {
 	return o.events != nil && generation == o.gen
 }
 
+// task is one cancellable request whose results carry its generation.
+// Starting or stopping advances the generation, so a result from an earlier
+// request drops.
+type task struct {
+	gen    uint64
+	cancel context.CancelFunc
+}
+
+// start stops any running request and returns the next one's context and
+// generation. A zero timeout means no deadline.
+func (t *task) start(parent context.Context, timeout time.Duration) (context.Context, uint64) {
+	t.stop()
+	var ctx context.Context
+	if timeout > 0 {
+		ctx, t.cancel = context.WithTimeout(parent, timeout)
+	} else {
+		ctx, t.cancel = context.WithCancel(parent)
+	}
+	return ctx, t.gen
+}
+
+// stop cancels the running request and invalidates its results.
+func (t *task) stop() {
+	t.gen++
+	t.done()
+}
+
+// done releases a finished request's context; its results stay current.
+func (t *task) done() {
+	if t.cancel != nil {
+		t.cancel()
+		t.cancel = nil
+	}
+}
+
+func (t *task) running() bool { return t.cancel != nil }
+
 // EngineFactory constructs the authenticated chat engine after startup login
 // has persisted a session.
 type EngineFactory func(context.Context) (*agent.Engine, error)
@@ -130,24 +167,21 @@ type Model struct {
 	searchSessionID        string
 	entitySearchQuery      string
 	entitySearchActive     bool
-	entitySearchGeneration uint64
-	entitySearchCancel     context.CancelFunc
+	entitySearchTask       task
 	entitySearchCache      map[string]entitySearchCacheEntry
 	entitySearchCacheOrder []string
 
-	statusGeneration uint64
-	statusIdentity   string
-	statusCancel     context.CancelFunc
+	statusTask     task
+	statusIdentity string
 
 	// Startup login stays inside this root model so Bubble Tea owns the
 	// alternate screen continuously while switching from login to chat.
-	startupCtx        context.Context
-	startupCancel     context.CancelFunc
-	startupGeneration uint64
-	startupStopping   bool
-	loginModel        *loginui.Model
-	engineFactory     EngineFactory
-	startupErr        error
+	startupCtx      context.Context
+	startupTask     task
+	startupStopping bool
+	loginModel      *loginui.Model
+	engineFactory   EngineFactory
+	startupErr      error
 
 	// transcript is the latest snapshot of the engine's aggregated transcript.
 	transcript agent.TranscriptSnapshot
@@ -179,10 +213,9 @@ type Model struct {
 
 	// /resume operations are cancellable and generation-stamped. A late result
 	// from a cancelled list/load can never mutate the current conversation.
-	conversationGeneration uint64
-	conversationCancel     context.CancelFunc
-	conversationRetry      conversationRetry
-	conversationSwitchID   string
+	conversationTask     task
+	conversationRetry    conversationRetry
+	conversationSwitchID string
 
 	// Turn status, surfaced in the status line.
 	chatPhase chat.Phase

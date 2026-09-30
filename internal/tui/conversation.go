@@ -104,29 +104,26 @@ func (m *Model) startConversationList() tea.Cmd {
 	if m.picker == nil {
 		return nil
 	}
-	m.invalidateConversationOperation()
 	m.picker.SetLoading(conversationview.OperationList)
 	m.conversationRetry = retryList
 	m.conversationSwitchID = ""
-	generation := m.conversationGeneration
-	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
-	m.conversationCancel = cancel
+	ctx, generation := m.conversationTask.start(context.Background(), historyLoadTimeout)
 	return waitConversationList(generation, m.engine.ListConversations(ctx))
 }
 
 func (m *Model) applyConversationListResult(msg conversationListResultMsg) tea.Cmd {
-	if msg.generation != m.conversationGeneration {
+	if msg.generation != m.conversationTask.gen {
 		return nil
 	}
 	if m.pickerClosing() {
-		m.finishConversationOperation()
+		m.conversationTask.done()
 		m.dropConversationPicker()
 		return nil
 	}
 	if m.picker == nil {
 		return nil
 	}
-	m.finishConversationOperation()
+	m.conversationTask.done()
 	if msg.result.Err != nil {
 		m.conversationRetry = retryList
 		n := conversationErrorNotice("could not load conversations", msg.result.Err)
@@ -152,24 +149,21 @@ func (m *Model) startConversationSwitch(conversationID string) tea.Cmd {
 	if m.picker == nil {
 		return nil
 	}
-	m.invalidateConversationOperation()
 	m.picker.SetLoading(conversationview.OperationOpen)
 	m.conversationRetry = retrySwitch
 	m.conversationSwitchID = conversationID
-	generation := m.conversationGeneration
-	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
-	m.conversationCancel = cancel
+	ctx, generation := m.conversationTask.start(context.Background(), historyLoadTimeout)
 	return waitConversationSwitch(generation, m.engine.SwitchConversation(ctx, conversationID))
 }
 
 func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) tea.Cmd {
-	if msg.generation != m.conversationGeneration {
+	if msg.generation != m.conversationTask.gen {
 		_ = msg.result.Discard()
 		return nil
 	}
 	if m.pickerClosing() {
 		_ = msg.result.Discard()
-		m.finishConversationOperation()
+		m.conversationTask.done()
 		m.dropConversationPicker()
 		return nil
 	}
@@ -178,7 +172,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 		return nil
 	}
 	if msg.result.Err != nil {
-		m.finishConversationOperation()
+		m.conversationTask.done()
 		m.conversationRetry = retrySwitch
 		n := conversationErrorNotice("resume failed", msg.result.Err)
 		m.picker.SetError(n.Text, msg.result.Err)
@@ -186,7 +180,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	}
 	if strings.TrimSpace(msg.result.ConversationID) == "" {
 		_ = msg.result.Discard()
-		m.finishConversationOperation()
+		m.conversationTask.done()
 		err := errors.New("conversation load returned no conversation id")
 		m.conversationRetry = retrySwitch
 		n := conversationErrorNotice("resume failed", err)
@@ -197,13 +191,13 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	// Commit engine state first; only a successful commit changes the visible
 	// root state. Cancel/deadline failure therefore leaves both views on old data.
 	if err := msg.result.Commit(); err != nil {
-		m.finishConversationOperation()
+		m.conversationTask.done()
 		m.conversationRetry = retrySwitch
 		n := conversationErrorNotice("resume failed", err)
 		m.picker.SetError(n.Text, err)
 		return m.showNotice(n, 0)
 	}
-	m.finishConversationOperation()
+	m.conversationTask.done()
 	m.transcript = agent.TranscriptSnapshot{Blocks: append([]agent.Block(nil), msg.result.Blocks...)}
 	m.convID = msg.result.ConversationID
 	m.usage = nil
@@ -236,9 +230,9 @@ func (m *Model) closeConversationPicker() tea.Cmd {
 	if m.picker == nil || m.pickerClosing() {
 		return nil
 	}
-	if m.conversationCancel != nil {
+	if m.conversationTask.running() {
 		m.picker.SetClosing()
-		m.conversationCancel()
+		m.conversationTask.done()
 		return nil
 	}
 	m.dropConversationPicker()
@@ -263,7 +257,7 @@ func (m *Model) dropConversationPicker() {
 // result before disappearing. The result still drains through its waiter and
 // stale-result handling.
 func (m *Model) abandonConversationPicker() {
-	m.invalidateConversationOperation()
+	m.conversationTask.stop()
 	m.dropConversationPicker()
 }
 
@@ -274,18 +268,6 @@ func (m *Model) updateConversationPicker(msg tea.Msg) tea.Cmd {
 	next, cmd := m.picker.Update(msg)
 	*m.picker = next
 	return cmd
-}
-
-func (m *Model) invalidateConversationOperation() {
-	m.conversationGeneration++
-	m.finishConversationOperation()
-}
-
-func (m *Model) finishConversationOperation() {
-	if m.conversationCancel != nil {
-		m.conversationCancel()
-		m.conversationCancel = nil
-	}
 }
 
 func conversationErrorNotice(operation string, err error) chat.Notice {

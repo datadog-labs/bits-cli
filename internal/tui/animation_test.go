@@ -215,7 +215,7 @@ func TestConversationSwitchWithPersistedRunningBlockStaysDisarmed(t *testing.T) 
 	if m.mode != ModeConversations {
 		t.Fatal("test setup did not open conversation picker")
 	}
-	generation := m.conversationGeneration
+	generation := m.conversationTask.gen
 	m.applyConversationSwitchResult(conversationSwitchResultMsg{
 		generation: generation,
 		result: agent.ConversationSwitchResult{

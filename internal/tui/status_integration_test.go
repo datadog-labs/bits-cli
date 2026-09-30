@@ -413,7 +413,7 @@ func TestCtrlCCancelsStatusCollectionAndQuits(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("ctrl+c did not cancel status collection")
 	}
-	if m.statusCancel != nil {
+	if m.statusTask.running() {
 		t.Fatal("ctrl+c retained status cancellation handle")
 	}
 }

@@ -243,10 +243,7 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.focus() == focusPicker {
 		m.abandonConversationPicker()
 	}
-	if m.statusCancel != nil {
-		m.statusCancel()
-		m.statusCancel = nil
-	}
+	m.statusTask.stop()
 	if m.op.cancel != nil {
 		m.op.cancel()
 	}
@@ -377,7 +374,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case statusClosedMsg:
-		if msg.generation == m.statusGeneration {
+		if msg.generation == m.statusTask.gen {
 			m.closeStatus()
 		}
 		return m, nil
@@ -615,15 +612,11 @@ func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
 	case tea.BackgroundColorMsg:
 		m.setDarkBackground(msg.IsDark())
 	case loginui.CompletedMsg:
-		// A running factory owns startupCancel.
-		if m.startupCancel != nil || m.startupStopping {
+		if m.startupTask.running() || m.startupStopping {
 			return nil
 		}
-		m.startupGeneration++
-		generation := m.startupGeneration
 		factory := m.engineFactory
-		factoryCtx, cancel := context.WithCancel(m.startupCtx)
-		m.startupCancel = cancel
+		factoryCtx, generation := m.startupTask.start(m.startupCtx, 0)
 		return func() tea.Msg {
 			if factory == nil {
 				return engineReadyMsg{generation: generation, err: errors.New("authenticated chat is unavailable")}
@@ -633,13 +626,10 @@ func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
 		}
 	case engineReadyMsg:
 		// stopStartup advances the generation, so a stopped factory's result drops.
-		if msg.generation != m.startupGeneration {
+		if msg.generation != m.startupTask.gen {
 			return nil
 		}
-		if m.startupCancel != nil {
-			m.startupCancel()
-			m.startupCancel = nil
-		}
+		m.startupTask.done()
 		if msg.err != nil {
 			m.startupErr = msg.err
 			return tea.Quit
@@ -686,11 +676,7 @@ func (m *Model) stopStartup() {
 		return
 	}
 	m.startupStopping = true
-	m.startupGeneration++
-	if m.startupCancel != nil {
-		m.startupCancel()
-		m.startupCancel = nil
-	}
+	m.startupTask.stop()
 }
 
 // handleKey routes a keypress to the surface that owns input. Global quit is

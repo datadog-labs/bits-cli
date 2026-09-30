@@ -196,8 +196,8 @@ func TestCtrlCCancelsResumeOperationAndQuits(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
 	m := New(engine)
 	wait := m.openConversationPicker()
-	if m.mode != ModeConversations || m.conversationCancel == nil {
-		t.Fatalf("resume did not start: mode=%v cancel=%v", m.mode, m.conversationCancel != nil)
+	if m.mode != ModeConversations || !m.conversationTask.running() {
+		t.Fatalf("resume did not start: mode=%v cancel=%v", m.mode, m.conversationTask.running())
 	}
 
 	_, quit := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
@@ -207,8 +207,8 @@ func TestCtrlCCancelsResumeOperationAndQuits(t *testing.T) {
 	if _, ok := quit().(tea.QuitMsg); !ok {
 		t.Fatalf("ctrl+c command = %T, want tea.QuitMsg", quit())
 	}
-	if m.mode != ModeChat || m.picker != nil || m.conversationCancel != nil {
-		t.Fatalf("ctrl+c left resume active: mode=%v picker=%v cancel=%v", m.mode, m.picker != nil, m.conversationCancel != nil)
+	if m.mode != ModeChat || m.picker != nil || m.conversationTask.running() {
+		t.Fatalf("ctrl+c left resume active: mode=%v picker=%v cancel=%v", m.mode, m.picker != nil, m.conversationTask.running())
 	}
 
 	// The waiter must also complete after cancellation; otherwise the engine
