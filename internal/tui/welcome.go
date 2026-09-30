@@ -139,10 +139,10 @@ func authenticationLabel(mode string) string {
 // showResume gates the offer on an idle, empty transcript, an empty composer,
 // a non-empty fetch, and room for at least one row.
 func (m *Model) showResume() bool {
-	// turnEvents, not just the transcript: a submitted turn empties the composer
-	// and publishes no block until its first event, and resuming during it would
-	// hit the engine gate.
-	if len(m.transcript.Blocks) != 0 || m.turnEvents != nil || m.resume.empty() || m.editor.Value() != "" {
+	// The operation, not just the transcript: a submitted turn empties the
+	// composer and publishes no block until its first event, and resuming during
+	// it would hit the engine gate.
+	if len(m.transcript.Blocks) != 0 || m.op.busy() || m.resume.empty() || m.editor.Value() != "" {
 		return false
 	}
 	if !m.showSplashPanel() {

@@ -25,7 +25,7 @@ type fileSearchClosedMsg struct{}
 // update its matcher.
 func (m *Model) syncFileSearch() tea.Cmd {
 	query, active := m.editor.ActiveEntityQuery()
-	if m.fileSearchBlocked() || !active || query == "" {
+	if m.searchesBlocked() || !active || query == "" {
 		return m.stopFileSearch()
 	}
 	if m.workspace == nil {
@@ -107,8 +107,10 @@ func (m *Model) stopFileSearch() tea.Cmd {
 	}
 }
 
-func (m *Model) fileSearchBlocked() bool {
-	return m.pendingLogout || m.logoutRunning || m.loggedOut
+// searchesBlocked stops completion searches from reaching an engine that is
+// being, or has been, logged out.
+func (m *Model) searchesBlocked() bool {
+	return m.op.loggingOut() || m.loggedOut
 }
 
 func (m *Model) syncCompletionSearches() tea.Cmd {

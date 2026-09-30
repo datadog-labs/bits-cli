@@ -125,7 +125,7 @@ func TestPermissionsSwitchingToCurrentModeIsANoOp(t *testing.T) {
 
 func TestPermissionsQueuesDuringActiveTurn(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
-	m.turnEvents = make(chan agent.Event)
+	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
 	m.chatPhase = chat.PhaseStreaming
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
 	if m.mode != ModePermissions || !m.permissionConfirm {
@@ -146,7 +146,7 @@ func TestPermissionsQueuesDuringActiveTurn(t *testing.T) {
 	if m.mode != ModeChat || m.pendingPermissions != agent.ModeSkipPermissions {
 		t.Fatal("reselecting the queued choice changed it")
 	}
-	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.turnGen})
+	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
 	if m.pendingPermissions != "" || m.tools.PermissionsMode() != agent.ModeSkipPermissions {
 		t.Fatal("queued mode did not apply when the turn closed")
 	}
@@ -154,13 +154,13 @@ func TestPermissionsQueuesDuringActiveTurn(t *testing.T) {
 
 func TestPermissionsPickerOpensDuringActiveTurn(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
-	m.turnEvents = make(chan agent.Event)
+	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
 	m.chatPhase = chat.PhaseStreaming
 	_, _ = m.dispatchCommand("permissions", "")
 	if m.mode != ModePermissions || !strings.Contains(ansi.Strip(m.permissionsView()), "Permission changes take effect on the next turn.") {
 		t.Fatal("picker did not explain when changes take effect")
 	}
-	if m.chatPhase != chat.PhaseStreaming || m.turnEvents == nil {
+	if m.chatPhase != chat.PhaseStreaming || m.op.events == nil {
 		t.Fatal("opening the picker disturbed the active turn")
 	}
 	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
@@ -170,7 +170,7 @@ func TestPermissionsPickerOpensDuringActiveTurn(t *testing.T) {
 
 func TestPermissionsCurrentModeCancelsQueuedChange(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
-	m.turnEvents = make(chan agent.Event)
+	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
 	m.chatPhase = chat.PhaseStreaming
 	m.pendingPermissions = agent.ModeSkipPermissions
 	_, _ = m.dispatchCommand("permissions", "manual")
@@ -187,6 +187,8 @@ func TestPermissionsCurrentModeCancelsQueuedChange(t *testing.T) {
 
 func TestPermissionsQueuesWhileApprovalsPending(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
+	// Approvals only arrive inside a running operation.
+	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
 	m.pendingApprovals = []agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{Status: agent.ToolAwaitingApproval},
@@ -206,7 +208,7 @@ func TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool(t *testing.T) {
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
 	for len(m.pendingApprovals) == 0 {
-		msg := runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents))
+		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
 		_, _ = m.Update(msg)
 	}
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
@@ -268,7 +270,7 @@ func TestPermissionsSwitchBackToManualPromptsAgain(t *testing.T) {
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
 	for len(m.pendingApprovals) == 0 {
-		msg := runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents))
+		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
 		_, _ = m.Update(msg)
 	}
 	if backend.calls != 3 {
@@ -281,7 +283,7 @@ func TestPermissionsSwitchBackToManualClearsExistingSessionGrants(t *testing.T) 
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
 	for len(m.pendingApprovals) == 0 {
-		msg := runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents))
+		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
 		_, _ = m.Update(msg)
 	}
 	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight}) // select "Allow for session"
@@ -298,7 +300,7 @@ func TestPermissionsSwitchBackToManualClearsExistingSessionGrants(t *testing.T) 
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
 	for len(m.pendingApprovals) == 0 {
-		msg := runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents))
+		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
 		_, _ = m.Update(msg)
 	}
 	if len(m.pendingApprovals) != 1 {
@@ -486,7 +488,7 @@ func TestPermissionsPickerCompactResizeKeepsSelection(t *testing.T) {
 func TestPermissionsConfirmationCannotBypassNewActiveWork(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
-	m.turnEvents = make(chan agent.Event)
+	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.tools.PermissionsMode() != agent.ModeManual || m.pendingPermissions != agent.ModeSkipPermissions || m.mode != ModeChat {
 		t.Fatal("stale confirmation did not queue the mode for the active turn")

@@ -255,7 +255,7 @@ func (m *Model) observeEvent(event agent.Event) {
 
 func (m *Model) markConnected() {
 	m.connectivity = statusview.ConnectivityConnected
-	if m.authFailureObserved && m.turnGen <= m.authFailureGeneration {
+	if m.authFailureObserved && m.op.gen <= m.authFailureGeneration {
 		return
 	}
 	if m.engine == nil {
@@ -270,7 +270,7 @@ func (m *Model) markConnected() {
 func (m *Model) markAuthenticationFailed() {
 	m.authStateOverride = "authentication failed"
 	m.authFailureObserved = true
-	m.authFailureGeneration = m.turnGen
+	m.authFailureGeneration = m.op.gen
 }
 
 func (m *Model) markAuthenticated() {

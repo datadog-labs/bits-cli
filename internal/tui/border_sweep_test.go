@@ -17,7 +17,7 @@ func sweepModel(phase chat.Phase) *Model {
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.editor.Focus()
-	m.turnEvents = make(chan agent.Event)
+	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
 	m.chatPhase = phase
 	return m
 }
@@ -40,7 +40,7 @@ func TestBorderSweepArmsOnlyForActiveTurnPhases(t *testing.T) {
 
 func TestBorderSweepRequiresLiveTurn(t *testing.T) {
 	m := sweepModel(chat.PhaseStreaming)
-	m.turnEvents = nil
+	m.op = operation{}
 	if cmd := m.syncAnimations(); cmd != nil || m.animBorderSweep.active {
 		t.Fatal("stale streaming phase without a live turn started sweep")
 	}
@@ -170,8 +170,7 @@ func TestTurnDoneDisarmsSweepClock(t *testing.T) {
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.chatPhase = chat.PhaseStreaming
-	m.turnEvents = make(chan agent.Event)
-	m.turnGen = 1
+	m.op = operation{kind: opTurn, gen: 1, events: make(chan agent.Event)}
 	m.syncAnimations()
 	m.Update(turnEventMsg{generation: 1, ev: agent.Event{Kind: agent.EventTurnDone}})
 

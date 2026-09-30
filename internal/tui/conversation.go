@@ -17,11 +17,10 @@ import (
 )
 
 // requestNewConversation defers the reset until the current engine channel is
-// closed. cancelRemote makes repeated /new or /clear submissions idempotent and
-// prevents cleanup from invoking cancellation a second time.
+// closed. Cancelling only once makes repeated /new or /clear submissions
+// idempotent and keeps cleanup from cancelling a second time.
 func (m *Model) requestNewConversation() tea.Cmd {
-	m.pendingNew = true
-	m.cancelRemote()
+	m.after(thenNewConversation)
 	return batchCommands(
 		m.stopCompletionSearches(),
 		m.showNotice(notice(chat.NoticeInfo, nil,
@@ -40,14 +39,13 @@ func (m *Model) startNewConversation() tea.Cmd {
 
 	// A reset is a new event identity domain even though active work was drained.
 	// This makes any delayed Bubble Tea message from the prior domain harmless.
-	m.turnGen++
+	m.op.gen++
 	m.clearSelection()
 	m.transcript = agent.TranscriptSnapshot{}
 	m.list.Reset()
 	m.convID = ""
 	m.usage = nil
 	m.chatPhase = chat.PhaseIdle
-	m.pendingNew = false
 	m.editor.Reset()
 	closeFileSearch := m.stopCompletionSearches()
 	m.clearNotice()

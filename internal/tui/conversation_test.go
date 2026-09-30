@@ -97,8 +97,8 @@ func setConversationInput(m *Model, value string) {
 
 func drainConversationRemote(t *testing.T, m *Model) {
 	t.Helper()
-	for m.turnEvents != nil {
-		msg := runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents))
+	for m.op.events != nil {
+		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
 		_, _ = m.Update(msg)
 	}
 }
@@ -150,13 +150,13 @@ func TestNewDuringActiveTurnCancelsOnceAndDrainsBeforeReset(t *testing.T) {
 	_, _ = m.submit()
 	waitSignal(t, backend.sendStarted)
 
-	originalCancel := m.cancelTurn
+	originalCancel := m.op.cancel
 	var cancelCalls atomic.Int32
-	m.cancelTurn = func() {
+	m.op.cancel = func() {
 		cancelCalls.Add(1)
 		originalCancel()
 	}
-	oldGeneration := m.turnGen
+	oldGeneration := m.op.gen
 	setConversationInput(m, "/new")
 	_, _ = m.submit()
 	setConversationInput(m, "/clear")
@@ -165,15 +165,15 @@ func TestNewDuringActiveTurnCancelsOnceAndDrainsBeforeReset(t *testing.T) {
 	if got := cancelCalls.Load(); got != 1 {
 		t.Fatalf("cancel function calls = %d, want exactly 1", got)
 	}
-	if m.convID != "old" || !m.pendingNew {
-		t.Fatalf("conversation reset before drain: id=%q pending=%v", m.convID, m.pendingNew)
+	if m.convID != "old" || m.op.then != thenNewConversation {
+		t.Fatalf("conversation reset before drain: id=%q pending=%v", m.convID, m.op.then)
 	}
 	drainConversationRemote(t, m)
 	if got := cancelCalls.Load(); got != 1 {
 		t.Fatalf("cancel function calls after drain = %d, want exactly 1", got)
 	}
-	if m.convID != "" || m.engine.ConversationID() != "" || m.turnGen == oldGeneration {
-		t.Fatalf("post-drain reset failed: root=%q engine=%q generation=%d", m.convID, m.engine.ConversationID(), m.turnGen)
+	if m.convID != "" || m.engine.ConversationID() != "" || m.op.gen == oldGeneration {
+		t.Fatalf("post-drain reset failed: root=%q engine=%q generation=%d", m.convID, m.engine.ConversationID(), m.op.gen)
 	}
 }
 
@@ -183,7 +183,7 @@ func TestNewDuringHistoryLoadingCancelsAndDrains(t *testing.T) {
 	m := New(engine)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.chatPhase = chat.PhaseLoading
-	_ = m.beginRemote(engine.Restore(ctx), cancel)
+	_ = m.begin(opRestore, engine.Restore(ctx), cancel)
 	waitSignal(t, backend.historyStarted)
 
 	setConversationInput(m, "/new")
@@ -204,9 +204,9 @@ func TestNewAfterCancellationDoesNotCancelTwice(t *testing.T) {
 	_, _ = m.submit()
 	waitSignal(t, backend.sendStarted)
 
-	originalCancel := m.cancelTurn
+	originalCancel := m.op.cancel
 	var cancelCalls atomic.Int32
-	m.cancelTurn = func() {
+	m.op.cancel = func() {
 		cancelCalls.Add(1)
 		originalCancel()
 	}
@@ -228,12 +228,12 @@ func TestNewAfterFailedTurnDrainsThenClearsError(t *testing.T) {
 	_, _ = m.submit()
 
 	for m.chatPhase != chat.PhaseError {
-		msg := runConversationCmd(t, waitEvent(m.turnGen, m.turnEvents))
+		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
 		_, _ = m.Update(msg)
 	}
 	setConversationInput(m, "/new")
 	_, _ = m.submit()
-	if m.convID != "old" || !m.pendingNew {
+	if m.convID != "old" || m.op.then != thenNewConversation {
 		t.Fatal("failed turn reset before its event channel drained")
 	}
 	drainConversationRemote(t, m)
@@ -246,15 +246,15 @@ func TestNewRejectsStaleEventsFromPriorConversation(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
 	setConversationInput(m, "/new")
 	_, _ = m.submit()
-	oldGeneration := m.turnGen - 1
+	oldGeneration := m.op.gen - 1
 
 	setConversationInput(m, "fresh prompt")
 	_, _ = m.submit()
-	freshGeneration := m.turnGen
+	freshGeneration := m.op.gen
 	_, _ = m.Update(turnEventMsg{generation: oldGeneration, ev: agent.Event{Kind: agent.EventConversation, ConvID: "stale"}})
 	_, _ = m.Update(turnClosedMsg{generation: oldGeneration})
-	if m.convID != "" || m.turnGen != freshGeneration || m.turnEvents == nil {
-		t.Fatalf("stale event mutated fresh operation: id=%q generation=%d active=%v", m.convID, m.turnGen, m.turnEvents != nil)
+	if m.convID != "" || m.op.gen != freshGeneration || m.op.events == nil {
+		t.Fatalf("stale event mutated fresh operation: id=%q generation=%d active=%v", m.convID, m.op.gen, m.op.events != nil)
 	}
 	drainConversationRemote(t, m)
 	if m.convID != "fresh" {

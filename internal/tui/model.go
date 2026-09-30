@@ -36,6 +36,57 @@ const (
 	ModePermissions
 )
 
+// operation is the one exclusive session operation: a turn (resumed client
+// tools included), a history restore, or logout. Anything that asks "can I
+// start something?" or "what happens when it ends?" reads it; chatPhase only
+// drives what the chat displays.
+type operation struct {
+	kind   opKind
+	gen    uint64             // stamps the operation's messages; never reset, so stale ones drop
+	events <-chan agent.Event // engine operations only
+	cancel context.CancelFunc
+	stop   stopLevel
+	then   followUp
+}
+
+type opKind uint8
+
+const (
+	opIdle    opKind = iota
+	opTurn           // a user turn or resumed client tools
+	opRestore        // conversation history loading at startup
+	opLogout         // credential deletion; the session quits once it succeeds
+)
+
+// stopLevel only rises within an operation: stopping its tools never undoes a
+// full cancel.
+type stopLevel uint8
+
+const (
+	stopNone  stopLevel = iota
+	stopTools           // the engine stops client tools; the turn continues
+	stopAll             // the operation's context is cancelled
+)
+
+// followUp runs once the operation ends. It only rises, so a queued logout
+// wins over a queued new conversation.
+type followUp uint8
+
+const (
+	thenNothing followUp = iota
+	thenNewConversation
+	thenLogout
+)
+
+func (o operation) busy() bool { return o.kind != opIdle }
+
+func (o operation) loggingOut() bool { return o.kind == opLogout || o.then == thenLogout }
+
+// accepts reports whether an engine message belongs to the running operation.
+func (o operation) accepts(generation uint64) bool {
+	return o.events != nil && generation == o.gen
+}
+
 // EngineFactory constructs the authenticated chat engine after startup login
 // has persisted a session.
 type EngineFactory func(context.Context) (*agent.Engine, error)
@@ -103,27 +154,13 @@ type Model struct {
 	// transcript is the latest snapshot of the engine's aggregated transcript.
 	transcript agent.TranscriptSnapshot
 
-	// Active turn: turnEvents is the running turn's event channel (nil when
-	// idle); cancelTurn interrupts it.
-	turnEvents       <-chan agent.Event
-	cancelTurn       context.CancelFunc
-	turnGen          uint64
-	cancelRequested  bool
-	restoringHistory bool
-	stoppingTools    bool
-
-	// /new and /clear cancel an active turn/restore once, then wait for its
-	// channel to close before resetting conversation state.
-	pendingNew bool
+	// op is the one exclusive session operation; see operation.
+	op operation
 
 	// /logout stops active work before deleting credentials, then discards the
 	// authenticated engine.
-	logout           LogoutFunc
-	pendingLogout    bool
-	logoutRunning    bool
-	logoutCancel     context.CancelFunc
-	logoutGeneration uint64
-	loggedOut        bool
+	logout    LogoutFunc
+	loggedOut bool
 
 	toolUI            *tools.UI
 	activeToolUI      *toolUISession
@@ -366,9 +403,7 @@ func (m *Model) initChat() tea.Cmd {
 		return tea.Batch(append(commands, m.fetchRecentConversations())...)
 	}
 	m.chatPhase = chat.PhaseLoading
-	m.restoringHistory = true
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
-	events := m.engine.Restore(ctx)
-	commands = append(commands, m.beginRemote(events, cancel))
+	commands = append(commands, m.begin(opRestore, m.engine.Restore(ctx), cancel))
 	return tea.Batch(commands...)
 }

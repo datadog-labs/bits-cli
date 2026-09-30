@@ -30,7 +30,7 @@ func waitToolUI(ui *tools.UI) tea.Cmd {
 
 func (m *Model) activateToolUI(request *tools.Request) {
 	// A tool may present before a requested stop reaches its context.
-	if request.Context().Err() != nil || m.cancelRequested || m.stoppingTools {
+	if request.Context().Err() != nil || m.op.stop != stopNone {
 		return
 	}
 	component, ok := chat.NewToolInteraction(request.Call)
@@ -87,10 +87,10 @@ func (m *Model) updateToolUI(msg tea.Msg) tea.Cmd {
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+x" {
 			if m.engine.StopTools() {
-				m.stoppingTools = true
+				m.op.stop = max(m.op.stop, stopTools)
 				m.clearToolUIs()
 			} else {
-				m.cancelRemote()
+				m.cancelOperation()
 			}
 			return nil
 		}

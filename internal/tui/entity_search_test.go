@@ -132,8 +132,12 @@ func TestEntitySearchBlockedByLogoutState(t *testing.T) {
 			m.editor.Update(tea.PasteMsg{Content: "@check"})
 			_ = m.syncEntitySearch()
 			message := entitySearchDebounceMsg{generation: m.entitySearchGeneration, query: "check"}
-			m.pendingLogout = state == "pending"
-			m.logoutRunning = state == "running"
+			if state == "pending" {
+				m.op.then = thenLogout
+			}
+			if state == "running" {
+				m.op.kind = opLogout
+			}
 			m.loggedOut = state == "completed"
 			if cmd := m.beginEntitySearch(message); cmd != nil {
 				t.Fatal("logout allowed queued search to start")
@@ -174,7 +178,7 @@ func TestLogoutCancelsEntitySearch(t *testing.T) {
 				m.requestLogout()
 			} else {
 				m.startLogout()
-				t.Cleanup(m.logoutCancel)
+				t.Cleanup(m.op.cancel)
 			}
 			select {
 			case <-searcher.canceled:
@@ -385,9 +389,9 @@ func TestSelectedEntityContextIsSentOnceAndClearedAfterSubmit(t *testing.T) {
 	if len(m.editor.Attachments()) != 0 {
 		t.Fatalf("attachments survived submit: %#v", m.editor.Attachments())
 	}
-	for range m.turnEvents {
+	for range m.op.events {
 	}
-	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.turnGen})
+	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
 
 	m.editor.Update(tea.PasteMsg{Content: "next independent turn"})
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})

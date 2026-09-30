@@ -22,10 +22,6 @@ var permissionOptionDetails = [...]string{
 
 const fullAccessConfirmation = "Enabling full access will automatically approve all actions without requiring confirmation."
 
-func (m *Model) permissionsBusy() bool {
-	return m.turnEvents != nil || m.cancelTurn != nil || m.chatPhase == chat.PhaseLoading || len(m.pendingApprovals) > 0
-}
-
 func (m *Model) switchPermissions(argument string) tea.Cmd {
 	if m.tools == nil || m.engine == nil {
 		return m.showNotice(notice(chat.NoticeError, nil, "This session has no tool permissions to configure."), 0)
@@ -69,7 +65,7 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 }
 
 func (m *Model) applyPermissionsMode(mode agent.PermissionsMode) tea.Cmd {
-	if m.permissionsBusy() {
+	if m.op.busy() {
 		m.pendingPermissions = mode
 		m.setMode(ModeChat)
 		m.clearNotice()
