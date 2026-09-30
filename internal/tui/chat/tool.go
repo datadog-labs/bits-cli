@@ -136,28 +136,16 @@ const (
 	spanMuted
 )
 
-type toolLifecycle uint8
-
-const (
-	lifecycleUnknown toolLifecycle = iota
-	lifecycleRunning
-	lifecycleAwaiting
-	lifecycleSuccess
-	lifecycleError
-	lifecycleDenied
-	lifecycleCancelled
-)
-
-func (a toolAction) label(state toolLifecycle) string {
+func (a toolAction) label(state agent.ToolStatus) string {
 	var label string
 	switch state {
-	case lifecycleRunning, lifecycleAwaiting:
+	case agent.ToolRunning, agent.ToolAwaitingApproval:
 		label = a.active
-	case lifecycleSuccess:
+	case agent.ToolSuccess:
 		label = a.success
-	case lifecycleError:
+	case agent.ToolError:
 		label = a.failure
-	case lifecycleUnknown, lifecycleDenied, lifecycleCancelled:
+	case agent.ToolUnknown, agent.ToolDenied, agent.ToolCancelled:
 		label = a.base
 	}
 	if label == "" {
@@ -166,27 +154,11 @@ func (a toolAction) label(state toolLifecycle) string {
 	return label
 }
 
-func lifecycleOf(tool *agent.ToolBlock) toolLifecycle {
+func statusOf(tool *agent.ToolBlock) agent.ToolStatus {
 	if tool == nil {
-		return lifecycleUnknown
+		return agent.ToolUnknown
 	}
-	switch tool.Status {
-	case agent.ToolDenied:
-		return lifecycleDenied
-	case agent.ToolCancelled:
-		return lifecycleCancelled
-	case agent.ToolRunning:
-		return lifecycleRunning
-	case agent.ToolAwaitingApproval:
-		return lifecycleAwaiting
-	case agent.ToolSuccess:
-		return lifecycleSuccess
-	case agent.ToolError:
-		return lifecycleError
-	case agent.ToolUnknown:
-		return lifecycleUnknown
-	}
-	return lifecycleUnknown
+	return tool.Status
 }
 
 // classifyTool uses the complete wire identity. In particular, server tools
@@ -321,7 +293,7 @@ func compactInput(input string) string {
 }
 
 func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
-	state := lifecycleOf(tool)
+	state := statusOf(tool)
 	action := p.actionLabel(state)
 	if !p.validInput {
 		// Keep local inspection tools recognizable while their input is still
@@ -363,7 +335,7 @@ func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 	}
 }
 
-func (p toolPresentation) actionLabel(state toolLifecycle) string {
+func (p toolPresentation) actionLabel(state agent.ToolStatus) string {
 	if p.renderSpec == nil {
 		return ""
 	}
@@ -406,33 +378,33 @@ func RenderToolApproval(tool *agent.ToolBlock, width int, sty Styles) (string, b
 }
 
 func renderSkillTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
-	state := lifecycleOf(tool)
+	state := statusOf(tool)
 	header := renderToolHeader(tool, p.summary(tool), nil, width, sty, frame)
 	switch state {
-	case lifecycleRunning, lifecycleAwaiting, lifecycleDenied, lifecycleCancelled:
+	case agent.ToolRunning, agent.ToolAwaitingApproval, agent.ToolDenied, agent.ToolCancelled:
 		return header
-	case lifecycleUnknown, lifecycleSuccess, lifecycleError:
+	case agent.ToolUnknown, agent.ToolSuccess, agent.ToolError:
 	}
 
 	detail := tool.Detail
 	if detail == "" {
 		detail = tool.Output
 	}
-	if state == lifecycleError && detail != "" {
+	if state == agent.ToolError && detail != "" {
 		return header + "\n" + renderPreview(detail, width, genericOutputMaxLines, sty.ToolError, false, sty)
 	}
 	return header
 }
 
 func renderSimpleTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
-	state := lifecycleOf(tool)
+	state := statusOf(tool)
 	header := renderToolHeader(tool, p.summary(tool), nil, width, sty, frame)
 	switch state {
-	case lifecycleRunning, lifecycleAwaiting, lifecycleDenied, lifecycleCancelled:
+	case agent.ToolRunning, agent.ToolAwaitingApproval, agent.ToolDenied, agent.ToolCancelled:
 		return header
-	case lifecycleUnknown, lifecycleSuccess, lifecycleError:
+	case agent.ToolUnknown, agent.ToolSuccess, agent.ToolError:
 	}
-	if p.inspection() && state == lifecycleSuccess {
+	if p.inspection() && state == agent.ToolSuccess {
 		return header
 	}
 	detail := tool.Detail
@@ -443,7 +415,7 @@ func renderSimpleTool(tool *agent.ToolBlock, p toolPresentation, width int, sty 
 		return header
 	}
 	style := sty.ToolDetail
-	if state == lifecycleError {
+	if state == agent.ToolError {
 		style = sty.ToolError
 	}
 	return header + "\n" + renderPreview(detail, width, genericOutputMaxLines, style, false, sty)
@@ -487,16 +459,16 @@ func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, width int, sty 
 		if fallbackDetail == "" {
 			fallbackDetail = tool.Output
 		}
-		state := lifecycleOf(tool)
+		state := statusOf(tool)
 		if fallbackDetail == "" {
 			content = header
 		} else {
 			switch state {
-			case lifecycleRunning, lifecycleDenied, lifecycleCancelled:
+			case agent.ToolRunning, agent.ToolDenied, agent.ToolCancelled:
 				content = header
-			case lifecycleUnknown, lifecycleAwaiting, lifecycleSuccess, lifecycleError:
+			case agent.ToolUnknown, agent.ToolAwaitingApproval, agent.ToolSuccess, agent.ToolError:
 				style := sty.ToolDetail
-				if state == lifecycleError {
+				if state == agent.ToolError {
 					style = sty.ToolError
 				}
 				content = header + "\n" + renderPreview(fallbackDetail, width, genericOutputMaxLines, style, false, sty)
@@ -545,22 +517,22 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty St
 		suffix = execSuffix(result)
 	}
 	header := renderExecInvocation(tool, p, suffix, width, sty, frame)
-	state := lifecycleOf(tool)
+	state := statusOf(tool)
 	if tool.Output == "" {
 		return header
 	}
 	switch state {
-	case lifecycleRunning, lifecycleAwaiting, lifecycleDenied:
+	case agent.ToolRunning, agent.ToolAwaitingApproval, agent.ToolDenied:
 		return header
-	case lifecycleCancelled:
+	case agent.ToolCancelled:
 		if decoded && execResultIsTerminal(result.Status) && len(execRows(result, max(1, width-4))) == 0 {
 			return header + "\n" + renderExecNoOutput(width, sty)
 		}
 		return header
-	case lifecycleUnknown, lifecycleSuccess, lifecycleError:
+	case agent.ToolUnknown, agent.ToolSuccess, agent.ToolError:
 	}
 	style := sty.ToolDetail
-	if state == lifecycleError {
+	if state == agent.ToolError {
 		style = sty.ToolError
 	}
 	if !decoded {
@@ -759,7 +731,7 @@ func renderRows(rows []string, width int, style lipgloss.Style, sty Styles) stri
 const statusGlyphWidth = 2
 
 func renderToolHeader(tool *agent.ToolBlock, summary, suffix []summarySpan, width int, sty Styles, frame int) string {
-	state := lifecycleOf(tool)
+	state := statusOf(tool)
 	glyph, glyphStyle := statusGlyph(state, sty, frame)
 	spans := make([]summarySpan, 0, len(summary)+len(suffix)+1)
 	spans = append(spans, summary...)
@@ -771,32 +743,32 @@ func renderToolHeader(tool *agent.ToolBlock, summary, suffix []summarySpan, widt
 	return ansi.Truncate(header, max(1, width), "…")
 }
 
-func lifecycleSuffix(state toolLifecycle) string {
+func lifecycleSuffix(state agent.ToolStatus) string {
 	switch state {
-	case lifecycleAwaiting:
+	case agent.ToolAwaitingApproval:
 		return "awaiting approval"
-	case lifecycleDenied:
+	case agent.ToolDenied:
 		return "denied"
-	case lifecycleCancelled:
+	case agent.ToolCancelled:
 		return "stopped"
 	default:
 		return ""
 	}
 }
 
-func statusGlyph(state toolLifecycle, sty Styles, frame int) (string, lipgloss.Style) {
+func statusGlyph(state agent.ToolStatus, sty Styles, frame int) (string, lipgloss.Style) {
 	switch state {
-	case lifecycleRunning:
+	case agent.ToolRunning:
 		glyph := sty.StatusSpinner.Frame(frame)
 		if glyph == "" {
 			glyph = "•"
 		}
 		return glyph, sty.StatusRunning
-	case lifecycleAwaiting:
+	case agent.ToolAwaitingApproval:
 		return "•", sty.StatusRunning
-	case lifecycleSuccess:
+	case agent.ToolSuccess:
 		return "✓", sty.StatusSuccess
-	case lifecycleError:
+	case agent.ToolError:
 		return "✗", sty.StatusError
 	default:
 		return "•", sty.Meta
@@ -806,7 +778,7 @@ func statusGlyph(state toolLifecycle, sty Styles, frame int) (string, lipgloss.S
 // renderActivityHeader renders the shared compact header used by thinking and
 // grouped inspection activity. Keeping the state-to-glyph mapping here makes
 // every progressing row use the same spinner and static fallbacks.
-func renderActivityHeader(state toolLifecycle, label, suffix string, width int, sty Styles, frame int) string {
+func renderActivityHeader(state agent.ToolStatus, label, suffix string, width int, sty Styles, frame int) string {
 	glyph, glyphStyle := statusGlyph(state, sty, frame)
 	header := glyphStyle.UnsetBackground().Render(glyph+" ") + sty.ToolName.Render(label)
 	if suffix != "" {
@@ -909,28 +881,28 @@ func wrapSummarySpans(spans []summarySpan, width int, sty Styles) []string {
 	return append(lines, renderSummaryClusters(row, sty))
 }
 
-func inspectionLifecycle(blocks []agent.Block) toolLifecycle {
-	states := make([]toolLifecycle, 0, len(blocks))
+func inspectionLifecycle(blocks []agent.Block) agent.ToolStatus {
+	states := make([]agent.ToolStatus, 0, len(blocks))
 	for i := range blocks {
-		state := lifecycleOf(blocks[i].Tool)
+		state := statusOf(blocks[i].Tool)
 		states = append(states, state)
-		if state == lifecycleRunning {
-			return lifecycleRunning
+		if state == agent.ToolRunning {
+			return agent.ToolRunning
 		}
 	}
 	for _, state := range states {
-		if state == lifecycleAwaiting {
-			return lifecycleAwaiting
+		if state == agent.ToolAwaitingApproval {
+			return agent.ToolAwaitingApproval
 		}
 	}
 	for _, state := range states {
-		if state == lifecycleSuccess {
-			return lifecycleSuccess
+		if state == agent.ToolSuccess {
+			return agent.ToolSuccess
 		}
 	}
 	// Keep mixed terminal outcomes quiet: surface a terminal group state only
 	// when every inspection call reached the same outcome.
-	all := func(want toolLifecycle) bool {
+	all := func(want agent.ToolStatus) bool {
 		if len(states) == 0 {
 			return false
 		}
@@ -941,12 +913,12 @@ func inspectionLifecycle(blocks []agent.Block) toolLifecycle {
 		}
 		return true
 	}
-	for _, state := range []toolLifecycle{lifecycleError, lifecycleDenied, lifecycleCancelled} {
+	for _, state := range []agent.ToolStatus{agent.ToolError, agent.ToolDenied, agent.ToolCancelled} {
 		if all(state) {
 			return state
 		}
 	}
-	return lifecycleUnknown
+	return agent.ToolUnknown
 }
 
 func renderInspectionGroup(blocks []agent.Block, presentations []toolPresentation, width int, sty Styles, frame int) string {
@@ -954,20 +926,20 @@ func renderInspectionGroup(blocks []agent.Block, presentations []toolPresentatio
 	label := "inspect"
 	suffix := ""
 	switch state {
-	case lifecycleRunning:
+	case agent.ToolRunning:
 		label = "inspecting"
 		suffix = activityEllipsis(frame, sty.StatusSpinner.Len() > 0)
-	case lifecycleAwaiting:
+	case agent.ToolAwaitingApproval:
 		label, suffix = "inspecting", " · awaiting approval"
-	case lifecycleSuccess:
+	case agent.ToolSuccess:
 		label = "inspected"
-	case lifecycleError:
+	case agent.ToolError:
 		label = "inspection failed"
-	case lifecycleDenied:
+	case agent.ToolDenied:
 		label = "inspection denied"
-	case lifecycleCancelled:
+	case agent.ToolCancelled:
 		label = "inspection stopped"
-	case lifecycleUnknown:
+	case agent.ToolUnknown:
 		// Keep the neutral defaults.
 	}
 	lines := []string{renderActivityHeader(state, label, suffix, width, sty, frame)}
@@ -976,14 +948,14 @@ func renderInspectionGroup(blocks []agent.Block, presentations []toolPresentatio
 	first := true
 	for i := 0; i < len(blocks); {
 		p := presentations[i]
-		memberState := lifecycleOf(blocks[i].Tool)
-		if p.identity == spec.ClientReadFile && (memberState == lifecycleRunning || memberState == lifecycleSuccess) {
+		memberState := statusOf(blocks[i].Tool)
+		if p.identity == spec.ClientReadFile && (memberState == agent.ToolRunning || memberState == agent.ToolSuccess) {
 			paths := make([]string, 0, 2)
 			seen := make(map[string]struct{})
 			j := i
 			for j < len(blocks) && presentations[j].identity == spec.ClientReadFile {
-				s := lifecycleOf(blocks[j].Tool)
-				if s != lifecycleRunning && s != lifecycleSuccess {
+				s := statusOf(blocks[j].Tool)
+				if s != agent.ToolRunning && s != agent.ToolSuccess {
 					break
 				}
 				path := presentations[j].argument
@@ -1031,12 +1003,12 @@ func activityEllipsis(frame int, motion bool) string {
 // inspectionDiagnostic returns the first available diagnostic only for a
 // wholly failed inspection group. Mixed probe failures remain intentionally
 // quiet.
-func inspectionDiagnostic(blocks []agent.Block, state toolLifecycle) (int, string) {
-	if state != lifecycleError {
+func inspectionDiagnostic(blocks []agent.Block, state agent.ToolStatus) (int, string) {
+	if state != agent.ToolError {
 		return -1, ""
 	}
 	for i, block := range blocks {
-		if lifecycleOf(block.Tool) != lifecycleError {
+		if statusOf(block.Tool) != agent.ToolError {
 			continue
 		}
 		detail := block.Tool.Detail
@@ -1107,10 +1079,10 @@ func renderInspectionChild(spans []summarySpan, first bool, width int, sty Style
 func collapseWS(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, width int, sty Styles, frame int) string {
-	state := lifecycleOf(tool)
+	state := statusOf(tool)
 	label := "questions"
 	if tool.Status == agent.ToolRunning && tool.HasFinalInput {
-		state, label = lifecycleAwaiting, "waiting for your answers"
+		state, label = agent.ToolAwaitingApproval, "waiting for your answers"
 	}
 	if tool.Status == agent.ToolCancelled {
 		label = "questions cancelled"

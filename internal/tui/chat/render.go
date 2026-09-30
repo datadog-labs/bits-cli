@@ -92,11 +92,11 @@ func renderReasoning(it agent.Block, width int, sty Styles, frame int) string {
 }
 
 func renderReasoningGroup(blocks []agent.Block, width int, sty Styles, frame int) string {
-	state := lifecycleSuccess
+	state := agent.ToolSuccess
 	label := "thought"
 	for _, block := range blocks {
 		if !block.Complete {
-			state = lifecycleRunning
+			state = agent.ToolRunning
 			label = "thinking" + activityEllipsis(frame, sty.StatusSpinner.Len() > 0)
 			break
 		}
