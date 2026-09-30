@@ -118,7 +118,7 @@ func (m Model) Query() string { return m.search.Value() }
 func (m *Model) SetFrame(frame int) { m.frame = frame }
 
 func (m Model) Animating() bool {
-	return m.state == StateLoading && m.theme.Chat.StatusSpinner.Len() > 0 && m.width >= 20 && m.height >= 3
+	return m.state == StateLoading && m.theme.Chat.StatusSpinner.Len() > 0
 }
 
 func (m *Model) SetLoading(operation Operation) {
