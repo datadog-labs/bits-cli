@@ -18,7 +18,7 @@ func (m *Model) requestLogout() tea.Cmd {
 	closeFileSearch := m.stopCompletionSearches()
 	m.editor.CloseMenu()
 	m.after(thenLogout)
-	return batchCommands(
+	return tea.Batch(
 		closeFileSearch,
 		m.showNotice(notice(chat.NoticeInfo, nil,
 			"Cancelling the current operation before logging out..."), 0),
@@ -28,7 +28,7 @@ func (m *Model) requestLogout() tea.Cmd {
 func (m *Model) startLogout() tea.Cmd {
 	closeFileSearch := m.stopCompletionSearches()
 	if m.logout == nil {
-		return batchCommands(
+		return tea.Batch(
 			closeFileSearch,
 			m.showNotice(notice(chat.NoticeError, nil, "Logout is unavailable."), 0),
 		)

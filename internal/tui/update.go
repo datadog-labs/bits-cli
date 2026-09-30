@@ -413,7 +413,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Paste, cursor blink, and other editor-bound input. When the editor is not
 	// the focus it is blurred and ignores these, showing no cursor.
 	cmd := m.editor.Update(msg)
-	return m, batchCommands(cmd, m.syncCompletionSearches())
+	return m, tea.Batch(cmd, m.syncCompletionSearches())
 }
 
 func (m *Model) openConversationInBrowser() tea.Cmd {
@@ -598,9 +598,9 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	m.syncStatus()
 	switch {
 	case done.then == thenNewConversation:
-		return m, batchCommands(permissionsCommand, m.startNewConversation())
+		return m, tea.Batch(permissionsCommand, m.startNewConversation())
 	case done.kind == opRestore && done.stop != stopAll:
-		return m, batchCommands(permissionsCommand, m.resumePendingTools())
+		return m, tea.Batch(permissionsCommand, m.resumePendingTools())
 	}
 	return m, permissionsCommand
 }
@@ -729,7 +729,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		cmd := m.editor.Update(msg)
-		return m, batchCommands(cmd, m.syncCompletionSearches())
+		return m, tea.Batch(cmd, m.syncCompletionSearches())
 	}
 
 	// The offer is only visible with an empty composer, so these keys have no
@@ -771,7 +771,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	cmd := m.editor.Update(msg)
-	return m, batchCommands(cmd, m.syncCompletionSearches())
+	return m, tea.Batch(cmd, m.syncCompletionSearches())
 }
 
 func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -835,7 +835,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
-	return m, batchCommands(closeFileSearch, wait)
+	return m, tea.Batch(closeFileSearch, wait)
 }
 
 // begin starts an exclusive operation. Its generation drops any late message
