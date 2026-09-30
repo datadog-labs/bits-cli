@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -521,8 +522,11 @@ func (e *Engine) run(
 			return
 		}
 		completion.Denied = completion.Denied || toolRound.denied
-		if toolRound.stopped {
-			// A denial was answered on the wire; discard the follow-up and end the turn.
+		switch toolRound.outcome {
+		case roundAborted:
+			return // cancelled: end the turn quietly
+		case roundStopped:
+			// The round was answered on the wire; discard the follow-up and end the turn.
 			if ctx.Err() == nil {
 				opts.ConversationID = convID
 				id, drainRounds, err := e.drainStoppedToolCalls(ctx, toolRound.responses, opts)
@@ -549,17 +553,9 @@ func (e *Engine) run(
 				completion.Completed = emitTerminal(Event{Kind: EventTurnDone})
 			}
 			return
+		case roundAnswered:
+			next = toolRound.responses
 		}
-		if !toolRound.complete {
-			if ctx.Err() == nil {
-				if !finalizeAndEmit(emit) {
-					return
-				}
-				completion.Completed = emit(Event{Kind: EventTurnDone})
-			}
-			return
-		}
-		next = toolRound.responses
 	}
 	completion.Err = ErrMaxTurns
 	if !finalizeAndEmit(emitAtRound(maxTurns)) {
@@ -616,12 +612,21 @@ func (e *Engine) drainStoppedToolCalls(
 	return conversationID, rounds, ErrMaxTurns
 }
 
-// toolRound is one client-tool round trip's wire responses and outcome.
+// roundOutcome is how a client-tool round ended.
+type roundOutcome uint8
+
+const (
+	roundAborted  roundOutcome = iota // the turn was cancelled; nothing is answered
+	roundAnswered                     // send the responses as the next round
+	roundStopped                      // answer on the wire, drain follow-ups, end the turn
+)
+
+// toolRound is one client-tool round trip's outcome and wire responses.
+// Responses are set unless the round was aborted.
 type toolRound struct {
+	outcome   roundOutcome
 	responses []assistant.ClientToolResponse
-	complete  bool
 	denied    bool
-	stopped   bool
 }
 
 func cloneUsage(usage *assistant.Usage) *assistant.Usage {
@@ -785,12 +790,14 @@ const (
 
 // roundCall is the engine goroutine's state for one client tool call.
 type roundCall struct {
-	call   ToolCall
-	index  int // position in the round's wire responses
-	status callStatus
-	key    ApprovalKey        // set while awaiting approval
-	cancel context.CancelFunc // set once launched
+	call     ToolCall
+	status   callStatus
+	key      ApprovalKey                  // set while awaiting approval
+	cancel   context.CancelFunc           // set once launched
+	response assistant.ClientToolResponse // set once resolved
 }
+
+func unresolved(c *roundCall) bool { return c.status != callResolved }
 
 type toolDone struct {
 	call   *roundCall
@@ -809,9 +816,7 @@ type toolRoundState struct {
 	onDeny        DenyPolicy
 	calls         []*roundCall // in wire order
 	byID          map[string]*roundCall
-	responses     []assistant.ClientToolResponse
 	results       chan toolDone
-	outstanding   int
 	denied        bool
 	stopRequested bool
 }
@@ -837,9 +842,7 @@ func (e *Engine) runTools(
 		onDeny:      onDeny,
 		calls:       make([]*roundCall, len(calls)),
 		byID:        make(map[string]*roundCall, len(calls)),
-		responses:   make([]assistant.ClientToolResponse, len(calls)),
 		results:     make(chan toolDone, len(calls)),
-		outstanding: len(calls),
 	}
 	for i, call := range calls {
 		if call.ID == "" {
@@ -848,7 +851,7 @@ func (e *Engine) runTools(
 		if _, exists := r.byID[call.ID]; exists {
 			return toolRound{}, fmt.Errorf("duplicate client tool call id %q", call.ID)
 		}
-		r.calls[i] = &roundCall{call: call, index: i}
+		r.calls[i] = &roundCall{call: call}
 		r.byID[call.ID] = r.calls[i]
 	}
 
@@ -860,7 +863,7 @@ func (e *Engine) runTools(
 			break
 		}
 	}
-	for ok && r.outstanding > 0 {
+	for ok && slices.ContainsFunc(r.calls, unresolved) {
 		select {
 		case command := <-e.commands:
 			if command.generation == generation {
@@ -889,9 +892,20 @@ func (e *Engine) runTools(
 		}
 	}
 	if !ok {
-		return toolRound{denied: r.denied}, nil
+		return toolRound{outcome: roundAborted, denied: r.denied}, nil
 	}
-	return toolRound{responses: r.responses, complete: true, denied: r.denied, stopped: r.stopRequested}, nil
+	round := toolRound{
+		outcome:   roundAnswered,
+		responses: make([]assistant.ClientToolResponse, len(r.calls)),
+		denied:    r.denied,
+	}
+	if r.stopRequested {
+		round.outcome = roundStopped
+	}
+	for i, c := range r.calls {
+		round.responses[i] = c.response
+	}
+	return round, nil
 }
 
 // dispatch decides how a call starts: answered locally, parked for approval,
@@ -1059,8 +1073,7 @@ func (r *toolRoundState) resolve(c *roundCall, result ToolResult) bool {
 		return true
 	}
 	c.status = callResolved
-	r.outstanding--
-	r.responses[c.index] = toolResponse(c.call, result)
+	c.response = toolResponse(c.call, result)
 	result = r.tools.NormalizeResult(c.call, result)
 	if _, updated := r.e.transcript.MarkToolExecuted(c.call.ID, result); !updated {
 		return true
