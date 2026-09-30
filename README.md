@@ -69,6 +69,46 @@ Exit statuses are `0` for a completed turn, `1` for startup/runtime/delivery fai
 
 `bits --version` prints the module version when available, otherwise `dev` with the short commit recorded in the build.
 
+## Project instructions
+
+The interactive CLI and `bits run` use Pi's project-context discovery rules.
+In each directory, the first readable regular file wins, in this order:
+
+1. `AGENTS.override.md`
+2. `AGENTS.md`
+3. `AGENTS.MD`
+4. `CLAUDE.md`
+5. `CLAUDE.MD`
+
+Bits loads global instructions from `~/.bits-cli` first, then ancestor directories
+from the filesystem root down to the active directory. Discovery crosses Git
+roots and also works outside Git. Each directory contributes at most one file;
+an empty override suppresses the other filenames in that directory. UTF-8 byte
+order marks are stripped. Files are included only once when the global directory
+is also an ancestor.
+
+For a linked worktree nested inside its main checkout, a selected context file
+at the worktree root shadows the same filename at the main checkout root.
+Other ancestor instructions remain applicable. Descendant directories are not
+searched.
+
+Instructions are sent as Assistant context using the project-context template,
+without changing the visible prompt. Each new conversation captures a snapshot
+and sends it only on its first request. The backend preserves it in history, so
+tool continuations and later turns do not resend it. The snapshot remains fixed
+while the conversation is running; restart or resume to pick up file changes.
+
+Resuming reloads the files. Since the prior snapshot is unknown, the first
+request explicitly replaces previous project instructions, or withdraws them
+if no applicable instructions remain. Switching conversations with `/resume`
+uses the same behavior.
+
+Bits retains its size limits and symlink checks: 32 KiB per file and 128 KiB
+total, excluding template markup. Truncated files include a notice and source
+path. Symlink targets must stay within their Git worktree for files inside that
+worktree, or within the directory being inspected for other files. Missing,
+unreadable, and escaping candidates are skipped before trying the next filename.
+
 ## Authentication
 
 ### Startup login

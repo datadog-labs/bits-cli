@@ -12,6 +12,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent/fake"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/auth"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 // ErrLoginRequired marks an OAuth state that an interactive caller may replace
@@ -30,6 +31,7 @@ type ClientOptions struct {
 
 // EngineOptions configures a surface-independent agent engine.
 type EngineOptions struct {
+	Workspace      *workspace.Workspace
 	Client         ClientOptions
 	Send           assistant.SendOptions
 	UseFakeBackend bool
@@ -60,6 +62,10 @@ var defaultSkillOverrides = []assistant.SkillOverride{
 // become a demo session.
 func NewEngine(ctx context.Context, opts EngineOptions) (*agent.Engine, error) {
 	opts.Send = withDefaultSkillOverrides(opts.Send)
+	var engineOptions []agent.Option
+	if opts.Workspace != nil {
+		engineOptions = append(engineOptions, agent.WithProjectInstructionsManager(agent.NewProjectInstructionsManager(opts.Workspace.Path())))
+	}
 	switch opts.Client.Mode {
 	case auth.ModeAuto:
 		if opts.UseFakeBackend {
@@ -73,7 +79,7 @@ func NewEngine(ctx context.Context, opts EngineOptions) (*agent.Engine, error) {
 				}
 				opts.Send.ConversationID = id
 			}
-			return agent.New(backend, opts.Send), nil
+			return agent.New(backend, opts.Send, engineOptions...), nil
 		}
 	case auth.ModeAPIKey:
 		// Continue below; API-key mode must validate its explicit credentials.
@@ -88,7 +94,7 @@ func NewEngine(ctx context.Context, opts EngineOptions) (*agent.Engine, error) {
 		}
 		return nil, err
 	}
-	return agent.New(client, opts.Send), nil
+	return agent.New(client, opts.Send, engineOptions...), nil
 }
 
 // withDefaultSkillOverrides supplies this client's disabled-by-default skills
