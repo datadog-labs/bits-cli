@@ -31,6 +31,35 @@ func (e *Engine) CanResumeTools(tools *ToolSet) bool {
 	return true
 }
 
+// SettleRestoredTools marks unfinished calls that cannot resume as cancelled
+// in the local transcript, leaving conversation history unchanged. It reports
+// whether any block changed and does nothing while an operation is active.
+func (e *Engine) SettleRestoredTools(tools *ToolSet) bool {
+	if !e.active.CompareAndSwap(false, true) {
+		return false
+	}
+	defer e.active.Store(false)
+	resuming := map[string]bool{}
+	if e.CanResumeTools(tools) {
+		for _, call := range e.continuation.calls {
+			resuming[call.Tool.ToolCallID] = true
+		}
+	}
+	changed := false
+	for _, block := range e.transcript.Blocks() {
+		tool := block.Tool
+		if tool == nil || resuming[block.ID.Key] || tool.Cancelled || tool.Denied || tool.Status == ToolSuccess || tool.Status == ToolError {
+			continue
+		}
+		if _, updated := e.transcript.MarkToolExecuted(block.ID.Key, ToolResult{
+			Title: "Interrupted", Output: "the session ended before this call was answered", IsError: true, Cancelled: true,
+		}); updated {
+			changed = true
+		}
+	}
+	return changed
+}
+
 // ResumePendingTools restores safe handlers and sends their responses on the
 // original conversation, using the original user turn's context.
 func (e *Engine) ResumePendingTools(ctx context.Context, in TurnInput) <-chan Event {

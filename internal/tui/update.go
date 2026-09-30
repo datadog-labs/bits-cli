@@ -886,7 +886,14 @@ func (m *Model) beginRemote(events <-chan agent.Event, cancel context.CancelFunc
 }
 
 func (m *Model) resumePendingTools() tea.Cmd {
-	if m.engine == nil || m.tools == nil || !m.engine.CanResumeTools(m.tools) {
+	if m.engine == nil {
+		return nil
+	}
+	if m.engine.SettleRestoredTools(m.tools) {
+		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+		m.syncTranscript()
+	}
+	if m.tools == nil || !m.engine.CanResumeTools(m.tools) {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())

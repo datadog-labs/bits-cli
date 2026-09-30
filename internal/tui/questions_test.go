@@ -403,3 +403,36 @@ func TestQuestionExitAndStopHaveDifferentPersistedOutcomes(t *testing.T) {
 		})
 	}
 }
+
+func TestRestoredCallsThatWillNotResumeSettle(t *testing.T) {
+	ask := fmt.Sprintf(`("ask_user_question", %q)`, questionInput)
+	for _, tc := range []struct {
+		name    string
+		scripts []string
+	}{
+		// The tool set has no read_file, so the batch cannot resume.
+		{"mixed batch", []string{`call([` + ask + `, ("read_file", {"path": "go.mod"})])`}},
+		{"abandoned by a later turn", []string{`call([` + ask + `])`, `say("moved on")`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fake.Fake{ContinueDir: t.TempDir()}
+			id, err := f.PushConversation(t.Context(), "", tc.scripts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := newResumedQuestionModel(t, f, id, true)
+			drainConversationRemote(t, m)
+			if m.activeToolUI != nil || m.turnEvents != nil {
+				t.Fatal("a call that cannot resume opened")
+			}
+			for _, block := range m.transcript.Blocks {
+				if block.Tool != nil && !block.Tool.Cancelled {
+					t.Fatalf("restored %s still looks running", block.Tool.Name)
+				}
+			}
+			if len(questionResponses(t, f, id)) != 0 {
+				t.Fatal("settling persisted a response")
+			}
+		})
+	}
+}
