@@ -12,59 +12,6 @@ import (
 	"time"
 )
 
-func TestResolveExecShell(t *testing.T) {
-	tests := []struct {
-		name       string
-		configured string
-		available  map[string]string
-		want       string
-	}{
-		{
-			name:       "configured shell",
-			configured: "/opt/custom/sh",
-			available:  map[string]string{"/opt/custom/sh": "/opt/custom/sh", "/bin/sh": "/bin/sh"},
-			want:       "/opt/custom/sh",
-		},
-		{
-			name:       "configured shell resolved through path",
-			configured: "zsh",
-			available:  map[string]string{"zsh": "/usr/bin/zsh", "/bin/sh": "/bin/sh"},
-			want:       "/usr/bin/zsh",
-		},
-		{
-			name:       "unavailable configured shell falls back",
-			configured: "/missing/shell",
-			available:  map[string]string{"/bin/sh": "/bin/sh"},
-			want:       "/bin/sh",
-		},
-		{
-			name:       "empty configured shell falls back",
-			configured: "",
-			available:  map[string]string{"/bin/sh": "/bin/sh"},
-			want:       "/bin/sh",
-		},
-		{
-			name:       "nothing available",
-			configured: "/missing/shell",
-			available:  map[string]string{},
-			want:       "",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			lookPath := func(file string) (string, error) {
-				if resolved, ok := test.available[file]; ok {
-					return resolved, nil
-				}
-				return "", errors.New("not found")
-			}
-			if got := resolveExecShell(test.configured, lookPath); got != test.want {
-				t.Fatalf("resolveExecShell(%q) = %q, want %q", test.configured, got, test.want)
-			}
-		})
-	}
-}
-
 func TestExecServiceRejectsInvalidRequestBeforeLaunch(t *testing.T) {
 	launcher := &recordingExecLauncher{}
 	service := testExecService(launcher, time.Second, 1024)
@@ -101,10 +48,10 @@ func TestExecServiceResolvesFailuresBeforeAdmission(t *testing.T) {
 		},
 	}
 	service := newExecService(launcher, execServiceConfig{
-		concurrency:  1,
-		timeout:      time.Minute,
-		outputLimit:  1024,
-		resolveShell: func() string { return "/bin/sh" },
+		concurrency:      1,
+		timeout:          time.Minute,
+		outputLimit:      1024,
+		defaultShellPath: "/bin/sh",
 	})
 	cwd := t.TempDir()
 	worker := make(chan ExecOutcome, 1)
@@ -140,10 +87,10 @@ func TestExecServiceResolvesFailuresBeforeAdmission(t *testing.T) {
 func TestExecServiceShellResolutionPrecedesCancelledAdmission(t *testing.T) {
 	launcher := &recordingExecLauncher{}
 	service := newExecService(launcher, execServiceConfig{
-		concurrency:  1,
-		timeout:      time.Second,
-		outputLimit:  1024,
-		resolveShell: func() string { return "" },
+		concurrency:      1,
+		timeout:          time.Second,
+		outputLimit:      1024,
+		defaultShellPath: "",
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -183,10 +130,10 @@ func TestExecServiceResolvesPlanBeforeLaunch(t *testing.T) {
 		},
 	}
 	service := newExecService(launcher, execServiceConfig{
-		concurrency:  4,
-		timeout:      3 * time.Second,
-		outputLimit:  1234,
-		resolveShell: func() string { return "/custom/shell" },
+		concurrency:      4,
+		timeout:          3 * time.Second,
+		outputLimit:      1234,
+		defaultShellPath: "/custom/shell",
 	})
 	base := t.TempDir()
 	outcome := service.Run(context.Background(), ExecRequest{
@@ -356,10 +303,10 @@ func TestExecServiceTimeoutKillsAndReapsAfterGrace(t *testing.T) {
 
 func testExecService(launcher execLauncher, timeout time.Duration, outputLimit int) *ExecService {
 	return newExecService(launcher, execServiceConfig{
-		concurrency:  execConcurrencyLimit,
-		timeout:      timeout,
-		outputLimit:  outputLimit,
-		resolveShell: func() string { return "/bin/sh" },
+		concurrency:      execConcurrencyLimit,
+		timeout:          timeout,
+		outputLimit:      outputLimit,
+		defaultShellPath: "/bin/sh",
 	})
 }
 

@@ -2,6 +2,9 @@
 
 package tools
 
-import "github.com/DataDog/bits-cli/internal/agent"
+import (
+	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/workspace"
+)
 
-func platformExecTools(string) []agent.Tool { return nil }
+func platformExecTools(*workspace.Workspace) []agent.Tool { return nil }

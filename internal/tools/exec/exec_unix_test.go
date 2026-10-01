@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
 func TestExecServiceUnixSuccessAndInheritedEnvironment(t *testing.T) {
@@ -77,14 +79,78 @@ func TestExecServiceUnixLaunchFailure(t *testing.T) {
 	}
 }
 
-func TestExecServiceUnixFallsBackWhenConfiguredShellIsUnavailable(t *testing.T) {
+func TestExecServiceUnixIgnoresShellEnvironment(t *testing.T) {
 	t.Setenv("SHELL", filepath.Join(t.TempDir(), "missing-shell"))
-	outcome := NewExecService().Run(context.Background(), ExecRequest{
-		Command: "printf fallback",
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ws.Close() })
+	selected := ws.DefaultShellPath()
+	if selected == "" || selected == os.Getenv("SHELL") {
+		t.Fatalf("default shell = %q, want an available account shell", selected)
+	}
+	outcome := NewExecService(selected).Run(context.Background(), ExecRequest{
+		Command: "printf selected",
 		CWD:     t.TempDir(),
 	})
-	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != "fallback" {
-		t.Fatalf("outcome = %+v, want /bin/sh fallback success", outcome)
+	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != "selected" {
+		t.Fatalf("outcome = %+v, want account shell success", outcome)
+	}
+}
+
+func TestExecServiceUnixUsesRequestedShell(t *testing.T) {
+	service := NewExecService("")
+	outcome := service.Run(context.Background(), ExecRequest{
+		Command: `printf '%s' "$BASH_VERSION"`,
+		CWD:     t.TempDir(),
+		Shell:   "bash",
+	})
+	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout == "" {
+		t.Fatalf("outcome = %+v, want Bash output", outcome)
+	}
+	for _, shell := range []string{"fish", filepath.Join(t.TempDir(), "bash")} {
+		outcome := service.Run(context.Background(), ExecRequest{Command: "true", CWD: t.TempDir(), Shell: shell})
+		if outcome.Reason != ExecLaunchFailed {
+			t.Fatalf("shell %q outcome = %+v, want launch failure", shell, outcome)
+		}
+	}
+}
+
+func TestExecServiceUnixResolvesRelativeShellBeforeChangingDirectory(t *testing.T) {
+	processDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell := filepath.Join(t.TempDir(), "bash")
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\nprintf selected"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	relativeShell, err := filepath.Rel(processDirectory, shell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := NewExecService("").Run(context.Background(), ExecRequest{
+		Command: "ignored", CWD: t.TempDir(), Shell: relativeShell,
+	})
+	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != "selected" {
+		t.Fatalf("relative shell outcome = %+v", outcome)
+	}
+}
+
+func TestDirectExecLauncherUsesLoginCommandFlags(t *testing.T) {
+	dir := t.TempDir()
+	shell := filepath.Join(dir, "fake-shell")
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\nprintf '%s|%s' \"$1\" \"$2\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	service := newExecService(newDirectExecLauncher(), execServiceConfig{
+		concurrency: 1, timeout: time.Second, outputLimit: 4096,
+		defaultShellPath: shell,
+	})
+	outcome := service.Run(context.Background(), ExecRequest{Command: "printf command", CWD: dir})
+	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != "-lc|printf command" {
+		t.Fatalf("outcome = %+v, want -lc and command string", outcome)
 	}
 }
 
@@ -272,10 +338,10 @@ func TestExecServiceUnixReapsDirectChild(t *testing.T) {
 
 func newUnixTestExecService(timeout time.Duration, outputLimit int) *ExecService {
 	return newExecService(newDirectExecLauncher(), execServiceConfig{
-		concurrency:  execConcurrencyLimit,
-		timeout:      timeout,
-		outputLimit:  outputLimit,
-		resolveShell: func() string { return "/bin/sh" },
+		concurrency:      execConcurrencyLimit,
+		timeout:          timeout,
+		outputLimit:      outputLimit,
+		defaultShellPath: "/bin/sh",
 	})
 }
 

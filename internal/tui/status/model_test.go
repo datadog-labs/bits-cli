@@ -16,6 +16,7 @@ func TestModelRendersTruthfulRuntimeAndWorkspaceSnapshot(t *testing.T) {
 	m := New(96, 40, styles.Default(true))
 	m.Open(Runtime{
 		Site:                "https://api.us3.datadoghq.com",
+		Shell:               "/bin/zsh",
 		AuthenticationMode:  "oauth",
 		AuthenticationState: "authenticated",
 		ConversationID:      "conversation-123",
@@ -49,7 +50,7 @@ func TestModelRendersTruthfulRuntimeAndWorkspaceSnapshot(t *testing.T) {
 		"Assistant", "Conversation", "conversation-123", "Profile", "cli",
 		"Model", "default",
 		"Permissions", "manual", "Turn", "streaming", "Connectivity", "connected", "Context tokens", "3,200 / 16,000",
-		"Workspace", "Directory", "/work/bits-cli", "Repository", "bits-cli · /work/bits-cli",
+		"Workspace", "Directory", "/work/bits-cli", "Shell", "/bin/zsh", "Repository", "bits-cli · /work/bits-cli",
 		"Branch", "main", "Commit", "0123456789abcdef0123456789abcdef01234567",
 		"Working tree", "staged, untracked",
 		"↑/↓ scroll", "pgup/pgdown page",

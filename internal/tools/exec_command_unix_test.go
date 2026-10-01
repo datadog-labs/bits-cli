@@ -44,7 +44,12 @@ func TestExecCommandUnixEndToEndWorkdirsAndFailures(t *testing.T) {
 	if err := os.WriteFile(regular, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	tool := newExecCommandTool(turnCWD, exectool.NewExecService())
+	ws, err := workspace.Open(turnCWD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ws.Close() })
+	tool := newExecCommandTool(turnCWD, exectool.NewExecService(ws.DefaultShellPath()))
 	tests := []struct {
 		name       string
 		input      string

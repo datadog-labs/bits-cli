@@ -5,7 +5,6 @@ package exec
 import (
 	"errors"
 	"io"
-	"os"
 	osexec "os/exec"
 	"syscall"
 	"time"
@@ -17,16 +16,12 @@ const execPipeWaitDelay = 100 * time.Millisecond
 
 type directExecLauncher struct{}
 
-func defaultExecShell() string {
-	return resolveExecShell(os.Getenv("SHELL"), osexec.LookPath)
-}
-
 func newDirectExecLauncher() execLauncher {
 	return directExecLauncher{}
 }
 
 func (directExecLauncher) Start(plan ExecPlan, stdout, stderr io.Writer) (execProcess, error) {
-	command := osexec.Command(plan.Shell, "-c", plan.Command)
+	command := osexec.Command(plan.Shell, "-lc", plan.Command)
 	command.Dir = plan.CWD
 	// A nil Stdin connects the child to the null device. A nil Env inherits
 	// the ordinary parent process environment unchanged.

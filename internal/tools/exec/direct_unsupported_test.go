@@ -9,7 +9,7 @@ import (
 )
 
 func TestExecServiceUnsupportedPlatform(t *testing.T) {
-	outcome := NewExecService().Run(context.Background(), ExecRequest{
+	outcome := NewExecService("/bin/sh").Run(context.Background(), ExecRequest{
 		Command: "true",
 		CWD:     t.TempDir(),
 	})

@@ -46,7 +46,7 @@ func NewEditorTools(ws *workspace.Workspace) []agent.Tool {
 // the deliberately unsandboxed, one-shot exec_command tool.
 func NewClientTools(ws *workspace.Workspace) []agent.Tool {
 	clientTools := NewEditorTools(ws)
-	return append(clientTools, platformExecTools(ws.Path())...)
+	return append(clientTools, platformExecTools(ws)...)
 }
 
 // errorResult builds an error ToolResult with a formatted output message.

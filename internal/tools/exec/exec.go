@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"time"
 
@@ -55,6 +56,7 @@ const (
 type ExecRequest struct {
 	Command string
 	CWD     string
+	Shell   string
 	// Timeout overrides the service default when non-zero.
 	Timeout time.Duration
 }
@@ -103,39 +105,39 @@ type ExecOutcome struct {
 // must be shared by all exec_command handlers belonging to one Bits engine for
 // its four-command limit to cover that engine.
 type ExecService struct {
-	launcher     execLauncher
-	permits      chan struct{}
-	timeout      time.Duration
-	outputLimit  int
-	resolveShell func() string
+	launcher         execLauncher
+	permits          chan struct{}
+	timeout          time.Duration
+	outputLimit      int
+	defaultShellPath string
 }
 
-// NewExecService constructs the Linux/macOS direct execution service. On an
-// unsupported platform it remains constructible, but Run reports a launch
-// failure instead of exposing Unix execution behavior.
-func NewExecService() *ExecService {
+// NewExecService constructs the Linux/macOS direct execution service with the
+// default shell selected by the workspace. On an unsupported platform it remains
+// constructible, but Run reports a launch failure instead of Unix execution.
+func NewExecService(defaultShellPath string) *ExecService {
 	return newExecService(newDirectExecLauncher(), execServiceConfig{
-		concurrency:  execConcurrencyLimit,
-		timeout:      execTimeout,
-		outputLimit:  execOutputLimit,
-		resolveShell: defaultExecShell,
+		concurrency:      execConcurrencyLimit,
+		timeout:          execTimeout,
+		outputLimit:      execOutputLimit,
+		defaultShellPath: defaultShellPath,
 	})
 }
 
 type execServiceConfig struct {
-	concurrency  int
-	timeout      time.Duration
-	outputLimit  int
-	resolveShell func() string
+	concurrency      int
+	timeout          time.Duration
+	outputLimit      int
+	defaultShellPath string
 }
 
 func newExecService(launcher execLauncher, config execServiceConfig) *ExecService {
 	return &ExecService{
-		launcher:     launcher,
-		permits:      make(chan struct{}, config.concurrency),
-		timeout:      config.timeout,
-		outputLimit:  config.outputLimit,
-		resolveShell: config.resolveShell,
+		launcher:         launcher,
+		permits:          make(chan struct{}, config.concurrency),
+		timeout:          config.timeout,
+		outputLimit:      config.outputLimit,
+		defaultShellPath: config.defaultShellPath,
 	}
 }
 
@@ -252,7 +254,23 @@ func (s *ExecService) resolve(request ExecRequest) (ExecPlan, error) {
 	if !info.IsDir() {
 		return ExecPlan{}, fmt.Errorf("exec working directory %q is not a directory", cwd)
 	}
-	shell := s.resolveShell()
+	var shell string
+	if request.Shell != "" {
+		if !supportedExecShell(request.Shell) {
+			return ExecPlan{}, fmt.Errorf("unsupported exec shell %q: use bash, zsh, or sh", request.Shell)
+		}
+		resolved, err := osexec.LookPath(request.Shell)
+		if err != nil {
+			return ExecPlan{}, fmt.Errorf("resolve exec shell %q: %w", request.Shell, err)
+		}
+		resolved, err = filepath.Abs(resolved)
+		if err != nil {
+			return ExecPlan{}, fmt.Errorf("resolve absolute exec shell %q: %w", request.Shell, err)
+		}
+		shell = resolved
+	} else {
+		shell = s.defaultShellPath
+	}
 	if shell == "" {
 		return ExecPlan{}, errors.New("no shell is available")
 	}
@@ -273,16 +291,13 @@ func (s *ExecService) resolve(request ExecRequest) (ExecPlan, error) {
 	}, nil
 }
 
-func resolveExecShell(configured string, lookPath func(string) (string, error)) string {
-	if configured != "" {
-		if resolved, err := lookPath(configured); err == nil {
-			return resolved
-		}
+func supportedExecShell(shell string) bool {
+	switch filepath.Base(shell) {
+	case "bash", "zsh", "sh":
+		return true
+	default:
+		return false
 	}
-	if resolved, err := lookPath("/bin/sh"); err == nil {
-		return resolved
-	}
-	return ""
 }
 
 func terminateAndWait(process execProcess, waited <-chan execProcessResult) execProcessResult {

@@ -9,18 +9,20 @@ import (
 	"strings"
 )
 
-// Workspace owns a confined filesystem root and its display path.
+// Workspace owns a confined filesystem root, its display path, and the shell
+// selected when the workspace was opened.
 //
 // A Workspace is safe for concurrent use. Call Close when the process no
 // longer needs it; values returned by OSRoot are borrowed and must not be
 // closed independently.
 type Workspace struct {
-	path        string
-	displayPath string
-	root        *os.Root
+	path             string
+	displayPath      string
+	defaultShellPath string
+	root             *os.Root
 }
 
-// Open resolves path and opens it as a confined workspace.
+// Open resolves path, opens it as a confined workspace, and selects its shell.
 func Open(path string) (*Workspace, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -34,13 +36,18 @@ func Open(path string) (*Workspace, error) {
 	if home, homeErr := os.UserHomeDir(); homeErr == nil {
 		displayPath = userRelativePath(abs, home)
 	}
-	return &Workspace{path: abs, displayPath: displayPath, root: root}, nil
+	return &Workspace{path: abs, displayPath: displayPath, defaultShellPath: resolveDefaultShellPath(), root: root}, nil
 }
 
 // Path returns the absolute path used to identify the workspace to processes
 // launched in it.
 func (w *Workspace) Path() string {
 	return w.path
+}
+
+// DefaultShellPath returns the shell selected when this workspace was opened.
+func (w *Workspace) DefaultShellPath() string {
+	return w.defaultShellPath
 }
 
 // DisplayPath returns the stable user-facing form of Path. Locations inside

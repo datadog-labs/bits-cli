@@ -32,6 +32,7 @@ const (
 // Runtime is the non-secret live state owned by the root TUI model.
 type Runtime struct {
 	Site                string
+	Shell               string
 	AuthenticationMode  string
 	AuthenticationState string
 	Identity            string
@@ -219,6 +220,7 @@ func (m Model) workspaceRows() []statusRow {
 	if !m.workspaceReady {
 		return []statusRow{
 			{label: "Directory", value: "collecting…"},
+			{label: "Shell", value: available(m.runtime.Shell, "no supported login shell is available")},
 			{label: "Repository", value: "collecting…"},
 			{label: "Branch", value: "collecting…"},
 			{label: "Commit", value: "collecting…"},
@@ -231,6 +233,7 @@ func (m Model) workspaceRows() []statusRow {
 	case workspacepkg.RepositoryAbsent:
 		return []statusRow{
 			{label: "Directory", value: directory},
+			{label: "Shell", value: available(m.runtime.Shell, "no supported login shell is available")},
 			{label: "Repository", value: "not a Git repository"},
 			{label: "Branch", value: "not applicable"},
 			{label: "Commit", value: "not applicable"},
@@ -251,6 +254,7 @@ func (m Model) workspaceRows() []statusRow {
 		}
 		return []statusRow{
 			{label: "Directory", value: directory},
+			{label: "Shell", value: available(m.runtime.Shell, "no supported login shell is available")},
 			{label: "Repository", value: repositoryLabel(repository)},
 			{label: "Branch", value: branch},
 			{label: "Commit", value: commit},
@@ -259,6 +263,7 @@ func (m Model) workspaceRows() []statusRow {
 	default:
 		return []statusRow{
 			{label: "Directory", value: directory},
+			{label: "Shell", value: available(m.runtime.Shell, "no supported login shell is available")},
 			{label: "Repository", value: "unavailable — Git context could not be collected"},
 			{label: "Branch", value: "unavailable — Git context could not be collected"},
 			{label: "Commit", value: "unavailable — Git context could not be collected"},

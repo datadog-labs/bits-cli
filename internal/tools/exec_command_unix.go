@@ -5,8 +5,9 @@ package tools
 import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	exectool "github.com/DataDog/bits-cli/internal/tools/exec"
+	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
-func platformExecTools(turnCWD string) []agent.Tool {
-	return []agent.Tool{newExecCommandTool(turnCWD, exectool.NewExecService())}
+func platformExecTools(ws *workspace.Workspace) []agent.Tool {
+	return []agent.Tool{newExecCommandTool(ws.Path(), exectool.NewExecService(ws.DefaultShellPath()))}
 }

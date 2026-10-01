@@ -130,6 +130,7 @@ func (m *Model) statusRuntime() statusview.Runtime {
 	}
 	return statusview.Runtime{
 		Site:                runtime.Backend.Site,
+		Shell:               defaultShellPath(m.workspace),
 		AuthenticationMode:  runtime.Backend.AuthenticationMode,
 		AuthenticationState: authenticationState,
 		Identity:            m.statusIdentity,
@@ -141,6 +142,13 @@ func (m *Model) statusRuntime() statusview.Runtime {
 		Connectivity:        m.statusConnectivity(),
 		Usage:               m.usage,
 	}
+}
+
+func defaultShellPath(ws *workspace.Workspace) string {
+	if ws == nil {
+		return ""
+	}
+	return ws.DefaultShellPath()
 }
 
 func identityLabel(identity assistant.CurrentUser) string {

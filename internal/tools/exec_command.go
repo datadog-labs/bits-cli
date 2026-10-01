@@ -14,7 +14,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/tools/spec"
 )
 
-const execCommandDescription = "Runs a non-interactive shell command to completion and returns its stdout, stderr, and terminal status. The process is terminated on timeout or cancellation and cannot be resumed."
+const execCommandDescription = "Runs a command in a non-interactive login shell and returns its stdout, stderr, and exit status."
 
 type execRunner interface {
 	Run(context.Context, exectool.ExecRequest) exectool.ExecOutcome
@@ -32,6 +32,10 @@ func newExecCommandTool(turnCWD string, runner execRunner) agent.Tool {
 						"type":        "string",
 						"minLength":   1,
 						"description": "Shell command to execute.",
+					},
+					"shell": map[string]any{
+						"type":        "string",
+						"description": "Shell binary to launch (bash, zsh, or sh). Defaults to the user's default shell.",
 					},
 					"workdir": map[string]any{
 						"type":        "string",
@@ -135,7 +139,7 @@ func execCommandApprovalKey(args spec.ExecCommandInput, cwd string) agent.Approv
 }
 
 func resolvedExecCommandRequest(args spec.ExecCommandInput, cwd string) exectool.ExecRequest {
-	request := exectool.ExecRequest{Command: args.Cmd, CWD: cwd}
+	request := exectool.ExecRequest{Command: args.Cmd, CWD: cwd, Shell: args.Shell}
 	if args.TimeoutMS != nil {
 		request.Timeout = time.Duration(*args.TimeoutMS) * time.Millisecond
 	}

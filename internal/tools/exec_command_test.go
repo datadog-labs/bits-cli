@@ -55,7 +55,7 @@ func TestExecCommandDefinitionIsStrictAndTruthful(t *testing.T) {
 		t.Fatal(err)
 	}
 	schema := string(encoded)
-	for _, want := range []string{`"required":["cmd"]`, `"additionalProperties":false`, `"workdir"`, `"timeout_ms"`, `"minimum":1`, `"maximum":600000`} {
+	for _, want := range []string{`"required":["cmd"]`, `"additionalProperties":false`, `"shell"`, `"workdir"`, `"timeout_ms"`, `"minimum":1`, `"maximum":600000`} {
 		if !strings.Contains(schema, want) {
 			t.Errorf("schema %s does not contain %s", schema, want)
 		}
@@ -99,6 +99,7 @@ func TestExecCommandResolvesWorkdirAtTheHandlerBoundary(t *testing.T) {
 		input       string
 		want        string
 		wantTimeout time.Duration
+		wantShell   string
 	}{
 		{name: "default", input: `{"cmd":"pwd"}`, want: turnCWD},
 		{name: "empty defaults", input: `{"cmd":"pwd","workdir":""}`, want: turnCWD},
@@ -106,6 +107,7 @@ func TestExecCommandResolvesWorkdirAtTheHandlerBoundary(t *testing.T) {
 		{name: "absolute", input: `{"cmd":"pwd","workdir":` + mustJSONString(t, abs) + `}`, want: abs},
 		{name: "outside workspace", input: `{"cmd":"pwd","workdir":"../outside"}`, want: filepath.Clean(filepath.Join(turnCWD, "../outside"))},
 		{name: "custom timeout", input: `{"cmd":"pwd","timeout_ms":2500}`, want: turnCWD, wantTimeout: 2500 * time.Millisecond},
+		{name: "custom shell", input: `{"cmd":"pwd","shell":"/bin/bash"}`, want: turnCWD, wantShell: "/bin/bash"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -118,7 +120,7 @@ func TestExecCommandResolvesWorkdirAtTheHandlerBoundary(t *testing.T) {
 				t.Fatalf("runner calls = %d, want %d", got, before+1)
 			}
 			request := runner.lastRequest()
-			if request.Command != "pwd" || request.CWD != test.want || request.Timeout != test.wantTimeout || !filepath.IsAbs(request.CWD) {
+			if request.Command != "pwd" || request.CWD != test.want || request.Timeout != test.wantTimeout || request.Shell != test.wantShell || !filepath.IsAbs(request.CWD) {
 				t.Fatalf("request = %+v, want command pwd and cwd %q", request, test.want)
 			}
 		})
@@ -150,6 +152,10 @@ func TestExecCommandApprovalShowsFinalCommandAndEffectiveWorkdir(t *testing.T) {
 	differentTimeout, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./...","workdir":"subdir","timeout_ms":30001}`})
 	if !needed || differentTimeout.Key == requirement.Key {
 		t.Fatalf("different timeout reused approval authority %+v", requirement.Key)
+	}
+	differentShell, needed := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./...","workdir":"subdir","timeout_ms":30000,"shell":"bash"}`})
+	if !needed || differentShell.Key == requirement.Key {
+		t.Fatalf("different shell did not change approval authority: %+v", differentShell)
 	}
 	for _, want := range []string{"cwd: " + filepath.Join(turnCWD, "subdir"), "timeout: 30s", "unsandboxed"} {
 		if !strings.Contains(requirement.Prompt.Detail, want) {

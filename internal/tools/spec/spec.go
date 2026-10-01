@@ -83,6 +83,7 @@ type Edit struct {
 
 type ExecCommandInput struct {
 	Cmd       string `json:"cmd"`
+	Shell     string `json:"shell"`
 	Workdir   string `json:"workdir"`
 	TimeoutMS *int64 `json:"timeout_ms"`
 }
