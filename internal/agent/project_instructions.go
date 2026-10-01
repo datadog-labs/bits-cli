@@ -25,88 +25,80 @@ const (
 	instructionsRemovalNotice     = "The previously provided project instructions no longer apply."
 )
 
-// ProjectInstructionsManager owns project instruction discovery, formatting, and context updates
+type instructionsPhase uint8
+
+const (
+	instructionsUnprepared instructionsPhase = iota
+	instructionsPending
+	instructionsDelivered
+)
+
+// ProjectInstructions owns project instruction discovery, formatting, and delivery
 // for one conversation at a time. Its engine serializes access.
-type ProjectInstructionsManager struct {
-	workspacePath   string
-	prepared        bool
-	previous        string
-	known           bool
-	pending         string
-	pendingSnapshot string
+type ProjectInstructions struct {
+	workspacePath  string
+	phase          instructionsPhase
+	pendingContext string
 }
 
-// WithProjectInstructionsManager attaches the manager owned by this engine. A manager
-// must not be shared between engines.
-func WithProjectInstructionsManager(manager *ProjectInstructionsManager) Option {
-	return func(engine *Engine) { engine.projectInstructionsManager = manager }
+// WithProjectInstructions attaches instructions owned by this engine.
+// Instructions must not be shared between engines.
+func WithProjectInstructions(instructions *ProjectInstructions) Option {
+	return func(engine *Engine) { engine.projectInstructions = instructions }
 }
 
-// NewProjectInstructionsManager uses the explicit workspace directory without changing
+// NewProjectInstructions uses the explicit workspace directory without changing
 // the process working directory.
-func NewProjectInstructionsManager(workspacePath string) *ProjectInstructionsManager {
-	return &ProjectInstructionsManager{workspacePath: workspacePath}
+func NewProjectInstructions(workspacePath string) *ProjectInstructions {
+	return &ProjectInstructions{workspacePath: workspacePath}
 }
 
-// apply sends an instruction update once per refresh. The backend preserves
-// prior instructions in history, so a changed snapshot must explicitly replace
-// or withdraw them. A resumed conversation starts with unknown prior context.
-func (m *ProjectInstructionsManager) apply(ctx context.Context, opts assistant.SendOptions) assistant.SendOptions {
-	if m == nil {
+// apply prepares an update once per conversation. The exact update stays pending
+// until delivery, even if a failed request assigns a conversation ID.
+func (p *ProjectInstructions) apply(ctx context.Context, opts assistant.SendOptions) assistant.SendOptions {
+	if p == nil || p.phase == instructionsDelivered {
 		return opts
 	}
-	if !m.prepared {
-		current := m.snapshot(ctx)
+	if p.phase == instructionsUnprepared {
+		current := p.snapshot(ctx)
 		if ctx.Err() != nil {
 			return opts
 		}
-		unknown := !m.known && opts.ConversationID != ""
 		update := current
-		switch {
-		case m.known && current == m.previous:
-			update = ""
-		case current != "" && (unknown || m.previous != ""):
-			update = instructionsReplacementNotice + "\n\n" + current
-		case current == "" && (unknown || m.previous != ""):
-			update = instructionsRemovalNotice
+		if opts.ConversationID != "" {
+			// Resuming starts with unknown prior instructions.
+			if current == "" {
+				update = instructionsRemovalNotice
+			} else {
+				update = instructionsReplacementNotice + "\n\n" + current
+			}
 		}
-		m.pendingSnapshot, m.pending, m.prepared = current, update, true
+		p.pendingContext = update
+		p.phase = instructionsPending
 	}
-	if m.pending != "" {
+	if p.pendingContext != "" {
 		if opts.CustomUserContext != "" {
 			opts.CustomUserContext += "\n\n"
 		}
-		opts.CustomUserContext += m.pending
+		opts.CustomUserContext += p.pendingContext
 	}
 	return opts
 }
 
 // acknowledge records delivery after a response starts streaming or Send succeeds.
 // Unstreamed failures retain the exact prepared update for the next request.
-func (m *ProjectInstructionsManager) acknowledge() {
-	if m != nil && m.prepared {
-		m.previous, m.known = m.pendingSnapshot, true
-		m.pending = ""
+func (p *ProjectInstructions) acknowledge() {
+	if p != nil && p.phase == instructionsPending {
+		p.phase = instructionsDelivered
+		p.pendingContext = ""
 	}
 }
 
-// refresh checks the files again on the next request, retaining the previous
-// snapshot so unchanged instructions are not resent.
-func (m *ProjectInstructionsManager) refresh() {
-	if m != nil {
-		m.prepared = false
-		m.pending = ""
-		m.pendingSnapshot = ""
-	}
-}
-
-func (m *ProjectInstructionsManager) reset() {
-	if m != nil {
-		m.prepared = false
-		m.pending = ""
-		m.pendingSnapshot = ""
-		m.previous = ""
-		m.known = false
+// reset discards the conversation snapshot so the next request reloads the files.
+func (p *ProjectInstructions) reset() {
+	if p != nil {
+		p.phase = instructionsUnprepared
+		p.pendingContext = ""
 	}
 }
 
@@ -122,8 +114,8 @@ type instructionFile struct {
 
 // snapshot loads ancestor instructions from the filesystem
 // root to the active directory, including ancestors outside Git repositories.
-func (m *ProjectInstructionsManager) snapshot(parent context.Context) string {
-	active, err := filepath.Abs(m.workspacePath)
+func (p *ProjectInstructions) snapshot(parent context.Context) string {
+	active, err := filepath.Abs(p.workspacePath)
 	if err != nil {
 		return ""
 	}

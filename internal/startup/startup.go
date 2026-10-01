@@ -64,7 +64,7 @@ func NewEngine(ctx context.Context, opts EngineOptions) (*agent.Engine, error) {
 	opts.Send = withDefaultSkillOverrides(opts.Send)
 	var engineOptions []agent.Option
 	if opts.Workspace != nil {
-		engineOptions = append(engineOptions, agent.WithProjectInstructionsManager(agent.NewProjectInstructionsManager(opts.Workspace.Path())))
+		engineOptions = append(engineOptions, agent.WithProjectInstructions(agent.NewProjectInstructions(opts.Workspace.Path())))
 	}
 	switch opts.Client.Mode {
 	case auth.ModeAuto:

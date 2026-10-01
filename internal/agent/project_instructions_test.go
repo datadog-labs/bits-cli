@@ -27,7 +27,7 @@ func TestInstructionsHierarchy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := NewProjectInstructionsManager(nested).snapshot(context.Background())
+	got := NewProjectInstructions(nested).snapshot(context.Background())
 	resolvedRepo, err := filepath.EvalSymlinks(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestInstructionsNonGitAndUnsafeFiles(t *testing.T) {
 	}
 	outside := t.TempDir()
 	writeInstructionTestFile(t, outside, "AGENTS.md", "outside instruction")
-	ws := NewProjectInstructionsManager(active)
+	ws := NewProjectInstructions(active)
 	if got := ws.snapshot(context.Background()); got != "" {
 		t.Fatalf("missing file = %q", got)
 	}
@@ -123,7 +123,7 @@ func TestInstructionsLimits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := NewProjectInstructionsManager(dir).snapshot(context.Background())
+	got := NewProjectInstructions(dir).snapshot(context.Background())
 	if strings.Count(got, strings.Repeat("x", instructionFileLimit)) != instructionTotalLimit/instructionFileLimit {
 		t.Fatal("unexpected number of bounded file contents")
 	}
@@ -141,7 +141,7 @@ func TestInstructionsLinkedWorktree(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "linked")
 	runInstructionsGit(t, repo, "worktree", "add", "-b", "linked", linked)
 	writeInstructionTestFile(t, linked, "AGENTS.md", "linked instruction")
-	got := NewProjectInstructionsManager(linked).snapshot(context.Background())
+	got := NewProjectInstructions(linked).snapshot(context.Background())
 	if !strings.Contains(got, "linked instruction") || strings.Contains(got, "main instruction") {
 		t.Fatalf("linked instructions = %q", got)
 	}
@@ -163,22 +163,22 @@ func writeInstructionTestFile(t *testing.T, dir, name, content string) {
 	}
 }
 
-func TestProjectInstructionsManagerEmptySnapshotLoadsOnce(t *testing.T) {
+func TestProjectInstructionsEmptySnapshotLoadsOnce(t *testing.T) {
 	dir := t.TempDir()
-	manager := NewProjectInstructionsManager(dir)
+	instructions := NewProjectInstructions(dir)
 	opts := assistant.SendOptions{CustomUserContext: "existing"}
-	first := manager.apply(context.Background(), opts)
-	manager.acknowledge()
+	first := instructions.apply(context.Background(), opts)
+	instructions.acknowledge()
 	if first.CustomUserContext != "existing" {
 		t.Fatalf("empty snapshot = %q", first.CustomUserContext)
 	}
 	writeInstructionTestFile(t, dir, "AGENTS.md", "created later")
-	second := manager.apply(context.Background(), opts)
+	second := instructions.apply(context.Background(), opts)
 	if second.CustomUserContext != "existing" {
 		t.Fatalf("snapshot was reloaded: %q", second.CustomUserContext)
 	}
-	manager.reset()
-	third := manager.apply(context.Background(), opts)
+	instructions.reset()
+	third := instructions.apply(context.Background(), opts)
 	if !strings.Contains(third.CustomUserContext, "created later") {
 		t.Fatalf("reset did not reload: %q", third.CustomUserContext)
 	}
@@ -187,7 +187,7 @@ func TestProjectInstructionsManagerEmptySnapshotLoadsOnce(t *testing.T) {
 	}
 }
 
-func TestProjectInstructionsManagerInstructionUpdates(t *testing.T) {
+func TestProjectInstructionsResumeUpdates(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		before string
@@ -195,26 +195,26 @@ func TestProjectInstructionsManagerInstructionUpdates(t *testing.T) {
 		resume bool
 		want   string
 	}{
-		{name: "unchanged", before: "old", after: "old"},
+		{name: "unchanged on resume", before: "old", after: "old", want: instructionsReplacementNotice},
 		{name: "replaced", before: "old", after: "new", want: instructionsReplacementNotice},
 		{name: "removed", before: "old", want: instructionsRemovalNotice},
 		{name: "cleared", before: "old", after: " \n\t", want: instructionsRemovalNotice},
-		{name: "added", after: "new", want: "# Project-Specific Context"},
-		{name: "still absent"},
+		{name: "added on resume", after: "new", want: instructionsReplacementNotice},
+		{name: "still absent on resume", want: instructionsRemovalNotice},
 		{name: "resumed unknown with instructions", resume: true, after: "new", want: instructionsReplacementNotice},
 		{name: "resumed unknown without instructions", resume: true, want: instructionsRemovalNotice},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			manager := NewProjectInstructionsManager(dir)
+			instructions := NewProjectInstructions(dir)
 			ctx := context.Background()
 			if !tc.resume {
 				if tc.before != "" {
 					writeInstructionTestFile(t, dir, "AGENTS.md", tc.before)
 				}
-				manager.apply(ctx, assistant.SendOptions{})
-				manager.acknowledge()
-				manager.refresh()
+				instructions.apply(ctx, assistant.SendOptions{})
+				instructions.acknowledge()
+				instructions.reset()
 			}
 			if tc.after != "" {
 				writeInstructionTestFile(t, dir, "AGENTS.md", tc.after)
@@ -224,30 +224,22 @@ func TestProjectInstructionsManagerInstructionUpdates(t *testing.T) {
 				}
 			}
 			opts := assistant.SendOptions{ConversationID: "conversation", CustomUserContext: "existing"}
-			got := manager.apply(ctx, opts).CustomUserContext
-			manager.acknowledge()
-			if tc.want == "" {
-				if got != "existing" {
-					t.Fatalf("unexpected update = %q", got)
-				}
-			} else if !strings.HasPrefix(got, "existing\n\n"+tc.want) {
+			got := instructions.apply(ctx, opts).CustomUserContext
+			instructions.acknowledge()
+			if !strings.HasPrefix(got, "existing\n\n"+tc.want) {
 				t.Fatalf("update = %q, want notice %q", got, tc.want)
 			}
-			if tc.want != "" && strings.TrimSpace(tc.after) != "" && !strings.Contains(got, "\n"+tc.after+"\n") {
+			if strings.TrimSpace(tc.after) != "" && !strings.Contains(got, "\n"+tc.after+"\n") {
 				t.Fatalf("missing new contents in %q", got)
 			}
-			if next := manager.apply(ctx, opts).CustomUserContext; next != "existing" {
+			if next := instructions.apply(ctx, opts).CustomUserContext; next != "existing" {
 				t.Fatalf("continuation repeated update: %q", next)
-			}
-			manager.refresh()
-			if next := manager.apply(ctx, opts).CustomUserContext; next != "existing" {
-				t.Fatalf("unchanged snapshot repeated update: %q", next)
 			}
 		})
 	}
 }
 
-func TestProjectInstructionsManagerCascadingReplacement(t *testing.T) {
+func TestProjectInstructionsCascadingReplacement(t *testing.T) {
 	repo := t.TempDir()
 	runInstructionsGit(t, repo, "init", "-b", "main")
 	nested := filepath.Join(repo, "nested")
@@ -256,14 +248,14 @@ func TestProjectInstructionsManagerCascadingReplacement(t *testing.T) {
 	}
 	writeInstructionTestFile(t, repo, "AGENTS.md", "root instructions")
 	writeInstructionTestFile(t, nested, "AGENTS.md", "nested instructions")
-	manager := NewProjectInstructionsManager(nested)
-	manager.apply(context.Background(), assistant.SendOptions{})
-	manager.acknowledge()
+	instructions := NewProjectInstructions(nested)
+	instructions.apply(context.Background(), assistant.SendOptions{})
+	instructions.acknowledge()
 	if err := os.Remove(filepath.Join(nested, "AGENTS.md")); err != nil {
 		t.Fatal(err)
 	}
-	manager.refresh()
-	got := manager.apply(context.Background(), assistant.SendOptions{ConversationID: "conversation"}).CustomUserContext
+	instructions.reset()
+	got := instructions.apply(context.Background(), assistant.SendOptions{ConversationID: "conversation"}).CustomUserContext
 	if !strings.HasPrefix(got, instructionsReplacementNotice) || !strings.Contains(got, "root instructions") || strings.Contains(got, "nested instructions") {
 		t.Fatalf("remaining cascade = %q", got)
 	}
@@ -276,8 +268,8 @@ func TestPiInstructionFilenamePrecedence(t *testing.T) {
 			for _, candidate := range instructionFilenames[i:] {
 				writeInstructionTestFile(t, dir, candidate, "selected "+candidate)
 			}
-			manager := NewProjectInstructionsManager(dir)
-			got := manager.snapshot(context.Background())
+			instructions := NewProjectInstructions(dir)
+			got := instructions.snapshot(context.Background())
 			if strings.Count(got, "<file path=") != 1 || !strings.Contains(got, "selected "+name+"\n") {
 				t.Fatalf("selected file = %q", got)
 			}
@@ -291,7 +283,7 @@ func TestPiInstructionFilenamePrecedence(t *testing.T) {
 			}
 		}
 		writeInstructionTestFile(t, dir, "CLAUDE.md", "fallback")
-		got := NewProjectInstructionsManager(dir).snapshot(context.Background())
+		got := NewProjectInstructions(dir).snapshot(context.Background())
 		if !strings.Contains(got, "fallback") {
 			t.Fatalf("fallback = %q", got)
 		}
@@ -300,14 +292,14 @@ func TestPiInstructionFilenamePrecedence(t *testing.T) {
 		dir := t.TempDir()
 		writeInstructionTestFile(t, dir, "AGENTS.override.md", "")
 		writeInstructionTestFile(t, dir, "AGENTS.md", "ignored")
-		if got := NewProjectInstructionsManager(dir).snapshot(context.Background()); got != "" {
+		if got := NewProjectInstructions(dir).snapshot(context.Background()); got != "" {
 			t.Fatalf("empty override = %q", got)
 		}
 	})
 	t.Run("BOM stripped", func(t *testing.T) {
 		dir := t.TempDir()
 		writeInstructionTestFile(t, dir, "CLAUDE.MD", "\ufeffuse the formatter")
-		got := NewProjectInstructionsManager(dir).snapshot(context.Background())
+		got := NewProjectInstructions(dir).snapshot(context.Background())
 		if strings.Contains(got, "\ufeff") || !strings.Contains(got, "use the formatter") {
 			t.Fatalf("BOM context = %q", got)
 		}
@@ -329,8 +321,8 @@ func TestPiAncestorInstructions(t *testing.T) {
 			writeInstructionTestFile(t, outer, "AGENTS.md", "ancestor content")
 			writeInstructionTestFile(t, repo, "AGENTS.MD", "repository content")
 			writeInstructionTestFile(t, active, "AGENTS.override.md", "local content")
-			manager := NewProjectInstructionsManager(active)
-			got := manager.snapshot(context.Background())
+			instructions := NewProjectInstructions(active)
+			got := instructions.snapshot(context.Background())
 			previous := -1
 			for _, content := range []string{"ancestor content", "repository content", "local content"} {
 				index := strings.Index(got, content)
@@ -372,7 +364,7 @@ func TestPiNestedWorktreeInstructionShadowing(t *testing.T) {
 			if err := os.Mkdir(nested, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			got := NewProjectInstructionsManager(nested).snapshot(context.Background())
+			got := NewProjectInstructions(nested).snapshot(context.Background())
 			if strings.Contains(got, "main content") != tc.keepMain || !strings.Contains(got, "outer content") || (tc.worktreeFile != "" && !strings.Contains(got, "linked content")) {
 				t.Fatalf("worktree context = %q", got)
 			}
@@ -388,7 +380,7 @@ func TestPiBareWorktreeKeepsContainerInstructions(t *testing.T) {
 	runInstructionsGit(t, outer, "--git-dir="+bare, "worktree", "add", "--orphan", "-b", "main", linked)
 	writeInstructionTestFile(t, outer, "AGENTS.md", "container content")
 	writeInstructionTestFile(t, linked, "AGENTS.md", "linked content")
-	got := NewProjectInstructionsManager(linked).snapshot(context.Background())
+	got := NewProjectInstructions(linked).snapshot(context.Background())
 	if !strings.Contains(got, "container content") || !strings.Contains(got, "linked content") {
 		t.Fatalf("bare layout context = %q", got)
 	}
@@ -406,7 +398,7 @@ func TestInstructionsDoNotDiscoverBitsConfig(t *testing.T) {
 	}
 	writeInstructionTestFile(t, config, "AGENTS.md", "unofficial global instructions")
 	writeInstructionTestFile(t, project, "AGENTS.md", "project instructions")
-	got := NewProjectInstructionsManager(project).snapshot(context.Background())
+	got := NewProjectInstructions(project).snapshot(context.Background())
 	if strings.Contains(got, "unofficial global instructions") || !strings.Contains(got, "project instructions") {
 		t.Fatalf("context = %q", got)
 	}

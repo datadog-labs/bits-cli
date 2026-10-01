@@ -154,12 +154,12 @@ type Engine struct {
 	previousConversationID string
 	// sentUserContext is the custom user context the current conversation is
 	// known to carry; nil when unknown, as after loading a conversation.
-	sentUserContext            *string
-	commands                   chan toolCommand
-	sessionGrants              map[ApprovalKey]struct{}
-	active                     atomic.Bool
-	operationGeneration        atomic.Uint64
-	projectInstructionsManager *ProjectInstructionsManager
+	sentUserContext     *string
+	commands            chan toolCommand
+	sessionGrants       map[ApprovalKey]struct{}
+	active              atomic.Bool
+	operationGeneration atomic.Uint64
+	projectInstructions *ProjectInstructions
 }
 
 // RuntimeStatus is the non-secret request and backend state needed by local
@@ -428,7 +428,7 @@ func (e *Engine) run(
 	// returns false once the turn has ended.
 	request := func(emit func(Event) bool, opts assistant.SendOptions) ([]ToolCall, bool) {
 		sentUserContext := opts.CustomUserContext
-		opts = e.projectInstructionsManager.apply(ctx, opts)
+		opts = e.projectInstructions.apply(ctx, opts)
 		var calls []ToolCall
 		streamed := false
 		fold := func(msg assistant.Message) bool {
@@ -482,7 +482,7 @@ func (e *Engine) run(
 			e.opts.ConversationID = id
 		}
 		if streamed || err == nil {
-			e.projectInstructionsManager.acknowledge()
+			e.projectInstructions.acknowledge()
 		}
 		if sent := sentUserContext; streamed && sent != "" {
 			e.sentUserContext = &sent
@@ -743,7 +743,7 @@ func (e *Engine) NewConversation() error {
 	e.opts.ConversationID = ""
 	e.opts.MessageHistory = nil
 	e.sentUserContext = nil
-	e.projectInstructionsManager.reset()
+	e.projectInstructions.reset()
 	e.transcript = NewTranscript()
 	e.continuation = nil
 	clear(e.sessionGrants)
