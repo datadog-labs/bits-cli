@@ -174,6 +174,39 @@ func TestRenderStreamingEditorPreviewShowsTailForWritesAndEdits(t *testing.T) {
 	}
 }
 
+// TestChangeToolExpandsToTheFullDiff: a change expands from its compact tail
+// to every diff line, while running too.
+func TestChangeToolExpandsToTheFullDiff(t *testing.T) {
+	lines := make([]filediff.DiffLine, 0, collapsedDiffLines+5)
+	for number := 1; number <= cap(lines); number++ {
+		lines = append(lines, filediff.DiffLine{Kind: filediff.LineAdd, NewNumber: number, Content: fmt.Sprintf("line%02d", number)})
+	}
+	diff := filediff.Diff{Hunks: []filediff.Hunk{{FromLine: 1, ToLine: 1, NewCount: len(lines), Lines: lines}}}
+	block := editorToolBlock("edit_file", "", &filediff.State{
+		Phase:  filediff.PhaseApplied,
+		Change: &filediff.Change{Path: "f.txt", Op: filediff.OpEdit, State: filediff.ChangeApplied, Diff: &diff},
+	})
+	p := classifyTool(block.Tool)
+	sty := DefaultStyles(true)
+
+	compact := renderPresentedTool(block.Tool, p, renderContext{width: 80, sty: sty})
+	if got := ansi.Strip(compact); strings.Contains(got, "line01") || !strings.Contains(got, "line20") {
+		t.Fatalf("compact view is not the diff tail: %q", got)
+	}
+	for _, status := range []agent.ToolStatus{agent.ToolSuccess, agent.ToolRunning} {
+		block.Tool.Status = status
+		got := ansi.Strip(renderPresentedTool(block.Tool, p, renderContext{width: 80, sty: sty, disclosure: fullView}))
+		for number := 1; number <= len(lines); number++ {
+			if want := fmt.Sprintf("line%02d", number); !strings.Contains(got, want) {
+				t.Fatalf("%v expanded view is missing %s: %q", status, want, got)
+			}
+		}
+		if strings.Contains(got, "hidden") {
+			t.Fatalf("%v expanded view still has an omission marker: %q", status, got)
+		}
+	}
+}
+
 func TestRenderStreamingWriteUsesPathFromDiffState(t *testing.T) {
 	block := editorToolBlock("write_file", "", &filediff.State{
 		Phase:    filediff.PhaseStreaming,

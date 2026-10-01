@@ -128,6 +128,33 @@ func TestServerGateWithClientCall(t *testing.T) {
 	})
 }
 
+// TestDisclosureScript runs the disclosure QA script against the real tools,
+// so schema drift fails here rather than during manual QA.
+func TestDisclosureScript(t *testing.T) {
+	engine := agent.New(&Fake{ScriptRoot: "testdata"}, assistant.SendOptions{})
+	result, _ := runTurn(t, engine, `load("disclosure.star", "all"); all()`, workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
+	var calls int
+	for _, block := range result.Blocks {
+		if block.Kind == assistant.KindText && strings.Contains(block.Markdown.Content, "fake script error") {
+			t.Fatalf("script failed:\n%s", block.Markdown.Content)
+		}
+		if block.Tool == nil || !block.Tool.IsClientSide {
+			continue
+		}
+		calls++
+		want := agent.ToolSuccess
+		if strings.Contains(block.Tool.Input, "missing.txt") || strings.Contains(block.Tool.Input, "does-not-exist") {
+			want = agent.ToolError
+		}
+		if block.Tool.Status != want {
+			t.Errorf("%s %s status = %v, want %v: %s", block.Tool.Name, block.Tool.Input, block.Tool.Status, want, block.Tool.Output)
+		}
+	}
+	if calls != 14 {
+		t.Errorf("disclosure script ran %d client calls, want 14", calls)
+	}
+}
+
 func TestKitchen(t *testing.T) {
 	engine := agent.New(&Fake{}, assistant.SendOptions{})
 	result, _ := runTurn(t, engine, "kitchen()", workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)

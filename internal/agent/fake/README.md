@@ -21,6 +21,7 @@ think("checking"); r = call("read_file", {"path": "go.mod"}); say(r.output.split
 a, b = call([("list_files", {"path": "."}), ("grep_files", {"pattern": "TODO"})])
 g = call("approval_request", {"tool_name": "delete_dashboard", "tool_args": {}}); say("deleted" if g.ok else "kept")
 load("internal/agent/fake/testdata/questions.star", "ask_user_question"); ask_user_question()
+load("internal/agent/fake/testdata/disclosure.star", "all"); all()
 ```
 
 | Built-in | Emits |

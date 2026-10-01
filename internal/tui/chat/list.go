@@ -54,11 +54,12 @@ type List struct {
 	// (before the first SetStyles) disables the gutter.
 	gutterWidth int
 
-	// collapseAll is the ctrl+o default for every guttered block; toggled
-	// holds per-block clicks that invert it. ctrl+o clears toggled, so the
-	// default applies uniformly, including to blocks that arrive later.
-	collapseAll bool
-	toggled     map[agent.BlockID]bool
+	// expandAll is the ctrl+o default for every guttered block; toggled holds
+	// per-block clicks that invert it. ctrl+o clears toggled, so the default
+	// applies uniformly, including to blocks that arrive later. Blocks start
+	// collapsed: a tool shows its compact view until expanded.
+	expandAll bool
+	toggled   map[agent.BlockID]bool
 
 	// pointerY is the viewport row under the mouse, or -1 when unknown. Hover
 	// is derived from it at render time, so it can never go stale when the
@@ -77,19 +78,31 @@ type Surface struct {
 type presentationItem struct {
 	id            agent.BlockID
 	rev           uint64
-	group         string
+	kind          itemKind
 	start, end    int
 	presentations []toolPresentation
 	notice        *NoticeItem
 }
 
-// headerGroupKey marks the synthetic header item. Its start/end are
-// headerSentinel: it has no backing block, and every reader of start must
-// tolerate that.
+// itemKind is the shape of a presentation item, decided once when the
+// presentation is built.
+type itemKind uint8
+
 const (
-	headerGroupKey = "header"
-	headerSentinel = -1
+	itemBlock itemKind = iota
+	itemNotice
+	// itemTool is one tool call, including an inspection call with no
+	// adjacent peers. Its presentations hold exactly that call.
+	itemTool
+	itemReasoning
+	// itemInspectionGroup is a run of two or more adjacent inspection calls.
+	itemInspectionGroup
+	// itemHeader is the synthetic header. Its start/end are headerSentinel:
+	// it has no backing block, and every reader of start must tolerate that.
+	itemHeader
 )
+
+const headerSentinel = -1
 
 // headerBlockID keys the header's cache entry. The NUL-prefixed key cannot
 // collide with a client-minted or wire id, which keeps this a view-layer
@@ -97,20 +110,16 @@ const (
 var headerBlockID = agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00header"}
 
 // listLineEntry memoizes one block's rendered lines (height is len(lines)),
-// including the accordion gutter and collapse. An animated entry is valid only
+// including the accordion gutter and disclosure mode. An animated entry is valid only
 // for the frame that produced it; a settled entry remains valid as the global
 // animation frame advances.
 type listLineEntry struct {
-	rev       uint64
-	width     int
-	animated  bool
-	frame     int
-	collapsed bool
-	lines     []string
-
-	// disclosable reports that the entry drew a clickable chevron: it has
-	// detail rows to hide, as opposed to a blank gutter.
-	disclosable bool
+	rev        uint64
+	width      int
+	animated   bool
+	frame      int
+	disclosure disclosure
+	lines      []string
 }
 
 // NewList returns an empty list with a one-row gap between blocks.
@@ -216,7 +225,7 @@ func (l *List) Reset() {
 	l.offsetIdx = 0
 	l.offsetLine = 0
 	l.follow = true
-	l.collapseAll = false
+	l.expandAll = false
 	clear(l.toggled)
 	l.invalidateAll()
 }
@@ -282,7 +291,7 @@ func (l *List) gapAfter(idx int) int {
 }
 
 func (it presentationItem) spacing() itemSpacing {
-	if it.group != "" || len(it.presentations) != 1 || it.presentations[0].renderSpec == nil {
+	if it.kind != itemTool {
 		return itemSpacing{}
 	}
 	return it.presentations[0].renderSpec.spacing
@@ -301,30 +310,47 @@ func (l *List) stacksTight(it presentationItem) bool {
 }
 
 // gutter returns the accordion gutter width it reserves: the control's width
-// for a single tool when the viewport has room left for content, 0 otherwise.
-// Reasoning groups and multi-tool inspection groups keep their left edge.
+// for an expandable item when the viewport has room left for content, 0
+// otherwise.
 func (l *List) gutter(it presentationItem) int {
-	if len(it.presentations) != 1 || l.gutterWidth == 0 || l.width <= l.gutterWidth {
+	if l.gutterWidth == 0 || l.width <= l.gutterWidth || !l.expandable(it) {
 		return 0
 	}
 	return l.gutterWidth
 }
 
-func (l *List) collapsed(id agent.BlockID) bool { return l.collapseAll != l.toggled[id] }
-
-// ToggleDisclosure flips one block's collapsed state.
-func (l *List) ToggleDisclosure(id agent.BlockID) {
-	l.toggled[id] = !l.toggled[id]
+// expandable reports whether an item has a full view to disclose. Every single
+// tool does, unless its renderer is static; a reasoning group does when it has
+// text. Multi-tool inspection groups keep their left edge.
+func (l *List) expandable(it presentationItem) bool {
+	switch it.kind {
+	case itemTool:
+		return !it.presentations[0].renderSpec.static
+	case itemReasoning:
+		return hasReasoningText(l.items[it.start:it.end])
+	case itemBlock, itemInspectionGroup, itemHeader:
+	}
+	return false
 }
 
-// ToggleAllDisclosure collapses every guttered block, or expands them all if
-// they were collapsed, discarding individual toggles.
+func (l *List) expanded(id agent.BlockID) bool { return l.expandAll != l.toggled[id] }
+
+// ToggleDisclosure flips one block between its compact and full view.
+func (l *List) ToggleDisclosure(id agent.BlockID) {
+	l.toggled[id] = !l.toggled[id]
+	l.anchorOffset()
+}
+
+// ToggleAllDisclosure expands every guttered block, or collapses them all if
+// they were expanded, discarding individual toggles.
 func (l *List) ToggleAllDisclosure() {
-	l.collapseAll = !l.collapseAll
+	l.expandAll = !l.expandAll
 	clear(l.toggled)
-	// Keep the viewport anchored to the current item's header instead of
-	// letting a now-shorter item's shrunk height carry the offset into
-	// later blocks.
+	l.anchorOffset()
+}
+
+// anchorOffset keeps the viewport on the current item when its height shrinks.
+func (l *List) anchorOffset() {
 	if l.offsetIdx < len(l.view) {
 		l.offsetLine = min(l.offsetLine, max(l.itemHeight(l.offsetIdx)-1, 0))
 	}
@@ -350,7 +376,7 @@ func (l *List) HeaderAt(y int) (agent.BlockID, bool) {
 	row := -l.offsetLine
 	for idx := l.offsetIdx; idx < len(l.view) && row <= y; idx++ {
 		e := l.entry(idx)
-		if row == y && e.disclosable {
+		if row == y && l.gutter(l.view[idx]) > 0 {
 			return l.view[idx].id, true
 		}
 		row += len(e.lines) + l.gapAfter(idx)
@@ -361,7 +387,7 @@ func (l *List) HeaderAt(y int) (agent.BlockID, bool) {
 func (l *List) renderItem(idx int) []string { return l.entry(idx).lines }
 
 // entry returns the block's rendered lines, cached by revision, width and
-// collapse state. Animated entries additionally key on frame, so unrelated
+// disclosure state. Animated entries additionally key on frame, so unrelated
 // model updates at the same frame do not render them again; settled entries
 // remain cached as the global animation frame advances.
 func (l *List) entry(idx int) listLineEntry {
@@ -369,40 +395,38 @@ func (l *List) entry(idx int) listLineEntry {
 	gutter := l.gutter(it)
 	width := l.width - gutter
 	animated := l.itemAnimated(it)
-	collapsed := gutter > 0 && l.collapsed(it.id)
+	d := compactView
+	if gutter > 0 && l.expanded(it.id) {
+		d = fullView
+	}
 	if e, ok := l.cache[it.id]; ok &&
-		e.rev == it.rev && e.width == width && e.animated == animated && e.collapsed == collapsed &&
+		e.rev == it.rev && e.width == width && e.animated == animated && e.disclosure == d &&
 		(!animated || e.frame == l.frame) {
 		return e
 	}
+	content := l.renderPresentationItem(it, renderContext{width: width, sty: l.sty, frame: l.frame, disclosure: d})
 	e := listLineEntry{
-		rev:       it.rev,
-		width:     width,
-		animated:  animated,
-		frame:     l.frame,
-		collapsed: collapsed,
-		lines:     strings.Split(l.renderPresentationItem(it, width), "\n"),
+		rev:        it.rev,
+		width:      width,
+		animated:   animated,
+		frame:      l.frame,
+		disclosure: d,
+		lines:      strings.Split(content, "\n"),
 	}
 	if gutter > 0 {
-		e.disclosable = len(e.lines) > 1
-		e.lines = l.addGutter(e.lines, e.disclosable, collapsed)
+		e.lines = l.addGutter(e.lines, d == fullView)
 	}
 	l.cache[it.id] = e
 	return e
 }
 
 // addGutter splices the accordion control into a tool's header and indents
-// its detail rows, dropping them when collapsed. The status glyph stays the
-// leftmost cell, so the control goes right after it.
-func (l *List) addGutter(lines []string, disclosable, collapsed bool) []string {
+// its detail rows. The renderer already chose the compact or full view, so the
+// gutter only reflects that state. The status glyph stays the leftmost cell,
+// so the control goes right after it.
+func (l *List) addGutter(lines []string, expanded bool) []string {
 	blank := strings.Repeat(" ", l.gutterWidth)
-	control := blank
-	if disclosable {
-		control = components.Accordion(l.sty.Accordion, !collapsed)
-		if collapsed {
-			lines = lines[:1]
-		}
-	}
+	control := components.Accordion(l.sty.Accordion, expanded)
 	out := make([]string, len(lines))
 	out[0] = ansi.Cut(lines[0], 0, statusGlyphWidth) + control + ansi.TruncateLeft(lines[0], statusGlyphWidth, "")
 	for i := 1; i < len(lines); i++ {
@@ -411,31 +435,29 @@ func (l *List) addGutter(lines []string, disclosable, collapsed bool) []string {
 	return out
 }
 
-func (l *List) renderPresentationItem(it presentationItem, width int) string {
+func (l *List) renderPresentationItem(it presentationItem, c renderContext) string {
 	// First: the header has no backing block, so it must return before any
 	// branch indexes l.items.
-	if it.group == headerGroupKey {
+	switch it.kind {
+	case itemHeader:
 		return l.header
+	case itemNotice:
+		return renderNotice(it.notice.Notice, c.width, c.sty)
+	case itemReasoning:
+		return renderReasoningGroup(l.items[it.start:it.end], c)
+	case itemInspectionGroup:
+		return renderInspectionGroup(l.items[it.start:it.end], it.presentations, c)
+	case itemTool:
+		return renderPresentedTool(l.items[it.start].Tool, it.presentations[0], c)
+	case itemBlock:
 	}
-	if it.notice != nil {
-		return renderNotice(it.notice.Notice, width, l.sty)
-	}
-	if it.group == reasoningGroupKey {
-		return renderReasoningGroup(l.items[it.start:it.end], width, l.sty, l.frame)
-	}
-	if it.group == inspectionGroupKey && len(it.presentations) > 1 {
-		return renderInspectionGroup(l.items[it.start:it.end], it.presentations, width, l.sty, l.frame)
-	}
-	if len(it.presentations) == 1 {
-		return renderPresentedTool(l.items[it.start].Tool, it.presentations[0], width, l.sty, l.frame)
-	}
-	return l.renderer.RenderBlock(l.items[it.start], width, l.sty, l.frame)
+	return l.renderer.RenderBlock(l.items[it.start], c.width, c.sty, c.frame)
 }
 
 // itemAnimated reports whether rendering depends on the frame counter. Waiting
 // for approval is deliberately static because no work is progressing.
 func (l *List) itemAnimated(it presentationItem) bool {
-	if it.notice != nil || it.group == headerGroupKey {
+	if it.kind == itemNotice || it.kind == itemHeader {
 		return false
 	}
 	// WithoutMotion replaces the shared spinner with static fallbacks, so
@@ -707,7 +729,7 @@ func buildPresentationWithNotices(header string, blocks []agent.Block, notices [
 		items = append(items, presentationItem{
 			id:    headerBlockID,
 			rev:   headerRevision(header),
-			group: headerGroupKey,
+			kind:  itemHeader,
 			start: headerSentinel,
 			end:   headerSentinel,
 		})
@@ -720,9 +742,9 @@ func buildPresentationWithNotices(header string, blocks []agent.Block, notices [
 		items = appendBlockPresentations(items, blocks, previous, at)
 		entry := &notices[i]
 		items = append(items, presentationItem{
-			id:    agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00notice:" + strconv.FormatUint(entry.ID, 10)},
-			rev:   uint64(entry.Notice.Level) + headerRevision(entry.Notice.Text),
-			start: headerSentinel, end: headerSentinel, notice: entry,
+			id:   agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00notice:" + strconv.FormatUint(entry.ID, 10)},
+			rev:  uint64(entry.Notice.Level) + headerRevision(entry.Notice.Text),
+			kind: itemNotice, start: headerSentinel, end: headerSentinel, notice: entry,
 		})
 		previous = at
 	}
@@ -736,33 +758,35 @@ func appendBlockPresentations(items []presentationItem, blocks []agent.Block, fr
 			for j < to && blocks[j].Kind == assistant.KindReasoning {
 				j++
 			}
-			items = append(items, newPresentationItem(blocks, reasoningGroupKey, i, j, nil))
+			items = append(items, newPresentationItem(blocks, itemReasoning, i, j, nil))
 			i = j
 			continue
 		}
 
 		p, isTool := presentationOfBlock(blocks[i])
-		if !isTool || p.group == "" {
-			var presentation []toolPresentation
-			if isTool {
-				presentation = []toolPresentation{p}
-			}
-			items = append(items, newPresentationItem(blocks, "", i, i+1, presentation))
+		if !isTool {
+			items = append(items, newPresentationItem(blocks, itemBlock, i, i+1, nil))
 			i++
 			continue
 		}
 
 		presentations := []toolPresentation{p}
+		group := p.group()
 		j := i + 1
-		for j < to {
+		for group != "" && j < to {
 			next, ok := presentationOfBlock(blocks[j])
-			if !ok || next.group != p.group {
+			if !ok || next.group() != group {
 				break
 			}
 			presentations = append(presentations, next)
 			j++
 		}
-		items = append(items, newPresentationItem(blocks, p.group, i, j, presentations))
+		kind := itemTool
+		if len(presentations) > 1 {
+			// inspectionGroupKey is the only tool group key.
+			kind = itemInspectionGroup
+		}
+		items = append(items, newPresentationItem(blocks, kind, i, j, presentations))
 		i = j
 	}
 	return items
@@ -798,11 +822,11 @@ func presentationOfBlock(block agent.Block) (toolPresentation, bool) {
 	return classifyTool(block.Tool), true
 }
 
-func newPresentationItem(blocks []agent.Block, group string, start, end int, presentations []toolPresentation) presentationItem {
+func newPresentationItem(blocks []agent.Block, kind itemKind, start, end int, presentations []toolPresentation) presentationItem {
 	first := blocks[start].ID
 	it := presentationItem{
 		id:            first,
-		group:         group,
+		kind:          kind,
 		start:         start,
 		end:           end,
 		presentations: presentations,

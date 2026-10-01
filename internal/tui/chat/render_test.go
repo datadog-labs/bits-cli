@@ -86,7 +86,8 @@ func TestExactToolIdentityControlsSpecialization(t *testing.T) {
 	if got := ansi.Strip(RenderBlock(local, 80, DefaultStyles(true), 0)); !strings.Contains(got, "read README.md") || strings.Contains(got, "body") {
 		t.Fatalf("local read rendering = %q", got)
 	}
-	if got := ansi.Strip(RenderBlock(server, 80, DefaultStyles(true), 0)); !strings.Contains(got, `remote.read_file({"path":"README.md"})`) || !strings.Contains(got, "body") {
+	full := renderContext{width: 80, sty: DefaultStyles(true), disclosure: fullView}
+	if got := ansi.Strip(renderPresentedTool(server.Tool, classifyTool(server.Tool), full)); !strings.Contains(got, `remote.read_file({"path":"README.md"})`) || !strings.Contains(got, "body") {
 		t.Fatalf("server read rendering = %q", got)
 	}
 }
@@ -159,11 +160,12 @@ func TestLocalInspectionActionsUseLifecycleVerbsForValidAndPartialInput(t *testi
 			if !strings.Contains(got, test.want) {
 				t.Fatalf("rendering = %q, want %q", got, test.want)
 			}
-			if test.output && !strings.Contains(got, "inspection diagnostic") {
-				t.Fatalf("inspection diagnostic was hidden: %q", got)
+			if strings.Contains(got, "inspection diagnostic") {
+				t.Fatalf("compact view showed inspection output: %q", got)
 			}
-			if !test.output && strings.Contains(got, "inspection diagnostic") {
-				t.Fatalf("inspection output was shown: %q", got)
+			full := ansi.Strip(renderPresentedTool(tool, classifyTool(tool), renderContext{width: 80, sty: DefaultStyles(true), disclosure: fullView}))
+			if test.output && !strings.Contains(full, "inspection diagnostic") {
+				t.Fatalf("full view hid the inspection diagnostic: %q", full)
 			}
 		})
 	}
@@ -206,6 +208,13 @@ func TestExecCommandDecodesEnvelopeAndBoundsOutput(t *testing.T) {
 	}
 	if got, wantMax := strings.Count(plain, "\n")+1, 2+execOutputMaxLines; got > wantMax {
 		t.Fatalf("exec rendering used %d lines, want <= %d:\n%s", got, wantMax, plain)
+	}
+
+	full := ansi.Strip(renderPresentedTool(block.Tool, classifyTool(block.Tool), renderContext{width: 80, sty: DefaultStyles(true), disclosure: fullView}))
+	for _, row := range []string{"out-1", "out-2", "out-3", "err-1", "err-2", "err-3"} {
+		if !strings.Contains(full, row) {
+			t.Errorf("expanded exec view is missing %s:\n%s", row, full)
+		}
 	}
 }
 

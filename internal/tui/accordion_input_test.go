@@ -12,11 +12,15 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
 
+// accordionTestOutput is long enough that the compact view hides rows, so the
+// tool offers a disclosure control.
+const accordionTestOutput = "row 1\nrow 2\nrow 3\nrow 4\nrow 5"
+
 func accordionTestBlock() agent.Block {
 	return agent.Block{
 		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"},
 		Kind: assistant.KindToolResult,
-		Tool: &agent.ToolBlock{Name: "search_logs", Status: agent.ToolSuccess, Output: "ok: 4 results"},
+		Tool: &agent.ToolBlock{Name: "search_logs", Status: agent.ToolSuccess, Output: accordionTestOutput},
 	}
 }
 
@@ -36,8 +40,8 @@ func accordionTestModel(t *testing.T) *Model {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.syncTranscript()
 	m.editor.Focus()
-	if full := accordionDocumentLines(m); full <= 1 {
-		t.Fatalf("fixture tool did not produce a disclosable body, document lines = %d", full)
+	if lines := accordionDocumentLines(m); lines <= 1 {
+		t.Fatalf("fixture tool did not produce a compact body, document lines = %d", lines)
 	}
 	return m
 }
@@ -66,7 +70,7 @@ func accordionRow(t *testing.T, m *Model) int {
 
 func TestClickOnAccordionZoneTogglesWithoutStartingSelection(t *testing.T) {
 	m := accordionTestModel(t)
-	full := accordionDocumentLines(m)
+	compact := accordionDocumentLines(m)
 	row := accordionRow(t, m)
 
 	clickAccordionZone(m, 0, row)
@@ -74,13 +78,13 @@ func TestClickOnAccordionZoneTogglesWithoutStartingSelection(t *testing.T) {
 	if m.selection.selected() {
 		t.Fatal("clicking the accordion zone left a text selection")
 	}
-	if got := accordionDocumentLines(m); got >= full {
-		t.Fatalf("click did not collapse the block: document lines = %d, want fewer than %d", got, full)
+	if got := accordionDocumentLines(m); got <= compact {
+		t.Fatalf("click did not expand the block: document lines = %d, want more than %d", got, compact)
 	}
 
 	clickAccordionZone(m, 0, row)
-	if got := accordionDocumentLines(m); got != full {
-		t.Fatalf("second click did not re-expand the block: document lines = %d, want %d", got, full)
+	if got := accordionDocumentLines(m); got != compact {
+		t.Fatalf("second click did not re-collapse the block: document lines = %d, want %d", got, compact)
 	}
 }
 
@@ -125,22 +129,22 @@ func TestCtrlOTogglesInEveryChatFocus(t *testing.T) {
 			m := accordionTestModel(t)
 			tc.setup(m)
 			m.relayout() // the setup may dock a surface, which changes the header
-			full := accordionDocumentLines(m)
+			compact := accordionDocumentLines(m)
 			if !tc.keeps(m) {
 				t.Fatal("fixture did not reach the focus under test")
 			}
 
 			m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
-			if got := accordionDocumentLines(m); got >= full {
-				t.Fatalf("ctrl+o did not collapse: document lines = %d, want fewer than %d", got, full)
+			if got := accordionDocumentLines(m); got <= compact {
+				t.Fatalf("ctrl+o did not expand: document lines = %d, want more than %d", got, compact)
 			}
 			if !tc.keeps(m) {
 				t.Fatal("ctrl+o disturbed the surface that owns input")
 			}
 
 			m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
-			if got := accordionDocumentLines(m); got != full {
-				t.Fatalf("second ctrl+o did not re-expand: document lines = %d, want %d", got, full)
+			if got := accordionDocumentLines(m); got != compact {
+				t.Fatalf("second ctrl+o did not re-collapse: document lines = %d, want %d", got, compact)
 			}
 		})
 	}
@@ -194,7 +198,7 @@ func scrollableAccordionTestModel(t *testing.T) *Model {
 		blocks = append(blocks, agent.Block{
 			ID:   agent.BlockID{Scope: agent.ScopeTool, Key: fmt.Sprintf("call-%d", i)},
 			Kind: assistant.KindToolResult,
-			Tool: &agent.ToolBlock{Name: "search_logs", Status: agent.ToolSuccess, Output: "ok: 4 results"},
+			Tool: &agent.ToolBlock{Name: "search_logs", Status: agent.ToolSuccess, Output: accordionTestOutput},
 		})
 	}
 	m.transcript.Blocks = blocks
@@ -221,6 +225,9 @@ func visibleAccordionRow(t *testing.T, m *Model) int {
 
 func TestMouseWheelScrollRefreshesHoverUnderTheStationaryPointer(t *testing.T) {
 	m := scrollableAccordionTestModel(t)
+	// Expanded blocks put detail rows, not the next header, under the pointer
+	// once the wheel scrolls.
+	m.list.ToggleAllDisclosure()
 	m.list.ScrollToTop()
 	row := visibleAccordionRow(t, m)
 
