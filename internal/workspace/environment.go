@@ -56,20 +56,31 @@ type Environment struct {
 // deadline. Independently useful fields remain populated when part of the Git
 // inspection is unavailable.
 func (w *Workspace) Snapshot(parent context.Context) Environment {
-	snapshot := Environment{
-		Path:       w.path,
-		Repository: Repository{State: RepositoryUnavailable},
-	}
-
 	ctx, cancel := context.WithTimeout(parent, snapshotTimeout)
 	defer cancel()
 
+	repository := w.repository(ctx)
+	if repository.State == RepositoryPresent {
+		if raw, err := gitBytes(ctx, w.path, "status", "--porcelain=v1", "-z", "--untracked-files=normal"); err == nil {
+			repository.Changes = parsePorcelain(raw)
+		}
+	}
+	return Environment{Path: w.path, Repository: repository}
+}
+
+// Repository is like Snapshot but skips the working-tree inspection, which
+// can be slow in large repositories.
+func (w *Workspace) Repository(parent context.Context) Repository {
+	ctx, cancel := context.WithTimeout(parent, snapshotTimeout)
+	defer cancel()
+	return w.repository(ctx)
+}
+
+func (w *Workspace) repository(ctx context.Context) Repository {
 	root, err := git(ctx, w.path, "rev-parse", "--show-toplevel")
 	if err != nil {
-		snapshot.Repository.State = repositoryStateForRootError(err, ctx.Err())
-		return snapshot
+		return Repository{State: repositoryStateForRootError(err, ctx.Err())}
 	}
-
 	repository := Repository{
 		State: RepositoryPresent,
 		Root:  root,
@@ -84,11 +95,7 @@ func (w *Workspace) Snapshot(parent context.Context) Environment {
 	} else if repository.Branch != "" && ctx.Err() == nil {
 		repository.Unborn = true
 	}
-	if raw, statusErr := gitBytes(ctx, w.path, "status", "--porcelain=v1", "-z", "--untracked-files=normal"); statusErr == nil {
-		repository.Changes = parsePorcelain(raw)
-	}
-	snapshot.Repository = repository
-	return snapshot
+	return repository
 }
 
 func repositoryStateForRootError(err, contextError error) RepositoryState {

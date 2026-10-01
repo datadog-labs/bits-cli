@@ -12,6 +12,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/browser"
+	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
@@ -828,7 +829,13 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.StartTurn(ctx, agent.TurnInput{Message: text, Tools: m.tools, Context: turnContext, OnDeny: agent.DenyContinue})
+	events := m.engine.StartTurn(ctx, agent.TurnInput{
+		Message:     text,
+		Tools:       m.tools,
+		Context:     turnContext,
+		OnDeny:      agent.DenyContinue,
+		UserContext: tools.UserContext(m.workspace, m.tools),
+	})
 	wait := m.begin(opTurn, events, cancel)
 	m.chatPhase = chat.PhaseWaiting
 	m.clearNotice()

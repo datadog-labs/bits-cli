@@ -152,10 +152,13 @@ type Engine struct {
 	transcript             *Transcript
 	continuation           *toolContinuation
 	previousConversationID string
-	commands               chan toolCommand
-	sessionGrants          map[ApprovalKey]struct{}
-	active                 atomic.Bool
-	operationGeneration    atomic.Uint64
+	// sentUserContext is the custom user context the current conversation is
+	// known to carry; nil when unknown, as after loading a conversation.
+	sentUserContext     *string
+	commands            chan toolCommand
+	sessionGrants       map[ApprovalKey]struct{}
+	active              atomic.Bool
+	operationGeneration atomic.Uint64
 }
 
 // RuntimeStatus is the non-secret request and backend state needed by local
@@ -222,6 +225,9 @@ type TurnInput struct {
 	Context *assistant.AssistantContext
 	// OnDeny is the turn's policy after a denial is answered on the wire.
 	OnDeny DenyPolicy
+	// UserContext renders the client's environment. The engine sends it with
+	// the turn's first request when the conversation does not already carry it.
+	UserContext func(context.Context) string
 }
 
 // turnCompletion is the final state captured before an engine operation
@@ -405,11 +411,16 @@ func (e *Engine) run(
 
 	var next any = in.Message
 	convID := e.ConversationID()
+	var userContext string
+	if len(resumed) == 0 {
+		userContext = e.pendingUserContext(ctx, in.UserContext)
+	}
 
 	// request sends one round and collects the client calls it pauses on. It
 	// returns false once the turn has ended.
 	request := func(emit func(Event) bool, opts assistant.SendOptions) ([]ToolCall, bool) {
 		var calls []ToolCall
+		streamed := false
 		fold := func(msg assistant.Message) bool {
 			if msg.Results != nil && msg.Results.Usage != nil {
 				completion.Usage = cloneUsage(msg.Results.Usage)
@@ -443,6 +454,7 @@ func (e *Engine) run(
 		}
 
 		id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {
+			streamed = true
 			msg := ar.Data.Attributes.StructuredMessage
 			// A client_tool_call pauses the stream until we answer it; collect it
 			// for runTools.
@@ -458,6 +470,9 @@ func (e *Engine) run(
 		// cancellation. Preserve it so every surface can report a resumable handle.
 		if id != "" {
 			e.opts.ConversationID = id
+		}
+		if sent := opts.CustomUserContext; streamed && sent != "" {
+			e.sentUserContext = &sent
 		}
 		if err != nil {
 			// Context-derived cancellation remains quiet. An independent backend
@@ -500,6 +515,8 @@ func (e *Engine) run(
 		opts.ConversationID = convID
 		opts.ClientTools = defs
 		opts.Context = in.Context
+		opts.CustomUserContext = userContext
+		userContext = ""
 
 		calls := resumed
 		resumed = nil
@@ -527,6 +544,7 @@ func (e *Engine) run(
 			// The round was answered on the wire; discard the follow-up and end the turn.
 			if ctx.Err() == nil {
 				opts.ConversationID = convID
+				opts.CustomUserContext = ""
 				id, drainRounds, err := e.drainStoppedToolCalls(ctx, toolRound.responses, opts)
 				terminalRound := round + drainRounds
 				if id != "" {
@@ -560,6 +578,19 @@ func (e *Engine) run(
 		return
 	}
 	send(Event{Kind: EventError, Round: maxTurns, Err: ErrMaxTurns})
+}
+
+// pendingUserContext returns the user context to send with a new user turn, or
+// "" when the conversation already carries it.
+func (e *Engine) pendingUserContext(ctx context.Context, render func(context.Context) string) string {
+	if render == nil {
+		return ""
+	}
+	rendered := render(ctx)
+	if e.sentUserContext != nil && *e.sentUserContext == rendered {
+		return ""
+	}
+	return rendered
 }
 
 // drainStoppedToolCalls cancels follow-up client calls after a stopped
@@ -698,6 +729,7 @@ func (e *Engine) NewConversation() error {
 	}
 	e.opts.ConversationID = ""
 	e.opts.MessageHistory = nil
+	e.sentUserContext = nil
 	e.transcript = NewTranscript()
 	e.continuation = nil
 	clear(e.sessionGrants)

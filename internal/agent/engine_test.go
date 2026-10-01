@@ -47,13 +47,15 @@ type conversationRecordingBackend struct {
 type cancellationIDBackend struct{ started chan struct{} }
 
 type contextRecordingBackend struct {
-	calls    int
-	contexts []*assistant.AssistantContext
+	calls        int
+	contexts     []*assistant.AssistantContext
+	userContexts []string
 }
 
 func (b *contextRecordingBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.calls++
 	b.contexts = append(b.contexts, opts.Context)
+	b.userContexts = append(b.userContexts, opts.CustomUserContext)
 	var response assistant.AssistantResponse
 	if b.calls == 1 {
 		content := assistant.ToolCallContent("tool-call-1", "read", `{}`)
@@ -107,6 +109,39 @@ func TestTurnContextSurvivesToolContinuationsAndDoesNotLeak(t *testing.T) {
 	}
 	if backend.contexts[2] != nil {
 		t.Fatalf("next independent turn reused context: %#v", backend.contexts[2])
+	}
+}
+
+func TestUserContextIsSentOnlyWhenTheConversationLacksIt(t *testing.T) {
+	backend := &contextRecordingBackend{}
+	tools, err := NewToolSet(ModeSkipPermissions, Tool{
+		Definition: assistant.ClientTool{Name: "read"},
+		Handler: func(context.Context, ToolCall) (ToolResult, error) {
+			return ToolResult{Output: "ok"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := "env-a"
+	engine := New(backend, assistant.SendOptions{})
+	userContext := func(context.Context) string { return env }
+	turn := func() {
+		drain(engine.StartTurn(context.Background(), TurnInput{Message: "hi", Tools: tools, UserContext: userContext}))
+	}
+
+	turn() // tool call, then continuation
+	turn()
+	env = "env-b"
+	turn()
+	if err := engine.NewConversation(); err != nil {
+		t.Fatal(err)
+	}
+	turn()
+
+	want := []string{"env-a", "", "", "env-b", "env-b"}
+	if !reflect.DeepEqual(backend.userContexts, want) {
+		t.Fatalf("user contexts = %q, want %q", backend.userContexts, want)
 	}
 }
 
@@ -491,11 +526,10 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 	backend := &conversationRecordingBackend{messages: map[string][]string{}}
 	opts := assistant.SendOptions{
-		ConversationID:    "old-conversation",
-		Model:             "retained-model",
-		DebugTag:          "retained-debug-tag",
-		CustomUserContext: "retained-context",
-		MessageHistory:    []json.RawMessage{json.RawMessage(`{"role":"user","content":"old history"}`)},
+		ConversationID: "old-conversation",
+		Model:          "retained-model",
+		DebugTag:       "retained-debug-tag",
+		MessageHistory: []json.RawMessage{json.RawMessage(`{"role":"user","content":"old history"}`)},
 	}
 	e := New(backend, opts)
 
@@ -523,7 +557,7 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 	}
 	if got := backend.opts[len(backend.opts)-1]; got.ConversationID != "" ||
 		len(got.MessageHistory) != 0 || got.Model != opts.Model ||
-		got.DebugTag != opts.DebugTag || got.CustomUserContext != opts.CustomUserContext {
+		got.DebugTag != opts.DebugTag {
 		t.Fatalf("first new request options = %+v; process-wide configuration was not retained", got)
 	}
 	if got := backend.messages["old-conversation"]; !reflect.DeepEqual(got, []string{"old prompt"}) {

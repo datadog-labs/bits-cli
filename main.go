@@ -86,12 +86,12 @@ func runRunWithStore(ctx context.Context, opts cmd.RunOptions, store auth.Creden
 	if err != nil {
 		return err
 	}
-	return runEngineTurn(ctx, engine, toolSet, opts, out)
+	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet, UserContext: tools.UserContext(workspace, toolSet)}, opts, out)
 }
 
 // runEngineTurn drives exactly one turn, attempts Finish once, and maps its
 // authoritative outcome to the process contract.
-func runEngineTurn(ctx context.Context, engine *agent.Engine, tools *agent.ToolSet, opts cmd.RunOptions, out io.Writer) error {
+func runEngineTurn(ctx context.Context, engine *agent.Engine, input agent.TurnInput, opts cmd.RunOptions, out io.Writer) error {
 	var delivery headless.Delivery
 	switch opts.Delivery {
 	case "adeep":
@@ -102,7 +102,9 @@ func runEngineTurn(ctx context.Context, engine *agent.Engine, tools *agent.ToolS
 	if err := delivery.Start(headless.Start{StartedAt: time.Now(), RequestedModel: opts.Model}); err != nil {
 		return err
 	}
-	result, err := engine.RunTurn(ctx, agent.TurnInput{Message: opts.Prompt, Tools: tools, OnDeny: agent.DenyContinue}, delivery.Consume) // no-dd-sa:datadog/go-promptinjection -- opts.Prompt is intentionally sent as the user's message for this one turn; it is never used as a system instruction
+	input.Message = opts.Prompt // no-dd-sa:datadog/go-promptinjection -- opts.Prompt is intentionally sent as the user's message for this one turn; it is never used as a system instruction
+	input.OnDeny = agent.DenyContinue
+	result, err := engine.RunTurn(ctx, input, delivery.Consume)
 	finishErr := delivery.Finish(headless.Finish{EndedAt: time.Now(), Result: result, Err: err})
 
 	switch headless.ClassifyTurn(result) {

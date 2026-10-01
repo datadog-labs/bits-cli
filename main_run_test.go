@@ -205,7 +205,7 @@ func TestRunInvalidServerGateExitsThree(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	var out bytes.Buffer
 
-	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), &out)
+	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
 	if err == nil {
 		t.Fatal("denial completed with exit 0")
 	}
@@ -245,7 +245,7 @@ func TestRunSkipPermissionsApprovesLocalAndServerGates(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	var out bytes.Buffer
 
-	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), &out)
+	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
 	if err != nil {
 		t.Fatalf("skip-permissions run failed: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestRunDenyModeDeniesLocalAndServerGates(t *testing.T) {
 	opts.PermissionsMode = agent.ModeDeny
 	var out bytes.Buffer
 
-	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeDeny), opts, &out)
+	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeDeny)}, opts, &out)
 	var exitErr *cmd.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != cmd.ExitApprovalDenied {
 		t.Fatalf("error = %v, want exit %d", err, cmd.ExitApprovalDenied)
@@ -315,7 +315,7 @@ func TestRunRuntimeFailureWinsOverDenial(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	var out bytes.Buffer
 
-	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), &out)
+	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
 	if !errors.Is(err, backendErr) {
 		t.Fatalf("error = %v, want the backend failure to win over exit 3", err)
 	}
@@ -341,7 +341,7 @@ func TestRunCancellationIsRuntimeFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runEngineTurn(ctx, engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), &out)
+		done <- runEngineTurn(ctx, engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
 	}()
 	<-backend.started
 	cancel()
@@ -381,7 +381,7 @@ func TestRunWriterFailureIsRuntimeFailure(t *testing.T) {
 	}}
 	engine := agent.New(backend, assistant.SendOptions{})
 
-	err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), failRunWriter{err: writerErr})
+	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), failRunWriter{err: writerErr})
 	if !errors.Is(err, writerErr) {
 		t.Fatalf("error = %v, want the writer failure", err)
 	}
@@ -405,7 +405,7 @@ func TestRunExecutesExactlyOneTurn(t *testing.T) {
 	engine := agent.New(backend, assistant.SendOptions{})
 	var out bytes.Buffer
 
-	if err := runEngineTurn(context.Background(), engine, runToolSet(t, agent.ModeSkipPermissions), runOptions(), &out); err != nil {
+	if err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out); err != nil {
 		t.Fatal(err)
 	}
 	if backend.calls != 2 {
