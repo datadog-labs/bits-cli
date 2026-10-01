@@ -104,6 +104,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll(-wheelScrollLines)
 		case tea.MouseWheelDown:
 			m.scroll(wheelScrollLines)
+		default:
 		}
 		return m, nil
 	case stepMsg:

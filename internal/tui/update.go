@@ -540,6 +540,7 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 			m.list.ScrollBy(-mouseWheelDelta)
 		case tea.MouseWheelDown:
 			m.list.ScrollBy(mouseWheelDelta)
+		default:
 		}
 		return nil
 	}
@@ -555,6 +556,7 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 			m.approvalPanel.ScrollBy(-mouseWheelDelta)
 		case tea.MouseWheelDown:
 			m.approvalPanel.ScrollBy(mouseWheelDelta)
+		default:
 		}
 		return nil
 	}
@@ -563,6 +565,7 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 		m.list.ScrollBy(-mouseWheelDelta)
 	case tea.MouseWheelDown:
 		m.list.ScrollBy(mouseWheelDelta)
+	default:
 	}
 	return nil
 }

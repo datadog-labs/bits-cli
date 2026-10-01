@@ -1,6 +1,6 @@
 module github.com/DataDog/bits-cli
 
-go 1.27
+go 1.27.1
 
 require (
 	charm.land/bubbles/v2 v2.1.1

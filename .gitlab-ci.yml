@@ -4,7 +4,7 @@ variables:
   GIT_DEPTH: 1
   GIT_BASE_BRANCH: main
   GO_IMAGE: registry.ddbuild.io/images/mirror/golang:1.27.0
-  GOTOOLCHAIN: local
+  GOTOOLCHAIN: go1.27.1
 
 stages:
   - lint
@@ -19,8 +19,8 @@ lint:
     - arch:arm64
   timeout: 10m
   before_script:
-    - GOLANGCI_LINT_VERSION="v2.13.2"
-    - GOLANGCI_LINT_RELEASE="2.13.2"
+    - GOLANGCI_LINT_VERSION="v2.14.0"
+    - GOLANGCI_LINT_RELEASE="2.14.0"
     - GOLANGCI_LINT_URL="https://depot-read-api-github-releases.us1.ddbuild.io/internal/mirror/github-releases/golangci/golangci-lint/releases/download/${GOLANGCI_LINT_VERSION}"
     - curl -fsSL "${GOLANGCI_LINT_URL}/golangci-lint-${GOLANGCI_LINT_RELEASE}-linux-arm64.tar.gz" -o /tmp/golangci-lint.tar.gz
     - curl -fsSL "${GOLANGCI_LINT_URL}/golangci-lint-${GOLANGCI_LINT_RELEASE}-checksums.txt" -o /tmp/golangci-lint-checksums.txt

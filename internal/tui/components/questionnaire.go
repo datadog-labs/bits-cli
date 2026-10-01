@@ -128,6 +128,7 @@ func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
 			q.scroll = max(0, q.scroll-1)
 		case tea.MouseWheelDown:
 			q.scroll++
+		default:
 		}
 		q.follow = false
 		return nil

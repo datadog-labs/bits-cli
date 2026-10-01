@@ -1,6 +1,6 @@
 module github.com/DataDog/bits-cli/tools/licenses
 
-go 1.27
+go 1.27.1
 
 require github.com/go-enry/go-license-detector/v4 v4.3.1
 
