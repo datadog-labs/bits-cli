@@ -29,10 +29,11 @@ const (
 // for one conversation at a time. Its engine serializes access.
 type ProjectInstructionsManager struct {
 	workspacePath   string
-	globalDirectory string
 	prepared        bool
 	previous        string
 	known           bool
+	pending         string
+	pendingSnapshot string
 }
 
 // WithProjectInstructionsManager attaches the manager owned by this engine. A manager
@@ -44,42 +45,49 @@ func WithProjectInstructionsManager(manager *ProjectInstructionsManager) Option 
 // NewProjectInstructionsManager uses the explicit workspace directory without changing
 // the process working directory.
 func NewProjectInstructionsManager(workspacePath string) *ProjectInstructionsManager {
-	manager := &ProjectInstructionsManager{workspacePath: workspacePath}
-	if home, err := os.UserHomeDir(); err == nil {
-		manager.globalDirectory = filepath.Join(home, ".bits-cli")
-	}
-	return manager
+	return &ProjectInstructionsManager{workspacePath: workspacePath}
 }
 
 // apply sends an instruction update once per refresh. The backend preserves
 // prior instructions in history, so a changed snapshot must explicitly replace
 // or withdraw them. A resumed conversation starts with unknown prior context.
 func (m *ProjectInstructionsManager) apply(ctx context.Context, opts assistant.SendOptions) assistant.SendOptions {
-	if m == nil || m.prepared {
+	if m == nil {
 		return opts
 	}
-	current := m.snapshot(ctx)
-	if ctx.Err() != nil {
-		return opts
+	if !m.prepared {
+		current := m.snapshot(ctx)
+		if ctx.Err() != nil {
+			return opts
+		}
+		unknown := !m.known && opts.ConversationID != ""
+		update := current
+		switch {
+		case m.known && current == m.previous:
+			update = ""
+		case current != "" && (unknown || m.previous != ""):
+			update = instructionsReplacementNotice + "\n\n" + current
+		case current == "" && (unknown || m.previous != ""):
+			update = instructionsRemovalNotice
+		}
+		m.pendingSnapshot, m.pending, m.prepared = current, update, true
 	}
-	unknown := !m.known && opts.ConversationID != ""
-	update := current
-	switch {
-	case m.known && current == m.previous:
-		update = ""
-	case current != "" && (unknown || m.previous != ""):
-		update = instructionsReplacementNotice + "\n\n" + current
-	case current == "" && (unknown || m.previous != ""):
-		update = instructionsRemovalNotice
-	}
-	m.previous, m.known, m.prepared = current, true, true
-	if update != "" {
+	if m.pending != "" {
 		if opts.CustomUserContext != "" {
 			opts.CustomUserContext += "\n\n"
 		}
-		opts.CustomUserContext += update
+		opts.CustomUserContext += m.pending
 	}
 	return opts
+}
+
+// acknowledge records delivery after a response starts streaming or Send succeeds.
+// Unstreamed failures retain the exact prepared update for the next request.
+func (m *ProjectInstructionsManager) acknowledge() {
+	if m != nil && m.prepared {
+		m.previous, m.known = m.pendingSnapshot, true
+		m.pending = ""
+	}
 }
 
 // refresh checks the files again on the next request, retaining the previous
@@ -87,12 +95,16 @@ func (m *ProjectInstructionsManager) apply(ctx context.Context, opts assistant.S
 func (m *ProjectInstructionsManager) refresh() {
 	if m != nil {
 		m.prepared = false
+		m.pending = ""
+		m.pendingSnapshot = ""
 	}
 }
 
 func (m *ProjectInstructionsManager) reset() {
 	if m != nil {
 		m.prepared = false
+		m.pending = ""
+		m.pendingSnapshot = ""
 		m.previous = ""
 		m.known = false
 	}
@@ -108,7 +120,7 @@ type instructionFile struct {
 	truncated bool
 }
 
-// snapshot loads global instructions first, then ancestors from the filesystem
+// snapshot loads ancestor instructions from the filesystem
 // root to the active directory, including ancestors outside Git repositories.
 func (m *ProjectInstructionsManager) snapshot(parent context.Context) string {
 	active, err := filepath.Abs(m.workspacePath)
@@ -124,11 +136,6 @@ func (m *ProjectInstructionsManager) snapshot(parent context.Context) string {
 		}
 	}
 	slices.Reverse(directories)
-	if m.globalDirectory != "" {
-		if global, absErr := filepath.Abs(m.globalDirectory); absErr == nil {
-			directories = append([]string{global}, directories...)
-		}
-	}
 	var snapshot strings.Builder
 	remaining := instructionTotalLimit
 	seen := make(map[string]bool)

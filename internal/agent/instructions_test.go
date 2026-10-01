@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -103,6 +104,7 @@ func TestConversationSwitchResetsInstructionsOnlyOnCommit(t *testing.T) {
 			}}
 			manager := NewProjectInstructionsManager(t.TempDir())
 			manager.apply(context.Background(), assistant.SendOptions{})
+			manager.acknowledge()
 			engine := New(backend, assistant.SendOptions{ConversationID: "old"}, WithProjectInstructionsManager(manager))
 			conversation, err := engine.LoadConversation(context.Background(), testConversationID)
 			if err != nil {
@@ -124,5 +126,65 @@ func TestConversationSwitchResetsInstructionsOnlyOnCommit(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// instructionDeliveryBackend can assign an ID before a request fails, without
+// necessarily streaming a response that confirms the context was received.
+type instructionDeliveryBackend struct {
+	contexts      []string
+	streamFailure bool
+}
+
+func (b *instructionDeliveryBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	b.contexts = append(b.contexts, opts.CustomUserContext)
+	if len(b.contexts) > 1 || b.streamFailure {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("hello"))
+		if err := emit(response); err != nil {
+			return "conversation", err
+		}
+	}
+	if len(b.contexts) == 1 {
+		return "conversation", errors.New("request failed")
+	}
+	return "conversation", nil
+}
+
+func TestProjectInstructionsRetryUntilDelivered(t *testing.T) {
+	for _, tc := range []struct{ name, conversationID, contents, notice string }{
+		{"insertion", "", "original instructions", "# Project-Specific Context"},
+		{"replacement", "conversation", "original instructions", instructionsReplacementNotice},
+		{"removal", "conversation", "", instructionsRemovalNotice},
+	} {
+		for _, streamFailure := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/streamed=%t", tc.name, streamFailure), func(t *testing.T) {
+				dir := t.TempDir()
+				if tc.contents != "" {
+					writeInstructionTestFile(t, dir, "AGENTS.md", tc.contents)
+				}
+				backend := &instructionDeliveryBackend{streamFailure: streamFailure}
+				engine := New(backend, assistant.SendOptions{ConversationID: tc.conversationID}, WithProjectInstructionsManager(NewProjectInstructionsManager(dir)))
+				drain(engine.StartTurn(context.Background(), TurnInput{Message: "first"}))
+				if !strings.HasPrefix(backend.contexts[0], tc.notice) {
+					t.Fatalf("first update = %q", backend.contexts[0])
+				}
+				// A retry must reuse the prepared snapshot and notice, even after an ID
+				// was assigned or files changed while the failed turn was in flight.
+				writeInstructionTestFile(t, dir, "AGENTS.md", "changed after failure")
+				drain(engine.StartTurn(context.Background(), TurnInput{Message: "retry"}))
+				want := backend.contexts[0]
+				if streamFailure {
+					want = ""
+				}
+				if backend.contexts[1] != want {
+					t.Fatalf("retry update = %q, want %q", backend.contexts[1], want)
+				}
+				drain(engine.StartTurn(context.Background(), TurnInput{Message: "later"}))
+				if backend.contexts[2] != "" {
+					t.Fatalf("delivered update repeated: %q", backend.contexts[2])
+				}
+			})
+		}
 	}
 }

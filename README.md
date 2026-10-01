@@ -80,12 +80,10 @@ In each directory, the first readable regular file wins, in this order:
 4. `CLAUDE.md`
 5. `CLAUDE.MD`
 
-Bits loads global instructions from `~/.bits-cli` first, then ancestor directories
-from the filesystem root down to the active directory. Discovery crosses Git
-roots and also works outside Git. Each directory contributes at most one file;
+Bits loads ancestor directories from the filesystem root down to the active
+directory. Discovery crosses Git roots and also works outside Git. Each directory contributes at most one file;
 an empty override suppresses the other filenames in that directory. UTF-8 byte
-order marks are stripped. Files are included only once when the global directory
-is also an ancestor.
+order marks are stripped.
 
 For a linked worktree nested inside its main checkout, a selected context file
 at the worktree root shadows the same filename at the main checkout root.
@@ -94,7 +92,9 @@ searched.
 
 Instructions are sent as Assistant context using the project-context template,
 without changing the visible prompt. Each new conversation captures a snapshot
-and sends it only on its first request. The backend preserves it in history, so
+and sends it with its first request. If that request fails before streaming a
+response, the same instruction update is retried on the next request. The backend
+preserves it in history, so
 tool continuations and later turns do not resend it. The snapshot remains fixed
 while the conversation is running; restart or resume to pick up file changes.
 

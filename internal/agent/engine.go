@@ -481,6 +481,9 @@ func (e *Engine) run(
 		if id != "" {
 			e.opts.ConversationID = id
 		}
+		if streamed || err == nil {
+			e.projectInstructionsManager.acknowledge()
+		}
 		if sent := sentUserContext; streamed && sent != "" {
 			e.sentUserContext = &sent
 		}

@@ -168,6 +168,7 @@ func TestProjectInstructionsManagerEmptySnapshotLoadsOnce(t *testing.T) {
 	manager := NewProjectInstructionsManager(dir)
 	opts := assistant.SendOptions{CustomUserContext: "existing"}
 	first := manager.apply(context.Background(), opts)
+	manager.acknowledge()
 	if first.CustomUserContext != "existing" {
 		t.Fatalf("empty snapshot = %q", first.CustomUserContext)
 	}
@@ -212,6 +213,7 @@ func TestProjectInstructionsManagerInstructionUpdates(t *testing.T) {
 					writeInstructionTestFile(t, dir, "AGENTS.md", tc.before)
 				}
 				manager.apply(ctx, assistant.SendOptions{})
+				manager.acknowledge()
 				manager.refresh()
 			}
 			if tc.after != "" {
@@ -223,6 +225,7 @@ func TestProjectInstructionsManagerInstructionUpdates(t *testing.T) {
 			}
 			opts := assistant.SendOptions{ConversationID: "conversation", CustomUserContext: "existing"}
 			got := manager.apply(ctx, opts).CustomUserContext
+			manager.acknowledge()
 			if tc.want == "" {
 				if got != "existing" {
 					t.Fatalf("unexpected update = %q", got)
@@ -255,6 +258,7 @@ func TestProjectInstructionsManagerCascadingReplacement(t *testing.T) {
 	writeInstructionTestFile(t, nested, "AGENTS.md", "nested instructions")
 	manager := NewProjectInstructionsManager(nested)
 	manager.apply(context.Background(), assistant.SendOptions{})
+	manager.acknowledge()
 	if err := os.Remove(filepath.Join(nested, "AGENTS.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +277,6 @@ func TestPiInstructionFilenamePrecedence(t *testing.T) {
 				writeInstructionTestFile(t, dir, candidate, "selected "+candidate)
 			}
 			manager := NewProjectInstructionsManager(dir)
-			manager.globalDirectory = ""
 			got := manager.snapshot(context.Background())
 			if strings.Count(got, "<file path=") != 1 || !strings.Contains(got, "selected "+name+"\n") {
 				t.Fatalf("selected file = %q", got)
@@ -311,10 +314,9 @@ func TestPiInstructionFilenamePrecedence(t *testing.T) {
 	})
 }
 
-func TestPiGlobalAndAncestorInstructions(t *testing.T) {
+func TestPiAncestorInstructions(t *testing.T) {
 	for _, git := range []bool{false, true} {
 		t.Run(fmt.Sprintf("git=%t", git), func(t *testing.T) {
-			global := t.TempDir()
 			outer := t.TempDir()
 			repo := filepath.Join(outer, "repo")
 			active := filepath.Join(repo, "nested")
@@ -324,26 +326,18 @@ func TestPiGlobalAndAncestorInstructions(t *testing.T) {
 			if git {
 				runInstructionsGit(t, repo, "init", "-b", "main")
 			}
-			writeInstructionTestFile(t, global, "CLAUDE.md", "global content")
 			writeInstructionTestFile(t, outer, "AGENTS.md", "ancestor content")
 			writeInstructionTestFile(t, repo, "AGENTS.MD", "repository content")
 			writeInstructionTestFile(t, active, "AGENTS.override.md", "local content")
 			manager := NewProjectInstructionsManager(active)
-			manager.globalDirectory = global
 			got := manager.snapshot(context.Background())
 			previous := -1
-			for _, content := range []string{"global content", "ancestor content", "repository content", "local content"} {
+			for _, content := range []string{"ancestor content", "repository content", "local content"} {
 				index := strings.Index(got, content)
 				if index <= previous {
 					t.Fatalf("incorrect ordering for %q: %q", content, got)
 				}
 				previous = index
-			}
-			// A global directory that is also an ancestor is included only once.
-			manager.globalDirectory = outer
-			got = manager.snapshot(context.Background())
-			if strings.Count(got, "ancestor content") != 1 {
-				t.Fatalf("duplicate global context = %q", got)
 			}
 		})
 	}
@@ -400,21 +394,20 @@ func TestPiBareWorktreeKeepsContainerInstructions(t *testing.T) {
 	}
 }
 
-func TestPiGlobalDirectoryUsesBitsConfig(t *testing.T) {
+func TestInstructionsDoNotDiscoverBitsConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	global := filepath.Join(home, ".bits-cli")
-	if err := os.Mkdir(global, 0o755); err != nil {
-		t.Fatal(err)
+	config := filepath.Join(home, ".bits-cli")
+	project := filepath.Join(home, "project")
+	for _, dir := range []string{config, project} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	writeInstructionTestFile(t, global, "AGENTS.override.md", "global override content")
-	writeInstructionTestFile(t, global, "AGENTS.md", "unused global content")
-	manager := NewProjectInstructionsManager(t.TempDir())
-	if manager.globalDirectory != global {
-		t.Fatalf("global directory = %q", manager.globalDirectory)
-	}
-	got := manager.snapshot(context.Background())
-	if !strings.Contains(got, "global override content") || strings.Contains(got, "unused global content") {
-		t.Fatalf("global instructions = %q", got)
+	writeInstructionTestFile(t, config, "AGENTS.md", "unofficial global instructions")
+	writeInstructionTestFile(t, project, "AGENTS.md", "project instructions")
+	got := NewProjectInstructionsManager(project).snapshot(context.Background())
+	if strings.Contains(got, "unofficial global instructions") || !strings.Contains(got, "project instructions") {
+		t.Fatalf("context = %q", got)
 	}
 }
