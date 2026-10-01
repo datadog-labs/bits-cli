@@ -17,6 +17,8 @@ const (
 
 	// Narrower than this, fact values truncate to noise, so they are dropped.
 	welcomeMinFactsWidth = 12
+
+	aiNotice = "Bits is an AI assistant. It can make mistakes — review its suggestions and actions."
 )
 
 // welcomeLogoWidth is the wider of the two logo forms. Gating on it rather than
@@ -34,9 +36,8 @@ func (m *Model) showSplashPanel() bool {
 	return m.welcomeContentWidth() >= welcomeLogoWidth
 }
 
-// splashPanelHeight is the logo slot plus the panel's border and padding.
 func (m *Model) splashPanelHeight() int {
-	return splash.Rows + m.styles.Panel.Frame.GetVerticalFrameSize()
+	return lipgloss.Height(m.splashPanelBody()) + m.styles.Panel.Frame.GetVerticalFrameSize()
 }
 
 // welcomePanelWidth spans the terminal less the panel margin. Panel.MaxWidth is
@@ -59,20 +60,24 @@ func (m *Model) welcomeLogo() string {
 }
 
 func (m *Model) splashPanelView() string {
-	logo := m.welcomeLogo()
-	columns := []string{logo}
-	if facts := m.welcomeFacts(m.welcomeContentWidth() - lipgloss.Width(logo) - welcomeGap); facts != "" {
-		columns = append(columns, strings.Repeat(" ", welcomeGap), facts)
-	}
-	body := lipgloss.JoinHorizontal(lipgloss.Center, columns...)
 	return m.styles.Panel.Frame.
 		Width(m.welcomePanelWidth()).
 		MarginLeft(max(0, m.styles.Panel.HorizontalMargin)).
-		Render(body)
+		Render(m.splashPanelBody())
 }
 
-// welcomeFacts renders one value per line, or "" when width leaves no room. The
-// organization is omitted: it would cost a CurrentUser request.
+func (m *Model) splashPanelBody() string {
+	width := m.welcomeContentWidth()
+	if facts := m.welcomeFacts(width - welcomeLogoWidth - welcomeGap); facts != "" {
+		return lipgloss.JoinHorizontal(lipgloss.Center, m.welcomeLogo(), strings.Repeat(" ", welcomeGap), facts)
+	}
+	notice := wordwrap(aiNotice, width)
+	for i, line := range notice {
+		notice[i] = m.styles.Text.Secondary.Render(line)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, m.welcomeLogo(), "", strings.Join(notice, "\n"))
+}
+
 func (m *Model) welcomeFacts(width int) string {
 	if width < welcomeMinFactsWidth {
 		return ""
@@ -100,6 +105,10 @@ func (m *Model) welcomeFacts(width int) string {
 		}
 		value = ansi.Truncate(escape.SingleLine(value), width, "…")
 		lines = append(lines, m.styles.Text.Secondary.Render(value))
+	}
+	lines = append(lines, "")
+	for _, line := range wordwrap(aiNotice, width) {
+		lines = append(lines, m.styles.Text.Secondary.Render(line))
 	}
 	return strings.Join(lines, "\n")
 }

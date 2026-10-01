@@ -86,30 +86,23 @@ func TestWelcomeBlockNeverOverflowsTerminalWidth(t *testing.T) {
 	}
 }
 
-// The shorter fact column sits centered against the logo, not at its top edge.
-func TestWelcomeFactsCenteredAgainstLogo(t *testing.T) {
-	m := welcomeModel(120, 40)
-	for _, facts := range []string{
-		m.welcomeFacts(60),
-		"one\ntwo\nthree\nfour",
-	} {
-		body := lipgloss.JoinHorizontal(lipgloss.Center,
-			m.welcomeLogo(), strings.Repeat(" ", welcomeGap), facts)
-		lines := strings.Split(body, "\n")
-		if len(lines) != splash.Rows {
-			t.Fatalf("body is %d rows, want %d", len(lines), splash.Rows)
-		}
+func TestWelcomeLogoCentersAgainstTheTallerColumn(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		m := welcomeModels(60, 40)["engine"]
+		m.splashReady = ready
+		rows := strings.Split(ansi.Strip(m.splashPanelBody()), "\n")
+		logoWidth := lipgloss.Width(m.welcomeLogo())
 
-		marker := strings.SplitN(ansi.Strip(facts), "\n", 2)[0]
 		first := -1
-		for i, line := range lines {
-			if strings.Contains(ansi.Strip(line), marker) {
+		for i, row := range rows {
+			if strings.TrimSpace(ansi.Truncate(row, logoWidth, "")) != "" {
 				first = i
 				break
 			}
 		}
-		if want := (splash.Rows - lipgloss.Height(facts)) / 2; first != want {
-			t.Errorf("facts start on row %d, want %d (centered)", first, want)
+		if want := (len(rows) - splash.Rows + 1) / 2; first != want {
+			t.Fatalf("ready=%v: logo starts on row %d of %d, want %d (centered)",
+				ready, first, len(rows), want)
 		}
 	}
 }
@@ -142,6 +135,82 @@ func TestWelcomeHiddenUntilTerminalIsTallEnough(t *testing.T) {
 	if !welcomeModel(100, needed).showSplashPanel() {
 		t.Error("splash panel hidden on a terminal tall enough to hold it")
 	}
+}
+
+func TestWelcomeNoticeSitsOneBlankRowBelowTheFacts(t *testing.T) {
+	const want = "Bits is an AI assistant. It can make mistakes — review its suggestions and actions."
+	m := welcomeModels(80, 40)["engine"]
+	logoWidth := lipgloss.Width(m.welcomeLogo())
+	width := m.welcomeContentWidth() - welcomeLogoWidth - welcomeGap
+	column := columnText(strings.Split(ansi.Strip(m.splashPanelBody()), "\n"), logoWidth)
+
+	at := -1
+	for i, row := range column {
+		if strings.HasPrefix(strings.TrimSpace(row), "Bits is") {
+			at = i
+			break
+		}
+	}
+	if at < 2 {
+		t.Fatalf("notice missing or lacks separating facts row (found at %d)", at)
+	}
+	if column[at-1] != "" {
+		t.Fatalf("row above the notice is %q, want one blank separator row", column[at-1])
+	}
+	if !strings.Contains(column[at-2], "bits-cli") {
+		t.Fatalf("row above the separator is %q, want the working-directory fact", column[at-2])
+	}
+	var lines []string
+	for _, row := range column[at:] {
+		if strings.TrimSpace(row) == "" {
+			t.Fatal("blank row inside the notice")
+		}
+		if got := ansi.StringWidth(row); got > width {
+			t.Fatalf("notice row %q measures %d columns, want at most %d", row, got, width)
+		}
+		lines = append(lines, row)
+	}
+	if len(lines) < 2 {
+		t.Fatalf("notice did not wrap at %d columns", width)
+	}
+	if got := strings.Join(lines, " "); got != want {
+		t.Fatalf("notice reads %q, want %q", got, want)
+	}
+}
+
+func TestWelcomeNoticeStandsAloneBelowTheLogo(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		m := welcomeModels(45, 30)["engine"]
+		m.splashReady = ready
+		if !m.showSplashPanel() {
+			t.Fatalf("ready=%v: splash panel hidden at 45 columns", ready)
+		}
+		rows := strings.Split(ansi.Strip(m.splashPanelBody()), "\n")
+		if len(rows) < splash.Rows+2 {
+			t.Fatalf("ready=%v: body is %d rows, want the logo, a blank row, and the notice", ready, len(rows))
+		}
+		if got := strings.TrimSpace(rows[splash.Rows]); got != "" {
+			t.Fatalf("ready=%v: row %d is %q, want one blank row between the logo and the notice", ready, splash.Rows, got)
+		}
+		lines := make([]string, 0, len(rows))
+		for _, row := range rows[splash.Rows+1:] {
+			if got := ansi.StringWidth(row); got > m.welcomeContentWidth() {
+				t.Fatalf("ready=%v: notice row %q measures %d columns, want at most %d", ready, row, got, m.welcomeContentWidth())
+			}
+			lines = append(lines, strings.TrimRight(row, " "))
+		}
+		if got := strings.Join(lines, " "); got != aiNotice {
+			t.Fatalf("ready=%v: notice reads %q, want %q", ready, got, aiNotice)
+		}
+	}
+}
+
+func columnText(rows []string, logoWidth int) []string {
+	out := make([]string, len(rows))
+	for i, row := range rows {
+		out[i] = strings.TrimRight(strings.TrimPrefix(row, ansi.Truncate(row, logoWidth+welcomeGap, "")), " ")
+	}
+	return out
 }
 
 func TestHostnameOf(t *testing.T) {
@@ -405,10 +474,16 @@ func TestWelcomeVisibilityUnchangedByTheProbe(t *testing.T) {
 
 		m.splashReady = false
 		before := m.showSplashPanel()
+		reserved := m.splashPanelHeight()
 		m.splashReady = true
-		if after := m.showSplashPanel(); after != before {
+		after := m.showSplashPanel()
+		if after != before {
 			t.Fatalf("width=%d: visibility changed from %v to %v when the probe landed",
 				width, before, after)
+		}
+		if got := m.splashPanelHeight(); got != reserved {
+			t.Fatalf("width=%d: reserved height changed from %d to %d rows when the probe landed",
+				width, reserved, got)
 		}
 	}
 }
