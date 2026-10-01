@@ -159,6 +159,7 @@ type Engine struct {
 	sessionGrants       map[ApprovalKey]struct{}
 	active              atomic.Bool
 	operationGeneration atomic.Uint64
+	projectInstructions *ProjectInstructions
 }
 
 // RuntimeStatus is the non-secret request and backend state needed by local
@@ -177,9 +178,12 @@ type toolCommand struct {
 	stop       bool
 }
 
+// Option configures an engine before it starts processing operations.
+type Option func(*Engine)
+
 // New returns an Engine. opts carries the per-request defaults (profile, model,
 // conversation id, …); ConversationID is updated as turns run.
-func New(b Backend, opts assistant.SendOptions) *Engine {
+func New(b Backend, opts assistant.SendOptions, options ...Option) *Engine {
 	profile := opts.Profile
 	if profile == "" {
 		profile = assistant.DefaultProfile
@@ -190,7 +194,7 @@ func New(b Backend, opts assistant.SendOptions) *Engine {
 	}); ok {
 		runtimeStatus.Backend = provider.BackendStatus()
 	}
-	return &Engine{
+	engine := &Engine{
 		backend:       b,
 		opts:          opts,
 		runtimeStatus: runtimeStatus,
@@ -198,6 +202,10 @@ func New(b Backend, opts assistant.SendOptions) *Engine {
 		commands:      make(chan toolCommand, maxQueuedCommands),
 		sessionGrants: make(map[ApprovalKey]struct{}),
 	}
+	for _, option := range options {
+		option(engine)
+	}
+	return engine
 }
 
 // Site returns the Assistant API site of the active backend. Backends without
@@ -419,6 +427,8 @@ func (e *Engine) run(
 	// request sends one round and collects the client calls it pauses on. It
 	// returns false once the turn has ended.
 	request := func(emit func(Event) bool, opts assistant.SendOptions) ([]ToolCall, bool) {
+		sentUserContext := opts.CustomUserContext
+		opts = e.projectInstructions.apply(ctx, opts)
 		var calls []ToolCall
 		streamed := false
 		fold := func(msg assistant.Message) bool {
@@ -471,7 +481,10 @@ func (e *Engine) run(
 		if id != "" {
 			e.opts.ConversationID = id
 		}
-		if sent := opts.CustomUserContext; streamed && sent != "" {
+		if streamed || err == nil {
+			e.projectInstructions.acknowledge()
+		}
+		if sent := sentUserContext; streamed && sent != "" {
 			e.sentUserContext = &sent
 		}
 		if err != nil {
@@ -730,6 +743,7 @@ func (e *Engine) NewConversation() error {
 	e.opts.ConversationID = ""
 	e.opts.MessageHistory = nil
 	e.sentUserContext = nil
+	e.projectInstructions.reset()
 	e.transcript = NewTranscript()
 	e.continuation = nil
 	clear(e.sessionGrants)
