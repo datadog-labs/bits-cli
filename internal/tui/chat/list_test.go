@@ -885,3 +885,35 @@ func TestHoverFollowsTheTailPinBeforeRender(t *testing.T) {
 		t.Fatalf("Hovered() before render = %t, but the rendered row under the pointer is a header: %t", hovered, want)
 	}
 }
+
+func TestViewportStaysFilledAfterGrowing(t *testing.T) {
+	blocks := make([]agent.Block, 10)
+	for i := range blocks {
+		blocks[i] = agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: fmt.Sprint(i), Kind: assistant.KindText}, Role: assistant.RoleAssistant, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: fmt.Sprintf("row %d", i)}}
+	}
+	grown := func(follow bool) *List {
+		list := NewList()
+		list.SetStyles(DefaultStyles(true))
+		list.SetWidth(24)
+		list.SetHeight(10)
+		list.SetItems(blocks)
+		list.SetHeight(3)
+		list.Render()
+		list.follow = follow
+		list.SetHeight(10)
+		return list
+	}
+
+	for _, follow := range []bool{true, false} {
+		rows := strings.Split(ansi.Strip(grown(follow).Render()), "\n")
+		if !strings.Contains(rows[1], "row 5") || !strings.Contains(rows[9], "row 9") {
+			t.Fatalf("follow=%t: viewport not filled to the end:\n%s", follow, strings.Join(rows, "\n"))
+		}
+	}
+
+	list := grown(true)
+	list.ScrollBy(-1)
+	if list.Following() || !strings.Contains(ansi.Strip(list.Render()), "row 4") {
+		t.Fatal("scrolling before the next render did not start from the drawn rows")
+	}
+}

@@ -106,6 +106,7 @@ func TestHeaderAppearanceKeepsTheScrolledRow(t *testing.T) {
 		textBlock("a", "AAA"), textBlock("b", "BBB"), textBlock("c", "CCC"),
 		textBlock("d", "DDD"), textBlock("e", "EEE"), textBlock("f", "FFF"),
 	})
+	l.ScrollToTop()
 	l.ScrollBy(4) // two items plus their gaps: the viewport starts on CCC
 	if got := firstVisibleLine(l); got != "CCC" {
 		t.Fatalf("setup: viewport starts on %q, want CCC", got)

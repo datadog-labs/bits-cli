@@ -514,6 +514,7 @@ func (l *List) ScrollBy(lines int) {
 	if len(l.view) == 0 || lines == 0 {
 		return
 	}
+	l.settle()
 	// A manual scroll re-derives follow: at the bottom we follow, otherwise not.
 	defer func() { l.follow = l.AtBottom() }()
 
@@ -572,13 +573,16 @@ func (l *List) VisibleSurface() Surface {
 }
 
 // settle self-heals the tail pin: streaming growth or a resize can leave the
-// offset above the true bottom. Rendering and hit-testing both call it, so a
-// hit test between an update and the next render sees the rows that render
-// will draw.
+// offset above the true bottom, and a taller viewport can leave it past the
+// end. Rendering, hit-testing, and scrolling all call it, so each sees the rows
+// render will draw.
 func (l *List) settle() {
 	l.normalizeOffset()
-	if l.follow && !l.AtBottom() {
+	switch {
+	case l.follow:
 		l.ScrollToBottom()
+	case l.height > 0:
+		l.clampOffset()
 	}
 }
 
@@ -671,6 +675,7 @@ func (l *List) offsetRow() int {
 // (or its follow state) changed. The existing ScrollBy remains the mutating
 // primitive for callers that do not need the result.
 func (l *List) ScrollByChanged(lines int) bool {
+	l.settle()
 	idx, line, follow := l.offsetIdx, l.offsetLine, l.follow
 	l.ScrollBy(lines)
 	return idx != l.offsetIdx || line != l.offsetLine || follow != l.follow
