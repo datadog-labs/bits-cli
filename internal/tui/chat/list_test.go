@@ -916,4 +916,42 @@ func TestViewportStaysFilledAfterGrowing(t *testing.T) {
 	if list.Following() || !strings.Contains(ansi.Strip(list.Render()), "row 4") {
 		t.Fatal("scrolling before the next render did not start from the drawn rows")
 	}
+
+	// A tall first item can still be the viewport's first visible item at
+	// the bottom. Scrolling away and back must restore follow before the
+	// last block grows.
+	list = NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(8)
+	headerRows := make([]string, 20)
+	for i := range headerRows {
+		headerRows[i] = fmt.Sprintf("splash row %d", i)
+	}
+	list.SetHeader(strings.Join(headerRows, "\n"))
+	last := textBlock("last", "before")
+	list.SetItems([]agent.Block{last})
+	list.ScrollToBottom()
+	if list.offsetIdx != 0 {
+		t.Fatal("fixture needs the viewport to start inside the tall header")
+	}
+
+	list.ScrollBy(-3)
+	if list.Following() {
+		t.Fatal("scrolling up should stop following")
+	}
+	list.ScrollBy(3)
+	if !list.Following() || !list.AtBottom() {
+		t.Fatal("scrolling back to the visible bottom should resume following")
+	}
+
+	last.Rev++
+	last.Markdown.Content = "before\nafter\ntail"
+	list.SetItems([]agent.Block{last})
+	if got := ansi.Strip(list.Render()); !strings.Contains(got, "tail") {
+		t.Fatalf("grown block tail is hidden below the viewport:\n%s", got)
+	}
+	if !list.Following() || !list.AtBottom() {
+		t.Fatal("growing the last block lost the bottom pin")
+	}
 }

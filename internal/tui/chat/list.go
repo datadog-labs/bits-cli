@@ -476,18 +476,21 @@ func (l *List) AtBottom() bool {
 	if len(l.view) == 0 {
 		return true
 	}
-	total := 0
+	// Start at the viewport's first row, which may be deep inside a tall
+	// item (notably the splash). Checking an item's full height before
+	// subtracting offsetLine would report false even with the tail visible.
+	total := -l.offsetLine
 	for idx := l.offsetIdx; idx < len(l.view); idx++ {
-		if total > l.height {
-			return false
-		}
 		h := l.itemHeight(idx)
 		if idx > l.offsetIdx {
 			h += l.gapAfter(idx - 1)
 		}
 		total += h
+		if total > l.height {
+			return false
+		}
 	}
-	return total-l.offsetLine <= l.height
+	return true
 }
 
 // lastOffsetItem returns the (index, intra-item line offset) that places the
@@ -541,14 +544,9 @@ func (l *List) ScrollBy(lines int) {
 			return
 		}
 		l.offsetLine += lines
-		for l.offsetLine >= l.itemHeight(l.offsetIdx) {
-			l.offsetLine -= l.itemHeight(l.offsetIdx)
-			l.offsetLine = max(0, l.offsetLine-l.gapAfter(l.offsetIdx))
+		for l.offsetIdx < len(l.view)-1 && l.offsetLine >= l.itemHeight(l.offsetIdx)+l.gapAfter(l.offsetIdx) {
+			l.offsetLine -= l.itemHeight(l.offsetIdx) + l.gapAfter(l.offsetIdx)
 			l.offsetIdx++
-			if l.offsetIdx > len(l.view)-1 {
-				l.ScrollToBottom()
-				return
-			}
 		}
 		lastIdx, lastLine := l.lastOffsetItem()
 		if l.offsetIdx > lastIdx || (l.offsetIdx == lastIdx && l.offsetLine > lastLine) {

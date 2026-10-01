@@ -84,6 +84,19 @@ func TestHeaderShiftsDocumentCoordinatesConsistently(t *testing.T) {
 	if !strings.Contains(l.Render(), "H1") {
 		t.Fatal("header absent from the rendered surface")
 	}
+
+	// The gap counted in document coordinates must also consume one scroll
+	// row before the block enters the viewport.
+	l.SetHeight(1)
+	l.ScrollToTop()
+	l.ScrollBy(3)
+	if got := l.VisibleSurface(); got.Top != 3 || got.Content != "" {
+		t.Fatalf("scrolling three rows = %+v, want the header gap", got)
+	}
+	l.ScrollBy(1)
+	if got := l.VisibleSurface(); got.Top != 4 || !strings.Contains(got.Content, "BLOCK BODY") {
+		t.Fatalf("scrolling four rows = %+v, want BLOCK BODY", got)
+	}
 }
 
 // firstVisibleLine is the transcript row the viewport starts on, with the
