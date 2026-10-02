@@ -26,7 +26,7 @@ const (
 )
 
 // ClientSkills owns a metadata snapshot for a conversation. The engine serializes
-// access and sends the same catalog on every request, including continuations.
+// access and sends the same catalog with each top-level user message.
 type ClientSkills struct {
 	workspace string
 	extra     []string
@@ -84,12 +84,15 @@ const clientSkillsRemovalNotice = "<available-local-client-skills>\nThis is the 
 type clientSkill struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
-	path        string
+	// DisableModelInvocation keeps the skill out of the catalog. The skill still
+	// claims its name, so it shadows lower-precedence skills with the same name.
+	DisableModelInvocation bool `yaml:"disable-model-invocation"`
+	path                   string
 }
 
 var skillNamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-func parseClientSkill(content []byte) (clientSkill, bool) {
+func parseClientSkill(content []byte, defaultName string) (clientSkill, bool) {
 	content = bytes.TrimPrefix(content, []byte{0xef, 0xbb, 0xbf})
 	lines := strings.Split(string(content), "\n")
 	if len(lines) < 3 || strings.TrimSuffix(lines[0], "\r") != "---" {
@@ -116,8 +119,11 @@ func parseClientSkill(content []byte) (clientSkill, bool) {
 		if metadata.Decode(&skill) != nil {
 			return clientSkill{}, false
 		}
-		skill.Description = strings.TrimSpace(skill.Description)
-		return skill, len(skill.Name) <= 64 && skillNamePattern.MatchString(skill.Name) && len(skill.Description) > 0 && utf8.RuneCountInString(skill.Description) <= 1024
+		if strings.TrimSpace(skill.Name) == "" {
+			skill.Name = defaultName
+		}
+		skill.Description = strings.Join(strings.Fields(skill.Description), " ")
+		return skill, len(skill.Name) <= 64 && skillNamePattern.MatchString(skill.Name) && len(skill.Description) > 0
 	}
 	return clientSkill{}, false
 }
@@ -184,8 +190,10 @@ func (s *ClientSkills) snapshot(ctx context.Context) string {
 		_ = root.Close()
 	}
 	names := make([]string, 0, len(scan.skills))
-	for name := range scan.skills {
-		names = append(names, name)
+	for name, skill := range scan.skills {
+		if !skill.DisableModelInvocation {
+			names = append(names, name)
+		}
 	}
 	slices.Sort(names)
 	if len(names) == 0 {
@@ -218,10 +226,9 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 	}
 	s.remainingEntries--
 	resolved, err := filepath.EvalSymlinks(source)
-	if err != nil || !withinInstructionsRoot(boundary, resolved) || seen[resolved] {
+	if err != nil || !withinInstructionsRoot(boundary, resolved) {
 		return
 	}
-	seen[resolved] = true
 	relative, err := filepath.Rel(boundary, resolved)
 	if err != nil {
 		return
@@ -231,6 +238,10 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 		return
 	}
 	if info.IsDir() {
+		if seen[resolved] {
+			return
+		}
+		seen[resolved] = true
 		dir, openErr := root.Open(relative)
 		if openErr != nil {
 			return
@@ -267,7 +278,7 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 	if err != nil || truncated || !utf8.Valid(content) {
 		return
 	}
-	skill, ok := parseClientSkill(content)
+	skill, ok := parseClientSkill(content, filepath.Base(filepath.Dir(source)))
 	if !ok {
 		return
 	}

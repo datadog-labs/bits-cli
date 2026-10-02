@@ -33,14 +33,16 @@ func TestClientSkillFrontmatter(t *testing.T) {
 		{"invalid name", "---\nname: Bad_Name\ndescription: test\n---", false},
 		{"consecutive hyphens", "---\nname: bad--name\ndescription: test\n---", false},
 		{"long name", "---\nname: " + strings.Repeat("a", 65) + "\ndescription: test\n---", false},
-		{"long description", "---\nname: test\ndescription: " + strings.Repeat("a", 1025) + "\n---", false},
+		{"long description", "---\nname: test\ndescription: " + strings.Repeat("a", 1025) + "\n---", true},
 		{"scalar type", "---\nname: test\ndescription: 42\n---", false},
 		{"duplicate key", "---\nname: test\nname: duplicate\ndescription: test\n---", false},
 		{"unterminated", "---\nname: test\ndescription: test", false},
 		{"invalid yaml", "---\nname: [\ndescription: test\n---", false},
+		{"disable model invocation", "---\nname: test\ndescription: test\ndisable-model-invocation: true\n---", true},
+		{"non-bool disable model invocation", "---\nname: test\ndescription: test\ndisable-model-invocation: maybe\n---", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, ok := parseClientSkill([]byte(tc.input))
+			_, ok := parseClientSkill([]byte(tc.input), "fallback")
 			if ok != tc.valid {
 				t.Fatalf("valid = %t, want %t", ok, tc.valid)
 			}
@@ -95,6 +97,36 @@ func TestClientSkillDiscoveryPrecedenceAndBoundaries(t *testing.T) {
 	}
 	if got := NewClientSkills(active, []string{extra, extra}).snapshot(context.Background()); got != catalog {
 		t.Fatal("catalog is not deterministic")
+	}
+}
+
+func writeSkillFile(t *testing.T, root, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstructionTestFile(t, root, filepath.Join(path, "SKILL.md"), content)
+}
+
+func TestClientSkillDisableModelInvocation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	active := t.TempDir()
+	writeSkill(t, active, ".agents/skills/visible", "visible", "shown to the model")
+	writeSkillFile(t, active, ".agents/skills/hidden", "---\nname: hidden\ndescription: user only\ndisable-model-invocation: true\n---\n")
+	writeSkill(t, active, "extras/hidden", "hidden", "shadowed duplicate")
+	got := NewClientSkills(active, []string{"extras"}).snapshot(context.Background())
+	if !strings.Contains(got, `name="visible"`) {
+		t.Fatal("missing visible skill")
+	}
+	if strings.Contains(got, `name="hidden"`) || strings.Contains(got, "user only") || strings.Contains(got, "shadowed duplicate") {
+		t.Fatalf("disabled skill reached the catalog: %s", got)
+	}
+
+	onlyHidden := t.TempDir()
+	writeSkillFile(t, onlyHidden, ".agents/skills/hidden", "---\nname: hidden\ndescription: user only\ndisable-model-invocation: true\n---\n")
+	if got := NewClientSkills(onlyHidden, nil).snapshot(context.Background()); got != "" {
+		t.Fatalf("catalog with only disabled skills = %q, want empty", got)
 	}
 }
 
@@ -187,7 +219,7 @@ func TestClientSkillConversationSnapshot(t *testing.T) {
 	}
 }
 
-func TestClientSkillsResentOnToolContinuations(t *testing.T) {
+func TestClientSkillsOnlySentWithUserMessages(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	writeSkill(t, dir, ".agents/skills/example", "example", "example description")
@@ -198,11 +230,11 @@ func TestClientSkillsResentOnToolContinuations(t *testing.T) {
 	}
 	engine := New(backend, assistant.SendOptions{}, WithClientSkills(NewClientSkills(dir, nil)))
 	drain(engine.StartTurn(context.Background(), TurnInput{Message: "inspect", Tools: tools, UserContext: func(context.Context) string { return "environment" }}))
-	if len(backend.userContexts) != 2 || !strings.HasPrefix(backend.userContexts[0], "environment\n\n") || !strings.Contains(backend.userContexts[1], "example description") {
+	if len(backend.userContexts) != 2 || !strings.HasPrefix(backend.userContexts[0], "environment\n\n") || !strings.Contains(backend.userContexts[0], "example description") || backend.userContexts[1] != "" {
 		t.Fatalf("contexts = %q", backend.userContexts)
 	}
 	drain(engine.StartTurn(context.Background(), TurnInput{Message: "next", Tools: tools, UserContext: func(context.Context) string { return "environment" }}))
-	if backend.userContexts[2] != backend.userContexts[1] {
+	if !strings.Contains(backend.userContexts[2], "example description") || strings.Contains(backend.userContexts[2], "environment") {
 		t.Fatal("catalog missing or environment context repeated")
 	}
 }
@@ -311,8 +343,8 @@ func TestClientSkillsSwitchAndStoppedToolDrain(t *testing.T) {
 	if _, _, err := engine.drainStoppedToolCalls(context.Background(), nil, assistant.SendOptions{ConversationID: engine.ConversationID()}); err != nil {
 		t.Fatal(err)
 	}
-	if backend.contexts[0] != backend.contexts[1] {
-		t.Fatal("stopped tool drain lost catalog")
+	if backend.contexts[1] != "" {
+		t.Fatal("stopped tool drain included catalog")
 	}
 	if err := engine.InstallConversation(context.Background(), &Conversation{id: "existing", transcript: NewTranscript()}); err != nil {
 		t.Fatal(err)
@@ -320,5 +352,88 @@ func TestClientSkillsSwitchAndStoppedToolDrain(t *testing.T) {
 	drain(engine.StartTurn(context.Background(), TurnInput{Message: "resumed"}))
 	if !strings.Contains(backend.contexts[2], "example description") {
 		t.Fatalf("restored conversation did not rescan skills: %q", backend.contexts[2])
+	}
+}
+
+func TestClientSkillSymlinkTargetVisitedFirst(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, ".agents", "skills", "example")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstructionTestFile(t, skillDir, "INSTRUCTIONS.md", "---\nname: example\ndescription: a valid symlinked skill\n---\nInstructions")
+	if err := os.Symlink("INSTRUCTIONS.md", filepath.Join(skillDir, "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	got := NewClientSkills(dir, nil).snapshot(context.Background())
+	if !strings.Contains(got, `name="example"`) {
+		t.Fatalf("valid skill within boundary was omitted: %q", got)
+	}
+}
+
+func TestClientSkillsDeferredUntilUserMessageAfterToolResume(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	writeSkill(t, dir, ".agents/skills/example", "example", "example description")
+	tools, err := NewToolSet(ModeSkipPermissions, Tool{
+		Definition: assistant.ClientTool{Name: "input"}, Resumable: true,
+		Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &optionsBackend{}
+	skills := NewClientSkills(dir, nil)
+	engine := New(backend, assistant.SendOptions{ConversationID: "conversation"}, WithClientSkills(skills))
+	engine.continuation = continuationFromHistory([]assistant.Message{savedCall("one", "input")})
+	drain(engine.ResumePendingTools(t.Context(), TurnInput{Tools: tools}))
+	if backend.opts.CustomUserContext != "" || skills.prepared {
+		t.Fatal("resumed client tool response prepared or sent the catalog")
+	}
+	drain(engine.StartTurn(t.Context(), TurnInput{Message: "continue", Tools: tools}))
+	if !strings.Contains(backend.opts.CustomUserContext, "example description") {
+		t.Fatal("next user message did not include the catalog")
+	}
+}
+
+func TestClientSkillNameFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name, frontmatter, directory, want string
+		valid                              bool
+	}{
+		{"missing", "", "directory-name", "directory-name", true},
+		{"empty", "name: ''\n", "directory-name", "directory-name", true},
+		{"blank", "name: '  '\n", "directory-name", "directory-name", true},
+		{"explicit", "name: explicit\n", "directory-name", "explicit", true},
+		{"invalid explicit", "name: Bad_Name\n", "directory-name", "", false},
+		{"invalid fallback", "", "Bad_Directory", "", false},
+		{"long fallback", "", strings.Repeat("a", 65), "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			skill, ok := parseClientSkill([]byte("---\n"+tc.frontmatter+"description: useful skill\n---\n"), tc.directory)
+			if ok != tc.valid || ok && skill.Name != tc.want {
+				t.Fatalf("name = %q, valid = %t; want %q, %t", skill.Name, ok, tc.want, tc.valid)
+			}
+		})
+	}
+}
+
+func TestClientSkillDescriptionNormalization(t *testing.T) {
+	content := "---\nname: example\ndescription: |\n  First   line\n\n  Second\tline\u00a0with\u2003spaces\n---\n"
+	skill, ok := parseClientSkill([]byte(content), "fallback")
+	if !ok || skill.Description != "First line Second line with spaces" {
+		t.Fatalf("description = %q, valid = %t", skill.Description, ok)
+	}
+}
+
+func TestClientSkillCatalogWithFallbackAndLongDescription(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	description := strings.Repeat("word ", 300) + "end"
+	writeSkillFile(t, dir, ".agents/skills/directory-name", "---\ndescription: |\n  "+description+"\n---\nbody")
+	got := NewClientSkills(dir, nil).snapshot(context.Background())
+	if !strings.Contains(got, `name="directory-name"`) || !strings.Contains(got, description) {
+		t.Fatalf("catalog omitted fallback name or long description: %s", got)
 	}
 }

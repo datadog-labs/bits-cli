@@ -430,7 +430,9 @@ func (e *Engine) run(
 	request := func(emit func(Event) bool, opts assistant.SendOptions) ([]ToolCall, bool) {
 		sentUserContext := opts.CustomUserContext
 		opts = e.projectInstructions.apply(ctx, opts)
-		opts = e.clientSkills.apply(ctx, opts)
+		if _, userMessage := next.(string); userMessage {
+			opts = e.clientSkills.apply(ctx, opts)
+		}
 		var calls []ToolCall
 		streamed := false
 		fold := func(msg assistant.Message) bool {
@@ -615,7 +617,6 @@ func (e *Engine) drainStoppedToolCalls(
 	responses []assistant.ClientToolResponse,
 	opts assistant.SendOptions,
 ) (string, int, error) {
-	opts = e.clientSkills.apply(ctx, opts)
 	payload := any(responses)
 	conversationID := opts.ConversationID
 	rounds := 0
