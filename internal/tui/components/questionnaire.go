@@ -56,14 +56,19 @@ func NewQuestionnaire(questions []Question) *Questionnaire {
 	}
 }
 
-func (q *Questionnaire) SetSize(width, height int, theme styles.Theme) {
+// SetStyles replaces the form's theme-derived styles.
+func (q *Questionnaire) SetStyles(theme styles.Theme) { q.styles = theme }
+
+// SetSize gives the form width columns and at most height rows.
+func (q *Questionnaire) SetSize(width, height int) {
 	if q.width != width || q.height != height {
 		q.follow = true
 	}
-	q.width, q.height, q.styles = width, height, theme
+	q.width, q.height = width, height
 }
 
-func (q *Questionnaire) MinSize() (int, int) { return 36, 14 }
+// MinSize is the smallest area the form can be answered in.
+func (q *Questionnaire) MinSize() (int, int) { return 36, questionMinHeight }
 
 // Answers reports the confirmed answers once the user submits or dismisses.
 func (q *Questionnaire) Answers() (answers []string, dismissed, done bool) {
@@ -209,7 +214,11 @@ func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-const questionChromeHeight = 4 // tabs, rule, gap, and help row
+const (
+	questionChromeHeight = 4 // tabs, rule, gap, and help row
+	questionMinHeight    = 8
+	questionMaxHeight    = 16
+)
 
 type questionRow struct {
 	text   string
@@ -222,10 +231,10 @@ type questionTab struct {
 	start, end int // cell offsets within the panel's horizontal padding
 }
 
-// A fixed height across pages prevents the transcript jumping as answers change.
-// Even the smallest supported terminal keeps conversation rows above the form.
+// Height fills the rows the form was given, up to a cap. It does not depend
+// on the page, so the transcript does not jump as answers change.
 func (q *Questionnaire) Height() int {
-	return min(16, max(8, q.height*2/3))
+	return min(questionMaxHeight, max(questionMinHeight, q.height))
 }
 
 func (q *Questionnaire) bodyHeight() int {
@@ -348,7 +357,7 @@ func (q *Questionnaire) visibleRows(width int) []questionRow {
 	return rows[q.scroll:min(len(rows), q.scroll+height)]
 }
 
-// View replaces the composer, leaving the transcript and footer in place.
+// View renders the form at Height rows.
 func (q *Questionnaire) View() string {
 	width := max(3, q.width-4)
 	tabs := q.tabs(width)

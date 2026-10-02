@@ -14,7 +14,8 @@ import (
 
 func newQuestionnaire(questions ...Question) *Questionnaire {
 	q := NewQuestionnaire(questions)
-	q.SetSize(80, 24, styles.Default(true))
+	q.SetStyles(styles.Default(true))
+	q.SetSize(80, 24)
 	return q
 }
 
@@ -119,7 +120,8 @@ func TestQuestionnaireFiveQuestionsAndLongOptions(t *testing.T) {
 		}
 	}
 	q := newQuestionnaire(questions...)
-	q.SetSize(36, 14, styles.Default(true))
+	q.SetStyles(styles.Default(true))
+	q.SetSize(36, 14)
 	for i := range 5 {
 		press(q, tea.KeyUp, 0)    // Other, after all five options
 		press(q, tea.KeyEnter, 0) // blank Other must stay unanswered
@@ -156,7 +158,8 @@ func TestQuestionnaireLongCustomTextAndTabsFitBothThemes(t *testing.T) {
 	q.Update(tea.PasteMsg{Content: strings.Repeat("東京🙂", 50)})
 	for _, dark := range []bool{true, false} {
 		for _, size := range [][2]int{{36, 14}, {40, 16}, {80, 24}, {120, 40}} {
-			q.SetSize(size[0], size[1], styles.Default(dark))
+			q.SetStyles(styles.Default(dark))
+			q.SetSize(size[0], size[1])
 			view := q.View()
 			if strings.Count(view, "\n")+1 != q.Height() {
 				t.Fatalf("custom input changes the form height at %v:\n%s", size, ansi.Strip(view))

@@ -19,7 +19,7 @@ import (
 const approvalToolName = "confirm_action"
 
 // newApprovalTool is a self-contained tool that always requires approval,
-// used to drive the approval composer in these end-to-end tests.
+// used to drive the approval panel in these end-to-end tests.
 func newApprovalTool() agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
@@ -182,7 +182,7 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 
 	// Shrink below the approval minimum: View hides the whole chat behind the
 	// resize hint, so no keypress may drive the hidden prompt — not even Esc.
-	model.Update(tea.WindowSizeMsg{Width: minimumApprovalWidth - 1, Height: minimumApprovalHeight})
+	model.Update(tea.WindowSizeMsg{Width: approvalMinWidth - 1, Height: 24})
 	if !model.frame.tooSmall {
 		t.Fatal("chat not concealed at the reduced size")
 	}
@@ -233,7 +233,7 @@ func TestToolApprovalComposerSuppressedInSkipPermissions(t *testing.T) {
 	}
 	view := ansi.Strip(model.View().Content)
 	if strings.Contains(view, "Permission Required") || strings.Contains(view, "Run the test action?") {
-		t.Fatalf("approval composer rendered in skip-permissions mode:\n%s", view)
+		t.Fatalf("approval panel rendered in skip-permissions mode:\n%s", view)
 	}
 	if !model.editor.Focused() {
 		t.Fatal("editor lost focus without an approval owning the composer")
@@ -260,7 +260,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 				_, _ = model.Update(msg)
 			}
 
-			view := model.frame.approval
+			view := model.frame.dockView
 			plain := ansi.Strip(view)
 			normalized := strings.Join(strings.Fields(plain), " ")
 			for _, want := range []string{"Permission Required", "ESC x", "Run the test action?", "This test tool requires", "Deny"} {
@@ -317,7 +317,7 @@ func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
 	}}
 
 	model.relayout()
-	plain := ansi.Strip(model.frame.approval)
+	plain := ansi.Strip(model.frame.dockView)
 	wants := []string{"Run an unsandboxed command?", "cwd: /workspace · unsandboxed", "Allow"}
 	wants = append(wants, strings.Split(command, "\n")...)
 	for _, want := range wants {
@@ -340,7 +340,7 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := newShell()
-	model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 22})
 	model.approval.pending = []agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{
@@ -356,14 +356,14 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 	}}
 
 	model.relayout()
-	first := ansi.Strip(model.frame.approval)
+	first := ansi.Strip(model.frame.dockView)
 	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "shift+pgup/pgdown scroll") || !strings.Contains(first, "Allow") {
 		t.Fatalf("initial long-command approval window is incorrect:\n%s", first)
 	}
 	for range 10 {
 		model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown, Mod: tea.ModShift})
 	}
-	last := ansi.Strip(model.frame.approval)
+	last := ansi.Strip(model.frame.dockView)
 	if strings.Contains(last, "print(1)") || !strings.Contains(last, "print(20)") || !strings.Contains(last, "cwd: /workspace") || !strings.Contains(last, "Allow") {
 		t.Fatalf("paged long-command approval window is incorrect:\n%s", last)
 	}
@@ -401,10 +401,10 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 			}
 
-			approval := model.frame.approval
+			approval := model.frame.dockView
 			view := ansi.Strip(model.View().Content)
 			if !strings.Contains(view, "Permission Required") || !strings.Contains(view, "Run the test action?") || !strings.Contains(approval, model.styles.Approval.Selected.Render(tt.selection)) {
-				t.Fatalf("approval composer not rendered:\n%s", view)
+				t.Fatalf("approval panel not rendered:\n%s", view)
 			}
 			for _, line := range strings.Split(view, "\n") {
 				if width := ansi.StringWidth(line); width > 80 {
@@ -420,7 +420,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 			drainConversationRemote(t, model)
 
 			if strings.Contains(ansi.Strip(model.View().Content), "Permission Required") {
-				t.Fatal("approval composer remained after the decision")
+				t.Fatal("approval panel remained after the decision")
 			}
 			if tt.deny {
 				// The denial is answered on the wire and the follow-up answer renders.
@@ -484,7 +484,14 @@ func TestApprovalKeepsTranscriptScrollable(t *testing.T) {
 	if model.list.VisibleSurface().Top != top {
 		t.Fatal("scrolling over the approval panel moved the transcript")
 	}
-	if strings.Contains(ansi.Strip(model.frame.approval), "lines 1–") {
-		t.Fatalf("approval body did not scroll:\n%s", ansi.Strip(model.frame.approval))
+	if strings.Contains(ansi.Strip(model.frame.dockView), "lines 1–") {
+		t.Fatalf("approval body did not scroll:\n%s", ansi.Strip(model.frame.dockView))
+	}
+
+	// The panel has no use for clicks, so they select its text, e.g. to copy
+	// the command.
+	model.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 4, Y: model.frame.dock.Min.Y + 1})
+	if !model.selection.selecting() || model.selection.scope != selectionScopeLower {
+		t.Fatal("a click on the approval did not start a selection of its text")
 	}
 }

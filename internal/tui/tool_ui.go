@@ -12,12 +12,27 @@ import (
 )
 
 // toolUISession pairs a pending tool request with the component answering it.
+// It docks like an approval; settlePrompt responds once the component is done.
 type toolUISession struct {
 	request   *tools.Request
 	component chat.ToolInteraction
 }
 
+var _ prompt = (*toolUISession)(nil)
+
 func (s *toolUISession) cancelled() bool { return s.request.Context().Err() != nil }
+
+func (s *toolUISession) layout(width, height int) string {
+	s.component.SetSize(width, height)
+	return s.component.View()
+}
+
+func (s *toolUISession) minSize() (int, int) { return s.component.MinSize() }
+
+// update forwards every event: the component owns all of its dock.
+func (s *toolUISession) update(msg tea.Msg) (tea.Cmd, bool) {
+	return s.component.Update(msg), true
+}
 
 type toolUIOpenedMsg struct{ request *tools.Request }
 
@@ -38,6 +53,7 @@ func (m *Model) activateToolUI(request *tools.Request) {
 		request.Respond(nil, fmt.Errorf("no interactive UI for tool %q", request.Call.Name))
 		return
 	}
+	component.SetStyles(m.styles)
 	session := &toolUISession{request: request, component: component}
 	if m.activeToolUI != nil {
 		m.queuedToolUIs = append(m.queuedToolUIs, session)
@@ -79,36 +95,13 @@ func (m *Model) reconcileToolUI() {
 	}
 }
 
-func (m *Model) updateToolUI(msg tea.Msg) tea.Cmd {
-	if m.activeToolUI == nil {
-		return nil
+// stopTools answers ctrl+x on a tool UI: the engine stops the client-tool
+// round, or the whole operation when it cannot.
+func (m *Model) stopTools() {
+	if m.engine.StopTools() {
+		m.op.stop = max(m.op.stop, stopTools)
+		m.clearToolUIs()
+	} else {
+		m.cancelOperation()
 	}
-	switch msg := msg.(type) {
-	case tea.KeyPressMsg:
-		if msg.String() == "ctrl+x" {
-			if m.engine.StopTools() {
-				m.op.stop = max(m.op.stop, stopTools)
-				m.clearToolUIs()
-			} else {
-				m.cancelOperation()
-			}
-			return nil
-		}
-	case tea.MouseClickMsg:
-		msg.Y -= m.frame.dock.Min.Y
-		return m.forwardToolUI(msg)
-	case tea.MouseWheelMsg:
-		msg.Y -= m.frame.dock.Min.Y
-		return m.forwardToolUI(msg)
-	}
-	return m.forwardToolUI(msg)
-}
-
-func (m *Model) forwardToolUI(msg tea.Msg) tea.Cmd {
-	cmd := m.activeToolUI.component.Update(msg)
-	if answer, done := m.activeToolUI.component.Result(); done {
-		m.activeToolUI.request.Respond(answer, nil)
-		m.nextToolUI()
-	}
-	return cmd
 }

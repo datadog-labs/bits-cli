@@ -95,8 +95,7 @@ type focus int
 
 const (
 	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
-	focusToolUI                   // a tool's interactive UI replaces the composer
-	focusApproval                 // a tool approval is pending
+	focusPrompt                   // a tool approval or a tool's UI is docked (see prompt)
 	focusPicker                   // the /resume conversation picker
 	focusStatus                   // the local /status document
 	focusPermissions              // the permissions picker
@@ -114,11 +113,8 @@ func (m *Model) focus() focus {
 	case ModePermissions:
 		return focusPermissions
 	case ModeChat, ModeTermInit:
-		if m.activeToolUI != nil {
-			return focusToolUI
-		}
-		if m.approval.active() {
-			return focusApproval
+		if m.prompt() != nil {
+			return focusPrompt
 		}
 	}
 	return focusEditor
@@ -277,41 +273,8 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
-	case tea.MouseWheelMsg:
-		return m, m.handleMouseWheel(msg)
-
-	case tea.MouseClickMsg:
-		if m.focus() == focusToolUI {
-			return m, m.updateToolUI(msg)
-		}
-		if m.mode == ModeChat {
-			if msg.Button == tea.MouseLeft {
-				// The press might turn into a drag-select, so it isn't a toggle
-				// yet: arm it, and let finishSelection decide on release whether
-				// the gesture stayed a plain click or moved and became a
-				// selection.
-				m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.HeaderAt(msg.Y)
-				return m, m.beginSelection(msg)
-			}
-			return m, nil
-		}
-
-	case tea.MouseMotionMsg:
-		if m.mode == ModeChat {
-			m.list.SetPointerRow(msg.Y)
-			if m.selection.selecting() {
-				return m, m.extendSelection(msg)
-			}
-			return m, nil
-		}
-
-	case tea.MouseReleaseMsg:
-		if m.mode == ModeChat {
-			if m.selection.selecting() {
-				return m, m.finishSelection(msg)
-			}
-			return m, nil
-		}
+	case tea.MouseMsg:
+		return m, m.handleMouse(msg)
 
 	case selectionTickMsg:
 		return m, m.advanceSelectionScroll(msg)
@@ -381,8 +344,11 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.postNotice(notice(chat.NoticeInfo, nil, "Opened Assistant settings in your browser: %s", msg.url))
 	}
 
-	if m.focus() == focusToolUI {
-		return m, m.updateToolUI(msg)
+	if m.focus() == focusPrompt {
+		// Paste, cursor blink, and the like belong to the prompt, never to the
+		// inert editor below it.
+		cmd, _ := m.updatePrompt(msg)
+		return m, cmd
 	}
 	if m.focus() == focusPicker {
 		return m, m.updateConversationPicker(msg)
@@ -445,7 +411,7 @@ func (m *Model) beginSelection(msg tea.MouseClickMsg) tea.Cmd {
 		m.editor.CloseMenu()
 	}
 	scope := selectionScopeLower
-	if image.Pt(msg.X, msg.Y).In(m.frame.transcript) {
+	if m.frame.at(image.Pt(msg.X, msg.Y)) == regionTranscript {
 		scope = selectionScopeTranscript
 	}
 	m.selection.beginClick(m.visibleSelectionFrame(scope), scope, msg.X, msg.Y, m.hasPendingAccordionToggle, time.Now())
@@ -510,29 +476,52 @@ func (m *Model) advanceSelectionScroll(msg selectionTickMsg) tea.Cmd {
 	return m.armSelectionScroll()
 }
 
-func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
-	overDock := image.Pt(msg.X, msg.Y).In(m.frame.dock)
-	switch focus := m.focus(); {
-	case focus == focusPicker:
+// handleMouse routes a pointer event. Full-screen pickers take every event.
+// On the chat, focus only decides who gets keys; the pointer decides the rest:
+// a drag stays with the selection it started, the docked prompt gets what lands
+// on it, and anything it does not use scrolls or selects like the rest of the
+// chat. The wheel scrolls the transcript wherever nothing else scrolls.
+func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
+	switch m.focus() {
+	case focusPicker:
 		return m.updateConversationPicker(msg)
-	case focus == focusStatus:
+	case focusStatus:
 		return m.updateStatus(msg)
-	case focus == focusToolUI && overDock:
-		return m.updateToolUI(msg)
-	}
-
-	// Focus decides who gets keys; the wheel follows the pointer. A docked
-	// approval scrolls its own body, anywhere else scrolls the transcript.
-	scroll := m.list.ScrollBy
-	if m.focus() == focusApproval && overDock {
-		scroll = m.approval.ScrollBy
-	}
-	switch msg.Button {
-	case tea.MouseWheelUp:
-		scroll(-mouseWheelDelta)
-	case tea.MouseWheelDown:
-		scroll(mouseWheelDelta)
 	default:
+	}
+	if m.mode != ModeChat {
+		// The permissions popup covers the chat; the pointer drives neither.
+		return nil
+	}
+	switch msg := msg.(type) {
+	case tea.MouseMotionMsg:
+		m.list.SetPointerRow(msg.Y)
+		return m.extendSelection(msg)
+	case tea.MouseReleaseMsg:
+		return m.finishSelection(msg)
+	}
+	if m.frame.at(pointAt(msg)) == regionDock {
+		if cmd, used := m.updatePrompt(m.frame.inDock(msg)); used {
+			return cmd
+		}
+	}
+	switch msg := msg.(type) {
+	case tea.MouseWheelMsg:
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.list.ScrollBy(-mouseWheelDelta)
+		case tea.MouseWheelDown:
+			m.list.ScrollBy(mouseWheelDelta)
+		default:
+		}
+	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft {
+			// The press might turn into a drag-select, so it isn't a toggle
+			// yet: arm it, and let finishSelection decide on release whether
+			// the gesture stayed a plain click or moved and became a selection.
+			m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.HeaderAt(msg.Y)
+			return m.beginSelection(msg)
+		}
 	}
 	return nil
 }
@@ -664,10 +653,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.focus() {
 	case focusPicker:
 		return m, m.updateConversationPicker(msg)
-	case focusToolUI:
-		return m, m.updateToolUI(msg)
-	case focusApproval:
-		return m.handleApprovalKey(msg)
+	case focusPrompt:
+		return m, m.handlePromptKey(msg)
 	case focusStatus:
 		return m, m.updateStatus(msg)
 	case focusPermissions:
@@ -743,18 +730,24 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmd, m.syncCompletionSearches())
 }
 
-func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+// handlePromptKey gives a key to the docked prompt. Keys it does not use
+// scroll the transcript, and never reach the inert editor.
+func (m *Model) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
+	if msg.String() == "ctrl+x" && m.activeToolUI != nil {
+		m.stopTools()
+		return nil
+	}
+	cmd, used := m.updatePrompt(msg)
+	if used {
+		return cmd
+	}
 	switch msg.String() {
 	case "pgup":
 		m.list.PageUp()
 	case "pgdown":
 		m.list.PageDown()
-	default:
-		if decision, decided := m.approval.handleKey(msg); decided {
-			m.engine.Decide(m.approval.callID(), decision)
-		}
 	}
-	return m, nil
+	return nil
 }
 
 // submit routes slash commands through their active-turn policy, or starts a
@@ -913,12 +906,9 @@ func (m *Model) relayout() {
 	if m.mode == ModeTermInit {
 		return
 	}
-	if m.activeToolUI != nil {
-		m.activeToolUI.component.SetSize(m.width, m.height, m.styles)
-	}
 	m.editor.SetPlaceholder(m.promptPlaceholder())
 	m.frame = m.layout()
-	m.editor.SetMenuHeight(m.frame.composerTop())
+	m.editor.SetMenuHeight(m.frame.composer.Min.Y)
 	m.list.SetHeight(m.frame.transcript.Dy())
 	m.list.SetHeader(m.headerView())
 }

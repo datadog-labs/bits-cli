@@ -125,7 +125,7 @@ func TestSweepStopsAtApprovalMinimumSizeAndRestarts(t *testing.T) {
 	m.syncTranscript()
 	m.syncAnimations()
 
-	m.Update(tea.WindowSizeMsg{Width: minimumApprovalWidth - 1, Height: minimumApprovalHeight})
+	m.Update(tea.WindowSizeMsg{Width: approvalMinWidth - 1, Height: 24})
 	if m.animClock.armed {
 		t.Fatal("hidden approval/chat view kept shared clock running")
 	}

@@ -88,14 +88,18 @@ type toolRenderSpec struct {
 	interact func(call agent.ToolCall) ToolInteraction // nil = not interactive
 }
 
-// ToolInteraction replaces the composer while a tool waits on the user.
-// Mouse coordinates are relative to its top-left corner.
+// ToolInteraction docks above the composer while a tool waits on the user,
+// like a tool approval. Mouse coordinates are relative to its top-left corner.
 type ToolInteraction interface {
 	Update(tea.Msg) tea.Cmd
 	View() string
+	// Height is the rows View takes at the last size.
 	Height() int
+	// MinSize is the smallest area the interaction can be answered in.
 	MinSize() (width, height int)
-	SetSize(width, height int, theme styles.Theme)
+	// SetSize gives the interaction width columns and at most height rows.
+	SetSize(width, height int)
+	SetStyles(theme styles.Theme)
 	// Result reports the user's answer once they are done. The tool, not the
 	// UI, turns it into the model-visible result.
 	Result() (any, bool)

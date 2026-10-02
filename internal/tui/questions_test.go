@@ -210,17 +210,20 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	}
 }
 
-func TestQuestionsReplaceComposerAndRestoreIt(t *testing.T) {
+func TestQuestionsDockAboveTheComposer(t *testing.T) {
 	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
 	waitQuestions(t, m)
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"Help me choose", "waiting for your answers", "Which region?"} {
+	for _, want := range []string{"waiting for your answers", "Which region?", "Working on it…"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("inline view missing %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "Working on it…") {
-		t.Fatal("composer was rendered behind the form")
+	if form, editor := strings.Index(view, "Which region?"), strings.Index(view, "Working on it…"); form > editor {
+		t.Fatalf("form is not docked above the composer:\n%s", view)
+	}
+	if m.editor.Focused() {
+		t.Fatal("the editor kept the keyboard under the form")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
 	questionKey(m, tea.KeyEscape, 0)
@@ -230,8 +233,8 @@ func TestQuestionsReplaceComposerAndRestoreIt(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	questionKey(m, tea.KeyEscape, 0)
 	drainConversationRemote(t, m)
-	if m.activeToolUI != nil {
-		t.Fatal("dismissing the form did not restore the composer")
+	if m.activeToolUI != nil || !m.frame.dock.Empty() || !m.editor.Focused() {
+		t.Fatal("dismissing the form did not hand the keyboard back to the composer")
 	}
 }
 
@@ -443,5 +446,24 @@ func TestRestoredCallsThatWillNotResumeSettle(t *testing.T) {
 				t.Fatal("settling persisted a response")
 			}
 		})
+	}
+}
+
+// Focus gives the form the keyboard, but the pointer goes where it points: a
+// click on the transcript above the form starts a transcript selection.
+func TestQuestionsLeaveTheTranscriptSelectable(t *testing.T) {
+	m, _ := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
+	waitQuestions(t, m)
+	form := m.activeToolUI.component.View()
+	_, _ = m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 2, Y: m.frame.transcript.Max.Y - 1})
+	if !m.selection.selecting() || m.selection.scope != selectionScopeTranscript {
+		t.Fatal("a click on the transcript did not start a transcript selection")
+	}
+	if m.activeToolUI.component.View() != form {
+		t.Fatal("a click on the transcript reached the form")
+	}
+	_, _ = m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: 2, Y: m.frame.transcript.Max.Y - 1})
+	if m.selection.selecting() || m.focus() != focusPrompt {
+		t.Fatal("releasing the click did not hand the pointer back")
 	}
 }
