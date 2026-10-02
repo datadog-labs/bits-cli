@@ -109,9 +109,9 @@ func (a *approvalPrompt) update(msg tea.Msg) (tea.Cmd, bool) {
 			a.selected = (a.selected + len(approvalChoices) - 1) % len(approvalChoices)
 		case "right", "tab":
 			a.selected = (a.selected + 1) % len(approvalChoices)
-		case "shift+pgup":
+		case "pgup":
 			a.scroll(-a.window.PageSize())
-		case "shift+pgdown":
+		case "pgdown":
 			a.scroll(a.window.PageSize())
 		case "esc":
 			a.decision = agent.ApprovalDeny
@@ -158,7 +158,7 @@ func (a *approvalPrompt) layout(width, height int) string {
 			return sty.Text.Render(ansi.Wordwrap(title, width, "-"))
 		},
 		ScrollOffset: a.window.Offset,
-		ScrollHint:   "shift+pgup/pgdown scroll",
+		ScrollHint:   "pgup/pgdown scroll",
 		ScrollableBody: func(width int) string {
 			if rendered, ok := chat.RenderToolApproval(block.Tool, width, a.chat); ok {
 				return rendered

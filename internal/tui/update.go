@@ -639,16 +639,28 @@ func (m *Model) stopStartup() {
 
 // handleKey routes a keypress to the surface that owns input. Global quit is
 // handled earlier in Update.
+//
+// The transcript keys work whatever owns the keyboard on the chat: ctrl+o
+// toggles every tool block, and shift+pgup/pgdown page the transcript. Plain
+// pgup/pgdown page what owns the keyboard: a docked prompt's body, or the
+// transcript under the editor.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" && m.selection.active() {
 		m.selection.clear()
 		return m, nil
 	}
-	// ctrl+o toggles every tool block whenever the transcript is visible,
-	// whichever chat surface (editor, completion menu, approval) owns input.
-	if msg.String() == "ctrl+o" && m.mode == ModeChat {
-		m.list.ToggleAllDisclosure()
-		return m, nil
+	if m.mode == ModeChat {
+		switch msg.String() {
+		case "ctrl+o":
+			m.list.ToggleAllDisclosure()
+			return m, nil
+		case "shift+pgup":
+			m.list.PageUp()
+			return m, nil
+		case "shift+pgdown":
+			m.list.PageDown()
+			return m, nil
+		}
 	}
 	switch m.focus() {
 	case focusPicker:
@@ -730,24 +742,15 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmd, m.syncCompletionSearches())
 }
 
-// handlePromptKey gives a key to the docked prompt. Keys it does not use
-// scroll the transcript, and never reach the inert editor.
+// handlePromptKey gives a key to the docked prompt; the inert editor never
+// sees it. ctrl+x stops the tool round the prompt belongs to.
 func (m *Model) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
-	if msg.String() == "ctrl+x" && m.activeToolUI != nil {
+	if msg.String() == "ctrl+x" {
 		m.stopTools()
 		return nil
 	}
-	cmd, used := m.updatePrompt(msg)
-	if used {
-		return cmd
-	}
-	switch msg.String() {
-	case "pgup":
-		m.list.PageUp()
-	case "pgdown":
-		m.list.PageDown()
-	}
-	return nil
+	cmd, _ := m.updatePrompt(msg)
+	return cmd
 }
 
 // submit routes slash commands through their active-turn policy, or starts a

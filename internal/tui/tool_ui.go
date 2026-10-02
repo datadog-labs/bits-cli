@@ -95,8 +95,9 @@ func (m *Model) reconcileToolUI() {
 	}
 }
 
-// stopTools answers ctrl+x on a tool UI: the engine stops the client-tool
-// round, or the whole operation when it cannot.
+// stopTools answers ctrl+x on a docked prompt: the engine stops the
+// client-tool round, settling its approvals and tool UIs, or the whole
+// operation when it cannot.
 func (m *Model) stopTools() {
 	if m.engine.StopTools() {
 		m.op.stop = max(m.op.stop, stopTools)

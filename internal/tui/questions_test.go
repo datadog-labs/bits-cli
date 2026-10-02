@@ -17,6 +17,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
 )
 
@@ -465,5 +466,28 @@ func TestQuestionsLeaveTheTranscriptSelectable(t *testing.T) {
 	_, _ = m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: 2, Y: m.frame.transcript.Max.Y - 1})
 	if m.selection.selecting() || m.focus() != focusPrompt {
 		t.Fatal("releasing the click did not hand the pointer back")
+	}
+}
+
+// Keys follow one rule with a form docked: pgup/pgdown page what owns the
+// keyboard, shift+pgup/pgdown always page the transcript.
+func TestQuestionsShiftPageScrollsTheTranscript(t *testing.T) {
+	m, _ := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
+	waitQuestions(t, m)
+	for i := range 40 {
+		m.notices = append(m.notices, chat.NoticeItem{ID: uint64(i + 1), Notice: chat.Notice{Level: chat.NoticeInfo, Text: fmt.Sprintf("line %d", i)}})
+	}
+	m.syncTranscript()
+	m.Update(tea.WindowSizeMsg{Width: 36, Height: 16})
+
+	before, form := m.list.VisibleSurface().Top, m.activeToolUI.component.View()
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift})
+	if m.list.VisibleSurface().Top >= before || m.activeToolUI.component.View() != form {
+		t.Fatal("shift+pgup did not page only the transcript")
+	}
+	before = m.list.VisibleSurface().Top
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.list.VisibleSurface().Top != before || m.activeToolUI.component.View() == form {
+		t.Fatal("pgdown did not page only the form")
 	}
 }

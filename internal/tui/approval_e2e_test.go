@@ -357,11 +357,11 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 
 	model.relayout()
 	first := ansi.Strip(model.frame.dockView)
-	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "shift+pgup/pgdown scroll") || !strings.Contains(first, "Allow") {
+	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "· pgup/pgdown scroll") || !strings.Contains(first, "Allow") {
 		t.Fatalf("initial long-command approval window is incorrect:\n%s", first)
 	}
 	for range 10 {
-		model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown, Mod: tea.ModShift})
+		model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	}
 	last := ansi.Strip(model.frame.dockView)
 	if strings.Contains(last, "print(1)") || !strings.Contains(last, "print(20)") || !strings.Contains(last, "cwd: /workspace") || !strings.Contains(last, "Allow") {
@@ -473,19 +473,23 @@ func TestApprovalKeepsTranscriptScrollable(t *testing.T) {
 		t.Fatal("wheel over the transcript did not scroll it while approval is pending")
 	}
 	top = model.list.VisibleSurface().Top
-	model.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	model.Update(tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift})
 	if model.list.VisibleSurface().Top >= top {
-		t.Fatal("pgup did not scroll the transcript while approval is pending")
+		t.Fatal("shift+pgup did not scroll the transcript while approval is pending")
 	}
 
+	// The wheel over the panel and pgup/pgdown scroll its body, not the chat.
 	top = model.list.VisibleSurface().Top
 	model.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, Y: model.frame.dock.Min.Y})
-	model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown, Mod: tea.ModShift})
-	if model.list.VisibleSurface().Top != top {
-		t.Fatal("scrolling over the approval panel moved the transcript")
+	if !strings.Contains(ansi.Strip(model.frame.dockView), "lines 2–") {
+		t.Fatalf("wheel did not scroll the approval body:\n%s", ansi.Strip(model.frame.dockView))
 	}
-	if strings.Contains(ansi.Strip(model.frame.dockView), "lines 1–") {
-		t.Fatalf("approval body did not scroll:\n%s", ansi.Strip(model.frame.dockView))
+	model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if strings.Contains(ansi.Strip(model.frame.dockView), "lines 2–") {
+		t.Fatalf("pgdown did not page the approval body:\n%s", ansi.Strip(model.frame.dockView))
+	}
+	if model.list.VisibleSurface().Top != top {
+		t.Fatal("scrolling the approval panel moved the transcript")
 	}
 
 	// The panel has no use for clicks, so they select its text, e.g. to copy
@@ -493,5 +497,35 @@ func TestApprovalKeepsTranscriptScrollable(t *testing.T) {
 	model.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 4, Y: model.frame.dock.Min.Y + 1})
 	if !model.selection.selecting() || model.selection.scope != selectionScopeLower {
 		t.Fatal("a click on the approval did not start a selection of its text")
+	}
+}
+
+// ctrl+x stops the tool round from any docked prompt, an approval included.
+func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
+	backend := &approvalBackend{t: t}
+	tool := newApprovalTool()
+	tool.Handler = func(context.Context, agent.ToolCall) (agent.ToolResult, error) {
+		t.Error("stopped tool executed")
+		return agent.ToolResult{}, nil
+	}
+	tools, err := agent.NewToolSet(agent.ModeManual, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	setConversationInput(model, "Run the action")
+	_, _ = model.submit()
+	for !model.approval.active() {
+		_, _ = model.Update(runConversationCmd(t, waitEvent(model.op.gen, model.op.events)))
+	}
+
+	_, _ = model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	if model.op.stop != stopTools {
+		t.Fatalf("stop = %d, want the tool round stopped", model.op.stop)
+	}
+	drainConversationRemote(t, model)
+	if model.approval.active() || model.focus() != focusEditor {
+		t.Fatal("the approval outlived the stopped tool round")
 	}
 }
