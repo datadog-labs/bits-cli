@@ -369,7 +369,7 @@ func TestReasoningGroupStaysActiveWhileMemberStreams(t *testing.T) {
 	})
 
 	plain := ansi.Strip(list.Render())
-	if !strings.Contains(plain, "thinking.") || strings.Contains(plain, "✓ reasoning") {
+	if !strings.Contains(plain, "reasoning.") || strings.Contains(plain, "✓ reasoning") {
 		t.Fatalf("active reasoning group = %q", plain)
 	}
 	if !list.HasAnimated() {

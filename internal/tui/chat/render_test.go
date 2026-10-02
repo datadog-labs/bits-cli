@@ -42,7 +42,7 @@ func TestReasoningRendersAsCompactActivity(t *testing.T) {
 
 	first := ansi.Strip(RenderBlock(block, 80, sty, 0))
 	second := ansi.Strip(RenderBlock(block, 80, sty, 8))
-	if !strings.Contains(first, sty.StatusSpinner.Frame(0)+" thinking.") || first == second {
+	if !strings.Contains(first, sty.StatusSpinner.Frame(0)+" reasoning.") || first == second {
 		t.Fatalf("active reasoning did not render compact animated status: %q, %q", first, second)
 	}
 	if strings.Contains(first, block.Thinking.Content) {
