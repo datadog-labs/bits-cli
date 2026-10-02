@@ -257,6 +257,7 @@ type Model struct {
 	// Selection belongs to ModeChat; selection.go encapsulates its gesture and
 	// auto-scroll state while the model supplies rendered pane frames.
 	selection selection
+	follow    followControl
 
 	// pendingAccordionToggle is the block a mouse-down landed on inside an
 	// accordion header row. Every left-click also begins a potential
@@ -397,6 +398,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 func (m *Model) setMode(mode Mode) {
 	if m.mode == ModeChat && mode != ModeChat {
 		m.clearSelection()
+		m.follow = followControl{}
 	}
 	m.mode = mode
 }

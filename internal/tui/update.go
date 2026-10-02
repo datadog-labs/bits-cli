@@ -162,7 +162,7 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // Exiting never resets it here: main resets the shape once the program has
 // stopped, which covers every quit path.
 func (m *Model) reconcilePointerShape() tea.Cmd {
-	hand := m.mode == ModeChat && !m.frame.tooSmall && m.list.Hovered()
+	hand := m.mode == ModeChat && !m.frame.tooSmall && (m.list.Hovered() || m.follow.hover)
 	if hand == m.pointerIsHand {
 		return nil
 	}
@@ -253,6 +253,9 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 // engine events, conversation results, notices) are handled directly; keyboard,
 // mouse, and editor-bound input are routed by focus().
 func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.handleFollowMouse(msg) {
+		return m, nil
+	}
 	switch msg := msg.(type) {
 	case toolUIOpenedMsg:
 		m.activateToolUI(msg.request)
@@ -944,6 +947,7 @@ func (m *Model) setDarkBackground(isDark bool) {
 
 func (m *Model) resize(w, h int) {
 	m.clearSelection()
+	m.follow = followControl{}
 	m.width, m.height = w, h
 	m.editor.SetWidth(w)
 	m.list.SetWidth(w)

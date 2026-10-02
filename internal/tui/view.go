@@ -60,6 +60,7 @@ func chatMouseMode() tea.MouseMode {
 // Alt-screen and mouse tracking, which were program options in Bubble Tea v1,
 // are now declared on the returned view.
 func (m *Model) View() tea.View {
+	m.follow.area = image.Rectangle{}
 	if m.mode == ModeLogin && m.loginModel != nil {
 		return m.loginModel.View()
 	}
@@ -174,7 +175,7 @@ func (m *Model) chatView() string {
 		return m.selection.render(m.visibleSelectionFrame(m.selection.scope))
 	}
 
-	base := m.chatViewBase(m.list.Render())
+	base := m.followOverlay(m.chatViewBase(m.list.Render()))
 	switch {
 	case m.mode == ModePermissions:
 		// Spans the terminal inside its margin, so it does not track the composer.
