@@ -13,6 +13,7 @@ Allowing a scenario writes under tmp/approval-demo/ only. Enter one prompt:
   load("fakedata/approval.star", "queued"); queued()
   load("fakedata/approval.star", "write_then_edit"); write_then_edit()
   load("fakedata/approval.star", "question_over_history"); question_over_history()
+  load("fakedata/approval.star", "question_then_approval"); question_then_approval()
   load("fakedata/approval.star", "after_decision"); after_decision()
 
 The rules every scenario checks:
@@ -41,6 +42,11 @@ and edits show a short fixed prompt.
   question_over_history
                     The questionnaire docks where the panel would. Drag to
                     select text in the transcript above it while it is open.
+  question_then_approval
+                    A question and an approval wait at once. Whichever arrives
+                    first docks and is not replaced by the other; the approval
+                    header says "2 waiting". Answer it and the other docks,
+                    fresh. Ctrl+X instead stops both.
   after_decision    Scroll up while the panel is open, then Allow. The turn
                     continues; submitting a new message jumps to the bottom.
 
@@ -103,18 +109,28 @@ def question_over_history():
     filler(30)
     load_questions()
 
+QUESTIONS = {"questions": [
+    {"question": "Which region should we investigate?", "options": [
+        {"label": "US (Recommended)", "description": "Start with the US production environment."},
+        {"label": "EU", "description": "Investigate the EU production environment."},
+    ]},
+    {"question": "Which service should we focus on?", "options": [
+        {"label": "API", "description": "Inspect API latency and error rates."},
+        {"label": "Worker", "description": "Inspect background jobs and queue delays."},
+    ]},
+]}
+
 def load_questions():
-    r = call("ask_user_question", {"questions": [
-        {"question": "Which region should we investigate?", "options": [
-            {"label": "US (Recommended)", "description": "Start with the US production environment."},
-            {"label": "EU", "description": "Investigate the EU production environment."},
-        ]},
-        {"question": "Which service should we focus on?", "options": [
-            {"label": "API", "description": "Inspect API latency and error rates."},
-            {"label": "Worker", "description": "Inspect background jobs and queue delays."},
-        ]},
-    ]})
+    r = call("ask_user_question", QUESTIONS)
     say("Questions finished: " + r.status)
+
+def question_then_approval():
+    filler(30)
+    results = call([
+        ("ask_user_question", QUESTIONS),
+        ("write_file", {"path": "tmp/approval-demo/mixed.txt", "content": numbered(5, "mixed") + "\n"}),
+    ])
+    say("batch finished: " + ", ".join([r.status for r in results]))
 
 def after_decision():
     filler(30)
