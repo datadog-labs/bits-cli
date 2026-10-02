@@ -61,18 +61,6 @@ type (
 	}
 )
 
-type approvalChoice struct {
-	decision     agent.ApprovalDecision
-	label        string
-	compactLabel string
-}
-
-var approvalChoices = [...]approvalChoice{
-	{decision: agent.ApprovalAllowOnce, label: "Allow", compactLabel: "Allow"},
-	{decision: agent.ApprovalAllowSession, label: "Allow for session", compactLabel: "Session"},
-	{decision: agent.ApprovalDeny, label: "Deny", compactLabel: "Deny"},
-}
-
 // postNotice adds a session-only message at the current point in the agent
 // transcript. It never enters the engine's transcript or backend.
 func (m *Model) postNotice(n chat.Notice) tea.Cmd {
@@ -129,7 +117,7 @@ func (m *Model) focus() focus {
 		if m.activeToolUI != nil {
 			return focusToolUI
 		}
-		if len(m.pendingApprovals) > 0 {
+		if m.approval.active() {
 			return focusApproval
 		}
 	}
@@ -537,7 +525,7 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	// approval scrolls its own body, anywhere else scrolls the transcript.
 	scroll := m.list.ScrollBy
 	if m.focus() == focusApproval && overDock {
-		scroll = m.approvalPanel.ScrollBy
+		scroll = m.approval.ScrollBy
 	}
 	switch msg.Button {
 	case tea.MouseWheelUp:
@@ -566,9 +554,7 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	} else if done.cancel != nil {
 		done.cancel() // release the turn/restore context
 	}
-	m.pendingApprovals = nil
-	m.approvalChoice = 0
-	m.approvalPanel.ResetScroll()
+	m.approval.clear()
 	m.clearToolUIs()
 
 	if done.then == thenLogout {
@@ -759,31 +745,16 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "left", "shift+tab":
-		m.approvalChoice = (m.approvalChoice + len(approvalChoices) - 1) % len(approvalChoices)
-	case "right", "tab":
-		m.approvalChoice = (m.approvalChoice + 1) % len(approvalChoices)
 	case "pgup":
 		m.list.PageUp()
 	case "pgdown":
 		m.list.PageDown()
-	case "shift+pgup":
-		m.approvalPanel.PageUp()
-	case "shift+pgdown":
-		m.approvalPanel.PageDown()
-	case "esc":
-		m.respondToApproval(agent.ApprovalDeny)
-	case "enter":
-		m.respondToApproval(approvalChoices[m.approvalChoice].decision)
+	default:
+		if decision, decided := m.approval.handleKey(msg); decided {
+			m.engine.Decide(m.approval.callID(), decision)
+		}
 	}
 	return m, nil
-}
-
-func (m *Model) respondToApproval(decision agent.ApprovalDecision) {
-	if len(m.pendingApprovals) == 0 {
-		return
-	}
-	m.engine.Decide(m.pendingApprovals[0].ToolCallID(), decision)
 }
 
 // submit routes slash commands through their active-turn policy, or starts a
@@ -884,7 +855,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	switch ev.Kind {
 	case agent.EventTranscript:
 		m.transcript = ev.Transcript
-		m.updatePendingApprovals(ev.Transcript.PendingApprovals())
+		m.approval.set(ev.Transcript.PendingApprovals())
 		m.reconcileToolUI()
 		if ev.Transcript.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
@@ -911,18 +882,6 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 		}
 	}
 	return nil
-}
-
-func (m *Model) updatePendingApprovals(pending []agent.Block) {
-	current := ""
-	if len(m.pendingApprovals) > 0 {
-		current = m.pendingApprovals[0].ToolCallID()
-	}
-	m.pendingApprovals = pending
-	if len(m.pendingApprovals) == 0 || m.pendingApprovals[0].ToolCallID() != current {
-		m.approvalChoice = 0
-		m.approvalPanel.ResetScroll()
-	}
 }
 
 // setDarkBackground adapts styles to the detected terminal background.

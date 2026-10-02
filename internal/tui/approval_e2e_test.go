@@ -100,7 +100,7 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 				model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 				setConversationInput(model, "Run the action")
 				_, _ = model.submit()
-				for len(model.pendingApprovals) == 0 {
+				for len(model.approval.pending) == 0 {
 					msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
 					_, _ = model.Update(msg)
 				}
@@ -150,7 +150,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
-	for len(model.pendingApprovals) == 0 {
+	for len(model.approval.pending) == 0 {
 		msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
 		_, _ = model.Update(msg)
 	}
@@ -175,7 +175,7 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
-	for len(model.pendingApprovals) == 0 {
+	for len(model.approval.pending) == 0 {
 		msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
 		_, _ = model.Update(msg)
 	}
@@ -193,7 +193,7 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	for _, code := range []rune{tea.KeyRight, tea.KeyEnter, tea.KeyEscape} {
 		_, _ = model.Update(tea.KeyPressMsg{Code: code})
 	}
-	if len(model.pendingApprovals) == 0 {
+	if len(model.approval.pending) == 0 {
 		t.Fatal("a concealed keypress answered the approval")
 	}
 	if backend.calls != 1 {
@@ -228,8 +228,8 @@ func TestToolApprovalComposerSuppressedInSkipPermissions(t *testing.T) {
 	_, _ = model.submit()
 	drainConversationRemote(t, model)
 
-	if len(model.pendingApprovals) != 0 {
-		t.Fatalf("skip-permissions surfaced %d approval prompts", len(model.pendingApprovals))
+	if len(model.approval.pending) != 0 {
+		t.Fatalf("skip-permissions surfaced %d approval prompts", len(model.approval.pending))
 	}
 	view := ansi.Strip(model.View().Content)
 	if strings.Contains(view, "Permission Required") || strings.Contains(view, "Run the test action?") {
@@ -255,7 +255,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 			model.Update(tea.WindowSizeMsg{Width: width, Height: 24})
 			setConversationInput(model, "Run the action")
 			_, _ = model.submit()
-			for len(model.pendingApprovals) == 0 {
+			for len(model.approval.pending) == 0 {
 				msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
 				_, _ = model.Update(msg)
 			}
@@ -302,7 +302,7 @@ func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
 	}
 	model := newShell()
 	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	model.pendingApprovals = []agent.Block{{
+	model.approval.pending = []agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{
 			Name:         spec.ExecCommand,
@@ -341,7 +341,7 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 	}
 	model := newShell()
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	model.pendingApprovals = []agent.Block{{
+	model.approval.pending = []agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{
 			Name:         spec.ExecCommand,
@@ -393,7 +393,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 			setConversationInput(model, "Run the action")
 			_, _ = model.submit()
 
-			for len(model.pendingApprovals) == 0 {
+			for len(model.approval.pending) == 0 {
 				msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
 				_, _ = model.Update(msg)
 			}
@@ -457,7 +457,7 @@ func TestApprovalKeepsTranscriptScrollable(t *testing.T) {
 		model.notices = append(model.notices, chat.NoticeItem{ID: uint64(i + 1), Notice: chat.Notice{Level: chat.NoticeInfo, Text: fmt.Sprintf("line %d", i)}})
 	}
 	model.syncTranscript()
-	model.pendingApprovals = []agent.Block{{
+	model.approval.pending = []agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{Name: spec.ExecCommand, Input: string(input), Status: agent.ToolAwaitingApproval, IsClientSide: true},
 	}}

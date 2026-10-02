@@ -197,9 +197,7 @@ type Model struct {
 	toolUI           *tools.UI
 	activeToolUI     *toolUISession
 	queuedToolUIs    []*toolUISession
-	pendingApprovals []agent.Block
-	approvalChoice   int
-	approvalPanel    *components.Panel
+	approval         approvalPrompt
 	permissionsPanel *components.Panel
 	// The picker shows the options, or the full-access confirmation; the
 	// cursor is the row on the page shown (on the confirmation, 0 is Yes).
@@ -342,7 +340,6 @@ func newShell() *Model {
 		animActivity:      newAnimationTimeline(activityAnimInterval),
 		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
 		status:            statusview.New(1, 1, theme),
-		approvalPanel:     components.NewPanel(theme.Approval.Panel),
 		permissionsPanel:  components.NewPanel(theme.Permissions),
 		styles:            theme,
 		searchSessionID:   newSearchSessionID(),
@@ -384,7 +381,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	m.list.SetStyles(m.chatStyles)
 	m.editor.SetInputStyles(theme.Input)
 	m.editor.SetStyles(theme.Editor)
-	m.approvalPanel.SetStyles(theme.Approval.Panel)
+	m.approval.setStyles(theme, m.chatStyles)
 	m.permissionsPanel.SetStyles(theme.Permissions)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)

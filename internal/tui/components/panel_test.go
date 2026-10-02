@@ -95,7 +95,7 @@ func TestPanelCompactBodyReceivesCompactWidth(t *testing.T) {
 	}
 }
 
-func TestPanelOwnsScrollableBodyPaging(t *testing.T) {
+func TestPanelPagesAScrollableBodyThroughItsWindow(t *testing.T) {
 	panel := NewPanel(styles.Default(true).Panel)
 	rows := make([]string, 12)
 	for i := range rows {
@@ -107,17 +107,18 @@ func TestPanelOwnsScrollableBodyPaging(t *testing.T) {
 		ScrollableBody: func(int) string { return strings.Join(rows, "\n") },
 		BodyFooter:     func(int) string { return "Deny  Allow" },
 		BodyFooterGap:  1,
+		ScrollHint:     "keys scroll",
 	}
 
-	first := panel.Render(60, 20, content)
+	first, window := panel.Layout(60, 20, content)
 	assertBounded(t, first, 60, 20)
 	plain := ansi.Strip(first)
-	if !strings.Contains(plain, "detail-01") || strings.Contains(plain, "detail-12") || !strings.Contains(plain, "shift+pgup/pgdown scroll") {
+	if !strings.Contains(plain, "detail-01") || strings.Contains(plain, "detail-12") || !strings.Contains(plain, "lines 1–7 of 12 · keys scroll") {
 		t.Fatalf("initial scroll window is incorrect:\n%s", plain)
 	}
 
-	panel.PageDown()
-	second := panel.Render(60, 20, content)
+	content.ScrollOffset = window.Scrolled(window.PageSize()).Offset
+	second, _ := panel.Layout(60, 20, content)
 	assertBounded(t, second, 60, 20)
 	plain = ansi.Strip(second)
 	if strings.Contains(plain, "detail-01") || !strings.Contains(plain, "detail-12") {
@@ -135,5 +136,39 @@ func assertBounded(t *testing.T, view string, width, height int) {
 		if got := ansi.StringWidth(line); got > width {
 			t.Fatalf("line %d width = %d, want <= %d", i+1, got, width)
 		}
+	}
+}
+
+func TestWindowScrolledClampsToTheBody(t *testing.T) {
+	w := Window{Rows: 12, Page: 5}
+	for _, tc := range []struct{ by, want int }{{-3, 0}, {4, 4}, {100, 7}} {
+		if got := w.Scrolled(tc.by).Offset; got != tc.want {
+			t.Errorf("Scrolled(%d).Offset = %d, want %d", tc.by, got, tc.want)
+		}
+	}
+	if got := (Window{}).Scrolled(5); got != (Window{}) {
+		t.Errorf("zero window scrolled to %+v", got)
+	}
+}
+
+func TestPanelLayoutIsPure(t *testing.T) {
+	panel := NewPanel(styles.Default(true).Panel)
+	rows := make([]string, 30)
+	for i := range rows {
+		rows[i] = fmt.Sprintf("row-%02d", i+1)
+	}
+	content := PanelContent{
+		Title:          "Permission required",
+		ScrollableBody: func(int) string { return strings.Join(rows, "\n") },
+		ScrollOffset:   9,
+	}
+	first, window := panel.Layout(60, 16, content)
+	second, again := panel.Layout(60, 16, content)
+	if first != second || window != again || window.Offset != 9 {
+		t.Fatalf("layout is not repeatable: window=%+v again=%+v", window, again)
+	}
+	content.ScrollOffset = 1000
+	if _, clamped := panel.Layout(60, 16, content); clamped.Offset != window.Rows-window.Page {
+		t.Fatalf("offset = %d, want the last page at %d", clamped.Offset, window.Rows-window.Page)
 	}
 }

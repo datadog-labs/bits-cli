@@ -22,7 +22,7 @@ import (
 // rows the frame gives it, and a frame that cannot be usably drawn is marked
 // too small instead.
 func TestLayoutTilesTheScreen(t *testing.T) {
-	approval := func(m *Model) { m.pendingApprovals = []agent.Block{animToolBlock(agent.ToolAwaitingApproval)} }
+	approval := func(m *Model) { m.approval.pending = []agent.Block{animToolBlock(agent.ToolAwaitingApproval)} }
 	draft := func(m *Model) { setConversationInput(m, strings.Repeat("draft\n", 12)) }
 	toolUI := func(m *Model) {
 		component, _ := chat.NewToolInteraction(agent.ToolCall{Name: spec.AskUserQuestion, Input: questionInput})

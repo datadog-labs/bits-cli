@@ -127,7 +127,7 @@ func TestQuestionsCompleteTheCall(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m, backend := startQuestions(t, tc.mode, questionInput, 1)
 			waitQuestions(t, m)
-			if m.editor.Focused() || len(m.pendingApprovals) != 0 {
+			if m.editor.Focused() || len(m.approval.pending) != 0 {
 				t.Fatal("question incorrectly routed through editor or permissions")
 			}
 			if backend.calls != 1 || len(backend.definitions) != 1 || backend.definitions[0].Name != spec.AskUserQuestion {

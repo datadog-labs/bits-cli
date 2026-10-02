@@ -29,5 +29,5 @@ func (m *Model) borderSweepWanted() bool {
 	if m.chatPhase != chat.PhaseWaiting && m.chatPhase != chat.PhaseStreaming {
 		return false
 	}
-	return len(m.pendingApprovals) == 0 || m.list.HasAnimated()
+	return !m.approval.active() || m.list.HasAnimated()
 }

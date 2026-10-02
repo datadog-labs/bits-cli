@@ -13,7 +13,6 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
-	"github.com/DataDog/bits-cli/internal/tui/components"
 	"github.com/DataDog/bits-cli/internal/tui/escape"
 )
 
@@ -34,10 +33,6 @@ const (
 	minimumApprovalDockRows = 15
 	chatComposerGapHeight   = 1
 	chatFooterHeight        = 1
-
-	// approvalCompactWidth is the terminal width below which the approval block
-	// switches to condensed action labels so the choice row still fits.
-	approvalCompactWidth = 50
 )
 
 // terminalMultiplexerActive reports whether the process runs inside tmux,
@@ -152,7 +147,7 @@ func (m *Model) layout() frame {
 	if m.activeToolUI == nil {
 		// The panel scrolls its body, so cap it to keep transcript rows visible.
 		budget := min(free, max(minimumApprovalDockRows, free-minimumTranscriptRows))
-		if f.approval = m.approvalView(max(1, budget)); f.approval != "" {
+		if f.approval = m.approval.layout(m.width, max(1, budget)); f.approval != "" {
 			f.dock = take(lipgloss.Height(f.approval))
 		}
 	}
@@ -165,7 +160,7 @@ func (m *Model) layout() frame {
 	case m.activeToolUI != nil:
 		minWidth, minHeight := m.activeToolUI.component.MinSize()
 		f.tooSmall = m.width < minWidth || m.height < minHeight
-	case len(m.pendingApprovals) > 0:
+	case m.approval.active():
 		// A pending approval needs more room than the bare chat; when it doesn't
 		// fit, its prompt is hidden behind the resize hint too.
 		f.tooSmall = m.width < minimumApprovalWidth ||
@@ -285,81 +280,6 @@ func selectionRowCount(content string) int {
 		return 0
 	}
 	return strings.Count(content, "\n") + 1
-}
-
-// approvalView renders the docked approval panel within height rows, or ""
-// when nothing awaits approval. It uses the shared bounded panel while keeping
-// the action row and its selection state local to the approval flow.
-func (m *Model) approvalView(height int) string {
-	if len(m.pendingApprovals) == 0 || m.pendingApprovals[0].Tool == nil {
-		return ""
-	}
-
-	block := m.pendingApprovals[0]
-	prompt := block.Tool.Approval
-	title := "Run " + escape.Inline(block.Tool.Name) + "?"
-	detail := ""
-	if prompt != nil {
-		if prompt.Title != "" {
-			title = escape.Inline(prompt.Title)
-		}
-		detail = prompt.Detail
-	}
-
-	queue := "Permission Required"
-	if count := len(m.pendingApprovals); count > 1 {
-		queue += " · " + strconv.Itoa(count) + " waiting"
-	}
-	content := components.PanelContent{
-		Title:   queue,
-		Dismiss: "ESC x",
-		BodyHeader: func(width int) string {
-			return m.styles.Approval.Text.Render(ansi.Wordwrap(title, width, "-"))
-		},
-		ScrollableBody: func(width int) string {
-			if rendered, ok := chat.RenderToolApproval(block.Tool, width, m.chatStyles); ok {
-				return rendered
-			}
-			return m.styles.Approval.Detail.Render(ansi.Wordwrap(escape.Inline(detail), width, "-"))
-		},
-		BodyFooter: func(width int) string {
-			return m.approvalActions(width)
-		},
-		BodyFooterGap: 1,
-		CompactTitle:  queue,
-		CompactBody: func(width int) string {
-			lines := []string{m.styles.Approval.Text.Render(ansi.Truncate(title, width, "…"))}
-			if rendered, ok := chat.RenderToolApproval(block.Tool, width, m.chatStyles); ok {
-				lines = append(lines, rendered)
-			} else if detail != "" {
-				lines = append(lines, m.styles.Approval.Detail.Render(ansi.Truncate(escape.Inline(detail), width, "…")))
-			}
-			lines = append(lines, "", m.approvalActions(width))
-			return strings.Join(lines, "\n")
-		},
-		TinyMessage: "Resize terminal to approve",
-	}
-	panel := m.approvalPanel.Render(m.width, height, content)
-	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, panel)
-}
-
-// approvalActions renders the choice row within width, condensing labels on
-// narrow terminals. The focused choice uses the interactive fill.
-func (m *Model) approvalActions(width int) string {
-	sty := m.styles.Approval
-	actions := make([]string, len(approvalChoices))
-	for i, choice := range approvalChoices {
-		label := choice.label
-		if width < approvalCompactWidth {
-			label = choice.compactLabel
-		}
-		if i == m.approvalChoice {
-			actions[i] = sty.Selected.Render(label)
-		} else {
-			actions[i] = sty.Action.Render(label)
-		}
-	}
-	return ansi.Truncate(strings.Join(actions, "  "), max(1, width), "")
 }
 
 // promptPlaceholder returns the current editor prompt placeholder.
