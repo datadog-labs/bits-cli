@@ -145,7 +145,9 @@ func TestDirectExecLauncherUsesLoginCommandFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := newExecService(newDirectExecLauncher(), execServiceConfig{
-		concurrency: 1, timeout: time.Second, outputLimit: 4096,
+		// This test exercises argument construction, not timeout behavior. Leave
+		// enough room for slow or heavily loaded local machines to start a shell.
+		concurrency: 1, timeout: 5 * time.Second, outputLimit: 4096,
 		defaultShellPath: shell,
 	})
 	outcome := service.Run(context.Background(), ExecRequest{Command: "printf command", CWD: dir})

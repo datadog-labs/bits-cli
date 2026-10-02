@@ -22,13 +22,15 @@ func TestInstructionsHierarchy(t *testing.T) {
 	writeInstructionTestFile(t, repo, "AGENTS.md", "root instruction")
 	writeInstructionTestFile(t, filepath.Dir(nested), "AGENTS.md", "nested instruction")
 	writeInstructionTestFile(t, nested, "AGENTS.md", "active instruction")
-	writeInstructionTestFile(t, nested, "agents.md", "wrong case")
+	if supportsCaseSensitiveNames(t, nested) {
+		writeInstructionTestFile(t, nested, "agents.md", "wrong case")
+	}
 	before, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := NewProjectInstructions(nested).snapshot(context.Background())
-	resolvedRepo, err := filepath.EvalSymlinks(repo)
+	absoluteRepo, err := filepath.Abs(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +48,7 @@ nested instruction
 active instruction
   </file>
 </project_context>
-`, filepath.ToSlash(resolvedRepo), filepath.ToSlash(resolvedRepo), filepath.ToSlash(resolvedRepo))
+`, filepath.ToSlash(absoluteRepo), filepath.ToSlash(absoluteRepo), filepath.ToSlash(absoluteRepo))
 	if got != expected {
 		t.Fatalf("instructions = %q, want %q", got, expected)
 	}
@@ -149,7 +151,14 @@ func TestInstructionsLinkedWorktree(t *testing.T) {
 
 func runInstructionsGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	command := exec.Command("git", args...)
+	// Test repositories must not inherit the developer or machine's hooks.
+	hooks := t.TempDir()
+	command := exec.Command("git", append([]string{
+		"-c", "core.hooksPath=" + hooks,
+		"-c", "commit.gpgsign=false",
+		"-c", "user.name=Bits Test",
+		"-c", "user.email=bits@example.com",
+	}, args...)...)
 	command.Dir = dir
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, output)
@@ -262,22 +271,28 @@ func TestProjectInstructionsCascadingReplacement(t *testing.T) {
 }
 
 func TestPiInstructionFilenamePrecedence(t *testing.T) {
-	for i, name := range instructionFilenames {
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			for _, candidate := range instructionFilenames[i:] {
-				writeInstructionTestFile(t, dir, candidate, "selected "+candidate)
-			}
-			instructions := NewProjectInstructions(dir)
-			got := instructions.snapshot(context.Background())
-			if strings.Count(got, "<file path=") != 1 || !strings.Contains(got, "selected "+name+"\n") {
-				t.Fatalf("selected file = %q", got)
-			}
-		})
-	}
+	t.Run("case-sensitive filename precedence", func(t *testing.T) {
+		if !supportsCaseSensitiveNames(t, t.TempDir()) {
+			t.Skip("filename precedence includes case-only variants, unavailable on this filesystem")
+		}
+		for i, name := range instructionFilenames {
+			t.Run(name, func(t *testing.T) {
+				dir := t.TempDir()
+				for _, candidate := range instructionFilenames[i:] {
+					writeInstructionTestFile(t, dir, candidate, "selected "+candidate)
+				}
+				instructions := NewProjectInstructions(dir)
+				got := instructions.snapshot(context.Background())
+				if strings.Count(got, "<file path=") != 1 || !strings.Contains(got, "selected "+name+"\n") {
+					t.Fatalf("selected file = %q", got)
+				}
+			})
+		}
+	})
 	t.Run("directory candidates fall back", func(t *testing.T) {
 		dir := t.TempDir()
-		for _, name := range instructionFilenames[:3] {
+		// These are distinct on both case-sensitive and case-insensitive filesystems.
+		for _, name := range []string{"AGENTS.override.md", "AGENTS.md"} {
 			if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -304,6 +319,31 @@ func TestPiInstructionFilenamePrecedence(t *testing.T) {
 			t.Fatalf("BOM context = %q", got)
 		}
 	})
+}
+
+// supportsCaseSensitiveNames detects whether a test directory can hold two
+// distinct files whose names differ only by case. Some macOS volumes are
+// case-insensitive, so tests of filename precedence must be gated by the
+// actual filesystem rather than GOOS.
+func supportsCaseSensitiveNames(t *testing.T, dir string) bool {
+	t.Helper()
+	upper := filepath.Join(dir, "case-probe")
+	lower := filepath.Join(dir, "CASE-PROBE")
+	if err := os.WriteFile(upper, []byte("upper"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lower, []byte("lower"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(upper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(lower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(first) == "upper" && string(second) == "lower"
 }
 
 func TestPiAncestorInstructions(t *testing.T) {
