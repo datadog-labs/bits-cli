@@ -13,7 +13,7 @@ type Styles struct {
 	styles.Chat
 }
 
-// Notice returns the style for a transient notice of the given level.
+// Notice returns the style for a local transcript message.
 func (s Styles) Notice(level NoticeLevel) lipgloss.Style {
 	switch level {
 	case NoticeError:

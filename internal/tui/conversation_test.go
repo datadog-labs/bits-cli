@@ -126,7 +126,7 @@ func TestNewAndClearResetConversationStateLocally(t *testing.T) {
 			m.transcript.Blocks = []agent.Block{{Markdown: &assistant.MarkdownPayload{Content: "old transcript"}}}
 			m.usage = &assistant.Usage{TokensUsed: 99, MaxTokens: 100}
 			m.chatPhase = chat.PhaseError
-			m.notice = notice(chat.NoticeError, errors.New("old error"), "old error")
+			m.postNotice(notice(chat.NoticeError, errors.New("old error"), "old error"))
 			setConversationInput(m, input)
 
 			_, _ = m.submit()
@@ -136,8 +136,8 @@ func TestNewAndClearResetConversationStateLocally(t *testing.T) {
 			if m.convID != "" || m.engine.ConversationID() != "" || len(m.transcript.Blocks) != 0 {
 				t.Fatalf("identity/transcript not reset: root=%q engine=%q blocks=%d", m.convID, m.engine.ConversationID(), len(m.transcript.Blocks))
 			}
-			if m.usage != nil || m.chatPhase != chat.PhaseIdle || !m.notice.Empty() {
-				t.Fatalf("turn state not reset: usage=%v phase=%v notice=%+v", m.usage, m.chatPhase, m.notice)
+			if m.usage != nil || m.chatPhase != chat.PhaseIdle || latestNotice(m).Text != "Started a new conversation." {
+				t.Fatalf("turn state not reset: usage=%v phase=%v notice=%+v", m.usage, m.chatPhase, latestNotice(m))
 			}
 		})
 	}
@@ -237,8 +237,8 @@ func TestNewAfterFailedTurnDrainsThenClearsError(t *testing.T) {
 		t.Fatal("failed turn reset before its event channel drained")
 	}
 	drainConversationRemote(t, m)
-	if m.convID != "" || m.chatPhase != chat.PhaseIdle || !m.notice.Empty() || m.usage != nil {
-		t.Fatalf("failed-turn state survived reset: id=%q phase=%v notice=%+v usage=%v", m.convID, m.chatPhase, m.notice, m.usage)
+	if m.convID != "" || m.chatPhase != chat.PhaseIdle || latestNotice(m).Text != "Started a new conversation." || m.usage != nil {
+		t.Fatalf("failed-turn state survived reset: id=%q phase=%v notice=%+v usage=%v", m.convID, m.chatPhase, latestNotice(m), m.usage)
 	}
 }
 

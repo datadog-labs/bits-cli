@@ -216,23 +216,25 @@ type Model struct {
 	conversationTask     task
 	conversationSwitchID string
 
-	// Turn status, surfaced in the status line.
+	// Turn status, surfaced in the editor and local status view.
 	chatPhase chat.Phase
 	convID    string
-	usage     *assistant.Usage
+	// Increments when the visible conversation changes; delayed local results
+	// from an earlier conversation must not enter the new transcript.
+	conversationEpoch uint64
+	usage             *assistant.Usage
 	// connectivity is the last observed remote outcome. Active phases override
 	// it with connecting/connected when building the status snapshot.
 	connectivity          statusview.Connectivity
 	authStateOverride     string
 	authFailureGeneration uint64
 
-	// notice is the transient status message (error/warn/info) shown in the
-	// status line.
-	notice    chat.Notice
-	noticeSeq int
+	// Session-only UI messages are merged with the agent snapshot for display.
+	notices      []chat.NoticeItem
+	nextNoticeID uint64
 
 	// Transcript rendering. list owns the transcript's scroll position and
-	// per-item render cache; chatStyles is also used by the notice bar.
+	// per-item render cache.
 	list       *chat.List
 	chatStyles chat.Styles
 	styles     styles.Theme // terminal styles; dark until detected

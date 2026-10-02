@@ -344,7 +344,7 @@ func TestPendingQuestionRestoresOnStartupAndResume(t *testing.T) {
 				_, cmd = m.Update(conversationview.SelectedMsg{Conversation: assistant.ConversationSummary{ConversationID: id}})
 				_, _ = m.Update(runResumeCmd(t, cmd))
 				if m.op.events == nil {
-					t.Fatalf("resume failed: %+v", m.notice)
+					t.Fatalf("resume failed: %+v", latestNotice(m))
 				}
 			}
 			waitQuestions(t, m)

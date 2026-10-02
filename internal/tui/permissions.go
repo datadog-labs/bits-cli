@@ -25,7 +25,7 @@ const fullAccessConfirmation = "Enabling full access will automatically approve 
 
 func (m *Model) switchPermissions(argument string) tea.Cmd {
 	if m.tools == nil || m.engine == nil {
-		return m.showNotice(notice(chat.NoticeError, nil, "This session has no tool permissions to configure."), 0)
+		return m.postNotice(notice(chat.NoticeError, nil, "This session has no tool permissions to configure."))
 	}
 	current := m.tools.PermissionsMode()
 	if argument == "" {
@@ -39,7 +39,7 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 		return nil
 	}
 	if argument != string(agent.ModeManual) && argument != string(agent.ModeSkipPermissions) {
-		return m.showNotice(notice(chat.NoticeError, nil, "Unknown permissions mode %q. Use manual or skip-permissions.", argument), 0)
+		return m.postNotice(notice(chat.NoticeError, nil, "Unknown permissions mode %q. Use manual or skip-permissions.", argument))
 	}
 	mode := agent.PermissionsMode(argument)
 	if mode == current {
@@ -62,18 +62,17 @@ func (m *Model) applyPermissionsMode(mode agent.PermissionsMode) tea.Cmd {
 	if m.op.busy() {
 		m.pendingPermissions = mode
 		m.setMode(ModeChat)
-		m.clearNotice()
 		return nil
 	}
 	if err := m.setPermissionsMode(mode); err != nil {
 		m.setMode(ModeChat)
 		if errors.Is(err, agent.ErrOperationActive) {
-			return m.showNotice(notice(chat.NoticeWarn, nil, "Permissions are still changing. Try again after this response."), 0)
+			return m.postNotice(notice(chat.NoticeWarn, nil, "Permissions are still changing. Try again after this response."))
 		}
-		return m.showNotice(notice(chat.NoticeError, err, "Could not switch the permissions mode."), 0)
+		return m.postNotice(notice(chat.NoticeError, err, "Could not switch the permissions mode."))
 	}
 	m.setMode(ModeChat)
-	return nil
+	return m.postNotice(permissionsChangedNotice(mode))
 }
 
 func (m *Model) setPermissionsMode(mode agent.PermissionsMode) error {
@@ -82,7 +81,6 @@ func (m *Model) setPermissionsMode(mode agent.PermissionsMode) error {
 	}
 	m.pendingPermissions = ""
 	m.syncStatus()
-	m.clearNotice()
 	return nil
 }
 
@@ -93,12 +91,19 @@ func (m *Model) applyPendingPermissions() tea.Cmd {
 	mode := m.pendingPermissions
 	if err := m.setPermissionsMode(mode); err != nil {
 		m.pendingPermissions = ""
-		return m.showNotice(notice(chat.NoticeError, err, "Could not switch the permissions mode."), 0)
+		return m.postNotice(notice(chat.NoticeError, err, "Could not switch the permissions mode."))
 	}
 	if m.mode == ModePermissions {
 		m.permissionConfirm, m.permissionCursor = false, slices.Index(permissionModes[:], mode)
 	}
-	return nil
+	return m.postNotice(permissionsChangedNotice(mode))
+}
+
+func permissionsChangedNotice(mode agent.PermissionsMode) chat.Notice {
+	if mode == agent.ModeSkipPermissions {
+		return notice(chat.NoticeWarn, nil, "Full Access enabled. Actions will run without approval.")
+	}
+	return notice(chat.NoticeInfo, nil, "Permissions set to Ask for Approval.")
 }
 
 func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -122,7 +127,7 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			if m.tools.PermissionsMode() != agent.ModeManual {
 				m.setMode(ModeChat)
-				return m.showNotice(notice(chat.NoticeWarn, nil, "Permissions changed while the picker was open. Open it again."), 0)
+				return m.postNotice(notice(chat.NoticeWarn, nil, "Permissions changed while the picker was open. Open it again."))
 			}
 			return m.applyPermissionsMode(agent.ModeSkipPermissions)
 		}

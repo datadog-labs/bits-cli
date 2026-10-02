@@ -20,11 +20,7 @@ import (
 // idempotent and keeps cleanup from cancelling a second time.
 func (m *Model) requestNewConversation() tea.Cmd {
 	m.after(thenNewConversation)
-	return tea.Batch(
-		m.stopCompletionSearches(),
-		m.showNotice(notice(chat.NoticeInfo, nil,
-			"Cancelling the current operation before starting a new conversation…"), 0),
-	)
+	return m.stopCompletionSearches()
 }
 
 // startNewConversation resets only conversation-scoped state. It deliberately
@@ -33,12 +29,15 @@ func (m *Model) requestNewConversation() tea.Cmd {
 // ends any history browsing.
 func (m *Model) startNewConversation() tea.Cmd {
 	if err := m.engine.NewConversation(); err != nil {
-		return m.showNotice(noticeForError("could not start a new conversation", err), 0)
+		m.postNotice(noticeForError("could not start a new conversation", err))
+		m.list.ScrollToBottom()
+		return nil
 	}
 
 	// A reset is a new event identity domain even though active work was drained.
 	// This makes any delayed Bubble Tea message from the prior domain harmless.
 	m.op.gen++
+	m.conversationEpoch++
 	m.clearSelection()
 	m.transcript = agent.TranscriptSnapshot{}
 	m.list.Reset()
@@ -47,8 +46,9 @@ func (m *Model) startNewConversation() tea.Cmd {
 	m.chatPhase = chat.PhaseIdle
 	m.editor.Reset()
 	closeFileSearch := m.stopCompletionSearches()
-	m.clearNotice()
+	m.notices = nil
 	m.setMode(ModeChat)
+	m.postNotice(notice(chat.NoticeInfo, nil, "Started a new conversation."))
 	m.list.ScrollToBottom()
 	return closeFileSearch // Update reconciles focus and animations after the mode change.
 }
@@ -66,7 +66,6 @@ type conversationSwitchResultMsg struct {
 }
 
 func (m *Model) openConversationPicker() tea.Cmd {
-	m.clearNotice()
 	picker := conversationview.New(m.width, m.height, m.styles)
 	m.picker = &picker
 	m.setMode(ModeConversations)
@@ -141,16 +140,17 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	if err != nil {
 		n := conversationErrorNotice("resume failed", err)
 		m.picker.SetError(n.Text, err)
-		return m.showNotice(n, 0)
+		return m.postNotice(n)
 	}
 	m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+	m.conversationEpoch++
 	m.convID = m.engine.ConversationID()
 	m.usage = nil
 	m.chatPhase = chat.PhaseIdle
 	m.list.Reset()
+	m.notices = nil
 	m.syncTranscript()
 	m.list.ScrollToBottom()
-	m.clearNotice()
 	m.dropConversationPicker()
 	return m.resumePendingTools() // Update reconciles focus and animations after the mode change.
 }
@@ -199,7 +199,7 @@ func (m *Model) updateConversationPicker(msg tea.Msg) tea.Cmd {
 func conversationErrorNotice(operation string, err error) chat.Notice {
 	n := noticeForError(operation, err)
 	n.Text = ansi.Truncate(escape.SingleLine(n.Text), 240, "…")
-	n.Err = nil // never append raw backend detail in the notice bar
+	n.Err = nil // picker messages are kept as curated text
 	return n
 }
 
@@ -207,7 +207,6 @@ func conversationErrorNotice(operation string, err error) chat.Notice {
 // offer. It drives the switch through the /resume picker so the existing
 // loading, error and retry paths apply unchanged.
 func (m *Model) resumeSelectedConversation(conversationID string) tea.Cmd {
-	m.clearNotice()
 	picker := conversationview.New(m.width, m.height, m.styles)
 	for _, summary := range m.resume.conversations {
 		if summary.ConversationID == conversationID {

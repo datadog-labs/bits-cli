@@ -58,7 +58,7 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 				return
 			}
 
-			rects := slices.DeleteFunc([]image.Rectangle{f.transcript, f.dock, f.notice, f.editor, f.footer}, image.Rectangle.Empty)
+			rects := slices.DeleteFunc([]image.Rectangle{f.transcript, f.dock, f.composerGap, f.editor, f.footer}, image.Rectangle.Empty)
 			slices.SortFunc(rects, func(a, b image.Rectangle) int { return a.Min.Y - b.Min.Y })
 			for i, r := range rects {
 				if (i == 0 && r != f.transcript) || (i > 0 && r.Min.Y != rects[i-1].Max.Y) || r.Dx() != tc.width {
@@ -68,6 +68,9 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 			view := strings.Split(ansi.Strip(m.View().Content), "\n")
 			if len(view) != tc.height || rects[len(rects)-1].Max.Y != tc.height {
 				t.Fatalf("view is %d rows and surfaces end at %d, want %d", len(view), rects[len(rects)-1].Max.Y, tc.height)
+			}
+			if f.composerGap.Dy() != chatComposerGapHeight || strings.TrimSpace(view[f.composerGap.Min.Y]) != "" {
+				t.Fatalf("composer gap is not one empty row: rect=%v row=%q", f.composerGap, view[f.composerGap.Min.Y])
 			}
 			firstRow := func(s string) string { return strings.SplitN(ansi.Strip(s), "\n", 2)[0] }
 			dock := f.approval

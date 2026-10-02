@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/binary"
 	"hash/fnv"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -10,6 +11,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/components"
+	"github.com/DataDog/bits-cli/internal/tui/escape"
 )
 
 // List is a lazily-rendered, vertically-stacked view of transcript items with an
@@ -31,9 +33,10 @@ type List struct {
 	// list re-syncs, so AtBottom() would already see the grown content.
 	follow bool
 
-	items []agent.Block
-	view  []presentationItem
-	sty   Styles
+	items   []agent.Block
+	notices []NoticeItem
+	view    []presentationItem
+	sty     Styles
 
 	// header is pre-rendered content occupying the document's first rows. It
 	// becomes a synthetic presentation item so the scroll, document-coordinate
@@ -77,6 +80,7 @@ type presentationItem struct {
 	group         string
 	start, end    int
 	presentations []toolPresentation
+	notice        *NoticeItem
 }
 
 // headerGroupKey marks the synthetic header item. Its start/end are
@@ -150,8 +154,15 @@ func (l *List) SetStyles(sty Styles) {
 // TODO: Revisit the cost of rebuilding presentation data on UI-only updates if
 // large transcripts become common.
 func (l *List) SetItems(items []agent.Block) {
+	l.SetTranscript(items, nil)
+}
+
+// SetTranscript combines agent blocks with session-only UI messages without
+// changing the source blocks or their backend-facing transcript.
+func (l *List) SetTranscript(items []agent.Block, notices []NoticeItem) {
 	l.items = items
-	l.view = buildPresentation(l.header, items)
+	l.notices = notices
+	l.view = buildPresentationWithNotices(l.header, items, notices)
 	if l.offsetIdx >= len(l.view) {
 		l.offsetIdx = max(0, len(l.view)-1)
 		l.offsetLine = 0
@@ -170,7 +181,7 @@ func (l *List) SetHeader(header string) {
 	}
 	had, has := l.header != "", header != ""
 	l.header = header
-	l.view = buildPresentation(l.header, l.items)
+	l.view = buildPresentationWithNotices(l.header, l.items, l.notices)
 	switch {
 	case had == has:
 	case has:
@@ -200,6 +211,7 @@ func headerRevision(header string) uint64 {
 // block IDs and revisions from the previous conversation.
 func (l *List) Reset() {
 	l.items = nil
+	l.notices = nil
 	l.view = buildPresentation(l.header, nil)
 	l.offsetIdx = 0
 	l.offsetLine = 0
@@ -405,6 +417,9 @@ func (l *List) renderPresentationItem(it presentationItem, width int) string {
 	if it.group == headerGroupKey {
 		return l.header
 	}
+	if it.notice != nil {
+		return renderNotice(it.notice.Notice, width, l.sty)
+	}
 	if it.group == reasoningGroupKey {
 		return renderReasoningGroup(l.items[it.start:it.end], width, l.sty, l.frame)
 	}
@@ -420,6 +435,9 @@ func (l *List) renderPresentationItem(it presentationItem, width int) string {
 // itemAnimated reports whether rendering depends on the frame counter. Waiting
 // for approval is deliberately static because no work is progressing.
 func (l *List) itemAnimated(it presentationItem) bool {
+	if it.notice != nil || it.group == headerGroupKey {
+		return false
+	}
 	// WithoutMotion replaces the shared spinner with static fallbacks, so
 	// running blocks no longer justify a repaint clock.
 	if l.sty.StatusSpinner.Len() == 0 {
@@ -682,6 +700,10 @@ func (l *List) ScrollByChanged(lines int) bool {
 }
 
 func buildPresentation(header string, blocks []agent.Block) []presentationItem {
+	return buildPresentationWithNotices(header, blocks, nil)
+}
+
+func buildPresentationWithNotices(header string, blocks []agent.Block, notices []NoticeItem) []presentationItem {
 	items := make([]presentationItem, 0, len(blocks)+1)
 	if header != "" {
 		items = append(items, presentationItem{
@@ -692,10 +714,28 @@ func buildPresentation(header string, blocks []agent.Block) []presentationItem {
 			end:   headerSentinel,
 		})
 	}
-	for i := 0; i < len(blocks); {
+	// A local message divides presentation groups, so streamed reasoning or
+	// adjacent tools cannot later absorb a message posted between them.
+	previous := 0
+	for i := range notices {
+		at := min(max(notices[i].After, previous), len(blocks))
+		items = appendBlockPresentations(items, blocks, previous, at)
+		entry := &notices[i]
+		items = append(items, presentationItem{
+			id:    agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00notice:" + strconv.FormatUint(entry.ID, 10)},
+			rev:   uint64(entry.Notice.Level) + headerRevision(entry.Notice.Text),
+			start: headerSentinel, end: headerSentinel, notice: entry,
+		})
+		previous = at
+	}
+	return appendBlockPresentations(items, blocks, previous, len(blocks))
+}
+
+func appendBlockPresentations(items []presentationItem, blocks []agent.Block, from, to int) []presentationItem {
+	for i := from; i < to; {
 		if blocks[i].Kind == assistant.KindReasoning {
 			j := i + 1
-			for j < len(blocks) && blocks[j].Kind == assistant.KindReasoning {
+			for j < to && blocks[j].Kind == assistant.KindReasoning {
 				j++
 			}
 			items = append(items, newPresentationItem(blocks, reasoningGroupKey, i, j, nil))
@@ -716,7 +756,7 @@ func buildPresentation(header string, blocks []agent.Block) []presentationItem {
 
 		presentations := []toolPresentation{p}
 		j := i + 1
-		for j < len(blocks) {
+		for j < to {
 			next, ok := presentationOfBlock(blocks[j])
 			if !ok || next.group != p.group {
 				break
@@ -728,6 +768,29 @@ func buildPresentation(header string, blocks []agent.Block) []presentationItem {
 		i = j
 	}
 	return items
+}
+
+func renderNotice(n Notice, width int, sty Styles) string {
+	marker := ""
+	switch n.Level {
+	case NoticeInfo:
+		marker = "✓"
+	case NoticeWarn:
+		marker = "!"
+	case NoticeError:
+		marker = "×"
+	}
+	// Escape untrusted text before wrapping it into selectable document rows.
+	text := escape.Multiline(n.Text)
+	lines := strings.Split(wrap(text, max(1, width-3)), "\n")
+	for i, line := range lines {
+		prefix := "   "
+		if i == 0 {
+			prefix = sty.Notice(n.Level).Render(marker) + "  "
+		}
+		lines[i] = components.PaintRowBackground(prefix+line, width, sty.Input.Background)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func presentationOfBlock(block agent.Block) (toolPresentation, bool) {

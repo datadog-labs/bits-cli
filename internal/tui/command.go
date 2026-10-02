@@ -153,25 +153,35 @@ func parseCommand(input string) (string, string, bool) {
 // dispatchCommand routes a parsed slash command and its argument remainder to
 // its handler and returns the (model, cmd) the caller returns from Update.
 // Recognized commands own their side effects (turn cancellation, notices).
-// Unrecognized commands post a transient notice rather than reaching the
+// Unrecognized commands post a local transcript message rather than reaching the
 // model, so the control plane never leaks literal slash text into an agent
 // turn.
 func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
+	// A command is a direct user action. If it posts a message while the user is
+	// reading above the tail, bring that response into view. Asynchronous notices
+	// use postNotice directly and preserve the reader's scroll position.
+	before := m.nextNoticeID
+	defer func() {
+		if m.nextNoticeID != before && m.list != nil {
+			m.list.ScrollToBottom()
+		}
+	}()
+
 	definition, ok := lookupCommand(name)
 	if !ok {
-		return m, m.showNotice(notice(chat.NoticeError, nil, "Unknown command: /%s", name), 0)
+		return m, m.postNotice(notice(chat.NoticeError, nil, "Unknown command: /%s", name))
 	}
 	if m.op.loggingOut() {
-		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Logout is already in progress."), 0)
+		return m, m.postNotice(notice(chat.NoticeInfo, nil, "Logout is already in progress."))
 	}
 
 	if m.op.busy() {
 		switch definition.activeTurnPolicy {
 		case commandRejectedDuringTurn:
 			if definition.id == commandCopy {
-				return m, m.showNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response to finish before using /copy."), 0)
+				return m, m.postNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response to finish before using /copy."))
 			}
-			return m, m.showNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active turn: /%s", name), 0)
+			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active turn: /%s", name))
 		case commandCancelsTurn:
 			switch definition.id {
 			case commandNew:
@@ -221,10 +231,10 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 func (m *Model) copyLatestAssistantResponse() tea.Cmd {
 	text, ok := latestCopyableAssistantResponse(m.transcript.Blocks)
 	if !ok {
-		return m.showNotice(notice(chat.NoticeWarn, nil, "No completed assistant response is available to copy."), 0)
+		return m.postNotice(notice(chat.NoticeWarn, nil, "No completed assistant response is available to copy."))
 	}
 	return tea.Batch(
-		m.showNotice(notice(chat.NoticeInfo, nil, "Copied to clipboard."), 0),
+		m.postNotice(notice(chat.NoticeInfo, nil, "Copied to clipboard.")),
 		tea.SetClipboard(text),
 	)
 }
