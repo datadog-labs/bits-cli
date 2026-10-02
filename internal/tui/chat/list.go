@@ -328,7 +328,7 @@ func (l *List) expandable(it presentationItem) bool {
 		return !it.presentations[0].renderSpec.static
 	case itemReasoning:
 		return hasReasoningText(l.items[it.start:it.end])
-	case itemBlock, itemInspectionGroup, itemHeader:
+	case itemBlock, itemNotice, itemInspectionGroup, itemHeader:
 	}
 	return false
 }
