@@ -51,8 +51,8 @@ func TestReasoningRendersAsCompactActivity(t *testing.T) {
 
 	block.Complete = true
 	settled := ansi.Strip(RenderBlock(block, 80, sty, 16))
-	if settled != "✓ thought" {
-		t.Fatalf("completed reasoning = %q, want %q", settled, "✓ thought")
+	if settled != "✓ reasoning" {
+		t.Fatalf("completed reasoning = %q, want %q", settled, "✓ reasoning")
 	}
 }
 

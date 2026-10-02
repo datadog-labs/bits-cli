@@ -320,7 +320,7 @@ func TestAdjacentReasoningBlocksRenderAsOneActivity(t *testing.T) {
 		t.Fatalf("presentation item count = %d, want 2", got)
 	}
 	plain := ansi.Strip(list.Render())
-	if got := strings.Count(plain, "✓ thought"); got != 1 {
+	if got := strings.Count(plain, "✓ reasoning"); got != 1 {
 		t.Fatalf("settled reasoning rows = %d, want 1:\n%s", got, plain)
 	}
 }
@@ -336,7 +336,7 @@ func TestReasoningGroupStaysActiveWhileMemberStreams(t *testing.T) {
 	})
 
 	plain := ansi.Strip(list.Render())
-	if !strings.Contains(plain, "thinking.") || strings.Contains(plain, "✓ thought") {
+	if !strings.Contains(plain, "thinking.") || strings.Contains(plain, "✓ reasoning") {
 		t.Fatalf("active reasoning group = %q", plain)
 	}
 	if !list.HasAnimated() {
