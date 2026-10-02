@@ -35,6 +35,37 @@ inserted as typed mentions such as `@dashboard:"Test Dashboard"` and sent as
 structured context for the next turn. Editing or deleting the mention removes
 that entity from the structured context. File mentions remain plain prompt text.
 
+## Local skills
+
+Sessions in both `bits` and `bits run` discover `SKILL.md` files
+recursively under `.agents/skills` from the active directory up to the Git
+worktree root. Outside Git, only the active directory is searched. Bits also
+searches `~/.agents/skills`. Add directories with repeatable `--skill` flags:
+
+```sh
+bits --skill ~/.codex/skills --skill ./team-skills
+bits run --prompt "Review this change" --delivery adeep --skill ./team-skills
+```
+
+Skills need YAML frontmatter with a lowercase name using letters, numbers, and
+single hyphens, up to 64 characters, and a non-empty description up to 1,024
+characters. The closest project directory wins duplicate names, followed by
+explicit directories in flag order, then the default user directory.
+
+Bits snapshots names, descriptions, and file paths on the first request of each
+session and includes that catalog in every request. Full instructions are read
+through client tools when a skill is invoked. Reading a skill outside the active
+workspace uses `exec_command` and follows its permission settings. `/new` and
+resuming a conversation both refresh discovery; if a resumed conversation no
+longer has any skills, Bits sends a notice that supersedes the older catalog.
+
+Discovery rejects symlinks escaping the worktree or, outside Git, the active
+directory. User and explicit skill directories each have their own resolved
+boundary. Scans are limited to 128 roots, 32 directory levels, 4,096 entries,
+64 KiB per skill file, and 1 MiB of file content in total. Oversized files and
+directories exceeding the entry budget are omitted. The catalog is sorted by
+name and capped at 64 KiB.
+
 ## Permissions
 
 Interactive `bits` defaults to `manual`: tools that can change your system or

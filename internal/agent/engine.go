@@ -160,6 +160,7 @@ type Engine struct {
 	active              atomic.Bool
 	operationGeneration atomic.Uint64
 	projectInstructions *ProjectInstructions
+	clientSkills        *ClientSkills
 }
 
 // RuntimeStatus is the non-secret request and backend state needed by local
@@ -429,6 +430,7 @@ func (e *Engine) run(
 	request := func(emit func(Event) bool, opts assistant.SendOptions) ([]ToolCall, bool) {
 		sentUserContext := opts.CustomUserContext
 		opts = e.projectInstructions.apply(ctx, opts)
+		opts = e.clientSkills.apply(ctx, opts)
 		var calls []ToolCall
 		streamed := false
 		fold := func(msg assistant.Message) bool {
@@ -613,6 +615,7 @@ func (e *Engine) drainStoppedToolCalls(
 	responses []assistant.ClientToolResponse,
 	opts assistant.SendOptions,
 ) (string, int, error) {
+	opts = e.clientSkills.apply(ctx, opts)
 	payload := any(responses)
 	conversationID := opts.ConversationID
 	rounds := 0
@@ -744,6 +747,7 @@ func (e *Engine) NewConversation() error {
 	e.opts.MessageHistory = nil
 	e.sentUserContext = nil
 	e.projectInstructions.reset()
+	e.clientSkills.reset()
 	e.transcript = NewTranscript()
 	e.continuation = nil
 	clear(e.sessionGrants)

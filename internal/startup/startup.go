@@ -32,6 +32,7 @@ type ClientOptions struct {
 // EngineOptions configures a surface-independent agent engine.
 type EngineOptions struct {
 	Workspace      *workspace.Workspace
+	SkillPaths     []string
 	Client         ClientOptions
 	Send           assistant.SendOptions
 	UseFakeBackend bool
@@ -64,7 +65,8 @@ func NewEngine(ctx context.Context, opts EngineOptions) (*agent.Engine, error) {
 	opts.Send = withDefaultSkillOverrides(opts.Send)
 	var engineOptions []agent.Option
 	if opts.Workspace != nil {
-		engineOptions = append(engineOptions, agent.WithProjectInstructions(agent.NewProjectInstructions(opts.Workspace.Path())))
+		engineOptions = append(engineOptions, agent.WithProjectInstructions(agent.NewProjectInstructions(opts.Workspace.Path())),
+			agent.WithClientSkills(agent.NewClientSkills(opts.Workspace.Path(), opts.SkillPaths)))
 	}
 	switch opts.Client.Mode {
 	case auth.ModeAuto:

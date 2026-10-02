@@ -18,6 +18,7 @@ import (
 // ChatOptions carries the user-supplied root command flags resolved before
 // chat starts.
 type ChatOptions struct {
+	SkillPaths      []string
 	ConversationID  string
 	Model           string
 	InferenceMode   string
@@ -123,6 +124,7 @@ func newRootCommand(actions Actions) *cobra.Command {
 	root.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
 		return fmt.Errorf("%w\nRun '%s --help' for usage", err, command.CommandPath())
 	})
+	root.Flags().StringArrayVar(&opts.SkillPaths, "skill", nil, "additional skill directory to discover (repeatable)")
 	root.Flags().StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
 	root.Flags().StringVar(&permissionsMode, "permissions", string(agent.ModeManual), "permissions mode: manual or skip-permissions")
 	root.Flags().StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")

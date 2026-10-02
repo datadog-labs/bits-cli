@@ -306,3 +306,23 @@ func TestCommandPropagatesContextAndActionErrors(t *testing.T) {
 		t.Fatalf("action error printed before main boundary: stdout %q, stderr %q", stdout.String(), stderr.String())
 	}
 }
+
+func TestSkillFlagsForChatAndRun(t *testing.T) {
+	for _, prefix := range [][]string{nil, {"run", "--prompt", "hello", "--delivery", "adeep"}} {
+		t.Run(strings.Join(prefix, " "), func(t *testing.T) {
+			var got []string
+			actions := Actions{
+				Chat: func(_ context.Context, opts ChatOptions) error { got = opts.SkillPaths; return nil },
+				Run:  func(_ context.Context, opts RunOptions) error { got = opts.SkillPaths; return nil },
+			}
+			args := append(prefix, "--skill", "some/path,with-comma", "--skill", "~/my skills")
+			var out bytes.Buffer
+			if err := Execute(context.Background(), args, actions, &out, &out); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, []string{"some/path,with-comma", "~/my skills"}) {
+				t.Fatalf("skill paths = %q", got)
+			}
+		})
+	}
+}
