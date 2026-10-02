@@ -3,6 +3,7 @@ package tui
 import (
 	"image"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -25,8 +26,14 @@ const (
 	// detail, and every action. Below that, input stays disabled behind the
 	// resize hint so a hidden choice cannot be confirmed.
 	minimumApprovalPanelHeight = 6
-	chatComposerGapHeight      = 1
-	chatFooterHeight           = 1
+	// minimumTranscriptRows is the transcript height a docked approval leaves
+	// so the chat stays readable and scrollable while a decision is pending.
+	minimumTranscriptRows = 5
+	// minimumApprovalDockRows is the smallest dock that shows the full
+	// scrollable panel (header, body window, actions) rather than its compact fallback.
+	minimumApprovalDockRows = 15
+	chatComposerGapHeight   = 1
+	chatFooterHeight        = 1
 
 	// approvalCompactWidth is the terminal width below which the approval block
 	// switches to condensed action labels so the choice row still fits.
@@ -135,16 +142,17 @@ func (m *Model) layout() frame {
 	}
 
 	f.footer = take(chatFooterHeight)
-	approvalRows := 0
 	if m.activeToolUI != nil {
 		f.dock = take(m.activeToolUI.component.Height())
 	} else {
 		f.editor = take(m.editor.Height())
 	}
 	f.composerGap = take(chatComposerGapHeight)
+	free := y // rows shared by the transcript and a docked approval
 	if m.activeToolUI == nil {
-		approvalRows = y
-		if f.approval = m.approvalView(max(1, y)); f.approval != "" {
+		// The panel scrolls its body, so cap it to keep transcript rows visible.
+		budget := min(free, max(minimumApprovalDockRows, free-minimumTranscriptRows))
+		if f.approval = m.approvalView(max(1, budget)); f.approval != "" {
 			f.dock = take(lipgloss.Height(f.approval))
 		}
 	}
@@ -162,7 +170,7 @@ func (m *Model) layout() frame {
 		// fit, its prompt is hidden behind the resize hint too.
 		f.tooSmall = m.width < minimumApprovalWidth ||
 			m.height < minimumApprovalHeight ||
-			approvalRows < minimumApprovalPanelHeight
+			free < minimumApprovalPanelHeight
 	}
 	return f
 }
@@ -208,23 +216,17 @@ func (m *Model) chatOverlay(base, popup string, x int) string {
 // exact composition so every rendered row stays in the same screen coordinate
 // space as the normal chat view.
 func (m *Model) chatViewBase(transcript string) string {
+	composer := m.editor.View()
 	if m.activeToolUI != nil {
-		dim := lipgloss.NewStyle().Faint(true)
-		sections := []string{dim.Render(transcript)}
-		for range m.frame.composerGap.Dy() {
-			sections = append(sections, "")
-		}
-		sections = append(sections, m.activeToolUI.component.View(), m.chatFooter())
-		return strings.Join(sections, "\n")
+		transcript = lipgloss.NewStyle().Faint(true).Render(transcript)
+		composer = m.activeToolUI.component.View()
 	}
 	sections := []string{transcript}
 	if m.frame.approval != "" {
 		sections = append(sections, m.frame.approval)
 	}
-	for range m.frame.composerGap.Dy() {
-		sections = append(sections, "")
-	}
-	sections = append(sections, m.editor.View(), m.chatFooter())
+	sections = append(sections, slices.Repeat([]string{""}, m.frame.composerGap.Dy())...)
+	sections = append(sections, composer, m.chatFooter())
 	return strings.Join(sections, "\n")
 }
 

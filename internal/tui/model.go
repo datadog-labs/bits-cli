@@ -397,7 +397,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 // control to chat without replacing or quitting the root model.
 func (m *Model) setMode(mode Mode) {
 	if m.mode == ModeChat && mode != ModeChat {
-		m.clearSelection()
+		m.selection.clear()
 		m.follow = followControl{}
 	}
 	m.mode = mode

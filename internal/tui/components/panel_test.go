@@ -112,7 +112,7 @@ func TestPanelOwnsScrollableBodyPaging(t *testing.T) {
 	first := panel.Render(60, 20, content)
 	assertBounded(t, first, 60, 20)
 	plain := ansi.Strip(first)
-	if !strings.Contains(plain, "detail-01") || strings.Contains(plain, "detail-12") || !strings.Contains(plain, "pgup/pgdown scroll") {
+	if !strings.Contains(plain, "detail-01") || strings.Contains(plain, "detail-12") || !strings.Contains(plain, "shift+pgup/pgdown scroll") {
 		t.Fatalf("initial scroll window is incorrect:\n%s", plain)
 	}
 

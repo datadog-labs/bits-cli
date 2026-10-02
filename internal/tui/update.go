@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"image"
 	"strings"
 	"time"
 
@@ -456,7 +457,7 @@ func (m *Model) beginSelection(msg tea.MouseClickMsg) tea.Cmd {
 		m.editor.CloseMenu()
 	}
 	scope := selectionScopeLower
-	if msg.Y < m.frame.transcript.Max.Y {
+	if image.Pt(msg.X, msg.Y).In(m.frame.transcript) {
 		scope = selectionScopeTranscript
 	}
 	m.selection.beginClick(m.visibleSelectionFrame(scope), scope, msg.X, msg.Y, m.hasPendingAccordionToggle, time.Now())
@@ -521,45 +522,28 @@ func (m *Model) advanceSelectionScroll(msg selectionTickMsg) tea.Cmd {
 	return m.armSelectionScroll()
 }
 
-func (m *Model) clearSelection() {
-	m.selection.clear()
-}
-
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
-	if m.focus() == focusToolUI {
-		if msg.Y >= m.frame.dock.Min.Y {
-			return m.updateToolUI(msg)
-		}
-		switch msg.Button {
-		case tea.MouseWheelUp:
-			m.list.ScrollBy(-mouseWheelDelta)
-		case tea.MouseWheelDown:
-			m.list.ScrollBy(mouseWheelDelta)
-		default:
-		}
-		return nil
-	}
-	if m.focus() == focusPicker {
+	overDock := image.Pt(msg.X, msg.Y).In(m.frame.dock)
+	switch focus := m.focus(); {
+	case focus == focusPicker:
 		return m.updateConversationPicker(msg)
-	}
-	if m.focus() == focusStatus {
+	case focus == focusStatus:
 		return m.updateStatus(msg)
+	case focus == focusToolUI && overDock:
+		return m.updateToolUI(msg)
 	}
-	if m.focus() == focusApproval {
-		switch msg.Button {
-		case tea.MouseWheelUp:
-			m.approvalPanel.ScrollBy(-mouseWheelDelta)
-		case tea.MouseWheelDown:
-			m.approvalPanel.ScrollBy(mouseWheelDelta)
-		default:
-		}
-		return nil
+
+	// Focus decides who gets keys; the wheel follows the pointer. A docked
+	// approval scrolls its own body, anywhere else scrolls the transcript.
+	scroll := m.list.ScrollBy
+	if m.focus() == focusApproval && overDock {
+		scroll = m.approvalPanel.ScrollBy
 	}
 	switch msg.Button {
 	case tea.MouseWheelUp:
-		m.list.ScrollBy(-mouseWheelDelta)
+		scroll(-mouseWheelDelta)
 	case tea.MouseWheelDown:
-		m.list.ScrollBy(mouseWheelDelta)
+		scroll(mouseWheelDelta)
 	default:
 	}
 	return nil
@@ -682,7 +666,7 @@ func (m *Model) stopStartup() {
 // handled earlier in Update.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" && m.selection.active() {
-		m.clearSelection()
+		m.selection.clear()
 		return m, nil
 	}
 	// ctrl+o toggles every tool block whenever the transcript is visible,
@@ -780,8 +764,12 @@ func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "right", "tab":
 		m.approvalChoice = (m.approvalChoice + 1) % len(approvalChoices)
 	case "pgup":
-		m.approvalPanel.PageUp()
+		m.list.PageUp()
 	case "pgdown":
+		m.list.PageDown()
+	case "shift+pgup":
+		m.approvalPanel.PageUp()
+	case "shift+pgdown":
 		m.approvalPanel.PageDown()
 	case "esc":
 		m.respondToApproval(agent.ApprovalDeny)
@@ -946,7 +934,7 @@ func (m *Model) setDarkBackground(isDark bool) {
 }
 
 func (m *Model) resize(w, h int) {
-	m.clearSelection()
+	m.selection.clear()
 	m.follow = followControl{}
 	m.width, m.height = w, h
 	m.editor.SetWidth(w)
@@ -966,7 +954,9 @@ func (m *Model) relayout() {
 	if m.mode == ModeTermInit {
 		return
 	}
-	m.layoutToolUI()
+	if m.activeToolUI != nil {
+		m.activeToolUI.component.SetSize(m.width, m.height, m.styles)
+	}
 	m.editor.SetPlaceholder(m.promptPlaceholder())
 	m.frame = m.layout()
 	m.editor.SetMenuHeight(m.frame.composerTop())

@@ -38,7 +38,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	// This makes any delayed Bubble Tea message from the prior domain harmless.
 	m.op.gen++
 	m.conversationEpoch++
-	m.clearSelection()
+	m.selection.clear()
 	m.transcript = agent.TranscriptSnapshot{}
 	m.list.Reset()
 	m.convID = ""

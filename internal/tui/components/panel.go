@@ -190,7 +190,7 @@ func (p *Panel) scrollableBody(width, height int, content PanelContent) string {
 	maxOffset := len(rows) - pageSize
 	p.scrollOffset = min(max(0, p.scrollOffset), maxOffset)
 	end := min(len(rows), p.scrollOffset+pageSize)
-	position := fmt.Sprintf("lines %d–%d of %d · pgup/pgdown scroll", p.scrollOffset+1, end, len(rows))
+	position := fmt.Sprintf("lines %d–%d of %d · shift+pgup/pgdown scroll", p.scrollOffset+1, end, len(rows))
 	middle := strings.Join(rows[p.scrollOffset:end], "\n") + "\n" +
 		p.styles.Help.Render(ansi.Truncate(position, width, "…"))
 	return joinNonEmpty(header, middle, footer)

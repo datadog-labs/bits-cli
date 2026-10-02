@@ -13,6 +13,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
 const approvalToolName = "confirm_action"
@@ -356,11 +357,11 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 
 	model.relayout()
 	first := ansi.Strip(model.frame.approval)
-	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "pgup/pgdown scroll") || !strings.Contains(first, "Allow") {
+	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "shift+pgup/pgdown scroll") || !strings.Contains(first, "Allow") {
 		t.Fatalf("initial long-command approval window is incorrect:\n%s", first)
 	}
 	for range 10 {
-		model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+		model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown, Mod: tea.ModShift})
 	}
 	last := ansi.Strip(model.frame.approval)
 	if strings.Contains(last, "print(1)") || !strings.Contains(last, "print(20)") || !strings.Contains(last, "cwd: /workspace") || !strings.Contains(last, "Allow") {
@@ -438,5 +439,52 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				t.Fatalf("tool response = %+v", backend.responses)
 			}
 		})
+	}
+}
+
+func TestApprovalKeepsTranscriptScrollable(t *testing.T) {
+	commandRows := make([]string, 60)
+	for i := range commandRows {
+		commandRows[i] = fmt.Sprintf("print(%d)", i+1)
+	}
+	input, err := json.Marshal(spec.ExecCommandInput{Cmd: strings.Join(commandRows, "\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := newShell()
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	for i := range 80 {
+		model.notices = append(model.notices, chat.NoticeItem{ID: uint64(i + 1), Notice: chat.Notice{Level: chat.NoticeInfo, Text: fmt.Sprintf("line %d", i)}})
+	}
+	model.syncTranscript()
+	model.pendingApprovals = []agent.Block{{
+		Kind: assistant.KindToolCall,
+		Tool: &agent.ToolBlock{Name: spec.ExecCommand, Input: string(input), Status: agent.ToolAwaitingApproval, IsClientSide: true},
+	}}
+	model.relayout()
+
+	if rows := model.frame.transcript.Dy(); rows < minimumTranscriptRows {
+		t.Fatalf("transcript rows = %d, want >= %d", rows, minimumTranscriptRows)
+	}
+
+	top := model.list.VisibleSurface().Top
+	model.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, Y: 0})
+	if model.list.VisibleSurface().Top >= top {
+		t.Fatal("wheel over the transcript did not scroll it while approval is pending")
+	}
+	top = model.list.VisibleSurface().Top
+	model.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if model.list.VisibleSurface().Top >= top {
+		t.Fatal("pgup did not scroll the transcript while approval is pending")
+	}
+
+	top = model.list.VisibleSurface().Top
+	model.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, Y: model.frame.dock.Min.Y})
+	model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown, Mod: tea.ModShift})
+	if model.list.VisibleSurface().Top != top {
+		t.Fatal("scrolling over the approval panel moved the transcript")
+	}
+	if strings.Contains(ansi.Strip(model.frame.approval), "lines 1–") {
+		t.Fatalf("approval body did not scroll:\n%s", ansi.Strip(model.frame.approval))
 	}
 }

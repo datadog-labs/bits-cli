@@ -44,7 +44,7 @@ func (m *Model) activateToolUI(request *tools.Request) {
 		return
 	}
 	m.activeToolUI = session
-	m.clearSelection()
+	m.selection.clear()
 	m.editor.CloseMenu()
 }
 
@@ -111,10 +111,4 @@ func (m *Model) forwardToolUI(msg tea.Msg) tea.Cmd {
 		m.nextToolUI()
 	}
 	return cmd
-}
-
-func (m *Model) layoutToolUI() {
-	if m.activeToolUI != nil {
-		m.activeToolUI.component.SetSize(m.width, m.height, m.styles)
-	}
 }
