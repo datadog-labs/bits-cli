@@ -85,12 +85,20 @@ type toolRenderSpec struct {
 	// static marks a renderer that ignores disclosure, so List offers no
 	// disclosure control.
 	static   bool
-	interact func(call agent.ToolCall) components.Prompt // nil = not interactive
+	interact func(call agent.ToolCall) ToolPrompt // nil = not interactive
 }
 
-// NewToolPrompt builds the interactive UI registered for a client tool. The
-// host docks it like a tool approval.
-func NewToolPrompt(call agent.ToolCall) (components.Prompt, bool) {
+// ToolPrompt is the interactive UI a client tool asks the user through. The
+// host docks it like a tool approval, and hands Result to the waiting tool.
+type ToolPrompt interface {
+	components.Prompt
+	// Result reports the user's answer once they have given it, and keeps
+	// reporting it. The tool, not the UI, turns it into the call's result.
+	Result() (any, bool)
+}
+
+// NewToolPrompt builds the interactive UI registered for a client tool.
+func NewToolPrompt(call agent.ToolCall) (ToolPrompt, bool) {
 	renderSpec := toolRenderSpecFor(spec.Identity{ClientSide: true, Name: call.Name})
 	if renderSpec.interact == nil {
 		return nil, false
@@ -1068,7 +1076,7 @@ func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, c renderCont
 // questionPrompt asks ask_user_question's questions with a Questionnaire.
 type questionPrompt struct{ form *components.Questionnaire }
 
-func newQuestionPrompt(call agent.ToolCall) components.Prompt {
+func newQuestionPrompt(call agent.ToolCall) ToolPrompt {
 	input, err := spec.ParseQuestions(call.Input)
 	if err != nil {
 		return nil

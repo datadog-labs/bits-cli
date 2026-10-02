@@ -169,7 +169,7 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	}
 	// Arrival order is up to the scheduler; queued forms follow the transcript.
 	queued := queuedToolUIs(m)
-	remaining := []string{queued[0].callID, queued[1].callID}
+	remaining := []string{queued[0].callID(), queued[1].callID()}
 	slices.Sort(remaining)
 	questionKey(m, tea.KeyEscape, 0)
 	if dockedToolUI(m) == nil || dockedToolUI(m).Call.ID != remaining[0] {

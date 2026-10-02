@@ -543,7 +543,7 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	} else if done.cancel != nil {
 		done.cancel() // release the turn/restore context
 	}
-	m.requests = nil
+	m.clearAsks()
 
 	if done.then == thenLogout {
 		// Logging out makes a queued permissions mode moot.
@@ -851,7 +851,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	switch ev.Kind {
 	case agent.EventTranscript:
 		m.transcript = ev.Transcript
-		m.syncRequests(ev.Transcript.PendingApprovals())
+		m.syncApprovals(ev.Transcript.PendingApprovals())
 		if ev.Transcript.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}
@@ -910,6 +910,7 @@ func (m *Model) relayout() {
 	if m.mode == ModeTermInit {
 		return
 	}
+	m.redock()
 	m.editor.SetPlaceholder(m.promptPlaceholder())
 	m.frame = m.layout()
 	m.editor.SetMenuHeight(m.frame.composer.Min.Y)

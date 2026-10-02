@@ -189,7 +189,7 @@ func TestPermissionsQueuesWhileApprovalsPending(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	// Approvals only arrive inside a running operation.
 	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
-	m.syncRequests([]agent.Block{{
+	m.syncApprovals([]agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{Status: agent.ToolAwaitingApproval},
 	}})

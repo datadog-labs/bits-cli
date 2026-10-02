@@ -37,13 +37,13 @@ var approvalChoices = [...]approvalChoice{
 }
 
 // approvalPrompt is the panel asking the user to allow one tool call. It owns
-// the highlighted action, the body scroll, and the decision until the model
-// collects it. A new prompt starts on the first action, scrolled to the top.
+// the highlighted action, the body scroll, and the decision; its approvalAsk
+// delivers that. A new prompt starts on the first action, scrolled to the top.
 type approvalPrompt struct {
 	block    agent.Block
 	selected int                    // index into approvalChoices
 	window   components.Window      // the body rows the last layout showed
-	decision agent.ApprovalDecision // made but not yet collected; "" when none
+	decision agent.ApprovalDecision // "" until the user decides
 	panel    components.Panel
 
 	theme styles.Theme
@@ -60,9 +60,6 @@ func (a *approvalPrompt) SetStyles(theme styles.Theme) {
 	a.theme, a.chat = theme, chat.StylesFor(theme)
 	a.panel.SetStyles(theme.Approval.Panel)
 }
-
-// Result reports the agent.ApprovalDecision the user made.
-func (a *approvalPrompt) Result() (any, bool) { return a.decision, a.decision != "" }
 
 // Update moves the highlight, scrolls the body, or makes the decision. The
 // wheel scrolls the body; clicks are left to text selection.

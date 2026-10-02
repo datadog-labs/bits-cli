@@ -17,16 +17,16 @@ const (
 	minimumDockRows = 15
 )
 
-// The dock shows the first request waiting on the user (see request) as its
+// The dock shows one ask waiting on the user (see ask and redock) through its
 // components.Prompt. It sits between the transcript and the composer and owns
 // the keyboard while it shows; the editor stays visible but inert.
 
 // prompt returns the docked prompt, or nil.
 func (m *Model) prompt() components.Prompt {
-	if len(m.requests) == 0 {
+	if m.docked == nil {
 		return nil
 	}
-	return m.requests[0].prompt
+	return m.docked.prompt()
 }
 
 // dockRows is the most rows a prompt may take out of the free rows above the

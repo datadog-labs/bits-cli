@@ -302,7 +302,7 @@ func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
 	}
 	model := newShell()
 	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	model.syncRequests([]agent.Block{{
+	model.syncApprovals([]agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{
 			Name:         spec.ExecCommand,
@@ -341,7 +341,7 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 	}
 	model := newShell()
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 22})
-	model.syncRequests([]agent.Block{{
+	model.syncApprovals([]agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{
 			Name:         spec.ExecCommand,
@@ -457,7 +457,7 @@ func TestApprovalKeepsTranscriptScrollable(t *testing.T) {
 		model.notices = append(model.notices, chat.NoticeItem{ID: uint64(i + 1), Notice: chat.Notice{Level: chat.NoticeInfo, Text: fmt.Sprintf("line %d", i)}})
 	}
 	model.syncTranscript()
-	model.syncRequests([]agent.Block{{
+	model.syncApprovals([]agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{Name: spec.ExecCommand, Input: string(input), Status: agent.ToolAwaitingApproval, IsClientSide: true},
 	}})

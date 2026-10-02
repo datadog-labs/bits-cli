@@ -13,8 +13,6 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
-	"github.com/DataDog/bits-cli/internal/tui/chat"
 	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
@@ -22,12 +20,9 @@ import (
 // rows the frame gives it, and a frame that cannot be usably drawn is marked
 // too small instead.
 func TestLayoutTilesTheScreen(t *testing.T) {
-	approval := func(m *Model) { m.syncRequests([]agent.Block{animToolBlock(agent.ToolAwaitingApproval)}) }
+	approval := func(m *Model) { m.syncApprovals([]agent.Block{animToolBlock(agent.ToolAwaitingApproval)}) }
 	draft := func(m *Model) { setConversationInput(m, strings.Repeat("draft\n", 12)) }
-	toolUI := func(m *Model) {
-		prompt, _ := chat.NewToolPrompt(agent.ToolCall{Name: spec.AskUserQuestion, Input: questionInput})
-		m.ask(&request{callID: "question", prompt: prompt})
-	}
+	toolUI := func(m *Model) { m.openToolUI(questionRequest(t, "question")) }
 	for _, tc := range []struct {
 		name          string
 		width, height int

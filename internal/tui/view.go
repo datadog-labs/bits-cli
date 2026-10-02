@@ -146,7 +146,7 @@ func (m *Model) layout() frame {
 	f.composerGap = take(chatComposerGapHeight)
 	dock, answerable := m.prompt(), true
 	if dock != nil {
-		area := components.Dock{Width: m.width, Height: dockRows(y), Waiting: len(m.requests)}
+		area := components.Dock{Width: m.width, Height: dockRows(y), Waiting: len(m.waitingAsks())}
 		if f.dockView, answerable = dock.Layout(area); f.dockView != "" {
 			f.dock = take(lipgloss.Height(f.dockView))
 		}
