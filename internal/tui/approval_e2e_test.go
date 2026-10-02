@@ -260,7 +260,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 				_, _ = model.Update(msg)
 			}
 
-			view := model.frame.dockView
+			view := model.frame.promptView
 			plain := ansi.Strip(view)
 			normalized := strings.Join(strings.Fields(plain), " ")
 			for _, want := range []string{"Permission Required", "ESC x", "Run the test action?", "This test tool requires", "Deny"} {
@@ -317,7 +317,7 @@ func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
 	}})
 
 	model.relayout()
-	plain := ansi.Strip(model.frame.dockView)
+	plain := ansi.Strip(model.frame.promptView)
 	wants := []string{"Run an unsandboxed command?", "cwd: /workspace · unsandboxed", "Allow"}
 	wants = append(wants, strings.Split(command, "\n")...)
 	for _, want := range wants {
@@ -356,14 +356,14 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 	}})
 
 	model.relayout()
-	first := ansi.Strip(model.frame.dockView)
+	first := ansi.Strip(model.frame.promptView)
 	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "· pgup/pgdown scroll") || !strings.Contains(first, "Allow") {
 		t.Fatalf("initial long-command approval window is incorrect:\n%s", first)
 	}
 	for range 10 {
 		model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	}
-	last := ansi.Strip(model.frame.dockView)
+	last := ansi.Strip(model.frame.promptView)
 	if strings.Contains(last, "print(1)") || !strings.Contains(last, "print(20)") || !strings.Contains(last, "cwd: /workspace") || !strings.Contains(last, "Allow") {
 		t.Fatalf("paged long-command approval window is incorrect:\n%s", last)
 	}
@@ -401,7 +401,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 			}
 
-			approval := model.frame.dockView
+			approval := model.frame.promptView
 			view := ansi.Strip(model.View().Content)
 			if !strings.Contains(view, "Permission Required") || !strings.Contains(view, "Run the test action?") || !strings.Contains(approval, model.styles.Approval.Selected.Render(tt.selection)) {
 				t.Fatalf("approval panel not rendered:\n%s", view)
@@ -480,13 +480,13 @@ func TestApprovalKeepsTranscriptScrollable(t *testing.T) {
 
 	// The wheel over the panel and pgup/pgdown scroll its body, not the chat.
 	top = model.list.VisibleSurface().Top
-	model.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, Y: model.frame.dock.Min.Y})
-	if !strings.Contains(ansi.Strip(model.frame.dockView), "lines 2–") {
-		t.Fatalf("wheel did not scroll the approval body:\n%s", ansi.Strip(model.frame.dockView))
+	model.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, Y: model.frame.prompt.Min.Y})
+	if !strings.Contains(ansi.Strip(model.frame.promptView), "lines 2–") {
+		t.Fatalf("wheel did not scroll the approval body:\n%s", ansi.Strip(model.frame.promptView))
 	}
 	model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
-	if strings.Contains(ansi.Strip(model.frame.dockView), "lines 2–") {
-		t.Fatalf("pgdown did not page the approval body:\n%s", ansi.Strip(model.frame.dockView))
+	if strings.Contains(ansi.Strip(model.frame.promptView), "lines 2–") {
+		t.Fatalf("pgdown did not page the approval body:\n%s", ansi.Strip(model.frame.promptView))
 	}
 	if model.list.VisibleSurface().Top != top {
 		t.Fatal("scrolling the approval panel moved the transcript")
@@ -494,7 +494,7 @@ func TestApprovalKeepsTranscriptScrollable(t *testing.T) {
 
 	// The panel has no use for clicks, so they select its text, e.g. to copy
 	// the command.
-	model.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 4, Y: model.frame.dock.Min.Y + 1})
+	model.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 4, Y: model.frame.prompt.Min.Y + 1})
 	if !model.selection.selecting() || model.selection.scope != selectionScopeLower {
 		t.Fatal("a click on the approval did not start a selection of its text")
 	}

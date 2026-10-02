@@ -16,10 +16,10 @@ import (
 )
 
 const (
-	// approvalCompactWidth is the dock width below which the panel switches to
+	// approvalCompactWidth is the slot width below which the panel switches to
 	// condensed action labels so the choice row still fits.
 	approvalCompactWidth = 50
-	// approvalMinWidth is the narrowest dock whose choice row shows every
+	// approvalMinWidth is the narrowest slot whose choice row shows every
 	// action, even condensed.
 	approvalMinWidth = 36
 )
@@ -55,6 +55,10 @@ var _ components.Prompt = (*approvalPrompt)(nil)
 func newApprovalPrompt(block agent.Block) *approvalPrompt {
 	return &approvalPrompt{block: block}
 }
+
+// Placement docks the panel above the composer, which keeps the user's draft
+// in sight while they decide.
+func (a *approvalPrompt) Placement() components.Placement { return components.Docked }
 
 func (a *approvalPrompt) SetStyles(theme styles.Theme) {
 	a.theme, a.chat = theme, chat.StylesFor(theme)
@@ -98,12 +102,12 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 
 func (a *approvalPrompt) scroll(rows int) { a.window = a.window.Scrolled(rows) }
 
-// Layout renders the panel within the dock. It is answerable in the full
+// Layout renders the panel within the slot. It is answerable in the full
 // form, whose body scrolls, or in the compact one, which only shows when the
 // whole request fits; never in the one-line fallback. Layout keeps the body
 // window it showed, so scrolling clamps to what the last frame displayed.
-func (a *approvalPrompt) Layout(dock components.Dock) (string, bool) {
-	width := dock.Width
+func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
+	width := slot.Width
 	block := a.block
 	prompt := block.Tool.Approval
 	title := "Run " + escape.Inline(block.Tool.Name) + "?"
@@ -116,8 +120,8 @@ func (a *approvalPrompt) Layout(dock components.Dock) (string, bool) {
 	}
 
 	queue := "Permission Required"
-	if dock.Waiting > 1 {
-		queue += " · " + strconv.Itoa(dock.Waiting) + " waiting"
+	if slot.Waiting > 1 {
+		queue += " · " + strconv.Itoa(slot.Waiting) + " waiting"
 	}
 	sty := a.theme.Approval
 	content := components.PanelContent{
@@ -151,7 +155,7 @@ func (a *approvalPrompt) Layout(dock components.Dock) (string, bool) {
 		},
 		TinyMessage: "Resize terminal to approve",
 	}
-	rendered, window, shown := a.panel.Layout(width, dock.Height, content)
+	rendered, window, shown := a.panel.Layout(width, slot.Height, content)
 	a.window = window
 	return lipgloss.PlaceHorizontal(width, lipgloss.Center, rendered), shown && width >= approvalMinWidth
 }

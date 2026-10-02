@@ -17,7 +17,8 @@ import (
 // ask is one tool call waiting on the user, answered through its prompt. Two
 // sources ask, each kept in its own shape: approvals mirror the transcript
 // (m.approvals), tool UIs arrive as requests on the tools.UI channel
-// (m.toolUIs). The dock shows one ask at a time (see redock).
+// (m.toolUIs). The chat shows one ask at a time (see reshow), placed where its
+// prompt asks.
 type ask interface {
 	callID() string
 	prompt() components.Prompt
@@ -93,7 +94,7 @@ func (m *Model) openToolUI(ui *tools.Request) {
 	form.SetStyles(m.styles)
 	m.toolUIs = append(m.toolUIs, &toolAsk{ui: ui, form: form})
 	m.editor.CloseMenu()
-	m.redock()
+	m.reshow()
 }
 
 // syncApprovals mirrors the approvals the transcript lists: new calls are
@@ -119,7 +120,7 @@ func (m *Model) syncApprovals(pending []agent.Block) {
 		a.settled = !listed[id]
 		return a.settled
 	})
-	m.redock()
+	m.reshow()
 }
 
 // dropToolUIs lets go of every tool UI once its round stops, before their
@@ -129,27 +130,27 @@ func (m *Model) dropToolUIs() {
 		t.done = true
 	}
 	m.toolUIs = nil
-	m.redock()
+	m.reshow()
 }
 
 // clearAsks forgets every ask when the operation they belong to ends.
 func (m *Model) clearAsks() {
 	m.approvals = make(map[string]*approvalAsk)
-	m.toolUIs, m.docked = nil, nil
+	m.toolUIs, m.shown = nil, nil
 }
 
-// redock keeps the docked ask while it waits; otherwise the earliest waiting
-// call in the transcript docks, whichever source asked. It also lets go of
+// reshow keeps the shown ask while it waits; otherwise the earliest waiting
+// call in the transcript is shown, whichever source asked. It also lets go of
 // tool UIs that stopped waiting. Every change to the asks ends with it, and
 // relayout runs it once per update to notice cancelled tool contexts.
-func (m *Model) redock() {
+func (m *Model) reshow() {
 	m.toolUIs = slices.DeleteFunc(m.toolUIs, func(t *toolAsk) bool { return !t.waiting() })
-	if m.docked != nil && m.docked.waiting() {
+	if m.shown != nil && m.shown.waiting() {
 		return
 	}
-	m.docked = nil
+	m.shown = nil
 	if waiting := m.waitingAsks(); len(waiting) > 0 {
-		m.docked = slices.MinFunc(waiting, m.compareAsks)
+		m.shown = slices.MinFunc(waiting, m.compareAsks)
 	}
 }
 
@@ -180,20 +181,20 @@ func (m *Model) compareAsks(a, b ask) int {
 	return cmp.Or(cmp.Compare(position(a), position(b)), cmp.Compare(a.callID(), b.callID()))
 }
 
-// updatePrompt applies msg to the docked prompt, then delivers its answer;
-// once delivered, the next ask docks.
+// updatePrompt applies msg to the shown prompt, then delivers its answer;
+// once delivered, the next ask is shown.
 func (m *Model) updatePrompt(msg tea.Msg) (tea.Cmd, bool) {
-	if m.docked == nil {
+	if m.shown == nil {
 		return nil, false
 	}
-	cmd, used := m.docked.prompt().Update(msg)
-	if m.docked.deliver() {
-		m.redock()
+	cmd, used := m.shown.prompt().Update(msg)
+	if m.shown.deliver() {
+		m.reshow()
 	}
 	return cmd, used
 }
 
-// stopTools answers ctrl+x on a docked prompt: the engine stops the
+// stopTools answers ctrl+x on a shown prompt: the engine stops the
 // client-tool round, settling its approvals and tool UIs, or the whole
 // operation when it cannot.
 func (m *Model) stopTools() {

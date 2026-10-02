@@ -107,7 +107,7 @@ func permissionsChangedNotice(mode agent.PermissionsMode) chat.Notice {
 }
 
 func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
-	if !m.permissionsPanel.Fits(max(1, m.width), m.frame.composer.Min.Y, m.permissionsContent()) {
+	if !m.permissionsPanel.Fits(max(1, m.width), m.frame.inputTop(), m.permissionsContent()) {
 		if msg.String() == "esc" {
 			m.setMode(ModeChat)
 		}
@@ -153,7 +153,7 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 // permissionsView floats above the composer, so it fits the rows left there
 // and falls back to the panel's compact form when it does not.
 func (m *Model) permissionsView() string {
-	return m.permissionsPanel.Render(max(1, m.width), m.frame.composer.Min.Y, m.permissionsContent())
+	return m.permissionsPanel.Render(max(1, m.width), m.frame.inputTop(), m.permissionsContent())
 }
 
 func (m *Model) permissionsContent() components.PanelContent {

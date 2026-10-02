@@ -89,7 +89,7 @@ type toolRenderSpec struct {
 }
 
 // ToolPrompt is the interactive UI a client tool asks the user through. The
-// host docks it like a tool approval, and hands Result to the waiting tool.
+// host shows it like a tool approval, and hands Result to the waiting tool.
 type ToolPrompt interface {
 	components.Prompt
 	// Result reports the user's answer once they have given it, and keeps
@@ -1094,11 +1094,15 @@ func newQuestionPrompt(call agent.ToolCall) ToolPrompt {
 // Update gives the form every event: it owns all of its area.
 func (q questionPrompt) Update(msg tea.Msg) (tea.Cmd, bool) { return q.form.Update(msg), true }
 
-func (q questionPrompt) Layout(dock components.Dock) (string, bool) {
-	q.form.SetSize(dock.Width, dock.Height)
+func (q questionPrompt) Layout(slot components.Slot) (string, bool) {
+	q.form.SetSize(slot.Width, slot.Height)
 	minWidth, minHeight := q.form.MinSize()
-	return q.form.View(), dock.Width >= minWidth && dock.Height >= minHeight
+	return q.form.View(), slot.Width >= minWidth && slot.Height >= minHeight
 }
+
+// Placement puts the form in place of the composer: answering it is the one
+// thing to do.
+func (q questionPrompt) Placement() components.Placement { return components.ReplacesInput }
 
 func (q questionPrompt) SetStyles(theme styles.Theme) { q.form.SetStyles(theme) }
 

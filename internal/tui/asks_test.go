@@ -29,7 +29,7 @@ func waitingApprovals(m *Model) int {
 
 // dockedToolUI is the tool request whose UI is docked, or nil.
 func dockedToolUI(m *Model) *tools.Request {
-	if t, ok := m.docked.(*toolAsk); ok {
+	if t, ok := m.shown.(*toolAsk); ok {
 		return t.ui
 	}
 	return nil
@@ -37,7 +37,7 @@ func dockedToolUI(m *Model) *tools.Request {
 
 // queuedToolUIs are the tool UIs waiting behind the docked ask.
 func queuedToolUIs(m *Model) []*toolAsk {
-	return slices.DeleteFunc(slices.Clone(m.toolUIs), func(t *toolAsk) bool { return t == m.docked })
+	return slices.DeleteFunc(slices.Clone(m.toolUIs), func(t *toolAsk) bool { return t == m.shown })
 }
 
 // questionRequest presents ask_user_question as the tool would, and returns
@@ -88,7 +88,7 @@ func TestApprovalsDockOneAtATimeInTranscriptOrder(t *testing.T) {
 		t.Fatal("a later update replaced or reset the docked approval")
 	}
 	m.relayout()
-	if dock := ansi.Strip(m.frame.dockView); !strings.Contains(dock, "3 waiting") {
+	if dock := ansi.Strip(m.frame.promptView); !strings.Contains(dock, "3 waiting") {
 		t.Fatalf("the docked approval does not count every ask:\n%s", dock)
 	}
 
@@ -152,7 +152,7 @@ func TestApprovalIsHiddenWhenItCannotBeShownWhole(t *testing.T) {
 		if m.frame.tooSmall {
 			continue
 		}
-		if dock := ansi.Strip(m.frame.dockView); !strings.Contains(dock, "Deny") || !strings.Contains(dock, "lines ") {
+		if dock := ansi.Strip(m.frame.promptView); !strings.Contains(dock, "Deny") || !strings.Contains(dock, "lines ") {
 			t.Fatalf("height %d docks an approval without its actions or scroll:\n%s", height, dock)
 		}
 	}

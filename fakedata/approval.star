@@ -1,8 +1,9 @@
-"""Scenarios for exercising docked prompts with BITS_FAKE_BACKEND=1.
+"""Scenarios for exercising prompts with BITS_FAKE_BACKEND=1.
 
 A prompt is a tool request waiting on the user: the approval panel or a tool's
-interactive UI (today the questionnaire). Both dock between the transcript and
-the composer, which stays visible but inert.
+interactive UI (today the questionnaire). The approval docks above the
+composer, which stays visible but inert; the questionnaire replaces the
+composer and dims the transcript behind it.
 
 Start the TUI in the default permission mode (Ask for Approval):
   BITS_FAKE_BACKEND=1 go run .
@@ -40,13 +41,13 @@ and edits show a short fixed prompt.
   write_then_edit   Two approvals in a row (write, then edit). The second starts
                     with the first action highlighted even if you moved it.
   question_over_history
-                    The questionnaire docks where the panel would. Drag to
-                    select text in the transcript above it while it is open.
+                    The questionnaire replaces the composer; the transcript
+                    dims but still scrolls and selects under the pointer.
   question_then_approval
                     A question and an approval wait at once. Whichever arrives
-                    first docks and is not replaced by the other; the approval
-                    header says "2 waiting". Answer it and the other docks,
-                    fresh. Ctrl+X instead stops both.
+                    first shows and is not replaced by the other; the approval
+                    header says "2 waiting". Answer it and the other shows,
+                    fresh, in its own place. Ctrl+X instead stops both.
   after_decision    Scroll up while the panel is open, then Allow. The turn
                     continues; submitting a new message jumps to the bottom.
 

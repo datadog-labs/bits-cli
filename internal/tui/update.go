@@ -95,7 +95,7 @@ type focus int
 
 const (
 	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
-	focusPrompt                   // a tool approval or a tool's UI is docked (see prompt)
+	focusPrompt                   // a tool approval or a tool's UI is shown (see prompt)
 	focusPicker                   // the /resume conversation picker
 	focusStatus                   // the local /status document
 	focusPermissions              // the permissions picker
@@ -478,7 +478,7 @@ func (m *Model) advanceSelectionScroll(msg selectionTickMsg) tea.Cmd {
 
 // handleMouse routes a pointer event. Full-screen pickers take every event.
 // On the chat, focus only decides who gets keys; the pointer decides the rest:
-// a drag stays with the selection it started, the docked prompt gets what lands
+// a drag stays with the selection it started, the shown prompt gets what lands
 // on it, and anything it does not use scrolls or selects like the rest of the
 // chat. The wheel scrolls the transcript wherever nothing else scrolls.
 func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
@@ -500,8 +500,8 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	case tea.MouseReleaseMsg:
 		return m.finishSelection(msg)
 	}
-	if m.frame.at(pointAt(msg)) == regionDock {
-		if cmd, used := m.updatePrompt(m.frame.inDock(msg)); used {
+	if m.frame.at(pointAt(msg)) == regionPrompt {
+		if cmd, used := m.updatePrompt(m.frame.inPrompt(msg)); used {
 			return cmd
 		}
 	}
@@ -641,7 +641,7 @@ func (m *Model) stopStartup() {
 //
 // The transcript keys work whatever owns the keyboard on the chat: ctrl+o
 // toggles every tool block, and shift+pgup/pgdown page the transcript. Plain
-// pgup/pgdown page what owns the keyboard: a docked prompt's body, or the
+// pgup/pgdown page what owns the keyboard: a shown prompt's body, or the
 // transcript under the editor.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" && m.selection.active() {
@@ -741,7 +741,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmd, m.syncCompletionSearches())
 }
 
-// handlePromptKey gives a key to the docked prompt; the inert editor never
+// handlePromptKey gives a key to the shown prompt; the inert editor never
 // sees it. ctrl+x stops the tool round the prompt belongs to.
 func (m *Model) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
 	if msg.String() == "ctrl+x" {
@@ -903,17 +903,17 @@ func (m *Model) resize(w, h int) {
 }
 
 // relayout lays the chat out from current state: it builds the frame, laying
-// out the docked prompt, and sizes the transcript and editor to it. Update
+// out the shown prompt, and sizes the transcript and editor to it. Update
 // calls it once, after every handler has run, so a prompt is laid out once per
 // update and View only draws what this laid out.
 func (m *Model) relayout() {
 	if m.mode == ModeTermInit {
 		return
 	}
-	m.redock()
+	m.reshow()
 	m.editor.SetPlaceholder(m.promptPlaceholder())
 	m.frame = m.layout()
-	m.editor.SetMenuHeight(m.frame.composer.Min.Y)
+	m.editor.SetMenuHeight(m.frame.inputTop())
 	m.list.SetHeight(m.frame.transcript.Dy())
 	m.list.SetHeader(m.headerView())
 }

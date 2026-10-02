@@ -84,24 +84,31 @@ func (m *Model) View() tea.View {
 }
 
 // frame is the chat screen laid out for one update. relayout builds it once
-// at the end of every Update, laying out the docked prompt on the way; View,
+// at the end of every Update, laying out the shown prompt on the way; View,
 // hit-testing, and every size query read it instead of measuring again.
 //
-// Rows stack top to bottom: transcript, dock, composer gap, composer, footer.
-// The dock holds the prompt waiting on the user, and is empty when none is.
+// Rows stack top to bottom: transcript, prompt, composer gap, composer,
+// footer. The prompt rows hold the ask waiting on the user, and are empty
+// when none is. A components.Docked prompt sits under the transcript, above
+// the editor; one that components.ReplacesInput takes the composer's place
+// below the gap, and the composer rows are then empty.
 type frame struct {
 	transcript  image.Rectangle
-	dock        image.Rectangle
+	prompt      image.Rectangle
 	composerGap image.Rectangle
 	composer    image.Rectangle
 	footer      image.Rectangle
 
-	// dockView is the docked prompt as its one Layout of the update drew it.
-	dockView string
+	// promptView is the shown prompt as its one Layout of the update drew it.
+	promptView string
+
+	// replaced means the prompt replaces the composer: the editor and footer
+	// hide, and the transcript dims behind it.
+	replaced bool
 
 	// tooSmall means the chat cannot be usably rendered, so View replaces the
 	// whole screen with a resize hint. The UI is then invisible and Update drops
-	// user input: nothing — a docked prompt, the composer, transcript
+	// user input: nothing — a shown prompt, the composer, transcript
 	// scrolling — can be driven blind. Only ctrl+c still works.
 	tooSmall bool
 }
@@ -111,18 +118,19 @@ type region uint8
 
 const (
 	regionTranscript region = iota
-	regionDock
+	regionPrompt
 	regionComposer
 	regionChrome // the gap and footer around the composer
 )
 
-// at reports which region of the frame contains p.
+// at reports which region of the frame contains p. The prompt comes first,
+// so it stays on top should it ever float over the rest.
 func (f frame) at(p image.Point) region {
 	switch {
+	case p.In(f.prompt):
+		return regionPrompt
 	case p.In(f.transcript):
 		return regionTranscript
-	case p.In(f.dock):
-		return regionDock
 	case p.In(f.composer):
 		return regionComposer
 	default:
@@ -130,9 +138,19 @@ func (f frame) at(p image.Point) region {
 	}
 }
 
+// inputTop is the first row of what fills the input slot: the composer, or a
+// prompt replacing it. Popups float just above it.
+func (f frame) inputTop() int {
+	if f.replaced {
+		return f.prompt.Min.Y
+	}
+	return f.composer.Min.Y
+}
+
 // layout stacks the chat bottom-up, so each surface is sized against the rows
 // left below the transcript, which takes the rest. It is not pure: laying out
-// the docked prompt sizes it and settles its scroll, so only relayout calls it.
+// the shown prompt sizes it and settles its scroll, so only relayout calls it.
+// The prompt's Placement is the one thing that changes the stack.
 func (m *Model) layout() frame {
 	var f frame
 	y := m.height
@@ -142,14 +160,24 @@ func (m *Model) layout() frame {
 	}
 
 	f.footer = take(chatFooterHeight)
-	f.composer = take(m.editor.Height())
-	f.composerGap = take(chatComposerGapHeight)
-	dock, answerable := m.prompt(), true
-	if dock != nil {
-		area := components.Dock{Width: m.width, Height: dockRows(y), Waiting: len(m.waitingAsks())}
-		if f.dockView, answerable = dock.Layout(area); f.dockView != "" {
-			f.dock = take(lipgloss.Height(f.dockView))
+	p, answerable := m.prompt(), true
+	f.replaced = p != nil && p.Placement() == components.ReplacesInput
+	if !f.replaced {
+		f.composer = take(m.editor.Height())
+		f.composerGap = take(chatComposerGapHeight)
+	}
+	if p != nil {
+		free := y
+		if f.replaced {
+			free -= chatComposerGapHeight // the gap stays above the prompt
 		}
+		slot := components.Slot{Width: m.width, Height: promptRows(free), Waiting: len(m.waitingAsks())}
+		if f.promptView, answerable = p.Layout(slot); f.promptView != "" {
+			f.prompt = take(lipgloss.Height(f.promptView))
+		}
+	}
+	if f.replaced {
+		f.composerGap = take(chatComposerGapHeight)
 	}
 	f.transcript = image.Rect(0, 0, m.width, max(1, y))
 
@@ -167,7 +195,7 @@ func (m *Model) layout() frame {
 
 // chatView stacks the frame's surfaces and floats at most one popup — the
 // permissions picker or the completion menu — above the composer. Input is
-// routed to a docked prompt, so the editor stays visible but inert.
+// routed to a shown prompt; a docked one leaves the editor visible but inert.
 func (m *Model) chatView() string {
 	if m.selection.active() {
 		return m.selection.render(m.visibleSelectionFrame(m.selection.scope))
@@ -195,7 +223,7 @@ func (m *Model) chatOverlay(base, popup string, x int) string {
 	if width := m.list.Width(); x+popupW > width {
 		x = max(0, width-popupW)
 	}
-	y := max(0, m.frame.composer.Min.Y-popupH)
+	y := max(0, m.frame.inputTop()-popupH)
 	return lipgloss.NewCompositor(
 		lipgloss.NewLayer(base),
 		lipgloss.NewLayer(popup).X(x).Y(y).Z(1),
@@ -206,11 +234,17 @@ func (m *Model) chatOverlay(base, popup string, x int) string {
 // exact composition so every rendered row stays in the same screen coordinate
 // space as the normal chat view.
 func (m *Model) chatViewBase(transcript string) string {
-	sections := []string{transcript}
-	if m.frame.dockView != "" {
-		sections = append(sections, m.frame.dockView)
+	gap := slices.Repeat([]string{""}, m.frame.composerGap.Dy())
+	if m.frame.replaced {
+		// The footer row stays, blank, so the prompt sits where the composer did.
+		transcript = lipgloss.NewStyle().Faint(true).Render(transcript)
+		return strings.Join(slices.Concat([]string{transcript}, gap, []string{m.frame.promptView, ""}), "\n")
 	}
-	sections = append(sections, slices.Repeat([]string{""}, m.frame.composerGap.Dy())...)
+	sections := []string{transcript}
+	if m.frame.promptView != "" {
+		sections = append(sections, m.frame.promptView)
+	}
+	sections = append(sections, gap...)
 	sections = append(sections, m.editor.View(), m.chatFooter())
 	return strings.Join(sections, "\n")
 }

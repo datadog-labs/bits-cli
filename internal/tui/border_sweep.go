@@ -12,7 +12,8 @@ import (
 const borderSweepInterval = 17 * time.Millisecond
 
 func (m *Model) animationsVisible() bool {
-	return m.mode == ModeChat && !m.frame.tooSmall
+	// A prompt replacing the composer dims the transcript, which stays still.
+	return m.mode == ModeChat && !m.frame.tooSmall && !m.frame.replaced
 }
 
 func (m *Model) toolAnimationWanted() bool {
@@ -20,7 +21,7 @@ func (m *Model) toolAnimationWanted() bool {
 }
 
 // borderSweepWanted distinguishes active work from a wait on the user. If a
-// docked prompt coexists with a running tool, work is still progressing and
+// shown prompt coexists with a running tool, work is still progressing and
 // the sweep remains active.
 func (m *Model) borderSweepWanted() bool {
 	if !m.animationsVisible() || !m.styles.Input.SweepMotion || m.op.events == nil {

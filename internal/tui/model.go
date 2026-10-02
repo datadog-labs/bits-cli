@@ -194,12 +194,11 @@ type Model struct {
 	logout    LogoutFunc
 	loggedOut bool
 
-	// Tool calls waiting on the user, by source, and the one docked above the
-	// composer (see ask).
+	// Tool calls waiting on the user, by source, and the one shown (see ask).
 	toolUI           *tools.UI
 	approvals        map[string]*approvalAsk // mirrors the transcript, by call ID
 	toolUIs          []*toolAsk              // requests from the tools.UI channel
-	docked           ask
+	shown            ask
 	permissionsPanel *components.Panel
 	// The picker shows the options, or the full-access confirmation; the
 	// cursor is the row on the page shown (on the confirmation, 0 is Yes).

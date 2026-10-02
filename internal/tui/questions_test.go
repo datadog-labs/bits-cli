@@ -211,20 +211,17 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	}
 }
 
-func TestQuestionsDockAboveTheComposer(t *testing.T) {
+func TestQuestionsReplaceTheComposerAndRestoreIt(t *testing.T) {
 	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
 	waitQuestions(t, m)
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"waiting for your answers", "Which region?", "Working on it…"} {
+	for _, want := range []string{"waiting for your answers", "Which region?"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("inline view missing %q:\n%s", want, view)
 		}
 	}
-	if form, editor := strings.Index(view, "Which region?"), strings.Index(view, "Working on it…"); form > editor {
-		t.Fatalf("form is not docked above the composer:\n%s", view)
-	}
-	if m.editor.Focused() {
-		t.Fatal("the editor kept the keyboard under the form")
+	if strings.Contains(view, "Working on it…") || !m.frame.replaced || m.editor.Focused() {
+		t.Fatalf("the composer stayed behind the form:\n%s", view)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
 	questionKey(m, tea.KeyEscape, 0)
@@ -234,7 +231,7 @@ func TestQuestionsDockAboveTheComposer(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	questionKey(m, tea.KeyEscape, 0)
 	drainConversationRemote(t, m)
-	if dockedToolUI(m) != nil || !m.frame.dock.Empty() || !m.editor.Focused() {
+	if dockedToolUI(m) != nil || !m.frame.prompt.Empty() || !m.editor.Focused() {
 		t.Fatal("dismissing the form did not hand the keyboard back to the composer")
 	}
 }
@@ -246,21 +243,21 @@ func TestQuestionsWheelTargetsTheHoveredPane(t *testing.T) {
 	questionKey(m, '2', 0)
 	questionKey(m, tea.KeyPgUp, 0)
 	_ = m.View()
-	before, form := m.list.VisibleSurface().Top, m.frame.dockView
+	before, form := m.list.VisibleSurface().Top, m.frame.promptView
 	_, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 3, Y: 0})
-	if m.list.VisibleSurface().Top >= before || m.frame.dockView != form {
+	if m.list.VisibleSurface().Top >= before || m.frame.promptView != form {
 		t.Fatal("wheel above picker did not scroll only the conversation")
 	}
 	before = m.list.VisibleSurface().Top
-	_, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 3, Y: m.frame.dock.Min.Y + 3})
-	if m.frame.dockView == form || m.list.VisibleSurface().Top != before {
+	_, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 3, Y: m.frame.prompt.Min.Y + 3})
+	if m.frame.promptView == form || m.list.VisibleSurface().Top != before {
 		t.Fatal("wheel over picker did not scroll only the question")
 	}
 	// The option row moves up with scrolling; hit testing must move with it.
 	for y, row := range strings.Split(ansi.Strip(m.View().Content), "\n") {
 		if strings.Contains(row, "1. US") {
 			_, _ = m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 5, Y: y})
-			if !strings.Contains(ansi.Strip(m.frame.dockView), "› 1. US") {
+			if !strings.Contains(ansi.Strip(m.frame.promptView), "› 1. US") {
 				t.Fatal("scrolled choice hit the wrong target")
 			}
 			return
@@ -455,12 +452,12 @@ func TestRestoredCallsThatWillNotResumeSettle(t *testing.T) {
 func TestQuestionsLeaveTheTranscriptSelectable(t *testing.T) {
 	m, _ := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
 	waitQuestions(t, m)
-	form := m.frame.dockView
+	form := m.frame.promptView
 	_, _ = m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 2, Y: m.frame.transcript.Max.Y - 1})
 	if !m.selection.selecting() || m.selection.scope != selectionScopeTranscript {
 		t.Fatal("a click on the transcript did not start a transcript selection")
 	}
-	if m.frame.dockView != form {
+	if m.frame.promptView != form {
 		t.Fatal("a click on the transcript reached the form")
 	}
 	_, _ = m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: 2, Y: m.frame.transcript.Max.Y - 1})
@@ -480,14 +477,14 @@ func TestQuestionsShiftPageScrollsTheTranscript(t *testing.T) {
 	m.syncTranscript()
 	m.Update(tea.WindowSizeMsg{Width: 36, Height: 16})
 
-	before, form := m.list.VisibleSurface().Top, m.frame.dockView
+	before, form := m.list.VisibleSurface().Top, m.frame.promptView
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift})
-	if m.list.VisibleSurface().Top >= before || m.frame.dockView != form {
+	if m.list.VisibleSurface().Top >= before || m.frame.promptView != form {
 		t.Fatal("shift+pgup did not page only the transcript")
 	}
 	before = m.list.VisibleSurface().Top
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
-	if m.list.VisibleSurface().Top != before || m.frame.dockView == form {
+	if m.list.VisibleSurface().Top != before || m.frame.promptView == form {
 		t.Fatal("pgdown did not page only the form")
 	}
 }
