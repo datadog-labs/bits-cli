@@ -3,9 +3,11 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
@@ -65,8 +67,8 @@ func TestLogoutDuringActiveTurnCancelsAndDrainsBeforeDeleting(t *testing.T) {
 
 	// A /new queued first must not swallow the logout.
 	_, _ = m.dispatchCommand("new", "")
-	_, cmd := m.dispatchCommand("logout", "")
-	if cmd == nil || m.op.then != thenLogout {
+	_, _ = m.dispatchCommand("logout", "")
+	if m.op.then != thenLogout {
 		t.Fatal("active-turn logout was not queued")
 	}
 	if turnCtx.Err() == nil {
@@ -76,7 +78,7 @@ func TestLogoutDuringActiveTurnCancelsAndDrainsBeforeDeleting(t *testing.T) {
 		t.Fatal("credentials were deleted before the turn drained")
 	}
 
-	_, cmd = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
+	_, cmd := m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
 	if cmd == nil || m.op.kind != opLogout {
 		t.Fatal("logout did not start after the turn closed")
 	}
@@ -90,6 +92,31 @@ func TestLogoutDuringActiveTurnCancelsAndDrainsBeforeDeleting(t *testing.T) {
 	}
 }
 
+func TestQueuedLogoutFailurePostsOneNotice(t *testing.T) {
+	want := errors.New("credential store unavailable")
+	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}), Config{
+		Logout: func(context.Context) (bool, error, error) {
+			return true, nil, want
+		},
+	})
+	_, cancel := context.WithCancel(context.Background())
+	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancel}
+	_, _ = m.dispatchCommand("new", "")
+	_, _ = m.dispatchCommand("logout", "")
+	if len(m.notices) != 0 {
+		t.Fatalf("queued operation posted transcript progress: %+v", m.notices)
+	}
+
+	_, cmd := m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
+	if cmd == nil || m.op.kind != opLogout || m.promptPlaceholder() != "Logging out…" {
+		t.Fatal("logout did not continue after the turn drained")
+	}
+	_, _ = m.Update(cmd())
+	if len(m.notices) != 1 || !errors.Is(m.notices[0].Notice.Err, want) || m.promptPlaceholder() != "Ask Bits…" {
+		t.Fatalf("logout failure notice or placeholder: notices=%+v placeholder=%q", m.notices, m.promptPlaceholder())
+	}
+}
+
 func TestLogoutLocalFailureKeepsAuthenticatedEngine(t *testing.T) {
 	want := errors.New("credential store unavailable")
 	engine := agent.New(&spyBackend{t: t}, assistant.SendOptions{})
@@ -98,21 +125,29 @@ func TestLogoutLocalFailureKeepsAuthenticatedEngine(t *testing.T) {
 			return true, nil, want
 		},
 	})
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	for range 20 {
+		m.postNotice(notice(chat.NoticeInfo, nil, "Earlier message"))
+	}
+	m.list.ScrollToTop()
 
 	_, cmd := m.dispatchCommand("logout", "")
+	if m.list.Following() {
+		t.Fatal("starting logout moved the transcript without a result")
+	}
 	msg := cmd()
-	_, next := m.Update(msg)
+	_, _ = m.Update(msg)
+	if !m.list.Following() || !strings.Contains(ansi.Strip(m.list.Render()), "could not log out") {
+		t.Fatalf("logout result is outside the viewport:\n%s", ansi.Strip(m.list.Render()))
+	}
 	if m.engine != engine {
 		t.Fatal("local deletion failure invalidated the usable engine")
 	}
 	if m.op.kind == opLogout {
 		t.Fatal("logout remained active after failure")
 	}
-	if !errors.Is(m.notice.Err, want) || m.notice.Level != chat.NoticeError {
-		t.Fatalf("failure notice = %+v", m.notice)
-	}
-	if next == nil {
-		t.Fatal("failure notice did not schedule expiry")
+	if !errors.Is(latestNotice(m).Err, want) || latestNotice(m).Level != chat.NoticeError {
+		t.Fatalf("failure notice = %+v", latestNotice(m))
 	}
 	if m.LoggedOut() {
 		t.Fatal("failed local logout recorded success")
@@ -188,8 +223,8 @@ func TestRepeatedLogoutWhileRunningDoesNotStartAnotherDelete(t *testing.T) {
 	})
 
 	_, first := m.dispatchCommand("logout", "")
-	_, second := m.dispatchCommand("logout", "")
-	if second == nil || m.notice.Empty() {
+	_, _ = m.dispatchCommand("logout", "")
+	if latestNotice(m).Empty() {
 		t.Fatal("repeated logout did not report in-progress state")
 	}
 	_ = first()

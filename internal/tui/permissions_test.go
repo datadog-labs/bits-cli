@@ -74,8 +74,8 @@ func TestPermissionsShowsCurrentMode(t *testing.T) {
 func TestPermissionsRejectsInvalidArgument(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "gated")
-	if m.notice.Level != chat.NoticeError || !strings.Contains(m.notice.Text, "manual or skip-permissions") {
-		t.Fatalf("notice = %#v, want the valid modes listed", m.notice)
+	if latestNotice(m).Level != chat.NoticeError || !strings.Contains(latestNotice(m).Text, "manual or skip-permissions") {
+		t.Fatalf("notice = %#v, want the valid modes listed", latestNotice(m))
 	}
 	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
 		t.Fatalf("mode = %q, want manual after a rejected switch", got)
@@ -93,8 +93,8 @@ func TestPermissionsRejectsTrailingArguments(t *testing.T) {
 		t.Run(tc.argument, func(t *testing.T) {
 			m, _ := newPermissionsModel(t, tc.mode)
 			_, _ = m.dispatchCommand("permissions", tc.argument)
-			if m.notice.Level != chat.NoticeError || !strings.Contains(m.notice.Text, "manual or skip-permissions") {
-				t.Fatalf("notice = %#v, want the valid modes listed", m.notice)
+			if latestNotice(m).Level != chat.NoticeError || !strings.Contains(latestNotice(m).Text, "manual or skip-permissions") {
+				t.Fatalf("notice = %#v, want the valid modes listed", latestNotice(m))
 			}
 			if got := m.tools.PermissionsMode(); got != tc.mode {
 				t.Fatalf("mode = %q, want %q unchanged after a rejected switch", got, tc.mode)
@@ -107,8 +107,8 @@ func TestPermissionsExtraSpacesAroundModeStillSwitch(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
 	setConversationInput(m, "/permissions   manual")
 	_, _ = m.submit()
-	if !m.notice.Empty() {
-		t.Fatalf("notice = %#v, want no success notification", m.notice)
+	if !latestNotice(m).Empty() {
+		t.Fatalf("notice = %#v, want no success notification", latestNotice(m))
 	}
 	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
 		t.Fatalf("mode = %q, want manual", got)
@@ -118,8 +118,8 @@ func TestPermissionsExtraSpacesAroundModeStillSwitch(t *testing.T) {
 func TestPermissionsSwitchingToCurrentModeIsANoOp(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "manual")
-	if !m.notice.Empty() {
-		t.Fatalf("notice = %#v, want no notification for the current mode", m.notice)
+	if !latestNotice(m).Empty() {
+		t.Fatalf("notice = %#v, want no notification for the current mode", latestNotice(m))
 	}
 }
 
@@ -135,7 +135,7 @@ func TestPermissionsQueuesDuringActiveTurn(t *testing.T) {
 	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual {
 		t.Fatal("mode changed before the active turn closed")
 	}
-	if strings.Contains(ansi.Strip(m.chatFooter()), "Full Access after this response") || !m.notice.Empty() {
+	if strings.Contains(ansi.Strip(m.chatFooter()), "Full Access after this response") || !latestNotice(m).Empty() {
 		t.Fatal("queuing a mode changed the footer or showed a notification")
 	}
 	_, _ = m.dispatchCommand("permissions", "")
@@ -174,7 +174,7 @@ func TestPermissionsCurrentModeCancelsQueuedChange(t *testing.T) {
 	m.chatPhase = chat.PhaseStreaming
 	m.pendingPermissions = agent.ModeSkipPermissions
 	_, _ = m.dispatchCommand("permissions", "manual")
-	if m.pendingPermissions != "" || !m.notice.Empty() {
+	if m.pendingPermissions != "" || !latestNotice(m).Empty() {
 		t.Fatal("selecting the current mode did not cancel the queued change")
 	}
 	if m.chatPhase != chat.PhaseStreaming {
@@ -219,8 +219,8 @@ func TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool(t *testing.T) {
 		t.Fatal("confirmation is hidden while an approval is pending")
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !m.notice.Empty() {
-		t.Fatalf("notice = %#v, want no success notification", m.notice)
+	if !latestNotice(m).Empty() {
+		t.Fatalf("notice = %#v, want no success notification", latestNotice(m))
 	}
 	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual || len(m.pendingApprovals) != 1 {
 		t.Fatal("current tool approval changed before the turn ended")
@@ -260,8 +260,8 @@ func TestPermissionsSwitchBackToManualPromptsAgain(t *testing.T) {
 	if len(m.pendingApprovals) != 0 {
 		t.Fatalf("skip-permissions surfaced %d permission prompts", len(m.pendingApprovals))
 	}
-	if !m.notice.Empty() {
-		t.Fatalf("notice = %#v, want no success notification", m.notice)
+	if !latestNotice(m).Empty() {
+		t.Fatalf("notice = %#v, want no success notification", latestNotice(m))
 	}
 	if got := m.tools.PermissionsMode(); got != agent.ModeManual || m.pendingPermissions != "" {
 		t.Fatalf("mode = %q, queued = %q; want manual after the first turn", got, m.pendingPermissions)

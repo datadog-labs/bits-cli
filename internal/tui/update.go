@@ -25,9 +25,6 @@ const historyLoadTimeout = 30 * time.Second
 // mouseWheelDelta is how many transcript lines one wheel notch scrolls,
 const mouseWheelDelta = 1
 
-// defaultNoticeTTL is how long a transient status notice stays before it clears.
-const defaultNoticeTTL = 10 * time.Second
-
 // selectionAutoScrollInterval controls how often an active drag advances the
 // transcript while its pointer rests against a viewport edge.
 const selectionAutoScrollInterval = 25 * time.Millisecond
@@ -48,22 +45,20 @@ type (
 		err        error
 	}
 	webOpenResultMsg struct {
-		url string
-		err error
+		epoch uint64
+		url   string
+		err   error
 	}
 	settingsOpenResultMsg struct {
-		url string
-		err error
+		epoch uint64
+		url   string
+		err   error
 	}
 	logoutResultMsg struct {
 		generation uint64
 		err        error
 	}
 )
-
-// noticeExpiredMsg clears a transient status notice when its TTL elapses. seq
-// guards against a stale timer clearing a newer notice.
-type noticeExpiredMsg struct{ seq int }
 
 type approvalChoice struct {
 	decision     agent.ApprovalDecision
@@ -77,23 +72,18 @@ var approvalChoices = [...]approvalChoice{
 	{decision: agent.ApprovalDeny, label: "Deny", compactLabel: "Deny"},
 }
 
-// showNotice sets the transient status notice and returns a command that clears
-// it after ttl (defaultNoticeTTL when ttl <= 0). The seq stamps the timer so a
-// later notice is not cleared by an earlier one's timer.
-func (m *Model) showNotice(n chat.Notice, ttl time.Duration) tea.Cmd {
-	m.noticeSeq++
-	m.notice = n
-	if ttl <= 0 {
-		ttl = defaultNoticeTTL
+// postNotice adds a session-only message at the current point in the agent
+// transcript. It never enters the engine's transcript or backend.
+func (m *Model) postNotice(n chat.Notice) tea.Cmd {
+	if n.Empty() {
+		return nil
 	}
-	seq := m.noticeSeq
-	return tea.Tick(ttl, func(time.Time) tea.Msg { return noticeExpiredMsg{seq: seq} })
-}
-
-// clearNotice removes any notice immediately and invalidates a pending timer.
-func (m *Model) clearNotice() {
-	m.noticeSeq++
-	m.notice = chat.Notice{}
+	m.nextNoticeID++
+	m.notices = append(m.notices, chat.NoticeItem{ID: m.nextNoticeID, After: len(m.transcript.Blocks), Notice: n})
+	if m.list != nil {
+		m.syncTranscript()
+	}
+	return nil
 }
 
 // waitEvent reads one event from the turn channel and re-arms after each event
@@ -380,23 +370,23 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case noticeExpiredMsg:
-		if msg.seq == m.noticeSeq {
-			m.notice = chat.Notice{}
-		}
-		return m, nil
-
 	case webOpenResultMsg:
-		if msg.err != nil {
-			return m, m.showNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url), 0)
+		if msg.epoch != m.conversationEpoch {
+			return m, nil
 		}
-		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Opened this conversation in your browser: %s", msg.url), 0)
+		if msg.err != nil {
+			return m, m.postNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url))
+		}
+		return m, m.postNotice(notice(chat.NoticeInfo, nil, "Opened this conversation in your browser: %s", msg.url))
 
 	case settingsOpenResultMsg:
-		if msg.err != nil {
-			return m, m.showNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url), 0)
+		if msg.epoch != m.conversationEpoch {
+			return m, nil
 		}
-		return m, m.showNotice(notice(chat.NoticeInfo, nil, "Opened Assistant settings in your browser: %s", msg.url), 0)
+		if msg.err != nil {
+			return m, m.postNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url))
+		}
+		return m, m.postNotice(notice(chat.NoticeInfo, nil, "Opened Assistant settings in your browser: %s", msg.url))
 	}
 
 	if m.focus() == focusToolUI {
@@ -419,38 +409,40 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) openConversationInBrowser() tea.Cmd {
 	if strings.TrimSpace(m.convID) == "" {
-		return m.showNotice(notice(chat.NoticeWarn, nil, "Start a conversation before using /web."), 0)
+		return m.postNotice(notice(chat.NoticeWarn, nil, "Start a conversation before using /web."))
 	}
 	if m.engine == nil {
-		return m.showNotice(notice(chat.NoticeError, nil, "This conversation has no Datadog web site."), 0)
+		return m.postNotice(notice(chat.NoticeError, nil, "This conversation has no Datadog web site."))
 	}
 	target, err := browser.ConversationURL(m.engine.Site(), m.convID)
 	if err != nil {
-		return m.showNotice(notice(chat.NoticeError, err, "Could not build a web link for this conversation."), 0)
+		return m.postNotice(notice(chat.NoticeError, err, "Could not build a web link for this conversation."))
 	}
 	openURL := m.openURL
+	epoch := m.conversationEpoch
 	if openURL == nil {
 		openURL = browser.Open
 	}
 	return func() tea.Msg {
-		return webOpenResultMsg{url: target, err: openURL(context.Background(), target)}
+		return webOpenResultMsg{epoch: epoch, url: target, err: openURL(context.Background(), target)}
 	}
 }
 
 func (m *Model) openSettingsInBrowser() tea.Cmd {
 	if m.engine == nil {
-		return m.showNotice(notice(chat.NoticeError, nil, "Assistant settings have no Datadog web site."), 0)
+		return m.postNotice(notice(chat.NoticeError, nil, "Assistant settings have no Datadog web site."))
 	}
 	target, err := browser.SettingsURL(m.engine.Site())
 	if err != nil {
-		return m.showNotice(notice(chat.NoticeError, err, "Could not build a web link for Assistant settings."), 0)
+		return m.postNotice(notice(chat.NoticeError, err, "Could not build a web link for Assistant settings."))
 	}
 	openURL := m.openURL
+	epoch := m.conversationEpoch
 	if openURL == nil {
 		openURL = browser.Open
 	}
 	return func() tea.Msg {
-		return settingsOpenResultMsg{url: target, err: openURL(context.Background(), target)}
+		return settingsOpenResultMsg{epoch: epoch, url: target, err: openURL(context.Background(), target)}
 	}
 }
 
@@ -841,7 +833,6 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	})
 	wait := m.begin(opTurn, events, cancel)
 	m.chatPhase = chat.PhaseWaiting
-	m.clearNotice()
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
@@ -896,7 +887,7 @@ func (m *Model) after(next followUp) {
 
 // applyEvent folds one engine event into the block snapshot / status. The switch
 // is exhaustive over agent.EventKind. It returns a command for side effects (an
-// error posts a transient notice); nil otherwise.
+// error posts a local transcript message); nil otherwise.
 func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
@@ -919,12 +910,12 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 		if m.op.kind == opRestore {
 			m.chatPhase = chat.PhaseIdle
 			if ev.Err != nil {
-				return m.showNotice(noticeForError("restore failed", ev.Err), 0)
+				return m.postNotice(noticeForError("restore failed", ev.Err))
 			}
 		} else {
 			m.chatPhase = chat.PhaseError
 			if ev.Err != nil {
-				return m.showNotice(noticeForError("", ev.Err), 0)
+				return m.postNotice(noticeForError("", ev.Err))
 			}
 		}
 	}
@@ -981,5 +972,5 @@ func (m *Model) relayout() {
 
 // syncTranscript rebuilds presentation metadata after m.transcript changes.
 func (m *Model) syncTranscript() {
-	m.list.SetItems(m.transcript.Blocks)
+	m.list.SetTranscript(m.transcript.Blocks, m.notices)
 }

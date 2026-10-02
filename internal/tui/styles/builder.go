@@ -193,9 +193,9 @@ func build(isDark bool, p palette) Theme {
 			// Transcript labels, progress lines and the idle dot: present so nothing
 			// is silently dropped, but not competing with the conversation.
 			Meta:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.textTertiary)),
-			NoticeInfo:  lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.info)),
-			NoticeWarn:  lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onWarning)).Background(lipgloss.Color(p.warning)),
-			NoticeError: lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color(p.onAccent)).Background(lipgloss.Color(p.critical)),
+			NoticeInfo:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.info)),
+			NoticeWarn:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.warning)),
+			NoticeError: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.critical)),
 		},
 		Editor: Editor{
 			MenuFrame: lipgloss.NewStyle().

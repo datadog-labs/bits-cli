@@ -25,7 +25,7 @@ const (
 	// detail, and every action. Below that, input stays disabled behind the
 	// resize hint so a hidden choice cannot be confirmed.
 	minimumApprovalPanelHeight = 6
-	chatNoticeHeight           = 1
+	chatComposerGapHeight      = 1
 	chatFooterHeight           = 1
 
 	// approvalCompactWidth is the terminal width below which the approval block
@@ -56,7 +56,7 @@ func chatMouseMode() tea.MouseMode {
 	return tea.MouseModeAllMotion
 }
 
-// View lays out the transcript viewport, notice row, input, and metadata footer.
+// View lays out the transcript viewport, input, and metadata footer.
 // Alt-screen and mouse tracking, which were program options in Bubble Tea v1,
 // are now declared on the returned view.
 func (m *Model) View() tea.View {
@@ -95,15 +95,14 @@ func (m *Model) View() tea.View {
 // from state at the end of every Update; View, hit-testing, and every size
 // query read it instead of measuring again.
 //
-// Rows stack top to bottom: transcript, docked approval, notice, editor,
-// footer. A tool UI replaces the approval and the editor and sits below the
-// notice instead.
+// Rows stack top to bottom: transcript, docked approval, composer gap, editor,
+// footer. A tool UI replaces the approval and editor, with the gap above it.
 type frame struct {
-	transcript image.Rectangle
-	dock       image.Rectangle // approval panel or tool UI; empty when neither shows
-	notice     image.Rectangle
-	editor     image.Rectangle // empty while a tool UI replaces the composer
-	footer     image.Rectangle
+	transcript  image.Rectangle
+	dock        image.Rectangle // approval panel or tool UI; empty when neither shows
+	composerGap image.Rectangle
+	editor      image.Rectangle // empty while a tool UI replaces the composer
+	footer      image.Rectangle
 
 	// approval is the docked approval panel, rendered once so it can be measured.
 	approval string
@@ -138,10 +137,11 @@ func (m *Model) layout() frame {
 	approvalRows := 0
 	if m.activeToolUI != nil {
 		f.dock = take(m.activeToolUI.component.Height())
-		f.notice = take(chatNoticeHeight)
 	} else {
 		f.editor = take(m.editor.Height())
-		f.notice = take(chatNoticeHeight)
+	}
+	f.composerGap = take(chatComposerGapHeight)
+	if m.activeToolUI == nil {
 		approvalRows = y
 		if f.approval = m.approvalView(max(1, y)); f.approval != "" {
 			f.dock = take(lipgloss.Height(f.approval))
@@ -209,13 +209,21 @@ func (m *Model) chatOverlay(base, popup string, x int) string {
 func (m *Model) chatViewBase(transcript string) string {
 	if m.activeToolUI != nil {
 		dim := lipgloss.NewStyle().Faint(true)
-		return strings.Join([]string{dim.Render(transcript), dim.Render(m.noticeBar()), m.activeToolUI.component.View(), m.chatFooter()}, "\n")
+		sections := []string{dim.Render(transcript)}
+		for range m.frame.composerGap.Dy() {
+			sections = append(sections, "")
+		}
+		sections = append(sections, m.activeToolUI.component.View(), m.chatFooter())
+		return strings.Join(sections, "\n")
 	}
 	sections := []string{transcript}
 	if m.frame.approval != "" {
 		sections = append(sections, m.frame.approval)
 	}
-	sections = append(sections, m.noticeBar(), m.editor.View(), m.chatFooter())
+	for range m.frame.composerGap.Dy() {
+		sections = append(sections, "")
+	}
+	sections = append(sections, m.editor.View(), m.chatFooter())
 	return strings.Join(sections, "\n")
 }
 
@@ -353,37 +361,24 @@ func (m *Model) approvalActions(width int) string {
 
 // promptPlaceholder returns the current editor prompt placeholder.
 func (m *Model) promptPlaceholder() string {
+	switch {
+	case m.op.then == thenLogout || m.op.kind == opLogout:
+		return "Logging out…"
+	case m.op.then == thenNewConversation:
+		return "Starting a new conversation…"
+	}
 	switch m.chatPhase {
 	case chat.PhaseLoading:
 		return "Loading…"
 	case chat.PhaseWaiting, chat.PhaseStreaming:
 		return "Working on it…"
-	case chat.PhaseError:
-		return "Error"
 	default:
 		return "Ask Bits…"
 	}
 }
 
-// noticeBar renders the transient notification bar between the transcript and
-// the input.
-func (m *Model) noticeBar() string {
-	if m.notice.Empty() {
-		return ""
-	}
-	width := max(1, m.list.Width())
-	text := m.notice.Text
-	if err := m.notice.Err; err != nil {
-		if detail := err.Error(); detail != "" && detail != m.notice.Text {
-			text += " (" + detail + ")"
-		}
-	}
-	text = ansi.Truncate(escape.Inline(text), max(1, width-2), "…")
-	return m.chatStyles.Notice(m.notice.Level).Width(width).Render(text)
-}
-
 // chatFooter renders low-attention workspace and context usage metadata below
-// the editor. Transient notices keep their separate row above the editor.
+// the editor.
 func (m *Model) chatFooter() string {
 	if m.activeToolUI != nil {
 		return ""

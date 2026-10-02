@@ -113,8 +113,8 @@ func TestCommandCompletionMatchesRegistry(t *testing.T) {
 	}
 	m := newModelWithSpy(t)
 	_, _ = m.dispatchCommand("help", "")
-	if !strings.Contains(m.notice.Text, "Unknown command: /help") {
-		t.Fatalf("/help notice = %q", m.notice.Text)
+	if !strings.Contains(latestNotice(m).Text, "Unknown command: /help") {
+		t.Fatalf("/help notice = %q", latestNotice(m).Text)
 	}
 }
 
@@ -216,8 +216,8 @@ func TestSubmitSettingsOpensAssistantSettingsWithoutSending(t *testing.T) {
 	if opened != want {
 		t.Fatalf("opened URL = %q, want %q", opened, want)
 	}
-	if !strings.Contains(m.notice.Text, want) || m.notice.Level != chat.NoticeInfo {
-		t.Fatalf("success notice = %#v", m.notice)
+	if !strings.Contains(latestNotice(m).Text, want) || latestNotice(m).Level != chat.NoticeInfo {
+		t.Fatalf("success notice = %#v", latestNotice(m))
 	}
 	if m.editor.Value() != "" {
 		t.Fatalf("editor still contains %q", m.editor.Value())
@@ -235,12 +235,12 @@ func TestSubmitSettingsUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "/settings"})
 
-	_, cmd := m.submit()
-	if cmd == nil || launched {
-		t.Fatalf("unsupported-site result: cmd=%v launched=%v", cmd != nil, launched)
+	_, _ = m.submit()
+	if launched {
+		t.Fatalf("unsupported-site result: launched=%v", launched)
 	}
-	if m.notice.Level != chat.NoticeError || !strings.Contains(m.notice.Text, "Could not build a web link") || m.notice.Err == nil {
-		t.Fatalf("unsupported-site notice = %#v", m.notice)
+	if latestNotice(m).Level != chat.NoticeError || !strings.Contains(latestNotice(m).Text, "Could not build a web link") || latestNotice(m).Err == nil {
+		t.Fatalf("unsupported-site notice = %#v", latestNotice(m))
 	}
 }
 
@@ -255,12 +255,12 @@ func TestSubmitSettingsLauncherFailureProvidesManualURL(t *testing.T) {
 	_, cmd := m.submit()
 	msg := cmd()
 	_, _ = m.Update(msg)
-	if m.notice.Level != chat.NoticeError || !errors.Is(m.notice.Err, launchErr) {
-		t.Fatalf("launcher-failure notice = %#v", m.notice)
+	if latestNotice(m).Level != chat.NoticeError || !errors.Is(latestNotice(m).Err, launchErr) {
+		t.Fatalf("launcher-failure notice = %#v", latestNotice(m))
 	}
 	for _, want := range []string{"Could not open a browser", "https://app.datadoghq.com/ask/settings"} {
-		if !strings.Contains(m.notice.Text, want) {
-			t.Fatalf("launcher-failure notice %q does not contain %q", m.notice.Text, want)
+		if !strings.Contains(latestNotice(m).Text, want) {
+			t.Fatalf("launcher-failure notice %q does not contain %q", latestNotice(m).Text, want)
 		}
 	}
 }
@@ -289,9 +289,9 @@ func TestSubmitModelIsUnknown(t *testing.T) {
 	m := newModelWithSpy(t)
 	m.editor.Update(tea.PasteMsg{Content: "/model"})
 
-	_, cmd := m.submit()
-	if cmd == nil || m.notice.Level != chat.NoticeError || !strings.Contains(m.notice.Text, "Unknown command: /model") {
-		t.Fatalf("model command result: cmd=%v notice=%#v", cmd != nil, m.notice)
+	_, _ = m.submit()
+	if latestNotice(m).Level != chat.NoticeError || !strings.Contains(latestNotice(m).Text, "Unknown command: /model") {
+		t.Fatalf("model command result: notice=%#v", latestNotice(m))
 	}
 }
 
@@ -317,8 +317,8 @@ func TestSubmitWebOpensCurrentConversationWithoutSending(t *testing.T) {
 	if opened != want {
 		t.Fatalf("opened URL = %q, want %q", opened, want)
 	}
-	if !strings.Contains(m.notice.Text, want) || m.notice.Level != chat.NoticeInfo {
-		t.Fatalf("success notice = %#v", m.notice)
+	if !strings.Contains(latestNotice(m).Text, want) || latestNotice(m).Level != chat.NoticeInfo {
+		t.Fatalf("success notice = %#v", latestNotice(m))
 	}
 	if m.ConversationID() != "conversation-1" {
 		t.Fatalf("conversation ID changed to %q", m.ConversationID())
@@ -339,12 +339,12 @@ func TestSubmitWebWithoutConversationDoesNotLaunchOrSend(t *testing.T) {
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "/web"})
 
-	_, cmd := m.submit()
-	if cmd == nil || launched {
-		t.Fatalf("missing-conversation result: cmd=%v launched=%v", cmd != nil, launched)
+	_, _ = m.submit()
+	if launched {
+		t.Fatalf("missing-conversation result: launched=%v", launched)
 	}
-	if m.notice.Level != chat.NoticeWarn || !strings.Contains(m.notice.Text, "Start a conversation") {
-		t.Fatalf("missing-conversation notice = %#v", m.notice)
+	if latestNotice(m).Level != chat.NoticeWarn || !strings.Contains(latestNotice(m).Text, "Start a conversation") {
+		t.Fatalf("missing-conversation notice = %#v", latestNotice(m))
 	}
 }
 
@@ -359,12 +359,12 @@ func TestSubmitWebUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "/web"})
 
-	_, cmd := m.submit()
-	if cmd == nil || launched {
-		t.Fatalf("unsupported-site result: cmd=%v launched=%v", cmd != nil, launched)
+	_, _ = m.submit()
+	if launched {
+		t.Fatalf("unsupported-site result: launched=%v", launched)
 	}
-	if m.notice.Level != chat.NoticeError || !strings.Contains(m.notice.Text, "Could not build a web link") || m.notice.Err == nil {
-		t.Fatalf("unsupported-site notice = %#v", m.notice)
+	if latestNotice(m).Level != chat.NoticeError || !strings.Contains(latestNotice(m).Text, "Could not build a web link") || latestNotice(m).Err == nil {
+		t.Fatalf("unsupported-site notice = %#v", latestNotice(m))
 	}
 }
 
@@ -379,12 +379,12 @@ func TestSubmitWebLauncherFailureProvidesManualURL(t *testing.T) {
 	_, cmd := m.submit()
 	msg := cmd()
 	_, _ = m.Update(msg)
-	if m.notice.Level != chat.NoticeError || !errors.Is(m.notice.Err, launchErr) {
-		t.Fatalf("launcher-failure notice = %#v", m.notice)
+	if latestNotice(m).Level != chat.NoticeError || !errors.Is(latestNotice(m).Err, launchErr) {
+		t.Fatalf("launcher-failure notice = %#v", latestNotice(m))
 	}
 	for _, want := range []string{"Could not open a browser", "https://app.datadoghq.com/ask/conversation-1"} {
-		if !strings.Contains(m.notice.Text, want) {
-			t.Fatalf("launcher-failure notice %q does not contain %q", m.notice.Text, want)
+		if !strings.Contains(latestNotice(m).Text, want) {
+			t.Fatalf("launcher-failure notice %q does not contain %q", latestNotice(m).Text, want)
 		}
 	}
 }
@@ -431,8 +431,8 @@ func TestSubmitResumeDuringTurnIsRejectedWithoutCancellation(t *testing.T) {
 	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancel}
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "/resume"})
-	_, cmd := m.submit()
-	if cmd == nil || m.notice.Empty() {
+	_, _ = m.submit()
+	if latestNotice(m).Empty() {
 		t.Fatal("expected active-turn rejection notice")
 	}
 	if ctx.Err() != nil || m.mode == ModeConversations {
@@ -447,8 +447,8 @@ func TestSubmitResumeDuringStartupHistoryLoadIsRejected(t *testing.T) {
 	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancel}
 	m.chatPhase = chat.PhaseLoading
 	m.editor.Update(tea.PasteMsg{Content: "/resume"})
-	_, cmd := m.submit()
-	if cmd == nil || m.notice.Empty() {
+	_, _ = m.submit()
+	if latestNotice(m).Empty() {
 		t.Fatal("expected history-load rejection notice")
 	}
 	if ctx.Err() != nil || m.mode == ModeConversations {
@@ -580,8 +580,8 @@ func TestSubmitUnknownCommandDuringActiveTurnDoesNotCancel(t *testing.T) {
 	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancel}
 	m.editor.Update(tea.PasteMsg{Content: "/nope"})
 
-	_, cmd := m.submit()
-	if cmd == nil || m.notice.Empty() {
+	_, _ = m.submit()
+	if latestNotice(m).Empty() {
 		t.Fatal("expected an unknown-command notice")
 	}
 	if ctx.Err() != nil {
@@ -591,16 +591,14 @@ func TestSubmitUnknownCommandDuringActiveTurnDoesNotCancel(t *testing.T) {
 
 func TestDispatchUnknownCommandPostsNotice(t *testing.T) {
 	m := &Model{}
-	_, cmd := m.dispatchCommand("nope", "")
-	if cmd == nil {
-		t.Fatal("expected a notice clear-tick command")
-	}
-	// showNotice sets the notice synchronously; the returned cmd only clears it.
-	if m.notice.Empty() {
+	_, _ = m.dispatchCommand("nope", "")
+
+	// Local messages are appended synchronously and need no timer.
+	if latestNotice(m).Empty() {
 		t.Fatal("expected an unknown-command notice on the model")
 	}
-	if m.notice.Level != chat.NoticeError {
-		t.Errorf("notice level = %v, want NoticeError", m.notice.Level)
+	if latestNotice(m).Level != chat.NoticeError {
+		t.Errorf("notice level = %v, want NoticeError", latestNotice(m).Level)
 	}
 }
 
@@ -660,8 +658,8 @@ func TestCopyCommandWritesLatestAssistantResponseLocally(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("/copy returned no clipboard command")
 	}
-	if m.notice.Level != chat.NoticeInfo || m.notice.Text != "Copied to clipboard." {
-		t.Fatalf("notice = %+v, want copy confirmation", m.notice)
+	if latestNotice(m).Level != chat.NoticeInfo || latestNotice(m).Text != "Copied to clipboard." {
+		t.Fatalf("notice = %+v, want copy confirmation", latestNotice(m))
 	}
 	if cmd() == nil {
 		t.Fatal("/copy clipboard command returned no message")
@@ -676,12 +674,12 @@ func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "/copy"})
 
-	_, cmd := m.submit()
-	if cmd == nil || m.notice.Empty() {
+	_, _ = m.submit()
+	if latestNotice(m).Empty() {
 		t.Fatal("streaming /copy should show a rejection notice")
 	}
-	if !strings.Contains(m.notice.Text, "Wait for the assistant response to finish") {
-		t.Fatalf("notice = %q, want active-turn rejection", m.notice.Text)
+	if !strings.Contains(latestNotice(m).Text, "Wait for the assistant response to finish") {
+		t.Fatalf("notice = %q, want active-turn rejection", latestNotice(m).Text)
 	}
 }
 
@@ -692,11 +690,11 @@ func TestCopyCommandReportsNoCompletedAssistantResponse(t *testing.T) {
 		{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: false, Markdown: &assistant.MarkdownPayload{Content: "partial"}},
 	}
 
-	_, cmd := m.dispatchCommand("copy", "")
-	if cmd == nil || m.notice.Empty() {
+	_, _ = m.dispatchCommand("copy", "")
+	if latestNotice(m).Empty() {
 		t.Fatal("/copy without a completed response should show a notice")
 	}
-	if m.notice.Level != chat.NoticeWarn || !strings.Contains(m.notice.Text, "No completed assistant response") {
-		t.Fatalf("notice = %+v, want no-response warning", m.notice)
+	if latestNotice(m).Level != chat.NoticeWarn || !strings.Contains(latestNotice(m).Text, "No completed assistant response") {
+		t.Fatalf("notice = %+v, want no-response warning", latestNotice(m))
 	}
 }

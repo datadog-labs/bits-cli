@@ -18,26 +18,20 @@ func (m *Model) requestLogout() tea.Cmd {
 	closeFileSearch := m.stopCompletionSearches()
 	m.editor.CloseMenu()
 	m.after(thenLogout)
-	return tea.Batch(
-		closeFileSearch,
-		m.showNotice(notice(chat.NoticeInfo, nil,
-			"Cancelling the current operation before logging out..."), 0),
-	)
+	return closeFileSearch
 }
 
 func (m *Model) startLogout() tea.Cmd {
 	closeFileSearch := m.stopCompletionSearches()
 	if m.logout == nil {
-		return tea.Batch(
-			closeFileSearch,
-			m.showNotice(notice(chat.NoticeError, nil, "Logout is unavailable."), 0),
-		)
+		m.postNotice(notice(chat.NoticeError, nil, "Logout is unavailable."))
+		m.list.ScrollToBottom()
+		return closeFileSearch
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), logoutTimeout)
 	m.begin(opLogout, nil, cancel)
 	generation := m.op.gen
 	m.editor.CloseMenu()
-	m.clearNotice()
 	logout := m.logout
 	return func() tea.Msg {
 		if closeFileSearch != nil {
@@ -58,7 +52,9 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 	m.op.cancel()
 	m.op = operation{gen: m.op.gen}
 	if msg.err != nil {
-		return m, m.showNotice(noticeForError("could not log out", msg.err), 0)
+		m.postNotice(noticeForError("could not log out", msg.err))
+		m.list.ScrollToBottom()
+		return m, nil
 	}
 
 	// Discard authenticated collaborators and invalidate queued search results.

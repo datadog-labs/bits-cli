@@ -37,7 +37,6 @@ func (m *Model) openStatus() tea.Cmd {
 	m.status.SetSize(m.width, m.height)
 	m.status.Open(m.statusRuntime())
 	m.setMode(ModeStatus)
-	m.clearNotice()
 	engine := m.engine
 	workspaceCommand := func() tea.Msg {
 		snapshot := workspace.Environment{}

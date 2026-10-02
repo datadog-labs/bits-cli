@@ -123,11 +123,11 @@ func TestWelcomeFactsOmitOrganization(t *testing.T) {
 	}
 }
 
-// The gate is the transcript viewport, so the boundary moves with the notice, footer
+// The gate is the transcript viewport, so the boundary moves with the footer
 // and composer rather than with m.height alone.
 func TestWelcomeHiddenUntilTerminalIsTallEnough(t *testing.T) {
 	tall := welcomeModel(100, 40)
-	needed := tall.splashPanelHeight() + chatNoticeHeight + chatFooterHeight + tall.editor.Height()
+	needed := tall.splashPanelHeight() + chatComposerGapHeight + chatFooterHeight + tall.editor.Height()
 
 	if welcomeModel(100, needed-1).showSplashPanel() {
 		t.Error("splash panel shown on a terminal too short to hold it")
