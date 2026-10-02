@@ -193,7 +193,7 @@ func (s *ClientSkills) snapshot(ctx context.Context) string {
 	}
 	var catalog strings.Builder
 	catalog.WriteString("<available-local-client-skills>\nThis is the latest available-local-client-skills update. Disregard any earlier <available-local-client-skills> blocks.\nAvailable local client skills in this user's local project context:\n")
-	const footer = "Local client skills are different from enabled skills. They are local to this CLI. Do not load these local client skills with the Skill tool. When a skill is invoked, read its SKILL.md with available client tools before following it. Use read_file with a workspace-relative path for files inside the active directory; for other paths use exec_command subject to its normal permissions.\n</available-local-client-skills>"
+	const footer = "Local client skills are different from enabled skills. They are local to this CLI. Do not load these local client skills with the Skill tool. When a skill is invoked, read its SKILL.md with available client tools before following it.\n</available-local-client-skills>"
 	for _, name := range names {
 		skill := scan.skills[name]
 		entry := fmt.Sprintf("<skill name=\"%s\" path=\"%s\">%s</skill>\n", html.EscapeString(skill.Name), html.EscapeString(filepath.ToSlash(skill.path)), html.EscapeString(skill.Description))
