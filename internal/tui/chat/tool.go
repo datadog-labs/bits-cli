@@ -1086,12 +1086,12 @@ func newQuestionPrompt(call agent.ToolCall) components.Prompt {
 // Update gives the form every event: it owns all of its area.
 func (q questionPrompt) Update(msg tea.Msg) (tea.Cmd, bool) { return q.form.Update(msg), true }
 
-func (q questionPrompt) Layout(width, height int) string {
+func (q questionPrompt) Layout(width, height int) (string, bool) {
 	q.form.SetSize(width, height)
-	return q.form.View()
+	minWidth, minHeight := q.form.MinSize()
+	return q.form.View(), width >= minWidth && height >= minHeight
 }
 
-func (q questionPrompt) MinSize() (int, int)          { return q.form.MinSize() }
 func (q questionPrompt) SetStyles(theme styles.Theme) { q.form.SetStyles(theme) }
 
 func (q questionPrompt) Result() (any, bool) {

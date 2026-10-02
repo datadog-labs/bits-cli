@@ -142,10 +142,9 @@ func (m *Model) layout() frame {
 	f.footer = take(chatFooterHeight)
 	f.composer = take(m.editor.Height())
 	f.composerGap = take(chatComposerGapHeight)
-	dock := m.prompt()
-	room := dockRows(y)
+	dock, answerable := m.prompt(), true
 	if dock != nil {
-		if f.dockView = dock.Layout(m.width, room); f.dockView != "" {
+		if f.dockView, answerable = dock.Layout(m.width, dockRows(y)); f.dockView != "" {
 			f.dock = take(lipgloss.Height(f.dockView))
 		}
 	}
@@ -155,10 +154,10 @@ func (m *Model) layout() frame {
 	case m.mode != ModeChat && m.mode != ModePermissions:
 	case m.width < minimumChatWidth || m.height < minimumChatHeight:
 		f.tooSmall = true
-	case dock != nil:
-		// A prompt that cannot be answered is hidden behind the resize hint too.
-		minWidth, minHeight := dock.MinSize()
-		f.tooSmall = m.width < minWidth || room < minHeight
+	case !answerable:
+		// A prompt drawn without its controls or its whole request is hidden
+		// behind the resize hint too.
+		f.tooSmall = true
 	}
 	return f
 }

@@ -110,7 +110,7 @@ func TestPanelPagesAScrollableBodyThroughItsWindow(t *testing.T) {
 		ScrollHint:     "keys scroll",
 	}
 
-	first, window := panel.Layout(60, 20, content)
+	first, window, _ := panel.Layout(60, 20, content)
 	assertBounded(t, first, 60, 20)
 	plain := ansi.Strip(first)
 	if !strings.Contains(plain, "detail-01") || strings.Contains(plain, "detail-12") || !strings.Contains(plain, "lines 1–7 of 12 · keys scroll") {
@@ -118,7 +118,7 @@ func TestPanelPagesAScrollableBodyThroughItsWindow(t *testing.T) {
 	}
 
 	content.ScrollOffset = window.Scrolled(window.PageSize()).Offset
-	second, _ := panel.Layout(60, 20, content)
+	second, _, _ := panel.Layout(60, 20, content)
 	assertBounded(t, second, 60, 20)
 	plain = ansi.Strip(second)
 	if strings.Contains(plain, "detail-01") || !strings.Contains(plain, "detail-12") {
@@ -162,13 +162,13 @@ func TestPanelLayoutIsPure(t *testing.T) {
 		ScrollableBody: func(int) string { return strings.Join(rows, "\n") },
 		ScrollOffset:   9,
 	}
-	first, window := panel.Layout(60, 16, content)
-	second, again := panel.Layout(60, 16, content)
+	first, window, _ := panel.Layout(60, 16, content)
+	second, again, _ := panel.Layout(60, 16, content)
 	if first != second || window != again || window.Offset != 9 {
 		t.Fatalf("layout is not repeatable: window=%+v again=%+v", window, again)
 	}
 	content.ScrollOffset = 1000
-	if _, clamped := panel.Layout(60, 16, content); clamped.Offset != window.Rows-window.Page {
+	if _, clamped, _ := panel.Layout(60, 16, content); clamped.Offset != window.Rows-window.Page {
 		t.Fatalf("offset = %d, want the last page at %d", clamped.Offset, window.Rows-window.Page)
 	}
 }

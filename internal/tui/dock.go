@@ -5,7 +5,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/tui/components"
 )
 
@@ -35,30 +34,6 @@ func (m *Model) prompt() components.Prompt {
 // minimumTranscriptRows once the dock has minimumDockRows.
 func dockRows(free int) int {
 	return max(0, min(free-1, max(minimumDockRows, free-minimumTranscriptRows)))
-}
-
-// updatePrompt applies msg to the docked prompt, then hands on its answer.
-func (m *Model) updatePrompt(msg tea.Msg) (tea.Cmd, bool) {
-	if len(m.requests) == 0 {
-		return nil, false
-	}
-	r := m.requests[0]
-	cmd, used := r.prompt.Update(msg)
-	if answer, done := r.prompt.Result(); done {
-		m.answer(r, answer)
-	}
-	return cmd, used
-}
-
-// answer hands the user's answer to whoever asked. A tool UI is done once
-// answered; an approval stays until the transcript drops the call.
-func (m *Model) answer(r *request, answer any) {
-	if r.ui != nil {
-		r.ui.Respond(answer, nil)
-		m.drop(func(other *request) bool { return other == r })
-		return
-	}
-	m.engine.Decide(r.callID, answer.(agent.ApprovalDecision))
 }
 
 // inDock moves a click or a wheel event into the dock's coordinates; those

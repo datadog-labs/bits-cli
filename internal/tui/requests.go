@@ -20,6 +20,10 @@ type request struct {
 	callID string
 	prompt components.Prompt
 	ui     *tools.Request // the tool's request; nil for an approval
+	// respond hands the prompt's answer to whoever asked, and reports whether
+	// it got through.
+	respond  func(answer any) bool
+	answered bool
 }
 
 type toolUIOpenedMsg struct{ request *tools.Request }
@@ -72,7 +76,44 @@ func (m *Model) openToolUI(ui *tools.Request) {
 		ui.Respond(nil, fmt.Errorf("no interactive UI for tool %q", ui.Call.Name))
 		return
 	}
-	m.ask(&request{callID: ui.Call.ID, prompt: prompt, ui: ui})
+	m.ask(&request{callID: ui.Call.ID, prompt: prompt, ui: ui, respond: func(answer any) bool {
+		ui.Respond(answer, nil)
+		return true
+	}})
+}
+
+// askApproval queues an approval of block's call.
+func (m *Model) askApproval(block agent.Block) {
+	id, prompt := block.ToolCallID(), m.newApprovalPrompt(block)
+	// The prompt's own decision, typed, is the answer.
+	m.ask(&request{callID: id, prompt: prompt, respond: func(any) bool {
+		return m.engine.Decide(id, prompt.decision)
+	}})
+}
+
+// updatePrompt applies msg to the docked prompt, then hands on its answer. An
+// answered prompt gets no more input while it waits for its source to settle.
+func (m *Model) updatePrompt(msg tea.Msg) (tea.Cmd, bool) {
+	if len(m.requests) == 0 || m.requests[0].answered {
+		return nil, false
+	}
+	r := m.requests[0]
+	cmd, used := r.prompt.Update(msg)
+	m.answer(r)
+	return cmd, used
+}
+
+// answer hands r's answer, once given, to whoever asked; if it does not get
+// through, the next update tries again. A tool UI is done once answered; an
+// approval stays until the transcript drops its call.
+func (m *Model) answer(r *request) {
+	answer, done := r.prompt.Result()
+	if !done {
+		return
+	}
+	if r.answered = r.respond(answer); r.answered && r.ui != nil {
+		m.drop(func(other *request) bool { return other == r })
+	}
 }
 
 // syncRequests follows the transcript: approvals it no longer lists and tool
@@ -92,7 +133,7 @@ func (m *Model) syncRequests(pending []agent.Block) {
 	})
 	for _, block := range pending {
 		if !slices.ContainsFunc(m.requests, func(r *request) bool { return r.ui == nil && r.callID == block.ToolCallID() }) {
-			m.ask(&request{callID: block.ToolCallID(), prompt: m.newApprovalPrompt(block)})
+			m.askApproval(block)
 		}
 	}
 }

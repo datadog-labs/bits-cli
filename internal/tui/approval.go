@@ -19,10 +19,9 @@ const (
 	// approvalCompactWidth is the dock width below which the panel switches to
 	// condensed action labels so the choice row still fits.
 	approvalCompactWidth = 50
-	// The compact panel needs this much room to show its heading, request
-	// title, detail, and every action.
-	approvalMinWidth  = 36
-	approvalMinHeight = 6
+	// approvalMinWidth is the narrowest dock whose choice row shows every
+	// action, even condensed.
+	approvalMinWidth = 36
 )
 
 type approvalChoice struct {
@@ -64,15 +63,8 @@ func (a *approvalPrompt) SetStyles(theme styles.Theme) {
 	a.panel.SetStyles(theme.Approval.Panel)
 }
 
-// Result hands over the agent.ApprovalDecision the user made, once: the
-// panel stays until the transcript drops the call, and must not decide twice.
-func (a *approvalPrompt) Result() (any, bool) {
-	decision := a.decision
-	a.decision = ""
-	return decision, decision != ""
-}
-
-func (a *approvalPrompt) MinSize() (int, int) { return approvalMinWidth, approvalMinHeight }
+// Result reports the agent.ApprovalDecision the user made.
+func (a *approvalPrompt) Result() (any, bool) { return a.decision, a.decision != "" }
 
 // Update moves the highlight, scrolls the body, or makes the decision. The
 // wheel scrolls the body; clicks are left to text selection.
@@ -111,14 +103,13 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 
 func (a *approvalPrompt) scroll(rows int) { a.window = a.window.Scrolled(rows) }
 
-// Layout renders the panel within width×height.
-// It is where the prompt learns how much of the body shows, so scrolling clamps
-// to what the last frame displayed.
-func (a *approvalPrompt) Layout(width, height int) string {
+// Layout renders the panel within width×height. It is answerable in the full
+// form, whose body scrolls, or in the compact one, which only shows when the
+// whole request fits; never in the one-line fallback. Layout is also where the
+// prompt learns how much of the body shows, so scrolling clamps to what the
+// last frame displayed.
+func (a *approvalPrompt) Layout(width, height int) (string, bool) {
 	block := a.block
-	if block.Tool == nil {
-		return ""
-	}
 	prompt := block.Tool.Approval
 	title := "Run " + escape.Inline(block.Tool.Name) + "?"
 	detail := ""
@@ -152,20 +143,22 @@ func (a *approvalPrompt) Layout(width, height int) string {
 		BodyFooterGap: 1,
 		CompactTitle:  queue,
 		CompactBody: func(width int) string {
-			lines := []string{sty.Text.Render(ansi.Truncate(title, width, "…"))}
+			// Wrapped, not truncated: a request that does not fit whole falls
+			// back to the one-line form, which cannot be answered.
+			lines := []string{sty.Text.Render(ansi.Wordwrap(title, width, "-"))}
 			if rendered, ok := chat.RenderToolApproval(block.Tool, width, a.chat); ok {
 				lines = append(lines, rendered)
 			} else if detail != "" {
-				lines = append(lines, sty.Detail.Render(ansi.Truncate(escape.Inline(detail), width, "…")))
+				lines = append(lines, sty.Detail.Render(ansi.Wordwrap(escape.Inline(detail), width, "-")))
 			}
 			lines = append(lines, "", a.actions(width))
 			return strings.Join(lines, "\n")
 		},
 		TinyMessage: "Resize terminal to approve",
 	}
-	rendered, window := a.panel.Layout(width, height, content)
+	rendered, window, shown := a.panel.Layout(width, height, content)
 	a.window = window
-	return lipgloss.PlaceHorizontal(width, lipgloss.Center, rendered)
+	return lipgloss.PlaceHorizontal(width, lipgloss.Center, rendered), shown && width >= approvalMinWidth
 }
 
 // actions renders the choice row within width, condensing labels on narrow

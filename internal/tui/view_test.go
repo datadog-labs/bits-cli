@@ -36,13 +36,13 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 	}{
 		{"composer", 80, 24, nil, false},
 		{"tall draft under the header", 80, 22, []func(*Model){draft}, false},
-		{"approval", 80, 12, []func(*Model){approval}, false},
+		{"approval", 80, 11, []func(*Model){approval}, false},
 		{"tool UI", 80, 24, []func(*Model){toolUI}, false},
 		{"short tool UI", 80, 14, []func(*Model){toolUI}, false},
 		{"narrow chat", minimumChatWidth - 1, 24, nil, true},
-		{"short approval", 80, 11, []func(*Model){approval}, true},
+		{"short approval", 80, 10, []func(*Model){approval}, true},
 		{"narrow approval", approvalMinWidth - 1, 24, []func(*Model){approval}, true},
-		{"approval squeezed by a draft", 80, 18, []func(*Model){approval, draft}, true},
+		{"approval squeezed by a draft", 80, 17, []func(*Model){approval, draft}, true},
 		{"tool UI squeezed by a draft", 80, 20, []func(*Model){toolUI, draft}, true},
 		{"small tool UI", 30, 10, []func(*Model){toolUI}, true},
 	} {

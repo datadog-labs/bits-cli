@@ -83,20 +83,22 @@ func (p *Panel) View(width, height int, content PanelContent) string {
 // layout. It uses the same bounded full and compact states as View without
 // adding the surrounding centering space.
 func (p *Panel) Render(width, height int, content PanelContent) string {
-	rendered, _ := p.Layout(width, height, content)
+	rendered, _, _ := p.Layout(width, height, content)
 	return rendered
 }
 
-// Layout is Render that also reports the Window of a scrollable body it showed.
-// The window is zero when the compact fallback is shown.
-func (p *Panel) Layout(width, height int, content PanelContent) (string, Window) {
+// Layout is Render that also reports what it showed: the Window of a
+// scrollable body, zero in the compact form, and whether the content showed
+// at all rather than the one-line fallback, which drops the body and controls.
+func (p *Panel) Layout(width, height int, content PanelContent) (string, Window, bool) {
 	if width <= 0 || height <= 0 {
-		return "", Window{}
+		return "", Window{}, false
 	}
 	if full, window, ok := p.fit(width, height, content); ok {
-		return full, window
+		return full, window, true
 	}
-	return p.compact(width, height, content), Window{}
+	compact, shown := p.compact(width, height, content)
+	return compact, Window{}, shown
 }
 
 // Fits reports whether Render shows the full layout rather than a compact
@@ -249,13 +251,15 @@ func (p *Panel) footer(width int, left, right string) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right)
 }
 
-func (p *Panel) compact(width, height int, content PanelContent) string {
+// compact renders the compact form, or the one-line fallback when even that
+// does not fit. It reports whether the compact form showed.
+func (p *Panel) compact(width, height int, content PanelContent) (string, bool) {
 	tiny := content.TinyMessage
 	if tiny == "" {
 		tiny = content.CompactTitle
 	}
 	if height < 3 || width < 20 {
-		return p.styles.Compact.Render(ansi.Truncate(tiny, width, ""))
+		return p.styles.Compact.Render(ansi.Truncate(tiny, width, "")), false
 	}
 
 	title := content.CompactTitle
@@ -275,7 +279,7 @@ func (p *Panel) compact(width, height int, content PanelContent) string {
 	}
 	candidate := p.styles.Compact.Width(compactWidth).Render(title + "\n\n" + message)
 	if lipgloss.Width(candidate) <= width && lipgloss.Height(candidate) <= height {
-		return candidate
+		return candidate, true
 	}
-	return p.styles.Compact.Render(ansi.Truncate(tiny, width, ""))
+	return p.styles.Compact.Render(ansi.Truncate(tiny, width, "")), false
 }
