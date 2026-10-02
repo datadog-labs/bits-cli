@@ -14,19 +14,14 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/components"
 )
 
-// ask is one tool call waiting on the user, answered through its prompt. Two
-// sources ask, each kept in its own shape: approvals mirror the transcript
-// (m.approvals), tool UIs arrive as requests on the tools.UI channel
-// (m.toolUIs). The chat shows one ask at a time (see reshow), placed where its
-// prompt asks.
+// ask is a tool call waiting for user input. Approvals mirror the transcript;
+// interactive tool requests arrive on tools.UI. The chat shows one at a time.
 type ask interface {
 	callID() string
 	prompt() components.Prompt
-	// deliver hands the prompt's answer, once given, to whoever asked. It
-	// reports whether the answer got through; if not, it is tried again.
+	// deliver sends the answer and reports whether it succeeded.
 	deliver() bool
-	// waiting reports whether the ask still needs the user: not yet answered,
-	// and still held by its source.
+	// waiting reports whether the request still needs an answer.
 	waiting() bool
 }
 
@@ -97,10 +92,7 @@ func (m *Model) openToolUI(ui *tools.Request) {
 	m.reshow()
 }
 
-// syncApprovals mirrors the approvals the transcript lists: new calls are
-// asked, calls it no longer lists are settled. An ask keeps its prompt while
-// listed, so a streaming update resets neither the highlight nor the scroll,
-// and an answered one is not asked again.
+// syncApprovals mirrors pending calls while preserving each prompt's state.
 func (m *Model) syncApprovals(pending []agent.Block) {
 	listed := make(map[string]bool, len(pending))
 	for _, block := range pending {
@@ -139,10 +131,8 @@ func (m *Model) clearAsks() {
 	m.toolUIs, m.shown = nil, nil
 }
 
-// reshow keeps the shown ask while it waits; otherwise the earliest waiting
-// call in the transcript is shown, whichever source asked. It also lets go of
-// tool UIs that stopped waiting. Every change to the asks ends with it, and
-// relayout runs it once per update to notice cancelled tool contexts.
+// reshow keeps the current request or selects the earliest pending call.
+// It also drops cancelled tool UIs.
 func (m *Model) reshow() {
 	m.toolUIs = slices.DeleteFunc(m.toolUIs, func(t *toolAsk) bool { return !t.waiting() })
 	if m.shown != nil && m.shown.waiting() {

@@ -83,15 +83,10 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// frame is the chat screen laid out for one update. relayout builds it once
-// at the end of every Update, laying out the shown prompt on the way; View,
-// hit-testing, and every size query read it instead of measuring again.
+// frame is the chat layout built once per update and shared by drawing and hit-testing.
 //
-// Rows stack top to bottom: transcript, prompt, composer gap, composer,
-// footer. The prompt rows hold the ask waiting on the user, and are empty
-// when none is. A components.Docked prompt sits under the transcript, above
-// the editor; one that components.ReplacesInput takes the composer's place
-// below the gap, and the composer rows are then empty.
+// Rows stack as transcript, prompt, gap, composer, and footer. A replacing
+// prompt occupies the composer slot and dims the transcript.
 type frame struct {
 	transcript  image.Rectangle
 	prompt      image.Rectangle
@@ -102,8 +97,7 @@ type frame struct {
 	// promptView is the shown prompt as its one Layout of the update drew it.
 	promptView string
 
-	// replaced means the prompt replaces the composer: the editor and footer
-	// hide, and the transcript dims behind it.
+	// replaced means the prompt takes the composer slot and dims chat.
 	replaced bool
 
 	// tooSmall means the chat cannot be usably rendered, so View replaces the
@@ -147,10 +141,7 @@ func (f frame) inputTop() int {
 	return f.composer.Min.Y
 }
 
-// layout stacks the chat bottom-up, so each surface is sized against the rows
-// left below the transcript, which takes the rest. It is not pure: laying out
-// the shown prompt sizes it and settles its scroll, so only relayout calls it.
-// The prompt's Placement is the one thing that changes the stack.
+// layout stacks the chat bottom-up and lays out the shown prompt.
 func (m *Model) layout() frame {
 	var f frame
 	y := m.height
@@ -186,8 +177,7 @@ func (m *Model) layout() frame {
 	case m.width < minimumChatWidth || m.height < minimumChatHeight:
 		f.tooSmall = true
 	case !answerable:
-		// A prompt drawn without its controls or its whole request is hidden
-		// behind the resize hint too.
+		// Hide prompts that lack room for the request or its controls.
 		f.tooSmall = true
 	}
 	return f

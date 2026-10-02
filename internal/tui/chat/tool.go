@@ -92,8 +92,7 @@ type toolRenderSpec struct {
 // host shows it like a tool approval, and hands Result to the waiting tool.
 type ToolPrompt interface {
 	components.Prompt
-	// Result reports the user's answer once they have given it, and keeps
-	// reporting it. The tool, not the UI, turns it into the call's result.
+	// Result returns the user's answer; the tool converts it to a call result.
 	Result() (any, bool)
 }
 

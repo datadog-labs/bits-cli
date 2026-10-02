@@ -476,11 +476,7 @@ func (m *Model) advanceSelectionScroll(msg selectionTickMsg) tea.Cmd {
 	return m.armSelectionScroll()
 }
 
-// handleMouse routes a pointer event. Full-screen pickers take every event.
-// On the chat, focus only decides who gets keys; the pointer decides the rest:
-// a drag stays with the selection it started, the shown prompt gets what lands
-// on it, and anything it does not use scrolls or selects like the rest of the
-// chat. The wheel scrolls the transcript wherever nothing else scrolls.
+// handleMouse routes pointer events by position; chat focus only routes keys.
 func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	switch m.focus() {
 	case focusPicker:
@@ -516,9 +512,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 	case tea.MouseClickMsg:
 		if msg.Button == tea.MouseLeft {
-			// The press might turn into a drag-select, so it isn't a toggle
-			// yet: arm it, and let finishSelection decide on release whether
-			// the gesture stayed a plain click or moved and became a selection.
+			// Defer the toggle until release so drag selection can take over.
 			m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.HeaderAt(msg.Y)
 			return m.beginSelection(msg)
 		}
@@ -639,10 +633,8 @@ func (m *Model) stopStartup() {
 // handleKey routes a keypress to the surface that owns input. Global quit is
 // handled earlier in Update.
 //
-// The transcript keys work whatever owns the keyboard on the chat: ctrl+o
-// toggles every tool block, and shift+pgup/pgdown page the transcript. Plain
-// pgup/pgdown page what owns the keyboard: a shown prompt's body, or the
-// transcript under the editor.
+// Ctrl+O toggles tool blocks and Shift+PgUp/PgDn page chat from any chat focus.
+// PgUp/PgDn go to the focused prompt or transcript.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" && m.selection.active() {
 		m.selection.clear()
@@ -902,10 +894,7 @@ func (m *Model) resize(w, h int) {
 	}
 }
 
-// relayout lays the chat out from current state: it builds the frame, laying
-// out the shown prompt, and sizes the transcript and editor to it. Update
-// calls it once, after every handler has run, so a prompt is laid out once per
-// update and View only draws what this laid out.
+// relayout rebuilds the frame and sizes the transcript and editor after each update.
 func (m *Model) relayout() {
 	if m.mode == ModeTermInit {
 		return

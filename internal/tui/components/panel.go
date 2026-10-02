@@ -22,11 +22,8 @@ type PanelContent struct {
 	// MinBodyWidth is the narrowest body the full layout renders; below it the
 	// panel falls back to its compact form.
 	MinBodyWidth int
-	// BodyHeader, ScrollableBody, and BodyFooter form an optional bounded
-	// layout. ScrollableBody must return display-width-wrapped rows; Panel
-	// performs vertical paging only, starting at ScrollOffset. Panel keeps no
-	// scroll state: Layout reports the Window it showed and the caller keeps it.
-	// ScrollHint follows the position line, naming the caller's scroll keys.
+	// These fields define a bounded, vertically scrollable body. The caller
+	// owns ScrollOffset and receives the visible Window from Layout.
 	BodyHeader     func(width int) string
 	ScrollableBody func(width int) string
 	BodyFooter     func(width int) string
@@ -42,9 +39,7 @@ type PanelContent struct {
 	TinyMessage    string
 }
 
-// Window is the slice of a scrollable body a layout showed: its first row, the
-// body's row count and the rows per page. The zero Window means nothing scrolls.
-// Callers keep it between layouts so wheel and paging clamp to what is visible.
+// Window describes the visible slice of a scrollable body.
 type Window struct {
 	Offset, Rows, Page int
 }
@@ -58,8 +53,7 @@ func (w Window) Scrolled(rows int) Window {
 // PageSize is the number of rows a page jump moves.
 func (w Window) PageSize() int { return max(1, w.Page) }
 
-// Panel renders the shared understated, responsive bordered surface. It holds
-// only theme styles, so rendering is a pure function of its arguments.
+// Panel renders a responsive bordered surface using shared theme styles.
 type Panel struct {
 	styles styles.Panel
 }
@@ -87,9 +81,7 @@ func (p *Panel) Render(width, height int, content PanelContent) string {
 	return rendered
 }
 
-// Layout is Render that also reports what it showed: the Window of a
-// scrollable body, zero in the compact form, and whether the content showed
-// at all rather than the one-line fallback, which drops the body and controls.
+// Layout also reports the visible body window and whether controls were shown.
 func (p *Panel) Layout(width, height int, content PanelContent) (string, Window, bool) {
 	if width <= 0 || height <= 0 {
 		return "", Window{}, false
@@ -175,8 +167,7 @@ func (p *Panel) scrollableBody(width, height int, content PanelContent) (string,
 		rows = nil
 	}
 
-	// The parts are joined line to line, so the body gets every row the header
-	// and footer leave.
+	// Give the body all rows left by the header and footer.
 	parts := []string{header, body, footer}
 	fixedHeight := 0
 	for _, part := range parts {
