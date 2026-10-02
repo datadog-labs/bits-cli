@@ -53,10 +53,10 @@ type approvalPrompt struct {
 	chat  chat.Styles
 }
 
-var _ prompt = (*approvalPrompt)(nil)
+var _ components.Prompt = (*approvalPrompt)(nil)
 
-func (a *approvalPrompt) setStyles(theme styles.Theme, chatStyles chat.Styles) {
-	a.theme, a.chat = theme, chatStyles
+func (a *approvalPrompt) SetStyles(theme styles.Theme) {
+	a.theme, a.chat = theme, chat.StylesFor(theme)
 	a.panel.SetStyles(theme.Approval.Panel)
 }
 
@@ -81,18 +81,19 @@ func (a *approvalPrompt) set(pending []agent.Block) {
 // clear drops every pending call and returns the prompt to its initial state.
 func (a *approvalPrompt) clear() { a.set(nil) }
 
-// result hands over the decision the user made, once.
-func (a *approvalPrompt) result() (agent.ApprovalDecision, bool) {
+// Result hands over the agent.ApprovalDecision the user made, once: the
+// panel stays until the transcript drops the call, and must not decide twice.
+func (a *approvalPrompt) Result() (any, bool) {
 	decision := a.decision
 	a.decision = ""
 	return decision, decision != ""
 }
 
-func (a *approvalPrompt) minSize() (int, int) { return approvalMinWidth, approvalMinHeight }
+func (a *approvalPrompt) MinSize() (int, int) { return approvalMinWidth, approvalMinHeight }
 
-// update moves the highlight, scrolls the body, or makes the decision. The
+// Update moves the highlight, scrolls the body, or makes the decision. The
 // wheel scrolls the body; clicks are left to text selection.
-func (a *approvalPrompt) update(msg tea.Msg) (tea.Cmd, bool) {
+func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case tea.MouseWheelMsg:
 		switch msg.Button {
@@ -127,10 +128,10 @@ func (a *approvalPrompt) update(msg tea.Msg) (tea.Cmd, bool) {
 
 func (a *approvalPrompt) scroll(rows int) { a.window = a.window.Scrolled(rows) }
 
-// layout renders the panel within width×height, or "" when nothing is pending.
+// Layout renders the panel within width×height, or "" when nothing is pending.
 // It is where the prompt learns how much of the body shows, so scrolling clamps
 // to what the last frame displayed.
-func (a *approvalPrompt) layout(width, height int) string {
+func (a *approvalPrompt) Layout(width, height int) string {
 	if !a.active() || a.pending[0].Tool == nil {
 		return ""
 	}

@@ -9,30 +9,16 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 )
 
-// toolUISession pairs a pending tool request with the component answering it.
-// It docks like an approval; settlePrompt responds once the component is done.
+// toolUISession pairs a pending tool request with the prompt answering it.
 type toolUISession struct {
-	request   *tools.Request
-	component chat.ToolInteraction
+	request *tools.Request
+	prompt  components.Prompt
 }
-
-var _ prompt = (*toolUISession)(nil)
 
 func (s *toolUISession) cancelled() bool { return s.request.Context().Err() != nil }
-
-func (s *toolUISession) layout(width, height int) string {
-	s.component.SetSize(width, height)
-	return s.component.View()
-}
-
-func (s *toolUISession) minSize() (int, int) { return s.component.MinSize() }
-
-// update forwards every event: the component owns all of its dock.
-func (s *toolUISession) update(msg tea.Msg) (tea.Cmd, bool) {
-	return s.component.Update(msg), true
-}
 
 type toolUIOpenedMsg struct{ request *tools.Request }
 
@@ -48,13 +34,13 @@ func (m *Model) activateToolUI(request *tools.Request) {
 	if request.Context().Err() != nil || m.op.stop != stopNone {
 		return
 	}
-	component, ok := chat.NewToolInteraction(request.Call)
+	prompt, ok := chat.NewToolPrompt(request.Call)
 	if !ok {
 		request.Respond(nil, fmt.Errorf("no interactive UI for tool %q", request.Call.Name))
 		return
 	}
-	component.SetStyles(m.styles)
-	session := &toolUISession{request: request, component: component}
+	prompt.SetStyles(m.styles)
+	session := &toolUISession{request: request, prompt: prompt}
 	if m.activeToolUI != nil {
 		m.queuedToolUIs = append(m.queuedToolUIs, session)
 		return

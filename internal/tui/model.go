@@ -194,8 +194,8 @@ type Model struct {
 	logout    LogoutFunc
 	loggedOut bool
 
-	// Tool requests waiting on the user dock above the composer as a prompt
-	// (see prompt): a tool's interactive UI first, then an approval.
+	// Tool requests waiting on the user dock above the composer as a
+	// components.Prompt: a tool's interactive UI first, then an approval.
 	toolUI           *tools.UI
 	activeToolUI     *toolUISession
 	queuedToolUIs    []*toolUISession
@@ -383,12 +383,12 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	m.list.SetStyles(m.chatStyles)
 	m.editor.SetInputStyles(theme.Input)
 	m.editor.SetStyles(theme.Editor)
-	m.approval.setStyles(theme, m.chatStyles)
+	m.approval.SetStyles(theme)
 	if m.activeToolUI != nil {
-		m.activeToolUI.component.SetStyles(theme)
+		m.activeToolUI.prompt.SetStyles(theme)
 	}
 	for _, session := range m.queuedToolUIs {
-		session.component.SetStyles(theme)
+		session.prompt.SetStyles(theme)
 	}
 	m.permissionsPanel.SetStyles(theme.Permissions)
 	if m.picker != nil {

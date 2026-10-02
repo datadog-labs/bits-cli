@@ -4,6 +4,9 @@ import (
 	"image"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 )
 
 const (
@@ -15,27 +18,16 @@ const (
 	minimumDockRows = 15
 )
 
-// prompt is a tool request waiting on the user: a tool approval or a tool's
-// interactive UI. It docks between the transcript and the composer and owns
-// the keyboard while it shows; the editor stays visible but inert. The model
-// collects its answer after each update (see settlePrompt).
-type prompt interface {
-	// layout fits the prompt to width and at most height rows and renders it.
-	layout(width, height int) string
-	// minSize is the smallest dock the prompt can be answered in. Below it the
-	// chat is hidden behind the resize hint, so a hidden choice is never made.
-	minSize() (width, height int)
-	// update applies a key or a pointer event in dock coordinates. It reports
-	// whether the prompt used the event, so a click it ignores can start a text
-	// selection instead.
-	update(tea.Msg) (tea.Cmd, bool)
-}
+// The dock holds the request waiting on the user, a components.Prompt: a
+// tool approval, or the interactive UI a client tool asks through. It sits
+// between the transcript and the composer and owns the keyboard while it
+// shows; the editor stays visible but inert.
 
 // prompt returns the docked prompt, or nil. Tool UIs come first: they answer
 // a request a running tool is blocked on.
-func (m *Model) prompt() prompt {
+func (m *Model) prompt() components.Prompt {
 	if m.activeToolUI != nil {
-		return m.activeToolUI
+		return m.activeToolUI.prompt
 	}
 	if m.approval.active() {
 		return &m.approval
@@ -56,23 +48,23 @@ func (m *Model) updatePrompt(msg tea.Msg) (tea.Cmd, bool) {
 	if p == nil {
 		return nil, false
 	}
-	cmd, used := p.update(msg)
-	m.settlePrompt()
+	cmd, used := p.Update(msg)
+	m.settle(p)
 	return cmd, used
 }
 
-// settlePrompt hands an answered prompt's answer to whoever asked for it.
-func (m *Model) settlePrompt() {
-	if session := m.activeToolUI; session != nil {
-		if answer, done := session.component.Result(); done {
-			session.request.Respond(answer, nil)
-			m.nextToolUI()
-		}
+// settle hands the docked prompt's answer, once given, to whoever asked.
+func (m *Model) settle(p components.Prompt) {
+	answer, done := p.Result()
+	if !done {
 		return
 	}
-	if decision, decided := m.approval.result(); decided {
-		m.engine.Decide(m.approval.callID(), decision)
+	if session := m.activeToolUI; session != nil {
+		session.request.Respond(answer, nil)
+		m.nextToolUI()
+		return
 	}
+	m.engine.Decide(m.approval.callID(), answer.(agent.ApprovalDecision))
 }
 
 // inDock moves a click or a wheel event into the dock's coordinates; those

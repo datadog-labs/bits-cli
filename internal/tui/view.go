@@ -145,7 +145,7 @@ func (m *Model) layout() frame {
 	dock := m.prompt()
 	room := dockRows(y)
 	if dock != nil {
-		if f.dockView = dock.layout(m.width, room); f.dockView != "" {
+		if f.dockView = dock.Layout(m.width, room); f.dockView != "" {
 			f.dock = take(lipgloss.Height(f.dockView))
 		}
 	}
@@ -157,7 +157,7 @@ func (m *Model) layout() frame {
 		f.tooSmall = true
 	case dock != nil:
 		// A prompt that cannot be answered is hidden behind the resize hint too.
-		minWidth, minHeight := dock.minSize()
+		minWidth, minHeight := dock.MinSize()
 		f.tooSmall = m.width < minWidth || room < minHeight
 	}
 	return f

@@ -85,38 +85,22 @@ type toolRenderSpec struct {
 	// static marks a renderer that ignores disclosure, so List offers no
 	// disclosure control.
 	static   bool
-	interact func(call agent.ToolCall) ToolInteraction // nil = not interactive
+	interact func(call agent.ToolCall) components.Prompt // nil = not interactive
 }
 
-// ToolInteraction docks above the composer while a tool waits on the user,
-// like a tool approval. Mouse coordinates are relative to its top-left corner.
-type ToolInteraction interface {
-	Update(tea.Msg) tea.Cmd
-	View() string
-	// Height is the rows View takes at the last size.
-	Height() int
-	// MinSize is the smallest area the interaction can be answered in.
-	MinSize() (width, height int)
-	// SetSize gives the interaction width columns and at most height rows.
-	SetSize(width, height int)
-	SetStyles(theme styles.Theme)
-	// Result reports the user's answer once they are done. The tool, not the
-	// UI, turns it into the model-visible result.
-	Result() (any, bool)
-}
-
-// NewToolInteraction builds the interactive UI registered for a client tool.
-func NewToolInteraction(call agent.ToolCall) (ToolInteraction, bool) {
+// NewToolPrompt builds the interactive UI registered for a client tool. The
+// host docks it like a tool approval.
+func NewToolPrompt(call agent.ToolCall) (components.Prompt, bool) {
 	renderSpec := toolRenderSpecFor(spec.Identity{ClientSide: true, Name: call.Name})
 	if renderSpec.interact == nil {
 		return nil, false
 	}
-	interaction := renderSpec.interact(call)
-	return interaction, interaction != nil
+	prompt := renderSpec.interact(call)
+	return prompt, prompt != nil
 }
 
 var (
-	questionToolRenderSpec = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, static: true, interact: newQuestionInteraction}
+	questionToolRenderSpec = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, static: true, interact: newQuestionPrompt}
 	simpleToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool}
 	readToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, group: inspectionGroupKey}
 	listToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, group: inspectionGroupKey}
@@ -1081,9 +1065,10 @@ func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, c renderCont
 	return strings.Join(lines, "\n")
 }
 
-type questionInteraction struct{ *components.Questionnaire }
+// questionPrompt asks ask_user_question's questions with a Questionnaire.
+type questionPrompt struct{ form *components.Questionnaire }
 
-func newQuestionInteraction(call agent.ToolCall) ToolInteraction {
+func newQuestionPrompt(call agent.ToolCall) components.Prompt {
 	input, err := spec.ParseQuestions(call.Input)
 	if err != nil {
 		return nil
@@ -1095,11 +1080,22 @@ func newQuestionInteraction(call agent.ToolCall) ToolInteraction {
 			questions[i].Options = append(questions[i].Options, components.Option{Label: option.Label, Description: option.Description})
 		}
 	}
-	return questionInteraction{components.NewQuestionnaire(questions)}
+	return questionPrompt{components.NewQuestionnaire(questions)}
 }
 
-func (q questionInteraction) Result() (any, bool) {
-	answers, dismissed, done := q.Answers()
+// Update gives the form every event: it owns all of its area.
+func (q questionPrompt) Update(msg tea.Msg) (tea.Cmd, bool) { return q.form.Update(msg), true }
+
+func (q questionPrompt) Layout(width, height int) string {
+	q.form.SetSize(width, height)
+	return q.form.View()
+}
+
+func (q questionPrompt) MinSize() (int, int)          { return q.form.MinSize() }
+func (q questionPrompt) SetStyles(theme styles.Theme) { q.form.SetStyles(theme) }
+
+func (q questionPrompt) Result() (any, bool) {
+	answers, dismissed, done := q.form.Answers()
 	if !done {
 		return nil, false
 	}

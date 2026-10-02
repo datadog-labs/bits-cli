@@ -25,8 +25,8 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 	approval := func(m *Model) { m.approval.pending = []agent.Block{animToolBlock(agent.ToolAwaitingApproval)} }
 	draft := func(m *Model) { setConversationInput(m, strings.Repeat("draft\n", 12)) }
 	toolUI := func(m *Model) {
-		component, _ := chat.NewToolInteraction(agent.ToolCall{Name: spec.AskUserQuestion, Input: questionInput})
-		m.activeToolUI = &toolUISession{component: component}
+		prompt, _ := chat.NewToolPrompt(agent.ToolCall{Name: spec.AskUserQuestion, Input: questionInput})
+		m.activeToolUI = &toolUISession{prompt: prompt}
 	}
 	for _, tc := range []struct {
 		name          string
