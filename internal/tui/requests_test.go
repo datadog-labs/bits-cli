@@ -57,6 +57,7 @@ func awaitingCall(id string) agent.Block {
 // preempted, and the next one docked is the earliest call in the transcript.
 func TestRequestsDockOneAtATimeInTranscriptOrder(t *testing.T) {
 	m := newShell()
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
 	a, b, c := awaitingCall("a"), awaitingCall("b"), awaitingCall("c")
 	m.transcript.Blocks = []agent.Block{a, b, c}
 
@@ -67,8 +68,9 @@ func TestRequestsDockOneAtATimeInTranscriptOrder(t *testing.T) {
 	if m.prompt() != docked || docked.selected != 2 {
 		t.Fatal("a later update replaced or reset the docked approval")
 	}
-	if got := docked.waiting(); got != 3 {
-		t.Fatalf("waiting = %d, want 3", got)
+	m.relayout()
+	if dock := ansi.Strip(m.frame.dockView); !strings.Contains(dock, "3 waiting") {
+		t.Fatalf("the docked approval does not count every request:\n%s", dock)
 	}
 
 	m.syncRequests([]agent.Block{a, c})
@@ -118,7 +120,7 @@ func TestApprovalIsHiddenWhenItCannotBeShownWhole(t *testing.T) {
 func TestAnsweredApprovalTakesNoMoreInput(t *testing.T) {
 	m := newShell()
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	prompt := m.newApprovalPrompt(awaitingCall("a"))
+	prompt := newApprovalPrompt(awaitingCall("a"))
 	var sent []agent.ApprovalDecision
 	m.ask(&request{callID: "a", prompt: prompt, respond: func(answer any) bool {
 		sent = append(sent, answer.(agent.ApprovalDecision))

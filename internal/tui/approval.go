@@ -41,7 +41,6 @@ var approvalChoices = [...]approvalChoice{
 // collects it. A new prompt starts on the first action, scrolled to the top.
 type approvalPrompt struct {
 	block    agent.Block
-	waiting  func() int             // requests waiting on the user, this one included
 	selected int                    // index into approvalChoices
 	window   components.Window      // the body rows the last layout showed
 	decision agent.ApprovalDecision // made but not yet collected; "" when none
@@ -53,9 +52,8 @@ type approvalPrompt struct {
 
 var _ components.Prompt = (*approvalPrompt)(nil)
 
-// newApprovalPrompt asks about block; its header counts the model's requests.
-func (m *Model) newApprovalPrompt(block agent.Block) *approvalPrompt {
-	return &approvalPrompt{block: block, waiting: func() int { return len(m.requests) }}
+func newApprovalPrompt(block agent.Block) *approvalPrompt {
+	return &approvalPrompt{block: block}
 }
 
 func (a *approvalPrompt) SetStyles(theme styles.Theme) {
@@ -103,12 +101,12 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 
 func (a *approvalPrompt) scroll(rows int) { a.window = a.window.Scrolled(rows) }
 
-// Layout renders the panel within width×height. It is answerable in the full
+// Layout renders the panel within the dock. It is answerable in the full
 // form, whose body scrolls, or in the compact one, which only shows when the
-// whole request fits; never in the one-line fallback. Layout is also where the
-// prompt learns how much of the body shows, so scrolling clamps to what the
-// last frame displayed.
-func (a *approvalPrompt) Layout(width, height int) (string, bool) {
+// whole request fits; never in the one-line fallback. Layout keeps the body
+// window it showed, so scrolling clamps to what the last frame displayed.
+func (a *approvalPrompt) Layout(dock components.Dock) (string, bool) {
+	width := dock.Width
 	block := a.block
 	prompt := block.Tool.Approval
 	title := "Run " + escape.Inline(block.Tool.Name) + "?"
@@ -121,8 +119,8 @@ func (a *approvalPrompt) Layout(width, height int) (string, bool) {
 	}
 
 	queue := "Permission Required"
-	if count := a.waiting(); count > 1 {
-		queue += " · " + strconv.Itoa(count) + " waiting"
+	if dock.Waiting > 1 {
+		queue += " · " + strconv.Itoa(dock.Waiting) + " waiting"
 	}
 	sty := a.theme.Approval
 	content := components.PanelContent{
@@ -156,7 +154,7 @@ func (a *approvalPrompt) Layout(width, height int) (string, bool) {
 		},
 		TinyMessage: "Resize terminal to approve",
 	}
-	rendered, window, shown := a.panel.Layout(width, height, content)
+	rendered, window, shown := a.panel.Layout(width, dock.Height, content)
 	a.window = window
 	return lipgloss.PlaceHorizontal(width, lipgloss.Center, rendered), shown && width >= approvalMinWidth
 }

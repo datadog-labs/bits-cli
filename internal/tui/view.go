@@ -13,6 +13,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/DataDog/bits-cli/internal/tui/components"
 	"github.com/DataDog/bits-cli/internal/tui/escape"
 )
 
@@ -82,9 +83,9 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// frame is the chat screen laid out for one update. relayout derives it once
-// from state at the end of every Update; View, hit-testing, and every size
-// query read it instead of measuring again.
+// frame is the chat screen laid out for one update. relayout builds it once
+// at the end of every Update, laying out the docked prompt on the way; View,
+// hit-testing, and every size query read it instead of measuring again.
 //
 // Rows stack top to bottom: transcript, dock, composer gap, composer, footer.
 // The dock holds the prompt waiting on the user, and is empty when none is.
@@ -95,7 +96,7 @@ type frame struct {
 	composer    image.Rectangle
 	footer      image.Rectangle
 
-	// dockView is the docked prompt, rendered once so it can be measured.
+	// dockView is the docked prompt as its one Layout of the update drew it.
 	dockView string
 
 	// tooSmall means the chat cannot be usably rendered, so View replaces the
@@ -130,7 +131,8 @@ func (f frame) at(p image.Point) region {
 }
 
 // layout stacks the chat bottom-up, so each surface is sized against the rows
-// left below the transcript, which takes the rest.
+// left below the transcript, which takes the rest. It is not pure: laying out
+// the docked prompt sizes it and settles its scroll, so only relayout calls it.
 func (m *Model) layout() frame {
 	var f frame
 	y := m.height
@@ -144,7 +146,8 @@ func (m *Model) layout() frame {
 	f.composerGap = take(chatComposerGapHeight)
 	dock, answerable := m.prompt(), true
 	if dock != nil {
-		if f.dockView, answerable = dock.Layout(m.width, dockRows(y)); f.dockView != "" {
+		area := components.Dock{Width: m.width, Height: dockRows(y), Waiting: len(m.requests)}
+		if f.dockView, answerable = dock.Layout(area); f.dockView != "" {
 			f.dock = take(lipgloss.Height(f.dockView))
 		}
 	}

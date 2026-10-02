@@ -84,7 +84,7 @@ func (m *Model) openToolUI(ui *tools.Request) {
 
 // askApproval queues an approval of block's call.
 func (m *Model) askApproval(block agent.Block) {
-	id, prompt := block.ToolCallID(), m.newApprovalPrompt(block)
+	id, prompt := block.ToolCallID(), newApprovalPrompt(block)
 	// The prompt's own decision, typed, is the answer.
 	m.ask(&request{callID: id, prompt: prompt, respond: func(any) bool {
 		return m.engine.Decide(id, prompt.decision)

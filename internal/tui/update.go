@@ -902,8 +902,10 @@ func (m *Model) resize(w, h int) {
 	}
 }
 
-// relayout derives the frame from current state and sizes the transcript to
-// it. Update calls it once, after every handler has run.
+// relayout lays the chat out from current state: it builds the frame, laying
+// out the docked prompt, and sizes the transcript and editor to it. Update
+// calls it once, after every handler has run, so a prompt is laid out once per
+// update and View only draws what this laid out.
 func (m *Model) relayout() {
 	if m.mode == ModeTermInit {
 		return
