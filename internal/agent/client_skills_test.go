@@ -437,3 +437,35 @@ func TestClientSkillCatalogWithFallbackAndLongDescription(t *testing.T) {
 		t.Fatalf("catalog omitted fallback name or long description: %s", got)
 	}
 }
+
+func TestClientSkillCatalogSkipsEntriesThatDoNotFit(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		firstDescription string
+		wantFirst        bool
+	}{
+		{"larger than entire catalog", strings.Repeat("&", skillCatalogLimit/5), false},
+		{"larger than remaining budget", strings.Repeat("&", 8000), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			dir := t.TempDir()
+			writeSkill(t, dir, ".agents/skills/a-first", "a-first", "'"+tc.firstDescription+"'")
+			writeSkill(t, dir, ".agents/skills/b-large", "b-large", "'"+strings.Repeat("&", 8000)+"'")
+			writeSkill(t, dir, ".agents/skills/c-small", "c-small", "small description")
+			got := NewClientSkills(dir, nil).snapshot(context.Background())
+			if strings.Contains(got, `name="a-first"`) != tc.wantFirst {
+				t.Fatalf("unexpected first skill inclusion: %t", !tc.wantFirst)
+			}
+			if !strings.Contains(got, `name="c-small"`) {
+				t.Fatal("entry that did not fit suppressed the later small skill")
+			}
+			if tc.wantFirst && strings.Contains(got, `name="b-large"`) {
+				t.Fatal("entry exceeding remaining budget was included")
+			}
+			if len(got) > skillCatalogLimit || !strings.HasSuffix(got, "</available-local-client-skills>") {
+				t.Fatalf("invalid catalog: %d bytes", len(got))
+			}
+		})
+	}
+}

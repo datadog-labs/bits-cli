@@ -206,7 +206,7 @@ func (s *ClientSkills) snapshot(ctx context.Context) string {
 		skill := scan.skills[name]
 		entry := fmt.Sprintf("<skill name=\"%s\" path=\"%s\">%s</skill>\n", html.EscapeString(skill.Name), html.EscapeString(filepath.ToSlash(skill.path)), html.EscapeString(skill.Description))
 		if catalog.Len()+len(entry)+len(footer) > skillCatalogLimit {
-			break
+			continue
 		}
 		catalog.WriteString(entry)
 	}
