@@ -28,7 +28,6 @@ const (
 	execOutputMaxLines    = 5
 	collapsedDiffLines    = 15
 	inspectionGroupKey    = "inspect"
-	reasoningGroupKey     = "reasoning"
 )
 
 // toolPresentation is derived solely for rendering. The source ToolBlock stays
@@ -39,16 +38,29 @@ type toolPresentation struct {
 	argument   string
 	context    string
 	timeout    string
-	group      string
 	validInput bool
+	// renderSpec is never nil: unknown tools use simpleToolRenderSpec.
 	renderSpec *toolRenderSpec
+}
+
+// group returns the key that merges this call with adjacent calls sharing it,
+// or "" when it stands alone. Only decodable input groups, so a malformed
+// call stays visible as its own row.
+func (p toolPresentation) group() string {
+	if !p.validInput {
+		return ""
+	}
+	return p.renderSpec.group
 }
 
 // toolRenderSpec keeps a tool renderer and its static transcript layout plan
 // together. The presentation layer selects it before rendering so List can
 // account for spacing during lazy height and scroll calculations.
+//
+// A toolRenderFunc renders the requested disclosure view. Only write/edit and
+// exec_command have a compact view beyond their header.
 type (
-	toolRenderFunc         func(*agent.ToolBlock, toolPresentation, int, Styles, int) string
+	toolRenderFunc         func(tool *agent.ToolBlock, p toolPresentation, c renderContext) string
 	toolApprovalRenderFunc func(*agent.ToolBlock, toolPresentation, int, Styles) string
 )
 
@@ -67,8 +79,13 @@ type toolRenderSpec struct {
 	renderApproval toolApprovalRenderFunc
 	spacing        itemSpacing
 	action         toolAction
-	inspection     bool
-	interact       func(call agent.ToolCall) ToolInteraction // nil = not interactive
+	// group merges adjacent calls with the same key into one presentation
+	// item; "" keeps each call on its own.
+	group string
+	// static marks a renderer that ignores disclosure, so List offers no
+	// disclosure control.
+	static   bool
+	interact func(call agent.ToolCall) ToolInteraction // nil = not interactive
 }
 
 // ToolInteraction replaces the composer while a tool waits on the user.
@@ -87,7 +104,7 @@ type ToolInteraction interface {
 // NewToolInteraction builds the interactive UI registered for a client tool.
 func NewToolInteraction(call agent.ToolCall) (ToolInteraction, bool) {
 	renderSpec := toolRenderSpecFor(spec.Identity{ClientSide: true, Name: call.Name})
-	if renderSpec == nil || renderSpec.interact == nil {
+	if renderSpec.interact == nil {
 		return nil, false
 	}
 	interaction := renderSpec.interact(call)
@@ -95,11 +112,11 @@ func NewToolInteraction(call agent.ToolCall) (ToolInteraction, bool) {
 }
 
 var (
-	questionToolRenderSpec = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, interact: newQuestionInteraction}
+	questionToolRenderSpec = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, static: true, interact: newQuestionInteraction}
 	simpleToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool}
-	readToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, inspection: true}
-	listToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, inspection: true}
-	grepToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "search", active: "searching"}, inspection: true}
+	readToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, group: inspectionGroupKey}
+	listToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, group: inspectionGroupKey}
+	grepToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "search", active: "searching"}, group: inspectionGroupKey}
 	writeToolRenderSpec    = &toolRenderSpec{
 		render:  renderChangeTool,
 		spacing: itemSpacing{before: 1, after: 1},
@@ -117,7 +134,7 @@ var (
 		action:         toolAction{base: "run", success: "ran", failure: "run failed"},
 	}
 	skillToolRenderSpec = &toolRenderSpec{
-		render:  renderSkillTool,
+		render:  renderSimpleTool,
 		spacing: itemSpacing{before: 1, after: 1},
 		action:  toolAction{base: "load", active: "loading", success: "loaded", failure: "load failed"},
 	}
@@ -134,6 +151,7 @@ const (
 	spanAction spanKind = iota
 	spanArgument
 	spanMuted
+	spanError
 )
 
 func (a toolAction) label(state agent.ToolStatus) string {
@@ -168,7 +186,7 @@ func statusOf(tool *agent.ToolBlock) agent.ToolStatus {
 // rebuilds.
 func classifyTool(tool *agent.ToolBlock) toolPresentation {
 	if tool == nil {
-		return toolPresentation{}
+		return toolPresentation{renderSpec: simpleToolRenderSpec}
 	}
 	qualified := qualifiedToolName(tool)
 	input := toolInput(tool)
@@ -180,9 +198,6 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 		var in spec.PathInput
 		if decodeObject(input, &in) && in.Path != "" {
 			p.argument, p.validInput = escape.Inline(in.Path), true
-			if id == spec.ClientReadFile {
-				p.group = inspectionGroupKey
-			}
 		}
 	case spec.ClientListFiles:
 		var in spec.ListFilesInput
@@ -190,7 +205,7 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			if in.Path == "" {
 				in.Path = "."
 			}
-			p.argument, p.group, p.validInput = escape.Inline(in.Path), inspectionGroupKey, true
+			p.argument, p.validInput = escape.Inline(in.Path), true
 			if in.Depth != nil {
 				p.context = fmt.Sprintf("depth %d", *in.Depth)
 			}
@@ -199,7 +214,7 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 		var in spec.GrepFilesInput
 		if decodeObject(input, &in) && in.Pattern != "" {
 			p.argument, p.context = escape.Inline(in.Pattern), escape.Inline(in.Path)
-			p.group, p.validInput = inspectionGroupKey, true
+			p.validInput = true
 		}
 	case spec.ClientExecCommand:
 		var in spec.ExecCommandInput
@@ -336,9 +351,6 @@ func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 }
 
 func (p toolPresentation) actionLabel(state agent.ToolStatus) string {
-	if p.renderSpec == nil {
-		return ""
-	}
 	return p.renderSpec.action.label(state)
 }
 
@@ -350,20 +362,18 @@ func actionArgument(action, argument string) []summarySpan {
 	return spans
 }
 
-// renderTool renders an individual call. Inspection grouping is performed by
-// List before this point; RenderBlock intentionally remains a one-block API.
+// renderTool renders an individual call in its compact view. Inspection
+// grouping is performed by List before this point; RenderBlock intentionally
+// remains a one-block API.
 func renderTool(it agent.Block, width int, sty Styles, frame int) string {
 	if it.Tool == nil {
 		return fallback(it, width, sty)
 	}
-	return renderPresentedTool(it.Tool, classifyTool(it.Tool), width, sty, frame)
+	return renderPresentedTool(it.Tool, classifyTool(it.Tool), renderContext{width: width, sty: sty, frame: frame})
 }
 
-func renderPresentedTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
-	if p.renderSpec == nil {
-		return renderSimpleTool(tool, p, width, sty, frame)
-	}
-	return p.renderSpec.render(tool, p, width, sty, frame)
+func renderPresentedTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
+	return p.renderSpec.render(tool, p, c)
 }
 
 // RenderToolApproval renders the tool-specific portion of an approval prompt.
@@ -371,61 +381,49 @@ func renderPresentedTool(tool *agent.ToolBlock, p toolPresentation, width int, s
 // Tools without a specialized approval design use the caller's generic fallback.
 func RenderToolApproval(tool *agent.ToolBlock, width int, sty Styles) (string, bool) {
 	p := classifyTool(tool)
-	if p.renderSpec == nil || p.renderSpec.renderApproval == nil || !p.validInput {
+	if p.renderSpec.renderApproval == nil || !p.validInput {
 		return "", false
 	}
 	return p.renderSpec.renderApproval(tool, p, max(1, width), sty), true
 }
 
-func renderSkillTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
-	state := statusOf(tool)
-	header := renderToolHeader(tool, p.summary(tool), nil, width, sty, frame)
-	switch state {
-	case agent.ToolRunning, agent.ToolAwaitingApproval, agent.ToolDenied, agent.ToolCancelled:
+// renderSimpleTool shows only the header until expanded. The full view adds
+// the whole detail or output, or "(no output)" once the call has settled.
+func renderSimpleTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
+	header := renderToolHeader(tool, p.summary(tool), nil, c)
+	if c.disclosure == compactView {
 		return header
-	case agent.ToolUnknown, agent.ToolSuccess, agent.ToolError:
 	}
-
 	detail := tool.Detail
 	if detail == "" {
 		detail = tool.Output
 	}
-	if state == agent.ToolError && detail != "" {
-		return header + "\n" + renderPreview(detail, width, genericOutputMaxLines, sty.ToolError, false, sty)
+	if body := renderDetail(detail, statusOf(tool), genericOutputMaxLines, c); body != "" {
+		return header + "\n" + body
 	}
 	return header
 }
 
-func renderSimpleTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
-	state := statusOf(tool)
-	header := renderToolHeader(tool, p.summary(tool), nil, width, sty, frame)
-	switch state {
-	case agent.ToolRunning, agent.ToolAwaitingApproval, agent.ToolDenied, agent.ToolCancelled:
-		return header
-	case agent.ToolUnknown, agent.ToolSuccess, agent.ToolError:
-	}
-	if p.inspection() && state == agent.ToolSuccess {
-		return header
-	}
-	detail := tool.Detail
+// renderDetail renders a tool's detail text, clamped to limit rows in the
+// compact view. Empty detail renders "(no output)" once the call has settled,
+// and nothing while it is still running or awaiting approval.
+func renderDetail(detail string, state agent.ToolStatus, limit int, c renderContext) string {
 	if detail == "" {
-		detail = tool.Output
+		if state == agent.ToolRunning || state == agent.ToolAwaitingApproval {
+			return ""
+		}
+		return renderNoOutput(c.width, c.sty)
 	}
-	if detail == "" {
-		return header
-	}
-	style := sty.ToolDetail
+	style := c.sty.ToolDetail
 	if state == agent.ToolError {
-		style = sty.ToolError
+		style = c.sty.ToolError
 	}
-	return header + "\n" + renderPreview(detail, width, genericOutputMaxLines, style, false, sty)
+	return renderPreview(detail, limit, style, false, c)
 }
 
-func (p toolPresentation) inspection() bool {
-	return p.renderSpec != nil && p.renderSpec.inspection
-}
-
-func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
+// renderChangeTool shows the newest collapsedDiffLines of the diff in its
+// compact view and the whole diff when expanded.
+func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
 	path := p.argument
 	var diff *filediff.Diff
 	var fallbackDetail string
@@ -440,42 +438,45 @@ func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, width int, sty 
 	if path != "" {
 		p.argument, p.validInput = escape.Inline(path), true
 	}
-	header := renderToolHeader(tool, p.summary(tool), nil, width, sty, frame)
-	var content string
+	header := renderToolHeader(tool, p.summary(tool), nil, c)
 	if diff != nil {
 		lines := []string{header}
 		if format := formatChange(*diff); format != "" {
-			lines = append(lines, sty.ToolDetail.Render(ansi.Truncate("  └ "+format, width, "…")))
+			lines = append(lines, c.sty.ToolDetail.Render(ansi.Truncate("  └ "+format, c.width, "…")))
 		}
-		body := diffrender.Render(*diff, diffrender.Options{Path: path, Width: width, Style: sty.Diff, MaxLines: collapsedDiffLines, Tail: true})
+		limit := collapsedDiffLines
+		if c.disclosure == fullView {
+			// TODO: bound very large expanded diffs if rendering cost shows up.
+			limit = 0
+		}
+		body := diffrender.Render(*diff, diffrender.Options{Path: path, Width: c.width, Style: c.sty.Diff, MaxLines: limit, Tail: true})
 		if body != "" {
 			lines = append(lines, body)
 		}
-		content = strings.Join(lines, "\n")
-	} else {
-		if fallbackDetail == "" {
-			fallbackDetail = tool.Detail
+		return strings.Join(lines, "\n")
+	}
+
+	if fallbackDetail == "" {
+		fallbackDetail = tool.Detail
+	}
+	if fallbackDetail == "" {
+		fallbackDetail = tool.Output
+	}
+	state := statusOf(tool)
+	if c.disclosure == compactView {
+		switch state {
+		case agent.ToolRunning, agent.ToolDenied, agent.ToolCancelled:
+			return header
+		case agent.ToolUnknown, agent.ToolAwaitingApproval, agent.ToolSuccess, agent.ToolError:
 		}
 		if fallbackDetail == "" {
-			fallbackDetail = tool.Output
-		}
-		state := statusOf(tool)
-		if fallbackDetail == "" {
-			content = header
-		} else {
-			switch state {
-			case agent.ToolRunning, agent.ToolDenied, agent.ToolCancelled:
-				content = header
-			case agent.ToolUnknown, agent.ToolAwaitingApproval, agent.ToolSuccess, agent.ToolError:
-				style := sty.ToolDetail
-				if state == agent.ToolError {
-					style = sty.ToolError
-				}
-				content = header + "\n" + renderPreview(fallbackDetail, width, genericOutputMaxLines, style, false, sty)
-			}
+			return header
 		}
 	}
-	return content
+	if body := renderDetail(fallbackDetail, state, genericOutputMaxLines, c); body != "" {
+		return header + "\n" + body
+	}
+	return header
 }
 
 func editorDiff(state *filediff.State) (path string, diff *filediff.Diff, reason string) {
@@ -509,14 +510,14 @@ func formatName(format filediff.TextFormat) string {
 	return name
 }
 
-func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles, frame int) string {
+func renderExecTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
 	var result spec.ExecCommandOutput
 	decoded := json.Unmarshal([]byte(tool.Output), &result) == nil
 	var suffix []summarySpan
 	if decoded {
 		suffix = execSuffix(result)
 	}
-	header := renderExecInvocation(tool, p, suffix, width, sty, frame)
+	header := renderExecInvocation(tool, p, suffix, c)
 	state := statusOf(tool)
 	if tool.Output == "" {
 		return header
@@ -525,27 +526,27 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, width int, sty St
 	case agent.ToolRunning, agent.ToolAwaitingApproval, agent.ToolDenied:
 		return header
 	case agent.ToolCancelled:
-		if decoded && execResultIsTerminal(result.Status) && len(execRows(result, max(1, width-4))) == 0 {
-			return header + "\n" + renderExecNoOutput(width, sty)
+		if decoded && execResultIsTerminal(result.Status) && len(execRows(result, max(1, c.width-4), compactView)) == 0 {
+			return header + "\n" + renderNoOutput(c.width, c.sty)
 		}
 		return header
 	case agent.ToolUnknown, agent.ToolSuccess, agent.ToolError:
 	}
-	style := sty.ToolDetail
+	style := c.sty.ToolDetail
 	if state == agent.ToolError {
-		style = sty.ToolError
+		style = c.sty.ToolError
 	}
 	if !decoded {
-		return header + "\n" + renderPreview(tool.Output, width, execOutputMaxLines, style, true, sty)
+		return header + "\n" + renderPreview(tool.Output, execOutputMaxLines, style, true, c)
 	}
-	rows := execRows(result, max(1, width-4))
+	rows := execRows(result, max(1, c.width-4), c.disclosure)
 	if len(rows) == 0 {
 		if !execResultIsTerminal(result.Status) {
 			return header
 		}
-		return header + "\n" + renderExecNoOutput(width, sty)
+		return header + "\n" + renderNoOutput(c.width, c.sty)
 	}
-	return header + "\n" + renderRows(rows, width, style, sty)
+	return header + "\n" + renderRows(rows, c.width, style, c.sty)
 }
 
 func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles) string {
@@ -578,7 +579,7 @@ func execResultIsTerminal(status spec.ExecTerminalReason) bool {
 	}
 }
 
-func renderExecNoOutput(width int, sty Styles) string {
+func renderNoOutput(width int, sty Styles) string {
 	return renderRows([]string{"(no output)"}, width, sty.ToolDetail, sty)
 }
 
@@ -586,31 +587,32 @@ func renderExecNoOutput(width int, sty Styles) string {
 // For a multiline command, the first source line stays in the header and the
 // remaining lines form a bounded branch above the command output. This retains
 // shell structure (especially heredocs) without allowing an arbitrary tool
-// input to consume the transcript viewport.
-func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []summarySpan, width int, sty Styles, frame int) string {
+// input to consume the transcript viewport. When expanded, every source line
+// is shown.
+func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []summarySpan, c renderContext) string {
 	command := strings.TrimRight(p.argument, "\n")
-	lines := highlightShellCommand(command, sty)
+	lines := highlightShellCommand(command, c.sty)
 	p.argument = lines[0]
-	header := renderToolHeader(tool, p.summary(tool), suffix, width, sty, frame)
+	header := renderToolHeader(tool, p.summary(tool), suffix, c)
 	if len(lines) == 1 {
 		return header
 	}
 
-	sourceRows := lines[1:]
+	rows := lines[1:]
 	limit := execCommandMaxLines - 1
 	omissionRow := -1
-	if len(sourceRows) > limit {
+	if len(rows) > limit && c.disclosure == compactView {
 		omissionRow = min(2, limit-1)
+		rows = middleClamp(rows, limit)
 	}
-	rows := middleClamp(sourceRows, limit)
 	for i, row := range rows {
-		prefix := sty.ToolDetail.Render("  │ ")
+		prefix := c.sty.ToolDetail.Render("  │ ")
 		body := row
 		if i == omissionRow {
-			body = sty.ToolDetail.Render(row)
+			body = c.sty.ToolDetail.Render(row)
 		}
-		body = ansi.Truncate(body, max(1, width-4), "…")
-		rows[i] = ansi.Truncate(prefix+body, max(1, width), "…")
+		body = ansi.Truncate(body, max(1, c.width-4), "…")
+		rows[i] = ansi.Truncate(prefix+body, max(1, c.width), "…")
 	}
 	return header + "\n" + strings.Join(rows, "\n")
 }
@@ -635,7 +637,9 @@ func execSuffix(result spec.ExecCommandOutput) []summarySpan {
 	return []summarySpan{{text: text, kind: spanMuted}}
 }
 
-func execRows(result spec.ExecCommandOutput, bodyWidth int) []string {
+// execRows lays out the command output, middle-clamped to execOutputMaxLines
+// in the compact view.
+func execRows(result spec.ExecCommandOutput, bodyWidth int, d disclosure) []string {
 	stdout := strings.TrimRight(escape.Multiline(result.Stdout), "\n")
 	stderr := strings.TrimRight(escape.Multiline(result.Stderr), "\n")
 	if stderr == "" && result.Status == spec.ExecLaunchFailed {
@@ -668,7 +672,9 @@ func execRows(result spec.ExecCommandOutput, bodyWidth int) []string {
 	if marker != "" {
 		limit--
 	}
-	rows = middleClamp(rows, limit)
+	if d == compactView {
+		rows = middleClamp(rows, limit)
+	}
 	if marker != "" {
 		rows = append(rows, ansi.Truncate(marker, bodyWidth, "…"))
 	}
@@ -700,15 +706,20 @@ func middleClamp(rows []string, limit int) []string {
 	return out
 }
 
-func renderPreview(text string, width, limit int, style lipgloss.Style, middle bool, sty Styles) string {
+// renderPreview renders text clamped to limit rows, or in full for fullView.
+//
+// TODO: bound very large expanded outputs if rendering cost shows up.
+func renderPreview(text string, limit int, style lipgloss.Style, middle bool, c renderContext) string {
 	text = strings.TrimRight(escape.Multiline(text), "\n")
-	rows := wrappedRows(text, max(1, width-4))
-	if middle {
+	rows := wrappedRows(text, max(1, c.width-4))
+	switch {
+	case c.disclosure == fullView || len(rows) <= limit:
+	case middle:
 		rows = middleClamp(rows, limit)
-	} else if len(rows) > limit {
+	default:
 		rows = append(append([]string(nil), rows[:limit-1]...), "…")
 	}
-	return renderRows(rows, width, style, sty)
+	return renderRows(rows, c.width, style, c.sty)
 }
 
 func renderRows(rows []string, width int, style lipgloss.Style, sty Styles) string {
@@ -730,17 +741,17 @@ func renderRows(rows []string, width int, style lipgloss.Style, sty Styles) stri
 // disclosure state.
 const statusGlyphWidth = 2
 
-func renderToolHeader(tool *agent.ToolBlock, summary, suffix []summarySpan, width int, sty Styles, frame int) string {
+func renderToolHeader(tool *agent.ToolBlock, summary, suffix []summarySpan, c renderContext) string {
 	state := statusOf(tool)
-	glyph, glyphStyle := statusGlyph(state, sty, frame)
+	glyph, glyphStyle := statusGlyph(state, c.sty, c.frame)
 	spans := make([]summarySpan, 0, len(summary)+len(suffix)+1)
 	spans = append(spans, summary...)
 	spans = append(spans, suffix...)
 	if label := lifecycleSuffix(state); label != "" {
 		spans = append(spans, summarySpan{text: " · " + label, kind: spanMuted})
 	}
-	header := glyphStyle.UnsetBackground().Render(glyph+" ") + renderSpans(spans, sty)
-	return ansi.Truncate(header, max(1, width), "…")
+	header := glyphStyle.UnsetBackground().Render(glyph+" ") + renderSpans(spans, c.sty)
+	return ansi.Truncate(header, max(1, c.width), "…")
 }
 
 func lifecycleSuffix(state agent.ToolStatus) string {
@@ -778,13 +789,13 @@ func statusGlyph(state agent.ToolStatus, sty Styles, frame int) (string, lipglos
 // renderActivityHeader renders the shared compact header used by thinking and
 // grouped inspection activity. Keeping the state-to-glyph mapping here makes
 // every progressing row use the same spinner and static fallbacks.
-func renderActivityHeader(state agent.ToolStatus, label, suffix string, width int, sty Styles, frame int) string {
-	glyph, glyphStyle := statusGlyph(state, sty, frame)
-	header := glyphStyle.UnsetBackground().Render(glyph+" ") + sty.ToolName.Render(label)
+func renderActivityHeader(state agent.ToolStatus, label, suffix string, c renderContext) string {
+	glyph, glyphStyle := statusGlyph(state, c.sty, c.frame)
+	header := glyphStyle.UnsetBackground().Render(glyph+" ") + c.sty.ToolName.Render(label)
 	if suffix != "" {
-		header += sty.ToolDetail.Render(suffix)
+		header += c.sty.ToolDetail.Render(suffix)
 	}
-	return ansi.Truncate(header, max(1, width), "…")
+	return ansi.Truncate(header, max(1, c.width), "…")
 }
 
 func renderSpans(spans []summarySpan, sty Styles) string {
@@ -795,6 +806,8 @@ func renderSpans(spans []summarySpan, sty Styles) string {
 			b.WriteString(sty.ToolName.Render(span.text))
 		case spanArgument:
 			b.WriteString(sty.ToolArgument.Render(span.text))
+		case spanError:
+			b.WriteString(sty.ToolError.Render(span.text))
 		default:
 			b.WriteString(sty.ToolDetail.Render(span.text))
 		}
@@ -802,14 +815,10 @@ func renderSpans(spans []summarySpan, sty Styles) string {
 	return b.String()
 }
 
-type summaryCluster struct {
-	text string
-	kind spanKind
-}
-
-// renderSummaryClusters styles complete rows, so every continuation starts
-// with its own color instead of relying on terminal state from the prior row.
-func renderSummaryClusters(clusters []summaryCluster, sty Styles) string {
+// renderSummaryClusters styles a complete row of one-grapheme spans, merging
+// runs of the same kind, so every continuation starts with its own color
+// instead of relying on terminal state from the prior row.
+func renderSummaryClusters(clusters []summarySpan, sty Styles) string {
 	var spans []summarySpan
 	var run strings.Builder
 	var kind spanKind
@@ -830,7 +839,7 @@ func renderSummaryClusters(clusters []summaryCluster, sty Styles) string {
 // wrapSummarySpans keeps colors attached to text while laying out rows.
 func wrapSummarySpans(spans []summarySpan, width int, sty Styles) []string {
 	var lines []string
-	var row, word, space []summaryCluster
+	var row, word, space []summarySpan
 	rowWidth, wordWidth, spaceWidth := 0, 0, 0
 	flushSpace := func() {
 		row = append(row, space...)
@@ -853,7 +862,7 @@ func wrapSummarySpans(spans []summarySpan, width int, sty Styles) []string {
 			cluster, cellWidth := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
 			text = text[len(cluster):]
 			r, _ := utf8.DecodeRuneInString(cluster)
-			item := summaryCluster{text: cluster, kind: span.kind}
+			item := summarySpan{text: cluster, kind: span.kind}
 			switch {
 			case unicode.IsSpace(r) && r != '\u00a0':
 				flushWord()
@@ -881,69 +890,39 @@ func wrapSummarySpans(spans []summarySpan, width int, sty Styles) []string {
 	return append(lines, renderSummaryClusters(row, sty))
 }
 
+// inspectionLifecycle is the group's activity: running or awaiting approval
+// while any call is, then success once any call succeeded. Each call reports
+// its own failure, so a settled group without a success stays neutral rather
+// than alarming: inspection failures are routine.
 func inspectionLifecycle(blocks []agent.Block) agent.ToolStatus {
-	states := make([]agent.ToolStatus, 0, len(blocks))
+	state := agent.ToolUnknown
 	for i := range blocks {
-		state := statusOf(blocks[i].Tool)
-		states = append(states, state)
-		if state == agent.ToolRunning {
+		switch statusOf(blocks[i].Tool) {
+		case agent.ToolRunning:
 			return agent.ToolRunning
-		}
-	}
-	for _, state := range states {
-		if state == agent.ToolAwaitingApproval {
-			return agent.ToolAwaitingApproval
-		}
-	}
-	for _, state := range states {
-		if state == agent.ToolSuccess {
-			return agent.ToolSuccess
-		}
-	}
-	// Keep mixed terminal outcomes quiet: surface a terminal group state only
-	// when every inspection call reached the same outcome.
-	all := func(want agent.ToolStatus) bool {
-		if len(states) == 0 {
-			return false
-		}
-		for _, state := range states {
-			if state != want {
-				return false
+		case agent.ToolAwaitingApproval:
+			state = agent.ToolAwaitingApproval
+		case agent.ToolSuccess:
+			if state != agent.ToolAwaitingApproval {
+				state = agent.ToolSuccess
 			}
-		}
-		return true
-	}
-	for _, state := range []agent.ToolStatus{agent.ToolError, agent.ToolDenied, agent.ToolCancelled} {
-		if all(state) {
-			return state
+		case agent.ToolUnknown, agent.ToolError, agent.ToolDenied, agent.ToolCancelled:
 		}
 	}
-	return agent.ToolUnknown
+	return state
 }
 
-func renderInspectionGroup(blocks []agent.Block, presentations []toolPresentation, width int, sty Styles, frame int) string {
+func renderInspectionGroup(blocks []agent.Block, presentations []toolPresentation, c renderContext) string {
 	state := inspectionLifecycle(blocks)
-	label := "inspect"
-	suffix := ""
+	label, suffix := "inspected", ""
 	switch state {
 	case agent.ToolRunning:
-		label = "inspecting"
-		suffix = activityEllipsis(frame, sty.StatusSpinner.Len() > 0)
+		label, suffix = "inspecting", activityEllipsis(c.frame, c.sty.StatusSpinner.Len() > 0)
 	case agent.ToolAwaitingApproval:
 		label, suffix = "inspecting", " · awaiting approval"
-	case agent.ToolSuccess:
-		label = "inspected"
-	case agent.ToolError:
-		label = "inspection failed"
-	case agent.ToolDenied:
-		label = "inspection denied"
-	case agent.ToolCancelled:
-		label = "inspection stopped"
-	case agent.ToolUnknown:
-		// Keep the neutral defaults.
+	case agent.ToolUnknown, agent.ToolSuccess, agent.ToolError, agent.ToolDenied, agent.ToolCancelled:
 	}
-	lines := []string{renderActivityHeader(state, label, suffix, width, sty, frame)}
-	diagnosticIndex, diagnostic := inspectionDiagnostic(blocks, state)
+	lines := []string{renderActivityHeader(state, label, suffix, c)}
 
 	first := true
 	for i := 0; i < len(blocks); {
@@ -972,14 +951,11 @@ func renderInspectionGroup(blocks []agent.Block, presentations []toolPresentatio
 				}
 				spans = append(spans, summarySpan{text: path, kind: spanArgument})
 			}
-			lines = append(lines, renderInspectionChild(spans, first, width, sty)...)
+			lines = append(lines, renderInspectionChild(spans, nil, first, c.width, c.sty)...)
 			first, i = false, j
 			continue
 		}
-		lines = append(lines, renderInspectionChild(p.summary(blocks[i].Tool), first, width, sty)...)
-		if i == diagnosticIndex {
-			lines = append(lines, renderInspectionDiagnostic(diagnostic, first, width, sty))
-		}
+		lines = append(lines, renderInspectionChild(p.summary(blocks[i].Tool), inspectionOutcome(blocks[i].Tool), first, c.width, c.sty)...)
 		first, i = false, i+1
 	}
 	return strings.Join(lines, "\n")
@@ -1000,38 +976,30 @@ func activityEllipsis(frame int, motion bool) string {
 	return fmt.Sprintf("%-3s", strings.Repeat(".", dots))
 }
 
-// inspectionDiagnostic returns the first available diagnostic only for a
-// wholly failed inspection group. Mixed probe failures remain intentionally
-// quiet.
-func inspectionDiagnostic(blocks []agent.Block, state agent.ToolStatus) (int, string) {
-	if state != agent.ToolError {
-		return -1, ""
-	}
-	for i, block := range blocks {
-		if statusOf(block.Tool) != agent.ToolError {
-			continue
-		}
-		detail := block.Tool.Detail
+// inspectionOutcome is the suffix a group row adds for a call that did not
+// succeed: its error on one line, or the denied/stopped lifecycle label.
+func inspectionOutcome(tool *agent.ToolBlock) []summarySpan {
+	switch state := statusOf(tool); state {
+	case agent.ToolError:
+		detail := tool.Detail
 		if detail == "" {
-			detail = block.Tool.Output
+			detail = tool.Output
 		}
-		if detail != "" {
-			return i, collapseWS(escape.Multiline(detail))
+		if detail = collapseWS(escape.Multiline(detail)); detail == "" {
+			detail = "failed"
 		}
+		return []summarySpan{{text: " (" + detail + ")", kind: spanError}}
+	case agent.ToolDenied, agent.ToolCancelled:
+		return []summarySpan{{text: " · " + lifecycleSuffix(state), kind: spanMuted}}
+	case agent.ToolUnknown, agent.ToolRunning, agent.ToolAwaitingApproval, agent.ToolSuccess:
 	}
-	return -1, ""
+	return nil
 }
 
-func renderInspectionDiagnostic(diagnostic string, first bool, width int, sty Styles) string {
-	prefix := "      "
-	if first {
-		prefix = "    "
-	}
-	line := sty.ToolDetail.Render(prefix) + sty.ToolError.Render(ansi.Truncate(diagnostic, max(1, width-len(prefix)), "…"))
-	return ansi.Truncate(line, max(1, width), "…")
-}
-
-func renderInspectionChild(spans []summarySpan, first bool, width int, sty Styles) []string {
+// renderInspectionChild renders one group row. The summary wraps with a
+// hanging indent; a row with an outcome stays on one line, cut at the width,
+// so failures never grow the group.
+func renderInspectionChild(spans, outcome []summarySpan, first bool, width int, sty Styles) []string {
 	prefix := "    "
 	if first {
 		prefix = "  └ "
@@ -1040,7 +1008,8 @@ func renderInspectionChild(spans []summarySpan, first bool, width int, sty Style
 		return []string{sty.ToolDetail.Render(prefix)}
 	}
 	action := spans[0]
-	if action.kind != spanAction {
+	if action.kind != spanAction || len(outcome) > 0 {
+		spans = append(append([]summarySpan(nil), spans...), outcome...)
 		line := sty.ToolDetail.Render(prefix) + renderSpans(spans, sty)
 		return []string{ansi.Truncate(line, max(1, width), "…")}
 	}
@@ -1078,7 +1047,7 @@ func renderInspectionChild(spans []summarySpan, first bool, width int, sty Style
 // collapseWS joins whitespace runs.
 func collapseWS(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, width int, sty Styles, frame int) string {
+func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, c renderContext) string {
 	state := statusOf(tool)
 	label := "questions"
 	if tool.Status == agent.ToolRunning && tool.HasFinalInput {
@@ -1087,23 +1056,23 @@ func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, width int, s
 	if tool.Status == agent.ToolCancelled {
 		label = "questions cancelled"
 	}
-	header := renderActivityHeader(state, label, "", width, sty, frame)
+	header := renderActivityHeader(state, label, "", c)
 	input, err := spec.ParseQuestions(tool.Input)
 	if err != nil {
-		return header + "\n" + sty.ToolError.Render(wrap(escape.Multiline(tool.Output), width))
+		return header + "\n" + c.sty.ToolError.Render(wrap(escape.Multiline(tool.Output), c.width))
 	}
 	var result spec.AskUserQuestionOutput
 	if json.Unmarshal([]byte(tool.Output), &result) == nil && result.Success {
-		return header + "\n" + sty.ToolDetail.Render(wrap(escape.Multiline(result.Message), width))
+		return header + "\n" + c.sty.ToolDetail.Render(wrap(escape.Multiline(result.Message), c.width))
 	}
 	lines := []string{header}
 	for _, question := range input.Questions {
-		lines = append(lines, sty.ToolDetail.Render(wrap(escape.Multiline("Q: "+question.Question), width)))
+		lines = append(lines, c.sty.ToolDetail.Render(wrap(escape.Multiline("Q: "+question.Question), c.width)))
 	}
 	if result.Message != "" {
-		lines = append(lines, sty.ToolDetail.Render(wrap(escape.Multiline(result.Message), width)))
+		lines = append(lines, c.sty.ToolDetail.Render(wrap(escape.Multiline(result.Message), c.width)))
 	} else if tool.Output != "" {
-		lines = append(lines, sty.ToolDetail.Render(wrap(escape.Multiline(tool.Output), width)))
+		lines = append(lines, c.sty.ToolDetail.Render(wrap(escape.Multiline(tool.Output), c.width)))
 	}
 	return strings.Join(lines, "\n")
 }

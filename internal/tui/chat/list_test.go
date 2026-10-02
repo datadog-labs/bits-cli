@@ -9,6 +9,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tools/spec"
 	"github.com/DataDog/bits-cli/internal/tui/components"
 	"github.com/DataDog/bits-cli/internal/tui/styles"
 )
@@ -32,7 +33,16 @@ func TestResetInvalidatesCacheAcrossConversationIdentityDomains(t *testing.T) {
 	}
 }
 
-// listWithTool returns a sized list holding one tool block in the given status.
+const disclosableOutput = "row 1\nrow 2\nrow 3\nrow 4\nrow 5"
+
+func disclosableToolBlock(key string) agent.Block {
+	block := toolBlockOf(agent.ToolSuccess)
+	block.ID = agent.BlockID{Scope: agent.ScopeTool, Key: key}
+	block.Tool.Output = disclosableOutput
+	return block
+}
+
+// listWithTool returns a sized list holding one tool block with output.
 func listWithTool(status agent.ToolStatus) *List {
 	list := NewList()
 	list.SetStyles(DefaultStyles(true))
@@ -40,6 +50,7 @@ func listWithTool(status agent.ToolStatus) *List {
 	list.SetHeight(8)
 	block := toolBlockOf(status)
 	block.ID = agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"}
+	block.Tool.Output = disclosableOutput
 	list.SetItems([]agent.Block{block})
 	return list
 }
@@ -161,8 +172,7 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 		t.Fatalf("presentation item count = %d, want 3", got)
 	}
 	plain := ansi.Strip(list.Render())
-	gutter := strings.Repeat(" ", list.gutterWidth)
-	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "✓ " + gutter + "search ToolBlock in internal"} {
+	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "▶ search ToolBlock in internal"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("group rendering missing %q:\n%s", want, plain)
 		}
@@ -265,9 +275,7 @@ func TestSingletonInspectionRendersAsTool(t *testing.T) {
 		hidden string
 	}{
 		{name: "running", status: agent.ToolRunning, want: "listing .", hidden: "inspecting"},
-		// The gutter sits between the settled glyph and the name, so the check
-		// is no longer immediately adjacent to "list .".
-		{name: "settled", status: agent.ToolSuccess, want: "✓ <gutter>list .", hidden: "inspected"},
+		{name: "settled", status: agent.ToolSuccess, want: "▶ list .", hidden: "inspected"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			list := NewList()
@@ -276,11 +284,9 @@ func TestSingletonInspectionRendersAsTool(t *testing.T) {
 			list.SetHeight(8)
 			list.SetItems([]agent.Block{inspectBlock("1", "list_files", `{"path":""}`, test.status, "listing")})
 
-			gutter := strings.Repeat(" ", list.gutterWidth)
 			plain := ansi.Strip(list.Render())
-			want := strings.ReplaceAll(test.want, "<gutter>", gutter)
-			if !strings.Contains(plain, want) {
-				t.Fatalf("singleton inspection rendering = %q, want %q", plain, want)
+			if !strings.Contains(plain, test.want) {
+				t.Fatalf("singleton inspection rendering = %q, want %q", plain, test.want)
 			}
 			if strings.Contains(plain, test.hidden) || strings.Contains(plain, "└") {
 				t.Fatalf("singleton inspection retained grouped rendering: %q", plain)
@@ -320,8 +326,35 @@ func TestAdjacentReasoningBlocksRenderAsOneActivity(t *testing.T) {
 		t.Fatalf("presentation item count = %d, want 2", got)
 	}
 	plain := ansi.Strip(list.Render())
-	if got := strings.Count(plain, "✓ reasoning"); got != 1 {
+	if got := strings.Count(plain, "reasoning"); got != 1 {
 		t.Fatalf("settled reasoning rows = %d, want 1:\n%s", got, plain)
+	}
+}
+
+func TestReasoningExpandsToItsThinkingText(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(8)
+	list.SetItems([]agent.Block{
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking-1", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "first idea"}},
+		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking-2", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "second idea"}},
+	})
+
+	compact := ansi.Strip(strings.Join(list.renderItem(0), "\n"))
+	if !strings.Contains(compact, "▶ reasoning") || strings.Contains(compact, "idea") {
+		t.Fatalf("reasoning did not start collapsed on its header:\n%s", compact)
+	}
+	if _, ok := list.HeaderAt(0); !ok {
+		t.Fatal("reasoning header is not clickable")
+	}
+
+	list.ToggleDisclosure(list.view[0].id)
+	expanded := ansi.Strip(strings.Join(list.renderItem(0), "\n"))
+	for _, want := range []string{"▼ reasoning", "first idea", "second idea"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded reasoning missing %q:\n%s", want, expanded)
+		}
 	}
 }
 
@@ -336,7 +369,7 @@ func TestReasoningGroupStaysActiveWhileMemberStreams(t *testing.T) {
 	})
 
 	plain := ansi.Strip(list.Render())
-	if !strings.Contains(plain, "thinking.") || strings.Contains(plain, "✓ reasoning") {
+	if !strings.Contains(plain, "reasoning.") || strings.Contains(plain, "✓ reasoning") {
 		t.Fatalf("active reasoning group = %q", plain)
 	}
 	if !list.HasAnimated() {
@@ -397,64 +430,68 @@ func TestToolMarginsCollapseAcrossAdjacentItems(t *testing.T) {
 	}
 }
 
-func TestInspectionGroupKeepsMixedFailuresQuiet(t *testing.T) {
-	list := NewList()
-	list.SetStyles(DefaultStyles(true))
-	list.SetWidth(80)
-	list.SetHeight(12)
-	list.SetItems([]agent.Block{
-		inspectBlock("1", "read_file", `{"path":"README.md"}`, agent.ToolSuccess, "readme body"),
-		inspectBlock("2", "read_file", `{"path":"missing.md"}`, agent.ToolError, "open missing.md: no such file"),
-	})
-	plain := ansi.Strip(list.Render())
-	if !strings.Contains(plain, "✓ inspected") || !strings.Contains(plain, "read missing.md") {
-		t.Fatalf("mixed inspection rendering = %q", plain)
+// TestInspectionGroupRowsCarryTheirOwnOutcome: a group keeps its neutral
+// header through routine failures, and each call that did not succeed shows
+// its error or lifecycle on its own row, cut at the width.
+func TestInspectionGroupRowsCarryTheirOwnOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		header string
+		blocks []agent.Block
+	}{
+		{"mixed", "✓ inspected", []agent.Block{
+			inspectBlock("1", "read_file", `{"path":"README.md"}`, agent.ToolSuccess, "readme body"),
+			inspectBlock("2", "read_file", `{"path":"missing.md"}`, agent.ToolError, "open missing.md: no such file"),
+		}},
+		{"all failed", "• inspected", []agent.Block{
+			inspectBlock("1", "read_file", `{"path":"one"}`, agent.ToolError, "first error\nwith detail"),
+			inspectBlock("2", "read_file", `{"path":"two"}`, agent.ToolError, "second error"),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			list := NewList()
+			list.SetStyles(DefaultStyles(true))
+			list.SetWidth(80)
+			list.SetHeight(12)
+			list.SetItems(tc.blocks)
+			plain := ansi.Strip(list.Render())
+			if !strings.Contains(plain, tc.header) || strings.Contains(plain, "failed") {
+				t.Fatalf("group header is not a neutral %q:\n%s", tc.header, plain)
+			}
+			for _, block := range tc.blocks {
+				if block.Tool.Status != agent.ToolError {
+					continue
+				}
+				want := "read " + classifyTool(block.Tool).argument + " (" + collapseWS(block.Tool.Output) + ")"
+				if !strings.Contains(plain, want) {
+					t.Fatalf("group row missing %q:\n%s", want, plain)
+				}
+			}
+		})
 	}
-	if strings.Contains(plain, "no such file") || strings.Contains(plain, "inspection failed") {
-		t.Fatalf("mixed inspection exposed routine failure: %q", plain)
-	}
-}
 
-func TestInspectionGroupShowsOneDiagnosticWhenAllFail(t *testing.T) {
-	list := NewList()
-	list.SetStyles(DefaultStyles(true))
-	list.SetWidth(80)
-	list.SetHeight(12)
-	list.SetItems([]agent.Block{
-		inspectBlock("1", "read_file", `{"path":"one"}`, agent.ToolError, "first error\nwith detail"),
-		inspectBlock("2", "read_file", `{"path":"two"}`, agent.ToolError, "second error"),
-	})
-	plain := ansi.Strip(list.Render())
-	if !strings.Contains(plain, "✗ inspection failed") || !strings.Contains(plain, "first error with detail") {
-		t.Fatalf("failed inspection rendering = %q", plain)
-	}
-	if strings.Contains(plain, "second error") {
-		t.Fatalf("failed inspection rendered more than one diagnostic: %q", plain)
-	}
-}
-
-func TestInspectionDiagnosticUsesFirstAvailableDetailBesideItsChild(t *testing.T) {
-	list := NewList()
-	list.SetStyles(DefaultStyles(true))
-	list.SetWidth(80)
-	list.SetHeight(12)
-	list.SetItems([]agent.Block{
-		inspectBlock("1", "read_file", `{"path":"one"}`, agent.ToolError, ""),
-		inspectBlock("2", "read_file", `{"path":"two"}`, agent.ToolError, "second error"),
-	})
-	rows := strings.Split(ansi.Strip(list.Render()), "\n")
-	child, diagnostic := -1, -1
-	for i, row := range rows {
-		if strings.Contains(row, "read two") {
-			child = i
+	t.Run("lifecycle and width", func(t *testing.T) {
+		list := NewList()
+		list.SetStyles(DefaultStyles(true))
+		list.SetWidth(40)
+		list.SetHeight(12)
+		list.SetItems([]agent.Block{
+			inspectBlock("1", "read_file", `{"path":"a.go"}`, agent.ToolDenied, ""),
+			inspectBlock("2", "read_file", `{"path":"b.go"}`, agent.ToolCancelled, ""),
+			inspectBlock("3", "read_file", `{"path":"c.go"}`, agent.ToolError, strings.Repeat("very long error ", 10)),
+			inspectBlock("4", "read_file", `{"path":"d.go"}`, agent.ToolError, ""),
+		})
+		lines := list.renderItem(0)
+		plain := ansi.Strip(strings.Join(lines, "\n"))
+		for _, want := range []string{"read a.go · denied", "read b.go · stopped", "read c.go (very long error", "read d.go (failed)"} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("group row missing %q:\n%s", want, plain)
+			}
 		}
-		if strings.Contains(row, "second error") {
-			diagnostic = i
+		if len(lines) != 5 {
+			t.Fatalf("group rendered %d lines, want the header and one row per call:\n%s", len(lines), plain)
 		}
-	}
-	if child < 0 || diagnostic != child+1 {
-		t.Fatalf("diagnostic was not attached to its child:\n%s", strings.Join(rows, "\n"))
-	}
+	})
 }
 
 func TestInspectionGroupCacheInvalidatesWhenMemberIsAdded(t *testing.T) {
@@ -608,15 +645,10 @@ func TestToggleAllDisclosureKeepsViewportAnchoredOnCollapse(t *testing.T) {
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(80)
 	list.SetHeight(2)
-	list.SetItems([]agent.Block{
-		inspectBlock("1", "list_files", `{"path":"a"}`, agent.ToolSuccess, "first"),
-		inspectBlock("2", "list_files", `{"path":"b"}`, agent.ToolSuccess, "second"),
-	})
-	list.Render() // populate the render cache ToggleAllDisclosure reads through
+	list.SetItems([]agent.Block{disclosableToolBlock("1"), disclosableToolBlock("2")})
+	list.ToggleAllDisclosure() // expand everything
+	list.Render()              // populate the render cache ToggleAllDisclosure reads through
 
-	if h := list.itemHeight(0); h < 3 {
-		t.Fatalf("fixture item 0 height = %d, want at least 3 expanded lines to exercise the clamp", h)
-	}
 	list.offsetIdx, list.offsetLine = 0, 2 // scrolled two lines into item 0's body
 
 	list.ToggleAllDisclosure() // collapse everything
@@ -629,8 +661,9 @@ func TestToggleAllDisclosureKeepsViewportAnchoredOnCollapse(t *testing.T) {
 	}
 }
 
-// TestGutterReservation: only a single tool reserves the accordion gutter,
-// and only when the viewport leaves room for content beside it.
+// TestGutterReservation: single tools and reasoning groups reserve the
+// accordion gutter, and only when the viewport leaves room for content beside
+// it.
 func TestGutterReservation(t *testing.T) {
 	reasoning := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}}
 	tool := toolBlockOf(agent.ToolSuccess)
@@ -643,7 +676,7 @@ func TestGutterReservation(t *testing.T) {
 		want  int
 	}{
 		{"single tool", tool, 80, gutterWidth},
-		{"reasoning group", reasoning, 80, 0},
+		{"reasoning group", reasoning, 80, gutterWidth},
 		{"no room left for content", tool, gutterWidth, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -668,48 +701,81 @@ func TestGutteredItemStaysWithinTotalWidth(t *testing.T) {
 	}
 }
 
-func TestToggleDisclosureCollapsesToHeaderLineAndBack(t *testing.T) {
-	list := listWithTool(agent.ToolSuccess)
-	id := list.view[0].id
-	full := list.itemHeight(0)
-	if full <= 1 {
-		t.Fatalf("fixture tool did not produce a disclosable body, height = %d", full)
-	}
+// TestEveryToolExpandsToItsOutput: a default tool shows only its header until
+// expanded, even when there is nothing to show.
+func TestEveryToolExpandsToItsOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name, output, want string
+	}{
+		{"no output", "", "(no output)"},
+		{"multi-line output", disclosableOutput, disclosableOutput},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			list := listWithTool(agent.ToolSuccess)
+			list.items[0].Tool.Output = tc.output
+			list.SetItems(list.items)
+			id := list.view[0].id
 
-	list.ToggleDisclosure(id)
-	if got := list.itemHeight(0); got != 1 {
-		t.Fatalf("collapsed height = %d, want 1", got)
-	}
-
-	list.ToggleDisclosure(id)
-	if got := list.itemHeight(0); got != full {
-		t.Fatalf("re-expanded height = %d, want %d", got, full)
+			if got := ansi.Strip(strings.Join(list.renderItem(0), "\n")); !strings.Contains(got, "▶") || strings.Contains(got, "\n") {
+				t.Fatalf("tool did not start collapsed on its header:\n%s", got)
+			}
+			list.ToggleDisclosure(id)
+			got := list.renderItem(0)
+			for _, want := range append([]string{"▼"}, strings.Split(tc.want, "\n")...) {
+				if !strings.Contains(ansi.Strip(strings.Join(got, "\n")), want) {
+					t.Fatalf("expanded view missing %q:\n%s", want, ansi.Strip(strings.Join(got, "\n")))
+				}
+			}
+			if want := 1 + strings.Count(tc.want, "\n") + 1; len(got) != want {
+				t.Fatalf("expanded height = %d, want the header plus %d rows", len(got), want-1)
+			}
+			list.ToggleDisclosure(id)
+			if got := list.itemHeight(0); got != 1 {
+				t.Fatalf("re-collapsed height = %d, want the header only", got)
+			}
+		})
 	}
 }
 
-func TestHeaderOnlyToolReservesGutterButDrawsNoChevron(t *testing.T) {
-	list := NewList()
-	list.SetStyles(DefaultStyles(true))
-	list.SetWidth(80)
-	list.SetHeight(4)
-	list.SetItems([]agent.Block{{
+// TestNothingToExpandDrawsNoGutter: a block without a full view renders at the
+// full width with no gutter, is not clickable, and ignores ctrl+o.
+func TestNothingToExpandDrawsNoGutter(t *testing.T) {
+	question := agent.Block{
 		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"},
-		Kind: assistant.KindToolResult,
-		Tool: &agent.ToolBlock{Name: "list_monitors", Status: agent.ToolSuccess},
-	}})
+		Kind: assistant.KindToolResult, Complete: true,
+		Tool: &agent.ToolBlock{
+			Name: spec.AskUserQuestion, IsClientSide: true, Status: agent.ToolRunning,
+			Input: `{"questions":[{"question":"One?","options":[{"label":"A","description":""}]}]}`,
+		},
+	}
+	reasoning := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "  "}}
+	for _, tc := range []struct {
+		name  string
+		block agent.Block
+	}{
+		{"question tool", question},
+		{"reasoning without text", reasoning},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			list := NewList()
+			list.SetStyles(DefaultStyles(true))
+			list.SetWidth(80)
+			list.SetHeight(8)
+			list.SetItems([]agent.Block{tc.block})
 
-	if height := list.itemHeight(0); height != 1 {
-		t.Fatalf("header-only tool rendered %d lines, want 1", height)
-	}
-	if _, ok := list.HeaderAt(0); ok {
-		t.Fatal("header-only tool is clickable")
-	}
-	lines := list.renderItem(0)
-	gutter := strings.Repeat(" ", list.gutterWidth)
-	// The gutter sits right after the fixed-width status glyph, not before it,
-	// so the glyph stays the leftmost cell on the row.
-	if got := ansi.Strip(ansi.Cut(lines[0], statusGlyphWidth, statusGlyphWidth+list.gutterWidth)); got != gutter {
-		t.Fatalf("header-only tool did not reserve the gutter after the status glyph: %q", lines[0])
+			if _, ok := list.HeaderAt(0); ok {
+				t.Fatal("block with nothing to expand is clickable")
+			}
+			bare := list.renderPresentationItem(list.view[0], renderContext{width: list.width, sty: list.sty, frame: list.frame})
+			if got := strings.Join(list.renderItem(0), "\n"); got != bare {
+				t.Fatalf("block with nothing to expand was not rendered bare at full width:\n%s\nwant:\n%s", ansi.Strip(got), ansi.Strip(bare))
+			}
+			height := list.itemHeight(0)
+			list.ToggleAllDisclosure()
+			if got := list.itemHeight(0); got != height {
+				t.Fatalf("ctrl+o changed the height from %d to %d", height, got)
+			}
+		})
 	}
 }
 
@@ -725,9 +791,7 @@ func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseAndScroll(t *testing.T) {
 	keys := []string{"call-0", "call-1", "call-2"}
 	blocks := make([]agent.Block, len(keys))
 	for i, key := range keys {
-		block := toolBlockOf(agent.ToolSuccess)
-		block.ID = agent.BlockID{Scope: agent.ScopeTool, Key: key}
-		blocks[i] = block
+		blocks[i] = disclosableToolBlock(key)
 	}
 	list.SetItems(blocks)
 
@@ -753,7 +817,8 @@ func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseAndScroll(t *testing.T) {
 
 func TestHeaderAtOnlyMatchesAVisibleHeaderRow(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
-	list.ScrollToTop() // drop follow so the header starts visible
+	list.ToggleDisclosure(list.view[0].id) // give the header detail rows
+	list.ScrollToTop()                     // drop follow so the header starts visible
 	list.SetHeight(2)
 	if id, ok := list.HeaderAt(0); !ok || id != list.view[0].id {
 		t.Fatalf("HeaderAt(0) = %v, %t, want the tool's header", id, ok)
@@ -796,48 +861,49 @@ func TestHoverPaintsOnlyTheSurfaceNotTheDocument(t *testing.T) {
 	}
 }
 
-// TestToggleAllDisclosure: the first ctrl+o collapses, the next expands, and
+// TestToggleAllDisclosure: the first ctrl+o expands, the next collapses, and
 // each press discards individual toggles.
 func TestToggleAllDisclosure(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
+	compact := list.itemHeight(0)
+	list.ToggleDisclosure(list.view[0].id)
 	full := list.itemHeight(0)
 
-	list.ToggleDisclosure(list.view[0].id) // collapsed individually
-	list.ToggleAllDisclosure()
-	if got := list.itemHeight(0); got != 1 {
-		t.Fatalf("collapse-all height = %d, want 1", got)
-	}
 	list.ToggleAllDisclosure()
 	if got := list.itemHeight(0); got != full {
-		t.Fatalf("expand-all height = %d, want %d (individual collapse discarded)", got, full)
+		t.Fatalf("expand-all height = %d, want %d", got, full)
+	}
+	list.ToggleDisclosure(list.view[0].id) // collapsed individually
+	list.ToggleAllDisclosure()
+	if got := list.itemHeight(0); got != compact {
+		t.Fatalf("collapse-all height = %d, want %d (individual collapse discarded)", got, compact)
 	}
 }
 
-func TestCollapseAllAppliesToBlocksArrivingLater(t *testing.T) {
+func TestExpandAllAppliesToBlocksArrivingLater(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
+	compact := list.itemHeight(0)
 	list.ToggleAllDisclosure()
 
-	later := toolBlockOf(agent.ToolSuccess)
-	later.ID = agent.BlockID{Scope: agent.ScopeTool, Key: "call-2"}
-	list.SetItems(append(list.items, later))
-	if got := list.itemHeight(1); got != 1 {
-		t.Fatalf("a block arriving after collapse-all rendered %d lines, want 1", got)
+	list.SetItems(append(list.items, disclosableToolBlock("call-2")))
+	if got := list.itemHeight(1); got <= compact {
+		t.Fatalf("a block arriving after expand-all rendered %d lines, want more than the compact %d", got, compact)
 	}
 }
 
 func TestResetClearsDisclosureState(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
-	full := list.itemHeight(0)
+	compact := list.itemHeight(0)
 	blocks := list.items
-	for _, collapse := range []func(){
+	for _, expand := range []func(){
 		list.ToggleAllDisclosure,
 		func() { list.ToggleDisclosure(list.view[0].id) },
 	} {
-		collapse()
+		expand()
 		list.Reset()
 		list.SetItems(blocks)
-		if got := list.itemHeight(0); got != full {
-			t.Fatalf("after Reset height = %d, want the default expanded %d", got, full)
+		if got := list.itemHeight(0); got != compact {
+			t.Fatalf("after Reset height = %d, want the default compact %d", got, compact)
 		}
 	}
 }
@@ -849,12 +915,10 @@ func TestHoverFollowsTheTailPinBeforeRender(t *testing.T) {
 	list := NewList()
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(80)
-	list.SetHeight(3)
+	list.SetHeight(5) // fits one compact item
 	blocks := make([]agent.Block, 0, 4)
 	for i := range 4 {
-		block := toolBlockOf(agent.ToolSuccess)
-		block.ID = agent.BlockID{Scope: agent.ScopeTool, Key: fmt.Sprintf("call-%d", i)}
-		blocks = append(blocks, block)
+		blocks = append(blocks, disclosableToolBlock(fmt.Sprintf("call-%d", i)))
 	}
 	list.SetItems(blocks[:3])
 	chevronRow := func() int {
@@ -915,5 +979,43 @@ func TestViewportStaysFilledAfterGrowing(t *testing.T) {
 	list.ScrollBy(-1)
 	if list.Following() || !strings.Contains(ansi.Strip(list.Render()), "row 4") {
 		t.Fatal("scrolling before the next render did not start from the drawn rows")
+	}
+
+	// A tall first item can still be the viewport's first visible item at
+	// the bottom. Scrolling away and back must restore follow before the
+	// last block grows.
+	list = NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(8)
+	headerRows := make([]string, 20)
+	for i := range headerRows {
+		headerRows[i] = fmt.Sprintf("splash row %d", i)
+	}
+	list.SetHeader(strings.Join(headerRows, "\n"))
+	last := textBlock("last", "before")
+	list.SetItems([]agent.Block{last})
+	list.ScrollToBottom()
+	if list.offsetIdx != 0 {
+		t.Fatal("fixture needs the viewport to start inside the tall header")
+	}
+
+	list.ScrollBy(-3)
+	if list.Following() {
+		t.Fatal("scrolling up should stop following")
+	}
+	list.ScrollBy(3)
+	if !list.Following() || !list.AtBottom() {
+		t.Fatal("scrolling back to the visible bottom should resume following")
+	}
+
+	last.Rev++
+	last.Markdown.Content = "before\nafter\ntail"
+	list.SetItems([]agent.Block{last})
+	if got := ansi.Strip(list.Render()); !strings.Contains(got, "tail") {
+		t.Fatalf("grown block tail is hidden below the viewport:\n%s", got)
+	}
+	if !list.Following() || !list.AtBottom() {
+		t.Fatal("growing the last block lost the bottom pin")
 	}
 }
