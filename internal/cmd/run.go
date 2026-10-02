@@ -69,6 +69,7 @@ func newRunCommand(action func(context.Context, RunOptions) error) *cobra.Comman
 		},
 	}
 	flags := command.Flags()
+	flags.StringArrayVar(&opts.SkillPaths, "skill", nil, "additional skill directory to discover (repeatable)")
 	flags.StringVar(&opts.Prompt, "prompt", "", "literal prompt for the one assistant turn (required)")
 	flags.StringVar(&opts.Delivery, "delivery", "", "delivery streamed on stdout: adeep (required)")
 	flags.StringVar(&opts.Model, "model", "", "backend model ID override (for example, anthropic/claude-sonnet-4-6)")

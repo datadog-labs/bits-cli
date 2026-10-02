@@ -73,7 +73,8 @@ func runRunWithStore(ctx context.Context, opts cmd.RunOptions, store auth.Creden
 		return err
 	}
 	engine, err := startup.NewEngine(ctx, startup.EngineOptions{
-		Workspace: workspace,
+		Workspace:  workspace,
+		SkillPaths: opts.SkillPaths,
 		Client: startup.ClientOptions{
 			Mode:    opts.AuthMode,
 			Store:   store,
@@ -248,7 +249,8 @@ func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth
 		},
 	}
 	engineOpts := startup.EngineOptions{
-		Workspace: workspace,
+		Workspace:  workspace,
+		SkillPaths: opts.SkillPaths,
 		Client: startup.ClientOptions{
 			Mode:    opts.AuthMode,
 			Store:   store,

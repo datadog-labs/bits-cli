@@ -136,6 +136,7 @@ func (e *Engine) installConversation(conversation *Conversation) {
 	e.opts.MessageHistory = nil
 	e.sentUserContext = nil
 	e.projectInstructions.reset()
+	e.clientSkills.reset()
 	e.transcript = conversation.transcript
 	e.continuation = conversation.continuation
 }
