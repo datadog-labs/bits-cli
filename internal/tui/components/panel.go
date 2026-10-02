@@ -175,16 +175,16 @@ func (p *Panel) scrollableBody(width, height int, content PanelContent) (string,
 		rows = nil
 	}
 
+	// The parts are joined line to line, so the body gets every row the header
+	// and footer leave.
 	parts := []string{header, body, footer}
-	fixedHeight, separators := 0, -1
+	fixedHeight := 0
 	for _, part := range parts {
-		if part == "" {
-			continue
+		if part != "" {
+			fixedHeight += lipgloss.Height(part)
 		}
-		fixedHeight += lipgloss.Height(part)
-		separators++
 	}
-	available := height - fixedHeight + len(rows) - max(0, separators)
+	available := height - fixedHeight + len(rows)
 	if available < 1 || len(rows) <= available {
 		return joinNonEmpty(parts...), Window{Rows: len(rows), Page: len(rows)}
 	}

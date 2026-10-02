@@ -31,9 +31,10 @@ and edits show a short fixed prompt.
   short_request     Small panel. Left/Right/Tab move the highlight; Enter and
                     Esc decide. Wheel over the panel does nothing visible.
   long_command      The body is taller than its window ("lines X-Y of N").
-                    Scrolling never moves the highlight. On a tall terminal the
-                    chat keeps at least 5 rows; on a short one the panel drops
-                    to its compact form without a scroll hint.
+                    Scrolling never moves the highlight. The panel takes at
+                    most half the rows above the composer (at least 15), so
+                    the chat keeps the rest; on a short terminal it drops to
+                    its compact form without a scroll hint, or the resize hint.
   queued            Header says "3 waiting"; the first is a long command. Scroll
                     its body, then decide: the next panel starts at the top with
                     the first action highlighted. Scroll the chat up before

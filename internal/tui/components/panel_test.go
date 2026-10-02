@@ -113,7 +113,7 @@ func TestPanelPagesAScrollableBodyThroughItsWindow(t *testing.T) {
 	first, window, _ := panel.Layout(60, 20, content)
 	assertBounded(t, first, 60, 20)
 	plain := ansi.Strip(first)
-	if !strings.Contains(plain, "detail-01") || strings.Contains(plain, "detail-12") || !strings.Contains(plain, "lines 1–7 of 12 · keys scroll") {
+	if !strings.Contains(plain, "detail-01") || strings.Contains(plain, "detail-12") || !strings.Contains(plain, "lines 1–9 of 12 · keys scroll") {
 		t.Fatalf("initial scroll window is incorrect:\n%s", plain)
 	}
 

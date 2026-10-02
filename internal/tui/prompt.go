@@ -8,14 +8,9 @@ import (
 	"github.com/DataDog/bits-cli/internal/tui/components"
 )
 
-const (
-	// minimumTranscriptRows is the transcript height a shown prompt leaves so
-	// the chat stays readable and scrollable while the user answers.
-	minimumTranscriptRows = 5
-	// minimumPromptRows is what a prompt may take even when that leaves the
-	// transcript fewer rows: enough for a scrolling approval body.
-	minimumPromptRows = 15
-)
+// minimumPromptRows is what a prompt may take even past half the free rows:
+// enough for a scrolling approval body on a short terminal.
+const minimumPromptRows = 15
 
 // The chat shows one ask waiting on the user (see ask and reshow) through its
 // components.Prompt, which owns the keyboard while it shows. Its Placement
@@ -30,11 +25,11 @@ func (m *Model) prompt() components.Prompt {
 	return m.shown.prompt()
 }
 
-// promptRows is the most rows a prompt may take out of the free rows above the
-// composer. The transcript always keeps a row, and keeps
-// minimumTranscriptRows once the prompt has minimumPromptRows.
+// promptRows is the most rows a prompt may take out of the free rows above
+// the composer: half of them, so the transcript keeps the other half, but at
+// least minimumPromptRows, and always leaving the transcript a row.
 func promptRows(free int) int {
-	return max(0, min(free-1, max(minimumPromptRows, free-minimumTranscriptRows)))
+	return max(0, min(free-1, max(minimumPromptRows, free/2)))
 }
 
 // inPrompt moves a click or a wheel event into the prompt's coordinates; those

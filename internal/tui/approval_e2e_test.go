@@ -463,8 +463,8 @@ func TestApprovalKeepsTranscriptScrollable(t *testing.T) {
 	}})
 	model.relayout()
 
-	if rows := model.frame.transcript.Dy(); rows < minimumTranscriptRows {
-		t.Fatalf("transcript rows = %d, want >= %d", rows, minimumTranscriptRows)
+	if transcript, prompt := model.frame.transcript.Dy(), model.frame.prompt.Dy(); transcript < prompt {
+		t.Fatalf("transcript rows = %d, want at least the approval's %d", transcript, prompt)
 	}
 
 	top := model.list.VisibleSurface().Top
