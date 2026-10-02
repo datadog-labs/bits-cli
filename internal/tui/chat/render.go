@@ -93,7 +93,7 @@ func renderReasoning(it agent.Block, width int, sty Styles, frame int) string {
 
 func renderReasoningGroup(blocks []agent.Block, width int, sty Styles, frame int) string {
 	state := agent.ToolSuccess
-	label := "thought"
+	label := "reasoning"
 	for _, block := range blocks {
 		if !block.Complete {
 			state = agent.ToolRunning

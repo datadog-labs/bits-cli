@@ -102,7 +102,7 @@ func (p *ProjectInstructions) reset() {
 	}
 }
 
-// instructionFilenames follows Pi's context-file precedence. Only the first
+// instructionFilenames lists supported filenames in precedence order. Only the first
 // readable regular file in each directory participates, even when it is empty.
 var instructionFilenames = [...]string{"AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"}
 

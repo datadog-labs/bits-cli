@@ -270,7 +270,7 @@ func TestProjectInstructionsCascadingReplacement(t *testing.T) {
 	}
 }
 
-func TestPiInstructionFilenamePrecedence(t *testing.T) {
+func TestInstructionFilenamePrecedence(t *testing.T) {
 	t.Run("case-sensitive filename precedence", func(t *testing.T) {
 		if !supportsCaseSensitiveNames(t, t.TempDir()) {
 			t.Skip("filename precedence includes case-only variants, unavailable on this filesystem")
@@ -346,7 +346,7 @@ func supportsCaseSensitiveNames(t *testing.T, dir string) bool {
 	return string(first) == "upper" && string(second) == "lower"
 }
 
-func TestPiAncestorInstructions(t *testing.T) {
+func TestAncestorInstructions(t *testing.T) {
 	for _, git := range []bool{false, true} {
 		t.Run(fmt.Sprintf("git=%t", git), func(t *testing.T) {
 			outer := t.TempDir()
@@ -375,7 +375,7 @@ func TestPiAncestorInstructions(t *testing.T) {
 	}
 }
 
-func TestPiNestedWorktreeInstructionShadowing(t *testing.T) {
+func TestNestedWorktreeInstructionShadowing(t *testing.T) {
 	for _, tc := range []struct {
 		name, mainFile, worktreeFile string
 		keepMain                     bool
@@ -412,7 +412,7 @@ func TestPiNestedWorktreeInstructionShadowing(t *testing.T) {
 	}
 }
 
-func TestPiBareWorktreeKeepsContainerInstructions(t *testing.T) {
+func TestBareWorktreeKeepsContainerInstructions(t *testing.T) {
 	outer := t.TempDir()
 	bare := filepath.Join(outer, ".bare")
 	runInstructionsGit(t, outer, "init", "--bare", bare)
