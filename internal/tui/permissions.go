@@ -72,7 +72,7 @@ func (m *Model) applyPermissionsMode(mode agent.PermissionsMode) tea.Cmd {
 		return m.postNotice(notice(chat.NoticeError, err, "Could not switch the permissions mode."))
 	}
 	m.setMode(ModeChat)
-	return nil
+	return m.postNotice(permissionsChangedNotice(mode))
 }
 
 func (m *Model) setPermissionsMode(mode agent.PermissionsMode) error {
@@ -96,7 +96,14 @@ func (m *Model) applyPendingPermissions() tea.Cmd {
 	if m.mode == ModePermissions {
 		m.permissionConfirm, m.permissionCursor = false, slices.Index(permissionModes[:], mode)
 	}
-	return nil
+	return m.postNotice(permissionsChangedNotice(mode))
+}
+
+func permissionsChangedNotice(mode agent.PermissionsMode) chat.Notice {
+	if mode == agent.ModeSkipPermissions {
+		return notice(chat.NoticeWarn, nil, "Full Access enabled. Actions will run without approval.")
+	}
+	return notice(chat.NoticeInfo, nil, "Permissions set to Ask for Approval.")
 }
 
 func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {

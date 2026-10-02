@@ -107,8 +107,8 @@ func TestPermissionsExtraSpacesAroundModeStillSwitch(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeSkipPermissions)
 	setConversationInput(m, "/permissions   manual")
 	_, _ = m.submit()
-	if !latestNotice(m).Empty() {
-		t.Fatalf("notice = %#v, want no success notification", latestNotice(m))
+	if latestNotice(m).Level != chat.NoticeInfo || latestNotice(m).Text != "Permissions set to Ask for Approval." {
+		t.Fatalf("notice = %#v, want the permissions change announced", latestNotice(m))
 	}
 	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
 		t.Fatalf("mode = %q, want manual", got)
@@ -260,8 +260,8 @@ func TestPermissionsSwitchBackToManualPromptsAgain(t *testing.T) {
 	if len(m.pendingApprovals) != 0 {
 		t.Fatalf("skip-permissions surfaced %d permission prompts", len(m.pendingApprovals))
 	}
-	if !latestNotice(m).Empty() {
-		t.Fatalf("notice = %#v, want no success notification", latestNotice(m))
+	if latestNotice(m).Level != chat.NoticeInfo || latestNotice(m).Text != "Permissions set to Ask for Approval." {
+		t.Fatalf("notice = %#v, want the applied permissions change announced", latestNotice(m))
 	}
 	if got := m.tools.PermissionsMode(); got != agent.ModeManual || m.pendingPermissions != "" {
 		t.Fatalf("mode = %q, queued = %q; want manual after the first turn", got, m.pendingPermissions)
