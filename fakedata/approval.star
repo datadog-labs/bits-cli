@@ -54,8 +54,8 @@ def pad(n):
     return ("0" if n < 10 else "") + str(n)
 
 def filler(lines, label = "history"):
-    # One short paragraph per line so the chat is clearly taller than the screen.
-    say("\n\n".join(["%s %s: the quick brown fox jumps over the lazy dog." % (label, pad(i + 1)) for i in range(lines)]))
+    # One short list item per row: enough rows to scroll, few words to stream.
+    say("\n".join(["- %s %s" % (label, pad(i + 1)) for i in range(lines)]))
 
 def numbered(count, prefix):
     return "\n".join(["%s %s" % (prefix, pad(i + 1)) for i in range(count)])
@@ -67,18 +67,18 @@ def long_script(steps):
     return "\n".join(lines)
 
 def short_request():
-    filler(60)
+    filler(30)
     r = call("write_file", {"path": "tmp/approval-demo/short.txt", "content": "hello\n"})
     say("write_file finished: " + r.status)
 
 def long_command():
-    filler(60)
+    filler(30)
     cmd = long_script(40)
     r = call("exec_command", {"cmd": cmd})
     say("exec_command finished: " + r.status)
 
 def queued():
-    filler(60)
+    filler(30)
     results = call([
         ("exec_command", {"cmd": long_script(30)}),
         ("write_file", {"path": "tmp/approval-demo/two.txt", "content": numbered(5, "two") + "\n"}),
@@ -87,7 +87,7 @@ def queued():
     say("batch finished: " + ", ".join([r.status for r in results]))
 
 def write_then_edit():
-    filler(40)
+    filler(20)
     path = "tmp/approval-demo/diff.txt"
     w = call("write_file", {"path": path, "content": numbered(40, "row") + "\n"})
     if not w.ok:
@@ -100,7 +100,7 @@ def write_then_edit():
     say("edit_file finished: " + e.status)
 
 def question_over_history():
-    filler(60)
+    filler(30)
     load_questions()
 
 def load_questions():
@@ -117,7 +117,7 @@ def load_questions():
     say("Questions finished: " + r.status)
 
 def after_decision():
-    filler(60)
+    filler(30)
     r = call("write_file", {"path": "tmp/approval-demo/after.txt", "content": numbered(25, "after") + "\n"})
     say("The decision was: " + r.status + ".")
-    filler(10, "after")
+    filler(5, "after")
