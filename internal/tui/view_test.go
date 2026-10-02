@@ -22,11 +22,11 @@ import (
 // rows the frame gives it, and a frame that cannot be usably drawn is marked
 // too small instead.
 func TestLayoutTilesTheScreen(t *testing.T) {
-	approval := func(m *Model) { m.approval.pending = []agent.Block{animToolBlock(agent.ToolAwaitingApproval)} }
+	approval := func(m *Model) { m.syncRequests([]agent.Block{animToolBlock(agent.ToolAwaitingApproval)}) }
 	draft := func(m *Model) { setConversationInput(m, strings.Repeat("draft\n", 12)) }
 	toolUI := func(m *Model) {
 		prompt, _ := chat.NewToolPrompt(agent.ToolCall{Name: spec.AskUserQuestion, Input: questionInput})
-		m.activeToolUI = &toolUISession{prompt: prompt}
+		m.ask(&request{callID: "question", prompt: prompt})
 	}
 	for _, tc := range []struct {
 		name          string

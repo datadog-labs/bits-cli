@@ -18,21 +18,16 @@ const (
 	minimumDockRows = 15
 )
 
-// The dock holds the request waiting on the user, a components.Prompt: a
-// tool approval, or the interactive UI a client tool asks through. It sits
-// between the transcript and the composer and owns the keyboard while it
-// shows; the editor stays visible but inert.
+// The dock shows the first request waiting on the user (see request) as its
+// components.Prompt. It sits between the transcript and the composer and owns
+// the keyboard while it shows; the editor stays visible but inert.
 
-// prompt returns the docked prompt, or nil. Tool UIs come first: they answer
-// a request a running tool is blocked on.
+// prompt returns the docked prompt, or nil.
 func (m *Model) prompt() components.Prompt {
-	if m.activeToolUI != nil {
-		return m.activeToolUI.prompt
+	if len(m.requests) == 0 {
+		return nil
 	}
-	if m.approval.active() {
-		return &m.approval
-	}
-	return nil
+	return m.requests[0].prompt
 }
 
 // dockRows is the most rows a prompt may take out of the free rows above the
@@ -44,27 +39,26 @@ func dockRows(free int) int {
 
 // updatePrompt applies msg to the docked prompt, then hands on its answer.
 func (m *Model) updatePrompt(msg tea.Msg) (tea.Cmd, bool) {
-	p := m.prompt()
-	if p == nil {
+	if len(m.requests) == 0 {
 		return nil, false
 	}
-	cmd, used := p.Update(msg)
-	m.settle(p)
+	r := m.requests[0]
+	cmd, used := r.prompt.Update(msg)
+	if answer, done := r.prompt.Result(); done {
+		m.answer(r, answer)
+	}
 	return cmd, used
 }
 
-// settle hands the docked prompt's answer, once given, to whoever asked.
-func (m *Model) settle(p components.Prompt) {
-	answer, done := p.Result()
-	if !done {
+// answer hands the user's answer to whoever asked. A tool UI is done once
+// answered; an approval stays until the transcript drops the call.
+func (m *Model) answer(r *request, answer any) {
+	if r.ui != nil {
+		r.ui.Respond(answer, nil)
+		m.drop(func(other *request) bool { return other == r })
 		return
 	}
-	if session := m.activeToolUI; session != nil {
-		session.request.Respond(answer, nil)
-		m.nextToolUI()
-		return
-	}
-	m.engine.Decide(m.approval.callID(), answer.(agent.ApprovalDecision))
+	m.engine.Decide(r.callID, answer.(agent.ApprovalDecision))
 }
 
 // inDock moves a click or a wheel event into the dock's coordinates; those

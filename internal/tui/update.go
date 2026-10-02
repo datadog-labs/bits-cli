@@ -243,7 +243,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch msg := msg.(type) {
 	case toolUIOpenedMsg:
-		m.activateToolUI(msg.request)
+		m.openToolUI(msg.request)
 		return m, waitToolUI(m.toolUI)
 
 	case tea.WindowSizeMsg:
@@ -543,8 +543,7 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	} else if done.cancel != nil {
 		done.cancel() // release the turn/restore context
 	}
-	m.approval.clear()
-	m.clearToolUIs()
+	m.requests = nil
 
 	if done.then == thenLogout {
 		// Logging out makes a queued permissions mode moot.
@@ -826,14 +825,15 @@ func (m *Model) resumePendingTools() tea.Cmd {
 }
 
 // cancelOperation cancels a running engine operation once and drops its tool
-// UIs. Logout is never interrupted this way.
+// UIs; its approvals go when the operation closes. Logout is never
+// interrupted this way.
 func (m *Model) cancelOperation() {
 	if m.op.events == nil || m.op.stop == stopAll {
 		return
 	}
 	m.op.stop = stopAll
 	m.op.cancel()
-	m.clearToolUIs()
+	m.dropToolUIs()
 }
 
 // after queues next for when the running operation ends, and cancels the
@@ -851,8 +851,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	switch ev.Kind {
 	case agent.EventTranscript:
 		m.transcript = ev.Transcript
-		m.approval.set(ev.Transcript.PendingApprovals())
-		m.reconcileToolUI()
+		m.syncRequests(ev.Transcript.PendingApprovals())
 		if ev.Transcript.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}

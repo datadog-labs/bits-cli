@@ -194,12 +194,10 @@ type Model struct {
 	logout    LogoutFunc
 	loggedOut bool
 
-	// Tool requests waiting on the user dock above the composer as a
-	// components.Prompt: a tool's interactive UI first, then an approval.
+	// Tool calls waiting on the user, oldest first; the first is docked above
+	// the composer (see request).
 	toolUI           *tools.UI
-	activeToolUI     *toolUISession
-	queuedToolUIs    []*toolUISession
-	approval         approvalPrompt
+	requests         []*request
 	permissionsPanel *components.Panel
 	// The picker shows the options, or the full-access confirmation; the
 	// cursor is the row on the page shown (on the confirmation, 0 is Yes).
@@ -383,12 +381,8 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	m.list.SetStyles(m.chatStyles)
 	m.editor.SetInputStyles(theme.Input)
 	m.editor.SetStyles(theme.Editor)
-	m.approval.SetStyles(theme)
-	if m.activeToolUI != nil {
-		m.activeToolUI.prompt.SetStyles(theme)
-	}
-	for _, session := range m.queuedToolUIs {
-		session.prompt.SetStyles(theme)
+	for _, r := range m.requests {
+		r.prompt.SetStyles(theme)
 	}
 	m.permissionsPanel.SetStyles(theme.Permissions)
 	if m.picker != nil {

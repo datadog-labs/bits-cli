@@ -189,16 +189,16 @@ func TestPermissionsQueuesWhileApprovalsPending(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	// Approvals only arrive inside a running operation.
 	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
-	m.approval.pending = []agent.Block{{
+	m.syncRequests([]agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{Status: agent.ToolAwaitingApproval},
-	}}
+	}})
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
 	if m.mode != ModePermissions || !m.permissionConfirm {
 		t.Fatal("pending approval prevented the confirmation from opening")
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual || len(m.approval.pending) != 1 {
+	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual || waitingApprovals(m) != 1 {
 		t.Fatal("queued change altered the current approval")
 	}
 }
@@ -207,7 +207,7 @@ func TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool(t *testing.T) {
 	m, backend := newPermissionsModel(t, agent.ModeManual)
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
-	for len(m.approval.pending) == 0 {
+	for waitingApprovals(m) == 0 {
 		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
 		_, _ = m.Update(msg)
 	}
@@ -222,7 +222,7 @@ func TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool(t *testing.T) {
 	if !latestNotice(m).Empty() {
 		t.Fatalf("notice = %#v, want no success notification", latestNotice(m))
 	}
-	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual || len(m.approval.pending) != 1 {
+	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual || waitingApprovals(m) != 1 {
 		t.Fatal("current tool approval changed before the turn ended")
 	}
 	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape}) // deny the current tool
@@ -237,8 +237,8 @@ func TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool(t *testing.T) {
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
 	drainConversationRemote(t, m)
-	if len(m.approval.pending) != 0 {
-		t.Fatalf("skip-permissions still surfaced %d permission prompts", len(m.approval.pending))
+	if waitingApprovals(m) != 0 {
+		t.Fatalf("skip-permissions still surfaced %d permission prompts", waitingApprovals(m))
 	}
 	if backend.calls != 4 {
 		t.Fatalf("backend calls = %d, want a completed second turn", backend.calls)
@@ -257,8 +257,8 @@ func TestPermissionsSwitchBackToManualPromptsAgain(t *testing.T) {
 		t.Fatal("manual mode did not queue during the active turn")
 	}
 	drainConversationRemote(t, m)
-	if len(m.approval.pending) != 0 {
-		t.Fatalf("skip-permissions surfaced %d permission prompts", len(m.approval.pending))
+	if waitingApprovals(m) != 0 {
+		t.Fatalf("skip-permissions surfaced %d permission prompts", waitingApprovals(m))
 	}
 	if latestNotice(m).Level != chat.NoticeInfo || latestNotice(m).Text != "Permissions set to Ask for Approval." {
 		t.Fatalf("notice = %#v, want the applied permissions change announced", latestNotice(m))
@@ -269,7 +269,7 @@ func TestPermissionsSwitchBackToManualPromptsAgain(t *testing.T) {
 
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
-	for len(m.approval.pending) == 0 {
+	for waitingApprovals(m) == 0 {
 		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
 		_, _ = m.Update(msg)
 	}
@@ -282,7 +282,7 @@ func TestPermissionsSwitchBackToManualClearsExistingSessionGrants(t *testing.T) 
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
-	for len(m.approval.pending) == 0 {
+	for waitingApprovals(m) == 0 {
 		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
 		_, _ = m.Update(msg)
 	}
@@ -299,12 +299,12 @@ func TestPermissionsSwitchBackToManualClearsExistingSessionGrants(t *testing.T) 
 
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
-	for len(m.approval.pending) == 0 {
+	for waitingApprovals(m) == 0 {
 		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
 		_, _ = m.Update(msg)
 	}
-	if len(m.approval.pending) != 1 {
-		t.Fatalf("earlier session grant survived the switch back to manual: %d prompts", len(m.approval.pending))
+	if waitingApprovals(m) != 1 {
+		t.Fatalf("earlier session grant survived the switch back to manual: %d prompts", waitingApprovals(m))
 	}
 }
 

@@ -37,13 +37,12 @@ var approvalChoices = [...]approvalChoice{
 	{decision: agent.ApprovalDeny, label: "Deny", compactLabel: "Deny"},
 }
 
-// approvalPrompt is the docked panel asking the user to allow a tool call. It
-// owns everything about the prompt — the queue, the highlighted action, the
-// body scroll and the decision until the model collects it — so the rest of
-// the UI only feeds it the pending calls and its input. The zero value is an
-// idle prompt.
+// approvalPrompt is the panel asking the user to allow one tool call. It owns
+// the highlighted action, the body scroll, and the decision until the model
+// collects it. A new prompt starts on the first action, scrolled to the top.
 type approvalPrompt struct {
-	pending  []agent.Block          // tool calls awaiting a decision, oldest first
+	block    agent.Block
+	waiting  func() int             // requests waiting on the user, this one included
 	selected int                    // index into approvalChoices
 	window   components.Window      // the body rows the last layout showed
 	decision agent.ApprovalDecision // made but not yet collected; "" when none
@@ -55,31 +54,15 @@ type approvalPrompt struct {
 
 var _ components.Prompt = (*approvalPrompt)(nil)
 
+// newApprovalPrompt asks about block; its header counts the model's requests.
+func (m *Model) newApprovalPrompt(block agent.Block) *approvalPrompt {
+	return &approvalPrompt{block: block, waiting: func() int { return len(m.requests) }}
+}
+
 func (a *approvalPrompt) SetStyles(theme styles.Theme) {
 	a.theme, a.chat = theme, chat.StylesFor(theme)
 	a.panel.SetStyles(theme.Approval.Panel)
 }
-
-// active reports whether a call awaits a decision.
-func (a *approvalPrompt) active() bool { return len(a.pending) > 0 }
-
-// callID is the call the next decision applies to.
-func (a *approvalPrompt) callID() string { return a.pending[0].ToolCallID() }
-
-// set replaces the pending calls. The highlighted action and scroll position
-// are kept while the same call stays at the head of the queue, so a streaming
-// update does not reset what the user is doing.
-func (a *approvalPrompt) set(pending []agent.Block) {
-	if len(pending) == 0 || !a.active() || pending[0].ToolCallID() != a.callID() {
-		a.selected = 0
-		a.window = components.Window{}
-		a.decision = ""
-	}
-	a.pending = pending
-}
-
-// clear drops every pending call and returns the prompt to its initial state.
-func (a *approvalPrompt) clear() { a.set(nil) }
 
 // Result hands over the agent.ApprovalDecision the user made, once: the
 // panel stays until the transcript drops the call, and must not decide twice.
@@ -128,15 +111,14 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 
 func (a *approvalPrompt) scroll(rows int) { a.window = a.window.Scrolled(rows) }
 
-// Layout renders the panel within width×height, or "" when nothing is pending.
+// Layout renders the panel within width×height.
 // It is where the prompt learns how much of the body shows, so scrolling clamps
 // to what the last frame displayed.
 func (a *approvalPrompt) Layout(width, height int) string {
-	if !a.active() || a.pending[0].Tool == nil {
+	block := a.block
+	if block.Tool == nil {
 		return ""
 	}
-
-	block := a.pending[0]
 	prompt := block.Tool.Approval
 	title := "Run " + escape.Inline(block.Tool.Name) + "?"
 	detail := ""
@@ -148,7 +130,7 @@ func (a *approvalPrompt) Layout(width, height int) string {
 	}
 
 	queue := "Permission Required"
-	if count := len(a.pending); count > 1 {
+	if count := a.waiting(); count > 1 {
 		queue += " · " + strconv.Itoa(count) + " waiting"
 	}
 	sty := a.theme.Approval

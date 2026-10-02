@@ -97,10 +97,10 @@ func pumpToolUI(t *testing.T, m *Model) {
 
 func waitQuestions(t *testing.T, m *Model) {
 	t.Helper()
-	for m.activeToolUI == nil && m.op.events != nil {
+	for dockedToolUI(m) == nil && m.op.events != nil {
 		pumpToolUI(t, m)
 	}
-	if m.activeToolUI == nil {
+	if dockedToolUI(m) == nil {
 		t.Fatal("turn ended without a question form")
 	}
 	// The engine queues the tool's transcript events before its handler runs.
@@ -128,7 +128,7 @@ func TestQuestionsCompleteTheCall(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m, backend := startQuestions(t, tc.mode, questionInput, 1)
 			waitQuestions(t, m)
-			if m.editor.Focused() || len(m.approval.pending) != 0 {
+			if m.editor.Focused() || waitingApprovals(m) != 0 {
 				t.Fatal("question incorrectly routed through editor or permissions")
 			}
 			if backend.calls != 1 || len(backend.definitions) != 1 || backend.definitions[0].Name != spec.AskUserQuestion {
@@ -149,7 +149,7 @@ func TestQuestionsCompleteTheCall(t *testing.T) {
 			if response.ToolCallID != "question-0" || response.Status != tc.status || !strings.Contains(result.Message, tc.message) {
 				t.Fatalf("response=%+v", response)
 			}
-			if m.activeToolUI != nil || !m.editor.Focused() {
+			if dockedToolUI(m) != nil || !m.editor.Focused() {
 				t.Fatal("form did not release input")
 			}
 			if !strings.Contains(ansi.Strip(m.list.Document()), "Continuing with your answers.") {
@@ -161,18 +161,18 @@ func TestQuestionsCompleteTheCall(t *testing.T) {
 
 func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 3)
-	for m.activeToolUI == nil || len(m.queuedToolUIs) < 2 {
+	for dockedToolUI(m) == nil || len(queuedToolUIs(m)) < 2 {
 		pumpToolUI(t, m)
 	}
 	for len(m.op.events) > 0 {
 		pumpToolUI(t, m)
 	}
 	// Arrival order is up to the scheduler; queued forms follow the transcript.
-	slices.Reverse(m.queuedToolUIs)
-	remaining := []string{m.queuedToolUIs[0].request.Call.ID, m.queuedToolUIs[1].request.Call.ID}
+	queued := queuedToolUIs(m)
+	remaining := []string{queued[0].callID, queued[1].callID}
 	slices.Sort(remaining)
 	questionKey(m, tea.KeyEscape, 0)
-	if m.activeToolUI == nil || m.activeToolUI.request.Call.ID != remaining[0] {
+	if dockedToolUI(m) == nil || dockedToolUI(m).Call.ID != remaining[0] {
 		t.Fatalf("next form is not the earliest pending call %s", remaining[0])
 	}
 	// Cancelling a queued call must drop its form without stranding the others.
@@ -190,8 +190,8 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 		pumpToolUI(t, m)
 	}
 	for m.op.events != nil {
-		if m.activeToolUI != nil {
-			if m.activeToolUI.request.Call.ID == remaining[1] {
+		if dockedToolUI(m) != nil {
+			if dockedToolUI(m).Call.ID == remaining[1] {
 				t.Fatal("cancelled call showed its form")
 			}
 			questionKey(m, tea.KeyEscape, 0)
@@ -228,13 +228,13 @@ func TestQuestionsDockAboveTheComposer(t *testing.T) {
 	}
 	m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
 	questionKey(m, tea.KeyEscape, 0)
-	if m.activeToolUI == nil || backend.calls != 1 {
+	if dockedToolUI(m) == nil || backend.calls != 1 {
 		t.Fatal("hidden form consumed a key")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	questionKey(m, tea.KeyEscape, 0)
 	drainConversationRemote(t, m)
-	if m.activeToolUI != nil || !m.frame.dock.Empty() || !m.editor.Focused() {
+	if dockedToolUI(m) != nil || !m.frame.dock.Empty() || !m.editor.Focused() {
 		t.Fatal("dismissing the form did not hand the keyboard back to the composer")
 	}
 }
@@ -369,7 +369,7 @@ func TestPendingQuestionRestoresOnStartupAndResume(t *testing.T) {
 			if !continued(m) {
 				t.Fatal("the pushed turn did not continue")
 			}
-			if m.engine.CanResumeTools(m.tools) || m.activeToolUI != nil {
+			if m.engine.CanResumeTools(m.tools) || dockedToolUI(m) != nil {
 				t.Fatal("question stayed pending after continuation")
 			}
 		})
@@ -407,7 +407,7 @@ func TestQuestionExitAndStopHaveDifferentPersistedOutcomes(t *testing.T) {
 			reopened := newResumedQuestionModel(t, f, id, true)
 			if tc.cancelled > 0 {
 				drainConversationRemote(t, reopened)
-				if reopened.activeToolUI != nil || reopened.engine.CanResumeTools(reopened.tools) {
+				if dockedToolUI(reopened) != nil || reopened.engine.CanResumeTools(reopened.tools) {
 					t.Fatal("cancelled questions reopened")
 				}
 			} else {
@@ -435,7 +435,7 @@ func TestRestoredCallsThatWillNotResumeSettle(t *testing.T) {
 			}
 			m := newResumedQuestionModel(t, f, id, true)
 			drainConversationRemote(t, m)
-			if m.activeToolUI != nil || m.op.events != nil {
+			if dockedToolUI(m) != nil || m.op.events != nil {
 				t.Fatal("a call that cannot resume opened")
 			}
 			for _, block := range m.transcript.Blocks {
