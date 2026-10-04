@@ -228,7 +228,11 @@ func (e *Engine) SearchEntities(ctx context.Context, in assistant.SearchEntities
 
 type TurnInput struct {
 	Message string
-	Tools   *ToolSet
+	// LocalSkill is precedence-resolved discovery metadata selected by the user.
+	// Its current body is read inside this operation before contacting the backend.
+	LocalSkill     *LocalSkill
+	SkillArguments string
+	Tools          *ToolSet
 	// Context belongs to this independent user turn. The engine resends it on
 	// client-tool continuations, but never stores it in its long-lived options.
 	Context *assistant.AssistantContext
@@ -409,6 +413,17 @@ func (e *Engine) run(
 		}
 	}
 
+	var skillContext string
+	if len(resumed) == 0 && in.LocalSkill != nil {
+		var err error
+		skillContext, err = in.LocalSkill.invocationContext(ctx, in.SkillArguments)
+		if err != nil {
+			completion.Err = err
+			send(Event{Kind: EventError, Err: err})
+			return
+		}
+	}
+
 	// A restored tool call is already in the transcript; only a new turn adds a
 	// user block before contacting the backend.
 	if len(resumed) == 0 {
@@ -432,6 +447,12 @@ func (e *Engine) run(
 		opts = e.projectInstructions.apply(ctx, opts)
 		if _, userMessage := next.(string); userMessage {
 			opts = e.clientSkills.apply(ctx, opts)
+			if skillContext != "" {
+				if opts.CustomUserContext != "" {
+					opts.CustomUserContext += "\n\n"
+				}
+				opts.CustomUserContext += skillContext
+			}
 		}
 		var calls []ToolCall
 		streamed := false

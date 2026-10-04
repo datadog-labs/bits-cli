@@ -115,7 +115,13 @@ func TestClientSkillDisableModelInvocation(t *testing.T) {
 	writeSkill(t, active, ".agents/skills/visible", "visible", "shown to the model")
 	writeSkillFile(t, active, ".agents/skills/hidden", "---\nname: hidden\ndescription: user only\ndisable-model-invocation: true\n---\n")
 	writeSkill(t, active, "extras/hidden", "hidden", "shadowed duplicate")
-	got := NewClientSkills(active, []string{"extras"}).snapshot(context.Background())
+	skills := NewClientSkills(active, []string{"extras"})
+	engine := New(nil, assistant.SendOptions{}, WithClientSkills(skills))
+	visible := engine.DiscoverLocalSkills(context.Background())
+	if len(visible) != 2 || visible[0].Name != "hidden" || !visible[0].DisableModelInvocation || visible[0].Description != "user only" || visible[0].Path != filepath.Join(active, ".agents/skills/hidden/SKILL.md") {
+		t.Fatalf("explicitly invokable skills = %+v", visible)
+	}
+	got := skills.snapshot(context.Background())
 	if !strings.Contains(got, `name="visible"`) {
 		t.Fatal("missing visible skill")
 	}
@@ -465,6 +471,39 @@ func TestClientSkillCatalogSkipsEntriesThatDoNotFit(t *testing.T) {
 			}
 			if len(got) > skillCatalogLimit || !strings.HasSuffix(got, "</available-local-client-skills>") {
 				t.Fatalf("invalid catalog: %d bytes", len(got))
+			}
+		})
+	}
+}
+
+func TestClientSkillNamespacedNames(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		valid bool
+	}{
+		{"figma:something", true},
+		{"figma-tools:some-action", true},
+		{"org:figma:something", true},
+		{":something", false},
+		{"figma:", false},
+		{"figma::something", false},
+		{"figma-:something", false},
+		{"figma:-something", false},
+		{"figma:some--thing", false},
+		{"Figma:something", false},
+		{"figma:some_thing", false},
+		{"figma:" + strings.Repeat("a", 59), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, fallback := range []bool{false, true} {
+				content := "---\ndescription: Test skill\n"
+				if !fallback {
+					content += "name: " + tc.name + "\n"
+				}
+				skill, valid := parseClientSkill([]byte(content+"---\nInstructions"), tc.name)
+				if valid != tc.valid || valid && skill.Name != tc.name {
+					t.Fatalf("fallback=%t: parsed name=%q valid=%t, want valid=%t", fallback, skill.Name, valid, tc.valid)
+				}
 			}
 		})
 	}

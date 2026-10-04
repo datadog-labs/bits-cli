@@ -28,6 +28,21 @@ Use `bits --help` for the complete command list or `bits help login` for command
 | `/logout` | Sign out from your Datadog account and exit Bits. |
 | `/quit`, `/exit` | Exit Bits. |
 
+Local skills also appear in the slash menu as `/skill:<name>`, with their
+frontmatter descriptions. Bits discovers them in `.agents/skills` from the
+current directory up to the repository root, then in repeatable `--skill`
+directories, and finally in `~/.agents/skills`. The nearest project skill wins when names
+repeat. The `skill:` namespace keeps skill names distinct from built-in commands.
+Typing `/review` or `/rev` also finds the `/skill:review` completion.
+
+Press Enter on a skill completion to invoke it, or use Tab to complete its name
+and add arguments. For example, `/skill:review Check README.md` loads the current
+`SKILL.md` instructions for the assistant, including the base directory for
+relative references. Skills with `model-invocable: false` or
+`disable-model-invocation: true` are available for explicit invocation but stay
+out of the automatic model catalog. Starting or resuming a conversation rescans
+local skills.
+
 Type `@` after whitespace or punctuation to open a mixed picker of entities and
 local-file suggestions. Prefix a query with a supported entity type, such as
 `@service:assistant`, to narrow the search. Entity selections are

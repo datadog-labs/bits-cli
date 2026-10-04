@@ -171,6 +171,9 @@ type Model struct {
 	entitySearchCache      map[string]entitySearchCacheEntry
 	entitySearchCacheOrder []string
 
+	localSkills     map[string]agent.LocalSkill
+	localSkillsTask task
+
 	statusTask     task
 	statusIdentity string
 
@@ -422,7 +425,7 @@ func (m *Model) Init() tea.Cmd {
 // on login handoff because Bubble Tea calls Init only on the original model.
 func (m *Model) initChat() tea.Cmd {
 	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
-	commands := []tea.Cmd{m.editor.Focus(), requestBG, waitToolUI(m.toolUI)}
+	commands := []tea.Cmd{m.editor.Focus(), requestBG, waitToolUI(m.toolUI), m.refreshLocalSkills()}
 	if m.engine == nil {
 		return tea.Batch(commands...)
 	}

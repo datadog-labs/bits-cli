@@ -234,6 +234,7 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.focus() == focusPicker {
 		m.closeConversationPicker()
 	}
+	m.localSkillsTask.stop()
 	m.statusTask.stop()
 	if m.op.cancel != nil {
 		m.op.cancel()
@@ -257,6 +258,10 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg := msg.(type) {
+	case localSkillsResultMsg:
+		m.applyLocalSkills(msg)
+		return m, nil
+
 	case toolUIOpenedMsg:
 		m.activateToolUI(msg.request)
 		return m, waitToolUI(m.toolUI)
@@ -725,6 +730,10 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					m.stopEntitySearch()
 					return m.dispatchCommand(name, "")
 				}
+				if _, ok := m.localSkills[strings.TrimPrefix(name, "skill:")]; strings.HasPrefix(name, "skill:") && ok {
+					m.editor.AcceptCommand()
+					return m.submit()
+				}
 			}
 		}
 		cmd := m.editor.Update(msg)
@@ -813,8 +822,17 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		text = " "
 	}
 
-	// Slash commands are a native control plane: they never reach the model.
-	if name, argument, ok := parseCommand(raw); ok {
+	var invokedSkill *agent.LocalSkill
+	var skillArguments string
+	if name, arguments, ok := parseLocalSkillInvocation(raw); ok {
+		skill, found := m.localSkills[name]
+		if !found {
+			return m, m.postNotice(notice(chat.NoticeError, nil, "Unknown local skill: %s", name))
+		}
+		invokedSkill = &skill
+		skillArguments = arguments
+		text = raw
+	} else if name, argument, ok := parseCommand(raw); ok {
 		m.editor.Reset()
 		m.stopEntitySearch()
 		return m.dispatchCommand(name, argument)
@@ -828,11 +846,13 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	events := m.engine.StartTurn(ctx, agent.TurnInput{
-		Message:     text,
-		Tools:       m.tools,
-		Context:     turnContext,
-		OnDeny:      agent.DenyContinue,
-		UserContext: tools.UserContext(m.workspace, m.tools),
+		Message:        text,
+		LocalSkill:     invokedSkill,
+		SkillArguments: skillArguments,
+		Tools:          m.tools,
+		Context:        turnContext,
+		OnDeny:         agent.DenyContinue,
+		UserContext:    tools.UserContext(m.workspace, m.tools),
 	})
 	wait := m.begin(opTurn, events, cancel)
 	m.chatPhase = chat.PhaseWaiting
