@@ -57,9 +57,9 @@ func TestClientSkillInvocationLoadsCurrentBody(t *testing.T) {
 		drain(engine.StartTurn(context.Background(), TurnInput{Message: "/skill:review" + arguments, Skill: &SkillInvocation{Name: skill.Name, Arguments: arguments}}))
 	}
 	for _, opts := range backend.opts {
-		context := opts.CustomUserContext
-		if !strings.Contains(context, "<instructions>Current &lt;instructions&gt; &amp; body\r\n\t </instructions>") || !strings.Contains(context, "<arguments>"+arguments+"</arguments>") || strings.Contains(context, "BODY MUST") {
-			t.Fatalf("skill context = %q", context)
+		userContext := opts.CustomUserContext
+		if !strings.Contains(userContext, "<instructions>Current &lt;instructions&gt; &amp; body\r\n\t </instructions>") || !strings.Contains(userContext, "<arguments>"+arguments+"</arguments>") || strings.Contains(userContext, "BODY MUST") {
+			t.Fatalf("skill context = %q", userContext)
 		}
 	}
 }

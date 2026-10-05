@@ -27,7 +27,9 @@ type skillMenu struct {
 	engine  *agent.Engine
 	epoch   uint64
 	started bool
-	task    task
+	// skills is nil until a load succeeds for this conversation.
+	skills map[string]agent.SkillSummary
+	task   task
 }
 
 // syncClientSkills observes conversation identity and loads the menu once per
@@ -43,7 +45,7 @@ func (m *Model) syncClientSkills() tea.Cmd {
 }
 
 func (m *Model) loadClientSkillMenu() tea.Cmd {
-	m.clientSkills = nil
+	m.skillMenu.skills = nil
 	m.editor.SetCommands(commandCompletionSpecs())
 	m.skillMenu.engine, m.skillMenu.epoch, m.skillMenu.started = m.engine, m.conversationEpoch, true
 	// The engine bounds discovery; this context only abandons a superseded load.
@@ -67,11 +69,11 @@ func (m *Model) applyClientSkills(msg clientSkillsResultMsg) tea.Cmd {
 	if msg.err != nil {
 		return m.postNotice(notice(chat.NoticeWarn, msg.err, "Could not load client skill suggestions. You can still invoke a skill with /skill:<name>."))
 	}
-	m.clientSkills = make(map[string]agent.SkillSummary, len(msg.skills))
+	m.skillMenu.skills = make(map[string]agent.SkillSummary, len(msg.skills))
 	specs := commandCompletionSpecs()
 	// The registry already supplies a stable, sorted list.
 	for _, skill := range msg.skills {
-		m.clientSkills[skill.Name] = skill
+		m.skillMenu.skills[skill.Name] = skill
 		specs = append(specs, editor.CommandSpec{Name: "skill:" + skill.Name, Aliases: []string{skill.Name}, Detail: escape.Inline(skill.Description)})
 	}
 	m.editor.SetCommands(specs)

@@ -59,7 +59,7 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 
 	// Discard authenticated collaborators and invalidate queued search results.
 	m.skillMenu.task.stop()
-	m.clientSkills = nil
+	m.skillMenu.skills = nil
 	m.editor.SetCommands(commandCompletionSpecs())
 	closeFileSearch := m.stopCompletionSearches()
 	m.entitySearcher = nil

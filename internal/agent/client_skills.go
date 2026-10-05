@@ -47,7 +47,7 @@ func (s *ClientSkills) reset() {
 }
 
 // apply adds the catalog, then an explicitly invoked skill's instructions.
-func (s *ClientSkills) apply(ctx context.Context, opts assistant.SendOptions, invoked string) assistant.SendOptions {
+func (s *ClientSkills) apply(ctx context.Context, opts assistant.SendOptions, skillContext string) assistant.SendOptions {
 	if s == nil {
 		return opts
 	}
@@ -58,15 +58,15 @@ func (s *ClientSkills) apply(ctx context.Context, opts assistant.SendOptions, in
 		}
 		opts.CustomUserContext = joinUserContext(opts.CustomUserContext, catalog)
 	}
-	opts.CustomUserContext = joinUserContext(opts.CustomUserContext, invoked)
+	opts.CustomUserContext = joinUserContext(opts.CustomUserContext, skillContext)
 	return opts
 }
 
-func joinUserContext(context, block string) string {
-	if context == "" || block == "" {
-		return context + block
+func joinUserContext(existing, block string) string {
+	if existing == "" || block == "" {
+		return existing + block
 	}
-	return context + "\n\n" + block
+	return existing + "\n\n" + block
 }
 
 // Keep context markers stable so updates supersede catalogs already in conversation history.

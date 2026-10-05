@@ -171,8 +171,7 @@ type Model struct {
 	entitySearchCache      map[string]entitySearchCacheEntry
 	entitySearchCacheOrder []string
 
-	clientSkills map[string]agent.SkillSummary
-	skillMenu    skillMenu
+	skillMenu skillMenu
 
 	statusTask     task
 	statusIdentity string

@@ -127,7 +127,7 @@ func TestClientSkillBuiltinCollisionsAndBusyGuard(t *testing.T) {
 		{Name: "new"}, {Name: "exit"}, {Name: "permissions"}, {Name: "review", Description: "Review \x1b[2J"},
 	}})
 	for _, name := range []string{"new", "exit", "permissions"} {
-		if _, exists := m.clientSkills[name]; !exists {
+		if _, exists := m.skillMenu.skills[name]; !exists {
 			t.Fatalf("skill named %s missing from registry", name)
 		}
 		if _, builtin := lookupCommand(name); !builtin {
@@ -153,7 +153,7 @@ func TestClientSkillMenuRejectsStaleResults(t *testing.T) {
 	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
 	old := m.loadClientSkillMenu()().(clientSkillsResultMsg)
 	m.applyClientSkills(old)
-	if _, ok := m.clientSkills["review"]; !ok {
+	if _, ok := m.skillMenu.skills["review"]; !ok {
 		t.Fatal("missing user-only skill")
 	}
 	if err := os.Remove(path); err != nil {
@@ -165,17 +165,17 @@ func TestClientSkillMenuRejectsStaleResults(t *testing.T) {
 	m.conversationEpoch++
 	cmd := m.syncClientSkills()
 	m.applyClientSkills(old)
-	if len(m.clientSkills) != 0 {
+	if len(m.skillMenu.skills) != 0 {
 		t.Fatal("stale result restored removed skill")
 	}
 	m.applyClientSkills(cmd().(clientSkillsResultMsg))
-	if len(m.clientSkills) != 0 {
+	if len(m.skillMenu.skills) != 0 {
 		t.Fatal("removed skill survived rescan")
 	}
 	old.generation = m.skillMenu.task.gen
 	m.conversationEpoch++
 	m.applyClientSkills(old)
-	if len(m.clientSkills) != 0 {
+	if len(m.skillMenu.skills) != 0 {
 		t.Fatal("old conversation result restored skill")
 	}
 }
@@ -259,10 +259,10 @@ func TestNewConversationRefreshesClientSkillMenu(t *testing.T) {
 			m.applyClientSkills(result)
 		}
 	}
-	if _, old := m.clientSkills["review"]; old {
+	if _, old := m.skillMenu.skills["review"]; old {
 		t.Fatal("removed skill survived new conversation")
 	}
-	if _, found := m.clientSkills["new"]; !found {
+	if _, found := m.skillMenu.skills["new"]; !found {
 		t.Fatal("new skill missing after conversation reset")
 	}
 	m.editor.Focus()
@@ -306,7 +306,7 @@ func TestClientSkillMenuReportsFailureOnceAndAcceptsEmptySuccess(t *testing.T) {
 	_ = m.syncClientSkills()
 	failed := clientSkillsResultMsg{generation: m.skillMenu.task.gen, epoch: m.conversationEpoch, err: context.DeadlineExceeded}
 	_ = m.applyClientSkills(failed)
-	if !strings.Contains(latestNotice(m).Text, "Could not load client skill suggestions") || m.clientSkills != nil {
+	if !strings.Contains(latestNotice(m).Text, "Could not load client skill suggestions") || m.skillMenu.skills != nil {
 		t.Fatal("failure did not reach the user")
 	}
 	if m.syncClientSkills() != nil {
@@ -318,7 +318,7 @@ func TestClientSkillMenuReportsFailureOnceAndAcceptsEmptySuccess(t *testing.T) {
 		t.Fatal("new conversation did not reload the menu")
 	}
 	m.applyClientSkills(cmd().(clientSkillsResultMsg))
-	if m.clientSkills == nil || len(m.clientSkills) != 0 {
+	if m.skillMenu.skills == nil || len(m.skillMenu.skills) != 0 {
 		t.Fatal("empty successful registry was not accepted")
 	}
 }

@@ -202,9 +202,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	clientSkills := m.syncClientSkills()
+	loadSkillMenu := m.syncClientSkills()
 	m.relayout()
-	return m, tea.Batch(cmd, clientSkills, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
+	return m, tea.Batch(cmd, loadSkillMenu, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
 }
 
 func isUserInput(msg tea.Msg) bool {
@@ -769,9 +769,9 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		text = " "
 	}
 
-	var invocation *agent.SkillInvocation
+	var skillInvocation *agent.SkillInvocation
 	if name, arguments, ok := parseClientSkillInvocation(raw); ok {
-		invocation = &agent.SkillInvocation{Name: name, Arguments: arguments}
+		skillInvocation = &agent.SkillInvocation{Name: name, Arguments: arguments}
 		text = raw
 	} else if name, argument, ok := parseCommand(raw); ok {
 		m.editor.Reset()
@@ -783,9 +783,9 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	}
 	// Once the menu has loaded, an unknown name keeps the draft for correction.
 	// Otherwise the engine resolves the name and fails the turn if it is unknown.
-	if invocation != nil && m.clientSkills != nil {
-		if _, known := m.clientSkills[invocation.Name]; !known {
-			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Unknown client skill: %s", escape.Inline(invocation.Name)))
+	if skillInvocation != nil && m.skillMenu.skills != nil {
+		if _, known := m.skillMenu.skills[skillInvocation.Name]; !known {
+			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Unknown client skill: %s", escape.Inline(skillInvocation.Name)))
 		}
 	}
 	turnContext := contextFromAttachments(attachments)
@@ -795,7 +795,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	events := m.engine.StartTurn(ctx, agent.TurnInput{
 		Message:     text,
-		Skill:       invocation,
+		Skill:       skillInvocation,
 		Tools:       m.tools,
 		Context:     turnContext,
 		OnDeny:      agent.DenyContinue,
