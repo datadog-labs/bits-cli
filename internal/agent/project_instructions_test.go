@@ -34,10 +34,9 @@ func TestInstructionsHierarchy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := fmt.Sprintf(`# Project-Specific Context
-Make sure to follow the instructions in the context below
+	expected := fmt.Sprintf(`<project_instructions>
+Make sure to follow these project instructions.
 
-<project_context>
   <file path="%s/AGENTS.md">
 root instruction
   </file>
@@ -47,7 +46,7 @@ nested instruction
   <file path="%s/nested/active/AGENTS.md">
 active instruction
   </file>
-</project_context>
+</project_instructions>
 `, filepath.ToSlash(absoluteRepo), filepath.ToSlash(absoluteRepo), filepath.ToSlash(absoluteRepo))
 	if got != expected {
 		t.Fatalf("instructions = %q, want %q", got, expected)

@@ -799,7 +799,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		Tools:       m.tools,
 		Context:     turnContext,
 		OnDeny:      agent.DenyContinue,
-		UserContext: tools.UserContext(m.workspace, m.tools),
+		UserContext: tools.UserContext(m.workspace),
 	})
 	wait := m.begin(opTurn, events, cancel)
 	m.chatPhase = chat.PhaseWaiting

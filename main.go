@@ -88,7 +88,7 @@ func runRunWithStore(ctx context.Context, opts cmd.RunOptions, store auth.Creden
 	if err != nil {
 		return err
 	}
-	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet, UserContext: tools.UserContext(workspace, toolSet)}, opts, out)
+	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet, UserContext: tools.UserContext(workspace)}, opts, out)
 }
 
 // runEngineTurn drives exactly one turn, attempts Finish once, and maps its

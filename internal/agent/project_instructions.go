@@ -18,11 +18,13 @@ import (
 )
 
 const (
-	instructionsInsertionNotice   = "Make sure to follow the instructions in the context below"
+	instructionsContextStart      = "<project_instructions>\n"
+	instructionsContextEnd        = "</project_instructions>\n"
+	instructionsInsertionNotice   = "Make sure to follow these project instructions."
 	instructionFileLimit          = 32 * 1024
 	instructionTotalLimit         = 128 * 1024
-	instructionsReplacementNotice = "These project instructions replace all previously provided project instructions."
-	instructionsRemovalNotice     = "The previously provided project instructions no longer apply."
+	instructionsReplacementNotice = instructionsContextStart + "This block replaces all earlier provided <project_instructions> blocks."
+	instructionsRemovalNotice     = instructionsContextStart + "This block replaces any earlier <project_instructions> blocks.\nAny previously provided <project_instructions> no longer apply.\n" + instructionsContextEnd
 )
 
 type instructionsPhase uint8
@@ -70,7 +72,7 @@ func (p *ProjectInstructions) apply(ctx context.Context, opts assistant.SendOpti
 			if current == "" {
 				update = instructionsRemovalNotice
 			} else {
-				update = instructionsReplacementNotice + "\n\n" + current
+				update = instructionsReplacementNotice + "\n" + strings.TrimPrefix(current, instructionsContextStart)
 			}
 		}
 		p.pendingContext = update
@@ -158,7 +160,7 @@ func (p *ProjectInstructions) snapshot(parent context.Context) string {
 		}
 		remaining -= len(file.content)
 		if snapshot.Len() == 0 {
-			snapshot.WriteString("# Project-Specific Context\n" + instructionsInsertionNotice + "\n\n<project_context>\n")
+			snapshot.WriteString(instructionsContextStart + instructionsInsertionNotice + "\n\n")
 		}
 		fmt.Fprintf(&snapshot, "  <file path=\"%s\">\n%s", html.EscapeString(label), file.content)
 		if file.truncated {
@@ -167,7 +169,7 @@ func (p *ProjectInstructions) snapshot(parent context.Context) string {
 		snapshot.WriteString("\n  </file>\n")
 	}
 	if snapshot.Len() > 0 {
-		snapshot.WriteString("</project_context>\n")
+		snapshot.WriteString(instructionsContextEnd)
 	}
 	return snapshot.String()
 }
