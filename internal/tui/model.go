@@ -171,6 +171,8 @@ type Model struct {
 	entitySearchCache      map[string]entitySearchCacheEntry
 	entitySearchCacheOrder []string
 
+	skillMenu skillMenu
+
 	statusTask     task
 	statusIdentity string
 
@@ -432,7 +434,7 @@ func (m *Model) initChat() tea.Cmd {
 	}
 	if m.engine.ConversationID() == "" {
 		// Fetch the startup offer only when there is no history to restore.
-		return tea.Batch(append(commands, m.fetchRecentConversations())...)
+		return tea.Batch(append(commands, m.fetchRecentConversations(), m.syncClientSkills())...)
 	}
 	m.chatPhase = chat.PhaseLoading
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)

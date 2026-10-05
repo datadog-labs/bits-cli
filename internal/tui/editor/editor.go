@@ -340,6 +340,14 @@ func (e *Editor) SelectedCommand() (string, bool) {
 	return strings.TrimPrefix(insert, "/"), true
 }
 
+// AcceptCommand replaces only the selected command token, preserving the
+// argument remainder and attachments when the parent immediately submits it.
+func (e *Editor) AcceptCommand() {
+	if _, ok := e.SelectedCommand(); ok {
+		e.acceptCandidate(false)
+	}
+}
+
 // Height is the rendered height of the input in rows. It deliberately excludes
 // the completion menu: the menu is an overlay (see MenuView), so opening it must
 // not change the layout and reflow the transcript.
@@ -671,7 +679,9 @@ func (e *Editor) commandTriggerActive(word string) bool {
 // text plus a trailing space, then closes the menu. The cursor lands after the
 // inserted space when the edit is on the final line (the common single-line
 // case); otherwise it falls back to the buffer end.
-func (e *Editor) accept() {
+func (e *Editor) accept() { e.acceptCandidate(true) }
+
+func (e *Editor) acceptCandidate(trailingSpace bool) {
 	if !e.menu.open || len(e.menu.items) == 0 || e.menu.selector == nil {
 		e.closeMenu()
 		return
@@ -700,7 +710,11 @@ func (e *Editor) accept() {
 		}
 	}
 
-	repl := []rune(insert + " ")
+	replacement := insert
+	if trailingSpace {
+		replacement += " "
+	}
+	repl := []rune(replacement)
 	lines[row] = string(runes[:start]) + string(repl) + string(runes[end:])
 	value := strings.Join(lines, "\n")
 	e.ta.SetValue(value)
