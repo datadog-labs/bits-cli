@@ -10,6 +10,3 @@ go.work.sum
 # OS
 **/.DS_Store
 /.envrc.local
-
-# Scratch output of fakedata scenarios
-/tmp/
