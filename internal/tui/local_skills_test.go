@@ -70,7 +70,7 @@ func TestLocalSkillSlashInvocation(t *testing.T) {
 			path := installTestSkill(t, root, skillName, tc.userOnly)
 			backend := &skillRecordingBackend{}
 			m := New(agent.New(backend, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
-			m.applyLocalSkills(m.refreshLocalSkills()().(localSkillsResultMsg))
+			m.applyLocalSkills(m.loadLocalSkillMenu()().(localSkillsResultMsg))
 			m.editor.Focus()
 			m.editor.Update(tea.PasteMsg{Content: tc.input})
 			if tc.completion && !m.editor.MenuOpen() {
@@ -142,12 +142,12 @@ func TestLocalSkillBuiltinCollisionsAndBusyGuard(t *testing.T) {
 	}
 }
 
-func TestLocalSkillRefreshRejectsStaleResults(t *testing.T) {
+func TestLocalSkillMenuRejectsStaleResults(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	path := installTestSkill(t, root, "review", true)
 	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
-	old := m.refreshLocalSkills()().(localSkillsResultMsg)
+	old := m.loadLocalSkillMenu()().(localSkillsResultMsg)
 	m.applyLocalSkills(old)
 	if _, ok := m.localSkills["review"]; !ok {
 		t.Fatal("missing user-only skill")
@@ -155,7 +155,11 @@ func TestLocalSkillRefreshRejectsStaleResults(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	cmd := m.refreshLocalSkills()
+	if err := m.engine.NewConversation(); err != nil {
+		t.Fatal(err)
+	}
+	m.conversationEpoch++
+	cmd := m.syncLocalSkills()
 	m.applyLocalSkills(old)
 	if len(m.localSkills) != 0 {
 		t.Fatal("stale result restored removed skill")
@@ -192,7 +196,7 @@ func TestLocalSkillInvocationPreservesAttachments(t *testing.T) {
 	installTestSkill(t, root, "review", true)
 	backend := &skillRecordingBackend{}
 	m := New(agent.New(backend, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
-	m.applyLocalSkills(m.refreshLocalSkills()().(localSkillsResultMsg))
+	m.applyLocalSkills(m.loadLocalSkillMenu()().(localSkillsResultMsg))
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "/skill:review @check"})
 	_ = m.syncEntitySearch()
@@ -239,12 +243,14 @@ func TestNewConversationRefreshesLocalSkillMenu(t *testing.T) {
 	root := t.TempDir()
 	path := installTestSkill(t, root, "review", true)
 	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
-	m.applyLocalSkills(m.refreshLocalSkills()().(localSkillsResultMsg))
+	m.applyLocalSkills(m.loadLocalSkillMenu()().(localSkillsResultMsg))
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	installTestSkill(t, root, "new", true)
-	for _, msg := range flattenMsgs(t, m.startNewConversation()) {
+	m.startNewConversation()
+	_, update := m.Update(nil)
+	for _, msg := range flattenMsgs(t, update) {
 		if result, ok := msg.(localSkillsResultMsg); ok {
 			m.applyLocalSkills(result)
 		}
@@ -265,4 +271,27 @@ func TestNewConversationRefreshesLocalSkillMenu(t *testing.T) {
 	if selected, ok := m.editor.SelectedCommand(); !ok || selected != "new" {
 		t.Fatalf("native selection = %q, %t", selected, ok)
 	}
+}
+
+func TestLocalSkillMenuWaitsForRestoreAndLoadsOncePerConversation(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.op.kind = opRestore
+	if cmd := m.syncLocalSkills(); cmd != nil {
+		t.Fatal("discovery started before history installation could reset the registry")
+	}
+	m.op.kind = opIdle
+	cmd := m.syncLocalSkills()
+	if cmd == nil {
+		t.Fatal("restore completion did not load the menu")
+	}
+	m.applyLocalSkills(cmd().(localSkillsResultMsg))
+	if cmd := m.syncLocalSkills(); cmd != nil {
+		t.Fatal("ordinary updates reload the menu")
+	}
+	m.conversationEpoch++
+	cmd = m.syncLocalSkills()
+	if cmd == nil {
+		t.Fatal("new conversation did not load the menu")
+	}
+	m.applyLocalSkills(cmd().(localSkillsResultMsg))
 }

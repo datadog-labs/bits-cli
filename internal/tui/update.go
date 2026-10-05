@@ -216,8 +216,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	localSkills := m.syncLocalSkills()
 	m.relayout()
-	return m, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
+	return m, tea.Batch(cmd, localSkills, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
 }
 
 func isUserInput(msg tea.Msg) bool {

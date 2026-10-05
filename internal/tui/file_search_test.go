@@ -157,7 +157,7 @@ func TestFileSearchCleanupOnResetLogoutAndQuit(t *testing.T) {
 		if m.fileSearchSession != nil || closeFileSearch == nil {
 			t.Fatal("conversation reset retained the file-search session")
 		}
-		_ = flattenMsgs(t, closeFileSearch)
+		_ = closeFileSearch()
 		assertClosed(t, session)
 	})
 

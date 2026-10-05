@@ -171,8 +171,10 @@ type Model struct {
 	entitySearchCache      map[string]entitySearchCacheEntry
 	entitySearchCacheOrder []string
 
-	localSkills     map[string]agent.LocalSkill
-	localSkillsTask task
+	localSkills       map[string]agent.LocalSkill
+	localSkillsTask   task
+	localSkillsEngine *agent.Engine
+	localSkillsEpoch  uint64
 
 	statusTask     task
 	statusIdentity string
@@ -425,13 +427,13 @@ func (m *Model) Init() tea.Cmd {
 // on login handoff because Bubble Tea calls Init only on the original model.
 func (m *Model) initChat() tea.Cmd {
 	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
-	commands := []tea.Cmd{m.editor.Focus(), requestBG, waitToolUI(m.toolUI), m.refreshLocalSkills()}
+	commands := []tea.Cmd{m.editor.Focus(), requestBG, waitToolUI(m.toolUI)}
 	if m.engine == nil {
 		return tea.Batch(commands...)
 	}
 	if m.engine.ConversationID() == "" {
 		// Fetch the startup offer only when there is no history to restore.
-		return tea.Batch(append(commands, m.fetchRecentConversations())...)
+		return tea.Batch(append(commands, m.fetchRecentConversations(), m.syncLocalSkills())...)
 	}
 	m.chatPhase = chat.PhaseLoading
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)

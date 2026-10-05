@@ -141,7 +141,7 @@ const maxTurns = 150
 // exclusively owns all mutable conversation state, including opts, transcript,
 // previousConversationID, and session grants. State crosses goroutine boundaries
 // through copied events/results and channel synchronization. Only Decide,
-// CancelTool, and explicitly atomic methods may be called concurrently with an
+// CancelTool, LocalSkills, and explicitly atomic methods may be called concurrently with an
 // operation. Do not add a mutex around Engine state without first changing this
 // ownership model and identifying accesses that its existing operation gate and
 // channel boundaries do not order.

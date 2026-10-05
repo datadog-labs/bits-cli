@@ -20,7 +20,18 @@ type localSkillsResultMsg struct {
 	skills     []agent.LocalSkill
 }
 
-func (m *Model) refreshLocalSkills() tea.Cmd {
+// syncLocalSkills observes conversation identity in the normal UI update cycle,
+// so startup, new conversations, and resume share one menu-loading path.
+func (m *Model) syncLocalSkills() tea.Cmd {
+	if m.engine == nil || m.op.kind == opRestore || (m.localSkillsEngine == m.engine && m.localSkillsEpoch == m.conversationEpoch) {
+		return nil
+	}
+	m.localSkillsEngine = m.engine
+	m.localSkillsEpoch = m.conversationEpoch
+	return m.loadLocalSkillMenu()
+}
+
+func (m *Model) loadLocalSkillMenu() tea.Cmd {
 	m.localSkills = nil
 	m.editor.SetCommands(commandCompletionSpecs())
 	ctx, generation := m.localSkillsTask.start(context.Background(), 5*time.Second)
@@ -28,7 +39,7 @@ func (m *Model) refreshLocalSkills() tea.Cmd {
 	return func() tea.Msg {
 		var skills []agent.LocalSkill
 		if engine != nil {
-			skills = engine.DiscoverLocalSkills(ctx)
+			skills = engine.LocalSkills(ctx)
 		}
 		return localSkillsResultMsg{generation: generation, epoch: epoch, skills: skills}
 	}

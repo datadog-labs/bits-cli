@@ -50,7 +50,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	m.setMode(ModeChat)
 	m.postNotice(notice(chat.NoticeInfo, nil, "Started a new conversation."))
 	m.list.ScrollToBottom()
-	return tea.Batch(closeFileSearch, m.refreshLocalSkills()) // Update reconciles focus and animations after the mode change.
+	return closeFileSearch // Update reconciles focus and animations after the mode change.
 }
 
 type conversationListResultMsg struct {
@@ -152,7 +152,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	m.syncTranscript()
 	m.list.ScrollToBottom()
 	m.dropConversationPicker()
-	return tea.Batch(m.resumePendingTools(), m.refreshLocalSkills()) // Update reconciles focus and animations after the mode change.
+	return m.resumePendingTools() // Update reconciles focus and animations after the mode change.
 }
 
 func (m *Model) retryConversationOperation() tea.Cmd {

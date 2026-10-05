@@ -117,7 +117,7 @@ func TestClientSkillDisableModelInvocation(t *testing.T) {
 	writeSkill(t, active, "extras/hidden", "hidden", "shadowed duplicate")
 	skills := NewClientSkills(active, []string{"extras"})
 	engine := New(nil, assistant.SendOptions{}, WithClientSkills(skills))
-	visible := engine.DiscoverLocalSkills(context.Background())
+	visible := engine.LocalSkills(context.Background())
 	if len(visible) != 2 || visible[0].Name != "hidden" || !visible[0].DisableModelInvocation || visible[0].Description != "user only" || visible[0].Path != filepath.Join(active, ".agents/skills/hidden/SKILL.md") {
 		t.Fatalf("explicitly invokable skills = %+v", visible)
 	}
@@ -265,7 +265,7 @@ func TestClientSkillsResumeAndEmptySnapshot(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	skills.apply(ctx, assistant.SendOptions{})
-	if skills.prepared {
+	if skills.cache.current != nil {
 		t.Fatal("canceled discovery cached")
 	}
 	if got := skills.apply(context.Background(), assistant.SendOptions{}); !strings.Contains(got.CustomUserContext, "created later") {
@@ -394,7 +394,7 @@ func TestClientSkillsDeferredUntilUserMessageAfterToolResume(t *testing.T) {
 	engine := New(backend, assistant.SendOptions{ConversationID: "conversation"}, WithClientSkills(skills))
 	engine.continuation = continuationFromHistory([]assistant.Message{savedCall("one", "input")})
 	drain(engine.ResumePendingTools(t.Context(), TurnInput{Tools: tools}))
-	if backend.opts.CustomUserContext != "" || skills.prepared {
+	if backend.opts.CustomUserContext != "" || skills.cache.current != nil {
 		t.Fatal("resumed client tool response prepared or sent the catalog")
 	}
 	drain(engine.StartTurn(t.Context(), TurnInput{Message: "continue", Tools: tools}))
@@ -507,4 +507,8 @@ func TestClientSkillNamespacedNames(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (s *ClientSkills) snapshot(ctx context.Context) string {
+	return renderClientSkills(s.discover(ctx))
 }
