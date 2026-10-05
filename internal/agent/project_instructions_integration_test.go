@@ -17,7 +17,7 @@ func TestConversationInstructionsSnapshotAndReset(t *testing.T) {
 	instructions := NewProjectInstructions(dir)
 	engine := New(backend, assistant.SendOptions{}, WithProjectInstructions(instructions))
 	drain(engine.StartTurn(context.Background(), TurnInput{Message: "visible prompt", UserContext: func(context.Context) string { return "existing" }}))
-	if got := backend.opts[0].CustomUserContext; !strings.HasPrefix(got, "existing\n\n# Project-Specific Context") || !strings.Contains(got, "original instructions") {
+	if got := backend.opts[0].CustomUserContext; !strings.HasPrefix(got, "existing\n\n<project_instructions>\nMake sure to follow these project instructions.") || !strings.Contains(got, "original instructions") {
 		t.Fatalf("first context = %q", got)
 	}
 	writeInstructionTestFile(t, dir, "AGENTS.md", "updated instructions")
@@ -153,7 +153,7 @@ func (b *instructionDeliveryBackend) Send(_ context.Context, _ any, opts assista
 
 func TestProjectInstructionsRetryUntilDelivered(t *testing.T) {
 	for _, tc := range []struct{ name, conversationID, contents, notice string }{
-		{"insertion", "", "original instructions", "# Project-Specific Context"},
+		{"insertion", "", "original instructions", "<project_instructions>\nMake sure to follow these project instructions."},
 		{"replacement", "conversation", "original instructions", instructionsReplacementNotice},
 		{"removal", "conversation", "", instructionsRemovalNotice},
 	} {
