@@ -283,7 +283,7 @@ func TestArrowKeysRecallPromptsOutsideTheOffer(t *testing.T) {
 		{name: "idle", want: "second"},
 		{name: "a running turn", setup: func(m *Model) { m.op = operation{kind: opTurn, events: make(chan agent.Event)} }, want: "second"},
 		{name: "a pending approval owns the keys", setup: func(m *Model) {
-			m.pendingApprovals = []agent.Block{animToolBlock(agent.ToolAwaitingApproval)}
+			m.syncApprovals([]agent.Block{animToolBlock(agent.ToolAwaitingApproval)})
 		}, want: ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {

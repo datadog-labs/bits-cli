@@ -185,6 +185,12 @@ func TestClientSkillLimits(t *testing.T) {
 	if len(got) > skillCatalogLimit || !strings.HasPrefix(got, "<available-local-client-skills>") || !strings.HasSuffix(got, "</available-local-client-skills>") || !strings.Contains(got, "Do not load these local client skills with the Skill tool.") || strings.Contains(got, "<CONTEXT") || strings.Count(got, "<skill ") >= 100 {
 		t.Fatalf("catalog limit not enforced: %d bytes", len(got))
 	}
+	// Resolve the boundary like snapshot does: on macOS t.TempDir() lives under
+	// /var, a symlink to /private/var, which would fail walk's boundary check.
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		t.Fatal(err)

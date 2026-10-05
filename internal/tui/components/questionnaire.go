@@ -56,14 +56,19 @@ func NewQuestionnaire(questions []Question) *Questionnaire {
 	}
 }
 
-func (q *Questionnaire) SetSize(width, height int, theme styles.Theme) {
+// SetStyles replaces the form's theme-derived styles.
+func (q *Questionnaire) SetStyles(theme styles.Theme) { q.styles = theme }
+
+// SetSize gives the form width columns and at most height rows.
+func (q *Questionnaire) SetSize(width, height int) {
 	if q.width != width || q.height != height {
 		q.follow = true
 	}
-	q.width, q.height, q.styles = width, height, theme
+	q.width, q.height = width, height
 }
 
-func (q *Questionnaire) MinSize() (int, int) { return 36, 14 }
+// MinSize is the smallest area the form can be answered in.
+func (q *Questionnaire) MinSize() (int, int) { return 36, questionMinHeight }
 
 // Answers reports the confirmed answers once the user submits or dismisses.
 func (q *Questionnaire) Answers() (answers []string, dismissed, done bool) {
@@ -115,9 +120,11 @@ func (q *Questionnaire) showPage(page int) tea.Cmd {
 	return nil
 }
 
-func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
+// Update applies an event and reports whether the form used it. Clicks outside
+// tabs and actionable rows are left to the host for text selection.
+func (q *Questionnaire) Update(msg tea.Msg) (tea.Cmd, bool) {
 	if q.complete {
-		return nil
+		return nil, true
 	}
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
@@ -129,19 +136,20 @@ func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
 		case tea.MouseWheelDown:
 			q.scroll++
 		default:
+			return nil, false
 		}
 		q.follow = false
-		return nil
+		return nil, true
 	}
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc":
 			q.finish(true)
-			return nil
+			return nil, true
 		case "tab", "ctrl+right":
-			return q.showPage(q.page + 1)
+			return q.showPage(q.page + 1), true
 		case "shift+tab", "ctrl+left":
-			return q.showPage(q.page - 1)
+			return q.showPage(q.page - 1), true
 		case "pgup", "pgdown":
 			delta := q.bodyHeight()
 			if key.String() == "pgup" {
@@ -149,22 +157,22 @@ func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
 			}
 			q.scroll = max(0, q.scroll+delta)
 			q.follow = false
-			return nil
+			return nil, true
 		case "enter":
 			if q.page == len(q.answers) {
 				q.finish(false)
-				return nil
+				return nil, true
 			}
 			question := q.questions[q.page]
 			if q.editing {
 				if strings.TrimSpace(q.text.Value()) == "" {
-					return nil
+					return nil, true
 				}
 				q.answers[q.page] = q.text.Value()
 			} else {
 				q.answers[q.page] = question.Options[q.choices[q.page]].Label
 			}
-			return q.showPage(q.page + 1)
+			return q.showPage(q.page + 1), true
 		case "up", "down":
 			if q.page < len(q.answers) {
 				delta := 1
@@ -172,27 +180,27 @@ func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
 					delta = -1
 				}
 				count := len(q.questions[q.page].Options) + 1
-				return q.selectChoice((q.choices[q.page] + delta + count) % count)
+				return q.selectChoice((q.choices[q.page] + delta + count) % count), true
 			}
 		}
 		// Text entry owns printable keys, including digits and brackets.
 		if !q.editing {
 			switch key.String() {
 			case "[":
-				return q.showPage(q.page - 1)
+				return q.showPage(q.page - 1), true
 			case "]":
-				return q.showPage(q.page + 1)
+				return q.showPage(q.page + 1), true
 			}
 			if q.page < len(q.answers) {
 				count := len(q.questions[q.page].Options) + 1
 				switch key.String() {
 				case "j":
-					return q.selectChoice((q.choices[q.page] + 1) % count)
+					return q.selectChoice((q.choices[q.page] + 1) % count), true
 				case "k":
-					return q.selectChoice((q.choices[q.page] + count - 1) % count)
+					return q.selectChoice((q.choices[q.page] + count - 1) % count), true
 				}
 				if len(key.String()) == 1 && key.Code >= '1' && key.Code < '1'+rune(count) {
-					return q.selectChoice(int(key.Code - '1'))
+					return q.selectChoice(int(key.Code - '1')), true
 				}
 			}
 		}
@@ -204,12 +212,16 @@ func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
 		}
 		var cmd tea.Cmd
 		q.text, cmd = q.text.Update(msg)
-		return cmd
+		return cmd, true
 	}
-	return nil
+	return nil, true
 }
 
-const questionChromeHeight = 4 // tabs, rule, gap, and help row
+const (
+	questionChromeHeight = 4 // tabs, rule, gap, and help row
+	questionMinHeight    = 8
+	questionMaxHeight    = 16
+)
 
 type questionRow struct {
 	text   string
@@ -222,10 +234,10 @@ type questionTab struct {
 	start, end int // cell offsets within the panel's horizontal padding
 }
 
-// A fixed height across pages prevents the transcript jumping as answers change.
-// Even the smallest supported terminal keeps conversation rows above the form.
+// Height fills the rows the form was given, up to a cap. It does not depend
+// on the page, so the transcript does not jump as answers change.
 func (q *Questionnaire) Height() int {
-	return min(16, max(8, q.height*2/3))
+	return min(questionMaxHeight, max(questionMinHeight, q.height))
 }
 
 func (q *Questionnaire) bodyHeight() int {
@@ -348,7 +360,7 @@ func (q *Questionnaire) visibleRows(width int) []questionRow {
 	return rows[q.scroll:min(len(rows), q.scroll+height)]
 }
 
-// View replaces the composer, leaving the transcript and footer in place.
+// View renders the form at Height rows.
 func (q *Questionnaire) View() string {
 	width := max(3, q.width-4)
 	tabs := q.tabs(width)
@@ -375,19 +387,19 @@ func (q *Questionnaire) View() string {
 	return lipgloss.NewStyle().Padding(0, 2).Render(strings.Join(lines, "\n"))
 }
 
-func (q *Questionnaire) click(msg tea.MouseClickMsg) tea.Cmd {
+func (q *Questionnaire) click(msg tea.MouseClickMsg) (tea.Cmd, bool) {
 	if msg.Button != tea.MouseLeft {
-		return nil
+		return nil, false
 	}
 	x, y := msg.X-2, msg.Y
 	width := max(3, q.width-4)
 	if x < 0 || x >= width || y < 0 {
-		return nil
+		return nil, false
 	}
 	if y == 0 {
 		for i, tab := range q.tabs(width) {
 			if x >= tab.start && x < tab.end {
-				return q.showPage(i)
+				return q.showPage(i), true
 			}
 		}
 	}
@@ -395,11 +407,11 @@ func (q *Questionnaire) click(msg tea.MouseClickMsg) tea.Cmd {
 	if row := y - 2; row >= 0 && row < len(rows) {
 		hit := rows[row]
 		if hit.page >= 0 {
-			return q.showPage(hit.page)
+			return q.showPage(hit.page), true
 		}
 		if hit.choice >= 0 {
-			return q.selectChoice(hit.choice)
+			return q.selectChoice(hit.choice), true
 		}
 	}
-	return nil
+	return nil, false
 }

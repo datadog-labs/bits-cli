@@ -65,8 +65,7 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 	m.entitySearcher = nil
 	m.engine = nil
 	m.convID = ""
-	m.pendingApprovals = nil
-	m.approvalPanel.ResetScroll()
+	m.clearAsks()
 	m.loggedOut = true
 	if closeFileSearch == nil {
 		return m, tea.Quit

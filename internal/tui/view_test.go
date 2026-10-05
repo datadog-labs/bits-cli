@@ -13,8 +13,6 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
-	"github.com/DataDog/bits-cli/internal/tui/chat"
 	"github.com/DataDog/bits-cli/internal/workspace"
 )
 
@@ -22,12 +20,9 @@ import (
 // rows the frame gives it, and a frame that cannot be usably drawn is marked
 // too small instead.
 func TestLayoutTilesTheScreen(t *testing.T) {
-	approval := func(m *Model) { m.pendingApprovals = []agent.Block{animToolBlock(agent.ToolAwaitingApproval)} }
+	approval := func(m *Model) { m.syncApprovals([]agent.Block{animToolBlock(agent.ToolAwaitingApproval)}) }
 	draft := func(m *Model) { setConversationInput(m, strings.Repeat("draft\n", 12)) }
-	toolUI := func(m *Model) {
-		component, _ := chat.NewToolInteraction(agent.ToolCall{Name: spec.AskUserQuestion, Input: questionInput})
-		m.activeToolUI = &toolUISession{component: component}
-	}
+	toolUI := func(m *Model) { m.openToolUI(questionRequest(t, "question")) }
 	for _, tc := range []struct {
 		name          string
 		width, height int
@@ -36,11 +31,14 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 	}{
 		{"composer", 80, 24, nil, false},
 		{"tall draft under the header", 80, 22, []func(*Model){draft}, false},
-		{"approval", 80, minimumApprovalHeight, []func(*Model){approval}, false},
+		{"approval", 80, 11, []func(*Model){approval}, false},
 		{"tool UI", 80, 24, []func(*Model){toolUI}, false},
+		{"short tool UI", 80, 14, []func(*Model){toolUI}, false},
 		{"narrow chat", minimumChatWidth - 1, 24, nil, true},
-		{"short approval", 80, minimumApprovalHeight - 1, []func(*Model){approval}, true},
-		{"approval squeezed by a draft", 80, minimumApprovalHeight, []func(*Model){approval, draft}, true},
+		{"short approval", 80, 10, []func(*Model){approval}, true},
+		{"narrow approval", approvalMinWidth - 1, 24, []func(*Model){approval}, true},
+		{"approval squeezed by a draft", 80, 17, []func(*Model){approval, draft}, true},
+		{"tool UI hides a tall draft", 80, 20, []func(*Model){toolUI, draft}, false},
 		{"small tool UI", 30, 10, []func(*Model){toolUI}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -58,7 +56,7 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 				return
 			}
 
-			rects := slices.DeleteFunc([]image.Rectangle{f.transcript, f.dock, f.composerGap, f.editor, f.footer}, image.Rectangle.Empty)
+			rects := slices.DeleteFunc([]image.Rectangle{f.transcript, f.prompt, f.composerGap, f.composer, f.footer}, image.Rectangle.Empty)
 			slices.SortFunc(rects, func(a, b image.Rectangle) int { return a.Min.Y - b.Min.Y })
 			for i, r := range rects {
 				if (i == 0 && r != f.transcript) || (i > 0 && r.Min.Y != rects[i-1].Max.Y) || r.Dx() != tc.width {
@@ -73,15 +71,16 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 				t.Fatalf("composer gap is not one empty row: rect=%v row=%q", f.composerGap, view[f.composerGap.Min.Y])
 			}
 			firstRow := func(s string) string { return strings.SplitN(ansi.Strip(s), "\n", 2)[0] }
-			dock := f.approval
-			if m.activeToolUI != nil {
-				dock = m.activeToolUI.component.View()
+			if m.prompt() != nil && (f.prompt.Empty() || view[f.prompt.Min.Y] != firstRow(f.promptView)) {
+				t.Fatalf("prompt %v: view row = %q, want the prompt's first row", f.prompt, view[f.prompt.Min.Y])
 			}
-			if !f.dock.Empty() && view[f.dock.Min.Y] != firstRow(dock) {
-				t.Fatalf("view row %d = %q, want the dock's first row", f.dock.Min.Y, view[f.dock.Min.Y])
-			}
-			if !f.editor.Empty() && view[f.editor.Min.Y] != firstRow(m.editor.View()) {
-				t.Fatalf("view row %d = %q, want the editor's first row", f.editor.Min.Y, view[f.editor.Min.Y])
+			if f.replaced {
+				// The prompt takes the composer's place, under the gap, over a blank footer.
+				if !f.composer.Empty() || f.prompt.Min.Y != f.composerGap.Max.Y || strings.TrimSpace(view[f.footer.Min.Y]) != "" {
+					t.Fatalf("prompt %v does not replace the composer: composer=%v gap=%v footer=%q", f.prompt, f.composer, f.composerGap, view[f.footer.Min.Y])
+				}
+			} else if view[f.composer.Min.Y] != firstRow(m.editor.View()) {
+				t.Fatalf("view row %d = %q, want the editor's first row", f.composer.Min.Y, view[f.composer.Min.Y])
 			}
 		})
 	}
@@ -143,6 +142,26 @@ func TestCompactTokenCount(t *testing.T) {
 	} {
 		if got := compactTokenCount(value); got != want {
 			t.Errorf("compactTokenCount(%d) = %q, want %q", value, got, want)
+		}
+	}
+}
+
+func TestFrameAtClassifiesEveryRow(t *testing.T) {
+	f := frame{
+		transcript:  image.Rect(0, 0, 10, 5),
+		prompt:      image.Rect(0, 5, 10, 8),
+		composerGap: image.Rect(0, 8, 10, 9),
+		composer:    image.Rect(0, 9, 10, 11),
+		footer:      image.Rect(0, 11, 10, 12),
+	}
+	for y, want := range map[int]region{
+		0: regionTranscript, 4: regionTranscript,
+		5: regionPrompt, 7: regionPrompt,
+		8: regionChrome, 11: regionChrome,
+		9: regionComposer, 10: regionComposer,
+	} {
+		if got := f.at(image.Pt(3, y)); got != want {
+			t.Errorf("row %d = %v, want %v", y, got, want)
 		}
 	}
 }

@@ -13,12 +13,13 @@ import (
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
 	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
 const approvalToolName = "confirm_action"
 
 // newApprovalTool is a self-contained tool that always requires approval,
-// used to drive the approval composer in these end-to-end tests.
+// used to drive the approval panel in these end-to-end tests.
 func newApprovalTool() agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
@@ -99,7 +100,7 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 				model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 				setConversationInput(model, "Run the action")
 				_, _ = model.submit()
-				for len(model.pendingApprovals) == 0 {
+				for waitingApprovals(model) == 0 {
 					msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
 					_, _ = model.Update(msg)
 				}
@@ -149,7 +150,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
-	for len(model.pendingApprovals) == 0 {
+	for waitingApprovals(model) == 0 {
 		msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
 		_, _ = model.Update(msg)
 	}
@@ -174,14 +175,14 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
-	for len(model.pendingApprovals) == 0 {
+	for waitingApprovals(model) == 0 {
 		msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
 		_, _ = model.Update(msg)
 	}
 
 	// Shrink below the approval minimum: View hides the whole chat behind the
 	// resize hint, so no keypress may drive the hidden prompt — not even Esc.
-	model.Update(tea.WindowSizeMsg{Width: minimumApprovalWidth - 1, Height: minimumApprovalHeight})
+	model.Update(tea.WindowSizeMsg{Width: approvalMinWidth - 1, Height: 24})
 	if !model.frame.tooSmall {
 		t.Fatal("chat not concealed at the reduced size")
 	}
@@ -192,7 +193,7 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	for _, code := range []rune{tea.KeyRight, tea.KeyEnter, tea.KeyEscape} {
 		_, _ = model.Update(tea.KeyPressMsg{Code: code})
 	}
-	if len(model.pendingApprovals) == 0 {
+	if waitingApprovals(model) == 0 {
 		t.Fatal("a concealed keypress answered the approval")
 	}
 	if backend.calls != 1 {
@@ -227,12 +228,12 @@ func TestToolApprovalComposerSuppressedInSkipPermissions(t *testing.T) {
 	_, _ = model.submit()
 	drainConversationRemote(t, model)
 
-	if len(model.pendingApprovals) != 0 {
-		t.Fatalf("skip-permissions surfaced %d approval prompts", len(model.pendingApprovals))
+	if waitingApprovals(model) != 0 {
+		t.Fatalf("skip-permissions surfaced %d approval prompts", waitingApprovals(model))
 	}
 	view := ansi.Strip(model.View().Content)
 	if strings.Contains(view, "Permission Required") || strings.Contains(view, "Run the test action?") {
-		t.Fatalf("approval composer rendered in skip-permissions mode:\n%s", view)
+		t.Fatalf("approval panel rendered in skip-permissions mode:\n%s", view)
 	}
 	if !model.editor.Focused() {
 		t.Fatal("editor lost focus without an approval owning the composer")
@@ -254,12 +255,12 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 			model.Update(tea.WindowSizeMsg{Width: width, Height: 24})
 			setConversationInput(model, "Run the action")
 			_, _ = model.submit()
-			for len(model.pendingApprovals) == 0 {
+			for waitingApprovals(model) == 0 {
 				msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
 				_, _ = model.Update(msg)
 			}
 
-			view := model.frame.approval
+			view := model.frame.promptView
 			plain := ansi.Strip(view)
 			normalized := strings.Join(strings.Fields(plain), " ")
 			for _, want := range []string{"Permission Required", "ESC x", "Run the test action?", "This test tool requires", "Deny"} {
@@ -301,7 +302,7 @@ func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
 	}
 	model := newShell()
 	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	model.pendingApprovals = []agent.Block{{
+	model.syncApprovals([]agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{
 			Name:         spec.ExecCommand,
@@ -313,10 +314,10 @@ func TestExecCommandApprovalPanelShowsFullMultilineCommand(t *testing.T) {
 				Detail: "cwd: /workspace · unsandboxed",
 			},
 		},
-	}}
+	}})
 
 	model.relayout()
-	plain := ansi.Strip(model.frame.approval)
+	plain := ansi.Strip(model.frame.promptView)
 	wants := []string{"Run an unsandboxed command?", "cwd: /workspace · unsandboxed", "Allow"}
 	wants = append(wants, strings.Split(command, "\n")...)
 	for _, want := range wants {
@@ -339,8 +340,8 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := newShell()
-	model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	model.pendingApprovals = []agent.Block{{
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 22})
+	model.syncApprovals([]agent.Block{{
 		Kind: assistant.KindToolCall,
 		Tool: &agent.ToolBlock{
 			Name:         spec.ExecCommand,
@@ -352,17 +353,17 @@ func TestExecCommandApprovalPanelPagesLongCommands(t *testing.T) {
 				Detail: "cwd: /workspace · unsandboxed",
 			},
 		},
-	}}
+	}})
 
 	model.relayout()
-	first := ansi.Strip(model.frame.approval)
-	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "pgup/pgdown scroll") || !strings.Contains(first, "Allow") {
+	first := ansi.Strip(model.frame.promptView)
+	if !strings.Contains(first, "print(1)") || strings.Contains(first, "print(20)") || !strings.Contains(first, "· pgup/pgdown scroll") || !strings.Contains(first, "Allow") {
 		t.Fatalf("initial long-command approval window is incorrect:\n%s", first)
 	}
 	for range 10 {
 		model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	}
-	last := ansi.Strip(model.frame.approval)
+	last := ansi.Strip(model.frame.promptView)
 	if strings.Contains(last, "print(1)") || !strings.Contains(last, "print(20)") || !strings.Contains(last, "cwd: /workspace") || !strings.Contains(last, "Allow") {
 		t.Fatalf("paged long-command approval window is incorrect:\n%s", last)
 	}
@@ -392,7 +393,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 			setConversationInput(model, "Run the action")
 			_, _ = model.submit()
 
-			for len(model.pendingApprovals) == 0 {
+			for waitingApprovals(model) == 0 {
 				msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
 				_, _ = model.Update(msg)
 			}
@@ -400,10 +401,10 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 			}
 
-			approval := model.frame.approval
+			approval := model.frame.promptView
 			view := ansi.Strip(model.View().Content)
 			if !strings.Contains(view, "Permission Required") || !strings.Contains(view, "Run the test action?") || !strings.Contains(approval, model.styles.Approval.Selected.Render(tt.selection)) {
-				t.Fatalf("approval composer not rendered:\n%s", view)
+				t.Fatalf("approval panel not rendered:\n%s", view)
 			}
 			for _, line := range strings.Split(view, "\n") {
 				if width := ansi.StringWidth(line); width > 80 {
@@ -419,7 +420,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 			drainConversationRemote(t, model)
 
 			if strings.Contains(ansi.Strip(model.View().Content), "Permission Required") {
-				t.Fatal("approval composer remained after the decision")
+				t.Fatal("approval panel remained after the decision")
 			}
 			if tt.deny {
 				// The denial is answered on the wire and the follow-up answer renders.
@@ -438,5 +439,93 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 				t.Fatalf("tool response = %+v", backend.responses)
 			}
 		})
+	}
+}
+
+func TestApprovalKeepsTranscriptScrollable(t *testing.T) {
+	commandRows := make([]string, 60)
+	for i := range commandRows {
+		commandRows[i] = fmt.Sprintf("print(%d)", i+1)
+	}
+	input, err := json.Marshal(spec.ExecCommandInput{Cmd: strings.Join(commandRows, "\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := newShell()
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	for i := range 80 {
+		model.notices = append(model.notices, chat.NoticeItem{ID: uint64(i + 1), Notice: chat.Notice{Level: chat.NoticeInfo, Text: fmt.Sprintf("line %d", i)}})
+	}
+	model.syncTranscript()
+	model.syncApprovals([]agent.Block{{
+		Kind: assistant.KindToolCall,
+		Tool: &agent.ToolBlock{Name: spec.ExecCommand, Input: string(input), Status: agent.ToolAwaitingApproval, IsClientSide: true},
+	}})
+	model.relayout()
+
+	if transcript, prompt := model.frame.transcript.Dy(), model.frame.prompt.Dy(); transcript < prompt {
+		t.Fatalf("transcript rows = %d, want at least the approval's %d", transcript, prompt)
+	}
+
+	top := model.list.VisibleSurface().Top
+	model.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, Y: 0})
+	if model.list.VisibleSurface().Top >= top {
+		t.Fatal("wheel over the transcript did not scroll it while approval is pending")
+	}
+	top = model.list.VisibleSurface().Top
+	model.Update(tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift})
+	if model.list.VisibleSurface().Top >= top {
+		t.Fatal("shift+pgup did not scroll the transcript while approval is pending")
+	}
+
+	// The wheel over the panel and pgup/pgdown scroll its body, not the chat.
+	top = model.list.VisibleSurface().Top
+	model.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, Y: model.frame.prompt.Min.Y})
+	if !strings.Contains(ansi.Strip(model.frame.promptView), "lines 2–") {
+		t.Fatalf("wheel did not scroll the approval body:\n%s", ansi.Strip(model.frame.promptView))
+	}
+	model.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if strings.Contains(ansi.Strip(model.frame.promptView), "lines 2–") {
+		t.Fatalf("pgdown did not page the approval body:\n%s", ansi.Strip(model.frame.promptView))
+	}
+	if model.list.VisibleSurface().Top != top {
+		t.Fatal("scrolling the approval panel moved the transcript")
+	}
+
+	// The panel has no use for clicks, so they select its text, e.g. to copy
+	// the command.
+	model.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 4, Y: model.frame.prompt.Min.Y + 1})
+	if !model.selection.selecting() || model.selection.scope != selectionScopeLower {
+		t.Fatal("a click on the approval did not start a selection of its text")
+	}
+}
+
+// ctrl+x stops the tool round from any docked prompt, an approval included.
+func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
+	backend := &approvalBackend{t: t}
+	tool := newApprovalTool()
+	tool.Handler = func(context.Context, agent.ToolCall) (agent.ToolResult, error) {
+		t.Error("stopped tool executed")
+		return agent.ToolResult{}, nil
+	}
+	tools, err := agent.NewToolSet(agent.ModeManual, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	setConversationInput(model, "Run the action")
+	_, _ = model.submit()
+	for waitingApprovals(model) == 0 {
+		_, _ = model.Update(runConversationCmd(t, waitEvent(model.op.gen, model.op.events)))
+	}
+
+	_, _ = model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	if model.op.stop != stopTools {
+		t.Fatalf("stop = %d, want the tool round stopped", model.op.stop)
+	}
+	drainConversationRemote(t, model)
+	if waitingApprovals(model) > 0 || model.focus() != focusEditor {
+		t.Fatal("the approval outlived the stopped tool round")
 	}
 }
