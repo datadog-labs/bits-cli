@@ -28,6 +28,9 @@ Use `bits --help` for the complete command list or `bits help login` for command
 | `/logout` | Sign out from your Datadog account and exit Bits. |
 | `/quit`, `/exit` | Exit Bits. |
 
+Local skills appear in the slash menu as `/skill:<name>`. Bits discovers them in
+`.agents/skills`, `~/.agents/skills`, and directories passed with `--skill`.
+
 Type `@` after whitespace or punctuation to open a mixed picker of entities and
 local-file suggestions. Prefix a query with a supported entity type, such as
 `@service:assistant`, to narrow the search. Entity selections are

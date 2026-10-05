@@ -141,7 +141,7 @@ const maxTurns = 150
 // exclusively owns all mutable conversation state, including opts, transcript,
 // previousConversationID, and session grants. State crosses goroutine boundaries
 // through copied events/results and channel synchronization. Only Decide,
-// CancelTool, and explicitly atomic methods may be called concurrently with an
+// CancelTool, ClientSkills, and explicitly atomic methods may be called concurrently with an
 // operation. Do not add a mutex around Engine state without first changing this
 // ownership model and identifying accesses that its existing operation gate and
 // channel boundaries do not order.
@@ -228,7 +228,9 @@ func (e *Engine) SearchEntities(ctx context.Context, in assistant.SearchEntities
 
 type TurnInput struct {
 	Message string
-	Tools   *ToolSet
+	// Skill is resolved and read inside this operation before contacting the backend.
+	Skill *SkillInvocation
+	Tools *ToolSet
 	// Context belongs to this independent user turn. The engine resends it on
 	// client-tool continuations, but never stores it in its long-lived options.
 	Context *assistant.AssistantContext
@@ -418,6 +420,19 @@ func (e *Engine) run(
 		}
 	}
 
+	// A skill that cannot be read fails the turn like a backend error: the user
+	// block stays visible and nothing is sent.
+	var skillContext string
+	if len(resumed) == 0 && in.Skill != nil {
+		var err error
+		skillContext, err = e.prepareSkill(ctx, *in.Skill)
+		if err != nil {
+			completion.Err = err
+			send(Event{Kind: EventError, Err: err})
+			return
+		}
+	}
+
 	var next any = in.Message
 	convID := e.ConversationID()
 	var userContext string
@@ -431,7 +446,7 @@ func (e *Engine) run(
 		sentUserContext := opts.CustomUserContext
 		opts = e.projectInstructions.apply(ctx, opts)
 		if _, userMessage := next.(string); userMessage {
-			opts = e.clientSkills.apply(ctx, opts)
+			opts = e.clientSkills.apply(ctx, opts, skillContext)
 		}
 		var calls []ToolCall
 		streamed := false

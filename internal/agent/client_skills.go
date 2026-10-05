@@ -1,19 +1,15 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"html"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -25,13 +21,12 @@ const (
 	skillRootLimit    = 128
 )
 
-// ClientSkills owns a metadata snapshot for a conversation. The engine serializes
-// access and sends the same catalog with each top-level user message.
+// ClientSkills shares one conversation registry between completion and the
+// engine. Discovery configuration is immutable; the cache owns synchronization.
 type ClientSkills struct {
 	workspace string
 	extra     []string
-	prepared  bool
-	catalog   string
+	cache     skillRegistryCache
 }
 
 // NewClientSkills discovers skills relative to an explicit workspace. Extra
@@ -40,104 +35,87 @@ func NewClientSkills(workspace string, extra []string) *ClientSkills {
 	return &ClientSkills{workspace: workspace, extra: slices.Clone(extra)}
 }
 
-// WithClientSkills attaches a catalog owned exclusively by this engine.
+// WithClientSkills attaches a client skill store owned exclusively by this engine.
 func WithClientSkills(skills *ClientSkills) Option {
 	return func(e *Engine) { e.clientSkills = skills }
 }
 
 func (s *ClientSkills) reset() {
 	if s != nil {
-		s.prepared = false
-		s.catalog = ""
+		s.cache.reset()
 	}
 }
 
-func (s *ClientSkills) apply(ctx context.Context, opts assistant.SendOptions) assistant.SendOptions {
+// apply adds the catalog, then an explicitly invoked skill's instructions.
+func (s *ClientSkills) apply(ctx context.Context, opts assistant.SendOptions, skillContext string) assistant.SendOptions {
 	if s == nil {
 		return opts
 	}
-	if !s.prepared {
-		// New and resumed conversations both rescan. A resumed conversation may
-		// carry an older catalog in its history, so an empty rescan sends an
-		// explicit notice that supersedes it.
-		catalog := s.snapshot(ctx)
-		if ctx.Err() != nil {
-			return opts
-		}
+	if registry, err := s.cache.load(ctx, s.discover); err == nil {
+		catalog := registry.catalog
 		if catalog == "" && opts.ConversationID != "" {
 			catalog = clientSkillsRemovalNotice
 		}
-		s.catalog = catalog
-		s.prepared = true
+		opts.CustomUserContext = joinUserContext(opts.CustomUserContext, catalog)
 	}
-	if s.catalog != "" {
-		if opts.CustomUserContext != "" {
-			opts.CustomUserContext += "\n\n"
-		}
-		opts.CustomUserContext += s.catalog
-	}
+	opts.CustomUserContext = joinUserContext(opts.CustomUserContext, skillContext)
 	return opts
 }
 
-const clientSkillsRemovalNotice = "<available-local-client-skills>\nThis is the latest available-local-client-skills update. Disregard any earlier <available-local-client-skills> blocks.\nNo local client skills are currently available in this user's local project context.\n</available-local-client-skills>"
-
-type clientSkill struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	// DisableModelInvocation keeps the skill out of the catalog. The skill still
-	// claims its name, so it shadows lower-precedence skills with the same name.
-	DisableModelInvocation bool `yaml:"disable-model-invocation"`
-	path                   string
+func joinUserContext(existing, block string) string {
+	if existing == "" || block == "" {
+		return existing + block
+	}
+	return existing + "\n\n" + block
 }
 
-var skillNamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+// Keep context markers stable so updates supersede catalogs already in conversation history.
+const clientSkillsRemovalNotice = "<available-local-client-skills>\nThis is the latest available-local-client-skills update. Disregard any earlier <available-local-client-skills> blocks.\nNo local client skills are currently available in this user's local project context.\n</available-local-client-skills>"
 
-func parseClientSkill(content []byte, defaultName string) (clientSkill, bool) {
-	content = bytes.TrimPrefix(content, []byte{0xef, 0xbb, 0xbf})
-	lines := strings.Split(string(content), "\n")
-	if len(lines) < 3 || strings.TrimSuffix(lines[0], "\r") != "---" {
-		return clientSkill{}, false
+// SkillSummary is the presentation metadata exposed to completion clients.
+type SkillSummary struct {
+	Name        string
+	Description string
+}
+
+// registeredSkill stays inside the engine with its confined-read metadata.
+type registeredSkill struct {
+	Name                   string
+	Description            string
+	Path                   string
+	DisableModelInvocation bool
+	boundary               string
+	// defaultName applies when a reread document omits its name.
+	defaultName string
+}
+
+// ClientSkills lists the shared conversation registry. An empty successful result
+// means no skills; failures remain distinguishable and can be retried.
+func (e *Engine) ClientSkills(ctx context.Context) ([]SkillSummary, error) {
+	if e.clientSkills == nil {
+		return nil, nil
 	}
-	for i := 1; i < len(lines); i++ {
-		if strings.TrimSuffix(lines[i], "\r") != "---" {
-			continue
-		}
-		var metadata yaml.Node
-		if yaml.Unmarshal([]byte(strings.Join(lines[1:i], "\n")), &metadata) != nil || len(metadata.Content) != 1 || metadata.Content[0].Kind != yaml.MappingNode {
-			return clientSkill{}, false
-		}
-		// Require strings rather than YAML's implicit scalar conversions.
-		mapping := metadata.Content[0].Content
-		for j := 0; j < len(mapping); j += 2 {
-			if mapping[j].Value == "name" || mapping[j].Value == "description" {
-				if mapping[j+1].Tag != "!!str" {
-					return clientSkill{}, false
-				}
-			}
-		}
-		var skill clientSkill
-		if metadata.Decode(&skill) != nil {
-			return clientSkill{}, false
-		}
-		if strings.TrimSpace(skill.Name) == "" {
-			skill.Name = defaultName
-		}
-		skill.Description = strings.Join(strings.Fields(skill.Description), " ")
-		return skill, len(skill.Name) <= 64 && skillNamePattern.MatchString(skill.Name) && len(skill.Description) > 0
+	registry, err := e.clientSkills.cache.load(ctx, e.clientSkills.discover)
+	if err != nil {
+		return nil, err
 	}
-	return clientSkill{}, false
+	summaries := make([]SkillSummary, 0, len(registry.skills))
+	for _, skill := range registry.skills {
+		summaries = append(summaries, SkillSummary{Name: skill.Name, Description: skill.Description})
+	}
+	return summaries, nil
 }
 
 type skillLocation struct{ path, boundary string }
 
-func (s *ClientSkills) snapshot(ctx context.Context) string {
+func (s *ClientSkills) discover(ctx context.Context) []registeredSkill {
 	active, err := filepath.Abs(s.workspace)
 	if err != nil {
-		return ""
+		return nil
 	}
 	active, err = filepath.EvalSymlinks(active)
 	if err != nil {
-		return ""
+		return nil
 	}
 	repository, _ := instructionRepository(ctx, active)
 	boundary := active
@@ -173,7 +151,7 @@ func (s *ClientSkills) snapshot(ctx context.Context) string {
 		root := filepath.Join(home, ".agents", "skills")
 		locations = append(locations, skillLocation{root, root})
 	}
-	scan := skillScan{ctx: ctx, remainingEntries: skillEntryLimit, remainingBytes: skillReadLimit, skills: make(map[string]clientSkill)}
+	scan := skillScan{ctx: ctx, remainingEntries: skillEntryLimit, remainingBytes: skillReadLimit, skills: make(map[string]registeredSkill)}
 	for _, location := range locations {
 		if ctx.Err() != nil || scan.remainingEntries <= 0 || scan.remainingBytes <= 0 {
 			break
@@ -190,21 +168,29 @@ func (s *ClientSkills) snapshot(ctx context.Context) string {
 		_ = root.Close()
 	}
 	names := make([]string, 0, len(scan.skills))
-	for name, skill := range scan.skills {
-		if !skill.DisableModelInvocation {
-			names = append(names, name)
-		}
+	for name := range scan.skills {
+		names = append(names, name)
 	}
 	slices.Sort(names)
-	if len(names) == 0 {
+	skills := make([]registeredSkill, 0, len(names))
+	for _, name := range names {
+		skills = append(skills, scan.skills[name])
+	}
+	return skills
+}
+
+func renderClientSkills(skills []registeredSkill) string {
+	if !slices.ContainsFunc(skills, func(skill registeredSkill) bool { return !skill.DisableModelInvocation }) {
 		return ""
 	}
 	var catalog strings.Builder
 	catalog.WriteString("<available-local-client-skills>\nThis is the latest available-local-client-skills update. Disregard any earlier <available-local-client-skills> blocks.\nAvailable local client skills in this user's local project context:\n")
 	const footer = "Local client skills are different from enabled skills. They are local to this CLI. Do not load these local client skills with the Skill tool. When a skill is invoked, read its SKILL.md with available client tools before following it.\n</available-local-client-skills>"
-	for _, name := range names {
-		skill := scan.skills[name]
-		entry := fmt.Sprintf("<skill name=\"%s\" path=\"%s\">%s</skill>\n", html.EscapeString(skill.Name), html.EscapeString(filepath.ToSlash(skill.path)), html.EscapeString(skill.Description))
+	for _, skill := range skills {
+		if skill.DisableModelInvocation {
+			continue
+		}
+		entry := fmt.Sprintf("<skill name=\"%s\" path=\"%s\">%s</skill>\n", html.EscapeString(skill.Name), html.EscapeString(filepath.ToSlash(skill.Path)), html.EscapeString(skill.Description))
 		if catalog.Len()+len(entry)+len(footer) > skillCatalogLimit {
 			continue
 		}
@@ -217,7 +203,7 @@ func (s *ClientSkills) snapshot(ctx context.Context) string {
 type skillScan struct {
 	ctx                              context.Context
 	remainingEntries, remainingBytes int
-	skills                           map[string]clientSkill
+	skills                           map[string]registeredSkill
 }
 
 func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen map[string]bool) {
@@ -268,22 +254,14 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 		s.remainingBytes = 0
 		return
 	}
-	limit := min(skillFileLimit, s.remainingBytes-1)
-	content, truncated, err := readInstructions(root, relative, limit)
-	if truncated {
-		s.remainingBytes -= limit + 1
-	} else {
-		s.remainingBytes -= len(content)
-	}
-	if err != nil || truncated || !utf8.Valid(content) {
+	defaultName := filepath.Base(filepath.Dir(source))
+	document, consumed, err := readSkillDocument(root, relative, min(skillFileLimit, s.remainingBytes-1), defaultName)
+	s.remainingBytes -= consumed
+	if err != nil {
 		return
 	}
-	skill, ok := parseClientSkill(content, filepath.Base(filepath.Dir(source)))
-	if !ok {
-		return
-	}
-	if _, exists := s.skills[skill.Name]; !exists {
-		skill.path = resolved
+	if _, exists := s.skills[document.Name]; !exists {
+		skill := registeredSkill{Name: document.Name, Description: document.Description, Path: resolved, DisableModelInvocation: document.DisableModelInvocation, boundary: boundary, defaultName: defaultName}
 		s.skills[skill.Name] = skill
 	}
 }

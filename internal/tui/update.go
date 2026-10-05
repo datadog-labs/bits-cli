@@ -16,6 +16,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
+	"github.com/DataDog/bits-cli/internal/tui/escape"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
 	"github.com/DataDog/bits-cli/internal/tui/splash"
 )
@@ -201,8 +202,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	loadSkillMenu := m.syncClientSkills()
 	m.relayout()
-	return m, tea.Batch(cmd, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
+	return m, tea.Batch(cmd, loadSkillMenu, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
 }
 
 func isUserInput(msg tea.Msg) bool {
@@ -219,6 +221,7 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.focus() == focusPicker {
 		m.closeConversationPicker()
 	}
+	m.skillMenu.task.stop()
 	m.statusTask.stop()
 	if m.op.cancel != nil {
 		m.op.cancel()
@@ -242,6 +245,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg := msg.(type) {
+	case clientSkillsResultMsg:
+		return m, m.applyClientSkills(msg)
+
 	case toolUIOpenedMsg:
 		m.openToolUI(msg.request)
 		return m, waitToolUI(m.toolUI)
@@ -685,6 +691,10 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					m.stopEntitySearch()
 					return m.dispatchCommand(name, "")
 				}
+				if strings.HasPrefix(name, "skill:") {
+					m.editor.AcceptCommand()
+					return m.submit()
+				}
 			}
 		}
 		cmd := m.editor.Update(msg)
@@ -759,14 +769,24 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		text = " "
 	}
 
-	// Slash commands are a native control plane: they never reach the model.
-	if name, argument, ok := parseCommand(raw); ok {
+	var skillInvocation *agent.SkillInvocation
+	if name, arguments, ok := parseClientSkillInvocation(raw); ok {
+		skillInvocation = &agent.SkillInvocation{Name: name, Arguments: arguments}
+		text = raw
+	} else if name, argument, ok := parseCommand(raw); ok {
 		m.editor.Reset()
 		m.stopEntitySearch()
 		return m.dispatchCommand(name, argument)
 	}
 	if m.op.busy() {
 		return m, nil
+	}
+	// Once the menu has loaded, an unknown name keeps the draft for correction.
+	// Otherwise the engine resolves the name and fails the turn if it is unknown.
+	if skillInvocation != nil && m.skillMenu.skills != nil {
+		if _, known := m.skillMenu.skills[skillInvocation.Name]; !known {
+			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Unknown client skill: %s", escape.Inline(skillInvocation.Name)))
+		}
 	}
 	turnContext := contextFromAttachments(attachments)
 	m.editor.Reset()
@@ -775,6 +795,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	events := m.engine.StartTurn(ctx, agent.TurnInput{
 		Message:     text,
+		Skill:       skillInvocation,
 		Tools:       m.tools,
 		Context:     turnContext,
 		OnDeny:      agent.DenyContinue,
