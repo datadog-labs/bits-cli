@@ -58,9 +58,9 @@ func TestClientSkillSlashInvocation(t *testing.T) {
 		{name: "bare prefix completion", input: "/rev", completion: true},
 		{name: "tab with arguments", input: "/skill:rev", completion: true, tab: true},
 		{name: "bare prefix tab with arguments", input: "/rev", completion: true, tab: true},
-		{name: "namespaced typed", skillName: "figma:something", input: "/skill:figma:something Keep CASE"},
-		{name: "namespaced completion", skillName: "figma:something", input: "/figma:some", completion: true, userOnly: true},
-		{name: "namespaced tab", skillName: "figma:something", input: "/figma:some", completion: true, tab: true},
+		{name: "namespaced typed", skillName: "datadog:something", input: "/skill:datadog:something Keep CASE"},
+		{name: "namespaced completion", skillName: "datadog:something", input: "/datadog:some", completion: true, userOnly: true},
+		{name: "namespaced tab", skillName: "datadog:something", input: "/datadog:some", completion: true, tab: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())

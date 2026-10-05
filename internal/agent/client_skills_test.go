@@ -487,18 +487,18 @@ func TestClientSkillNamespacedNames(t *testing.T) {
 		name  string
 		valid bool
 	}{
-		{"figma:something", true},
-		{"figma-tools:some-action", true},
-		{"org:figma:something", true},
+		{"datadog:something", true},
+		{"datadog-tools:some-action", true},
+		{"org:datadog:something", true},
 		{":something", false},
-		{"figma:", false},
-		{"figma::something", false},
-		{"figma-:something", false},
-		{"figma:-something", false},
-		{"figma:some--thing", false},
-		{"Figma:something", false},
-		{"figma:some_thing", false},
-		{"figma:" + strings.Repeat("a", 59), false},
+		{"datadog:", false},
+		{"datadog::something", false},
+		{"datadog-:something", false},
+		{"datadog:-something", false},
+		{"datadog:some--thing", false},
+		{"Datadog:something", false},
+		{"datadog:some_thing", false},
+		{"datadog:" + strings.Repeat("a", 57), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, fallback := range []bool{false, true} {
