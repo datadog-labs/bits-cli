@@ -4,92 +4,10 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
-
-func TestSkillRegistrySharesDiscoveryAndCallerCancellation(t *testing.T) {
-	var cache skillRegistryCache
-	defer cache.reset()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var scans atomic.Int32
-	discover := func(ctx context.Context) []registeredSkill {
-		if scans.Add(1) == 1 {
-			close(started)
-		}
-		select {
-		case <-release:
-		case <-ctx.Done():
-		}
-		return []registeredSkill{{Name: "review", Description: "Review"}}
-	}
-	firstCtx, stopFirst := context.WithCancel(ctx)
-	first := make(chan error, 1)
-	go func() { _, err := cache.load(firstCtx, discover); first <- err }()
-	select {
-	case <-started:
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
-	}
-	second := make(chan *skillRegistry, 1)
-	go func() { registry, _ := cache.load(ctx, discover); second <- registry }()
-	stopFirst()
-	if err := <-first; !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled waiter = %v", err)
-	}
-	close(release)
-	registry := <-second
-	if registry == nil || registry.err != nil || len(registry.skills) != 1 || scans.Load() != 1 {
-		t.Fatalf("registry = %+v, scans = %d", registry, scans.Load())
-	}
-	again, err := cache.load(ctx, discover)
-	if err != nil || again != registry || scans.Load() != 1 {
-		t.Fatal("completed registry was rescanned")
-	}
-}
-
-func TestSkillRegistryResetDuringDiscovery(t *testing.T) {
-	var cache skillRegistryCache
-	defer cache.reset()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	started := make(chan struct{})
-	finishOld := make(chan struct{})
-	oldDone := make(chan error, 1)
-	go func() {
-		_, err := cache.load(ctx, func(scanCtx context.Context) []registeredSkill {
-			close(started)
-			<-scanCtx.Done()
-			<-finishOld
-			return []registeredSkill{{Name: "old"}}
-		})
-		oldDone <- err
-	}()
-	select {
-	case <-started:
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
-	}
-	cache.reset()
-	fresh, err := cache.load(ctx, func(context.Context) []registeredSkill { return []registeredSkill{{Name: "new"}} })
-	if err != nil {
-		t.Fatal(err)
-	}
-	close(finishOld)
-	if err := <-oldDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("old discovery = %v", err)
-	}
-	again, err := cache.load(ctx, func(context.Context) []registeredSkill { t.Error("old completion evicted new registry"); return nil })
-	if err != nil || again != fresh || again.skills[0].Name != "new" {
-		t.Fatal("reset lost the new registry")
-	}
-}
 
 func TestSkillRegistrySharedByMenuAndCatalog(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

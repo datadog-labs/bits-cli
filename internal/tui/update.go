@@ -15,6 +15,7 @@ import (
 	"github.com/DataDog/bits-cli/internal/tools"
 	"github.com/DataDog/bits-cli/internal/tui/chat"
 	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
+	"github.com/DataDog/bits-cli/internal/tui/escape"
 	loginui "github.com/DataDog/bits-cli/internal/tui/login"
 	"github.com/DataDog/bits-cli/internal/tui/splash"
 )
@@ -261,8 +262,6 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case clientSkillsResultMsg:
 		return m, m.applyClientSkills(msg)
-	case clientSkillsRetryMsg:
-		return m, m.retryClientSkills(msg)
 
 	case toolUIOpenedMsg:
 		m.activateToolUI(msg.request)
@@ -578,12 +577,6 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	if !m.op.accepts(msg.generation) {
 		return m, nil
 	}
-	// A cancellation can suppress the local echo after the engine accepted the
-	// message. Check its settled transcript before restoring a pending draft.
-	if pending := m.op.submission; pending != nil && len(m.engine.Snapshot()) > pending.transcriptLength {
-		m.op.submission = nil
-	}
-	m.restorePendingSubmission()
 	done := m.op
 	m.op = operation{gen: done.gen}
 	if m.chatPhase != chat.PhaseError {
@@ -842,13 +835,15 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	if m.op.busy() {
 		return m, nil
 	}
-	turnContext := contextFromAttachments(attachments)
-	var submission *pendingSubmission
-	if invocation != nil {
-		submission = &pendingSubmission{draft: m.editor.TakeDraft(), transcriptLength: len(m.transcript.Blocks)}
-	} else {
-		m.editor.Reset()
+	// Once the menu has loaded, an unknown name keeps the draft for correction.
+	// Otherwise the engine resolves the name and fails the turn if it is unknown.
+	if invocation != nil && m.clientSkills != nil {
+		if _, known := m.clientSkills[invocation.Name]; !known {
+			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Unknown client skill: %s", escape.Inline(invocation.Name)))
+		}
 	}
+	turnContext := contextFromAttachments(attachments)
+	m.editor.Reset()
 	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -861,7 +856,6 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		UserContext: tools.UserContext(m.workspace, m.tools),
 	})
 	wait := m.begin(opTurn, events, cancel)
-	m.op.submission = submission
 	m.chatPhase = chat.PhaseWaiting
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
@@ -922,9 +916,6 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
 	case agent.EventTranscript:
-		if pending := m.op.submission; pending != nil && len(ev.Transcript.Blocks) > pending.transcriptLength {
-			m.op.submission = nil
-		}
 		m.transcript = ev.Transcript
 		m.updatePendingApprovals(ev.Transcript.PendingApprovals())
 		m.reconcileToolUI()
@@ -938,7 +929,6 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	case agent.EventTurnDone:
 		m.chatPhase = chat.PhaseIdle
 	case agent.EventError:
-		m.restorePendingSubmission()
 		// A failure during restore is benign: drop to idle with a notice so the
 		// user can still type. A failure mid-turn is the turn's error state.
 		if m.op.kind == opRestore {
@@ -954,16 +944,6 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 		}
 	}
 	return nil
-}
-
-// restorePendingSubmission runs only for the current operation. A queued
-// conversation switch or logout discards its draft along with the operation.
-func (m *Model) restorePendingSubmission() {
-	pending := m.op.submission
-	m.op.submission = nil
-	if pending != nil && m.op.then == thenNothing {
-		m.editor.RestoreDraft(pending.draft)
-	}
 }
 
 func (m *Model) updatePendingApprovals(pending []agent.Block) {

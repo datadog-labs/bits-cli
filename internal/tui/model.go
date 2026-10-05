@@ -36,23 +36,17 @@ const (
 	ModePermissions
 )
 
-type pendingSubmission struct {
-	draft            editor.Draft
-	transcriptLength int
-}
-
 // operation is the one exclusive session operation: a turn (resumed client
 // tools included), a history restore, or logout. Anything that asks "can I
 // start something?" or "what happens when it ends?" reads it; chatPhase only
 // drives what the chat displays.
 type operation struct {
-	submission *pendingSubmission
-	kind       opKind
-	gen        uint64             // stamps the operation's messages; never reset, so stale ones drop
-	events     <-chan agent.Event // engine operations only
-	cancel     context.CancelFunc
-	stop       stopLevel
-	then       followUp
+	kind   opKind
+	gen    uint64             // stamps the operation's messages; never reset, so stale ones drop
+	events <-chan agent.Event // engine operations only
+	cancel context.CancelFunc
+	stop   stopLevel
+	then   followUp
 }
 
 type opKind uint8

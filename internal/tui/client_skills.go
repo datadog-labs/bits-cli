@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"strings"
-	"time"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
@@ -21,43 +20,23 @@ type clientSkillsResultMsg struct {
 	err        error
 }
 
-type skillMenuState uint8
-
-const (
-	skillMenuIdle skillMenuState = iota
-	skillMenuLoading
-	skillMenuReady
-	skillMenuFailed
-)
-
-const maxSkillMenuAttempts = 3
-
+// skillMenu records which engine and conversation the menu was loaded for.
+// Discovery is a bounded local scan, so a failed load is reported, not retried;
+// /skill:<name> still works because the engine resolves names itself.
 type skillMenu struct {
-	engine   *agent.Engine
-	epoch    uint64
-	state    skillMenuState
-	attempts int
-	task     task
+	engine  *agent.Engine
+	epoch   uint64
+	started bool
+	task    task
 }
 
-type clientSkillsRetryMsg struct {
-	generation uint64
-	epoch      uint64
-}
-
-// syncClientSkills observes conversation identity. Failed loads retry through a
-// delayed message, never through every render or input event.
+// syncClientSkills observes conversation identity and loads the menu once per
+// conversation.
 func (m *Model) syncClientSkills() tea.Cmd {
 	if m.engine == nil || m.op.kind == opRestore {
 		return nil
 	}
-	if m.skillMenu.engine != m.engine || m.skillMenu.epoch != m.conversationEpoch {
-		m.skillMenu.engine = m.engine
-		m.skillMenu.epoch = m.conversationEpoch
-		m.skillMenu.state = skillMenuIdle
-		m.skillMenu.attempts = 0
-	}
-	if m.skillMenu.state != skillMenuIdle {
+	if m.skillMenu.started && m.skillMenu.engine == m.engine && m.skillMenu.epoch == m.conversationEpoch {
 		return nil
 	}
 	return m.loadClientSkillMenu()
@@ -66,9 +45,9 @@ func (m *Model) syncClientSkills() tea.Cmd {
 func (m *Model) loadClientSkillMenu() tea.Cmd {
 	m.clientSkills = nil
 	m.editor.SetCommands(commandCompletionSpecs())
-	m.skillMenu.state = skillMenuLoading
-	m.skillMenu.attempts++
-	ctx, generation := m.skillMenu.task.start(context.Background(), 5*time.Second)
+	m.skillMenu.engine, m.skillMenu.epoch, m.skillMenu.started = m.engine, m.conversationEpoch, true
+	// The engine bounds discovery; this context only abandons a superseded load.
+	ctx, generation := m.skillMenu.task.start(context.Background(), 0)
 	engine, epoch := m.engine, m.conversationEpoch
 	return func() tea.Msg {
 		var skills []agent.SkillSummary
@@ -86,15 +65,8 @@ func (m *Model) applyClientSkills(msg clientSkillsResultMsg) tea.Cmd {
 	}
 	m.skillMenu.task.done()
 	if msg.err != nil {
-		m.skillMenu.state = skillMenuFailed
-		if m.skillMenu.attempts < maxSkillMenuAttempts {
-			return tea.Tick(time.Duration(m.skillMenu.attempts)*250*time.Millisecond, func(time.Time) tea.Msg {
-				return clientSkillsRetryMsg{generation: msg.generation, epoch: msg.epoch}
-			})
-		}
 		return m.postNotice(notice(chat.NoticeWarn, msg.err, "Could not load client skill suggestions. You can still invoke a skill with /skill:<name>."))
 	}
-	m.skillMenu.state = skillMenuReady
 	m.clientSkills = make(map[string]agent.SkillSummary, len(msg.skills))
 	specs := commandCompletionSpecs()
 	// The registry already supplies a stable, sorted list.
@@ -104,13 +76,6 @@ func (m *Model) applyClientSkills(msg clientSkillsResultMsg) tea.Cmd {
 	}
 	m.editor.SetCommands(specs)
 	return nil
-}
-
-func (m *Model) retryClientSkills(msg clientSkillsRetryMsg) tea.Cmd {
-	if msg.generation != m.skillMenu.task.gen || msg.epoch != m.conversationEpoch || m.skillMenu.state != skillMenuFailed || m.skillMenu.attempts >= maxSkillMenuAttempts {
-		return nil
-	}
-	return m.loadClientSkillMenu()
 }
 
 // parseClientSkillInvocation preserves the entire argument remainder, including

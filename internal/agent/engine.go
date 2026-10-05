@@ -411,6 +411,17 @@ func (e *Engine) run(
 		}
 	}
 
+	// A restored tool call is already in the transcript; only a new turn adds a
+	// user block before contacting the backend.
+	if len(resumed) == 0 {
+		e.transcript.AppendUser(in.Message)
+		if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
+			return
+		}
+	}
+
+	// A skill that cannot be read fails the turn like a backend error: the user
+	// block stays visible and nothing is sent.
 	var skillContext string
 	if len(resumed) == 0 && in.Skill != nil {
 		var err error
@@ -418,15 +429,6 @@ func (e *Engine) run(
 		if err != nil {
 			completion.Err = err
 			send(Event{Kind: EventError, Err: err})
-			return
-		}
-	}
-
-	// A restored tool call is already in the transcript; only a new turn adds a
-	// user block before contacting the backend.
-	if len(resumed) == 0 {
-		e.transcript.AppendUser(in.Message)
-		if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
 			return
 		}
 	}
@@ -444,13 +446,7 @@ func (e *Engine) run(
 		sentUserContext := opts.CustomUserContext
 		opts = e.projectInstructions.apply(ctx, opts)
 		if _, userMessage := next.(string); userMessage {
-			opts = e.clientSkills.apply(ctx, opts)
-			if skillContext != "" {
-				if opts.CustomUserContext != "" {
-					opts.CustomUserContext += "\n\n"
-				}
-				opts.CustomUserContext += skillContext
-			}
+			opts = e.clientSkills.apply(ctx, opts, skillContext)
 		}
 		var calls []ToolCall
 		streamed := false

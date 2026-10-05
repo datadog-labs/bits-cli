@@ -2,8 +2,11 @@ package agent
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -69,4 +72,27 @@ func parseSkillDocument(content []byte, defaultName string) (skillDocument, bool
 		return skillDocument{skillMetadata: skill, body: strings.Join(lines[i+1:], "\n")}, len(skill.Name) <= 64 && skillNamePattern.MatchString(skill.Name) && len(skill.Description) > 0
 	}
 	return skillDocument{}, false
+}
+
+var errInvalidSkillDocument = errors.New("oversized, not valid UTF-8, or has invalid metadata")
+
+// readSkillDocument reads one SKILL.md confined to root. consumed is the byte
+// count charged against a discovery budget, including the truncation probe.
+func readSkillDocument(root *os.Root, relative string, limit int, defaultName string) (document skillDocument, consumed int, err error) {
+	content, truncated, err := readInstructions(root, relative, limit)
+	consumed = len(content)
+	if truncated {
+		consumed = limit + 1
+	}
+	if err != nil {
+		return skillDocument{}, consumed, err
+	}
+	if truncated || !utf8.Valid(content) {
+		return skillDocument{}, consumed, errInvalidSkillDocument
+	}
+	document, ok := parseSkillDocument(content, defaultName)
+	if !ok {
+		return skillDocument{}, consumed, errInvalidSkillDocument
+	}
+	return document, consumed, nil
 }

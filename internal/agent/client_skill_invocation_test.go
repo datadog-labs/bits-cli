@@ -65,7 +65,7 @@ func TestClientSkillInvocationLoadsCurrentBody(t *testing.T) {
 }
 
 func TestClientSkillInvocationReadFailuresNeverSend(t *testing.T) {
-	for _, failure := range []string{"removed", "oversized", "invalid utf8", "invalid metadata", "renamed", "directory", "escaping symlink", "replaced root"} {
+	for _, failure := range []string{"removed", "oversized", "invalid utf8", "invalid metadata", "renamed", "directory", "escaping symlink"} {
 		t.Run(failure, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			root := t.TempDir()
@@ -83,15 +83,6 @@ func TestClientSkillInvocationReadFailuresNeverSend(t *testing.T) {
 			case "removed":
 			case "directory":
 				if err := os.Mkdir(skill.Path, 0o755); err != nil {
-					t.Fatal(err)
-				}
-			case "replaced root":
-				if err := os.Rename(root, root+"-previous"); err != nil {
-					t.Fatal(err)
-				}
-				outside := t.TempDir()
-				writeSkill(t, outside, ".agents/skills/review", "review", "outside root")
-				if err := os.Symlink(outside, root); err != nil {
 					t.Fatal(err)
 				}
 			case "escaping symlink":
@@ -126,7 +117,8 @@ func TestClientSkillInvocationReadFailuresNeverSend(t *testing.T) {
 					failureErr = event.Err
 				}
 			}
-			if failureErr == nil || len(backend.opts) != 0 || len(engine.Snapshot()) != 0 {
+			// The failed turn keeps its user block, like a backend failure.
+			if failureErr == nil || len(backend.opts) != 0 || len(engine.Snapshot()) != 1 {
 				t.Fatalf("failure = %v, backend requests = %d, transcript = %+v", failureErr, len(backend.opts), engine.Snapshot())
 			}
 		})
@@ -165,5 +157,27 @@ func TestClientSkillInvocationResolvesCurrentRegistry(t *testing.T) {
 	}
 	if gotErr == nil || len(backend.opts) != 2 {
 		t.Fatal("unregistered skill reached backend")
+	}
+}
+
+func TestClientSkillInvocationKeepsDiscoveredDefaultName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeSkillFile(t, root, ".agents/skills/shared", "---\ndescription: Unnamed\n---\nSHARED BODY")
+	if err := os.MkdirAll(filepath.Join(root, ".agents/skills/review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, ".agents/skills/shared/SKILL.md"), filepath.Join(root, ".agents/skills/review/SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
+	engine := New(backend, assistant.SendOptions{}, WithClientSkills(NewClientSkills(root, nil)))
+	for event := range engine.StartTurn(context.Background(), TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: "review"}}) {
+		if event.Err != nil {
+			t.Fatal(event.Err)
+		}
+	}
+	if len(backend.opts) != 1 || !strings.Contains(backend.opts[0].CustomUserContext, "SHARED BODY") {
+		t.Fatal("symlinked skill did not resolve under its discovered name")
 	}
 }

@@ -249,26 +249,26 @@ func TestClientSkillsResumeAndEmptySnapshot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	skills := NewClientSkills(dir, nil)
-	opts := skills.apply(context.Background(), assistant.SendOptions{})
+	opts := skills.apply(context.Background(), assistant.SendOptions{}, "")
 	if opts.CustomUserContext != "" {
 		t.Fatal("unexpected empty catalog")
 	}
 	writeSkill(t, dir, ".agents/skills/example", "example", "created later")
-	if got := skills.apply(context.Background(), opts); got.CustomUserContext != "" {
+	if got := skills.apply(context.Background(), opts, ""); got.CustomUserContext != "" {
 		t.Fatal("empty snapshot was rediscovered")
 	}
 	skills.reset()
-	if got := skills.apply(context.Background(), assistant.SendOptions{ConversationID: "existing"}); !strings.Contains(got.CustomUserContext, "created later") {
+	if got := skills.apply(context.Background(), assistant.SendOptions{ConversationID: "existing"}, ""); !strings.Contains(got.CustomUserContext, "created later") {
 		t.Fatalf("resumed conversation did not rescan skills: %q", got.CustomUserContext)
 	}
 	skills.reset()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	skills.apply(ctx, assistant.SendOptions{})
+	skills.apply(ctx, assistant.SendOptions{}, "")
 	if skills.cache.current != nil {
 		t.Fatal("canceled discovery cached")
 	}
-	if got := skills.apply(context.Background(), assistant.SendOptions{}); !strings.Contains(got.CustomUserContext, "created later") {
+	if got := skills.apply(context.Background(), assistant.SendOptions{}, ""); !strings.Contains(got.CustomUserContext, "created later") {
 		t.Fatal("reset did not discover skills")
 	}
 }
@@ -277,13 +277,13 @@ func TestClientSkillsResumeWithoutSkillsSupersedesOlderCatalog(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	skills := NewClientSkills(t.TempDir(), nil)
 	for range 2 {
-		got := skills.apply(context.Background(), assistant.SendOptions{ConversationID: "existing"})
+		got := skills.apply(context.Background(), assistant.SendOptions{ConversationID: "existing"}, "")
 		if got.CustomUserContext != clientSkillsRemovalNotice {
 			t.Fatalf("resume without skills = %q", got.CustomUserContext)
 		}
 	}
 	skills.reset()
-	if got := skills.apply(context.Background(), assistant.SendOptions{}); got.CustomUserContext != "" {
+	if got := skills.apply(context.Background(), assistant.SendOptions{}, ""); got.CustomUserContext != "" {
 		t.Fatalf("new conversation without skills = %q", got.CustomUserContext)
 	}
 }

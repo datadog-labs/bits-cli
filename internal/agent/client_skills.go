@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
 )
@@ -47,25 +46,27 @@ func (s *ClientSkills) reset() {
 	}
 }
 
-func (s *ClientSkills) apply(ctx context.Context, opts assistant.SendOptions) assistant.SendOptions {
+// apply adds the catalog, then an explicitly invoked skill's instructions.
+func (s *ClientSkills) apply(ctx context.Context, opts assistant.SendOptions, invoked string) assistant.SendOptions {
 	if s == nil {
 		return opts
 	}
-	registry, err := s.cache.load(ctx, s.discover)
-	if err != nil {
-		return opts
-	}
-	catalog := registry.catalog
-	if catalog == "" && opts.ConversationID != "" {
-		catalog = clientSkillsRemovalNotice
-	}
-	if catalog != "" {
-		if opts.CustomUserContext != "" {
-			opts.CustomUserContext += "\n\n"
+	if registry, err := s.cache.load(ctx, s.discover); err == nil {
+		catalog := registry.catalog
+		if catalog == "" && opts.ConversationID != "" {
+			catalog = clientSkillsRemovalNotice
 		}
-		opts.CustomUserContext += catalog
+		opts.CustomUserContext = joinUserContext(opts.CustomUserContext, catalog)
 	}
+	opts.CustomUserContext = joinUserContext(opts.CustomUserContext, invoked)
 	return opts
+}
+
+func joinUserContext(context, block string) string {
+	if context == "" || block == "" {
+		return context + block
+	}
+	return context + "\n\n" + block
 }
 
 // Keep context markers stable so updates supersede catalogs already in conversation history.
@@ -84,7 +85,8 @@ type registeredSkill struct {
 	Path                   string
 	DisableModelInvocation bool
 	boundary               string
-	boundaryInfo           os.FileInfo
+	// defaultName applies when a reread document omits its name.
+	defaultName string
 }
 
 // ClientSkills lists the shared conversation registry. An empty successful result
@@ -252,28 +254,14 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 		s.remainingBytes = 0
 		return
 	}
-	limit := min(skillFileLimit, s.remainingBytes-1)
-	content, truncated, err := readInstructions(root, relative, limit)
-	if truncated {
-		s.remainingBytes -= limit + 1
-	} else {
-		s.remainingBytes -= len(content)
-	}
-	if err != nil || truncated || !utf8.Valid(content) {
-		return
-	}
-	document, ok := parseSkillDocument(content, filepath.Base(filepath.Dir(source)))
-	if !ok {
+	defaultName := filepath.Base(filepath.Dir(source))
+	document, consumed, err := readSkillDocument(root, relative, min(skillFileLimit, s.remainingBytes-1), defaultName)
+	s.remainingBytes -= consumed
+	if err != nil {
 		return
 	}
 	if _, exists := s.skills[document.Name]; !exists {
-		skill := registeredSkill{Name: document.Name, Description: document.Description, DisableModelInvocation: document.DisableModelInvocation}
-		skill.Path = resolved
-		skill.boundary = boundary
-		skill.boundaryInfo, err = root.Stat(".")
-		if err != nil {
-			return
-		}
+		skill := registeredSkill{Name: document.Name, Description: document.Description, Path: resolved, DisableModelInvocation: document.DisableModelInvocation, boundary: boundary, defaultName: defaultName}
 		s.skills[skill.Name] = skill
 	}
 }

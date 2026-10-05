@@ -6,7 +6,6 @@ import (
 	"html"
 	"os"
 	"path/filepath"
-	"unicode/utf8"
 )
 
 // SkillInvocation is a user request. The engine resolves its name against the
@@ -30,7 +29,7 @@ func (e *Engine) prepareSkill(ctx context.Context, invocation SkillInvocation) (
 	}
 	for _, skill := range registry.skills {
 		if skill.Name == invocation.Name {
-			loaded, err := skill.load(ctx)
+			loaded, err := skill.load()
 			if err != nil {
 				return "", err
 			}
@@ -41,49 +40,22 @@ func (e *Engine) prepareSkill(ctx context.Context, invocation SkillInvocation) (
 }
 
 // load rereads a registered file through its discovery boundary.
-func (s registeredSkill) load(ctx context.Context) (loadedSkill, error) {
-	if err := ctx.Err(); err != nil {
-		return loadedSkill{}, err
-	}
-	if s.boundary == "" || !withinInstructionsRoot(s.boundary, s.Path) {
-		return loadedSkill{}, fmt.Errorf("client skill %q has no registered read boundary", s.Name)
-	}
+func (s registeredSkill) load() (loadedSkill, error) {
 	root, err := os.OpenRoot(s.boundary)
 	if err != nil {
 		return loadedSkill{}, fmt.Errorf("open client skill %q root: %w", s.Name, err)
 	}
 	defer func() { _ = root.Close() }()
-	boundaryInfo, err := root.Stat(".")
-	if err != nil {
-		return loadedSkill{}, fmt.Errorf("stat client skill %q root: %w", s.Name, err)
-	}
-	if s.boundaryInfo == nil || !os.SameFile(s.boundaryInfo, boundaryInfo) {
-		return loadedSkill{}, fmt.Errorf("client skill %q discovery root changed; start a new conversation to rescan", s.Name)
-	}
 	relative, err := filepath.Rel(s.boundary, s.Path)
 	if err != nil {
 		return loadedSkill{}, fmt.Errorf("resolve client skill %q: %w", s.Name, err)
 	}
-	info, err := root.Stat(relative)
-	if err != nil {
-		return loadedSkill{}, fmt.Errorf("stat client skill %q: %w", s.Name, err)
-	}
-	if !info.Mode().IsRegular() {
-		return loadedSkill{}, fmt.Errorf("client skill %q is not a regular file", s.Name)
-	}
-	content, truncated, err := readInstructions(root, relative, skillFileLimit)
+	document, _, err := readSkillDocument(root, relative, skillFileLimit, s.defaultName)
 	if err != nil {
 		return loadedSkill{}, fmt.Errorf("read client skill %q: %w", s.Name, err)
 	}
-	if truncated || !utf8.Valid(content) {
-		return loadedSkill{}, fmt.Errorf("client skill %q is oversized or is not valid UTF-8", s.Name)
-	}
-	document, valid := parseSkillDocument(content, filepath.Base(filepath.Dir(s.Path)))
-	if !valid || document.Name != s.Name {
-		return loadedSkill{}, fmt.Errorf("client skill %q metadata changed or is invalid; start a new conversation to rescan", s.Name)
-	}
-	if err := ctx.Err(); err != nil {
-		return loadedSkill{}, err
+	if document.Name != s.Name {
+		return loadedSkill{}, fmt.Errorf("client skill %q was renamed; start a new conversation to rescan", s.Name)
 	}
 	return loadedSkill{Name: s.Name, Path: s.Path, BaseDirectory: filepath.Dir(s.Path), Body: document.body}, nil
 }

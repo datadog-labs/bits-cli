@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/DataDog/bits-cli/internal/agent"
 	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/DataDog/bits-cli/internal/tui/chat"
 )
 
 type skillRecordingBackend struct {
@@ -300,144 +300,64 @@ func TestClientSkillMenuWaitsForRestoreAndLoadsOncePerConversation(t *testing.T)
 	m.applyClientSkills(cmd().(clientSkillsResultMsg))
 }
 
-func TestClientSkillMenuRetriesFailuresAndAcceptsEmptySuccess(t *testing.T) {
+func TestClientSkillMenuReportsFailureOnceAndAcceptsEmptySuccess(t *testing.T) {
 	m := newModelWithSpy(t)
 	defer m.skillMenu.task.stop()
 	_ = m.syncClientSkills()
-	first := clientSkillsResultMsg{generation: m.skillMenu.task.gen, epoch: m.conversationEpoch, err: context.DeadlineExceeded}
-	if retry := m.applyClientSkills(first); retry == nil || m.skillMenu.state != skillMenuFailed {
-		t.Fatal("failed load did not schedule retry")
-	}
-	if cmd := m.syncClientSkills(); cmd != nil {
-		t.Fatal("ordinary update bypassed delayed retry")
-	}
-	retry := m.retryClientSkills(clientSkillsRetryMsg{generation: first.generation, epoch: first.epoch})
-	if retry == nil || m.skillMenu.state != skillMenuLoading {
-		t.Fatal("retry did not start a load")
-	}
-	m.applyClientSkills(retry().(clientSkillsResultMsg))
-	if m.skillMenu.state != skillMenuReady || m.skillMenu.attempts != 2 {
-		t.Fatal("empty successful registry was not accepted")
-	}
-	if cmd := m.syncClientSkills(); cmd != nil {
-		t.Fatal("empty successful registry retried")
-	}
-	if cmd := m.retryClientSkills(clientSkillsRetryMsg{generation: first.generation, epoch: first.epoch}); cmd != nil {
-		t.Fatal("stale retry restarted discovery")
-	}
-}
-
-func TestClientSkillMenuRetriesAreBoundedAndConversationScoped(t *testing.T) {
-	m := newModelWithSpy(t)
-	defer m.skillMenu.task.stop()
-	_ = m.syncClientSkills()
-	var old clientSkillsRetryMsg
-	for attempt := 1; attempt <= maxSkillMenuAttempts; attempt++ {
-		old = clientSkillsRetryMsg{generation: m.skillMenu.task.gen, epoch: m.conversationEpoch}
-		cmd := m.applyClientSkills(clientSkillsResultMsg{generation: old.generation, epoch: old.epoch, err: errors.New("discovery failed")})
-		if attempt < maxSkillMenuAttempts {
-			if cmd == nil {
-				t.Fatal("missing retry")
-			}
-			_ = m.retryClientSkills(old)
-		} else if cmd != nil {
-			t.Fatal("retry limit exceeded")
-		}
-	}
-	if m.syncClientSkills() != nil || m.retryClientSkills(old) != nil {
-		t.Fatal("exhausted retries restarted")
-	}
-	if !strings.Contains(latestNotice(m).Text, "Could not load client skill suggestions") {
+	failed := clientSkillsResultMsg{generation: m.skillMenu.task.gen, epoch: m.conversationEpoch, err: context.DeadlineExceeded}
+	_ = m.applyClientSkills(failed)
+	if !strings.Contains(latestNotice(m).Text, "Could not load client skill suggestions") || m.clientSkills != nil {
 		t.Fatal("failure did not reach the user")
 	}
+	if m.syncClientSkills() != nil {
+		t.Fatal("failed load retried within the same conversation")
+	}
 	m.conversationEpoch++
-	if cmd := m.syncClientSkills(); cmd == nil || m.skillMenu.attempts != 1 {
-		t.Fatal("new conversation did not reset attempts")
+	cmd := m.syncClientSkills()
+	if cmd == nil {
+		t.Fatal("new conversation did not reload the menu")
 	}
-	if m.retryClientSkills(old) != nil {
-		t.Fatal("previous conversation retry was accepted")
-	}
-}
-
-func TestClientSkillFailureRecoversDraftWithoutOverwritingEdits(t *testing.T) {
-	for _, edit := range []string{"unchanged", "typed", "typed then cleared", "new conversation", "logout"} {
-		t.Run(edit, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			root := t.TempDir()
-			path := installTestSkill(t, root, "review", true)
-			m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
-			m.applyClientSkills(m.loadClientSkillMenu()().(clientSkillsResultMsg))
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-			m.editor.Focus()
-			original := "/skill:review   Keep CASE\n  and whitespace  "
-			m.editor.Update(tea.PasteMsg{Content: original})
-			_, _ = m.submit()
-			switch edit {
-			case "typed":
-				m.editor.Update(tea.PasteMsg{Content: "new draft"})
-			case "typed then cleared":
-				m.editor.SetValue("new draft")
-				m.editor.Reset()
-			case "new conversation":
-				m.op.then = thenNewConversation
-			case "logout":
-				m.op.then = thenLogout
-			}
-			for event := range m.op.events {
-				m.applyEvent(event)
-			}
-			want := ""
-			if edit == "unchanged" {
-				want = original
-			}
-			if edit == "typed" {
-				want = "new draft"
-			}
-			if got := m.editor.Value(); got != want {
-				t.Fatalf("draft = %q, want %q", got, want)
-			}
-			if m.op.submission != nil {
-				t.Fatal("rejected submission retained")
-			}
-		})
+	m.applyClientSkills(cmd().(clientSkillsResultMsg))
+	if m.clientSkills == nil || len(m.clientSkills) != 0 {
+		t.Fatal("empty successful registry was not accepted")
 	}
 }
 
-func TestClientSkillAcceptedTurnDoesNotRestoreDraftOnBackendError(t *testing.T) {
+func TestClientSkillUnknownNameKeepsDraftOnceMenuLoaded(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.applyClientSkills(clientSkillsResultMsg{skills: []agent.SkillSummary{{Name: "review"}}})
+	m.editor.SetValue("/skill:missing Keep CASE")
+	_, _ = m.submit()
+	if m.op.events != nil || m.editor.Value() != "/skill:missing Keep CASE" {
+		t.Fatal("unknown skill started a turn or cleared the draft")
+	}
+	if !strings.Contains(latestNotice(m).Text, "Unknown client skill: missing") {
+		t.Fatal("unknown skill was not reported")
+	}
+}
+
+func TestClientSkillReadFailureFailsTurnLikeBackendError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
-	installTestSkill(t, root, "review", true)
-	backend := &skillRecordingBackend{err: errors.New("backend failed")}
-	m := New(agent.New(backend, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
+	path := installTestSkill(t, root, "review", true)
+	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
+	m.applyClientSkills(m.loadClientSkillMenu()().(clientSkillsResultMsg))
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
 	m.editor.SetValue("/skill:review argument")
 	_, _ = m.submit()
+	var failure error
 	for event := range m.op.events {
+		if event.Err != nil {
+			failure = event.Err
+		}
 		m.applyEvent(event)
 	}
-	if m.editor.Value() != "" || m.op.submission != nil || len(m.transcript.UserPrompts()) != 1 {
-		t.Fatal("accepted submission was restored or not recorded")
+	if failure == nil || m.chatPhase != chat.PhaseError {
+		t.Fatalf("failure = %v, phase = %v", failure, m.chatPhase)
 	}
-	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
-	if m.editor.Value() != "" {
-		t.Fatal("closing accepted turn restored draft")
-	}
-}
-
-func TestClientSkillCanceledPreparationRecoversOnlyCurrentSubmission(t *testing.T) {
-	m := newModelWithSpy(t)
-	m.editor.SetValue("/skill:review preserve me")
-	draft := m.editor.TakeDraft()
-	events := make(chan agent.Event)
-	close(events)
-	m.op = operation{kind: opTurn, gen: 2, events: events, stop: stopAll, submission: &pendingSubmission{draft: draft}}
-	_, _ = m.dispatch(turnEventMsg{generation: 1, ev: agent.Event{Kind: agent.EventError, Err: errors.New("stale")}})
-	if m.editor.Value() != "" || m.op.submission == nil {
-		t.Fatal("stale error affected pending submission")
-	}
-	_, _ = m.handleTurnClosed(turnClosedMsg{generation: 2})
-	if m.editor.Value() != "/skill:review preserve me" || m.op.submission != nil {
-		t.Fatal("canceled preparation lost draft")
+	if prompts := m.transcript.UserPrompts(); len(prompts) != 1 || m.editor.Value() != "" {
+		t.Fatal("failed skill turn did not keep its user block")
 	}
 }
