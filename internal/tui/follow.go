@@ -23,8 +23,8 @@ type followControl struct {
 }
 
 func (m *Model) followTarget() (string, image.Rectangle) {
-	if m.mode != ModeChat || m.frame.tooSmall || m.activeToolUI != nil ||
-		len(m.pendingApprovals) > 0 || m.editor.MenuOpen() ||
+	if m.mode != ModeChat || m.frame.tooSmall || m.shown != nil ||
+		m.editor.MenuOpen() ||
 		m.selection.selecting() || m.selection.selected() ||
 		m.list.Height() <= 0 || m.list.Following() || m.list.AtBottom() {
 		return "", image.Rectangle{}
@@ -87,7 +87,7 @@ func (m *Model) handleFollowMouse(msg tea.Msg) bool {
 			return false
 		}
 		m.follow.pressed = area
-		m.clearSelection()
+		m.selection.clear()
 		return true
 	case tea.MouseMotionMsg:
 		_, area := m.followTarget()

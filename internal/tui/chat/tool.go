@@ -85,34 +85,29 @@ type toolRenderSpec struct {
 	// static marks a renderer that ignores disclosure, so List offers no
 	// disclosure control.
 	static   bool
-	interact func(call agent.ToolCall) ToolInteraction // nil = not interactive
+	interact func(call agent.ToolCall) ToolPrompt // nil = not interactive
 }
 
-// ToolInteraction replaces the composer while a tool waits on the user.
-// Mouse coordinates are relative to its top-left corner.
-type ToolInteraction interface {
-	Update(tea.Msg) tea.Cmd
-	View() string
-	Height() int
-	MinSize() (width, height int)
-	SetSize(width, height int, theme styles.Theme)
-	// Result reports the user's answer once they are done. The tool, not the
-	// UI, turns it into the model-visible result.
+// ToolPrompt is the interactive UI a client tool asks the user through. The
+// host shows it like a tool approval, and hands Result to the waiting tool.
+type ToolPrompt interface {
+	components.Prompt
+	// Result returns the user's answer; the tool converts it to a call result.
 	Result() (any, bool)
 }
 
-// NewToolInteraction builds the interactive UI registered for a client tool.
-func NewToolInteraction(call agent.ToolCall) (ToolInteraction, bool) {
+// NewToolPrompt builds the interactive UI registered for a client tool.
+func NewToolPrompt(call agent.ToolCall) (ToolPrompt, bool) {
 	renderSpec := toolRenderSpecFor(spec.Identity{ClientSide: true, Name: call.Name})
 	if renderSpec.interact == nil {
 		return nil, false
 	}
-	interaction := renderSpec.interact(call)
-	return interaction, interaction != nil
+	prompt := renderSpec.interact(call)
+	return prompt, prompt != nil
 }
 
 var (
-	questionToolRenderSpec = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, static: true, interact: newQuestionInteraction}
+	questionToolRenderSpec = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, static: true, interact: newQuestionPrompt}
 	simpleToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool}
 	readToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, group: inspectionGroupKey}
 	listToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, group: inspectionGroupKey}
@@ -1077,9 +1072,10 @@ func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, c renderCont
 	return strings.Join(lines, "\n")
 }
 
-type questionInteraction struct{ *components.Questionnaire }
+// questionPrompt asks ask_user_question's questions with a Questionnaire.
+type questionPrompt struct{ form *components.Questionnaire }
 
-func newQuestionInteraction(call agent.ToolCall) ToolInteraction {
+func newQuestionPrompt(call agent.ToolCall) ToolPrompt {
 	input, err := spec.ParseQuestions(call.Input)
 	if err != nil {
 		return nil
@@ -1091,11 +1087,25 @@ func newQuestionInteraction(call agent.ToolCall) ToolInteraction {
 			questions[i].Options = append(questions[i].Options, components.Option{Label: option.Label, Description: option.Description})
 		}
 	}
-	return questionInteraction{components.NewQuestionnaire(questions)}
+	return questionPrompt{components.NewQuestionnaire(questions)}
 }
 
-func (q questionInteraction) Result() (any, bool) {
-	answers, dismissed, done := q.Answers()
+func (q questionPrompt) Update(msg tea.Msg) (tea.Cmd, bool) { return q.form.Update(msg) }
+
+func (q questionPrompt) Layout(slot components.Slot) (string, bool) {
+	q.form.SetSize(slot.Width, slot.Height)
+	minWidth, minHeight := q.form.MinSize()
+	return q.form.View(), slot.Width >= minWidth && slot.Height >= minHeight
+}
+
+// Placement puts the form in place of the composer: answering it is the one
+// thing to do.
+func (q questionPrompt) Placement() components.Placement { return components.ReplacesInput }
+
+func (q questionPrompt) SetStyles(theme styles.Theme) { q.form.SetStyles(theme) }
+
+func (q questionPrompt) Result() (any, bool) {
+	answers, dismissed, done := q.form.Answers()
 	if !done {
 		return nil, false
 	}

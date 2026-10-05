@@ -22,13 +22,14 @@ type PanelContent struct {
 	// MinBodyWidth is the narrowest body the full layout renders; below it the
 	// panel falls back to its compact form.
 	MinBodyWidth int
-	// BodyHeader, ScrollableBody, and BodyFooter form an optional bounded
-	// layout whose scroll state is owned by Panel. ScrollableBody must return
-	// display-width-wrapped rows; Panel performs vertical paging only.
+	// These fields define a bounded, vertically scrollable body. The caller
+	// owns ScrollOffset and receives the visible Window from Layout.
 	BodyHeader     func(width int) string
 	ScrollableBody func(width int) string
 	BodyFooter     func(width int) string
 	BodyFooterGap  int
+	ScrollOffset   int
+	ScrollHint     string
 	FooterLeft     string
 	FooterRight    string
 
@@ -38,12 +39,23 @@ type PanelContent struct {
 	TinyMessage    string
 }
 
-// Panel renders the shared understated, responsive bordered surface.
+// Window describes the visible slice of a scrollable body.
+type Window struct {
+	Offset, Rows, Page int
+}
+
+// Scrolled returns the window moved by rows, clamped to the body.
+func (w Window) Scrolled(rows int) Window {
+	w.Offset = min(max(0, w.Offset+rows), max(0, w.Rows-w.Page))
+	return w
+}
+
+// PageSize is the number of rows a page jump moves.
+func (w Window) PageSize() int { return max(1, w.Page) }
+
+// Panel renders a responsive bordered surface using shared theme styles.
 type Panel struct {
-	styles         styles.Panel
-	scrollOffset   int
-	scrollPageSize int
-	scrollRows     int
+	styles styles.Panel
 }
 
 // NewPanel creates a panel with the supplied shared theme styles.
@@ -51,24 +63,6 @@ func NewPanel(sty styles.Panel) *Panel { return &Panel{styles: sty} }
 
 // SetStyles replaces the panel's theme-derived styles.
 func (p *Panel) SetStyles(sty styles.Panel) { p.styles = sty }
-
-// ResetScroll returns an optional scrollable body to its first row.
-func (p *Panel) ResetScroll() {
-	p.scrollOffset = 0
-	p.scrollPageSize = 0
-	p.scrollRows = 0
-}
-
-// ScrollBy moves an optional scrollable body by rows. Rendering normalizes the
-// offset again after content or dimensions change.
-func (p *Panel) ScrollBy(rows int) {
-	maxOffset := max(0, p.scrollRows-p.scrollPageSize)
-	p.scrollOffset = min(max(0, p.scrollOffset+rows), maxOffset)
-}
-
-// PageUp and PageDown move an optional scrollable body by one visible page.
-func (p *Panel) PageUp()   { p.ScrollBy(-max(1, p.scrollPageSize)) }
-func (p *Panel) PageDown() { p.ScrollBy(max(1, p.scrollPageSize)) }
 
 // View renders and centers a full panel when it fits, otherwise a bounded
 // compact or one-line fallback. The returned string never exceeds width/height.
@@ -83,25 +77,32 @@ func (p *Panel) View(width, height int, content PanelContent) string {
 // layout. It uses the same bounded full and compact states as View without
 // adding the surrounding centering space.
 func (p *Panel) Render(width, height int, content PanelContent) string {
+	rendered, _, _ := p.Layout(width, height, content)
+	return rendered
+}
+
+// Layout also reports the visible body window and whether controls were shown.
+func (p *Panel) Layout(width, height int, content PanelContent) (string, Window, bool) {
 	if width <= 0 || height <= 0 {
-		return ""
+		return "", Window{}, false
 	}
-	if full, ok := p.fit(width, height, content); ok {
-		return full
+	if full, window, ok := p.fit(width, height, content); ok {
+		return full, window, true
 	}
-	return p.compact(width, height, content)
+	compact, shown := p.compact(width, height, content)
+	return compact, Window{}, shown
 }
 
 // Fits reports whether Render shows the full layout rather than a compact
 // fallback, so a caller can disable controls the fallback hides.
 func (p *Panel) Fits(width, height int, content PanelContent) bool {
-	_, ok := p.fit(width, height, content)
+	_, _, ok := p.fit(width, height, content)
 	return ok
 }
 
-func (p *Panel) fit(width, height int, content PanelContent) (string, bool) {
-	full := p.full(width, height, content)
-	return full, full != "" && lipgloss.Width(full) <= width && lipgloss.Height(full) <= height
+func (p *Panel) fit(width, height int, content PanelContent) (string, Window, bool) {
+	full, window := p.full(width, height, content)
+	return full, window, full != "" && lipgloss.Width(full) <= width && lipgloss.Height(full) <= height
 }
 
 // BodySize is the body area the full layout leaves at width×height, below a
@@ -121,20 +122,23 @@ func (p *Panel) BodySize(width, height int, footer bool) (int, int) {
 
 func (p *Panel) gapRows() int { return max(1, p.styles.SectionGap+1) }
 
-func (p *Panel) full(width, height int, content PanelContent) string {
+func (p *Panel) full(width, height int, content PanelContent) (string, Window) {
 	hasFooter := content.FooterLeft != "" || content.FooterRight != ""
 	bodyWidth, bodyHeight := p.BodySize(width, height, hasFooter)
 	if bodyWidth < max(1, content.MinBodyWidth) {
-		return ""
+		return "", Window{}
 	}
 
+	var window Window
 	sections := []string{p.header(bodyWidth, content.Title, content.Dismiss)}
 	switch {
 	case content.ScrollableBody != nil:
 		if bodyHeight <= 0 {
-			return ""
+			return "", Window{}
 		}
-		sections = append(sections, p.scrollableBody(bodyWidth, bodyHeight, content))
+		var body string
+		body, window = p.scrollableBody(bodyWidth, bodyHeight, content)
+		sections = append(sections, body)
 	case content.Body != nil:
 		sections = append(sections, content.Body(bodyWidth, bodyHeight))
 	}
@@ -143,10 +147,11 @@ func (p *Panel) full(width, height int, content PanelContent) string {
 	}
 	sections = slices.DeleteFunc(sections, func(section string) bool { return section == "" })
 	gap := strings.Repeat("\n", p.gapRows())
-	return p.styles.Frame.Width(bodyWidth + p.styles.Frame.GetHorizontalFrameSize()).Render(strings.Join(sections, gap))
+	framed := p.styles.Frame.Width(bodyWidth + p.styles.Frame.GetHorizontalFrameSize()).Render(strings.Join(sections, gap))
+	return framed, window
 }
 
-func (p *Panel) scrollableBody(width, height int, content PanelContent) string {
+func (p *Panel) scrollableBody(width, height int, content PanelContent) (string, Window) {
 	header, body, footer := "", content.ScrollableBody(width), ""
 	if content.BodyHeader != nil {
 		header = content.BodyHeader(width)
@@ -162,38 +167,34 @@ func (p *Panel) scrollableBody(width, height int, content PanelContent) string {
 		rows = nil
 	}
 
+	// Give the body all rows left by the header and footer.
 	parts := []string{header, body, footer}
-	fixedHeight, separators := 0, -1
+	fixedHeight := 0
 	for _, part := range parts {
-		if part == "" {
-			continue
+		if part != "" {
+			fixedHeight += lipgloss.Height(part)
 		}
-		fixedHeight += lipgloss.Height(part)
-		separators++
 	}
-	available := height - fixedHeight + len(rows) - max(0, separators)
+	available := height - fixedHeight + len(rows)
 	if available < 1 || len(rows) <= available {
-		p.scrollOffset = 0
-		p.scrollPageSize = len(rows)
-		p.scrollRows = len(rows)
-		return joinNonEmpty(parts...)
+		return joinNonEmpty(parts...), Window{Rows: len(rows), Page: len(rows)}
 	}
 
 	pageSize := available - 1 // reserve a row for position and key help
 	if pageSize < 1 {
 		// The natural body makes the full layout fail its height check and lets
 		// the panel select its existing compact fallback.
-		return joinNonEmpty(parts...)
+		return joinNonEmpty(parts...), Window{}
 	}
-	p.scrollRows = len(rows)
-	p.scrollPageSize = pageSize
-	maxOffset := len(rows) - pageSize
-	p.scrollOffset = min(max(0, p.scrollOffset), maxOffset)
-	end := min(len(rows), p.scrollOffset+pageSize)
-	position := fmt.Sprintf("lines %d–%d of %d · pgup/pgdown scroll", p.scrollOffset+1, end, len(rows))
-	middle := strings.Join(rows[p.scrollOffset:end], "\n") + "\n" +
+	window := Window{Rows: len(rows), Page: pageSize}.Scrolled(content.ScrollOffset)
+	end := min(len(rows), window.Offset+pageSize)
+	position := fmt.Sprintf("lines %d–%d of %d", window.Offset+1, end, len(rows))
+	if content.ScrollHint != "" {
+		position += " · " + content.ScrollHint
+	}
+	middle := strings.Join(rows[window.Offset:end], "\n") + "\n" +
 		p.styles.Help.Render(ansi.Truncate(position, width, "…"))
-	return joinNonEmpty(header, middle, footer)
+	return joinNonEmpty(header, middle, footer), window
 }
 
 func joinNonEmpty(parts ...string) string {
@@ -241,13 +242,15 @@ func (p *Panel) footer(width int, left, right string) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right)
 }
 
-func (p *Panel) compact(width, height int, content PanelContent) string {
+// compact renders the compact form, or the one-line fallback when even that
+// does not fit. It reports whether the compact form showed.
+func (p *Panel) compact(width, height int, content PanelContent) (string, bool) {
 	tiny := content.TinyMessage
 	if tiny == "" {
 		tiny = content.CompactTitle
 	}
 	if height < 3 || width < 20 {
-		return p.styles.Compact.Render(ansi.Truncate(tiny, width, ""))
+		return p.styles.Compact.Render(ansi.Truncate(tiny, width, "")), false
 	}
 
 	title := content.CompactTitle
@@ -267,7 +270,7 @@ func (p *Panel) compact(width, height int, content PanelContent) string {
 	}
 	candidate := p.styles.Compact.Width(compactWidth).Render(title + "\n\n" + message)
 	if lipgloss.Width(candidate) <= width && lipgloss.Height(candidate) <= height {
-		return candidate
+		return candidate, true
 	}
-	return p.styles.Compact.Render(ansi.Truncate(tiny, width, ""))
+	return p.styles.Compact.Render(ansi.Truncate(tiny, width, "")), false
 }

@@ -121,8 +121,8 @@ func TestCtrlOTogglesInEveryChatFocus(t *testing.T) {
 		},
 		{
 			"approval",
-			func(m *Model) { m.pendingApprovals = []agent.Block{accordionTestBlock()} },
-			func(m *Model) bool { return m.focus() == focusApproval },
+			func(m *Model) { m.syncApprovals([]agent.Block{accordionTestBlock()}) },
+			func(m *Model) bool { return m.focus() == focusPrompt },
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

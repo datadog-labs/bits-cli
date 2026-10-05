@@ -194,12 +194,11 @@ type Model struct {
 	logout    LogoutFunc
 	loggedOut bool
 
+	// Tool calls waiting on the user, by source, and the one shown (see ask).
 	toolUI           *tools.UI
-	activeToolUI     *toolUISession
-	queuedToolUIs    []*toolUISession
-	pendingApprovals []agent.Block
-	approvalChoice   int
-	approvalPanel    *components.Panel
+	approvals        map[string]*approvalAsk // mirrors the transcript, by call ID
+	toolUIs          []*toolAsk              // requests from the tools.UI channel
+	shown            ask
 	permissionsPanel *components.Panel
 	// The picker shows the options, or the full-access confirmation; the
 	// cursor is the row on the page shown (on the confirmation, 0 is Yes).
@@ -342,11 +341,11 @@ func newShell() *Model {
 		animActivity:      newAnimationTimeline(activityAnimInterval),
 		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
 		status:            statusview.New(1, 1, theme),
-		approvalPanel:     components.NewPanel(theme.Approval.Panel),
 		permissionsPanel:  components.NewPanel(theme.Permissions),
 		styles:            theme,
 		searchSessionID:   newSearchSessionID(),
 		entitySearchCache: make(map[string]entitySearchCacheEntry),
+		approvals:         make(map[string]*approvalAsk),
 		resume:            resume{now: time.Now},
 		chatMouseMode:     chatMouseMode(),
 	}
@@ -384,7 +383,12 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	m.list.SetStyles(m.chatStyles)
 	m.editor.SetInputStyles(theme.Input)
 	m.editor.SetStyles(theme.Editor)
-	m.approvalPanel.SetStyles(theme.Approval.Panel)
+	for _, a := range m.approvals {
+		a.panel.SetStyles(theme)
+	}
+	for _, t := range m.toolUIs {
+		t.form.SetStyles(theme)
+	}
 	m.permissionsPanel.SetStyles(theme.Permissions)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
@@ -397,7 +401,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 // control to chat without replacing or quitting the root model.
 func (m *Model) setMode(mode Mode) {
 	if m.mode == ModeChat && mode != ModeChat {
-		m.clearSelection()
+		m.selection.clear()
 		m.follow = followControl{}
 	}
 	m.mode = mode

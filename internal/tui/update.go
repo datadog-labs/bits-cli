@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"image"
 	"strings"
 	"time"
 
@@ -60,18 +61,6 @@ type (
 	}
 )
 
-type approvalChoice struct {
-	decision     agent.ApprovalDecision
-	label        string
-	compactLabel string
-}
-
-var approvalChoices = [...]approvalChoice{
-	{decision: agent.ApprovalAllowOnce, label: "Allow", compactLabel: "Allow"},
-	{decision: agent.ApprovalAllowSession, label: "Allow for session", compactLabel: "Session"},
-	{decision: agent.ApprovalDeny, label: "Deny", compactLabel: "Deny"},
-}
-
 // postNotice adds a session-only message at the current point in the agent
 // transcript. It never enters the engine's transcript or backend.
 func (m *Model) postNotice(n chat.Notice) tea.Cmd {
@@ -106,8 +95,7 @@ type focus int
 
 const (
 	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
-	focusToolUI                   // a tool's interactive UI replaces the composer
-	focusApproval                 // a tool approval is pending
+	focusPrompt                   // a tool approval or a tool's UI is shown (see prompt)
 	focusPicker                   // the /resume conversation picker
 	focusStatus                   // the local /status document
 	focusPermissions              // the permissions picker
@@ -125,11 +113,8 @@ func (m *Model) focus() focus {
 	case ModePermissions:
 		return focusPermissions
 	case ModeChat, ModeTermInit:
-		if m.activeToolUI != nil {
-			return focusToolUI
-		}
-		if len(m.pendingApprovals) > 0 {
-			return focusApproval
+		if m.prompt() != nil {
+			return focusPrompt
 		}
 	}
 	return focusEditor
@@ -258,7 +243,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch msg := msg.(type) {
 	case toolUIOpenedMsg:
-		m.activateToolUI(msg.request)
+		m.openToolUI(msg.request)
 		return m, waitToolUI(m.toolUI)
 
 	case tea.WindowSizeMsg:
@@ -288,41 +273,8 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
-	case tea.MouseWheelMsg:
-		return m, m.handleMouseWheel(msg)
-
-	case tea.MouseClickMsg:
-		if m.focus() == focusToolUI {
-			return m, m.updateToolUI(msg)
-		}
-		if m.mode == ModeChat {
-			if msg.Button == tea.MouseLeft {
-				// The press might turn into a drag-select, so it isn't a toggle
-				// yet: arm it, and let finishSelection decide on release whether
-				// the gesture stayed a plain click or moved and became a
-				// selection.
-				m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.HeaderAt(msg.Y)
-				return m, m.beginSelection(msg)
-			}
-			return m, nil
-		}
-
-	case tea.MouseMotionMsg:
-		if m.mode == ModeChat {
-			m.list.SetPointerRow(msg.Y)
-			if m.selection.selecting() {
-				return m, m.extendSelection(msg)
-			}
-			return m, nil
-		}
-
-	case tea.MouseReleaseMsg:
-		if m.mode == ModeChat {
-			if m.selection.selecting() {
-				return m, m.finishSelection(msg)
-			}
-			return m, nil
-		}
+	case tea.MouseMsg:
+		return m, m.handleMouse(msg)
 
 	case selectionTickMsg:
 		return m, m.advanceSelectionScroll(msg)
@@ -392,8 +344,11 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.postNotice(notice(chat.NoticeInfo, nil, "Opened Assistant settings in your browser: %s", msg.url))
 	}
 
-	if m.focus() == focusToolUI {
-		return m, m.updateToolUI(msg)
+	if m.focus() == focusPrompt {
+		// Paste, cursor blink, and the like belong to the prompt, never to the
+		// inert editor below it.
+		cmd, _ := m.updatePrompt(msg)
+		return m, cmd
 	}
 	if m.focus() == focusPicker {
 		return m, m.updateConversationPicker(msg)
@@ -456,7 +411,7 @@ func (m *Model) beginSelection(msg tea.MouseClickMsg) tea.Cmd {
 		m.editor.CloseMenu()
 	}
 	scope := selectionScopeLower
-	if msg.Y < m.frame.transcript.Max.Y {
+	if m.frame.at(image.Pt(msg.X, msg.Y)) == regionTranscript {
 		scope = selectionScopeTranscript
 	}
 	m.selection.beginClick(m.visibleSelectionFrame(scope), scope, msg.X, msg.Y, m.hasPendingAccordionToggle, time.Now())
@@ -521,15 +476,33 @@ func (m *Model) advanceSelectionScroll(msg selectionTickMsg) tea.Cmd {
 	return m.armSelectionScroll()
 }
 
-func (m *Model) clearSelection() {
-	m.selection.clear()
-}
-
-func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
-	if m.focus() == focusToolUI {
-		if msg.Y >= m.frame.dock.Min.Y {
-			return m.updateToolUI(msg)
+// handleMouse routes pointer events by position; chat focus only routes keys.
+func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
+	switch m.focus() {
+	case focusPicker:
+		return m.updateConversationPicker(msg)
+	case focusStatus:
+		return m.updateStatus(msg)
+	default:
+	}
+	if m.mode != ModeChat {
+		// The permissions popup covers the chat; the pointer drives neither.
+		return nil
+	}
+	switch msg := msg.(type) {
+	case tea.MouseMotionMsg:
+		m.list.SetPointerRow(msg.Y)
+		return m.extendSelection(msg)
+	case tea.MouseReleaseMsg:
+		return m.finishSelection(msg)
+	}
+	if m.frame.at(pointAt(msg)) == regionPrompt {
+		if cmd, used := m.updatePrompt(m.frame.inPrompt(msg)); used {
+			return cmd
 		}
+	}
+	switch msg := msg.(type) {
+	case tea.MouseWheelMsg:
 		switch msg.Button {
 		case tea.MouseWheelUp:
 			m.list.ScrollBy(-mouseWheelDelta)
@@ -537,30 +510,12 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 			m.list.ScrollBy(mouseWheelDelta)
 		default:
 		}
-		return nil
-	}
-	if m.focus() == focusPicker {
-		return m.updateConversationPicker(msg)
-	}
-	if m.focus() == focusStatus {
-		return m.updateStatus(msg)
-	}
-	if m.focus() == focusApproval {
-		switch msg.Button {
-		case tea.MouseWheelUp:
-			m.approvalPanel.ScrollBy(-mouseWheelDelta)
-		case tea.MouseWheelDown:
-			m.approvalPanel.ScrollBy(mouseWheelDelta)
-		default:
+	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft {
+			// Defer the toggle until release so drag selection can take over.
+			m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.HeaderAt(msg.Y)
+			return m.beginSelection(msg)
 		}
-		return nil
-	}
-	switch msg.Button {
-	case tea.MouseWheelUp:
-		m.list.ScrollBy(-mouseWheelDelta)
-	case tea.MouseWheelDown:
-		m.list.ScrollBy(mouseWheelDelta)
-	default:
 	}
 	return nil
 }
@@ -582,10 +537,7 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	} else if done.cancel != nil {
 		done.cancel() // release the turn/restore context
 	}
-	m.pendingApprovals = nil
-	m.approvalChoice = 0
-	m.approvalPanel.ResetScroll()
-	m.clearToolUIs()
+	m.clearAsks()
 
 	if done.then == thenLogout {
 		// Logging out makes a queued permissions mode moot.
@@ -680,24 +632,32 @@ func (m *Model) stopStartup() {
 
 // handleKey routes a keypress to the surface that owns input. Global quit is
 // handled earlier in Update.
+//
+// Ctrl+O toggles tool blocks and Shift+PgUp/PgDn page chat from any chat focus.
+// PgUp/PgDn go to the focused prompt or transcript.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" && m.selection.active() {
-		m.clearSelection()
+		m.selection.clear()
 		return m, nil
 	}
-	// ctrl+o toggles every tool block whenever the transcript is visible,
-	// whichever chat surface (editor, completion menu, approval) owns input.
-	if msg.String() == "ctrl+o" && m.mode == ModeChat {
-		m.list.ToggleAllDisclosure()
-		return m, nil
+	if m.mode == ModeChat {
+		switch msg.String() {
+		case "ctrl+o":
+			m.list.ToggleAllDisclosure()
+			return m, nil
+		case "shift+pgup":
+			m.list.PageUp()
+			return m, nil
+		case "shift+pgdown":
+			m.list.PageDown()
+			return m, nil
+		}
 	}
 	switch m.focus() {
 	case focusPicker:
 		return m, m.updateConversationPicker(msg)
-	case focusToolUI:
-		return m, m.updateToolUI(msg)
-	case focusApproval:
-		return m.handleApprovalKey(msg)
+	case focusPrompt:
+		return m, m.handlePromptKey(msg)
 	case focusStatus:
 		return m, m.updateStatus(msg)
 	case focusPermissions:
@@ -773,29 +733,15 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmd, m.syncCompletionSearches())
 }
 
-func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "left", "shift+tab":
-		m.approvalChoice = (m.approvalChoice + len(approvalChoices) - 1) % len(approvalChoices)
-	case "right", "tab":
-		m.approvalChoice = (m.approvalChoice + 1) % len(approvalChoices)
-	case "pgup":
-		m.approvalPanel.PageUp()
-	case "pgdown":
-		m.approvalPanel.PageDown()
-	case "esc":
-		m.respondToApproval(agent.ApprovalDeny)
-	case "enter":
-		m.respondToApproval(approvalChoices[m.approvalChoice].decision)
+// handlePromptKey gives a key to the shown prompt; the inert editor never
+// sees it. ctrl+x stops the tool round the prompt belongs to.
+func (m *Model) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
+	if msg.String() == "ctrl+x" {
+		m.stopTools()
+		return nil
 	}
-	return m, nil
-}
-
-func (m *Model) respondToApproval(decision agent.ApprovalDecision) {
-	if len(m.pendingApprovals) == 0 {
-		return
-	}
-	m.engine.Decide(m.pendingApprovals[0].ToolCallID(), decision)
+	cmd, _ := m.updatePrompt(msg)
+	return cmd
 }
 
 // submit routes slash commands through their active-turn policy, or starts a
@@ -871,14 +817,15 @@ func (m *Model) resumePendingTools() tea.Cmd {
 }
 
 // cancelOperation cancels a running engine operation once and drops its tool
-// UIs. Logout is never interrupted this way.
+// UIs; its approvals go when the operation closes. Logout is never
+// interrupted this way.
 func (m *Model) cancelOperation() {
 	if m.op.events == nil || m.op.stop == stopAll {
 		return
 	}
 	m.op.stop = stopAll
 	m.op.cancel()
-	m.clearToolUIs()
+	m.dropToolUIs()
 }
 
 // after queues next for when the running operation ends, and cancels the
@@ -896,8 +843,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	switch ev.Kind {
 	case agent.EventTranscript:
 		m.transcript = ev.Transcript
-		m.updatePendingApprovals(ev.Transcript.PendingApprovals())
-		m.reconcileToolUI()
+		m.syncApprovals(ev.Transcript.PendingApprovals())
 		if ev.Transcript.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}
@@ -925,18 +871,6 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	return nil
 }
 
-func (m *Model) updatePendingApprovals(pending []agent.Block) {
-	current := ""
-	if len(m.pendingApprovals) > 0 {
-		current = m.pendingApprovals[0].ToolCallID()
-	}
-	m.pendingApprovals = pending
-	if len(m.pendingApprovals) == 0 || m.pendingApprovals[0].ToolCallID() != current {
-		m.approvalChoice = 0
-		m.approvalPanel.ResetScroll()
-	}
-}
-
 // setDarkBackground adapts styles to the detected terminal background.
 func (m *Model) setDarkBackground(isDark bool) {
 	if isDark == m.styles.IsDark {
@@ -946,7 +880,7 @@ func (m *Model) setDarkBackground(isDark bool) {
 }
 
 func (m *Model) resize(w, h int) {
-	m.clearSelection()
+	m.selection.clear()
 	m.follow = followControl{}
 	m.width, m.height = w, h
 	m.editor.SetWidth(w)
@@ -960,16 +894,15 @@ func (m *Model) resize(w, h int) {
 	}
 }
 
-// relayout derives the frame from current state and sizes the transcript to
-// it. Update calls it once, after every handler has run.
+// relayout rebuilds the frame and sizes the transcript and editor after each update.
 func (m *Model) relayout() {
 	if m.mode == ModeTermInit {
 		return
 	}
-	m.layoutToolUI()
+	m.reshow()
 	m.editor.SetPlaceholder(m.promptPlaceholder())
 	m.frame = m.layout()
-	m.editor.SetMenuHeight(m.frame.composerTop())
+	m.editor.SetMenuHeight(m.frame.inputTop())
 	m.list.SetHeight(m.frame.transcript.Dy())
 	m.list.SetHeader(m.headerView())
 }

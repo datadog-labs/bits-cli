@@ -12,16 +12,17 @@ import (
 const borderSweepInterval = 17 * time.Millisecond
 
 func (m *Model) animationsVisible() bool {
-	return m.mode == ModeChat && m.activeToolUI == nil && !m.frame.tooSmall
+	// A prompt replacing the composer dims the transcript, which stays still.
+	return m.mode == ModeChat && !m.frame.tooSmall && !m.frame.replaced
 }
 
 func (m *Model) toolAnimationWanted() bool {
 	return m.animationsVisible() && m.op.events != nil && m.list.HasAnimated()
 }
 
-// borderSweepWanted distinguishes active work from an approval-only wait. If
-// approvals coexist with a running tool, work is still progressing and the
-// sweep remains active.
+// borderSweepWanted distinguishes active work from a wait on the user. If a
+// shown prompt coexists with a running tool, work is still progressing and
+// the sweep remains active.
 func (m *Model) borderSweepWanted() bool {
 	if !m.animationsVisible() || !m.styles.Input.SweepMotion || m.op.events == nil {
 		return false
@@ -29,5 +30,5 @@ func (m *Model) borderSweepWanted() bool {
 	if m.chatPhase != chat.PhaseWaiting && m.chatPhase != chat.PhaseStreaming {
 		return false
 	}
-	return len(m.pendingApprovals) == 0 || m.list.HasAnimated()
+	return m.prompt() == nil || m.list.HasAnimated()
 }
