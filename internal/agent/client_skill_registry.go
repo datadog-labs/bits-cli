@@ -11,7 +11,7 @@ import (
 type skillRegistry struct {
 	ready   chan struct{}
 	cancel  context.CancelFunc
-	skills  []LocalSkill
+	skills  []registeredSkill
 	catalog string
 	err     error
 }
@@ -23,7 +23,7 @@ type skillRegistryCache struct {
 	current *skillRegistry
 }
 
-func (c *skillRegistryCache) load(ctx context.Context, discover func(context.Context) []LocalSkill) (*skillRegistry, error) {
+func (c *skillRegistryCache) load(ctx context.Context, discover func(context.Context) []registeredSkill) (*skillRegistry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

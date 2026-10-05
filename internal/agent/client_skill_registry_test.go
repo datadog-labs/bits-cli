@@ -19,7 +19,7 @@ func TestSkillRegistrySharesDiscoveryAndCallerCancellation(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var scans atomic.Int32
-	discover := func(ctx context.Context) []LocalSkill {
+	discover := func(ctx context.Context) []registeredSkill {
 		if scans.Add(1) == 1 {
 			close(started)
 		}
@@ -27,7 +27,7 @@ func TestSkillRegistrySharesDiscoveryAndCallerCancellation(t *testing.T) {
 		case <-release:
 		case <-ctx.Done():
 		}
-		return []LocalSkill{{Name: "review", Description: "Review"}}
+		return []registeredSkill{{Name: "review", Description: "Review"}}
 	}
 	firstCtx, stopFirst := context.WithCancel(ctx)
 	first := make(chan error, 1)
@@ -63,11 +63,11 @@ func TestSkillRegistryResetDuringDiscovery(t *testing.T) {
 	finishOld := make(chan struct{})
 	oldDone := make(chan error, 1)
 	go func() {
-		_, err := cache.load(ctx, func(scanCtx context.Context) []LocalSkill {
+		_, err := cache.load(ctx, func(scanCtx context.Context) []registeredSkill {
 			close(started)
 			<-scanCtx.Done()
 			<-finishOld
-			return []LocalSkill{{Name: "old"}}
+			return []registeredSkill{{Name: "old"}}
 		})
 		oldDone <- err
 	}()
@@ -77,7 +77,7 @@ func TestSkillRegistryResetDuringDiscovery(t *testing.T) {
 		t.Fatal(ctx.Err())
 	}
 	cache.reset()
-	fresh, err := cache.load(ctx, func(context.Context) []LocalSkill { return []LocalSkill{{Name: "new"}} })
+	fresh, err := cache.load(ctx, func(context.Context) []registeredSkill { return []registeredSkill{{Name: "new"}} })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestSkillRegistryResetDuringDiscovery(t *testing.T) {
 	if err := <-oldDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("old discovery = %v", err)
 	}
-	again, err := cache.load(ctx, func(context.Context) []LocalSkill { t.Error("old completion evicted new registry"); return nil })
+	again, err := cache.load(ctx, func(context.Context) []registeredSkill { t.Error("old completion evicted new registry"); return nil })
 	if err != nil || again != fresh || again.skills[0].Name != "new" {
 		t.Fatal("reset lost the new registry")
 	}
@@ -98,7 +98,7 @@ func TestSkillRegistrySharedByMenuAndCatalog(t *testing.T) {
 	writeSkillFile(t, dir, ".agents/skills/manual", "---\nname: manual\ndescription: User only\nmodel-invocable: false\n---\n")
 	backend := &instructionDeliveryBackend{}
 	engine := New(backend, assistant.SendOptions{}, WithClientSkills(NewClientSkills(dir, nil)))
-	menu := engine.LocalSkills(context.Background())
+	menu := mustClientSkills(t, engine)
 	if len(menu) != 2 || menu[0].Name != "manual" {
 		t.Fatalf("menu = %+v", menu)
 	}
@@ -108,7 +108,7 @@ func TestSkillRegistrySharedByMenuAndCatalog(t *testing.T) {
 	if !strings.Contains(backend.contexts[0], "original description") || strings.Contains(backend.contexts[0], "User only") {
 		t.Fatalf("catalog differs from menu: %q", backend.contexts[0])
 	}
-	if got := engine.LocalSkills(context.Background())[1].Description; got != "original description" {
+	if got := mustClientSkills(t, engine)[1].Description; got != "original description" {
 		t.Fatalf("registry mutated: %s", got)
 	}
 	if err := engine.NewConversation(); err != nil {
@@ -117,13 +117,32 @@ func TestSkillRegistrySharedByMenuAndCatalog(t *testing.T) {
 	// Headless turns can populate the same cache before any menu requests it.
 	drain(engine.StartTurn(context.Background(), TurnInput{Message: "new"}))
 	writeSkill(t, dir, ".agents/skills/review", "review", "resumed description")
-	if got := engine.LocalSkills(context.Background())[1].Description; got != "changed description" {
+	if got := mustClientSkills(t, engine)[1].Description; got != "changed description" {
 		t.Fatalf("menu rescanned engine registry: %s", got)
 	}
 	if err := engine.InstallConversation(context.Background(), &Conversation{id: "existing", transcript: NewTranscript()}); err != nil {
 		t.Fatal(err)
 	}
-	if got := engine.LocalSkills(context.Background())[1].Description; got != "resumed description" {
+	if got := mustClientSkills(t, engine)[1].Description; got != "resumed description" {
 		t.Fatalf("resume retained old registry: %s", got)
+	}
+}
+
+func mustClientSkills(t *testing.T, engine *Engine) []SkillSummary {
+	t.Helper()
+	skills, err := engine.ClientSkills(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return skills
+}
+
+func TestClientSkillsReturnsDiscoveryError(t *testing.T) {
+	engine := New(nil, assistant.SendOptions{}, WithClientSkills(NewClientSkills(t.TempDir(), nil)))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	summaries, err := engine.ClientSkills(ctx)
+	if !errors.Is(err, context.Canceled) || summaries != nil {
+		t.Fatalf("canceled load = (%v, %v)", summaries, err)
 	}
 }

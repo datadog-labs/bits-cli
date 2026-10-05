@@ -65,6 +65,7 @@ func (e *Editor) historyKey(key string) (tea.Cmd, bool) {
 // marked dismissed so a trailing @mention or leading /command is not treated
 // as a completion trigger.
 func (e *Editor) recall(text string) tea.Cmd {
+	e.revision++
 	e.ta.SetValue(text)
 	// SetValue neither refreshes the textarea's viewport content nor scrolls
 	// it, so a recall taller than the visible rows would show its head. An

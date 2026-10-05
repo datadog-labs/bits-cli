@@ -36,17 +36,23 @@ const (
 	ModePermissions
 )
 
+type pendingSubmission struct {
+	draft            editor.Draft
+	transcriptLength int
+}
+
 // operation is the one exclusive session operation: a turn (resumed client
 // tools included), a history restore, or logout. Anything that asks "can I
 // start something?" or "what happens when it ends?" reads it; chatPhase only
 // drives what the chat displays.
 type operation struct {
-	kind   opKind
-	gen    uint64             // stamps the operation's messages; never reset, so stale ones drop
-	events <-chan agent.Event // engine operations only
-	cancel context.CancelFunc
-	stop   stopLevel
-	then   followUp
+	submission *pendingSubmission
+	kind       opKind
+	gen        uint64             // stamps the operation's messages; never reset, so stale ones drop
+	events     <-chan agent.Event // engine operations only
+	cancel     context.CancelFunc
+	stop       stopLevel
+	then       followUp
 }
 
 type opKind uint8
@@ -171,10 +177,8 @@ type Model struct {
 	entitySearchCache      map[string]entitySearchCacheEntry
 	entitySearchCacheOrder []string
 
-	localSkills       map[string]agent.LocalSkill
-	localSkillsTask   task
-	localSkillsEngine *agent.Engine
-	localSkillsEpoch  uint64
+	clientSkills map[string]agent.SkillSummary
+	skillMenu    skillMenu
 
 	statusTask     task
 	statusIdentity string
@@ -433,7 +437,7 @@ func (m *Model) initChat() tea.Cmd {
 	}
 	if m.engine.ConversationID() == "" {
 		// Fetch the startup offer only when there is no history to restore.
-		return tea.Batch(append(commands, m.fetchRecentConversations(), m.syncLocalSkills())...)
+		return tea.Batch(append(commands, m.fetchRecentConversations(), m.syncClientSkills())...)
 	}
 	m.chatPhase = chat.PhaseLoading
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)

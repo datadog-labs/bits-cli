@@ -216,9 +216,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	localSkills := m.syncLocalSkills()
+	clientSkills := m.syncClientSkills()
 	m.relayout()
-	return m, tea.Batch(cmd, localSkills, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
+	return m, tea.Batch(cmd, clientSkills, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
 }
 
 func isUserInput(msg tea.Msg) bool {
@@ -235,7 +235,7 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.focus() == focusPicker {
 		m.closeConversationPicker()
 	}
-	m.localSkillsTask.stop()
+	m.skillMenu.task.stop()
 	m.statusTask.stop()
 	if m.op.cancel != nil {
 		m.op.cancel()
@@ -259,9 +259,10 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg := msg.(type) {
-	case localSkillsResultMsg:
-		m.applyLocalSkills(msg)
-		return m, nil
+	case clientSkillsResultMsg:
+		return m, m.applyClientSkills(msg)
+	case clientSkillsRetryMsg:
+		return m, m.retryClientSkills(msg)
 
 	case toolUIOpenedMsg:
 		m.activateToolUI(msg.request)
@@ -577,6 +578,12 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	if !m.op.accepts(msg.generation) {
 		return m, nil
 	}
+	// A cancellation can suppress the local echo after the engine accepted the
+	// message. Check its settled transcript before restoring a pending draft.
+	if pending := m.op.submission; pending != nil && len(m.engine.Snapshot()) > pending.transcriptLength {
+		m.op.submission = nil
+	}
+	m.restorePendingSubmission()
 	done := m.op
 	m.op = operation{gen: done.gen}
 	if m.chatPhase != chat.PhaseError {
@@ -731,7 +738,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					m.stopEntitySearch()
 					return m.dispatchCommand(name, "")
 				}
-				if _, ok := m.localSkills[strings.TrimPrefix(name, "skill:")]; strings.HasPrefix(name, "skill:") && ok {
+				if strings.HasPrefix(name, "skill:") {
 					m.editor.AcceptCommand()
 					return m.submit()
 				}
@@ -823,15 +830,9 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		text = " "
 	}
 
-	var invokedSkill *agent.LocalSkill
-	var skillArguments string
-	if name, arguments, ok := parseLocalSkillInvocation(raw); ok {
-		skill, found := m.localSkills[name]
-		if !found {
-			return m, m.postNotice(notice(chat.NoticeError, nil, "Unknown local skill: %s", name))
-		}
-		invokedSkill = &skill
-		skillArguments = arguments
+	var invocation *agent.SkillInvocation
+	if name, arguments, ok := parseClientSkillInvocation(raw); ok {
+		invocation = &agent.SkillInvocation{Name: name, Arguments: arguments}
 		text = raw
 	} else if name, argument, ok := parseCommand(raw); ok {
 		m.editor.Reset()
@@ -842,20 +843,25 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	turnContext := contextFromAttachments(attachments)
-	m.editor.Reset()
+	var submission *pendingSubmission
+	if invocation != nil {
+		submission = &pendingSubmission{draft: m.editor.TakeDraft(), transcriptLength: len(m.transcript.Blocks)}
+	} else {
+		m.editor.Reset()
+	}
 	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	events := m.engine.StartTurn(ctx, agent.TurnInput{
-		Message:        text,
-		LocalSkill:     invokedSkill,
-		SkillArguments: skillArguments,
-		Tools:          m.tools,
-		Context:        turnContext,
-		OnDeny:         agent.DenyContinue,
-		UserContext:    tools.UserContext(m.workspace, m.tools),
+		Message:     text,
+		Skill:       invocation,
+		Tools:       m.tools,
+		Context:     turnContext,
+		OnDeny:      agent.DenyContinue,
+		UserContext: tools.UserContext(m.workspace, m.tools),
 	})
 	wait := m.begin(opTurn, events, cancel)
+	m.op.submission = submission
 	m.chatPhase = chat.PhaseWaiting
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
@@ -916,6 +922,9 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
 	case agent.EventTranscript:
+		if pending := m.op.submission; pending != nil && len(ev.Transcript.Blocks) > pending.transcriptLength {
+			m.op.submission = nil
+		}
 		m.transcript = ev.Transcript
 		m.updatePendingApprovals(ev.Transcript.PendingApprovals())
 		m.reconcileToolUI()
@@ -929,6 +938,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	case agent.EventTurnDone:
 		m.chatPhase = chat.PhaseIdle
 	case agent.EventError:
+		m.restorePendingSubmission()
 		// A failure during restore is benign: drop to idle with a notice so the
 		// user can still type. A failure mid-turn is the turn's error state.
 		if m.op.kind == opRestore {
@@ -944,6 +954,16 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// restorePendingSubmission runs only for the current operation. A queued
+// conversation switch or logout discards its draft along with the operation.
+func (m *Model) restorePendingSubmission() {
+	pending := m.op.submission
+	m.op.submission = nil
+	if pending != nil && m.op.then == thenNothing {
+		m.editor.RestoreDraft(pending.draft)
+	}
 }
 
 func (m *Model) updatePendingApprovals(pending []agent.Block) {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,11 +17,12 @@ import (
 type skillRecordingBackend struct {
 	message any
 	opts    assistant.SendOptions
+	err     error
 }
 
 func (b *skillRecordingBackend) Send(_ context.Context, message any, opts assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
 	b.message, b.opts = message, opts
-	return "skill-conversation", nil
+	return "skill-conversation", b.err
 }
 
 func installTestSkill(t *testing.T, root, name string, userOnly bool) string {
@@ -40,7 +42,7 @@ func installTestSkill(t *testing.T, root, name string, userOnly bool) string {
 	return path
 }
 
-func TestLocalSkillSlashInvocation(t *testing.T) {
+func TestClientSkillSlashInvocation(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		skillName  string
@@ -70,7 +72,9 @@ func TestLocalSkillSlashInvocation(t *testing.T) {
 			path := installTestSkill(t, root, skillName, tc.userOnly)
 			backend := &skillRecordingBackend{}
 			m := New(agent.New(backend, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
-			m.applyLocalSkills(m.loadLocalSkillMenu()().(localSkillsResultMsg))
+			if tc.completion {
+				m.applyClientSkills(m.loadClientSkillMenu()().(clientSkillsResultMsg))
+			}
 			m.editor.Focus()
 			m.editor.Update(tea.PasteMsg{Content: tc.input})
 			if tc.completion && !m.editor.MenuOpen() {
@@ -117,13 +121,13 @@ func TestLocalSkillSlashInvocation(t *testing.T) {
 	}
 }
 
-func TestLocalSkillBuiltinCollisionsAndBusyGuard(t *testing.T) {
+func TestClientSkillBuiltinCollisionsAndBusyGuard(t *testing.T) {
 	m := newModelWithSpy(t)
-	m.applyLocalSkills(localSkillsResultMsg{skills: []agent.LocalSkill{
+	m.applyClientSkills(clientSkillsResultMsg{skills: []agent.SkillSummary{
 		{Name: "new"}, {Name: "exit"}, {Name: "permissions"}, {Name: "review", Description: "Review \x1b[2J"},
 	}})
 	for _, name := range []string{"new", "exit", "permissions"} {
-		if _, exists := m.localSkills[name]; !exists {
+		if _, exists := m.clientSkills[name]; !exists {
 			t.Fatalf("skill named %s missing from registry", name)
 		}
 		if _, builtin := lookupCommand(name); !builtin {
@@ -142,14 +146,14 @@ func TestLocalSkillBuiltinCollisionsAndBusyGuard(t *testing.T) {
 	}
 }
 
-func TestLocalSkillMenuRejectsStaleResults(t *testing.T) {
+func TestClientSkillMenuRejectsStaleResults(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	path := installTestSkill(t, root, "review", true)
 	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
-	old := m.loadLocalSkillMenu()().(localSkillsResultMsg)
-	m.applyLocalSkills(old)
-	if _, ok := m.localSkills["review"]; !ok {
+	old := m.loadClientSkillMenu()().(clientSkillsResultMsg)
+	m.applyClientSkills(old)
+	if _, ok := m.clientSkills["review"]; !ok {
 		t.Fatal("missing user-only skill")
 	}
 	if err := os.Remove(path); err != nil {
@@ -159,44 +163,44 @@ func TestLocalSkillMenuRejectsStaleResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.conversationEpoch++
-	cmd := m.syncLocalSkills()
-	m.applyLocalSkills(old)
-	if len(m.localSkills) != 0 {
+	cmd := m.syncClientSkills()
+	m.applyClientSkills(old)
+	if len(m.clientSkills) != 0 {
 		t.Fatal("stale result restored removed skill")
 	}
-	m.applyLocalSkills(cmd().(localSkillsResultMsg))
-	if len(m.localSkills) != 0 {
+	m.applyClientSkills(cmd().(clientSkillsResultMsg))
+	if len(m.clientSkills) != 0 {
 		t.Fatal("removed skill survived rescan")
 	}
-	old.generation = m.localSkillsTask.gen
+	old.generation = m.skillMenu.task.gen
 	m.conversationEpoch++
-	m.applyLocalSkills(old)
-	if len(m.localSkills) != 0 {
+	m.applyClientSkills(old)
+	if len(m.clientSkills) != 0 {
 		t.Fatal("old conversation result restored skill")
 	}
 }
 
-func TestParseLocalSkillInvocationPreservesArguments(t *testing.T) {
+func TestParseClientSkillInvocationPreservesArguments(t *testing.T) {
 	for _, arguments := range []string{"", "  Fix README.md\n\tKeep CASE  ", "\nmultiline\n", "\tMixed Case"} {
-		name, got, ok := parseLocalSkillInvocation("/skill:review" + arguments)
+		name, got, ok := parseClientSkillInvocation("/skill:review" + arguments)
 		if !ok || name != "review" || got != arguments {
 			t.Fatalf("parse = (%q, %q, %t), want arguments %q", name, got, ok, arguments)
 		}
 	}
 	for _, raw := range []string{" /skill:review", "explain /skill:review", "/review"} {
-		if _, _, ok := parseLocalSkillInvocation(raw); ok {
+		if _, _, ok := parseClientSkillInvocation(raw); ok {
 			t.Fatalf("accepted ordinary input %q", raw)
 		}
 	}
 }
 
-func TestLocalSkillInvocationPreservesAttachments(t *testing.T) {
+func TestClientSkillInvocationPreservesAttachments(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	installTestSkill(t, root, "review", true)
 	backend := &skillRecordingBackend{}
 	m := New(agent.New(backend, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
-	m.applyLocalSkills(m.loadLocalSkillMenu()().(localSkillsResultMsg))
+	m.applyClientSkills(m.loadClientSkillMenu()().(clientSkillsResultMsg))
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "/skill:review @check"})
 	_ = m.syncEntitySearch()
@@ -238,12 +242,12 @@ func TestLocalSkillInvocationPreservesAttachments(t *testing.T) {
 	}
 }
 
-func TestNewConversationRefreshesLocalSkillMenu(t *testing.T) {
+func TestNewConversationRefreshesClientSkillMenu(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	path := installTestSkill(t, root, "review", true)
 	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
-	m.applyLocalSkills(m.loadLocalSkillMenu()().(localSkillsResultMsg))
+	m.applyClientSkills(m.loadClientSkillMenu()().(clientSkillsResultMsg))
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
@@ -251,14 +255,14 @@ func TestNewConversationRefreshesLocalSkillMenu(t *testing.T) {
 	m.startNewConversation()
 	_, update := m.Update(nil)
 	for _, msg := range flattenMsgs(t, update) {
-		if result, ok := msg.(localSkillsResultMsg); ok {
-			m.applyLocalSkills(result)
+		if result, ok := msg.(clientSkillsResultMsg); ok {
+			m.applyClientSkills(result)
 		}
 	}
-	if _, old := m.localSkills["review"]; old {
+	if _, old := m.clientSkills["review"]; old {
 		t.Fatal("removed skill survived new conversation")
 	}
-	if _, found := m.localSkills["new"]; !found {
+	if _, found := m.clientSkills["new"]; !found {
 		t.Fatal("new skill missing after conversation reset")
 	}
 	m.editor.Focus()
@@ -273,25 +277,167 @@ func TestNewConversationRefreshesLocalSkillMenu(t *testing.T) {
 	}
 }
 
-func TestLocalSkillMenuWaitsForRestoreAndLoadsOncePerConversation(t *testing.T) {
+func TestClientSkillMenuWaitsForRestoreAndLoadsOncePerConversation(t *testing.T) {
 	m := newModelWithSpy(t)
 	m.op.kind = opRestore
-	if cmd := m.syncLocalSkills(); cmd != nil {
+	if cmd := m.syncClientSkills(); cmd != nil {
 		t.Fatal("discovery started before history installation could reset the registry")
 	}
 	m.op.kind = opIdle
-	cmd := m.syncLocalSkills()
+	cmd := m.syncClientSkills()
 	if cmd == nil {
 		t.Fatal("restore completion did not load the menu")
 	}
-	m.applyLocalSkills(cmd().(localSkillsResultMsg))
-	if cmd := m.syncLocalSkills(); cmd != nil {
+	m.applyClientSkills(cmd().(clientSkillsResultMsg))
+	if cmd := m.syncClientSkills(); cmd != nil {
 		t.Fatal("ordinary updates reload the menu")
 	}
 	m.conversationEpoch++
-	cmd = m.syncLocalSkills()
+	cmd = m.syncClientSkills()
 	if cmd == nil {
 		t.Fatal("new conversation did not load the menu")
 	}
-	m.applyLocalSkills(cmd().(localSkillsResultMsg))
+	m.applyClientSkills(cmd().(clientSkillsResultMsg))
+}
+
+func TestClientSkillMenuRetriesFailuresAndAcceptsEmptySuccess(t *testing.T) {
+	m := newModelWithSpy(t)
+	defer m.skillMenu.task.stop()
+	_ = m.syncClientSkills()
+	first := clientSkillsResultMsg{generation: m.skillMenu.task.gen, epoch: m.conversationEpoch, err: context.DeadlineExceeded}
+	if retry := m.applyClientSkills(first); retry == nil || m.skillMenu.state != skillMenuFailed {
+		t.Fatal("failed load did not schedule retry")
+	}
+	if cmd := m.syncClientSkills(); cmd != nil {
+		t.Fatal("ordinary update bypassed delayed retry")
+	}
+	retry := m.retryClientSkills(clientSkillsRetryMsg{generation: first.generation, epoch: first.epoch})
+	if retry == nil || m.skillMenu.state != skillMenuLoading {
+		t.Fatal("retry did not start a load")
+	}
+	m.applyClientSkills(retry().(clientSkillsResultMsg))
+	if m.skillMenu.state != skillMenuReady || m.skillMenu.attempts != 2 {
+		t.Fatal("empty successful registry was not accepted")
+	}
+	if cmd := m.syncClientSkills(); cmd != nil {
+		t.Fatal("empty successful registry retried")
+	}
+	if cmd := m.retryClientSkills(clientSkillsRetryMsg{generation: first.generation, epoch: first.epoch}); cmd != nil {
+		t.Fatal("stale retry restarted discovery")
+	}
+}
+
+func TestClientSkillMenuRetriesAreBoundedAndConversationScoped(t *testing.T) {
+	m := newModelWithSpy(t)
+	defer m.skillMenu.task.stop()
+	_ = m.syncClientSkills()
+	var old clientSkillsRetryMsg
+	for attempt := 1; attempt <= maxSkillMenuAttempts; attempt++ {
+		old = clientSkillsRetryMsg{generation: m.skillMenu.task.gen, epoch: m.conversationEpoch}
+		cmd := m.applyClientSkills(clientSkillsResultMsg{generation: old.generation, epoch: old.epoch, err: errors.New("discovery failed")})
+		if attempt < maxSkillMenuAttempts {
+			if cmd == nil {
+				t.Fatal("missing retry")
+			}
+			_ = m.retryClientSkills(old)
+		} else if cmd != nil {
+			t.Fatal("retry limit exceeded")
+		}
+	}
+	if m.syncClientSkills() != nil || m.retryClientSkills(old) != nil {
+		t.Fatal("exhausted retries restarted")
+	}
+	if !strings.Contains(latestNotice(m).Text, "Could not load client skill suggestions") {
+		t.Fatal("failure did not reach the user")
+	}
+	m.conversationEpoch++
+	if cmd := m.syncClientSkills(); cmd == nil || m.skillMenu.attempts != 1 {
+		t.Fatal("new conversation did not reset attempts")
+	}
+	if m.retryClientSkills(old) != nil {
+		t.Fatal("previous conversation retry was accepted")
+	}
+}
+
+func TestClientSkillFailureRecoversDraftWithoutOverwritingEdits(t *testing.T) {
+	for _, edit := range []string{"unchanged", "typed", "typed then cleared", "new conversation", "logout"} {
+		t.Run(edit, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			root := t.TempDir()
+			path := installTestSkill(t, root, "review", true)
+			m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
+			m.applyClientSkills(m.loadClientSkillMenu()().(clientSkillsResultMsg))
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			m.editor.Focus()
+			original := "/skill:review   Keep CASE\n  and whitespace  "
+			m.editor.Update(tea.PasteMsg{Content: original})
+			_, _ = m.submit()
+			switch edit {
+			case "typed":
+				m.editor.Update(tea.PasteMsg{Content: "new draft"})
+			case "typed then cleared":
+				m.editor.SetValue("new draft")
+				m.editor.Reset()
+			case "new conversation":
+				m.op.then = thenNewConversation
+			case "logout":
+				m.op.then = thenLogout
+			}
+			for event := range m.op.events {
+				m.applyEvent(event)
+			}
+			want := ""
+			if edit == "unchanged" {
+				want = original
+			}
+			if edit == "typed" {
+				want = "new draft"
+			}
+			if got := m.editor.Value(); got != want {
+				t.Fatalf("draft = %q, want %q", got, want)
+			}
+			if m.op.submission != nil {
+				t.Fatal("rejected submission retained")
+			}
+		})
+	}
+}
+
+func TestClientSkillAcceptedTurnDoesNotRestoreDraftOnBackendError(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	installTestSkill(t, root, "review", true)
+	backend := &skillRecordingBackend{err: errors.New("backend failed")}
+	m := New(agent.New(backend, assistant.SendOptions{}, agent.WithClientSkills(agent.NewClientSkills(root, nil))))
+	m.editor.SetValue("/skill:review argument")
+	_, _ = m.submit()
+	for event := range m.op.events {
+		m.applyEvent(event)
+	}
+	if m.editor.Value() != "" || m.op.submission != nil || len(m.transcript.UserPrompts()) != 1 {
+		t.Fatal("accepted submission was restored or not recorded")
+	}
+	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
+	if m.editor.Value() != "" {
+		t.Fatal("closing accepted turn restored draft")
+	}
+}
+
+func TestClientSkillCanceledPreparationRecoversOnlyCurrentSubmission(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.editor.SetValue("/skill:review preserve me")
+	draft := m.editor.TakeDraft()
+	events := make(chan agent.Event)
+	close(events)
+	m.op = operation{kind: opTurn, gen: 2, events: events, stop: stopAll, submission: &pendingSubmission{draft: draft}}
+	_, _ = m.dispatch(turnEventMsg{generation: 1, ev: agent.Event{Kind: agent.EventError, Err: errors.New("stale")}})
+	if m.editor.Value() != "" || m.op.submission == nil {
+		t.Fatal("stale error affected pending submission")
+	}
+	_, _ = m.handleTurnClosed(turnClosedMsg{generation: 2})
+	if m.editor.Value() != "/skill:review preserve me" || m.op.submission != nil {
+		t.Fatal("canceled preparation lost draft")
+	}
 }

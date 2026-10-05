@@ -42,7 +42,7 @@ func TestClientSkillFrontmatter(t *testing.T) {
 		{"non-bool disable model invocation", "---\nname: test\ndescription: test\ndisable-model-invocation: maybe\n---", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, ok := parseClientSkill([]byte(tc.input), "fallback")
+			_, ok := parseSkillDocument([]byte(tc.input), "fallback")
 			if ok != tc.valid {
 				t.Fatalf("valid = %t, want %t", ok, tc.valid)
 			}
@@ -117,8 +117,8 @@ func TestClientSkillDisableModelInvocation(t *testing.T) {
 	writeSkill(t, active, "extras/hidden", "hidden", "shadowed duplicate")
 	skills := NewClientSkills(active, []string{"extras"})
 	engine := New(nil, assistant.SendOptions{}, WithClientSkills(skills))
-	visible := engine.LocalSkills(context.Background())
-	if len(visible) != 2 || visible[0].Name != "hidden" || !visible[0].DisableModelInvocation || visible[0].Description != "user only" || visible[0].Path != filepath.Join(active, ".agents/skills/hidden/SKILL.md") {
+	visible := mustClientSkills(t, engine)
+	if len(visible) != 2 || visible[0].Name != "hidden" || visible[0].Description != "user only" {
 		t.Fatalf("explicitly invokable skills = %+v", visible)
 	}
 	got := skills.snapshot(context.Background())
@@ -190,12 +190,12 @@ func TestClientSkillLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
-	scan := skillScan{ctx: context.Background(), remainingEntries: 2, remainingBytes: skillReadLimit, skills: map[string]clientSkill{}}
+	scan := skillScan{ctx: context.Background(), remainingEntries: 2, remainingBytes: skillReadLimit, skills: map[string]registeredSkill{}}
 	scan.walk(root, dir, filepath.Join(dir, ".agents/skills"), 0, map[string]bool{})
 	if len(scan.skills) != 0 || scan.remainingEntries != 0 {
 		t.Fatal("entry budget not enforced")
 	}
-	scan = skillScan{ctx: context.Background(), remainingEntries: skillEntryLimit, remainingBytes: 10, skills: map[string]clientSkill{}}
+	scan = skillScan{ctx: context.Background(), remainingEntries: skillEntryLimit, remainingBytes: 10, skills: map[string]registeredSkill{}}
 	scan.walk(root, dir, filepath.Join(dir, ".agents/skills"), 0, map[string]bool{})
 	if len(scan.skills) != 0 || scan.remainingBytes != 0 {
 		t.Fatal("aggregate read budget not enforced")
@@ -417,7 +417,7 @@ func TestClientSkillNameFallback(t *testing.T) {
 		{"long fallback", "", strings.Repeat("a", 65), "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			skill, ok := parseClientSkill([]byte("---\n"+tc.frontmatter+"description: useful skill\n---\n"), tc.directory)
+			skill, ok := parseSkillDocument([]byte("---\n"+tc.frontmatter+"description: useful skill\n---\n"), tc.directory)
 			if ok != tc.valid || ok && skill.Name != tc.want {
 				t.Fatalf("name = %q, valid = %t; want %q, %t", skill.Name, ok, tc.want, tc.valid)
 			}
@@ -427,7 +427,7 @@ func TestClientSkillNameFallback(t *testing.T) {
 
 func TestClientSkillDescriptionNormalization(t *testing.T) {
 	content := "---\nname: example\ndescription: |\n  First   line\n\n  Second\tline\u00a0with\u2003spaces\n---\n"
-	skill, ok := parseClientSkill([]byte(content), "fallback")
+	skill, ok := parseSkillDocument([]byte(content), "fallback")
 	if !ok || skill.Description != "First line Second line with spaces" {
 		t.Fatalf("description = %q, valid = %t", skill.Description, ok)
 	}
@@ -500,7 +500,7 @@ func TestClientSkillNamespacedNames(t *testing.T) {
 				if !fallback {
 					content += "name: " + tc.name + "\n"
 				}
-				skill, valid := parseClientSkill([]byte(content+"---\nInstructions"), tc.name)
+				skill, valid := parseSkillDocument([]byte(content+"---\nInstructions"), tc.name)
 				if valid != tc.valid || valid && skill.Name != tc.name {
 					t.Fatalf("fallback=%t: parsed name=%q valid=%t, want valid=%t", fallback, skill.Name, valid, tc.valid)
 				}

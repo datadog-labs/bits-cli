@@ -42,6 +42,7 @@ const (
 // Editor is the chat input. The completion menu opens automatically for @
 // tokens and for a / token only when it is the first token in the prompt.
 type Editor struct {
+	revision          uint64
 	commandSpecs      []CommandSpec
 	ta                textarea.Model
 	styles            styles.Editor
@@ -166,6 +167,7 @@ func (e *Editor) RemoveLastAttachment() bool {
 	if len(e.attachments) == 0 {
 		return false
 	}
+	e.revision++
 	tracked := e.attachments[len(e.attachments)-1]
 	before := e.ta.Value()
 	runes := []rune(before)
@@ -294,12 +296,14 @@ func (e *Editor) Value() string { return e.ta.Value() }
 
 // SetValue replaces the prompt text and leaves history mode.
 func (e *Editor) SetValue(s string) {
+	e.revision++
 	e.history.end()
 	e.ta.SetValue(s)
 }
 
 // Reset clears the input, closes the menu, and leaves history mode.
 func (e *Editor) Reset() {
+	e.revision++
 	e.ta.Reset()
 	e.attachments = nil
 	e.fileQuery = ""
@@ -403,6 +407,7 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 		e.dismissedValue = ""
 	}
 	if start, oldEnd, newEnd, changed := textEditRange(before, after, beforeCursor, e.cursorOffset()); changed {
+		e.revision++
 		e.applyMentionEdit(start, oldEnd, newEnd, after)
 	}
 	e.syncHistory()
@@ -686,6 +691,7 @@ func (e *Editor) acceptCandidate(trailingSpace bool) {
 		e.closeMenu()
 		return
 	}
+	e.revision++
 	candidate := e.menu.items[e.menu.selector.Index()]
 	insert := candidate.Insert
 

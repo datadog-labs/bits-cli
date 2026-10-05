@@ -1,19 +1,16 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"html"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/DataDog/bits-cli/internal/assistant"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -39,7 +36,7 @@ func NewClientSkills(workspace string, extra []string) *ClientSkills {
 	return &ClientSkills{workspace: workspace, extra: slices.Clone(extra)}
 }
 
-// WithClientSkills attaches a catalog owned exclusively by this engine.
+// WithClientSkills attaches a client skill store owned exclusively by this engine.
 func WithClientSkills(skills *ClientSkills) Option {
 	return func(e *Engine) { e.clientSkills = skills }
 }
@@ -71,70 +68,17 @@ func (s *ClientSkills) apply(ctx context.Context, opts assistant.SendOptions) as
 	return opts
 }
 
+// Keep context markers stable so updates supersede catalogs already in conversation history.
 const clientSkillsRemovalNotice = "<available-local-client-skills>\nThis is the latest available-local-client-skills update. Disregard any earlier <available-local-client-skills> blocks.\nNo local client skills are currently available in this user's local project context.\n</available-local-client-skills>"
 
-type clientSkill struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	// DisableModelInvocation keeps the skill out of the catalog. The skill still
-	// claims its name, so it shadows lower-precedence skills with the same name.
-	DisableModelInvocation bool  `yaml:"disable-model-invocation"`
-	ModelInvocable         *bool `yaml:"model-invocable"`
-	path                   string
-	boundary               string
-	boundaryInfo           os.FileInfo
+// SkillSummary is the presentation metadata exposed to completion clients.
+type SkillSummary struct {
+	Name        string
+	Description string
 }
 
-// Colons separate namespaces; each component follows the existing name rules.
-var skillNamePattern = regexp.MustCompile(`^[a-z0-9]+([:-][a-z0-9]+)*$`)
-
-func parseClientSkill(content []byte, defaultName string) (clientSkill, bool) {
-	content = bytes.TrimPrefix(content, []byte{0xef, 0xbb, 0xbf})
-	lines := strings.Split(string(content), "\n")
-	if len(lines) < 3 || strings.TrimSuffix(lines[0], "\r") != "---" {
-		return clientSkill{}, false
-	}
-	for i := 1; i < len(lines); i++ {
-		if strings.TrimSuffix(lines[i], "\r") != "---" {
-			continue
-		}
-		var metadata yaml.Node
-		if yaml.Unmarshal([]byte(strings.Join(lines[1:i], "\n")), &metadata) != nil || len(metadata.Content) != 1 || metadata.Content[0].Kind != yaml.MappingNode {
-			return clientSkill{}, false
-		}
-		// Require strings rather than YAML's implicit scalar conversions.
-		mapping := metadata.Content[0].Content
-		for j := 0; j < len(mapping); j += 2 {
-			if mapping[j].Value == "model-invocable" || mapping[j].Value == "disable-model-invocation" {
-				if mapping[j+1].Tag != "!!bool" {
-					return clientSkill{}, false
-				}
-			}
-			if mapping[j].Value == "name" || mapping[j].Value == "description" {
-				if mapping[j+1].Tag != "!!str" {
-					return clientSkill{}, false
-				}
-			}
-		}
-		var skill clientSkill
-		if metadata.Decode(&skill) != nil {
-			return clientSkill{}, false
-		}
-		if skill.ModelInvocable != nil && !*skill.ModelInvocable {
-			skill.DisableModelInvocation = true
-		}
-		if strings.TrimSpace(skill.Name) == "" {
-			skill.Name = defaultName
-		}
-		skill.Description = strings.Join(strings.Fields(skill.Description), " ")
-		return skill, len(skill.Name) <= 64 && skillNamePattern.MatchString(skill.Name) && len(skill.Description) > 0
-	}
-	return clientSkill{}, false
-}
-
-// LocalSkill is metadata for an explicitly invokable local skill. User-only
-// skills remain available here even though they are omitted from the catalog.
-type LocalSkill struct {
+// registeredSkill stays inside the engine with its confined-read metadata.
+type registeredSkill struct {
 	Name                   string
 	Description            string
 	Path                   string
@@ -143,22 +87,26 @@ type LocalSkill struct {
 	boundaryInfo           os.FileInfo
 }
 
-// LocalSkills returns a copy of the conversation registry shared with the
-// automatic catalog. It may be called concurrently with an engine operation.
-func (e *Engine) LocalSkills(ctx context.Context) []LocalSkill {
+// ClientSkills lists the shared conversation registry. An empty successful result
+// means no skills; failures remain distinguishable and can be retried.
+func (e *Engine) ClientSkills(ctx context.Context) ([]SkillSummary, error) {
 	if e.clientSkills == nil {
-		return nil
+		return nil, nil
 	}
 	registry, err := e.clientSkills.cache.load(ctx, e.clientSkills.discover)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return slices.Clone(registry.skills)
+	summaries := make([]SkillSummary, 0, len(registry.skills))
+	for _, skill := range registry.skills {
+		summaries = append(summaries, SkillSummary{Name: skill.Name, Description: skill.Description})
+	}
+	return summaries, nil
 }
 
 type skillLocation struct{ path, boundary string }
 
-func (s *ClientSkills) discover(ctx context.Context) []LocalSkill {
+func (s *ClientSkills) discover(ctx context.Context) []registeredSkill {
 	active, err := filepath.Abs(s.workspace)
 	if err != nil {
 		return nil
@@ -201,7 +149,7 @@ func (s *ClientSkills) discover(ctx context.Context) []LocalSkill {
 		root := filepath.Join(home, ".agents", "skills")
 		locations = append(locations, skillLocation{root, root})
 	}
-	scan := skillScan{ctx: ctx, remainingEntries: skillEntryLimit, remainingBytes: skillReadLimit, skills: make(map[string]clientSkill)}
+	scan := skillScan{ctx: ctx, remainingEntries: skillEntryLimit, remainingBytes: skillReadLimit, skills: make(map[string]registeredSkill)}
 	for _, location := range locations {
 		if ctx.Err() != nil || scan.remainingEntries <= 0 || scan.remainingBytes <= 0 {
 			break
@@ -222,16 +170,15 @@ func (s *ClientSkills) discover(ctx context.Context) []LocalSkill {
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	skills := make([]LocalSkill, 0, len(names))
+	skills := make([]registeredSkill, 0, len(names))
 	for _, name := range names {
-		skill := scan.skills[name]
-		skills = append(skills, LocalSkill{Name: skill.Name, Description: skill.Description, Path: skill.path, DisableModelInvocation: skill.DisableModelInvocation, boundary: skill.boundary, boundaryInfo: skill.boundaryInfo})
+		skills = append(skills, scan.skills[name])
 	}
 	return skills
 }
 
-func renderClientSkills(skills []LocalSkill) string {
-	if !slices.ContainsFunc(skills, func(skill LocalSkill) bool { return !skill.DisableModelInvocation }) {
+func renderClientSkills(skills []registeredSkill) string {
+	if !slices.ContainsFunc(skills, func(skill registeredSkill) bool { return !skill.DisableModelInvocation }) {
 		return ""
 	}
 	var catalog strings.Builder
@@ -254,7 +201,7 @@ func renderClientSkills(skills []LocalSkill) string {
 type skillScan struct {
 	ctx                              context.Context
 	remainingEntries, remainingBytes int
-	skills                           map[string]clientSkill
+	skills                           map[string]registeredSkill
 }
 
 func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen map[string]bool) {
@@ -315,12 +262,13 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 	if err != nil || truncated || !utf8.Valid(content) {
 		return
 	}
-	skill, ok := parseClientSkill(content, filepath.Base(filepath.Dir(source)))
+	document, ok := parseSkillDocument(content, filepath.Base(filepath.Dir(source)))
 	if !ok {
 		return
 	}
-	if _, exists := s.skills[skill.Name]; !exists {
-		skill.path = resolved
+	if _, exists := s.skills[document.Name]; !exists {
+		skill := registeredSkill{Name: document.Name, Description: document.Description, DisableModelInvocation: document.DisableModelInvocation}
+		skill.Path = resolved
 		skill.boundary = boundary
 		skill.boundaryInfo, err = root.Stat(".")
 		if err != nil {
