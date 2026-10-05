@@ -464,6 +464,12 @@ func TestQuestionsLeaveTheTranscriptSelectable(t *testing.T) {
 	if m.selection.selecting() || m.focus() != focusPrompt {
 		t.Fatal("releasing the click did not hand the pointer back")
 	}
+
+	// Non-actionable form text also falls through to lower-pane selection.
+	_, _ = m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 4, Y: m.frame.prompt.Min.Y + 2})
+	if !m.selection.selecting() || m.selection.scope != selectionScopeLower {
+		t.Fatal("a click on question text did not start a lower-pane selection")
+	}
 }
 
 // Keys follow one rule with a form docked: pgup/pgdown page what owns the

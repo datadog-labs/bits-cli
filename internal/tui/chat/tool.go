@@ -1090,8 +1090,7 @@ func newQuestionPrompt(call agent.ToolCall) ToolPrompt {
 	return questionPrompt{components.NewQuestionnaire(questions)}
 }
 
-// Update gives the form every event: it owns all of its area.
-func (q questionPrompt) Update(msg tea.Msg) (tea.Cmd, bool) { return q.form.Update(msg), true }
+func (q questionPrompt) Update(msg tea.Msg) (tea.Cmd, bool) { return q.form.Update(msg) }
 
 func (q questionPrompt) Layout(slot components.Slot) (string, bool) {
 	q.form.SetSize(slot.Width, slot.Height)

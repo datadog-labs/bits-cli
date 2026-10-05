@@ -120,9 +120,11 @@ func (q *Questionnaire) showPage(page int) tea.Cmd {
 	return nil
 }
 
-func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
+// Update applies an event and reports whether the form used it. Clicks outside
+// tabs and actionable rows are left to the host for text selection.
+func (q *Questionnaire) Update(msg tea.Msg) (tea.Cmd, bool) {
 	if q.complete {
-		return nil
+		return nil, true
 	}
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
@@ -134,19 +136,20 @@ func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
 		case tea.MouseWheelDown:
 			q.scroll++
 		default:
+			return nil, false
 		}
 		q.follow = false
-		return nil
+		return nil, true
 	}
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc":
 			q.finish(true)
-			return nil
+			return nil, true
 		case "tab", "ctrl+right":
-			return q.showPage(q.page + 1)
+			return q.showPage(q.page + 1), true
 		case "shift+tab", "ctrl+left":
-			return q.showPage(q.page - 1)
+			return q.showPage(q.page - 1), true
 		case "pgup", "pgdown":
 			delta := q.bodyHeight()
 			if key.String() == "pgup" {
@@ -154,22 +157,22 @@ func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
 			}
 			q.scroll = max(0, q.scroll+delta)
 			q.follow = false
-			return nil
+			return nil, true
 		case "enter":
 			if q.page == len(q.answers) {
 				q.finish(false)
-				return nil
+				return nil, true
 			}
 			question := q.questions[q.page]
 			if q.editing {
 				if strings.TrimSpace(q.text.Value()) == "" {
-					return nil
+					return nil, true
 				}
 				q.answers[q.page] = q.text.Value()
 			} else {
 				q.answers[q.page] = question.Options[q.choices[q.page]].Label
 			}
-			return q.showPage(q.page + 1)
+			return q.showPage(q.page + 1), true
 		case "up", "down":
 			if q.page < len(q.answers) {
 				delta := 1
@@ -177,27 +180,27 @@ func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
 					delta = -1
 				}
 				count := len(q.questions[q.page].Options) + 1
-				return q.selectChoice((q.choices[q.page] + delta + count) % count)
+				return q.selectChoice((q.choices[q.page] + delta + count) % count), true
 			}
 		}
 		// Text entry owns printable keys, including digits and brackets.
 		if !q.editing {
 			switch key.String() {
 			case "[":
-				return q.showPage(q.page - 1)
+				return q.showPage(q.page - 1), true
 			case "]":
-				return q.showPage(q.page + 1)
+				return q.showPage(q.page + 1), true
 			}
 			if q.page < len(q.answers) {
 				count := len(q.questions[q.page].Options) + 1
 				switch key.String() {
 				case "j":
-					return q.selectChoice((q.choices[q.page] + 1) % count)
+					return q.selectChoice((q.choices[q.page] + 1) % count), true
 				case "k":
-					return q.selectChoice((q.choices[q.page] + count - 1) % count)
+					return q.selectChoice((q.choices[q.page] + count - 1) % count), true
 				}
 				if len(key.String()) == 1 && key.Code >= '1' && key.Code < '1'+rune(count) {
-					return q.selectChoice(int(key.Code - '1'))
+					return q.selectChoice(int(key.Code - '1')), true
 				}
 			}
 		}
@@ -209,9 +212,9 @@ func (q *Questionnaire) Update(msg tea.Msg) tea.Cmd {
 		}
 		var cmd tea.Cmd
 		q.text, cmd = q.text.Update(msg)
-		return cmd
+		return cmd, true
 	}
-	return nil
+	return nil, true
 }
 
 const (
@@ -384,19 +387,19 @@ func (q *Questionnaire) View() string {
 	return lipgloss.NewStyle().Padding(0, 2).Render(strings.Join(lines, "\n"))
 }
 
-func (q *Questionnaire) click(msg tea.MouseClickMsg) tea.Cmd {
+func (q *Questionnaire) click(msg tea.MouseClickMsg) (tea.Cmd, bool) {
 	if msg.Button != tea.MouseLeft {
-		return nil
+		return nil, false
 	}
 	x, y := msg.X-2, msg.Y
 	width := max(3, q.width-4)
 	if x < 0 || x >= width || y < 0 {
-		return nil
+		return nil, false
 	}
 	if y == 0 {
 		for i, tab := range q.tabs(width) {
 			if x >= tab.start && x < tab.end {
-				return q.showPage(i)
+				return q.showPage(i), true
 			}
 		}
 	}
@@ -404,11 +407,11 @@ func (q *Questionnaire) click(msg tea.MouseClickMsg) tea.Cmd {
 	if row := y - 2; row >= 0 && row < len(rows) {
 		hit := rows[row]
 		if hit.page >= 0 {
-			return q.showPage(hit.page)
+			return q.showPage(hit.page), true
 		}
 		if hit.choice >= 0 {
-			return q.selectChoice(hit.choice)
+			return q.selectChoice(hit.choice), true
 		}
 	}
-	return nil
+	return nil, false
 }
