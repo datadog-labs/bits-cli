@@ -1,0 +1,12 @@
+/bits-cli
+
+# Build output
+/build/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# OS
+**/.DS_Store
+/.envrc.local
