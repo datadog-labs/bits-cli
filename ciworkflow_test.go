@@ -133,8 +133,8 @@ func TestWorkflowReleaseTagGating(t *testing.T) {
 	}
 }
 
-// The Build step must fail the job when scripts/build.sh fails: the old
-// printf "$(./scripts/build.sh)" form swallowed the script's exit status.
+// The Build step must propagate scripts/build.sh failures instead of
+// swallowing the script's exit status.
 func TestWorkflowBuildStepPropagatesBuildFailure(t *testing.T) {
 	wf := loadYAML(t, ".github/workflows/ci.yml")
 	run, _ := jobStep(t, wf, "build", "Build")["run"].(string)
@@ -229,16 +229,15 @@ func TestGitlabPipelineIsStableTagReleaseOnly(t *testing.T) {
 	if ifExpr, _ := as[map[string]any](t, rules[0], "first workflow rule")["if"].(string); !strings.Contains(ifExpr, strictStableTag) {
 		t.Errorf("workflow rule if = %q, want strict stable tag gate", ifExpr)
 	}
-	jobs := as[map[string]any](t, gl, ".gitlab-ci.yml")
 	for _, name := range []string{"lint", "test", "build", "publish-to-dogbrew"} {
-		if _, ok := jobs[name].(map[string]any); !ok {
+		if _, ok := gl[name].(map[string]any); !ok {
 			t.Errorf("GitLab pipeline must keep the %q job for the release flow", name)
 		}
 	}
-	publish := as[map[string]any](t, jobs["publish-to-dogbrew"], "publish job")
+	publish := as[map[string]any](t, gl["publish-to-dogbrew"], "publish job")
 	var script strings.Builder
 	for _, line := range as[[]any](t, publish["script"], "publish script") {
-		script.WriteString(line.(string) + "\n")
+		script.WriteString(as[string](t, line, "publish script line") + "\n")
 	}
 	if !strings.Contains(script.String(), "--publish") {
 		t.Error("publish-to-dogbrew must keep its --publish gate")

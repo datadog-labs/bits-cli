@@ -1,14 +1,7 @@
-# CI for ordinary development and release-tag builds.
-#
-# Runs lint, tests, and the six-target build matrix for every pull request,
-# main push, queued merge, and v-prefixed tag push. On strict stable tags
-# (v<major>.<minor>.<patch>, no leading zeroes) it also packages the Dogbrew
-# platform tarballs as workflow artifacts — without publishing them.
-#
-# Trust boundary: this workflow also runs for fork pull requests, so it uses
-# no secrets, no write or id-token permissions, and only public tools and
-# module downloads. The internal Dogbrew publish remains on the GitLab
-# stable-tag pipeline (see .gitlab-ci.yml and RELEASE.md).
+# Unprivileged by design — no secrets, read-only permissions, public tools
+# and module downloads only — so fork pull requests run the same checks
+# without trust escalation. Dogbrew publishing stays on the internal GitLab
+# stable-tag pipeline (see RELEASE.md).
 
 name: CI
 
@@ -17,23 +10,22 @@ on:
   push:
     branches: [main]
     # A glob cannot express "no leading zeroes", so every v-prefixed tag
-    # reaches the workflow and the resolve-release steps validate strictly;
-    # non-stable tags (pre-releases, v01.2.3, ...) build dev binaries only.
+    # reaches the workflow and the resolve-release steps validate strictly.
     tags: ['v*']
   merge_group:
+
+defaults:
+  run:
+    shell: bash
 
 permissions:
   contents: read
 
 concurrency:
-  # Superseded runs on the same PR/ref are canceled.
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  # GitLab runners inherit an internal Go proxy through .adms/go/go.env;
-  # pin the public proxy and checksum DB explicitly so module downloads on
-  # GitHub-hosted runners never depend on internal infrastructure.
   GOPROXY: https://proxy.golang.org
   GOSUMDB: sum.golang.org
 
@@ -51,8 +43,6 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # scripts/lint.sh also lints the nested tools/licenses module and
-      # checks LICENSE-3rdparty.csv for drift.
       - name: Lint
         run: ./scripts/lint.sh
 
@@ -101,9 +91,6 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # Only tag refs can become releases; scripts/version.sh then rejects
-      # anything that is not a strict v<major>.<minor>.<patch> stable tag,
-      # so branch and pull-request names never masquerade as releases.
       - name: Resolve release version
         id: release
         if: startsWith(github.ref, 'refs/tags/')
@@ -115,8 +102,6 @@ jobs:
           else
             printf 'not a stable release tag; building dev binary\n' >&2
           fi
-      # A validated VERSION embeds the exact release version; an empty one
-      # keeps the dev VCS version stamped by the Go toolchain.
       - name: Build
         id: build
         env:
@@ -145,8 +130,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Same strict tag validation as the build job: non-stable v tags skip
-      # packaging entirely instead of producing publish-looking tarballs.
       - name: Resolve release version
         id: release
         env:
@@ -169,8 +152,8 @@ jobs:
           path: dist
           pattern: bits-*
           merge-multiple: true
-      # Packages the three Dogbrew platform tarballs without --publish: no
-      # internal ADMS or Dogbrew network access happens from Actions.
+      # No --publish: nothing fork-visible can reach the Dogbrew publisher
+      # from Actions.
       - name: Package Dogbrew tarballs
         if: steps.release.outputs.is-release == 'true'
         env:

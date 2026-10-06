@@ -43,9 +43,8 @@ Lint with the pinned golangci-lint configuration:
    runs — both pass.
 4. Open a pull request against `main` with a clear description of the change
    and how it was tested. GitHub Actions runs lint, tests, and builds for
-   pull requests; for external fork PRs the runs may require maintainer
-   approval under the repository policy, but maintainers no longer need to
-   mirror branches to an internal CI.
+   pull requests; maintainers no longer need to mirror branches to an
+   internal CI.
 
 ## Continuous integration
 
@@ -72,8 +71,8 @@ RELEASE.md for the release flow.
 
 The internal GitLab pipeline (`.gitlab-ci.yml`) no longer runs for branches
 or pull requests. It only keeps a stable-tag release pipeline that feeds
-the manual internal Dogbrew publisher (see RELEASE.md). Benchmark
-collection and Datadog reporting are deferred for now.
+the manual internal Dogbrew publisher (see RELEASE.md). CI does not
+currently run performance benchmarks.
 
 ## Third-party licenses
 

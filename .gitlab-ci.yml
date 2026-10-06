@@ -1,9 +1,7 @@
-# Internal release pipeline, stable tags only.
-#
-# Ordinary CI lives in .github/workflows/ci.yml. This pipeline exists solely
-# to produce trusted binaries from the internal network and to hold the
-# manual publish-to-dogbrew gate; its workflow rules restrict it to strict
-# stable semantic tags — branch and pull-request pipelines never run here.
+# Internal stable-tag release pipeline: strict stable tags only (see the
+# workflow rules), producing trusted binaries from the internal network
+# and holding the manual publish-to-dogbrew gate — the only Dogbrew
+# publish path.
 
 include:
   - local: .adms/go/gitlab.yaml
