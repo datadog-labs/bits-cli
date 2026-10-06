@@ -6,7 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 )
 
 const logoutTimeout = 60 * time.Second

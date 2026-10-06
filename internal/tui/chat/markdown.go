@@ -11,8 +11,8 @@ import (
 	"charm.land/glamour/v2"
 	"charm.land/glamour/v2/ansi"
 
-	"github.com/DataDog/bits-cli/internal/tui/escape"
-	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/escape"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 // Streaming keeps settled top-level blocks rendered and reparses only the tail.

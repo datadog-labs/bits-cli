@@ -11,9 +11,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 // A frame's surfaces tile the screen top to bottom, View draws each one on the

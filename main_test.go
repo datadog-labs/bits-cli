@@ -10,10 +10,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/auth"
-	"github.com/DataDog/bits-cli/internal/cmd"
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/cmd"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 func TestPrintLoggedOutUsesOneSuccessMessage(t *testing.T) {

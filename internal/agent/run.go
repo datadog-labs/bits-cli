@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 var errTurnIncomplete = errors.New("turn ended without a completion or error")

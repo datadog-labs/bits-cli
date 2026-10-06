@@ -12,7 +12,7 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent"
 )
 
 type sizeMaskingFS struct{ fs.FS }

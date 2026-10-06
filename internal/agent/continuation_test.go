@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 func savedCall(id, name string) assistant.Message {

@@ -5,7 +5,7 @@ import (
 	"image/color"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 func hex(c color.Color) string {

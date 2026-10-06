@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // scriptBackend replays a fixed set of messages, then returns convID/err.

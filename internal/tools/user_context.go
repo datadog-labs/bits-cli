@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 // localEnvironment is the model-facing description of the local machine. Its

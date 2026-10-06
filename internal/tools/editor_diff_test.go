@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/filediff"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/filediff"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 func TestParsePartialEditorInput(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // streamRandom streams a pseudo-random answer from seed, so a seed always

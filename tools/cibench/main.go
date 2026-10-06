@@ -265,7 +265,7 @@ func median(values []float64) float64 {
 func buildMeasures(summaries []benchmarkSummary) map[string]float64 {
 	measures := make(map[string]float64)
 	for _, summary := range summaries {
-		packageName := strings.TrimPrefix(summary.Package, "github.com/DataDog/bits-cli/")
+		packageName := strings.TrimPrefix(summary.Package, "github.com/datadog-labs/bits-cli/")
 		benchmarkName := strings.TrimPrefix(summary.Name, "Benchmark")
 		base := measurePrefix + "." + normalizeMeasurePath(packageName) + "." + normalizeMeasurePath(benchmarkName)
 		measures[base+".samples"] = float64(summary.Samples)

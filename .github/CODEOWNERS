@@ -1,3 +1,2 @@
 
-* @ddoghq/graphing-bits-cli
-/.adms/ @DataDog/dependency-management @ddoghq/graphing-bits-cli
+* @datadog-labs/graphing-bits-cli

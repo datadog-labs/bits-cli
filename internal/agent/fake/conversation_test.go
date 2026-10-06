@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // blockView is the part of a block that must survive a history round trip.

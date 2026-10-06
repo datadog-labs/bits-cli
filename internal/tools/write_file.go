@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/filediff"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/filediff"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 func newWriteFileTool(r *os.Root, root string, locker *mutationLocker) agent.Tool {

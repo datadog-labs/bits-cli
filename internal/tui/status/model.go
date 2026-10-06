@@ -10,11 +10,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/tui/components"
-	"github.com/DataDog/bits-cli/internal/tui/escape"
-	"github.com/DataDog/bits-cli/internal/tui/styles"
-	workspacepkg "github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tui/components"
+	"github.com/datadog-labs/bits-cli/internal/tui/escape"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	workspacepkg "github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 // Connectivity is observed Assistant transport state. The separate current-user

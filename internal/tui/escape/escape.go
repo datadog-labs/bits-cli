@@ -9,7 +9,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/textsafe"
+	"github.com/datadog-labs/bits-cli/internal/textsafe"
 )
 
 const renderedTab = "    "

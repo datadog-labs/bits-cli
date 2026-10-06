@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // emitter delivers one Send's messages: it paces them, stops on

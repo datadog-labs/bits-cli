@@ -10,10 +10,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/tools"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 // waitingApprovals counts the approvals waiting on the user.

@@ -10,7 +10,7 @@ import (
 	"testing/fstest"
 	"unicode/utf8"
 
-	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent"
 )
 
 type openCountingFS struct {

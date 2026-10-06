@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // This opt-in test proves the engine reset contract against the real Assistant

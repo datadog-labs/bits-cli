@@ -3,7 +3,7 @@ package components
 import (
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 // Accordion renders the disclosure control for a block's detail rows. The

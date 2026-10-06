@@ -11,7 +11,7 @@ Thanks for your interest in contributing to Bits CLI! This document covers the b
 Clone the repository:
 
 ```sh
-git clone git@github.com:DataDog/bits-cli.git
+git clone git@github.com:datadog-labs/bits-cli.git
 cd bits-cli
 ```
 

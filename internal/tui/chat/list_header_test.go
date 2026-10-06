@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 func headerList(t *testing.T, width, height int) *List {

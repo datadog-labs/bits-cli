@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // send runs one Send and summarizes the wire messages it emitted.

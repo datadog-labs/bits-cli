@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/site"
+	"github.com/datadog-labs/bits-cli/internal/site"
 )
 
 const openTimeout = 10 * time.Second

@@ -10,7 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 func setTestFileResults(e *Editor, query string, paths ...string) {

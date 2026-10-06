@@ -9,8 +9,8 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/filediff"
-	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/filediff"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 // hunkSeparator separates rendered hunks.

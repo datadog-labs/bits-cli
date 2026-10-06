@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // spyBackend is an agent.Backend whose Send fails the test if called. It lets

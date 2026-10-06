@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/agent/fake"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/auth"
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/fake"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 // ErrLoginRequired marks an OAuth state that an interactive caller may replace

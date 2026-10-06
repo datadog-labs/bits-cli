@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 func TestDenyStopTransitionsPendingToolsInCallOrder(t *testing.T) {

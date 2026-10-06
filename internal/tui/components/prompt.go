@@ -3,7 +3,7 @@ package components
 import (
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 // Slot gives a prompt its available size and queue length.

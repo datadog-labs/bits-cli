@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/DataDog/bits-cli/internal/assistant"
+import "github.com/datadog-labs/bits-cli/internal/assistant"
 
 // BlockScope namespaces a BlockID so ids drawn from different sources can never
 // collide.

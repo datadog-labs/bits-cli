@@ -7,9 +7,9 @@ import (
 	"charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/tui/styles"
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 func TestModelRendersTruthfulRuntimeAndWorkspaceSnapshot(t *testing.T) {

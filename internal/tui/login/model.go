@@ -12,10 +12,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/auth"
-	"github.com/DataDog/bits-cli/internal/site"
-	"github.com/DataDog/bits-cli/internal/tui/components"
-	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/site"
+	"github.com/datadog-labs/bits-cli/internal/tui/components"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 const (

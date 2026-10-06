@@ -7,9 +7,9 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/tui/escape"
-	"github.com/DataDog/bits-cli/internal/tui/splash"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/tui/escape"
+	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 )
 
 const (

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent"
 )
 
 func TestListFilesTool(t *testing.T) {

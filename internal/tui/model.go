@@ -9,19 +9,19 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/browser"
-	"github.com/DataDog/bits-cli/internal/tools"
-	"github.com/DataDog/bits-cli/internal/tui/chat"
-	"github.com/DataDog/bits-cli/internal/tui/components"
-	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
-	"github.com/DataDog/bits-cli/internal/tui/editor"
-	loginui "github.com/DataDog/bits-cli/internal/tui/login"
-	"github.com/DataDog/bits-cli/internal/tui/splash"
-	statusview "github.com/DataDog/bits-cli/internal/tui/status"
-	"github.com/DataDog/bits-cli/internal/tui/styles"
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/browser"
+	"github.com/datadog-labs/bits-cli/internal/tools"
+	"github.com/datadog-labs/bits-cli/internal/tui/chat"
+	"github.com/datadog-labs/bits-cli/internal/tui/components"
+	conversationview "github.com/datadog-labs/bits-cli/internal/tui/conversations"
+	"github.com/datadog-labs/bits-cli/internal/tui/editor"
+	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
+	"github.com/datadog-labs/bits-cli/internal/tui/splash"
+	statusview "github.com/datadog-labs/bits-cli/internal/tui/status"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 // Mode is the top-level screen the model shows.

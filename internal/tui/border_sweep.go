@@ -3,7 +3,7 @@ package tui
 import (
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/tui/chat"
+	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 )
 
 // borderSweepInterval is the composer's logical animation step. The shared

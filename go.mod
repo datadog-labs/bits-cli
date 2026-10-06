@@ -1,4 +1,4 @@
-module github.com/DataDog/bits-cli
+module github.com/datadog-labs/bits-cli
 
 go 1.27.1
 

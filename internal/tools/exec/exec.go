@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 const (

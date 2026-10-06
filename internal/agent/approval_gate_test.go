@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // gateBackend scripts a server-injected approval gate and optional siblings;

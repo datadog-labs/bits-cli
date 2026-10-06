@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 // approvalKeyWorkspaceRead is the shared approval key used by the read-only
