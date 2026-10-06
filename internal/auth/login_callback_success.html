@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Authorization Successful</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&display=swap');
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background-color: #F9FAFB;
+      background-image: radial-gradient(circle, #d1d5db 0.5px, transparent 0.5px);
+      background-size: 12px 12px;
+      color: #1a1a1a;
+      position: relative;
+      overflow: hidden;
+    }
+    .ellipse-1 {
+      position: absolute;
+      left: 20%;
+      right: 50%;
+      top: 50%;
+      bottom: 20%;
+      background: rgba(217, 222, 255, 0.9);
+      filter: blur(50px);
+      transform: matrix(0.9, -0.44, 0.56, 0.83, 0, 0);
+      border-radius: 50%;
+      z-index: 0;
+    }
+    .ellipse-2 {
+      position: absolute;
+      left: 55%;
+      right: 15%;
+      top: 20%;
+      bottom: 50%;
+      background: rgba(217, 222, 255, 0.9);
+      filter: blur(50px);
+      transform: matrix(0.9, -0.44, 0.56, 0.83, 0, 0);
+      border-radius: 50%;
+      z-index: 0;
+    }
+    .ellipse-3 {
+      position: absolute;
+      left: 40%;
+      right: 40%;
+      top: 40%;
+      bottom: 40%;
+      background: rgba(113, 184, 231, 0.3);
+      filter: blur(50px);
+      transform: matrix(0.9, -0.44, 0.56, 0.83, 0, 0);
+      border-radius: 50%;
+      z-index: 0;
+    }
+    .ellipse-4 {
+      position: absolute;
+      left: 15%;
+      right: 55%;
+      top: 20%;
+      bottom: 50%;
+      background: rgba(113, 184, 231, 0.3);
+      filter: blur(50px);
+      transform: matrix(0.9, -0.44, 0.56, 0.83, 0, 0);
+      border-radius: 50%;
+      z-index: 0;
+    }
+    .container {
+      padding: 24px 80px 48px 80px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+      max-width: 600px;
+      animation: slideUp 0.4s ease-out;
+      position: relative;
+      z-index: 1;
+    }
+    .container::before {
+      content: '';
+      position: absolute;
+      inset: -2px;
+      border-radius: 12px;
+      padding: 2px;
+      background: conic-gradient(
+        from var(--angle),
+        #C2C8DD 0deg,
+        #E2E5ED 90deg,
+        #C2C8DD 180deg,
+        #E2E5ED 270deg,
+        #C2C8DD 360deg
+      );
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      animation: borderRotate 8s linear infinite;
+      z-index: -1;
+    }
+    @property --angle {
+      syntax: '<angle>';
+      initial-value: 0deg;
+      inherits: false;
+    }
+    @keyframes borderRotate {
+      from {
+        --angle: 0deg;
+      }
+      to {
+        --angle: 360deg;
+      }
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 40px;
+    }
+    .header-logo {
+      width: 24px;
+      height: 24px;
+    }
+    .header-text {
+      font-family: 'Noto Sans', sans-serif;
+      font-size: 15px;
+      font-weight: 700;
+      color: rgba(28, 43, 52, 0.68);
+    }
+    .logo-container {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .status-icon {
+      display: block;
+      margin: 0 auto;
+      width: 60px;
+      height: 60px;
+    }
+    .content {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .text-content {
+      text-align: center;
+      flex: 1;
+    }
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    h1 {
+      font-size: 32px;
+      font-weight: 600;
+      font-family: 'Noto Sans', sans-serif;
+      color: rgba(28, 43, 52, 0.97);
+      margin: 0 0 8px 0;
+      letter-spacing: -0.01em;
+    }
+    p {
+      font-size: 15px;
+      font-family: 'Noto Sans', sans-serif;
+      color: rgba(28, 43, 52, 0.68);
+      line-height: 1.5;
+      margin: 0;
+    }
+    .countdown-line {
+      color: rgba(28, 43, 52, 0.68);
+    }
+  </style>
+</head>
+<body>
+  <div class="ellipse-1"></div>
+  <div class="ellipse-2"></div>
+  <div class="ellipse-3"></div>
+  <div class="ellipse-4"></div>
+  <div class="container">
+    <div class="header">
+      <svg class="header-logo" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M22.2449 11.8294L23.2106 21.2419L11.3831 22.665L11.1262 20.8312L10.4118 20.9344C10.4737 21.9563 10.2356 22.9275 9.78368 23.3925C9.25493 23.9344 8.48618 24.075 7.67618 23.955C7.13243 23.8819 6.72743 23.4881 6.42743 23.0062C7.55243 23.7975 8.93806 23.4319 9.41243 22.77C9.59955 22.5195 9.73531 22.2345 9.81189 21.9314C9.88848 21.6283 9.90438 21.313 9.85868 21.0037L3.21743 21.9675L0.789307 2.28375L20.4881 0L21.6431 11.9438L22.2449 11.8294Z" fill="#632CA6"/>
+        <path d="M11.9156 13.935C11.2313 13.4907 10.6019 12.9671 10.0406 12.375C9.98245 12.3319 9.99183 12.1406 9.99183 12.1406C10.8802 12.8156 11.8709 13.3441 12.9262 13.7062C13.2278 13.8036 13.5457 13.84 13.8615 13.8133C14.1773 13.7866 14.4846 13.6973 14.7656 13.5506C15.3155 13.2353 15.7959 12.8118 16.1775 12.3056L16.2412 12.4162C16.1822 12.6159 16.101 12.8083 15.9993 12.99C16.131 13.0613 16.2725 13.1125 16.4193 13.1419L17.5443 12.9675C17.7875 12.5699 17.9463 12.1265 18.0108 11.6649C18.0754 11.2033 18.0442 10.7334 17.9193 10.2844C17.745 9.72185 16.8337 8.5781 16.7681 8.51623C16.5393 8.29685 16.8075 7.44748 16.3537 6.51935C15.8718 5.53873 14.625 4.51685 14.0793 4.07248C14.2387 4.18873 15.2231 4.58623 15.6825 5.13935C15.7256 5.0831 15.7425 4.78498 15.7818 4.70998C15.3881 4.19248 15.3581 3.27373 15.3581 3.02248C15.3395 2.69142 15.2621 2.36633 15.1293 2.06248C15.384 2.28317 15.5586 2.58174 15.6262 2.91185C15.73 3.48495 15.9763 4.02271 16.3425 4.4756C16.9856 5.27435 17.565 5.68498 17.8575 5.3906C18.21 5.03435 17.5031 3.44623 16.5993 2.55935C15.5456 1.52435 15.27 1.65748 14.6512 1.87873C14.1581 2.05498 13.9012 3.45373 12.6056 3.42748C12.3881 3.40123 11.8275 3.3881 11.5481 3.38998C11.6925 3.18748 11.8125 3.03935 11.8125 3.03935C11.5384 3.15215 11.2722 3.28307 11.0156 3.43123L10.9875 3.38998C11.0587 3.23814 11.1468 3.09475 11.25 2.96248C11.0227 3.1027 10.8031 3.25478 10.5918 3.4181C10.6297 3.2254 10.7244 3.04844 10.8637 2.90998C10.8637 2.90998 10.4287 2.98685 9.8737 3.5981C9.42869 3.72299 8.99767 3.89326 8.58745 4.10623C7.77183 3.9281 7.38558 3.63935 7.01808 3.1106C6.7387 2.70748 6.23995 2.6456 5.7337 2.85373C4.9837 3.16123 4.0462 3.57935 4.0462 3.57935C4.0462 3.57935 4.35183 3.5681 4.67058 3.57935C4.37846 3.69387 4.09301 3.8247 3.81558 3.97123C3.81558 3.97123 4.01995 3.97123 4.27308 3.97123C4.13681 4.08757 3.99341 4.19528 3.8437 4.29373C3.58736 4.48296 3.34602 4.6917 3.12183 4.9181C3.28885 4.84459 3.46046 4.78196 3.63558 4.7306C3.46683 5.11873 3.12933 5.4056 3.1912 5.88185C3.2512 6.31873 3.78558 7.21498 4.47558 7.75685C4.53558 7.8056 5.47683 8.67748 6.18745 8.31935C6.89808 7.96123 7.17933 7.64435 7.29558 7.15498C7.43245 6.59248 7.35558 6.16873 7.0612 4.95185C6.9637 4.5506 6.71245 3.72185 6.59058 3.32623L6.6187 3.3056C7.03834 4.16439 7.39552 5.05232 7.68745 5.96248C8.06245 7.31248 7.94245 8.00248 7.76995 8.24998C7.25433 8.99998 5.93245 9.10873 5.33245 8.68873C5.24058 10.1475 5.56495 10.7887 5.67558 11.1112C5.6212 11.4862 5.86308 12.1744 5.86308 12.1744C5.87828 12.009 5.92473 11.848 5.99995 11.7C6.03438 11.9778 6.10629 12.2496 6.2137 12.5081C6.20879 12.3359 6.23287 12.1642 6.28495 12C6.38232 12.1411 6.48946 12.2751 6.60558 12.4012C6.67494 12.6477 6.78729 12.8801 6.93745 13.0875C6.92065 12.9442 6.92065 12.7995 6.93745 12.6562C7.4887 13.185 7.58433 13.9687 7.6387 14.5537C7.78495 16.1869 5.06245 17.4844 4.52433 18.5081C4.12308 19.1137 3.88308 20.07 4.56183 20.6362C6.20433 21.9994 5.57433 22.3744 6.39558 22.9744C7.52058 23.7956 8.93433 23.4281 9.41433 22.7587C10.0818 21.8212 9.9112 20.9494 9.66183 20.1337C9.47433 19.4906 8.94183 18.4237 8.28933 18.0094C7.7345 17.6489 7.07191 17.4919 6.41433 17.565L6.46495 17.5069C7.2562 17.3494 8.0812 17.4356 8.67933 17.8219C9.35808 18.2569 9.9787 19.005 10.3031 20.1525C10.6781 20.1 10.7231 20.0756 11.0531 20.0287L10.3031 14.1225L11.9156 13.935ZM15.7218 6.56248C16.4212 6.88685 16.3293 7.49998 16.3481 7.87498C16.3565 7.94911 16.3565 8.02397 16.3481 8.0981C16.1946 8.02745 16.0248 7.99959 15.8568 8.01748C15.7877 8.02096 15.7188 8.02848 15.6506 8.03998C15.3948 7.87274 15.1981 7.62942 15.0881 7.34435L15.0562 7.27123L15.0431 7.23935V7.22435C14.9643 6.97873 15.0168 6.92998 15.0431 6.84935C15.0693 6.76873 15.2025 6.70685 15.015 6.6431C14.996 6.63702 14.9765 6.63263 14.9568 6.62998C15.0881 6.47623 15.4575 6.43873 15.7218 6.56248ZM14.8593 10.6181C14.9943 10.5112 15.6093 10.3144 16.1887 10.2431C16.4887 10.2075 16.9162 10.1887 17.0081 10.2431C17.1956 10.3425 17.1956 10.6519 17.0662 10.9406C16.8787 11.3569 16.6293 11.8162 16.3387 11.8537C15.8662 11.9175 15.4181 11.6662 14.9081 11.28C14.8541 11.2448 14.8089 11.1977 14.7762 11.1422C14.7434 11.0867 14.7239 11.0244 14.7192 10.9602C14.7145 10.8959 14.7247 10.8315 14.749 10.7718C14.7733 10.7121 14.811 10.6589 14.8593 10.6162V10.6181ZM10.3762 7.4531C11.1262 6.94123 12.0937 7.14373 11.9325 7.29748C11.6231 7.58998 12.0337 7.50373 12.0787 8.04748C12.0995 8.18024 12.0915 8.31592 12.0553 8.44532C12.019 8.57472 11.9554 8.69482 11.8687 8.79748C11.5756 8.83813 11.2868 8.90592 11.0062 8.99998C10.8241 9.06003 10.6456 9.13078 10.4718 9.21186C10.4241 9.18036 10.3784 9.14592 10.335 9.10873C10.2092 9.00893 10.1083 8.88128 10.0402 8.73584C9.97219 8.59041 9.93886 8.43115 9.94286 8.27063C9.94686 8.11012 9.98808 7.95272 10.0633 7.81085C10.1385 7.66898 10.2456 7.54652 10.3762 7.4531ZM21.6468 12.6694L15.5512 13.7756C15.3511 14.0194 15.1138 14.2301 14.8481 14.4C14.584 14.5441 14.2932 14.6325 13.9936 14.6599C13.6941 14.6874 13.392 14.6531 13.1062 14.5594C12.8676 14.5078 12.6346 14.4331 12.4106 14.3362L10.92 14.5425L11.8256 22.08L22.2693 20.205L21.6468 12.6694ZM12.3525 21.36L12.2662 20.5406L13.9706 17.9381L15.9075 18.5006L17.5725 15.7181L19.5693 17.0306L21.0881 13.8431L21.6262 19.6387L12.3525 21.36Z" fill="white"/>
+      </svg>
+      <span class="header-text">Bits CLI</span>
+    </div>
+    <div class="logo-container">
+      <svg class="status-icon" width="60" height="60" viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Success">
+        <path d="M29.9995 2.5C24.5605 2.5 19.2437 4.11285 14.7213 7.13458C10.199 10.1563 6.67425 14.4512 4.59284 19.4762C2.51143 24.5012 1.96684 30.0305 3.02793 35.365C4.08902 40.6994 6.70814 45.5995 10.5541 49.4454C14.4 53.2914 19.3001 55.9105 24.6345 56.9716C29.969 58.0327 35.4983 57.4881 40.5233 55.4067C45.5483 53.3253 49.8432 49.8005 52.8649 45.2782C55.8867 40.7558 57.4995 35.439 57.4995 30C57.4995 22.7065 54.6022 15.7118 49.445 10.5546C44.2877 5.39731 37.293 2.5 29.9995 2.5ZM26.1467 44.3659L13.0426 31.2619L18.3461 25.9584L26.1467 33.759L42.8701 17.0359L48.1733 22.3391L26.1467 44.3659Z" fill="url(#paint0_linear_481_125)"/>
+        <defs>
+          <linearGradient id="paint0_linear_481_125" x1="3.87451" y1="57.5" x2="69.0317" y2="27.7987" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#D671D0"/>
+            <stop offset="1" stop-color="#7A71CB"/>
+          </linearGradient>
+        </defs>
+      </svg>
+    </div>
+    <div class="content">
+      <div class="text-content">
+        <h1>Authorization successful</h1>
+        <p>You can close this window and return to Bits CLI.<br><span class="countdown-line" id="close-status">This tab will try to close automatically in <span id="countdown">10</span> seconds.</span></p>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var el = document.getElementById('countdown');
+      var status = document.getElementById('close-status');
+      var sec = 10;
+      var t = setInterval(function() {
+        sec--;
+        if (el) el.textContent = Math.max(0, sec);
+        if (sec <= 0) {
+          clearInterval(t);
+          window.close();
+          setTimeout(function() {
+            if (!window.closed && status) {
+              status.textContent = 'You can safely close this tab.';
+            }
+          }, 500);
+        }
+      }, 1000);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+{
+  "github.com/inconshreveable/mousetrap": {
+    "license": "Apache-2.0",
+    "copyright": "Copyright 2022 Alan Shreve (@inconshreveable)",
+    "reason": "the LICENSE file carries no standalone copyright line; the license and the corrected holder come from the module's doc.go and README"
+  },
+  "github.com/kylelemons/godebug": {
+    "license": "Apache-2.0",
+    "copyright": "Copyright 2013 Google Inc.",
+    "reason": "the LICENSE file carries no standalone copyright line; the license and the holder come from the module's source headers"
+  },
+  "github.com/davecgh/go-spew": {
+    "license": "ISC",
+    "detected": "0BSD",
+    "reason": "detector near-tie between 0BSD and ISC (the texts differ only in the attribution proviso); the LICENSE file titles itself \"ISC License\""
+  },
+  "github.com/aymanbagabas/go-udiff": {
+    "license": "MIT AND BSD-3-Clause",
+    "detected": "MIT OR BSD-3-Clause",
+    "reason": "per-file coverage, not a choice: LICENSE-BSD (Copyright 2009 The Go Authors) covers the ported Go diff code and LICENSE-MIT (Copyright 2023 Ayman Bagabas) covers his additions"
+  },
+  "github.com/spf13/cobra": {
+    "license": "Apache-2.0",
+    "copyright": "Copyright The Cobra Authors",
+    "reason": "the LICENSE.txt is the raw Apache-2.0 text with no standalone copyright line; the license and the holder come from the project's README"
+  },
+  "charm.land/bubbles/v2": {
+    "origin": "https://github.com/charmbracelet/bubbles",
+    "reason": "charm.land is a vanity domain, so the origin cannot be derived from the module path"
+  },
+  "charm.land/bubbletea/v2": {
+    "origin": "https://github.com/charmbracelet/bubbletea",
+    "reason": "charm.land is a vanity domain, so the origin cannot be derived from the module path"
+  },
+  "charm.land/glamour/v2": {
+    "origin": "https://github.com/charmbracelet/glamour",
+    "reason": "charm.land is a vanity domain, so the origin cannot be derived from the module path"
+  },
+  "charm.land/lipgloss/v2": {
+    "origin": "https://github.com/charmbracelet/lipgloss",
+    "reason": "charm.land is a vanity domain, so the origin cannot be derived from the module path"
+  },
+  "gopkg.in/yaml.v3": {
+    "license": "MIT AND Apache-2.0",
+    "detected": "MIT OR Apache-2.0",
+    "reason": "per-file coverage, not a choice: the libyaml-derived files (apic.go, emitterc.go, parserc.go, readerc.go, scannerc.go, writerc.go, yamlh.go, yamlprivateh.go) are MIT (Kirill Simonov) and the remaining files are Apache-2.0, per the module's LICENSE"
+  },
+  "go.starlark.net": {
+    "origin": "https://github.com/google/starlark-go",
+    "reason": "go.starlark.net is a vanity domain, so the origin cannot be derived from the module path"
+  },
+  "google.golang.org/protobuf": {
+    "origin": "https://github.com/protocolbuffers/protobuf-go",
+    "reason": "google.golang.org is a vanity domain, so the origin cannot be derived from the module path"
+  }
+}
