@@ -62,10 +62,9 @@ type List struct {
 	expandAll bool
 	toggled   map[agent.BlockID]bool
 
-	// pointerY is the viewport row under the mouse, or -1 when unknown. Hover
-	// is derived from it at render time, so it can never go stale when the
-	// content moves under a stationary pointer.
-	pointerY int
+	// The pointer position is in viewport cells. Hover is derived from it so
+	// scrolling or streaming can change the target beneath a stationary pointer.
+	pointerX, pointerY int
 }
 
 // Surface is the visible transcript and its row offset in the full document.
@@ -133,7 +132,7 @@ type listLineEntry struct {
 
 // NewList returns an empty list with a one-row gap between blocks.
 func NewList() *List {
-	return &List{gap: 1, follow: true, cache: map[agent.BlockID]listLineEntry{}, toggled: map[agent.BlockID]bool{}, pointerY: -1}
+	return &List{gap: 1, follow: true, cache: map[agent.BlockID]listLineEntry{}, toggled: map[agent.BlockID]bool{}, pointerX: -1, pointerY: -1}
 }
 
 // Following reports whether the view is pinned to the tail.
@@ -369,11 +368,17 @@ func (l *List) anchorOffset() {
 // viewport clears hover.
 func (l *List) SetPointerRow(y int) { l.pointerY = y }
 
+// SetPointer records the viewport cell under the mouse.
+func (l *List) SetPointer(x, y int) { l.pointerX, l.pointerY = x, y }
+
 // Hovered reports whether the pointer sits over a clickable accordion row.
 func (l *List) Hovered() bool {
 	_, ok := l.HeaderAt(l.pointerY)
 	return ok
 }
+
+// HoveredLink returns the rendered link beneath the stationary pointer.
+func (l *List) HoveredLink() (LinkHit, bool) { return l.LinkAt(l.pointerX, l.pointerY) }
 
 // HeaderAt returns the block whose clickable accordion header sits on viewport
 // row y. The whole row is the target, so only y matters.

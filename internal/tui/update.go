@@ -136,7 +136,7 @@ func (m *Model) reconcileFocus() tea.Cmd {
 	return nil
 }
 
-// reconcilePointerShape shows a hand over a clickable accordion row via OSC 22
+// reconcilePointerShape shows a hand over a clickable accordion row or link via OSC 22
 // (kitty implements it fully; xterm and foot carry an older, simpler version;
 // other terminals ignore it). It must go through tea.Raw rather than
 // View.Content: Bubble Tea's renderer parses Content into a cell buffer that
@@ -146,7 +146,15 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // Exiting never resets it here: main resets the shape once the program has
 // stopped, which covers every quit path.
 func (m *Model) reconcilePointerShape() tea.Cmd {
-	hand := m.mode == ModeChat && !m.frame.tooSmall && (m.list.Hovered() || m.follow.hover)
+	hand := false
+	if m.mode == ModeChat && !m.frame.tooSmall {
+		hand = m.list.Hovered() || m.follow.hover
+		if !hand && !m.frame.replaced && !m.editor.MenuOpen() {
+			if hit, ok := m.list.HoveredLink(); ok && webLink(hit.URL) {
+				hand = true
+			}
+		}
+	}
 	if hand == m.pointerIsHand {
 		return nil
 	}
@@ -544,7 +552,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 	switch msg := msg.(type) {
 	case tea.MouseMotionMsg:
-		m.list.SetPointerRow(msg.Y)
+		m.list.SetPointer(msg.X, msg.Y)
 		m.moveLinkClick(msg)
 		return m.extendSelection(msg)
 	case tea.MouseReleaseMsg:
