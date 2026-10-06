@@ -1,15 +1,25 @@
+# Internal release pipeline, stable tags only.
+#
+# Ordinary CI lives in .github/workflows/ci.yml. This pipeline exists solely
+# to produce trusted binaries from the internal network and to hold the
+# manual publish-to-dogbrew gate; its workflow rules restrict it to strict
+# stable semantic tags — branch and pull-request pipelines never run here.
+
 include:
   - local: .adms/go/gitlab.yaml
 variables:
   GIT_DEPTH: 1
-  GIT_BASE_BRANCH: main
   GO_IMAGE: registry.ddbuild.io/images/mirror/golang:1.27.0
   GOTOOLCHAIN: go1.27.1
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/'
+    - when: never
 
 stages:
   - lint
   - build
-  - benchmark
   - publish
 
 lint:
@@ -30,8 +40,6 @@ lint:
     - install /tmp/golangci-lint/golangci-lint /usr/local/bin/golangci-lint
   script:
     - ./scripts/lint.sh
-  rules:
-    - when: always
 
 test:
   stage: lint
@@ -41,8 +49,6 @@ test:
   timeout: 10m
   script:
     - ./scripts/test.sh
-  rules:
-    - when: always
 
 build:
   stage: build
@@ -58,19 +64,14 @@ build:
         GOARCH: [amd64, arm64]
       - GOOS: windows
         GOARCH: [amd64, arm64]
+  # The workflow gate guarantees a strict stable tag here, so every build of
+  # this pipeline embeds the exact release version.
   script:
-    - |
-      if [[ "${CI_COMMIT_TAG:-}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-        VERSION="$(./scripts/version.sh)" ./scripts/build.sh
-      else
-        ./scripts/build.sh
-      fi
+    - VERSION="$(./scripts/version.sh)" ./scripts/build.sh
   artifacts:
     expire_in: 2 weeks
     paths:
       - build/
-  rules:
-    - when: always
 
 publish-to-dogbrew:
   stage: publish
@@ -93,48 +94,3 @@ publish-to-dogbrew:
     - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/'
       when: manual
     - when: never
-
-tui-benchmarks:
-  stage: benchmark
-  image: $GO_IMAGE
-  tags:
-    - arch:arm64
-  allow_failure: true
-  timeout: 10m
-  id_tokens:
-    DD_STS_OIDC_TOKEN:
-      aud: dd-sts
-  variables:
-    DD_SITE: datadoghq.com
-    DATADOG_CI_VERSION: v5.7.0
-    DATADOG_CI_SHA256: dbab21348d32f94a33be49644dd1e866eccb74bd49cbb74800999b28f22253f6
-    DD_STS_VERSION: v0.1.4
-    GOMAXPROCS: "1"
-    KUBERNETES_CPU_REQUEST: "1"
-    KUBERNETES_CPU_LIMIT: "1"
-    KUBERNETES_MEMORY_REQUEST: 2Gi
-    KUBERNETES_MEMORY_LIMIT: 2Gi
-  before_script:
-    - mkdir -p "$CI_PROJECT_DIR/.ci-bin"
-    - curl -fsSL "https://binaries.ddbuild.io/dd-source/dd-sts/${DD_STS_VERSION}/dd-sts-tar.tar.gz" | tar -xz -C "$CI_PROJECT_DIR/.ci-bin" dd-sts-linux-arm64
-    - mv "$CI_PROJECT_DIR/.ci-bin/dd-sts-linux-arm64" "$CI_PROJECT_DIR/.ci-bin/dd-sts"
-    - curl -fsSL "https://depot-read-api-github-releases.us1.ddbuild.io/internal/mirror/github-releases/DataDog/datadog-ci/releases/download/${DATADOG_CI_VERSION}/datadog-ci_linux-arm64" -o "$CI_PROJECT_DIR/.ci-bin/datadog-ci"
-    - echo "${DATADOG_CI_SHA256}  $CI_PROJECT_DIR/.ci-bin/datadog-ci" | sha256sum -c -
-    - chmod +x "$CI_PROJECT_DIR/.ci-bin/datadog-ci"
-    - export PATH="$CI_PROJECT_DIR/.ci-bin:$PATH"
-  script:
-    - go test ./... -run '^$' -bench . -benchmem -benchtime=500ms -count=7 -cpu=1 | tee benchmark.txt
-    - go run ./tools/cibench -input benchmark.txt -output benchmark.json
-    - dd-sts exchange --policy bits-cli-ci -- sh -c 'datadog-ci measure --level job --measures-file benchmark-measures.json && datadog-ci tag --level job --tags-file benchmark-tags.json'
-  artifacts:
-    when: always
-    expire_in: 30 days
-    paths:
-      - benchmark.txt
-      - benchmark.json
-      - benchmark-measures.json
-      - benchmark-tags.json
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/'
-      when: never
-    - when: always

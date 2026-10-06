@@ -41,7 +41,39 @@ Lint with the pinned golangci-lint configuration:
 2. Make your change, keeping commits focused.
 3. Make sure `./scripts/test.sh` and `./scripts/lint.sh` — the same scripts CI
    runs — both pass.
-4. Open a pull request against `main` with a clear description of the change and how it was tested. External GitHub pull requests run no CI themselves; maintainers mirror the branch to the internal GitLab CI for validation.
+4. Open a pull request against `main` with a clear description of the change
+   and how it was tested. GitHub Actions runs lint, tests, and builds for
+   pull requests; for external fork PRs the runs may require maintainer
+   approval under the repository policy, but maintainers no longer need to
+   mirror branches to an internal CI.
+
+## Continuous integration
+
+GitHub Actions (`.github/workflows/ci.yml`) runs for pull requests
+(forks included, though external runs may require maintainer approval
+under the repository policy), pushes to `main`, queued merges, and every
+`v`-prefixed tag:
+
+- **Lint** runs `./scripts/lint.sh`: the pinned golangci-lint over both
+  modules plus the `LICENSE-3rdparty.csv` drift check.
+- **Test** runs `./scripts/test.sh` on Linux.
+- **Build** cross-builds the six supported targets (linux/darwin/windows on
+  amd64/arm64) with `./scripts/build.sh` and uploads each binary as a
+  workflow artifact.
+- On a strict stable tag (`v<major>.<minor>.<patch>`, no leading zeroes),
+  the three Dogbrew platform tarballs are additionally packaged as
+  workflow artifacts. Nothing is ever published from Actions.
+
+The workflow is deliberately unprivileged — read-only permissions, no
+secrets, SHA-pinned official actions — so fork pull requests get the same
+checks as internal ones without any trust escalation. Pre-release tags
+(for example `v1.2.3-rc1`) build ordinary development binaries only; see
+RELEASE.md for the release flow.
+
+The internal GitLab pipeline (`.gitlab-ci.yml`) no longer runs for branches
+or pull requests. It only keeps a stable-tag release pipeline that feeds
+the manual internal Dogbrew publisher (see RELEASE.md). Benchmark
+collection and Datadog reporting are deferred for now.
 
 ## Third-party licenses
 
