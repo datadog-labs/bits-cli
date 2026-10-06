@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"image"
+	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
@@ -46,15 +48,11 @@ type (
 		engine     *agent.Engine
 		err        error
 	}
-	webOpenResultMsg struct {
-		epoch uint64
-		url   string
-		err   error
-	}
-	settingsOpenResultMsg struct {
-		epoch uint64
-		url   string
-		err   error
+	browserOpenResultMsg struct {
+		epoch   uint64
+		url     string
+		success string
+		err     error
 	}
 	logoutResultMsg struct {
 		generation uint64
@@ -331,23 +329,14 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case webOpenResultMsg:
+	case browserOpenResultMsg:
 		if msg.epoch != m.conversationEpoch {
 			return m, nil
 		}
 		if msg.err != nil {
 			return m, m.postNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url))
 		}
-		return m, m.postNotice(notice(chat.NoticeInfo, nil, "Opened this conversation in your browser: %s", msg.url))
-
-	case settingsOpenResultMsg:
-		if msg.epoch != m.conversationEpoch {
-			return m, nil
-		}
-		if msg.err != nil {
-			return m, m.postNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url))
-		}
-		return m, m.postNotice(notice(chat.NoticeInfo, nil, "Opened Assistant settings in your browser: %s", msg.url))
+		return m, m.postNotice(notice(chat.NoticeInfo, nil, "%s: %s", msg.success, msg.url))
 	}
 
 	if m.focus() == focusPrompt {
@@ -382,14 +371,7 @@ func (m *Model) openConversationInBrowser() tea.Cmd {
 	if err != nil {
 		return m.postNotice(notice(chat.NoticeError, err, "Could not build a web link for this conversation."))
 	}
-	openURL := m.openURL
-	epoch := m.conversationEpoch
-	if openURL == nil {
-		openURL = browser.Open
-	}
-	return func() tea.Msg {
-		return webOpenResultMsg{epoch: epoch, url: target, err: openURL(context.Background(), target)}
-	}
+	return m.openBrowser(target, "Opened this conversation in your browser")
 }
 
 func (m *Model) openSettingsInBrowser() tea.Cmd {
@@ -400,13 +382,17 @@ func (m *Model) openSettingsInBrowser() tea.Cmd {
 	if err != nil {
 		return m.postNotice(notice(chat.NoticeError, err, "Could not build a web link for Assistant settings."))
 	}
+	return m.openBrowser(target, "Opened Assistant settings in your browser")
+}
+
+func (m *Model) openBrowser(target, success string) tea.Cmd {
 	openURL := m.openURL
-	epoch := m.conversationEpoch
 	if openURL == nil {
 		openURL = browser.Open
 	}
+	epoch := m.conversationEpoch
 	return func() tea.Msg {
-		return settingsOpenResultMsg{epoch: epoch, url: target, err: openURL(context.Background(), target)}
+		return browserOpenResultMsg{epoch: epoch, url: target, success: success, err: openURL(context.Background(), target)}
 	}
 }
 
@@ -458,6 +444,66 @@ func (m *Model) finishSelection(msg tea.MouseReleaseMsg) tea.Cmd {
 	return tea.SetClipboard(text)
 }
 
+type pendingLinkClick struct {
+	hit     chat.LinkHit
+	x, y    int
+	epoch   uint64
+	dragged bool
+}
+
+// webLink accepts destinations opened by Bits on a plain click. Other OSC 8
+// links remain available to the terminal under its own link behavior.
+func webLink(raw string) bool {
+	if len(raw) == 0 || len(raw) > 8*1024 {
+		return false
+	}
+	for _, r := range raw {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") &&
+		u.Hostname() != "" && u.User == nil
+}
+
+func (m *Model) beginLinkClick(msg tea.MouseClickMsg) {
+	m.pendingLink = nil
+	if msg.Mod != 0 || m.frame.replaced || m.editor.MenuOpen() ||
+		m.frame.at(image.Pt(msg.X, msg.Y)) != regionTranscript {
+		return
+	}
+	hit, ok := m.list.LinkAt(msg.X, msg.Y)
+	if ok && webLink(hit.URL) {
+		m.pendingLink = &pendingLinkClick{hit: hit, x: msg.X, y: msg.Y, epoch: m.conversationEpoch}
+	}
+}
+
+func (m *Model) moveLinkClick(msg tea.MouseMotionMsg) {
+	if p := m.pendingLink; p != nil && (msg.X != p.x || msg.Y != p.y) {
+		p.dragged = true
+	}
+}
+
+func (m *Model) finishLinkClick(msg tea.MouseReleaseMsg) tea.Cmd {
+	p := m.pendingLink
+	m.pendingLink = nil
+	wasSelecting := m.selection.selecting()
+	hadSelection := m.selection.selected()
+	cmd := m.finishSelection(msg)
+	if p == nil || msg.Button != tea.MouseLeft || msg.Mod != 0 ||
+		!wasSelecting || p.dragged || hadSelection || m.selection.selected() ||
+		p.epoch != m.conversationEpoch || m.frame.replaced || m.editor.MenuOpen() ||
+		m.frame.at(image.Pt(msg.X, msg.Y)) != regionTranscript {
+		return cmd
+	}
+	hit, ok := m.list.LinkAt(msg.X, msg.Y)
+	if !ok || hit != p.hit || !webLink(hit.URL) {
+		return cmd
+	}
+	return tea.Batch(cmd, m.openBrowser(hit.URL, "Opened link in your browser"))
+}
+
 func (m *Model) armSelectionScroll() tea.Cmd {
 	token, ok := m.selection.armScroll()
 	if !ok {
@@ -493,14 +539,16 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 	if m.mode != ModeChat {
 		// The permissions popup covers the chat; the pointer drives neither.
+		m.pendingLink = nil
 		return nil
 	}
 	switch msg := msg.(type) {
 	case tea.MouseMotionMsg:
 		m.list.SetPointerRow(msg.Y)
+		m.moveLinkClick(msg)
 		return m.extendSelection(msg)
 	case tea.MouseReleaseMsg:
-		return m.finishSelection(msg)
+		return m.finishLinkClick(msg)
 	}
 	if m.frame.at(pointAt(msg)) == regionPrompt {
 		if cmd, used := m.updatePrompt(m.frame.inPrompt(msg)); used {
@@ -518,6 +566,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 	case tea.MouseClickMsg:
 		if msg.Button == tea.MouseLeft {
+			m.beginLinkClick(msg)
 			// Defer the toggle until release so drag selection can take over.
 			m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.HeaderAt(msg.Y)
 			return m.beginSelection(msg)

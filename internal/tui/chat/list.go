@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
@@ -71,6 +72,14 @@ type List struct {
 type Surface struct {
 	Content string
 	Top     int
+}
+
+// LinkHit identifies a rendered hyperlink in an assistant text item.
+type LinkHit struct {
+	URL     string
+	BlockID agent.BlockID
+	Rev     uint64
+	Row     int
 }
 
 // presentationItem points into List.items. It never copies or rewrites source
@@ -369,19 +378,69 @@ func (l *List) Hovered() bool {
 // HeaderAt returns the block whose clickable accordion header sits on viewport
 // row y. The whole row is the target, so only y matters.
 func (l *List) HeaderAt(y int) (agent.BlockID, bool) {
+	idx, line, ok := l.itemAtRow(y)
+	if ok && line == 0 && l.gutter(l.view[idx]) > 0 {
+		return l.view[idx].id, true
+	}
+	return agent.BlockID{}, false
+}
+
+// itemAtRow maps a viewport row to a rendered presentation item. Gaps and
+// viewport padding do not belong to an item.
+func (l *List) itemAtRow(y int) (int, int, bool) {
 	if y < 0 || y >= l.height {
-		return agent.BlockID{}, false
+		return 0, 0, false
 	}
 	l.settle()
 	row := -l.offsetLine
 	for idx := l.offsetIdx; idx < len(l.view) && row <= y; idx++ {
-		e := l.entry(idx)
-		if row == y && l.gutter(l.view[idx]) > 0 {
-			return l.view[idx].id, true
+		height := len(l.entry(idx).lines)
+		if y < row+height {
+			return idx, y - row, true
 		}
-		row += len(e.lines) + l.gapAfter(idx)
+		row += height + l.gapAfter(idx)
 	}
-	return agent.BlockID{}, false
+	return 0, 0, false
+}
+
+// LinkAt returns the link under a transcript viewport cell. Parsing the visible
+// ANSI surface keeps hit testing aligned with Markdown wrapping and scrolling.
+func (l *List) LinkAt(x, y int) (LinkHit, bool) {
+	if x < 0 || x >= l.width {
+		return LinkHit{}, false
+	}
+	idx, row, ok := l.itemAtRow(y)
+	if !ok {
+		return LinkHit{}, false
+	}
+	item := l.view[idx]
+	if item.kind != itemBlock || item.start < 0 {
+		return LinkHit{}, false
+	}
+	block := l.items[item.start]
+	if block.Kind != assistant.KindText || block.Role != assistant.RoleAssistant {
+		return LinkHit{}, false
+	}
+	hit := LinkHit{BlockID: item.id, Rev: item.rev, Row: row}
+
+	buf := uv.NewScreenBuffer(l.width, l.height)
+	buf.Method = ansi.GraphemeWidth
+	uv.NewStyledString(l.renderSurface(false).Content).Draw(&buf, buf.Bounds())
+	line := buf.Line(y)
+	if x >= len(line) {
+		return LinkHit{}, false
+	}
+	// A wide grapheme's continuation column has zero width. Resolve it to
+	// the leading cell, which carries the hyperlink.
+	start := x
+	for start > 0 && line[start].Width == 0 {
+		start--
+	}
+	if line[start].Width <= 0 || x >= start+line[start].Width || line[start].Link.URL == "" {
+		return LinkHit{}, false
+	}
+	hit.URL = line[start].Link.URL
+	return hit, true
 }
 
 func (l *List) renderItem(idx int) []string { return l.entry(idx).lines }
