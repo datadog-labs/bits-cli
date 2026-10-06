@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 func streamedToolMessage(messageID, contentType, toolCallID, toolName, partialJSON, input string) assistant.Message {

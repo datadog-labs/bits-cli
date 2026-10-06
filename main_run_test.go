@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/auth"
-	"github.com/DataDog/bits-cli/internal/cmd"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/cmd"
 )
 
 // scriptBackend scripts the run surface's backend: round 1 may emit the

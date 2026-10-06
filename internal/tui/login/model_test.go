@@ -12,7 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	tuistyles "github.com/DataDog/bits-cli/internal/tui/styles"
+	tuistyles "github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 func TestSitePickerNavigatesAndStartsSelectedSite(t *testing.T) {

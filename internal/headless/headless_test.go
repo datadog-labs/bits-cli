@@ -3,7 +3,7 @@ package headless
 import (
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent"
 )
 
 func TestClassifyTurn(t *testing.T) {

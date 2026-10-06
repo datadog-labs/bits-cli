@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 func TestRenderLocalEnvironment(t *testing.T) {

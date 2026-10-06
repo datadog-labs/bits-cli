@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent"
 )
 
 // UI hands interactive tool calls to a front end and waits for the user. It is

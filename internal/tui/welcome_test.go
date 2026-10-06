@@ -11,16 +11,16 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/ansi/kitty"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/agent/fake"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/tui/splash"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/fake"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 )
 
 func welcomeModel(width, height int) *Model {
 	m := newShell()
 	m.version = "v0.1.2"
-	m.workspaceDisplayPath = "~/go/src/github.com/DataDog/bits-cli"
+	m.workspaceDisplayPath = "~/go/src/github.com/datadog-labs/bits-cli"
 	m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return m
 }
@@ -139,7 +139,7 @@ func TestWelcomeHiddenUntilTerminalIsTallEnough(t *testing.T) {
 
 func TestWelcomeNoticeSitsOneBlankRowBelowTheFacts(t *testing.T) {
 	const want = "Bits is an AI assistant. It can make mistakes — review its suggestions and actions."
-	m := welcomeModels(80, 40)["engine"]
+	m := welcomeModels(84, 40)["engine"]
 	logoWidth := lipgloss.Width(m.welcomeLogo())
 	width := m.welcomeContentWidth() - welcomeLogoWidth - welcomeGap
 	column := columnText(strings.Split(ansi.Strip(m.splashPanelBody()), "\n"), logoWidth)

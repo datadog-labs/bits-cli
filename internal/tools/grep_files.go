@@ -15,10 +15,10 @@ import (
 
 	gitignore "github.com/git-pkgs/gitignore"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 const (

@@ -11,7 +11,7 @@ import (
 )
 
 func TestParseBenchmarksAggregatesSampleMedians(t *testing.T) {
-	input := `pkg: github.com/DataDog/bits-cli/internal/agent
+	input := `pkg: github.com/datadog-labs/bits-cli/internal/agent
 BenchmarkTranscriptStreaming/fragments_800-1  5  240 ns/op  120 B/op  3 allocs/op  61 terminal-writes/op
 BenchmarkTranscriptStreaming/fragments_800-1  5  200 ns/op  100 B/op  2 allocs/op  57 terminal-writes/op
 BenchmarkTranscriptStreaming/fragments_800-1  5  220 ns/op  110 B/op  2 allocs/op  59 terminal-writes/op
@@ -30,7 +30,7 @@ BenchmarkTranscriptStreaming/fragments_800-1  5  220 ns/op  110 B/op  2 allocs/o
 		"allocs_per_op":          2,
 		"terminal_writes_per_op": 59,
 	}
-	if got[0].Package != "github.com/DataDog/bits-cli/internal/agent" {
+	if got[0].Package != "github.com/datadog-labs/bits-cli/internal/agent" {
 		t.Fatalf("package = %q", got[0].Package)
 	}
 	if got[0].Name != "BenchmarkTranscriptStreaming/fragments_800" {
@@ -46,7 +46,7 @@ BenchmarkTranscriptStreaming/fragments_800-1  5  220 ns/op  110 B/op  2 allocs/o
 
 func TestBuildMeasuresCreatesStableCIVisibilityNames(t *testing.T) {
 	summaries := []benchmarkSummary{{
-		Package: "github.com/DataDog/bits-cli/internal/agent",
+		Package: "github.com/datadog-labs/bits-cli/internal/agent",
 		Name:    "BenchmarkTranscriptStreaming/fragments_800",
 		Samples: 7,
 		Metrics: map[string]float64{
@@ -89,7 +89,7 @@ func TestRunWritesArtifactMeasuresAndRunnerTags(t *testing.T) {
 	tagsPath := filepath.Join(dir, "benchmark-tags.json")
 	input := `goos: linux
 goarch: arm64
-pkg: github.com/DataDog/bits-cli/internal/agent
+pkg: github.com/datadog-labs/bits-cli/internal/agent
 cpu: AWS Graviton4
 BenchmarkTranscriptStreaming/fragments_800-1  5  220 ns/op
 `

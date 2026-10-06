@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/DataDog/bits-cli/internal/textsafe"
+	"github.com/datadog-labs/bits-cli/internal/textsafe"
 )
 
 // Sentinel errors callers can match with errors.Is to branch on the outcome of

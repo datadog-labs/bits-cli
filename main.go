@@ -12,17 +12,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/auth"
-	"github.com/DataDog/bits-cli/internal/cmd"
-	"github.com/DataDog/bits-cli/internal/headless"
-	"github.com/DataDog/bits-cli/internal/headless/adeep"
-	"github.com/DataDog/bits-cli/internal/startup"
-	"github.com/DataDog/bits-cli/internal/tools"
-	"github.com/DataDog/bits-cli/internal/tui"
-	loginui "github.com/DataDog/bits-cli/internal/tui/login"
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/cmd"
+	"github.com/datadog-labs/bits-cli/internal/headless"
+	"github.com/datadog-labs/bits-cli/internal/headless/adeep"
+	"github.com/datadog-labs/bits-cli/internal/startup"
+	"github.com/datadog-labs/bits-cli/internal/tools"
+	"github.com/datadog-labs/bits-cli/internal/tui"
+	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 func main() {

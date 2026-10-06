@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 func TestMutationLockerCancelWhileWaiting(t *testing.T) {

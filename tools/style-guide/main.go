@@ -14,7 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/DataDog/bits-cli/tools/style-guide/catalog"
+	"github.com/datadog-labs/bits-cli/tools/style-guide/catalog"
 )
 
 func main() {

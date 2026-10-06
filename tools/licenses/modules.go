@@ -15,7 +15,7 @@ import (
 
 // mainModule is the path of the repository's own module; it never appears in
 // its go.sum, but the inventory rules it out explicitly.
-const mainModule = "github.com/DataDog/bits-cli"
+const mainModule = "github.com/datadog-labs/bits-cli"
 
 // majorVersionRe matches the /v2-style major version suffix of a module path.
 var majorVersionRe = regexp.MustCompile(`/v[0-9]+$`)

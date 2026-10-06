@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/auth"
 )
 
 // These tests hit the real Bits assistant API. They are opt-in: either set

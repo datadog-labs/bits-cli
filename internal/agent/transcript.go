@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // maxToolInputPreviewBytes bounds the raw streamed argument retained in a

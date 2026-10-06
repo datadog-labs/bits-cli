@@ -34,7 +34,7 @@ build_args=(-trimpath -o "$OUTPUT")
 if [[ -n "$VERSION" ]]; then
     build_args+=(
         -buildvcs=false
-        -ldflags "-s -w -X github.com/DataDog/bits-cli/internal/cmd.releaseVersion=${VERSION}"
+        -ldflags "-s -w -X github.com/datadog-labs/bits-cli/internal/cmd.releaseVersion=${VERSION}"
     )
 fi
 CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \

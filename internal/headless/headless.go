@@ -5,7 +5,7 @@ package headless
 import (
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent"
 )
 
 // Start carries the run-opening facts a delivery may need.

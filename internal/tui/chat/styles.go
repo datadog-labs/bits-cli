@@ -3,7 +3,7 @@ package chat
 import (
 	"charm.land/lipgloss/v2"
 
-	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 // Styles holds the chat-specific styles the renderers use.

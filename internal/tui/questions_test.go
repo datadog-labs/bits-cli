@@ -12,13 +12,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/agent/fake"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	"github.com/DataDog/bits-cli/internal/tools"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
-	"github.com/DataDog/bits-cli/internal/tui/chat"
-	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/fake"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/tui/chat"
+	conversationview "github.com/datadog-labs/bits-cli/internal/tui/conversations"
 )
 
 const questionInput = `{"questions":[{"question":"Which region?","options":[{"label":"US","description":"US region"},{"label":"EU","description":"EU region"}]},{"question":"Which service?","options":[{"label":"API","description":"Public API"}]}]}`

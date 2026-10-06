@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/browser"
+	"github.com/datadog-labs/bits-cli/internal/browser"
 	"golang.org/x/oauth2"
 )
 

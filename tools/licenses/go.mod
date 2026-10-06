@@ -1,4 +1,4 @@
-module github.com/DataDog/bits-cli/tools/licenses
+module github.com/datadog-labs/bits-cli/tools/licenses
 
 go 1.27.1
 

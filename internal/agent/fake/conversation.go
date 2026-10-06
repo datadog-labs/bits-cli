@@ -15,7 +15,7 @@ import (
 
 	"go.starlark.net/starlark"
 
-	"github.com/DataDog/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // titleRunes bounds a conversation title derived from its first message.

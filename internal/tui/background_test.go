@@ -8,11 +8,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/agent/fake"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	loginui "github.com/DataDog/bits-cli/internal/tui/login"
-	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/fake"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 // TestViewsPaintTheThemeBackground covers both root views and both modes: an

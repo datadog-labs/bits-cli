@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 func TestEditorApprovalIdentifiesTargetAndPreservesWorkspaceGrant(t *testing.T) {

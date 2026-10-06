@@ -8,8 +8,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/filediff"
-	"github.com/DataDog/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/filediff"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 func TestRenderShowsAddedAndDeletedContent(t *testing.T) {

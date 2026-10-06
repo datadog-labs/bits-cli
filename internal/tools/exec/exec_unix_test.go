@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/workspace"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 func TestExecServiceUnixSuccessAndInheritedEnvironment(t *testing.T) {

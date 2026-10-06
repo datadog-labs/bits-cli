@@ -5,7 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	tuistyles "github.com/DataDog/bits-cli/internal/tui/styles"
+	tuistyles "github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 // pageScrollLines is how many lines PgUp/PgDn (and space) move.

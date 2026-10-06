@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/assistant"
-	exectool "github.com/DataDog/bits-cli/internal/tools/exec"
-	"github.com/DataDog/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 type recordingExecRunner struct {

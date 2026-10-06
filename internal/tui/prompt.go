@@ -5,7 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/DataDog/bits-cli/internal/tui/components"
+	"github.com/datadog-labs/bits-cli/internal/tui/components"
 )
 
 // minimumPromptRows is what a prompt may take even past half the free rows:

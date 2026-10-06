@@ -11,14 +11,14 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/DataDog/bits-cli/internal/agent"
-	"github.com/DataDog/bits-cli/internal/browser"
-	"github.com/DataDog/bits-cli/internal/tools"
-	"github.com/DataDog/bits-cli/internal/tui/chat"
-	conversationview "github.com/DataDog/bits-cli/internal/tui/conversations"
-	"github.com/DataDog/bits-cli/internal/tui/escape"
-	loginui "github.com/DataDog/bits-cli/internal/tui/login"
-	"github.com/DataDog/bits-cli/internal/tui/splash"
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/browser"
+	"github.com/datadog-labs/bits-cli/internal/tools"
+	"github.com/datadog-labs/bits-cli/internal/tui/chat"
+	conversationview "github.com/datadog-labs/bits-cli/internal/tui/conversations"
+	"github.com/datadog-labs/bits-cli/internal/tui/escape"
+	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
+	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 )
 
 // historyLoadTimeout bounds the conversation-history fetch on startup.

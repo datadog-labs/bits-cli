@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DataDog/bits-cli/internal/textsafe"
+	"github.com/datadog-labs/bits-cli/internal/textsafe"
 )
 
 // testClient points a Client at h with the httptest server's client for both

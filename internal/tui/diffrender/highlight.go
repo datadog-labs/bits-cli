@@ -10,7 +10,7 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	chromastyles "github.com/alecthomas/chroma/v2/styles"
 
-	"github.com/DataDog/bits-cli/internal/tui/escape"
+	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 )
 
 // lexerCache memoizes filename matches.
