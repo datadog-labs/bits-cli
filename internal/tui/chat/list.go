@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
@@ -61,16 +62,23 @@ type List struct {
 	expandAll bool
 	toggled   map[agent.BlockID]bool
 
-	// pointerY is the viewport row under the mouse, or -1 when unknown. Hover
-	// is derived from it at render time, so it can never go stale when the
-	// content moves under a stationary pointer.
-	pointerY int
+	// The pointer position is in viewport cells. Hover is derived from it so
+	// scrolling or streaming can change the target beneath a stationary pointer.
+	pointerX, pointerY int
 }
 
 // Surface is the visible transcript and its row offset in the full document.
 type Surface struct {
 	Content string
 	Top     int
+}
+
+// LinkHit identifies a rendered hyperlink in an assistant text item.
+type LinkHit struct {
+	URL     string
+	BlockID agent.BlockID
+	Rev     uint64
+	Row     int
 }
 
 // presentationItem points into List.items. It never copies or rewrites source
@@ -124,7 +132,7 @@ type listLineEntry struct {
 
 // NewList returns an empty list with a one-row gap between blocks.
 func NewList() *List {
-	return &List{gap: 1, follow: true, cache: map[agent.BlockID]listLineEntry{}, toggled: map[agent.BlockID]bool{}, pointerY: -1}
+	return &List{gap: 1, follow: true, cache: map[agent.BlockID]listLineEntry{}, toggled: map[agent.BlockID]bool{}, pointerX: -1, pointerY: -1}
 }
 
 // Following reports whether the view is pinned to the tail.
@@ -360,28 +368,84 @@ func (l *List) anchorOffset() {
 // viewport clears hover.
 func (l *List) SetPointerRow(y int) { l.pointerY = y }
 
+// SetPointer records the viewport cell under the mouse.
+func (l *List) SetPointer(x, y int) { l.pointerX, l.pointerY = x, y }
+
 // Hovered reports whether the pointer sits over a clickable accordion row.
 func (l *List) Hovered() bool {
 	_, ok := l.HeaderAt(l.pointerY)
 	return ok
 }
 
+// HoveredLink returns the rendered link beneath the stationary pointer.
+func (l *List) HoveredLink() (LinkHit, bool) { return l.LinkAt(l.pointerX, l.pointerY) }
+
 // HeaderAt returns the block whose clickable accordion header sits on viewport
 // row y. The whole row is the target, so only y matters.
 func (l *List) HeaderAt(y int) (agent.BlockID, bool) {
+	idx, line, ok := l.itemAtRow(y)
+	if ok && line == 0 && l.gutter(l.view[idx]) > 0 {
+		return l.view[idx].id, true
+	}
+	return agent.BlockID{}, false
+}
+
+// itemAtRow maps a viewport row to a rendered presentation item. Gaps and
+// viewport padding do not belong to an item.
+func (l *List) itemAtRow(y int) (int, int, bool) {
 	if y < 0 || y >= l.height {
-		return agent.BlockID{}, false
+		return 0, 0, false
 	}
 	l.settle()
 	row := -l.offsetLine
 	for idx := l.offsetIdx; idx < len(l.view) && row <= y; idx++ {
-		e := l.entry(idx)
-		if row == y && l.gutter(l.view[idx]) > 0 {
-			return l.view[idx].id, true
+		height := len(l.entry(idx).lines)
+		if y < row+height {
+			return idx, y - row, true
 		}
-		row += len(e.lines) + l.gapAfter(idx)
+		row += height + l.gapAfter(idx)
 	}
-	return agent.BlockID{}, false
+	return 0, 0, false
+}
+
+// LinkAt returns the link under a transcript viewport cell. Parsing the visible
+// ANSI surface keeps hit testing aligned with Markdown wrapping and scrolling.
+func (l *List) LinkAt(x, y int) (LinkHit, bool) {
+	if x < 0 || x >= l.width {
+		return LinkHit{}, false
+	}
+	idx, row, ok := l.itemAtRow(y)
+	if !ok {
+		return LinkHit{}, false
+	}
+	item := l.view[idx]
+	if item.kind != itemBlock || item.start < 0 {
+		return LinkHit{}, false
+	}
+	block := l.items[item.start]
+	if block.Kind != assistant.KindText || block.Role != assistant.RoleAssistant {
+		return LinkHit{}, false
+	}
+	hit := LinkHit{BlockID: item.id, Rev: item.rev, Row: row}
+
+	buf := uv.NewScreenBuffer(l.width, l.height)
+	buf.Method = ansi.GraphemeWidth
+	uv.NewStyledString(l.renderSurface(false).Content).Draw(&buf, buf.Bounds())
+	line := buf.Line(y)
+	if x >= len(line) {
+		return LinkHit{}, false
+	}
+	// A wide grapheme's continuation column has zero width. Resolve it to
+	// the leading cell, which carries the hyperlink.
+	start := x
+	for start > 0 && line[start].Width == 0 {
+		start--
+	}
+	if line[start].Width <= 0 || x >= start+line[start].Width || line[start].Link.URL == "" {
+		return LinkHit{}, false
+	}
+	hit.URL = line[start].Link.URL
+	return hit, true
 }
 
 func (l *List) renderItem(idx int) []string { return l.entry(idx).lines }

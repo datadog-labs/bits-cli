@@ -267,6 +267,7 @@ type Model struct {
 	// never turned it into a real selection range.
 	pendingAccordionToggle    agent.BlockID
 	hasPendingAccordionToggle bool
+	pendingLink               *pendingLinkClick
 
 	// pointerIsHand is the OS pointer shape last written to the terminal, so
 	// reconcilePointerShape only emits an OSC 22 sequence on a real change.

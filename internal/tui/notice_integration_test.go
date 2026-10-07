@@ -53,7 +53,7 @@ func TestDelayedBrowserResultStaysOutOfNewConversation(t *testing.T) {
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	oldEpoch := m.conversationEpoch
 	m.startNewConversation()
-	_, _ = m.Update(webOpenResultMsg{epoch: oldEpoch, url: "https://example.com/old"})
+	_, _ = m.Update(browserOpenResultMsg{epoch: oldEpoch, url: "https://example.com/old"})
 	if len(m.notices) != 1 || latestNotice(m).Text != "Started a new conversation." {
 		t.Fatalf("stale browser result entered new transcript: %+v", m.notices)
 	}
