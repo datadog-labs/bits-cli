@@ -13,8 +13,19 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/cmd"
+	"github.com/datadog-labs/bits-cli/internal/site"
+	"github.com/datadog-labs/bits-cli/internal/startup"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
+
+// clearStagingEnv clears inherited staging configuration for one test; empty
+// values are equivalent to unset for the staging loader.
+func clearStagingEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv(site.EnvStagingSite, "")
+	t.Setenv(site.EnvStagingDomain, "")
+	t.Setenv(site.EnvStagingClientID, "")
+}
 
 func TestPrintLoggedOutUsesOneSuccessMessage(t *testing.T) {
 	var out bytes.Buffer
@@ -35,9 +46,37 @@ func (s stubCredentialStore) Load() (auth.Session, error) { return s.session, s.
 func (stubCredentialStore) Save(auth.Session) error       { return nil }
 func (stubCredentialStore) Delete() error                 { return nil }
 
+// recordingCredentialStore counts mutations so a test can prove a failing
+// startup left the stored credential untouched.
+type recordingCredentialStore struct {
+	session auth.Session
+	err     error
+	loads   int
+	saves   int
+	deletes int
+}
+
+func (s *recordingCredentialStore) Load() (auth.Session, error) {
+	s.loads++
+	return s.session, s.err
+}
+
+func (s *recordingCredentialStore) Save(session auth.Session) error {
+	s.saves++
+	s.session = session
+	return nil
+}
+
+func (s *recordingCredentialStore) Delete() error {
+	s.deletes++
+	s.session = auth.Session{}
+	s.err = auth.ErrNoSession
+	return nil
+}
+
 func validOAuthSession() auth.Session {
 	return auth.Session{
-		Site:         "https://api.datad0g.com",
+		Site:         "https://api.datadoghq.com",
 		ClientID:     "oauth-client",
 		AccessToken:  "oauth-access",
 		RefreshToken: "oauth-refresh",
@@ -57,6 +96,7 @@ func testWorkspace(t *testing.T) *workspace.Workspace {
 }
 
 func TestStartupExplicitAPIKeyModeDoesNotFallThroughToFakeBackend(t *testing.T) {
+	clearStagingEnv(t)
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")
@@ -72,6 +112,7 @@ func TestStartupExplicitAPIKeyModeDoesNotFallThroughToFakeBackend(t *testing.T) 
 }
 
 func TestStartupMissingOAuthSelectsInteractiveLogin(t *testing.T) {
+	clearStagingEnv(t)
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	model, err := startupModelWithStore(
 		context.Background(),
@@ -89,6 +130,7 @@ func TestStartupMissingOAuthSelectsInteractiveLogin(t *testing.T) {
 }
 
 func TestStartupCredentialStoreFailureDoesNotSelectLogin(t *testing.T) {
+	clearStagingEnv(t)
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	storeErr := errors.New("keyring unavailable")
 	_, err := startupModelWithStore(
@@ -102,7 +144,62 @@ func TestStartupCredentialStoreFailureDoesNotSelectLogin(t *testing.T) {
 	}
 }
 
+// A stored staging session whose environment is missing or names a different
+// domain fails startup with the actionable configuration error: the site
+// picker is never entered to hide it, the stored credential is not mutated,
+// and no network fallback runs.
+func TestStartupStagingConfigFailureDoesNotEnterLoginPicker(t *testing.T) {
+	clearStagingEnv(t)
+	t.Setenv("BITS_FAKE_BACKEND", "")
+	workspace := testWorkspace(t)
+	for name, env := range map[string]struct{ site, domain, clientID string }{
+		"missing staging configuration": {site: "", domain: "", clientID: ""},
+		"mismatched staging domain":     {site: "https://login.other.test", domain: "other.test", clientID: "other-client"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(site.EnvStagingSite, env.site)
+			t.Setenv(site.EnvStagingDomain, env.domain)
+			t.Setenv(site.EnvStagingClientID, env.clientID)
+			stored := validOAuthSession()
+			stored.Site = "https://api.staging.test"
+			stored.ClientID = "saved-staging-client"
+			store := &recordingCredentialStore{session: stored}
+
+			model, err := startupModelWithStore(
+				context.Background(),
+				cmd.ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
+				store,
+				workspace,
+			)
+			if err == nil {
+				t.Fatal("startup succeeded with an unusable stored staging session")
+			}
+			if model != nil {
+				t.Fatal("startup returned a model; the login picker would hide the configuration failure")
+			}
+			if errors.Is(err, startup.ErrLoginRequired) {
+				t.Fatalf("startup error = %v, must not be login-required", err)
+			}
+			if !errors.Is(err, auth.ErrSiteConfiguration) {
+				t.Fatalf("startup error = %v, want auth.ErrSiteConfiguration", err)
+			}
+			for _, want := range []string{site.EnvStagingSite, site.EnvStagingDomain} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("startup error = %v, want it to name %q", err, want)
+				}
+			}
+			if store.loads != 1 || store.saves != 0 || store.deletes != 0 {
+				t.Fatalf("OAuth store operations = load %d, save %d, delete %d", store.loads, store.saves, store.deletes)
+			}
+			if store.session != stored {
+				t.Fatalf("stored session was mutated: %+v", store.session)
+			}
+		})
+	}
+}
+
 func TestStartupStoredOAuthEntersChatWithConversation(t *testing.T) {
+	clearStagingEnv(t)
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	model, err := startupModelWithStore(
 		context.Background(),

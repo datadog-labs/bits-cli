@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/datadog-labs/bits-cli/internal/site"
 )
 
 func TestOpenHonorsCanceledContext(t *testing.T) {
@@ -29,8 +31,9 @@ func TestConversationURLUsesAuthoritativeSiteMapping(t *testing.T) {
 		{name: "AP1", site: "https://api.ap1.datadoghq.com", want: "https://ap1.datadoghq.com/ask/conversation-1"},
 		{name: "AP2", site: "https://api.ap2.datadoghq.com", want: "https://ap2.datadoghq.com/ask/conversation-1"},
 		{name: "UK1", site: "https://api.uk1.datadoghq.com", want: "https://uk1.datadoghq.com/ask/conversation-1"},
-		{name: "staging API", site: "https://api.datad0g.com", want: "https://dd.datad0g.com/ask/conversation-1"},
-		{name: "staging direct", site: "https://dd.datad0g.com", want: "https://dd.datad0g.com/ask/conversation-1"},
+	}
+	for _, name := range []string{site.EnvStagingSite, site.EnvStagingDomain, site.EnvStagingClientID} {
+		t.Setenv(name, "")
 	}
 
 	for _, test := range tests {
@@ -71,8 +74,49 @@ func TestSettingsURLUsesAuthoritativeSiteMapping(t *testing.T) {
 }
 
 func TestSettingsURLRejectsUnsupportedSite(t *testing.T) {
+	for _, name := range []string{site.EnvStagingSite, site.EnvStagingDomain, site.EnvStagingClientID} {
+		t.Setenv(name, "")
+	}
 	if got, err := SettingsURL("https://api.ddog-gov.com"); err == nil || got != "" {
 		t.Fatalf("SettingsURL() = %q, %v, want an error", got, err)
+	}
+	if got, err := SettingsURL("https://api.staging.test"); err == nil || got != "" {
+		t.Fatalf("SettingsURL() without staging configuration = %q, %v, want an error", got, err)
+	}
+}
+
+// A staging environment maps exactly its configured hosts to the login
+// origin; a partial configuration never breaks production mapping.
+func TestConversationURLStagingEnvironment(t *testing.T) {
+	t.Setenv(site.EnvStagingSite, "https://login.staging.test")
+	t.Setenv(site.EnvStagingDomain, "staging.test")
+	for siteURL, want := range map[string]string{
+		"https://api.staging.test":   "https://login.staging.test/ask/conversation-1",
+		"https://login.staging.test": "https://login.staging.test/ask/conversation-1",
+	} {
+		if got, err := ConversationURL(siteURL, "conversation-1"); err != nil || got != want {
+			t.Errorf("ConversationURL(%q) = %q, %v; want %q", siteURL, got, err, want)
+		}
+	}
+	for _, siteURL := range []string{
+		"https://evil.staging.test",
+		"https://api.evil.staging.test",
+		"https://x.login.staging.test",
+		"https://staging.test",
+		"https://login.staging.test.evil.example",
+	} {
+		if got, err := ConversationURL(siteURL, "conversation-1"); err == nil || got != "" {
+			t.Errorf("ConversationURL(%q) = %q, %v; want an error", siteURL, got, err)
+		}
+	}
+
+	t.Setenv(site.EnvStagingDomain, "")
+	if got, err := ConversationURL("https://api.staging.test", "conversation-1"); err == nil || got != "" {
+		t.Fatalf("partial staging configuration: ConversationURL = %q, %v; want an error", got, err)
+	}
+	got, err := ConversationURL("https://api.datadoghq.com", "conversation-1")
+	if err != nil || got != "https://app.datadoghq.com/ask/conversation-1" {
+		t.Fatalf("production mapping broken by malformed staging env: %q, %v", got, err)
 	}
 }
 
@@ -132,5 +176,28 @@ func TestLauncherCommand(t *testing.T) {
 				t.Fatal("launcher omitted the target")
 			}
 		})
+	}
+}
+
+// Browser links for a staging session use the currently configured login
+// origin: changing the login alias within the same canonical domain reroutes
+// links without invalidating the stored api-prefixed session.
+func TestConversationURLStagingLoginAliasChange(t *testing.T) {
+	t.Setenv(site.EnvStagingSite, "https://login.staging.test")
+	t.Setenv(site.EnvStagingDomain, "staging.test")
+	t.Setenv(site.EnvStagingClientID, "")
+	got, err := ConversationURL("https://api.staging.test", "conversation-1")
+	if err != nil || got != "https://login.staging.test/ask/conversation-1" {
+		t.Fatalf("ConversationURL = %q, %v", got, err)
+	}
+
+	t.Setenv(site.EnvStagingSite, "https://ui.staging.test")
+	got, err = ConversationURL("https://api.staging.test", "conversation-1")
+	if err != nil || got != "https://ui.staging.test/ask/conversation-1" {
+		t.Fatalf("ConversationURL after alias change = %q, %v", got, err)
+	}
+	got, err = SettingsURL("https://api.staging.test")
+	if err != nil || got != "https://ui.staging.test/ask/settings" {
+		t.Fatalf("SettingsURL after alias change = %q, %v", got, err)
 	}
 }

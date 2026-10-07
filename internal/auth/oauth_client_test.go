@@ -55,6 +55,7 @@ func TestNewOAuthHTTPClientSurfacesRedirectWithoutFollowing(t *testing.T) {
 
 // NewSource's default client construction must refuse redirects.
 func TestNewSourceDefaultClientRefusesRedirects(t *testing.T) {
+	noStagingEnv(t)
 	source, err := NewSource(expiredSession(), newMemoryStore(expiredSession()), nil)
 	if err != nil {
 		t.Fatalf("NewSource: %v", err)
@@ -100,8 +101,8 @@ func TestLoginExchangeDoesNotFollowTokenRedirect(t *testing.T) {
 
 	client := newOAuthHTTPClient(loginHTTPTimeout)
 	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Hostname() != "api.datad0g.com" {
-			t.Errorf("token exchange host = %s, want api.datad0g.com", req.URL.Hostname())
+		if req.URL.Hostname() != "api.datadoghq.com" {
+			t.Errorf("token exchange host = %s, want api.datadoghq.com", req.URL.Hostname())
 		}
 		clone := req.Clone(req.Context())
 		clone.URL.Scheme = "http"
@@ -111,7 +112,7 @@ func TestLoginExchangeDoesNotFollowTokenRedirect(t *testing.T) {
 
 	store := &memoryStore{}
 	_, err := login(context.Background(), SiteConfig{
-		Site:         DefaultStagingSite,
+		Site:         DefaultSite,
 		ClientID:     "client",
 		AuthorizeURL: redirect.URL + "/authorize",
 		TokenURL:     redirect.URL + "/api/v2/oauth2/token",
@@ -134,14 +135,15 @@ func TestLoginExchangeDoesNotFollowTokenRedirect(t *testing.T) {
 // through Source.AccessToken with the same client NewSource installs by
 // default, routed to the fake endpoint through a transport rewrite.
 func TestSourceRefreshDoesNotFollowTokenRedirect(t *testing.T) {
+	noStagingEnv(t)
 	redirect, targetHits := redirectTestPair(t)
 
 	initial := expiredSession()
 	store := newMemoryStore(initial)
 	client := newOAuthHTTPClient(refreshTimeout)
 	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Hostname() != "api.dd.datad0g.com" {
-			t.Errorf("refresh host = %s, want api.dd.datad0g.com", req.URL.Hostname())
+		if req.URL.Hostname() != "api.datadoghq.com" {
+			t.Errorf("refresh host = %s, want api.datadoghq.com", req.URL.Hostname())
 		}
 		clone := req.Clone(req.Context())
 		clone.URL.Scheme = "http"
@@ -171,12 +173,13 @@ func TestSourceRefreshDoesNotFollowTokenRedirect(t *testing.T) {
 // fake endpoint through a transport rewrite on the same client Revoke builds
 // by default.
 func TestLogoutRevokeDoesNotFollowRedirect(t *testing.T) {
+	noStagingEnv(t)
 	redirect, targetHits := redirectTestPair(t)
 
 	client := newOAuthHTTPClient(revokeHTTPTimeout)
 	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Hostname() != "api.dd.datad0g.com" {
-			t.Errorf("revoke host = %s, want api.dd.datad0g.com", req.URL.Hostname())
+		if req.URL.Hostname() != "api.datadoghq.com" {
+			t.Errorf("revoke host = %s, want api.datadoghq.com", req.URL.Hostname())
 		}
 		clone := req.Clone(req.Context())
 		clone.URL.Scheme = "http"
@@ -185,7 +188,7 @@ func TestLogoutRevokeDoesNotFollowRedirect(t *testing.T) {
 	})
 
 	session := Session{
-		Site:         DefaultStagingSite,
+		Site:         "https://api.datadoghq.com",
 		ClientID:     "client",
 		AccessToken:  "access",
 		RefreshToken: "refresh",

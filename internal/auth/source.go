@@ -37,7 +37,7 @@ func NewSource(session Session, store CredentialStore, httpClient *http.Client) 
 	}
 	cfg, err := ConfigForSite(session.Site, session.ClientID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrSiteConfiguration, err)
 	}
 	if store == nil {
 		return nil, fmt.Errorf("OAuth credential store is required")

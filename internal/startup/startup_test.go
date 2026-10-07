@@ -10,7 +10,18 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/site"
 )
+
+// clearStagingEnv clears inherited staging configuration for one test; empty
+// values are equivalent to unset for the staging loader. Unit tests stay
+// deterministic under any configuration inherited from the developer's shell.
+func clearStagingEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv(site.EnvStagingSite, "")
+	t.Setenv(site.EnvStagingDomain, "")
+	t.Setenv(site.EnvStagingClientID, "")
+}
 
 type observedStore struct {
 	loads   int
@@ -41,7 +52,7 @@ func (s *observedStore) Delete() error {
 
 func validSession() auth.Session {
 	return auth.Session{
-		Site:         "https://api.datad0g.com",
+		Site:         "https://api.datadoghq.com",
 		ClientID:     "oauth-client",
 		AccessToken:  "oauth-access",
 		RefreshToken: "oauth-refresh",
@@ -51,6 +62,7 @@ func validSession() auth.Session {
 }
 
 func TestNewAuthenticatedClientAPIKeyBypassesOAuthStore(t *testing.T) {
+	clearStagingEnv(t)
 	for _, store := range []*observedStore{
 		{session: validSession()},
 		{err: errors.New("keyring unavailable")},
@@ -71,6 +83,7 @@ func TestNewAuthenticatedClientAPIKeyBypassesOAuthStore(t *testing.T) {
 }
 
 func TestNewAuthenticatedClientAPIKeyRequiresSecretsAndTrustedSite(t *testing.T) {
+	clearStagingEnv(t)
 	for _, test := range []struct {
 		name    string
 		apiKey  string
@@ -100,6 +113,7 @@ func TestNewAuthenticatedClientAPIKeyRequiresSecretsAndTrustedSite(t *testing.T)
 }
 
 func TestNewAuthenticatedClientAutoUsesOAuthAndIgnoresAmbientKeys(t *testing.T) {
+	clearStagingEnv(t)
 	store := &observedStore{session: validSession()}
 	client, err := NewAuthenticatedClient(context.Background(), ClientOptions{
 		Mode: auth.ModeAuto, Store: store, APIKey: "ignored-api", AppKey: "ignored-app", APISite: "api.datadoghq.eu",
@@ -110,12 +124,13 @@ func TestNewAuthenticatedClientAutoUsesOAuthAndIgnoresAmbientKeys(t *testing.T) 
 	if client.TokenSource == nil || client.APIKey != "" || client.AppKey != "" {
 		t.Fatalf("client auth = token source %v, API key %q, app key %q", client.TokenSource != nil, client.APIKey, client.AppKey)
 	}
-	if client.BaseURL != "https://api.datad0g.com" {
+	if client.BaseURL != "https://api.datadoghq.com" {
 		t.Fatalf("BaseURL = %q", client.BaseURL)
 	}
 }
 
 func TestNewAuthenticatedClientClassifiesOnlyReplaceableOAuthFailures(t *testing.T) {
+	clearStagingEnv(t)
 	for _, test := range []struct {
 		name          string
 		store         *observedStore
@@ -124,7 +139,7 @@ func TestNewAuthenticatedClientClassifiesOnlyReplaceableOAuthFailures(t *testing
 	}{
 		{name: "no session", store: &observedStore{err: auth.ErrNoSession}, wantCause: auth.ErrNoSession, loginRequired: true},
 		{name: "corrupt session", store: &observedStore{err: errors.Join(auth.ErrSessionCorrupt, errors.New("truncated"))}, wantCause: auth.ErrSessionCorrupt, loginRequired: true},
-		{name: "invalid decoded session", store: &observedStore{session: auth.Session{Site: "https://api.datad0g.com"}}, wantCause: auth.ErrSessionCorrupt, loginRequired: true},
+		{name: "invalid decoded session", store: &observedStore{session: auth.Session{Site: "https://api.datadoghq.com"}}, wantCause: auth.ErrSessionCorrupt, loginRequired: true},
 		{name: "store failure", store: &observedStore{err: errors.New("keyring unavailable")}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -146,6 +161,7 @@ func TestNewAuthenticatedClientClassifiesOnlyReplaceableOAuthFailures(t *testing
 }
 
 func TestNewAuthenticatedClientMarksExpiredUnrefreshableOAuthForLogin(t *testing.T) {
+	clearStagingEnv(t)
 	session := validSession()
 	session.Expiry = time.Now().Add(-time.Hour)
 	session.RefreshToken = ""
@@ -169,6 +185,7 @@ func TestNewAuthenticatedClientRejectsInvalidConfiguration(t *testing.T) {
 }
 
 func TestNewEngineSelectionAndConfiguration(t *testing.T) {
+	clearStagingEnv(t)
 	t.Run("automatic fake bypasses OAuth", func(t *testing.T) {
 		const id = "11111111-1111-4111-8111-111111111111"
 		// A script instead of an id pushes the conversation it opens.
@@ -211,4 +228,63 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 			t.Fatalf("error = %v", err)
 		}
 	})
+}
+
+// API-key authentication for a configured staging environment targets the
+// canonical API host even when the caller names the login origin; production
+// login hosts stay rejected.
+func TestNewAuthenticatedClientAPIKeyCanonicalizesStagingLoginOrigin(t *testing.T) {
+	clearStagingEnv(t)
+	t.Setenv(site.EnvStagingSite, "https://login.staging.test")
+	t.Setenv(site.EnvStagingDomain, "staging.test")
+	for _, apiSite := range []string{"https://login.staging.test", "https://api.staging.test"} {
+		client, err := NewAuthenticatedClient(context.Background(), ClientOptions{
+			Mode: auth.ModeAPIKey, APIKey: "api-key", AppKey: "app-key", APISite: apiSite,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if client.BaseURL != "https://api.staging.test" {
+			t.Errorf("API-key client for %q targets %q, want the canonical API host", apiSite, client.BaseURL)
+		}
+	}
+	if _, err := NewAuthenticatedClient(context.Background(), ClientOptions{
+		Mode: auth.ModeAPIKey, APIKey: "api-key", AppKey: "app-key", APISite: "app.datadoghq.com",
+	}); err == nil {
+		t.Error("production login host accepted as an API-key site")
+	}
+}
+
+// A stored staging session without staging configuration fails closed: the
+// error is the actionable configuration failure itself, not a login-required
+// or corrupt-session state, and no store mutation or network fallback
+// happens. Callers therefore surface it instead of opening a login picker.
+func TestNewAuthenticatedClientMissingStagingConfigFailsClosed(t *testing.T) {
+	clearStagingEnv(t)
+	session := validSession()
+	session.Site = "https://api.staging.test"
+	session.ClientID = "saved-staging-client"
+	store := &observedStore{session: session}
+
+	_, err := NewAuthenticatedClient(context.Background(), ClientOptions{Mode: auth.ModeAuto, Store: store})
+	if err == nil {
+		t.Fatal("NewAuthenticatedClient succeeded without staging configuration")
+	}
+	if !errors.Is(err, auth.ErrSiteConfiguration) {
+		t.Fatalf("error = %v, want ErrSiteConfiguration", err)
+	}
+	if errors.Is(err, ErrLoginRequired) || errors.Is(err, auth.ErrSessionCorrupt) {
+		t.Fatalf("error = %v, must not be login-required or corrupt-session so callers do not suppress it into a login picker", err)
+	}
+	for _, want := range []string{site.EnvStagingSite, site.EnvStagingDomain, "bits login"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to name %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "logout") {
+		t.Errorf("error advises deleting the stored credential: %v", err)
+	}
+	if store.loads != 1 || store.saves != 0 || store.deletes != 0 {
+		t.Fatalf("OAuth store operations = load %d, save %d, delete %d", store.loads, store.saves, store.deletes)
+	}
 }

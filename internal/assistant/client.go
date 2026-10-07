@@ -1,4 +1,4 @@
-// Package assistant is a bare-bones client for the Datadog Bits AI (CMD-I)
+// Package assistant is a bare-bones client for the Datadog Bits AI
 // Assistant HTTP API. It targets the same API the Datadog UI uses when you
 // chat with Bits, and is intended to drive a remote agent loop.
 //
@@ -22,10 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 )
-
-// DefaultBaseURL is the Datadog staging site (org 2). dd-auth --domain
-// dd.datad0g.com produces credentials valid here.
-const DefaultBaseURL = "https://dd.datad0g.com"
 
 const (
 	// defaultRequestTimeout bounds each non-streaming request. It matches the
@@ -179,13 +175,15 @@ func sameOrigin(a, b *url.URL) bool {
 // key-drop policy.
 var fallbackHTTPClient = &http.Client{CheckRedirect: checkRedirect}
 
-// NewAPIKeyClient builds the explicit developer/CI fallback client.
+// NewAPIKeyClient builds the explicit developer/CI fallback client. The site
+// is never defaulted: the caller must name the Datadog API site explicitly so
+// credentials cannot silently target a different environment.
 func NewAPIKeyClient(baseURL, apiKey, appKey string) (*Client, error) {
 	if apiKey == "" || appKey == "" {
 		return nil, fmt.Errorf("DD_API_KEY and DD_APP_KEY must both be set")
 	}
 	if strings.TrimSpace(baseURL) == "" {
-		baseURL = DefaultBaseURL
+		return nil, fmt.Errorf("a Datadog API site is required for api-key authentication; pass --site explicitly")
 	}
 	client := newClient(baseURL)
 	client.APIKey = apiKey

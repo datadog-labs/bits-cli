@@ -21,6 +21,13 @@ func TestE2E_OAuthRefresh(t *testing.T) {
 	if before.RefreshToken == "" {
 		t.Fatal("stored OAuth session has no refresh token")
 	}
+	// Validate the session and its site configuration before mutating the
+	// stored credential: a config problem (for example a staging session whose
+	// BITS_STAGING_SITE/BITS_STAGING_DOMAIN is no longer set) must fail here
+	// rather than after a forced-expiry save.
+	if _, err := NewSource(before, store, nil); err != nil {
+		t.Fatalf("stored OAuth session is unusable: %v", err)
+	}
 
 	forced := before
 	forced.Expiry = time.Now().Add(-time.Minute)

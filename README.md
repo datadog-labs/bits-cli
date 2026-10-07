@@ -78,7 +78,7 @@ Exit statuses are `0` for a completed turn, `1` for startup/runtime/delivery fai
 
 Run `bits`. When no working OAuth session is available, Bits opens a site picker automatically. Choose US1, US3, US5, EU1, AP1, AP2, or enter your organization's Datadog subdomain. Bits then opens the regional OAuth flow in your browser and continues into chat after authentication succeeds.
 
-The `bits login` command is the explicit non-TUI login path for choosing a site before chat, including staging, GovCloud, scripting, and debugging:
+The `bits login` command is the explicit non-TUI login path for choosing a site before chat, including GovCloud, scripting, and debugging:
 
 ```sh
 bits login --site app.datadoghq.eu
@@ -91,7 +91,7 @@ bits login --site acme.us3.datadoghq.com
 bits login --site customer.ddog-gov.com --client-id UUID
 ```
 
-The selected site's domain family determines the public OAuth client automatically: `datad0g.com` uses the staging registration, while commercial `datadoghq.com` and `datadoghq.eu` sites use the production registration. Site and OAuth-client selection are non-secret runtime configuration and are accepted only as flags. The former `DD_SITE_URL` and `BITS_OAUTH_CLIENT_ID` environment overrides are no longer supported; use `--site` and `bits login --client-id` respectively.
+The selected site's domain family determines the public OAuth client automatically: commercial `datadoghq.com` and `datadoghq.eu` sites use the production registration, and a staging site uses the client configured for it (below). Site and OAuth-client selection are non-secret runtime configuration. The former `DD_SITE_URL` and `BITS_OAUTH_CLIENT_ID` environment overrides remain unsupported; use `--site` and `bits login --client-id` respectively.
 
 Bits opens Datadog in your browser and completes Authorization Code + PKCE through an ephemeral `127.0.0.1` callback. The callback uses an available OS-selected port; no fixed local port needs to be free. The client ID is public configuration; no client secret is shipped.
 
@@ -105,6 +105,21 @@ On Linux without an available Secret Service, Bits uses `~/.bits-cli/oauth-sessi
 
 Only one OAuth login is active per OS user. Running `bits login` again saves the replacement before best-effort revoking the previous grant.
 
+### Staging environment
+
+Staging is opt-in and no staging endpoint is embedded in Bits. `BITS_STAGING_SITE` (the HTTPS login origin) and `BITS_STAGING_DOMAIN` (the bare domain the OAuth callback returns; token and Assistant traffic always goes to the canonical `api.<domain>` route) are both required; `BITS_STAGING_CLIENT_ID` is optional and only names the default OAuth client — `bits login --client-id` always takes precedence:
+
+```sh
+export BITS_STAGING_SITE=https://login.staging.test   # HTTPS login origin
+export BITS_STAGING_DOMAIN=staging.test               # bare callback domain
+export BITS_STAGING_CLIENT_ID=staging-test-client             # optional default OAuth client
+bits login --site "$BITS_STAGING_SITE"
+```
+
+The login origin must be HTTPS and the callback domain or a subdomain of it; malformed or production-overlapping configuration fails with an explicit error rather than falling back to production.
+
+A saved staging session records the canonical API domain (`api.<domain>`) of the configured callback domain plus its OAuth client ID — never the login alias, even when the alias itself starts with `api.`. It stays usable on later runs while `BITS_STAGING_DOMAIN` still names that same domain, even if `BITS_STAGING_SITE` moves to another login origin under it: token refresh and Assistant traffic stay on `api.<domain>`, and only browser links (`/web`, `/settings`) follow the currently configured login origin. The stored client ID always stays authoritative. Changing `BITS_STAGING_DOMAIN` — or running without the staging variables while a staging session is stored — fails closed with a visible error naming `BITS_STAGING_SITE` and `BITS_STAGING_DOMAIN`, both in interactive `bits` and in headless `bits run`; Bits never falls back to the production login picker or to production routing, and the stored credential is left untouched. Setting the new matching variables and running `bits login` again is the explicit way to switch environments, and clearing the variables alone cannot establish a new environment.
+
 ### Developer and CI authentication
 
 API and application keys remain environment variables because they are secrets. Select them explicitly for a deterministic, noninteractive authentication path:
@@ -115,7 +130,9 @@ export DD_APP_KEY=...
 bits --auth api-key --site https://api.datadoghq.com
 ```
 
-Explicit API-key mode requires `--site`, accepts an `api.`-prefixed Datadog API URL or hostname (plus the org-2 staging host `dd.datad0g.com`), and does not read, refresh, replace, or delete a stored OAuth session. It never opens a browser or login picker. Both secrets are required; OAuth client selection remains on `bits login`. The mode affects only the current invocation, so a later plain `bits` returns to automatic OAuth selection. This makes authentication noninteractive; `bits` still launches its interactive terminal UI.
+Explicit API-key mode requires `--site`, accepts an `api.`-prefixed Datadog API URL or hostname, plus its configured staging environment's login or API host (the login origin is canonicalized to the environment's `api.` host), and rejects an empty base URL instead of defaulting to any site. It does not read, refresh, replace, or delete a stored OAuth session. It never opens a browser or login picker. Both secrets are required; OAuth client selection remains on `bits login`. The mode affects only the current invocation, so a later plain `bits` returns to automatic OAuth selection. This makes authentication noninteractive; `bits` still launches its interactive terminal UI.
+
+Opt-in end-to-end tests follow the same rule: `BITS_OAUTH_E2E=1` reuses the stored login, while `BITS_ASSISTANT_E2E=1` also requires `DD_API_KEY`/`DD_APP_KEY` and an explicit `BITS_E2E_SITE` naming the Datadog API site to use (validated through the same site canonicalization as `--site`); no test run defaults to a site.
 
 Authentication selection is deterministic:
 

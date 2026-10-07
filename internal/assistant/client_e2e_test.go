@@ -13,9 +13,10 @@ import (
 )
 
 // These tests hit the real Bits assistant API. They are opt-in: either set
-// BITS_ASSISTANT_E2E=1 and provide DD_API_KEY / DD_APP_KEY (as populated by
-// `dd-auth --domain dd.datad0g.com`), or set BITS_OAUTH_E2E=1 after `bits login`.
-// Without either flag they skip, so `go test` stays hermetic by default.
+// BITS_OAUTH_E2E=1 after `bits login`, or set BITS_ASSISTANT_E2E=1 with
+// DD_API_KEY / DD_APP_KEY (a Datadog API key pair) plus BITS_E2E_SITE naming
+// the site to use. Without either flag they skip, so `go test` stays hermetic
+// by default and no run ever falls back to an implicit site.
 //
 // The assistant is an LLM, so response *content* is not deterministic. The
 // assertions therefore split into two kinds:
@@ -45,10 +46,20 @@ func requireE2E(t *testing.T) *Client {
 		return client
 	}
 	if os.Getenv("BITS_ASSISTANT_E2E") == "" {
-		t.Skip("set BITS_OAUTH_E2E=1 after bits login, or BITS_ASSISTANT_E2E=1 with DD_API_KEY/DD_APP_KEY")
+		t.Skip("set BITS_OAUTH_E2E=1 after bits login, or BITS_ASSISTANT_E2E=1 with DD_API_KEY/DD_APP_KEY and BITS_E2E_SITE")
+	}
+	e2eSite := strings.TrimSpace(os.Getenv("BITS_E2E_SITE"))
+	if e2eSite == "" {
+		t.Fatal("BITS_ASSISTANT_E2E=1 requires BITS_E2E_SITE naming the API site to use")
+	}
+	// Route e2e credentials through the same canonicalization as the CLI so a
+	// configured staging login origin also targets its API host.
+	normalizedSite, err := auth.NormalizeAPISite(e2eSite)
+	if err != nil {
+		t.Fatalf("normalize BITS_E2E_SITE %q: %v", e2eSite, err)
 	}
 	client, err := NewAPIKeyClient(
-		DefaultBaseURL,
+		normalizedSite,
 		os.Getenv("DD_API_KEY"),
 		os.Getenv("DD_APP_KEY"),
 	)

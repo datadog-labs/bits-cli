@@ -9,7 +9,7 @@ import (
 
 func fileTestSession() Session {
 	return Session{
-		Site:         "https://dd.datad0g.com",
+		Site:         "https://api.datadoghq.com",
 		ClientID:     "client",
 		AccessToken:  "access",
 		TokenType:    "Bearer",
@@ -99,7 +99,7 @@ func TestLoadSessionFileRejectsGroupOrOtherReadable(t *testing.T) {
 
 func TestSaveSessionFileRejectsInvalidSession(t *testing.T) {
 	path := tempSessionPath(t)
-	if err := saveSessionFile(path, false, Session{Site: "https://dd.datad0g.com"}); err == nil {
+	if err := saveSessionFile(path, false, Session{Site: "https://api.datadoghq.com"}); err == nil {
 		t.Fatal("saveSessionFile accepted an incomplete session")
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
