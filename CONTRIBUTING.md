@@ -43,8 +43,7 @@ Lint with the pinned golangci-lint configuration:
    runs — both pass.
 4. Open a pull request against `main` with a clear description of the change
    and how it was tested. GitHub Actions runs lint, tests, and builds for
-   pull requests; maintainers no longer need to mirror branches to an
-   internal CI.
+   every pull request.
 
 ## Continuous integration
 
@@ -60,19 +59,19 @@ under the repository policy), pushes to `main`, queued merges, and every
   amd64/arm64) with `./scripts/build.sh` and uploads each binary as a
   workflow artifact.
 - On a strict stable tag (`v<major>.<minor>.<patch>`, no leading zeroes),
-  the three Dogbrew platform tarballs are additionally packaged as
-  workflow artifacts. Nothing is ever published from Actions.
+  the three supported platform release archives (`bits-darwin-arm64`,
+  `bits-linux-amd64`, `bits-linux-arm64`) are additionally packaged as
+  workflow artifacts. Each archive holds the binary plus a `cli.yaml`
+  manifest with the release version. Nothing beyond GitHub Actions
+  artifacts is ever uploaded, and nothing is published, from CI; see
+  RELEASE.md for the release flow.
 
 The workflow is deliberately unprivileged — read-only permissions, no
 secrets, SHA-pinned official actions — so fork pull requests get the same
-checks as internal ones without any trust escalation. Pre-release tags
+checks as branch pushes without any trust escalation. Pre-release tags
 (for example `v1.2.3-rc1`) build ordinary development binaries only; see
-RELEASE.md for the release flow.
-
-The internal GitLab pipeline (`.gitlab-ci.yml`) no longer runs for branches
-or pull requests. It only keeps a stable-tag release pipeline that feeds
-the manual internal Dogbrew publisher (see RELEASE.md). CI does not
-currently run performance benchmarks.
+RELEASE.md for the release flow. CI does not currently run performance
+benchmarks.
 
 ## Third-party licenses
 

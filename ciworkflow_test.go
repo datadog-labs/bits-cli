@@ -14,8 +14,9 @@ import (
 
 // These tests pin the CI wiring around the release trust boundary: GitHub
 // Actions runs ordinary checks unprivileged (including fork PRs), only
-// strict stable tags may produce release artifacts, and the internal GitLab
-// pipeline is the tag-only release flow feeding the manual publisher.
+// strict stable tags may produce release artifacts, and nothing in the
+// repository publishes packages or uploads them anywhere beyond GitHub
+// Actions artifacts.
 
 func loadYAML(t *testing.T, path string) map[string]any {
 	t.Helper()
@@ -120,16 +121,24 @@ func TestWorkflowReleaseTagGating(t *testing.T) {
 	if cond, _ := resolve["if"].(string); !strings.Contains(cond, "refs/tags/") {
 		t.Errorf("resolve step if = %q, must be gated on tag refs", cond)
 	}
-	if env := as[map[string]any](t, resolve["env"], "resolve env"); env["CI_COMMIT_TAG"] != "${{ github.ref_name }}" {
-		t.Errorf("resolve env CI_COMMIT_TAG = %v, want ${{ github.ref_name }}", env["CI_COMMIT_TAG"])
+	env := as[map[string]any](t, resolve["env"], "resolve env")
+	if env["RELEASE_TAG"] != "${{ github.ref_name }}" {
+		t.Errorf("resolve env RELEASE_TAG = %v, want ${{ github.ref_name }}", env["RELEASE_TAG"])
 	}
-	job := jobMap(t, wf, "dogbrew-tarballs")
+	// The tag reaches scripts/version.sh through an environment variable,
+	// never as an interpolated string in the command itself.
+	runBody, _ := resolve["run"].(string)
+	if !strings.Contains(runBody, "./scripts/version.sh \"$RELEASE_TAG\"") {
+		t.Errorf("resolve step must pass the tag via $RELEASE_TAG: %q", runBody)
+	}
+	job := jobMap(t, wf, "release-archives")
 	if cond, _ := job["if"].(string); !strings.Contains(cond, "refs/tags/v") {
-		t.Errorf("dogbrew-tarballs if = %q, must be gated on v tag refs", cond)
+		t.Errorf("release-archives if = %q, must be gated on v tag refs", cond)
 	}
-	run, _ := jobStep(t, wf, "dogbrew-tarballs", "Package Dogbrew tarballs")["run"].(string)
-	if !strings.Contains(run, "dogbrew.sh") || strings.Contains(run, "--publish") {
-		t.Errorf("packaging step must run scripts/dogbrew.sh without --publish: %q", run)
+	packageStep := jobStep(t, wf, "release-archives", "Package release archives")
+	run, _ := packageStep["run"].(string)
+	if !strings.Contains(run, "scripts/package.sh") || strings.Contains(run, "--publish") {
+		t.Errorf("packaging step must run scripts/package.sh without --publish: %q", run)
 	}
 }
 
@@ -156,17 +165,18 @@ func TestWorkflowBuildStepPropagatesBuildFailure(t *testing.T) {
 	}
 }
 
-// Artifact upload/download normalizes file modes to 0644; the packaging
-// step must restore the executable bit. The binaries are never run here.
+// Artifact upload/download normalizes file modes to 0644; the packager
+// must restore the executable bit when staging the archives. The binaries
+// are never run here.
 func TestWorkflowPackagingRestoresExecutableBits(t *testing.T) {
 	wf := loadYAML(t, ".github/workflows/ci.yml")
-	run, _ := jobStep(t, wf, "dogbrew-tarballs", "Package Dogbrew tarballs")["run"].(string)
+	run, _ := jobStep(t, wf, "release-archives", "Package release archives")["run"].(string)
 
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"scripts/dogbrew.sh", "cli.yaml"} {
+	for _, file := range []string{"scripts/package.sh", "cli.yaml"} {
 		data, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -175,7 +185,7 @@ func TestWorkflowPackagingRestoresExecutableBits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Chmod(filepath.Join(dir, "scripts", "dogbrew.sh"), 0o755); err != nil {
+	if err := os.Chmod(filepath.Join(dir, "scripts", "package.sh"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(dir, "dist"), 0o755); err != nil {
@@ -197,7 +207,7 @@ func TestWorkflowPackagingRestoresExecutableBits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Mirror the manifest rewrite scripts/dogbrew.sh applies.
+	// Mirror the manifest rewrite scripts/package.sh applies.
 	wantManifest := regexp.MustCompile(`(?m)^version:.*$`).
 		ReplaceAllString(string(cliYAML), "version: "+version)
 	for _, p := range platforms {
@@ -218,36 +228,86 @@ func TestWorkflowPackagingRestoresExecutableBits(t *testing.T) {
 	}
 }
 
-func TestGitlabPipelineIsStableTagReleaseOnly(t *testing.T) {
-	gl := loadYAML(t, ".gitlab-ci.yml")
-	const strictStableTag = `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`
-
-	rules := as[[]any](t, as[map[string]any](t, gl["workflow"], "workflow")["rules"], "workflow rules")
-	if len(rules) != 2 || as[map[string]any](t, rules[1], "second workflow rule")["when"] != "never" {
-		t.Fatalf("workflow rules = %v, want one strict tag rule plus when: never", rules)
+// The packager is offline-only: it validates inputs strictly and has no
+// upload surface at all — unknown arguments (including any legacy publish
+// or target flags) must be rejected.
+func TestPackageScriptRejectsInvalidInputs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if ifExpr, _ := as[map[string]any](t, rules[0], "first workflow rule")["if"].(string); !strings.Contains(ifExpr, strictStableTag) {
-		t.Errorf("workflow rule if = %q, want strict stable tag gate", ifExpr)
-	}
-	for _, name := range []string{"lint", "test", "build", "publish-to-dogbrew"} {
-		if _, ok := gl[name].(map[string]any); !ok {
-			t.Errorf("GitLab pipeline must keep the %q job for the release flow", name)
+	for _, file := range []string{"scripts/package.sh", "cli.yaml"} {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(file)), data, 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
-	publish := as[map[string]any](t, gl["publish-to-dogbrew"], "publish job")
-	var script strings.Builder
-	for _, line := range as[[]any](t, publish["script"], "publish script") {
-		script.WriteString(as[string](t, line, "publish script line") + "\n")
+	if err := os.Chmod(filepath.Join(dir, "scripts", "package.sh"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(script.String(), "--publish") {
-		t.Error("publish-to-dogbrew must keep its --publish gate")
+	if err := os.Mkdir(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	first := as[map[string]any](t, as[[]any](t, publish["rules"], "publish rules")[0], "first publish rule")
-	if first["when"] != "manual" {
-		t.Errorf("publish rule = %v, want when: manual", first)
+	for _, platform := range []string{"darwin-arm64", "linux-amd64", "linux-arm64"} {
+		if err := os.WriteFile(filepath.Join(dir, "dist", "bits-"+platform), []byte("fake binary"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if ifExpr, _ := first["if"].(string); !strings.Contains(ifExpr, strictStableTag) {
-		t.Errorf("publish rule if = %q, want strict stable tag gate", ifExpr)
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		cmd := exec.Command("bash", append([]string{"scripts/package.sh"}, args...)...)
+		cmd.Dir = dir
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		return stderr.String(), err
+	}
+
+	// Baseline: with all three valid binaries staged, packaging succeeds.
+	if stderr, err := run("--version", "1.2.3", "--dist-dir", "dist"); err != nil {
+		t.Fatalf("package.sh with valid inputs failed: %v: %s", err, stderr)
+	}
+
+	for _, test := range []struct {
+		version string
+		wantErr string
+	}{
+		{version: "", wantErr: "--version is required"},
+		{version: "1.2", wantErr: "release version must be"},
+		{version: "1.2.3-rc1", wantErr: "release version must be"},
+		{version: "01.2.3", wantErr: "release version must be"},
+		{version: "0.0.0-dev", wantErr: "release version must be"},
+	} {
+		stderr, err := run("--version", test.version, "--dist-dir", "dist")
+		if err == nil {
+			t.Errorf("package.sh must reject version %q", test.version)
+		} else if !strings.Contains(stderr, test.wantErr) {
+			t.Errorf("version %q: stderr = %q, want diagnostic %q", test.version, stderr, test.wantErr)
+		}
+	}
+
+	// Rejected for the flag itself, not because inputs are missing.
+	for _, flag := range []string{"--publish", "--target", "--upload"} {
+		stderr, err := run("--version", "1.2.3", "--dist-dir", "dist", flag)
+		if err == nil {
+			t.Errorf("package.sh must reject unknown argument %q", flag)
+		} else if !strings.Contains(stderr, "unknown argument: "+flag) {
+			t.Errorf("flag %q: stderr = %q, want unknown-argument diagnostic", flag, stderr)
+		}
+	}
+
+	// Remove one valid input; packaging must report it as missing.
+	if err := os.Remove(filepath.Join(dir, "dist", "bits-linux-arm64")); err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := run("--version", "1.2.3", "--dist-dir", "dist")
+	if err == nil {
+		t.Error("package.sh must fail when a platform binary is missing")
+	} else if !strings.Contains(stderr, "missing or empty binary") || !strings.Contains(stderr, "bits-linux-arm64") {
+		t.Errorf("stderr = %q, want missing-input diagnostic naming bits-linux-arm64", stderr)
 	}
 }
 
@@ -262,15 +322,18 @@ func TestVersionScriptStrictStableTags(t *testing.T) {
 	}
 	for _, tag := range []string{"", "main", "v1.2", "1.2.3", "v01.2.3", "v1.2.3-rc1", "refs/tags/v1.2.3"} {
 		if _, err := runVersionScript(t, tag); err == nil {
-			t.Errorf("version.sh with CI_COMMIT_TAG=%q must fail", tag)
+			t.Errorf("version.sh with tag %q must fail", tag)
 		}
+	}
+	cmd := exec.Command("bash", "scripts/version.sh")
+	if err := cmd.Run(); err == nil {
+		t.Error("version.sh without a tag argument must fail")
 	}
 }
 
 func runVersionScript(t *testing.T, tag string) (string, error) {
 	t.Helper()
-	cmd := exec.Command("bash", "scripts/version.sh")
-	cmd.Env = append(os.Environ(), "CI_COMMIT_TAG="+tag)
+	cmd := exec.Command("bash", "scripts/version.sh", tag)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	err := cmd.Run()
