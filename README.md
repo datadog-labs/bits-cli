@@ -1,7 +1,7 @@
 # Bits CLI
 
 Bits CLI is a native terminal client for Datadog Assistant.
-
+<img width="710" height="573" alt="CleanShot 2026-10-07 at 13 08 11@2x" src="https://github.com/user-attachments/assets/01c89baf-5a23-4e4c-8c78-64b490b6722c" />
 ## Command line
 
 Run `bits` to open chat. Process-level long flags use conventional double-dash syntax; `-h` is the only shorthand:
