@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/datadog-labs/bits-cli/internal/site"
 	"golang.org/x/oauth2"
 )
 
@@ -103,7 +105,7 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 	defer issuer.Close()
 
 	cfg := SiteConfig{
-		Site:         DefaultStagingSite,
+		Site:         DefaultSite,
 		ClientID:     "client",
 		AuthorizeURL: issuer.URL + "/authorize",
 		TokenURL:     issuer.URL + "/token",
@@ -112,7 +114,7 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 	}
 	httpClient := issuer.Client()
 	httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Host != "api.datad0g.com" || req.URL.Path != "/api/v2/oauth2/token" {
+		if req.URL.Host != "api.datadoghq.com" || req.URL.Path != "/api/v2/oauth2/token" {
 			t.Errorf("token exchange URL = %s", req.URL)
 		}
 		clone := req.Clone(req.Context())
@@ -139,7 +141,7 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 			t.Fatalf("dynamic redirect URI = %q, parse error = %v", redirectURI, callbackErr)
 		}
 		go func() {
-			callback := redirectURI + "?code=auth-code&domain=datad0g.com&state=" + url.QueryEscape(query.Get("state"))
+			callback := redirectURI + "?code=auth-code&domain=datadoghq.com&state=" + url.QueryEscape(query.Get("state"))
 			resp, callbackErr := http.Get(callback) //nolint:gosec // loopback test callback
 			if callbackErr != nil {
 				t.Errorf("callback: %v", callbackErr)
@@ -166,13 +168,13 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-	if session.AccessToken != "access" || session.RefreshToken != "refresh" || session.Site != "https://api.datad0g.com" {
+	if session.AccessToken != "access" || session.RefreshToken != "refresh" || session.Site != "https://api.datadoghq.com" {
 		t.Errorf("session = %#v", session)
 	}
 	if store.saves != 1 || store.session.AccessToken != "access" {
 		t.Errorf("stored session = %#v, saves = %d", store.session, store.saves)
 	}
-	if !strings.Contains(output.String(), "Datadog OAuth callback domain: datad0g.com") {
+	if !strings.Contains(output.String(), "Datadog OAuth callback domain: datadoghq.com") {
 		t.Errorf("output did not report callback domain: %q", output.String())
 	}
 	if reportedURL == "" || !strings.Contains(reportedURL, "code_challenge=") {
@@ -303,7 +305,7 @@ func TestLoginRevokesUnpersistedGrant(t *testing.T) {
 	store := &memoryStore{saveFailures: -1, saveErr: fmt.Errorf("keyring unavailable")}
 	openURL := callbackOpenURL(t)
 	_, err := login(context.Background(), SiteConfig{
-		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
+		Site: DefaultSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
 		TokenURL: issuer.URL + "/api/v2/oauth2/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
 	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: openURL})
 	if err == nil || !strings.Contains(err.Error(), "persist new OAuth session") {
@@ -316,7 +318,7 @@ func TestLoginRevokesUnpersistedGrant(t *testing.T) {
 
 func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
 	previous := Session{
-		Site: "https://api.datad0g.com", ClientID: "client", AccessToken: "old-access",
+		Site: "https://api.datadoghq.com", ClientID: "client", AccessToken: "old-access",
 		RefreshToken: "old-refresh", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour),
 	}
 	store := newMemoryStore(previous)
@@ -348,7 +350,7 @@ func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
 		return http.DefaultTransport.RoundTrip(clone)
 	})
 	_, err := login(context.Background(), SiteConfig{
-		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
+		Site: DefaultSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
 		TokenURL: issuer.URL + "/api/v2/oauth2/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
 	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: callbackOpenURL(t)})
 	if err != nil {
@@ -361,7 +363,7 @@ func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
 
 func TestReplacementLoginDoesNotRevokeSharedRefreshToken(t *testing.T) {
 	previous := Session{
-		Site: "https://api.datad0g.com", ClientID: "client", AccessToken: "old-access",
+		Site: "https://api.datadoghq.com", ClientID: "client", AccessToken: "old-access",
 		RefreshToken: "shared-refresh", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour),
 	}
 	store := newMemoryStore(previous)
@@ -388,7 +390,7 @@ func TestReplacementLoginDoesNotRevokeSharedRefreshToken(t *testing.T) {
 	})
 
 	session, err := login(context.Background(), SiteConfig{
-		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
+		Site: DefaultSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
 		TokenURL: issuer.URL + "/api/v2/oauth2/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
 	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: callbackOpenURL(t)})
 	if err != nil {
@@ -419,7 +421,7 @@ func callbackOpenURL(t *testing.T) func(string) error {
 		}
 		query := u.Query()
 		go func() {
-			callback := query.Get("redirect_uri") + "?code=auth-code&domain=datad0g.com&state=" + url.QueryEscape(query.Get("state"))
+			callback := query.Get("redirect_uri") + "?code=auth-code&domain=datadoghq.com&state=" + url.QueryEscape(query.Get("state"))
 			resp, callbackErr := http.Get(callback) //nolint:gosec // loopback test callback
 			if callbackErr != nil {
 				t.Errorf("callback: %v", callbackErr)
@@ -452,7 +454,7 @@ func TestLoginReplacesCorruptCredential(t *testing.T) {
 		loadErr: fmt.Errorf("%w: truncated credential", ErrSessionCorrupt),
 	}
 	session, err := login(context.Background(), SiteConfig{
-		Site: DefaultStagingSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
+		Site: DefaultSite, ClientID: "client", AuthorizeURL: issuer.URL + "/authorize",
 		TokenURL: issuer.URL + "/api/v2/oauth2/token", RevokeURL: issuer.URL + "/oauth2/v1/revoke", RedirectURI: DefaultRedirectURI,
 	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: callbackOpenURL(t)})
 	if err != nil {
@@ -553,7 +555,7 @@ func TestRevokeUsesRefreshToken(t *testing.T) {
 		return http.DefaultTransport.RoundTrip(clone)
 	})
 	err := Revoke(context.Background(), Session{
-		Site:         DefaultStagingSite,
+		Site:         DefaultSite,
 		ClientID:     "client",
 		AccessToken:  "access",
 		RefreshToken: "refresh",
@@ -597,7 +599,7 @@ func TestRevokeRefreshesExpiredAccessTokenBeforeRevoking(t *testing.T) {
 		return http.DefaultTransport.RoundTrip(clone)
 	})
 	err := Revoke(context.Background(), Session{
-		Site: DefaultStagingSite, ClientID: "client",
+		Site: DefaultSite, ClientID: "client",
 		AccessToken: "expired-access", RefreshToken: "old-refresh",
 		Expiry: time.Now().Add(-time.Hour),
 	}, client)
@@ -627,7 +629,7 @@ func TestRevokeTreatsInvalidGrantAsAlreadyRevoked(t *testing.T) {
 		return http.DefaultTransport.RoundTrip(clone)
 	})
 	err := Revoke(context.Background(), Session{
-		Site: DefaultStagingSite, ClientID: "client",
+		Site: DefaultSite, ClientID: "client",
 		AccessToken: "expired-access", RefreshToken: "dead-refresh",
 		Expiry: time.Now().Add(-time.Hour),
 	}, client)
@@ -651,7 +653,7 @@ func TestRevokeSanitizesAuthorizationServerError(t *testing.T) {
 		return http.DefaultTransport.RoundTrip(clone)
 	})
 	err := Revoke(context.Background(), Session{
-		Site: DefaultStagingSite, ClientID: "client", AccessToken: "access", RefreshToken: "refresh-secret",
+		Site: DefaultSite, ClientID: "client", AccessToken: "access", RefreshToken: "refresh-secret",
 	}, client)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 400 (invalid_request)") || strings.Contains(err.Error(), "refresh-secret") {
 		t.Fatalf("Revoke error = %v", err)
@@ -660,7 +662,7 @@ func TestRevokeSanitizesAuthorizationServerError(t *testing.T) {
 
 func TestLogoutDeletesBeforeBestEffortRevocation(t *testing.T) {
 	session := Session{
-		Site: DefaultStagingSite, ClientID: "client", AccessToken: "access", RefreshToken: "refresh",
+		Site: DefaultSite, ClientID: "client", AccessToken: "access", RefreshToken: "refresh",
 	}
 	store := newMemoryStore(session)
 	store.afterLockErr = fmt.Errorf("%w: injected", ErrSessionUnlock)
@@ -779,5 +781,90 @@ func TestCallbackRejectsForeignHosts(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+// An end-to-end staging login; a sibling callback domain is rejected before
+// any token traffic or store write.
+func TestLoginStagingEnvironment(t *testing.T) {
+	t.Setenv(site.EnvStagingSite, "https://login.staging.test")
+	t.Setenv(site.EnvStagingDomain, "staging.test")
+	t.Setenv(site.EnvStagingClientID, "staging-test-client")
+
+	login := func(callbackDomain string, httpClient *http.Client) (Session, *memoryStore, error) {
+		store := &memoryStore{}
+		openURL := func(raw string) error {
+			u, err := url.Parse(raw)
+			if err != nil {
+				return err
+			}
+			if u.Host != "login.staging.test" || u.Path != "/oauth2/v1/authorize" {
+				t.Errorf("authorize URL = %s", u)
+			}
+			query := u.Query()
+			go func() {
+				callback := query.Get("redirect_uri") + "?code=auth-code&domain=" + url.QueryEscape(callbackDomain) + "&state=" + url.QueryEscape(query.Get("state"))
+				resp, callbackErr := http.Get(callback) //nolint:gosec // loopback test callback
+				if callbackErr != nil {
+					t.Errorf("callback: %v", callbackErr)
+					return
+				}
+				_ = resp.Body.Close()
+			}()
+			return nil
+		}
+		session, err := Login(context.Background(), LoginOptions{
+			Site:       "https://login.staging.test",
+			Store:      store,
+			HTTPClient: httpClient,
+			OpenURL:    openURL,
+			Out:        io.Discard,
+		})
+		return session, store, err
+	}
+
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil || r.URL.Path != "/token" || r.Form.Get("client_id") != "staging-test-client" {
+			t.Errorf("token request: %s %v %q", r.URL.Path, err, r.Form.Get("client_id"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"access_token":"access","refresh_token":"refresh","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer issuer.Close()
+
+	httpClient := issuer.Client()
+	httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host != "api.staging.test" || req.URL.Path != "/api/v2/oauth2/token" {
+			t.Errorf("token exchange URL = %s", req.URL)
+		}
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme = "http"
+		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+		clone.URL.Path = "/token"
+		return http.DefaultTransport.RoundTrip(clone)
+	})
+
+	session, store, err := login("staging.test", httpClient)
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if session.Site != "https://api.staging.test" || session.ClientID != "staging-test-client" {
+		t.Errorf("session = %#v", session)
+	}
+	if store.saves != 1 || store.session.Site != "https://api.staging.test" {
+		t.Errorf("stored session = %#v, saves = %d", store.session, store.saves)
+	}
+
+	// A sibling callback domain is rejected before the token exchange.
+	noNetwork := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Error("token exchange attempted before the callback domain was accepted")
+		return nil, errors.New("no network in test")
+	})}
+	_, store, err = login("evil.staging.test", noNetwork)
+	if err == nil || !strings.Contains(err.Error(), "different environment") {
+		t.Fatalf("Login error = %v, want a cross-environment callback rejection", err)
+	}
+	if store.saves != 0 {
+		t.Errorf("store saves = %d, want 0", store.saves)
 	}
 }

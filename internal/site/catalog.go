@@ -17,7 +17,9 @@ type catalogEntry struct {
 
 // TODO: Keep this catalog in sync with Datadog's public site list:
 // https://docs.datadoghq.com/getting_started/site/. When adding a region, add
-// its login and Assistant hosts here and extend catalog_test.go.
+// its login and Assistant hosts here and extend catalog_test.go. Staging is
+// deliberately absent: it is not a Datadog production destination and is
+// only reachable through explicit environment configuration (see staging.go).
 var regions = []catalogEntry{
 	{Region: Region{Name: "US1", WebHost: "app.datadoghq.com"}, AssistantHosts: []string{"api.datadoghq.com"}, ShowInLogin: true},
 	{Region: Region{Name: "US3", WebHost: "us3.datadoghq.com"}, AssistantHosts: []string{"api.us3.datadoghq.com"}, ShowInLogin: true},
@@ -26,7 +28,6 @@ var regions = []catalogEntry{
 	{Region: Region{Name: "AP1", WebHost: "ap1.datadoghq.com"}, AssistantHosts: []string{"api.ap1.datadoghq.com"}, ShowInLogin: true},
 	{Region: Region{Name: "AP2", WebHost: "ap2.datadoghq.com"}, AssistantHosts: []string{"api.ap2.datadoghq.com"}, ShowInLogin: true},
 	{Region: Region{Name: "UK1", WebHost: "uk1.datadoghq.com"}, AssistantHosts: []string{"api.uk1.datadoghq.com"}, ShowInLogin: true},
-	{Region: Region{Name: "Staging", WebHost: "dd.datad0g.com"}, AssistantHosts: []string{"api.datad0g.com", "dd.datad0g.com"}},
 }
 
 // LoginRegions returns the regions shown in the interactive login picker.
@@ -41,7 +42,10 @@ func LoginRegions() []Region {
 }
 
 // WebHostForAssistantHost resolves an Assistant API host to its regional web
-// application host. It returns false for sites outside the catalog.
+// application host. It returns false for sites outside the catalog. A
+// configured staging environment maps its exact hosts to the configured
+// login host; malformed, partial, or absent configuration leaves staging
+// unmapped rather than guessing a destination for credentials.
 func WebHostForAssistantHost(host string) (string, bool) {
 	host = strings.ToLower(strings.TrimSpace(host))
 	for _, region := range regions {
@@ -50,6 +54,9 @@ func WebHostForAssistantHost(host string) (string, bool) {
 				return region.WebHost, true
 			}
 		}
+	}
+	if staging, ok, err := StagingFromEnv(); err == nil && ok {
+		return staging.WebHostFor(host)
 	}
 	return "", false
 }

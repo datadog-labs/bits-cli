@@ -37,7 +37,7 @@ func (stubCredentialStore) Delete() error                 { return nil }
 
 func validOAuthSession() auth.Session {
 	return auth.Session{
-		Site:         "https://api.datad0g.com",
+		Site:         "https://api.datadoghq.com",
 		ClientID:     "oauth-client",
 		AccessToken:  "oauth-access",
 		RefreshToken: "oauth-refresh",

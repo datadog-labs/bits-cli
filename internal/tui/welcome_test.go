@@ -215,10 +215,10 @@ func columnText(rows []string, logoWidth int) []string {
 
 func TestHostnameOf(t *testing.T) {
 	for site, want := range map[string]string{
-		"https://api.datadoghq.com":     "api.datadoghq.com",
-		"https://dd.datad0g.com/api/v2": "dd.datad0g.com",
-		"":                              "",
-		"not a url":                     "not a url",
+		"https://api.datadoghq.com":       "api.datadoghq.com",
+		"https://api.datadoghq.eu/api/v2": "api.datadoghq.eu",
+		"":                                "",
+		"not a url":                       "not a url",
 	} {
 		if got := hostnameOf(site); got != want {
 			t.Errorf("hostnameOf(%q) = %q, want %q", site, got, want)

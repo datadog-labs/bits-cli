@@ -100,8 +100,8 @@ func TestLoginExchangeDoesNotFollowTokenRedirect(t *testing.T) {
 
 	client := newOAuthHTTPClient(loginHTTPTimeout)
 	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Hostname() != "api.datad0g.com" {
-			t.Errorf("token exchange host = %s, want api.datad0g.com", req.URL.Hostname())
+		if req.URL.Hostname() != "api.datadoghq.com" {
+			t.Errorf("token exchange host = %s, want api.datadoghq.com", req.URL.Hostname())
 		}
 		clone := req.Clone(req.Context())
 		clone.URL.Scheme = "http"
@@ -111,7 +111,7 @@ func TestLoginExchangeDoesNotFollowTokenRedirect(t *testing.T) {
 
 	store := &memoryStore{}
 	_, err := login(context.Background(), SiteConfig{
-		Site:         DefaultStagingSite,
+		Site:         DefaultSite,
 		ClientID:     "client",
 		AuthorizeURL: redirect.URL + "/authorize",
 		TokenURL:     redirect.URL + "/api/v2/oauth2/token",
@@ -140,8 +140,8 @@ func TestSourceRefreshDoesNotFollowTokenRedirect(t *testing.T) {
 	store := newMemoryStore(initial)
 	client := newOAuthHTTPClient(refreshTimeout)
 	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Hostname() != "api.dd.datad0g.com" {
-			t.Errorf("refresh host = %s, want api.dd.datad0g.com", req.URL.Hostname())
+		if req.URL.Hostname() != "api.datadoghq.com" {
+			t.Errorf("refresh host = %s, want api.datadoghq.com", req.URL.Hostname())
 		}
 		clone := req.Clone(req.Context())
 		clone.URL.Scheme = "http"
@@ -175,8 +175,8 @@ func TestLogoutRevokeDoesNotFollowRedirect(t *testing.T) {
 
 	client := newOAuthHTTPClient(revokeHTTPTimeout)
 	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Hostname() != "api.dd.datad0g.com" {
-			t.Errorf("revoke host = %s, want api.dd.datad0g.com", req.URL.Hostname())
+		if req.URL.Hostname() != "api.datadoghq.com" {
+			t.Errorf("revoke host = %s, want api.datadoghq.com", req.URL.Hostname())
 		}
 		clone := req.Clone(req.Context())
 		clone.URL.Scheme = "http"
@@ -185,7 +185,7 @@ func TestLogoutRevokeDoesNotFollowRedirect(t *testing.T) {
 	})
 
 	session := Session{
-		Site:         DefaultStagingSite,
+		Site:         "https://api.datadoghq.com",
 		ClientID:     "client",
 		AccessToken:  "access",
 		RefreshToken: "refresh",

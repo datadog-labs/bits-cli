@@ -23,10 +23,6 @@ import (
 	"time"
 )
 
-// DefaultBaseURL is the Datadog staging site. Run `bits login
-// --site dd.datad0g.com` to obtain credentials valid here.
-const DefaultBaseURL = "https://dd.datad0g.com"
-
 const (
 	// defaultRequestTimeout bounds each non-streaming request. It matches the
 	// server's own non-streaming request timeout (30s).
@@ -179,13 +175,15 @@ func sameOrigin(a, b *url.URL) bool {
 // key-drop policy.
 var fallbackHTTPClient = &http.Client{CheckRedirect: checkRedirect}
 
-// NewAPIKeyClient builds the explicit developer/CI fallback client.
+// NewAPIKeyClient builds the explicit developer/CI fallback client. The site
+// is never defaulted: the caller must name the Datadog API site explicitly so
+// credentials cannot silently target a different environment.
 func NewAPIKeyClient(baseURL, apiKey, appKey string) (*Client, error) {
 	if apiKey == "" || appKey == "" {
 		return nil, fmt.Errorf("DD_API_KEY and DD_APP_KEY must both be set")
 	}
 	if strings.TrimSpace(baseURL) == "" {
-		baseURL = DefaultBaseURL
+		return nil, fmt.Errorf("a Datadog API site is required for api-key authentication; pass --site explicitly")
 	}
 	client := newClient(baseURL)
 	client.APIKey = apiKey

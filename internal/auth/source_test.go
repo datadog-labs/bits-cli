@@ -94,7 +94,7 @@ func (s *memoryStore) WithSessionLock(ctx context.Context, fn func() error) erro
 
 func expiredSession() Session {
 	return Session{
-		Site:         DefaultStagingSite,
+		Site:         "https://api.datadoghq.com",
 		ClientID:     "client",
 		AccessToken:  "old-access",
 		RefreshToken: "old-refresh",
@@ -123,7 +123,7 @@ func testSource(t *testing.T, session Session, store CredentialStore, tokenURL s
 	return &Source{
 		gate: make(chan struct{}, 1),
 		config: SiteConfig{
-			Site:        DefaultStagingSite,
+			Site:        "https://api.datadoghq.com",
 			ClientID:    "client",
 			TokenURL:    tokenURL,
 			RedirectURI: DefaultRedirectURI,

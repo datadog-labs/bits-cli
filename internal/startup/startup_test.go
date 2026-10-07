@@ -41,7 +41,7 @@ func (s *observedStore) Delete() error {
 
 func validSession() auth.Session {
 	return auth.Session{
-		Site:         "https://api.datad0g.com",
+		Site:         "https://api.datadoghq.com",
 		ClientID:     "oauth-client",
 		AccessToken:  "oauth-access",
 		RefreshToken: "oauth-refresh",
@@ -110,7 +110,7 @@ func TestNewAuthenticatedClientAutoUsesOAuthAndIgnoresAmbientKeys(t *testing.T) 
 	if client.TokenSource == nil || client.APIKey != "" || client.AppKey != "" {
 		t.Fatalf("client auth = token source %v, API key %q, app key %q", client.TokenSource != nil, client.APIKey, client.AppKey)
 	}
-	if client.BaseURL != "https://api.datad0g.com" {
+	if client.BaseURL != "https://api.datadoghq.com" {
 		t.Fatalf("BaseURL = %q", client.BaseURL)
 	}
 }
@@ -124,7 +124,7 @@ func TestNewAuthenticatedClientClassifiesOnlyReplaceableOAuthFailures(t *testing
 	}{
 		{name: "no session", store: &observedStore{err: auth.ErrNoSession}, wantCause: auth.ErrNoSession, loginRequired: true},
 		{name: "corrupt session", store: &observedStore{err: errors.Join(auth.ErrSessionCorrupt, errors.New("truncated"))}, wantCause: auth.ErrSessionCorrupt, loginRequired: true},
-		{name: "invalid decoded session", store: &observedStore{session: auth.Session{Site: "https://api.datad0g.com"}}, wantCause: auth.ErrSessionCorrupt, loginRequired: true},
+		{name: "invalid decoded session", store: &observedStore{session: auth.Session{Site: "https://api.datadoghq.com"}}, wantCause: auth.ErrSessionCorrupt, loginRequired: true},
 		{name: "store failure", store: &observedStore{err: errors.New("keyring unavailable")}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

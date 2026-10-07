@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/datadog-labs/bits-cli/internal/site"
 	"golang.org/x/oauth2"
 )
 
@@ -12,13 +13,9 @@ const (
 	// ProductionClientID is the dedicated Bits CLI native OAuth client replicated
 	// from US1 to the commercial Datadog production regions.
 	ProductionClientID = "83d1af23-fbe1-4f44-a604-405b2c3fbdd9"
-	// StagingClientID is the dedicated Bits CLI native OAuth client in Datadog staging.
-	StagingClientID = "605736a5-3085-47c7-ab49-22b90d36530f"
 	// DefaultSite is the production US1 login site. The authorization flow lets a
 	// user select another region and returns its canonical domain on the callback.
 	DefaultSite = "https://app.datadoghq.com"
-	// DefaultStagingSite is the Datadog staging site used for internal validation.
-	DefaultStagingSite = "https://dd.datad0g.com"
 	// DefaultRedirectURI asks the OS to select an available IPv4 loopback port.
 	// Datadog's OAuth provider permits flexible ports for native loopback clients
 	// when the literal host and registered path match RFC 8252.
@@ -28,8 +25,7 @@ const (
 type oauthEnvironment uint8
 
 const (
-	oauthEnvironmentStaging oauthEnvironment = iota + 1
-	oauthEnvironmentCommercial
+	oauthEnvironmentCommercial oauthEnvironment = iota + 1
 	oauthEnvironmentGovCloud
 )
 
@@ -43,18 +39,20 @@ type domainFamily struct {
 	environment oauthEnvironment
 }
 
-// Production families are documented at
-// https://docs.datadoghq.com/getting_started/site/. Adding a new family or
-// assigning a client must be an explicit reviewed change. The commercial client
-// is not registered for GovCloud, so that family continues to require an override.
+// Adding a family or client must be an explicit reviewed change (families
+// documented at https://docs.datadoghq.com/getting_started/site/). The
+// commercial client is not registered for GovCloud, and staging has no
+// built-in family: it is reachable only through the environment
+// configuration validated by internal/site.
 var datadogDomainFamilies = []domainFamily{
-	{suffix: "datad0g.com", clientID: StagingClientID, environment: oauthEnvironmentStaging},
 	{suffix: "datadoghq.com", clientID: ProductionClientID, environment: oauthEnvironmentCommercial},
 	{suffix: "datadoghq.eu", clientID: ProductionClientID, environment: oauthEnvironmentCommercial},
 	{suffix: "ddog-gov.com", environment: oauthEnvironmentGovCloud},
 }
 
 // SiteConfig contains the site-specific OAuth and Assistant endpoints.
+// staging is the trust snapshot captured at build time for an
+// environment-configured staging site; nil means a built-in destination.
 type SiteConfig struct {
 	Site          string
 	Domain        string
@@ -64,79 +62,122 @@ type SiteConfig struct {
 	RevokeURL     string
 	RedirectURI   string
 	AssistantBase string
+
+	staging *site.StagingConfig
+}
+
+// stagingSnapshot captures the environment-configured staging trust snapshot
+// at an API boundary.
+func stagingSnapshot() (*site.StagingConfig, error) {
+	config, ok, err := site.StagingFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return &config, nil
+}
+
+func isStagingHost(domain string, staging *site.StagingConfig) bool {
+	return staging != nil && (domain == staging.LoginHost || domain == staging.APIHost)
 }
 
 // NormalizeAPISite validates a Datadog-owned API endpoint and returns its
-// canonical HTTPS URL. It accepts either a URL or hostname. The staging host
-// dd.datad0g.com is the sole non-api-prefixed endpoint supported by the
-// Assistant API.
+// canonical HTTPS URL, accepting a URL or hostname. A configured staging
+// environment also accepts its exact login host for direct API-key use.
 func NormalizeAPISite(rawSite string) (string, error) {
-	site, domain, err := normalizeSite(rawSite)
+	staging, err := stagingSnapshot()
 	if err != nil {
 		return "", err
 	}
-	if domain != "dd.datad0g.com" && !strings.HasPrefix(domain, "api.") {
+	siteURL, domain, err := normalizeSite(rawSite, staging)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(domain, "api.") && (staging == nil || domain != staging.LoginHost) {
 		return "", fmt.Errorf("datadog API site must use an api-prefixed hostname")
 	}
-	return site, nil
+	return siteURL, nil
 }
 
-// ConfigForSite preserves the supplied Datadog site as the authorization host,
-// including customer subdomains. The site family selects the staging or
-// commercial production registration unless clientIDOverride is provided.
+// ConfigForSite preserves the supplied Datadog site as the authorization
+// host, including customer subdomains. The site family selects the production
+// or GovCloud registration unless clientIDOverride is provided. A configured
+// staging environment accepts only its exact login and API hosts and never
+// inherits a production client.
 func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
-	site, domain, err := normalizeSite(rawSite)
+	staging, err := stagingSnapshot()
+	if err != nil {
+		return SiteConfig{}, err
+	}
+	siteURL, domain, err := normalizeSite(rawSite, staging)
 	if err != nil {
 		return SiteConfig{}, err
 	}
 
 	clientID := strings.TrimSpace(clientIDOverride)
-	if clientID == "" {
+	var snapshot *site.StagingConfig
+	if isStagingHost(domain, staging) {
+		snapshot = staging
+		if clientID == "" {
+			clientID = staging.ClientID
+		}
+		if clientID == "" {
+			return SiteConfig{}, fmt.Errorf("no OAuth client is configured for staging site %s; pass --client-id or set %s", domain, site.EnvStagingClientID)
+		}
+	} else if clientID == "" {
 		clientID = defaultClientID(domain)
-	}
-	if clientID == "" {
-		return SiteConfig{}, fmt.Errorf("no Bits CLI OAuth client is configured for %s; provide an OAuth client ID override", domain)
+		if clientID == "" {
+			return SiteConfig{}, fmt.Errorf("no Bits CLI OAuth client is configured for %s; provide an OAuth client ID override", domain)
+		}
 	}
 
 	// Login replaces these provisional API routes with the canonical domain
-	// returned by the OAuth service before exchanging the authorization code.
-	// Sessions already store that api-prefixed site, so this also reconstructs
+	// returned by the OAuth service before exchanging the authorization code;
+	// sessions already store that api-prefixed site, so this also reconstructs
 	// their routes.
 	apiDomain := domain
 	if !strings.HasPrefix(apiDomain, "api.") {
 		apiDomain = "api." + apiDomain
 	}
+	if snapshot != nil {
+		apiDomain = snapshot.APIHost
+	}
 	apiBase := "https://" + apiDomain
 	return SiteConfig{
-		Site:          site,
+		Site:          siteURL,
 		Domain:        domain,
 		ClientID:      clientID,
-		AuthorizeURL:  site + "/oauth2/v1/authorize",
+		AuthorizeURL:  siteURL + "/oauth2/v1/authorize",
 		TokenURL:      apiBase + "/api/v2/oauth2/token",
 		RevokeURL:     apiBase + "/oauth2/v1/revoke",
 		RedirectURI:   DefaultRedirectURI,
 		AssistantBase: apiBase,
+		staging:       snapshot,
 	}, nil
 }
 
 // WithCallbackDomain applies the canonical regional base returned by Datadog
-// on the state-validated OAuth callback. The OAuth service removes customer
-// subdomains from this value, so api.<domain> routes token and Assistant
-// requests correctly.
+// on the state-validated OAuth callback. Validation uses the trust snapshot
+// captured when this configuration was built, so a mid-flow environment
+// change cannot retarget the callback.
 func (c SiteConfig) WithCallbackDomain(raw string) (SiteConfig, error) {
-	domain, err := normalizeCallbackDomain(raw)
+	domain, err := normalizeCallbackDomain(raw, c.staging)
 	if err != nil {
 		return SiteConfig{}, err
 	}
-	initialDomain := c.Domain
-	if initialDomain == "" {
-		_, initialDomain, err = normalizeSite(c.Site)
-		if err != nil {
-			return SiteConfig{}, fmt.Errorf("validate initial OAuth site: %w", err)
+	if c.staging == nil {
+		initialDomain := c.Domain
+		if initialDomain == "" {
+			_, initialDomain, err = normalizeSite(c.Site, nil)
+			if err != nil {
+				return SiteConfig{}, fmt.Errorf("validate initial OAuth site: %w", err)
+			}
 		}
-	}
-	if environmentForDomain(initialDomain) != environmentForDomain(domain) {
-		return SiteConfig{}, fmt.Errorf("OAuth callback returned Datadog domain %q from a different environment", raw)
+		if environmentForDomain(initialDomain) != environmentForDomain(domain) {
+			return SiteConfig{}, fmt.Errorf("OAuth callback returned Datadog domain %q from a different environment", raw)
+		}
 	}
 
 	apiBase := "https://api." + domain
@@ -163,10 +204,23 @@ func (c SiteConfig) OAuth2Config() *oauth2.Config {
 	}
 }
 
-func normalizeCallbackDomain(raw string) (string, error) {
+// normalizeCallbackDomain validates the bare domain returned on the OAuth
+// callback: with a staging trust snapshot, only that environment's exact
+// domain; otherwise the built-in production families.
+func normalizeCallbackDomain(raw string, staging *site.StagingConfig) (string, error) {
 	domain := strings.ToLower(strings.TrimSpace(raw))
 	u, err := url.Parse("https://" + domain)
-	if err != nil || domain == "" || u.Host != domain || u.Hostname() != domain || u.Port() != "" || !isDatadogDomain(domain) {
+	if err != nil || domain == "" || u.Host != domain || u.Hostname() != domain || u.Port() != "" ||
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return "", fmt.Errorf("OAuth callback returned an unsupported Datadog domain %q", raw)
+	}
+	if staging != nil {
+		if domain != staging.Domain {
+			return "", fmt.Errorf("OAuth callback returned domain %q from a different environment", raw)
+		}
+		return domain, nil
+	}
+	if !isDatadogDomain(domain) {
 		return "", fmt.Errorf("OAuth callback returned an unsupported Datadog domain %q", raw)
 	}
 	if strings.HasPrefix(domain, "api.") {
@@ -175,7 +229,7 @@ func normalizeCallbackDomain(raw string) (string, error) {
 	return domain, nil
 }
 
-func normalizeSite(raw string) (site, domain string, err error) {
+func normalizeSite(raw string, staging *site.StagingConfig) (siteURL, domain string, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		raw = DefaultSite
@@ -190,11 +244,15 @@ func normalizeSite(raw string) (site, domain string, err error) {
 	if u.Scheme != "https" || u.Hostname() == "" {
 		return "", "", fmt.Errorf("datadog site must be an https URL or hostname")
 	}
-	if u.User != nil || u.Port() != "" || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+	// url.Parse drops an empty port ("host:"), empty "?" and "#" delimiters,
+	// and percent-encoded path characters, so the raw input and escaped path
+	// need direct checks.
+	if u.User != nil || u.Port() != "" || strings.HasSuffix(u.Host, ":") || strings.ContainsAny(raw, "?#") ||
+		(u.Path != "" && u.Path != "/") || u.EscapedPath() != u.Path {
 		return "", "", fmt.Errorf("datadog site must not include credentials, a port, a path, query, or fragment")
 	}
 	domain = strings.ToLower(u.Hostname())
-	if !isDatadogDomain(domain) {
+	if !isDatadogDomain(domain) && !isStagingHost(domain, staging) {
 		return "", "", fmt.Errorf("datadog site must use a Datadog-owned hostname")
 	}
 	return "https://" + domain, domain, nil

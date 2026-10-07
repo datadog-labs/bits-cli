@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,10 +16,14 @@ import (
 // conversations are deleted during cleanup.
 func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 	if os.Getenv("BITS_ASSISTANT_E2E") == "" {
-		t.Skip("set BITS_ASSISTANT_E2E=1 (with DD_API_KEY/DD_APP_KEY) to run assistant e2e tests")
+		t.Skip("set BITS_ASSISTANT_E2E=1 (DD_API_KEY/DD_APP_KEY and BITS_E2E_SITE) to run assistant e2e tests")
+	}
+	e2eSite := strings.TrimSpace(os.Getenv("BITS_E2E_SITE"))
+	if e2eSite == "" {
+		t.Fatal("BITS_ASSISTANT_E2E=1 requires BITS_E2E_SITE naming the API site to use")
 	}
 	client, err := assistant.NewAPIKeyClient(
-		assistant.DefaultBaseURL,
+		e2eSite,
 		os.Getenv("DD_API_KEY"),
 		os.Getenv("DD_APP_KEY"),
 	)
