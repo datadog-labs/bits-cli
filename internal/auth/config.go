@@ -17,7 +17,7 @@ const (
 	// DefaultSite is the production US1 login site. The authorization flow lets a
 	// user select another region and returns its canonical domain on the callback.
 	DefaultSite = "https://app.datadoghq.com"
-	// DefaultStagingSite is the org-2 staging site used for internal validation.
+	// DefaultStagingSite is the Datadog staging site used for internal validation.
 	DefaultStagingSite = "https://dd.datad0g.com"
 	// DefaultRedirectURI asks the OS to select an available IPv4 loopback port.
 	// Datadog's OAuth provider permits flexible ports for native loopback clients
@@ -67,8 +67,9 @@ type SiteConfig struct {
 }
 
 // NormalizeAPISite validates a Datadog-owned API endpoint and returns its
-// canonical HTTPS URL. It accepts either a URL or hostname. The org-2 staging
-// host is the sole non-api-prefixed endpoint supported by the Assistant API.
+// canonical HTTPS URL. It accepts either a URL or hostname. The staging host
+// dd.datad0g.com is the sole non-api-prefixed endpoint supported by the
+// Assistant API.
 func NormalizeAPISite(rawSite string) (string, error) {
 	site, domain, err := normalizeSite(rawSite)
 	if err != nil {
@@ -98,8 +99,9 @@ func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
 	}
 
 	// Login replaces these provisional API routes with the canonical domain
-	// returned by AAA before exchanging the authorization code. Sessions already
-	// store that api-prefixed site, so this also reconstructs their routes.
+	// returned by the OAuth service before exchanging the authorization code.
+	// Sessions already store that api-prefixed site, so this also reconstructs
+	// their routes.
 	apiDomain := domain
 	if !strings.HasPrefix(apiDomain, "api.") {
 		apiDomain = "api." + apiDomain
@@ -118,8 +120,9 @@ func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
 }
 
 // WithCallbackDomain applies the canonical regional base returned by Datadog
-// on the state-validated OAuth callback. AAA removes customer subdomains from
-// this value, so api.<domain> routes token and Assistant requests correctly.
+// on the state-validated OAuth callback. The OAuth service removes customer
+// subdomains from this value, so api.<domain> routes token and Assistant
+// requests correctly.
 func (c SiteConfig) WithCallbackDomain(raw string) (SiteConfig, error) {
 	domain, err := normalizeCallbackDomain(raw)
 	if err != nil {

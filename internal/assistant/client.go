@@ -1,4 +1,4 @@
-// Package assistant is a bare-bones client for the Datadog Bits AI (CMD-I)
+// Package assistant is a bare-bones client for the Datadog Bits AI
 // Assistant HTTP API. It targets the same API the Datadog UI uses when you
 // chat with Bits, and is intended to drive a remote agent loop.
 //
@@ -23,8 +23,8 @@ import (
 	"time"
 )
 
-// DefaultBaseURL is the Datadog staging site (org 2). dd-auth --domain
-// dd.datad0g.com produces credentials valid here.
+// DefaultBaseURL is the Datadog staging site. Run `bits login
+// --site dd.datad0g.com` to obtain credentials valid here.
 const DefaultBaseURL = "https://dd.datad0g.com"
 
 const (

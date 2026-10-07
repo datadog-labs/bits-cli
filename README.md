@@ -115,7 +115,7 @@ export DD_APP_KEY=...
 bits --auth api-key --site https://api.datadoghq.com
 ```
 
-Explicit API-key mode requires `--site`, accepts an `api.`-prefixed Datadog API URL or hostname (plus the org-2 staging host `dd.datad0g.com`), and does not read, refresh, replace, or delete a stored OAuth session. It never opens a browser or login picker. Both secrets are required; OAuth client selection remains on `bits login`. The mode affects only the current invocation, so a later plain `bits` returns to automatic OAuth selection. This makes authentication noninteractive; `bits` still launches its interactive terminal UI.
+Explicit API-key mode requires `--site`, accepts an `api.`-prefixed Datadog API URL or hostname (plus the staging host `dd.datad0g.com`), and does not read, refresh, replace, or delete a stored OAuth session. It never opens a browser or login picker. Both secrets are required; OAuth client selection remains on `bits login`. The mode affects only the current invocation, so a later plain `bits` returns to automatic OAuth selection. This makes authentication noninteractive; `bits` still launches its interactive terminal UI.
 
 Authentication selection is deterministic:
 

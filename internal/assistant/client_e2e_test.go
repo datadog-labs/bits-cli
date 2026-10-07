@@ -13,9 +13,9 @@ import (
 )
 
 // These tests hit the real Bits assistant API. They are opt-in: either set
-// BITS_ASSISTANT_E2E=1 and provide DD_API_KEY / DD_APP_KEY (as populated by
-// `dd-auth --domain dd.datad0g.com`), or set BITS_OAUTH_E2E=1 after `bits login`.
-// Without either flag they skip, so `go test` stays hermetic by default.
+// BITS_ASSISTANT_E2E=1 and provide DD_API_KEY / DD_APP_KEY (a Datadog API
+// key pair), or set BITS_OAUTH_E2E=1 after `bits login`. Without either
+// flag they skip, so `go test` stays hermetic by default.
 //
 // The assistant is an LLM, so response *content* is not deterministic. The
 // assertions therefore split into two kinds:

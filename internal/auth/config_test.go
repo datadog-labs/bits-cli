@@ -48,7 +48,7 @@ func TestConfigForSite_SelectsProductionClient(t *testing.T) {
 		{name: "US1", site: "https://app.datadoghq.com", wantSite: "https://app.datadoghq.com"},
 		{name: "regional customer subdomain", site: "https://acme.us3.datadoghq.com", wantSite: "https://acme.us3.datadoghq.com"},
 		{name: "EU", site: "https://app.datadoghq.eu", wantSite: "https://app.datadoghq.eu"},
-		{name: "preprod", site: "https://ddstaging.datadoghq.com", wantSite: "https://ddstaging.datadoghq.com"},
+		{name: "customer subdomain", site: "https://demo.datadoghq.com", wantSite: "https://demo.datadoghq.com"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg, err := ConfigForSite(test.site, "")
