@@ -52,8 +52,14 @@ func requireE2E(t *testing.T) *Client {
 	if e2eSite == "" {
 		t.Fatal("BITS_ASSISTANT_E2E=1 requires BITS_E2E_SITE naming the API site to use")
 	}
+	// Route e2e credentials through the same canonicalization as the CLI so a
+	// configured staging login origin also targets its API host.
+	normalizedSite, err := auth.NormalizeAPISite(e2eSite)
+	if err != nil {
+		t.Fatalf("normalize BITS_E2E_SITE %q: %v", e2eSite, err)
+	}
 	client, err := NewAPIKeyClient(
-		e2eSite,
+		normalizedSite,
 		os.Getenv("DD_API_KEY"),
 		os.Getenv("DD_APP_KEY"),
 	)

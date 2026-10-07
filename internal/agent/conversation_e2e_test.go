@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/auth"
 )
 
 // This opt-in test proves the engine reset contract against the real Assistant
@@ -22,8 +23,14 @@ func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 	if e2eSite == "" {
 		t.Fatal("BITS_ASSISTANT_E2E=1 requires BITS_E2E_SITE naming the API site to use")
 	}
+	// Route e2e credentials through the same canonicalization as the CLI so a
+	// configured staging login origin also targets its API host.
+	normalizedSite, err := auth.NormalizeAPISite(e2eSite)
+	if err != nil {
+		t.Fatal(err)
+	}
 	client, err := assistant.NewAPIKeyClient(
-		e2eSite,
+		normalizedSite,
 		os.Getenv("DD_API_KEY"),
 		os.Getenv("DD_APP_KEY"),
 	)

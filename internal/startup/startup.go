@@ -148,7 +148,16 @@ func NewAuthenticatedClient(ctx context.Context, opts ClientOptions) (*assistant
 		}
 		source, err := auth.NewSource(session, opts.Store, nil)
 		if err != nil {
-			return nil, fmt.Errorf("%w: stored OAuth session is invalid; run `bits logout`, then `bits login`: %w: %w", ErrLoginRequired, auth.ErrSessionCorrupt, err)
+			// A site-configuration failure (for example a staging login whose
+			// BITS_STAGING_* variables are missing or no longer match) is
+			// actionable as written, so it surfaces without the login hint; a
+			// caller must not replace it with the production login picker.
+			if errors.Is(err, auth.ErrSiteConfiguration) {
+				return nil, fmt.Errorf("cannot use stored OAuth session; restore the matching site configuration or run `bits login`: %w", err)
+			}
+			// The stored session can also be unusable for structural reasons, so
+			// never advise deleting credentials here.
+			return nil, fmt.Errorf("%w: cannot use stored OAuth session; run `bits login`: %w: %w", ErrLoginRequired, auth.ErrSessionCorrupt, err)
 		}
 		// Validate the grant before handing the client to a surface. This is a
 		// local check for a fresh token and performs the existing safe refresh

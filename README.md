@@ -107,7 +107,7 @@ Only one OAuth login is active per OS user. Running `bits login` again saves the
 
 ### Staging environment
 
-Staging is opt-in and no staging endpoint is embedded in Bits. `BITS_STAGING_SITE` (the HTTPS login origin) and `BITS_STAGING_DOMAIN` (the bare domain the OAuth callback returns; token and Assistant traffic always goes to `api.<domain>`) must be set together; `BITS_STAGING_CLIENT_ID` is optional when you pass `bits login --client-id`, which always takes precedence:
+Staging is opt-in and no staging endpoint is embedded in Bits. `BITS_STAGING_SITE` (the HTTPS login origin) and `BITS_STAGING_DOMAIN` (the bare domain the OAuth callback returns; token and Assistant traffic always goes to the canonical `api.<domain>` route) are both required; `BITS_STAGING_CLIENT_ID` is optional and only names the default OAuth client — `bits login --client-id` always takes precedence:
 
 ```sh
 export BITS_STAGING_SITE=https://login.staging.test   # HTTPS login origin
@@ -116,7 +116,9 @@ export BITS_STAGING_CLIENT_ID=staging-test-client             # optional default
 bits login --site "$BITS_STAGING_SITE"
 ```
 
-The login origin must be HTTPS and the callback domain or a subdomain of it; malformed or production-overlapping configuration fails with an explicit error rather than falling back to production. A saved staging session keeps working on later runs only while the same `BITS_STAGING_SITE` and `BITS_STAGING_DOMAIN` are set; its stored client ID remains authoritative. To switch environments, set the new matching variables and log in again — clearing the variables alone cannot establish a new environment.
+The login origin must be HTTPS and the callback domain or a subdomain of it; malformed or production-overlapping configuration fails with an explicit error rather than falling back to production.
+
+A saved staging session records the canonical API domain (`api.<domain>`) of the configured callback domain plus its OAuth client ID — never the login alias, even when the alias itself starts with `api.`. It stays usable on later runs while `BITS_STAGING_DOMAIN` still names that same domain, even if `BITS_STAGING_SITE` moves to another login origin under it: token refresh and Assistant traffic stay on `api.<domain>`, and only browser links (`/web`, `/settings`) follow the currently configured login origin. The stored client ID always stays authoritative. Changing `BITS_STAGING_DOMAIN` — or running without the staging variables while a staging session is stored — fails closed with a visible error naming `BITS_STAGING_SITE` and `BITS_STAGING_DOMAIN`, both in interactive `bits` and in headless `bits run`; Bits never falls back to the production login picker or to production routing, and the stored credential is left untouched. Setting the new matching variables and running `bits login` again is the explicit way to switch environments, and clearing the variables alone cannot establish a new environment.
 
 ### Developer and CI authentication
 
@@ -128,9 +130,9 @@ export DD_APP_KEY=...
 bits --auth api-key --site https://api.datadoghq.com
 ```
 
-Explicit API-key mode requires `--site`, accepts an `api.`-prefixed Datadog API URL or hostname (plus a configured staging login or API host), and rejects an empty base URL instead of defaulting to any site. It does not read, refresh, replace, or delete a stored OAuth session. It never opens a browser or login picker. Both secrets are required; OAuth client selection remains on `bits login`. The mode affects only the current invocation, so a later plain `bits` returns to automatic OAuth selection. This makes authentication noninteractive; `bits` still launches its interactive terminal UI.
+Explicit API-key mode requires `--site`, accepts an `api.`-prefixed Datadog API URL or hostname, plus its configured staging environment's login or API host (the login origin is canonicalized to the environment's `api.` host), and rejects an empty base URL instead of defaulting to any site. It does not read, refresh, replace, or delete a stored OAuth session. It never opens a browser or login picker. Both secrets are required; OAuth client selection remains on `bits login`. The mode affects only the current invocation, so a later plain `bits` returns to automatic OAuth selection. This makes authentication noninteractive; `bits` still launches its interactive terminal UI.
 
-Opt-in end-to-end tests follow the same rule: `BITS_OAUTH_E2E=1` reuses the stored login, while `BITS_ASSISTANT_E2E=1` also requires `DD_API_KEY`/`DD_APP_KEY` and an explicit `BITS_E2E_SITE` naming the Datadog API site to use; no test run defaults to a site.
+Opt-in end-to-end tests follow the same rule: `BITS_OAUTH_E2E=1` reuses the stored login, while `BITS_ASSISTANT_E2E=1` also requires `DD_API_KEY`/`DD_APP_KEY` and an explicit `BITS_E2E_SITE` naming the Datadog API site to use (validated through the same site canonicalization as `--site`); no test run defaults to a site.
 
 Authentication selection is deterministic:
 

@@ -10,7 +10,17 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/site"
 )
+
+// clearStagingEnv clears inherited staging configuration for one test; empty
+// values are equivalent to unset for the staging loader.
+func clearStagingEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv(site.EnvStagingSite, "")
+	t.Setenv(site.EnvStagingDomain, "")
+	t.Setenv(site.EnvStagingClientID, "")
+}
 
 func runOptionsForTest(err error) (Actions, *[]RunOptions) {
 	var recorded []RunOptions
@@ -32,6 +42,7 @@ func executeRun(t *testing.T, args []string, actionErr error) (stdout, stderr st
 }
 
 func TestRunDispatchesResolvedOptions(t *testing.T) {
+	clearStagingEnv(t)
 	stdout, stderr, recorded, err := executeRun(t, []string{
 		"run",
 		"--prompt", "summarize the incident",
@@ -65,6 +76,24 @@ func TestRunDispatchesResolvedOptions(t *testing.T) {
 	}
 }
 
+// The api-key CLI path canonicalizes a configured staging login origin to
+// the environment's API host before dispatching the run.
+func TestRunAPIKeyCanonicalizesStagingLoginOrigin(t *testing.T) {
+	clearStagingEnv(t)
+	t.Setenv(site.EnvStagingSite, "https://login.staging.test")
+	t.Setenv(site.EnvStagingDomain, "staging.test")
+	_, _, recorded, err := executeRun(t, []string{
+		"run", "--prompt", "hello", "--delivery", "adeep",
+		"--auth", "api-key", "--site", "https://login.staging.test",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded) != 1 || recorded[0].Site != "https://api.staging.test" {
+		t.Fatalf("run options = %#v, want the canonical staging API site", recorded)
+	}
+}
+
 func TestRunDefaultsToDeny(t *testing.T) {
 	_, _, recorded, err := executeRun(t, []string{"run", "--prompt", "hello", "--delivery", "adeep"}, nil)
 	if err != nil {
@@ -82,6 +111,7 @@ func TestRunDefaultsToDeny(t *testing.T) {
 // Every usage failure must be detected before the action (and therefore any
 // engine construction) runs, and must carry the usage exit status.
 func TestRunRejectsUsageBeforeAction(t *testing.T) {
+	clearStagingEnv(t)
 	for _, test := range []struct {
 		name    string
 		args    []string

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -50,6 +51,12 @@ var datadogDomainFamilies = []domainFamily{
 	{suffix: "ddog-gov.com", environment: oauthEnvironmentGovCloud},
 }
 
+// ErrSiteConfiguration marks a failure to build the site configuration a
+// stored session requires, such as missing or mismatched BITS_STAGING_*
+// variables. The stored session itself may be intact: restoring the matching
+// environment, or logging in again with it, makes it usable again.
+var ErrSiteConfiguration = errors.New("stored OAuth session does not match the current site configuration")
+
 // SiteConfig contains the site-specific OAuth and Assistant endpoints.
 // staging is the trust snapshot captured at build time for an
 // environment-configured staging site; nil means a built-in destination.
@@ -85,7 +92,10 @@ func isStagingHost(domain string, staging *site.StagingConfig) bool {
 
 // NormalizeAPISite validates a Datadog-owned API endpoint and returns its
 // canonical HTTPS URL, accepting a URL or hostname. A configured staging
-// environment also accepts its exact login host for direct API-key use.
+// environment also accepts its exact login host, canonicalizing it to the
+// environment's API host even when the login alias itself starts with
+// "api."; API-key calls then follow the documented API route instead of the
+// login origin.
 func NormalizeAPISite(rawSite string) (string, error) {
 	staging, err := stagingSnapshot()
 	if err != nil {
@@ -95,7 +105,10 @@ func NormalizeAPISite(rawSite string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !strings.HasPrefix(domain, "api.") && (staging == nil || domain != staging.LoginHost) {
+	if staging != nil && domain == staging.LoginHost {
+		return "https://" + staging.APIHost, nil
+	}
+	if !strings.HasPrefix(domain, "api.") {
 		return "", fmt.Errorf("datadog API site must use an api-prefixed hostname")
 	}
 	return siteURL, nil
@@ -253,7 +266,7 @@ func normalizeSite(raw string, staging *site.StagingConfig) (siteURL, domain str
 	}
 	domain = strings.ToLower(u.Hostname())
 	if !isDatadogDomain(domain) && !isStagingHost(domain, staging) {
-		return "", "", fmt.Errorf("datadog site must use a Datadog-owned hostname")
+		return "", "", fmt.Errorf("datadog site must use a Datadog-owned hostname; a staging host is reachable only by configuring %s and %s", site.EnvStagingSite, site.EnvStagingDomain)
 	}
 	return "https://" + domain, domain, nil
 }

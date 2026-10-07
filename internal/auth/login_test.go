@@ -277,6 +277,7 @@ func TestCallbackRejectsNonLiteralAndMalformedRedirects(t *testing.T) {
 }
 
 func TestLoginRevokesUnpersistedGrant(t *testing.T) {
+	noStagingEnv(t)
 	var revokedToken string
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -317,6 +318,7 @@ func TestLoginRevokesUnpersistedGrant(t *testing.T) {
 }
 
 func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
+	noStagingEnv(t)
 	previous := Session{
 		Site: "https://api.datadoghq.com", ClientID: "client", AccessToken: "old-access",
 		RefreshToken: "old-refresh", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour),
@@ -362,6 +364,7 @@ func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
 }
 
 func TestReplacementLoginDoesNotRevokeSharedRefreshToken(t *testing.T) {
+	noStagingEnv(t)
 	previous := Session{
 		Site: "https://api.datadoghq.com", ClientID: "client", AccessToken: "old-access",
 		RefreshToken: "shared-refresh", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour),
@@ -480,6 +483,7 @@ func TestLogoutClearsCorruptCredential(t *testing.T) {
 }
 
 func TestLogoutRevokesDistinctSessionsFromBothStoreBackends(t *testing.T) {
+	noStagingEnv(t)
 	store := newTestStore(t, true)
 	keyringSession := fileTestSession()
 	keyringSession.AccessToken = "keyring-access"
@@ -531,6 +535,7 @@ func TestLogoutRevokesDistinctSessionsFromBothStoreBackends(t *testing.T) {
 }
 
 func TestRevokeUsesRefreshToken(t *testing.T) {
+	noStagingEnv(t)
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			t.Errorf("ParseForm: %v", err)
@@ -566,6 +571,7 @@ func TestRevokeUsesRefreshToken(t *testing.T) {
 }
 
 func TestRevokeRefreshesExpiredAccessTokenBeforeRevoking(t *testing.T) {
+	noStagingEnv(t)
 	var refreshed, revoked bool
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -612,6 +618,7 @@ func TestRevokeRefreshesExpiredAccessTokenBeforeRevoking(t *testing.T) {
 }
 
 func TestRevokeTreatsInvalidGrantAsAlreadyRevoked(t *testing.T) {
+	noStagingEnv(t)
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v2/oauth2/token" {
 			t.Errorf("revoke should not be reached; path = %q", r.URL.Path)
@@ -639,6 +646,7 @@ func TestRevokeTreatsInvalidGrantAsAlreadyRevoked(t *testing.T) {
 }
 
 func TestRevokeSanitizesAuthorizationServerError(t *testing.T) {
+	noStagingEnv(t)
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -661,6 +669,7 @@ func TestRevokeSanitizesAuthorizationServerError(t *testing.T) {
 }
 
 func TestLogoutDeletesBeforeBestEffortRevocation(t *testing.T) {
+	noStagingEnv(t)
 	session := Session{
 		Site: DefaultSite, ClientID: "client", AccessToken: "access", RefreshToken: "refresh",
 	}

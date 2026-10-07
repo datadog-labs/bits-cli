@@ -335,6 +335,7 @@ func TestDirtySourceNeverOverwritesReplacementOrDeletion(t *testing.T) {
 }
 
 func TestLogoutWaitsForRefreshAndDeletesRotatedSession(t *testing.T) {
+	noStagingEnv(t)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var revokedToken string

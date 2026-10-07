@@ -178,3 +178,26 @@ func TestLauncherCommand(t *testing.T) {
 		})
 	}
 }
+
+// Browser links for a staging session use the currently configured login
+// origin: changing the login alias within the same canonical domain reroutes
+// links without invalidating the stored api-prefixed session.
+func TestConversationURLStagingLoginAliasChange(t *testing.T) {
+	t.Setenv(site.EnvStagingSite, "https://login.staging.test")
+	t.Setenv(site.EnvStagingDomain, "staging.test")
+	t.Setenv(site.EnvStagingClientID, "")
+	got, err := ConversationURL("https://api.staging.test", "conversation-1")
+	if err != nil || got != "https://login.staging.test/ask/conversation-1" {
+		t.Fatalf("ConversationURL = %q, %v", got, err)
+	}
+
+	t.Setenv(site.EnvStagingSite, "https://ui.staging.test")
+	got, err = ConversationURL("https://api.staging.test", "conversation-1")
+	if err != nil || got != "https://ui.staging.test/ask/conversation-1" {
+		t.Fatalf("ConversationURL after alias change = %q, %v", got, err)
+	}
+	got, err = SettingsURL("https://api.staging.test")
+	if err != nil || got != "https://ui.staging.test/ask/settings" {
+		t.Fatalf("SettingsURL after alias change = %q, %v", got, err)
+	}
+}

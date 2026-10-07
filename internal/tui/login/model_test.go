@@ -12,8 +12,18 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/datadog-labs/bits-cli/internal/site"
 	tuistyles "github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
+
+// clearStagingEnv clears inherited staging configuration for one test; empty
+// values are equivalent to unset for the staging loader.
+func clearStagingEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv(site.EnvStagingSite, "")
+	t.Setenv(site.EnvStagingDomain, "")
+	t.Setenv(site.EnvStagingClientID, "")
+}
 
 func TestSitePickerNavigatesAndStartsSelectedSite(t *testing.T) {
 	called := make(chan string, 1)
@@ -49,6 +59,7 @@ func TestSitePickerWraps(t *testing.T) {
 }
 
 func TestCustomDomainValidationAndLogin(t *testing.T) {
+	clearStagingEnv(t)
 	called := make(chan string, 1)
 	m := newModel(func(_ context.Context, site string) error {
 		called <- site
@@ -311,6 +322,7 @@ func TestSmallTerminalUsesBoundedResizePrompt(t *testing.T) {
 }
 
 func TestNormalizeCustomSite(t *testing.T) {
+	clearStagingEnv(t)
 	for _, test := range []struct {
 		raw  string
 		want string
@@ -335,6 +347,25 @@ func TestNormalizeCustomSite(t *testing.T) {
 		if _, err := normalizeCustomSite(raw); err == nil || !strings.Contains(err.Error(), "not its API endpoint") {
 			t.Errorf("normalizeCustomSite(%q) error = %v; want API endpoint rejection", raw, err)
 		}
+	}
+}
+
+// A configured staging environment makes its exact login host an explicit
+// custom-site choice; its API endpoint stays rejected like production's.
+func TestNormalizeCustomSiteStagingEnvironment(t *testing.T) {
+	clearStagingEnv(t)
+	t.Setenv(site.EnvStagingSite, "https://login.staging.test")
+	t.Setenv(site.EnvStagingDomain, "staging.test")
+	t.Setenv(site.EnvStagingClientID, "staging-test-client")
+	got, err := normalizeCustomSite("login.staging.test")
+	if err != nil || got != "https://login.staging.test" {
+		t.Fatalf("normalizeCustomSite(login.staging.test) = %q, %v", got, err)
+	}
+	if _, err := normalizeCustomSite("api.staging.test"); err == nil || !strings.Contains(err.Error(), "not its API endpoint") {
+		t.Errorf("normalizeCustomSite(api.staging.test) error = %v; want API endpoint rejection", err)
+	}
+	if _, err := normalizeCustomSite("login.other.test"); err == nil {
+		t.Error("normalizeCustomSite accepted an unconfigured staging host")
 	}
 }
 
