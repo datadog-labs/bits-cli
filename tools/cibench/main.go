@@ -31,7 +31,7 @@ type runMetadata struct {
 	CommitRef   string         `json:"git_ref,omitempty"`
 	PipelineID  string         `json:"ci_pipeline_id,omitempty"`
 	JobID       string         `json:"ci_job_id,omitempty"`
-	RequestKind string         `json:"ddci_request_kind,omitempty"`
+	CIEventName string         `json:"ci_event_name,omitempty"`
 	GoVersion   string         `json:"go_version"`
 	GOOS        string         `json:"goos"`
 	GOARCH      string         `json:"goarch"`
@@ -39,17 +39,12 @@ type runMetadata struct {
 }
 
 type runnerMetadata struct {
-	ID             string   `json:"id,omitempty"`
-	Description    string   `json:"description,omitempty"`
-	Tags           []string `json:"tags"`
-	Version        string   `json:"version,omitempty"`
-	ExecutableArch string   `json:"executable_arch,omitempty"`
-	CPUModel       string   `json:"cpu_model,omitempty"`
-	CPURequest     string   `json:"cpu_request,omitempty"`
-	CPULimit       string   `json:"cpu_limit,omitempty"`
-	MemoryRequest  string   `json:"memory_request,omitempty"`
-	MemoryLimit    string   `json:"memory_limit,omitempty"`
-	GOMAXPROCS     string   `json:"gomaxprocs,omitempty"`
+	ID             string `json:"id,omitempty"`
+	Description    string `json:"description,omitempty"`
+	Version        string `json:"version,omitempty"`
+	ExecutableArch string `json:"executable_arch,omitempty"`
+	CPUModel       string `json:"cpu_model,omitempty"`
+	GOMAXPROCS     string `json:"gomaxprocs,omitempty"`
 }
 
 type benchmarkSamples struct {
@@ -91,11 +86,11 @@ func run(inputPath, outputPath, measuresPath, tagsPath string) error {
 	}
 
 	metadata := runMetadata{
-		CommitSHA:   os.Getenv("CI_COMMIT_SHA"),
-		CommitRef:   os.Getenv("CI_COMMIT_REF_NAME"),
-		PipelineID:  os.Getenv("CI_PIPELINE_ID"),
-		JobID:       os.Getenv("CI_JOB_ID"),
-		RequestKind: os.Getenv("DDCI_REQUEST_KIND"),
+		CommitSHA:   os.Getenv("GITHUB_SHA"),
+		CommitRef:   os.Getenv("GITHUB_REF_NAME"),
+		PipelineID:  os.Getenv("GITHUB_RUN_ID"),
+		JobID:       os.Getenv("GITHUB_JOB"),
+		CIEventName: os.Getenv("GITHUB_EVENT_NAME"),
 		GoVersion:   runtime.Version(),
 		GOOS:        runtime.GOOS,
 		GOARCH:      runtime.GOARCH,
@@ -196,19 +191,12 @@ func parseBenchmarks(r io.Reader) ([]benchmarkSummary, string, error) {
 }
 
 func runnerMetadataFromEnvironment(cpuModel string) runnerMetadata {
-	tags := make([]string, 0)
-	_ = json.Unmarshal([]byte(os.Getenv("CI_RUNNER_TAGS")), &tags)
 	return runnerMetadata{
-		ID:             os.Getenv("CI_RUNNER_ID"),
-		Description:    os.Getenv("CI_RUNNER_DESCRIPTION"),
-		Tags:           tags,
-		Version:        os.Getenv("CI_RUNNER_VERSION"),
-		ExecutableArch: os.Getenv("CI_RUNNER_EXECUTABLE_ARCH"),
+		ID:             os.Getenv("RUNNER_NAME"),
+		Description:    os.Getenv("RUNNER_ENVIRONMENT"),
+		Version:        os.Getenv("ImageVersion"),
+		ExecutableArch: os.Getenv("RUNNER_ARCH"),
 		CPUModel:       cpuModel,
-		CPURequest:     os.Getenv("KUBERNETES_CPU_REQUEST"),
-		CPULimit:       os.Getenv("KUBERNETES_CPU_LIMIT"),
-		MemoryRequest:  os.Getenv("KUBERNETES_MEMORY_REQUEST"),
-		MemoryLimit:    os.Getenv("KUBERNETES_MEMORY_LIMIT"),
 		GOMAXPROCS:     os.Getenv("GOMAXPROCS"),
 	}
 }
@@ -283,20 +271,15 @@ func buildTags(metadata runMetadata) map[string]string {
 			tags[measurePrefix+"."+name] = value
 		}
 	}
-	add("ddci_request_kind", metadata.RequestKind)
+	add("ci_event_name", metadata.CIEventName)
 	add("go_version", metadata.GoVersion)
 	add("goos", metadata.GOOS)
 	add("goarch", metadata.GOARCH)
 	add("runner.id", metadata.Runner.ID)
 	add("runner.description", metadata.Runner.Description)
-	add("runner.tags", strings.Join(metadata.Runner.Tags, ","))
 	add("runner.version", metadata.Runner.Version)
 	add("runner.executable_arch", metadata.Runner.ExecutableArch)
 	add("runner.cpu_model", metadata.Runner.CPUModel)
-	add("runner.cpu_request", metadata.Runner.CPURequest)
-	add("runner.cpu_limit", metadata.Runner.CPULimit)
-	add("runner.memory_request", metadata.Runner.MemoryRequest)
-	add("runner.memory_limit", metadata.Runner.MemoryLimit)
 	add("runner.gomaxprocs", metadata.Runner.GOMAXPROCS)
 	return tags
 }
