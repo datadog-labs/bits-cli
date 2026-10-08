@@ -109,3 +109,23 @@ jobs:
           go-version-file: go.mod
       - name: Build release archives
         run: ./scripts/dist.sh v0.0.0
+
+  # The single check required to merge: it fails unless every job above
+  # succeeded, so adding a job only means listing it here.
+  ci:
+    name: CI
+    if: always()
+    needs: [lint, test, build, dist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check required jobs
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            if [[ "$result" != success ]]; then
+              echo "required jobs did not all succeed: $RESULTS" >&2
+              exit 1
+            fi
+          done
