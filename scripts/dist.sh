@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# dist.sh - build the release archives and checksums for a tag into DIST_DIR
-# and print their paths.
+# dist.sh - build the release archives, their SBOMs, and the checksums for a
+# tag into DIST_DIR and print their paths.
 
 set -euo pipefail
 
@@ -35,7 +35,9 @@ for platform in "${PLATFORMS[@]}"; do
     install -m 0755 "$binary" "$stage/bits"
     (cd "$SRC_DIR" && cp "${files[@]}" "$stage/")
     COPYFILE_DISABLE=1 tar -czf "$DIST_DIR/$name.tar.gz" -C "$stage" bits "${files[@]}"
+    "$SRC_DIR/scripts/sbom.sh" "$stage" "$version" "$DIST_DIR/$name.sbom.json"
     echo "$DIST_DIR/$name.tar.gz"
+    echo "$DIST_DIR/$name.sbom.json"
 done
 
 checksums="bits_${version}_checksums.txt"
@@ -44,5 +46,5 @@ if command -v sha256sum >/dev/null; then
 else
     sha256=(shasum -a 256)
 fi
-(cd "$DIST_DIR" && "${sha256[@]}" bits_"${version}"_*.tar.gz >"$checksums")
+(cd "$DIST_DIR" && "${sha256[@]}" bits_"${version}"_*.tar.gz bits_"${version}"_*.sbom.json >"$checksums")
 echo "$DIST_DIR/$checksums"

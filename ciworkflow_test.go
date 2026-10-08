@@ -3,6 +3,8 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -269,9 +271,14 @@ func TestDistArchives(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stub := "#!/usr/bin/env bash\nset -eu\nmkdir -p \"$BUILD_DIR\"\nout=\"$BUILD_DIR/bits-$GOOS-$GOARCH\"\necho \"$GOOS/$GOARCH $VERSION\" >\"$out\"\necho \"$out\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "scripts", "build.sh"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
+	stubs := map[string]string{
+		"build.sh": "#!/usr/bin/env bash\nset -eu\nmkdir -p \"$BUILD_DIR\"\nout=\"$BUILD_DIR/bits-$GOOS-$GOARCH\"\necho \"$GOOS/$GOARCH $VERSION\" >\"$out\"\necho \"$out\"\n",
+		"sbom.sh":  "#!/usr/bin/env bash\nset -eu\necho \"sbom of $(cat \"$1/bits\") version $2\" >\"$3\"\n",
+	}
+	for name, stub := range stubs {
+		if err := os.WriteFile(filepath.Join(dir, "scripts", name), []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	cmd := command(t, dir, "bash", "scripts/dist.sh", "v1.2.3")
@@ -290,8 +297,11 @@ func TestDistArchives(t *testing.T) {
 	}
 	want := []string{
 		"bits_1.2.3_checksums.txt",
+		"bits_1.2.3_darwin_arm64.sbom.json",
 		"bits_1.2.3_darwin_arm64.tar.gz",
+		"bits_1.2.3_linux_amd64.sbom.json",
 		"bits_1.2.3_linux_amd64.tar.gz",
+		"bits_1.2.3_linux_arm64.sbom.json",
 		"bits_1.2.3_linux_arm64.tar.gz",
 	}
 	if !slices.Equal(names, want) {
@@ -316,6 +326,113 @@ func TestDistArchives(t *testing.T) {
 		bits := files["bits"]
 		if bits.mode&0o111 == 0 || bits.body != platform+" 1.2.3\n" {
 			t.Errorf("%s: bits mode %o body %q", archive, bits.mode, bits.body)
+		}
+		sbom, err := os.ReadFile(strings.TrimSuffix(archive, ".tar.gz") + ".sbom.json")
+		if want := "sbom of " + platform + " 1.2.3 version 1.2.3\n"; err != nil || string(sbom) != want {
+			t.Errorf("%s SBOM = %q, %v; want %q", archive, sbom, err, want)
+		}
+	}
+
+	checksums, err := os.ReadFile(filepath.Join(dist, "bits_1.2.3_checksums.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(checksums), "\n"); n != len(want)-1 {
+		t.Errorf("checksums list %d files, want every archive and SBOM (%d):\n%s", n, len(want)-1, checksums)
+	}
+}
+
+// TestPublishNotes runs publish.sh against a stub gh and checks that every
+// asset is uploaded and that the notes give per-platform install commands.
+func TestPublishNotes(t *testing.T) {
+	if _, err := exec.LookPath("sha256sum"); err != nil {
+		t.Skip("publish.sh runs on Linux and needs sha256sum")
+	}
+	dir := t.TempDir()
+	for _, file := range []string{"scripts/publish.sh", ".github/release-notes.md"} {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dst := filepath.Join(dir, file)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dist := filepath.Join(dir, "dist")
+	if err := os.MkdirAll(dist, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var sums strings.Builder
+	for _, name := range []string{"bits_1.2.3_darwin_arm64.tar.gz", "bits_1.2.3_linux_amd64.tar.gz", "bits_1.2.3_darwin_arm64.sbom.json", "bits_1.2.3_linux_amd64.sbom.json"} {
+		if err := os.WriteFile(filepath.Join(dist, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&sums, "%x  %s\n", sha256.Sum256([]byte(name)), name)
+	}
+	if err := os.WriteFile(filepath.Join(dist, "bits_1.2.3_checksums.txt"), []byte(sums.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git := command(t, dir, "git", "-c", "user.name=t", "-c", "user.email=t@t", "init", "-q")
+	if out, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	git = command(t, dir, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
+	if out, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	// The gh stub records its calls and the notes passed to it.
+	bin := t.TempDir()
+	log := filepath.Join(bin, "calls")
+	stub := `#!/usr/bin/env bash
+[[ "$1 $2" == "release view" ]] && exit 1
+echo "$*" >>"` + log + `"
+while [[ $# -gt 0 ]]; do
+    [[ "$1" == --notes ]] && printf '%s\n' "$2" >"` + log + `.notes"
+    shift
+done
+`
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := command(t, dir, "bash", "scripts/publish.sh", "v1.2.3")
+	for i, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "PATH=") {
+			cmd.Env[i] = "PATH=" + bin + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
+		}
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("publish.sh: %v\n%s", err, out)
+	}
+
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, asset := range []string{"bits_1.2.3_checksums.txt", "bits_1.2.3_darwin_arm64.tar.gz", "bits_1.2.3_linux_amd64.sbom.json"} {
+		if !strings.Contains(string(calls), " "+asset) {
+			t.Errorf("release create must upload %s:\n%s", asset, calls)
+		}
+	}
+	notes, err := os.ReadFile(log + ".notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(notes), "{{") {
+		t.Errorf("notes must not contain unrendered placeholders:\n%s", notes)
+	}
+	for _, line := range []string{
+		"# darwin/arm64\ngh release download v1.2.3 --repo datadog-labs/bits-cli --pattern bits_1.2.3_darwin_arm64.tar.gz\n",
+		"# linux/amd64\ngh release download v1.2.3 --repo datadog-labs/bits-cli --pattern bits_1.2.3_linux_amd64.tar.gz\n",
+		"sha256sum --check --ignore-missing bits_1.2.3_checksums.txt\n",
+		"--signer-workflow datadog-labs/bits-cli/.github/workflows/release.yml --source-ref refs/heads/main\n",
+	} {
+		if !strings.Contains(string(notes), line) {
+			t.Errorf("notes must contain %q:\n%s", line, notes)
 		}
 	}
 }
