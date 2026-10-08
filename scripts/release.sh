@@ -1,75 +1,55 @@
 #!/usr/bin/env bash
 #
-# release.sh - validate, create, and push the next Bits release tag.
+# release.sh - trigger the release workflow on main for a tag. With --check,
+# verify instead that the tag is the next patch, minor, or major release
+# after the existing tags; the release workflow runs this first.
 
 set -euo pipefail
 
-usage() {
-    echo "Usage: $0 v<major>.<minor>.<patch>" >&2
-    echo "Creates and pushes an annotated release tag at HEAD." >&2
+SEMVER='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
 }
 
-if [[ $# -eq 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
-    usage
+check=false
+if [[ "${1:-}" == --check ]]; then
+    check=true
+    shift
+fi
+[[ $# -eq 1 && "$1" =~ $SEMVER ]] || die "usage: $0 [--check] v<major>.<minor>.<patch>"
+tag="$1"
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+if [[ "$check" == false ]]; then
+    gh workflow run release.yml --repo datadog-labs/bits-cli --ref main --field tag="$tag"
+    echo "Triggered the $tag release; follow it with: gh run watch --repo datadog-labs/bits-cli"
     exit 0
 fi
-if [[ $# -ne 1 ]]; then
-    usage
-    exit 1
+
+# A shallow clone may lack the tags the version check depends on.
+[[ "$(git rev-parse --is-shallow-repository)" == false ]] ||
+    die "the version check needs a full clone with all tags"
+if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
+    die "tag $tag already exists"
 fi
 
-tag="$1"
-if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-    echo "ERROR: release tag must match v<major>.<minor>.<patch>; got ${tag}" >&2
-    exit 1
-fi
-target_major=$((10#${BASH_REMATCH[1]}))
-target_minor=$((10#${BASH_REMATCH[2]}))
-target_patch=$((10#${BASH_REMATCH[3]}))
-
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/.." && pwd)"
-cd "${repo_root}"
-
-git fetch origin --tags
-
-if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-    echo "ERROR: tag already exists: ${tag}" >&2
-    exit 1
-fi
-
+tags="$(git tag --list 'v*' --sort=-version:refname)"
 previous=""
-while IFS= read -r candidate; do
-    if [[ "$candidate" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+while read -r candidate; do
+    if [[ "$candidate" =~ $SEMVER ]]; then
         previous="$candidate"
         break
     fi
-done < <(git tag --list 'v*' --sort=-version:refname)
+done <<<"$tags"
 
-if [[ -z "$previous" ]]; then
-    echo "ERROR: no existing release tag found" >&2
-    exit 1
+if [[ -n "$previous" ]]; then
+    IFS=. read -r major minor patch <<<"${previous#v}"
+    case "${tag#v}" in
+        "$major.$minor.$((patch + 1))" | "$major.$((minor + 1)).0" | "$((major + 1)).0.0") ;;
+        *) die "$tag is not the next patch, minor, or major release after $previous" ;;
+    esac
 fi
-
-if [[ ! "$previous" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-    echo "ERROR: invalid existing release tag: ${previous}" >&2
-    exit 1
-fi
-previous_major=$((10#${BASH_REMATCH[1]}))
-previous_minor=$((10#${BASH_REMATCH[2]}))
-previous_patch=$((10#${BASH_REMATCH[3]}))
-
-if (( target_major == previous_major && target_minor == previous_minor && target_patch == previous_patch + 1 )); then
-    bump="patch"
-elif (( target_major == previous_major && target_minor == previous_minor + 1 && target_patch == 0 )); then
-    bump="minor"
-elif (( target_major == previous_major + 1 && target_minor == 0 && target_patch == 0 )); then
-    bump="major"
-else
-    echo "ERROR: ${tag} is not the next patch, minor, or major bump after ${previous}" >&2
-    exit 1
-fi
-
-git tag -a "$tag" -m "Release ${tag}"
-git push origin "$tag"
-printf 'Released %s (%s bump from %s)\n' "$tag" "$bump" "$previous"
+echo "$tag is the next release after ${previous:-no previous release}"

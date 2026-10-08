@@ -47,31 +47,11 @@ Lint with the pinned golangci-lint configuration:
 
 ## Continuous integration
 
-GitHub Actions (`.github/workflows/ci.yml`) runs for pull requests
-(forks included, though external runs may require maintainer approval
-under the repository policy), pushes to `main`, queued merges, and every
-`v`-prefixed tag:
-
-- **Lint** runs `./scripts/lint.sh`: the pinned golangci-lint over both
-  modules plus the `LICENSE-3rdparty.csv` drift check.
-- **Test** runs `./scripts/test.sh` on Linux.
-- **Build** cross-builds the six supported targets (linux/darwin/windows on
-  amd64/arm64) with `./scripts/build.sh` and uploads each binary as a
-  workflow artifact.
-- On a strict stable tag (`v<major>.<minor>.<patch>`, no leading zeroes),
-  the three supported platform release archives (`bits-darwin-arm64`,
-  `bits-linux-amd64`, `bits-linux-arm64`) are additionally packaged as
-  workflow artifacts. Each archive holds the binary plus a `cli.yaml`
-  manifest with the release version. Nothing beyond GitHub Actions
-  artifacts is ever uploaded, and nothing is published, from CI; see
-  RELEASE.md for the release flow.
-
-The workflow is deliberately unprivileged — read-only permissions, no
-secrets, SHA-pinned official actions — so fork pull requests get the same
-checks as branch pushes without any trust escalation. Pre-release tags
-(for example `v1.2.3-rc1`) build ordinary development binaries only; see
-RELEASE.md for the release flow. CI does not currently run performance
-benchmarks.
+`.github/workflows/ci.yml` runs on pull requests (forks included), pushes to
+`main`, and queued merges. It is unprivileged (read-only token, no secrets,
+SHA-pinned actions) and runs `./scripts/lint.sh`, `./scripts/test.sh`, and
+`./scripts/build.sh` for linux, darwin, and windows on amd64 and arm64.
+Releases are described in RELEASE.md.
 
 ## Third-party licenses
 
