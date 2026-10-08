@@ -21,6 +21,7 @@ type workflow struct {
 	Permissions map[string]string
 	Jobs        map[string]struct {
 		If          string
+		Environment string
 		Uses        string
 		Needs       needs
 		Permissions map[string]string
@@ -28,6 +29,7 @@ type workflow struct {
 			Uses string
 			Run  string
 			With map[string]any
+			Env  map[string]string
 		}
 	}
 }
@@ -44,19 +46,21 @@ func (n *needs) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func loadWorkflow(t *testing.T, name string) workflow {
+	wf, _ := loadWorkflowSource(t, name)
+	return wf
+}
+
+func loadWorkflowSource(t *testing.T, name string) (workflow, string) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(".github", "workflows", name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "secrets.") {
-		t.Errorf("%s must not reference secrets", name)
-	}
 	var wf workflow
 	if err := yaml.Unmarshal(raw, &wf); err != nil {
 		t.Fatalf("parse %s: %v", name, err)
 	}
-	return wf
+	return wf, string(raw)
 }
 
 func TestWorkflowsHardening(t *testing.T) {
@@ -91,7 +95,10 @@ func TestWorkflowsHardening(t *testing.T) {
 }
 
 func TestCIWorkflowIsUnprivileged(t *testing.T) {
-	wf := loadWorkflow(t, "ci.yml")
+	wf, raw := loadWorkflowSource(t, "ci.yml")
+	if strings.Contains(raw, "secrets.") {
+		t.Error("ci.yml must not reference secrets")
+	}
 	for _, trigger := range []string{"pull_request", "workflow_call"} {
 		if _, ok := wf.On[trigger]; !ok {
 			t.Errorf("ci.yml must run on %s", trigger)
@@ -123,7 +130,7 @@ func TestCIWorkflowGate(t *testing.T) {
 }
 
 func TestReleaseWorkflowGating(t *testing.T) {
-	wf := loadWorkflow(t, "release.yml")
+	wf, raw := loadWorkflowSource(t, "release.yml")
 	if len(wf.On) != 1 || wf.On["workflow_dispatch"] == nil {
 		t.Errorf("release.yml must only run on workflow_dispatch, got %v", wf.On)
 	}
@@ -157,6 +164,32 @@ func TestReleaseWorkflowGating(t *testing.T) {
 			t.Errorf("only the publish job may set permissions; %s sets %v", name, job.Permissions)
 		}
 	}
+	// Secrets are the Apple signing credentials, scoped to the dist job's
+	// build step and to the protected environment. The publish job stays out
+	// of any environment, which would change the subject of its ID token.
+	secrets := 0
+	for name, job := range wf.Jobs {
+		for _, step := range job.Steps {
+			for key, value := range step.Env {
+				if !strings.Contains(value, "secrets.") {
+					continue
+				}
+				secrets++
+				if name != "dist" || !strings.HasPrefix(key, "QUILL_") {
+					t.Errorf("%s job step uses a secret in %s; only the dist job may pass signing credentials", name, key)
+				}
+			}
+		}
+	}
+	if total := strings.Count(raw, "secrets."); total != secrets {
+		t.Errorf("release.yml references secrets outside of step env (%d of %d)", total-secrets, total)
+	}
+	if env := wf.Jobs["dist"].Environment; env != "protected-main-env" {
+		t.Errorf("dist environment = %q, want protected-main-env", env)
+	}
+	if env := wf.Jobs["publish"].Environment; env != "" {
+		t.Errorf("publish must not run in an environment, got %q", env)
+	}
 	want := map[string]string{"contents": "read", "id-token": "write", "attestations": "write"}
 	if got := wf.Jobs["publish"].Permissions; !maps.Equal(got, want) {
 		t.Errorf("publish permissions = %v, want %v", got, want)
@@ -178,7 +211,7 @@ func command(t *testing.T, dir, name string, args ...string) *exec.Cmd {
 	for _, kv := range os.Environ() {
 		key, value, _ := strings.Cut(kv, "=")
 		switch {
-		case strings.HasPrefix(key, "GIT_"), slices.Contains([]string{"BUILD_DIR", "DIST_DIR", "GOARCH", "GOOS", "VERSION"}, key):
+		case strings.HasPrefix(key, "GIT_"), strings.HasPrefix(key, "QUILL_"), slices.Contains([]string{"BUILD_DIR", "DIST_DIR", "GOARCH", "GOOS", "VERSION"}, key):
 			continue
 		case key == "PATH":
 			kv = "PATH=" + bin + string(os.PathListSeparator) + value
@@ -241,7 +274,7 @@ func TestReleaseCheck(t *testing.T) {
 
 // Each release script validates its tag before having any side effect.
 func TestScriptsRejectInvalidTags(t *testing.T) {
-	for _, args := range [][]string{{"scripts/dist.sh"}, {"scripts/publish.sh"}, {"scripts/release.sh"}, {"scripts/release.sh", "--check"}} {
+	for _, args := range [][]string{{"scripts/dist.sh"}, {"scripts/dist.sh", "--sign"}, {"scripts/publish.sh"}, {"scripts/release.sh"}, {"scripts/release.sh", "--check"}} {
 		for _, tag := range []string{"", "main", "v1.2", "1.2.3", "v01.2.3", "v1.2.3-rc1", "refs/tags/v1.2.3"} {
 			script := strings.Join(args, " ")
 			out, err := command(t, "", "bash", append(args, tag)...).CombinedOutput()
@@ -252,9 +285,18 @@ func TestScriptsRejectInvalidTags(t *testing.T) {
 	}
 }
 
-// TestDistArchives runs dist.sh against a stub build.sh and checks the
-// published layout: one archive per release platform plus checksums.
+// TestDistArchives runs dist.sh against stub build and signing scripts and
+// checks the published layout: one archive per release platform plus
+// checksums, with only the macOS binaries signed under --sign.
 func TestDistArchives(t *testing.T) {
+	for _, sign := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unsigned", true: "signed"}[sign], func(t *testing.T) {
+			testDistArchives(t, sign)
+		})
+	}
+}
+
+func testDistArchives(t *testing.T, sign bool) {
 	dir := t.TempDir()
 	for _, file := range []string{"scripts/dist.sh", "README.md", "LICENSE", "LICENSE-3rdparty.csv"} {
 		data, err := os.ReadFile(file)
@@ -269,13 +311,21 @@ func TestDistArchives(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stub := "#!/usr/bin/env bash\nset -eu\nmkdir -p \"$BUILD_DIR\"\nout=\"$BUILD_DIR/bits-$GOOS-$GOARCH\"\necho \"$GOOS/$GOARCH $VERSION\" >\"$out\"\necho \"$out\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "scripts", "build.sh"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
+	stubs := map[string]string{
+		"build.sh":      "#!/usr/bin/env bash\nset -eu\nmkdir -p \"$BUILD_DIR\"\nout=\"$BUILD_DIR/bits-$GOOS-$GOARCH\"\necho \"$GOOS/$GOARCH $VERSION\" >\"$out\"\necho \"$out\"\n",
+		"sign-macos.sh": "#!/usr/bin/env bash\nset -eu\necho signed >>\"$1\"\n",
+	}
+	for name, stub := range stubs {
+		if err := os.WriteFile(filepath.Join(dir, "scripts", name), []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	cmd := command(t, dir, "bash", "scripts/dist.sh", "v1.2.3")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	args := []string{"scripts/dist.sh", "v1.2.3"}
+	if sign {
+		args = []string{"scripts/dist.sh", "--sign", "v1.2.3"}
+	}
+	if out, err := command(t, dir, "bash", args...).CombinedOutput(); err != nil {
 		t.Fatalf("dist.sh: %v\n%s", err, out)
 	}
 
@@ -313,9 +363,12 @@ func TestDistArchives(t *testing.T) {
 		if got := slices.Sorted(maps.Keys(files)); !slices.Equal(got, []string{"LICENSE", "LICENSE-3rdparty.csv", "README.md", "bits"}) {
 			t.Errorf("%s contains %v", archive, got)
 		}
-		bits := files["bits"]
-		if bits.mode&0o111 == 0 || bits.body != platform+" 1.2.3\n" {
-			t.Errorf("%s: bits mode %o body %q", archive, bits.mode, bits.body)
+		body := platform + " 1.2.3\n"
+		if sign && strings.HasPrefix(platform, "darwin/") {
+			body += "signed\n"
+		}
+		if bits := files["bits"]; bits.mode&0o111 == 0 || bits.body != body {
+			t.Errorf("%s: bits mode %o body %q, want %q", archive, bits.mode, bits.body, body)
 		}
 	}
 }

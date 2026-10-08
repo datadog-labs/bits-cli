@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # dist.sh - build the release archives and checksums for a tag into DIST_DIR
-# and print their paths.
+# and print their paths. With --sign, the macOS binaries are signed and
+# notarized with scripts/sign-macos.sh before being archived.
 
 set -euo pipefail
 
@@ -10,8 +11,13 @@ PLATFORMS=(darwin/arm64 linux/amd64 linux/arm64)
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${DIST_DIR:-$SRC_DIR/dist}"
 
+sign=false
+if [[ "${1:-}" == --sign ]]; then
+    sign=true
+    shift
+fi
 if [[ $# -ne 1 || ! "$1" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-    echo "usage: $0 v<major>.<minor>.<patch>" >&2
+    echo "usage: $0 [--sign] v<major>.<minor>.<patch>" >&2
     exit 1
 fi
 version="${1#v}"
@@ -33,6 +39,9 @@ for platform in "${PLATFORMS[@]}"; do
         "$SRC_DIR/scripts/build.sh")"
     mkdir -p "$stage"
     install -m 0755 "$binary" "$stage/bits"
+    if [[ "$sign" == true && "$goos" == darwin ]]; then
+        "$SRC_DIR/scripts/sign-macos.sh" "$stage/bits" >&2
+    fi
     (cd "$SRC_DIR" && cp "${files[@]}" "$stage/")
     COPYFILE_DISABLE=1 tar -czf "$DIST_DIR/$name.tar.gz" -C "$stage" bits "${files[@]}"
     echo "$DIST_DIR/$name.tar.gz"
