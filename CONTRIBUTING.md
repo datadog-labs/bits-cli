@@ -32,7 +32,8 @@ Lint with the pinned golangci-lint configuration:
 ./scripts/lint.sh
 ```
 
-`./scripts/lint.sh` lints both modules and also verifies that
+`./scripts/lint.sh` lints both modules, checks the shell scripts with
+shellcheck when it is installed (CI always does), and verifies that
 `LICENSE-3rdparty.csv` matches the dependency tree.
 
 ## Development workflow
@@ -61,7 +62,7 @@ shipped root module (its `go.sum` entries with a zip hash), with the SPDX
 license identifier and copyright holder of each module.
 
 - After any dependency change, run `./scripts/generate-licenses.sh` and commit
-  the regenerated CSV.
+  the regenerated CSV. This includes the weekly Dependabot pull requests.
 - The drift check runs as part of `./scripts/lint.sh` and compares the committed
   CSV byte for byte with the freshly generated one.
 - If a module cannot be resolved (unknown license, no copyright statement, or

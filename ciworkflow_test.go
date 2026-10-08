@@ -104,6 +104,24 @@ func TestCIWorkflowIsUnprivileged(t *testing.T) {
 	}
 }
 
+// The CI job is the check required to merge: it must run even when other
+// jobs fail, and depend on every one of them.
+func TestCIWorkflowGate(t *testing.T) {
+	wf := loadWorkflow(t, "ci.yml")
+	gate, ok := wf.Jobs["ci"]
+	if !ok {
+		t.Fatal("ci.yml must have a ci job aggregating the other jobs")
+	}
+	if gate.If != "always()" {
+		t.Errorf("ci job if = %q, want always() so that failures are reported", gate.If)
+	}
+	for name := range wf.Jobs {
+		if name != "ci" && !slices.Contains(gate.Needs, name) {
+			t.Errorf("ci job must need %s", name)
+		}
+	}
+}
+
 func TestReleaseWorkflowGating(t *testing.T) {
 	wf := loadWorkflow(t, "release.yml")
 	if len(wf.On) != 1 || wf.On["workflow_dispatch"] == nil {
