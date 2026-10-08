@@ -1,341 +1,337 @@
 package main
 
 import (
-	"bytes"
+	"archive/tar"
+	"compress/gzip"
+	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
 
-// These tests pin the CI wiring around the release trust boundary: GitHub
-// Actions runs ordinary checks unprivileged (including fork PRs), only
-// strict stable tags may produce release artifacts, and nothing in the
-// repository publishes packages or uploads them anywhere beyond GitHub
-// Actions artifacts.
+type workflow struct {
+	On          map[string]any `yaml:"on"`
+	Permissions map[string]string
+	Jobs        map[string]struct {
+		If          string
+		Uses        string
+		Needs       needs
+		Permissions map[string]string
+		Steps       []struct {
+			Uses string
+			Run  string
+			With map[string]any
+		}
+	}
+}
 
-func loadYAML(t *testing.T, path string) map[string]any {
+// needs accepts both forms of a job's needs: a single job or a list.
+type needs []string
+
+func (n *needs) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		*n = needs{node.Value}
+		return nil
+	}
+	return node.Decode((*[]string)(n))
+}
+
+func loadWorkflow(t *testing.T, name string) workflow {
 	t.Helper()
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(filepath.Join(".github", "workflows", name))
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	var doc map[string]any
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-	return doc
-}
-
-func as[T any](t *testing.T, v any, what string) T {
-	t.Helper()
-	out, ok := v.(T)
-	if !ok {
-		t.Fatalf("%s: unexpected type %T", what, v)
-	}
-	return out
-}
-
-func jobMap(t *testing.T, wf map[string]any, name string) map[string]any {
-	t.Helper()
-	return as[map[string]any](t, as[map[string]any](t, wf["jobs"], "jobs")[name], name+" job")
-}
-
-func jobStep(t *testing.T, wf map[string]any, jobName, stepName string) map[string]any {
-	t.Helper()
-	for _, s := range as[[]any](t, jobMap(t, wf, jobName)["steps"], jobName+" steps") {
-		if step := as[map[string]any](t, s, jobName+" step"); step["name"] == stepName {
-			return step
-		}
-	}
-	t.Fatalf("no %q step in %q job", stepName, jobName)
-	return nil
-}
-
-// runStepBody executes a workflow step's `run` body under the GitHub
-// Actions Linux shell semantics (bash with -e and pipefail) from dir.
-func runStepBody(t *testing.T, dir, body string, extraEnv ...string) error {
-	t.Helper()
-	cmd := exec.Command("bash", "-e", "-o", "pipefail", "-c", body)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), extraEnv...)
-	return cmd.Run()
-}
-
-func TestWorkflowUnprivilegedTrustBoundary(t *testing.T) {
-	wf := loadYAML(t, ".github/workflows/ci.yml")
-	triggers := as[map[string]any](t, wf["on"], "workflow triggers")
-	if _, ok := triggers["pull_request"]; !ok {
-		t.Error("workflow must run on pull_request so fork PRs get ordinary checks")
-	}
-	for _, forbidden := range []string{"pull_request_target", "workflow_run"} {
-		if _, ok := triggers[forbidden]; ok {
-			t.Errorf("workflow must not use %s (privileged fork access)", forbidden)
-		}
-	}
-	tags := as[[]any](t, as[map[string]any](t, triggers["push"], "push trigger")["tags"], "push tags")
-	if len(tags) != 1 || tags[0] != "v*" {
-		t.Errorf("push tags = %v, want [v*] so tag pushes reach the workflow", tags)
-	}
-	perms := as[map[string]any](t, wf["permissions"], "permissions")
-	if len(perms) != 1 || perms["contents"] != "read" {
-		t.Errorf("permissions = %v, want only contents: read", perms)
-	}
-	if raw, err := os.ReadFile(".github/workflows/ci.yml"); err != nil {
 		t.Fatal(err)
-	} else if strings.Contains(string(raw), "secrets.") {
-		t.Error("workflow must not reference any secrets")
 	}
+	if strings.Contains(string(raw), "secrets.") {
+		t.Errorf("%s must not reference secrets", name)
+	}
+	var wf workflow
+	if err := yaml.Unmarshal(raw, &wf); err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	return wf
+}
+
+func TestWorkflowsHardening(t *testing.T) {
 	pinned := regexp.MustCompile(`^[^@\s]+@[0-9a-f]{40}$`)
-	for name, v := range as[map[string]any](t, wf["jobs"], "jobs") {
-		job := as[map[string]any](t, v, name+" job")
-		if _, ok := job["permissions"]; ok {
-			t.Errorf("%s job must not override the read-only permissions", name)
+	for _, name := range []string{"ci.yml", "release.yml"} {
+		wf := loadWorkflow(t, name)
+		for _, trigger := range []string{"pull_request_target", "workflow_run"} {
+			if _, ok := wf.On[trigger]; ok {
+				t.Errorf("%s must not use %s", name, trigger)
+			}
 		}
-		for i, s := range as[[]any](t, job["steps"], name+" steps") {
-			step := as[map[string]any](t, s, name+" step")
-			uses, _ := step["uses"].(string)
-			if uses == "" {
-				continue
-			}
-			if !pinned.MatchString(uses) {
-				t.Errorf("%s job step %d uses %q, want a full-commit SHA pin", name, i, uses)
-			}
-			if strings.HasPrefix(uses, "actions/checkout") {
-				with := as[map[string]any](t, step["with"], name+" checkout with")
-				if with["persist-credentials"] != false {
-					t.Errorf("%s job checkout must set persist-credentials: false", name)
+		if len(wf.Permissions) != 1 || wf.Permissions["contents"] != "read" {
+			t.Errorf("%s permissions = %v, want only contents: read", name, wf.Permissions)
+		}
+		for jobName, job := range wf.Jobs {
+			for _, step := range job.Steps {
+				if strings.Contains(step.Run, "${{") {
+					t.Errorf("%s/%s: pass expressions through env, not inline in run: %q", name, jobName, step.Run)
+				}
+				if step.Uses == "" {
+					continue
+				}
+				if !pinned.MatchString(step.Uses) {
+					t.Errorf("%s/%s uses %q, want a full commit SHA pin", name, jobName, step.Uses)
+				}
+				if strings.HasPrefix(step.Uses, "actions/checkout@") && step.With["persist-credentials"] != false {
+					t.Errorf("%s/%s checkout must set persist-credentials: false", name, jobName)
 				}
 			}
 		}
 	}
 }
 
-func TestWorkflowReleaseTagGating(t *testing.T) {
-	wf := loadYAML(t, ".github/workflows/ci.yml")
-	resolve := jobStep(t, wf, "build", "Resolve release version")
-	if cond, _ := resolve["if"].(string); !strings.Contains(cond, "refs/tags/") {
-		t.Errorf("resolve step if = %q, must be gated on tag refs", cond)
+func TestCIWorkflowIsUnprivileged(t *testing.T) {
+	wf := loadWorkflow(t, "ci.yml")
+	for _, trigger := range []string{"pull_request", "workflow_call"} {
+		if _, ok := wf.On[trigger]; !ok {
+			t.Errorf("ci.yml must run on %s", trigger)
+		}
 	}
-	env := as[map[string]any](t, resolve["env"], "resolve env")
-	if env["RELEASE_TAG"] != "${{ github.ref_name }}" {
-		t.Errorf("resolve env RELEASE_TAG = %v, want ${{ github.ref_name }}", env["RELEASE_TAG"])
-	}
-	// The tag reaches scripts/version.sh through an environment variable,
-	// never as an interpolated string in the command itself.
-	runBody, _ := resolve["run"].(string)
-	if !strings.Contains(runBody, "./scripts/version.sh \"$RELEASE_TAG\"") {
-		t.Errorf("resolve step must pass the tag via $RELEASE_TAG: %q", runBody)
-	}
-	job := jobMap(t, wf, "release-archives")
-	if cond, _ := job["if"].(string); !strings.Contains(cond, "refs/tags/v") {
-		t.Errorf("release-archives if = %q, must be gated on v tag refs", cond)
-	}
-	packageStep := jobStep(t, wf, "release-archives", "Package release archives")
-	run, _ := packageStep["run"].(string)
-	if !strings.Contains(run, "scripts/package.sh") || strings.Contains(run, "--publish") {
-		t.Errorf("packaging step must run scripts/package.sh without --publish: %q", run)
+	for name, job := range wf.Jobs {
+		if job.Permissions != nil {
+			t.Errorf("ci.yml job %s must not override permissions", name)
+		}
 	}
 }
 
-// The Build step must propagate scripts/build.sh failures instead of
-// swallowing the script's exit status.
-func TestWorkflowBuildStepPropagatesBuildFailure(t *testing.T) {
-	wf := loadYAML(t, ".github/workflows/ci.yml")
-	run, _ := jobStep(t, wf, "build", "Build")["run"].(string)
-
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o755); err != nil {
-		t.Fatal(err)
+func TestReleaseWorkflowGating(t *testing.T) {
+	wf := loadWorkflow(t, "release.yml")
+	if len(wf.On) != 1 || wf.On["workflow_dispatch"] == nil {
+		t.Errorf("release.yml must only run on workflow_dispatch, got %v", wf.On)
 	}
-	stub := "#!/bin/sh\nprintf 'build/bits-linux-amd64'\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(dir, "scripts", "build.sh"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
+	if wf.Jobs["check"].If != "github.ref == 'refs/heads/main'" {
+		t.Errorf("check job if = %q, must only release main", wf.Jobs["check"].If)
 	}
-	out := filepath.Join(dir, "github_output")
-	if err := runStepBody(t, dir, run, "GITHUB_OUTPUT="+out); err == nil {
-		t.Fatal("Build step body must fail when scripts/build.sh fails")
+	// release.sh --check compares against every existing tag.
+	fullClone := false
+	for _, step := range wf.Jobs["check"].Steps {
+		if strings.HasPrefix(step.Uses, "actions/checkout@") && step.With["fetch-depth"] == 0 {
+			fullClone = true
+		}
 	}
-	if written, err := os.ReadFile(out); err == nil && strings.Contains(string(written), "binary=") {
-		t.Errorf("failed build must not write binary output, got %q", written)
+	if !fullClone {
+		t.Error("check job must check out the full history and tags (fetch-depth: 0)")
+	}
+	if wf.Jobs["ci"].Uses != "./.github/workflows/ci.yml" {
+		t.Errorf("release ci job uses %q, want ./.github/workflows/ci.yml", wf.Jobs["ci"].Uses)
+	}
+	for job, needs := range map[string][]string{"ci": {"check"}, "dist": {"check"}, "publish": {"ci", "dist"}} {
+		for _, need := range needs {
+			if !slices.Contains(wf.Jobs[job].Needs, need) {
+				t.Errorf("%s must need %s, got %v", job, need, wf.Jobs[job].Needs)
+			}
+		}
+	}
+	// The GITHUB_TOKEN never gets write access to the repository: the
+	// release and its tag are created with a dd-octo-sts token.
+	for name, job := range wf.Jobs {
+		if name != "publish" && job.Permissions != nil {
+			t.Errorf("only the publish job may set permissions; %s sets %v", name, job.Permissions)
+		}
+	}
+	want := map[string]string{"contents": "read", "id-token": "write", "attestations": "write"}
+	if got := wf.Jobs["publish"].Permissions; !maps.Equal(got, want) {
+		t.Errorf("publish permissions = %v, want %v", got, want)
 	}
 }
 
-// Artifact upload/download normalizes file modes to 0644; the packager
-// must restore the executable bit when staging the archives. The binaries
-// are never run here.
-func TestWorkflowPackagingRestoresExecutableBits(t *testing.T) {
-	wf := loadYAML(t, ".github/workflows/ci.yml")
-	run, _ := jobStep(t, wf, "release-archives", "Package release archives")["run"].(string)
+// command prepares name to run in dir with an environment isolated from the
+// caller's: no inherited git, dist, or build settings, and a gh stub that
+// fails, so that a test can never reach GitHub.
+func command(t *testing.T, dir, name string, args ...string) *exec.Cmd {
+	t.Helper()
+	bin := t.TempDir()
+	stub := "#!/bin/sh\necho 'gh is stubbed in tests' >&2\nexit 99\n"
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	for _, kv := range os.Environ() {
+		key, value, _ := strings.Cut(kv, "=")
+		switch {
+		case strings.HasPrefix(key, "GIT_"), slices.Contains([]string{"BUILD_DIR", "DIST_DIR", "GOARCH", "GOOS", "VERSION"}, key):
+			continue
+		case key == "PATH":
+			kv = "PATH=" + bin + string(os.PathListSeparator) + value
+		}
+		cmd.Env = append(cmd.Env, kv)
+	}
+	cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	return cmd
+}
 
+func TestReleaseCheck(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range []string{"scripts/package.sh", "cli.yaml"} {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(file)), data, 0o644); err != nil {
-			t.Fatal(err)
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := command(t, dir, "git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	if err := os.Chmod(filepath.Join(dir, "scripts", "package.sh"), 0o755); err != nil {
-		t.Fatal(err)
+	check := func(dir, tag string) error {
+		return command(t, dir, "bash", "scripts/release.sh", "--check", tag).Run()
 	}
-	if err := os.Mkdir(filepath.Join(dir, "dist"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	const version = "1.2.3"
-	platforms := []string{"darwin-arm64", "linux-amd64", "linux-arm64"}
-	for _, p := range platforms {
-		// Fake binaries arrive with the artifact-normalized 0644 mode.
-		if err := os.WriteFile(filepath.Join(dir, "dist", "bits-"+p), []byte("fake binary"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := runStepBody(t, dir, run, "VERSION="+version); err != nil {
-		t.Fatalf("packaging step body failed: %v", err)
-	}
-
-	cliYAML, err := os.ReadFile("cli.yaml")
+	data, err := os.ReadFile("scripts/release.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Mirror the manifest rewrite scripts/package.sh applies.
-	wantManifest := regexp.MustCompile(`(?m)^version:.*$`).
-		ReplaceAllString(string(cliYAML), "version: "+version)
-	for _, p := range platforms {
-		extract := t.TempDir()
-		archive := filepath.Join(dir, "dist", "bits-"+p+".tar.gz")
-		tar := exec.Command("tar", "-xzf", archive, "-C", extract)
-		if out, err := tar.CombinedOutput(); err != nil {
-			t.Fatalf("extract %s: %v: %s", archive, err, out)
+	if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scripts", "release.sh"), data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(dir, "init", "-q")
+	git(dir, "add", "scripts")
+	git(dir, "commit", "-q", "-m", "init")
+
+	if err := check(dir, "v3.1.4"); err != nil {
+		t.Errorf("first release must accept any tag: %v", err)
+	}
+	git(dir, "tag", "v0.9.0")
+	git(dir, "tag", "v0.10.0")
+	git(dir, "tag", "v1.0.0-rc.1")
+	for tag, ok := range map[string]bool{
+		"v0.10.1": true, "v0.11.0": true, "v1.0.0": true,
+		"v0.10.0": false, "v0.9.1": false, "v0.10.2": false, "v0.12.0": false, "v2.0.0": false,
+	} {
+		if err := check(dir, tag); (err == nil) != ok {
+			t.Errorf("release.sh --check %s: err = %v, want ok = %v", tag, err, ok)
 		}
-		manifest, err := os.ReadFile(filepath.Join(extract, "cli.yaml"))
-		if err != nil || string(manifest) != wantManifest {
-			t.Errorf("archive for %s must contain cli.yaml with version %s", p, version)
-		}
-		info, statErr := os.Stat(filepath.Join(extract, "bits-"+p))
-		if statErr != nil || info.Mode()&0o111 == 0 || info.Size() == 0 {
-			t.Errorf("archive for %s must carry an executable, non-empty binary: %v", p, statErr)
+	}
+
+	// A shallow clone has no tags; the check must fail instead of treating
+	// the tag as a first release.
+	shallow := filepath.Join(t.TempDir(), "shallow")
+	git("", "clone", "-q", "--depth", "1", "--no-tags", "file://"+dir, shallow)
+	if err := check(shallow, "v3.1.4"); err == nil {
+		t.Error("release.sh --check must fail in a shallow clone")
+	}
+}
+
+// Each release script validates its tag before having any side effect.
+func TestScriptsRejectInvalidTags(t *testing.T) {
+	for _, args := range [][]string{{"scripts/dist.sh"}, {"scripts/publish.sh"}, {"scripts/release.sh"}, {"scripts/release.sh", "--check"}} {
+		for _, tag := range []string{"", "main", "v1.2", "1.2.3", "v01.2.3", "v1.2.3-rc1", "refs/tags/v1.2.3"} {
+			script := strings.Join(args, " ")
+			out, err := command(t, "", "bash", append(args, tag)...).CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "usage:") {
+				t.Errorf("%s %q: want usage error, got %v: %s", script, tag, err, out)
+			}
 		}
 	}
 }
 
-// The packager is offline-only: it validates inputs strictly and has no
-// upload surface at all — unknown arguments (including any legacy publish
-// or target flags) must be rejected.
-func TestPackageScriptRejectsInvalidInputs(t *testing.T) {
+// TestDistArchives runs dist.sh against a stub build.sh and checks the
+// published layout: one archive per release platform plus checksums.
+func TestDistArchives(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range []string{"scripts/package.sh", "cli.yaml"} {
+	for _, file := range []string{"scripts/dist.sh", "README.md", "LICENSE", "LICENSE-3rdparty.csv"} {
 		data, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(file)), data, 0o644); err != nil {
+		dst := filepath.Join(dir, file)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, data, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Chmod(filepath.Join(dir, "scripts", "package.sh"), 0o755); err != nil {
+	stub := "#!/usr/bin/env bash\nset -eu\nmkdir -p \"$BUILD_DIR\"\nout=\"$BUILD_DIR/bits-$GOOS-$GOARCH\"\necho \"$GOOS/$GOARCH $VERSION\" >\"$out\"\necho \"$out\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "scripts", "build.sh"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(dir, "dist"), 0o755); err != nil {
+
+	cmd := command(t, dir, "bash", "scripts/dist.sh", "v1.2.3")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("dist.sh: %v\n%s", err, out)
+	}
+
+	dist := filepath.Join(dir, "dist")
+	entries, err := os.ReadDir(dist)
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, platform := range []string{"darwin-arm64", "linux-amd64", "linux-arm64"} {
-		if err := os.WriteFile(filepath.Join(dir, "dist", "bits-"+platform), []byte("fake binary"), 0o644); err != nil {
-			t.Fatal(err)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	want := []string{
+		"bits_1.2.3_checksums.txt",
+		"bits_1.2.3_darwin_arm64.tar.gz",
+		"bits_1.2.3_linux_amd64.tar.gz",
+		"bits_1.2.3_linux_arm64.tar.gz",
+	}
+	if !slices.Equal(names, want) {
+		t.Fatalf("dist contents = %v, want %v", names, want)
+	}
+
+	check := exec.Command("sha256sum", "--check", "bits_1.2.3_checksums.txt")
+	if _, err := exec.LookPath("sha256sum"); err != nil {
+		check = exec.Command("shasum", "-a", "256", "--check", "bits_1.2.3_checksums.txt")
+	}
+	check.Dir = dist
+	if out, err := check.CombinedOutput(); err != nil {
+		t.Errorf("checksums do not verify: %v\n%s", err, out)
+	}
+
+	for _, platform := range []string{"darwin/arm64", "linux/amd64", "linux/arm64"} {
+		archive := filepath.Join(dist, "bits_1.2.3_"+strings.ReplaceAll(platform, "/", "_")+".tar.gz")
+		files := readTarGz(t, archive)
+		if got := slices.Sorted(maps.Keys(files)); !slices.Equal(got, []string{"LICENSE", "LICENSE-3rdparty.csv", "README.md", "bits"}) {
+			t.Errorf("%s contains %v", archive, got)
 		}
-	}
-	run := func(args ...string) (string, error) {
-		t.Helper()
-		cmd := exec.Command("bash", append([]string{"scripts/package.sh"}, args...)...)
-		cmd.Dir = dir
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		return stderr.String(), err
-	}
-
-	// Baseline: with all three valid binaries staged, packaging succeeds.
-	if stderr, err := run("--version", "1.2.3", "--dist-dir", "dist"); err != nil {
-		t.Fatalf("package.sh with valid inputs failed: %v: %s", err, stderr)
-	}
-
-	for _, test := range []struct {
-		version string
-		wantErr string
-	}{
-		{version: "", wantErr: "--version is required"},
-		{version: "1.2", wantErr: "release version must be"},
-		{version: "1.2.3-rc1", wantErr: "release version must be"},
-		{version: "01.2.3", wantErr: "release version must be"},
-		{version: "0.0.0-dev", wantErr: "release version must be"},
-	} {
-		stderr, err := run("--version", test.version, "--dist-dir", "dist")
-		if err == nil {
-			t.Errorf("package.sh must reject version %q", test.version)
-		} else if !strings.Contains(stderr, test.wantErr) {
-			t.Errorf("version %q: stderr = %q, want diagnostic %q", test.version, stderr, test.wantErr)
+		bits := files["bits"]
+		if bits.mode&0o111 == 0 || bits.body != platform+" 1.2.3\n" {
+			t.Errorf("%s: bits mode %o body %q", archive, bits.mode, bits.body)
 		}
-	}
-
-	// Rejected for the flag itself, not because inputs are missing.
-	for _, flag := range []string{"--publish", "--target", "--upload"} {
-		stderr, err := run("--version", "1.2.3", "--dist-dir", "dist", flag)
-		if err == nil {
-			t.Errorf("package.sh must reject unknown argument %q", flag)
-		} else if !strings.Contains(stderr, "unknown argument: "+flag) {
-			t.Errorf("flag %q: stderr = %q, want unknown-argument diagnostic", flag, stderr)
-		}
-	}
-
-	// Remove one valid input; packaging must report it as missing.
-	if err := os.Remove(filepath.Join(dir, "dist", "bits-linux-arm64")); err != nil {
-		t.Fatal(err)
-	}
-	stderr, err := run("--version", "1.2.3", "--dist-dir", "dist")
-	if err == nil {
-		t.Error("package.sh must fail when a platform binary is missing")
-	} else if !strings.Contains(stderr, "missing or empty binary") || !strings.Contains(stderr, "bits-linux-arm64") {
-		t.Errorf("stderr = %q, want missing-input diagnostic naming bits-linux-arm64", stderr)
 	}
 }
 
-func TestVersionScriptStrictStableTags(t *testing.T) {
-	for tag, want := range map[string]string{
-		"v0.0.0": "0.0.0", "v1.2.3": "1.2.3", "v10.20.30": "10.20.30",
-	} {
-		got, err := runVersionScript(t, tag)
-		if err != nil || strings.TrimSpace(got) != want {
-			t.Errorf("version.sh(%q) = %q, err %v; want %q", tag, got, err, want)
-		}
-	}
-	for _, tag := range []string{"", "main", "v1.2", "1.2.3", "v01.2.3", "v1.2.3-rc1", "refs/tags/v1.2.3"} {
-		if _, err := runVersionScript(t, tag); err == nil {
-			t.Errorf("version.sh with tag %q must fail", tag)
-		}
-	}
-	cmd := exec.Command("bash", "scripts/version.sh")
-	if err := cmd.Run(); err == nil {
-		t.Error("version.sh without a tag argument must fail")
-	}
+type tarFile struct {
+	mode int64
+	body string
 }
 
-func runVersionScript(t *testing.T, tag string) (string, error) {
+func readTarGz(t *testing.T, path string) map[string]tarFile {
 	t.Helper()
-	cmd := exec.Command("bash", "scripts/version.sh", tag)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	err := cmd.Run()
-	return stdout.String(), err
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]tarFile{}
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return files
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[hdr.Name] = tarFile{mode: hdr.Mode, body: string(body)}
+	}
 }

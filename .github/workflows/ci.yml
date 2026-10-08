@@ -1,6 +1,5 @@
-# Unprivileged by design — no secrets, read-only permissions, public tools
-# and module downloads only — so fork pull requests run the same checks
-# without trust escalation. Nothing is published from this workflow.
+# Unprivileged: read-only token and no secrets, so fork pull requests run the
+# same checks. Also called by release.yml to gate publishing.
 
 name: CI
 
@@ -8,10 +7,8 @@ on:
   pull_request:
   push:
     branches: [main]
-    # A glob cannot express "no leading zeroes", so every v-prefixed tag
-    # reaches the workflow and the resolve-release steps validate strictly.
-    tags: ['v*']
   merge_group:
+  workflow_call:
 
 defaults:
   run:
@@ -20,8 +17,9 @@ defaults:
 permissions:
   contents: read
 
+# Cancel superseded pull request runs only; other runs get a unique group.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -90,77 +88,24 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Resolve release version
-        id: release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          if version="$(./scripts/version.sh "$RELEASE_TAG" 2>/dev/null)"; then
-            printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          else
-            printf 'not a stable release tag; building dev binary\n' >&2
-          fi
       - name: Build
-        id: build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          binary="$(./scripts/build.sh)"
-          printf 'binary=%s\n' "$binary" >> "$GITHUB_OUTPUT"
-      - name: Upload binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: bits-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ${{ steps.build.outputs.binary }}
-          retention-days: 14
-          if-no-files-found: error
+        run: ./scripts/build.sh
 
-  release-archives:
-    name: Release archives
-    needs: [lint, test, build]
-    if: startsWith(github.ref, 'refs/tags/v')
+  dist:
+    name: Dist
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Resolve release version
-        id: release
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          if version="$(./scripts/version.sh "$RELEASE_TAG" 2>/dev/null)"; then
-            printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-            printf 'is-release=true\n' >> "$GITHUB_OUTPUT"
-          else
-            printf 'is-release=false\n' >> "$GITHUB_OUTPUT"
-            printf 'skipping release packaging: %s is not a stable release tag\n' \
-              "${GITHUB_REF_NAME}" >&2
-          fi
-      - name: Download binaries
-        if: steps.release.outputs.is-release == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          path: dist
-          pattern: bits-*
-          merge-multiple: true
-      # Artifact upload/download normalizes file modes to 0644; this step
-      # restores the executable bit when staging the binaries.
-      - name: Package release archives
-        if: steps.release.outputs.is-release == 'true'
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        run: ./scripts/package.sh --version "$VERSION" --dist-dir dist
-      - name: Upload release archives
-        if: steps.release.outputs.is-release == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-archives-v${{ steps.release.outputs.version }}
-          path: dist/bits-*.tar.gz
-          retention-days: 7
-          if-no-files-found: error
+          go-version-file: go.mod
+      - name: Build release archives
+        run: ./scripts/dist.sh v0.0.0

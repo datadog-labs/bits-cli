@@ -1,0 +1,12 @@
+# dd-octo-sts policy for the publish job of .github/workflows/release.yml:
+# creating the release and its tag, which the tag ruleset reserves.
+issuer: https://token.actions.githubusercontent.com
+subject: repo:datadog-labs/bits-cli:ref:refs/heads/main
+
+claim_pattern:
+  event_name: workflow_dispatch
+  ref: refs/heads/main
+  job_workflow_ref: datadog-labs/bits-cli/\.github/workflows/release\.yml@refs/heads/main
+
+permissions:
+  contents: write

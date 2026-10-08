@@ -1,32 +1,36 @@
 # Releasing Bits
 
-## Release flow
-
-From the commit to release (normally `main`), run:
+Releases are cut from `main` by the release workflow. Start one with:
 
 ```sh
 ./scripts/release.sh v1.2.3
 ```
 
-The tag must be a stable semantic version (`v<major>.<minor>.<patch>`) with
-no leading zeroes in its components.
+This triggers `.github/workflows/release.yml` on `main`, which:
 
-Pushing a **stable tag** triggers the GitHub Actions release flow
-(`.github/workflows/ci.yml`): the tag is linted and tested, all six supported
-targets are cross-built, and the three supported platform archives
-(`bits-darwin-arm64`, `bits-linux-amd64`, `bits-linux-arm64`) are packaged as
-workflow artifacts under the name `release-archives-v<version>`.
+1. checks that the tag is the next patch, minor, or major version;
+2. runs CI and builds the release archives with `./scripts/dist.sh`;
+3. attests their build provenance and publishes them as a GitHub release of
+   the `main` commit with `./scripts/publish.sh`, which also creates the tag.
 
-Each archive contains the platform binary and a `cli.yaml` manifest with the
-release version and the minimal metadata (name, team, description, version)
-needed to register the CLI with a package index.
+Tags are protected, so they are only created by the workflow, with a
+dd-octo-sts token scoped by `.github/chainguard/self.release.sts.yaml`.
 
-The release archives (and every cross-built binary) are uploaded to GitHub
-Actions workflow artifacts; nothing leaves GitHub Actions. No publication
-or upload to any package index happens automatically from this repository:
-the workflow has no secrets and no write permissions, and the repository
-contains no publisher. Making the release archives available through any
-package index is a separate manual step performed outside this repository.
+Release assets, for darwin/arm64, linux/amd64, and linux/arm64:
 
-Non-stable tags (for example `v1.2.3-rc1`) never produce release artifacts;
-they get ordinary development builds only.
+```
+bits_<version>_<os>_<arch>.tar.gz   bits, README.md, LICENSE, LICENSE-3rdparty.csv
+bits_<version>_checksums.txt        SHA-256 of every archive
+```
+
+Verify a download with:
+
+```sh
+sha256sum --check --ignore-missing bits_<version>_checksums.txt
+gh attestation verify bits_<version>_<os>_<arch>.tar.gz \
+    --repo datadog-labs/bits-cli \
+    --signer-workflow datadog-labs/bits-cli/.github/workflows/release.yml \
+    --source-ref refs/heads/main
+```
+
+`./scripts/dist.sh v1.2.3` produces the same archives locally in `dist/`.
