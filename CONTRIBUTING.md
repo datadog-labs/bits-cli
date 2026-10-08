@@ -32,7 +32,8 @@ Lint with the pinned golangci-lint configuration:
 ./scripts/lint.sh
 ```
 
-`./scripts/lint.sh` lints both modules and also verifies that
+`./scripts/lint.sh` lints both modules, checks the shell scripts with
+shellcheck when it is installed (CI always does), and verifies that
 `LICENSE-3rdparty.csv` matches the dependency tree.
 
 ## Development workflow

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 #
-# lint.sh - install a pinned golangci-lint, lint every module, and check
-# LICENSE-3rdparty.csv for drift.
+# lint.sh - install a pinned golangci-lint, lint every module, check the
+# shell scripts with shellcheck, and check LICENSE-3rdparty.csv for drift.
+#
+# The shell script checks are skipped when shellcheck is not installed,
+# unless --require-shellcheck is passed, as CI does.
 
 set -euo pipefail
 
@@ -9,6 +12,20 @@ GOLANGCI_LINT_VERSION="v2.14.0"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+require_shellcheck=false
+case "${1:-}" in
+    "") ;;
+    --require-shellcheck) require_shellcheck=true ;;
+    *)
+        printf 'usage: %s [--require-shellcheck]\n' "$0" >&2
+        exit 1
+        ;;
+esac
+if [[ "$require_shellcheck" == true ]] && ! command -v shellcheck >/dev/null 2>&1; then
+    printf 'lint: shellcheck is required but not installed.\n' >&2
+    exit 1
+fi
 
 if command -v golangci-lint >/dev/null 2>&1; then
     GOLANGCI_LINT="$(command -v golangci-lint)"
@@ -42,5 +59,11 @@ cd tools/licenses
 # nothing needs warming up here.
 cd "$SRC_DIR"
 scripts/generate-licenses.sh check
+
+if command -v shellcheck >/dev/null 2>&1; then
+    git ls-files -z '*.sh' | xargs -0 shellcheck
+else
+    printf 'lint: shellcheck is not installed; skipping shell script checks.\n' >&2
+fi
 
 printf 1>&2 "lint: all good.\n"

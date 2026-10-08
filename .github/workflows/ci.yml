@@ -41,7 +41,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Lint
-        run: ./scripts/lint.sh
+        run: ./scripts/lint.sh --require-shellcheck
 
   test:
     name: Test
