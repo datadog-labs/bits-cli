@@ -62,7 +62,7 @@ shipped root module (its `go.sum` entries with a zip hash), with the SPDX
 license identifier and copyright holder of each module.
 
 - After any dependency change, run `./scripts/generate-licenses.sh` and commit
-  the regenerated CSV.
+  the regenerated CSV. This includes the weekly Dependabot pull requests.
 - The drift check runs as part of `./scripts/lint.sh` and compares the committed
   CSV byte for byte with the freshly generated one.
 - If a module cannot be resolved (unknown license, no copyright statement, or
