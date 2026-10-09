@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-PLATFORMS=(darwin/arm64 linux/amd64 linux/arm64)
+PLATFORMS=(darwin/amd64 darwin/arm64 linux/amd64 linux/arm64)
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${DIST_DIR:-$SRC_DIR/dist}"
