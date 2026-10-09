@@ -34,3 +34,21 @@ gh attestation verify bits_<version>_<os>_<arch>.tar.gz \
 ```
 
 `./scripts/dist.sh v1.2.3` produces the same archives locally in `dist/`.
+
+## Homebrew
+
+The `bits` formula of the [datadog-labs/homebrew-pack](https://github.com/datadog-labs/homebrew-pack)
+tap is rendered from `.github/homebrew/bits.rb.erb`. After a release, propose it to
+the tap with:
+
+```sh
+./scripts/homebrew.rb v1.2.3
+```
+
+The script verifies the release archives against the release checksums and
+their build provenance attestations, commits the formula to a branch of the tap
+(or of your fork of it), and opens a draft pull request. `--dry-run` verifies the
+release and previews the formula diff, push destination, and PR title and body.
+It does not commit, create a fork, push, or create or update a PR.
+It needs Ruby and an authenticated `gh`.
+Commits use your git signing configuration.

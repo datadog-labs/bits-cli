@@ -241,14 +241,86 @@ func TestReleaseCheck(t *testing.T) {
 
 // Each release script validates its tag before having any side effect.
 func TestScriptsRejectInvalidTags(t *testing.T) {
-	for _, args := range [][]string{{"scripts/dist.sh"}, {"scripts/publish.sh"}, {"scripts/release.sh"}, {"scripts/release.sh", "--check"}} {
+	for _, args := range [][]string{{"bash", "scripts/dist.sh"}, {"bash", "scripts/publish.sh"}, {"bash", "scripts/release.sh"}, {"bash", "scripts/release.sh", "--check"}, {"ruby", "scripts/homebrew.rb"}, {"ruby", "scripts/homebrew.rb", "--dry-run"}} {
+		if _, err := exec.LookPath(args[0]); err != nil {
+			t.Logf("skipping %s: %v", args[0], err)
+			continue
+		}
 		for _, tag := range []string{"", "main", "v1.2", "1.2.3", "v01.2.3", "v1.2.3-rc1", "refs/tags/v1.2.3"} {
 			script := strings.Join(args, " ")
-			out, err := command(t, "", "bash", append(args, tag)...).CombinedOutput()
+			out, err := command(t, "", args[0], append(args[1:], tag)...).CombinedOutput()
 			if err == nil || !strings.Contains(string(out), "usage:") {
 				t.Errorf("%s %q: want usage error, got %v: %s", script, tag, err, out)
 			}
 		}
+	}
+}
+
+// Render the formula for every released platform and reject missing values.
+func TestHomebrewTemplate(t *testing.T) {
+	if _, err := exec.LookPath("ruby"); err != nil {
+		t.Skip("ruby is required to render Homebrew templates")
+	}
+	dist, err := os.ReadFile("scripts/dist.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^PLATFORMS=\((.*)\)$`).FindSubmatch(dist)
+	if m == nil {
+		t.Fatal("no PLATFORMS in scripts/dist.sh")
+	}
+	platforms := strings.Fields(strings.ReplaceAll(string(m[1]), "/", "_"))
+	args := []string{"-r", "./scripts/homebrew.rb", "-e", `print render("bits.rb", ARGV.map { |arg| arg.split("=", 2) }.to_h)`, "--", "version=1.2.3"}
+	checksums := make(map[string]string)
+	for i, platform := range platforms {
+		checksums[platform] = strings.Repeat(string(rune('a'+i)), 64)
+		args = append(args, "sha256_"+platform+"="+checksums[platform])
+	}
+	formula, err := command(t, "", "ruby", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("render formula: %v\n%s", err, formula)
+	}
+	for _, platform := range platforms {
+		url := `url "https://github.com/datadog-labs/bits-cli/releases/download/v1.2.3/bits_1.2.3_` + platform + `.tar.gz"`
+		sha := `sha256 "` + checksums[platform] + `"`
+		if !strings.Contains(string(formula), url+"\n      "+sha) {
+			t.Errorf("formula must install %s with %s and %s", platform, url, sha)
+		}
+	}
+	if got, want := strings.Count(string(formula), "url \""), len(platforms); got != want {
+		t.Errorf("formula template has %d URLs, want one per released platform (%d)", got, want)
+	}
+	if out, err := command(t, "", "ruby", args[:len(args)-1]...).CombinedOutput(); err == nil || !strings.Contains(string(out), "key not found") {
+		t.Fatalf("missing checksum should fail rendering: %v\n%s", err, out)
+	}
+}
+
+func TestHomebrewChecksums(t *testing.T) {
+	if _, err := exec.LookPath("ruby"); err != nil {
+		t.Skip("ruby is required to verify Homebrew checksums")
+	}
+	archive := filepath.Join(t.TempDir(), "archive.tar.gz")
+	if err := os.WriteFile(archive, []byte("abc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const checksum = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	entry := checksum + "  archive.tar.gz\n"
+	for _, tc := range []struct {
+		name, manifest, want string
+	}{
+		{"valid", entry, checksum},
+		{"missing", "", "expected exactly one SHA-256"},
+		{"duplicate", entry + entry, "expected exactly one SHA-256"},
+		{"malformed", "invalid  archive.tar.gz\n", "expected exactly one SHA-256"},
+		{"mismatch", strings.Repeat("0", 64) + "  archive.tar.gz\n", "checksum mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := command(t, "", "ruby", "-r", "./scripts/homebrew.rb", "-e",
+				`puts verified_checksum(ARGV[0], ARGV[1])`, "--", archive, tc.manifest).CombinedOutput()
+			if (err == nil) != (tc.name == "valid") || !strings.Contains(string(out), tc.want) {
+				t.Fatalf("got %v: %s; want %s", err, out, tc.want)
+			}
+		})
 	}
 }
 
