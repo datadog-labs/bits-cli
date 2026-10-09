@@ -11,7 +11,7 @@ require "tmpdir"
 
 REPO = "datadog-labs/bits-cli"
 TAP = "datadog-labs/homebrew-pack"
-PLATFORMS = %w[darwin_arm64 linux_amd64 linux_arm64].freeze
+PLATFORMS = %w[darwin_amd64 darwin_arm64 linux_amd64 linux_arm64].freeze
 SRC_DIR = File.expand_path("..", __dir__)
 
 # Keep stderr visible and pass arguments directly, without a shell.

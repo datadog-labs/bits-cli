@@ -16,7 +16,7 @@ This triggers `.github/workflows/release.yml` on `main`, which:
 Tags are protected, so they are only created by the workflow, with a
 dd-octo-sts token scoped by `.github/chainguard/self.release.sts.yaml`.
 
-Release assets, for darwin/arm64, linux/amd64, and linux/arm64:
+Release assets, for darwin/amd64, darwin/arm64, linux/amd64, and linux/arm64:
 
 ```
 bits_<version>_<os>_<arch>.tar.gz   bits, README.md, LICENSE, LICENSE-3rdparty.csv

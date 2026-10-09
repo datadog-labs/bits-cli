@@ -362,6 +362,7 @@ func TestDistArchives(t *testing.T) {
 	}
 	want := []string{
 		"bits_1.2.3_checksums.txt",
+		"bits_1.2.3_darwin_amd64.tar.gz",
 		"bits_1.2.3_darwin_arm64.tar.gz",
 		"bits_1.2.3_linux_amd64.tar.gz",
 		"bits_1.2.3_linux_arm64.tar.gz",
@@ -379,7 +380,7 @@ func TestDistArchives(t *testing.T) {
 		t.Errorf("checksums do not verify: %v\n%s", err, out)
 	}
 
-	for _, platform := range []string{"darwin/arm64", "linux/amd64", "linux/arm64"} {
+	for _, platform := range []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"} {
 		archive := filepath.Join(dist, "bits_1.2.3_"+strings.ReplaceAll(platform, "/", "_")+".tar.gz")
 		files := readTarGz(t, archive)
 		if got := slices.Sorted(maps.Keys(files)); !slices.Equal(got, []string{"LICENSE", "LICENSE-3rdparty.csv", "README.md", "bits"}) {

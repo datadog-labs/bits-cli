@@ -11,12 +11,13 @@ class Bits < Formula
   license "Apache-2.0"
 
   on_macos do
-    # Bits is released for Apple silicon only on macOS.
-    depends_on arch: :arm64
-
     on_arm do
       url "https://github.com/datadog-labs/bits-cli/releases/download/v<%= values.fetch("version") %>/bits_<%= values.fetch("version") %>_darwin_arm64.tar.gz"
       sha256 "<%= values.fetch("sha256_darwin_arm64") %>"
+    end
+    on_intel do
+      url "https://github.com/datadog-labs/bits-cli/releases/download/v<%= values.fetch("version") %>/bits_<%= values.fetch("version") %>_darwin_amd64.tar.gz"
+      sha256 "<%= values.fetch("sha256_darwin_amd64") %>"
     end
   end
 
