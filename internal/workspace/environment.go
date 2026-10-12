@@ -156,3 +156,28 @@ func isConflictStatus(x, y byte) bool {
 		return false
 	}
 }
+
+// RepositoryLayout describes filesystem boundaries without inspecting working-tree state.
+// Empty fields mean the corresponding information could not be determined.
+type RepositoryLayout struct{ Root, CommonDir string }
+
+// InspectRepositoryLayout resolves the worktree root and shared Git directory under
+// a short deadline. It does not inspect branch, status, or instruction files.
+func InspectRepositoryLayout(parent context.Context, directory string) RepositoryLayout {
+	ctx, cancel := context.WithTimeout(parent, snapshotTimeout)
+	defer cancel()
+	output, err := git(ctx, directory, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir")
+	if err != nil {
+		return RepositoryLayout{}
+	}
+	paths := strings.Split(output, "\n")
+	if len(paths) != 2 {
+		return RepositoryLayout{}
+	}
+	root, err := filepath.EvalSymlinks(paths[0])
+	if err != nil {
+		return RepositoryLayout{}
+	}
+	common, _ := filepath.EvalSymlinks(paths[1])
+	return RepositoryLayout{Root: root, CommonDir: common}
+}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,144 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
-
-func TestInstructionsHierarchy(t *testing.T) {
-	repo := t.TempDir()
-	runInstructionsGit(t, repo, "init", "-b", "main")
-	nested := filepath.Join(repo, "nested", "active")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeInstructionTestFile(t, repo, "AGENTS.md", "root instruction")
-	writeInstructionTestFile(t, filepath.Dir(nested), "AGENTS.md", "nested instruction")
-	writeInstructionTestFile(t, nested, "AGENTS.md", "active instruction")
-	if supportsCaseSensitiveNames(t, nested) {
-		writeInstructionTestFile(t, nested, "agents.md", "wrong case")
-	}
-	before, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := NewProjectInstructions(nested).snapshot(context.Background())
-	absoluteRepo, err := filepath.Abs(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expected := fmt.Sprintf(`<project_instructions>
-Make sure to follow these project instructions.
-
-  <file path="%s/AGENTS.md">
-root instruction
-  </file>
-  <file path="%s/nested/AGENTS.md">
-nested instruction
-  </file>
-  <file path="%s/nested/active/AGENTS.md">
-active instruction
-  </file>
-</project_instructions>
-`, filepath.ToSlash(absoluteRepo), filepath.ToSlash(absoluteRepo), filepath.ToSlash(absoluteRepo))
-	if got != expected {
-		t.Fatalf("instructions = %q, want %q", got, expected)
-	}
-	after, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after != before {
-		t.Fatalf("working directory changed: %q -> %q", before, after)
-	}
-}
-
-func TestInstructionsNonGitAndUnsafeFiles(t *testing.T) {
-	parent := t.TempDir()
-	active := filepath.Join(parent, "active")
-	if err := os.Mkdir(active, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	outside := t.TempDir()
-	writeInstructionTestFile(t, outside, "AGENTS.md", "outside instruction")
-	ws := NewProjectInstructions(active)
-	if got := ws.snapshot(context.Background()); got != "" {
-		t.Fatalf("missing file = %q", got)
-	}
-	source := filepath.Join(active, "AGENTS.md")
-	if err := os.Symlink(filepath.Join(outside, "AGENTS.md"), source); err != nil {
-		t.Fatal(err)
-	}
-	if got := ws.snapshot(context.Background()); got != "" {
-		t.Fatalf("escaping symlink = %q", got)
-	}
-	if err := os.Remove(source); err != nil {
-		t.Fatal(err)
-	}
-	writeInstructionTestFile(t, active, "instructions.txt", "inside instruction")
-	if err := os.Symlink(filepath.Join(active, "instructions.txt"), source); err != nil {
-		t.Fatal(err)
-	}
-	if got := ws.snapshot(context.Background()); !strings.Contains(got, "inside instruction") || strings.Contains(got, "outside instruction") {
-		t.Fatalf("safe symlink = %q", got)
-	}
-	if err := os.Remove(source); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(source, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := ws.snapshot(context.Background()); got != "" {
-		t.Fatalf("directory = %q", got)
-	}
-	if err := os.Remove(source); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(source, []byte("unreadable instruction"), 0o000); err != nil {
-		t.Fatal(err)
-	}
-	if f, err := os.Open(source); err == nil {
-		_ = f.Close()
-		t.Skip("process can read mode 0000 files")
-	}
-	if got := ws.snapshot(context.Background()); got != "" {
-		t.Fatalf("unreadable file = %q", got)
-	}
-}
-
-func TestInstructionsLimits(t *testing.T) {
-	repo := t.TempDir()
-	runInstructionsGit(t, repo, "init", "-b", "main")
-	dir := repo
-	for range 5 {
-		writeInstructionTestFile(t, dir, "AGENTS.md", strings.Repeat("x", instructionFileLimit+1))
-		dir = filepath.Join(dir, "nested")
-		if err := os.Mkdir(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got := NewProjectInstructions(dir).snapshot(context.Background())
-	if strings.Count(got, strings.Repeat("x", instructionFileLimit)) != instructionTotalLimit/instructionFileLimit {
-		t.Fatal("unexpected number of bounded file contents")
-	}
-	if strings.Count(got, "[Truncated:") != 4 || !strings.Contains(got, "aggregate byte limit reached") {
-		t.Fatalf("missing truncation notices")
-	}
-}
-
-func TestInstructionsLinkedWorktree(t *testing.T) {
-	repo := t.TempDir()
-	runInstructionsGit(t, repo, "init", "-b", "main")
-	writeInstructionTestFile(t, repo, "AGENTS.md", "main instruction")
-	runInstructionsGit(t, repo, "add", ".")
-	runInstructionsGit(t, repo, "-c", "user.name=Bits Test", "-c", "user.email=bits@example.com", "commit", "-m", "initial")
-	linked := filepath.Join(t.TempDir(), "linked")
-	runInstructionsGit(t, repo, "worktree", "add", "-b", "linked", linked)
-	writeInstructionTestFile(t, linked, "AGENTS.md", "linked instruction")
-	got := NewProjectInstructions(linked).snapshot(context.Background())
-	if !strings.Contains(got, "linked instruction") || strings.Contains(got, "main instruction") {
-		t.Fatalf("linked instructions = %q", got)
-	}
-}
 
 func runInstructionsGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
@@ -173,7 +39,7 @@ func writeInstructionTestFile(t *testing.T, dir, name, content string) {
 
 func TestProjectInstructionsEmptySnapshotLoadsOnce(t *testing.T) {
 	dir := t.TempDir()
-	instructions := NewProjectInstructions(dir)
+	instructions := newProjectInstructions(dir)
 	opts := assistant.SendOptions{CustomUserContext: "existing"}
 	first := instructions.apply(context.Background(), opts)
 	instructions.acknowledge()
@@ -214,7 +80,7 @@ func TestProjectInstructionsResumeUpdates(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			instructions := NewProjectInstructions(dir)
+			instructions := newProjectInstructions(dir)
 			ctx := context.Background()
 			if !tc.resume {
 				if tc.before != "" {
@@ -256,7 +122,7 @@ func TestProjectInstructionsCascadingReplacement(t *testing.T) {
 	}
 	writeInstructionTestFile(t, repo, "AGENTS.md", "root instructions")
 	writeInstructionTestFile(t, nested, "AGENTS.md", "nested instructions")
-	instructions := NewProjectInstructions(nested)
+	instructions := newProjectInstructions(nested)
 	instructions.apply(context.Background(), assistant.SendOptions{})
 	instructions.acknowledge()
 	if err := os.Remove(filepath.Join(nested, "AGENTS.md")); err != nil {
@@ -269,176 +135,190 @@ func TestProjectInstructionsCascadingReplacement(t *testing.T) {
 	}
 }
 
-func TestInstructionFilenamePrecedence(t *testing.T) {
-	t.Run("case-sensitive filename precedence", func(t *testing.T) {
-		if !supportsCaseSensitiveNames(t, t.TempDir()) {
-			t.Skip("filename precedence includes case-only variants, unavailable on this filesystem")
+func TestConversationInstructionsSnapshotAndReset(t *testing.T) {
+	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
+	dir := t.TempDir()
+	writeInstructionTestFile(t, dir, "AGENTS.md", "original instructions")
+	engine := New(backend, assistant.SendOptions{}, WithProjectInstructions(env.NewInstructions(dir)))
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "visible prompt", UserContext: func(context.Context) string { return "existing" }}))
+	if got := backend.opts[0].CustomUserContext; !strings.HasPrefix(got, "existing\n\n<project_instructions>\nMake sure to follow these project instructions.") || !strings.Contains(got, "original instructions") {
+		t.Fatalf("first context = %q", got)
+	}
+	writeInstructionTestFile(t, dir, "AGENTS.md", "updated instructions")
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "visible prompt", UserContext: func(context.Context) string { return "existing" }}))
+	if got := backend.opts[1].CustomUserContext; got != "existing" {
+		t.Fatalf("later context = %q", got)
+	}
+	for _, message := range backend.messages["new-conversation-1"] {
+		if message != "visible prompt" {
+			t.Fatalf("visible prompt changed: %q", message)
 		}
-		for i, name := range instructionFilenames {
-			t.Run(name, func(t *testing.T) {
-				dir := t.TempDir()
-				for _, candidate := range instructionFilenames[i:] {
-					writeInstructionTestFile(t, dir, candidate, "selected "+candidate)
+	}
+	if err := engine.NewConversation(); err != nil {
+		t.Fatal(err)
+	}
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "new prompt"}))
+	if got := backend.opts[2].CustomUserContext; !strings.Contains(got, "updated instructions") || strings.Contains(got, "original instructions") {
+		t.Fatalf("reset context = %q", got)
+	}
+}
+
+func TestResumedConversationReplacesUnknownInstructions(t *testing.T) {
+	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
+	dir := t.TempDir()
+	writeInstructionTestFile(t, dir, "AGENTS.md", "local instructions")
+	engine := New(backend, assistant.SendOptions{ConversationID: "existing"}, WithProjectInstructions(env.NewInstructions(dir)))
+	instructions := engine.projectInstructions
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "resume"}))
+	if !strings.HasPrefix(backend.opts[0].CustomUserContext, instructionsReplacementNotice) || !strings.Contains(backend.opts[0].CustomUserContext, "local instructions") {
+		t.Fatal("resumed conversation did not replace unknown prior instructions")
+	}
+	if err := engine.NewConversation(); err != nil {
+		t.Fatal(err)
+	}
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "new"}))
+	if instructions.phase != instructionsDelivered || !strings.Contains(backend.opts[1].CustomUserContext, "local instructions") {
+		t.Fatal("new conversation did not load instructions")
+	}
+}
+
+func TestInstructionsAreNotResentOnToolContinuations(t *testing.T) {
+	backend := &contextRecordingBackend{}
+	tools, err := NewToolSet(ModeSkipPermissions, Tool{
+		Definition: assistant.ClientTool{Name: "read"},
+		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	writeInstructionTestFile(t, dir, "AGENTS.md", "local instructions")
+	engine := New(backend, assistant.SendOptions{}, WithProjectInstructions(env.NewInstructions(dir)))
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "inspect", Tools: tools, UserContext: func(context.Context) string { return "environment" }}))
+	if len(backend.userContexts) != 2 {
+		t.Fatalf("requests = %d", len(backend.userContexts))
+	}
+	if !strings.HasPrefix(backend.userContexts[0], "environment\n\n") || !strings.Contains(backend.userContexts[0], "local instructions") || backend.userContexts[1] != "" {
+		t.Fatalf("request contexts = %q", backend.userContexts)
+	}
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "next turn", Tools: tools, UserContext: func(context.Context) string { return "environment" }}))
+	if backend.userContexts[2] != "" {
+		t.Fatalf("next turn context = %q", backend.userContexts[2])
+	}
+}
+
+func TestResumedConversationWithdrawsUnknownInstructionsOnce(t *testing.T) {
+	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
+	engine := New(backend, assistant.SendOptions{ConversationID: "existing"}, WithProjectInstructions(env.NewInstructions(t.TempDir())))
+	for range 2 {
+		drain(engine.StartTurn(context.Background(), TurnInput{Message: "continue"}))
+	}
+	if backend.opts[0].CustomUserContext != instructionsRemovalNotice || backend.opts[1].CustomUserContext != "" {
+		t.Fatalf("resume contexts = %q, %q", backend.opts[0].CustomUserContext, backend.opts[1].CustomUserContext)
+	}
+}
+
+func TestConversationSwitchResetsInstructionsOnlyOnCommit(t *testing.T) {
+	for _, commit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("commit=%t", commit), func(t *testing.T) {
+			response := &assistant.ConversationHistoryResponse{}
+			response.Data.Type = "conversation-history-response"
+			backend := &conversationBackend{history: func(context.Context, assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
+				return response, nil
+			}}
+			engine := New(backend, assistant.SendOptions{ConversationID: "old"}, WithProjectInstructions(env.NewInstructions(t.TempDir())))
+			instructions := engine.projectInstructions
+			instructions.apply(context.Background(), assistant.SendOptions{})
+			instructions.acknowledge()
+			conversation, err := engine.LoadConversation(context.Background(), testConversationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if instructions.phase != instructionsDelivered {
+				t.Fatal("switch reset instructions before commit")
+			}
+			if commit {
+				if err := engine.InstallConversation(context.Background(), conversation); err != nil {
+					t.Fatal(err)
 				}
-				instructions := NewProjectInstructions(dir)
-				got := instructions.snapshot(context.Background())
-				if strings.Count(got, "<file path=") != 1 || !strings.Contains(got, "selected "+name+"\n") {
-					t.Fatalf("selected file = %q", got)
+				if instructions.phase != instructionsUnprepared {
+					t.Fatal("committed switch retained previous conversation instructions")
+				}
+			} else {
+				if instructions.phase != instructionsDelivered {
+					t.Fatal("discarded switch lost previous conversation instructions")
+				}
+			}
+		})
+	}
+}
+
+// instructionDeliveryBackend can assign an ID before a request fails, without
+// necessarily streaming a response that confirms the context was received.
+type instructionDeliveryBackend struct {
+	contexts      []string
+	streamFailure bool
+}
+
+func (b *instructionDeliveryBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	b.contexts = append(b.contexts, opts.CustomUserContext)
+	if len(b.contexts) > 1 || b.streamFailure {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("hello"))
+		if err := emit(response); err != nil {
+			return "conversation", err
+		}
+	}
+	if len(b.contexts) == 1 {
+		return "conversation", errors.New("request failed")
+	}
+	return "conversation", nil
+}
+
+func TestProjectInstructionsRetryUntilDelivered(t *testing.T) {
+	for _, tc := range []struct{ name, conversationID, contents, notice string }{
+		{"insertion", "", "original instructions", "<project_instructions>\nMake sure to follow these project instructions."},
+		{"replacement", "conversation", "original instructions", instructionsReplacementNotice},
+		{"removal", "conversation", "", instructionsRemovalNotice},
+	} {
+		for _, streamFailure := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/streamed=%t", tc.name, streamFailure), func(t *testing.T) {
+				dir := t.TempDir()
+				if tc.contents != "" {
+					writeInstructionTestFile(t, dir, "AGENTS.md", tc.contents)
+				}
+				backend := &instructionDeliveryBackend{streamFailure: streamFailure}
+				engine := New(backend, assistant.SendOptions{ConversationID: tc.conversationID}, WithProjectInstructions(env.NewInstructions(dir)))
+				drain(engine.StartTurn(context.Background(), TurnInput{Message: "first"}))
+				if !strings.HasPrefix(backend.contexts[0], tc.notice) {
+					t.Fatalf("first update = %q", backend.contexts[0])
+				}
+				// A retry must reuse the prepared snapshot and notice, even after an ID
+				// was assigned or files changed while the failed turn was in flight.
+				writeInstructionTestFile(t, dir, "AGENTS.md", "changed after failure")
+				drain(engine.StartTurn(context.Background(), TurnInput{Message: "retry"}))
+				want := backend.contexts[0]
+				if streamFailure {
+					want = ""
+				}
+				if backend.contexts[1] != want {
+					t.Fatalf("retry update = %q, want %q", backend.contexts[1], want)
+				}
+				drain(engine.StartTurn(context.Background(), TurnInput{Message: "later"}))
+				if backend.contexts[2] != "" {
+					t.Fatalf("delivered update repeated: %q", backend.contexts[2])
 				}
 			})
 		}
-	})
-	t.Run("directory candidates fall back", func(t *testing.T) {
-		dir := t.TempDir()
-		// These are distinct on both case-sensitive and case-insensitive filesystems.
-		for _, name := range []string{"AGENTS.override.md", "AGENTS.md"} {
-			if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
-				t.Fatal(err)
-			}
-		}
-		writeInstructionTestFile(t, dir, "CLAUDE.md", "fallback")
-		got := NewProjectInstructions(dir).snapshot(context.Background())
-		if !strings.Contains(got, "fallback") {
-			t.Fatalf("fallback = %q", got)
-		}
-	})
-	t.Run("empty override suppresses alternatives", func(t *testing.T) {
-		dir := t.TempDir()
-		writeInstructionTestFile(t, dir, "AGENTS.override.md", "")
-		writeInstructionTestFile(t, dir, "AGENTS.md", "ignored")
-		if got := NewProjectInstructions(dir).snapshot(context.Background()); got != "" {
-			t.Fatalf("empty override = %q", got)
-		}
-	})
-	t.Run("BOM stripped", func(t *testing.T) {
-		dir := t.TempDir()
-		writeInstructionTestFile(t, dir, "CLAUDE.MD", "\ufeffuse the formatter")
-		got := NewProjectInstructions(dir).snapshot(context.Background())
-		if strings.Contains(got, "\ufeff") || !strings.Contains(got, "use the formatter") {
-			t.Fatalf("BOM context = %q", got)
-		}
-	})
-}
-
-// supportsCaseSensitiveNames detects whether a test directory can hold two
-// distinct files whose names differ only by case. Some macOS volumes are
-// case-insensitive, so tests of filename precedence must be gated by the
-// actual filesystem rather than GOOS.
-func supportsCaseSensitiveNames(t *testing.T, dir string) bool {
-	t.Helper()
-	upper := filepath.Join(dir, "case-probe")
-	lower := filepath.Join(dir, "CASE-PROBE")
-	if err := os.WriteFile(upper, []byte("upper"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(lower, []byte("lower"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	first, err := os.ReadFile(upper)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := os.ReadFile(lower)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(first) == "upper" && string(second) == "lower"
-}
-
-func TestAncestorInstructions(t *testing.T) {
-	for _, git := range []bool{false, true} {
-		t.Run(fmt.Sprintf("git=%t", git), func(t *testing.T) {
-			outer := t.TempDir()
-			repo := filepath.Join(outer, "repo")
-			active := filepath.Join(repo, "nested")
-			if err := os.MkdirAll(active, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if git {
-				runInstructionsGit(t, repo, "init", "-b", "main")
-			}
-			writeInstructionTestFile(t, outer, "AGENTS.md", "ancestor content")
-			writeInstructionTestFile(t, repo, "AGENTS.MD", "repository content")
-			writeInstructionTestFile(t, active, "AGENTS.override.md", "local content")
-			instructions := NewProjectInstructions(active)
-			got := instructions.snapshot(context.Background())
-			previous := -1
-			for _, content := range []string{"ancestor content", "repository content", "local content"} {
-				index := strings.Index(got, content)
-				if index <= previous {
-					t.Fatalf("incorrect ordering for %q: %q", content, got)
-				}
-				previous = index
-			}
-		})
 	}
 }
 
-func TestNestedWorktreeInstructionShadowing(t *testing.T) {
-	for _, tc := range []struct {
-		name, mainFile, worktreeFile string
-		keepMain                     bool
-	}{
-		{"duplicate", "AGENTS.md", "AGENTS.md", false},
-		{"no worktree file", "AGENTS.md", "", true},
-		{"different filename", "CLAUDE.md", "AGENTS.md", true},
-		{"override", "AGENTS.override.md", "AGENTS.override.md", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			outer := t.TempDir()
-			main := filepath.Join(outer, "main")
-			if err := os.Mkdir(main, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			runInstructionsGit(t, main, "init", "-b", "main")
-			runInstructionsGit(t, main, "-c", "user.name=Bits Test", "-c", "user.email=bits@example.com", "commit", "--allow-empty", "-m", "initial")
-			linked := filepath.Join(main, "worktrees", "linked")
-			runInstructionsGit(t, main, "worktree", "add", "-b", "linked", linked)
-			writeInstructionTestFile(t, outer, "AGENTS.md", "outer content")
-			writeInstructionTestFile(t, main, tc.mainFile, "main content")
-			if tc.worktreeFile != "" {
-				writeInstructionTestFile(t, linked, tc.worktreeFile, "linked content")
-			}
-			nested := filepath.Join(linked, "nested")
-			if err := os.Mkdir(nested, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			got := NewProjectInstructions(nested).snapshot(context.Background())
-			if strings.Contains(got, "main content") != tc.keepMain || !strings.Contains(got, "outer content") || (tc.worktreeFile != "" && !strings.Contains(got, "linked content")) {
-				t.Fatalf("worktree context = %q", got)
-			}
-		})
-	}
+func newProjectInstructions(path string) *instructionDelivery {
+	return &instructionDelivery{source: env.NewInstructions(path)}
 }
 
-func TestBareWorktreeKeepsContainerInstructions(t *testing.T) {
-	outer := t.TempDir()
-	bare := filepath.Join(outer, ".bare")
-	runInstructionsGit(t, outer, "init", "--bare", bare)
-	linked := filepath.Join(outer, "main")
-	runInstructionsGit(t, outer, "--git-dir="+bare, "worktree", "add", "--orphan", "-b", "main", linked)
-	writeInstructionTestFile(t, outer, "AGENTS.md", "container content")
-	writeInstructionTestFile(t, linked, "AGENTS.md", "linked content")
-	got := NewProjectInstructions(linked).snapshot(context.Background())
-	if !strings.Contains(got, "container content") || !strings.Contains(got, "linked content") {
-		t.Fatalf("bare layout context = %q", got)
-	}
-}
+const instructionsReplacementNotice = "<project_instructions>\nThis block replaces all earlier provided <project_instructions> blocks."
 
-func TestInstructionsDoNotDiscoverBitsConfig(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	config := filepath.Join(home, ".bits-cli")
-	project := filepath.Join(home, "project")
-	for _, dir := range []string{config, project} {
-		if err := os.Mkdir(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	writeInstructionTestFile(t, config, "AGENTS.md", "unofficial global instructions")
-	writeInstructionTestFile(t, project, "AGENTS.md", "project instructions")
-	got := NewProjectInstructions(project).snapshot(context.Background())
-	if strings.Contains(got, "unofficial global instructions") || !strings.Contains(got, "project instructions") {
-		t.Fatalf("context = %q", got)
-	}
-}
+var instructionsRemovalNotice = env.ReplaceInstructions("")
+
+const clientSkillsRemovalNotice = env.SkillsRemovalNotice

@@ -11,8 +11,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/cmd"
@@ -88,7 +88,7 @@ func runRunWithStore(ctx context.Context, opts cmd.RunOptions, store auth.Creden
 	if err != nil {
 		return err
 	}
-	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet, UserContext: tools.UserContext(workspace)}, opts, out)
+	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet, UserContext: env.UserContext(workspace)}, opts, out)
 }
 
 // runEngineTurn drives exactly one turn, attempts Finish once, and maps its

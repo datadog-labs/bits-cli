@@ -1,7 +1,6 @@
 // Package agent drives the remote assistant turn loop and emits fine-grained
-// events on a channel. It imports only the assistant client and has no Bubble
-// Tea / UI dependency, so it is reusable by a future headless surface and
-// testable without a program.
+// events on a channel. It composes local context with assistant requests without
+// a terminal UI dependency, so interactive and headless surfaces share the engine.
 package agent
 
 import (
@@ -12,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
@@ -159,8 +159,8 @@ type Engine struct {
 	sessionGrants       map[ApprovalKey]struct{}
 	active              atomic.Bool
 	operationGeneration atomic.Uint64
-	projectInstructions *ProjectInstructions
-	clientSkills        *ClientSkills
+	projectInstructions *instructionDelivery
+	clientSkills        *env.Skills
 }
 
 // RuntimeStatus is the non-secret request and backend state needed by local
@@ -446,7 +446,7 @@ func (e *Engine) run(
 		sentUserContext := opts.CustomUserContext
 		opts = e.projectInstructions.apply(ctx, opts)
 		if _, userMessage := next.(string); userMessage {
-			opts = e.clientSkills.apply(ctx, opts, skillContext)
+			opts = e.applySkills(ctx, opts, skillContext)
 		}
 		var calls []ToolCall
 		streamed := false
@@ -612,19 +612,6 @@ func (e *Engine) run(
 	send(Event{Kind: EventError, Round: maxTurns, Err: ErrMaxTurns})
 }
 
-// pendingUserContext returns the user context to send with a new user turn, or
-// "" when the conversation already carries it.
-func (e *Engine) pendingUserContext(ctx context.Context, render func(context.Context) string) string {
-	if render == nil {
-		return ""
-	}
-	rendered := render(ctx)
-	if e.sentUserContext != nil && *e.sentUserContext == rendered {
-		return ""
-	}
-	return rendered
-}
-
 // drainStoppedToolCalls cancels follow-up client calls after a stopped
 // round so the backend is never left waiting.
 func (e *Engine) drainStoppedToolCalls(
@@ -761,9 +748,7 @@ func (e *Engine) NewConversation() error {
 	}
 	e.opts.ConversationID = ""
 	e.opts.MessageHistory = nil
-	e.sentUserContext = nil
-	e.projectInstructions.reset()
-	e.clientSkills.reset()
+	e.resetContext()
 	e.transcript = NewTranscript()
 	e.continuation = nil
 	clear(e.sessionGrants)

@@ -12,10 +12,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
-
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/browser"
-	"github.com/datadog-labs/bits-cli/internal/tools"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	conversationview "github.com/datadog-labs/bits-cli/internal/tui/conversations"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
@@ -856,7 +855,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		Tools:       m.tools,
 		Context:     turnContext,
 		OnDeny:      agent.DenyContinue,
-		UserContext: tools.UserContext(m.workspace),
+		UserContext: env.UserContext(m.workspace),
 	})
 	wait := m.begin(opTurn, events, cancel)
 	m.chatPhase = chat.PhaseWaiting

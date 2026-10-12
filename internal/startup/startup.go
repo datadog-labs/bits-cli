@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
@@ -65,8 +66,8 @@ func NewEngine(ctx context.Context, opts EngineOptions) (*agent.Engine, error) {
 	opts.Send = withDefaultSkillOverrides(opts.Send)
 	var engineOptions []agent.Option
 	if opts.Workspace != nil {
-		engineOptions = append(engineOptions, agent.WithProjectInstructions(agent.NewProjectInstructions(opts.Workspace.Path())),
-			agent.WithClientSkills(agent.NewClientSkills(opts.Workspace.Path(), opts.SkillPaths)))
+		engineOptions = append(engineOptions, agent.WithProjectInstructions(env.NewInstructions(opts.Workspace.Path())),
+			agent.WithClientSkills(env.NewSkills(opts.Workspace.Path(), opts.SkillPaths)))
 	}
 	switch opts.Client.Mode {
 	case auth.ModeAuto:
