@@ -189,10 +189,11 @@ type Config struct {
 	ConversationID string
 	MessageHistory []json.RawMessage
 
-	Model                     string
-	InferenceMode             string
-	Profile                   assistant.Profile
-	Referrer                  string
+	Model         string
+	InferenceMode string
+	Profile       assistant.Profile
+	Referrer      string
+	// SkillOverrides takes precedence over built-in defaults by skill name and source.
 	SkillOverrides            []assistant.SkillOverride
 	ExperimentalToolOverrides map[string]any
 	EnableDebugMode           bool
@@ -218,7 +219,7 @@ func New(b Backend, config Config) *Engine {
 		InferenceMode:             config.InferenceMode,
 		Profile:                   config.Profile,
 		Referrer:                  config.Referrer,
-		SkillOverrides:            config.SkillOverrides,
+		SkillOverrides:            mergeSkillOverrides(config.SkillOverrides),
 		ExperimentalToolOverrides: config.ExperimentalToolOverrides,
 		EnableDebugMode:           config.EnableDebugMode,
 		DebugTag:                  config.DebugTag,

@@ -1,13 +1,11 @@
-// Package cmd is the process-level command surface for bits. It owns the
-// Cobra command tree, generated help, and dispatch to caller-supplied
-// operations, keeping the command interface independent of chat and TUI
-// implementations.
+// Package cmd owns the Bits command tree and its interactive and headless runs.
 package cmd
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
@@ -27,53 +25,11 @@ type ChatOptions struct {
 	PermissionsMode agent.PermissionsMode
 }
 
-// RunOptions carries the shared execution flags plus one-turn run options.
-type RunOptions struct {
-	ChatOptions
-	Prompt   string
-	Delivery string
-}
-
-// LoginOptions carries the user-supplied login flags resolved by the command
-// tree before dispatch.
-type LoginOptions struct {
-	Site     string
-	ClientID string
-}
-
-// Actions binds command dispatch to caller-owned operations. The command tree
-// invokes these without depending on their implementations.
-type Actions struct {
-	Chat   func(ctx context.Context, opts ChatOptions) error
-	Run    func(ctx context.Context, opts RunOptions) error
-	Login  func(ctx context.Context, opts LoginOptions) error
-	Logout func(ctx context.Context) error
-}
-
 // Execute builds a fresh command tree for args and runs it with ctx, writing
-// output to stdout and stderr. A new tree per call keeps parsing state from
-// leaking between runs or tests.
-func Execute(ctx context.Context, args []string, actions Actions, stdout, stderr io.Writer) error {
+// output to stdout and stderr. A new tree per call keeps parsing state isolated.
+func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	invoked := false
-	dispatch := Actions{
-		Chat: func(ctx context.Context, opts ChatOptions) error {
-			invoked = true
-			return actions.Chat(ctx, opts)
-		},
-		Run: func(ctx context.Context, opts RunOptions) error {
-			invoked = true
-			return actions.Run(ctx, opts)
-		},
-		Login: func(ctx context.Context, opts LoginOptions) error {
-			invoked = true
-			return actions.Login(ctx, opts)
-		},
-		Logout: func(ctx context.Context) error {
-			invoked = true
-			return actions.Logout(ctx)
-		},
-	}
-	root := newRootCommand(dispatch)
+	root := newRootCommand(&invoked, stdout, stderr)
 	if args == nil {
 		args = []string{}
 	}
@@ -87,7 +43,7 @@ func Execute(ctx context.Context, args []string, actions Actions, stdout, stderr
 	return err
 }
 
-func newRootCommand(actions Actions) *cobra.Command {
+func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 	opts := ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual}
 	var authMode string
 	var permissionsMode string
@@ -117,7 +73,14 @@ func newRootCommand(actions Actions) *cobra.Command {
 			}
 			opts.AuthMode = mode
 			opts.PermissionsMode = permissions
-			return actions.Chat(command.Context(), opts)
+			if model, ok := os.LookupEnv("BITS_ASSISTANT_MODEL"); ok {
+				opts.Model = model
+			}
+			if inferenceMode, ok := os.LookupEnv("BITS_ASSISTANT_INFERENCE_MODE"); ok {
+				opts.InferenceMode = inferenceMode
+			}
+			*invoked = true
+			return runChat(command.Context(), opts, stdout, stderr)
 		},
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
@@ -134,19 +97,8 @@ func newRootCommand(actions Actions) *cobra.Command {
 		"",
 		"resume an existing conversation by ID",
 	)
-	root.AddCommand(newRunCommand(actions.Run), newLoginCommand(actions.Login), newLogoutCommand(actions.Logout))
+	root.AddCommand(newRunCommand(invoked, stdout), newLoginCommand(invoked, stderr), newLogoutCommand(invoked, stderr))
 	return root
-}
-
-func parseInferenceMode(raw string) (string, error) {
-	switch raw {
-	case "":
-		return "", nil
-	case "fast", "deep":
-		return raw, nil
-	default:
-		return "", fmt.Errorf("invalid inference mode %q; expected fast or deep", raw)
-	}
 }
 
 func validateSiteSelection(mode auth.Mode, site string, siteChanged bool) error {
@@ -158,21 +110,6 @@ func validateSiteSelection(mode auth.Mode, site string, siteChanged bool) error 
 		return fmt.Errorf("--site requires --auth %s; use `bits login --site` for OAuth", auth.ModeAPIKey)
 	}
 	return nil
-}
-
-func newLoginCommand(action func(context.Context, LoginOptions) error) *cobra.Command {
-	opts := LoginOptions{Site: auth.DefaultSite}
-	command := &cobra.Command{
-		Use:   "login",
-		Short: "Sign in to Datadog",
-		Args:  cobra.NoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
-			return action(command.Context(), opts)
-		},
-	}
-	command.Flags().StringVar(&opts.Site, "site", opts.Site, "Datadog site URL or hostname")
-	command.Flags().StringVar(&opts.ClientID, "client-id", opts.ClientID, "OAuth client ID override")
-	return command
 }
 
 func parseAuthenticationMode(raw string) (auth.Mode, error) {
@@ -192,16 +129,5 @@ func parsePermissionsMode(raw string) (agent.PermissionsMode, error) {
 		return mode, nil
 	default:
 		return "", fmt.Errorf("invalid permissions mode %q; expected manual or skip-permissions", raw)
-	}
-}
-
-func newLogoutCommand(action func(context.Context) error) *cobra.Command {
-	return &cobra.Command{
-		Use:   "logout",
-		Short: "Sign out of Datadog",
-		Args:  cobra.NoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
-			return action(command.Context())
-		},
 	}
 }

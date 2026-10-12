@@ -2,11 +2,17 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
+	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/headless"
+	"github.com/datadog-labs/bits-cli/internal/headless/adeep"
+	"github.com/datadog-labs/bits-cli/internal/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -14,7 +20,7 @@ import (
 // execution flags. The prompt is always a literal flag value, never positional
 // input or stdin. A headless run has no interactive approver, so gated actions
 // are denied unless --permissions skip-permissions is given.
-func newRunCommand(action func(context.Context, RunOptions) error) *cobra.Command {
+func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 	opts := RunOptions{ChatOptions: ChatOptions{AuthMode: auth.ModeAuto}}
 	var authMode string
 	var permissionsMode string
@@ -65,7 +71,8 @@ func newRunCommand(action func(context.Context, RunOptions) error) *cobra.Comman
 			opts.AuthMode = mode
 			opts.PermissionsMode = permissions
 			opts.Delivery = delivery
-			return action(command.Context(), opts)
+			*invoked = true
+			return runRunWithStore(command.Context(), opts, auth.DefaultStore(), stdout)
 		},
 	}
 	flags := command.Flags()
@@ -96,4 +103,76 @@ func parseDelivery(raw string) (string, error) {
 		return "", fmt.Errorf("invalid delivery %q; expected adeep", raw)
 	}
 	return raw, nil
+}
+
+// RunOptions carries the shared execution flags plus one-turn run options.
+type RunOptions struct {
+	ChatOptions
+	Prompt   string
+	Delivery string
+}
+
+func parseInferenceMode(raw string) (string, error) {
+	switch raw {
+	case "":
+		return "", nil
+	case "fast", "deep":
+		return raw, nil
+	default:
+		return "", fmt.Errorf("invalid inference mode %q; expected fast or deep", raw)
+	}
+}
+
+// runRunWithStore executes one noninteractive turn. Missing OAuth fails fast
+// with guidance to run bits login.
+func runRunWithStore(ctx context.Context, opts RunOptions, store auth.CredentialStore, out io.Writer) error {
+	workspace, err := openCurrentWorkspace()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = workspace.Close() }()
+	clientTools := tools.NewClientTools(workspace)
+	toolSet, err := agent.NewToolSet(opts.PermissionsMode, clientTools...)
+	if err != nil {
+		return err
+	}
+	engine, err := newEngine(ctx, opts.ChatOptions, workspace, store)
+	if err != nil {
+		return err
+	}
+	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet}, opts, out)
+}
+
+// runEngineTurn drives exactly one turn, attempts Finish once, and maps its
+// authoritative outcome to the process contract.
+func runEngineTurn(ctx context.Context, engine *agent.Engine, input agent.TurnInput, opts RunOptions, out io.Writer) error {
+	var delivery headless.Delivery
+	switch opts.Delivery {
+	case "adeep":
+		delivery = adeep.New(out)
+	default:
+		return fmt.Errorf("unsupported delivery %q", opts.Delivery)
+	}
+	if err := delivery.Start(headless.Start{StartedAt: time.Now(), RequestedModel: opts.Model}); err != nil {
+		return err
+	}
+	input.Message = opts.Prompt // no-dd-sa:datadog/go-promptinjection -- opts.Prompt is intentionally sent as the user's message for this one turn; it is never used as a system instruction
+	input.OnDeny = agent.DenyContinue
+	result, err := engine.RunTurn(ctx, input, delivery.Consume)
+	finishErr := delivery.Finish(headless.Finish{EndedAt: time.Now(), Result: result, Err: err})
+
+	switch headless.ClassifyTurn(result) {
+	case headless.OutcomeCompleted:
+		return finishErr
+	case headless.OutcomeApprovalDenied:
+		if finishErr != nil {
+			return finishErr
+		}
+		return &ExitError{Code: ExitApprovalDenied, Err: errors.New("an approval gate was denied; the turn finished with the backend's adjusted answer")}
+	default:
+		if err != nil {
+			return err
+		}
+		return finishErr
+	}
 }

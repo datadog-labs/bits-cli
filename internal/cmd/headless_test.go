@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"bytes"
@@ -11,7 +11,6 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
-	"github.com/datadog-labs/bits-cli/internal/cmd"
 )
 
 // scriptBackend scripts the run surface's backend: round 1 may emit the
@@ -83,9 +82,9 @@ func runToolSet(t *testing.T, mode agent.PermissionsMode) *agent.ToolSet {
 	return tools
 }
 
-func runOptions() cmd.RunOptions {
-	return cmd.RunOptions{
-		ChatOptions: cmd.ChatOptions{AuthMode: "auto", Model: "test-model", PermissionsMode: agent.ModeSkipPermissions},
+func runOptions() RunOptions {
+	return RunOptions{
+		ChatOptions: ChatOptions{AuthMode: "auto", Model: "test-model", PermissionsMode: agent.ModeSkipPermissions},
 		Prompt:      "what time is it?",
 		Delivery:    "adeep",
 	}
@@ -97,11 +96,13 @@ func TestRunFakeBackendStreamsVersionedJSONL(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")
-	opts := runOptions()
-	opts.Prompt = "random()"
-	var out bytes.Buffer
-
-	err := runRunWithStore(context.Background(), opts, stubCredentialStore{}, &out)
+	var out, stderr bytes.Buffer
+	err := Execute(context.Background(), []string{
+		"run", "--prompt", "random()", "--delivery", "adeep", "--model", "test-model",
+	}, &out, &stderr)
+	if stderr.Len() != 0 {
+		t.Fatalf("unexpected stderr: %s", &stderr)
+	}
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -184,8 +185,8 @@ func TestRunMissingOAuthFailsFastWithLoginHint(t *testing.T) {
 	if !strings.Contains(err.Error(), "OAuth login is required") {
 		t.Fatalf("error = %q, want the login-required classification", err)
 	}
-	var exitErr *cmd.ExitError
-	if errors.As(err, &exitErr) && exitErr.Code == cmd.ExitUsage {
+	var exitErr *ExitError
+	if errors.As(err, &exitErr) && exitErr.Code == ExitUsage {
 		t.Fatalf("login-required misclassified as usage: %v", err)
 	}
 	if out.Len() != 0 {
@@ -209,9 +210,9 @@ func TestRunInvalidServerGateExitsThree(t *testing.T) {
 	if err == nil {
 		t.Fatal("denial completed with exit 0")
 	}
-	var exitErr *cmd.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != cmd.ExitApprovalDenied {
-		t.Fatalf("error = %v, want exit %d", err, cmd.ExitApprovalDenied)
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitApprovalDenied {
+		t.Fatalf("error = %v, want exit %d", err, ExitApprovalDenied)
 	}
 
 	if len(backend.batches) != 1 || len(backend.batches[0]) != 1 {
@@ -283,9 +284,9 @@ func TestRunDenyModeDeniesLocalAndServerGates(t *testing.T) {
 	var out bytes.Buffer
 
 	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeDeny)}, opts, &out)
-	var exitErr *cmd.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != cmd.ExitApprovalDenied {
-		t.Fatalf("error = %v, want exit %d", err, cmd.ExitApprovalDenied)
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitApprovalDenied {
+		t.Fatalf("error = %v, want exit %d", err, ExitApprovalDenied)
 	}
 	if len(backend.batches) != 1 || len(backend.batches[0]) != 2 {
 		t.Fatalf("response batches = %v", backend.batches)
@@ -319,8 +320,8 @@ func TestRunRuntimeFailureWinsOverDenial(t *testing.T) {
 	if !errors.Is(err, backendErr) {
 		t.Fatalf("error = %v, want the backend failure to win over exit 3", err)
 	}
-	var exitErr *cmd.ExitError
-	if errors.As(err, &exitErr) && exitErr.Code == cmd.ExitApprovalDenied {
+	var exitErr *ExitError
+	if errors.As(err, &exitErr) && exitErr.Code == ExitApprovalDenied {
 		t.Fatalf("denial status won over the runtime failure: %v", err)
 	}
 	if !strings.Contains(out.String(), `"status":"denied"`) {
@@ -349,8 +350,8 @@ func TestRunCancellationIsRuntimeFailure(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
-	var exitErr *cmd.ExitError
-	if errors.As(err, &exitErr) && exitErr.Code == cmd.ExitApprovalDenied {
+	var exitErr *ExitError
+	if errors.As(err, &exitErr) && exitErr.Code == ExitApprovalDenied {
 		t.Fatalf("cancellation was misclassified as denial: %v", err)
 	}
 	if !strings.Contains(out.String(), `"outcome":"canceled"`) {
@@ -385,8 +386,8 @@ func TestRunWriterFailureIsRuntimeFailure(t *testing.T) {
 	if !errors.Is(err, writerErr) {
 		t.Fatalf("error = %v, want the writer failure", err)
 	}
-	var exitErr *cmd.ExitError
-	if errors.As(err, &exitErr) && exitErr.Code == cmd.ExitApprovalDenied {
+	var exitErr *ExitError
+	if errors.As(err, &exitErr) && exitErr.Code == ExitApprovalDenied {
 		t.Fatalf("writer failure was misclassified as denial: %v", err)
 	}
 }
@@ -416,5 +417,26 @@ func TestRunExecutesExactlyOneTurn(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"rounds":2`) {
 		t.Fatalf("round count missing from the terminal record:\n%s", out.String())
+	}
+}
+
+func TestRunCommandAuthenticationFailureIsNotUsageError(t *testing.T) {
+	clearStagingEnv(t)
+	t.Setenv("BITS_FAKE_BACKEND", "1")
+	t.Setenv("DD_API_KEY", "")
+	t.Setenv("DD_APP_KEY", "")
+	out, stderr, err := executeForTest(t, []string{
+		"run", "--prompt", "hello", "--delivery", "adeep",
+		"--auth", "api-key", "--site", "api.datadoghq.com",
+	})
+	if err == nil || !strings.Contains(err.Error(), "DD_API_KEY and DD_APP_KEY") {
+		t.Fatalf("error = %v, want missing API credentials", err)
+	}
+	var exit *ExitError
+	if errors.As(err, &exit) {
+		t.Fatalf("runtime authentication failure classified as exit %d: %v", exit.Code, err)
+	}
+	if out != "" || stderr != "" {
+		t.Fatalf("authentication failure output = %q, stderr = %q", out, stderr)
 	}
 }
