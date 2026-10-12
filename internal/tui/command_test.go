@@ -197,7 +197,7 @@ func TestSettingsIsRegisteredAndAllowedDuringTurn(t *testing.T) {
 
 func TestSubmitSettingsOpensAssistantSettingsWithoutSending(t *testing.T) {
 	var opened string
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.us3.datadoghq.com"}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.us3.datadoghq.com"}, agent.Config{}), Config{
 		OpenURL: func(_ context.Context, target string) error {
 			opened = target
 			return nil
@@ -226,7 +226,7 @@ func TestSubmitSettingsOpensAssistantSettingsWithoutSending(t *testing.T) {
 
 func TestSubmitSettingsUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
 	launched := false
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.ddog-gov.com"}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.ddog-gov.com"}, agent.Config{}), Config{
 		OpenURL: func(context.Context, string) error {
 			launched = true
 			return nil
@@ -246,7 +246,7 @@ func TestSubmitSettingsUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
 
 func TestSubmitSettingsLauncherFailureProvidesManualURL(t *testing.T) {
 	launchErr := errors.New("no graphical browser is available")
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, agent.Config{}), Config{
 		OpenURL: func(context.Context, string) error { return launchErr },
 	})
 	m.editor.Focus()
@@ -266,7 +266,7 @@ func TestSubmitSettingsLauncherFailureProvidesManualURL(t *testing.T) {
 }
 
 func TestSubmitSettingsDuringActiveTurnDoesNotCancel(t *testing.T) {
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, agent.Config{}), Config{
 		OpenURL: func(context.Context, string) error { return nil },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -298,7 +298,7 @@ func TestSubmitModelIsUnknown(t *testing.T) {
 func TestSubmitWebOpensCurrentConversationWithoutSending(t *testing.T) {
 	var opened string
 	backend := &spyBackend{t: t, site: "https://api.us3.datadoghq.com"}
-	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+	m := New(agent.New(backend, agent.Config{ConversationID: "conversation-1"}), Config{
 		OpenURL: func(_ context.Context, target string) error {
 			opened = target
 			return nil
@@ -330,7 +330,7 @@ func TestSubmitWebOpensCurrentConversationWithoutSending(t *testing.T) {
 
 func TestSubmitWebWithoutConversationDoesNotLaunchOrSend(t *testing.T) {
 	launched := false
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, agent.Config{}), Config{
 		OpenURL: func(context.Context, string) error {
 			launched = true
 			return nil
@@ -350,7 +350,7 @@ func TestSubmitWebWithoutConversationDoesNotLaunchOrSend(t *testing.T) {
 
 func TestSubmitWebUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
 	launched := false
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.ddog-gov.com"}, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.ddog-gov.com"}, agent.Config{ConversationID: "conversation-1"}), Config{
 		OpenURL: func(context.Context, string) error {
 			launched = true
 			return nil
@@ -370,7 +370,7 @@ func TestSubmitWebUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
 
 func TestSubmitWebLauncherFailureProvidesManualURL(t *testing.T) {
 	launchErr := errors.New("no graphical browser is available")
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, agent.Config{ConversationID: "conversation-1"}), Config{
 		OpenURL: func(context.Context, string) error { return launchErr },
 	})
 	m.editor.Focus()
@@ -391,7 +391,7 @@ func TestSubmitWebLauncherFailureProvidesManualURL(t *testing.T) {
 
 func TestSubmitWebDuringActiveTurnDoesNotCancel(t *testing.T) {
 	backend := &spyBackend{t: t, site: "https://api.datadoghq.com"}
-	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+	m := New(agent.New(backend, agent.Config{ConversationID: "conversation-1"}), Config{
 		OpenURL: func(context.Context, string) error { return nil },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -646,7 +646,7 @@ func TestLatestCopyableAssistantResponse(t *testing.T) {
 }
 
 func TestCopyCommandWritesLatestAssistantResponseLocally(t *testing.T) {
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{}))
 	m.editor.Focus()
 	m.transcript.Blocks = []agent.Block{
 		{Role: assistant.RoleUser, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "prompt"}},
@@ -667,7 +667,7 @@ func TestCopyCommandWritesLatestAssistantResponseLocally(t *testing.T) {
 }
 
 func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{}))
 	m.editor.Focus()
 	m.transcript.Blocks = []agent.Block{{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "previous answer"}}}
 	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
@@ -684,7 +684,7 @@ func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
 }
 
 func TestCopyCommandReportsNoCompletedAssistantResponse(t *testing.T) {
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{}))
 	m.transcript.Blocks = []agent.Block{
 		{Role: assistant.RoleUser, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "prompt"}},
 		{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: false, Markdown: &assistant.MarkdownPayload{Content: "partial"}},

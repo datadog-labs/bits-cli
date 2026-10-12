@@ -86,7 +86,7 @@ func toolBlock(t *testing.T, blocks []agent.Block, name string) *agent.ToolBlock
 }
 
 func TestParallelClientCalls(t *testing.T) {
-	engine := agent.New(&Fake{}, assistant.SendOptions{})
+	engine := agent.New(&Fake{}, agent.Config{})
 	script := `rs = call([("list_files", {"path": "."}), ("read_file", {"path": "go.mod"}), ("grep_files", {"pattern": "TODO"})]); say(str(["go.mod" in rs[0].output, "module demo" in rs[1].output, "notes.txt" in rs[2].output]))`
 	result, rounds := runTurn(t, engine, script, workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
 	if rounds != 2 {
@@ -107,7 +107,7 @@ func TestServerGateWithClientCall(t *testing.T) {
 	}
 
 	t.Run("deny continue", func(t *testing.T) {
-		engine := agent.New(&Fake{}, assistant.SendOptions{})
+		engine := agent.New(&Fake{}, agent.Config{})
 		result, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeManual), agent.DenyContinue, decide)
 		if got := texts(result.Blocks); !slices.Equal(got, []string{"not created"}) {
 			t.Fatalf("answer = %q", got)
@@ -117,7 +117,7 @@ func TestServerGateWithClientCall(t *testing.T) {
 		}
 	})
 	t.Run("deny stop", func(t *testing.T) {
-		engine := agent.New(&Fake{}, assistant.SendOptions{})
+		engine := agent.New(&Fake{}, agent.Config{})
 		result, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeManual), agent.DenyStop, decide)
 		if !result.Denied || len(texts(result.Blocks)) != 0 {
 			t.Fatalf("denied = %t, answers = %q", result.Denied, texts(result.Blocks))
@@ -131,7 +131,7 @@ func TestServerGateWithClientCall(t *testing.T) {
 // TestDisclosureScript runs the disclosure QA script against the real tools,
 // so schema drift fails here rather than during manual QA.
 func TestDisclosureScript(t *testing.T) {
-	engine := agent.New(&Fake{ScriptRoot: "testdata"}, assistant.SendOptions{})
+	engine := agent.New(&Fake{ScriptRoot: "testdata"}, agent.Config{})
 	result, _ := runTurn(t, engine, `load("disclosure.star", "all"); all()`, workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
 	var calls int
 	for _, block := range result.Blocks {
@@ -156,7 +156,7 @@ func TestDisclosureScript(t *testing.T) {
 }
 
 func TestKitchen(t *testing.T) {
-	engine := agent.New(&Fake{}, assistant.SendOptions{})
+	engine := agent.New(&Fake{}, agent.Config{})
 	result, _ := runTurn(t, engine, "kitchen()", workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
 	kinds := map[assistant.ContentKind]bool{}
 	styles := chat.DefaultStyles(true)

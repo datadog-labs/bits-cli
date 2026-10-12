@@ -32,7 +32,7 @@ func newModelWithFileWorkspace(t *testing.T, logout LogoutFunc) (*Model, *worksp
 		t.Fatal(err)
 	}
 	m := New(
-		agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}),
+		agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, agent.Config{}),
 		Config{Workspace: ws, Logout: logout},
 	)
 	t.Cleanup(func() {

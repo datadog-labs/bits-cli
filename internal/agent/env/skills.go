@@ -1,4 +1,4 @@
-package agent
+package env
 
 import (
 	"context"
@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
-	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 const (
@@ -21,56 +23,19 @@ const (
 	skillRootLimit    = 128
 )
 
-// ClientSkills shares one conversation registry between completion and the
+// Skills shares one conversation registry between completion and the
 // engine. Discovery configuration is immutable; the cache owns synchronization.
-type ClientSkills struct {
+type Skills struct {
 	workspace string
 	extra     []string
 	cache     skillRegistryCache
 }
 
-// NewClientSkills discovers skills relative to an explicit workspace. Extra
+// NewSkills discovers skills relative to an explicit workspace. Extra
 // directories are searched in flag order after project directories.
-func NewClientSkills(workspace string, extra []string) *ClientSkills {
-	return &ClientSkills{workspace: workspace, extra: slices.Clone(extra)}
+func NewSkills(workspace string, extra []string) *Skills {
+	return &Skills{workspace: workspace, extra: slices.Clone(extra)}
 }
-
-// WithClientSkills attaches a client skill store owned exclusively by this engine.
-func WithClientSkills(skills *ClientSkills) Option {
-	return func(e *Engine) { e.clientSkills = skills }
-}
-
-func (s *ClientSkills) reset() {
-	if s != nil {
-		s.cache.reset()
-	}
-}
-
-// apply adds the catalog, then an explicitly invoked skill's instructions.
-func (s *ClientSkills) apply(ctx context.Context, opts assistant.SendOptions, skillContext string) assistant.SendOptions {
-	if s == nil {
-		return opts
-	}
-	if registry, err := s.cache.load(ctx, s.discover); err == nil {
-		catalog := registry.catalog
-		if catalog == "" && opts.ConversationID != "" {
-			catalog = clientSkillsRemovalNotice
-		}
-		opts.CustomUserContext = joinUserContext(opts.CustomUserContext, catalog)
-	}
-	opts.CustomUserContext = joinUserContext(opts.CustomUserContext, skillContext)
-	return opts
-}
-
-func joinUserContext(existing, block string) string {
-	if existing == "" || block == "" {
-		return existing + block
-	}
-	return existing + "\n\n" + block
-}
-
-// Keep context markers stable so updates supersede catalogs already in conversation history.
-const clientSkillsRemovalNotice = "<available-local-client-skills>\nThis is the latest available-local-client-skills update. Disregard any earlier <available-local-client-skills> blocks.\nNo local client skills are currently available in this user's local project context.\n</available-local-client-skills>"
 
 // SkillSummary is the presentation metadata exposed to completion clients.
 type SkillSummary struct {
@@ -78,7 +43,7 @@ type SkillSummary struct {
 	Description string
 }
 
-// registeredSkill stays inside the engine with its confined-read metadata.
+// registeredSkill stays inside the registry with its confined-read metadata.
 type registeredSkill struct {
 	Name                   string
 	Description            string
@@ -89,26 +54,9 @@ type registeredSkill struct {
 	defaultName string
 }
 
-// ClientSkills lists the shared conversation registry. An empty successful result
-// means no skills; failures remain distinguishable and can be retried.
-func (e *Engine) ClientSkills(ctx context.Context) ([]SkillSummary, error) {
-	if e.clientSkills == nil {
-		return nil, nil
-	}
-	registry, err := e.clientSkills.cache.load(ctx, e.clientSkills.discover)
-	if err != nil {
-		return nil, err
-	}
-	summaries := make([]SkillSummary, 0, len(registry.skills))
-	for _, skill := range registry.skills {
-		summaries = append(summaries, SkillSummary{Name: skill.Name, Description: skill.Description})
-	}
-	return summaries, nil
-}
-
 type skillLocation struct{ path, boundary string }
 
-func (s *ClientSkills) discover(ctx context.Context) []registeredSkill {
+func (s *Skills) discover(ctx context.Context) []registeredSkill {
 	active, err := filepath.Abs(s.workspace)
 	if err != nil {
 		return nil
@@ -117,9 +65,9 @@ func (s *ClientSkills) discover(ctx context.Context) []registeredSkill {
 	if err != nil {
 		return nil
 	}
-	repository, _ := instructionRepository(ctx, active)
+	repository := workspace.InspectRepositoryLayout(ctx, active).Root
 	boundary := active
-	if repository != "" && withinInstructionsRoot(repository, active) {
+	if repository != "" && withinRoot(repository, active) {
 		boundary = repository
 	}
 	// Nearest project directories win, followed by explicit roots in flag order,
@@ -179,27 +127,6 @@ func (s *ClientSkills) discover(ctx context.Context) []registeredSkill {
 	return skills
 }
 
-func renderClientSkills(skills []registeredSkill) string {
-	if !slices.ContainsFunc(skills, func(skill registeredSkill) bool { return !skill.DisableModelInvocation }) {
-		return ""
-	}
-	var catalog strings.Builder
-	catalog.WriteString("<available-local-client-skills>\nThis is the latest available-local-client-skills update. Disregard any earlier <available-local-client-skills> blocks.\nAvailable local client skills in this user's local project context:\n")
-	const footer = "Local client skills are different from enabled skills. They are local to this CLI. Do not load these local client skills with the Skill tool. When a skill is invoked, read its SKILL.md with available client tools before following it.\n</available-local-client-skills>"
-	for _, skill := range skills {
-		if skill.DisableModelInvocation {
-			continue
-		}
-		entry := fmt.Sprintf("<skill name=\"%s\" path=\"%s\">%s</skill>\n", html.EscapeString(skill.Name), html.EscapeString(filepath.ToSlash(skill.Path)), html.EscapeString(skill.Description))
-		if catalog.Len()+len(entry)+len(footer) > skillCatalogLimit {
-			continue
-		}
-		catalog.WriteString(entry)
-	}
-	catalog.WriteString(footer)
-	return catalog.String()
-}
-
 type skillScan struct {
 	ctx                              context.Context
 	remainingEntries, remainingBytes int
@@ -212,7 +139,7 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 	}
 	s.remainingEntries--
 	resolved, err := filepath.EvalSymlinks(source)
-	if err != nil || !withinInstructionsRoot(boundary, resolved) {
+	if err != nil || !withinRoot(boundary, resolved) {
 		return
 	}
 	relative, err := filepath.Rel(boundary, resolved)
@@ -249,7 +176,7 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 	if filepath.Base(source) != "SKILL.md" || !info.Mode().IsRegular() {
 		return
 	}
-	// Reserve the extra byte readInstructions uses to detect truncation.
+	// Reserve the extra byte readBoundedFile uses to detect truncation.
 	if s.remainingBytes <= 1 {
 		s.remainingBytes = 0
 		return
@@ -264,4 +191,94 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 		skill := registeredSkill{Name: document.Name, Description: document.Description, Path: resolved, DisableModelInvocation: document.DisableModelInvocation, boundary: boundary, defaultName: defaultName}
 		s.skills[skill.Name] = skill
 	}
+}
+
+const skillDiscoveryTimeout = 5 * time.Second
+
+// skillRegistry is immutable once cached. Menu entries and the automatic
+// catalog derive from the same discovery result, including user-only skills.
+type skillRegistry struct {
+	skills  []registeredSkill
+	catalog string
+}
+
+// skillRegistryCache holds one discovery result per conversation. Discovery is
+// bounded, so it runs under the lock: concurrent callers share one scan, and a
+// reset cannot interleave with it. Failed scans are not cached.
+type skillRegistryCache struct {
+	mu      sync.Mutex
+	current *skillRegistry
+}
+
+func (c *skillRegistryCache) load(ctx context.Context, discover func(context.Context) []registeredSkill) (*skillRegistry, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.current != nil {
+		return c.current, nil
+	}
+	scanCtx, cancel := context.WithTimeout(ctx, skillDiscoveryTimeout)
+	defer cancel()
+	skills := discover(scanCtx)
+	if err := scanCtx.Err(); err != nil {
+		return nil, err
+	}
+	c.current = &skillRegistry{skills: skills, catalog: renderSkills(skills)}
+	return c.current, nil
+}
+
+func (c *skillRegistryCache) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.current = nil
+}
+
+// List returns a copy of the metadata shared by completion and the model catalog.
+func (s *Skills) List(ctx context.Context) ([]SkillSummary, error) {
+	registry, err := s.cache.load(ctx, s.discover)
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]SkillSummary, 0, len(registry.skills))
+	for _, skill := range registry.skills {
+		summaries = append(summaries, SkillSummary{Name: skill.Name, Description: skill.Description})
+	}
+	return summaries, nil
+}
+
+// Catalog returns the cached automatic-invocation catalog. An empty successful
+// result is distinct from canceled discovery, which is not cached.
+func (s *Skills) Catalog(ctx context.Context) (string, error) {
+	registry, err := s.cache.load(ctx, s.discover)
+	if err != nil {
+		return "", err
+	}
+	return registry.catalog, nil
+}
+
+// Reset invalidates discovery. The owning engine calls it on conversation changes.
+// Reset and discovery are serialized with concurrent completion requests.
+func (s *Skills) Reset() { s.cache.reset() }
+
+// SkillsRemovalNotice supersedes catalogs already in conversation history.
+const SkillsRemovalNotice = "<available-local-client-skills>\nThis is the latest available-local-client-skills update. Disregard any earlier <available-local-client-skills> blocks.\nNo local client skills are currently available in this user's local project context.\n</available-local-client-skills>"
+
+func renderSkills(skills []registeredSkill) string {
+	if !slices.ContainsFunc(skills, func(skill registeredSkill) bool { return !skill.DisableModelInvocation }) {
+		return ""
+	}
+	var catalog strings.Builder
+	catalog.WriteString("<available-local-client-skills>\nThis is the latest available-local-client-skills update. Disregard any earlier <available-local-client-skills> blocks.\nAvailable local client skills in this user's local project context:\n")
+	const footer = "Local client skills are different from enabled skills. They are local to this CLI. Do not load these local client skills with the Skill tool. When a skill is invoked, read its SKILL.md with available client tools before following it.\n</available-local-client-skills>"
+	for _, skill := range skills {
+		if skill.DisableModelInvocation {
+			continue
+		}
+		entry := fmt.Sprintf("<skill name=\"%s\" path=\"%s\">%s</skill>\n", html.EscapeString(skill.Name), html.EscapeString(filepath.ToSlash(skill.Path)), html.EscapeString(skill.Description))
+		if catalog.Len()+len(entry)+len(footer) > skillCatalogLimit {
+			continue
+		}
+		catalog.WriteString(entry)
+	}
+	catalog.WriteString(footer)
+	return catalog.String()
 }

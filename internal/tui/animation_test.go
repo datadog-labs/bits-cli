@@ -164,7 +164,7 @@ func TestTurnClosedUpdateDisarmsDespiteStaleRunningBlock(t *testing.T) {
 }
 
 func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
-	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
+	m := New(agent.New(&immediateConversationBackend{}, agent.Config{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
@@ -183,7 +183,7 @@ func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
 }
 
 func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
-	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
+	m := New(agent.New(&immediateConversationBackend{}, agent.Config{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
@@ -203,7 +203,7 @@ func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
 
 func TestConversationSwitchSettlesPersistedRunningBlockAndStaysDisarmed(t *testing.T) {
 	backend := newResumeBackend()
-	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
+	m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
@@ -308,7 +308,7 @@ func TestAnimationFrameReachesTheList(t *testing.T) {
 }
 
 func TestPickerLoadingUsesSharedClockAndStopsOnClose(t *testing.T) {
-	m := New(agent.New(newResumeBackend(), assistant.SendOptions{}))
+	m := New(agent.New(newResumeBackend(), agent.Config{}))
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.openConversationPicker()
 	if cmd := m.syncAnimations(); cmd == nil || !m.animClock.armed || m.animBorderSweep.active {

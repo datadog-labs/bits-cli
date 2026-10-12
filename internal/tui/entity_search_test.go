@@ -50,7 +50,7 @@ func (b *acceptingBackend) Send(_ context.Context, _ any, opts assistant.SendOpt
 
 func TestEntitySearchDebouncesThenCancelsSupersededRequest(t *testing.T) {
 	searcher := &blockingEntitySearcher{started: make(chan assistant.SearchEntitiesInput, 1), canceled: make(chan struct{})}
-	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{EntitySearcher: searcher})
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, agent.Config{}), Config{EntitySearcher: searcher})
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "@checkout api"})
 	debounce := m.syncEntitySearch()
@@ -88,7 +88,7 @@ func TestEntitySearchDebouncesThenCancelsSupersededRequest(t *testing.T) {
 
 func TestEntitySearchTypePrefixNarrowsRequest(t *testing.T) {
 	searcher := &staticEntitySearcher{}
-	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{EntitySearcher: searcher})
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, agent.Config{}), Config{EntitySearcher: searcher})
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: `@service:"Assistant API"`})
 	debounce := m.syncEntitySearch()
@@ -109,7 +109,7 @@ func TestEntitySearchTypePrefixNarrowsRequest(t *testing.T) {
 
 func TestQuotedEditorQueryReachesSearchIntact(t *testing.T) {
 	searcher := &staticEntitySearcher{}
-	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{EntitySearcher: searcher})
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, agent.Config{}), Config{EntitySearcher: searcher})
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: `@service:"API \"東京\" @prod"`})
 	debounce := m.syncEntitySearch()
@@ -127,7 +127,7 @@ func TestEntitySearchBlockedByLogoutState(t *testing.T) {
 	for _, state := range []string{"pending", "running", "completed"} {
 		t.Run(state, func(t *testing.T) {
 			searcher := &staticEntitySearcher{}
-			m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{EntitySearcher: searcher})
+			m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, agent.Config{}), Config{EntitySearcher: searcher})
 			m.editor.Focus()
 			m.editor.Update(tea.PasteMsg{Content: "@check"})
 			_ = m.syncEntitySearch()
@@ -157,7 +157,7 @@ func TestLogoutCancelsEntitySearch(t *testing.T) {
 	for _, pending := range []bool{false, true} {
 		t.Run(map[bool]string{false: "immediate", true: "pending turn drain"}[pending], func(t *testing.T) {
 			searcher := &blockingEntitySearcher{started: make(chan assistant.SearchEntitiesInput, 1), canceled: make(chan struct{})}
-			m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{
+			m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, agent.Config{}), Config{
 				EntitySearcher: searcher,
 				Logout:         func(context.Context) (bool, error, error) { return true, nil, nil },
 			})
@@ -203,7 +203,7 @@ func TestLogoutCancelsEntitySearch(t *testing.T) {
 func TestLogoutInvalidatesQueuedSearchAndFailureAllowsRetry(t *testing.T) {
 	searcher := &staticEntitySearcher{}
 	logoutErr := errors.New("credential store unavailable")
-	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, agent.Config{}), Config{
 		EntitySearcher: searcher,
 		Logout:         func(context.Context) (bool, error, error) { return true, nil, logoutErr },
 	})
@@ -291,7 +291,7 @@ func TestQuotedEntityQueryAcceptsIncompleteAndLiteralEscapes(t *testing.T) {
 }
 
 func TestEntitySearchRejectsStaleResponse(t *testing.T) {
-	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}))
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, agent.Config{}))
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "@new"})
 	_ = m.syncEntitySearch()
@@ -309,7 +309,7 @@ func TestEntitySearchRejectsStaleResponse(t *testing.T) {
 }
 
 func TestEntitySearchUsesFreshBoundedCache(t *testing.T) {
-	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}))
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, agent.Config{}))
 	m.editor.Focus()
 	response := assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
 		CandidateID: "cached", EntityID: "checkout", EntityType: "service", Name: "checkout",
@@ -333,7 +333,7 @@ func TestEntitySearchUsesFreshBoundedCache(t *testing.T) {
 func TestSearchFailureLeavesSubmissionUsable(t *testing.T) {
 	backend := &acceptingBackend{requests: make(chan assistant.SendOptions, 1)}
 	searcher := &staticEntitySearcher{err: errors.New("search unavailable")}
-	m := New(agent.New(backend, assistant.SendOptions{}), Config{EntitySearcher: searcher})
+	m := New(agent.New(backend, agent.Config{}), Config{EntitySearcher: searcher})
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "@missing entity"})
 	debounce := m.syncEntitySearch()
@@ -357,7 +357,7 @@ func TestSearchFailureLeavesSubmissionUsable(t *testing.T) {
 
 func TestSelectedEntityContextIsSentOnceAndClearedAfterSubmit(t *testing.T) {
 	backend := &acceptingBackend{requests: make(chan assistant.SendOptions, 2)}
-	m := New(agent.New(backend, assistant.SendOptions{}))
+	m := New(agent.New(backend, agent.Config{}))
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "@check"})
 	_ = m.syncEntitySearch()
@@ -403,7 +403,7 @@ func TestSelectedEntityContextIsSentOnceAndClearedAfterSubmit(t *testing.T) {
 
 func TestEditingSelectedMentionRemovesStructuredContext(t *testing.T) {
 	backend := &acceptingBackend{requests: make(chan assistant.SendOptions, 1)}
-	m := New(agent.New(backend, assistant.SendOptions{}))
+	m := New(agent.New(backend, agent.Config{}))
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "@check"})
 	_ = m.syncEntitySearch()
@@ -485,7 +485,7 @@ func TestEntityCandidateSanitizesTerminalControls(t *testing.T) {
 		t.Fatalf("sanitization changed canonical identity: %#v", candidate.Attachment)
 	}
 
-	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, assistant.SendOptions{}))
+	m := New(agent.New(&acceptingBackend{requests: make(chan assistant.SendOptions, 1)}, agent.Config{}))
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "@dash"})
 	m.editor.SetEntityResults("dash", editor.RemoteReady, []editor.Candidate{candidate})

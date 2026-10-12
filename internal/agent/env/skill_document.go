@@ -1,9 +1,13 @@
-package agent
+package env
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
+	"html"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -79,15 +83,12 @@ var errInvalidSkillDocument = errors.New("oversized, not valid UTF-8, or has inv
 // readSkillDocument reads one SKILL.md confined to root. consumed is the byte
 // count charged against a discovery budget, including the truncation probe.
 func readSkillDocument(root *os.Root, relative string, limit int, defaultName string) (document skillDocument, consumed int, err error) {
-	content, truncated, err := readInstructions(root, relative, limit)
+	content, err := readBoundedFile(root, relative, limit)
 	consumed = len(content)
-	if truncated {
-		consumed = limit + 1
-	}
 	if err != nil {
 		return skillDocument{}, consumed, err
 	}
-	if truncated || !utf8.Valid(content) {
+	if consumed > limit || !utf8.Valid(content) {
 		return skillDocument{}, consumed, errInvalidSkillDocument
 	}
 	document, ok := parseSkillDocument(content, defaultName)
@@ -95,4 +96,52 @@ func readSkillDocument(root *os.Root, relative string, limit int, defaultName st
 		return skillDocument{}, consumed, errInvalidSkillDocument
 	}
 	return document, consumed, nil
+}
+
+type loadedSkill struct {
+	Name, Path, BaseDirectory, Body string
+}
+
+// Invoke resolves a name against the cached registry and rereads its current body
+// through the original confinement boundary before rendering the invocation.
+func (s *Skills) Invoke(ctx context.Context, name, arguments string) (string, error) {
+	registry, err := s.cache.load(ctx, s.discover)
+	if err != nil {
+		return "", fmt.Errorf("discover client skills: %w", err)
+	}
+	for _, skill := range registry.skills {
+		if skill.Name == name {
+			loaded, err := skill.load()
+			if err != nil {
+				return "", err
+			}
+			return renderSkillInvocation(loaded, arguments), nil
+		}
+	}
+	return "", fmt.Errorf("unknown client skill: %s", name)
+}
+
+// load rereads a registered file through its discovery boundary.
+func (s registeredSkill) load() (loadedSkill, error) {
+	root, err := os.OpenRoot(s.boundary)
+	if err != nil {
+		return loadedSkill{}, fmt.Errorf("open client skill %q root: %w", s.Name, err)
+	}
+	defer func() { _ = root.Close() }()
+	relative, err := filepath.Rel(s.boundary, s.Path)
+	if err != nil {
+		return loadedSkill{}, fmt.Errorf("resolve client skill %q: %w", s.Name, err)
+	}
+	document, _, err := readSkillDocument(root, relative, skillFileLimit, s.defaultName)
+	if err != nil {
+		return loadedSkill{}, fmt.Errorf("read client skill %q: %w", s.Name, err)
+	}
+	if document.Name != s.Name {
+		return loadedSkill{}, fmt.Errorf("client skill %q was renamed; start a new conversation to rescan", s.Name)
+	}
+	return loadedSkill{Name: s.Name, Path: s.Path, BaseDirectory: filepath.Dir(s.Path), Body: document.body}, nil
+}
+
+func renderSkillInvocation(s loadedSkill, arguments string) string {
+	return fmt.Sprintf("<invoked-local-client-skill name=\"%s\" path=\"%s\" base-directory=\"%s\">\nThe user explicitly invoked this client skill. Follow these instructions, resolving relative references from its base directory.\n<instructions>%s</instructions>\n<arguments>%s</arguments>\n</invoked-local-client-skill>", html.EscapeString(s.Name), html.EscapeString(filepath.ToSlash(s.Path)), html.EscapeString(filepath.ToSlash(s.BaseDirectory)), html.EscapeString(s.Body), html.EscapeString(arguments))
 }

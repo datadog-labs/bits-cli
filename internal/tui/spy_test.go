@@ -34,7 +34,7 @@ func (s *spyBackend) Send(context.Context, any, assistant.SendOptions, func(assi
 // reaches spy.Send and fails with a clear cause instead of nil-panicking first.
 func newModelWithSpy(t *testing.T) *Model {
 	t.Helper()
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}))
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{}))
 	m.editor.Focus()
 	return m
 }

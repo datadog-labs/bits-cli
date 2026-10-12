@@ -373,7 +373,7 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 		},
 		{textMsg("a2", "done."), usageMsg("u2", assistant.Usage{TokensUsed: 50})},
 	}}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
 	result, err := runDelivery(t, engine, clientToolSet(t, agent.ModeSkipPermissions), &out)
@@ -441,7 +441,7 @@ func TestDeliveryDenialsAndSiblingResultAreCorrelated(t *testing.T) {
 		},
 		{textMsg("a2", "adjusted answer")},
 	}}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
 	result, err := runDelivery(t, engine, clientToolSet(t, agent.ModeManual), &out)
@@ -481,7 +481,7 @@ func TestDeliveryPendingCallAndExactMalformedPayloads(t *testing.T) {
 		failOn:  1,
 		failErr: backendErr,
 	}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
 	result, err := runDelivery(t, engine, clientToolSet(t, agent.ModeSkipPermissions), &out)
@@ -582,7 +582,7 @@ func TestDeliveryWriterFailureUsesConsumerFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := &turnBackend{rounds: [][]assistant.Message{{serverCallMsg("s1", "srv-1", "search_logs", "{}")}}}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	result, err := engine.RunTurn(context.Background(), agent.TurnInput{
 		Message: "investigate",
 		Tools:   clientToolSet(t, agent.ModeSkipPermissions),
@@ -706,7 +706,7 @@ func TestDeliveryReportsServerGateAndCancelledSiblings(t *testing.T) {
 		},
 		{textMsg("a2", "adjusted answer")},
 	}}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 	delivery := New(&out)
 	if err := delivery.Start(headless.Start{}); err != nil {

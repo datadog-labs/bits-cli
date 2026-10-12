@@ -308,7 +308,7 @@ func TestExecCommandManualEngineDoesNotLaunchBeforeApproval(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	events := engine.StartTurn(ctx, agent.TurnInput{Message: "run", Tools: set, OnDeny: agent.DenyContinue})
 
 	approved := false
@@ -354,7 +354,7 @@ func TestExecCommandDenialNeverLaunches(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	events := engine.StartTurn(ctx, agent.TurnInput{Message: "run", Tools: set, OnDeny: agent.DenyContinue})
 	denied := false
 	for event := range events {
@@ -423,7 +423,7 @@ func TestExecCommandSessionGrantIsScopedToExactLaunchTuple(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	events := engine.StartTurn(ctx, agent.TurnInput{Message: "run both", Tools: set, OnDeny: agent.DenyContinue})
 
 	if !waitForExecApproval(t, events, "exec-1") {

@@ -53,7 +53,7 @@ func TestHeadlessUnexpectedQuestionReturnsUnsupported(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := &headlessQuestionBackend{t: t}
-	engine := agent.New(b, assistant.SendOptions{})
+	engine := agent.New(b, agent.Config{})
 	result, err := engine.RunTurn(t.Context(), agent.TurnInput{Message: "choose", Tools: set}, nil)
 	if err != nil || result.Outcome != agent.TurnOutcomeCompleted {
 		t.Fatalf("result=%+v err=%v", result, err)

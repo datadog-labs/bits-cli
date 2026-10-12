@@ -1,17 +1,18 @@
 // Package agent drives the remote assistant turn loop and emits fine-grained
-// events on a channel. It imports only the assistant client and has no Bubble
-// Tea / UI dependency, so it is reusable by a future headless surface and
-// testable without a program.
+// events on a channel. It composes local context with assistant requests without
+// a terminal UI dependency, so interactive and headless surfaces share the engine.
 package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
 
+	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
@@ -159,8 +160,9 @@ type Engine struct {
 	sessionGrants       map[ApprovalKey]struct{}
 	active              atomic.Bool
 	operationGeneration atomic.Uint64
-	projectInstructions *ProjectInstructions
-	clientSkills        *ClientSkills
+	projectInstructions *instructionDelivery
+	clientSkills        *env.Skills
+	userContext         func(context.Context) string
 }
 
 // RuntimeStatus is the non-secret request and backend state needed by local
@@ -179,12 +181,48 @@ type toolCommand struct {
 	stop       bool
 }
 
-// Option configures an engine before it starts processing operations.
-type Option func(*Engine)
+// Config holds engine-lifetime dependencies and backend request defaults.
+// Messages, tools, attachments, and denial policy belong to TurnInput.
+type Config struct {
+	// ConversationID and MessageHistory initialize the conversation. Starting or
+	// installing another conversation clears the initial message history.
+	ConversationID string
+	MessageHistory []json.RawMessage
 
-// New returns an Engine. opts carries the per-request defaults (profile, model,
-// conversation id, …); ConversationID is updated as turns run.
-func New(b Backend, opts assistant.SendOptions, options ...Option) *Engine {
+	Model                     string
+	InferenceMode             string
+	Profile                   assistant.Profile
+	Referrer                  string
+	SkillOverrides            []assistant.SkillOverride
+	ExperimentalToolOverrides map[string]any
+	EnableDebugMode           bool
+	DebugTag                  string
+
+	ProjectInstructions *env.Instructions
+	// ClientSkills is a conversation-scoped registry owned exclusively by this engine.
+	ClientSkills *env.Skills
+	// UserContext is called on each new user turn to observe current environment
+	// state. Unchanged context is suppressed after delivery. The renderer survives
+	// conversation changes; delivery tracking does not. Nil disables it.
+	UserContext func(context.Context) string
+}
+
+// New creates an engine from its backend and configuration. Local context is
+// discovered lazily. Callers must not mutate configuration slices or maps after
+// construction. Dynamic environment state is observed through UserContext.
+func New(b Backend, config Config) *Engine {
+	opts := assistant.SendOptions{
+		ConversationID:            config.ConversationID,
+		MessageHistory:            config.MessageHistory,
+		Model:                     config.Model,
+		InferenceMode:             config.InferenceMode,
+		Profile:                   config.Profile,
+		Referrer:                  config.Referrer,
+		SkillOverrides:            config.SkillOverrides,
+		ExperimentalToolOverrides: config.ExperimentalToolOverrides,
+		EnableDebugMode:           config.EnableDebugMode,
+		DebugTag:                  config.DebugTag,
+	}
 	profile := opts.Profile
 	if profile == "" {
 		profile = assistant.DefaultProfile
@@ -202,9 +240,11 @@ func New(b Backend, opts assistant.SendOptions, options ...Option) *Engine {
 		transcript:    NewTranscript(),
 		commands:      make(chan toolCommand, maxQueuedCommands),
 		sessionGrants: make(map[ApprovalKey]struct{}),
+		clientSkills:  config.ClientSkills,
+		userContext:   config.UserContext,
 	}
-	for _, option := range options {
-		option(engine)
+	if config.ProjectInstructions != nil {
+		engine.projectInstructions = &instructionDelivery{source: config.ProjectInstructions}
 	}
 	return engine
 }
@@ -236,9 +276,6 @@ type TurnInput struct {
 	Context *assistant.AssistantContext
 	// OnDeny is the turn's policy after a denial is answered on the wire.
 	OnDeny DenyPolicy
-	// UserContext renders the client's environment. The engine sends it with
-	// the turn's first request when the conversation does not already carry it.
-	UserContext func(context.Context) string
 }
 
 // turnCompletion is the final state captured before an engine operation
@@ -437,7 +474,7 @@ func (e *Engine) run(
 	convID := e.ConversationID()
 	var userContext string
 	if len(resumed) == 0 {
-		userContext = e.pendingUserContext(ctx, in.UserContext)
+		userContext = e.pendingUserContext(ctx)
 	}
 
 	// request sends one round and collects the client calls it pauses on. It
@@ -446,7 +483,7 @@ func (e *Engine) run(
 		sentUserContext := opts.CustomUserContext
 		opts = e.projectInstructions.apply(ctx, opts)
 		if _, userMessage := next.(string); userMessage {
-			opts = e.clientSkills.apply(ctx, opts, skillContext)
+			opts = e.applySkills(ctx, opts, skillContext)
 		}
 		var calls []ToolCall
 		streamed := false
@@ -612,19 +649,6 @@ func (e *Engine) run(
 	send(Event{Kind: EventError, Round: maxTurns, Err: ErrMaxTurns})
 }
 
-// pendingUserContext returns the user context to send with a new user turn, or
-// "" when the conversation already carries it.
-func (e *Engine) pendingUserContext(ctx context.Context, render func(context.Context) string) string {
-	if render == nil {
-		return ""
-	}
-	rendered := render(ctx)
-	if e.sentUserContext != nil && *e.sentUserContext == rendered {
-		return ""
-	}
-	return rendered
-}
-
 // drainStoppedToolCalls cancels follow-up client calls after a stopped
 // round so the backend is never left waiting.
 func (e *Engine) drainStoppedToolCalls(
@@ -761,9 +785,7 @@ func (e *Engine) NewConversation() error {
 	}
 	e.opts.ConversationID = ""
 	e.opts.MessageHistory = nil
-	e.sentUserContext = nil
-	e.projectInstructions.reset()
-	e.clientSkills.reset()
+	e.resetContext()
 	e.transcript = NewTranscript()
 	e.continuation = nil
 	clear(e.sessionGrants)

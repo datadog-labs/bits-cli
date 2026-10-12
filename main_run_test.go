@@ -202,7 +202,7 @@ func TestRunInvalidServerGateExitsThree(t *testing.T) {
 			runTextMessage("a1", "I cannot delete the dashboard."),
 		},
 	}}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
 	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
@@ -242,7 +242,7 @@ func TestRunSkipPermissionsApprovesLocalAndServerGates(t *testing.T) {
 			runTextMessage("a1", "It is noon."),
 		},
 	}}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
 	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
@@ -277,7 +277,7 @@ func TestRunDenyModeDeniesLocalAndServerGates(t *testing.T) {
 			runTextMessage("a1", "I could not check the time."),
 		},
 	}}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	opts := runOptions()
 	opts.PermissionsMode = agent.ModeDeny
 	var out bytes.Buffer
@@ -312,7 +312,7 @@ func TestRunRuntimeFailureWinsOverDenial(t *testing.T) {
 		failOn:  2,
 		failErr: backendErr,
 	}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
 	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
@@ -335,7 +335,7 @@ func TestRunRuntimeFailureWinsOverDenial(t *testing.T) {
 // terminal record.
 func TestRunCancellationIsRuntimeFailure(t *testing.T) {
 	backend := &blockingRunBackend{started: make(chan struct{})}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -379,7 +379,7 @@ func TestRunWriterFailureIsRuntimeFailure(t *testing.T) {
 	backend := &scriptBackend{rounds: [][]assistant.Message{
 		{runTextMessage("a1", "answer")},
 	}}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 
 	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), failRunWriter{err: writerErr})
 	if !errors.Is(err, writerErr) {
@@ -402,7 +402,7 @@ func TestRunExecutesExactlyOneTurn(t *testing.T) {
 		{clientCallMessage("c1", "cli-1", "get_local_time", "{}")},
 		{runTextMessage("a1", "It is noon.")},
 	}}
-	engine := agent.New(backend, assistant.SendOptions{})
+	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
 	if err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out); err != nil {

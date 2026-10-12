@@ -152,7 +152,7 @@ func textBlock(id, text string) agent.Block {
 
 func TestResumeListErrorRetryEmptyAndCancelPreserveChat(t *testing.T) {
 	backend := newResumeBackend()
-	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
+	m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
 	m.Update(tea.WindowSizeMsg{Width: 50, Height: 12})
 	m.transcript.Blocks = []agent.Block{textBlock("same-message-id", "OLD")}
 	m.syncTranscript()
@@ -180,7 +180,7 @@ func TestResumeListErrorRetryEmptyAndCancelPreserveChat(t *testing.T) {
 
 func TestPickerBlursEditorUntilClosed(t *testing.T) {
 	backend := newResumeBackend()
-	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
+	m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
 	m.Update(tea.WindowSizeMsg{Width: 50, Height: 12})
 	_ = m.editor.Focus()
 	if !m.editor.Focused() {
@@ -202,7 +202,7 @@ func TestPickerBlursEditorUntilClosed(t *testing.T) {
 
 func TestCtrlCCancelsResumeOperationAndQuits(t *testing.T) {
 	backend := newResumeBackend()
-	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
+	engine := agent.New(backend, agent.Config{ConversationID: "old"})
 	m := New(engine)
 	wait := m.openConversationPicker()
 	if m.mode != ModeConversations || !m.conversationTask.running() {
@@ -233,7 +233,7 @@ func TestCtrlCCancelsResumeOperationAndQuits(t *testing.T) {
 
 func TestCancelPendingResumeReturnsImmediatelyAndIgnoresLateResult(t *testing.T) {
 	backend := newResumeBackend()
-	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
+	engine := agent.New(backend, agent.Config{ConversationID: "old"})
 	m := New(engine)
 	m.Update(tea.WindowSizeMsg{Width: 50, Height: 12})
 	_ = m.editor.Focus()
@@ -263,7 +263,7 @@ func TestCancelPendingResumeReturnsImmediatelyAndIgnoresLateResult(t *testing.T)
 func TestQueuedResumeActionsCannotRestartLoadingOperation(t *testing.T) {
 	t.Run("selection", func(t *testing.T) {
 		backend := newResumeBackend()
-		m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
+		m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
 		summary := assistant.ConversationSummary{ConversationID: resumeConversationID, Title: "New"}
 		backend.lists <- resumeListReply{response: summaries(summary)}
 		listWait := m.openConversationPicker()
@@ -283,7 +283,7 @@ func TestQueuedResumeActionsCannotRestartLoadingOperation(t *testing.T) {
 
 	t.Run("retry", func(t *testing.T) {
 		backend := newResumeBackend()
-		m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
+		m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
 		backend.lists <- resumeListReply{err: errors.New("unavailable")}
 		listWait := m.openConversationPicker()
 		_, _ = m.Update(runResumeCmd(t, listWait))
@@ -303,7 +303,7 @@ func TestQueuedResumeActionsCannotRestartLoadingOperation(t *testing.T) {
 
 func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	backend := newResumeBackend()
-	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
+	engine := agent.New(backend, agent.Config{ConversationID: "old"})
 	m := New(engine)
 	m.Update(tea.WindowSizeMsg{Width: 50, Height: 12})
 	m.transcript.Blocks = []agent.Block{textBlock("same-message-id", "OLD-CACHED")}
@@ -346,7 +346,7 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 
 func TestCancelLoadedButUnappliedResultCannotSwitchEngine(t *testing.T) {
 	backend := newResumeBackend()
-	engine := agent.New(backend, assistant.SendOptions{ConversationID: "old"})
+	engine := agent.New(backend, agent.Config{ConversationID: "old"})
 	m := New(engine)
 	summary := assistant.ConversationSummary{ConversationID: resumeConversationID, Title: "New"}
 	backend.lists <- resumeListReply{response: summaries(summary)}
@@ -383,7 +383,7 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(agent.New(&halfStreamedWriteBackend{}, assistant.SendOptions{}), Config{Tools: toolSet, Workspace: ws})
+	m := New(agent.New(&halfStreamedWriteBackend{}, agent.Config{}), Config{Tools: toolSet, Workspace: ws})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	setConversationInput(m, "write half.txt")

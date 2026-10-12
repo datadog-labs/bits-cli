@@ -37,7 +37,7 @@ func viewOf(blocks []agent.Block) []blockView {
 func TestConversationRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	f := &Fake{}
-	engine := agent.New(f, assistant.SendOptions{})
+	engine := agent.New(f, agent.Config{})
 	set := workspaceTools(t, agent.ModeSkipPermissions)
 	runTurn(t, engine, "random()", set, agent.DenyContinue, nil)
 	result, _ := runTurn(t, engine, `r = call("read_file", {"path": "go.mod"}); say(r.output)`, set, agent.DenyContinue, nil)
@@ -48,7 +48,7 @@ func TestConversationRoundTrip(t *testing.T) {
 		t.Fatalf("list = %+v, want only %s", list, id)
 	}
 
-	restored := agent.New(f, assistant.SendOptions{})
+	restored := agent.New(f, agent.Config{})
 	conversation, err := restored.LoadConversation(ctx, id)
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestPushedConversationResumesInANewEngine(t *testing.T) {
 	script := `id = push_conversation(lambda: say("earlier"), lambda: say("after " + call("echo", {}).output), title="Pending echo")
 call("echo", {})
 say(id)`
-	result, _ := runTurn(t, agent.New(f, assistant.SendOptions{}), script, set, agent.DenyContinue, nil)
+	result, _ := runTurn(t, agent.New(f, agent.Config{}), script, set, agent.DenyContinue, nil)
 	id := texts(result.Blocks)[0]
 	list, err := f.UserConversations(ctx)
 	if err != nil || len(list.Data.Attributes.Conversations) != 2 || !slices.ContainsFunc(list.Data.Attributes.Conversations, func(c assistant.ConversationSummary) bool {
@@ -99,7 +99,7 @@ say(id)`
 		t.Fatalf("conversations = %+v, want one pushed %s", list, id)
 	}
 
-	engine := agent.New(f, assistant.SendOptions{ConversationID: id})
+	engine := agent.New(f, agent.Config{ConversationID: id})
 	for range engine.Restore(ctx) {
 	}
 	for ev := range engine.ResumePendingTools(ctx, agent.TurnInput{Tools: set}) {

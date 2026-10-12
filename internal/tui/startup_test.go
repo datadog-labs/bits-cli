@@ -16,7 +16,6 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
-	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
 )
@@ -26,7 +25,7 @@ func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
 	factoryCalls := 0
 	root := NewWithLogin(context.Background(), loginModel, func(context.Context) (*agent.Engine, error) {
 		factoryCalls++
-		return agent.New(fake.New(), assistant.SendOptions{}), nil
+		return agent.New(fake.New(), agent.Config{}), nil
 	})
 
 	_, _ = root.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -70,7 +69,7 @@ func TestStartupHandoffKeepsOneAltScreenSession(t *testing.T) {
 		return nil
 	})
 	root := NewWithLogin(context.Background(), loginModel, func(context.Context) (*agent.Engine, error) {
-		return agent.New(fake.New(), assistant.SendOptions{}), nil
+		return agent.New(fake.New(), agent.Config{}), nil
 	})
 	program := tea.NewProgram(root,
 		tea.WithInput(bytes.NewReader(nil)),
@@ -157,7 +156,7 @@ func TestStartupHandoffTinyTerminalShowsBoundedResizePrompt(t *testing.T) {
 	for _, size := range []struct{ width, height int }{{10, 2}, {24, 4}} {
 		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
 			root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil), func(context.Context) (*agent.Engine, error) {
-				return agent.New(fake.New(), assistant.SendOptions{}), nil
+				return agent.New(fake.New(), agent.Config{}), nil
 			})
 			_, _ = root.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
 			_, factory := root.Update(loginui.CompletedMsg{})
@@ -183,7 +182,7 @@ func TestStartupLoginCompletionIsSingleFlight(t *testing.T) {
 	factoryCalls := 0
 	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil), func(context.Context) (*agent.Engine, error) {
 		factoryCalls++
-		return agent.New(fake.New(), assistant.SendOptions{}), nil
+		return agent.New(fake.New(), agent.Config{}), nil
 	})
 	_, first := root.Update(loginui.CompletedMsg{})
 	_, duplicate := root.Update(loginui.CompletedMsg{})
@@ -268,7 +267,7 @@ func TestStartupLoginCancellationRemainsProgramExit(t *testing.T) {
 
 func TestStartupLoginInitializesConversationRestore(t *testing.T) {
 	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil), func(context.Context) (*agent.Engine, error) {
-		return agent.New(fake.New(), assistant.SendOptions{ConversationID: "conversation-1"}), nil
+		return agent.New(fake.New(), agent.Config{ConversationID: "conversation-1"}), nil
 	})
 	_, cmd := root.Update(loginui.CompletedMsg{})
 	_, initCmd := root.Update(cmd())

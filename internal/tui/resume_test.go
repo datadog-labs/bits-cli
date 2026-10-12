@@ -240,7 +240,7 @@ func TestResumeViewIsEmptyWithoutConversations(t *testing.T) {
 func resumeKeyModel(t *testing.T) *Model {
 	t.Helper()
 	m := welcomeModel(120, 40)
-	m.engine = agent.New(fake.New(), assistant.SendOptions{})
+	m.engine = agent.New(fake.New(), agent.Config{})
 	m.resume = *resumeFixture(32)
 	m.relayout()
 	return m

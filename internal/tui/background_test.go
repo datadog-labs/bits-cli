@@ -10,7 +10,6 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
-	"github.com/datadog-labs/bits-cli/internal/assistant"
 	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
@@ -29,7 +28,7 @@ func TestViewsPaintTheThemeBackground(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil),
 				func(context.Context) (*agent.Engine, error) {
-					return agent.New(fake.New(), assistant.SendOptions{}), nil
+					return agent.New(fake.New(), agent.Config{}), nil
 				})
 
 			_, _ = root.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -63,7 +62,7 @@ func TestViewsPaintTheThemeBackground(t *testing.T) {
 func TestBackgroundFollowsTerminalModeChange(t *testing.T) {
 	root := NewWithLogin(context.Background(), loginui.New(context.Background(), nil),
 		func(context.Context) (*agent.Engine, error) {
-			return agent.New(fake.New(), assistant.SendOptions{}), nil
+			return agent.New(fake.New(), agent.Config{}), nil
 		})
 	_, _ = root.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
@@ -31,10 +32,11 @@ type ClientOptions struct {
 
 // EngineOptions configures a surface-independent agent engine.
 type EngineOptions struct {
+	// Workspace supplies defaults for local context providers omitted from Config.
 	Workspace      *workspace.Workspace
 	SkillPaths     []string
 	Client         ClientOptions
-	Send           assistant.SendOptions
+	Config         agent.Config
 	UseFakeBackend bool
 }
 
@@ -62,26 +64,33 @@ var defaultSkillOverrides = []assistant.SkillOverride{
 // over the fake backend so an invalid automation invocation cannot silently
 // become a demo session.
 func NewEngine(ctx context.Context, opts EngineOptions) (*agent.Engine, error) {
-	opts.Send = withDefaultSkillOverrides(opts.Send)
-	var engineOptions []agent.Option
+	opts.Config = withDefaultSkillOverrides(opts.Config)
 	if opts.Workspace != nil {
-		engineOptions = append(engineOptions, agent.WithProjectInstructions(agent.NewProjectInstructions(opts.Workspace.Path())),
-			agent.WithClientSkills(agent.NewClientSkills(opts.Workspace.Path(), opts.SkillPaths)))
+		if opts.Config.ProjectInstructions == nil {
+			opts.Config.ProjectInstructions = env.NewInstructions(opts.Workspace.Path())
+		}
+		if opts.Config.ClientSkills == nil {
+			opts.Config.ClientSkills = env.NewSkills(opts.Workspace.Path(), opts.SkillPaths)
+		}
+		if opts.Config.UserContext == nil {
+			opts.Config.UserContext = env.UserContext(opts.Workspace)
+		}
 	}
+
 	switch opts.Client.Mode {
 	case auth.ModeAuto:
 		if opts.UseFakeBackend {
 			backend := fake.New()
 			// The fake also takes a script for --conversation: it becomes the
 			// first turn of a conversation an earlier session left behind.
-			if script := opts.Send.ConversationID; script != "" && !agent.ValidConversationID(script) {
+			if script := opts.Config.ConversationID; script != "" && !agent.ValidConversationID(script) {
 				id, err := backend.PushConversation(ctx, "", script)
 				if err != nil {
 					return nil, fmt.Errorf("fake --conversation script: %w", err)
 				}
-				opts.Send.ConversationID = id
+				opts.Config.ConversationID = id
 			}
-			return agent.New(backend, opts.Send, engineOptions...), nil
+			return agent.New(backend, opts.Config), nil
 		}
 	case auth.ModeAPIKey:
 		// Continue below; API-key mode must validate its explicit credentials.
@@ -96,13 +105,13 @@ func NewEngine(ctx context.Context, opts EngineOptions) (*agent.Engine, error) {
 		}
 		return nil, err
 	}
-	return agent.New(client, opts.Send, engineOptions...), nil
+	return agent.New(client, opts.Config), nil
 }
 
 // withDefaultSkillOverrides supplies this client's disabled-by-default skills
 // unless the caller explicitly configured that same skill. Explicit options
 // therefore remain an escape hatch for a future opt-in surface.
-func withDefaultSkillOverrides(opts assistant.SendOptions) assistant.SendOptions {
+func withDefaultSkillOverrides(opts agent.Config) agent.Config {
 	overrides := append([]assistant.SkillOverride(nil), opts.SkillOverrides...)
 	configured := make(map[skillKey]struct{}, len(overrides))
 	for _, override := range overrides {

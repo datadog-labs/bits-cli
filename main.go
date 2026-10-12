@@ -11,9 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-
 	"github.com/datadog-labs/bits-cli/internal/agent"
-	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/cmd"
 	"github.com/datadog-labs/bits-cli/internal/headless"
@@ -82,13 +80,13 @@ func runRunWithStore(ctx context.Context, opts cmd.RunOptions, store auth.Creden
 			AppKey:  os.Getenv("DD_APP_KEY"),
 			APISite: opts.Site,
 		},
-		Send:           assistant.SendOptions{ConversationID: opts.ConversationID, Model: opts.Model, InferenceMode: opts.InferenceMode},
+		Config:         agent.Config{ConversationID: opts.ConversationID, Model: opts.Model, InferenceMode: opts.InferenceMode},
 		UseFakeBackend: os.Getenv("BITS_FAKE_BACKEND") == "1",
 	})
 	if err != nil {
 		return err
 	}
-	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet, UserContext: tools.UserContext(workspace)}, opts, out)
+	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet}, opts, out)
 }
 
 // runEngineTurn drives exactly one turn, attempts Finish once, and maps its
@@ -258,7 +256,7 @@ func startupModelWithStore(ctx context.Context, opts cmd.ChatOptions, store auth
 			AppKey:  os.Getenv("DD_APP_KEY"),
 			APISite: opts.Site,
 		},
-		Send:           assistant.SendOptions{ConversationID: opts.ConversationID, Model: opts.Model, InferenceMode: opts.InferenceMode},
+		Config:         agent.Config{ConversationID: opts.ConversationID, Model: opts.Model, InferenceMode: opts.InferenceMode},
 		UseFakeBackend: os.Getenv("BITS_FAKE_BACKEND") == "1",
 	}
 	engine, err := startup.NewEngine(ctx, engineOpts)

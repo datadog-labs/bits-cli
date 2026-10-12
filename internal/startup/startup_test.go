@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
-	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/site"
 )
@@ -193,7 +192,7 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 			store := &observedStore{err: errors.New("must not load")}
 			engine, err := NewEngine(context.Background(), EngineOptions{
 				Client:         ClientOptions{Mode: auth.ModeAuto, Store: store},
-				Send:           assistant.SendOptions{ConversationID: conversation},
+				Config:         agent.Config{ConversationID: conversation},
 				UseFakeBackend: true,
 			})
 			if err != nil {

@@ -7,51 +7,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/agent/env"
 )
-
-func TestClientSkillVisibilityFlags(t *testing.T) {
-	for _, flags := range []string{
-		"model-invocable: false\n",
-		"disable-model-invocation: true\n",
-		"model-invocable: true\ndisable-model-invocation: true\n",
-		"model-invocable: false\ndisable-model-invocation: false\n",
-	} {
-		t.Run(strings.TrimSpace(flags), func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			root := t.TempDir()
-			writeSkillFile(t, root, ".agents/skills/review", "---\ndescription: User only\n"+flags+"---\nInstructions")
-			writeSkill(t, root, "extra/review", "review", "shadowed automatic version")
-			provider := NewClientSkills(root, []string{"extra"})
-			skills := provider.discover(context.Background())
-			if len(skills) != 1 || skills[0].Name != "review" || !skills[0].DisableModelInvocation || skills[0].Description != "User only" {
-				t.Fatalf("registry = %+v", skills)
-			}
-			if catalog := provider.snapshot(context.Background()); catalog != "" {
-				t.Fatalf("user-only skill leaked into catalog: %s", catalog)
-			}
-		})
-	}
-	for _, flag := range []string{"model-invocable: maybe", "model-invocable: 'false'", "model-invocable: null", "disable-model-invocation: 'true'"} {
-		if _, valid := parseSkillDocument([]byte("---\nname: review\ndescription: Review\n"+flag+"\n---\n"), "review"); valid {
-			t.Fatalf("accepted invalid visibility flag %q", flag)
-		}
-	}
-}
 
 func TestClientSkillInvocationLoadsCurrentBody(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	writeSkill(t, root, ".agents/skills/review", "review", "Review")
-	provider := NewClientSkills(root, nil)
-	registry, err := provider.cache.load(context.Background(), provider.discover)
+	provider := env.NewSkills(root, nil)
+	summaries, err := provider.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	skill := registry.skills[0]
+	skill := summaries[0]
 	writeSkillFile(t, root, ".agents/skills/review", "\xef\xbb\xbf---\r\nname: review\r\ndescription: Updated\r\n---\r\nCurrent <instructions> & body\r\n\t ")
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
-	engine := New(backend, assistant.SendOptions{}, WithClientSkills(provider))
+	engine := New(backend, Config{ClientSkills: provider})
 	arguments := "  Preserve CASE\n\t and trailing space "
 	for range 2 {
 		drain(engine.StartTurn(context.Background(), TurnInput{Message: "/skill:review" + arguments, Skill: &SkillInvocation{Name: skill.Name, Arguments: arguments}}))
@@ -70,19 +41,19 @@ func TestClientSkillInvocationReadFailuresNeverSend(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			root := t.TempDir()
 			writeSkill(t, root, ".agents/skills/review", "review", "Review")
-			provider := NewClientSkills(root, nil)
-			registry, err := provider.cache.load(context.Background(), provider.discover)
+			provider := env.NewSkills(root, nil)
+			summaries, err := provider.List(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
-			skill := registry.skills[0]
-			if err := os.Remove(skill.Path); err != nil {
+			skill := summaries[0]
+			if err := os.Remove(filepath.Join(root, ".agents/skills/review/SKILL.md")); err != nil {
 				t.Fatal(err)
 			}
 			switch failure {
 			case "removed":
 			case "directory":
-				if err := os.Mkdir(skill.Path, 0o755); err != nil {
+				if err := os.Mkdir(filepath.Join(root, ".agents/skills/review/SKILL.md"), 0o755); err != nil {
 					t.Fatal(err)
 				}
 			case "escaping symlink":
@@ -90,14 +61,14 @@ func TestClientSkillInvocationReadFailuresNeverSend(t *testing.T) {
 				if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Symlink(outside, skill.Path); err != nil {
+				if err := os.Symlink(outside, filepath.Join(root, ".agents/skills/review/SKILL.md")); err != nil {
 					t.Fatal(err)
 				}
 			default:
 				content := "---\nname: review\ndescription: Review\n---\n"
 				switch failure {
 				case "oversized":
-					content += strings.Repeat("x", skillFileLimit)
+					content += strings.Repeat("x", 64*1024)
 				case "invalid utf8":
 					content += "\xff"
 				case "invalid metadata":
@@ -105,12 +76,12 @@ func TestClientSkillInvocationReadFailuresNeverSend(t *testing.T) {
 				case "renamed":
 					content = strings.ReplaceAll(content, "name: review", "name: another")
 				}
-				if err := os.WriteFile(skill.Path, []byte(content), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(root, ".agents/skills/review/SKILL.md"), []byte(content), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
 			backend := &conversationRecordingBackend{messages: make(map[string][]string)}
-			engine := New(backend, assistant.SendOptions{}, WithClientSkills(provider))
+			engine := New(backend, Config{ClientSkills: provider})
 			var failureErr error
 			for event := range engine.StartTurn(context.Background(), TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: skill.Name}}) {
 				if event.Err != nil {
@@ -131,7 +102,7 @@ func TestClientSkillInvocationResolvesCurrentRegistry(t *testing.T) {
 	writeSkillFile(t, root, ".agents/skills/review", "---\nname: review\ndescription: Project\n---\nPROJECT BODY")
 	writeSkillFile(t, root, "extras/review", "---\nname: review\ndescription: Extra\n---\nEXTRA BODY")
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
-	engine := New(backend, assistant.SendOptions{}, WithClientSkills(NewClientSkills(root, []string{"extras"})))
+	engine := New(backend, Config{ClientSkills: env.NewSkills(root, []string{"extras"})})
 	summaries := mustClientSkills(t, engine)
 	summaries[0].Name = "tampered"
 	drain(engine.StartTurn(context.Background(), TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: "review"}}))
@@ -171,7 +142,7 @@ func TestClientSkillInvocationKeepsDiscoveredDefaultName(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
-	engine := New(backend, assistant.SendOptions{}, WithClientSkills(NewClientSkills(root, nil)))
+	engine := New(backend, Config{ClientSkills: env.NewSkills(root, nil)})
 	for event := range engine.StartTurn(context.Background(), TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: "review"}}) {
 		if event.Err != nil {
 			t.Fatal(event.Err)

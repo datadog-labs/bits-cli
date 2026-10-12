@@ -134,9 +134,7 @@ func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversa
 func (e *Engine) installConversation(conversation *Conversation) {
 	e.opts.ConversationID = conversation.id
 	e.opts.MessageHistory = nil
-	e.sentUserContext = nil
-	e.projectInstructions.reset()
-	e.clientSkills.reset()
+	e.resetContext()
 	e.transcript = conversation.transcript
 	e.continuation = conversation.continuation
 }

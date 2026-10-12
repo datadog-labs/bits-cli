@@ -39,7 +39,7 @@ func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	e := New(client, assistant.SendOptions{})
+	e := New(client, Config{})
 
 	turnCtx, cancelTurn := context.WithCancel(ctx)
 	firstTurn := e.StartTurn(turnCtx, TurnInput{Message: "Count from 1 to 200, with one number per line."})

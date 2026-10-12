@@ -155,7 +155,7 @@ func TestEngineToolTurn(t *testing.T) {
 					}
 				}
 
-				events := drain(New(backend, assistant.SendOptions{}).StartTurn(context.Background(), TurnInput{
+				events := drain(New(backend, Config{}).StartTurn(context.Background(), TurnInput{
 					Message: "use a tool",
 					Tools:   tools,
 				}))
@@ -239,7 +239,7 @@ func TestEngineApprovalScope(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			engine := New(backend, assistant.SendOptions{})
+			engine := New(backend, Config{})
 			// Interactive surface: stop after the denial is answered on the wire.
 			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools, OnDeny: DenyStop})
 			decisions := 0
@@ -629,7 +629,7 @@ func TestEngineSkipPermissionsSkipsApprovalGates(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	events := drain(New(backend, assistant.SendOptions{}).StartTurn(ctx, TurnInput{Message: "write", Tools: tools}))
+	events := drain(New(backend, Config{}).StartTurn(ctx, TurnInput{Message: "write", Tools: tools}))
 
 	// No Decide is ever issued, yet every call runs and the turn completes.
 	if got := runs.Load(); got != 3 {
@@ -673,7 +673,7 @@ func TestEngineManualModeLeavesUngatedToolsUnblocked(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
 
 	// The ungated tool runs immediately, before any decision is made.
@@ -719,7 +719,7 @@ func TestEngineSkipPermissionsRunsMixedToolsetWithoutDecisions(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	events := drain(New(backend, assistant.SendOptions{}).StartTurn(ctx, TurnInput{Message: "run both", Tools: tools}))
+	events := drain(New(backend, Config{}).StartTurn(ctx, TurnInput{Message: "run both", Tools: tools}))
 
 	// Every tool runs with no decision; handler start order is scheduler-
 	// dependent, so only the completed set is asserted here.
@@ -758,7 +758,7 @@ func TestEngineParallelApprovalKeepsCallOrder(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
 	waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
 	engine.Decide("call-a", ApprovalAllowSession)
@@ -800,7 +800,7 @@ func TestEngineCancelRunningTool(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
 	receiveNames(t, started, 2)
 	engine.CancelTool("call-a")
@@ -844,7 +844,7 @@ func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
 	<-started
 	waitForToolStatus(t, events, "call-gated", ToolAwaitingApproval)

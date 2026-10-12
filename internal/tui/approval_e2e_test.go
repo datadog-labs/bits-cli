@@ -96,7 +96,7 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+				model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
 				model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 				setConversationInput(model, "Run the action")
 				_, _ = model.submit()
@@ -141,7 +141,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
 	model.Init() // focuses the editor, starting the cursor blink
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	if !model.editor.Focused() {
@@ -171,7 +171,7 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
@@ -222,7 +222,7 @@ func TestToolApprovalComposerSuppressedInSkipPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
@@ -251,7 +251,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+			model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
 			model.Update(tea.WindowSizeMsg{Width: width, Height: 24})
 			setConversationInput(model, "Run the action")
 			_, _ = model.submit()
@@ -388,7 +388,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+			model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
 			model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 			setConversationInput(model, "Run the action")
 			_, _ = model.submit()
@@ -512,7 +512,7 @@ func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()

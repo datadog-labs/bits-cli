@@ -7,7 +7,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
-	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
@@ -153,7 +152,7 @@ func TestStoppingLastAnimationInvalidatesSharedClock(t *testing.T) {
 }
 
 func TestSubmitArmsSharedClockForSweep(t *testing.T) {
-	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "new"}))
+	m := New(agent.New(&immediateConversationBackend{}, agent.Config{ConversationID: "new"}))
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.editor.Focus()
@@ -166,7 +165,7 @@ func TestSubmitArmsSharedClockForSweep(t *testing.T) {
 }
 
 func TestTurnDoneDisarmsSweepClock(t *testing.T) {
-	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
+	m := New(agent.New(&immediateConversationBackend{}, agent.Config{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.chatPhase = chat.PhaseStreaming

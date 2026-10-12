@@ -94,7 +94,7 @@ func TestTurnContextSurvivesToolContinuationsAndDoesNotLeak(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	turnContext := &assistant.AssistantContext{Entities: []assistant.ContextEntity{{
 		Type: "dashboard", ID: "dash-1", Label: "Checkout overview",
 	}}}
@@ -124,10 +124,10 @@ func TestUserContextIsSentOnlyWhenTheConversationLacksIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := "env-a"
-	engine := New(backend, assistant.SendOptions{})
 	userContext := func(context.Context) string { return env }
+	engine := New(backend, Config{UserContext: userContext})
 	turn := func() {
-		drain(engine.StartTurn(context.Background(), TurnInput{Message: "hi", Tools: tools, UserContext: userContext}))
+		drain(engine.StartTurn(context.Background(), TurnInput{Message: "hi", Tools: tools}))
 	}
 
 	turn() // tool call, then continuation
@@ -139,7 +139,12 @@ func TestUserContextIsSentOnlyWhenTheConversationLacksIt(t *testing.T) {
 	}
 	turn()
 
-	want := []string{"env-a", "", "", "env-b", "env-b"}
+	if err := engine.InstallConversation(context.Background(), &Conversation{id: "restored", transcript: NewTranscript()}); err != nil {
+		t.Fatal(err)
+	}
+	turn()
+
+	want := []string{"env-a", "", "", "env-b", "env-b", "env-b"}
 	if !reflect.DeepEqual(backend.userContexts, want) {
 		t.Fatalf("user contexts = %q, want %q", backend.userContexts, want)
 	}
@@ -185,7 +190,7 @@ func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			events := drain(New(backend, assistant.SendOptions{}).StartTurn(context.Background(), TurnInput{Message: "read", Tools: tools}))
+			events := drain(New(backend, Config{}).StartTurn(context.Background(), TurnInput{Message: "read", Tools: tools}))
 			var got *ToolBlock
 			for _, event := range events {
 				if event.Kind != EventTranscript {
@@ -230,7 +235,7 @@ func stateHasAssistant(event Event) bool {
 }
 
 func TestSnapshotDerivesTranscriptViewState(t *testing.T) {
-	e := New(&scriptBackend{}, assistant.SendOptions{})
+	e := New(&scriptBackend{}, Config{})
 	e.transcript.AppendMessage(assistant.AssistantMessage("tool", assistant.ToolCallContent("call-1", "search", "{}")))
 	if _, ok := e.transcript.MarkAwaitingApproval("call-1", ApprovalPrompt{}); !ok {
 		t.Fatal("MarkAwaitingApproval did not update tool")
@@ -359,7 +364,7 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := drain(New(backend, assistant.SendOptions{}).StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
+	events := drain(New(backend, Config{}).StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
 	if len(backend.opts) != 2 {
 		t.Fatalf("backend requests = %d, want initial and continuation", len(backend.opts))
 	}
@@ -404,7 +409,7 @@ func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	drain(New(backend, assistant.SendOptions{}).StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
+	drain(New(backend, Config{}).StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
 	if reducerCalls != 0 {
 		t.Fatalf("server-side tool triggered %d reductions", reducerCalls)
 	}
@@ -422,7 +427,7 @@ func TestEnginePreservesPerToolInputStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := New(backend, assistant.SendOptions{})
+	e := New(backend, Config{})
 	_ = drain(e.StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
 	if len(backend.opts) == 0 || !backend.opts[0].ClientTools[0].StreamInput {
 		t.Fatalf("caller-provided per-tool streaming was disabled: %+v", backend.opts)
@@ -430,7 +435,7 @@ func TestEnginePreservesPerToolInputStreaming(t *testing.T) {
 }
 
 func TestTurnCompletionSynchronizesOperationRelease(t *testing.T) {
-	e := New(&scriptBackend{convID: "conversation-1"}, assistant.SendOptions{})
+	e := New(&scriptBackend{convID: "conversation-1"}, Config{})
 	operation := e.beginTurn(context.Background(), TurnInput{Message: "question"})
 	completion := <-operation.completion
 	if !completion.Completed {
@@ -447,7 +452,7 @@ func TestTurnCompletionSynchronizesOperationRelease(t *testing.T) {
 
 func TestConcurrentTurnReturnsOperationError(t *testing.T) {
 	gate := make(chan struct{})
-	e := New(&blockingBackend{gate: gate}, assistant.SendOptions{})
+	e := New(&blockingBackend{gate: gate}, Config{})
 	ch := e.StartTurn(context.Background(), TurnInput{Message: "one"})
 	events := drain(e.StartTurn(context.Background(), TurnInput{Message: "two"}))
 	if len(events) != 1 || events[0].Kind != EventError || !errors.Is(events[0].Err, ErrOperationActive) {
@@ -468,7 +473,7 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 			usage,
 		},
 	}
-	e := New(b, assistant.SendOptions{})
+	e := New(b, Config{})
 
 	evs := drain(e.StartTurn(context.Background(), TurnInput{Message: "hi"}))
 	want := []EventKind{EventTranscript, EventTranscript, EventTranscript, EventUsage, EventConversation, EventTranscript, EventTurnDone}
@@ -500,7 +505,7 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 		convID: "created-before-error",
 		err:    backendErr,
 		msgs:   []assistant.Message{assistant.AssistantMessage("m1", assistant.TextContent("partial"))},
-	}, assistant.SendOptions{})
+	}, Config{})
 
 	events := drain(e.StartTurn(context.Background(), TurnInput{Message: "question"}))
 	wantKinds := []EventKind{EventTranscript, EventTranscript, EventTranscript, EventConversation, EventError}
@@ -525,7 +530,7 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 
 func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 	backend := &conversationRecordingBackend{messages: map[string][]string{}}
-	opts := assistant.SendOptions{
+	opts := Config{
 		ConversationID: "old-conversation",
 		Model:          "retained-model",
 		DebugTag:       "retained-debug-tag",
@@ -570,7 +575,7 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 
 func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
 	backend := &cancellationIDBackend{started: make(chan struct{})}
-	e := New(backend, assistant.SendOptions{})
+	e := New(backend, Config{})
 	ctx, cancel := context.WithCancel(context.Background())
 	turn := e.StartTurn(ctx, TurnInput{Message: "cancel me"})
 	<-backend.started
@@ -593,7 +598,7 @@ func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
 
 func TestNewConversationRejectsActiveTurnWithoutMutation(t *testing.T) {
 	gate := make(chan struct{})
-	e := New(&blockingBackend{gate: gate}, assistant.SendOptions{ConversationID: "old"})
+	e := New(&blockingBackend{gate: gate}, Config{ConversationID: "old"})
 	turn := e.StartTurn(context.Background(), TurnInput{Message: "busy"})
 	if err := e.NewConversation(); !errors.Is(err, ErrOperationActive) {
 		t.Fatalf("NewConversation error = %v, want ErrOperationActive", err)
@@ -616,7 +621,7 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 		assistant.AssistantMessage("m2", assistant.TextContent("World")),
 		assistant.AssistantMessage("future", assistant.Content{Type: "future_content"}),
 	}
-	e := New(&historyBackend{resp: resp}, assistant.SendOptions{ConversationID: testConversationID})
+	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
 	evs := drain(e.Restore(context.Background()))
 	if len(evs) != 1 || evs[0].Kind != EventTranscript {
@@ -632,7 +637,7 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 }
 
 func TestRestoreUnsupportedBackendErrors(t *testing.T) {
-	e := New(&scriptBackend{}, assistant.SendOptions{ConversationID: testConversationID})
+	e := New(&scriptBackend{}, Config{ConversationID: testConversationID})
 
 	evs := drain(e.Restore(context.Background()))
 	if len(evs) != 1 || evs[0].Kind != EventError || !errors.Is(evs[0].Err, ErrHistoryUnsupported) {
@@ -644,7 +649,7 @@ func TestRestoreUnsupportedBackendErrors(t *testing.T) {
 func TestRestoreEmptyEmitsNothing(t *testing.T) {
 	resp := &assistant.ConversationHistoryResponse{}
 	resp.Data.Type = "conversation-history-response"
-	e := New(&historyBackend{resp: resp}, assistant.SendOptions{ConversationID: testConversationID})
+	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
 	if evs := drain(e.Restore(context.Background())); len(evs) != 0 {
 		t.Fatalf("events = %v, want none", kinds(evs))
@@ -669,7 +674,7 @@ func (b *statusBackend) BackendStatus() assistant.BackendStatus {
 
 func TestEngineStatusReportsEffectiveNonSecretRuntimeConfiguration(t *testing.T) {
 	backend := &statusBackend{}
-	engine := New(backend, assistant.SendOptions{
+	engine := New(backend, Config{
 		ConversationID: "conversation-1",
 		Model:          "model-x",
 	})
@@ -709,7 +714,7 @@ func (b *currentUserBackend) CurrentUser(context.Context) (assistant.CurrentUser
 func TestEngineCurrentUserUsesOptionalBackendCapability(t *testing.T) {
 	want := assistant.CurrentUser{Name: "Bits User", Organization: "Bits Staging"}
 	backend := &currentUserBackend{user: want}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 
 	got, err := engine.CurrentUser(context.Background())
 	if err != nil {
@@ -721,7 +726,7 @@ func TestEngineCurrentUserUsesOptionalBackendCapability(t *testing.T) {
 }
 
 func TestEngineCurrentUserRejectsUnsupportedBackend(t *testing.T) {
-	engine := New(&scriptBackend{}, assistant.SendOptions{})
+	engine := New(&scriptBackend{}, Config{})
 
 	_, err := engine.CurrentUser(context.Background())
 	if !errors.Is(err, ErrCurrentUserUnsupported) {

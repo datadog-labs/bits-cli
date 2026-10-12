@@ -104,7 +104,7 @@ func drainConversationRemote(t *testing.T, m *Model) {
 }
 
 func TestCompletedTurnAppliesFinalTranscriptSnapshot(t *testing.T) {
-	m := New(agent.New(&streamingConversationBackend{}, assistant.SendOptions{}))
+	m := New(agent.New(&streamingConversationBackend{}, agent.Config{}))
 	setConversationInput(m, "prompt")
 	_, _ = m.submit()
 	drainConversationRemote(t, m)
@@ -121,7 +121,7 @@ func TestNewAndClearResetConversationStateLocally(t *testing.T) {
 	for _, input := range []string{"/new", "/clear", "/NEW", "/CLEAR"} {
 		t.Run(input, func(t *testing.T) {
 			m := newModelWithSpy(t)
-			m.engine = agent.New(&spyBackend{t: t}, assistant.SendOptions{ConversationID: "old"})
+			m.engine = agent.New(&spyBackend{t: t}, agent.Config{ConversationID: "old"})
 			m.convID = "old"
 			m.transcript.Blocks = []agent.Block{{Markdown: &assistant.MarkdownPayload{Content: "old transcript"}}}
 			m.usage = &assistant.Usage{TokensUsed: 99, MaxTokens: 100}
@@ -145,7 +145,7 @@ func TestNewAndClearResetConversationStateLocally(t *testing.T) {
 
 func TestNewDuringActiveTurnCancelsOnceAndDrainsBeforeReset(t *testing.T) {
 	backend := newCancellableConversationBackend()
-	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
+	m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
 	setConversationInput(m, "active prompt")
 	_, _ = m.submit()
 	waitSignal(t, backend.sendStarted)
@@ -179,7 +179,7 @@ func TestNewDuringActiveTurnCancelsOnceAndDrainsBeforeReset(t *testing.T) {
 
 func TestNewDuringHistoryLoadingCancelsAndDrains(t *testing.T) {
 	backend := newCancellableConversationBackend()
-	engine := agent.New(backend, assistant.SendOptions{ConversationID: resumeConversationID})
+	engine := agent.New(backend, agent.Config{ConversationID: resumeConversationID})
 	m := New(engine)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.chatPhase = chat.PhaseLoading
@@ -199,7 +199,7 @@ func TestNewDuringHistoryLoadingCancelsAndDrains(t *testing.T) {
 
 func TestNewAfterCancellationDoesNotCancelTwice(t *testing.T) {
 	backend := newCancellableConversationBackend()
-	m := New(agent.New(backend, assistant.SendOptions{ConversationID: "old"}))
+	m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
 	setConversationInput(m, "active prompt")
 	_, _ = m.submit()
 	waitSignal(t, backend.sendStarted)
@@ -223,7 +223,7 @@ func TestNewAfterCancellationDoesNotCancelTwice(t *testing.T) {
 }
 
 func TestNewAfterFailedTurnDrainsThenClearsError(t *testing.T) {
-	m := New(agent.New(&failedConversationBackend{err: errors.New("turn failed")}, assistant.SendOptions{ConversationID: "old"}))
+	m := New(agent.New(&failedConversationBackend{err: errors.New("turn failed")}, agent.Config{ConversationID: "old"}))
 	setConversationInput(m, "failing prompt")
 	_, _ = m.submit()
 
@@ -243,7 +243,7 @@ func TestNewAfterFailedTurnDrainsThenClearsError(t *testing.T) {
 }
 
 func TestNewRejectsStaleEventsFromPriorConversation(t *testing.T) {
-	m := New(agent.New(&immediateConversationBackend{}, assistant.SendOptions{ConversationID: "old"}))
+	m := New(agent.New(&immediateConversationBackend{}, agent.Config{ConversationID: "old"}))
 	setConversationInput(m, "/new")
 	_, _ = m.submit()
 	oldGeneration := m.op.gen - 1

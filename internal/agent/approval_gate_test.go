@@ -139,7 +139,7 @@ func decideServerGate(engine *Engine, decision ApprovalDecision, observe func(Ev
 
 func TestEngineApprovalRequestGateSkipPermissionsApproves(t *testing.T) {
 	backend := &gateBackend{}
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+	result, err := New(backend, Config{}).RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeSkipPermissions),
 	}, nil)
@@ -163,7 +163,7 @@ func TestEngineApprovalRequestGateSkipPermissionsApproves(t *testing.T) {
 
 func TestEngineDenyModeDeniesLocalAndServerGatesWithoutApprover(t *testing.T) {
 	backend := &gateBackend{includeSibling: true}
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+	result, err := New(backend, Config{}).RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeDeny),
 		OnDeny:  DenyContinue,
@@ -188,7 +188,7 @@ func TestEngineDenyModeDeniesLocalAndServerGatesWithoutApprover(t *testing.T) {
 
 func TestEngineApprovalRequestGateNilToolsDenies(t *testing.T) {
 	backend := &gateBackend{}
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+	result, err := New(backend, Config{}).RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		OnDeny:  DenyContinue,
 	}, nil)
@@ -206,7 +206,7 @@ func TestEngineApprovalRequestGateNilToolsDenies(t *testing.T) {
 
 func TestEngineMalformedApprovalRequestFailsClosed(t *testing.T) {
 	backend := &gateBackend{gateInput: `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"other"}`}
-	result, err := New(backend, assistant.SendOptions{}).RunTurn(context.Background(), TurnInput{
+	result, err := New(backend, Config{}).RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeSkipPermissions),
 	}, nil)
@@ -247,7 +247,7 @@ func TestParseServerGateInputRejectsNonContractPayloads(t *testing.T) {
 
 func TestEngineApprovalRequestGateManualApprovesInteractively(t *testing.T) {
 	backend := &gateBackend{}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	sawPending := false
 	consume := decideServerGate(engine, ApprovalAllowOnce, func(event Event) error {
 		if event.Kind != EventTranscript {
@@ -288,7 +288,7 @@ func TestEngineApprovalRequestGateManualApprovesInteractively(t *testing.T) {
 
 func TestEngineApprovalRequestGateAllowSessionIsToolScoped(t *testing.T) {
 	backend := &gateBackend{includeSecondGate: true}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	decisions := 0
 	decided := make(map[string]struct{})
 	consume := func(event Event) error {
@@ -336,7 +336,7 @@ func TestEngineApprovalRequestGateAllowSessionCoversSameTool(t *testing.T) {
 		includeSecondGate: true,
 		secondGateInput:   `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"def"},"tool_call_id":"gate-2","approval_message":"Delete another one?"}`,
 	}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	result, err := engine.RunTurn(ctx, TurnInput{
@@ -358,7 +358,7 @@ func TestEngineApprovalRequestGateAllowSessionCoversSameTool(t *testing.T) {
 
 func TestEngineApprovalRequestGateManualDeniesAndContinues(t *testing.T) {
 	backend := &gateBackend{}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeManual),
@@ -404,7 +404,7 @@ func TestEngineDeniedGatePreservesSiblingResultOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   tools,
@@ -436,7 +436,7 @@ func TestDenyPolicyZeroValueStopsAfterWireAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   tools,
@@ -462,7 +462,7 @@ func TestDenyStopCancelsPendingSiblingBeforeServerGate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	result, err := engine.RunTurn(ctx, TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeManual),
@@ -485,7 +485,7 @@ func TestDenyStopCancelsPendingSiblingBeforeServerGate(t *testing.T) {
 func TestDenyStopDrainsFollowUpClientToolCalls(t *testing.T) {
 	backend := &gateBackend{followUpToolCall: true}
 	terminalRound := 0
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeManual),
@@ -522,7 +522,7 @@ func TestDenyStopBackendFailureRetainsBackendProvenance(t *testing.T) {
 	backendErr := errors.New("backend failed while recording denial")
 	backend := &gateBackend{failFollowUp: backendErr}
 	var failure Event
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeManual),
@@ -561,7 +561,7 @@ func TestDeniedGateRecordsFailingSiblingOnTheWire(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	result, err := engine.RunTurn(ctx, TurnInput{
 		Message: "write something",
 		Tools:   tools,
@@ -585,7 +585,7 @@ func TestDeniedGateRecordsFailingSiblingOnTheWire(t *testing.T) {
 func TestRunTurnDeniedGateThenBackendFailureFails(t *testing.T) {
 	backendErr := errors.New("backend failed after denial")
 	backend := &gateBackend{failFollowUp: backendErr}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	result, err := engine.RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeManual),
@@ -622,7 +622,7 @@ func TestDenyContinueRecordsFailingSiblingOnTheWire(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	result, err := engine.RunTurn(ctx, TurnInput{
 		Message: "write something",
 		Tools:   tools,
