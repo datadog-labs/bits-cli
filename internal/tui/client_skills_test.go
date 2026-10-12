@@ -76,7 +76,7 @@ func TestClientSkillSlashInvocation(t *testing.T) {
 				t.Fatal(err)
 			}
 			backend := &skillRecordingBackend{}
-			m := New(agent.New(backend, assistant.SendOptions{}, agent.WithClientSkills(env.NewSkills(root, nil))))
+			m := New(agent.New(backend, agent.Config{ClientSkills: env.NewSkills(root, nil)}))
 			if tc.completion {
 				m.applyClientSkills(m.loadClientSkillMenu()().(clientSkillsResultMsg))
 			}
@@ -155,7 +155,7 @@ func TestClientSkillMenuRejectsStaleResults(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	path := installTestSkill(t, root, "review", true)
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}, agent.WithClientSkills(env.NewSkills(root, nil))))
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{ClientSkills: env.NewSkills(root, nil)}))
 	old := m.loadClientSkillMenu()().(clientSkillsResultMsg)
 	m.applyClientSkills(old)
 	if _, ok := m.skillMenu.skills["review"]; !ok {
@@ -204,7 +204,7 @@ func TestClientSkillInvocationPreservesAttachments(t *testing.T) {
 	root := t.TempDir()
 	installTestSkill(t, root, "review", true)
 	backend := &skillRecordingBackend{}
-	m := New(agent.New(backend, assistant.SendOptions{}, agent.WithClientSkills(env.NewSkills(root, nil))))
+	m := New(agent.New(backend, agent.Config{ClientSkills: env.NewSkills(root, nil)}))
 	m.applyClientSkills(m.loadClientSkillMenu()().(clientSkillsResultMsg))
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "/skill:review @check"})
@@ -251,7 +251,7 @@ func TestNewConversationRefreshesClientSkillMenu(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	path := installTestSkill(t, root, "review", true)
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}, agent.WithClientSkills(env.NewSkills(root, nil))))
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{ClientSkills: env.NewSkills(root, nil)}))
 	m.applyClientSkills(m.loadClientSkillMenu()().(clientSkillsResultMsg))
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
@@ -345,7 +345,7 @@ func TestClientSkillReadFailureFailsTurnLikeBackendError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	path := installTestSkill(t, root, "review", true)
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}, agent.WithClientSkills(env.NewSkills(root, nil))))
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{ClientSkills: env.NewSkills(root, nil)}))
 	m.applyClientSkills(m.loadClientSkillMenu()().(clientSkillsResultMsg))
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)

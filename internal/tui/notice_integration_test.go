@@ -10,14 +10,13 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
-	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 )
 
 func TestFakeTurnAndCommandsRenderLocalMessagesInOrder(t *testing.T) {
 	backend := fake.New()
 	backend.ScriptRoot = filepath.Join("..", "..")
-	m := New(agent.New(backend, assistant.SendOptions{}))
+	m := New(agent.New(backend, agent.Config{}))
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.editor.Update(tea.PasteMsg{Content: `load("fakedata/notices.star", "rate_limit"); rate_limit()`})
 	_, _ = m.submit()
@@ -49,7 +48,7 @@ func TestFakeTurnAndCommandsRenderLocalMessagesInOrder(t *testing.T) {
 }
 
 func TestDelayedBrowserResultStaysOutOfNewConversation(t *testing.T) {
-	m := New(agent.New(fake.New(), assistant.SendOptions{}))
+	m := New(agent.New(fake.New(), agent.Config{}))
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	oldEpoch := m.conversationEpoch
 	m.startNewConversation()
@@ -65,7 +64,7 @@ func TestCommandNoticeVisibleWhileScrolledUp(t *testing.T) {
 		{"copy", "No completed assistant response is available to copy."},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
-			m := New(agent.New(fake.New(), assistant.SendOptions{}))
+			m := New(agent.New(fake.New(), agent.Config{}))
 			_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 			for range 20 {
 				m.postNotice(notice(chat.NoticeInfo, nil, "Earlier message"))
@@ -90,7 +89,7 @@ func TestCommandNoticeVisibleWhileScrolledUp(t *testing.T) {
 }
 
 func TestPendingCommandsUsePlaceholderWithoutTranscriptNotice(t *testing.T) {
-	m := New(agent.New(fake.New(), assistant.SendOptions{}))
+	m := New(agent.New(fake.New(), agent.Config{}))
 	m.op.kind = opTurn
 	_, _ = m.dispatchCommand("new", "")
 	_, _ = m.dispatchCommand("new", "")

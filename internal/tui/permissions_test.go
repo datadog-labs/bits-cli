@@ -51,7 +51,7 @@ func newPermissionsModel(t *testing.T, mode agent.PermissionsMode) (*Model, *tur
 		t.Fatal(err)
 	}
 	backend := &turnBackend{t: t}
-	model := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: tools})
+	model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	return model, backend
 }

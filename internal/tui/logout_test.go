@@ -10,14 +10,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
-	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 )
 
 func TestSubmitLogoutIsLocalAndInvalidatesEngine(t *testing.T) {
 	calls := 0
 	tools := &agent.ToolSet{}
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{ConversationID: "conversation-1"}), Config{
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{ConversationID: "conversation-1"}), Config{
 		Tools: tools,
 		Logout: func(context.Context) (bool, error, error) {
 			calls++
@@ -55,7 +54,7 @@ func TestSubmitLogoutIsLocalAndInvalidatesEngine(t *testing.T) {
 
 func TestLogoutDuringActiveTurnCancelsAndDrainsBeforeDeleting(t *testing.T) {
 	logoutCalled := false
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{}), Config{
 		Logout: func(context.Context) (bool, error, error) {
 			logoutCalled = true
 			return true, nil, nil
@@ -94,7 +93,7 @@ func TestLogoutDuringActiveTurnCancelsAndDrainsBeforeDeleting(t *testing.T) {
 
 func TestQueuedLogoutFailurePostsOneNotice(t *testing.T) {
 	want := errors.New("credential store unavailable")
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{}), Config{
 		Logout: func(context.Context) (bool, error, error) {
 			return true, nil, want
 		},
@@ -119,7 +118,7 @@ func TestQueuedLogoutFailurePostsOneNotice(t *testing.T) {
 
 func TestLogoutLocalFailureKeepsAuthenticatedEngine(t *testing.T) {
 	want := errors.New("credential store unavailable")
-	engine := agent.New(&spyBackend{t: t}, assistant.SendOptions{})
+	engine := agent.New(&spyBackend{t: t}, agent.Config{})
 	m := New(engine, Config{
 		Logout: func(context.Context) (bool, error, error) {
 			return true, nil, want
@@ -155,7 +154,7 @@ func TestLogoutLocalFailureKeepsAuthenticatedEngine(t *testing.T) {
 }
 
 func TestAlreadyLoggedOutIsSafeAndInvalidatesEngine(t *testing.T) {
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{}), Config{
 		Logout: func(context.Context) (bool, error, error) {
 			return false, nil, nil
 		},
@@ -173,7 +172,7 @@ func TestAlreadyLoggedOutIsSafeAndInvalidatesEngine(t *testing.T) {
 
 func TestRemoteRevocationFailureStillInvalidatesLocalSession(t *testing.T) {
 	want := errors.New("remote revocation unavailable")
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{}), Config{
 		Logout: func(context.Context) (bool, error, error) {
 			return true, want, nil
 		},
@@ -192,7 +191,7 @@ func TestRemoteRevocationFailureStillInvalidatesLocalSession(t *testing.T) {
 func TestQuitCancelsLogout(t *testing.T) {
 	started := make(chan struct{})
 	done := make(chan struct{})
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{}), Config{
 		Logout: func(ctx context.Context) (bool, error, error) {
 			close(started)
 			<-ctx.Done()
@@ -215,7 +214,7 @@ func TestQuitCancelsLogout(t *testing.T) {
 
 func TestRepeatedLogoutWhileRunningDoesNotStartAnotherDelete(t *testing.T) {
 	calls := 0
-	m := New(agent.New(&spyBackend{t: t}, assistant.SendOptions{}), Config{
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{}), Config{
 		Logout: func(context.Context) (bool, error, error) {
 			calls++
 			return true, nil, nil

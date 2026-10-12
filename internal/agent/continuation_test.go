@@ -69,7 +69,7 @@ func TestContinuationKeepsOriginalTurnContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := &optionsBackend{}
-	e := New(backend, assistant.SendOptions{ConversationID: "conversation"})
+	e := New(backend, Config{ConversationID: "conversation"})
 	e.continuation = continuationFromHistory([]assistant.Message{user, savedCall("one", "input")})
 	drain(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
 	if got := backend.opts.Context; got == nil || got.Entities[0].ID != "api" || len(got.Resources) != 1 {
@@ -99,7 +99,7 @@ func TestResumeRequiresEveryHandlerToOptIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"write", "unknown", assistant.ApprovalRequestTool} {
-		e := New(&scriptBackend{}, assistant.SendOptions{})
+		e := New(&scriptBackend{}, Config{})
 		e.continuation = continuationFromHistory([]assistant.Message{savedCall("one", "input"), savedCall("two", name)})
 		if e.CanResumeTools(set) {
 			t.Fatalf("batch containing %s is resumable", name)
@@ -133,7 +133,7 @@ func TestCancelledClientToolPublishesTerminalSnapshot(t *testing.T) {
 				t.Fatal(err)
 			}
 			call := savedCall("call-input", "input")
-			e := New(&scriptBackend{msgs: []assistant.Message{call}, convID: "conversation"}, assistant.SendOptions{ConversationID: "conversation"})
+			e := New(&scriptBackend{msgs: []assistant.Message{call}, convID: "conversation"}, Config{ConversationID: "conversation"})
 			var events <-chan Event
 			if resumed {
 				e.transcript.AppendMessage(call)

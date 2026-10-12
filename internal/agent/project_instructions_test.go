@@ -139,13 +139,13 @@ func TestConversationInstructionsSnapshotAndReset(t *testing.T) {
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
 	dir := t.TempDir()
 	writeInstructionTestFile(t, dir, "AGENTS.md", "original instructions")
-	engine := New(backend, assistant.SendOptions{}, WithProjectInstructions(env.NewInstructions(dir)))
-	drain(engine.StartTurn(context.Background(), TurnInput{Message: "visible prompt", UserContext: func(context.Context) string { return "existing" }}))
+	engine := New(backend, Config{UserContext: func(context.Context) string { return "existing" }, ProjectInstructions: env.NewInstructions(dir)})
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "visible prompt"}))
 	if got := backend.opts[0].CustomUserContext; !strings.HasPrefix(got, "existing\n\n<project_instructions>\nMake sure to follow these project instructions.") || !strings.Contains(got, "original instructions") {
 		t.Fatalf("first context = %q", got)
 	}
 	writeInstructionTestFile(t, dir, "AGENTS.md", "updated instructions")
-	drain(engine.StartTurn(context.Background(), TurnInput{Message: "visible prompt", UserContext: func(context.Context) string { return "existing" }}))
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "visible prompt"}))
 	if got := backend.opts[1].CustomUserContext; got != "existing" {
 		t.Fatalf("later context = %q", got)
 	}
@@ -167,7 +167,7 @@ func TestResumedConversationReplacesUnknownInstructions(t *testing.T) {
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
 	dir := t.TempDir()
 	writeInstructionTestFile(t, dir, "AGENTS.md", "local instructions")
-	engine := New(backend, assistant.SendOptions{ConversationID: "existing"}, WithProjectInstructions(env.NewInstructions(dir)))
+	engine := New(backend, Config{ConversationID: "existing", ProjectInstructions: env.NewInstructions(dir)})
 	instructions := engine.projectInstructions
 	drain(engine.StartTurn(context.Background(), TurnInput{Message: "resume"}))
 	if !strings.HasPrefix(backend.opts[0].CustomUserContext, instructionsReplacementNotice) || !strings.Contains(backend.opts[0].CustomUserContext, "local instructions") {
@@ -193,15 +193,15 @@ func TestInstructionsAreNotResentOnToolContinuations(t *testing.T) {
 	}
 	dir := t.TempDir()
 	writeInstructionTestFile(t, dir, "AGENTS.md", "local instructions")
-	engine := New(backend, assistant.SendOptions{}, WithProjectInstructions(env.NewInstructions(dir)))
-	drain(engine.StartTurn(context.Background(), TurnInput{Message: "inspect", Tools: tools, UserContext: func(context.Context) string { return "environment" }}))
+	engine := New(backend, Config{UserContext: func(context.Context) string { return "environment" }, ProjectInstructions: env.NewInstructions(dir)})
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "inspect", Tools: tools}))
 	if len(backend.userContexts) != 2 {
 		t.Fatalf("requests = %d", len(backend.userContexts))
 	}
 	if !strings.HasPrefix(backend.userContexts[0], "environment\n\n") || !strings.Contains(backend.userContexts[0], "local instructions") || backend.userContexts[1] != "" {
 		t.Fatalf("request contexts = %q", backend.userContexts)
 	}
-	drain(engine.StartTurn(context.Background(), TurnInput{Message: "next turn", Tools: tools, UserContext: func(context.Context) string { return "environment" }}))
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "next turn", Tools: tools}))
 	if backend.userContexts[2] != "" {
 		t.Fatalf("next turn context = %q", backend.userContexts[2])
 	}
@@ -209,7 +209,7 @@ func TestInstructionsAreNotResentOnToolContinuations(t *testing.T) {
 
 func TestResumedConversationWithdrawsUnknownInstructionsOnce(t *testing.T) {
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
-	engine := New(backend, assistant.SendOptions{ConversationID: "existing"}, WithProjectInstructions(env.NewInstructions(t.TempDir())))
+	engine := New(backend, Config{ConversationID: "existing", ProjectInstructions: env.NewInstructions(t.TempDir())})
 	for range 2 {
 		drain(engine.StartTurn(context.Background(), TurnInput{Message: "continue"}))
 	}
@@ -226,7 +226,7 @@ func TestConversationSwitchResetsInstructionsOnlyOnCommit(t *testing.T) {
 			backend := &conversationBackend{history: func(context.Context, assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
 				return response, nil
 			}}
-			engine := New(backend, assistant.SendOptions{ConversationID: "old"}, WithProjectInstructions(env.NewInstructions(t.TempDir())))
+			engine := New(backend, Config{ConversationID: "old", ProjectInstructions: env.NewInstructions(t.TempDir())})
 			instructions := engine.projectInstructions
 			instructions.apply(context.Background(), assistant.SendOptions{})
 			instructions.acknowledge()
@@ -288,7 +288,7 @@ func TestProjectInstructionsRetryUntilDelivered(t *testing.T) {
 					writeInstructionTestFile(t, dir, "AGENTS.md", tc.contents)
 				}
 				backend := &instructionDeliveryBackend{streamFailure: streamFailure}
-				engine := New(backend, assistant.SendOptions{ConversationID: tc.conversationID}, WithProjectInstructions(env.NewInstructions(dir)))
+				engine := New(backend, Config{ConversationID: tc.conversationID, ProjectInstructions: env.NewInstructions(dir)})
 				drain(engine.StartTurn(context.Background(), TurnInput{Message: "first"}))
 				if !strings.HasPrefix(backend.contexts[0], tc.notice) {
 					t.Fatalf("first update = %q", backend.contexts[0])

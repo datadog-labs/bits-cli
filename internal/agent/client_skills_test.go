@@ -34,7 +34,7 @@ func TestClientSkillConversationSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, ".agents/skills/example", "example", "original description")
 	backend := &instructionDeliveryBackend{}
-	engine := New(backend, assistant.SendOptions{}, WithClientSkills(env.NewSkills(dir, nil)))
+	engine := New(backend, Config{ClientSkills: env.NewSkills(dir, nil)})
 	drain(engine.StartTurn(context.Background(), TurnInput{Message: "first"}))
 	writeSkill(t, dir, ".agents/skills/example", "example", "changed description")
 	for range 2 {
@@ -61,12 +61,12 @@ func TestClientSkillsOnlySentWithUserMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(backend, assistant.SendOptions{}, WithClientSkills(env.NewSkills(dir, nil)))
-	drain(engine.StartTurn(context.Background(), TurnInput{Message: "inspect", Tools: tools, UserContext: func(context.Context) string { return "environment" }}))
+	engine := New(backend, Config{UserContext: func(context.Context) string { return "environment" }, ClientSkills: env.NewSkills(dir, nil)})
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "inspect", Tools: tools}))
 	if len(backend.userContexts) != 2 || !strings.HasPrefix(backend.userContexts[0], "environment\n\n") || !strings.Contains(backend.userContexts[0], "example description") || backend.userContexts[1] != "" {
 		t.Fatalf("contexts = %q", backend.userContexts)
 	}
-	drain(engine.StartTurn(context.Background(), TurnInput{Message: "next", Tools: tools, UserContext: func(context.Context) string { return "environment" }}))
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "next", Tools: tools}))
 	if !strings.Contains(backend.userContexts[2], "example description") || strings.Contains(backend.userContexts[2], "environment") {
 		t.Fatal("catalog missing or environment context repeated")
 	}
@@ -75,7 +75,7 @@ func TestClientSkillsOnlySentWithUserMessages(t *testing.T) {
 func TestClientSkillsResumeAndEmptySnapshot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
-	engine := New(nil, assistant.SendOptions{}, WithClientSkills(env.NewSkills(dir, nil)))
+	engine := New(nil, Config{ClientSkills: env.NewSkills(dir, nil)})
 	opts := engine.applySkills(context.Background(), assistant.SendOptions{}, "")
 	if opts.CustomUserContext != "" {
 		t.Fatal("unexpected empty catalog")
@@ -100,7 +100,7 @@ func TestClientSkillsResumeAndEmptySnapshot(t *testing.T) {
 
 func TestClientSkillsResumeWithoutSkillsSupersedesOlderCatalog(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	engine := New(nil, assistant.SendOptions{}, WithClientSkills(env.NewSkills(t.TempDir(), nil)))
+	engine := New(nil, Config{ClientSkills: env.NewSkills(t.TempDir(), nil)})
 	for range 2 {
 		got := engine.applySkills(context.Background(), assistant.SendOptions{ConversationID: "existing"}, "")
 		if got.CustomUserContext != clientSkillsRemovalNotice {
@@ -118,7 +118,7 @@ func TestClientSkillsSwitchAndStoppedToolDrain(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, ".agents/skills/example", "example", "example description")
 	backend := &instructionDeliveryBackend{}
-	engine := New(backend, assistant.SendOptions{}, WithClientSkills(env.NewSkills(dir, nil)))
+	engine := New(backend, Config{ClientSkills: env.NewSkills(dir, nil)})
 	drain(engine.StartTurn(context.Background(), TurnInput{Message: "first"}))
 	if _, _, err := engine.drainStoppedToolCalls(context.Background(), nil, assistant.SendOptions{ConversationID: engine.ConversationID()}); err != nil {
 		t.Fatal(err)
@@ -148,15 +148,23 @@ func TestClientSkillsDeferredUntilUserMessageAfterToolResume(t *testing.T) {
 	}
 	backend := &optionsBackend{}
 	skills := env.NewSkills(dir, nil)
-	engine := New(backend, assistant.SendOptions{ConversationID: "conversation"}, WithClientSkills(skills))
+	renders := 0
+	engine := New(backend, Config{
+		ConversationID: "conversation",
+		ClientSkills:   skills,
+		UserContext: func(context.Context) string {
+			renders++
+			return "environment"
+		},
+	})
 	engine.continuation = continuationFromHistory([]assistant.Message{savedCall("one", "input")})
 	drain(engine.ResumePendingTools(t.Context(), TurnInput{Tools: tools}))
-	if backend.opts.CustomUserContext != "" {
+	if backend.opts.CustomUserContext != "" || renders != 0 {
 		t.Fatal("resumed client tool response prepared or sent the catalog")
 	}
 	writeSkill(t, dir, ".agents/skills/example", "example", "updated after tool resume")
 	drain(engine.StartTurn(t.Context(), TurnInput{Message: "continue", Tools: tools}))
-	if !strings.Contains(backend.opts.CustomUserContext, "updated after tool resume") {
+	if renders != 1 || !strings.Contains(backend.opts.CustomUserContext, "environment") || !strings.Contains(backend.opts.CustomUserContext, "updated after tool resume") {
 		t.Fatal("next user message did not include the catalog")
 	}
 }
@@ -167,7 +175,7 @@ func TestSkillRegistrySharedByMenuAndCatalog(t *testing.T) {
 	writeSkill(t, dir, ".agents/skills/review", "review", "original description")
 	writeSkillFile(t, dir, ".agents/skills/manual", "---\nname: manual\ndescription: User only\nmodel-invocable: false\n---\n")
 	backend := &instructionDeliveryBackend{}
-	engine := New(backend, assistant.SendOptions{}, WithClientSkills(env.NewSkills(dir, nil)))
+	engine := New(backend, Config{ClientSkills: env.NewSkills(dir, nil)})
 	menu := mustClientSkills(t, engine)
 	if len(menu) != 2 || menu[0].Name != "manual" {
 		t.Fatalf("menu = %+v", menu)
@@ -208,7 +216,7 @@ func mustClientSkills(t *testing.T, engine *Engine) []SkillSummary {
 }
 
 func TestClientSkillsReturnsDiscoveryError(t *testing.T) {
-	engine := New(nil, assistant.SendOptions{}, WithClientSkills(env.NewSkills(t.TempDir(), nil)))
+	engine := New(nil, Config{ClientSkills: env.NewSkills(t.TempDir(), nil)})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	summaries, err := engine.ClientSkills(ctx)

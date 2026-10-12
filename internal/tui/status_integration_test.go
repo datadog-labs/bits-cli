@@ -72,7 +72,7 @@ func newStatusModelAt(t *testing.T, root string, backend agent.Backend) *Model {
 	}
 	t.Cleanup(func() { _ = ws.Close() })
 	m := New(
-		agent.New(backend, assistant.SendOptions{Model: "model-x"}),
+		agent.New(backend, agent.Config{Model: "model-x"}),
 		Config{Tools: tools, Workspace: ws},
 	)
 	_ = m.editor.Focus()

@@ -143,7 +143,7 @@ func TestRunTurnReturnsFinalStateAndLatestUsage(t *testing.T) {
 			firstUsage,
 			lastUsage,
 		},
-	}, assistant.SendOptions{})
+	}, Config{})
 	result, err := engine.RunTurn(context.Background(), TurnInput{Message: "question"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestRunTurnReturnsPartialStateOnBackendError(t *testing.T) {
 		convID: "assigned-before-error",
 		err:    backendErr,
 		msgs:   []assistant.Message{assistant.AssistantMessage("answer", assistant.TextContent("partial"))},
-	}, assistant.SendOptions{})
+	}, Config{})
 
 	result, err := engine.RunTurn(context.Background(), TurnInput{Message: "question"}, nil)
 	if !errors.Is(err, backendErr) || result.Outcome != TurnOutcomeFailed {
@@ -197,7 +197,7 @@ func TestRunTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &unfinishedToolBackend{started: make(chan struct{}), client: tt.client}
-			engine := New(backend, assistant.SendOptions{})
+			engine := New(backend, Config{})
 			ctx, cancel := context.WithCancel(context.Background())
 			resultCh := make(chan TurnResult, 1)
 			errCh := make(chan error, 1)
@@ -228,7 +228,7 @@ func TestRunTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 
 func TestRunTurnCancellationLeavesEarlierUnfinishedToolUntouched(t *testing.T) {
 	backend := &historicalToolBackend{started: make(chan struct{})}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	if _, err := engine.RunTurn(context.Background(), TurnInput{Message: "first"}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestRunTurnCancellationLeavesEarlierUnfinishedToolUntouched(t *testing.T) {
 
 func TestStartTurnCancellationDeliversSettledSnapshotUnderBackpressure(t *testing.T) {
 	backend := &backpressureCancelBackend{filled: make(chan struct{})}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	ctx, cancel := context.WithCancel(context.Background())
 	events := engine.StartTurn(ctx, TurnInput{Message: "question"})
 
@@ -287,7 +287,7 @@ func TestStartTurnCancellationDeliversSettledSnapshotUnderBackpressure(t *testin
 
 func TestRunTurnCancellationDrainsAndPreservesPartialState(t *testing.T) {
 	backend := &cancelRunBackend{started: make(chan struct{})}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	ctx, cancel := context.WithCancel(context.Background())
 	resultCh := make(chan TurnResult, 1)
 	errCh := make(chan error, 1)
@@ -315,7 +315,7 @@ func TestRunTurnCancellationDrainsAndPreservesPartialState(t *testing.T) {
 func TestRunTurnPreservesBackendErrorReturnedAfterCancellation(t *testing.T) {
 	backendErr := errors.New("backend failed during cancellation")
 	backend := &errorAfterCancelRunBackend{started: make(chan struct{}), err: backendErr}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	ctx, cancel := context.WithCancel(context.Background())
 	resultCh := make(chan TurnResult, 1)
 	errCh := make(chan error, 1)
@@ -339,7 +339,7 @@ func TestRunTurnPreservesBackendErrorReturnedAfterCancellation(t *testing.T) {
 
 func TestRunTurnDeadlineExceeded(t *testing.T) {
 	backend := &cancelRunBackend{started: make(chan struct{})}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
@@ -352,7 +352,7 @@ func TestRunTurnDeadlineExceeded(t *testing.T) {
 func TestRunTurnConsumerFailureCancelsAndDrains(t *testing.T) {
 	consumerErr := errors.New("writer failed")
 	backend := &cancelRunBackend{started: make(chan struct{})}
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 
 	result, err := engine.RunTurn(context.Background(), TurnInput{Message: "question"}, func(event Event) error {
 		if stateHasAssistant(event) {

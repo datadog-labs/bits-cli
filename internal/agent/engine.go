@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -161,6 +162,7 @@ type Engine struct {
 	operationGeneration atomic.Uint64
 	projectInstructions *instructionDelivery
 	clientSkills        *env.Skills
+	userContext         func(context.Context) string
 }
 
 // RuntimeStatus is the non-secret request and backend state needed by local
@@ -179,12 +181,48 @@ type toolCommand struct {
 	stop       bool
 }
 
-// Option configures an engine before it starts processing operations.
-type Option func(*Engine)
+// Config holds engine-lifetime dependencies and backend request defaults.
+// Messages, tools, attachments, and denial policy belong to TurnInput.
+type Config struct {
+	// ConversationID and MessageHistory initialize the conversation. Starting or
+	// installing another conversation clears the initial message history.
+	ConversationID string
+	MessageHistory []json.RawMessage
 
-// New returns an Engine. opts carries the per-request defaults (profile, model,
-// conversation id, …); ConversationID is updated as turns run.
-func New(b Backend, opts assistant.SendOptions, options ...Option) *Engine {
+	Model                     string
+	InferenceMode             string
+	Profile                   assistant.Profile
+	Referrer                  string
+	SkillOverrides            []assistant.SkillOverride
+	ExperimentalToolOverrides map[string]any
+	EnableDebugMode           bool
+	DebugTag                  string
+
+	ProjectInstructions *env.Instructions
+	// ClientSkills is a conversation-scoped registry owned exclusively by this engine.
+	ClientSkills *env.Skills
+	// UserContext is called on each new user turn to observe current environment
+	// state. Unchanged context is suppressed after delivery. The renderer survives
+	// conversation changes; delivery tracking does not. Nil disables it.
+	UserContext func(context.Context) string
+}
+
+// New creates an engine from its backend and configuration. Local context is
+// discovered lazily. Callers must not mutate configuration slices or maps after
+// construction. Dynamic environment state is observed through UserContext.
+func New(b Backend, config Config) *Engine {
+	opts := assistant.SendOptions{
+		ConversationID:            config.ConversationID,
+		MessageHistory:            config.MessageHistory,
+		Model:                     config.Model,
+		InferenceMode:             config.InferenceMode,
+		Profile:                   config.Profile,
+		Referrer:                  config.Referrer,
+		SkillOverrides:            config.SkillOverrides,
+		ExperimentalToolOverrides: config.ExperimentalToolOverrides,
+		EnableDebugMode:           config.EnableDebugMode,
+		DebugTag:                  config.DebugTag,
+	}
 	profile := opts.Profile
 	if profile == "" {
 		profile = assistant.DefaultProfile
@@ -202,9 +240,11 @@ func New(b Backend, opts assistant.SendOptions, options ...Option) *Engine {
 		transcript:    NewTranscript(),
 		commands:      make(chan toolCommand, maxQueuedCommands),
 		sessionGrants: make(map[ApprovalKey]struct{}),
+		clientSkills:  config.ClientSkills,
+		userContext:   config.UserContext,
 	}
-	for _, option := range options {
-		option(engine)
+	if config.ProjectInstructions != nil {
+		engine.projectInstructions = &instructionDelivery{source: config.ProjectInstructions}
 	}
 	return engine
 }
@@ -236,9 +276,6 @@ type TurnInput struct {
 	Context *assistant.AssistantContext
 	// OnDeny is the turn's policy after a denial is answered on the wire.
 	OnDeny DenyPolicy
-	// UserContext renders the client's environment. The engine sends it with
-	// the turn's first request when the conversation does not already carry it.
-	UserContext func(context.Context) string
 }
 
 // turnCompletion is the final state captured before an engine operation
@@ -437,7 +474,7 @@ func (e *Engine) run(
 	convID := e.ConversationID()
 	var userContext string
 	if len(resumed) == 0 {
-		userContext = e.pendingUserContext(ctx, in.UserContext)
+		userContext = e.pendingUserContext(ctx)
 	}
 
 	// request sends one round and collects the client calls it pauses on. It

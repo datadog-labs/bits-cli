@@ -65,7 +65,7 @@ func startQuestions(t *testing.T, mode agent.PermissionsMode, input string, coun
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(agent.New(backend, assistant.SendOptions{}), Config{Tools: set, ToolUI: host})
+	m := New(agent.New(backend, agent.Config{}), Config{Tools: set, ToolUI: host})
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(m, "Help me choose")
 	_, _ = m.submit()
@@ -288,7 +288,7 @@ func newResumedQuestionModel(t *testing.T, f *fake.Fake, id string, startup bool
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := assistant.SendOptions{}
+	opts := agent.Config{}
 	if startup {
 		opts.ConversationID = id
 	}

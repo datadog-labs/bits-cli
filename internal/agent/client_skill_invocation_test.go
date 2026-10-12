@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
-	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 func TestClientSkillInvocationLoadsCurrentBody(t *testing.T) {
@@ -23,7 +22,7 @@ func TestClientSkillInvocationLoadsCurrentBody(t *testing.T) {
 	skill := summaries[0]
 	writeSkillFile(t, root, ".agents/skills/review", "\xef\xbb\xbf---\r\nname: review\r\ndescription: Updated\r\n---\r\nCurrent <instructions> & body\r\n\t ")
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
-	engine := New(backend, assistant.SendOptions{}, WithClientSkills(provider))
+	engine := New(backend, Config{ClientSkills: provider})
 	arguments := "  Preserve CASE\n\t and trailing space "
 	for range 2 {
 		drain(engine.StartTurn(context.Background(), TurnInput{Message: "/skill:review" + arguments, Skill: &SkillInvocation{Name: skill.Name, Arguments: arguments}}))
@@ -82,7 +81,7 @@ func TestClientSkillInvocationReadFailuresNeverSend(t *testing.T) {
 				}
 			}
 			backend := &conversationRecordingBackend{messages: make(map[string][]string)}
-			engine := New(backend, assistant.SendOptions{}, WithClientSkills(provider))
+			engine := New(backend, Config{ClientSkills: provider})
 			var failureErr error
 			for event := range engine.StartTurn(context.Background(), TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: skill.Name}}) {
 				if event.Err != nil {
@@ -103,7 +102,7 @@ func TestClientSkillInvocationResolvesCurrentRegistry(t *testing.T) {
 	writeSkillFile(t, root, ".agents/skills/review", "---\nname: review\ndescription: Project\n---\nPROJECT BODY")
 	writeSkillFile(t, root, "extras/review", "---\nname: review\ndescription: Extra\n---\nEXTRA BODY")
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
-	engine := New(backend, assistant.SendOptions{}, WithClientSkills(env.NewSkills(root, []string{"extras"})))
+	engine := New(backend, Config{ClientSkills: env.NewSkills(root, []string{"extras"})})
 	summaries := mustClientSkills(t, engine)
 	summaries[0].Name = "tampered"
 	drain(engine.StartTurn(context.Background(), TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: "review"}}))
@@ -143,7 +142,7 @@ func TestClientSkillInvocationKeepsDiscoveredDefaultName(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
-	engine := New(backend, assistant.SendOptions{}, WithClientSkills(env.NewSkills(root, nil)))
+	engine := New(backend, Config{ClientSkills: env.NewSkills(root, nil)})
 	for event := range engine.StartTurn(context.Background(), TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: "review"}}) {
 		if event.Err != nil {
 			t.Fatal(event.Err)

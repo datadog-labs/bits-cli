@@ -30,7 +30,7 @@ func (b *conversationBackend) ConversationHistory(ctx context.Context, in assist
 }
 
 func engineWithConversation(backend Backend, id string, messages ...assistant.Message) *Engine {
-	e := New(backend, assistant.SendOptions{ConversationID: id, Model: "retained"})
+	e := New(backend, Config{ConversationID: id, Model: "retained"})
 	for _, message := range messages {
 		e.transcript.AppendMessage(message)
 	}
@@ -44,7 +44,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 	response.Data.Attributes.Conversations = []assistant.ConversationSummary{{ID: testConversationID, ConversationID: testConversationID, Title: "One"}}
 	e := New(&conversationBackend{
 		list: func(context.Context) (*assistant.UserConversationsResponse, error) { return response, nil },
-	}, assistant.SendOptions{})
+	}, Config{})
 	result := e.ListConversations(context.Background())
 	if result.Err != nil || len(result.Conversations) != 1 {
 		t.Fatalf("result = %+v", result)
@@ -57,7 +57,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 		t.Fatal("result aliases backend storage")
 	}
 
-	unsupportedEngine := New(&scriptBackend{}, assistant.SendOptions{})
+	unsupportedEngine := New(&scriptBackend{}, Config{})
 	unsupported := unsupportedEngine.ListConversations(context.Background())
 	if !errors.Is(unsupported.Err, ErrConversationListUnsupported) {
 		t.Fatalf("unsupported error = %v", unsupported.Err)
@@ -68,7 +68,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 
 	malformed := New(&conversationBackend{
 		list: func(context.Context) (*assistant.UserConversationsResponse, error) { return nil, nil },
-	}, assistant.SendOptions{})
+	}, Config{})
 	if got := malformed.ListConversations(context.Background()).Err; !errors.Is(got, ErrMalformedConversationList) {
 		t.Fatalf("nil response error = %v", got)
 	}
@@ -83,7 +83,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 	}
 	malformed = New(&conversationBackend{
 		list: func(context.Context) (*assistant.UserConversationsResponse, error) { return badIDs, nil },
-	}, assistant.SendOptions{})
+	}, Config{})
 	result = malformed.ListConversations(context.Background())
 	if result.Err != nil || result.Omitted != 1 || len(result.Conversations) != 1 || result.Conversations[0].ConversationID != testConversationID {
 		t.Fatalf("partially malformed result = %+v", result)
@@ -221,7 +221,7 @@ func TestListConversationsIgnoresTheOperationGate(t *testing.T) {
 	}
 	e := New(&conversationBackend{
 		list: func(context.Context) (*assistant.UserConversationsResponse, error) { return response, nil },
-	}, assistant.SendOptions{})
+	}, Config{})
 
 	if !e.begin() {
 		t.Fatal("could not take the operation gate")
@@ -243,7 +243,7 @@ func TestListConversationsIgnoresTheOperationGate(t *testing.T) {
 func TestConversationLoadIgnoresActiveTurnButInstallRejectsIt(t *testing.T) {
 	response := &assistant.ConversationHistoryResponse{}
 	response.Data.Type = "conversation-history-response"
-	e := New(&historyBackend{resp: response}, assistant.SendOptions{ConversationID: "old"})
+	e := New(&historyBackend{resp: response}, Config{ConversationID: "old"})
 	if !e.begin() {
 		t.Fatal("could not take the operation gate")
 	}

@@ -98,7 +98,7 @@ func TestChatFooterRendersBelowEditor(t *testing.T) {
 	t.Cleanup(func() { _ = ws.Close() })
 
 	m := New(
-		agent.New(&spyBackend{t: t}, assistant.SendOptions{}),
+		agent.New(&spyBackend{t: t}, agent.Config{}),
 		Config{Workspace: ws},
 	)
 	_ = m.editor.Focus()

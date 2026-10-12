@@ -24,16 +24,6 @@ type instructionDelivery struct {
 	pendingContext string
 }
 
-// WithProjectInstructions configures instruction discovery. Delivery state belongs
-// to this engine and is reset only when its conversation changes.
-func WithProjectInstructions(source *env.Instructions) Option {
-	return func(engine *Engine) {
-		if source != nil {
-			engine.projectInstructions = &instructionDelivery{source: source}
-		}
-	}
-}
-
 // apply prepares an update once per conversation. The exact update stays pending
 // until delivery, even if a failed request assigns a conversation ID.
 func (p *instructionDelivery) apply(ctx context.Context, opts assistant.SendOptions) assistant.SendOptions {
@@ -81,11 +71,6 @@ func (p *instructionDelivery) reset() {
 // SkillSummary is presentation metadata exposed to completion clients.
 type SkillSummary = env.SkillSummary
 
-// WithClientSkills attaches a registry owned exclusively by this engine.
-func WithClientSkills(skills *env.Skills) Option {
-	return func(e *Engine) { e.clientSkills = skills }
-}
-
 // ClientSkills lists the shared conversation registry.
 func (e *Engine) ClientSkills(ctx context.Context) ([]SkillSummary, error) {
 	if e.clientSkills == nil {
@@ -128,11 +113,11 @@ func (e *Engine) prepareSkill(ctx context.Context, invocation SkillInvocation) (
 
 // pendingUserContext returns the user context to send with a new user turn, or
 // "" when the conversation already carries it.
-func (e *Engine) pendingUserContext(ctx context.Context, render func(context.Context) string) string {
-	if render == nil {
+func (e *Engine) pendingUserContext(ctx context.Context) string {
+	if e.userContext == nil {
 		return ""
 	}
-	rendered := render(ctx)
+	rendered := e.userContext(ctx)
 	if e.sentUserContext != nil && *e.sentUserContext == rendered {
 		return ""
 	}

@@ -29,7 +29,7 @@ func welcomeModel(width, height int) *Model {
 // path are known; with one the backend and authentication rows appear too.
 func welcomeModels(width, height int) map[string]*Model {
 	engined := welcomeModel(width, height)
-	engined.engine = agent.New(fake.New(), assistant.SendOptions{})
+	engined.engine = agent.New(fake.New(), agent.Config{})
 	return map[string]*Model{"bare": welcomeModel(width, height), "engine": engined}
 }
 
@@ -523,14 +523,14 @@ func TestInitChatFetchesTheOfferOnlyWithoutAConversationToRestore(t *testing.T) 
 
 	empty := welcomeModel(120, 40)
 	empty.mode = ModeChat
-	empty.engine = agent.New(fake.New(), assistant.SendOptions{})
+	empty.engine = agent.New(fake.New(), agent.Config{})
 	if !hasFetch(empty) {
 		t.Error("initChat did not fetch the offer for an empty start")
 	}
 
 	restoring := welcomeModel(120, 40)
 	restoring.mode = ModeChat
-	restoring.engine = agent.New(fake.New(), assistant.SendOptions{ConversationID: "existing-conversation"})
+	restoring.engine = agent.New(fake.New(), agent.Config{ConversationID: "existing-conversation"})
 	if hasFetch(restoring) {
 		t.Error("initChat fetched the offer despite a conversation to restore")
 	}

@@ -68,7 +68,7 @@ func approvalTransitionOrder(t *testing.T, decision ApprovalDecision) []string {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	engine := New(backend, assistant.SendOptions{})
+	engine := New(backend, Config{})
 	events := engine.StartTurn(ctx, TurnInput{Message: "run all", Tools: tools, OnDeny: DenyStop})
 	waitForToolStatus(t, events, "call-d", ToolAwaitingApproval)
 	if !engine.Decide("call-a", decision) {
