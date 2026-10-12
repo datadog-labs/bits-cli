@@ -9,11 +9,6 @@
     "copyright": "Copyright 2013 Google Inc.",
     "reason": "the LICENSE file carries no standalone copyright line; the license and the holder come from the module's source headers"
   },
-  "github.com/davecgh/go-spew": {
-    "license": "ISC",
-    "detected": "0BSD",
-    "reason": "detector near-tie between 0BSD and ISC (the texts differ only in the attribution proviso); the LICENSE file titles itself \"ISC License\""
-  },
   "github.com/aymanbagabas/go-udiff": {
     "license": "MIT AND BSD-3-Clause",
     "detected": "MIT OR BSD-3-Clause",
@@ -44,6 +39,12 @@
     "license": "MIT AND Apache-2.0",
     "detected": "MIT OR Apache-2.0",
     "reason": "per-file coverage, not a choice: the libyaml-derived files (apic.go, emitterc.go, parserc.go, readerc.go, scannerc.go, writerc.go, yamlh.go, yamlprivateh.go) are MIT (Kirill Simonov) and the remaining files are Apache-2.0, per the module's LICENSE"
+  },
+  "go.yaml.in/yaml/v3": {
+    "origin": "https://github.com/go-yaml/yaml",
+    "license": "MIT AND Apache-2.0",
+    "detected": "MIT OR Apache-2.0",
+    "reason": "go.yaml.in is a vanity domain; the module README identifies github.com/go-yaml/yaml as the upstream origin. Per-file coverage, not a choice: the libyaml-derived files (apic.go, emitterc.go, parserc.go, readerc.go, scannerc.go, writerc.go, yamlh.go, yamlprivateh.go) are MIT (Kirill Simonov) and the remaining files are Apache-2.0, per the module's LICENSE"
   },
   "go.starlark.net": {
     "origin": "https://github.com/google/starlark-go",
