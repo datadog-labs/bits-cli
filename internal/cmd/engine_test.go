@@ -1,4 +1,4 @@
-package startup
+package cmd
 
 import (
 	"context"
@@ -11,16 +11,6 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/site"
 )
-
-// clearStagingEnv clears inherited staging configuration for one test; empty
-// values are equivalent to unset for the staging loader. Unit tests stay
-// deterministic under any configuration inherited from the developer's shell.
-func clearStagingEnv(t *testing.T) {
-	t.Helper()
-	t.Setenv(site.EnvStagingSite, "")
-	t.Setenv(site.EnvStagingDomain, "")
-	t.Setenv(site.EnvStagingClientID, "")
-}
 
 type observedStore struct {
 	loads   int
@@ -185,16 +175,17 @@ func TestNewAuthenticatedClientRejectsInvalidConfiguration(t *testing.T) {
 
 func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 	clearStagingEnv(t)
+	t.Setenv("BITS_FAKE_BACKEND", "1")
+	t.Setenv("DD_API_KEY", "")
+	t.Setenv("DD_APP_KEY", "")
 	t.Run("automatic fake bypasses OAuth", func(t *testing.T) {
 		const id = "11111111-1111-4111-8111-111111111111"
 		// A script instead of an id pushes the conversation it opens.
 		for _, conversation := range []string{id, `say("earlier")`} {
 			store := &observedStore{err: errors.New("must not load")}
-			engine, err := NewEngine(context.Background(), EngineOptions{
-				Client:         ClientOptions{Mode: auth.ModeAuto, Store: store},
-				Config:         agent.Config{ConversationID: conversation},
-				UseFakeBackend: true,
-			})
+			engine, err := newEngine(context.Background(), ChatOptions{
+				AuthMode: auth.ModeAuto, ConversationID: conversation,
+			}, nil, store)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -209,20 +200,16 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 	})
 
 	t.Run("API key takes precedence over fake", func(t *testing.T) {
-		_, err := NewEngine(context.Background(), EngineOptions{
-			Client:         ClientOptions{Mode: auth.ModeAPIKey, APISite: "api.datadoghq.com"},
-			UseFakeBackend: true,
-		})
+		_, err := newEngine(context.Background(), ChatOptions{
+			AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com",
+		}, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "DD_API_KEY and DD_APP_KEY") {
 			t.Fatalf("error = %v", err)
 		}
 	})
 
 	t.Run("unsupported mode cannot select fake", func(t *testing.T) {
-		_, err := NewEngine(context.Background(), EngineOptions{
-			Client:         ClientOptions{Mode: auth.Mode("future")},
-			UseFakeBackend: true,
-		})
+		_, err := newEngine(context.Background(), ChatOptions{AuthMode: auth.Mode("future")}, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "unsupported authentication mode") {
 			t.Fatalf("error = %v", err)
 		}
