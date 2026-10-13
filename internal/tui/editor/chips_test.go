@@ -176,3 +176,55 @@ func TestChipLabelsAreEscaped(t *testing.T) {
 		t.Fatalf("chip = %q", ansi.Strip(view))
 	}
 }
+
+func TestRecallingAPromptRestoresItsChips(t *testing.T) {
+	e := New()
+	e.Focus()
+	service := func(id string) Attachment { return Attachment{Type: "service", ID: id, Label: id} }
+	e.SetHistorySource(func() []HistoryEntry {
+		return []HistoryEntry{
+			{Text: "first", Attachments: []Attachment{service("a")}},
+			{Text: "second", Attachments: []Attachment{service("b"), service("c")}},
+		}
+	})
+	for _, step := range []struct {
+		key, text, ids string
+	}{
+		{key: "up", text: "second", ids: "b,c"},
+		{key: "up", text: "first", ids: "a"},
+		{key: "down", text: "second", ids: "b,c"},
+		{key: "down", text: "", ids: ""},
+	} {
+		e.Update(historyKeyMsg(step.key))
+		if e.Value() != step.text || strings.Join(attachmentIDs(e), ",") != step.ids {
+			t.Fatalf("after %s: value %q, chips %v; want %q, %q", step.key, e.Value(), attachmentIDs(e), step.text, step.ids)
+		}
+	}
+}
+
+func TestHistoryDoesNotReplaceChipsBeingPrepared(t *testing.T) {
+	e := New()
+	e.Focus()
+	e.SetHistorySource(func() []HistoryEntry { return textEntries("previous") })
+	attachServices(e, "draft")
+	e.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	e.Update(historyKeyMsg("up"))
+	if e.Value() != "" || strings.Join(attachmentIDs(e), ",") != "draft" {
+		t.Fatalf("history replaced the draft: value %q, chips %v", e.Value(), attachmentIDs(e))
+	}
+}
+
+func TestRemovingARecalledChipLeavesHistory(t *testing.T) {
+	e := New()
+	e.Focus()
+	chip := Attachment{Type: "service", ID: "b", Label: "b"}
+	e.SetHistorySource(func() []HistoryEntry {
+		return []HistoryEntry{{Text: "first"}, {Text: "second", Attachments: []Attachment{chip}}}
+	})
+	e.Update(historyKeyMsg("up"))
+	e.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	e.Update(historyKeyMsg("up"))
+	if e.Value() != "second" {
+		t.Fatalf("up after removing a recalled chip switched entries: %q", e.Value())
+	}
+}

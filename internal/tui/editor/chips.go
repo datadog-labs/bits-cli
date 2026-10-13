@@ -128,8 +128,10 @@ func (e *Editor) focusChip(i int) {
 }
 
 // removeAttachment drops attachments[i]. A focused chip hands focus to its
-// left neighbour, and back to the text once no chip remains.
+// left neighbour, and back to the text once no chip remains. Like a text edit,
+// it ends history mode.
 func (e *Editor) removeAttachment(i int) {
+	e.history.end()
 	e.changeChips(func() {
 		e.attachments = slices.Delete(e.attachments, i, i+1)
 		if e.chips.cursor >= i && e.chips.cursor > 0 {

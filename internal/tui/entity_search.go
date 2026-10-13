@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/editor"
@@ -273,4 +274,21 @@ func contextFromAttachments(attachments []editor.Attachment) *assistant.Assistan
 		return nil
 	}
 	return &assistant.AssistantContext{Entities: entities}
+}
+
+// historyEntries turns previous prompts into editor history, restoring each
+// sent entity as the chip it was, images included.
+func historyEntries(prompts []agent.UserPrompt) []editor.HistoryEntry {
+	entries := make([]editor.HistoryEntry, len(prompts))
+	for i, prompt := range prompts {
+		entries[i].Text = prompt.Text
+		for _, entity := range prompt.Context {
+			entries[i].Attachments = append(entries[i].Attachments, editor.Attachment{
+				Type:  string(entity.Type),
+				ID:    entity.ID,
+				Label: entity.Label,
+			})
+		}
+	}
+	return entries
 }

@@ -1,6 +1,17 @@
 package editor
 
-import tea "charm.land/bubbletea/v2"
+import (
+	"slices"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// HistoryEntry is a previous prompt: its text and the attachments it was sent
+// with.
+type HistoryEntry struct {
+	Text        string
+	Attachments []Attachment
+}
 
 // history is the prompt-recall state: Up from an empty prompt loads the newest
 // entry and walks older ones; Down walks back and past the newest empties the
@@ -8,8 +19,8 @@ import tea "charm.land/bubbletea/v2"
 type history struct {
 	// source returns the entries, oldest first. It is read once on entry, so a
 	// transcript that changes while browsing does not shift the position.
-	source   func() []string
-	entries  []string
+	source   func() []HistoryEntry
+	entries  []HistoryEntry
 	index    int
 	recalled string // the loaded text; any divergence ends history mode
 }
@@ -22,11 +33,12 @@ func (h *history) end() { h.entries, h.index, h.recalled = nil, 0, "" }
 // stays chat-agnostic: the parent decides what counts as a previous prompt.
 // The editor keeps the returned slice while browsing, so source must return
 // one it no longer mutates.
-func (e *Editor) SetHistorySource(source func() []string) { e.history.source = source }
+func (e *Editor) SetHistorySource(source func() []HistoryEntry) { e.history.source = source }
 
 // historyKey handles Up/Down for prompt recall and reports whether it consumed
-// the key. History mode is entered only from an empty prompt; while it is
-// active, every Up/Down switches entry regardless of the entry's line count.
+// the key. History mode is entered only from an empty prompt without chips, so
+// it never replaces attachments being prepared; while it is active, every
+// Up/Down switches entry regardless of the entry's line count.
 func (e *Editor) historyKey(key string) (tea.Cmd, bool) {
 	h := &e.history
 	switch key {
@@ -38,7 +50,7 @@ func (e *Editor) historyKey(key string) (tea.Cmd, bool) {
 			h.index--
 			return e.recall(h.entries[h.index]), true
 		}
-		if e.ta.Value() != "" || h.source == nil {
+		if e.ta.Value() != "" || len(e.attachments) > 0 || h.source == nil {
 			return nil, false
 		}
 		entries := h.source()
@@ -55,17 +67,21 @@ func (e *Editor) historyKey(key string) (tea.Cmd, bool) {
 			h.index++
 			return e.recall(h.entries[h.index]), true
 		}
-		e.resetText()
+		e.Reset()
 		return nil, true
 	}
 	return nil, false
 }
 
-// recall loads text as a fresh prompt with the cursor at its end. The value is
-// marked dismissed so a trailing @mention or leading /command is not treated
+// recall loads an entry as a fresh prompt with the cursor at its end. The value
+// is marked dismissed so a trailing @mention or leading /command is not treated
 // as a completion trigger.
-func (e *Editor) recall(text string) tea.Cmd {
-	e.ta.SetValue(text)
+func (e *Editor) recall(entry HistoryEntry) tea.Cmd {
+	e.changeChips(func() {
+		e.attachments = slices.Clone(entry.Attachments)
+		e.chips = chipRow{pointer: e.chips.pointer}
+	})
+	e.ta.SetValue(entry.Text)
 	// SetValue neither refreshes the textarea's viewport content nor scrolls
 	// it, so a recall taller than the visible rows would show its head. An
 	// empty update refreshes the content and height and scrolls to the cursor,

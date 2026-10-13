@@ -159,6 +159,7 @@ func (e *Editor) addAttachment(a Attachment) {
 			return
 		}
 	}
+	e.history.end()
 	e.changeChips(func() { e.attachments = append(e.attachments, a) })
 }
 

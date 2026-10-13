@@ -417,6 +417,40 @@ func TestEditingMentionTextKeepsTheChipAndSendsIt(t *testing.T) {
 	}
 }
 
+func TestUpRestoresThePreviousPromptWithItsChips(t *testing.T) {
+	backend := &acceptingBackend{requests: make(chan assistant.SendOptions, 2)}
+	m := New(agent.New(backend, agent.Config{}))
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "@check"})
+	_ = m.syncEntitySearch()
+	m.applyEntitySearchResult(entitySearchResultMsg{
+		generation: m.entitySearchTask.gen,
+		query:      "check",
+		response: assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
+			CandidateID: "candidate-1", EntityID: "checkout-api",
+			EntityType: "service", Name: "checkout-api",
+		}}},
+	})
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.editor.Update(tea.PasteMsg{Content: "inspect"})
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	first := <-backend.requests
+	for event := range m.op.events {
+		m.applyEvent(event)
+	}
+	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
+
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := m.editor.Attachments(); len(got) != 1 || got[0].ID != "checkout-api" {
+		t.Fatalf("recalled chips = %#v", got)
+	}
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	second := <-backend.requests
+	if !reflect.DeepEqual(second.Context, first.Context) {
+		t.Fatalf("recalled prompt sent %#v, want %#v", second.Context, first.Context)
+	}
+}
+
 func TestEntityCandidateInsertsPlainLabel(t *testing.T) {
 	response := assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
 		CandidateID: "candidate-1", EntityID: "dashboard-1", EntityType: "dashboard",

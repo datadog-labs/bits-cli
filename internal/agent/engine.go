@@ -98,20 +98,30 @@ func (s TranscriptSnapshot) PendingApprovals() []Block {
 	return pending
 }
 
-// UserPrompts returns the text of the user messages, in transcript order.
-// Blank messages (an attachment-only submit is stored as " ") are skipped;
-// repeated messages are kept.
-func (s TranscriptSnapshot) UserPrompts() []string {
-	var prompts []string
+// UserPrompts returns the user messages in transcript order, repeats kept.
+// Blank text (an attachment-only submit is stored as " ") is returned empty,
+// and a message with neither text nor context is skipped.
+func (s TranscriptSnapshot) UserPrompts() []UserPrompt {
+	var prompts []UserPrompt
 	for _, block := range s.Blocks {
 		if block.Role != assistant.RoleUser || block.Kind != assistant.KindText || block.Markdown == nil {
 			continue
 		}
-		if strings.TrimSpace(block.Markdown.Content) != "" {
-			prompts = append(prompts, block.Markdown.Content)
+		text := block.Markdown.Content
+		if strings.TrimSpace(text) == "" {
+			text = ""
+		}
+		if text != "" || len(block.Context) > 0 {
+			prompts = append(prompts, UserPrompt{Text: text, Context: block.Context})
 		}
 	}
 	return prompts
+}
+
+// UserPrompt is a prompt the user sent and the entities it was sent with.
+type UserPrompt struct {
+	Text    string
+	Context []assistant.ContextEntity
 }
 
 // Event is one thing that happened during a turn. It is a plain value carried
