@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/editor"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 )
@@ -138,8 +139,8 @@ func trimSearchQuotes(query string) string {
 	if !ok {
 		return query
 	}
-	// Decode only the escapes emitted by entityMention. Autocomplete also
-	// receives incomplete quotes/escapes, so a strict string decoder won't do.
+	// Decode only \\ and \". Autocomplete also receives incomplete
+	// quotes/escapes, so a strict string decoder won't do.
 	var decoded strings.Builder
 	for i := 0; i < len(quoted); i++ {
 		c := quoted[i]
@@ -178,46 +179,32 @@ func entityCandidates(response assistant.SearchEntitiesResponse) []editor.Candid
 		if displayLabel == "" {
 			displayLabel = "unknown entity"
 		}
-		displayType := escape.SingleLine(string(entity.EntityType))
-		typeName := displayEntityType(displayType)
+		typeName := components.EntityTypeName(escape.SingleLine(string(entity.EntityType)))
 		id := entity.CandidateID
 		if id == "" {
 			id = string(entity.EntityType) + ":" + entity.EntityID
 		}
 		attachment := editor.Attachment{
-			Type: string(entity.EntityType), ID: entity.EntityID, Label: label,
-			CandidateID: entity.CandidateID, SearchFlowID: response.SearchFlowID,
-			Rank: entity.Rank, RankScore: entity.RankScore,
+			Type:               string(entity.EntityType),
+			ID:                 entity.EntityID,
+			Label:              label,
+			CandidateID:        entity.CandidateID,
+			SearchFlowID:       response.SearchFlowID,
+			Rank:               entity.Rank,
+			RankScore:          entity.RankScore,
 			TrackingAttributes: response.TrackingAttributes,
 		}
+		// The prompt reads like the web UI's: the attachment is the chip, and
+		// the text is free prose.
 		items = append(items, editor.Candidate{
-			Kind: editor.CandidateEntity, ID: id,
-			Label:  "◇ [" + typeName + "] " + displayLabel,
-			Insert: entityMention(displayType, displayLabel), Attachment: &attachment,
+			Kind:       editor.CandidateEntity,
+			ID:         id,
+			Label:      "◇ [" + typeName + "] " + displayLabel,
+			Insert:     "@" + displayLabel,
+			Attachment: &attachment,
 		})
 	}
 	return items
-}
-
-func displayEntityType(entityType string) string {
-	words := strings.Fields(strings.ReplaceAll(entityType, "_", " "))
-	for i, word := range words {
-		runes := []rune(word)
-		if len(runes) > 0 {
-			words[i] = string(unicode.ToUpper(runes[0])) + string(runes[1:])
-		}
-	}
-	if len(words) == 0 {
-		return "Entity"
-	}
-	return strings.Join(words, " ")
-}
-
-func entityMention(entityType, label string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
-	entityType = replacer.Replace(entityType)
-	label = replacer.Replace(label)
-	return "@" + entityType + `:"` + label + `"`
 }
 
 func (m *Model) cachedEntitySearch(query string, now time.Time) (assistant.SearchEntitiesResponse, bool) {

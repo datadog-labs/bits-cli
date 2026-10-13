@@ -146,7 +146,7 @@ func (m *Model) reconcileFocus() tea.Cmd {
 func (m *Model) reconcilePointerShape() tea.Cmd {
 	hand := false
 	if m.mode == ModeChat && !m.frame.tooSmall {
-		hand = m.list.Hovered() || m.follow.hover
+		hand = m.list.Hovered() || m.follow.hover || (m.focus() == focusEditor && m.editor.ChipHovered())
 		if !hand && !m.frame.replaced && !m.editor.MenuOpen() {
 			if hit, ok := m.list.HoveredLink(); ok && webLink(hit.URL) {
 				hand = true
@@ -551,6 +551,11 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.MouseMotionMsg:
 		m.list.SetPointer(msg.X, msg.Y)
+		if p, ok := m.inComposer(msg); ok {
+			m.editor.SetPointer(p.X, p.Y)
+		} else {
+			m.editor.SetPointer(-1, -1)
+		}
 		m.moveLinkClick(msg)
 		return m.extendSelection(msg)
 	case tea.MouseReleaseMsg:
@@ -571,6 +576,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		default:
 		}
 	case tea.MouseClickMsg:
+		if p, ok := m.inComposer(msg); ok && msg.Button == tea.MouseLeft && m.editor.Click(p.X, p.Y) {
+			return nil
+		}
 		if msg.Button == tea.MouseLeft {
 			m.beginLinkClick(msg)
 			// Defer the toggle until release so drag selection can take over.
@@ -579,6 +587,16 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// inComposer returns the editor-local cell of a pointer event over the
+// composer while the editor owns input.
+func (m *Model) inComposer(msg tea.MouseMsg) (image.Point, bool) {
+	p := pointAt(msg)
+	if m.focus() != focusEditor || m.frame.at(p) != regionComposer {
+		return image.Point{}, false
+	}
+	return p.Sub(m.frame.composer.Min), true
 }
 
 // handleTurnClosed ends the engine operation whose channel closed, then runs
@@ -777,6 +795,9 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
+		if m.editor.ChipsFocused() {
+			return m, m.editor.Update(msg)
+		}
 		m.cancelOperation() // interrupt the running turn
 		return m, nil
 	case "enter":

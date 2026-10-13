@@ -55,7 +55,7 @@ func (e *Editor) historyKey(key string) (tea.Cmd, bool) {
 			h.index++
 			return e.recall(h.entries[h.index]), true
 		}
-		e.Reset()
+		e.resetText()
 		return nil, true
 	}
 	return nil, false
@@ -75,7 +75,6 @@ func (e *Editor) recall(text string) tea.Cmd {
 	// The textarea sanitizes input (tabs, CR, control characters) and caps
 	// its content, so the value may differ from text: track what it holds.
 	value := e.ta.Value()
-	e.attachments = nil
 	e.completedMentions = nil
 	e.dismissedValue = value
 	e.closeMenu()
