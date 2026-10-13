@@ -98,20 +98,31 @@ func (s TranscriptSnapshot) PendingApprovals() []Block {
 	return pending
 }
 
-// UserPrompts returns the text of the user messages, in transcript order.
-// Blank messages (an attachment-only submit is stored as " ") are skipped;
-// repeated messages are kept.
-func (s TranscriptSnapshot) UserPrompts() []string {
-	var prompts []string
+// UserPrompts returns the user messages in transcript order, repeats kept.
+// Blank text (an attachment-only submit is stored as " ") is returned empty,
+// and a message with neither text nor context is skipped.
+func (s TranscriptSnapshot) UserPrompts() []UserPrompt {
+	var prompts []UserPrompt
 	for _, block := range s.Blocks {
 		if block.Role != assistant.RoleUser || block.Kind != assistant.KindText || block.Markdown == nil {
 			continue
 		}
-		if strings.TrimSpace(block.Markdown.Content) != "" {
-			prompts = append(prompts, block.Markdown.Content)
+		text := block.Markdown.Content
+		if strings.TrimSpace(text) == "" {
+			text = ""
+		}
+		if text != "" || len(block.Context) > 0 {
+			prompts = append(prompts, UserPrompt{Text: text, Context: block.Context})
 		}
 	}
 	return prompts
+}
+
+// UserPrompt is a prompt the user sent and the entities it was sent with.
+// Context shares immutable transcript data, including nested definition values.
+type UserPrompt struct {
+	Text    string
+	Context []assistant.ContextEntity
 }
 
 // Event is one thing that happened during a turn. It is a plain value carried
@@ -276,6 +287,8 @@ type TurnInput struct {
 	Tools *ToolSet
 	// Context is sent with Message only. The backend persists it on the user
 	// message, so tool continuations must not repeat it.
+	// Once submitted, callers must treat it and all nested data as immutable:
+	// the engine retains its entities in transcript snapshots without copying.
 	Context *assistant.AssistantContext
 	// Images are sent with Message only, like Context.
 	Images []imageinput.Image
@@ -458,7 +471,11 @@ func (e *Engine) run(
 	// exactly as it is sent.
 	sentContext := messageContext(in.Context, in.Images)
 	if len(resumed) == 0 {
-		e.transcript.AppendUser(in.Message, contextRefs(sentContext))
+		var sent []assistant.ContextEntity
+		if sentContext != nil {
+			sent = sentContext.Entities
+		}
+		e.transcript.AppendUser(in.Message, sent)
 		if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
 			return
 		}

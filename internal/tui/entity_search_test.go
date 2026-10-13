@@ -259,18 +259,6 @@ func TestEntitySearchQuerySyntaxDistinguishesTypedAndLiteralSearch(t *testing.T)
 	}
 }
 
-func TestEntityMentionQueryRoundTrip(t *testing.T) {
-	for _, label := range []string{`A "quoted" widget`, `path\to\service`, `trailing\`, `東京 \"quoted\"`} {
-		t.Run(label, func(t *testing.T) {
-			query := strings.TrimPrefix(entityMention("service", label), "@")
-			raw, groups := parseEntitySearchQuery(query)
-			if raw != label || !reflect.DeepEqual(groups, []string{"service"}) {
-				t.Fatalf("parseEntitySearchQuery(%q) = (%q, %v), want (%q, [service])", query, raw, groups, label)
-			}
-		})
-	}
-}
-
 func TestQuotedEntityQueryAcceptsIncompleteAndLiteralEscapes(t *testing.T) {
 	for _, test := range []struct{ query, want string }{
 		{`"A \"quoted\" widget"`, `A "quoted" widget`},
@@ -401,7 +389,7 @@ func TestSelectedEntityContextIsSentOnceAndClearedAfterSubmit(t *testing.T) {
 	}
 }
 
-func TestEditingSelectedMentionRemovesStructuredContext(t *testing.T) {
+func TestEditingMentionTextKeepsTheChipAndSendsIt(t *testing.T) {
 	backend := &acceptingBackend{requests: make(chan assistant.SendOptions, 1)}
 	m := New(agent.New(backend, agent.Config{}))
 	m.editor.Focus()
@@ -416,25 +404,54 @@ func TestEditingSelectedMentionRemovesStructuredContext(t *testing.T) {
 		}}},
 	})
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if got := m.editor.Value(); got != `@dashboard:"Test Dashboard" ` {
+	if got := m.editor.Value(); got != "@Test Dashboard " {
 		t.Fatalf("selected mention = %q", got)
 	}
 
-	// Remove the trailing space and then change the quoted mention itself.
-	m.editor.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
-	m.editor.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
-	if len(m.editor.Attachments()) != 0 {
-		t.Fatalf("edited mention retained context: %#v", m.editor.Attachments())
-	}
-	m.editor.CloseMenu()
+	m.editor.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	m.editor.Update(tea.PasteMsg{Content: "what changed?"})
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	request := <-backend.requests
-	if request.Context != nil {
-		t.Fatalf("edited mention sent structured context: %#v", request.Context)
+	if request.Context == nil || len(request.Context.Entities) != 1 || request.Context.Entities[0].ID != "dashboard-1" {
+		t.Fatalf("request context = %#v, want the chip's dashboard", request.Context)
 	}
 }
 
-func TestEntityCandidatePresentationAndQuotedMention(t *testing.T) {
+func TestUpRestoresThePreviousPromptWithItsChips(t *testing.T) {
+	backend := &acceptingBackend{requests: make(chan assistant.SendOptions, 2)}
+	m := New(agent.New(backend, agent.Config{}))
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "@check"})
+	_ = m.syncEntitySearch()
+	m.applyEntitySearchResult(entitySearchResultMsg{
+		generation: m.entitySearchTask.gen,
+		query:      "check",
+		response: assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
+			CandidateID: "candidate-1", EntityID: "checkout-api",
+			EntityType: "service", Name: "checkout-api",
+		}}},
+	})
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.editor.Update(tea.PasteMsg{Content: "inspect"})
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	first := <-backend.requests
+	for event := range m.op.events {
+		m.applyEvent(event)
+	}
+	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
+
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := m.editor.Attachments(); len(got) != 1 || got[0].ID != "checkout-api" {
+		t.Fatalf("recalled chips = %#v", got)
+	}
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	second := <-backend.requests
+	if !reflect.DeepEqual(second.Context, first.Context) {
+		t.Fatalf("recalled prompt sent %#v, want %#v", second.Context, first.Context)
+	}
+}
+
+func TestEntityCandidateInsertsPlainLabel(t *testing.T) {
 	response := assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
 		CandidateID: "candidate-1", EntityID: "dashboard-1", EntityType: "dashboard",
 		Title: "Test Dashboard", AuthorName: "Test User",
@@ -449,12 +466,12 @@ func TestEntityCandidatePresentationAndQuotedMention(t *testing.T) {
 	if got, want := candidates[0].Detail, ""; got != want {
 		t.Fatalf("detail = %q, want %q", got, want)
 	}
-	if got, want := candidates[0].Insert, `@dashboard:"Test Dashboard"`; got != want {
+	if got, want := candidates[0].Insert, "@Test Dashboard"; got != want {
 		t.Fatalf("insert = %q, want %q", got, want)
 	}
 }
 
-func TestUnknownEntityCandidatePresentationEscapesQuotedMention(t *testing.T) {
+func TestUnknownEntityTypeIsNamedForDisplay(t *testing.T) {
 	response := assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
 		CandidateID: "candidate-1", EntityID: "custom-1", EntityType: "custom_widget",
 		Name: `A "quoted" widget`,
@@ -463,7 +480,7 @@ func TestUnknownEntityCandidatePresentationEscapesQuotedMention(t *testing.T) {
 	if got, want := candidate.Label, `◇ [Custom Widget] A "quoted" widget`; got != want {
 		t.Fatalf("label = %q, want %q", got, want)
 	}
-	if got, want := candidate.Insert, `@custom_widget:"A \"quoted\" widget"`; got != want {
+	if got, want := candidate.Insert, `@A "quoted" widget`; got != want {
 		t.Fatalf("insert = %q, want %q", got, want)
 	}
 }
@@ -492,5 +509,42 @@ func TestEntityCandidateSanitizesTerminalControls(t *testing.T) {
 	menu := m.editor.MenuView()
 	if strings.Contains(menu, "\x1b]52;") || strings.Contains(ansi.Strip(menu), "\nforged row") {
 		t.Fatalf("menu rendered untrusted control sequence: %q", menu)
+	}
+}
+
+func TestClickingAComposerChipRemovesIt(t *testing.T) {
+	m := newShell()
+	m.mode = ModeChat
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.editor.Focus()
+	m.Update(tea.PasteMsg{Content: "@check"})
+	m.editor.SetEntityResults("check", editor.RemoteReady, entityCandidates(assistant.SearchEntitiesResponse{
+		Entities: []assistant.SearchEntity{{
+			CandidateID: "candidate-1", EntityID: "checkout-api",
+			EntityType: "service", Name: "checkout-api",
+		}},
+	}))
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+
+	x, y := -1, -1
+	for row, line := range strings.Split(ansi.Strip(m.chatView()), "\n") {
+		if i := strings.Index(line, "Service: checkout-api ×"); i >= 0 {
+			x, y = ansi.StringWidth(line[:i]), row
+		}
+	}
+	if y < 0 {
+		t.Fatalf("composer shows no chip: %q", ansi.Strip(m.chatView()))
+	}
+	m.Update(tea.MouseMotionMsg{X: x, Y: y})
+	if !m.pointerIsHand {
+		t.Fatal("pointer is not a hand over the chip")
+	}
+	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: x, Y: y})
+	m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: x, Y: y})
+	if len(m.editor.Attachments()) != 0 || m.selection.active() {
+		t.Fatalf("attachments = %#v, selection active = %v", m.editor.Attachments(), m.selection.active())
+	}
+	if got := m.editor.Value(); got != "@checkout-api " {
+		t.Fatalf("removing the chip changed the prompt: %q", got)
 	}
 }

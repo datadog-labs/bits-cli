@@ -3,6 +3,7 @@
 package editor
 
 import (
+	"image"
 	"slices"
 	"strconv"
 	"strings"
@@ -46,7 +47,8 @@ type Editor struct {
 	ta                textarea.Model
 	styles            styles.Editor
 	menu              menu
-	attachments       []trackedAttachment
+	attachments       []Attachment
+	chips             chipRow
 	fileQuery         string
 	fileItems         []Candidate
 	fileState         FileState
@@ -118,6 +120,7 @@ func New() *Editor {
 		ta:         ta,
 		styles:     defaultStyles.Editor,
 		inputStyle: defaultStyles.Input,
+		chips:      chipRow{pointer: image.Pt(-1, -1)},
 	}
 }
 
@@ -144,39 +147,29 @@ func (e *Editor) SetEntityResults(query string, state RemoteState, items []Candi
 	e.recompute()
 }
 
-// Attachments returns a copy of the selected canonical Datadog identities.
+// Attachments returns a copy of the attached items, in the order added.
 func (e *Editor) Attachments() []Attachment {
-	attachments := make([]Attachment, 0, len(e.attachments))
-	type entityKey struct{ entityType, id string }
-	seen := make(map[entityKey]struct{}, len(e.attachments))
-	for _, tracked := range e.attachments {
-		key := entityKey{entityType: tracked.attachment.Type, id: tracked.attachment.ID}
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		attachments = append(attachments, tracked.attachment)
-	}
-	return attachments
+	return slices.Clone(e.attachments)
 }
 
-// RemoveLastAttachment removes the most recently selected Datadog entity and
-// its visible mention.
+// addAttachment appends a, unless the same item is already attached.
+func (e *Editor) addAttachment(a Attachment) {
+	for _, existing := range e.attachments {
+		if existing.Type == a.Type && existing.ID == a.ID {
+			return
+		}
+	}
+	e.history.end()
+	e.changeChips(func() { e.attachments = append(e.attachments, a) })
+}
+
+// RemoveLastAttachment removes the most recently added attachment. The prompt
+// text is left alone: it is not tied to attachments.
 func (e *Editor) RemoveLastAttachment() bool {
 	if len(e.attachments) == 0 {
 		return false
 	}
-	tracked := e.attachments[len(e.attachments)-1]
-	before := e.ta.Value()
-	runes := []rune(before)
-	if tracked.start >= 0 && tracked.end <= len(runes) && tracked.start < tracked.end {
-		after := string(runes[:tracked.start]) + string(runes[tracked.end:])
-		e.ta.SetValue(after)
-		e.applyMentionEdit(tracked.start, tracked.end, tracked.start, after)
-	} else {
-		e.attachments = e.attachments[:len(e.attachments)-1]
-	}
-	e.invalidateBody()
+	e.removeAttachment(len(e.attachments) - 1)
 	return true
 }
 
@@ -298,10 +291,18 @@ func (e *Editor) SetValue(s string) {
 	e.ta.SetValue(s)
 }
 
-// Reset clears the input, closes the menu, and leaves history mode.
+// Reset clears the input and its attachments, closes the menu, and leaves
+// history mode.
 func (e *Editor) Reset() {
-	e.ta.Reset()
 	e.attachments = nil
+	e.chips = chipRow{pointer: e.chips.pointer}
+	e.resetText()
+}
+
+// resetText clears the prompt text and completion state but keeps the
+// attachments.
+func (e *Editor) resetText() {
+	e.ta.Reset()
 	e.fileQuery = ""
 	e.fileItems = nil
 	e.fileState = FileIdle
@@ -365,6 +366,15 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 		if k.String() == "ctrl+x" && e.RemoveLastAttachment() {
 			return nil
 		}
+		if e.chipKey(k.String()) {
+			return nil
+		}
+	}
+	// A paste inserts text, so the keyboard is back on the text: a following
+	// backspace must delete the paste, not a chip.
+	if _, ok := msg.(tea.PasteMsg); ok && e.chips.focused {
+		e.chips.focused = false
+		e.invalidateBody()
 	}
 	if k, ok := msg.(tea.KeyPressMsg); ok && e.menu.open {
 		switch k.String() {
@@ -410,9 +420,10 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-// View renders the input block: the textarea wrapped in the shared background
-// and one row of vertical padding. The completion menu is returned separately by
-// MenuView so the parent can composite it as an overlay.
+// View renders the input block: the attachment chips and the textarea wrapped
+// in the shared background and one row of vertical padding. The completion menu
+// is returned separately by MenuView so the parent can composite it as an
+// overlay.
 func (e *Editor) View() string {
 	e.renderView()
 	return e.view
@@ -430,11 +441,15 @@ func (e *Editor) renderView() {
 			// returns a new Style, leaving the idle style unaffected.
 			block = block.BorderTop(false)
 		}
-		textareaView := e.ta.View()
+		content := e.ta.View()
+		if rows := e.renderChips(animated); rows != "" {
+			// A blank row keeps the chips from crowding the prompt.
+			content = rows + "\n\n" + content
+		}
 		if e.width <= 0 {
-			e.body = block.Render(textareaView)
+			e.body = block.Render(content)
 		} else {
-			e.body = block.Width(e.width).Render(textareaView)
+			e.body = block.Width(e.width).Render(content)
 		}
 		e.bodyHeight = lipgloss.Height(e.body)
 		e.bodyCached = true
@@ -730,7 +745,7 @@ func (e *Editor) acceptCandidate(trailingSpace bool) {
 		e.completedMentions = append(e.completedMentions, mention)
 	}
 	if candidate.Attachment != nil {
-		e.attachments = append(e.attachments, trackedAttachment{attachment: *candidate.Attachment, trackedMention: mention})
+		e.addAttachment(*candidate.Attachment)
 	}
 	e.closeMenu()
 }
@@ -740,11 +755,6 @@ func (e *Editor) closeMenu() { e.menu = menu{} }
 type trackedMention struct {
 	text       string
 	start, end int // rune offsets in the entire prompt
-}
-
-type trackedAttachment struct {
-	attachment Attachment
-	trackedMention
 }
 
 // applyEdit shifts intact mentions and invalidates those touched by the edit.
@@ -763,13 +773,6 @@ func (m *trackedMention) applyEdit(start, oldEnd, newEnd int, after []rune) bool
 
 func (e *Editor) applyMentionEdit(start, oldEnd, newEnd int, after string) {
 	runes := []rune(after)
-	kept := e.attachments[:0]
-	for _, tracked := range e.attachments {
-		if tracked.applyEdit(start, oldEnd, newEnd, runes) {
-			kept = append(kept, tracked)
-		}
-	}
-	e.attachments = kept
 	completed := e.completedMentions[:0]
 	for _, mention := range e.completedMentions {
 		if mention.applyEdit(start, oldEnd, newEnd, runes) {

@@ -257,21 +257,28 @@ func TestSnapshotUserPrompts(t *testing.T) {
 		return Block{Role: assistant.RoleUser, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: text}}
 	}
 	answer := Block{Role: assistant.RoleAssistant, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "answer"}}
+	withContext := user(" ")
+	withContext.Context = []assistant.ContextEntity{{Type: assistant.EntityImageURL, ID: "data:image/png;base64,AAAA"}}
 	for _, test := range []struct {
 		name   string
 		blocks []Block
-		want   []string
+		want   []UserPrompt
 	}{
 		{name: "empty transcript"},
 		{
 			name:   "user text in order, repeats kept",
 			blocks: []Block{user("a"), answer, user("b\nc"), user("b\nc")},
-			want:   []string{"a", "b\nc", "b\nc"},
+			want:   []UserPrompt{{Text: "a"}, {Text: "b\nc"}, {Text: "b\nc"}},
 		},
 		{
 			name:   "blank and body-less user blocks skipped",
 			blocks: []Block{user(" "), {Role: assistant.RoleUser, Kind: assistant.KindText}, user("kept")},
-			want:   []string{"kept"},
+			want:   []UserPrompt{{Text: "kept"}},
+		},
+		{
+			name:   "an attachment-only prompt is kept with empty text",
+			blocks: []Block{withContext},
+			want:   []UserPrompt{{Context: withContext.Context}},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -696,15 +696,15 @@ func TestMixedCandidatesAttachCanonicalEntityAndCanRemoveIt(t *testing.T) {
 	if !strings.Contains(e.Value(), `@"service:checkout-api"`) {
 		t.Fatalf("visible prompt = %q", e.Value())
 	}
-	if strings.Contains(ansi.Strip(e.View()), "Attached:") {
-		t.Fatalf("editor rendered a separate attachment row: %q", ansi.Strip(e.View()))
+	if !strings.Contains(ansi.Strip(e.View()), "Service: checkout-api ×") {
+		t.Fatalf("editor did not show the attachment chip: %q", ansi.Strip(e.View()))
 	}
 	e.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	if len(e.Attachments()) != 0 {
-		t.Fatalf("attachment was not removed: %#v", e.Attachments())
+		t.Fatalf("ctrl+x did not remove the chip: %#v", e.Attachments())
 	}
-	if strings.Contains(e.Value(), `@"service:checkout-api"`) {
-		t.Fatalf("attachment removal left its mention in the prompt: %q", e.Value())
+	if !strings.Contains(e.Value(), `@"service:checkout-api"`) {
+		t.Fatalf("removing the chip changed the prompt text: %q", e.Value())
 	}
 }
 
@@ -728,78 +728,6 @@ func TestMenuAndAttachmentsAreUnicodeSafeAtNarrowWidths(t *testing.T) {
 		if width := ansi.StringWidth(line); width > 18 {
 			t.Fatalf("editor line is %d cells: %q", width, ansi.Strip(line))
 		}
-	}
-}
-
-func TestEditingOneOfTwoSameNamedMentionsRemovesOnlyItsIdentity(t *testing.T) {
-	e := New()
-	e.Focus()
-	e.ta.SetValue("@first")
-	e.ta.SetCursorColumn(len([]rune("@first")))
-	mention := `@dashboard:"Shared dashboard"`
-	first := Attachment{Type: "dashboard", ID: "dashboard-1", Label: "Shared dashboard"}
-	e.SetEntityResults("first", RemoteReady, []Candidate{{
-		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Dashboard] Shared dashboard",
-		Insert: mention, Attachment: &first,
-	}})
-	e.accept()
-
-	e.Update(tea.PasteMsg{Content: "@second"})
-	second := Attachment{Type: "dashboard", ID: "dashboard-2", Label: "Shared dashboard"}
-	e.SetEntityResults("second", RemoteReady, []Candidate{{
-		Kind: CandidateEntity, ID: "candidate-2", Label: "◇ [Dashboard] Shared dashboard",
-		Insert: mention, Attachment: &second,
-	}})
-	if query, active := e.ActiveEntityQuery(); !active || query != "second" {
-		t.Fatalf("second query = (%q, %v), value %q", query, active, e.Value())
-	}
-	if len(e.menu.items) != 1 || e.menu.items[0].ID != "candidate-2" {
-		t.Fatalf("second menu = %#v", e.menu.items)
-	}
-	e.accept()
-	if got := e.Attachments(); len(got) != 2 {
-		t.Fatalf("attachments before edit = %#v", got)
-	}
-
-	// Delete the closing quote from the first occurrence only.
-	e.ta.SetCursorColumn(len([]rune(mention)))
-	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
-	got := e.Attachments()
-	if len(got) != 1 || got[0].ID != "dashboard-2" {
-		t.Fatalf("attachments after editing first duplicate = %#v", got)
-	}
-}
-
-func TestBulkDeleteBeforeSameNamedMentionKeepsSurvivingIdentity(t *testing.T) {
-	e := New()
-	e.Focus()
-	mention := `@dashboard:"Same"`
-	first := Attachment{Type: "dashboard", ID: "d1", Label: "Same"}
-	second := Attachment{Type: "dashboard", ID: "d2", Label: "Same"}
-
-	e.ta.SetValue("@first")
-	e.ta.SetCursorColumn(len([]rune("@first")))
-	e.SetEntityResults("first", RemoteReady, []Candidate{{
-		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Dashboard] Same",
-		Insert: mention, Attachment: &first,
-	}})
-	e.accept()
-	e.Update(tea.PasteMsg{Content: "@second"})
-	e.SetEntityResults("second", RemoteReady, []Candidate{{
-		Kind: CandidateEntity, ID: "candidate-2", Label: "◇ [Dashboard] Same",
-		Insert: mention, Attachment: &second,
-	}})
-	e.accept()
-
-	secondStart := len([]rune(mention)) + 1
-	e.ta.SetCursorColumn(secondStart)
-	e.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
-	if got, want := e.Value(), mention+" "; got != want {
-		t.Fatalf("value after ctrl+u = %q, want %q", got, want)
-	}
-	got := e.Attachments()
-	if len(got) != 1 || got[0].ID != "d2" {
-		t.Fatalf("attachments after ctrl+u = %#v, want d2", got)
 	}
 }
 
@@ -1050,41 +978,6 @@ func TestEditingCompletedFileReopensSearch(t *testing.T) {
 	}
 }
 
-func TestCompletionBeforeEntityUpdatesExistingAttachmentSpan(t *testing.T) {
-	e := New()
-	e.Focus()
-	e.ta.SetValue("@dash")
-	e.ta.SetCursorColumn(len([]rune("@dash")))
-	mention := `@dashboard:"Test dashboard"`
-	attachment := Attachment{Type: "dashboard", ID: "dashboard-1", Label: "Test dashboard"}
-	e.SetEntityResults("dash", RemoteReady, []Candidate{{
-		Kind: CandidateEntity, ID: "candidate-1", Label: "◇ [Dashboard] Test dashboard",
-		Insert: mention, Attachment: &attachment,
-	}})
-	e.accept()
-
-	e.ta.SetCursorColumn(0)
-	e.Update(tea.PasteMsg{Content: "@eng"})
-	setTestFileResults(e, "eng", "internal/agent/engine.go")
-	if len(e.attachments) != 1 {
-		t.Fatalf("typing before mention removed attachment: value=%q tracked=%#v", e.Value(), e.attachments)
-	}
-	if !e.MenuOpen() {
-		t.Fatal("file completion before entity did not open")
-	}
-	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if !strings.Contains(e.Value(), mention) {
-		t.Fatalf("file completion removed visible entity mention: %q", e.Value())
-	}
-
-	e.ta.SetCursorColumn(len([]rune(e.Value())))
-	e.Update(tea.PasteMsg{Content: " inspect this"})
-	got := e.Attachments()
-	if len(got) != 1 || got[0].ID != "dashboard-1" {
-		t.Fatalf("attachment after completion and ordinary edit = %#v", got)
-	}
-}
-
 // historyStep is one input: a key name ("up", "ctrl+p", "left", …), "type:x"
 // for typed text, "set:x" for Editor.SetValue, "reset" for a submit-like
 // Editor.Reset, or "blur".
@@ -1156,7 +1049,7 @@ func TestPromptHistory(t *testing.T) {
 			e := New()
 			e.Focus()
 			if test.entries != nil {
-				e.SetHistorySource(func() []string { return test.entries })
+				e.SetHistorySource(func() []HistoryEntry { return textEntries(test.entries...) })
 			}
 			for _, step := range test.steps {
 				applyHistoryStep(e, step)
@@ -1178,7 +1071,7 @@ func TestPromptHistoryRecallDoesNotTriggerCompletion(t *testing.T) {
 		t.Run(entry, func(t *testing.T) {
 			e := New()
 			e.Focus()
-			e.SetHistorySource(func() []string { return []string{entry} })
+			e.SetHistorySource(func() []HistoryEntry { return textEntries(entry) })
 			e.Update(historyKeyMsg("up"))
 			// End keeps the cursor in place but recomputes the menu like any
 			// later input would.
@@ -1202,7 +1095,7 @@ func TestPromptHistorySnapshotsOnEntry(t *testing.T) {
 	entries := []string{"first", "second"}
 	e := New()
 	e.Focus()
-	e.SetHistorySource(func() []string { return entries })
+	e.SetHistorySource(func() []HistoryEntry { return textEntries(entries...) })
 	e.Update(historyKeyMsg("up"))
 	entries = append(entries, "streamed meanwhile")
 	e.Update(historyKeyMsg("up"))
@@ -1221,7 +1114,7 @@ func TestPromptHistoryTallRecallShowsItsEnd(t *testing.T) {
 	e := New()
 	e.SetWidth(80)
 	e.Focus()
-	e.SetHistorySource(func() []string { return []string{strings.Join(lines, "\n")} })
+	e.SetHistorySource(func() []HistoryEntry { return textEntries(strings.Join(lines, "\n")) })
 	e.Update(historyKeyMsg("up"))
 	view := ansi.Strip(e.View())
 	visible := map[string]bool{}
@@ -1231,4 +1124,12 @@ func TestPromptHistoryTallRecallShowsItsEnd(t *testing.T) {
 	if !visible[lines[len(lines)-1]] || visible[lines[0]] {
 		t.Fatalf("recalled view does not show the end of the prompt:\n%s", view)
 	}
+}
+
+func textEntries(texts ...string) []HistoryEntry {
+	entries := make([]HistoryEntry, len(texts))
+	for i, text := range texts {
+		entries[i].Text = text
+	}
+	return entries
 }

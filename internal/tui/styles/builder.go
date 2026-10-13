@@ -41,6 +41,7 @@ func build(isDark bool, p palette) Theme {
 		SweepDim:    lipgloss.Color(p.inputRule),
 		SweepHot:    lipgloss.Color(p.sweepHot),
 		SweepMotion: true,
+		Chip:        chip(p),
 	}
 
 	text := Text{
@@ -219,6 +220,19 @@ func build(isDark bool, p palette) Theme {
 				Foreground(lipgloss.Color(p.textPrimary)).
 				Background(lipgloss.Color(p.background)),
 		},
+	}
+}
+
+// chip raises attachment chips one step above the input surface they sit on.
+func chip(p palette) Chip {
+	base := lipgloss.NewStyle().Background(lipgloss.Color(p.surfaceRaised))
+	return Chip{
+		Frame:  base.Padding(0, 1),
+		Type:   base.Foreground(lipgloss.Color(p.textSecondary)),
+		Label:  base.Foreground(lipgloss.Color(p.textPrimary)),
+		Remove: base.Foreground(lipgloss.Color(p.textSecondary)),
+		Active: base.Bold(true).Foreground(lipgloss.Color(p.interactive)),
+		Gap:    lipgloss.NewStyle().Background(lipgloss.Color(p.surface)),
 	}
 }
 
