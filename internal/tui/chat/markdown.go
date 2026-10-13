@@ -1,15 +1,22 @@
 package chat
 
 import (
+	"bytes"
+	"fmt"
+	"io"
 	"strings"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	astext "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 
-	"charm.land/glamour/v2"
 	"charm.land/glamour/v2/ansi"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
@@ -155,27 +162,20 @@ func renderMarkdown(src string, width int, style ansi.StyleConfig) string {
 }
 
 type markdownRenderer struct {
-	term   *glamour.TermRenderer
+	term   *markdownTerm
 	width  int
 	style  ansi.StyleConfig
 	ready  bool
 	prefix markdownPrefix
 }
 
-// Render reuses Glamour's parsed style and Goldmark pipeline until wrapping or
-// the terminal theme changes. Failed setup is cached too, avoiding repeated
-// setup attempts while the same fallback configuration remains active.
 func (r *markdownRenderer) Render(src string, width int, style ansi.StyleConfig) string {
 	src = escape.MarkdownSource(src)
 	if width < 1 {
 		width = 1
 	}
 	if !r.ready || width != r.width || style != r.style {
-		r.term, _ = glamour.NewTermRenderer(
-			glamour.WithStyles(style),
-			glamour.WithWordWrap(width),
-			glamour.WithInlineTableLinks(true),
-		)
+		r.term = newMarkdownTerm(width, style)
 		r.width = width
 		r.style = style
 		r.ready = true
@@ -192,4 +192,118 @@ func (r *markdownRenderer) Render(src string, width int, style ansi.StyleConfig)
 		return wrap(escape.Multiline(src), width)
 	}
 	return strings.Trim(out, "\n")
+}
+
+// Glamour has no option to hide link URLs; replace links before rendering.
+type markdownTerm struct {
+	md      goldmark.Markdown
+	ansi    *ansi.ANSIRenderer
+	options ansi.Options
+}
+
+func newMarkdownTerm(width int, style ansi.StyleConfig) *markdownTerm {
+	md := goldmark.New(
+		goldmark.WithExtensions(extension.GFM, extension.DefinitionList),
+		goldmark.WithParserOptions(parser.WithAutoHeadingID()),
+	)
+	// Like glamour, replace the whole renderer so extensions add no HTML renderers.
+	options := ansi.Options{WordWrap: width, Styles: style, InlineTableLinks: true}
+	ar := ansi.NewRenderer(options)
+	md.SetRenderer(renderer.NewRenderer(renderer.WithNodeRenderers(util.Prioritized(ar, 1000))))
+	return &markdownTerm{md: md, ansi: ar, options: options}
+}
+
+func (t *markdownTerm) Render(src string) (string, error) {
+	source := []byte(src)
+	doc := t.md.Parser().Parse(text.NewReader(source))
+	source, err := t.replaceLinks(doc, source)
+	if err != nil {
+		return "", err
+	}
+	var b bytes.Buffer
+	if err := t.md.Renderer().Render(&b, source, doc); err != nil {
+		return "", fmt.Errorf("render markdown: %w", err)
+	}
+	return b.String(), nil
+}
+
+// Append rendered titles to source so existing node offsets stay valid.
+func (t *markdownTerm) replaceLinks(doc ast.Node, source []byte) ([]byte, error) {
+	var links []*ast.Link
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		// Glamour reads these nodes as plain text, bypassing child rendering.
+		if entering && (n.Kind() == ast.KindImage || n.Kind() == astext.KindStrikethrough) {
+			return ast.WalkSkipChildren, nil
+		}
+		if l, ok := n.(*ast.Link); ok && entering {
+			links = append(links, l)
+			return ast.WalkSkipChildren, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	for _, l := range links {
+		start := len(source)
+		title, err := t.title(l, source)
+		if err != nil {
+			return nil, err
+		}
+		source = append(source, title...)
+		repl := ast.NewTextSegment(text.NewSegment(start, len(source)))
+		l.Parent().ReplaceChild(l.Parent(), l, repl)
+	}
+	return source, nil
+}
+
+func (t *markdownTerm) title(l *ast.Link, source []byte) (string, error) {
+	// Autolink titles must inherit the outer link's destination.
+	var autolinks []*ast.AutoLink
+	_ = ast.Walk(l, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if a, ok := n.(*ast.AutoLink); ok && entering {
+			autolinks = append(autolinks, a)
+		}
+		return ast.WalkContinue, nil
+	})
+	for _, a := range autolinks {
+		start := len(source)
+		source = append(source, a.Label(source)...)
+		a.Parent().ReplaceChild(a.Parent(), a, ast.NewTextSegment(text.NewSegment(start, len(source))))
+	}
+	element := t.ansi.NewElement(l, source).Renderer
+	link, ok := element.(*ansi.LinkElement)
+	if !ok || link == nil {
+		return "", fmt.Errorf("unexpected Glamour link renderer: %T", element)
+	}
+	link.SkipHref = true
+	ctx := ansi.NewRenderContext(t.options)
+	// Recreate block styles so resets inside the title retain heading backgrounds.
+	var ancestors []ast.Node
+	for n := l.Parent(); n != nil; n = n.Parent() {
+		if n.Type() != ast.TypeInline {
+			ancestors = append(ancestors, n)
+		}
+	}
+	for i := len(ancestors) - 1; i >= 0; i-- {
+		if r := t.ansi.NewElement(ancestors[i], source).Renderer; r != nil {
+			switch r.(type) {
+			case *ansi.TableElement, *ansi.TableCellElement:
+				continue
+			}
+			if err := r.Render(io.Discard, ctx); err != nil {
+				return "", err
+			}
+		}
+	}
+	var b bytes.Buffer
+	if err := link.Render(&b, ctx); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(xansi.Strip(b.String())) == "" {
+		b.Reset()
+		link.Children = []ansi.ElementRenderer{&ansi.BaseElement{Token: string(l.Destination)}}
+		if err := link.Render(&b, ctx); err != nil {
+			return "", err
+		}
+	}
+	// The replacement text passes through Glamour's entity and escape decoding again.
+	return strings.NewReplacer(`&`, `&amp;`, `\`, `\\`).Replace(b.String()), nil
 }
