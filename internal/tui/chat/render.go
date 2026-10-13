@@ -99,7 +99,7 @@ func renderUser(text string, refs []agent.ContextRef, width int, sty Styles) str
 		for i, ref := range refs {
 			chips[i] = components.Chip{Type: string(ref.Type), Label: ref.Label}
 		}
-		placed := components.LayoutChips(sty.Input.Chip, chips, max(1, inner-w), 0, -1)
+		placed := components.LayoutChips(sty.Input.Chip, chips, max(1, inner-w), 1, -1)
 		for _, row := range components.ChipRows(sty.Input.Chip, placed) {
 			lines = append(lines, sty.Input.Chip.Gap.Render(indent)+row)
 		}

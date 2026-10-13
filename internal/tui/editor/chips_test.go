@@ -121,16 +121,22 @@ func TestBackspaceAtPromptStartWalksAndRemovesChips(t *testing.T) {
 	}
 }
 
-func TestManyChipsCollapseIntoMoreThatExpandsOnClick(t *testing.T) {
+func TestManyChipsCollapseIntoMoreThatTogglesOnClick(t *testing.T) {
 	e := New()
 	e.Focus()
 	e.SetWidth(40)
 	attachServices(e, "checkout-api", "payments-api", "inventory", "shipping")
 	collapsed := e.Height()
 
+	// The editor grows upward, so a cell recorded before the click no longer
+	// matches what is under a still mouse.
+	e.SetPointer(cellOf(t, e, "checkout-api"))
 	x, y := cellOf(t, e, "+3 more")
 	if !e.Click(x, y) {
 		t.Fatal("click on +3 more was not handled")
+	}
+	if e.ChipHovered() {
+		t.Fatal("the editor grew under a still pointer but kept its hover")
 	}
 	view := ansi.Strip(e.View())
 	for _, label := range []string{"checkout-api", "payments-api", "inventory", "shipping"} {
@@ -145,6 +151,11 @@ func TestManyChipsCollapseIntoMoreThatExpandsOnClick(t *testing.T) {
 		if w := ansi.StringWidth(line); w > 40 {
 			t.Fatalf("line is %d cells wide: %q", w, ansi.Strip(line))
 		}
+	}
+
+	x, y = cellOf(t, e, "less")
+	if !e.Click(x, y) || e.Height() != collapsed || !strings.Contains(ansi.Strip(e.View()), "+3 more") {
+		t.Fatalf("less did not collapse the row: height %d, want %d", e.Height(), collapsed)
 	}
 }
 

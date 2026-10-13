@@ -159,8 +159,7 @@ func (e *Editor) addAttachment(a Attachment) {
 			return
 		}
 	}
-	e.attachments = append(e.attachments, a)
-	e.invalidateBody()
+	e.changeChips(func() { e.attachments = append(e.attachments, a) })
 }
 
 // RemoveLastAttachment removes the most recently added attachment. The prompt

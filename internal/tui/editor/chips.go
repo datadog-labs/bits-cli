@@ -44,7 +44,7 @@ func (e *Editor) ChipHovered() bool {
 }
 
 // Click handles a left click at an editor-local cell and reports whether it
-// hit a chip: a chip is removed, the "+N more" token expands the row.
+// hit a chip: a chip is removed, "+N more" and "less" toggle the rows.
 func (e *Editor) Click(x, y int) bool {
 	e.renderView()
 	index, ok := components.ChipAt(e.chips.placed, x-e.chips.left, y-e.chips.top)
@@ -52,12 +52,23 @@ func (e *Editor) Click(x, y int) bool {
 		return false
 	}
 	if index == len(e.attachments) {
-		e.chips.expanded = true
-		e.invalidateBody()
+		e.changeChips(func() { e.chips.expanded = !e.chips.expanded })
 		return true
 	}
 	e.removeAttachment(index)
 	return true
+}
+
+// changeChips applies a change to the chip rows. The editor is anchored to the
+// bottom of the screen, so when its height changes the stored pointer cell no
+// longer points at what is under the mouse: forget it until the mouse moves.
+func (e *Editor) changeChips(change func()) {
+	before := e.Height()
+	change()
+	e.invalidateBody()
+	if e.Height() != before {
+		e.chips.pointer = image.Pt(-1, -1)
+	}
 }
 
 func (e *Editor) hoveredChip() (int, bool) {
@@ -106,26 +117,29 @@ func (e *Editor) chipKey(key string) bool {
 // chip is hidden behind "+N more".
 func (e *Editor) focusChip(i int) {
 	e.renderView()
-	if !slices.ContainsFunc(e.chips.placed, func(p components.PlacedChip) bool { return p.Index == i }) {
-		e.chips.expanded = true
-	}
-	e.chips.focused = true
-	e.chips.cursor = i
-	e.invalidateBody()
+	hidden := !slices.ContainsFunc(e.chips.placed, func(p components.PlacedChip) bool { return p.Index == i })
+	e.changeChips(func() {
+		if hidden {
+			e.chips.expanded = true
+		}
+		e.chips.focused = true
+		e.chips.cursor = i
+	})
 }
 
 // removeAttachment drops attachments[i]. A focused chip hands focus to its
 // left neighbour, and back to the text once no chip remains.
 func (e *Editor) removeAttachment(i int) {
-	e.attachments = slices.Delete(e.attachments, i, i+1)
-	if e.chips.cursor >= i && e.chips.cursor > 0 {
-		e.chips.cursor--
-	}
-	if len(e.attachments) == 0 {
-		e.chips.focused = false
-		e.chips.expanded = false
-	}
-	e.invalidateBody()
+	e.changeChips(func() {
+		e.attachments = slices.Delete(e.attachments, i, i+1)
+		if e.chips.cursor >= i && e.chips.cursor > 0 {
+			e.chips.cursor--
+		}
+		if len(e.attachments) == 0 {
+			e.chips.focused = false
+			e.chips.expanded = false
+		}
+	})
 }
 
 // renderChips lays out and draws the chip rows, recording where each chip
@@ -155,16 +169,18 @@ func (e *Editor) renderChips(animated bool) string {
 			Removable: true,
 		}
 	}
-	maxRows := 1
-	if e.chips.expanded {
-		maxRows = 0
-	}
 	width := 80
 	if e.width > 0 {
 		width = e.width - block.GetHorizontalFrameSize() - e.inputStyle.PromptWidth()
 	}
 	sty := e.inputStyle.Chip
-	e.chips.placed = components.LayoutChips(sty, chips, width, maxRows, -1)
+	layout := func(active int) []components.PlacedChip {
+		if e.chips.expanded {
+			return components.LayoutExpandedChips(sty, chips, width, active)
+		}
+		return components.LayoutChips(sty, chips, width, 1, active)
+	}
+	e.chips.placed = layout(-1)
 	active := -1
 	if e.chips.focused {
 		active = e.chips.cursor
@@ -172,7 +188,7 @@ func (e *Editor) renderChips(animated bool) string {
 		active = i
 	}
 	if active >= 0 {
-		e.chips.placed = components.LayoutChips(sty, chips, width, maxRows, active)
+		e.chips.placed = layout(active)
 	}
 
 	indent := sty.Gap.Render(strings.Repeat(" ", e.inputStyle.PromptWidth()))

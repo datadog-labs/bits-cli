@@ -90,6 +90,30 @@ func LayoutChips(sty styles.Chip, chips []Chip, width, maxRows, active int) []Pl
 	}
 }
 
+// LayoutExpandedChips lays out every chip and, when they span several rows,
+// appends a "less" token with Index len(chips) to collapse them again.
+func LayoutExpandedChips(sty styles.Chip, chips []Chip, width, active int) []PlacedChip {
+	width = max(1, width)
+	placed := LayoutChips(sty, chips, width, 0, active)
+	if len(placed) == 0 || placed[len(placed)-1].Row == 0 {
+		return placed
+	}
+	last := placed[len(placed)-1]
+	less := chipToken(sty, "less", width, len(chips) == active)
+	w := lipgloss.Width(less)
+	row, x := last.Row, last.X+last.Width+1
+	if x+w > width {
+		row, x = row+1, 0
+	}
+	return append(placed, PlacedChip{
+		Index: len(chips),
+		Row:   row,
+		X:     x,
+		Width: w,
+		View:  less,
+	})
+}
+
 // ChipRows joins placed chips into one line per row, painting the gaps with
 // the surrounding surface. Lines are not padded past their last chip.
 func ChipRows(sty styles.Chip, placed []PlacedChip) []string {

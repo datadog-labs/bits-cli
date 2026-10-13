@@ -548,3 +548,22 @@ func TestUserPromptShowsItsContextAsChipsAbovePromptText(t *testing.T) {
 		t.Fatalf("transcript chips are removable: %q", lines[chips])
 	}
 }
+
+func TestManyContextChipsTakeOneTranscriptRow(t *testing.T) {
+	var refs []agent.ContextRef
+	for _, name := range []string{"checkout-api", "payments-api", "inventory", "shipping"} {
+		refs = append(refs, agent.ContextRef{Type: assistant.EntityService, Label: name})
+	}
+	block := agent.Block{
+		ID:       agent.BlockID{Scope: agent.ScopeLocal, Key: "1"},
+		Role:     assistant.RoleUser,
+		Kind:     assistant.KindText,
+		Markdown: &assistant.MarkdownPayload{Content: "compare"},
+		Context:  refs,
+	}
+	lines := strings.Split(ansi.Strip(RenderBlock(block, 50, DefaultStyles(true), 0)), "\n")
+	prompt := slices.IndexFunc(lines, func(line string) bool { return strings.Contains(line, "› compare") })
+	if prompt < 1 || !strings.Contains(lines[prompt-1], "more") || strings.Contains(strings.Join(lines[:prompt-1], ""), "Service") {
+		t.Fatalf("context should fit one row ending in +N more: %q", lines)
+	}
+}
