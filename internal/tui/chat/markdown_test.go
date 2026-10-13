@@ -272,3 +272,115 @@ func TestMarkdownRendererKeepsTableEmailAutolinksInTheirCells(t *testing.T) {
 	}
 	t.Fatalf("table link and its value did not share a row: %q", plain)
 }
+
+func TestMarkdownRendererShowsOnlyLinkTitles(t *testing.T) {
+	const url = "https://docs.datadoghq.com/a?b=1&lt=2"
+	for name, source := range map[string]string{
+		"paragraph": "See [the docs](" + url + ") now.",
+		"emphasis":  "**See [the docs](" + url + ")** now.",
+		"table":     "| a |\n|---|\n| [the docs](" + url + ") |",
+		"reference": "See [the docs][ref].\n\n[ref]: " + url,
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := renderMarkdown(source, 80, markdownStyleConfig(true))
+			if plain := ansi.Strip(out); !strings.Contains(plain, "the docs") || strings.Contains(plain, "https://") {
+				t.Fatalf("link should render only its title: %q", plain)
+			}
+			if !strings.Contains(out, "\x1b]8;id=") || !strings.Contains(out, ";"+url+"\a") {
+				t.Fatalf("link title is not hyperlinked to %q: %q", url, out)
+			}
+		})
+	}
+}
+
+func TestMarkdownLinkTitlePreservesFormatting(t *testing.T) {
+	for _, title := range []string{"**bold**", "*italic*", "~~strike~~", "`code`", "&amp;lt;", `escaped \*star`, "line\nbreak"} {
+		t.Run(title, func(t *testing.T) {
+			style := markdownStyleConfig(true)
+			style.LinkText = style.Text
+			got := renderMarkdown("["+title+"](https://example.com)", 80, style)
+			want := renderMarkdown(title, 80, style)
+			if markdownCells(got, 80) != markdownCells(want, 80) {
+				t.Fatalf("link title lost formatting\ngot: %q\nwant: %q", got, want)
+			}
+		})
+	}
+}
+
+func TestMarkdownTableLinkPreservesLiteralBackslash(t *testing.T) {
+	const src = "| a |\n|---|\n| [" + `escaped \\*star` + "](https://example.com) |"
+	plain := ansi.Strip(renderMarkdown(src, 80, markdownStyleConfig(true)))
+	if !strings.Contains(plain, `escaped \*star`) {
+		t.Fatalf("link title lost its literal backslash: %q", plain)
+	}
+}
+
+func TestMarkdownLinkTitleUsesDestination(t *testing.T) {
+	for title, want := range map[string]string{
+		"":                        "https://outer.example",
+		"<https://inner.example>": "https://inner.example",
+		"<ops@example.com>":       "ops@example.com",
+		"**<https://inner.example>** and <ops@example.com>": "https://inner.example and ops@example.com",
+	} {
+		for _, context := range []string{"%s", "| link |\n|---|\n| %s |"} {
+			t.Run(fmt.Sprintf("%s/%s", title, context), func(t *testing.T) {
+				src := fmt.Sprintf(context, "["+title+"](https://outer.example)")
+				out := renderMarkdown(src, 100, markdownStyleConfig(true))
+				if plain := ansi.Strip(out); !strings.Contains(plain, want) {
+					t.Fatalf("rendered %q, want title %q", plain, want)
+				}
+				linked := 0
+				for _, line := range strings.Split(out, "\n") {
+					buf := uv.NewScreenBuffer(100, 1)
+					uv.NewStyledString(line).Draw(buf, buf.Bounds())
+					for x := range 100 {
+						c := buf.CellAt(x, 0)
+						if c == nil || c.Link.URL == "" {
+							continue
+						}
+						linked++
+						if c.Link.URL != "https://outer.example" {
+							t.Fatalf("title character %q links to %q", c.Content, c.Link.URL)
+						}
+					}
+				}
+				if linked == 0 {
+					t.Fatal("title has no hyperlink")
+				}
+			})
+		}
+	}
+}
+
+func TestMarkdownLinkInsideStrikethroughPreservesStyle(t *testing.T) {
+	const src = "~~before [docs](https://example.com) after~~"
+	out := renderMarkdown(src, 80, markdownStyleConfig(true))
+	if got := strings.TrimSpace(ansi.Strip(out)); got != "before docs after" {
+		t.Fatalf("unexpected strikethrough text: %q", got)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		buf := uv.NewScreenBuffer(80, 1)
+		uv.NewStyledString(line).Draw(buf, buf.Bounds())
+		for x := range 80 {
+			c := buf.CellAt(x, 0)
+			if c == nil || strings.TrimSpace(c.Content) == "" {
+				continue
+			}
+			if c.Style.Attrs&uv.AttrStrikethrough == 0 || c.Style.Fg == nil {
+				t.Fatalf("character %q lost its surrounding style: %+v", c.Content, c.Style)
+			}
+		}
+	}
+}
+
+func TestMarkdownImageLabelWithLinkPreservesEntities(t *testing.T) {
+	const src = "![use [A & B](https://docs.example)](https://image.example)"
+	out := renderMarkdown(src, 100, markdownStyleConfig(true))
+	plain := ansi.Strip(out)
+	if !strings.Contains(plain, "use A & B") || strings.Contains(plain, "&amp;") {
+		t.Fatalf("image label changed: %q", plain)
+	}
+	if strings.Contains(out, "https://docs.example") {
+		t.Fatalf("image label acquired an embedded hyperlink: %q", out)
+	}
+}

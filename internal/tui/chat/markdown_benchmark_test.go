@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -43,5 +44,22 @@ func BenchmarkMarkdownRendererStreaming(b *testing.B) {
 		for n := fragment; n < len(doc)+fragment; n += fragment {
 			benchmarkMarkdown = r.Render(doc[:min(n, len(doc))], 80, style)
 		}
+	}
+}
+
+func BenchmarkMarkdownLinkedTable(b *testing.B) {
+	for _, rows := range []int{400, 800, 1600} {
+		b.Run(fmt.Sprintf("rows=%d", rows), func(b *testing.B) {
+			src := "| link |\n|---|\n" + strings.Repeat("| [docs](https://example.com) |\n", rows)
+			r := newMarkdownTerm(80, markdownStyleConfig(true))
+			b.ReportAllocs()
+			for b.Loop() {
+				var err error
+				benchmarkMarkdown, err = r.Render(src)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

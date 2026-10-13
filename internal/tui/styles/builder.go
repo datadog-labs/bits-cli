@@ -248,6 +248,7 @@ func markdown(isDark bool, p palette) glamouransi.StyleConfig {
 	cfg.H1.BackgroundColor = new(p.primary)
 	cfg.Link.Color = new(p.link)
 	cfg.LinkText.Color = new(p.link)
+	cfg.LinkText.Underline = new(true)
 	cfg.Code.Color = new(p.codeText)
 	cfg.Code.BackgroundColor = new(p.codeSurface)
 	return cfg
