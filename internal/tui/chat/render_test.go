@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -517,5 +518,33 @@ func TestQuestionTranscriptRestoresAnswersWithoutLocalState(t *testing.T) {
 	}
 	if strings.Contains(view, "awaiting approval") {
 		t.Fatal("question displayed as permission approval")
+	}
+}
+
+func TestUserPromptShowsItsContextAsChipsAbovePromptText(t *testing.T) {
+	block := agent.Block{
+		ID:       agent.BlockID{Scope: agent.ScopeLocal, Key: "1"},
+		Role:     assistant.RoleUser,
+		Kind:     assistant.KindText,
+		Markdown: &assistant.MarkdownPayload{Content: "why is it spiking?"},
+		Context: []agent.ContextRef{
+			{Type: assistant.EntityService, Label: "checkout\x1b]52;c;Y2xpcA==\a\napi"},
+			{Type: assistant.EntityImageURL},
+		},
+	}
+	rendered := RenderBlock(block, 80, DefaultStyles(true), 0)
+	if strings.Contains(rendered, "\x1b]52") || strings.Contains(rendered, "\a") {
+		t.Fatalf("chip rendered a terminal control: %q", rendered)
+	}
+	lines := strings.Split(ansi.Strip(rendered), "\n")
+	chips := slices.IndexFunc(lines, func(line string) bool {
+		return strings.Contains(line, "Service: checkout api") && strings.Contains(line, "Image")
+	})
+	prompt := slices.IndexFunc(lines, func(line string) bool { return strings.Contains(line, "› why is it spiking?") })
+	if chips < 0 || prompt != chips+1 {
+		t.Fatalf("chips should sit right above the prompt: %q", lines)
+	}
+	if strings.Contains(lines[chips], "×") {
+		t.Fatalf("transcript chips are removable: %q", lines[chips])
 	}
 }

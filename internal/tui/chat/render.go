@@ -7,6 +7,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 )
 
@@ -77,26 +78,38 @@ func fallback(it agent.Block, width int, sty Styles) string {
 func (r *blockRenderer) renderText(it agent.Block, width int, sty Styles) string {
 	text := it.Markdown.Content
 	if it.Role == assistant.RoleUser {
-		return renderUser(text, width, sty)
+		return renderUser(text, it.Context, width, sty)
 	}
 	return r.markdown.Render(text, width, sty.Markdown)
 }
 
-// renderUser renders the user prompt with a hanging indent.
-func renderUser(text string, width int, sty Styles) string {
+// renderUser renders the user prompt with a hanging indent, below read-only
+// chips for the context it was sent with, laid out as in the composer.
+func renderUser(text string, refs []agent.ContextRef, width int, sty Styles) string {
 	text = escape.Multiline(text)
 	marker := sty.Input.Prompt
 	w := sty.Input.PromptWidth()
+	indent := strings.Repeat(" ", w)
 
 	inner := max(1, width-sty.Input.Block.GetHorizontalFrameSize())
 
-	lines := strings.Split(wrap(text, max(1, inner-w)), "\n")
-	for i, ln := range lines {
+	var lines []string
+	if len(refs) > 0 {
+		chips := make([]components.Chip, len(refs))
+		for i, ref := range refs {
+			chips[i] = components.Chip{Type: string(ref.Type), Label: ref.Label}
+		}
+		placed := components.LayoutChips(sty.Input.Chip, chips, max(1, inner-w), 0, -1)
+		for _, row := range components.ChipRows(sty.Input.Chip, placed) {
+			lines = append(lines, sty.Input.Chip.Gap.Render(indent)+row)
+		}
+	}
+	for i, ln := range strings.Split(wrap(text, max(1, inner-w)), "\n") {
 		if i == 0 {
-			lines[i] = sty.Input.Marker.Render(marker) + sty.Input.Text.Render(ln)
+			lines = append(lines, sty.Input.Marker.Render(marker)+sty.Input.Text.Render(ln))
 			continue
 		}
-		lines[i] = sty.Input.Text.Render(strings.Repeat(" ", w) + ln)
+		lines = append(lines, sty.Input.Text.Render(indent+ln))
 	}
 	return sty.Input.Block.Width(width).Render(strings.Join(lines, "\n"))
 }
