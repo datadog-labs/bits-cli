@@ -14,6 +14,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/imageinput"
 )
 
 var (
@@ -22,6 +23,7 @@ var (
 	ErrCurrentUserUnsupported = errors.New("backend does not support loading the current user")
 	ErrOperationActive        = errors.New("another conversation operation is active")
 	ErrNoPendingTools         = errors.New("no resumable client tools")
+	ErrInvalidImage           = errors.New("invalid image attachment")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -151,7 +153,7 @@ type Engine struct {
 	opts                   assistant.SendOptions
 	runtimeStatus          RuntimeStatus
 	transcript             *Transcript
-	continuation           *toolContinuation
+	continuation           []assistant.Content
 	previousConversationID string
 	// sentUserContext is the custom user context the current conversation is
 	// known to carry; nil when unknown, as after loading a conversation.
@@ -272,9 +274,11 @@ type TurnInput struct {
 	// Skill is resolved and read inside this operation before contacting the backend.
 	Skill *SkillInvocation
 	Tools *ToolSet
-	// Context belongs to this independent user turn. The engine resends it on
-	// client-tool continuations, but never stores it in its long-lived options.
+	// Context is sent with Message only. The backend persists it on the user
+	// message, so tool continuations must not repeat it.
 	Context *assistant.AssistantContext
+	// Images are sent with Message only, like Context.
+	Images []imageinput.Image
 	// OnDeny is the turn's policy after a denial is answered on the wire.
 	OnDeny DenyPolicy
 }
@@ -450,16 +454,23 @@ func (e *Engine) run(
 	}
 
 	// A restored tool call is already in the transcript; only a new turn adds a
-	// user block before contacting the backend.
+	// user block before contacting the backend. The block lists the context
+	// exactly as it is sent.
+	sentContext := messageContext(in.Context, in.Images)
 	if len(resumed) == 0 {
-		e.transcript.AppendUser(in.Message)
+		e.transcript.AppendUser(in.Message, contextRefs(sentContext))
 		if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
 			return
 		}
 	}
 
-	// A skill that cannot be read fails the turn like a backend error: the user
-	// block stays visible and nothing is sent.
+	// An invalid image or a skill that cannot be read fails the turn like a
+	// backend error: the user block stays visible and nothing is sent.
+	if err := validateImages(in.Images); err != nil {
+		completion.Err = err
+		send(Event{Kind: EventError, Err: err})
+		return
+	}
 	var skillContext string
 	if len(resumed) == 0 && in.Skill != nil {
 		var err error
@@ -471,20 +482,23 @@ func (e *Engine) run(
 		}
 	}
 
-	var next any = in.Message
-	convID := e.ConversationID()
-	var userContext string
+	var req turnRequest
 	if len(resumed) == 0 {
-		userContext = e.pendingUserContext(ctx)
+		req.user = &userMessage{
+			text:         in.Message,
+			context:      sentContext,
+			userContext:  e.pendingUserContext(ctx),
+			imageNotice:  resizeNotice(in.Images),
+			skillContext: skillContext,
+		}
 	}
 
 	// request sends one round and collects the client calls it pauses on. It
 	// returns false once the turn has ended.
-	request := func(emit func(Event) bool, opts assistant.SendOptions) ([]ToolCall, bool) {
-		sentUserContext := opts.CustomUserContext
-		opts = e.projectInstructions.apply(ctx, opts)
-		if _, userMessage := next.(string); userMessage {
-			opts = e.applySkills(ctx, opts, skillContext)
+	request := func(emit func(Event) bool) ([]ToolCall, bool) {
+		opts := e.projectInstructions.apply(ctx, e.sendOptions(defs, req))
+		if req.user != nil {
+			opts = e.applySkills(ctx, opts, req.user.skillContext)
 		}
 		var calls []ToolCall
 		streamed := false
@@ -520,7 +534,7 @@ func (e *Engine) run(
 			return true
 		}
 
-		id, err := e.backend.Send(ctx, next, opts, func(ar assistant.AssistantResponse) error {
+		id, err := e.backend.Send(ctx, req.payload(), opts, func(ar assistant.AssistantResponse) error {
 			streamed = true
 			msg := ar.Data.Attributes.StructuredMessage
 			// A client_tool_call pauses the stream until we answer it; collect it
@@ -541,7 +555,8 @@ func (e *Engine) run(
 		if streamed || err == nil {
 			e.projectInstructions.acknowledge()
 		}
-		if sent := sentUserContext; streamed && sent != "" {
+		if streamed && req.user != nil && req.user.userContext != "" {
+			sent := req.user.userContext
 			e.sentUserContext = &sent
 		}
 		if err != nil {
@@ -566,9 +581,8 @@ func (e *Engine) run(
 			return nil, false // cancelled: end the turn quietly
 		}
 
-		convID = id
-		e.opts.ConversationID = convID
-		emit(Event{Kind: EventConversation, ConvID: convID})
+		e.opts.ConversationID = id
+		emit(Event{Kind: EventConversation, ConvID: id})
 
 		if len(calls) == 0 {
 			if finalizeAndEmit(emit) {
@@ -581,18 +595,11 @@ func (e *Engine) run(
 
 	for round := 1; round <= maxTurns; round++ {
 		emit := emitAtRound(round)
-		opts := e.opts
-		opts.ConversationID = convID
-		opts.ClientTools = defs
-		opts.Context = in.Context
-		opts.CustomUserContext = userContext
-		userContext = ""
-
 		calls := resumed
 		resumed = nil
 		if calls == nil {
 			var ok bool
-			if calls, ok = request(emit, opts); !ok {
+			if calls, ok = request(emit); !ok {
 				return
 			}
 		}
@@ -613,8 +620,7 @@ func (e *Engine) run(
 		case roundStopped:
 			// The round was answered on the wire; discard the follow-up and end the turn.
 			if ctx.Err() == nil {
-				opts.ConversationID = convID
-				opts.CustomUserContext = ""
+				opts := e.sendOptions(defs, turnRequest{tools: toolRound.responses})
 				id, drainRounds, err := e.drainStoppedToolCalls(ctx, toolRound.responses, opts)
 				terminalRound := round + drainRounds
 				if id != "" {
@@ -640,7 +646,7 @@ func (e *Engine) run(
 			}
 			return
 		case roundAnswered:
-			next = toolRound.responses
+			req = turnRequest{tools: toolRound.responses}
 		}
 	}
 	completion.Err = ErrMaxTurns

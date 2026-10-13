@@ -3,6 +3,7 @@ package fake
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -67,11 +68,16 @@ func (f *Fake) conversation(id string) *conversation {
 }
 
 // startTurn records the user's script and stores it for continuation. A
-// non-nil fn is run instead of text, which then only describes it.
-func (f *Fake) startTurn(c *conversation, text string, fn starlark.Callable) scriptTurn {
+// non-nil fn is run instead of text, which then only describes it. Context
+// entities are persisted on the user message, as the real backend does.
+func (f *Fake) startTurn(c *conversation, text string, fn starlark.Callable, turnContext *assistant.AssistantContext) scriptTurn {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.appendLocked(c, assistant.Message{Role: "user", MessageID: f.nextID(), Content: assistant.TextContent(text)})
+	user := assistant.Message{Role: "user", MessageID: f.nextID(), Content: assistant.TextContent(text)}
+	if turnContext != nil && len(turnContext.Entities) > 0 {
+		user.ContextEntities, _ = json.Marshal(turnContext.Entities)
+	}
+	f.appendLocked(c, user)
 	if c.title == "" {
 		c.title = truncateRunes(strings.TrimSpace(text), titleRunes)
 	}

@@ -1,6 +1,9 @@
 package assistant
 
-import "encoding/json"
+import (
+	"encoding/base64"
+	"encoding/json"
+)
 
 // Role is the message author. The wire form is the string Message.Role
 // ("user" / "assistant"); Role is the typed value the rest of the app uses.
@@ -44,8 +47,9 @@ type SendOptions struct {
 	// Must be resent on every turn.
 	SkillOverrides []SkillOverride
 	// Context puts Datadog objects (dashboards, monitors, services...) in scope
-	// for one backend request. Agent loops must resend a turn's context on tool
-	// continuations and must not carry it to the next independent turn.
+	// for one backend request. The server persists it on that request's user
+	// message and regenerates its descriptions on every request that carries
+	// it, so send it with the user's message, not with tool continuations.
 	Context *AssistantContext
 	// Profile selects the server-side surface preset.
 	Profile Profile
@@ -141,9 +145,8 @@ const (
 const DefaultProfile = ProfileCLI
 
 // AssistantContext is the request-level `context`: Datadog objects in scope for
-// the turn. The server fetches each entity's details and injects them into the
-// prompt. It must be resent on every request that belongs to the same user
-// turn, including client-tool continuations.
+// the request. The server fetches each entity's details and injects them into
+// the prompt.
 type AssistantContext struct {
 	Entities []ContextEntity `json:"entities,omitempty"`
 	// Resources is the sibling `resources` list. Its wire shape is not modeled
@@ -182,6 +185,16 @@ const (
 	EntityErrorTrackingIssue EntityType = "error_tracking_issue"
 	EntitySpreadsheet        EntityType = "spreadsheet"
 )
+
+// ImageEntity attaches an image as a base64 data URL. The backend sends it to
+// the model as image content, never as prompt text.
+func ImageEntity(mediaType string, data []byte, label string) ContextEntity {
+	return ContextEntity{
+		Type:  EntityImageURL,
+		ID:    "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data),
+		Label: label,
+	}
+}
 
 // SkillOverride flips a skill's default-enabled state for a request. Name and
 // Source identify the skill (matching a Skill from Client.ListSkills); Enabled

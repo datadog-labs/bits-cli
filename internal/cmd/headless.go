@@ -12,6 +12,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/headless"
 	"github.com/datadog-labs/bits-cli/internal/headless/adeep"
+	"github.com/datadog-labs/bits-cli/internal/imageinput"
 	"github.com/datadog-labs/bits-cli/internal/tools"
 	"github.com/spf13/cobra"
 )
@@ -24,6 +25,7 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 	opts := RunOptions{ChatOptions: ChatOptions{AuthMode: auth.ModeAuto}}
 	var authMode string
 	var permissionsMode string
+	var imagePaths []string
 	command := &cobra.Command{
 		Use:   "run",
 		Short: "Run one noninteractive assistant turn and stream a delivery on stdout",
@@ -68,6 +70,13 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 				}
 				opts.Site = site
 			}
+			for _, path := range imagePaths {
+				img, err := imageinput.Load(command.Context(), path, imageinput.DefaultLimits)
+				if err != nil {
+					return fmt.Errorf("--image %s: %w", path, err)
+				}
+				opts.Images = append(opts.Images, img)
+			}
 			opts.AuthMode = mode
 			opts.PermissionsMode = permissions
 			opts.Delivery = delivery
@@ -78,6 +87,7 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 	flags := command.Flags()
 	flags.StringArrayVar(&opts.SkillPaths, "skill", nil, "additional skill directory to discover (repeatable)")
 	flags.StringVar(&opts.Prompt, "prompt", "", "literal prompt for the one assistant turn (required)")
+	flags.StringArrayVar(&imagePaths, "image", nil, "image file attached to the prompt (repeatable)")
 	flags.StringVar(&opts.Delivery, "delivery", "", "delivery streamed on stdout: adeep (required)")
 	flags.StringVar(&opts.Model, "model", "", "backend model ID override (for example, anthropic/claude-sonnet-4-6)")
 	flags.StringVar(&opts.InferenceMode, "reasoning", "", "reasoning mode: fast or deep (feature flagged by the backend)")
@@ -109,6 +119,7 @@ func parseDelivery(raw string) (string, error) {
 type RunOptions struct {
 	ChatOptions
 	Prompt   string
+	Images   []imageinput.Image
 	Delivery string
 }
 
@@ -140,7 +151,7 @@ func runRunWithStore(ctx context.Context, opts RunOptions, store auth.Credential
 	if err != nil {
 		return err
 	}
-	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet}, opts, out)
+	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet, Images: opts.Images}, opts, out)
 }
 
 // runEngineTurn drives exactly one turn, attempts Finish once, and maps its

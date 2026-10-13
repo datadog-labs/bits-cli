@@ -83,7 +83,7 @@ func (b *conversationRecordingBackend) Send(_ context.Context, message any, opts
 	return id, nil
 }
 
-func TestTurnContextSurvivesToolContinuationsAndDoesNotLeak(t *testing.T) {
+func TestContextIsSentOnlyWithTheUserMessage(t *testing.T) {
 	backend := &contextRecordingBackend{}
 	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "read"},
@@ -104,11 +104,11 @@ func TestTurnContextSurvivesToolContinuationsAndDoesNotLeak(t *testing.T) {
 	if len(backend.contexts) != 3 {
 		t.Fatalf("request contexts = %#v", backend.contexts)
 	}
-	if !reflect.DeepEqual(backend.contexts[0], turnContext) || !reflect.DeepEqual(backend.contexts[1], turnContext) {
-		t.Fatalf("initial/continuation contexts = %#v, want %#v", backend.contexts[:2], turnContext)
+	if !reflect.DeepEqual(backend.contexts[0], turnContext) {
+		t.Fatalf("user message context = %#v, want %#v", backend.contexts[0], turnContext)
 	}
-	if backend.contexts[2] != nil {
-		t.Fatalf("next independent turn reused context: %#v", backend.contexts[2])
+	if backend.contexts[1] != nil || backend.contexts[2] != nil {
+		t.Fatalf("tool answers or the next turn carried context: %#v", backend.contexts[1:])
 	}
 }
 

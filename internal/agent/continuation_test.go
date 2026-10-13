@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
@@ -39,10 +40,8 @@ func TestContinuationHistoryBoundaries(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pending := continuationFromHistory(tc.messages)
 			var ids []string
-			if pending != nil {
-				for _, c := range pending.calls {
-					ids = append(ids, c.Tool.ToolCallID)
-				}
+			for _, c := range pending {
+				ids = append(ids, c.Tool.ToolCallID)
 			}
 			if !reflect.DeepEqual(ids, tc.ids) {
 				t.Fatalf("pending IDs = %v, want %v", ids, tc.ids)
@@ -59,7 +58,7 @@ func (b *optionsBackend) Send(_ context.Context, _ any, opts assistant.SendOptio
 	return "conversation", nil
 }
 
-func TestContinuationKeepsOriginalTurnContext(t *testing.T) {
+func TestResumedToolsDoNotResendTheTurnContext(t *testing.T) {
 	user := assistant.Message{Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api","label":"API"}]`), ContextResources: json.RawMessage(`[{"name":"dashboard","value":42}]`)}
 	set, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "input"}, Resumable: true,
@@ -72,18 +71,43 @@ func TestContinuationKeepsOriginalTurnContext(t *testing.T) {
 	e := New(backend, Config{ConversationID: "conversation"})
 	e.continuation = continuationFromHistory([]assistant.Message{user, savedCall("one", "input")})
 	drain(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
-	if got := backend.opts.Context; got == nil || got.Entities[0].ID != "api" || len(got.Resources) != 1 {
-		t.Fatalf("resumed turn context = %+v", got)
+	if got := backend.opts.Context; got != nil {
+		t.Fatalf("resumed tool answers carried context %+v", got)
 	}
-	next := assistant.Message{Role: "user", Content: assistant.TextContent("new turn")}
-	c := continuationFromHistory([]assistant.Message{user, savedCall("one", "input"), next, savedCall("two", "input")})
-	if c.context != nil {
-		t.Fatal("context leaked across user turns")
+}
+
+func TestStoppingAResumedRoundDrainsWithoutInstructionsOrContext(t *testing.T) {
+	dir := t.TempDir()
+	writeInstructionTestFile(t, dir, "AGENTS.md", "local instructions")
+	started := make(chan struct{})
+	set, err := NewToolSet(ModeSkipPermissions, Tool{
+		Definition: assistant.ClientTool{Name: "input"}, Resumable: true,
+		Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+			close(started)
+			<-ctx.Done()
+			return ToolResult{}, ctx.Err()
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	user.ContextEntities = json.RawMessage(`{"unexpected":"shape"}`)
-	c = continuationFromHistory([]assistant.Message{user, savedCall("one", "input")})
-	if c.err == nil {
-		t.Fatal("malformed context was silently discarded")
+	backend := &optionsBackend{}
+	e := New(backend, Config{ConversationID: "conversation", ProjectInstructions: env.NewInstructions(dir)})
+	user := assistant.Message{Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api"}]`)}
+	e.continuation = continuationFromHistory([]assistant.Message{user, savedCall("one", "input")})
+
+	events := e.ResumePendingTools(t.Context(), TurnInput{Tools: set})
+	<-started
+	if !e.StopTools() {
+		t.Fatal("StopTools was not accepted during the resumed round")
+	}
+	drain(events)
+
+	if backend.opts.ConversationID != "conversation" {
+		t.Fatal("the stopped round was not drained")
+	}
+	if backend.opts.CustomUserContext != "" || backend.opts.Context != nil {
+		t.Fatalf("drain carried user context %q and context %+v", backend.opts.CustomUserContext, backend.opts.Context)
 	}
 }
 
