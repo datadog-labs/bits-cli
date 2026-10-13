@@ -103,6 +103,8 @@ func renderUser(text string, refs []agent.ContextRef, width int, sty Styles) str
 		for _, row := range components.ChipRows(sty.Input.Chip, placed) {
 			lines = append(lines, sty.Input.Chip.Gap.Render(indent)+row)
 		}
+		// Same blank row as the composer between the chips and the prompt.
+		lines = append(lines, "")
 	}
 	for i, ln := range strings.Split(wrap(text, max(1, inner-w)), "\n") {
 		if i == 0 {

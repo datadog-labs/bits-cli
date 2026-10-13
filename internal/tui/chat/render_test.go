@@ -541,8 +541,8 @@ func TestUserPromptShowsItsContextAsChipsAbovePromptText(t *testing.T) {
 		return strings.Contains(line, "Service: checkout api") && strings.Contains(line, "Image")
 	})
 	prompt := slices.IndexFunc(lines, func(line string) bool { return strings.Contains(line, "› why is it spiking?") })
-	if chips < 0 || prompt != chips+1 {
-		t.Fatalf("chips should sit right above the prompt: %q", lines)
+	if chips < 0 || prompt != chips+2 || strings.TrimSpace(lines[chips+1]) != "" {
+		t.Fatalf("chips should sit one blank row above the prompt: %q", lines)
 	}
 	if strings.Contains(lines[chips], "×") {
 		t.Fatalf("transcript chips are removable: %q", lines[chips])
@@ -563,7 +563,7 @@ func TestManyContextChipsTakeOneTranscriptRow(t *testing.T) {
 	}
 	lines := strings.Split(ansi.Strip(RenderBlock(block, 50, DefaultStyles(true), 0)), "\n")
 	prompt := slices.IndexFunc(lines, func(line string) bool { return strings.Contains(line, "› compare") })
-	if prompt < 1 || !strings.Contains(lines[prompt-1], "more") || strings.Contains(strings.Join(lines[:prompt-1], ""), "Service") {
+	if prompt < 2 || !strings.Contains(lines[prompt-2], "more") || strings.Contains(strings.Join(lines[:prompt-2], ""), "Service") {
 		t.Fatalf("context should fit one row ending in +N more: %q", lines)
 	}
 }
