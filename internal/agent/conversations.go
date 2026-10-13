@@ -35,7 +35,7 @@ type ConversationListResult struct {
 type Conversation struct {
 	id           string
 	transcript   *Transcript
-	continuation *toolContinuation
+	continuation []assistant.Content
 }
 
 // ListConversations reads and validates summaries without taking the engine's

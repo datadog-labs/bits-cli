@@ -8,6 +8,42 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
+// turnRequest is one backend request of a turn: the user's message, or the
+// answers to a round of client tool calls.
+type turnRequest struct {
+	user  *userMessage
+	tools []assistant.ClientToolResponse
+}
+
+// userMessage holds what is sent with the user's text and never with tool
+// answers.
+type userMessage struct {
+	text         string
+	context      *assistant.AssistantContext
+	userContext  string
+	skillContext string
+}
+
+func (r turnRequest) payload() any {
+	if r.user != nil {
+		return r.user.text
+	}
+	return r.tools
+}
+
+// sendOptions describes one request. Client tools ride on every request
+// because the backend does not retain them. Conversation-level deliveries,
+// such as project instructions, are added by the caller that acknowledges them.
+func (e *Engine) sendOptions(tools []assistant.ClientTool, req turnRequest) assistant.SendOptions {
+	opts := e.opts
+	opts.ClientTools = tools
+	if req.user != nil {
+		opts.Context = req.user.context
+		opts.CustomUserContext = req.user.userContext
+	}
+	return opts
+}
+
 type instructionsPhase uint8
 
 const (
