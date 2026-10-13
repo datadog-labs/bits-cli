@@ -17,7 +17,7 @@ version="${tag#v}"
 target="$(git -C "$SRC_DIR" rev-parse HEAD)"
 
 cd "$DIST_DIR"
-checksums="bits_${version}_checksums.txt"
+checksums="bits_checksums.txt"
 sha256sum --check --quiet "$checksums"
 
 assets=("$checksums")

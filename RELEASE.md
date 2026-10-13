@@ -19,15 +19,19 @@ dd-octo-sts token scoped by `.github/chainguard/self.release.sts.yaml`.
 Release assets, for darwin/amd64, darwin/arm64, linux/amd64, and linux/arm64:
 
 ```
-bits_<version>_<os>_<arch>.tar.gz   bits, README.md, LICENSE, LICENSE-3rdparty.csv
-bits_<version>_checksums.txt        SHA-256 of every archive
+bits_<os>_<arch>.tar.gz   bits, README.md, LICENSE, LICENSE-3rdparty.csv
+bits_checksums.txt        SHA-256 of every archive
 ```
+
+Archive names stay the same across releases so consumers can use GitHub's
+`releases/latest/download` URLs. Version-pinned consumers such as Homebrew use
+the immutable release tag in the URL and verify the archive checksum.
 
 Verify a download with:
 
 ```sh
-sha256sum --check --ignore-missing bits_<version>_checksums.txt
-gh attestation verify bits_<version>_<os>_<arch>.tar.gz \
+sha256sum --check --ignore-missing bits_checksums.txt
+gh attestation verify bits_<os>_<arch>.tar.gz \
     --repo datadog-labs/bits-cli \
     --signer-workflow datadog-labs/bits-cli/.github/workflows/release.yml \
     --source-ref refs/heads/main

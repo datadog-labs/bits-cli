@@ -50,8 +50,8 @@ def main(args)
 
   Dir.mktmpdir("bits-homebrew-") do |work_dir|
     release_dir = File.join(work_dir, "release")
-    checksums_name = "bits_#{version}_checksums.txt"
-    archives = PLATFORMS.to_h { |platform| [platform, "bits_#{version}_#{platform}.tar.gz"] }
+    checksums_name = "bits_checksums.txt"
+    archives = PLATFORMS.to_h { |platform| [platform, "bits_#{platform}.tar.gz"] }
     patterns = [checksums_name, *archives.values].flat_map { |name| ["--pattern", name] }
     run("gh", "release", "download", tag, "--repo", REPO, "--dir", release_dir, *patterns)
     checksums = File.read(File.join(release_dir, checksums_name))

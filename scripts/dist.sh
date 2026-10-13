@@ -26,7 +26,7 @@ files=(README.md LICENSE LICENSE-3rdparty.csv)
 for platform in "${PLATFORMS[@]}"; do
     goos="${platform%/*}"
     goarch="${platform#*/}"
-    name="bits_${version}_${goos}_${goarch}"
+    name="bits_${goos}_${goarch}"
     stage="$work_dir/$name"
 
     binary="$(GOOS="$goos" GOARCH="$goarch" VERSION="$version" BUILD_DIR="$work_dir/build" \
@@ -38,11 +38,11 @@ for platform in "${PLATFORMS[@]}"; do
     echo "$DIST_DIR/$name.tar.gz"
 done
 
-checksums="bits_${version}_checksums.txt"
+checksums="bits_checksums.txt"
 if command -v sha256sum >/dev/null; then
     sha256=(sha256sum)
 else
     sha256=(shasum -a 256)
 fi
-(cd "$DIST_DIR" && "${sha256[@]}" bits_"${version}"_*.tar.gz >"$checksums")
+(cd "$DIST_DIR" && "${sha256[@]}" bits_*.tar.gz >"$checksums")
 echo "$DIST_DIR/$checksums"

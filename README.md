@@ -31,16 +31,15 @@ brew install datadog-labs/pack/bits
 Or download the standalone binary from GitHub Releases:
 
 ```sh
-VERSION="0.0.7"
 case "$(uname -m)" in
   x86_64)        ARCH="amd64" ;;
   arm64|aarch64) ARCH="arm64" ;;
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-ASSET="bits_${VERSION}_linux_${ARCH}.tar.gz"
+ASSET="bits_linux_${ARCH}.tar.gz"
 curl -fL \
-  "https://github.com/datadog-labs/bits-cli/releases/download/v${VERSION}/${ASSET}" \
+  "https://github.com/datadog-labs/bits-cli/releases/latest/download/${ASSET}" \
   -o "/tmp/${ASSET}"
 tar -xzf "/tmp/${ASSET}" bits
 sudo install -m 755 bits /usr/local/bin/

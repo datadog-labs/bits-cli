@@ -281,7 +281,7 @@ func TestHomebrewTemplate(t *testing.T) {
 		t.Fatalf("render formula: %v\n%s", err, formula)
 	}
 	for _, platform := range platforms {
-		url := `url "https://github.com/datadog-labs/bits-cli/releases/download/v1.2.3/bits_1.2.3_` + platform + `.tar.gz"`
+		url := `url "https://github.com/datadog-labs/bits-cli/releases/download/v1.2.3/bits_` + platform + `.tar.gz"`
 		sha := `sha256 "` + checksums[platform] + `"`
 		if !strings.Contains(string(formula), url+"\n      "+sha) {
 			t.Errorf("formula must install %s with %s and %s", platform, url, sha)
@@ -361,19 +361,19 @@ func TestDistArchives(t *testing.T) {
 		names = append(names, e.Name())
 	}
 	want := []string{
-		"bits_1.2.3_checksums.txt",
-		"bits_1.2.3_darwin_amd64.tar.gz",
-		"bits_1.2.3_darwin_arm64.tar.gz",
-		"bits_1.2.3_linux_amd64.tar.gz",
-		"bits_1.2.3_linux_arm64.tar.gz",
+		"bits_checksums.txt",
+		"bits_darwin_amd64.tar.gz",
+		"bits_darwin_arm64.tar.gz",
+		"bits_linux_amd64.tar.gz",
+		"bits_linux_arm64.tar.gz",
 	}
 	if !slices.Equal(names, want) {
 		t.Fatalf("dist contents = %v, want %v", names, want)
 	}
 
-	check := exec.Command("sha256sum", "--check", "bits_1.2.3_checksums.txt")
+	check := exec.Command("sha256sum", "--check", "bits_checksums.txt")
 	if _, err := exec.LookPath("sha256sum"); err != nil {
-		check = exec.Command("shasum", "-a", "256", "--check", "bits_1.2.3_checksums.txt")
+		check = exec.Command("shasum", "-a", "256", "--check", "bits_checksums.txt")
 	}
 	check.Dir = dist
 	if out, err := check.CombinedOutput(); err != nil {
@@ -381,7 +381,7 @@ func TestDistArchives(t *testing.T) {
 	}
 
 	for _, platform := range []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"} {
-		archive := filepath.Join(dist, "bits_1.2.3_"+strings.ReplaceAll(platform, "/", "_")+".tar.gz")
+		archive := filepath.Join(dist, "bits_"+strings.ReplaceAll(platform, "/", "_")+".tar.gz")
 		files := readTarGz(t, archive)
 		if got := slices.Sorted(maps.Keys(files)); !slices.Equal(got, []string{"LICENSE", "LICENSE-3rdparty.csv", "README.md", "bits"}) {
 			t.Errorf("%s contains %v", archive, got)
