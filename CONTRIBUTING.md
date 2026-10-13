@@ -36,6 +36,50 @@ Lint with the pinned golangci-lint configuration:
 shellcheck when it is installed (CI always does), and verifies that
 `LICENSE-3rdparty.csv` matches the dependency tree.
 
+## Authentication for development
+
+Run `bits login` to sign in through your browser. For API-key authentication,
+set both `DD_API_KEY` and `DD_APP_KEY`, then select the mode and API site explicitly:
+
+```sh
+bits --auth api-key --site https://api.datadoghq.com
+```
+
+This uses the keys for the current invocation without changing your saved OAuth
+session. Plain `bits` uses OAuth even when those environment variables are set.
+
+### Staging
+
+Configure the staging login origin and callback domain before signing in:
+
+```sh
+export BITS_STAGING_SITE=https://login.staging.test
+export BITS_STAGING_DOMAIN=staging.test
+export BITS_STAGING_CLIENT_ID=staging-test-client
+bits login --site "$BITS_STAGING_SITE"
+```
+
+Use your environment's actual values. `BITS_STAGING_SITE` and
+`BITS_STAGING_DOMAIN` are required; `BITS_STAGING_CLIENT_ID` supplies an optional
+default that `bits login --client-id` can override. The login origin must use
+HTTPS and belong to the callback domain. API and token requests go to
+`api.<domain>`.
+
+Keep the staging configuration set while using the saved session. If it is
+missing or names a different domain, Bits reports an error. To switch back to
+production, run `bits logout` with the staging configuration still set, unset
+the staging variables, and sign in again.
+
+### Integration tests
+
+Tests that contact Datadog are opt-in:
+
+- `BITS_OAUTH_E2E=1` reuses your stored OAuth login.
+- `BITS_ASSISTANT_E2E=1` requires `DD_API_KEY`, `DD_APP_KEY`, and an explicit
+  `BITS_E2E_SITE` naming the Datadog API site.
+
+For noninteractive runs, see the [ADEEP delivery documentation](internal/headless/adeep/README.md).
+
 ## Development workflow
 
 1. Create a branch for your change.

@@ -1,6 +1,30 @@
 # `bits.delivery.adeep` JSONL delivery
 
-Versioned stream consumed by the ADEEP evaluation pipeline. The delivery is a library API (`adeep.New(writer)` driven through `Start`/`Consume`/`Finish`); the stacked command PR wires it as `bits run --delivery adeep`, which writes one JSON object per line to stdout with diagnostics on stderr. The schema discriminator is `bits.delivery.adeep` and this document describes version `1`. Bump `Version` in `jsonl.go` and update this document whenever a record gains a field or changes meaning; consumers must reject unknown versions.
+Versioned stream consumed by the ADEEP evaluation pipeline. The delivery is a library API (`adeep.New(writer)` driven through `Start`/`Consume`/`Finish`), exposed by `bits run --delivery adeep`, which writes one JSON object per line to stdout with diagnostics on stderr. The schema discriminator is `bits.delivery.adeep` and this document describes version `1`. Bump `Version` in `jsonl.go` and update this document whenever a record gains a field or changes meaning; consumers must reject unknown versions.
+
+## Running from the CLI
+
+Sign in with `bits login`, then run one assistant turn:
+
+```sh
+bits run --prompt "Summarize this conversation" --conversation YOUR_CONVERSATION_ID --delivery adeep
+```
+
+Omit `--conversation` to start a new conversation. `--prompt` is required and
+literal; positional and stdin prompts are not supported. The command requires
+a working login and never opens an interactive login flow. For API-key
+authentication, see [Contributing](../../../CONTRIBUTING.md#authentication-for-development).
+
+Actions requiring approval are denied by default (`--permissions deny`). Pass
+`--permissions skip-permissions` to allow them without prompting. The final
+assistant text is in `run.finished.response`.
+
+| Exit status | Meaning |
+| --- | --- |
+| `0` | Turn completed. |
+| `1` | Startup, runtime, or delivery failure. |
+| `2` | Invalid command or flags. |
+| `3` | At least one approval was denied, even if the assistant subsequently finished. |
 
 ## Envelope
 
