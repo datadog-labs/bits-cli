@@ -21,6 +21,7 @@ type userMessage struct {
 	text         string
 	context      *assistant.AssistantContext
 	userContext  string
+	imageNotice  string
 	skillContext string
 }
 
@@ -39,7 +40,7 @@ func (e *Engine) sendOptions(tools []assistant.ClientTool, req turnRequest) assi
 	opts.ClientTools = tools
 	if req.user != nil {
 		opts.Context = req.user.context
-		opts.CustomUserContext = req.user.userContext
+		opts.CustomUserContext = joinUserContext(req.user.userContext, req.user.imageNotice)
 	}
 	return opts
 }

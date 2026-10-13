@@ -1,6 +1,9 @@
 package assistant
 
-import "encoding/json"
+import (
+	"encoding/base64"
+	"encoding/json"
+)
 
 // Role is the message author. The wire form is the string Message.Role
 // ("user" / "assistant"); Role is the typed value the rest of the app uses.
@@ -182,6 +185,16 @@ const (
 	EntityErrorTrackingIssue EntityType = "error_tracking_issue"
 	EntitySpreadsheet        EntityType = "spreadsheet"
 )
+
+// ImageEntity attaches an image as a base64 data URL. The backend sends it to
+// the model as image content, never as prompt text.
+func ImageEntity(mediaType string, data []byte, label string) ContextEntity {
+	return ContextEntity{
+		Type:  EntityImageURL,
+		ID:    "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data),
+		Label: label,
+	}
+}
 
 // SkillOverride flips a skill's default-enabled state for a request. Name and
 // Source identify the skill (matching a Skill from Client.ListSkills); Enabled

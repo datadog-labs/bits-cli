@@ -74,8 +74,12 @@ func (f *Fake) Send(ctx context.Context, message any, opts assistant.SendOptions
 	}
 	switch m := message.(type) {
 	case string:
-		return c.id, f.runScript(c, out, opts, f.startTurn(c, m, nil))
+		return c.id, f.runScript(c, out, opts, f.startTurn(c, m, nil, opts.Context))
 	case []assistant.ClientToolResponse:
+		// The real backend would persist it again on the tool answers.
+		if opts.Context != nil {
+			return c.id, errors.New("fake: tool responses must not carry context")
+		}
 		turn, ok := f.resumeTurn(c, m)
 		if !ok {
 			return c.id, errors.New("fake: tool responses without a turn")

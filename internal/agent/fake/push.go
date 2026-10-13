@@ -48,7 +48,7 @@ func (f *Fake) pushConversation(ctx context.Context, title string, turns []pushe
 			record: func(m assistant.Message) { f.record(c, m) },
 			nextID: f.nextID,
 		}
-		if err := f.runScript(c, out, assistant.SendOptions{ConversationID: c.id}, f.startTurn(c, t.text, t.fn)); err != nil {
+		if err := f.runScript(c, out, assistant.SendOptions{ConversationID: c.id}, f.startTurn(c, t.text, t.fn, nil)); err != nil {
 			return "", err
 		}
 	}

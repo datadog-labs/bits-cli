@@ -14,6 +14,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/imageinput"
 )
 
 var (
@@ -22,6 +23,7 @@ var (
 	ErrCurrentUserUnsupported = errors.New("backend does not support loading the current user")
 	ErrOperationActive        = errors.New("another conversation operation is active")
 	ErrNoPendingTools         = errors.New("no resumable client tools")
+	ErrInvalidImage           = errors.New("invalid image attachment")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -275,6 +277,8 @@ type TurnInput struct {
 	// Context is sent with Message only. The backend persists it on the user
 	// message, so tool continuations must not repeat it.
 	Context *assistant.AssistantContext
+	// Images are sent with Message only, like Context.
+	Images []imageinput.Image
 	// OnDeny is the turn's policy after a denial is answered on the wire.
 	OnDeny DenyPolicy
 }
@@ -458,8 +462,13 @@ func (e *Engine) run(
 		}
 	}
 
-	// A skill that cannot be read fails the turn like a backend error: the user
-	// block stays visible and nothing is sent.
+	// An invalid image or a skill that cannot be read fails the turn like a
+	// backend error: the user block stays visible and nothing is sent.
+	if err := validateImages(in.Images); err != nil {
+		completion.Err = err
+		send(Event{Kind: EventError, Err: err})
+		return
+	}
 	var skillContext string
 	if len(resumed) == 0 && in.Skill != nil {
 		var err error
@@ -475,8 +484,9 @@ func (e *Engine) run(
 	if len(resumed) == 0 {
 		req.user = &userMessage{
 			text:         in.Message,
-			context:      in.Context,
+			context:      messageContext(in.Context, in.Images),
 			userContext:  e.pendingUserContext(ctx),
+			imageNotice:  resizeNotice(in.Images),
 			skillContext: skillContext,
 		}
 	}
