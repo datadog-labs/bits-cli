@@ -1,159 +1,87 @@
 # Bits CLI
 
-Bits CLI is a native terminal client for Datadog Assistant.
-<img width="710" height="573" alt="CleanShot 2026-10-07 at 13 08 11@2x" src="https://github.com/user-attachments/assets/01c89baf-5a23-4e4c-8c78-64b490b6722c" />
-## Command line
+Bits CLI brings Bits Chat and its built-in Datadog tools to your terminal. It
+adds coding tools that run in your local workspace, so Bits can inspect and edit
+code, run commands, and help implement and verify fixes using your Datadog
+context. Start a new conversation or continue one you started in Datadog.
 
-Run `bits` to open chat. Process-level long flags use conventional double-dash syntax; `-h` is the only shorthand:
+> [!NOTE]
+> Bits CLI is currently in preview. Features and interfaces may change.
 
-```sh
-bits [--permissions MODE] [--conversation ID]
-bits --auth api-key --site API_SITE [--permissions MODE] [--conversation ID]
-bits run --prompt TEXT --delivery adeep [--model MODEL] [flags]
-bits login [--site SITE] [--client-id ID]
-bits logout
-bits help [command]
-```
+## Installation
 
-Use `bits --help` for the complete command list or `bits help login` for command-specific help. The TUI has its own slash commands:
+### macOS
 
-| Command | Description |
-| --- | --- |
-| `/new`, `/clear` | Start a new conversation. |
-| `/resume` | Resume an existing conversation. |
-| `/status` | Show the current session status. |
-| `/permissions` | Show or switch the permissions mode for this session. |
-| `/web` | Open the active conversation in the Datadog web app. |
-| `/settings` | Open Assistant settings in the Datadog web app. |
-| `/logout` | Sign out from your Datadog account and exit Bits. |
-| `/quit`, `/exit` | Exit Bits. |
-
-Local skills appear in the slash menu as `/skill:<name>`. Bits discovers them in
-`.agents/skills`, `~/.agents/skills`, and directories passed with `--skill`.
-
-Type `@` after whitespace or punctuation to open a mixed picker of entities and
-local-file suggestions. Prefix a query with a supported entity type, such as
-`@service:assistant`, to narrow the search. Entity selections are
-inserted as typed mentions such as `@dashboard:"Test Dashboard"` and sent as
-structured context for the next turn. Editing or deleting the mention removes
-that entity from the structured context. File mentions remain plain prompt text.
-
-## Permissions
-
-Interactive `bits` defaults to `manual`: tools that can change your system or
-workspace — such as `exec_command`, `write_file`, and `edit_file` — pause with
-a permission panel before running. Run `bits --permissions skip-permissions`
-to run those tools without asking.
-
-Inside a session, `/permissions` shows the current mode, and
-`/permissions manual` or `/permissions skip-permissions` switches it for the
-rest of the session. The switch is never persisted: the next launch starts
-from the flag's default (`manual`). Switching is rejected while a turn or a
-permission request is active, and only typed input can change the mode — the
-assistant cannot switch it for you. Session-wide "allow" grants you gave
-earlier stay valid when you switch back to `manual`.
-
-`bits run` has no interactive approver, so it denies every gated action by
-default (`--permissions deny`). Pass `--permissions skip-permissions` to run
-everything without asking.
-
-## Noninteractive run
-
-`bits run` executes exactly one assistant turn without a TUI or interactive login. It writes only versioned JSONL to stdout; diagnostics go to stderr:
+Install with Homebrew:
 
 ```sh
-BITS_FAKE_BACKEND=1 bits run --prompt 'random()' --delivery adeep
-bits run --prompt "What changed?" --delivery adeep --auth api-key --site https://api.datadoghq.com
+brew tap datadog-labs/pack
+brew install datadog-labs/pack/bits
 ```
 
-`--prompt` is required and literal: positional and stdin prompts are not supported. The initial and only delivery is `adeep`, which emits `bits.delivery.adeep` v1 run/round lifecycle, correlated tool calls and results, usage, conversation updates, and one terminal record. Assistant Markdown appears only as `run.finished.response`. Without a working OAuth session, `run` fails fast with a `bits login` hint.
+### Linux
 
-Exit statuses are `0` for a completed turn, `1` for startup/runtime/delivery failure, `2` for command or flag misuse, and `3` when at least one approval gate was denied even though the backend could adjust and finish. On the headless surface a denial comes from a gated action under `--permissions deny`, or from a malformed server approval request; each is returned to the model as an error tool response.
-
-`bits --version` prints the module version when available, otherwise `dev` with the short commit recorded in the build.
-
-## Authentication
-
-### Startup login
-
-Run `bits`. When no working OAuth session is available, Bits opens a site picker automatically. Choose US1, US3, US5, EU1, AP1, AP2, or enter your organization's Datadog subdomain. Bits then opens the regional OAuth flow in your browser and continues into chat after authentication succeeds.
-
-The `bits login` command is the explicit non-TUI login path for choosing a site before chat, including GovCloud, scripting, and debugging:
+Install with Homebrew:
 
 ```sh
-bits login --site app.datadoghq.eu
-bits login --site acme.us3.datadoghq.com
+brew tap datadog-labs/pack
+brew install datadog-labs/pack/bits
 ```
 
-`bits login` also accepts `--client-id` for development and environments without a built-in registration, including GovCloud. It defaults to the US1 production site when `--site` is omitted:
+Or download the standalone binary from GitHub Releases:
 
 ```sh
-bits login --site customer.ddog-gov.com --client-id UUID
+VERSION="0.0.7"
+case "$(uname -m)" in
+  x86_64)        ARCH="amd64" ;;
+  arm64|aarch64) ARCH="arm64" ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+ASSET="bits_${VERSION}_linux_${ARCH}.tar.gz"
+curl -fL \
+  "https://github.com/datadog-labs/bits-cli/releases/download/v${VERSION}/${ASSET}" \
+  -o "/tmp/${ASSET}"
+tar -xzf "/tmp/${ASSET}" bits
+sudo install -m 755 bits /usr/local/bin/
+rm -f "/tmp/${ASSET}" bits
 ```
 
-The selected site's domain family determines the public OAuth client automatically: commercial `datadoghq.com` and `datadoghq.eu` sites use the production registration, and a staging site uses the client configured for it (below). Site and OAuth-client selection are non-secret runtime configuration. The former `DD_SITE_URL` and `BITS_OAUTH_CLIENT_ID` environment overrides remain unsupported; use `--site` and `bits login --client-id` respectively.
+## Get started
 
-Bits opens Datadog in your browser and completes Authorization Code + PKCE through an ephemeral `127.0.0.1` callback. The callback uses an available OS-selected port; no fixed local port needs to be free. The client ID is public configuration; no client secret is shipped.
-
-The resulting access and rotating refresh tokens are stored in the native OS credential manager:
-
-- macOS: Keychain
-- Linux: Secret Service-compatible keyring
-- Windows: Credential Manager
-
-On Linux without an available Secret Service, Bits uses `~/.bits-cli/oauth-session.json` with mode `0600`. When the keyring becomes available, the next locked session operation promotes the file session and removes the fallback copy. Other credential-store failures are returned rather than silently switching identities.
-
-Only one OAuth login is active per OS user. Running `bits login` again saves the replacement before best-effort revoking the previous grant.
-
-### Staging environment
-
-Staging is opt-in and no staging endpoint is embedded in Bits. `BITS_STAGING_SITE` (the HTTPS login origin) and `BITS_STAGING_DOMAIN` (the bare domain the OAuth callback returns; token and Assistant traffic always goes to the canonical `api.<domain>` route) are both required; `BITS_STAGING_CLIENT_ID` is optional and only names the default OAuth client — `bits login --client-id` always takes precedence:
+Launch Bits from the project you want to work on:
 
 ```sh
-export BITS_STAGING_SITE=https://login.staging.test   # HTTPS login origin
-export BITS_STAGING_DOMAIN=staging.test               # bare callback domain
-export BITS_STAGING_CLIENT_ID=staging-test-client             # optional default OAuth client
-bits login --site "$BITS_STAGING_SITE"
+cd your-project
+bits
 ```
 
-The login origin must be HTTPS and the callback domain or a subdomain of it; malformed or production-overlapping configuration fails with an explicit error rather than falling back to production.
+On first launch, choose your Datadog site and sign in through your browser.
+You'll need a Datadog account with the Bits Chat Access permission.
 
-A saved staging session records the canonical API domain (`api.<domain>`) of the configured callback domain plus its OAuth client ID — never the login alias, even when the alias itself starts with `api.`. It stays usable on later runs while `BITS_STAGING_DOMAIN` still names that same domain, even if `BITS_STAGING_SITE` moves to another login origin under it: token refresh and Assistant traffic stay on `api.<domain>`, and only browser links (`/web`, `/settings`) follow the currently configured login origin. The stored client ID always stays authoritative. Changing `BITS_STAGING_DOMAIN` — or running without the staging variables while a staging session is stored — fails closed with a visible error naming `BITS_STAGING_SITE` and `BITS_STAGING_DOMAIN`, both in interactive `bits` and in headless `bits run`; Bits never falls back to the production login picker or to production routing, and the stored credential is left untouched. Setting the new matching variables and running `bits login` again is the explicit way to switch environments, and clearing the variables alone cannot establish a new environment.
+<img width="710" height="573" alt="Bits CLI running Bits Chat in the terminal" src="https://github.com/user-attachments/assets/01c89baf-5a23-4e4c-8c78-64b490b6722c" />
 
-### Developer and CI authentication
+## Datadog integration
 
-API and application keys remain environment variables because they are secrets. Select them explicitly for a deterministic, noninteractive authentication path:
+Sign in to use the Datadog tools available through Bits Chat.
+The integration is built in, with no separate Datadog tool server to configure
+or API keys to manage for browser sign-in.
+
+Reference services, monitors, incidents, and dashboards directly in your
+conversation. Type `@` to search your Datadog entities and attach the relevant
+context to your question.
+
+An investigation started in Datadog can continue against your local code.
+Use `/resume` to select a conversation, or open it by ID:
 
 ```sh
-export DD_API_KEY=...
-export DD_APP_KEY=...
-bits --auth api-key --site https://api.datadoghq.com
+bits --conversation YOUR_CONVERSATION_ID
 ```
 
-Explicit API-key mode requires `--site`, accepts an `api.`-prefixed Datadog API URL or hostname, plus its configured staging environment's login or API host (the login origin is canonicalized to the environment's `api.` host), and rejects an empty base URL instead of defaulting to any site. It does not read, refresh, replace, or delete a stored OAuth session. It never opens a browser or login picker. Both secrets are required; OAuth client selection remains on `bits login`. The mode affects only the current invocation, so a later plain `bits` returns to automatic OAuth selection. This makes authentication noninteractive; `bits` still launches its interactive terminal UI.
+Use `/web` to reopen the active conversation in Datadog.
 
-Opt-in end-to-end tests follow the same rule: `BITS_OAUTH_E2E=1` reuses the stored login, while `BITS_ASSISTANT_E2E=1` also requires `DD_API_KEY`/`DD_APP_KEY` and an explicit `BITS_E2E_SITE` naming the Datadog API site to use (validated through the same site canonicalization as `--site`); no test run defaults to a site.
-
-Authentication selection is deterministic:
-
-1. `--auth auto` is the default and uses only a stored OAuth session or interactive OAuth login. Ambient API/app keys never change the selected principal.
-2. `--auth api-key` bypasses the OAuth credential store and requires `--site` plus the complete `DD_API_KEY` and `DD_APP_KEY` pair.
-3. In automatic mode, missing, corrupt, or definitively unrefreshable OAuth starts the login flow.
-4. Transient credential-store and OAuth refresh failures surface as errors instead of opening a browser or changing identities.
-
-### Logout
-
-```sh
-bits logout
-```
-
-Logout removes the local session under the same per-user cross-process lock used by refresh and login, then attempts remote token revocation. The lock identity is stable across process environment changes. A remote revocation outage does not restore the locally deleted session.
-
-Inside the TUI, `/logout` uses the same path and exits after invalidating the current authenticated client. Running `/logout` when no OAuth session is stored is safe.
-
-If Bits reports that the login expired or refresh was rejected, run `bits login` again. An unreadable credential can be cleared with `bits logout` before logging in again. If another process replaced the login with a different site or client, restart Bits to adopt it.
-
-An Assistant HTTP 401 is never retried automatically, especially for the non-idempotent streaming turn. It marks that exact access-token generation stale so the next independently initiated request refreshes safely.
+Bits asks for permission before reading workspace files, editing files, or
+executing commands. Run `bits --help` for available commands.
 
 ## Contributing
 
