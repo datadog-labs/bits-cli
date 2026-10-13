@@ -159,15 +159,7 @@ func (e *Editor) renderChips(animated bool) string {
 
 	chips := make([]components.Chip, len(e.attachments))
 	for i, a := range e.attachments {
-		label := a.Label
-		if label == "" {
-			label = a.ID
-		}
-		chips[i] = components.Chip{
-			Type:      a.Type,
-			Label:     label,
-			Removable: true,
-		}
+		chips[i] = components.EntityChip(a.Type, a.ID, a.Label, true)
 	}
 	width := 80
 	if e.width > 0 {

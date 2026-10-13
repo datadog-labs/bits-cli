@@ -124,16 +124,10 @@ type Block struct {
 	Dashboard *assistant.DashboardPayload // KindDashboard
 	Progress  *assistant.ProgressPayload  // KindProgress
 
-	// Context is what a user prompt was sent with. Snapshots share the slice, so
-	// it is never mutated after the block is created.
-	Context []ContextRef
-}
-
-// ContextRef is the display identity of an entity sent with a user prompt. It
-// has no ID because an image's ID is its whole data URL.
-type ContextRef struct {
-	Type  assistant.EntityType
-	Label string
+	// Context is the entities a user prompt was sent with, as sent: an image's
+	// ID is its whole data URL. Snapshots share the slice, so it is never
+	// mutated after the block is created.
+	Context []assistant.ContextEntity
 }
 
 // BlockID is the stable transcript key for one block. It is comparable, so it is

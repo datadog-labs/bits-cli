@@ -25,21 +25,6 @@ type userMessage struct {
 	skillContext string
 }
 
-func contextRefs(sent *assistant.AssistantContext) []ContextRef {
-	if sent == nil {
-		return nil
-	}
-	var refs []ContextRef
-	for _, entity := range sent.Entities {
-		label := entity.Label
-		if label == "" && entity.Type != assistant.EntityImageURL {
-			label = entity.ID
-		}
-		refs = append(refs, ContextRef{Type: entity.Type, Label: label})
-	}
-	return refs
-}
-
 func (r turnRequest) payload() any {
 	if r.user != nil {
 		return r.user.text

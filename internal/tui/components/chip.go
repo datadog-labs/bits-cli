@@ -24,6 +24,19 @@ type Chip struct {
 	Removable bool
 }
 
+// EntityChip shows an entity's label, or its ID when it has none. An image's
+// ID is its data URL, so an unlabeled image shows its type alone.
+func EntityChip(entityType, id, label string, removable bool) Chip {
+	if label == "" && entityType != "image_url" {
+		label = id
+	}
+	return Chip{
+		Type:      entityType,
+		Label:     label,
+		Removable: removable,
+	}
+}
+
 // PlacedChip is a rendered chip and its cells in a block of chip rows. It is
 // what is drawn and what clicks are mapped to. Index is the chip's index in
 // the laid-out slice; the "+N more" token has Index len(chips).

@@ -458,7 +458,12 @@ func (e *Engine) run(
 	// exactly as it is sent.
 	sentContext := messageContext(in.Context, in.Images)
 	if len(resumed) == 0 {
-		e.transcript.AppendUser(in.Message, contextRefs(sentContext))
+		var sent []assistant.ContextEntity
+		if sentContext != nil {
+			// A copy: the caller owns its context and could reuse it.
+			sent = slices.Clone(sentContext.Entities)
+		}
+		e.transcript.AppendUser(in.Message, sent)
 		if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
 			return
 		}

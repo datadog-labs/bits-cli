@@ -85,7 +85,7 @@ func (r *blockRenderer) renderText(it agent.Block, width int, sty Styles) string
 
 // renderUser renders the user prompt with a hanging indent, below read-only
 // chips for the context it was sent with, laid out as in the composer.
-func renderUser(text string, refs []agent.ContextRef, width int, sty Styles) string {
+func renderUser(text string, context []assistant.ContextEntity, width int, sty Styles) string {
 	text = escape.Multiline(text)
 	marker := sty.Input.Prompt
 	w := sty.Input.PromptWidth()
@@ -94,10 +94,10 @@ func renderUser(text string, refs []agent.ContextRef, width int, sty Styles) str
 	inner := max(1, width-sty.Input.Block.GetHorizontalFrameSize())
 
 	var lines []string
-	if len(refs) > 0 {
-		chips := make([]components.Chip, len(refs))
-		for i, ref := range refs {
-			chips[i] = components.Chip{Type: string(ref.Type), Label: ref.Label}
+	if len(context) > 0 {
+		chips := make([]components.Chip, len(context))
+		for i, entity := range context {
+			chips[i] = components.EntityChip(string(entity.Type), entity.ID, entity.Label, false)
 		}
 		placed := components.LayoutChips(sty.Input.Chip, chips, max(1, inner-w), 1, -1)
 		for _, row := range components.ChipRows(sty.Input.Chip, placed) {

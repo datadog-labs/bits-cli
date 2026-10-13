@@ -527,14 +527,17 @@ func TestUserPromptShowsItsContextAsChipsAbovePromptText(t *testing.T) {
 		Role:     assistant.RoleUser,
 		Kind:     assistant.KindText,
 		Markdown: &assistant.MarkdownPayload{Content: "why is it spiking?"},
-		Context: []agent.ContextRef{
-			{Type: assistant.EntityService, Label: "checkout\x1b]52;c;Y2xpcA==\a\napi"},
-			{Type: assistant.EntityImageURL},
+		Context: []assistant.ContextEntity{
+			{Type: assistant.EntityService, ID: "checkout-api", Label: "checkout\x1b]52;c;Y2xpcA==\a\napi"},
+			{Type: assistant.EntityImageURL, ID: "data:image/png;base64,AAAA"},
 		},
 	}
 	rendered := RenderBlock(block, 80, DefaultStyles(true), 0)
 	if strings.Contains(rendered, "\x1b]52") || strings.Contains(rendered, "\a") {
 		t.Fatalf("chip rendered a terminal control: %q", rendered)
+	}
+	if strings.Contains(rendered, "data:image") {
+		t.Fatalf("an image chip showed its data URL: %q", rendered)
 	}
 	lines := strings.Split(ansi.Strip(rendered), "\n")
 	chips := slices.IndexFunc(lines, func(line string) bool {
@@ -550,9 +553,9 @@ func TestUserPromptShowsItsContextAsChipsAbovePromptText(t *testing.T) {
 }
 
 func TestManyContextChipsTakeOneTranscriptRow(t *testing.T) {
-	var refs []agent.ContextRef
+	var refs []assistant.ContextEntity
 	for _, name := range []string{"checkout-api", "payments-api", "inventory", "shipping"} {
-		refs = append(refs, agent.ContextRef{Type: assistant.EntityService, Label: name})
+		refs = append(refs, assistant.ContextEntity{Type: assistant.EntityService, ID: name})
 	}
 	block := agent.Block{
 		ID:       agent.BlockID{Scope: agent.ScopeLocal, Key: "1"},
