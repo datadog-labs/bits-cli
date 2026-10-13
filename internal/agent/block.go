@@ -125,8 +125,8 @@ type Block struct {
 	Progress  *assistant.ProgressPayload  // KindProgress
 
 	// Context is the entities a user prompt was sent with, as sent: an image's
-	// ID is its whole data URL. Snapshots share the slice, so it is never
-	// mutated after the block is created.
+	// ID is its whole data URL. The slice and all nested data, including
+	// definition values, are shared and must remain immutable.
 	Context []assistant.ContextEntity
 }
 

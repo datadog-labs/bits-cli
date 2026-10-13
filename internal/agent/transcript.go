@@ -142,6 +142,8 @@ func (t *Transcript) markTool(id string, mutate func(*ToolBlock)) (Block, bool) 
 
 // AppendUser adds a user message with a locally generated unique id and returns
 // the created block. User blocks are complete on creation (never streamed).
+// Context is retained without copying; callers must not mutate its slice or
+// any nested data after this call.
 func (t *Transcript) AppendUser(text string, context []assistant.ContextEntity) Block {
 	t.userSeq++
 	b := Block{

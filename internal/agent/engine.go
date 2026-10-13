@@ -119,6 +119,7 @@ func (s TranscriptSnapshot) UserPrompts() []UserPrompt {
 }
 
 // UserPrompt is a prompt the user sent and the entities it was sent with.
+// Context shares immutable transcript data, including nested definition values.
 type UserPrompt struct {
 	Text    string
 	Context []assistant.ContextEntity
@@ -286,6 +287,8 @@ type TurnInput struct {
 	Tools *ToolSet
 	// Context is sent with Message only. The backend persists it on the user
 	// message, so tool continuations must not repeat it.
+	// Once submitted, callers must treat it and all nested data as immutable:
+	// the engine retains its entities in transcript snapshots without copying.
 	Context *assistant.AssistantContext
 	// Images are sent with Message only, like Context.
 	Images []imageinput.Image
@@ -470,8 +473,7 @@ func (e *Engine) run(
 	if len(resumed) == 0 {
 		var sent []assistant.ContextEntity
 		if sentContext != nil {
-			// A copy: the caller owns its context and could reuse it.
-			sent = slices.Clone(sentContext.Entities)
+			sent = sentContext.Entities
 		}
 		e.transcript.AppendUser(in.Message, sent)
 		if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {

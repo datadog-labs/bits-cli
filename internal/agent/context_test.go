@@ -16,7 +16,6 @@ func TestUserBlocksKeepTheContextTheyWereSentWith(t *testing.T) {
 	}}
 	img := shrunkScreenshot(t)
 	drain(engine.StartTurn(context.Background(), TurnInput{Message: "compare", Context: turnContext, Images: []imageinput.Image{img}}))
-	turnContext.Entities[0].Label = "changed by the caller later"
 
 	want := []assistant.ContextEntity{
 		{Type: assistant.EntityDashboard, ID: "dash-1", Label: "Checkout overview"},
