@@ -34,6 +34,23 @@ type Input struct {
 	SweepDim    color.Color
 	SweepHot    color.Color
 	SweepMotion bool
+
+	// Chip styles the attachment chips shown above the prompt, both in the
+	// composer and in submitted user blocks.
+	Chip Chip
+}
+
+// Chip styles one attachment chip. Every part carries the chip background
+// because each is rendered separately and its reset would clear an outer one.
+type Chip struct {
+	Frame  lipgloss.Style
+	Type   lipgloss.Style
+	Label  lipgloss.Style
+	Remove lipgloss.Style
+	// Active replaces Label and Remove on a hovered or focused chip.
+	Active lipgloss.Style
+	// Gap paints the cells between chips with the surrounding surface.
+	Gap lipgloss.Style
 }
 
 // PromptWidth returns the number of cells occupied by the input prompt.
