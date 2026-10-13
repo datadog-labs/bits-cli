@@ -119,6 +119,14 @@ func TestBackspaceAtPromptStartWalksAndRemovesChips(t *testing.T) {
 	if e.Value() != "h" || len(e.Attachments()) != 2 {
 		t.Fatalf("typing after chips: value = %q, attachments = %v", e.Value(), attachmentIDs(e))
 	}
+
+	e.SetValue("")
+	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	e.Update(tea.PasteMsg{Content: "x"})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if e.Value() != "" || len(e.Attachments()) != 2 {
+		t.Fatalf("backspace after a paste: value = %q, attachments = %v", e.Value(), attachmentIDs(e))
+	}
 }
 
 func TestManyChipsCollapseIntoMoreThatTogglesOnClick(t *testing.T) {

@@ -103,28 +103,51 @@ func LayoutChips(sty styles.Chip, chips []Chip, width, maxRows, active int) []Pl
 	}
 }
 
-// LayoutExpandedChips lays out every chip and, when they span several rows,
-// appends a "less" token with Index len(chips) to collapse them again.
-func LayoutExpandedChips(sty styles.Chip, chips []Chip, width, active int) []PlacedChip {
+// LayoutExpandedChips lays out chips on at most maxRows rows, ending with a
+// "less" token. Chips that do not fit are counted by a "+N" token (Index -1).
+func LayoutExpandedChips(sty styles.Chip, chips []Chip, width, maxRows, active int) []PlacedChip {
 	width = max(1, width)
 	placed := LayoutChips(sty, chips, width, 0, active)
 	if len(placed) == 0 || placed[len(placed)-1].Row == 0 {
 		return placed
 	}
-	last := placed[len(placed)-1]
 	less := chipToken(sty, "less", width, len(chips) == active)
-	w := lipgloss.Width(less)
-	row, x := last.Row, last.X+last.Width+1
-	if x+w > width {
-		row, x = row+1, 0
+	if last := placed[len(placed)-1]; last.Row < maxRows {
+		row, x := last.Row, last.X+last.Width+1
+		if x+lipgloss.Width(less) > width {
+			row, x = row+1, 0
+		}
+		return append(placed, placedToken(len(chips), row, x, less))
 	}
-	return append(placed, PlacedChip{
-		Index: len(chips),
+
+	kept := placed[:0]
+	for _, p := range placed {
+		if p.Row < maxRows {
+			kept = append(kept, p)
+		}
+	}
+	for {
+		count := chipToken(sty, "+"+strconv.Itoa(len(chips)-len(kept)), width, false)
+		x := 0
+		if n := len(kept); n > 0 && kept[n-1].Row == maxRows-1 {
+			x = kept[n-1].X + kept[n-1].Width + 1
+		}
+		lessX := x + lipgloss.Width(count) + 1
+		if lessX+lipgloss.Width(less) <= width || len(kept) == 0 {
+			return append(kept, placedToken(-1, maxRows-1, x, count), placedToken(len(chips), maxRows-1, lessX, less))
+		}
+		kept = kept[:len(kept)-1]
+	}
+}
+
+func placedToken(index, row, x int, view string) PlacedChip {
+	return PlacedChip{
+		Index: index,
 		Row:   row,
 		X:     x,
-		Width: w,
-		View:  less,
-	})
+		Width: lipgloss.Width(view),
+		View:  view,
+	}
 }
 
 // ChipRows joins placed chips into one line per row, painting the gaps with
@@ -149,10 +172,11 @@ func ChipRows(sty styles.Chip, placed []PlacedChip) []string {
 	return lines
 }
 
-// ChipAt returns the index of the placed chip covering cell (x, row).
+// ChipAt returns the index of the placed chip covering cell (x, row). Read-only
+// tokens are never hit.
 func ChipAt(placed []PlacedChip, x, row int) (int, bool) {
 	for _, p := range placed {
-		if p.Row == row && x >= p.X && x < p.X+p.Width {
+		if p.Index >= 0 && p.Row == row && x >= p.X && x < p.X+p.Width {
 			return p.Index, true
 		}
 	}

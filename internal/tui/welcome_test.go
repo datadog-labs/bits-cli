@@ -410,7 +410,7 @@ func TestResumeHiddenWithoutConversations(t *testing.T) {
 	}
 }
 
-func TestResumeHiddenWhileComposerHasText(t *testing.T) {
+func TestResumeHiddenWhileComposerHasADraft(t *testing.T) {
 	m := welcomeModel(120, 40)
 	m.resume = *resumeFixture(4)
 	if !m.showResume() {
@@ -423,6 +423,22 @@ func TestResumeHiddenWhileComposerHasText(t *testing.T) {
 	m.editor.SetValue("")
 	if !m.showResume() {
 		t.Fatal("resume did not return once the composer was cleared")
+	}
+
+	m.editor.Focus()
+	m.editor.Update(tea.PasteMsg{Content: "@check"})
+	_ = m.syncEntitySearch()
+	m.applyEntitySearchResult(entitySearchResultMsg{
+		generation: m.entitySearchTask.gen,
+		query:      "check",
+		response: assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
+			EntityID: "checkout-api", EntityType: "service", Name: "checkout-api",
+		}}},
+	})
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.editor.SetValue("")
+	if len(m.editor.Attachments()) != 1 || m.showResume() {
+		t.Fatal("an attachment-only draft would resume a conversation instead of being sent")
 	}
 }
 

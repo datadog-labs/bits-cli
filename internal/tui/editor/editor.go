@@ -370,6 +370,12 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 	}
+	// A paste inserts text, so the keyboard is back on the text: a following
+	// backspace must delete the paste, not a chip.
+	if _, ok := msg.(tea.PasteMsg); ok && e.chips.focused {
+		e.chips.focused = false
+		e.invalidateBody()
+	}
 	if k, ok := msg.(tea.KeyPressMsg); ok && e.menu.open {
 		switch k.String() {
 		case "up", "ctrl+p":

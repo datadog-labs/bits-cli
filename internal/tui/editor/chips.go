@@ -8,6 +8,10 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 )
 
+// maxExpandedChipRows bounds expanded chips so that, with the text's own cap,
+// the composer fits ordinary terminals.
+const maxExpandedChipRows = 4
+
 // chipRow is the interaction state of the attachment chips drawn above the
 // prompt. placed, top, and left describe the last render, which is what the
 // user clicks on.
@@ -170,7 +174,7 @@ func (e *Editor) renderChips(animated bool) string {
 	sty := e.inputStyle.Chip
 	layout := func(active int) []components.PlacedChip {
 		if e.chips.expanded {
-			return components.LayoutExpandedChips(sty, chips, width, active)
+			return components.LayoutExpandedChips(sty, chips, width, maxExpandedChipRows, active)
 		}
 		return components.LayoutChips(sty, chips, width, 1, active)
 	}
