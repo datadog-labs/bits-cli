@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -141,7 +142,7 @@ func (t *Transcript) markTool(id string, mutate func(*ToolBlock)) (Block, bool) 
 
 // AppendUser adds a user message with a locally generated unique id and returns
 // the created block. User blocks are complete on creation (never streamed).
-func (t *Transcript) AppendUser(text string) Block {
+func (t *Transcript) AppendUser(text string, context []ContextRef) Block {
 	t.userSeq++
 	b := Block{
 		ID:       BlockID{Scope: ScopeLocal, Key: strconv.Itoa(t.userSeq)},
@@ -149,6 +150,7 @@ func (t *Transcript) AppendUser(text string) Block {
 		Kind:     assistant.KindText,
 		Markdown: &assistant.MarkdownPayload{Content: text},
 		Complete: true,
+		Context:  context,
 	}
 	t.push(b)
 	t.closePrior(b)
@@ -224,6 +226,12 @@ func (t *Transcript) appendMarkdown(msg assistant.Message) (Block, bool) {
 		AgentID:   msg.AgentID,
 		CreatedAt: msg.CreatedAt,
 		Markdown:  &assistant.MarkdownPayload{Content: acc.String()},
+	}
+	if b.Role == assistant.RoleUser {
+		var sent assistant.AssistantContext
+		if json.Unmarshal(msg.ContextEntities, &sent.Entities) == nil {
+			b.Context = contextRefs(&sent)
+		}
 	}
 	t.push(b)
 	return b, true

@@ -368,7 +368,7 @@ func TestInterleavedStreamReopens(t *testing.T) {
 func TestUserMessageFinalizesPriorStream(t *testing.T) {
 	tr := NewTranscript()
 	tr.AppendMessage(assistant.AssistantMessage("m1", assistant.TextContent("partial")))
-	tr.AppendUser("next turn")
+	tr.AppendUser("next turn", nil)
 	if !tr.Blocks()[0].Complete {
 		t.Fatal("assistant block not finalized when a user message followed it")
 	}

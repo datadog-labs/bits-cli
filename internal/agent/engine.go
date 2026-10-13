@@ -454,9 +454,11 @@ func (e *Engine) run(
 	}
 
 	// A restored tool call is already in the transcript; only a new turn adds a
-	// user block before contacting the backend.
+	// user block before contacting the backend. The block lists the context
+	// exactly as it is sent.
+	sentContext := messageContext(in.Context, in.Images)
 	if len(resumed) == 0 {
-		e.transcript.AppendUser(in.Message)
+		e.transcript.AppendUser(in.Message, contextRefs(sentContext))
 		if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
 			return
 		}
@@ -484,7 +486,7 @@ func (e *Engine) run(
 	if len(resumed) == 0 {
 		req.user = &userMessage{
 			text:         in.Message,
-			context:      messageContext(in.Context, in.Images),
+			context:      sentContext,
 			userContext:  e.pendingUserContext(ctx),
 			imageNotice:  resizeNotice(in.Images),
 			skillContext: skillContext,
