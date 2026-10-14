@@ -1,37 +1,55 @@
 package agent
 
 import (
+	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/imageinput"
 )
 
-// validateImages rejects what the backend would silently drop.
-func validateImages(images []imageinput.Image) error {
-	for _, img := range images {
-		if mediaType, ok := imageinput.Sniff(img.Data); !ok || mediaType != img.MediaType {
-			return fmt.Errorf("%w: %q", ErrInvalidImage, img.Name)
-		}
+// prepareImageContext loads image file URLs as data URLs, drops duplicates and
+// enforces MaxImages. Recalled images are resent as is, without resize notice.
+func prepareImageContext(ctx context.Context, input *assistant.AssistantContext) (*assistant.AssistantContext, []imageinput.Image, error) {
+	if input == nil || !slices.ContainsFunc(input.Entities, isImage) {
+		return input, nil, nil
 	}
-	return nil
+	prepared := &assistant.AssistantContext{Resources: input.Resources}
+	var notices []imageinput.Image
+	seen := make(map[string]bool)
+	for _, entity := range input.Entities {
+		if !isImage(entity) {
+			prepared.Entities = append(prepared.Entities, entity)
+			continue
+		}
+		var img imageinput.Image
+		path, ok, err := imageinput.FilePath(entity.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok {
+			if img, err = imageinput.Load(ctx, path, imageinput.DefaultLimits); err != nil {
+				return nil, nil, err
+			}
+			entity = assistant.ImageEntity(string(img.MediaType), img.Data, entity.Label)
+		}
+		if seen[entity.ID] {
+			continue
+		}
+		seen[entity.ID] = true
+		if len(notices) == imageinput.MaxImages {
+			return nil, nil, imageinput.ErrTooManyImages
+		}
+		prepared.Entities = append(prepared.Entities, entity)
+		notices = append(notices, img)
+	}
+	return prepared, notices, nil
 }
 
-// messageContext appends images to a copy of the turn context.
-func messageContext(turnContext *assistant.AssistantContext, images []imageinput.Image) *assistant.AssistantContext {
-	if len(images) == 0 {
-		return turnContext
-	}
-	merged := &assistant.AssistantContext{}
-	if turnContext != nil {
-		merged.Entities = append(merged.Entities, turnContext.Entities...)
-		merged.Resources = turnContext.Resources
-	}
-	for _, img := range images {
-		merged.Entities = append(merged.Entities, assistant.ImageEntity(string(img.MediaType), img.Data, img.Name))
-	}
-	return merged
+func isImage(entity assistant.ContextEntity) bool {
+	return entity.Type == assistant.EntityImageURL
 }
 
 // resizeNotice tells the model when it sees fewer pixels than the user has,

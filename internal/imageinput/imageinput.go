@@ -16,6 +16,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -42,7 +43,10 @@ type Limits struct {
 	MaxEncodedBytes int // before base64
 }
 
-// DefaultLimits matches the web UI, which follows Anthropic's vision guidance.
+// MaxImages bounds the images attached to one message.
+const MaxImages = 4
+
+// DefaultLimits follows Anthropic's vision guidance.
 var DefaultLimits = Limits{
 	MaxSourceBytes:  30 << 20,
 	MaxDecodePixels: 50_000_000,
@@ -69,7 +73,24 @@ var (
 	ErrSourceTooLarge  = errors.New("image file too large")
 	ErrDecode          = errors.New("image could not be decoded")
 	ErrEncodedTooLarge = errors.New("encoded image too large")
+	ErrTooManyImages   = fmt.Errorf("at most %d images can be attached", MaxImages)
 )
+
+// Error is an image that cannot be attached, named as the user knows it.
+type Error struct {
+	Name string
+	Err  error
+}
+
+func (e *Error) Error() string {
+	cause := e.Err
+	if pathErr, ok := errors.AsType[*fs.PathError](cause); ok {
+		cause = pathErr.Err // the name already says which file
+	}
+	return fmt.Sprintf("could not attach %q: %v", e.Name, cause)
+}
+
+func (e *Error) Unwrap() error { return e.Err }
 
 // Sniff follows the WHATWG MIME Sniffing image patterns.
 func Sniff(data []byte) (MediaType, bool) {
@@ -190,7 +211,12 @@ func Prepare(name string, raw []byte, limits Limits) (Image, error) {
 }
 
 // Load caps both file size and bytes read, including files that grow during reading.
-func Load(ctx context.Context, path string, limits Limits) (Image, error) {
+func Load(ctx context.Context, path string, limits Limits) (_ Image, err error) {
+	defer func() {
+		if err != nil {
+			err = &Error{Name: filepath.Base(path), Err: err}
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return Image{}, err
 	}

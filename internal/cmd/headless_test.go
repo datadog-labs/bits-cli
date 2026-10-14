@@ -5,12 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/imageinput"
 )
 
 // scriptBackend scripts the run surface's backend: round 1 may emit the
@@ -438,5 +442,21 @@ func TestRunCommandAuthenticationFailureIsNotUsageError(t *testing.T) {
 	}
 	if out != "" || stderr != "" {
 		t.Fatalf("authentication failure output = %q, stderr = %q", out, stderr)
+	}
+}
+
+func TestImageFlagsReferenceAbsoluteFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile("shot.png", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	images, err := imageContext([]string{"shot.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []assistant.ContextEntity{{Type: assistant.EntityImageURL, ID: imageinput.FileURL(filepath.Join(dir, "shot.png")), Label: "shot.png"}}
+	if !reflect.DeepEqual(images.Entities, want) {
+		t.Fatalf("image context = %+v, want %+v", images.Entities, want)
 	}
 }

@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"net"
+	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/imageinput"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 )
 
@@ -51,6 +56,30 @@ func TestNoticeForError(t *testing.T) {
 			err:       fmt.Errorf("token: %w", auth.ErrSessionReplaced),
 			wantLevel: chat.NoticeWarn,
 			wantText:  "The active Datadog login changed. Restart Bits to use it.",
+		},
+		{
+			name:      "an unreachable service is a network error",
+			err:       &url.Error{Op: "Post", URL: "https://api.datadoghq.com", Err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}},
+			wantLevel: chat.NoticeError,
+			wantText:  "Can't reach the assistant service. Check your network and Datadog site.",
+		},
+		{
+			name:      "a missing file is not a network error",
+			err:       &fs.PathError{Op: "open", Path: "/skills/SKILL.md", Err: syscall.ENOENT},
+			wantLevel: chat.NoticeError,
+			wantText:  "open /skills/SKILL.md: no such file or directory",
+		},
+		{
+			name:      "an image that cannot be attached is named with its cause",
+			err:       &imageinput.Error{Name: "shot.png", Err: &fs.PathError{Op: "stat", Path: "/tmp/shot.png", Err: syscall.ENOENT}},
+			wantLevel: chat.NoticeError,
+			wantText:  `Couldn't attach "shot.png": the file no longer exists.`,
+		},
+		{
+			name:      "too many images is a warning",
+			err:       imageinput.ErrTooManyImages,
+			wantLevel: chat.NoticeWarn,
+			wantText:  "Attach at most 4 images to a message.",
 		},
 		{
 			name:      "api error maps through its status sentinel",
