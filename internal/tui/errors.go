@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"syscall"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -48,7 +49,11 @@ func noticeForAuthError(err error) (chat.Notice, bool) {
 
 // noticeForNonAPIError covers errors that never carry an HTTP status.
 func noticeForNonAPIError(op string, err error) chat.Notice {
-	_, isNet := errors.AsType[net.Error](err)
+	// syscall.Errno satisfies net.Error, so a file error is not a network one.
+	netErr, isNet := errors.AsType[net.Error](err)
+	if _, ok := netErr.(syscall.Errno); ok {
+		isNet = false
+	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return notice(chat.NoticeWarn, err, "The assistant took too long to respond. Try again.")
