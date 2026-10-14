@@ -14,7 +14,6 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
-	"github.com/datadog-labs/bits-cli/internal/imageinput"
 )
 
 var (
@@ -23,7 +22,6 @@ var (
 	ErrCurrentUserUnsupported = errors.New("backend does not support loading the current user")
 	ErrOperationActive        = errors.New("another conversation operation is active")
 	ErrNoPendingTools         = errors.New("no resumable client tools")
-	ErrInvalidImage           = errors.New("invalid image attachment")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -287,11 +285,10 @@ type TurnInput struct {
 	Tools *ToolSet
 	// Context is sent with Message only. The backend persists it on the user
 	// message, so tool continuations must not repeat it.
+	// Image file URLs are loaded and replaced with data URLs inside the turn.
 	// Once submitted, callers must treat it and all nested data as immutable:
 	// the engine retains its entities in transcript snapshots without copying.
 	Context *assistant.AssistantContext
-	// Images are sent with Message only, like Context.
-	Images []imageinput.Image
 	// OnDeny is the turn's policy after a denial is answered on the wire.
 	OnDeny DenyPolicy
 }
@@ -469,7 +466,11 @@ func (e *Engine) run(
 	// A restored tool call is already in the transcript; only a new turn adds a
 	// user block before contacting the backend. The block lists the context
 	// exactly as it is sent.
-	sentContext := messageContext(in.Context, in.Images)
+	sentContext, imageNotices, imageErr := prepareImageContext(ctx, in.Context)
+	if imageErr != nil {
+		// Keep file references in the failed prompt so history can retry them.
+		sentContext = in.Context
+	}
 	if len(resumed) == 0 {
 		var sent []assistant.ContextEntity
 		if sentContext != nil {
@@ -483,9 +484,9 @@ func (e *Engine) run(
 
 	// An invalid image or a skill that cannot be read fails the turn like a
 	// backend error: the user block stays visible and nothing is sent.
-	if err := validateImages(in.Images); err != nil {
-		completion.Err = err
-		send(Event{Kind: EventError, Err: err})
+	if imageErr != nil {
+		completion.Err = imageErr
+		send(Event{Kind: EventError, Err: imageErr})
 		return
 	}
 	var skillContext string
@@ -505,7 +506,7 @@ func (e *Engine) run(
 			text:         in.Message,
 			context:      sentContext,
 			userContext:  e.pendingUserContext(ctx),
-			imageNotice:  resizeNotice(in.Images),
+			imageNotice:  resizeNotice(imageNotices),
 			skillContext: skillContext,
 		}
 	}

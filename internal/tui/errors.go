@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"syscall"
@@ -11,6 +12,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/imageinput"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 )
 
@@ -54,7 +56,12 @@ func noticeForNonAPIError(op string, err error) chat.Notice {
 	if _, ok := netErr.(syscall.Errno); ok {
 		isNet = false
 	}
+	if imageErr, ok := errors.AsType[*imageinput.Error](err); ok {
+		return notice(chat.NoticeError, err, "Couldn't attach %q: %s", imageErr.Name, imageReason(imageErr.Err))
+	}
 	switch {
+	case errors.Is(err, imageinput.ErrTooManyImages):
+		return notice(chat.NoticeWarn, err, "Attach at most %d images to a message.", imageinput.MaxImages)
 	case errors.Is(err, context.DeadlineExceeded):
 		return notice(chat.NoticeWarn, err, "The assistant took too long to respond. Try again.")
 	case isNet:
@@ -70,6 +77,22 @@ func noticeForNonAPIError(op string, err error) chat.Notice {
 		text = op + ": " + text
 	}
 	return notice(chat.NoticeError, err, "%s", text)
+}
+
+func imageReason(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "the file no longer exists."
+	case errors.Is(err, fs.ErrPermission):
+		return "the file can't be read."
+	case errors.Is(err, imageinput.ErrNotImage):
+		return "only PNG, JPEG, GIF, and static WebP images are supported."
+	case errors.Is(err, imageinput.ErrDecode):
+		return "the image is damaged."
+	case errors.Is(err, imageinput.ErrSourceTooLarge), errors.Is(err, imageinput.ErrEncodedTooLarge):
+		return "the image is too large."
+	}
+	return err.Error()
 }
 
 func noticeForAPIError(apiErr *assistant.APIError) chat.Notice {

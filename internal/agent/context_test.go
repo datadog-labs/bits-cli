@@ -6,21 +6,16 @@ import (
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
-	"github.com/datadog-labs/bits-cli/internal/imageinput"
 )
 
 func TestUserBlocksKeepTheContextTheyWereSentWith(t *testing.T) {
 	engine := New(&scriptBackend{}, Config{})
-	turnContext := &assistant.AssistantContext{Entities: []assistant.ContextEntity{
-		{Type: assistant.EntityDashboard, ID: "dash-1", Label: "Checkout overview"},
-	}}
-	img := shrunkScreenshot(t)
-	drain(engine.StartTurn(context.Background(), TurnInput{Message: "compare", Context: turnContext, Images: []imageinput.Image{img}}))
+	dashboard := assistant.ContextEntity{Type: assistant.EntityDashboard, ID: "dash-1", Label: "Checkout overview"}
+	file, sent := screenshotFile(t)
+	turnContext := &assistant.AssistantContext{Entities: []assistant.ContextEntity{dashboard, file}}
+	drain(engine.StartTurn(context.Background(), TurnInput{Message: "compare", Context: turnContext}))
 
-	want := []assistant.ContextEntity{
-		{Type: assistant.EntityDashboard, ID: "dash-1", Label: "Checkout overview"},
-		assistant.ImageEntity("image/png", img.Data, "shot.png"),
-	}
+	want := []assistant.ContextEntity{dashboard, sent}
 	if got := engine.Snapshot()[0].Context; !reflect.DeepEqual(got, want) {
 		t.Fatalf("user block context = %+v, want %+v", got, want)
 	}

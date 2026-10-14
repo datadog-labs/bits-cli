@@ -14,6 +14,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/imageinput"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 )
 
@@ -67,6 +68,18 @@ func TestNoticeForError(t *testing.T) {
 			err:       &fs.PathError{Op: "open", Path: "/skills/SKILL.md", Err: syscall.ENOENT},
 			wantLevel: chat.NoticeError,
 			wantText:  "open /skills/SKILL.md: no such file or directory",
+		},
+		{
+			name:      "an image that cannot be attached is named with its cause",
+			err:       &imageinput.Error{Name: "shot.png", Err: &fs.PathError{Op: "stat", Path: "/tmp/shot.png", Err: syscall.ENOENT}},
+			wantLevel: chat.NoticeError,
+			wantText:  `Couldn't attach "shot.png": the file no longer exists.`,
+		},
+		{
+			name:      "too many images is a warning",
+			err:       imageinput.ErrTooManyImages,
+			wantLevel: chat.NoticeWarn,
+			wantText:  "Attach at most 4 images to a message.",
 		},
 		{
 			name:      "api error maps through its status sentinel",

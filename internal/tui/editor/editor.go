@@ -152,8 +152,8 @@ func (e *Editor) Attachments() []Attachment {
 	return slices.Clone(e.attachments)
 }
 
-// addAttachment appends a, unless the same item is already attached.
-func (e *Editor) addAttachment(a Attachment) {
+// AddAttachment appends a, unless the same item is already attached.
+func (e *Editor) AddAttachment(a Attachment) {
 	for _, existing := range e.attachments {
 		if existing.Type == a.Type && existing.ID == a.ID {
 			return
@@ -745,7 +745,7 @@ func (e *Editor) acceptCandidate(trailingSpace bool) {
 		e.completedMentions = append(e.completedMentions, mention)
 	}
 	if candidate.Attachment != nil {
-		e.addAttachment(*candidate.Attachment)
+		e.AddAttachment(*candidate.Attachment)
 	}
 	e.closeMenu()
 }

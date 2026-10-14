@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/headless"
 	"github.com/datadog-labs/bits-cli/internal/headless/adeep"
@@ -70,13 +73,11 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 				}
 				opts.Site = site
 			}
-			for _, path := range imagePaths {
-				img, err := imageinput.Load(command.Context(), path, imageinput.DefaultLimits)
-				if err != nil {
-					return fmt.Errorf("--image %s: %w", path, err)
-				}
-				opts.Images = append(opts.Images, img)
+			images, err := imageContext(imagePaths)
+			if err != nil {
+				return err
 			}
+			opts.Context = images
 			opts.AuthMode = mode
 			opts.PermissionsMode = permissions
 			opts.Delivery = delivery
@@ -96,6 +97,27 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 	flags.StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
 	flags.StringVar(&opts.ConversationID, "conversation", "", "resume an existing conversation by ID")
 	return command
+}
+
+// imageContext attaches --image files as file URLs, loaded when the turn starts.
+func imageContext(paths []string) (*assistant.AssistantContext, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	images := &assistant.AssistantContext{}
+	for _, path := range paths {
+		abs, err := filepath.Abs(path)
+		if err == nil {
+			_, err = os.Stat(abs)
+		}
+		if err != nil {
+			return nil, &imageinput.Error{Name: path, Err: err}
+		}
+		images.Entities = append(images.Entities, assistant.ContextEntity{
+			Type: assistant.EntityImageURL, ID: imageinput.FileURL(abs), Label: filepath.Base(abs),
+		})
+	}
+	return images, nil
 }
 
 func parseRunPermissionsMode(raw string) (agent.PermissionsMode, error) {
@@ -119,7 +141,7 @@ func parseDelivery(raw string) (string, error) {
 type RunOptions struct {
 	ChatOptions
 	Prompt   string
-	Images   []imageinput.Image
+	Context  *assistant.AssistantContext
 	Delivery string
 }
 
@@ -151,7 +173,7 @@ func runRunWithStore(ctx context.Context, opts RunOptions, store auth.Credential
 	if err != nil {
 		return err
 	}
-	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet, Images: opts.Images}, opts, out)
+	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet, Context: opts.Context}, opts, out)
 }
 
 // runEngineTurn drives exactly one turn, attempts Finish once, and maps its

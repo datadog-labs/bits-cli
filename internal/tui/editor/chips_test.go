@@ -171,7 +171,7 @@ func TestChipLabelsAreEscaped(t *testing.T) {
 	e := New()
 	e.Focus()
 	e.SetWidth(80)
-	e.addAttachment(Attachment{
+	e.AddAttachment(Attachment{
 		Type:  "service\x1b[31m",
 		ID:    "s1",
 		Label: "evil\x1b]52;c;Y2xpcA==\a\nforged",

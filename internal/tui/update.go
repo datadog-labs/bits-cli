@@ -360,6 +360,14 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.focus() == focusPermissions {
 		return m, nil
 	}
+	if paste, ok := msg.(tea.PasteMsg); ok && m.focus() == focusEditor {
+		if handled, err := dropImages(m.editor, paste.Content); handled {
+			if err != nil {
+				return m, m.postNotice(noticeForError("", err))
+			}
+			return m, nil
+		}
+	}
 	// Paste, cursor blink, and other editor-bound input. When the editor is not
 	// the focus it is blurred and ignores these, showing no cursor.
 	cmd := m.editor.Update(msg)

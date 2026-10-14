@@ -2,7 +2,6 @@ package imageinput
 
 import (
 	"io/fs"
-	"net/url"
 	"path"
 	"strings"
 )
@@ -39,12 +38,8 @@ func hasImageExtension(p string) bool {
 }
 
 func droppedPath(token string) (string, bool) {
-	if strings.HasPrefix(token, "file://") {
-		u, err := url.Parse(token)
-		if err != nil || (u.Host != "" && u.Host != "localhost") || u.RawQuery != "" || u.Fragment != "" {
-			return "", false
-		}
-		token = u.Path
+	if p, ok, err := FilePath(token); ok {
+		return p, err == nil
 	}
 	return token, path.IsAbs(token)
 }
