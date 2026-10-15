@@ -81,6 +81,19 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 // NewAuthenticatedClient constructs exactly the client selected by opts.Mode.
 // Automatic mode is OAuth-only; ambient API/app keys never change principals.
 func NewAuthenticatedClient(ctx context.Context, opts ClientOptions) (*assistant.Client, error) {
+	client, err := newClientForMode(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	custom, err := assistant.CustomHeadersFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	client.CustomHeaders = custom
+	return client, nil
+}
+
+func newClientForMode(ctx context.Context, opts ClientOptions) (*assistant.Client, error) {
 	switch opts.Mode {
 	case auth.ModeAPIKey:
 		if strings.TrimSpace(opts.APISite) == "" {

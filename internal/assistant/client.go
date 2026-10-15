@@ -76,6 +76,10 @@ type Client struct {
 	// defaultMaxLineBytes. A larger line fails the stream (wrapping
 	// bufio.ErrTooLong) rather than growing unbounded in memory.
 	MaxLineBytes int
+	// CustomHeaders are extra headers added to every request, from
+	// EnvCustomHeaders. They are applied before the headers the client manages,
+	// which therefore always win. Use ParseCustomHeaders to build one.
+	CustomHeaders http.Header
 	// MaxRetries is the number of extra attempts for idempotent, non-streaming
 	// requests (GET/DELETE/PUT) on transient failures (network errors,
 	// 429/502/503/504). Negative is treated as 0. The streaming POST (Send) is
@@ -273,6 +277,14 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 	if err != nil {
 		return nil, err
 	}
+	// Applied first, then the managed set is cleared, so a header that reached
+	// this point unvalidated cannot displace or impersonate a credential.
+	for name, values := range c.CustomHeaders {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
+	deleteManagedHeaders(req.Header)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Datadog-Bits-Surface", "cli")
 	if c.TokenSource != nil {
