@@ -10,6 +10,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -55,7 +56,7 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 		Short:         "Datadog Assistant in your terminal",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		Version:       BuildVersion(),
+		Version:       version.Build(),
 		RunE: func(command *cobra.Command, args []string) error {
 			if err := cobra.NoArgs(command, args); err != nil {
 				return err

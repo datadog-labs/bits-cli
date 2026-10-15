@@ -13,6 +13,8 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tools"
 	"github.com/datadog-labs/bits-cli/internal/tui"
 	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
+	"github.com/datadog-labs/bits-cli/internal/update"
+	"github.com/datadog-labs/bits-cli/internal/version"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -24,6 +26,10 @@ func printLoggedOut(w io.Writer) error {
 func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	if checker, err := update.New(); err == nil {
+		// Warm the update cache silently; presenting updates is a later step.
+		checker.Check(ctx, version.Build())
+	}
 	workspace, err := openCurrentWorkspace()
 	if err != nil {
 		return err
@@ -86,7 +92,7 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 	config := tui.Config{
 		Tools:     toolSet,
 		ToolUI:    toolUI,
-		Version:   BuildVersion(),
+		Version:   version.Build(),
 		Workspace: workspace,
 		Logout: func(logoutCtx context.Context) (bool, error, error) {
 			return auth.Logout(logoutCtx, store, nil)

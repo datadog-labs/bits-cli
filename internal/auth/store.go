@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/datadog-labs/bits-cli/internal/config"
 	"github.com/gofrs/flock"
 	"github.com/zalando/go-keyring"
 	"golang.org/x/oauth2"
@@ -21,9 +21,6 @@ const (
 	keyringService = "com.datadog.bits-cli"
 	keyringAccount = "oauth-session"
 
-	// configDirName is the Bits CLI configuration directory under the user's
-	// home. sessionLockFileName and sessionFileName live inside it.
-	configDirName       = ".bits-cli"
 	sessionLockFileName = "oauth-session.lock"
 	sessionFileName     = "oauth-session.json"
 
@@ -472,19 +469,8 @@ func keyringDelete() error {
 // the store's backend choice stable and avoids repeated D-Bus round trips.
 var keyringAvailableCached = sync.OnceValue(KeyringAvailable)
 
-func defaultConfigDir() (string, error) {
-	currentUser, err := user.Current()
-	if err != nil {
-		return "", fmt.Errorf("locate Bits CLI config directory: %w", err)
-	}
-	if currentUser.HomeDir == "" {
-		return "", fmt.Errorf("locate Bits CLI config directory: home directory is empty")
-	}
-	return filepath.Join(currentUser.HomeDir, configDirName), nil
-}
-
 func defaultSessionLockPath() (string, error) {
-	dir, err := defaultConfigDir()
+	dir, err := config.Dir()
 	if err != nil {
 		return "", err
 	}
