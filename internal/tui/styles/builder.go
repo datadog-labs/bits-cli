@@ -92,6 +92,19 @@ func build(isDark bool, p palette) Theme {
 			Foreground(lipgloss.Color(p.onAccent)).
 			Background(lipgloss.Color(p.interactive)).
 			Padding(0, 1),
+		// textPrimary, not onAccent: onAccent is #FFFFFF in both palettes, and
+		// white on light mode's blend (#EC93A0) is unreadable. textPrimary is
+		// white/black per mode, so it stays legible on both. Bold is left off
+		// at the style level; approvalChoice.chip bolds only the "full
+		// access" emphasis segment.
+		FullAccess: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(p.textPrimary)).
+			Background(lipgloss.Color(p.fullAccessSurface)).
+			Padding(0, 1),
+		// error, not the mockup's literal #EB364B: error is this palette's
+		// per-mode red, already darkened for light mode's contrast (raw
+		// #EB364B on light's #ECEFF4 background is ~3.3:1).
+		Disclaimer: lipgloss.NewStyle().Foreground(lipgloss.Color(p.error)),
 	}
 	// The control is a background fill on its cells rather than a drawn
 	// border, so the one-cell padding is what gives the chevron its box. It's

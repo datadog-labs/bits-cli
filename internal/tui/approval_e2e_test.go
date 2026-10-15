@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 const approvalToolName = "confirm_action"
@@ -106,7 +108,9 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 				}
 
 				if key == tea.KeyEnter {
-					// Move past Allow and Allow for session to select Deny.
+					// Move past Allow, Allow for session, and Switch to full
+					// access to select Deny.
+					_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
 					_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
 					_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
 				}
@@ -244,7 +248,13 @@ func TestToolApprovalComposerSuppressedInSkipPermissions(t *testing.T) {
 }
 
 func TestApprovalPanelResponsiveLayout(t *testing.T) {
-	for _, width := range []int{40, 80, 120} {
+	// 36 is the minimum slot (shows only the choices that never drop,
+	// condensed). 40 is below the all-four-condensed boundary, so "Allow for
+	// session" still drops. 44 is that boundary: all four fit condensed. 70
+	// is the full-label boundary that used to silently shear off "Deny" (the
+	// full-label row is 61 cells; measurement now falls back to condensed
+	// instead of truncating). 80 and 120 show every label in full.
+	for _, width := range []int{36, 40, 44, 70, 80, 120} {
 		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
 			backend := &approvalBackend{t: t}
 			tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
@@ -263,7 +273,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 			view := model.frame.promptView
 			plain := ansi.Strip(view)
 			normalized := strings.Join(strings.Fields(plain), " ")
-			for _, want := range []string{"Permission Required", "ESC x", "Run the test action?", "This test tool requires", "Deny"} {
+			for _, want := range []string{"Permission Required", "ESC x", "Run the test action?", "This test tool requires", "Allow", "Deny"} {
 				if !strings.Contains(plain, want) {
 					t.Errorf("approval panel missing %q:\n%s", want, plain)
 				}
@@ -273,12 +283,23 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 					t.Fatalf("line %d width = %d, want <= %d", lineNo+1, got, width)
 				}
 			}
-			if width < approvalCompactWidth {
-				if !strings.Contains(plain, "Allow") || !strings.Contains(plain, "Session") || strings.Contains(plain, "Allow for session") {
-					t.Fatalf("compact actions not used:\n%s", plain)
+			switch {
+			case width < 44:
+				// Narrow enough that "Allow for session" gives way first
+				// (decision: never Allow, never Deny); "Session" and "Full"
+				// (its condensed label) are gone with it.
+				if !strings.Contains(plain, "Full") || strings.Contains(plain, "Session") || strings.Contains(plain, "Allow for session") {
+					t.Fatalf("narrow actions did not drop Allow for session:\n%s", plain)
 				}
-			} else if !strings.Contains(normalized, "Allow Allow for session Deny") || strings.Contains(plain, "Allow once") {
-				t.Fatalf("full actions missing:\n%s", plain)
+			case width < 80:
+				// All four choices fit, but only condensed.
+				if !strings.Contains(normalized, "Allow Session Full Deny") {
+					t.Fatalf("condensed actions missing:\n%s", plain)
+				}
+			default:
+				if !strings.Contains(normalized, "Allow Allow for session Switch to full access Deny") {
+					t.Fatalf("full actions missing:\n%s", plain)
+				}
 			}
 			if width == 120 {
 				firstLine := strings.Split(plain, "\n")[0]
@@ -378,7 +399,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 	}{
 		{name: "allow", selection: "Allow"},
 		{name: "allow for session", navigate: 1, selection: "Allow for session"},
-		{name: "deny", navigate: 2, deny: true, selection: "Deny"},
+		{name: "deny", navigate: 3, deny: true, selection: "Deny"},
 	}
 
 	for _, tt := range tests {
@@ -403,7 +424,15 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 
 			approval := model.frame.promptView
 			view := ansi.Strip(model.View().Content)
-			if !strings.Contains(view, "Permission Required") || !strings.Contains(view, "Run the test action?") || !strings.Contains(approval, model.styles.Approval.Selected.Render(tt.selection)) {
+			// The chip renders its label as separate background segments
+			// (see approvalChoice.chip), so compare against the choice's own
+			// chip rendering rather than a plain Style.Render of the label.
+			i := slices.IndexFunc(approvalChoices[:], func(c approvalChoice) bool { return c.label == tt.selection })
+			if i < 0 {
+				t.Fatalf("no approval choice labeled %q", tt.selection)
+			}
+			wantChip := approvalChoices[i].chip(model.styles.Approval.Selected, false)
+			if !strings.Contains(view, "Permission Required") || !strings.Contains(view, "Run the test action?") || !strings.Contains(approval, wantChip) {
 				t.Fatalf("approval panel not rendered:\n%s", view)
 			}
 			for _, line := range strings.Split(view, "\n") {
@@ -527,5 +556,151 @@ func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 	drainConversationRemote(t, model)
 	if waitingApprovals(model) > 0 || model.focus() != focusEditor {
 		t.Fatal("the approval outlived the stopped tool round")
+	}
+}
+
+// awaitApproval drives model to the first approval prompt at width, with
+// "Run the action" submitted.
+func awaitApproval(t *testing.T, model *Model, width int) {
+	t.Helper()
+	model.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+	setConversationInput(model, "Run the action")
+	_, _ = model.submit()
+	for waitingApprovals(model) == 0 {
+		msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+		_, _ = model.Update(msg)
+	}
+}
+
+// TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused covers decision 2:
+// the disclaimer appears the moment full access is focused, nowhere else,
+// and never wraps past one row — not even at the minimum width.
+func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
+	for _, width := range []int{approvalMinWidth, 44, 80, 120} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			backend := &approvalBackend{t: t}
+			tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
+			if err != nil {
+				t.Fatal(err)
+			}
+			model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
+			awaitApproval(t, model, width)
+
+			plain := ansi.Strip(model.frame.promptView)
+			if strings.Contains(plain, "Full access skips") {
+				t.Fatalf("disclaimer shown before full access is focused:\n%s", plain)
+			}
+
+			// Walk every choice; the disclaimer shows on full access alone.
+			for range approvalChoices {
+				model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+				plain := ansi.Strip(model.frame.promptView)
+				focused := approvalChoices[model.approvals[model.shown.callID()].panel.selected]
+				hasDisclaimer := strings.Contains(plain, "Full access skips")
+				if focused.fullAccess != hasDisclaimer {
+					t.Fatalf("focused=%q fullAccess=%v disclaimer-shown=%v:\n%s", focused.label, focused.fullAccess, hasDisclaimer, plain)
+				}
+				if hasDisclaimer {
+					lines := strings.Split(plain, "\n")
+					count := 0
+					for _, line := range lines {
+						if strings.Contains(line, "Full access skips") {
+							count++
+							if got := ansi.StringWidth(line); got > width {
+								t.Fatalf("disclaimer line width = %d, want <= %d:\n%s", got, width, plain)
+							}
+						}
+					}
+					if count != 1 {
+						t.Fatalf("disclaimer rendered on %d rows, want exactly 1:\n%s", count, plain)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestApprovalFocusCycleNeverLandsOnAHiddenChoice guards the safety bug the
+// plan calls out explicitly: at a narrow width "Allow for session" is
+// dropped from the row, so it must also leave the keyboard focus cycle.
+// Cycling past the end more times than there are visible choices must never
+// land the cursor on it.
+func TestApprovalFocusCycleNeverLandsOnAHiddenChoice(t *testing.T) {
+	backend := &approvalBackend{t: t}
+	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
+	awaitApproval(t, model, approvalMinWidth)
+
+	panel := model.approvals[model.shown.callID()].panel
+	// Cycle past the end more times than there are visible choices at this
+	// width (3, per the geometry in approval.go): a cycle with no notion of
+	// visibility would eventually land on the hidden "Allow for session".
+	for range 20 {
+		_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+		if !slices.Contains(panel.visible, panel.selected) {
+			t.Fatalf("focus landed on a hidden choice: selected=%d visible=%v", panel.selected, panel.visible)
+		}
+	}
+	_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if panel.decision == agent.ApprovalAllowSession {
+		t.Fatal("enter on a hidden choice granted a session-wide allow")
+	}
+}
+
+// TestApprovalFullAccessAnswersCallAndQueuesSwitch exercises the whole
+// decision from the plan: choosing full access answers only the call it was
+// raised on (allow_once, not a session grant) and queues the permissions
+// switch for the next turn rather than applying it mid-turn — modeled on
+// TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool.
+func TestApprovalFullAccessAnswersCallAndQueuesSwitch(t *testing.T) {
+	m, backend := newPermissionsModel(t, agent.ModeManual)
+	awaitApproval(t, m, 80)
+
+	fullAccessIndex := slices.IndexFunc(approvalChoices[:], func(c approvalChoice) bool { return c.fullAccess })
+	for range fullAccessIndex {
+		_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	}
+	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if waitingApprovals(m) != 0 {
+		t.Fatal("full access did not answer the pending call")
+	}
+	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual {
+		t.Fatalf("pending = %q mode = %q, want the switch queued for next turn, not applied mid-turn", m.pendingPermissions, m.tools.PermissionsMode())
+	}
+
+	drainConversationRemote(t, m)
+	if got := m.tools.PermissionsMode(); got != agent.ModeSkipPermissions || m.pendingPermissions != "" {
+		t.Fatalf("mode = %q pending = %q, want full access applied once the turn drained", got, m.pendingPermissions)
+	}
+	if backend.calls < 2 {
+		t.Fatalf("backend calls = %d, want the engine to have received the allow_once answer", backend.calls)
+	}
+}
+
+// TestApprovalChipKeepsBackgroundAfterBoldSegment guards the subtle failure
+// mode of rendering the bold "full access" emphasis as a separate segment
+// (see approvalChoice.chip): the rendered row inside the full panel (below)
+// shows a single unbroken background behind "Switch to " + "full access" +
+// its trailing padding — the row's background-painted span must cover the
+// whole chip, not stop at the bold segment.
+func TestApprovalChipKeepsBackgroundAfterBoldSegment(t *testing.T) {
+	theme := styles.Default(true)
+	style := theme.Approval.FullAccess
+	fullAccessIndex := slices.IndexFunc(approvalChoices[:], func(c approvalChoice) bool { return c.fullAccess })
+	choice := approvalChoices[fullAccessIndex]
+	chip := choice.chip(style, false)
+
+	if plain := ansi.Strip(chip); plain != " "+choice.label+choice.emphasis+" " {
+		t.Fatalf("chip plain text = %q, want %q", plain, " "+choice.label+choice.emphasis+" ")
+	}
+	// Each of the chip's three Render calls re-emits a truecolor background
+	// SGR code ("48;2;..."); seeing it only once would mean the trailing
+	// padding segment lost its background after the bold emphasis.
+	if n := strings.Count(chip, "48;2;"); n < 2 {
+		t.Fatalf("chip %q sets its truecolor background fewer than twice; want it reapplied after the bold segment", chip)
 	}
 }

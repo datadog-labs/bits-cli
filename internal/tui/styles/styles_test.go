@@ -100,12 +100,13 @@ func TestSurfacesSeparateFromTheirBackground(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for role, surface := range map[string]string{
-				"surface":         test.palette.surface,
-				"surfaceRaised":   test.palette.surfaceRaised,
-				"approvalSurface": test.palette.approvalSurface,
-				"codeSurface":     test.palette.codeSurface,
-				"errorSurface":    test.palette.errorSurface,
-				"busySurface":     test.palette.busySurface,
+				"surface":           test.palette.surface,
+				"surfaceRaised":     test.palette.surfaceRaised,
+				"approvalSurface":   test.palette.approvalSurface,
+				"codeSurface":       test.palette.codeSurface,
+				"errorSurface":      test.palette.errorSurface,
+				"busySurface":       test.palette.busySurface,
+				"fullAccessSurface": test.palette.fullAccessSurface,
 			} {
 				// Some dark roles are still raw ANSI indices, which carry no hex
 				// luminance to measure; they are exempt until they join the ramp.
@@ -413,6 +414,12 @@ func TestSharedComponentStylesDeriveFromSemanticTokens(t *testing.T) {
 			}
 			if got, want := test.theme.Approval.Selected.GetBackground(), lipgloss.Color(test.palette.interactive); got != want {
 				t.Errorf("approval selection = %v, want token %v", got, want)
+			}
+			if got, want := test.theme.Approval.FullAccess.GetBackground(), lipgloss.Color(test.palette.fullAccessSurface); got != want {
+				t.Errorf("approval full access = %v, want token %v", got, want)
+			}
+			if got, want := test.theme.Approval.Disclaimer.GetForeground(), lipgloss.Color(test.palette.error); got != want {
+				t.Errorf("approval disclaimer = %v, want token %v", got, want)
 			}
 			if got, want := test.theme.Feedback.Error.GetForeground(), lipgloss.Color(test.palette.feedbackError); got != want {
 				t.Errorf("feedback error = %v, want token %v", got, want)
