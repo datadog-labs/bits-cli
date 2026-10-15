@@ -77,6 +77,10 @@ func TestParseCustomHeadersRejectsManagedHeaders(t *testing.T) {
 		"DD-APPLICATION-KEY=leak",
 		"content-type=text/plain",
 		"x-datadog-bits-surface=browser",
+		// Go sends the host from the request URL, so accepting this would be a
+		// silent no-op.
+		"host=backend.example",
+		"Host=backend.example",
 	} {
 		if _, err := ParseCustomHeaders(raw); err == nil {
 			t.Errorf("ParseCustomHeaders(%q) = nil error, want a rejection", raw)

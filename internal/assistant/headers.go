@@ -33,6 +33,11 @@ var managedHeaders = map[string]string{
 	"dd-application-key":     "the authentication mode sets this",
 	"content-type":           "the client sets this",
 	"x-datadog-bits-surface": "the client sets this",
+	// Go sends the host from the request URL and ignores this header, so
+	// setting it would be a silent no-op. Honouring it would also let a header
+	// retarget the request while it still carries credentials, which the site
+	// validation exists to prevent.
+	"host": "the Datadog site determines this",
 }
 
 // CustomHeadersFromEnv reads EnvCustomHeaders. It returns nil when unset or
