@@ -278,8 +278,8 @@ func contextFromAttachments(attachments []editor.Attachment) *assistant.Assistan
 
 // historyEntries turns previous prompts into editor history, restoring each
 // sent entity as the chip it was, images included.
-func historyEntries(prompts []agent.UserPrompt) []editor.HistoryEntry {
-	entries := make([]editor.HistoryEntry, len(prompts))
+func historyEntries(prompts []agent.UserPrompt) []editor.Prompt {
+	entries := make([]editor.Prompt, len(prompts))
 	for i, prompt := range prompts {
 		entries[i].Text = prompt.Text
 		for _, entity := range prompt.Context {

@@ -189,8 +189,8 @@ func TestRecallingAPromptRestoresItsChips(t *testing.T) {
 	e := New()
 	e.Focus()
 	service := func(id string) Attachment { return Attachment{Type: "service", ID: id, Label: id} }
-	e.SetHistorySource(func() []HistoryEntry {
-		return []HistoryEntry{
+	e.SetHistorySource(func() []Prompt {
+		return []Prompt{
 			{Text: "first", Attachments: []Attachment{service("a")}},
 			{Text: "second", Attachments: []Attachment{service("b"), service("c")}},
 		}
@@ -213,7 +213,7 @@ func TestRecallingAPromptRestoresItsChips(t *testing.T) {
 func TestHistoryDoesNotReplaceChipsBeingPrepared(t *testing.T) {
 	e := New()
 	e.Focus()
-	e.SetHistorySource(func() []HistoryEntry { return textEntries("previous") })
+	e.SetHistorySource(func() []Prompt { return textEntries("previous") })
 	attachServices(e, "draft")
 	e.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	e.Update(historyKeyMsg("up"))
@@ -226,8 +226,8 @@ func TestRemovingARecalledChipLeavesHistory(t *testing.T) {
 	e := New()
 	e.Focus()
 	chip := Attachment{Type: "service", ID: "b", Label: "b"}
-	e.SetHistorySource(func() []HistoryEntry {
-		return []HistoryEntry{{Text: "first"}, {Text: "second", Attachments: []Attachment{chip}}}
+	e.SetHistorySource(func() []Prompt {
+		return []Prompt{{Text: "first"}, {Text: "second", Attachments: []Attachment{chip}}}
 	})
 	e.Update(historyKeyMsg("up"))
 	e.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})

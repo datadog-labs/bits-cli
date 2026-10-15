@@ -6,21 +6,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// HistoryEntry is a previous prompt: its text and the attachments it was sent
-// with.
-type HistoryEntry struct {
-	Text        string
-	Attachments []Attachment
-}
-
 // history is the prompt-recall state: Up from an empty prompt loads the newest
 // entry and walks older ones; Down walks back and past the newest empties the
 // prompt again. It is active while entries is non-nil.
 type history struct {
 	// source returns the entries, oldest first. It is read once on entry, so a
 	// transcript that changes while browsing does not shift the position.
-	source   func() []HistoryEntry
-	entries  []HistoryEntry
+	source   func() []Prompt
+	entries  []Prompt
 	index    int
 	recalled string // the loaded text; any divergence ends history mode
 }
@@ -33,7 +26,7 @@ func (h *history) end() { h.entries, h.index, h.recalled = nil, 0, "" }
 // stays chat-agnostic: the parent decides what counts as a previous prompt.
 // The editor keeps the returned slice while browsing, so source must return
 // one it no longer mutates.
-func (e *Editor) SetHistorySource(source func() []HistoryEntry) { e.history.source = source }
+func (e *Editor) SetHistorySource(source func() []Prompt) { e.history.source = source }
 
 // historyKey handles Up/Down for prompt recall and reports whether it consumed
 // the key. History mode is entered only from an empty prompt without chips, so
@@ -76,7 +69,7 @@ func (e *Editor) historyKey(key string) (tea.Cmd, bool) {
 // recall loads an entry as a fresh prompt with the cursor at its end. The value
 // is marked dismissed so a trailing @mention or leading /command is not treated
 // as a completion trigger.
-func (e *Editor) recall(entry HistoryEntry) tea.Cmd {
+func (e *Editor) recall(entry Prompt) tea.Cmd {
 	e.changeChips(func() {
 		e.attachments = slices.Clone(entry.Attachments)
 		e.chips = chipRow{pointer: e.chips.pointer}

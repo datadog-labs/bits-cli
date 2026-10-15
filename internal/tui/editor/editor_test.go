@@ -1049,7 +1049,7 @@ func TestPromptHistory(t *testing.T) {
 			e := New()
 			e.Focus()
 			if test.entries != nil {
-				e.SetHistorySource(func() []HistoryEntry { return textEntries(test.entries...) })
+				e.SetHistorySource(func() []Prompt { return textEntries(test.entries...) })
 			}
 			for _, step := range test.steps {
 				applyHistoryStep(e, step)
@@ -1071,7 +1071,7 @@ func TestPromptHistoryRecallDoesNotTriggerCompletion(t *testing.T) {
 		t.Run(entry, func(t *testing.T) {
 			e := New()
 			e.Focus()
-			e.SetHistorySource(func() []HistoryEntry { return textEntries(entry) })
+			e.SetHistorySource(func() []Prompt { return textEntries(entry) })
 			e.Update(historyKeyMsg("up"))
 			// End keeps the cursor in place but recomputes the menu like any
 			// later input would.
@@ -1095,7 +1095,7 @@ func TestPromptHistorySnapshotsOnEntry(t *testing.T) {
 	entries := []string{"first", "second"}
 	e := New()
 	e.Focus()
-	e.SetHistorySource(func() []HistoryEntry { return textEntries(entries...) })
+	e.SetHistorySource(func() []Prompt { return textEntries(entries...) })
 	e.Update(historyKeyMsg("up"))
 	entries = append(entries, "streamed meanwhile")
 	e.Update(historyKeyMsg("up"))
@@ -1114,7 +1114,7 @@ func TestPromptHistoryTallRecallShowsItsEnd(t *testing.T) {
 	e := New()
 	e.SetWidth(80)
 	e.Focus()
-	e.SetHistorySource(func() []HistoryEntry { return textEntries(strings.Join(lines, "\n")) })
+	e.SetHistorySource(func() []Prompt { return textEntries(strings.Join(lines, "\n")) })
 	e.Update(historyKeyMsg("up"))
 	view := ansi.Strip(e.View())
 	visible := map[string]bool{}
@@ -1126,8 +1126,8 @@ func TestPromptHistoryTallRecallShowsItsEnd(t *testing.T) {
 	}
 }
 
-func textEntries(texts ...string) []HistoryEntry {
-	entries := make([]HistoryEntry, len(texts))
+func textEntries(texts ...string) []Prompt {
+	entries := make([]Prompt, len(texts))
 	for i, text := range texts {
 		entries[i].Text = text
 	}

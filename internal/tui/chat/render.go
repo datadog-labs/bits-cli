@@ -86,34 +86,11 @@ func (r *blockRenderer) renderText(it agent.Block, width int, sty Styles) string
 // renderUser renders the user prompt with a hanging indent, below read-only
 // chips for the context it was sent with, laid out as in the composer.
 func renderUser(text string, context []assistant.ContextEntity, width int, sty Styles) string {
-	text = escape.Multiline(text)
-	marker := sty.Input.Prompt
-	w := sty.Input.PromptWidth()
-	indent := strings.Repeat(" ", w)
-
-	inner := max(1, width-sty.Input.Block.GetHorizontalFrameSize())
-
-	var lines []string
-	if len(context) > 0 {
-		chips := make([]components.Chip, len(context))
-		for i, entity := range context {
-			chips[i] = components.EntityChip(string(entity.Type), entity.ID, entity.Label, false)
-		}
-		placed := components.LayoutChips(sty.Input.Chip, chips, max(1, inner-w), 1, -1)
-		for _, row := range components.ChipRows(sty.Input.Chip, placed) {
-			lines = append(lines, sty.Input.Chip.Gap.Render(indent)+row)
-		}
-		// Same blank row as the composer between the chips and the prompt.
-		lines = append(lines, "")
+	chips := make([]components.Chip, len(context))
+	for i, entity := range context {
+		chips[i] = components.EntityChip(string(entity.Type), entity.ID, entity.Label, false)
 	}
-	for i, ln := range strings.Split(wrap(text, max(1, inner-w)), "\n") {
-		if i == 0 {
-			lines = append(lines, sty.Input.Marker.Render(marker)+sty.Input.Text.Render(ln))
-			continue
-		}
-		lines = append(lines, sty.Input.Text.Render(indent+ln))
-	}
-	return sty.Input.Block.Width(width).Render(strings.Join(lines, "\n"))
+	return components.RenderInputMessage(components.InputMessage{Text: text, Chips: chips}, width, sty.Input).View
 }
 
 // renderReasoning renders model thinking in its compact, header-only view. An
