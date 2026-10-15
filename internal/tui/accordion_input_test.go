@@ -186,9 +186,48 @@ func TestMouseMotionSetsPointerShapeOverAnAccordionRow(t *testing.T) {
 	}
 }
 
+// TestMouseMotionSetsHandPointerAcrossTheWholeExpandedRegion: the hand
+// pointer shape follows List.Hovered, so it covers an expanded block's whole
+// disclosed region, not just its header. A collapsed block has no disclosed
+// rows, so the row right after its header stays the default shape.
+func TestMouseMotionSetsHandPointerAcrossTheWholeExpandedRegion(t *testing.T) {
+	m := accordionTestModel(t)
+	row := accordionRow(t, m)
+
+	// reconcilePointerShape only emits the OSC 22 sequence when the shape
+	// actually changes (see its doc comment), so establish a known "hand on"
+	// baseline on the header before checking a transition away from it.
+	if _, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row}); rawSequence(cmd) != ansi.SetPointerShape("pointer") {
+		t.Fatal("hovering the header did not set the hand pointer shape")
+	}
+	// Collapsed: nothing below the header row belongs to the block.
+	if _, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row + 1}); rawSequence(cmd) != ansi.SetPointerShape("default") {
+		t.Fatal("a collapsed block's body row set the hand pointer shape")
+	}
+
+	m.list.ToggleAllDisclosure()
+	// Every disclosed row of accordionTestOutput (5 lines) is now part of the
+	// one click target, including the last one — and so gets the hand too.
+	for offset := 1; offset <= 5; offset++ {
+		m.Update(tea.MouseMotionMsg{X: 0, Y: row + offset})
+		if !m.list.Hovered() {
+			t.Fatalf("disclosed row at offset %d did not report hover", offset)
+		}
+	}
+
+	// One row past the expanded block's last disclosed row is outside it, so
+	// the hand must come back off.
+	if _, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row + 6}); rawSequence(cmd) != ansi.SetPointerShape("default") {
+		t.Fatal("the row after the expanded block kept the hand pointer shape")
+	}
+}
+
 // scrollableAccordionTestModel builds several identical tool blocks in a
 // viewport too short to show them all, so ScrollBy actually moves the
-// offset instead of no-oping at AtBottom().
+// offset instead of no-oping at AtBottom(). Each block's output is a single
+// line, so an expanded block occupies exactly two rows (header + one detail
+// row) — small enough that a single wheel notch can cross a block boundary
+// inside the 3-row viewport this fixture's window size produces.
 func scrollableAccordionTestModel(t *testing.T) *Model {
 	t.Helper()
 	m := newShell()
@@ -198,7 +237,7 @@ func scrollableAccordionTestModel(t *testing.T) *Model {
 		blocks = append(blocks, agent.Block{
 			ID:   agent.BlockID{Scope: agent.ScopeTool, Key: fmt.Sprintf("call-%d", i)},
 			Kind: assistant.KindToolResult,
-			Tool: &agent.ToolBlock{Name: "search_logs", Status: agent.ToolSuccess, Output: accordionTestOutput},
+			Tool: &agent.ToolBlock{Name: "search_logs", Status: agent.ToolSuccess, Output: "row 1"},
 		})
 	}
 	m.transcript.Blocks = blocks
@@ -223,22 +262,39 @@ func visibleAccordionRow(t *testing.T, m *Model) int {
 	return -1
 }
 
+// TestMouseWheelScrollRefreshesHoverUnderTheStationaryPointer: every row of
+// an expanded block is a hover target, so a wheel notch that slides a
+// *different* block under a stationary pointer must retarget hover to that
+// block rather than keep reporting the one that scrolled away. Hover stays
+// set across the notch; it is the targeted block that changes.
 func TestMouseWheelScrollRefreshesHoverUnderTheStationaryPointer(t *testing.T) {
 	m := scrollableAccordionTestModel(t)
-	// Expanded blocks put detail rows, not the next header, under the pointer
-	// once the wheel scrolls.
 	m.list.ToggleAllDisclosure()
 	m.list.ScrollToTop()
-	row := visibleAccordionRow(t, m)
+	// One row below the chevron is still inside the first block's expanded
+	// region (its lone detail row): a stable fixture to point at regardless of
+	// how the chevron itself happens to line up with the viewport.
+	row := visibleAccordionRow(t, m) + 1
 
+	before, ok := m.list.AccordionAt(row)
+	if !ok {
+		t.Fatalf("row %d is not an accordion target before scrolling", row)
+	}
 	m.Update(tea.MouseMotionMsg{X: 0, Y: row})
 	if !m.list.Hovered() {
-		t.Fatal("expected hovering the chevron to set hover")
+		t.Fatal("expected hovering a detail row to set hover")
 	}
 
 	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 0, Y: row})
-	if m.list.Hovered() {
-		t.Fatal("scrolling moved the accordion row out from under the pointer, but hover was not recomputed")
+	after, ok := m.list.AccordionAt(row)
+	if !ok {
+		t.Fatalf("row %d is not an accordion target after scrolling", row)
+	}
+	if !m.list.Hovered() {
+		t.Fatal("scrolling a new block under the stationary pointer did not hover it")
+	}
+	if after == before {
+		t.Fatalf("fixture did not advance to a different block after one wheel notch: still %v", before)
 	}
 }
 

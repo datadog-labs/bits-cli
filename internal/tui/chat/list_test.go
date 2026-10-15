@@ -345,7 +345,7 @@ func TestReasoningExpandsToItsThinkingText(t *testing.T) {
 	if !strings.Contains(compact, "▶ reasoning") || strings.Contains(compact, "idea") {
 		t.Fatalf("reasoning did not start collapsed on its header:\n%s", compact)
 	}
-	if _, ok := list.HeaderAt(0); !ok {
+	if _, ok := list.AccordionAt(0); !ok {
 		t.Fatal("reasoning header is not clickable")
 	}
 
@@ -763,7 +763,7 @@ func TestNothingToExpandDrawsNoGutter(t *testing.T) {
 			list.SetHeight(8)
 			list.SetItems([]agent.Block{tc.block})
 
-			if _, ok := list.HeaderAt(0); ok {
+			if _, ok := list.AccordionAt(0); ok {
 				t.Fatal("block with nothing to expand is clickable")
 			}
 			bare := list.renderPresentationItem(list.view[0], renderContext{width: list.width, sty: list.sty, frame: list.frame})
@@ -815,25 +815,44 @@ func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseAndScroll(t *testing.T) {
 	}
 }
 
-func TestHeaderAtOnlyMatchesAVisibleHeaderRow(t *testing.T) {
+// TestAccordionAtCoversTheExpandedBlockAndNothingElse: an expanded block's
+// disclosed rows are part of its click target, a collapsed block's compact
+// body rows are not, and neither extends past the viewport.
+func TestAccordionAtCoversTheExpandedBlockAndNothingElse(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
 	list.ToggleDisclosure(list.view[0].id) // give the header detail rows
 	list.ScrollToTop()                     // drop follow so the header starts visible
 	list.SetHeight(2)
-	if id, ok := list.HeaderAt(0); !ok || id != list.view[0].id {
-		t.Fatalf("HeaderAt(0) = %v, %t, want the tool's header", id, ok)
+	if id, ok := list.AccordionAt(0); !ok || id != list.view[0].id {
+		t.Fatalf("AccordionAt(0) = %v, %t, want the tool's header", id, ok)
 	}
-	if _, ok := list.HeaderAt(1); ok {
-		t.Fatal("HeaderAt matched a detail row")
+	if id, ok := list.AccordionAt(1); !ok || id != list.view[0].id {
+		t.Fatalf("AccordionAt(1) = %v, %t, want the tool's disclosed detail row", id, ok)
 	}
-	if _, ok := list.HeaderAt(2); ok {
-		t.Fatal("HeaderAt matched a row outside the viewport")
+	if _, ok := list.AccordionAt(2); ok {
+		t.Fatal("AccordionAt matched a row outside the viewport")
 	}
 
+	list.ToggleDisclosure(list.view[0].id) // collapse again
+	if id, ok := list.AccordionAt(0); !ok || id != list.view[0].id {
+		t.Fatalf("AccordionAt(0) = %v, %t, want the collapsed block's header", id, ok)
+	}
+	if _, ok := list.AccordionAt(1); ok {
+		t.Fatal("AccordionAt matched past a collapsed block's single header row")
+	}
+}
+
+// TestAccordionAtKeepsExpandedDetailRowsAfterTheHeaderScrollsOff: an
+// expanded block's header is not the hit-test anchor, so scrolling it out of
+// view must not blind AccordionAt to the disclosed rows still on screen.
+func TestAccordionAtKeepsExpandedDetailRowsAfterTheHeaderScrollsOff(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	list.ToggleDisclosure(list.view[0].id)
 	list.SetHeight(1)
-	list.ScrollBy(1)
-	if _, ok := list.HeaderAt(0); ok {
-		t.Fatal("HeaderAt matched after the header scrolled off the top")
+	list.ScrollBy(1) // scroll past the header; no chevron remains visible
+
+	if id, ok := list.AccordionAt(0); !ok || id != list.view[0].id {
+		t.Fatalf("AccordionAt(0) = %v, %t, want the block even with its header scrolled off", id, ok)
 	}
 }
 
@@ -859,6 +878,44 @@ func TestHoverPaintsOnlyTheSurfaceNotTheDocument(t *testing.T) {
 	if list.Hovered() || list.Render() != resting {
 		t.Fatal("moving off the header row did not clear hover")
 	}
+}
+
+// TestHoverPaintsTheWholeExpandedBlock: once a block is expanded, every row
+// it renders is part of the single click target, so hovering any row of it
+// must paint the header's stronger fill on row 0 and the softer detail fill
+// on every row below it — never the detail fill on the header, and never
+// either fill past the item's last row.
+func TestHoverPaintsTheWholeExpandedBlock(t *testing.T) {
+	const headerFill = "48;2;34;36;43" // dark accordionHover (#22242B)
+	const detailFill = "48;2;28;30;38" // dark accordionDetailHover (#1C1E26)
+
+	list := listWithTool(agent.ToolSuccess)
+	list.ToggleDisclosure(list.view[0].id)
+	list.ScrollToTop()
+	height := list.itemHeight(0)
+
+	assertWholeBlockPainted := func(t *testing.T) {
+		t.Helper()
+		lines := strings.Split(list.Render(), "\n")
+		for row := range height {
+			want := detailFill
+			if row == 0 {
+				want = headerFill
+			}
+			if !strings.Contains(lines[row], want) {
+				t.Fatalf("row %d missing its hover fill %q:\n%s", row, want, lines[row])
+			}
+		}
+		if after := lines[height]; strings.Contains(after, headerFill) || strings.Contains(after, detailFill) {
+			t.Fatalf("hover leaked past the item's last row (%d) into row %d:\n%s", height-1, height, after)
+		}
+	}
+
+	list.SetPointerRow(0)
+	assertWholeBlockPainted(t)
+
+	list.SetPointerRow(height - 1)
+	assertWholeBlockPainted(t)
 }
 
 // TestToggleAllDisclosure: the first ctrl+o expands, the next collapses, and

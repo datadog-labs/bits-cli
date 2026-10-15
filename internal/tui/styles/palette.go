@@ -37,6 +37,7 @@ type palette struct {
 	// ANSI-256 index rather than a hex value that reads well as a fill; light
 	// just reuses surfaceRaised, which already sits one step above surface.
 	accordionHover string
+	accordionDetailHover string
 
 	// accordionBackground is the disclosure control's resting fill. Fixed to
 	// the same hex in both palettes by design request, rather than tuned per
@@ -95,6 +96,7 @@ func darkPalette() palette {
 		codeSurface:         "#343336",
 		codeText:            "#CECECE",
 		accordionHover:      "#22242B",
+		accordionDetailHover: "#1C1E26",
 		accordionBackground: "#22242B",
 		sweepHot:            "#A2C6FF",
 		link:                "#3d8bd0",
@@ -138,6 +140,7 @@ func lightPalette() palette {
 		codeSurface:         "#CED3DD",
 		codeText:            "#1C2E38",
 		accordionHover:      "#BDC5D3",
+		accordionDetailHover: "#D7DCE5",
 		accordionBackground: "#22242B",
 		sweepHot:            "#A2C6FF",
 		link:                "#006bc2",

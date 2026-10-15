@@ -590,7 +590,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		if msg.Button == tea.MouseLeft {
 			m.beginLinkClick(msg)
 			// Defer the toggle until release so drag selection can take over.
-			m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.HeaderAt(msg.Y)
+			m.pendingAccordionToggle, m.hasPendingAccordionToggle = m.list.AccordionAt(msg.Y)
 			return m.beginSelection(msg)
 		}
 	}

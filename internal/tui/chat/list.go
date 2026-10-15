@@ -371,23 +371,62 @@ func (l *List) SetPointerRow(y int) { l.pointerY = y }
 // SetPointer records the viewport cell under the mouse.
 func (l *List) SetPointer(x, y int) { l.pointerX, l.pointerY = x, y }
 
-// Hovered reports whether the pointer sits over a clickable accordion row.
+// Hovered reports whether the pointer sits over a clickable accordion zone.
 func (l *List) Hovered() bool {
-	_, ok := l.HeaderAt(l.pointerY)
+	_, ok := l.AccordionAt(l.pointerY)
 	return ok
 }
 
 // HoveredLink returns the rendered link beneath the stationary pointer.
 func (l *List) HoveredLink() (LinkHit, bool) { return l.LinkAt(l.pointerX, l.pointerY) }
 
-// HeaderAt returns the block whose clickable accordion header sits on viewport
-// row y. The whole row is the target, so only y matters.
-func (l *List) HeaderAt(y int) (agent.BlockID, bool) {
-	idx, line, ok := l.itemAtRow(y)
-	if ok && line == 0 && l.gutter(l.view[idx]) > 0 {
-		return l.view[idx].id, true
+// AccordionAt returns the block whose clickable accordion zone sits on
+// viewport row y. A collapsed block's only target is its header row; an
+// expanded block's target is every row it renders, since the whole disclosed
+// region collapses it back.
+func (l *List) AccordionAt(y int) (agent.BlockID, bool) {
+	idx, _, ok := l.accordionAtRow(y)
+	if !ok {
+		return agent.BlockID{}, false
 	}
-	return agent.BlockID{}, false
+	return l.view[idx].id, true
+}
+
+// accordionAtRow maps a viewport row to the accordion item it targets, if
+// any. Row 0 of a guttered item is always a target (the header); later rows
+// are targets only once the item is expanded, since a collapsed item's
+// compact body rows carry no disclosure semantics.
+func (l *List) accordionAtRow(y int) (idx, line int, ok bool) {
+	idx, line, ok = l.itemAtRow(y)
+	if !ok || l.gutter(l.view[idx]) == 0 {
+		return 0, 0, false
+	}
+	if line > 0 && !l.expanded(l.view[idx].id) {
+		return 0, 0, false
+	}
+	return idx, line, true
+}
+
+// hoverFill is the viewport row span an accordion hover paints, split into
+// the stronger header tone and the softer detail tone that covers the rest
+// of an expanded block. header may be negative when the block's header has
+// scrolled above the viewport; start/end are already clamped to [0, height].
+type hoverFill struct {
+	header, start, end int
+}
+
+// hoverFillRows returns the rows the pointer's accordion hover should paint.
+// The header may have scrolled above row 0, and the item may run past the
+// viewport bottom, so both ends are clamped independently of header, which
+// stays unclamped to tell the paint loop whether row 0 is itself the header.
+func (l *List) hoverFillRows() (hoverFill, bool) {
+	idx, line, ok := l.accordionAtRow(l.pointerY)
+	if !ok {
+		return hoverFill{}, false
+	}
+	header := l.pointerY - line
+	end := header + len(l.entry(idx).lines)
+	return hoverFill{header: header, start: max(header, 0), end: min(end, l.height)}, true
 }
 
 // itemAtRow maps a viewport row to a rendered presentation item. Gaps and
@@ -728,8 +767,14 @@ func (l *List) renderSurface(withPosition bool) Surface {
 	for len(lines) < budget {
 		lines = append(lines, "")
 	}
-	if l.Hovered() {
-		lines[l.pointerY] = components.PaintRowBackground(lines[l.pointerY], l.width, l.sty.Accordion.HoverBackground)
+	if fill, ok := l.hoverFillRows(); ok {
+		for row := fill.start; row < fill.end; row++ {
+			bg := l.sty.Accordion.DetailHoverBackground
+			if row == fill.header {
+				bg = l.sty.Accordion.HoverBackground
+			}
+			lines[row] = components.PaintRowBackground(lines[row], l.width, bg)
+		}
 	}
 	top := 0
 	if withPosition {

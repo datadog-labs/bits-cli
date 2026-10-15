@@ -180,11 +180,17 @@ type Accordion struct {
 	Resting lipgloss.Style
 
 	// HoverBackground is painted across the whole header row, not just the
-	// control's own cells, when that row is hovered. The caller (chat.List)
-	// repaints an already-rendered line's background cell-by-cell rather than
-	// wrapping it in a lipgloss style, since the line's own foreground colors
-	// must survive the repaint.
+	// control's own cells, when the header row itself is hovered. The caller
+	// (chat.List) repaints an already-rendered line's background cell-by-cell
+	// rather than wrapping it in a lipgloss style, since the line's own
+	// foreground colors must survive the repaint.
 	HoverBackground color.Color
+
+	// DetailHoverBackground paints every other row of an expanded block once
+	// any row in its disclosed region is hovered — the whole block is one
+	// click target, so hover covers it all, but a softer tone than
+	// HoverBackground keeps the header visually distinct from its content.
+	DetailHoverBackground color.Color
 }
 
 // Selector styles the reusable two-column keyboard selector.
