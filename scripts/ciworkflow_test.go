@@ -1,8 +1,9 @@
-package main
+package scripts
 
 import (
 	"archive/tar"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -15,6 +16,15 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestMain(m *testing.M) {
+	// Workflow and script fixtures are addressed from the repository root.
+	if err := os.Chdir(".."); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
 
 type workflow struct {
 	On          map[string]any `yaml:"on"`
