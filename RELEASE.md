@@ -19,9 +19,9 @@ dd-octo-sts token scoped by `.github/chainguard/self.release.sts.yaml`.
 Release assets, for darwin/amd64, darwin/arm64, linux/amd64, and linux/arm64:
 
 ```
-bits_<version>_<os>_<arch>.tar.gz            bits, README.md, LICENSE, LICENSE-3rdparty.csv
+bits_<version>_<os>_<arch>.tar.gz            bits, README.md, licenses
 bits_<version>_<os>_<arch>.tar.gz.sbom.json  SPDX JSON SBOM of the archive
-bits_<version>_checksums.txt                SHA-256 of every archive and SBOM
+bits_<version>_checksums.txt                 SHA-256 of every archive and SBOM
 ```
 
 Verify a download with:
@@ -34,14 +34,9 @@ gh attestation verify bits_<version>_<os>_<arch>.tar.gz \
     --source-ref refs/heads/main
 ```
 
-`./scripts/dist.sh v1.2.3` produces the same archives and SBOMs locally in `dist/`
-and requires [Syft](https://github.com/anchore/syft) on `PATH`. Syft scans each
-archive, including the Go dependencies recorded in its statically linked,
-CGO-disabled binary. Scanning the archive also allows packaged third-party
-executables to be cataloged if they are added later.
-
-SBOMs have build provenance attestations too; use their `.sbom.json` filename
-in the same `gh attestation verify` command above.
+`./scripts/dist.sh v1.2.3` builds archives and checksums locally in `dist/`.
+Add `--sbom` before the tag to include SBOMs; this requires
+[Syft](https://github.com/anchore/syft).
 
 ## Homebrew
 

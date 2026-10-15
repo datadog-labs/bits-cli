@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# dist.sh - build release archives, SPDX SBOMs, and checksums into DIST_DIR
+# dist.sh - build release archives, optional SPDX SBOMs, and checksums into DIST_DIR
 # and print their paths.
 
 set -euo pipefail
@@ -10,13 +10,19 @@ PLATFORMS=(darwin/amd64 darwin/arm64 linux/amd64 linux/arm64)
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${DIST_DIR:-$SRC_DIR/dist}"
 
+sbom=false
+if [[ "${1:-}" == --sbom ]]; then
+    sbom=true
+    shift
+fi
+
 if [[ $# -ne 1 || ! "$1" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-    echo "usage: $0 v<major>.<minor>.<patch>" >&2
+    echo "usage: $0 [--sbom] v<major>.<minor>.<patch>" >&2
     exit 1
 fi
 version="${1#v}"
 
-if ! command -v syft >/dev/null 2>&1; then
+if [[ "$sbom" == true ]] && ! command -v syft >/dev/null 2>&1; then
     echo "ERROR: syft is required to generate release SBOMs (https://github.com/anchore/syft)" >&2
     exit 1
 fi
@@ -28,6 +34,7 @@ mkdir -p "$DIST_DIR"
 rm -f "$DIST_DIR"/bits_*
 
 files=(README.md LICENSE LICENSE-3rdparty.csv)
+artifacts=()
 for platform in "${PLATFORMS[@]}"; do
     goos="${platform%/*}"
     goarch="${platform#*/}"
@@ -40,9 +47,13 @@ for platform in "${PLATFORMS[@]}"; do
     install -m 0755 "$binary" "$stage/bits"
     (cd "$SRC_DIR" && cp "${files[@]}" "$stage/")
     COPYFILE_DISABLE=1 tar -czf "$DIST_DIR/$name.tar.gz" -C "$stage" bits "${files[@]}"
+    artifacts+=("$name.tar.gz")
     echo "$DIST_DIR/$name.tar.gz"
-    syft "$DIST_DIR/$name.tar.gz" --output "spdx-json=$DIST_DIR/$name.tar.gz.sbom.json"
-    echo "$DIST_DIR/$name.tar.gz.sbom.json"
+    if [[ "$sbom" == true ]]; then
+        syft "$DIST_DIR/$name.tar.gz" --output "spdx-json=$DIST_DIR/$name.tar.gz.sbom.json"
+        artifacts+=("$name.tar.gz.sbom.json")
+        echo "$DIST_DIR/$name.tar.gz.sbom.json"
+    fi
 done
 
 checksums="bits_${version}_checksums.txt"
@@ -51,5 +62,5 @@ if command -v sha256sum >/dev/null; then
 else
     sha256=(shasum -a 256)
 fi
-(cd "$DIST_DIR" && "${sha256[@]}" bits_"${version}"_*.tar.gz bits_"${version}"_*.sbom.json >"$checksums")
+(cd "$DIST_DIR" && "${sha256[@]}" "${artifacts[@]}" >"$checksums")
 echo "$DIST_DIR/$checksums"
