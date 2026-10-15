@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"io"
 	"maps"
 	"os"
@@ -325,7 +326,7 @@ func TestHomebrewChecksums(t *testing.T) {
 }
 
 // TestDistArchives runs dist.sh against a stub build.sh and checks the
-// published layout: one archive per release platform plus checksums.
+// published layout: one archive and SBOM per release platform plus checksums.
 func TestDistArchives(t *testing.T) {
 	dir := t.TempDir()
 	for _, file := range []string{"scripts/dist.sh", "README.md", "LICENSE", "LICENSE-3rdparty.csv"} {
@@ -345,8 +346,24 @@ func TestDistArchives(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "scripts", "build.sh"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Validate that Syft receives a readable archive and the requested format,
+	// then emit a small stand-in document identifying that archive.
+	syft := `#!/usr/bin/env bash
+set -euo pipefail
+[[ $# == 3 && "$2" == --output && "$3" == spdx-json=* ]]
+tar -tzf "$1" >/dev/null
+printf '{"spdxVersion":"SPDX-2.3","name":"%s"}\n' "${1##*/}" >"${3#spdx-json=}"
+`
+	if err := os.WriteFile(filepath.Join(dir, "scripts", "syft"), []byte(syft), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	cmd := command(t, dir, "bash", "scripts/dist.sh", "v1.2.3")
+	for i, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "PATH=") {
+			cmd.Env[i] = "PATH=" + filepath.Join(dir, "scripts") + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
+		}
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("dist.sh: %v\n%s", err, out)
 	}
@@ -363,12 +380,32 @@ func TestDistArchives(t *testing.T) {
 	want := []string{
 		"bits_1.2.3_checksums.txt",
 		"bits_1.2.3_darwin_amd64.tar.gz",
+		"bits_1.2.3_darwin_amd64.tar.gz.sbom.json",
 		"bits_1.2.3_darwin_arm64.tar.gz",
+		"bits_1.2.3_darwin_arm64.tar.gz.sbom.json",
 		"bits_1.2.3_linux_amd64.tar.gz",
+		"bits_1.2.3_linux_amd64.tar.gz.sbom.json",
 		"bits_1.2.3_linux_arm64.tar.gz",
+		"bits_1.2.3_linux_arm64.tar.gz.sbom.json",
 	}
 	if !slices.Equal(names, want) {
 		t.Fatalf("dist contents = %v, want %v", names, want)
+	}
+	manifest, err := os.ReadFile(filepath.Join(dist, "bits_1.2.3_checksums.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checksummed []string
+	for line := range strings.Lines(string(manifest)) {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			t.Fatalf("malformed checksum entry: %q", line)
+		}
+		checksummed = append(checksummed, fields[1])
+	}
+	slices.Sort(checksummed)
+	if !slices.Equal(checksummed, want[1:]) {
+		t.Errorf("checksummed assets = %v, want %v", checksummed, want[1:])
 	}
 
 	check := exec.Command("sha256sum", "--check", "bits_1.2.3_checksums.txt")
@@ -382,6 +419,20 @@ func TestDistArchives(t *testing.T) {
 
 	for _, platform := range []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"} {
 		archive := filepath.Join(dist, "bits_1.2.3_"+strings.ReplaceAll(platform, "/", "_")+".tar.gz")
+		document, err := os.ReadFile(archive + ".sbom.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sbom struct {
+			SPDXVersion string `json:"spdxVersion"`
+			Name        string `json:"name"`
+		}
+		if err := json.Unmarshal(document, &sbom); err != nil {
+			t.Fatal(err)
+		}
+		if sbom.SPDXVersion != "SPDX-2.3" || sbom.Name != filepath.Base(archive) {
+			t.Errorf("%s: unexpected SBOM: %s", archive, document)
+		}
 		files := readTarGz(t, archive)
 		if got := slices.Sorted(maps.Keys(files)); !slices.Equal(got, []string{"LICENSE", "LICENSE-3rdparty.csv", "README.md", "bits"}) {
 			t.Errorf("%s contains %v", archive, got)

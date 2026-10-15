@@ -21,8 +21,8 @@ checksums="bits_${version}_checksums.txt"
 sha256sum --check --quiet "$checksums"
 
 assets=("$checksums")
-while read -r _ archive; do
-    assets+=("$archive")
+while read -r _ artifact; do
+    assets+=("$artifact")
 done <"$checksums"
 
 case "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || true)" in

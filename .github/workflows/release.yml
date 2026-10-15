@@ -64,11 +64,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Build release archives
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      - name: Build release archives and SBOMs
         env:
           TAG: ${{ inputs.tag }}
         run: ./scripts/dist.sh "$TAG"
-      - name: Upload release archives
+      - name: Upload release artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
@@ -90,7 +92,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Download release archives
+      - name: Download release artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
@@ -98,7 +100,9 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/bits_*.tar.gz
+          subject-path: |
+            dist/bits_*.tar.gz
+            dist/bits_*.sbom.json
       - name: Get release token
         id: octo-sts
         uses: DataDog/dd-octo-sts-action@c85802a58e202b7e764b5441e4378c76043c8108 # v1.0.5

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# dist.sh - build the release archives and checksums for a tag into DIST_DIR
+# dist.sh - build release archives, SPDX SBOMs, and checksums into DIST_DIR
 # and print their paths.
 
 set -euo pipefail
@@ -15,6 +15,11 @@ if [[ $# -ne 1 || ! "$1" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$
     exit 1
 fi
 version="${1#v}"
+
+if ! command -v syft >/dev/null 2>&1; then
+    echo "ERROR: syft is required to generate release SBOMs (https://github.com/anchore/syft)" >&2
+    exit 1
+fi
 
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
@@ -36,6 +41,8 @@ for platform in "${PLATFORMS[@]}"; do
     (cd "$SRC_DIR" && cp "${files[@]}" "$stage/")
     COPYFILE_DISABLE=1 tar -czf "$DIST_DIR/$name.tar.gz" -C "$stage" bits "${files[@]}"
     echo "$DIST_DIR/$name.tar.gz"
+    syft "$DIST_DIR/$name.tar.gz" --output "spdx-json=$DIST_DIR/$name.tar.gz.sbom.json"
+    echo "$DIST_DIR/$name.tar.gz.sbom.json"
 done
 
 checksums="bits_${version}_checksums.txt"
@@ -44,5 +51,5 @@ if command -v sha256sum >/dev/null; then
 else
     sha256=(shasum -a 256)
 fi
-(cd "$DIST_DIR" && "${sha256[@]}" bits_"${version}"_*.tar.gz >"$checksums")
+(cd "$DIST_DIR" && "${sha256[@]}" bits_"${version}"_*.tar.gz bits_"${version}"_*.sbom.json >"$checksums")
 echo "$DIST_DIR/$checksums"
