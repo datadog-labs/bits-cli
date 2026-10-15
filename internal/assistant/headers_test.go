@@ -88,17 +88,6 @@ func TestParseCustomHeadersRejectsManagedHeaders(t *testing.T) {
 	}
 }
 
-func TestCustomHeadersFromEnv(t *testing.T) {
-	t.Setenv(EnvCustomHeaders, "x-route-hint=1")
-	got, err := CustomHeadersFromEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Get("x-route-hint") != "1" {
-		t.Errorf("header = %v, want the pair from the environment", got)
-	}
-}
-
 func TestRequestCarriesCustomHeaders(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("x-route-hint"); got != "1" {

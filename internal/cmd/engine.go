@@ -15,6 +15,16 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
+// EnvCustomHeaders carries extra request headers as a comma-separated list of
+// name=value pairs, applied to every Assistant API request:
+//
+//	BITS_CUSTOM_HEADERS='x-route-hint=1,x-trace-me=abc'
+//
+// It is deliberately an environment variable rather than a flag: the mechanism
+// is for development and support, and is not part of the command-line contract.
+// See assistant.ParseCustomHeaders for the accepted syntax.
+const EnvCustomHeaders = "BITS_CUSTOM_HEADERS"
+
 // ErrLoginRequired marks an OAuth state that an interactive caller may replace
 // by starting login. Noninteractive callers should surface the wrapped error
 // with guidance to run `bits login`.
@@ -84,9 +94,9 @@ func NewAuthenticatedClient(ctx context.Context, opts ClientOptions) (*assistant
 	// Before authenticating: a malformed configuration is then reported as
 	// itself, rather than behind a login prompt, and without a token refresh
 	// having already persisted new credentials for an invocation that cannot run.
-	custom, err := assistant.CustomHeadersFromEnv()
+	custom, err := assistant.ParseCustomHeaders(os.Getenv(EnvCustomHeaders))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", EnvCustomHeaders, err)
 	}
 	client, err := newClientForMode(ctx, opts)
 	if err != nil {

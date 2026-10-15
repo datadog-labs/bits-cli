@@ -76,9 +76,9 @@ type Client struct {
 	// defaultMaxLineBytes. A larger line fails the stream (wrapping
 	// bufio.ErrTooLong) rather than growing unbounded in memory.
 	MaxLineBytes int
-	// CustomHeaders are extra headers added to every request, from
-	// EnvCustomHeaders. They are applied before the headers the client manages,
-	// which therefore always win. Use ParseCustomHeaders to build one.
+	// CustomHeaders are extra headers added to every request. They are applied
+	// before the headers the client manages, which therefore always win. Use
+	// ParseCustomHeaders to build one.
 	CustomHeaders http.Header
 	// MaxRetries is the number of extra attempts for idempotent, non-streaming
 	// requests (GET/DELETE/PUT) on transient failures (network errors,
