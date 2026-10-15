@@ -79,8 +79,8 @@ func TestSlashCompletionDoesNotOpenMidPrompt(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("mid-prompt slash should remain ordinary input while a turn is active")
 	}
-	if got := m.editor.Value(); got != "explain /new" {
-		t.Fatalf("editor value = %q, want ordinary input to remain pending", got)
+	if ps := m.editor.QueuedPrompts(); len(ps) != 1 || ps[0].Text != "explain /new" || m.editor.Value() != "" {
+		t.Fatalf("ordinary slash text was not queued: %+v", ps)
 	}
 }
 
@@ -539,7 +539,7 @@ func TestSubmitQuitWhenIdleQuitsWithoutBackendCall(t *testing.T) {
 	}
 }
 
-func TestSubmitOrdinaryInputDuringActiveTurnRemainsPending(t *testing.T) {
+func TestSubmitOrdinaryInputDuringActiveTurnQueues(t *testing.T) {
 	m := newModelWithSpy(t)
 	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
 	m.chatPhase = chat.PhaseStreaming
@@ -549,8 +549,8 @@ func TestSubmitOrdinaryInputDuringActiveTurnRemainsPending(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("ordinary input during an active turn returned a command")
 	}
-	if got := m.editor.Value(); got != "send this later" {
-		t.Fatalf("editor value = %q, want busy input to remain pending", got)
+	if ps := m.editor.QueuedPrompts(); len(ps) != 1 || ps[0].Text != "send this later" || m.editor.Value() != "" {
+		t.Fatalf("queued prompt = %+v, draft = %q", ps, m.editor.Value())
 	}
 }
 

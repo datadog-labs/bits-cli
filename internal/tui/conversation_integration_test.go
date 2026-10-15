@@ -15,6 +15,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tools"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	conversationview "github.com/datadog-labs/bits-cli/internal/tui/conversations"
+	"github.com/datadog-labs/bits-cli/internal/tui/editor"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -305,6 +306,8 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	backend := newResumeBackend()
 	engine := agent.New(backend, agent.Config{ConversationID: "old"})
 	m := New(engine)
+	m.editor.Enqueue(editor.Prompt{Text: "old conversation follow-up"})
+	m.editor.PauseQueue()
 	m.Update(tea.WindowSizeMsg{Width: 50, Height: 12})
 	m.transcript.Blocks = []agent.Block{textBlock("same-message-id", "OLD-CACHED")}
 	m.syncTranscript()
@@ -322,6 +325,10 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 		t.Fatalf("failed load mutated state: picker=%v root=%q engine=%q blocks=%+v", m.picker.State(), m.convID, engine.ConversationID(), m.transcript.Blocks)
 	}
 
+	if m.editor.QueueLen() != 1 || !m.editor.QueuePaused() {
+		t.Fatal("failed switch discarded queued prompt")
+	}
+
 	backend.histories <- resumeHistoryReply{response: history(
 		assistant.AssistantMessage("same-message-id", assistant.TextContent("NEW")),
 		assistant.AssistantMessage("same-message-id", assistant.TextContent("-TRANSCRIPT")),
@@ -330,6 +337,9 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	_, _ = m.Update(runResumeCmd(t, wait))
 	if m.mode != ModeChat || m.picker != nil || m.convID != resumeConversationID || engine.ConversationID() != resumeConversationID {
 		t.Fatalf("success state: mode=%v picker=%v root=%q engine=%q", m.mode, m.picker != nil, m.convID, engine.ConversationID())
+	}
+	if m.editor.QueueLen() != 0 || m.editor.QueuePaused() {
+		t.Fatal("queued prompt leaked into resumed conversation")
 	}
 	if len(m.transcript.Blocks) != 1 || m.transcript.Blocks[0].Markdown.Content != "NEW-TRANSCRIPT" {
 		t.Fatalf("new blocks = %+v", m.transcript.Blocks)

@@ -146,8 +146,8 @@ func TestClientSkillBuiltinCollisionsAndBusyGuard(t *testing.T) {
 	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
 	m.editor.SetValue("/skill:review Keep CASE")
 	_, cmd := m.submit()
-	if cmd != nil || m.editor.Value() != "/skill:review Keep CASE" {
-		t.Fatal("busy skill invocation should remain in composer")
+	if ps := m.editor.QueuedPrompts(); cmd != nil || len(ps) != 1 || ps[0].Text != "/skill:review Keep CASE" || m.editor.Value() != "" {
+		t.Fatal("busy skill invocation should be queued with original arguments")
 	}
 }
 

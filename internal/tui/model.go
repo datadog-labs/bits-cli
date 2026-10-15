@@ -41,12 +41,13 @@ const (
 // start something?" or "what happens when it ends?" reads it; chatPhase only
 // drives what the chat displays.
 type operation struct {
-	kind   opKind
-	gen    uint64             // stamps the operation's messages; never reset, so stale ones drop
-	events <-chan agent.Event // engine operations only
-	cancel context.CancelFunc
-	stop   stopLevel
-	then   followUp
+	kind      opKind
+	gen       uint64             // stamps the operation's messages; never reset, so stale ones drop
+	events    <-chan agent.Event // engine operations only
+	cancel    context.CancelFunc
+	stop      stopLevel
+	then      followUp
+	completed bool // terminal success; channel closure still gates the next turn
 }
 
 type opKind uint8

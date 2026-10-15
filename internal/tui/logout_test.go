@@ -11,6 +11,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
+	"github.com/datadog-labs/bits-cli/internal/tui/editor"
 )
 
 func TestSubmitLogoutIsLocalAndInvalidatesEngine(t *testing.T) {
@@ -23,6 +24,8 @@ func TestSubmitLogoutIsLocalAndInvalidatesEngine(t *testing.T) {
 			return true, nil, nil
 		},
 	})
+	m.editor.Enqueue(editor.Prompt{Text: "unsent follow-up"})
+	m.editor.PauseQueue()
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "/logout"})
 
@@ -43,6 +46,9 @@ func TestSubmitLogoutIsLocalAndInvalidatesEngine(t *testing.T) {
 	}
 	if m.engine != nil || m.ConversationID() != "" {
 		t.Fatal("authenticated engine or conversation survived logout")
+	}
+	if m.editor.QueueLen() != 0 || m.editor.QueuePaused() {
+		t.Fatal("queued prompt survived logout")
 	}
 	if m.tools != tools || m.logout == nil {
 		t.Fatal("logout discarded safe process configuration")

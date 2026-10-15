@@ -16,7 +16,6 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/browser"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	conversationview "github.com/datadog-labs/bits-cli/internal/tui/conversations"
-	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 )
@@ -640,6 +639,13 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	case done.kind == opRestore && done.stop != stopAll:
 		return m, tea.Batch(permissionsCommand, m.resumePendingTools())
 	}
+	if done.kind == opTurn {
+		if !done.completed || done.stop != stopNone {
+			m.editor.PauseQueue()
+		} else {
+			return m, tea.Batch(permissionsCommand, m.dispatchQueued())
+		}
+	}
 	return m, permissionsCommand
 }
 
@@ -838,60 +844,6 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
 	return cmd
 }
 
-// submit routes slash commands through their active-turn policy, or starts a
-// turn for ordinary input unless a turn is already running or history is still
-// loading. The user block is added by the engine (it owns the transcript), so
-// it arrives as the turn's first event.
-func (m *Model) submit() (tea.Model, tea.Cmd) {
-	raw := m.editor.Value()
-	text := strings.TrimSpace(raw)
-	attachments := m.editor.Attachments()
-	if text == "" && len(attachments) == 0 {
-		return m, nil
-	}
-	if text == "" {
-		text = " "
-	}
-
-	var skillInvocation *agent.SkillInvocation
-	if name, arguments, ok := parseClientSkillInvocation(raw); ok {
-		skillInvocation = &agent.SkillInvocation{Name: name, Arguments: arguments}
-		text = raw
-	} else if name, argument, ok := parseCommand(raw); ok {
-		m.editor.Reset()
-		m.stopEntitySearch()
-		return m.dispatchCommand(name, argument)
-	}
-	if m.op.busy() {
-		return m, nil
-	}
-	// Once the menu has loaded, an unknown name keeps the draft for correction.
-	// Otherwise the engine resolves the name and fails the turn if it is unknown.
-	if skillInvocation != nil && m.skillMenu.skills != nil {
-		if _, known := m.skillMenu.skills[skillInvocation.Name]; !known {
-			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Unknown client skill: %s", escape.Inline(skillInvocation.Name)))
-		}
-	}
-	turnContext := contextFromAttachments(attachments)
-	m.editor.Reset()
-	closeFileSearch := m.stopCompletionSearches()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.StartTurn(ctx, agent.TurnInput{
-		Message: text,
-		Skill:   skillInvocation,
-		Tools:   m.tools,
-		Context: turnContext,
-		OnDeny:  agent.DenyContinue,
-	})
-	wait := m.begin(opTurn, events, cancel)
-	m.chatPhase = chat.PhaseWaiting
-	// Submitting always jumps to the tail and re-engages auto-follow, so the
-	// user sees their message and the incoming reply even if they had scrolled up.
-	m.list.ScrollToBottom()
-	return m, tea.Batch(closeFileSearch, wait)
-}
-
 // begin starts an exclusive operation. Its generation drops any late message
 // from an earlier one.
 func (m *Model) begin(kind opKind, events <-chan agent.Event, cancel context.CancelFunc) tea.Cmd {
@@ -924,6 +876,7 @@ func (m *Model) resumePendingTools() tea.Cmd {
 // UIs; its approvals go when the operation closes. Logout is never
 // interrupted this way.
 func (m *Model) cancelOperation() {
+	m.editor.PauseQueue()
 	if m.op.events == nil || m.op.stop == stopAll {
 		return
 	}
@@ -956,8 +909,10 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	case agent.EventConversation:
 		m.convID = ev.ConvID
 	case agent.EventTurnDone:
+		m.op.completed = true
 		m.chatPhase = chat.PhaseIdle
 	case agent.EventError:
+		m.op.completed = false
 		// A failure during restore is benign: drop to idle with a notice so the
 		// user can still type. A failure mid-turn is the turn's error state.
 		if m.op.kind == opRestore {

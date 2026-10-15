@@ -58,6 +58,7 @@ type Editor struct {
 	completedMentions []trackedMention
 	dismissedValue    string
 	history           history
+	queue             promptQueue
 
 	// inputStyle is the shared input-block contract. width is the block's total
 	// width; the textarea is sized to fit inside the block's horizontal frame.
