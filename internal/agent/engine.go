@@ -179,9 +179,10 @@ type Engine struct {
 // RuntimeStatus is the non-secret request and backend state needed by local
 // status surfaces.
 type RuntimeStatus struct {
-	Profile assistant.Profile
-	Model   string
-	Backend assistant.BackendStatus
+	MultiAgent bool
+	Profile    assistant.Profile
+	Model      string
+	Backend    assistant.BackendStatus
 }
 
 type toolCommand struct {
@@ -239,7 +240,8 @@ func New(b Backend, config Config) *Engine {
 	if profile == "" {
 		profile = assistant.DefaultProfile
 	}
-	runtimeStatus := RuntimeStatus{Profile: profile, Model: opts.Model}
+	_, multiAgent := b.(DuplexBackend)
+	runtimeStatus := RuntimeStatus{Profile: profile, Model: opts.Model, MultiAgent: multiAgent}
 	if provider, ok := b.(interface {
 		BackendStatus() assistant.BackendStatus
 	}); ok {
@@ -404,6 +406,7 @@ func (e *Engine) run(
 	generation uint64,
 ) {
 	completion := turnCompletion{}
+	duplexTurn := false
 	turnStart := len(e.transcript.Blocks())
 	if len(resumed) > 0 {
 		for i, block := range e.transcript.Blocks() {
@@ -415,7 +418,13 @@ func (e *Engine) run(
 		}
 	}
 	defer func() {
+		if duplexTurn {
+			e.transcript.FinalizeAll()
+		}
 		if ctx.Err() != nil {
+			if duplexTurn {
+				e.cancelDuplexTools(in.Tools, turnStart)
+			}
 			e.transcript.CancelUnfinishedTools(turnStart)
 			// Cancellation makes send's context-aware select unavailable, but this
 			// terminal snapshot must not be dropped. It is sent after all queued
@@ -499,7 +508,6 @@ func (e *Engine) run(
 			return
 		}
 	}
-
 	var req turnRequest
 	if len(resumed) == 0 {
 		req.user = &userMessage{
@@ -508,6 +516,22 @@ func (e *Engine) run(
 			userContext:  e.pendingUserContext(ctx),
 			imageNotice:  resizeNotice(imageNotices),
 			skillContext: skillContext,
+		}
+	}
+
+	if backend, ok := e.backend.(DuplexBackend); ok && len(resumed) == 0 {
+		opts := e.projectInstructions.apply(ctx, e.sendOptions(defs, req))
+		opts = e.applySkills(ctx, opts, req.user.skillContext)
+		capable := true
+		if selector, ok := backend.(interface {
+			CanStream(string, assistant.SendOptions) bool
+		}); ok {
+			capable = selector.CanStream(req.user.text, opts)
+		}
+		if capable {
+			duplexTurn = true
+			e.runDuplex(ctx, in, backend, req, opts, generation, send, &completion)
+			return
 		}
 	}
 
@@ -918,6 +942,8 @@ type toolRoundState struct {
 	results       chan toolDone
 	denied        bool
 	stopRequested bool
+	stream        *duplexToolStream
+	slots         chan struct{}
 }
 
 // Workers only execute handlers. The engine goroutine owns approvals,
@@ -929,6 +955,18 @@ func (e *Engine) runTools(
 	generation uint64,
 	send func(Event) bool,
 	onDeny DenyPolicy,
+) (toolRound, error) {
+	return e.runToolActor(ctx, tools, calls, generation, send, onDeny, nil)
+}
+
+func (e *Engine) runToolActor(
+	ctx context.Context,
+	tools *ToolSet,
+	calls []ToolCall,
+	generation uint64,
+	send func(Event) bool,
+	onDeny DenyPolicy,
+	stream *duplexToolStream,
 ) (toolRound, error) {
 	roundCtx, cancelRound := context.WithCancel(ctx)
 	defer cancelRound()
@@ -942,6 +980,14 @@ func (e *Engine) runTools(
 		calls:       make([]*roundCall, len(calls)),
 		byID:        make(map[string]*roundCall, len(calls)),
 		results:     make(chan toolDone, len(calls)),
+		stream:      stream,
+	}
+	var incoming <-chan duplexStreamEvent
+	var submissionErrors <-chan error
+	if stream != nil {
+		incoming, submissionErrors = stream.events, stream.submissionErrors
+		r.results = make(chan toolDone, duplexToolConcurrency)
+		r.slots = make(chan struct{}, duplexToolConcurrency)
 	}
 	for i, call := range calls {
 		if call.ID == "" {
@@ -962,14 +1008,55 @@ func (e *Engine) runTools(
 			break
 		}
 	}
-	for ok && slices.ContainsFunc(r.calls, unresolved) {
+	for ok && (stream != nil || slices.ContainsFunc(r.calls, unresolved)) {
 		select {
+		case event := <-incoming:
+			if event.terminal {
+				stream.terminal = true
+				stream.backendFailure = event.err != nil
+				stream.cancel()
+				r.stopRound(nil, nil)
+				return toolRound{outcome: roundAnswered, denied: r.denied}, event.err
+			}
+			if !r.stopRequested && !stream.fold(event.response) {
+				ok = false
+				continue
+			}
+			content := event.response.Data.Attributes.StructuredMessage.Content
+			if content.Type != assistant.ContentClientToolCall {
+				continue
+			}
+			call := toolCallOf(content)
+			if call.ID == "" {
+				return toolRound{denied: r.denied}, errors.New("client tool call has no id")
+			}
+			if _, duplicate := r.byID[call.ID]; duplicate {
+				return toolRound{denied: r.denied}, fmt.Errorf("duplicate client tool call id %q", call.ID)
+			}
+			c := &roundCall{call: call}
+			r.calls = append(r.calls, c)
+			r.byID[call.ID] = c
+			if r.stopRequested {
+				ok = r.resolve(c, cancelledResult())
+			} else {
+				ok = r.dispatch(c)
+			}
+		case err := <-submissionErrors:
+			stream.terminal, stream.backendFailure = true, true
+			stream.cancel()
+			r.stopRound(nil, nil)
+			return toolRound{denied: r.denied}, err
 		case command := <-e.commands:
 			if command.generation == generation {
 				ok = r.handleCommand(command)
 			}
 
 		case done := <-r.results:
+			if stream != nil && ctx.Err() != nil {
+				stream.terminal = true
+				r.stopRound(nil, nil)
+				return toolRound{denied: r.denied}, ctx.Err()
+			}
 			c := done.call
 			if c.status == callResolved {
 				continue // cancelled or stopped before its handler returned
@@ -982,6 +1069,10 @@ func (e *Engine) runTools(
 				// Record the failure so the round's batch still gets answered.
 				ok = r.resolve(c, toolFailedResult(done.err))
 			default:
+				if stream != nil {
+					stream.terminal = true
+					stream.cancel()
+				}
 				r.stopRound(c, done.err)
 				return toolRound{denied: r.denied}, done.err
 			}
@@ -1144,8 +1235,26 @@ func (r *toolRoundState) launch(c *roundCall, approved bool) bool {
 	}
 	call := c.call
 	go func() {
+		if r.slots != nil {
+			select {
+			case r.slots <- struct{}{}:
+				defer func() { <-r.slots }()
+			case <-toolCtx.Done():
+				return
+			}
+			if r.ctx.Err() != nil || toolCtx.Err() != nil {
+				return
+			}
+		}
 		result, err := r.tools.Run(toolCtx, call)
-		r.results <- toolDone{call: c, result: result, err: err}
+		if r.stream == nil {
+			r.results <- toolDone{call: c, result: result, err: err}
+			return
+		}
+		select {
+		case r.results <- toolDone{call: c, result: result, err: err}:
+		case <-r.ctx.Done():
+		}
 	}()
 	return true
 }
@@ -1173,6 +1282,9 @@ func (r *toolRoundState) resolve(c *roundCall, result ToolResult) bool {
 	}
 	c.status = callResolved
 	c.response = toolResponse(c.call, result)
+	if r.stream != nil && !r.stream.terminal {
+		r.stream.submit(c.response)
+	}
 	result = r.tools.NormalizeResult(c.call, result)
 	if _, updated := r.e.transcript.MarkToolExecuted(c.call.ID, result); !updated {
 		return true

@@ -615,6 +615,13 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	}
 	done := m.op
 	m.op = operation{gen: done.gen}
+	// Channel closure follows the engine's final snapshot and ownership release.
+	// Cancellation may have suppressed the events carrying these last updates.
+	if m.engine != nil && m.engine.Status().MultiAgent {
+		m.convID = m.engine.ConversationID()
+		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+		m.syncTranscript()
+	}
 	if m.chatPhase != chat.PhaseError {
 		m.chatPhase = chat.PhaseIdle
 	}

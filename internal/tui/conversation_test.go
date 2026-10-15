@@ -18,6 +18,7 @@ type cancellableConversationBackend struct {
 	sendStarted    chan struct{}
 	historyStarted chan struct{}
 	cancelled      atomic.Int32
+	messages       []assistant.Message
 }
 
 func newCancellableConversationBackend() *cancellableConversationBackend {
@@ -27,7 +28,14 @@ func newCancellableConversationBackend() *cancellableConversationBackend {
 	}
 }
 
-func (b *cancellableConversationBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
+func (b *cancellableConversationBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	for _, message := range b.messages {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.StructuredMessage = message
+		if err := emit(response); err != nil {
+			return "old", err
+		}
+	}
 	b.sendStarted <- struct{}{}
 	<-ctx.Done()
 	b.cancelled.Add(1)
@@ -114,6 +122,44 @@ func TestCompletedTurnAppliesFinalTranscriptSnapshot(t *testing.T) {
 	}
 	if len(m.transcript.Blocks) != 2 || !m.transcript.Blocks[1].Complete {
 		t.Fatalf("blocks = %+v, want completed assistant response", m.transcript.Blocks)
+	}
+}
+
+type duplexConversationBackend struct {
+	*cancellableConversationBackend
+}
+
+func (b *duplexConversationBackend) Stream(ctx context.Context, prompt string, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) error {
+	_, err := b.Send(ctx, prompt, opts, func(response assistant.AssistantResponse) error {
+		response.Data.Attributes.ConversationID = "old"
+		return emit(response)
+	})
+	return err
+}
+
+func (b *duplexConversationBackend) SubmitToolResults(context.Context, []assistant.ClientToolResponse) error {
+	return nil
+}
+
+func TestCanceledTurnRetainsConversationHandle(t *testing.T) {
+	backend := newCancellableConversationBackend()
+	backend.messages = []assistant.Message{assistant.AssistantMessage("answer", assistant.TextContent("partial answer"))}
+	m := New(agent.New(&duplexConversationBackend{backend}, agent.Config{}))
+	setConversationInput(m, "prompt")
+	_, _ = m.submit()
+	waitSignal(t, backend.sendStarted)
+	for len(m.transcript.Blocks) < 2 {
+		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
+		_, _ = m.Update(msg)
+	}
+	m.cancelOperation()
+	drainConversationRemote(t, m)
+
+	if m.convID != "old" || m.ConversationID() != "old" || m.statusRuntime().ConversationID != "old" {
+		t.Fatalf("canceled conversation handle = %q, status = %q", m.ConversationID(), m.statusRuntime().ConversationID)
+	}
+	if len(m.transcript.Blocks) != 2 || !m.transcript.Blocks[1].Complete {
+		t.Fatalf("canceled transcript = %+v", m.transcript.Blocks)
 	}
 }
 
