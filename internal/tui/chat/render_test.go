@@ -570,3 +570,38 @@ func TestManyContextChipsTakeOneTranscriptRow(t *testing.T) {
 		t.Fatalf("context should fit one row ending in +N more: %q", lines)
 	}
 }
+
+func TestSubagentToolSummaries(t *testing.T) {
+	for _, test := range []struct {
+		name, input, want string
+		status            agent.ToolStatus
+	}{
+		{"spawn_agent", `{"prompt":"Investigate checkout errors"}`, "starting subagent Investigate checkout errors", agent.ToolRunning},
+		{"spawn_agent", `{"prompt":"Investigate checkout errors"}`, "started subagent Investigate checkout errors", agent.ToolSuccess},
+		{"wait_for_agents", `{"agent_ids":["a","b"],"mode":"all"}`, "waiting for 2 subagents", agent.ToolRunning},
+		{"wait_for_agents", `{"agent_ids":["a","b"],"mode":"any"}`, "waiting for any of 2 subagents", agent.ToolRunning},
+		{"send_agent_message", `{"agent_id":"a","message":"Check the logs"}`, "sending message Check the logs", agent.ToolRunning},
+	} {
+		t.Run(test.want, func(t *testing.T) {
+			block := agent.Block{Kind: assistant.KindToolCall, Tool: &agent.ToolBlock{Name: test.name, Input: test.input, Status: test.status}}
+			got := ansi.Strip(RenderBlock(block, 100, DefaultStyles(true), 0))
+			if !strings.Contains(got, test.want) || strings.Contains(got, test.input) {
+				t.Fatalf("rendered %q, want readable summary %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSubagentDecorationRequiresExactServerIdentity(t *testing.T) {
+	for _, tool := range []*agent.ToolBlock{
+		{Name: "spawn_agent", IsClientSide: true},
+		{Name: "spawn_agent", Namespace: new("custom")},
+	} {
+		tool.Input, tool.Status = `{"prompt":"task"}`, agent.ToolRunning
+		block := agent.Block{Kind: assistant.KindToolCall, Tool: tool}
+		got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
+		if strings.Contains(got, "starting subagent") || !strings.Contains(got, "spawn_agent(") {
+			t.Fatalf("unrelated tool received subagent decoration: %q", got)
+		}
+	}
+}

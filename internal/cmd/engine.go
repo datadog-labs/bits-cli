@@ -85,7 +85,11 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 		}
 		return nil, err
 	}
-	return agent.New(client, config), nil
+	var backend agent.Backend = client
+	if os.Getenv("BITS_USE_EXPERIMENTAL_SUBAGENTS") == "1" {
+		backend = assistant.NewMultiAgentClient(client)
+	}
+	return agent.New(backend, config), nil
 }
 
 // NewAuthenticatedClient constructs exactly the client selected by opts.Mode.
