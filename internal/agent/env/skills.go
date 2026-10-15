@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 const (
@@ -43,18 +41,15 @@ type SkillSummary struct {
 	Description string
 }
 
-// registeredSkill stays inside the registry with its confined-read metadata.
+// registeredSkill stays inside the registry with its reread metadata.
 type registeredSkill struct {
 	Name                   string
 	Description            string
 	Path                   string
 	DisableModelInvocation bool
-	boundary               string
 	// defaultName applies when a reread document omits its name.
 	defaultName string
 }
-
-type skillLocation struct{ path, boundary string }
 
 func (s *Skills) discover(ctx context.Context) []registeredSkill {
 	active, err := filepath.Abs(s.workspace)
@@ -65,19 +60,14 @@ func (s *Skills) discover(ctx context.Context) []registeredSkill {
 	if err != nil {
 		return nil
 	}
-	repository := workspace.InspectRepositoryLayout(ctx, active).Root
-	boundary := active
-	if repository != "" && withinRoot(repository, active) {
-		boundary = repository
-	}
 	// Nearest project directories win, followed by explicit roots in flag order,
 	// then the default user root. Traversal is bounded across all roots together.
-	var locations []skillLocation
-	for dir := active; ; dir = filepath.Dir(dir) {
-		locations = append(locations, skillLocation{filepath.Join(dir, ".agents", "skills"), boundary})
-		if dir == boundary || filepath.Dir(dir) == dir || len(locations) >= skillRootLimit {
+	var locations []string
+	for _, dir := range slices.Backward(projectDirectories(active)) {
+		if len(locations) >= skillRootLimit {
 			break
 		}
+		locations = append(locations, filepath.Join(dir, ".agents", "skills"))
 	}
 	home, _ := os.UserHomeDir()
 	for _, extra := range s.extra {
@@ -93,27 +83,17 @@ func (s *Skills) discover(ctx context.Context) []registeredSkill {
 		if !filepath.IsAbs(extra) {
 			extra = filepath.Join(active, extra)
 		}
-		locations = append(locations, skillLocation{extra, extra})
+		locations = append(locations, extra)
 	}
 	if home != "" && len(locations) < skillRootLimit {
-		root := filepath.Join(home, ".agents", "skills")
-		locations = append(locations, skillLocation{root, root})
+		locations = append(locations, filepath.Join(home, ".agents", "skills"))
 	}
 	scan := skillScan{ctx: ctx, remainingEntries: skillEntryLimit, remainingBytes: skillReadLimit, skills: make(map[string]registeredSkill)}
 	for _, location := range locations {
 		if ctx.Err() != nil || scan.remainingEntries <= 0 || scan.remainingBytes <= 0 {
 			break
 		}
-		resolvedBoundary, resolveErr := filepath.EvalSymlinks(location.boundary)
-		if resolveErr != nil {
-			continue
-		}
-		root, openErr := os.OpenRoot(resolvedBoundary)
-		if openErr != nil {
-			continue
-		}
-		scan.walk(root, resolvedBoundary, location.path, 0, make(map[string]bool))
-		_ = root.Close()
+		scan.walk(location, 0, make(map[string]bool))
 	}
 	names := make([]string, 0, len(scan.skills))
 	for name := range scan.skills {
@@ -133,20 +113,16 @@ type skillScan struct {
 	skills                           map[string]registeredSkill
 }
 
-func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen map[string]bool) {
+func (s *skillScan) walk(source string, depth int, seen map[string]bool) {
 	if s.ctx.Err() != nil || depth > skillDepthLimit || s.remainingEntries <= 0 || s.remainingBytes <= 0 {
 		return
 	}
 	s.remainingEntries--
 	resolved, err := filepath.EvalSymlinks(source)
-	if err != nil || !withinRoot(boundary, resolved) {
-		return
-	}
-	relative, err := filepath.Rel(boundary, resolved)
 	if err != nil {
 		return
 	}
-	info, err := root.Stat(relative)
+	info, err := os.Stat(resolved)
 	if err != nil {
 		return
 	}
@@ -155,7 +131,7 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 			return
 		}
 		seen[resolved] = true
-		dir, openErr := root.Open(relative)
+		dir, openErr := os.Open(resolved)
 		if openErr != nil {
 			return
 		}
@@ -169,7 +145,7 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 		}
 		slices.SortFunc(entries, func(a, b os.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
 		for _, entry := range entries {
-			s.walk(root, boundary, filepath.Join(resolved, entry.Name()), depth+1, seen)
+			s.walk(filepath.Join(resolved, entry.Name()), depth+1, seen)
 		}
 		return
 	}
@@ -182,13 +158,13 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 		return
 	}
 	defaultName := filepath.Base(filepath.Dir(source))
-	document, consumed, err := readSkillDocument(root, relative, min(skillFileLimit, s.remainingBytes-1), defaultName)
+	document, consumed, err := readSkillDocument(resolved, min(skillFileLimit, s.remainingBytes-1), defaultName)
 	s.remainingBytes -= consumed
 	if err != nil {
 		return
 	}
 	if _, exists := s.skills[document.Name]; !exists {
-		skill := registeredSkill{Name: document.Name, Description: document.Description, Path: resolved, DisableModelInvocation: document.DisableModelInvocation, boundary: boundary, defaultName: defaultName}
+		skill := registeredSkill{Name: document.Name, Description: document.Description, Path: resolved, DisableModelInvocation: document.DisableModelInvocation, defaultName: defaultName}
 		s.skills[skill.Name] = skill
 	}
 }

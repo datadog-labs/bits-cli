@@ -7,11 +7,8 @@ import (
 	"html"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 const (
@@ -48,42 +45,27 @@ type instructionFile struct {
 	truncated bool
 }
 
-// Snapshot loads ancestor instructions from the filesystem
-// root to the active directory, including ancestors outside Git repositories.
+// Snapshot loads instructions from the project root down to the active directory.
 func (p *Instructions) Snapshot(parent context.Context) string {
 	active, err := filepath.Abs(p.workspacePath)
 	if err != nil {
 		return ""
 	}
-	repository, shadowed := instructionRepository(parent, active)
-	var directories []string
-	for dir := active; ; dir = filepath.Dir(dir) {
-		directories = append(directories, dir)
-		if filepath.Dir(dir) == dir {
-			break
-		}
+	active, err = filepath.EvalSymlinks(active)
+	if err != nil {
+		return ""
 	}
-	slices.Reverse(directories)
+	directories := projectDirectories(active)
 	var snapshot strings.Builder
 	remaining := instructionTotalLimit
-	seen := make(map[string]bool)
 	for _, dir := range directories {
 		if parent.Err() != nil {
 			break
 		}
-		boundary := dir
-		if repository != "" && withinRoot(repository, dir) {
-			boundary = repository
-		}
-		file := loadInstructionFile(dir, boundary, min(instructionFileLimit, remaining))
-		if file == nil || seen[file.path] {
+		file := loadInstructionFile(dir, min(instructionFileLimit, remaining))
+		if file == nil {
 			continue
 		}
-		resolved, _ := filepath.EvalSymlinks(file.path)
-		if shadowed != "" && resolved == shadowed {
-			continue
-		}
-		seen[file.path] = true
 		label := filepath.ToSlash(file.path)
 		if remaining == 0 {
 			fmt.Fprintf(&snapshot, "\n[Instructions from %q omitted: aggregate byte limit reached.]\n", label)
@@ -108,54 +90,14 @@ func (p *Instructions) Snapshot(parent context.Context) string {
 	return snapshot.String()
 }
 
-// instructionRepository identifies the worktree confinement boundary and the
-// main checkout file shadowed by a nested linked worktree's own selected file.
-// Bare layouts, submodules, and sibling worktrees do not shadow ancestor files.
-func instructionRepository(parent context.Context, active string) (string, string) {
-	layout := workspace.InspectRepositoryLayout(parent, active)
-	repository, common := layout.Root, layout.CommonDir
-	if repository == "" || common == "" {
-		return repository, ""
-	}
-	main := filepath.Dir(common)
-	mainGit, err := filepath.EvalSymlinks(filepath.Join(main, ".git"))
-	if err != nil || mainGit != common || main == repository || !withinRoot(main, repository) {
-		return repository, ""
-	}
-	// A one-byte probe selects the same readable filename without retaining a
-	// second copy of the worktree's instruction contents.
-	selected := loadInstructionFile(repository, repository, 1)
-	if selected == nil {
-		return repository, ""
-	}
-	return repository, filepath.Join(main, filepath.Base(selected.path))
-}
-
-func loadInstructionFile(directory, boundary string, limit int) *instructionFile {
-	resolvedBoundary, err := filepath.EvalSymlinks(boundary)
-	if err != nil {
-		return nil
-	}
-	root, err := os.OpenRoot(resolvedBoundary)
-	if err != nil {
-		return nil
-	}
-	defer func() { _ = root.Close() }()
+func loadInstructionFile(directory string, limit int) *instructionFile {
 	for _, filename := range instructionFilenames {
 		source := filepath.Join(directory, filename)
-		resolved, resolveErr := filepath.EvalSymlinks(source)
-		if resolveErr != nil || !withinRoot(resolvedBoundary, resolved) {
-			continue
-		}
-		relative, relErr := filepath.Rel(resolvedBoundary, resolved)
-		if relErr != nil {
-			continue
-		}
-		info, statErr := root.Stat(relative)
+		info, statErr := os.Stat(source)
 		if statErr != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		content, readErr := readBoundedFile(root, relative, limit)
+		content, readErr := readBoundedFile(source, limit)
 		if readErr != nil {
 			continue
 		}

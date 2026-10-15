@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -80,10 +79,10 @@ func parseSkillDocument(content []byte, defaultName string) (skillDocument, bool
 
 var errInvalidSkillDocument = errors.New("oversized, not valid UTF-8, or has invalid metadata")
 
-// readSkillDocument reads one SKILL.md confined to root. consumed is the byte
-// count charged against a discovery budget, including the truncation probe.
-func readSkillDocument(root *os.Root, relative string, limit int, defaultName string) (document skillDocument, consumed int, err error) {
-	content, err := readBoundedFile(root, relative, limit)
+// readSkillDocument reads one SKILL.md. consumed is the byte count charged
+// against a discovery budget, including the truncation probe.
+func readSkillDocument(path string, limit int, defaultName string) (document skillDocument, consumed int, err error) {
+	content, err := readBoundedFile(path, limit)
 	consumed = len(content)
 	if err != nil {
 		return skillDocument{}, consumed, err
@@ -103,7 +102,7 @@ type loadedSkill struct {
 }
 
 // Invoke resolves a name against the cached registry and rereads its current body
-// through the original confinement boundary before rendering the invocation.
+// before rendering the invocation.
 func (s *Skills) Invoke(ctx context.Context, name, arguments string) (string, error) {
 	registry, err := s.cache.load(ctx, s.discover)
 	if err != nil {
@@ -121,18 +120,9 @@ func (s *Skills) Invoke(ctx context.Context, name, arguments string) (string, er
 	return "", fmt.Errorf("unknown client skill: %s", name)
 }
 
-// load rereads a registered file through its discovery boundary.
+// load rereads a registered file.
 func (s registeredSkill) load() (loadedSkill, error) {
-	root, err := os.OpenRoot(s.boundary)
-	if err != nil {
-		return loadedSkill{}, fmt.Errorf("open client skill %q root: %w", s.Name, err)
-	}
-	defer func() { _ = root.Close() }()
-	relative, err := filepath.Rel(s.boundary, s.Path)
-	if err != nil {
-		return loadedSkill{}, fmt.Errorf("resolve client skill %q: %w", s.Name, err)
-	}
-	document, _, err := readSkillDocument(root, relative, skillFileLimit, s.defaultName)
+	document, _, err := readSkillDocument(s.Path, skillFileLimit, s.defaultName)
 	if err != nil {
 		return loadedSkill{}, fmt.Errorf("read client skill %q: %w", s.Name, err)
 	}

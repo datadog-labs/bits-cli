@@ -31,7 +31,7 @@ func TestInstructionsHierarchy(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := NewInstructions(nested).Snapshot(context.Background())
-	absoluteRepo, err := filepath.Abs(repo)
+	absoluteRepo, err := filepath.EvalSymlinks(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,8 +77,8 @@ func TestInstructionsNonGitAndUnsafeFiles(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "AGENTS.md"), source); err != nil {
 		t.Fatal(err)
 	}
-	if got := ws.Snapshot(context.Background()); got != "" {
-		t.Fatalf("escaping symlink = %q", got)
+	if got := ws.Snapshot(context.Background()); !strings.Contains(got, "outside instruction") {
+		t.Fatalf("outside symlink = %q", got)
 	}
 	if err := os.Remove(source); err != nil {
 		t.Fatal(err)
@@ -248,7 +248,7 @@ func supportsCaseSensitiveNames(t *testing.T, dir string) bool {
 	return string(first) == "upper" && string(second) == "lower"
 }
 
-func TestAncestorInstructions(t *testing.T) {
+func TestInstructionsStopAtProjectRoot(t *testing.T) {
 	for _, git := range []bool{false, true} {
 		t.Run(fmt.Sprintf("git=%t", git), func(t *testing.T) {
 			outer := t.TempDir()
@@ -265,27 +265,22 @@ func TestAncestorInstructions(t *testing.T) {
 			writeInstructionTestFile(t, active, "AGENTS.override.md", "local content")
 			instructions := NewInstructions(active)
 			got := instructions.Snapshot(context.Background())
-			previous := -1
-			for _, content := range []string{"ancestor content", "repository content", "local content"} {
-				index := strings.Index(got, content)
-				if index <= previous {
-					t.Fatalf("incorrect ordering for %q: %q", content, got)
-				}
-				previous = index
+			repository := strings.Index(got, "repository content")
+			if strings.Contains(got, "ancestor content") || (repository >= 0) != git || repository > strings.Index(got, "local content") {
+				t.Fatalf("project instructions = %q", got)
 			}
 		})
 	}
 }
 
-func TestNestedWorktreeInstructionShadowing(t *testing.T) {
+func TestNestedWorktreeInstructionsStopAtWorktreeRoot(t *testing.T) {
 	for _, tc := range []struct {
 		name, mainFile, worktreeFile string
-		keepMain                     bool
 	}{
-		{"duplicate", "AGENTS.md", "AGENTS.md", false},
-		{"no worktree file", "AGENTS.md", "", true},
-		{"different filename", "CLAUDE.md", "AGENTS.md", true},
-		{"override", "AGENTS.override.md", "AGENTS.override.md", false},
+		{"duplicate", "AGENTS.md", "AGENTS.md"},
+		{"no worktree file", "AGENTS.md", ""},
+		{"different filename", "CLAUDE.md", "AGENTS.md"},
+		{"override", "AGENTS.override.md", "AGENTS.override.md"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			outer := t.TempDir()
@@ -307,14 +302,14 @@ func TestNestedWorktreeInstructionShadowing(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := NewInstructions(nested).Snapshot(context.Background())
-			if strings.Contains(got, "main content") != tc.keepMain || !strings.Contains(got, "outer content") || (tc.worktreeFile != "" && !strings.Contains(got, "linked content")) {
+			if strings.Contains(got, "main content") || strings.Contains(got, "outer content") || strings.Contains(got, "linked content") != (tc.worktreeFile != "") {
 				t.Fatalf("worktree context = %q", got)
 			}
 		})
 	}
 }
 
-func TestBareWorktreeKeepsContainerInstructions(t *testing.T) {
+func TestBareWorktreeExcludesContainerInstructions(t *testing.T) {
 	outer := t.TempDir()
 	bare := filepath.Join(outer, ".bare")
 	runInstructionsGit(t, outer, "init", "--bare", bare)
@@ -323,7 +318,7 @@ func TestBareWorktreeKeepsContainerInstructions(t *testing.T) {
 	writeInstructionTestFile(t, outer, "AGENTS.md", "container content")
 	writeInstructionTestFile(t, linked, "AGENTS.md", "linked content")
 	got := NewInstructions(linked).Snapshot(context.Background())
-	if !strings.Contains(got, "container content") || !strings.Contains(got, "linked content") {
+	if strings.Contains(got, "container content") || !strings.Contains(got, "linked content") {
 		t.Fatalf("bare layout context = %q", got)
 	}
 }

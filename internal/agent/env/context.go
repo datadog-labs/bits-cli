@@ -12,7 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
+	"slices"
 
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
@@ -61,15 +61,26 @@ func renderLocalEnvironment(ctx context.Context, ws *workspace.Workspace) string
 	return string(out)
 }
 
-func withinRoot(root, path string) bool {
-	relative, err := filepath.Rel(root, path)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+// projectDirectories lists directories from the nearest ancestor containing
+// .git down to active. Outside a repository it returns only active.
+func projectDirectories(active string) []string {
+	var directories []string
+	for dir := active; ; dir = filepath.Dir(dir) {
+		directories = append(directories, dir)
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			slices.Reverse(directories)
+			return directories
+		}
+		if filepath.Dir(dir) == dir {
+			return []string{active}
+		}
+	}
 }
 
-// readBoundedFile reads a regular file through root, including at most one byte
-// beyond limit so callers can choose whether to reject or truncate large files.
-func readBoundedFile(root *os.Root, path string, limit int) ([]byte, error) {
-	file, err := root.Open(path)
+// readBoundedFile reads a regular file, following symlinks, including at most
+// one byte beyond limit so callers can choose whether to reject or truncate.
+func readBoundedFile(path string, limit int) ([]byte, error) {
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}

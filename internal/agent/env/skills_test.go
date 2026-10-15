@@ -82,12 +82,12 @@ func TestClientSkillDiscoveryPrecedenceAndBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := NewSkills(active, []string{extra, extra}).snapshot(context.Background())
-	for _, want := range []string{"nearest version", "root description", "user description", "&lt;tag&gt; &amp; text"} {
+	for _, want := range []string{"nearest version", "root description", "user description", "&lt;tag&gt; &amp; text", `name="escape"`} {
 		if !strings.Contains(catalog, want) {
 			t.Fatalf("missing %q in %s", want, catalog)
 		}
 	}
-	for _, unwanted := range []string{"root version", "parent version", "home version", "extra version", "BODY MUST", `name="escape"`} {
+	for _, unwanted := range []string{"root version", "parent version", "home version", "extra version", "BODY MUST"} {
 		if strings.Contains(catalog, unwanted) {
 			t.Fatalf("unexpected %q in %s", unwanted, catalog)
 		}
@@ -187,24 +187,13 @@ func TestClientSkillLimits(t *testing.T) {
 	if len(got) > skillCatalogLimit || !strings.HasPrefix(got, "<available-local-client-skills>") || !strings.HasSuffix(got, "</available-local-client-skills>") || !strings.Contains(got, "Do not load these local client skills with the Skill tool.") || strings.Contains(got, "<CONTEXT") || strings.Count(got, "<skill ") >= 100 {
 		t.Fatalf("catalog limit not enforced: %d bytes", len(got))
 	}
-	// Resolve the boundary like snapshot does: on macOS t.TempDir() lives under
-	// /var, a symlink to /private/var, which would fail walk's boundary check.
-	dir, err = filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = root.Close() }()
 	scan := skillScan{ctx: context.Background(), remainingEntries: 2, remainingBytes: skillReadLimit, skills: map[string]registeredSkill{}}
-	scan.walk(root, dir, filepath.Join(dir, ".agents/skills"), 0, map[string]bool{})
+	scan.walk(filepath.Join(dir, ".agents/skills"), 0, map[string]bool{})
 	if len(scan.skills) != 0 || scan.remainingEntries != 0 {
 		t.Fatal("entry budget not enforced")
 	}
 	scan = skillScan{ctx: context.Background(), remainingEntries: skillEntryLimit, remainingBytes: 10, skills: map[string]registeredSkill{}}
-	scan.walk(root, dir, filepath.Join(dir, ".agents/skills"), 0, map[string]bool{})
+	scan.walk(filepath.Join(dir, ".agents/skills"), 0, map[string]bool{})
 	if len(scan.skills) != 0 || scan.remainingBytes != 0 {
 		t.Fatal("aggregate read budget not enforced")
 	}
@@ -252,12 +241,11 @@ func TestClientSkillFileSymlinksAndDepth(t *testing.T) {
 	}
 	writeSkill(t, root, strings.Repeat("nested/", skillDepthLimit+1), "deep", "past depth limit")
 	got := NewSkills(dir, nil).snapshot(context.Background())
-	if !strings.Contains(got, "inside boundary") || strings.Contains(got, "outside boundary") || strings.Contains(got, "past depth limit") {
+	if !strings.Contains(got, "inside boundary") || !strings.Contains(got, "outside boundary") || strings.Contains(got, "past depth limit") {
 		t.Fatalf("catalog = %s", got)
 	}
-	// Explicit roots cannot follow child links out of their own boundary either.
-	if got := NewSkills(t.TempDir(), []string{root}).snapshot(context.Background()); got != "" {
-		t.Fatalf("explicit root escaped: %s", got)
+	if got := NewSkills(t.TempDir(), []string{root}).snapshot(context.Background()); !strings.Contains(got, "outside boundary") {
+		t.Fatalf("explicit root did not follow link: %s", got)
 	}
 }
 
