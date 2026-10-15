@@ -70,6 +70,7 @@ func (e *Editor) historyKey(key string) (tea.Cmd, bool) {
 // is marked dismissed so a trailing @mention or leading /command is not treated
 // as a completion trigger.
 func (e *Editor) recall(entry Prompt) tea.Cmd {
+	e.focus = focusText
 	e.changeChips(func() {
 		e.attachments = slices.Clone(entry.Attachments)
 		e.chips = chipRow{pointer: e.chips.pointer}

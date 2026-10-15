@@ -28,6 +28,7 @@ type InputMessageView struct {
 // RenderInputMessage shares the transcript's input surface with queued prompts.
 // All text and chip labels are untrusted; Action is a caller-owned UI label.
 func RenderInputMessage(message InputMessage, width int, sty styles.Input) InputMessageView {
+	const minimumActionGap = 1
 	inner := max(1, width-sty.Block.GetHorizontalFrameSize())
 	markerWidth := sty.PromptWidth()
 	indent := strings.Repeat(" ", markerWidth)
@@ -41,8 +42,10 @@ func RenderInputMessage(message InputMessage, width int, sty styles.Input) Input
 	}
 	textWidth := max(1, inner-markerWidth)
 	actionWidth := ansi.StringWidth(message.Action)
+	actionColumn := inner - actionWidth
+	contentOrigin := image.Pt(sty.Block.GetBorderLeftSize()+sty.Block.GetPaddingLeft(), sty.Block.GetBorderTopSize()+sty.Block.GetPaddingTop())
 	if actionWidth > 0 {
-		textWidth = max(1, textWidth-actionWidth-1)
+		textWidth = max(1, actionColumn-markerWidth-minimumActionGap)
 	}
 	text := escape.Multiline(message.Text)
 	if message.Compact {
@@ -62,10 +65,12 @@ func RenderInputMessage(message InputMessage, width int, sty styles.Input) Input
 			if message.ActionHighlighted {
 				actionStyle = sty.Marker
 			}
-			rendered += sty.Text.Render(strings.Repeat(" ", max(1, inner-markerWidth-ansi.StringWidth(line)-actionWidth))) + actionStyle.Render(message.Action)
-			x := sty.Block.GetBorderLeftSize() + sty.Block.GetPaddingLeft() + inner - actionWidth
-			y := sty.Block.GetBorderTopSize() + sty.Block.GetPaddingTop() + len(lines)
-			result.Action = image.Rect(x, y, x+actionWidth, y+1)
+			textEnd := markerWidth + ansi.StringWidth(line)
+			actionStart := max(actionColumn, textEnd+minimumActionGap)
+			gap := strings.Repeat(" ", actionStart-textEnd)
+			rendered += sty.Text.Render(gap) + actionStyle.Render(message.Action)
+			actionRow := len(lines)
+			result.Action = image.Rect(actionStart, actionRow, actionStart+actionWidth, actionRow+1).Add(contentOrigin)
 		}
 		lines = append(lines, rendered)
 	}

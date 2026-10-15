@@ -17,6 +17,7 @@ var inputRule = lipgloss.Border{Top: "▔", Bottom: "▁"}
 
 // build turns semantic palette roles into the concrete styles components use.
 func build(isDark bool, p palette) Theme {
+	activitySpinner := Spinner{frames: brailleFrames, stepsPerFrame: spinnerStepsPerFrame}
 	input := Input{
 		Prompt:     prompt,
 		Background: lipgloss.Color(p.surface),
@@ -41,6 +42,7 @@ func build(isDark bool, p palette) Theme {
 		SweepDim:    lipgloss.Color(p.inputRule),
 		SweepHot:    lipgloss.Color(p.sweepHot),
 		SweepMotion: true,
+		Spinner:     activitySpinner,
 		Chip:        chip(p),
 	}
 
@@ -190,7 +192,7 @@ func build(isDark bool, p palette) Theme {
 			StatusAwaitingLabel: busy.shimmer("awaiting approval"),
 			StatusSweepDim:      busy.dim,
 			StatusSweepHot:      busy.hot,
-			StatusSpinner:       Spinner{frames: brailleFrames, stepsPerFrame: spinnerStepsPerFrame},
+			StatusSpinner:       activitySpinner,
 			// Transcript labels, progress lines and the idle dot: present so nothing
 			// is silently dropped, but not competing with the conversation.
 			Meta:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.textTertiary)),

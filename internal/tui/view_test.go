@@ -13,6 +13,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tui/editor"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -22,6 +23,11 @@ import (
 func TestLayoutTilesTheScreen(t *testing.T) {
 	approval := func(m *Model) { m.syncApprovals([]agent.Block{animToolBlock(agent.ToolAwaitingApproval)}) }
 	draft := func(m *Model) { setConversationInput(m, strings.Repeat("draft\n", 12)) }
+	queue := func(m *Model) {
+		for range 8 {
+			m.editor.Enqueue(editor.Prompt{Text: "queued follow-up"})
+		}
+	}
 	toolUI := func(m *Model) { m.openToolUI(questionRequest(t, "question")) }
 	for _, tc := range []struct {
 		name          string
@@ -30,6 +36,10 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 		tooSmall      bool
 	}{
 		{"composer", 80, 24, nil, false},
+		{"queued prompts", 80, 24, []func(*Model){queue}, false},
+		{"queued prompts on short screen", 40, 8, []func(*Model){queue}, false},
+		{"queue with approval", 80, 24, []func(*Model){queue, approval}, false},
+		{"queue with replacing tool UI", 80, 30, []func(*Model){queue, toolUI}, false},
 		{"tall draft under the header", 80, 22, []func(*Model){draft}, false},
 		{"approval", 80, 11, []func(*Model){approval}, false},
 		{"tool UI", 80, 24, []func(*Model){toolUI}, false},
@@ -56,7 +66,7 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 				return
 			}
 
-			rects := slices.DeleteFunc([]image.Rectangle{f.transcript, f.prompt, f.composerGap, f.composer, f.footer}, image.Rectangle.Empty)
+			rects := slices.DeleteFunc([]image.Rectangle{f.transcript, f.queue, f.prompt, f.composerGap, f.composer, f.footer}, image.Rectangle.Empty)
 			slices.SortFunc(rects, func(a, b image.Rectangle) int { return a.Min.Y - b.Min.Y })
 			for i, r := range rects {
 				if (i == 0 && r != f.transcript) || (i > 0 && r.Min.Y != rects[i-1].Max.Y) || r.Dx() != tc.width {

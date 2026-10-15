@@ -95,8 +95,8 @@ func (m *Model) syncAnimationsAt(now time.Time) tea.Cmd {
 	var wantActivity, wantSweep bool
 	switch m.mode {
 	case ModeChat:
-		wantActivity = m.toolAnimationWanted()
 		wantSweep = m.borderSweepWanted()
+		wantActivity = m.toolAnimationWanted() || (wantSweep && m.editor.QueueLen() > 0)
 	case ModeConversations:
 		wantActivity = m.picker != nil && m.picker.Animating()
 	default:
@@ -142,6 +142,7 @@ func (m *Model) advanceAnimations(msg animationTickMsg) tea.Cmd {
 // setActivityFrame shares the activity timeline between chat and the picker.
 func (m *Model) setActivityFrame(frame int) {
 	m.list.SetFrame(frame)
+	m.editor.SetActivityFrame(frame)
 	if m.picker != nil {
 		m.picker.SetFrame(frame)
 	}

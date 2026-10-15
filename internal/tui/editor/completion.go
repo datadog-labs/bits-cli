@@ -14,7 +14,8 @@ const (
 
 // Attachment preserves the canonical identity selected from remote search.
 // Candidate and search-flow IDs are retained for a future approved feedback
-// path; prompt text is never parsed to recreate these fields.
+// path; prompt text is never parsed to recreate these fields. RankScore and
+// TrackingAttributes are immutable search metadata shared across copies.
 type Attachment struct {
 	Type               string
 	ID                 string

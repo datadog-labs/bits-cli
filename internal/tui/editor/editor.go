@@ -59,24 +59,27 @@ type Editor struct {
 	dismissedValue    string
 	history           history
 	queue             promptQueue
+	queueUI           queuePresentation
+	focus             inputFocus
 
 	// inputStyle is the shared input-block contract. width is the block's total
 	// width; the textarea is sized to fit inside the block's horizontal frame.
-	inputStyle  styles.Input
-	view        string
-	viewHeight  int
-	viewCached  bool
-	body        string
-	bodyHeight  int
-	bodyCached  bool
-	width       int
-	widthSet    bool
-	menuHeight  int
-	working     bool
-	sweepFrame  int
-	sweep       styles.BorderSweep
-	sweepWidth  int
-	sweepCached bool
+	inputStyle    styles.Input
+	view          string
+	viewHeight    int
+	viewCached    bool
+	body          string
+	bodyHeight    int
+	bodyCached    bool
+	width         int
+	widthSet      bool
+	menuHeight    int
+	working       bool
+	sweepFrame    int
+	activityFrame int
+	sweep         styles.BorderSweep
+	sweepWidth    int
+	sweepCached   bool
 }
 
 func (e *Editor) SetCommands(commands []CommandSpec) {
@@ -122,6 +125,7 @@ func New() *Editor {
 		styles:     defaultStyles.Editor,
 		inputStyle: defaultStyles.Input,
 		chips:      chipRow{pointer: image.Pt(-1, -1)},
+		queueUI:    queuePresentation{pointer: image.Pt(-1, -1)},
 	}
 }
 
@@ -295,6 +299,7 @@ func (e *Editor) SetValue(s string) {
 // Reset clears the input and its attachments, closes the menu, and leaves
 // history mode.
 func (e *Editor) Reset() {
+	e.focus = focusText
 	e.attachments = nil
 	e.chips = chipRow{pointer: e.chips.pointer}
 	e.resetText()
@@ -363,18 +368,18 @@ func (e *Editor) Height() int {
 // historyKey), and any other message is fed to the textarea and the menu is
 // recomputed from the resulting value.
 func (e *Editor) Update(msg tea.Msg) tea.Cmd {
-	if k, ok := msg.(tea.KeyPressMsg); ok {
+	if k, ok := msg.(tea.KeyPressMsg); ok && e.Focused() {
 		if k.String() == "ctrl+x" && e.RemoveLastAttachment() {
 			return nil
 		}
-		if e.chipKey(k.String()) {
+		if e.ControlKey(k.String()) {
 			return nil
 		}
 	}
 	// A paste inserts text, so the keyboard is back on the text: a following
 	// backspace must delete the paste, not a chip.
-	if _, ok := msg.(tea.PasteMsg); ok && e.chips.focused {
-		e.chips.focused = false
+	if _, ok := msg.(tea.PasteMsg); ok && e.focus != focusText {
+		e.focus = focusText
 		e.invalidateBody()
 	}
 	if k, ok := msg.(tea.KeyPressMsg); ok && e.menu.open {
@@ -442,7 +447,13 @@ func (e *Editor) renderView() {
 			// returns a new Style, leaving the idle style unaffected.
 			block = block.BorderTop(false)
 		}
-		content := e.ta.View()
+		// Keep the input owner's focus intact while hiding its caret when a
+		// sibling control owns the keys. Blur only this render copy.
+		textarea := e.ta
+		if e.focus != focusText {
+			textarea.Blur()
+		}
+		content := textarea.View()
 		if rows := e.renderChips(animated); rows != "" {
 			// A blank row keeps the chips from crowding the prompt.
 			content = rows + "\n\n" + content
@@ -997,3 +1008,6 @@ func wordBounds(runes []rune, col int) (start, end int) {
 	}
 	return start, end
 }
+
+// SetActivityFrame shares the transcript's activity timeline with queued prompts.
+func (e *Editor) SetActivityFrame(frame int) { e.activityFrame = frame }

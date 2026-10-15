@@ -673,6 +673,7 @@ func TestEntityTriggerSupportsSpacesAndRejectsMiddleOfWord(t *testing.T) {
 
 func TestMixedCandidatesAttachCanonicalEntityAndCanRemoveIt(t *testing.T) {
 	e := New()
+	e.Focus()
 	e.ta.SetValue("@engine")
 	e.ta.SetCursorColumn(len([]rune("@engine")))
 	setTestFileResults(e, "engine", "internal/agent/engine.go")

@@ -17,9 +17,7 @@ const maxExpandedChipRows = 4
 // user clicks on.
 type chipRow struct {
 	expanded bool
-	// focused means the keyboard is on attachments[cursor], not the text.
-	focused bool
-	cursor  int
+	cursor   int
 	// pointer is the editor-local cell under the mouse.
 	pointer image.Point
 	placed  []components.PlacedChip
@@ -29,7 +27,7 @@ type chipRow struct {
 
 // ChipsFocused reports whether the keyboard is on an attachment chip. The
 // parent then routes esc here instead of interrupting the turn.
-func (e *Editor) ChipsFocused() bool { return e.chips.focused }
+func (e *Editor) ChipsFocused() bool { return e.focus == focusAttachments }
 
 // SetPointer records the editor-local cell under the mouse so the chip
 // beneath it is highlighted.
@@ -85,7 +83,7 @@ func (e *Editor) hoveredChip() (int, bool) {
 // from there ←/→ move, backspace/delete remove, and esc returns to the text.
 // Any other key returns to the text and is handled there.
 func (e *Editor) chipKey(key string) bool {
-	if !e.chips.focused {
+	if e.focus != focusAttachments {
 		if key == "backspace" && len(e.attachments) > 0 && e.ta.Focused() && !e.menu.open && e.cursorOffset() == 0 {
 			e.focusChip(len(e.attachments) - 1)
 			return true
@@ -100,19 +98,19 @@ func (e *Editor) chipKey(key string) bool {
 		if e.chips.cursor < len(e.attachments)-1 {
 			e.focusChip(e.chips.cursor + 1)
 		} else {
-			e.chips.focused = false
+			e.focus = focusText
 		}
 		e.invalidateBody()
 		return true
 	case "backspace", "delete":
 		e.removeAttachment(e.chips.cursor)
 		return true
-	case "esc":
-		e.chips.focused = false
+	case "esc", "enter":
+		e.focus = focusText
 		e.invalidateBody()
 		return true
 	}
-	e.chips.focused = false
+	e.focus = focusText
 	e.invalidateBody()
 	return false
 }
@@ -126,7 +124,7 @@ func (e *Editor) focusChip(i int) {
 		if hidden {
 			e.chips.expanded = true
 		}
-		e.chips.focused = true
+		e.focus = focusAttachments
 		e.chips.cursor = i
 	})
 }
@@ -142,7 +140,7 @@ func (e *Editor) removeAttachment(i int) {
 			e.chips.cursor--
 		}
 		if len(e.attachments) == 0 {
-			e.chips.focused = false
+			e.focus = focusText
 			e.chips.expanded = false
 		}
 	})
@@ -180,7 +178,7 @@ func (e *Editor) renderChips(animated bool) string {
 	}
 	e.chips.placed = layout(-1)
 	active := -1
-	if e.chips.focused {
+	if e.focus == focusAttachments {
 		active = e.chips.cursor
 	} else if i, ok := e.hoveredChip(); ok {
 		active = i

@@ -96,6 +96,7 @@ func (sp shimmerPalette) shimmer(text string) Shimmer {
 // gradients, so terminal color depth does not invoke this policy automatically.
 func (t Theme) WithoutMotion() Theme {
 	t.Input.SweepMotion = false
+	t.Input.Spinner = t.Input.Spinner.withoutMotion()
 	t.Chat.StatusRunningLabel = t.Chat.StatusRunningLabel.withoutMotion()
 	t.Chat.StatusAwaitingLabel = t.Chat.StatusAwaitingLabel.withoutMotion()
 	t.Chat.StatusSpinner = t.Chat.StatusSpinner.withoutMotion()

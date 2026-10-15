@@ -145,7 +145,7 @@ func (m *Model) reconcileFocus() tea.Cmd {
 func (m *Model) reconcilePointerShape() tea.Cmd {
 	hand := false
 	if m.mode == ModeChat && !m.frame.tooSmall {
-		hand = m.list.Hovered() || m.follow.hover || (m.focus() == focusEditor && m.editor.ChipHovered())
+		hand = m.list.Hovered() || m.follow.hover || m.editor.QueueHovered() || (m.focus() == focusEditor && m.editor.ChipHovered())
 		if !hand && !m.frame.replaced && !m.editor.MenuOpen() {
 			if hit, ok := m.list.HoveredLink(); ok && webLink(hit.URL) {
 				hand = true
@@ -563,10 +563,33 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		} else {
 			m.editor.SetPointer(-1, -1)
 		}
+		if p := pointAt(msg); p.In(m.frame.queue) {
+			p = p.Sub(m.frame.queue.Min)
+			m.editor.SetQueuePointer(p.X, p.Y)
+		} else {
+			m.editor.SetQueuePointer(-1, -1)
+		}
 		m.moveLinkClick(msg)
 		return m.extendSelection(msg)
 	case tea.MouseReleaseMsg:
 		return m.finishLinkClick(msg)
+	}
+	if m.frame.at(pointAt(msg)) == regionQueue {
+		p := pointAt(msg).Sub(m.frame.queue.Min)
+		switch msg := msg.(type) {
+		case tea.MouseClickMsg:
+			if msg.Button == tea.MouseLeft && m.editor.ClickQueue(p.X, p.Y) {
+				return nil
+			}
+		case tea.MouseWheelMsg:
+			if msg.Button == tea.MouseWheelUp {
+				m.editor.ScrollQueue(-1)
+			}
+			if msg.Button == tea.MouseWheelDown {
+				m.editor.ScrollQueue(1)
+			}
+			return nil
+		}
 	}
 	if m.frame.at(pointAt(msg)) == regionPrompt {
 		if cmd, used := m.updatePrompt(m.frame.inPrompt(msg)); used {
@@ -788,6 +811,10 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.syncCompletionSearches())
 	}
 
+	if m.editor.ControlKey(msg.String()) {
+		return m, nil
+	}
+
 	// The offer is only visible with an empty composer, so these keys have no
 	// competing meaning: submit() already no-ops on empty input.
 	if m.showResume() {
@@ -809,9 +836,6 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
-		if m.editor.ChipsFocused() {
-			return m, m.editor.Update(msg)
-		}
 		m.cancelOperation() // interrupt the running turn
 		return m, nil
 	case "enter":
@@ -960,7 +984,12 @@ func (m *Model) relayout() {
 	}
 	m.reshow()
 	m.editor.SetPlaceholder(m.promptPlaceholder())
+	previousQueue := m.frame.queue
 	m.frame = m.layout()
+	if m.frame.queue != previousQueue {
+		m.editor.SetQueuePointer(-1, -1)
+		m.frame = m.layout()
+	}
 	m.editor.SetMenuHeight(m.frame.inputTop())
 	m.list.SetHeight(m.frame.transcript.Dy())
 	m.list.SetHeader(m.headerView())

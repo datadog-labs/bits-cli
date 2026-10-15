@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/editor"
@@ -80,6 +82,38 @@ func TestQueuePausesAtInterruptedBoundaries(t *testing.T) {
 				t.Fatal("queue leaked into new conversation")
 			}
 		})
+	}
+}
+
+func TestQueueControlsPrecedeSubmissionAndCancellation(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cancelled := false
+	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: func() { cancelled = true }}
+	m.editor.Enqueue(editor.Prompt{Text: "later"})
+	m.editor.SetValue("draft")
+	m.editor.AddAttachment(editor.Attachment{Type: "service", ID: "api"})
+	m.relayout()
+	key := func(code rune, mod tea.KeyMod) { m.Update(tea.KeyPressMsg{Code: code, Mod: mod}) }
+	key(tea.KeyTab, 0)   // attachments
+	key(tea.KeyEnter, 0) // return to text, not submit
+	if m.editor.QueueLen() != 1 || m.editor.Value() != "draft" {
+		t.Fatal("Enter on attachments submitted draft")
+	}
+	key(tea.KeyTab, tea.ModShift) // queue
+	key(tea.KeyEscape, 0)
+	if cancelled {
+		t.Fatal("Escape on queue cancelled turn")
+	}
+	// A click on the close control removes the queued prompt without touching draft.
+	rect := m.frame.queue
+	m.Update(tea.MouseClickMsg{X: rect.Max.X - 2, Y: rect.Min.Y + 1, Button: tea.MouseLeft})
+	if m.editor.QueueLen() != 0 || m.editor.Value() != "draft" || len(m.editor.Attachments()) != 1 {
+		t.Fatal("queue click changed draft")
+	}
+	key(tea.KeyEscape, 0)
+	if !cancelled {
+		t.Fatal("Escape in text did not interrupt")
 	}
 }
 
