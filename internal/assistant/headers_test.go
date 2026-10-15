@@ -19,13 +19,13 @@ func TestParseCustomHeaders(t *testing.T) {
 		{name: "trailing comma", raw: "a=1,", want: http.Header{"A": {"1"}}},
 		{
 			name: "single pair",
-			raw:  "test-drive-my-drive=1",
-			want: http.Header{"Test-Drive-My-Drive": {"1"}},
+			raw:  "x-route-hint=1",
+			want: http.Header{"X-Route-Hint": {"1"}},
 		},
 		{
 			name: "several pairs with padding",
-			raw:  " test-drive-my-drive = 1 , x-trace-me=abc ",
-			want: http.Header{"Test-Drive-My-Drive": {"1"}, "X-Trace-Me": {"abc"}},
+			raw:  " x-route-hint = 1 , x-trace-me=abc ",
+			want: http.Header{"X-Route-Hint": {"1"}, "X-Trace-Me": {"abc"}},
 		},
 		{
 			name: "value keeps later equals signs",
@@ -85,20 +85,20 @@ func TestParseCustomHeadersRejectsManagedHeaders(t *testing.T) {
 }
 
 func TestCustomHeadersFromEnv(t *testing.T) {
-	t.Setenv(EnvCustomHeaders, "test-drive-my-drive=1")
+	t.Setenv(EnvCustomHeaders, "x-route-hint=1")
 	got, err := CustomHeadersFromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Get("test-drive-my-drive") != "1" {
+	if got.Get("x-route-hint") != "1" {
 		t.Errorf("header = %v, want the pair from the environment", got)
 	}
 }
 
 func TestRequestCarriesCustomHeaders(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("test-drive-my-drive"); got != "1" {
-			t.Errorf("test-drive-my-drive = %q, want 1", got)
+		if got := r.Header.Get("x-route-hint"); got != "1" {
+			t.Errorf("x-route-hint = %q, want 1", got)
 		}
 		if r.Header.Get("DD-API-KEY") != "api" || r.Header.Get("DD-APPLICATION-KEY") != "app" {
 			t.Error("credentials were displaced by a custom header")
@@ -108,7 +108,7 @@ func TestRequestCarriesCustomHeaders(t *testing.T) {
 		}
 		_, _ = fmt.Fprint(w, `{"data":{"id":"u","type":"user","attributes":{}}}`)
 	})
-	c.CustomHeaders = http.Header{"Test-Drive-My-Drive": {"1"}}
+	c.CustomHeaders = http.Header{"X-Route-Hint": {"1"}}
 	_, _ = c.CurrentUser(context.Background())
 }
 

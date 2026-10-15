@@ -11,8 +11,8 @@ import (
 // EnvCustomHeaders carries extra request headers as a comma-separated list of
 // name=value pairs, for example:
 //
-//	BITS_CUSTOM_HEADERS='test-drive-my-drive=1'
-//	BITS_CUSTOM_HEADERS='test-drive-my-drive=1,x-trace-me=abc'
+//	BITS_CUSTOM_HEADERS='x-route-hint=1'
+//	BITS_CUSTOM_HEADERS='x-route-hint=1,x-trace-me=abc'
 //
 // It is deliberately an environment variable rather than a flag: the mechanism
 // is for development and support, and is not part of the command-line contract.
