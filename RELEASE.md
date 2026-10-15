@@ -9,7 +9,7 @@ Releases are cut from `main` by the release workflow. Start one with:
 This triggers `.github/workflows/release.yml` on `main`, which:
 
 1. checks that the tag is the next patch, minor, or major version;
-2. runs CI and builds the release archives with `./scripts/dist.sh`;
+2. runs CI and builds the release archives and SBOMs with `./scripts/dist.sh`;
 3. attests their build provenance and publishes them as a GitHub release of
    the `main` commit with `./scripts/publish.sh`, which also creates the tag.
 
@@ -19,8 +19,9 @@ dd-octo-sts token scoped by `.github/chainguard/self.release.sts.yaml`.
 Release assets, for darwin/amd64, darwin/arm64, linux/amd64, and linux/arm64:
 
 ```
-bits_<version>_<os>_<arch>.tar.gz   bits, README.md, LICENSE, LICENSE-3rdparty.csv
-bits_<version>_checksums.txt        SHA-256 of every archive
+bits_<version>_<os>_<arch>.tar.gz            bits, README.md, licenses
+bits_<version>_<os>_<arch>.tar.gz.sbom.json  SPDX JSON SBOM of the archive
+bits_<version>_checksums.txt                 SHA-256 of every archive and SBOM
 ```
 
 Verify a download with:
@@ -33,7 +34,9 @@ gh attestation verify bits_<version>_<os>_<arch>.tar.gz \
     --source-ref refs/heads/main
 ```
 
-`./scripts/dist.sh v1.2.3` produces the same archives locally in `dist/`.
+`./scripts/dist.sh v1.2.3` builds archives and checksums locally in `dist/`.
+Add `--sbom` before the tag to include SBOMs; this requires
+[Syft](https://github.com/anchore/syft).
 
 ## Homebrew
 
