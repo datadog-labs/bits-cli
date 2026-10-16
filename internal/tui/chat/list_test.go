@@ -9,6 +9,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/filediff"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
@@ -912,6 +913,77 @@ func TestHoverPaintsTheWholeExpandedBlock(t *testing.T) {
 
 	list.SetPointerRow(height - 1)
 	assertWholeBlockPainted(t)
+}
+
+// listWithEditDiff returns a sized list holding one edit_file block whose
+// collapsed view renders a multi-line diff preview below its header.
+func listWithEditDiff() *List {
+	var before, after strings.Builder
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&before, "line-%d\n", i)
+		fmt.Fprintf(&after, "LINE-%d\n", i)
+	}
+	diff, display := filediff.BuildWithDisplay("a/f.go", "b/f.go", before.String(), after.String())
+	block := editorToolBlock("edit_file", display, &filediff.State{
+		Phase:  filediff.PhaseApplied,
+		Change: &filediff.Change{Path: "f.go", Op: filediff.OpEdit, State: filediff.ChangeApplied, Diff: &diff},
+	})
+	block.ID = agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"}
+
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(20)
+	list.SetItems([]agent.Block{block})
+	return list
+}
+
+// TestCollapsedPreviewRowsStayOutsideHoverAndClickTarget: a collapsed block
+// with compact preview rows (edit_file, write_file, exec_command) must paint
+// hover only on its header, matching the collapsed click target. Expanding
+// the same block must then paint — and target — the whole region.
+func TestCollapsedPreviewRowsStayOutsideHoverAndClickTarget(t *testing.T) {
+	const headerFill = "48;2;34;36;43" // dark accordionHover (#22242B)
+	const detailFill = "48;2;28;30;38" // dark accordionDetailHover (#1C1E26)
+
+	list := listWithEditDiff()
+	list.ScrollToTop()
+	collapsedHeight := list.itemHeight(0)
+	if collapsedHeight < 2 {
+		t.Fatalf("collapsed fixture only rendered %d line(s), want a compact preview body too", collapsedHeight)
+	}
+
+	list.SetPointerRow(0)
+	if id, ok := list.AccordionAt(0); !ok || id != list.view[0].id {
+		t.Fatalf("AccordionAt(0) on a collapsed block = %v, %t, want the header", id, ok)
+	}
+	if _, ok := list.AccordionAt(1); ok {
+		t.Fatal("collapsed block's preview row is a click target, want header-only")
+	}
+
+	lines := strings.Split(list.Render(), "\n")
+	if !strings.Contains(lines[0], headerFill) {
+		t.Fatalf("collapsed header row missing its hover fill:\n%s", lines[0])
+	}
+	for row := 1; row < collapsedHeight; row++ {
+		if strings.Contains(lines[row], headerFill) || strings.Contains(lines[row], detailFill) {
+			t.Fatalf("collapsed preview row %d painted by header hover, want unpainted:\n%s", row, lines[row])
+		}
+	}
+
+	list.ToggleDisclosure(list.view[0].id)
+	expandedHeight := list.itemHeight(0)
+	list.SetPointerRow(0)
+	lines = strings.Split(list.Render(), "\n")
+	for row := range expandedHeight {
+		want := detailFill
+		if row == 0 {
+			want = headerFill
+		}
+		if !strings.Contains(lines[row], want) {
+			t.Fatalf("expanded row %d missing its hover fill %q:\n%s", row, want, lines[row])
+		}
+	}
 }
 
 // TestToggleAllDisclosure: the first ctrl+o expands, the next collapses, and

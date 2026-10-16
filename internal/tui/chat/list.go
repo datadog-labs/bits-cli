@@ -419,7 +419,10 @@ func (l *List) hoverFillRows() (hoverFill, bool) {
 		return hoverFill{}, false
 	}
 	header := l.pointerY - line
-	end := header + len(l.entry(idx).lines)
+	end := header + 1
+	if l.expanded(l.view[idx].id) {
+		end = header + len(l.entry(idx).lines)
+	}
 	return hoverFill{header: header, start: max(header, 0), end: min(end, l.height)}, true
 }
 
