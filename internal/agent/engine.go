@@ -151,10 +151,10 @@ const maxTurns = 150
 //
 // The current design is a serialized operation/actor model: a claimed operation
 // exclusively owns all mutable conversation state, including opts, transcript,
-// previousConversationID, and session grants. State crosses goroutine boundaries
+// and previousConversationID; the permission gate carries its own lock. State crosses goroutine boundaries
 // through copied events/results and channel synchronization. Only Decide,
-// CancelTool, ClientSkills, and explicitly atomic methods may be called concurrently with an
-// operation. Do not add a mutex around Engine state without first changing this
+// CancelTool, StopTools, SetPermissionsMode, GrantSessionFor, ClientSkills, and explicitly
+// atomic methods may be called concurrently with an operation. Do not add a mutex around Engine state without first changing this
 // ownership model and identifying accesses that its existing operation gate and
 // channel boundaries do not order.
 type Engine struct {
@@ -166,9 +166,13 @@ type Engine struct {
 	previousConversationID string
 	// sentUserContext is the custom user context the current conversation is
 	// known to carry; nil when unknown, as after loading a conversation.
-	sentUserContext     *string
-	commands            chan toolCommand
-	sessionGrants       map[ApprovalKey]struct{}
+	sentUserContext *string
+	commands        chan toolCommand
+	gate            permissionGate
+	// permissionsChanged wakes a running round to re-gate its parked calls
+	// after a mode switch or a grant. It holds at most one signal: rounds
+	// re-read the current permissions anyway.
+	permissionsChanged  chan struct{}
 	active              atomic.Bool
 	operationGeneration atomic.Uint64
 	projectInstructions *instructionDelivery
@@ -246,14 +250,14 @@ func New(b Backend, config Config) *Engine {
 		runtimeStatus.Backend = provider.BackendStatus()
 	}
 	engine := &Engine{
-		backend:       b,
-		opts:          opts,
-		runtimeStatus: runtimeStatus,
-		transcript:    NewTranscript(),
-		commands:      make(chan toolCommand, maxQueuedCommands),
-		sessionGrants: make(map[ApprovalKey]struct{}),
-		clientSkills:  config.ClientSkills,
-		userContext:   config.UserContext,
+		backend:            b,
+		opts:               opts,
+		runtimeStatus:      runtimeStatus,
+		transcript:         NewTranscript(),
+		commands:           make(chan toolCommand, maxQueuedCommands),
+		permissionsChanged: make(chan struct{}, 1),
+		clientSkills:       config.ClientSkills,
+		userContext:        config.UserContext,
 	}
 	if config.ProjectInstructions != nil {
 		engine.projectInstructions = &instructionDelivery{source: config.ProjectInstructions}
@@ -360,6 +364,8 @@ func eventResult(ev Event) <-chan Event {
 	return out
 }
 
+// Decide answers a call parked for approval. It reports whether the answer
+// was queued, not applied: the round drops it if the call is no longer parked.
 func (e *Engine) Decide(toolCallID string, decision ApprovalDecision) bool {
 	if !decision.valid() {
 		return false
@@ -371,6 +377,8 @@ func (e *Engine) Decide(toolCallID string, decision ApprovalDecision) bool {
 	})
 }
 
+// CancelTool cancels one call of the active round. Like Decide, it reports
+// whether the command was queued.
 func (e *Engine) CancelTool(toolCallID string) bool {
 	return e.command(toolCommand{
 		generation: e.operationGeneration.Load(),
@@ -381,7 +389,8 @@ func (e *Engine) CancelTool(toolCallID string) bool {
 
 // StopTools cancels the active client-tool round and persists its cancellation
 // responses before ending the turn. Cancelling the turn context instead leaves
-// unanswered calls available for a later process to resume.
+// unanswered calls available for a later process to resume. It reports
+// whether the stop was queued.
 func (e *Engine) StopTools() bool {
 	return e.command(toolCommand{generation: e.operationGeneration.Load(), stop: true})
 }
@@ -813,28 +822,45 @@ func (e *Engine) NewConversation() error {
 	e.resetContext()
 	e.transcript = NewTranscript()
 	e.continuation = nil
-	clear(e.sessionGrants)
+	e.gate.clearGrants()
 	return nil
 }
 
-// SetPermissionsMode changes the process tool mode while the engine is idle.
-// The engine owns session grants, so returning to manual clears them under the
-// same operation gate used by turns and conversation restores.
+// SetPermissionsMode switches the process tool mode at once, even mid-turn.
+// The switch governs every gate decision made after it: dispatching a call,
+// re-gating parked calls (so a switch away from manual releases them), and
+// applying a queued answer: once it returns, no gated call starts under the
+// earlier mode. Calls already running are not stopped. Deny mode
+// is absolute: no gated call runs, whatever grants or answers exist.
+// Returning to manual revokes session grants.
 func (e *Engine) SetPermissionsMode(tools *ToolSet, mode PermissionsMode) error {
-	if !e.active.CompareAndSwap(false, true) {
-		return ErrOperationActive
-	}
-	defer e.active.Store(false)
 	if tools == nil {
 		return fmt.Errorf("tool set is nil")
 	}
-	if err := tools.SetPermissionsMode(mode); err != nil {
+	if err := e.gate.setMode(tools, mode); err != nil {
 		return err
 	}
-	if mode == ModeManual {
-		clear(e.sessionGrants)
-	}
+	e.permissionsUpdated()
 	return nil
+}
+
+// GrantSessionFor stops asking, for the rest of the conversation, for calls
+// sharing the approval key of the call parked as callID. It applies at once:
+// a running round releases every parked call the grant covers, callID
+// included. It reports false when no call is parked as callID.
+func (e *Engine) GrantSessionFor(callID string) bool {
+	if !e.gate.grantParked(callID) {
+		return false
+	}
+	e.permissionsUpdated()
+	return true
+}
+
+func (e *Engine) permissionsUpdated() {
+	select {
+	case e.permissionsChanged <- struct{}{}:
+	default: // a wake-up is already pending
+	}
 }
 
 // Restore fetches the persisted history for the engine's conversation, folds it
@@ -891,7 +917,7 @@ const (
 type roundCall struct {
 	call     ToolCall
 	status   callStatus
-	key      ApprovalKey                  // set while awaiting approval
+	gate     ApprovalRequirement          // the call's declared gate, set once dispatched
 	cancel   context.CancelFunc           // set once launched
 	response assistant.ClientToolResponse // set once resolved
 }
@@ -953,6 +979,12 @@ func (e *Engine) runTools(
 		r.calls[i] = &roundCall{call: call}
 		r.byID[call.ID] = r.calls[i]
 	}
+	// However the round ends, none of its calls stays parked.
+	defer func() {
+		for _, c := range r.calls {
+			e.gate.unpark(c.call.ID)
+		}
+	}()
 
 	// ok turns false once an event can no longer be delivered or the turn is
 	// cancelled; the round then ends without responses.
@@ -968,6 +1000,9 @@ func (e *Engine) runTools(
 			if command.generation == generation {
 				ok = r.handleCommand(command)
 			}
+
+		case <-e.permissionsChanged:
+			ok = r.regateParked()
 
 		case done := <-r.results:
 			c := done.call
@@ -1008,45 +1043,36 @@ func (e *Engine) runTools(
 }
 
 // dispatch decides how a call starts: answered locally, parked for approval,
-// or launched.
+// or launched. Once a stop is requested nothing new starts. The approval
+// policy runs here, once and outside the gate lock; the mode only decides
+// what the declared gate means.
 func (r *toolRoundState) dispatch(c *roundCall) bool {
-	permissions := r.tools.snapshotPermissions()
-	if c.call.Name != assistant.ApprovalRequestTool {
-		requirement, needsApproval := permissions.approval(c.call)
-		_, granted := r.e.sessionGrants[requirement.Key]
-		switch {
-		case !needsApproval || granted:
-			return r.launch(c, false)
-		case r.stopRequested:
-			return r.resolve(c, cancelledResult())
-		case permissions.deniesGates():
-			return r.deny(c, modeDeniedResult())
-		default:
-			return r.awaitApproval(c, requirement)
-		}
-	}
-
-	// The server write gate never runs a handler; it is answered locally.
 	if r.stopRequested {
 		return r.resolve(c, cancelledResult())
 	}
-	if _, err := parseServerGateInput(c.call); err != nil {
-		return r.deny(c, invalidServerGateResult())
+	if c.call.Name == assistant.ApprovalRequestTool {
+		// The server write gate never runs a handler; it is answered locally.
+		if _, err := parseServerGateInput(c.call); err != nil {
+			return r.deny(c, invalidServerGateResult())
+		}
+		if r.tools == nil {
+			return r.deny(c, serverDeniedResult()) // no tool set, so no one to approve it
+		}
 	}
-	if permissions.approvesServerGate() {
-		return r.resolve(c, approvedResult())
+	requirement, gated := r.tools.policy(c.call)
+	if !gated {
+		r.start(c)
+		return true
 	}
-	requirement, needsApproval := permissions.approval(c.call)
-	if !needsApproval {
-		return r.deny(c, serverDeniedResult())
-	}
-	if _, granted := r.e.sessionGrants[requirement.Key]; granted {
-		return r.resolve(c, approvedResult())
-	}
-	if permissions.deniesGates() {
+	c.gate = requirement
+	switch r.admit(c, false) {
+	case verdictRun:
+		return r.publishStarted(c, false)
+	case verdictDeny:
 		return r.deny(c, modeDeniedResult())
+	default:
+		return r.awaitApproval(c)
 	}
-	return r.awaitApproval(c, requirement)
 }
 
 func (r *toolRoundState) handleCommand(command toolCommand) bool {
@@ -1077,45 +1103,83 @@ func (r *toolRoundState) handleCommand(command toolCommand) bool {
 	if command.decision == ApprovalDeny {
 		return r.deny(c, approvalDeniedResult(c.call))
 	}
-	if command.decision == ApprovalAllowSession {
-		r.e.sessionGrants[c.key] = struct{}{}
+	switch r.admit(c, true) {
+	case verdictRun:
+		return r.publishStarted(c, true)
+	case verdictDeny:
+		return r.deny(c, modeDeniedResult())
+	default:
+		return true // an answer never parks
 	}
-	// Full access switches the mode before releasing siblings, so every parked
-	// call clears regardless of key. The error is unreachable: the mode is a
-	// constant and only an invalid one fails.
-	fullAccess := command.decision == ApprovalAllowFullAccess
-	if fullAccess {
-		_ = r.tools.SetPermissionsMode(ModeSkipPermissions)
-	}
-	if !r.approve(c) {
-		return false
-	}
-	for _, sibling := range r.calls {
-		if sibling.status != callAwaitingApproval {
+}
+
+// regateParked re-gates parked calls after a mode switch or a grant: a call
+// the permissions now allow runs, one the mode denies is denied, and the rest
+// stay parked.
+func (r *toolRoundState) regateParked() bool {
+	for _, c := range r.calls {
+		if c.status != callAwaitingApproval {
 			continue
 		}
-		_, granted := r.e.sessionGrants[sibling.key]
-		if (fullAccess || granted) && !r.approve(sibling) {
-			return false
+		switch r.admit(c, false) {
+		case verdictRun:
+			if !r.publishStarted(c, true) {
+				return false
+			}
+		case verdictDeny:
+			if !r.deny(c, modeDeniedResult()) {
+				return false
+			}
+		case verdictPark:
 		}
 	}
 	return true
 }
 
-func (r *toolRoundState) awaitApproval(c *roundCall, requirement ApprovalRequirement) bool {
+// admit decides how gated call c proceeds and, when it may run, starts it,
+// atomically with respect to permission changes. Callers publish the outcome.
+func (r *toolRoundState) admit(c *roundCall, allowOnce bool) verdict {
+	return r.e.gate.admit(r.tools, c.call.ID, c.gate.Key, allowOnce, func() { r.start(c) })
+}
+
+func (r *toolRoundState) awaitApproval(c *roundCall) bool {
 	c.status = callAwaitingApproval
-	c.key = requirement.Key
-	if _, updated := r.e.transcript.MarkAwaitingApproval(c.call.ID, requirement.Prompt); !updated {
+	if _, updated := r.e.transcript.MarkAwaitingApproval(c.call.ID, c.gate.Prompt); !updated {
 		return true
 	}
 	return r.send(Event{Kind: EventTranscript, Transcript: r.e.snapshot()})
 }
 
-func (r *toolRoundState) approve(c *roundCall) bool {
+// start begins c without publishing anything, so it may run under the gate
+// lock: a handler is launched, or the server gate is answered as approved.
+func (r *toolRoundState) start(c *roundCall) {
 	if c.call.Name == assistant.ApprovalRequestTool {
-		return r.resolve(c, approvedResult())
+		r.settle(c, approvedResult())
+		return
 	}
-	return r.launch(c, true)
+	toolCtx, cancel := context.WithCancel(r.ctx)
+	c.status = callRunning
+	c.cancel = cancel
+	call := c.call
+	go func() {
+		result, err := r.tools.Run(toolCtx, call)
+		r.results <- toolDone{call: c, result: result, err: err}
+	}()
+}
+
+// publishStarted shows a call start began: the server gate's approval, or a
+// handler running once it had waited for approval.
+func (r *toolRoundState) publishStarted(c *roundCall, wasParked bool) bool {
+	if c.call.Name == assistant.ApprovalRequestTool {
+		return r.publishResult(c, approvedResult())
+	}
+	if !wasParked {
+		return true
+	}
+	if _, updated := r.e.transcript.MarkToolRunning(c.call.ID); !updated {
+		return true
+	}
+	return r.send(Event{Kind: EventTranscript, Transcript: r.e.snapshot()})
 }
 
 // deny answers the denial on the wire; siblings still resolve. Under DenyStop
@@ -1136,25 +1200,6 @@ func (r *toolRoundState) deny(c *roundCall, result ToolResult) bool {
 			return false
 		}
 	}
-	return true
-}
-
-func (r *toolRoundState) launch(c *roundCall, approved bool) bool {
-	toolCtx, cancel := context.WithCancel(r.ctx)
-	c.status = callRunning
-	c.cancel = cancel
-	if approved {
-		if _, updated := r.e.transcript.MarkToolRunning(c.call.ID); updated {
-			if !r.send(Event{Kind: EventTranscript, Transcript: r.e.snapshot()}) {
-				return false
-			}
-		}
-	}
-	call := c.call
-	go func() {
-		result, err := r.tools.Run(toolCtx, call)
-		r.results <- toolDone{call: c, result: result, err: err}
-	}()
 	return true
 }
 
@@ -1179,8 +1224,18 @@ func (r *toolRoundState) resolve(c *roundCall, result ToolResult) bool {
 	if c.status == callResolved {
 		return true
 	}
+	r.e.gate.unpark(c.call.ID)
+	r.settle(c, result)
+	return r.publishResult(c, result)
+}
+
+// settle records c's wire response without publishing it.
+func (r *toolRoundState) settle(c *roundCall, result ToolResult) {
 	c.status = callResolved
 	c.response = toolResponse(c.call, result)
+}
+
+func (r *toolRoundState) publishResult(c *roundCall, result ToolResult) bool {
 	result = r.tools.NormalizeResult(c.call, result)
 	if _, updated := r.e.transcript.MarkToolExecuted(c.call.ID, result); !updated {
 		return true

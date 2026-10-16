@@ -109,6 +109,11 @@ func gatedToolSet(t *testing.T, mode PermissionsMode) *ToolSet {
 }
 
 func decideServerGate(engine *Engine, decision ApprovalDecision, observe func(Event) error) func(Event) error {
+	return answerServerGate(func(block Block) bool { return engine.Decide(block.ToolCallID(), decision) }, observe)
+}
+
+// answerServerGate answers the first pending server gate with answer.
+func answerServerGate(answer func(Block) bool, observe func(Event) error) func(Event) error {
 	decisionIssued := false
 	return func(event Event) error {
 		if observe != nil {
@@ -126,8 +131,7 @@ func decideServerGate(engine *Engine, decision ApprovalDecision, observe func(Ev
 			if block.Tool == nil || block.Tool.Name != assistant.ApprovalRequestTool {
 				continue
 			}
-			id := block.ToolCallID()
-			if !engine.Decide(id, decision) {
+			if !answer(block) {
 				return errors.New("server-gate approval decision was not queued")
 			}
 			decisionIssued = true
@@ -204,8 +208,11 @@ func TestEngineApprovalRequestGateNilToolsDenies(t *testing.T) {
 	}
 }
 
+// TestEngineMalformedApprovalRequestFailsClosed denies a malformed gate even
+// under full access, and the stop that denial requests wins over full access
+// for the sibling dispatched after it.
 func TestEngineMalformedApprovalRequestFailsClosed(t *testing.T) {
-	backend := &gateBackend{gateInput: `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"other"}`}
+	backend := &gateBackend{gateInput: `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"other"}`, includeSibling: true}
 	result, err := New(backend, Config{}).RunTurn(context.Background(), TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeSkipPermissions),
@@ -213,12 +220,15 @@ func TestEngineMalformedApprovalRequestFailsClosed(t *testing.T) {
 	if err != nil || result.Outcome != TurnOutcomeCompleted || !result.Denied {
 		t.Fatalf("result/error = %+v, %v; want a typed denial", result, err)
 	}
-	if len(backend.responses) != 1 {
-		t.Fatalf("response batches = %d, want 1", len(backend.responses))
+	if len(backend.responses) != 1 || len(backend.responses[0]) != 2 {
+		t.Fatalf("response batches = %+v, want the gate and its sibling", backend.responses)
 	}
 	response := backend.responses[0][0]
 	if response.Status != assistant.ToolStatusError || response.Title != "Invalid approval request" || response.Metadata.Output != "the server approval request was invalid" {
 		t.Fatalf("gate response = %+v, want an invalid-request error", response)
+	}
+	if sibling := backend.responses[0][1]; sibling.ToolCallID != "write-1" || sibling.Metadata.Output != "tool execution was cancelled by the user" {
+		t.Fatalf("sibling response = %+v, want it cancelled by the stop", sibling)
 	}
 }
 
@@ -303,7 +313,7 @@ func TestEngineApprovalRequestGateAllowSessionIsToolScoped(t *testing.T) {
 				continue
 			}
 			decisions++
-			if !engine.Decide(block.ToolCallID(), ApprovalAllowSession) {
+			if !allowForSession(engine, block.ToolCallID()) {
 				return errors.New("server-gate session approval was not queued")
 			}
 			decided[block.ToolCallID()] = struct{}{}
@@ -342,7 +352,7 @@ func TestEngineApprovalRequestGateAllowSessionCoversSameTool(t *testing.T) {
 	result, err := engine.RunTurn(ctx, TurnInput{
 		Message: "write something",
 		Tools:   gatedToolSet(t, ModeManual),
-	}, decideServerGate(engine, ApprovalAllowSession, nil))
+	}, answerServerGate(func(block Block) bool { return allowForSession(engine, block.ToolCallID()) }, nil))
 	if err != nil || result.Outcome != TurnOutcomeCompleted {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}

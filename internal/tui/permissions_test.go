@@ -123,7 +123,7 @@ func TestPermissionsSwitchingToCurrentModeIsANoOp(t *testing.T) {
 	}
 }
 
-func TestPermissionsQueuesDuringActiveTurn(t *testing.T) {
+func TestPermissionsAppliesDuringActiveTurn(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
 	m.chatPhase = chat.PhaseStreaming
@@ -132,23 +132,18 @@ func TestPermissionsQueuesDuringActiveTurn(t *testing.T) {
 		t.Fatal("full access did not require confirmation during the turn")
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual {
-		t.Fatal("mode changed before the active turn closed")
+	if m.mode != ModeChat || m.tools.PermissionsMode() != agent.ModeSkipPermissions {
+		t.Fatal("confirmed mode did not apply during the active turn")
 	}
-	if strings.Contains(ansi.Strip(m.chatFooter()), "Full Access after this response") || !latestNotice(m).Empty() {
-		t.Fatal("queuing a mode changed the footer or showed a notification")
+	if latestNotice(m).Text != "Full Access enabled. Actions will run without approval." {
+		t.Fatalf("notice = %#v, want the switch announced at once", latestNotice(m))
+	}
+	if m.chatPhase != chat.PhaseStreaming || m.op.events == nil {
+		t.Fatal("switching the mode disturbed the active turn")
 	}
 	_, _ = m.dispatchCommand("permissions", "")
-	if m.permissionCursor != 1 || strings.Contains(ansi.Strip(m.permissionsView()), "(queued)") || !strings.Contains(ansi.Strip(m.permissionsView()), "› Full Access (current)") {
-		t.Fatal("picker did not mark the selected choice as current")
-	}
-	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.mode != ModeChat || m.pendingPermissions != agent.ModeSkipPermissions {
-		t.Fatal("reselecting the queued choice changed it")
-	}
-	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
-	if m.pendingPermissions != "" || m.tools.PermissionsMode() != agent.ModeSkipPermissions {
-		t.Fatal("queued mode did not apply when the turn closed")
+	if m.permissionCursor != 1 || !strings.Contains(ansi.Strip(m.permissionsView()), "› Full Access (current)") {
+		t.Fatal("picker did not mark the applied mode as current")
 	}
 }
 
@@ -157,7 +152,7 @@ func TestPermissionsPickerOpensDuringActiveTurn(t *testing.T) {
 	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
 	m.chatPhase = chat.PhaseStreaming
 	_, _ = m.dispatchCommand("permissions", "")
-	if m.mode != ModePermissions || !strings.Contains(ansi.Strip(m.permissionsView()), "Permission changes take effect on the next turn.") {
+	if m.mode != ModePermissions || !strings.Contains(ansi.Strip(m.permissionsView()), "Permission changes take effect immediately.") {
 		t.Fatal("picker did not explain when changes take effect")
 	}
 	if m.chatPhase != chat.PhaseStreaming || m.op.events == nil {
@@ -168,49 +163,12 @@ func TestPermissionsPickerOpensDuringActiveTurn(t *testing.T) {
 	}
 }
 
-func TestPermissionsCurrentModeCancelsQueuedChange(t *testing.T) {
-	m, _ := newPermissionsModel(t, agent.ModeManual)
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
-	m.chatPhase = chat.PhaseStreaming
-	m.pendingPermissions = agent.ModeSkipPermissions
-	_, _ = m.dispatchCommand("permissions", "manual")
-	if m.pendingPermissions != "" || !latestNotice(m).Empty() {
-		t.Fatal("selecting the current mode did not cancel the queued change")
-	}
-	if m.chatPhase != chat.PhaseStreaming {
-		t.Fatal("cancelling the queued change disturbed the active turn")
-	}
-	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
-		t.Fatalf("mode = %q, want manual", got)
-	}
-}
-
-func TestPermissionsQueuesWhileApprovalsPending(t *testing.T) {
-	m, _ := newPermissionsModel(t, agent.ModeManual)
-	// Approvals only arrive inside a running operation.
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
-	m.syncApprovals([]agent.Block{{
-		Kind: assistant.KindToolCall,
-		Tool: &agent.ToolBlock{Status: agent.ToolAwaitingApproval},
-	}})
-	_, _ = m.dispatchCommand("permissions", "skip-permissions")
-	if m.mode != ModePermissions || !m.permissionConfirm {
-		t.Fatal("pending approval prevented the confirmation from opening")
-	}
-	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual || waitingApprovals(m) != 1 {
-		t.Fatal("queued change altered the current approval")
-	}
-}
-
-func TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool(t *testing.T) {
+// TestPermissionsSwitchToSkipReleasesPendingApproval switches to full access
+// from /permissions while a call waits for approval: the engine re-gates it,
+// so it runs without an answer and the turn completes.
+func TestPermissionsSwitchToSkipReleasesPendingApproval(t *testing.T) {
 	m, backend := newPermissionsModel(t, agent.ModeManual)
-	setConversationInput(m, "Run the action")
-	_, _ = m.submit()
-	for waitingApprovals(m) == 0 {
-		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
-		_, _ = m.Update(msg)
-	}
+	awaitApproval(t, m, 80)
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
 	if m.mode != ModePermissions || !m.permissionConfirm || m.tools.PermissionsMode() != agent.ModeManual {
 		t.Fatal("skip-permissions switched before confirmation")
@@ -219,62 +177,54 @@ func TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool(t *testing.T) {
 		t.Fatal("confirmation is hidden while an approval is pending")
 	}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !latestNotice(m).Empty() {
-		t.Fatalf("notice = %#v, want no success notification", latestNotice(m))
-	}
-	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual || waitingApprovals(m) != 1 {
-		t.Fatal("current tool approval changed before the turn ended")
-	}
-	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape}) // deny the current tool
-	drainConversationRemote(t, m)
-	if backend.calls != 2 {
-		t.Fatalf("backend calls = %d after the first turn", backend.calls)
-	}
-	if got := m.tools.PermissionsMode(); got != agent.ModeSkipPermissions || m.pendingPermissions != "" {
-		t.Fatalf("mode = %q, queued = %q; want full access applied after the turn", got, m.pendingPermissions)
+	if got := m.tools.PermissionsMode(); got != agent.ModeSkipPermissions {
+		t.Fatalf("mode = %q, want full access applied mid-turn", got)
 	}
 
-	setConversationInput(m, "Run the action")
-	_, _ = m.submit()
 	drainConversationRemote(t, m)
 	if waitingApprovals(m) != 0 {
-		t.Fatalf("skip-permissions still surfaced %d permission prompts", waitingApprovals(m))
+		t.Fatalf("%d approvals still waiting after full access", waitingApprovals(m))
 	}
-	if backend.calls != 4 {
-		t.Fatalf("backend calls = %d, want a completed second turn", backend.calls)
-	}
-	if len(backend.responses) != 2 || len(backend.responses[1]) != 1 || !strings.Contains(backend.responses[1][0].Metadata.Output, `"status":"ok"`) {
-		t.Fatalf("second-turn tool response = %+v, want the tool to have run unprompted", backend.responses)
+	if backend.calls != 2 || len(backend.responses) != 1 || !strings.Contains(backend.responses[0][0].Metadata.Output, `"status":"ok"`) {
+		t.Fatalf("tool responses = %+v, want the parked call to have run unprompted", backend.responses)
 	}
 }
 
+// TestPermissionsSwitchBackToManualPromptsAgain returns to manual mid-turn:
+// the switch applies at once, and the next gated call asks.
 func TestPermissionsSwitchBackToManualPromptsAgain(t *testing.T) {
 	m, backend := newPermissionsModel(t, agent.ModeSkipPermissions)
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
-	_, _ = m.dispatchCommand("permissions", "manual")
-	if m.pendingPermissions != agent.ModeManual || m.tools.PermissionsMode() != agent.ModeSkipPermissions {
-		t.Fatal("manual mode did not queue during the active turn")
-	}
 	drainConversationRemote(t, m)
-	if waitingApprovals(m) != 0 {
-		t.Fatalf("skip-permissions surfaced %d permission prompts", waitingApprovals(m))
-	}
-	if latestNotice(m).Level != chat.NoticeInfo || latestNotice(m).Text != "Permissions set to Ask for Approval." {
-		t.Fatalf("notice = %#v, want the applied permissions change announced", latestNotice(m))
-	}
-	if got := m.tools.PermissionsMode(); got != agent.ModeManual || m.pendingPermissions != "" {
-		t.Fatalf("mode = %q, queued = %q; want manual after the first turn", got, m.pendingPermissions)
-	}
-
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
-	for waitingApprovals(m) == 0 {
-		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
-		_, _ = m.Update(msg)
+	_, _ = m.dispatchCommand("permissions", "manual")
+	if got := m.tools.PermissionsMode(); got != agent.ModeManual {
+		t.Fatalf("mode = %q, want manual applied mid-turn", got)
 	}
-	if backend.calls != 3 {
+	if latestNotice(m).Level != chat.NoticeInfo || latestNotice(m).Text != "Permissions set to Ask for Approval." {
+		t.Fatalf("notice = %#v, want the switch announced at once", latestNotice(m))
+	}
+	// The second turn's call may already have run under full access; if not,
+	// it asks now. Either way the turn after that asks.
+	for m.op.events != nil && waitingApprovals(m) == 0 {
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.op.gen, m.op.events)))
+	}
+	if waitingApprovals(m) == 0 {
+		setConversationInput(m, "Run the action")
+		_, _ = m.submit()
+		awaitPendingApproval(t, m)
+	}
+	if backend.calls < 3 {
 		t.Fatalf("backend calls = %d, want the gated tool round", backend.calls)
+	}
+}
+
+func awaitPendingApproval(t *testing.T, m *Model) {
+	t.Helper()
+	for waitingApprovals(m) == 0 {
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.op.gen, m.op.events)))
 	}
 }
 
@@ -389,10 +339,10 @@ func TestPermissionsPickerSectionSpacing(t *testing.T) {
 	if panelRowText(rows[title-1]) != "" {
 		t.Fatalf("title needs one blank row of padding above it: %q", rows)
 	}
-	if note := find("Permission changes take effect on the next turn."); note != title+1 {
+	if note := find("Permission changes take effect immediately."); note != title+1 {
 		t.Fatalf("timing note should sit directly below the title: %q", rows)
 	}
-	for _, pair := range [][2]string{{"Permission changes take effect on the next turn.", "Ask for Approval"}, {"workspace", "Full Access"}} {
+	for _, pair := range [][2]string{{"Permission changes take effect immediately.", "Ask for Approval"}, {"workspace", "Full Access"}} {
 		start, end := find(pair[0]), find(pair[1])
 		if end-start != 2 || panelRowText(rows[start+1]) != "" {
 			t.Fatalf("expected one blank row between %q and %q", pair[0], pair[1])
@@ -485,12 +435,12 @@ func TestPermissionsPickerCompactResizeKeepsSelection(t *testing.T) {
 	}
 }
 
-func TestPermissionsConfirmationCannotBypassNewActiveWork(t *testing.T) {
+func TestPermissionsConfirmationAppliesDuringNewActiveWork(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
 	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.tools.PermissionsMode() != agent.ModeManual || m.pendingPermissions != agent.ModeSkipPermissions || m.mode != ModeChat {
-		t.Fatal("stale confirmation did not queue the mode for the active turn")
+	if m.tools.PermissionsMode() != agent.ModeSkipPermissions || m.mode != ModeChat {
+		t.Fatal("confirmation did not apply the mode during the new active turn")
 	}
 }

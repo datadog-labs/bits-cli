@@ -28,12 +28,24 @@ const (
 	fullAccessDisclaimer = "Full access skips all approval requests. Use with caution."
 )
 
+// approvalGrant is the permissions change a choice makes before it answers
+// the call; the engine then releases every parked call the change covers.
+type approvalGrant uint8
+
+const (
+	grantNone       approvalGrant = iota
+	grantSession                  // stop asking for this call's approval key
+	grantFullAccess               // switch to skip-permissions
+)
+
+// approvalChoice is one modal action: an answer for the call, plus the
+// permissions change that comes with it.
 type approvalChoice struct {
 	decision     agent.ApprovalDecision
+	grant        approvalGrant
 	label        string
 	emphasis     string // trailing segment rendered bold, e.g. "full access"
 	compactLabel string
-	fullAccess   bool
 	// dropPriority orders which choices give way on a narrow slot; 0 never
 	// drops. See actions.
 	dropPriority int
@@ -41,10 +53,12 @@ type approvalChoice struct {
 
 var approvalChoices = [...]approvalChoice{
 	{decision: agent.ApprovalAllowOnce, label: "Allow", compactLabel: "Allow"},
-	{decision: agent.ApprovalAllowSession, label: "Allow for session", compactLabel: "Session", dropPriority: 1},
-	{decision: agent.ApprovalAllowFullAccess, label: "Switch to ", emphasis: "full access", compactLabel: "Full", fullAccess: true, dropPriority: 2},
+	{decision: agent.ApprovalAllowOnce, grant: grantSession, label: "Allow for session", compactLabel: "Session", dropPriority: 1},
+	{decision: agent.ApprovalAllowOnce, grant: grantFullAccess, label: "Switch to ", emphasis: "full access", compactLabel: "Full", dropPriority: 2},
 	{decision: agent.ApprovalDeny, label: "Deny", compactLabel: "Deny"},
 }
+
+func (c approvalChoice) fullAccess() bool { return c.grant == grantFullAccess }
 
 // chip renders one choice's action label. The bold emphasis is a separate
 // rendered segment because nesting Bold(true) inside the outer style resets
@@ -63,13 +77,13 @@ func (c approvalChoice) chip(style lipgloss.Style, compact bool) string {
 // the highlighted action, the body scroll, and the decision; its approvalAsk
 // delivers that. A new prompt starts on the first action, scrolled to the top.
 type approvalPrompt struct {
-	block      agent.Block
-	selected   int                    // index into approvalChoices
-	visible    []int                  // choices the last Layout showed; empty until the first Layout
-	window     components.Window      // the body rows the last layout showed
-	decision   agent.ApprovalDecision // "" until the user decides
-	fullAccess bool                   // the decision also asked to switch to full access
-	panel      components.Panel
+	block    agent.Block
+	selected int                    // index into approvalChoices
+	visible  []int                  // choices the last Layout showed; empty until the first Layout
+	window   components.Window      // the body rows the last layout showed
+	decision agent.ApprovalDecision // "" until the user decides
+	grant    approvalGrant          // the permissions change made with the decision
+	panel    components.Panel
 
 	theme styles.Theme
 	chat  chat.Styles
@@ -117,7 +131,7 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 			a.decision = agent.ApprovalDeny
 		case "enter":
 			choice := approvalChoices[a.selected]
-			a.decision, a.fullAccess = choice.decision, choice.fullAccess
+			a.decision, a.grant = choice.decision, choice.grant
 		default:
 			return nil, false
 		}
@@ -249,7 +263,7 @@ func (a *approvalPrompt) actions(width int) string {
 	// approval Frame gives up a row of bottom padding for it (see
 	// builder.go's approvalPanel).
 	disclaimer := ""
-	if approvalChoices[choices.selected].fullAccess {
+	if approvalChoices[choices.selected].fullAccess() {
 		disclaimer = a.theme.Approval.Disclaimer.Render(ansi.Truncate(fullAccessDisclaimer, max(1, width), "…"))
 	}
 	return row + "\n" + disclaimer
@@ -262,7 +276,7 @@ func (a *approvalPrompt) renderChoiceRow(row choiceRow) string {
 		choice := approvalChoices[i]
 		style := sty.Action
 		if i == row.selected {
-			if choice.fullAccess {
+			if choice.fullAccess() {
 				style = sty.FullAccess
 			} else {
 				style = sty.Selected

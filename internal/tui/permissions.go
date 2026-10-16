@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"errors"
 	"slices"
 	"strings"
 
@@ -29,11 +28,7 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 	}
 	current := m.tools.PermissionsMode()
 	if argument == "" {
-		selected := current
-		if m.pendingPermissions != "" {
-			selected = m.pendingPermissions
-		}
-		m.permissionConfirm, m.permissionCursor = false, slices.Index(permissionModes[:], selected)
+		m.permissionConfirm, m.permissionCursor = false, slices.Index(permissionModes[:], current)
 		m.editor.CloseMenu()
 		m.setMode(ModePermissions)
 		return nil
@@ -43,10 +38,6 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 	}
 	mode := agent.PermissionsMode(argument)
 	if mode == current {
-		m.pendingPermissions = ""
-		return nil
-	}
-	if mode == m.pendingPermissions {
 		return nil
 	}
 	if current == agent.ModeManual && mode == agent.ModeSkipPermissions {
@@ -58,44 +49,19 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 	return m.applyPermissionsMode(mode)
 }
 
+// applyPermissionsMode closes the picker and switches the mode.
 func (m *Model) applyPermissionsMode(mode agent.PermissionsMode) tea.Cmd {
-	if m.op.busy() {
-		m.pendingPermissions = mode
-		m.setMode(ModeChat)
-		return nil
-	}
-	if err := m.setPermissionsMode(mode); err != nil {
-		m.setMode(ModeChat)
-		if errors.Is(err, agent.ErrOperationActive) {
-			return m.postNotice(notice(chat.NoticeWarn, nil, "Permissions are still changing. Try again after this response."))
-		}
-		return m.postNotice(notice(chat.NoticeError, err, "Could not switch the permissions mode."))
-	}
 	m.setMode(ModeChat)
-	return m.postNotice(permissionsChangedNotice(mode))
+	return m.setPermissionsMode(mode)
 }
 
-func (m *Model) setPermissionsMode(mode agent.PermissionsMode) error {
+// setPermissionsMode switches the mode at once, mid-turn included: the engine
+// re-gates calls already waiting for approval.
+func (m *Model) setPermissionsMode(mode agent.PermissionsMode) tea.Cmd {
 	if err := m.engine.SetPermissionsMode(m.tools, mode); err != nil {
-		return err
-	}
-	m.pendingPermissions = ""
-	m.syncStatus()
-	return nil
-}
-
-func (m *Model) applyPendingPermissions() tea.Cmd {
-	if m.pendingPermissions == "" {
-		return nil
-	}
-	mode := m.pendingPermissions
-	if err := m.setPermissionsMode(mode); err != nil {
-		m.pendingPermissions = ""
 		return m.postNotice(notice(chat.NoticeError, err, "Could not switch the permissions mode."))
 	}
-	if m.mode == ModePermissions {
-		m.permissionConfirm, m.permissionCursor = false, slices.Index(permissionModes[:], mode)
-	}
+	m.syncStatus()
 	return m.postNotice(permissionsChangedNotice(mode))
 }
 
@@ -133,11 +99,6 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		mode := permissionModes[m.permissionCursor]
 		if mode == m.tools.PermissionsMode() {
-			m.pendingPermissions = ""
-			m.setMode(ModeChat)
-			return nil
-		}
-		if mode == m.pendingPermissions {
 			m.setMode(ModeChat)
 			return nil
 		}
@@ -200,7 +161,7 @@ func (m *Model) permissionsBody(width, _ int) string {
 		rows = append(rows, blank, choice("Yes, enable full access", m.permissionCursor == 0), blank, choice("Cancel", m.permissionCursor == 1))
 		return strings.Join(rows, "\n")
 	}
-	rows = append(rows, row(style.MenuDetail, "Permission changes take effect on the next turn."))
+	rows = append(rows, row(style.MenuDetail, "Permission changes take effect immediately."))
 	for i, label := range m.permissionOptionLabels() {
 		rows = append(rows, blank)
 		rows = append(rows, m.permissionOptionRows(label, permissionOptionDetails[i], width, i == m.permissionCursor)...)
@@ -210,11 +171,7 @@ func (m *Model) permissionsBody(width, _ int) string {
 
 func (m *Model) permissionOptionLabels() [2]string {
 	labels := [2]string{"Ask for Approval", "Full Access"}
-	selected := m.tools.PermissionsMode()
-	if m.pendingPermissions != "" {
-		selected = m.pendingPermissions
-	}
-	if selected == agent.ModeManual {
+	if m.tools.PermissionsMode() == agent.ModeManual {
 		labels[0] += " (current)"
 	} else {
 		labels[1] += " (current)"
