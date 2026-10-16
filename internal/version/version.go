@@ -1,15 +1,20 @@
-package cmd
+// Package version reports the build version and identifies stable releases.
+package version
 
-import "runtime/debug"
+import (
+	"runtime/debug"
+
+	"golang.org/x/mod/semver"
+)
 
 // releaseVersion is set by the release build with -ldflags. Keeping it empty
 // for ordinary builds preserves the development version reported by the Go
 // toolchain.
 var releaseVersion string
 
-// BuildVersion reports the module version when available, otherwise a
+// Build reports the module version when available, otherwise a
 // development version with the short VCS revision recorded by the toolchain.
-func BuildVersion() string {
+func Build() string {
 	if releaseVersion != "" {
 		// Release artifacts store their package version without a prefix, while
 		// the CLI presents versions in the same form as Go module versions.
@@ -40,4 +45,10 @@ func vcsRevision(info *debug.BuildInfo) string {
 		}
 	}
 	return ""
+}
+
+// IsStable reports whether v is a complete, v-prefixed release version without
+// prerelease or build metadata. This excludes dev builds and abbreviated tags.
+func IsStable(v string) bool {
+	return semver.IsValid(v) && semver.Canonical(v) == v && semver.Prerelease(v) == ""
 }

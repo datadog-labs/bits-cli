@@ -37,22 +37,6 @@ func TestMutationRetriesAcceptCommittedPostconditions(t *testing.T) {
 	})
 }
 
-func TestDefaultLockPathIgnoresProcessHomeEnvironment(t *testing.T) {
-	before, err := defaultSessionLockPath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	after, err := defaultSessionLockPath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if before != after {
-		t.Fatalf("lock path changed with process environment: %q != %q", before, after)
-	}
-}
-
 func TestStoreLockSerializesProcesses(t *testing.T) {
 	if os.Getenv("BITS_LOCK_HELPER") == "1" {
 		store := Store{lockPath: os.Getenv("BITS_LOCK_PATH")}

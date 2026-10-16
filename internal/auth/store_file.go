@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/datadog-labs/bits-cli/internal/config"
 )
 
 // The file fallback persists the session as a mode-0600 JSON file. It has no
@@ -14,7 +16,7 @@ import (
 // operate on an explicit path; Store owns path resolution and backend choice.
 
 func defaultSessionFilePath() (string, error) {
-	dir, err := defaultConfigDir()
+	dir, err := config.Dir()
 	if err != nil {
 		return "", err
 	}

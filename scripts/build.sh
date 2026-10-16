@@ -19,7 +19,7 @@ if [[ -n "$VERSION" ]]; then
     fi
     build_args+=(
         -buildvcs=false
-        -ldflags "-s -w -buildid= -X github.com/datadog-labs/bits-cli/internal/cmd.releaseVersion=$VERSION"
+        -ldflags "-s -w -buildid= -X github.com/datadog-labs/bits-cli/internal/version.releaseVersion=$VERSION"
     )
 fi
 

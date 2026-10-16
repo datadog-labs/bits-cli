@@ -250,7 +250,7 @@ func TestModelAndAuthJoinsKnownValues(t *testing.T) {
 	}
 }
 
-// BuildVersion already returns a v-prefixed module version, so the block must
+// The build version already has a v prefix, so the block must
 // not add one: an untagged build otherwise reads "vdev".
 func TestWelcomeVersionRenderedAsGiven(t *testing.T) {
 	for _, version := range []string{"v0.1.2", "dev", "dev-abc1234"} {
