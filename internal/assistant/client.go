@@ -17,10 +17,13 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/datadog-labs/bits-cli/internal/version"
 )
 
 const (
@@ -287,6 +290,9 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 	deleteManagedHeaders(req.Header)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Datadog-Bits-Surface", "cli")
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", fmt.Sprintf("bits-cli/%s (%s/%s)", version.Build(), runtime.GOOS, runtime.GOARCH))
+	}
 	if c.TokenSource != nil {
 		token, err := c.TokenSource.AccessToken(ctx)
 		if err != nil {
