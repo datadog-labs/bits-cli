@@ -216,6 +216,9 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 		if decodeObject(input, &in) && in.Cmd != "" {
 			// Preserve command line boundaries for the exec-specific renderer. The
 			// working directory remains compact metadata in the header.
+			if in.Workdir == "" {
+				in.Workdir = "."
+			}
 			p.argument, p.context = escape.Multiline(in.Cmd), escape.SingleLine(in.Workdir)
 			if in.TimeoutMS != nil && *in.TimeoutMS > 0 && *in.TimeoutMS <= spec.ExecMaxTimeoutMS {
 				p.timeout = (time.Duration(*in.TimeoutMS) * time.Millisecond).String()
