@@ -13,7 +13,8 @@ What to check:
   multi-line commands), cut with "…".
 - Expanded (Ctrl+O, or click ▶): no "…" inside a command, nothing lost at
   the right edge; the first line wraps under the command's first column,
-  later lines wrap behind │ with soft continuations indented by 2 more.
+  later lines wrap behind │ with soft continuations indented by 2 more,
+  and source indentation is kept on every row.
 - Resize down to ~20 columns and back while expanded: text rewraps into a
   narrower column, never truncated, │ markers stay.
 
@@ -131,6 +132,15 @@ def shell_quoting():
     # Nested quotes, $(…), backticks and escaped characters wrapping mid-way.
     run("printf '%s\\n' \"$(git rev-parse --abbrev-ref HEAD)\" `date -u +%Y-%m-%dT%H:%M:%SZ` 'single \"quoted\" text with spaces' \"double 'quoted' text with \\$HOME and \\\"escapes\\\"\" | sed -e 's/^/  > /' -e 's/$/ </'")
 
+def indentation():
+    # Review repro: at ~32 columns the indented print used to lose its
+    # indentation behind an empty │ row. Indentation now repeats on every row.
+    run("python3 - <<'PY'\nif True:\n        print('abcdefghij')\n        print('" + words("indented-continuation", 4) + "')\nPY")
+
+def operators():
+    # Review repro: at ~20 columns "&&" used to overflow the row and be cut.
+    run("go test ./... && go vet ./... && git diff --stat")
+
 def short():
     # Control: expanding a short command changes nothing.
     run("echo short")
@@ -146,6 +156,8 @@ def corners():
     tabs_and_blanks()
     unicode()
     shell_quoting()
+    indentation()
+    operators()
     short()
 
 # ---------------------------------------------------------------------------

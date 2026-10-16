@@ -621,10 +621,11 @@ func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []su
 }
 
 // renderExecInvocationFull is the expanded invocation: every source line is
-// word-wrapped instead of truncated. The first line wraps under the command's
-// first column, so expanding only adds rows below the compact header; later
-// lines wrap behind the │ branch, with soft-wrapped continuations indented
-// further to keep them distinct from real newlines.
+// shown in full, wrapped instead of truncated. The first line wraps under the
+// command's first column, so expanding only adds rows below the compact
+// header; later lines wrap behind the │ branch, with soft-wrapped
+// continuations indented further to keep them distinct from real newlines.
+// Source indentation is kept on every row.
 func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines []string, suffix []summarySpan, c renderContext) string {
 	state := statusOf(tool)
 	action := p.actionLabel(state)
@@ -632,35 +633,92 @@ func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [
 	leadWidth := statusGlyphWidth + ansi.StringWidth(action) + 1
 
 	meta := append(append(p.execMeta(), suffix...), lifecycleSpans(state)...)
-	out := hangWrap(lead, strings.Repeat(" ", leadWidth), leadWidth, lines[0]+renderSpans(meta, c.sty), c.width)
+	out := hangWrap(lead, strings.Repeat(" ", leadWidth), leadWidth, leadWidth, lines[0]+renderSpans(meta, c.sty), c.width)
 
-	branch := c.sty.ToolDetail.Render("  │ ")
-	cont := c.sty.ToolDetail.Render("  │   ")
+	const branchText, contText = "  │ ", "  │   "
+	branch, cont := c.sty.ToolDetail.Render(branchText), c.sty.ToolDetail.Render(contText)
 	for _, row := range lines[1:] {
-		out = append(out, hangWrap(branch, cont, ansi.StringWidth("  │   "), row, c.width)...)
+		out = append(out, hangWrap(branch, cont, ansi.StringWidth(branchText), ansi.StringWidth(contText), row, c.width)...)
 	}
 	return strings.Join(out, "\n")
 }
 
-// shellBreakpoints are extra word-wrap opportunities in shell source.
-const shellBreakpoints = "/|;&"
+// shellBreakpoints are extra word-wrap opportunities in shell source. "&" is
+// left out: ansi.Wrap lets a run of breakpoints overflow the width, and
+// splitting "&&" helps no one.
+const shellBreakpoints = "/|;"
 
-// hangWrap word-wraps body after lead, re-applying styles on every row.
-// Continuation rows start with cont. prefixWidth is the widest of lead and
-// cont in cells: every row wraps to the width left after it, so no row
-// needs the final truncation, however narrow the terminal.
-func hangWrap(lead, cont string, prefixWidth int, body string, width int) []string {
+// hangWrap lays body out after lead without losing any of it:
+//   - the first row wraps to the width left after lead (leadWidth cells), the
+//     others to the width left after cont (contWidth cells);
+//   - body's leading indentation is repeated on every row instead of being
+//     eaten as a word break, capped at half the room so text still fits;
+//   - whatever the word wrapper leaves too wide is hard-wrapped, not cut.
+//
+// Styles are re-applied on every row. Only a width too narrow to hold a
+// prefix at all truncates.
+func hangWrap(lead, cont string, leadWidth, contWidth int, body string, width int) []string {
 	width = max(1, width)
-	bodyWidth := max(1, width-prefixWidth)
-	rows := strings.Split(lipgloss.Wrap(body, bodyWidth, shellBreakpoints), "\n")
-	for i, row := range rows {
-		prefix := cont
-		if i == 0 {
-			prefix = lead
+	indent := min(leadingSpaces(body), max(0, width-max(leadWidth, contWidth))/2)
+	body = ansi.TruncateLeft(body, indent, "")
+	pad := strings.Repeat(" ", indent)
+	firstWidth := max(1, width-leadWidth-indent)
+	restWidth := max(1, width-contWidth-indent)
+
+	var rows []string
+	if first, rest, ok := splitFirstRow(body, firstWidth); ok {
+		rows = append(rows, lead+pad+first)
+		if rest != "" {
+			for _, row := range wrapLossless(rest, restWidth) {
+				rows = append(rows, cont+pad+row)
+			}
 		}
-		rows[i] = ansi.Truncate(prefix+row, width, "…")
+	} else {
+		// Unexpected wrapper output: fall back to one width that fits every row.
+		for i, row := range wrapLossless(body, min(firstWidth, restWidth)) {
+			prefix := cont
+			if i == 0 {
+				prefix = lead
+			}
+			rows = append(rows, prefix+pad+row)
+		}
+	}
+	for i := range rows {
+		rows[i] = ansi.Truncate(rows[i], width, "…")
 	}
 	return rows
+}
+
+// wrapLossless word-wraps s to width and hard-wraps anything still wider:
+// ansi.Wrap lets trailing breakpoints such as "-" overflow. lipgloss.Wrap then
+// only re-applies styles on each row.
+func wrapLossless(s string, width int) []string {
+	s = ansi.Hardwrap(ansi.Wrap(s, width, shellBreakpoints), width, true)
+	return strings.Split(lipgloss.Wrap(s, width, ""), "\n")
+}
+
+// splitFirstRow wraps s to width and returns its first row plus the styled
+// remainder, so the remainder can wrap to another width. The whitespace the
+// row break consumed is dropped. ok is false if the first row is not a plain
+// prefix of s, which the wrappers should never produce.
+func splitFirstRow(s string, width int) (first, rest string, ok bool) {
+	rows := wrapLossless(s, width)
+	if len(rows) == 1 {
+		return rows[0], "", true
+	}
+	plain := ansi.Strip(s)
+	head := strings.TrimRight(ansi.Strip(rows[0]), " ")
+	if head == "" || !strings.HasPrefix(plain, head) {
+		return "", "", false
+	}
+	skip := ansi.StringWidth(head) + leadingSpaces(plain[len(head):])
+	return rows[0], ansi.TruncateLeft(s, skip, ""), true
+}
+
+// leadingSpaces counts the spaces s starts with, ignoring escape sequences.
+func leadingSpaces(s string) int {
+	plain := ansi.Strip(s)
+	return len(plain) - len(strings.TrimLeft(plain, " "))
 }
 
 func execSuffix(result spec.ExecCommandOutput) []summarySpan {
