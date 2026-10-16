@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"golang.org/x/mod/semver"
@@ -17,7 +19,16 @@ import (
 type homebrew struct {
 	client *http.Client
 	url    string
+	// prefix owns the running keg; upgrades use its brew, not the one on PATH.
+	prefix string
 }
+
+// formulaURL is the tap's generated formula. It is a variable only so a local
+// test build can point it elsewhere with -ldflags -X; release builds keep it.
+var formulaURL = "https://raw.githubusercontent.com/datadog-labs/homebrew-pack/main/Formula/bits.rb"
+
+// Fully qualified, so brew never picks a same-named formula from another tap.
+const homebrewUpgrade = "brew upgrade datadog-labs/pack/bits"
 
 func newHomebrew(url string) homebrew {
 	return homebrew{
@@ -31,6 +42,24 @@ func newHomebrew(url string) homebrew {
 }
 
 func (homebrew) Name() string { return "homebrew" }
+
+func (homebrew) Command() string { return homebrewUpgrade }
+
+// Upgrade runs brew attached to the terminal. LatestVersion reads the tap's
+// main branch, but brew installs from its local tap clone, which its
+// auto-update may leave up to a day old; forcing that fetch makes brew see the
+// release we offered. HOMEBREW_NO_AUTO_UPDATE still takes precedence. A
+// Ctrl+C reaches brew directly from the terminal, so brew handles it itself.
+func (h homebrew) Upgrade(stdin io.Reader, stdout, stderr io.Writer) error {
+	args := strings.Fields(homebrewUpgrade)
+	cmd := exec.Command(filepath.Join(h.prefix, "bin", args[0]), args[1:]...)
+	cmd.Env = append(os.Environ(), "HOMEBREW_AUTO_UPDATE_SECS=0")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s: %w", homebrewUpgrade, err)
+	}
+	return nil
+}
 
 func (h homebrew) LatestVersion(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.url, nil)
@@ -85,7 +114,14 @@ func detectBackend(executable string) (backend, error) {
 	if receipt.Source.Tap != "datadog-labs/pack" {
 		return nil, fmt.Errorf("%w: Homebrew tap %q", ErrUnsupportedInstallation, receipt.Source.Tap)
 	}
-	return newHomebrew("https://raw.githubusercontent.com/datadog-labs/homebrew-pack/main/Formula/bits.rb"), nil
+	h := newHomebrew(formulaURL)
+	h.prefix = filepath.Dir(filepath.Dir(rack))
+	// A Cellar moved out of the prefix (HOMEBREW_CELLAR) has no brew beside it,
+	// and an offer whose upgrade cannot run is worse than no offer.
+	if _, err := exec.LookPath(filepath.Join(h.prefix, "bin", "brew")); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUnsupportedInstallation, err)
+	}
+	return h, nil
 }
 
 // Read only the explicit version declaration in our generated formula. This is
@@ -95,11 +131,11 @@ var formulaVersion = regexp.MustCompile(`(?m)^[\t ]*version[\t ]+"([^"\r\n]+)"[\
 func homebrewVersion(raw []byte) (string, error) {
 	matches := formulaVersion.FindAllSubmatch(raw, -1)
 	if len(matches) != 1 {
-		return "", fmt.Errorf("%w: expected one explicit Homebrew version", ErrInvalidVersion)
+		return "", fmt.Errorf("%w: expected one explicit Homebrew version", errInvalidVersion)
 	}
 	latest := "v" + string(matches[0][1])
 	if !semver.IsValid(latest) {
-		return "", fmt.Errorf("%w: Homebrew version %q", ErrInvalidVersion, latest)
+		return "", fmt.Errorf("%w: Homebrew version %q", errInvalidVersion, latest)
 	}
 	return latest, nil
 }

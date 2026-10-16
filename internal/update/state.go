@@ -15,11 +15,19 @@ type state struct {
 	LatestVersion   string    `json:"latest_version,omitempty"`
 	CheckedAt       time.Time `json:"checked_at,omitempty"`
 	ExcludedVersion string    `json:"excluded_version,omitempty"`
+	PostponedUntil  time.Time `json:"postponed_until,omitempty"`
 }
 
 func (s state) stale(now time.Time) bool {
 	return !version.IsStable(s.LatestVersion) || s.CheckedAt.IsZero() ||
 		s.CheckedAt.After(now) || now.Sub(s.CheckedAt) >= ttl
+}
+
+// postponed ignores a postponement longer than the one postpone sets, which
+// only a clock moved backwards produces, as stale does for CheckedAt.
+func (s state) postponed(now time.Time) bool {
+	remaining := s.PostponedUntil.Sub(now)
+	return remaining > 0 && remaining <= postponement
 }
 
 func (c *Checker) load() state {
@@ -31,19 +39,38 @@ func (c *Checker) load() state {
 	return s
 }
 
-// Exclude persists the version to skip. An empty version clears the exclusion.
-// This is mechanism only; no command or UI exposes it yet.
-func (c *Checker) Exclude(excluded string) error {
-	if excluded != "" && !version.IsStable(excluded) {
-		return fmt.Errorf("%w: excluded version %q", ErrInvalidVersion, excluded)
+// exclude persists the version to skip: check stops reporting it until a newer
+// release replaces it. An empty version clears the exclusion.
+func (c *Checker) exclude(excluded string) error {
+	if c.backend == nil {
+		return ErrUnsupportedInstallation
 	}
+	if excluded != "" && !version.IsStable(excluded) {
+		return fmt.Errorf("%w: excluded version %q", errInvalidVersion, excluded)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	s := c.load()
 	s.ExcludedVersion = excluded
 	return c.save(s)
 }
 
-// Replace state atomically so readers never see a partial file. Concurrent
-// writers are best-effort: the last write wins, including exclusions.
+// postpone stops check from reporting any version for a day.
+func (c *Checker) postpone() error {
+	if c.backend == nil {
+		return ErrUnsupportedInstallation
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s := c.load()
+	s.PostponedUntil = time.Now().UTC().Add(postponement)
+	return c.save(s)
+}
+
+// Replace state atomically so readers never see a partial file. Callers that
+// modify loaded state hold c.mu across the read and write. Separate Bits
+// processes have separate checkers, so concurrent writes across processes
+// remain last write wins.
 func (c *Checker) save(s state) error {
 	dir := filepath.Dir(c.path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

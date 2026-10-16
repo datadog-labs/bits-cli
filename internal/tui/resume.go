@@ -105,34 +105,39 @@ func (r *resume) view(theme styles.Theme, width, visible int) string {
 	}
 	return strings.Join(append(lines,
 		r.indicator(theme, width, visible),
-		r.hint(theme, width),
+		offerHint(theme, width, resumeHint),
 	), "\n")
 }
 
-// row is a marker and title on the left with the relative timestamp flushed
-// right, padded so the whole row measures exactly width.
 func (r *resume) row(theme styles.Theme, width, index int) string {
+	summary := r.conversations[index]
+	return offerRow(theme, width, index == r.selected, conversations.SafeTitle(summary),
+		conversations.RelativeUpdatedAt(summary.UpdatedAt, r.now()))
+}
+
+// offerRow is a marker and title on the left with aside flushed right, padded
+// so the whole row measures exactly width.
+func offerRow(theme styles.Theme, width int, selected bool, title, aside string) string {
 	// An unfocused title sits at the secondary level: the offer is an aside, so
 	// only the focused row competes with the transcript for attention.
 	marker, style := theme.Selector.Marker, theme.Text.Secondary
-	stampStyle := theme.Text.Tertiary
-	if index == r.selected {
+	asideStyle := theme.Text.Tertiary
+	if selected {
 		marker, style = theme.Selector.SelectedMarker, theme.Selector.Selected
-		// The timestamp joins the title's accent, without taking its weight.
-		stampStyle = stampStyle.Foreground(style.GetForeground())
+		// The aside joins the title's accent, without taking its weight.
+		asideStyle = asideStyle.Foreground(style.GetForeground())
 	}
-	summary := r.conversations[index]
-	stamp := conversations.RelativeUpdatedAt(summary.UpdatedAt, r.now())
 	left := ansi.StringWidth(marker)
-	titleWidth := width - left - ansi.StringWidth(stamp) - resumeColumnGap
+	titleWidth := width - left - ansi.StringWidth(aside) - resumeColumnGap
 
-	title := ""
 	if titleWidth >= resumeMinTitleWidth {
-		// SafeTitle already single-lines its input.
-		title = ansi.Truncate(conversations.SafeTitle(summary), titleWidth, "…")
+		// Callers pass single-line titles.
+		title = ansi.Truncate(title, titleWidth, "…")
+	} else {
+		title = ""
 	}
-	pad := max(1, width-left-ansi.StringWidth(title)-ansi.StringWidth(stamp))
-	row := style.Render(marker+title) + strings.Repeat(" ", pad) + stampStyle.Render(stamp)
+	pad := max(1, width-left-ansi.StringWidth(title)-ansi.StringWidth(aside))
+	row := style.Render(marker+title) + strings.Repeat(" ", pad) + asideStyle.Render(aside)
 	return ansi.Truncate(row, width, "…")
 }
 
@@ -152,10 +157,9 @@ func (r *resume) indicator(theme styles.Theme, width, visible int) string {
 	}
 }
 
-// hint centres the key help between horizontal rules, dropping the rules when
-// they would not fit.
-func (r *resume) hint(theme styles.Theme, width int) string {
-	label := resumeHint
+// offerHint centres the key help between horizontal rules, dropping the rules
+// when they would not fit.
+func offerHint(theme styles.Theme, width int, label string) string {
 	if ansi.StringWidth(label) >= width {
 		return ansi.Truncate(theme.Text.Tertiary.Render(strings.TrimSpace(label)), width, "…")
 	}

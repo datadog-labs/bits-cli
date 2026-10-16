@@ -12,6 +12,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	tuieditor "github.com/datadog-labs/bits-cli/internal/tui/editor"
+	"github.com/datadog-labs/bits-cli/internal/update"
 )
 
 func TestParseCommand(t *testing.T) {
@@ -484,6 +485,37 @@ func TestDispatchQuitWithNoRunningTurnStillQuits(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatalf("cmd() = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestDispatchUpdate(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+		offer         *update.Offer
+		quits         bool
+	}{
+		{"update", "update", &update.Offer{Current: "v1.2.3"}, true},
+		{"alias", "upgrade", &update.Offer{Current: "v1.2.3"}, true},
+		{"cannot update", "update", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModelWithSpy(t)
+			m.upgrade = newUpgradePrompt(tc.offer)
+			ctx, cancel := context.WithCancel(context.Background())
+			m.op = operation{kind: opTurn, cancel: cancel}
+
+			_, cmd := m.dispatchCommand(tc.command, "")
+			quit := false
+			if cmd != nil {
+				_, quit = cmd().(tea.QuitMsg)
+			}
+			if quit != tc.quits || m.UpgradeRequested() != tc.quits || (ctx.Err() != nil) != tc.quits {
+				t.Fatalf("quit %v, requested %v, turn cancelled %v", quit, m.UpgradeRequested(), ctx.Err() != nil)
+			}
+			if !tc.quits && (len(m.notices) != 1 || !strings.Contains(m.notices[0].Notice.Text, "Automatic updates")) {
+				t.Fatalf("notices %+v, want an unsupported installation notice", m.notices)
+			}
+		})
 	}
 }
 

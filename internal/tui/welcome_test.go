@@ -15,6 +15,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
+	"github.com/datadog-labs/bits-cli/internal/update"
 )
 
 func welcomeModel(width, height int) *Model {
@@ -581,5 +582,102 @@ func TestHeaderVisibleAtLaunchAtTheTightestFittingHeight(t *testing.T) {
 	if !strings.Contains(m.list.Render(), first) {
 		t.Fatalf("height=%d: the panel's first row is not on screen at launch:\n%s",
 			tightest, m.list.Render())
+	}
+}
+
+const upgradeTitle = "Bits v1.3.0 is available. You're on v1.2.3."
+
+// upgradeModel shows the welcome screen with both offers available, recording
+// the choice the offer saves.
+func upgradeModel(t *testing.T, saveErr error) (*Model, *string) {
+	t.Helper()
+	saved := new(string)
+	save := func(choice string) func() error {
+		return func() error { *saved = choice; return saveErr }
+	}
+	m := welcomeModel(120, 40)
+	m.engine = agent.New(fake.New(), agent.Config{})
+	m.resume = *resumeFixture(4)
+	m.upgrade = newUpgradePrompt(&update.Offer{
+		Current: "v1.2.3", Latest: "v1.3.0", Postpone: save("postpone"), Skip: save("skip"),
+	})
+	m.relayout()
+	return m, saved
+}
+
+func TestUpgradeOfferChoices(t *testing.T) {
+	up, down, enter := tea.KeyPressMsg{Code: tea.KeyUp}, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyEnter}
+	for _, tc := range []struct {
+		name    string
+		keys    []tea.KeyPressMsg
+		saveErr error
+		quits   bool
+		saved   string
+	}{
+		{"update now", []tea.KeyPressMsg{up, enter}, nil, true, ""},
+		{"remind me later", []tea.KeyPressMsg{down, enter}, nil, false, "postpone"},
+		{"skip this version", []tea.KeyPressMsg{down, down, down, enter}, nil, false, "skip"},
+		{"save failure", []tea.KeyPressMsg{down, enter}, errors.New("read-only"), false, "postpone"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, saved := upgradeModel(t, tc.saveErr)
+			var cmd tea.Cmd
+			for _, key := range tc.keys {
+				_, cmd = m.handleEditorKey(key)
+			}
+			m.relayout()
+			quit := false
+			if cmd != nil {
+				_, quit = cmd().(tea.QuitMsg)
+			}
+			if quit != tc.quits || m.UpgradeRequested() != tc.quits || *saved != tc.saved {
+				t.Fatalf("quit %v, requested %v, saved %q", quit, m.UpgradeRequested(), *saved)
+			}
+			if (len(m.notices) == 1) != (tc.saveErr != nil) {
+				t.Fatalf("notices %+v for save error %v", m.notices, tc.saveErr)
+			}
+			if tc.quits {
+				return
+			}
+			if m.showUpgrade() || !m.showResume() {
+				t.Fatal("an answered offer did not give way to the resume offer")
+			}
+			if _, cmd := m.dispatchCommand("update", ""); cmd == nil || !m.UpgradeRequested() {
+				t.Fatal("/update unavailable after the offer was answered")
+			}
+		})
+	}
+}
+
+func TestUpgradeOfferVisibility(t *testing.T) {
+	m, _ := upgradeModel(t, nil)
+	header := m.headerView()
+	if !m.showUpgrade() || m.showResume() || !strings.Contains(ansi.Strip(header), upgradeTitle) {
+		t.Fatalf("want the update offer in place of the resume offer:\n%s", ansi.Strip(header))
+	}
+	if got, want := strings.Count(m.upgradeView(m.welcomePanelWidth()), "\n")+1, resumeBlockHeight(len(upgradeChoices)); got != want {
+		t.Fatalf("offer height = %d, want %d", got, want)
+	}
+	for i, line := range strings.Split(header, "\n") {
+		if w := ansi.StringWidth(line); w > m.width {
+			t.Fatalf("header line %d is %d wide, terminal is %d", i, w, m.width)
+		}
+	}
+
+	m.editor.SetValue("hello")
+	m.relayout()
+	if m.showUpgrade() || m.showResume() {
+		t.Fatal("an offer is shown over a draft")
+	}
+	m.editor.SetValue("")
+	m.relayout()
+	if !m.showUpgrade() {
+		t.Fatal("clearing the draft did not bring the offer back")
+	}
+
+	m.upgrade = newUpgradePrompt(&update.Offer{Current: "v1.2.3"})
+	m.relayout()
+	if m.showUpgrade() || !m.showResume() {
+		t.Fatal("offered an update without a newer release")
 	}
 }

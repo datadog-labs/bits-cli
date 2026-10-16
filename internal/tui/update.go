@@ -782,8 +782,20 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.syncCompletionSearches())
 	}
 
-	// The offer is only visible with an empty composer, so these keys have no
+	// The offers are only visible with an empty composer, so these keys have no
 	// competing meaning: submit() already no-ops on empty input.
+	if m.showUpgrade() {
+		switch msg.String() {
+		case "up":
+			m.moveUpgrade(-1)
+			return m, nil
+		case "down":
+			m.moveUpgrade(1)
+			return m, nil
+		case "enter":
+			return m, m.chooseUpgrade()
+		}
+	}
 	if m.showResume() {
 		key := msg.String()
 		switch key {
