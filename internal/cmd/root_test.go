@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/site"
+	"github.com/datadog-labs/bits-cli/internal/update"
 )
 
 func clearStagingEnv(t *testing.T) {
@@ -32,9 +33,19 @@ func TestCommandHelp(t *testing.T) {
 		}
 	}
 	out, _, _ := executeForTest(t, []string{"--help"})
-	for _, want := range []string{"login", "logout", "run", "--auth", "--permissions"} {
+	for _, want := range []string{"login", "logout", "run", "update", "--auth", "--permissions"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("root help missing %q", want)
+		}
+	}
+}
+
+// The test binary is not an installation that can update itself.
+func TestUpdateCommandRequiresSupportedInstallation(t *testing.T) {
+	for _, name := range []string{"update", "upgrade"} {
+		out, stderr, err := executeForTest(t, []string{name})
+		if !errors.Is(err, update.ErrUnsupportedInstallation) || out != "" || stderr != "" {
+			t.Fatalf("%s = output %q, stderr %q, error %v; want %v", name, out, stderr, err, update.ErrUnsupportedInstallation)
 		}
 	}
 }

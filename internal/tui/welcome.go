@@ -4,12 +4,15 @@ import (
 	"net/url"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
+	"github.com/datadog-labs/bits-cli/internal/update"
 )
 
 const (
@@ -145,16 +148,27 @@ func authenticationLabel(mode string) string {
 	}
 }
 
-// showResume gates the offer on an idle, empty transcript, an empty composer,
-// a non-empty fetch, and room for at least one row.
-func (m *Model) showResume() bool {
+// welcomeIdle gates the welcome offers on an idle, empty transcript, an empty
+// composer, and a visible splash panel.
+func (m *Model) welcomeIdle() bool {
 	// The operation, not just the transcript: a submitted turn empties the
 	// composer and publishes no block until its first event, and resuming during
 	// it would hit the engine gate.
-	if len(m.transcript.Blocks) != 0 || m.op.busy() || m.resume.empty() || m.editor.Value() != "" || len(m.editor.Attachments()) > 0 {
+	if len(m.transcript.Blocks) != 0 || m.op.busy() || m.editor.Value() != "" || len(m.editor.Attachments()) > 0 {
 		return false
 	}
-	if !m.showSplashPanel() {
+	return m.showSplashPanel()
+}
+
+// welcomeOfferHeight is the room for an offer below the panel and its gap.
+func (m *Model) welcomeOfferHeight() int {
+	return m.frame.transcript.Dy() - m.splashPanelHeight() - 1
+}
+
+// showResume gates the offer on the welcome conditions, a non-empty fetch, and
+// room for at least one row. A pending update offer takes its place.
+func (m *Model) showResume() bool {
+	if m.resume.empty() || m.showUpgrade() || !m.welcomeIdle() {
 		return false
 	}
 	return m.resumeVisibleRows() > 0
@@ -163,7 +177,7 @@ func (m *Model) showResume() bool {
 // resumeVisibleRows is how many conversations fit below the panel, at most
 // resumeRows, and 0 when not even one fits.
 func (m *Model) resumeVisibleRows() int {
-	available := m.frame.transcript.Dy() - m.splashPanelHeight() - 1
+	available := m.welcomeOfferHeight()
 	for rows := min(resumeRows, len(m.resume.conversations)); rows > 0; rows-- {
 		if resumeBlockHeight(rows) <= available {
 			return rows
@@ -173,15 +187,99 @@ func (m *Model) resumeVisibleRows() int {
 }
 
 // headerView is the transcript's leading content: the splash panel, plus the
-// resume offer separated by one blank row when it applies.
+// update or resume offer separated by one blank row when one applies.
 func (m *Model) headerView() string {
 	if !m.showSplashPanel() {
 		return ""
 	}
 	header := m.splashPanelView()
-	if m.showResume() {
-		block := m.resume.view(m.styles, m.welcomePanelWidth(), m.resumeVisibleRows())
-		header += "\n\n" + lipgloss.NewStyle().MarginLeft(max(0, m.styles.Panel.HorizontalMargin)).Render(block)
+	var block string
+	switch {
+	case m.showUpgrade():
+		block = m.upgradeView(m.welcomePanelWidth())
+	case m.showResume():
+		block = m.resume.view(m.styles, m.welcomePanelWidth(), m.resumeVisibleRows())
+	default:
+		return header
 	}
-	return header
+	return header + "\n\n" + lipgloss.NewStyle().MarginLeft(max(0, m.styles.Panel.HorizontalMargin)).Render(block)
+}
+
+// upgradePrompt is the update offer. Until answered it takes the resume
+// offer's place on the welcome screen, under the same conditions.
+type upgradePrompt struct {
+	offer     *update.Offer
+	pending   bool
+	cursor    int
+	requested bool
+}
+
+func newUpgradePrompt(offer *update.Offer) upgradePrompt {
+	return upgradePrompt{offer: offer, pending: offer != nil && offer.Latest != ""}
+}
+
+var upgradeChoices = [...]string{"Update now", "Remind me later", "Skip this version"}
+
+const upgradeHint = " ↑/↓ choose · start typing for a new conversation "
+
+// UpgradeRequested reports whether the user asked to update Bits. The session
+// has quit; the caller runs the installer.
+func (m *Model) UpgradeRequested() bool { return m.upgrade.requested }
+
+func (m *Model) showUpgrade() bool {
+	return m.upgrade.pending && m.welcomeIdle() &&
+		resumeBlockHeight(len(upgradeChoices)) <= m.welcomeOfferHeight()
+}
+
+func (m *Model) moveUpgrade(delta int) {
+	m.upgrade.cursor = min(max(m.upgrade.cursor+delta, 0), len(upgradeChoices)-1)
+}
+
+// chooseUpgrade answers the offer, which then gives way to the resume offer.
+func (m *Model) chooseUpgrade() tea.Cmd {
+	m.upgrade.pending = false
+	var err error
+	switch m.upgrade.cursor {
+	case 0:
+		_, cmd := m.requestUpgrade()
+		return cmd
+	case 1:
+		err = m.upgrade.offer.Postpone()
+	case 2:
+		err = m.upgrade.offer.Skip()
+	}
+	if err != nil {
+		return m.postNotice(notice(chat.NoticeError, err, "Could not save your update choice."))
+	}
+	return nil
+}
+
+// requestUpgrade ends the session like /quit, since the installer needs the
+// terminal, and leaves the command layer to run it.
+func (m *Model) requestUpgrade() (tea.Model, tea.Cmd) {
+	if m.upgrade.offer == nil {
+		return m, m.postNotice(notice(chat.NoticeWarn, update.ErrUnsupportedInstallation,
+			"Automatic updates are unavailable for this installation."))
+	}
+	m.upgrade.pending = false
+	m.upgrade.requested = true
+	return m.quit()
+}
+
+// upgradeView renders exactly resumeBlockHeight(len(upgradeChoices)) rows,
+// laid out like the resume offer so either can fill the same space.
+func (m *Model) upgradeView(width int) string {
+	offer := m.upgrade.offer
+	title := "Bits " + offer.Latest + " is available. You're on " + offer.Current + "."
+	lines := []string{
+		ansi.Truncate(m.styles.Text.Primary.Bold(true).Render(title), width, "…"),
+		"",
+	}
+	for i, label := range upgradeChoices {
+		if i > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, offerRow(m.styles, width, i == m.upgrade.cursor, label, ""))
+	}
+	return strings.Join(append(lines, "", offerHint(m.styles, width, upgradeHint)), "\n")
 }

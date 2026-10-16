@@ -1,13 +1,16 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,6 +22,15 @@ type fakeBackend func(context.Context) (string, error)
 
 func (fakeBackend) Name() string                                        { return "homebrew" }
 func (f fakeBackend) LatestVersion(ctx context.Context) (string, error) { return f(ctx) }
+func (fakeBackend) Command() string                                     { return "" }
+func (fakeBackend) Upgrade(io.Reader, io.Writer, io.Writer) error       { return nil }
+
+type upgradeBackend struct {
+	fakeBackend
+	err error
+}
+
+func (b upgradeBackend) Upgrade(io.Reader, io.Writer, io.Writer) error { return b.err }
 
 func testChecker(t *testing.T, b backend) *Checker {
 	t.Helper()
@@ -40,14 +52,20 @@ func writeState(t *testing.T, c *Checker, s state) {
 }
 
 func TestCachedDecision(t *testing.T) {
-	for _, tc := range []struct{ name, current, latest, excluded, want string }{
-		{"newer", "v1.2.3", "v1.2.4", "", "v1.2.4"},
-		{"same", "v1.2.3", "v1.2.3", "", ""},
-		{"older", "v2.0.0", "v1.99.99", "", ""},
-		{"excluded", "v1.2.3", "v1.2.4", "v1.2.4", ""},
-		{"next after exclusion", "v1.2.3", "v1.2.5", "v1.2.4", "v1.2.5"},
-		{"development", "dev-abcdef", "", "", ""},
-		{"prerelease", "v1.2.3-rc.1", "", "", ""},
+	for _, tc := range []struct {
+		name, current, latest, excluded, want string
+		postponed                             time.Duration
+	}{
+		{"newer", "v1.2.3", "v1.2.4", "", "v1.2.4", 0},
+		{"same", "v1.2.3", "v1.2.3", "", "", 0},
+		{"older", "v2.0.0", "v1.99.99", "", "", 0},
+		{"excluded", "v1.2.3", "v1.2.4", "v1.2.4", "", 0},
+		{"next after exclusion", "v1.2.3", "v1.2.5", "v1.2.4", "v1.2.5", 0},
+		{"postponed", "v1.2.3", "v1.2.4", "", "", time.Hour},
+		{"postponement over", "v1.2.3", "v1.2.4", "", "v1.2.4", -time.Second},
+		{"postponed past the limit", "v1.2.3", "v1.2.4", "", "v1.2.4", 2 * postponement},
+		{"development", "dev-abcdef", "", "", "", 0},
+		{"prerelease", "v1.2.3-rc.1", "", "", "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -56,8 +74,12 @@ func TestCachedDecision(t *testing.T) {
 					calls++
 					return "v1.3.0", nil
 				}))
-				writeState(t, c, state{Backend: "homebrew", LatestVersion: tc.latest, ExcludedVersion: tc.excluded, CheckedAt: time.Now()})
-				if got := c.Check(context.Background(), tc.current); got != tc.want {
+				s := state{Backend: "homebrew", LatestVersion: tc.latest, ExcludedVersion: tc.excluded, CheckedAt: time.Now()}
+				if tc.postponed != 0 {
+					s.PostponedUntil = time.Now().Add(tc.postponed)
+				}
+				writeState(t, c, s)
+				if got := c.check(context.Background(), tc.current); got != tc.want {
 					t.Fatalf("got %q, want %q", got, tc.want)
 				}
 				synctest.Wait()
@@ -81,7 +103,7 @@ func TestCheckDoesNotWaitForNetwork(t *testing.T) {
 		defer close(release)
 		writeState(t, c, state{Backend: "homebrew", LatestVersion: "v1.2.4", CheckedAt: time.Now().Add(-2 * ttl)})
 		result := make(chan string, 1)
-		go func() { result <- c.Check(context.Background(), "v1.2.3") }()
+		go func() { result <- c.check(context.Background(), "v1.2.3") }()
 		synctest.Wait()
 		select {
 		case got := <-result:
@@ -91,17 +113,55 @@ func TestCheckDoesNotWaitForNetwork(t *testing.T) {
 		default:
 			t.Fatal("Check blocked on backend")
 		}
-		c.Check(context.Background(), "v1.2.3")
+		c.check(context.Background(), "v1.2.3")
 		synctest.Wait()
 		if calls != 1 {
 			t.Fatalf("made %d backend calls", calls)
 		}
 		release <- struct{}{}
 		synctest.Wait()
-		if got := c.Check(context.Background(), "v1.2.3"); got != "v1.3.0" {
+		if got := c.check(context.Background(), "v1.2.3"); got != "v1.3.0" {
 			t.Fatalf("refreshed result = %q", got)
 		}
 	})
+}
+
+// Remind me later and any upgrade attempt hold the offer back a day.
+func TestPostpone(t *testing.T) {
+	upgradeErr := errors.New("brew failed")
+	upgrade := func(c *Checker) error { return c.Upgrade(nil, io.Discard, io.Discard) }
+	for _, tc := range []struct {
+		name       string
+		upgradeErr error
+		answer     func(*Checker) error
+	}{
+		{"remind me later", nil, (*Checker).postpone},
+		{"failed upgrade", upgradeErr, upgrade},
+		{"upgrade that installs nothing", nil, upgrade},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				latest := fakeBackend(func(context.Context) (string, error) { return "v1.2.4", nil })
+				c := testChecker(t, upgradeBackend{latest, tc.upgradeErr})
+				writeState(t, c, state{Backend: "homebrew", LatestVersion: "v1.2.4", CheckedAt: time.Now()})
+				if err := tc.answer(c); !errors.Is(err, tc.upgradeErr) {
+					t.Fatalf("got %v, want %v", err, tc.upgradeErr)
+				}
+				if got := c.check(context.Background(), "v1.2.3"); got != "" {
+					t.Fatalf("Check = %q right after", got)
+				}
+				time.Sleep(postponement - time.Second)
+				if got := c.check(context.Background(), "v1.2.3"); got != "" {
+					t.Fatalf("Check = %q just before a day", got)
+				}
+				time.Sleep(time.Second)
+				if got := c.check(context.Background(), "v1.2.3"); got != "v1.2.4" {
+					t.Fatalf("Check = %q after a day", got)
+				}
+				synctest.Wait()
+			})
+		})
+	}
 }
 
 func TestRefreshFailuresPreserveState(t *testing.T) {
@@ -112,9 +172,9 @@ func TestRefreshFailuresPreserveState(t *testing.T) {
 	}{
 		{"backend error", "", backendErr, backendErr},
 		{"canceled", "", context.Canceled, context.Canceled},
-		{"missing version", "", nil, ErrInvalidVersion},
-		{"prerelease", "v1.3.0-rc.1", nil, ErrInvalidVersion},
-		{"abbreviated", "v1.3", nil, ErrInvalidVersion},
+		{"missing version", "", nil, errInvalidVersion},
+		{"prerelease", "v1.3.0-rc.1", nil, errInvalidVersion},
+		{"abbreviated", "v1.3", nil, errInvalidVersion},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := testChecker(t, fakeBackend(func(context.Context) (string, error) { return tc.latest, tc.err }))
@@ -134,24 +194,24 @@ func TestRefreshPreservesExclusion(t *testing.T) {
 	var c *Checker
 	c = testChecker(t, fakeBackend(func(context.Context) (string, error) {
 		// Save the exclusion while the refresh is in progress.
-		return "v1.3.0", c.Exclude("v1.3.0")
+		return "v1.3.0", c.exclude("v1.3.0")
 	}))
 	if err := c.refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Check(context.Background(), "v1.2.3"); got != "" {
+	if got := c.check(context.Background(), "v1.2.3"); got != "" {
 		t.Fatalf("excluded version = %q", got)
 	}
-	if err := c.Exclude("dev"); !errors.Is(err, ErrInvalidVersion) {
+	if err := c.exclude("dev"); !errors.Is(err, errInvalidVersion) {
 		t.Fatalf("invalid exclusion: %v", err)
 	}
 	if c.load().ExcludedVersion != "v1.3.0" {
 		t.Fatal("invalid exclusion changed state")
 	}
-	if err := c.Exclude(""); err != nil {
+	if err := c.exclude(""); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Check(context.Background(), "v1.2.3"); got != "v1.3.0" {
+	if got := c.check(context.Background(), "v1.2.3"); got != "v1.3.0" {
 		t.Fatalf("cleared exclusion = %q", got)
 	}
 }
@@ -183,7 +243,7 @@ func TestHomebrewFetch(t *testing.T) {
 			if got != tc.want || (err != nil) != (tc.want == "") {
 				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
 			}
-			if errors.Is(err, ErrInvalidVersion) != tc.invalid {
+			if errors.Is(err, errInvalidVersion) != tc.invalid {
 				t.Fatalf("invalid version classification: %v", err)
 			}
 			if tc.status != 200 && !strings.Contains(err.Error(), fmt.Sprintf("HTTP %d", tc.status)) {
@@ -220,7 +280,7 @@ func TestStateRecoveryAndTTL(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if got := c.Check(context.Background(), "v1.2.3"); got != "" {
+				if got := c.check(context.Background(), "v1.2.3"); got != "" {
 					t.Fatalf("invalid state produced %q", got)
 				}
 				synctest.Wait()
@@ -254,9 +314,17 @@ func TestDetectBackend(t *testing.T) {
 		{"broken receipt", "Cellar/bits/1.2.3/bin/bits", "{", false},
 		{"copied binary", "local/bin/bits", `{"source":{"tap":"datadog-labs/pack"}}`, false},
 		{"other formula", "Cellar/other/1.2.3/bin/bits", `{"source":{"tap":"datadog-labs/pack"}}`, false},
+		{"cellar outside prefix", "cellar/Cellar/bits/1.2.3/bin/bits", `{"source":{"tap":"datadog-labs/pack"}}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
+			brew := filepath.Join(dir, "bin", "brew")
+			if err := os.MkdirAll(filepath.Dir(brew), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(brew, nil, 0o700); err != nil {
+				t.Fatal(err)
+			}
 			executable := filepath.Join(dir, tc.layout)
 			if err := os.MkdirAll(filepath.Dir(executable), 0o700); err != nil {
 				t.Fatal(err)
@@ -279,6 +347,10 @@ func TestDetectBackend(t *testing.T) {
 					if err != nil || got == nil || got.Name() != "homebrew" {
 						t.Fatalf("detect %s = %v, %v", path, got, err)
 					}
+					// Upgrades must run the brew owning this keg.
+					if want, _ := filepath.EvalSymlinks(dir); got.(homebrew).prefix != want {
+						t.Fatalf("prefix = %q, want %q", got.(homebrew).prefix, want)
+					}
 				} else if got != nil || !errors.Is(err, ErrUnsupportedInstallation) {
 					t.Fatalf("detect %s = %v, %v; want unsupported installation", path, got, err)
 				}
@@ -287,6 +359,36 @@ func TestDetectBackend(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHomebrewUpgrade(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew does not run on Windows")
+	}
+	h := newHomebrew("")
+	h.prefix = t.TempDir()
+	brew := filepath.Join(h.prefix, "bin", "brew")
+	if err := os.MkdirAll(filepath.Dir(brew), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\necho \"$* auto-update=$HOMEBREW_AUTO_UPDATE_SECS\"\nread line; echo \"$line\" >&2\nexit ${FAKE_BREW_EXIT:-0}\n"
+	if err := os.WriteFile(brew, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := h.Upgrade(strings.NewReader("typed\n"), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != "upgrade datadog-labs/pack/bits auto-update=0\n" {
+		t.Fatalf("brew invocation = %q", got)
+	}
+	if stderr.String() != "typed\n" {
+		t.Fatalf("terminal streams not attached: stderr = %q", stderr.String())
+	}
+	t.Setenv("FAKE_BREW_EXIT", "1")
+	if err := h.Upgrade(nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), homebrewUpgrade) {
+		t.Fatalf("failed upgrade error = %v, want the command named for a manual retry", err)
 	}
 }
 
@@ -302,7 +404,7 @@ func TestHomebrewVersion(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := homebrewVersion([]byte(tc.formula))
-			if got != tc.want || errors.Is(err, ErrInvalidVersion) != (tc.want == "") {
+			if got != tc.want || errors.Is(err, errInvalidVersion) != (tc.want == "") {
 				t.Fatalf("homebrewVersion = %q, %v; want %q", got, err, tc.want)
 			}
 		})

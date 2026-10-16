@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -26,16 +27,13 @@ func printLoggedOut(w io.Writer) error {
 func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	if checker, err := update.New(); err == nil {
-		// Warm the update cache silently; presenting updates is a later step.
-		checker.Check(ctx, version.Build())
-	}
+	checker := update.New()
 	workspace, err := openCurrentWorkspace()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = workspace.Close() }()
-	root, err := startupModel(ctx, opts, workspace)
+	root, err := startupModel(ctx, opts, workspace, checker.Offer(ctx, !opts.NoUpdateCheck))
 	if err != nil {
 		return err
 	}
@@ -63,10 +61,18 @@ func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer)
 	if m.LoggedOut() {
 		return printLoggedOut(stderr)
 	}
+	// The installer runs first so its output cannot scroll the resume hint away.
+	var upgradeErr error
+	if m.UpgradeRequested() {
+		upgradeErr = checker.Upgrade(os.Stdin, stdout, stderr)
+	}
 	// On a clean exit with an active conversation, surface how to get back to it.
 	// The conversation id is the server-side handle the Assistant API restores via
 	// --conversation; there is no local session store yet.
-	return printResumeHint(stdout, m.ConversationID())
+	if err := printResumeHint(stdout, m.ConversationID()); err != nil {
+		return err
+	}
+	return upgradeErr
 }
 
 // printResumeHint prints the resume line only for a backend-shaped conversation id.
@@ -78,11 +84,11 @@ func printResumeHint(w io.Writer, conversationID string) error {
 	return err
 }
 
-func startupModel(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace) (*tui.Model, error) {
-	return startupModelWithStore(ctx, opts, auth.DefaultStore(), workspace)
+func startupModel(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, upgrade *update.Offer) (*tui.Model, error) {
+	return startupModelWithStore(ctx, opts, auth.DefaultStore(), workspace, upgrade)
 }
 
-func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace) (*tui.Model, error) {
+func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace, upgrade *update.Offer) (*tui.Model, error) {
 	toolUI := tools.NewUI()
 	clientTools := append(tools.NewClientTools(workspace), tools.NewAskUserQuestionTool(toolUI))
 	toolSet, err := agent.NewToolSet(opts.PermissionsMode, clientTools...)
@@ -94,6 +100,7 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		ToolUI:    toolUI,
 		Version:   version.Build(),
 		Workspace: workspace,
+		Upgrade:   upgrade,
 		Logout: func(logoutCtx context.Context) (bool, error, error) {
 			return auth.Logout(logoutCtx, store, nil)
 		},

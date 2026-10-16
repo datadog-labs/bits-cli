@@ -24,6 +24,7 @@ type ChatOptions struct {
 	AuthMode        auth.Mode
 	Site            string
 	PermissionsMode agent.PermissionsMode
+	NoUpdateCheck   bool
 }
 
 // Execute builds a fresh command tree for args and runs it with ctx, writing
@@ -80,6 +81,7 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 			if inferenceMode, ok := os.LookupEnv("BITS_ASSISTANT_INFERENCE_MODE"); ok {
 				opts.InferenceMode = inferenceMode
 			}
+			opts.NoUpdateCheck = os.Getenv("BITS_NO_UPDATE_CHECK") == "1"
 			*invoked = true
 			return runChat(command.Context(), opts, stdout, stderr)
 		},
@@ -98,7 +100,7 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 		"",
 		"resume an existing conversation by ID",
 	)
-	root.AddCommand(newRunCommand(invoked, stdout), newLoginCommand(invoked, stderr), newLogoutCommand(invoked, stderr))
+	root.AddCommand(newRunCommand(invoked, stdout), newLoginCommand(invoked, stderr), newLogoutCommand(invoked, stderr), newUpdateCommand(invoked, stdout, stderr))
 	return root
 }
 

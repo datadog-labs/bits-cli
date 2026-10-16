@@ -94,6 +94,7 @@ func TestStartupExplicitAPIKeyModeDoesNotFallThroughToFakeBackend(t *testing.T) 
 		ChatOptions{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com", PermissionsMode: agent.ModeManual},
 		stubCredentialStore{session: validOAuthSession()},
 		testWorkspace(t),
+		nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "DD_API_KEY and DD_APP_KEY must both be set") {
 		t.Fatalf("startup error = %v", err)
@@ -108,6 +109,7 @@ func TestStartupMissingOAuthSelectsInteractiveLogin(t *testing.T) {
 		ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 		stubCredentialStore{err: auth.ErrNoSession},
 		testWorkspace(t),
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +129,7 @@ func TestStartupCredentialStoreFailureDoesNotSelectLogin(t *testing.T) {
 		ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 		stubCredentialStore{err: storeErr},
 		testWorkspace(t),
+		nil,
 	)
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("startup error = %v, want keyring failure", err)
@@ -159,6 +162,7 @@ func TestStartupStagingConfigFailureDoesNotEnterLoginPicker(t *testing.T) {
 				ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 				store,
 				workspace,
+				nil,
 			)
 			if err == nil {
 				t.Fatal("startup succeeded with an unusable stored staging session")
@@ -195,6 +199,7 @@ func TestStartupStoredOAuthEntersChatWithConversation(t *testing.T) {
 		ChatOptions{AuthMode: auth.ModeAuto, ConversationID: "conversation-1", PermissionsMode: agent.ModeManual},
 		stubCredentialStore{session: validOAuthSession()},
 		testWorkspace(t),
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)

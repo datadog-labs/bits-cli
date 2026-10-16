@@ -35,6 +35,7 @@ const (
 	commandSettings
 	commandLogout
 	commandPermissions
+	commandUpdate
 )
 
 type commandDefinition struct {
@@ -101,6 +102,13 @@ var commandDefinitions = []commandDefinition{
 		name:             "permissions",
 		activeTurnPolicy: commandAllowedDuringTurn,
 		description:      "choose what Bits is allowed to do",
+	},
+	{
+		id:               commandUpdate,
+		name:             "update",
+		aliases:          []string{"upgrade"},
+		activeTurnPolicy: commandCancelsTurn,
+		description:      "exit and update bits",
 	},
 }
 
@@ -188,7 +196,7 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 				return m, m.requestNewConversation()
 			case commandLogout:
 				return m, m.requestLogout()
-			case commandQuit:
+			case commandQuit, commandUpdate:
 				// quit cancels the running operation itself.
 			default:
 				panic("unhandled command cancellation policy")
@@ -219,6 +227,8 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 		return m, m.startLogout()
 	case commandPermissions:
 		return m, tea.Batch(m.stopCompletionSearches(), m.switchPermissions(argument))
+	case commandUpdate:
+		return m.requestUpgrade()
 	default:
 		panic("unhandled registered command")
 	}

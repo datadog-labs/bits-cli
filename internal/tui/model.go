@@ -21,6 +21,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 	statusview "github.com/datadog-labs/bits-cli/internal/tui/status"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/update"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -145,6 +146,7 @@ type Config struct {
 	EntitySearcher EntitySearcher
 	OpenURL        func(context.Context, string) error
 	Logout         LogoutFunc
+	Upgrade        *update.Offer // nil when this installation cannot update itself
 }
 
 // Model is the root Bubble Tea model. All state lives here and is mutated only
@@ -208,6 +210,8 @@ type Model struct {
 	permissionCursor  int
 	// A mode selected during an active turn applies when that turn closes.
 	pendingPermissions agent.PermissionsMode
+
+	upgrade upgradePrompt
 
 	// Top-level screen; transitions go through setMode.
 	mode Mode
@@ -327,6 +331,7 @@ func (m *Model) configure(configs []Config) {
 		m.openURL = configs[0].OpenURL
 		m.logout = configs[0].Logout
 		m.version = configs[0].Version
+		m.upgrade = newUpgradePrompt(configs[0].Upgrade)
 	}
 	if m.entitySearcher == nil && m.engine != nil {
 		m.entitySearcher = m.engine
