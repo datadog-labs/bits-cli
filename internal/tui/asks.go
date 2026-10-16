@@ -19,9 +19,8 @@ import (
 type ask interface {
 	callID() string
 	prompt() components.Prompt
-	// deliver sends the answer and reports whether it succeeded, along with a
-	// follow-up command to run when it did (e.g. queuing a permissions mode
-	// switch); the command is nil when there is nothing to follow up with.
+	// deliver sends the answer and reports whether it succeeded, with a
+	// follow-up command to run when it did, or nil when there is none.
 	deliver() (tea.Cmd, bool)
 	// waiting reports whether the request still needs an answer.
 	waiting() bool

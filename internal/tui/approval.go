@@ -21,12 +21,10 @@ const (
 	// condensed action labels so the choice row still fits.
 	approvalCompactWidth = 50
 	// approvalMinWidth is the narrowest slot that still shows the actions that
-	// never drop (Allow, Deny). Below it the panel conceals entirely rather
-	// than showing a partial choice row.
+	// never drop (Allow, Deny); below it the panel conceals entirely.
 	approvalMinWidth = 36
 
-	// fullAccessDisclaimer is the warning shown while the full-access choice
-	// is focused. Verbatim from the design mockup.
+	// fullAccessDisclaimer is the warning shown while full access is focused.
 	fullAccessDisclaimer = "Full access skips all approval requests. Use with caution."
 )
 
@@ -36,26 +34,23 @@ type approvalChoice struct {
 	emphasis     string // trailing segment rendered bold, e.g. "full access"
 	compactLabel string
 	fullAccess   bool
-	// dropPriority orders which choices give way first on a narrow slot: 0
-	// never drops (Allow, Deny), higher drops before lower when the full
-	// choice row does not fit. See actions.
+	// dropPriority orders which choices give way on a narrow slot; 0 never
+	// drops. See actions.
 	dropPriority int
 }
 
 var approvalChoices = [...]approvalChoice{
 	{decision: agent.ApprovalAllowOnce, label: "Allow", compactLabel: "Allow"},
 	{decision: agent.ApprovalAllowSession, label: "Allow for session", compactLabel: "Session", dropPriority: 1},
-	// ApprovalAllowOnce, not ApprovalAllowSession: a session grant would be
-	// silently cleared once the mode leaves manual, which would surprise the
-	// user. Switching to full access answers only this call.
+	// ApprovalAllowOnce, not ApprovalAllowSession: a session grant is cleared
+	// once the mode leaves manual, so it would not outlive the switch.
 	{decision: agent.ApprovalAllowOnce, label: "Switch to ", emphasis: "full access", compactLabel: "Full", fullAccess: true, dropPriority: 2},
 	{decision: agent.ApprovalDeny, label: "Deny", compactLabel: "Deny"},
 }
 
-// chip renders one choice's action label as a single fixed-background cell.
-// The bold emphasis is a separate rendered segment deliberately: nesting
-// Bold(true) inside the outer style resets the background for the rest of
-// the row once the inner style's reset code fires.
+// chip renders one choice's action label. The bold emphasis is a separate
+// rendered segment because nesting Bold(true) inside the outer style resets
+// its background for the rest of the row.
 func (c approvalChoice) chip(style lipgloss.Style, compact bool) string {
 	if compact {
 		return style.Render(c.compactLabel)
@@ -72,10 +67,10 @@ func (c approvalChoice) chip(style lipgloss.Style, compact bool) string {
 type approvalPrompt struct {
 	block      agent.Block
 	selected   int                    // index into approvalChoices
-	visible    []int                  // indices into approvalChoices the last actions() rendered; empty until the first Layout
+	visible    []int                  // choices the last actions() rendered; empty until the first Layout
 	window     components.Window      // the body rows the last layout showed
 	decision   agent.ApprovalDecision // "" until the user decides
-	fullAccess bool                   // the committed decision also asked to switch to full access
+	fullAccess bool                   // the decision also asked to switch to full access
 	panel      components.Panel
 
 	theme styles.Theme
@@ -135,19 +130,13 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 
 func (a *approvalPrompt) scroll(rows int) { a.window = a.window.Scrolled(rows) }
 
-// cycle moves the focus by delta positions among the choices the last Layout
-// actually showed (a.visible), so a hidden choice can never be focused — the
-// focus-cycle safety bug this guards against is a user landing on, and
-// enter-ing, a control they never saw (e.g. a silently-dropped "Allow for
-// session"). Before the first Layout, visible is empty and the cycle falls
-// back to the full array.
+// cycle moves the focus by delta among the choices the last Layout showed, so
+// the user can never focus and enter a control they cannot see. Before the
+// first Layout nothing has rendered yet, so every choice is in the cycle.
 func (a *approvalPrompt) cycle(delta int) int {
 	visible := a.visible
 	if len(visible) == 0 {
-		visible = make([]int, len(approvalChoices))
-		for i := range visible {
-			visible[i] = i
-		}
+		visible = allChoiceIndices()
 	}
 	pos := slices.Index(visible, a.selected)
 	if pos < 0 {
@@ -205,11 +194,8 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 			} else if detail != "" {
 				lines = append(lines, sty.Detail.Render(ansi.Wordwrap(escape.Inline(detail), width, "-")))
 			}
-			// No separate blank line before actions: a.actions already ends
-			// in the disclaimer-or-blank row, so the compact form's total
-			// height stays what it was before that row existed, the same
-			// way the full form's Frame.Padding gave up a row below (see
-			// builder.go's approvalPanel).
+			// No blank line before actions: it already ends in the
+			// disclaimer-or-blank row, keeping this form's height unchanged.
 			lines = append(lines, a.actions(width))
 			return strings.Join(lines, "\n")
 		},
@@ -220,17 +206,10 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 	return lipgloss.PlaceHorizontal(width, lipgloss.Center, rendered), shown && width >= approvalMinWidth
 }
 
-// actions renders the choice row within width, measurement-driven rather
-// than threshold-driven: it tries full labels, then condensed labels, then
-// drops choices (by dropPriority, never Allow or Deny) until the row fits.
-// This also fixes a latent bug: with four choices the full-label row no
-// longer fits a handful of slots that used to silently shear off "Deny"
-// before Panel ever asked whether the row fit.
-//
-// It also records which choices actually rendered, in a.visible, and clamps
-// a.selected onto that set — toward Allow (index 0), never toward a
-// neighbour — so Update's focus cycle (see cycle) can never land on a choice
-// the user cannot see.
+// actions renders the choice row within width by measuring it: full labels,
+// then condensed, then dropping choices by dropPriority until it fits, rather
+// than trusting a width threshold to predict that. It records what rendered
+// in a.visible and clamps a.selected onto that set for cycle.
 func (a *approvalPrompt) actions(width int) string {
 	compact := width < approvalCompactWidth
 	visible := allChoiceIndices()
@@ -255,17 +234,10 @@ func (a *approvalPrompt) actions(width int) string {
 	}
 
 	row := ansi.Truncate(a.renderChoiceRow(visible, compact), max(1, width), "…")
-	// The disclaimer row is reserved unconditionally, not appended only when
-	// full access is focused: Panel measures the footer's height once to
-	// decide between its full and compact forms (components/panel.go), so a
-	// row that only sometimes exists would make the whole modal jump by one
-	// line the moment the user focuses full access. Blank when unfocused,
-	// one line of text when focused — never zero lines either way.
-	//
-	// This does not grow the panel: the approval Frame gives up one row of
-	// its own bottom padding to make room (builder.go's approvalPanel), so
-	// what used to be blank space between the actions row and the border is
-	// now this row — occupied by nothing, or by the warning.
+	// The disclaimer row is always present, blank when unfocused, so focusing
+	// full access cannot change the panel's height. It costs nothing: the
+	// approval Frame gives up a row of bottom padding for it (see
+	// builder.go's approvalPanel).
 	disclaimer := ""
 	if approvalChoices[a.selected].fullAccess {
 		disclaimer = a.theme.Approval.Disclaimer.Render(ansi.Truncate(fullAccessDisclaimer, max(1, width), "…"))
@@ -299,9 +271,8 @@ func allChoiceIndices() []int {
 	return indices
 }
 
-// lowestDroppable finds the still-visible choice with the lowest nonzero
-// dropPriority — the next one to give way when the row does not fit. Allow
-// and Deny (priority 0) are never returned.
+// lowestDroppable returns the next choice to give way when the row does not
+// fit. Priority 0 (Allow, Deny) never drops.
 func lowestDroppable(visible []int) (int, bool) {
 	best, bestPriority := -1, 0
 	for _, i := range visible {
