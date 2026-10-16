@@ -1080,11 +1080,12 @@ func (r *toolRoundState) handleCommand(command toolCommand) bool {
 	if command.decision == ApprovalAllowSession {
 		r.e.sessionGrants[c.key] = struct{}{}
 	}
-	// Full access answers this call and switches the mode before releasing
-	// siblings, so every parked call in the round clears regardless of key.
+	// Full access switches the mode before releasing siblings, so every parked
+	// call clears regardless of key. The error is unreachable: the mode is a
+	// constant and only an invalid one fails.
 	fullAccess := command.decision == ApprovalAllowFullAccess
 	if fullAccess {
-		_ = r.tools.SetPermissionsMode(ModeSkipPermissions) // ModeSkipPermissions is always a valid mode
+		_ = r.tools.SetPermissionsMode(ModeSkipPermissions)
 	}
 	if !r.approve(c) {
 		return false
