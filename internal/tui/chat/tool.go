@@ -329,20 +329,25 @@ func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 		}
 		return spans
 	case spec.ClientExecCommand:
-		spans := actionArgument(action, p.argument)
-		if p.context != "" {
-			spans = append(spans, summarySpan{text: " in ", kind: spanMuted}, summarySpan{text: p.context, kind: spanArgument})
-		}
-		if p.timeout != "" {
-			spans = append(spans, summarySpan{text: " · timeout ", kind: spanMuted}, summarySpan{text: p.timeout, kind: spanArgument})
-		}
-		return spans
+		return append(actionArgument(action, p.argument), p.execMeta()...)
 	default:
 		if action != "" {
 			return actionArgument(action, p.argument)
 		}
 		return []summarySpan{{text: p.name, kind: spanAction}, {text: "(" + p.argument + ")", kind: spanArgument}}
 	}
+}
+
+// execMeta is the metadata the exec header shows after the command.
+func (p toolPresentation) execMeta() []summarySpan {
+	var spans []summarySpan
+	if p.context != "" {
+		spans = append(spans, summarySpan{text: " in ", kind: spanMuted}, summarySpan{text: p.context, kind: spanArgument})
+	}
+	if p.timeout != "" {
+		spans = append(spans, summarySpan{text: " · timeout ", kind: spanMuted}, summarySpan{text: p.timeout, kind: spanArgument})
+	}
+	return spans
 }
 
 func (p toolPresentation) actionLabel(state agent.ToolStatus) string {
@@ -587,6 +592,9 @@ func renderNoOutput(width int, sty Styles) string {
 func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []summarySpan, c renderContext) string {
 	command := strings.TrimRight(p.argument, "\n")
 	lines := highlightShellCommand(command, c.sty)
+	if c.disclosure == fullView {
+		return renderExecInvocationFull(tool, p, lines, suffix, c)
+	}
 	p.argument = lines[0]
 	header := renderToolHeader(tool, p.summary(tool), suffix, c)
 	if len(lines) == 1 {
@@ -610,6 +618,49 @@ func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []su
 		rows[i] = ansi.Truncate(prefix+body, max(1, c.width), "…")
 	}
 	return header + "\n" + strings.Join(rows, "\n")
+}
+
+// renderExecInvocationFull is the expanded invocation: every source line is
+// word-wrapped instead of truncated. The first line wraps under the command's
+// first column, so expanding only adds rows below the compact header; later
+// lines wrap behind the │ branch, with soft-wrapped continuations indented
+// further to keep them distinct from real newlines.
+func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines []string, suffix []summarySpan, c renderContext) string {
+	state := statusOf(tool)
+	action := p.actionLabel(state)
+	lead := headerGlyph(state, c) + c.sty.ToolName.Render(action) + c.sty.ToolDetail.Render(" ")
+	leadWidth := statusGlyphWidth + ansi.StringWidth(action) + 1
+
+	meta := append(append(p.execMeta(), suffix...), lifecycleSpans(state)...)
+	out := hangWrap(lead, strings.Repeat(" ", leadWidth), leadWidth, lines[0]+renderSpans(meta, c.sty), c.width)
+
+	branch := c.sty.ToolDetail.Render("  │ ")
+	cont := c.sty.ToolDetail.Render("  │   ")
+	for _, row := range lines[1:] {
+		out = append(out, hangWrap(branch, cont, ansi.StringWidth("  │   "), row, c.width)...)
+	}
+	return strings.Join(out, "\n")
+}
+
+// shellBreakpoints are extra word-wrap opportunities in shell source.
+const shellBreakpoints = "/|;&"
+
+// hangWrap word-wraps body after lead, re-applying styles on every row.
+// Continuation rows start with cont. prefixWidth is the widest of lead and
+// cont in cells: every row wraps to the width left after it, so no row
+// needs the final truncation, however narrow the terminal.
+func hangWrap(lead, cont string, prefixWidth int, body string, width int) []string {
+	width = max(1, width)
+	bodyWidth := max(1, width-prefixWidth)
+	rows := strings.Split(lipgloss.Wrap(body, bodyWidth, shellBreakpoints), "\n")
+	for i, row := range rows {
+		prefix := cont
+		if i == 0 {
+			prefix = lead
+		}
+		rows[i] = ansi.Truncate(prefix+row, width, "…")
+	}
+	return rows
 }
 
 func execSuffix(result spec.ExecCommandOutput) []summarySpan {
@@ -738,15 +789,24 @@ const statusGlyphWidth = 2
 
 func renderToolHeader(tool *agent.ToolBlock, summary, suffix []summarySpan, c renderContext) string {
 	state := statusOf(tool)
-	glyph, glyphStyle := statusGlyph(state, c.sty, c.frame)
 	spans := make([]summarySpan, 0, len(summary)+len(suffix)+1)
 	spans = append(spans, summary...)
 	spans = append(spans, suffix...)
-	if label := lifecycleSuffix(state); label != "" {
-		spans = append(spans, summarySpan{text: " · " + label, kind: spanMuted})
-	}
-	header := glyphStyle.UnsetBackground().Render(glyph+" ") + renderSpans(spans, c.sty)
+	spans = append(spans, lifecycleSpans(state)...)
+	header := headerGlyph(state, c) + renderSpans(spans, c.sty)
 	return ansi.Truncate(header, max(1, c.width), "…")
+}
+
+func headerGlyph(state agent.ToolStatus, c renderContext) string {
+	glyph, style := statusGlyph(state, c.sty, c.frame)
+	return style.UnsetBackground().Render(glyph + " ")
+}
+
+func lifecycleSpans(state agent.ToolStatus) []summarySpan {
+	if label := lifecycleSuffix(state); label != "" {
+		return []summarySpan{{text: " · " + label, kind: spanMuted}}
+	}
+	return nil
 }
 
 func lifecycleSuffix(state agent.ToolStatus) string {
