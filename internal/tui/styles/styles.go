@@ -158,6 +158,12 @@ type Approval struct {
 	Detail   lipgloss.Style
 	Action   lipgloss.Style
 	Selected lipgloss.Style
+	// FullAccess is the focused fill for the "Switch to full access" choice,
+	// distinct from Selected so it reads as a different kind of commitment.
+	FullAccess lipgloss.Style
+	// Disclaimer styles the one-row warning shown while full access is
+	// focused.
+	Disclaimer lipgloss.Style
 }
 
 // Accordion styles the disclosure control that expands and collapses a

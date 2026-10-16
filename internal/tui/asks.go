@@ -19,31 +19,39 @@ import (
 type ask interface {
 	callID() string
 	prompt() components.Prompt
-	// deliver sends the answer and reports whether it succeeded.
-	deliver() bool
+	// deliver sends the answer and reports whether it succeeded, with a
+	// follow-up command to run when it did, or nil when there is none.
+	deliver() (tea.Cmd, bool)
 	// waiting reports whether the request still needs an answer.
 	waiting() bool
 }
 
 // approvalAsk is one call the transcript lists as awaiting approval.
 type approvalAsk struct {
-	block    agent.Block
-	panel    *approvalPrompt
-	decide   func(callID string, decision agent.ApprovalDecision) bool
-	answered bool // the decision reached the engine
-	settled  bool // the transcript no longer lists the call
+	block      agent.Block
+	panel      *approvalPrompt
+	decide     func(callID string, decision agent.ApprovalDecision) bool
+	fullAccess func() tea.Cmd // queues the switch to full access; nil if not wired
+	answered   bool           // the decision reached the engine
+	settled    bool           // the transcript no longer lists the call
 }
 
 func (a *approvalAsk) callID() string            { return a.block.ToolCallID() }
 func (a *approvalAsk) prompt() components.Prompt { return a.panel }
 func (a *approvalAsk) waiting() bool             { return !a.answered && !a.settled }
 
-func (a *approvalAsk) deliver() bool {
+func (a *approvalAsk) deliver() (tea.Cmd, bool) {
 	if a.answered || a.panel.decision == "" {
-		return false
+		return nil, false
 	}
 	a.answered = a.decide(a.callID(), a.panel.decision)
-	return a.answered
+	if !a.answered {
+		return nil, false
+	}
+	if a.panel.fullAccess && a.fullAccess != nil {
+		return a.fullAccess(), true
+	}
+	return nil, true
 }
 
 // toolAsk is the interactive UI a client tool asks through.
@@ -57,14 +65,14 @@ func (t *toolAsk) callID() string            { return t.ui.Call.ID }
 func (t *toolAsk) prompt() components.Prompt { return t.form }
 func (t *toolAsk) waiting() bool             { return !t.done && t.ui.Context().Err() == nil }
 
-func (t *toolAsk) deliver() bool {
+func (t *toolAsk) deliver() (tea.Cmd, bool) {
 	answer, answered := t.form.Result()
 	if t.done || !answered {
-		return false
+		return nil, false
 	}
 	t.ui.Respond(answer, nil)
 	t.done = true
-	return true
+	return nil, true
 }
 
 type toolUIOpenedMsg struct{ request *tools.Request }
@@ -103,9 +111,14 @@ func (m *Model) syncApprovals(pending []agent.Block) {
 		}
 		panel := newApprovalPrompt(block)
 		panel.SetStyles(m.styles)
-		m.approvals[id] = &approvalAsk{block: block, panel: panel, decide: func(id string, decision agent.ApprovalDecision) bool {
-			return m.engine.Decide(id, decision)
-		}}
+		m.approvals[id] = &approvalAsk{
+			block: block,
+			panel: panel,
+			decide: func(id string, decision agent.ApprovalDecision) bool {
+				return m.engine.Decide(id, decision)
+			},
+			fullAccess: func() tea.Cmd { return m.applyPermissionsMode(agent.ModeSkipPermissions) },
+		}
 		m.editor.CloseMenu()
 	}
 	maps.DeleteFunc(m.approvals, func(id string, a *approvalAsk) bool {
@@ -178,7 +191,8 @@ func (m *Model) updatePrompt(msg tea.Msg) (tea.Cmd, bool) {
 		return nil, false
 	}
 	cmd, used := m.shown.prompt().Update(msg)
-	if m.shown.deliver() {
+	if followUp, delivered := m.shown.deliver(); delivered {
+		cmd = tea.Batch(cmd, followUp)
 		m.reshow()
 	}
 	return cmd, used

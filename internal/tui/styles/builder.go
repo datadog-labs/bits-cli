@@ -77,6 +77,10 @@ func build(isDark bool, p palette) Theme {
 	// Cleared MaxWidth spans the terminal like the splash banner rather than
 	// capping like a centered dialog.
 	approvalPanel.MaxWidth = 0
+	// Bottom padding dropped to 0, approval only: the full-access disclaimer
+	// (approval.go's actions) fills that row instead, so the panel's height is
+	// unchanged. The shared Panel default is untouched.
+	approvalPanel.Frame = approvalPanel.Frame.Padding(1, 2, 0, 2)
 	permissionsPanel := panel
 	permissionsPanel.SectionGap = 0
 	permissionsPanel.MaxWidth = 0
@@ -92,6 +96,16 @@ func build(isDark bool, p palette) Theme {
 			Foreground(lipgloss.Color(p.onAccent)).
 			Background(lipgloss.Color(p.interactive)).
 			Padding(0, 1),
+		// textPrimary, not onAccent: onAccent is #FFFFFF in both palettes and
+		// unreadable on light mode's #EC93A0. Bold is left off here so chip
+		// can bold only the emphasis segment.
+		FullAccess: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(p.textPrimary)).
+			Background(lipgloss.Color(p.fullAccessSurface)).
+			Padding(0, 1),
+		// error, not the mockup's literal #EB364B, which is only ~3.3:1 on
+		// light mode's background.
+		Disclaimer: lipgloss.NewStyle().Foreground(lipgloss.Color(p.error)),
 	}
 	// The control is a background fill on its cells rather than a drawn
 	// border, so the one-cell padding is what gives the chevron its box. It's

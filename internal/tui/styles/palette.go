@@ -67,6 +67,13 @@ type palette struct {
 	critical        string
 	info            string
 	warning         string
+
+	// fullAccessSurface is the focused fill for the approval modal's "Switch
+	// to full access" choice. #EB364B does not exist in this palette (nearest
+	// are critical #C4314B and error), so this is #EB364B at 50% over the
+	// mode's background, pre-derived rather than reusing an existing token:
+	// dark over #171921 -> #812836, light over #ECEFF4 -> #EC93A0.
+	fullAccessSurface string
 }
 
 func darkPalette() palette {
@@ -104,6 +111,7 @@ func darkPalette() palette {
 		critical:            "#C4314B",
 		info:                "#632CA6",
 		warning:             "#F5A623",
+		fullAccessSurface:   "#812836",
 	}
 }
 
@@ -146,5 +154,6 @@ func lightPalette() palette {
 		critical:            "#C4314B",
 		info:                "#632CA6",
 		warning:             "#F5A623",
+		fullAccessSurface:   "#EC93A0",
 	}
 }
