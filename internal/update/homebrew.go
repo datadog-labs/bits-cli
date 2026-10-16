@@ -124,16 +124,24 @@ func detectBackend(executable string) (backend, error) {
 	return h, nil
 }
 
-// Read only the explicit version declaration in our generated formula. This is
-// deliberately not a Ruby parser; unexpected formats fail the check silently.
-var formulaVersion = regexp.MustCompile(`(?m)^[\t ]*version[\t ]+"([^"\r\n]+)"[\t ]*\r?$`)
+// Read the version from the release download URLs in our generated formula.
+// Homebrew infers its formula version from these URLs, so avoid duplicating it
+// in an explicit version stanza. This is deliberately not a Ruby parser;
+// unexpected formats fail the check silently.
+var formulaReleaseVersion = regexp.MustCompile(`(?m)^[\t ]*url[\t ]+"[^"\r\n]*/releases/download/v([^/"\r\n]+)/[^"\r\n]+"[\t ]*\r?$`)
 
 func homebrewVersion(raw []byte) (string, error) {
-	matches := formulaVersion.FindAllSubmatch(raw, -1)
-	if len(matches) != 1 {
-		return "", fmt.Errorf("%w: expected one explicit Homebrew version", errInvalidVersion)
+	matches := formulaReleaseVersion.FindAllSubmatch(raw, -1)
+	if len(matches) == 0 {
+		return "", fmt.Errorf("%w: expected one version across Homebrew release URLs", errInvalidVersion)
 	}
-	latest := "v" + string(matches[0][1])
+	version := string(matches[0][1])
+	for _, match := range matches[1:] {
+		if string(match[1]) != version {
+			return "", fmt.Errorf("%w: mismatched versions across Homebrew release URLs", errInvalidVersion)
+		}
+	}
+	latest := "v" + version
 	if !semver.IsValid(latest) {
 		return "", fmt.Errorf("%w: Homebrew version %q", errInvalidVersion, latest)
 	}

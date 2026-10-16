@@ -290,8 +290,8 @@ func TestHomebrewTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render formula: %v\n%s", err, formula)
 	}
-	if got := strings.Count(string(formula), "\n  version \"1.2.3\"\n"); got != 1 {
-		t.Fatalf("expected one explicit version declaration, got %d", got)
+	if strings.Contains(string(formula), "\n  version ") {
+		t.Fatal("formula should let Homebrew infer the version from its release URLs")
 	}
 	for _, platform := range platforms {
 		url := `url "https://github.com/datadog-labs/bits-cli/releases/download/v1.2.3/bits_1.2.3_` + platform + `.tar.gz"`

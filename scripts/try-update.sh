@@ -64,7 +64,7 @@ chmod +x "$PREFIX/bin/brew"
 
 # Start without a cache so the first launch performs the real check.
 rm -f "$STATE"
-echo "--- serving $URL ($(grep -m1 '^ *version ' "$PREFIX/www/Formula/bits.rb" | xargs))"
+echo "--- serving $URL ($(grep -m1 'releases/download/v' "$PREFIX/www/Formula/bits.rb" | sed -E 's|.*releases/download/(v[^/]+)/.*|\1|'))"
 
 while true; do
     echo "--- launching $("$PREFIX/bin/bits" --version)"

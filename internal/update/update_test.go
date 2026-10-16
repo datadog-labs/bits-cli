@@ -223,7 +223,7 @@ func TestHomebrewFetch(t *testing.T) {
 		body, want string
 		invalid    bool
 	}{
-		{"success", 200, `  version "1.3.0"`, "v1.3.0", false},
+		{"success", 200, `  url "https://github.com/datadog-labs/bits-cli/releases/download/v1.3.0/bits_1.3.0_linux_amd64.tar.gz"`, "v1.3.0", false},
 		{"server", 500, "", "", false},
 		{"missing", 404, "", "", false},
 		{"redirect", 302, "", "", false},
@@ -394,13 +394,12 @@ func TestHomebrewUpgrade(t *testing.T) {
 
 func TestHomebrewVersion(t *testing.T) {
 	for _, tc := range []struct{ name, formula, want string }{
-		{"generated format", "class Bits < Formula\n  version \"1.2.3\"\n  on_macos do\n    url \"https://example.com/v9.9.9/bits.tar.gz\"\n  end\nend\n", "v1.2.3"},
-		{"windows newlines", "  version \"1.2.3\"\r\n", "v1.2.3"},
+		{"generated format", "class Bits < Formula\n  on_macos do\n    url \"https://github.com/datadog-labs/bits-cli/releases/download/v1.2.3/bits_1.2.3_darwin_arm64.tar.gz\"\n    url \"https://github.com/datadog-labs/bits-cli/releases/download/v1.2.3/bits_1.2.3_darwin_amd64.tar.gz\"\n  end\nend\n", "v1.2.3"},
+		{"windows newlines", "  url \"https://github.com/datadog-labs/bits-cli/releases/download/v1.2.3/bits_1.2.3_linux_amd64.tar.gz\"\r\n", "v1.2.3"},
 		{"missing", "class Bits < Formula\nend\n", ""},
-		{"comment", "  # version \"1.2.3\"\n", ""},
-		{"duplicate", "  version \"1.2.3\"\n  version \"1.2.4\"\n", ""},
-		{"expression", "  version ENV.fetch(\"VERSION\")\n", ""},
-		{"interpolation", "  version \"#{version}\"\n", ""},
+		{"comment", "  # url \"https://github.com/datadog-labs/bits-cli/releases/download/v1.2.3/bits_1.2.3_darwin_arm64.tar.gz\"\n", ""},
+		{"mismatched release URLs", "  url \"https://github.com/datadog-labs/bits-cli/releases/download/v1.2.3/bits_1.2.3_darwin_arm64.tar.gz\"\n  url \"https://github.com/datadog-labs/bits-cli/releases/download/v1.2.4/bits_1.2.4_linux_amd64.tar.gz\"\n", ""},
+		{"invalid version", "  url \"https://github.com/datadog-labs/bits-cli/releases/download/vnot-a-version/bits.tar.gz\"\n", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := homebrewVersion([]byte(tc.formula))
