@@ -670,12 +670,11 @@ func TestApprovalFocusCycleNeverLandsOnAHiddenChoice(t *testing.T) {
 	}
 }
 
-// TestApprovalFullAccessAnswersCallAndQueuesSwitch exercises the whole
-// decision from the plan: choosing full access answers only the call it was
-// raised on (allow_once, not a session grant) and queues the permissions
-// switch for the next turn rather than applying it mid-turn — modeled on
-// TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool.
-func TestApprovalFullAccessAnswersCallAndQueuesSwitch(t *testing.T) {
+// TestApprovalFullAccessAnswersCallAndSwitchesImmediately covers the engine
+// decision: choosing full access answers the call that raised it, is not
+// queued like /permission (no pendingPermissions), and posts the notice
+// right away rather than waiting for the turn to drain.
+func TestApprovalFullAccessAnswersCallAndSwitchesImmediately(t *testing.T) {
 	m, backend := newPermissionsModel(t, agent.ModeManual)
 	awaitApproval(t, m, 80)
 
@@ -688,16 +687,19 @@ func TestApprovalFullAccessAnswersCallAndQueuesSwitch(t *testing.T) {
 	if waitingApprovals(m) != 0 {
 		t.Fatal("full access did not answer the pending call")
 	}
-	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual {
-		t.Fatalf("pending = %q mode = %q, want the switch queued for next turn, not applied mid-turn", m.pendingPermissions, m.tools.PermissionsMode())
+	if m.pendingPermissions != "" {
+		t.Fatalf("pendingPermissions = %q, want empty — this path answers immediately, not queued", m.pendingPermissions)
+	}
+	if len(m.notices) == 0 {
+		t.Fatal("full access did not post its notice at decision time")
 	}
 
 	drainConversationRemote(t, m)
-	if got := m.tools.PermissionsMode(); got != agent.ModeSkipPermissions || m.pendingPermissions != "" {
-		t.Fatalf("mode = %q pending = %q, want full access applied once the turn drained", got, m.pendingPermissions)
+	if got := m.tools.PermissionsMode(); got != agent.ModeSkipPermissions {
+		t.Fatalf("mode = %q, want full access applied", got)
 	}
 	if backend.calls < 2 {
-		t.Fatalf("backend calls = %d, want the engine to have received the allow_once answer", backend.calls)
+		t.Fatalf("backend calls = %d, want the engine to have received the allow_full_access answer", backend.calls)
 	}
 }
 

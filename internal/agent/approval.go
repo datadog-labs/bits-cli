@@ -13,11 +13,14 @@ const (
 	ApprovalDeny         ApprovalDecision = "deny"
 	ApprovalAllowOnce    ApprovalDecision = "allow_once"
 	ApprovalAllowSession ApprovalDecision = "allow_session"
+	// ApprovalAllowFullAccess answers the call and switches the tool set to
+	// ModeSkipPermissions, releasing every sibling still parked this round.
+	ApprovalAllowFullAccess ApprovalDecision = "allow_full_access"
 )
 
 func (d ApprovalDecision) valid() bool {
 	switch d {
-	case ApprovalDeny, ApprovalAllowOnce, ApprovalAllowSession:
+	case ApprovalDeny, ApprovalAllowOnce, ApprovalAllowSession, ApprovalAllowFullAccess:
 		return true
 	default:
 		return false

@@ -28,12 +28,14 @@ type ask interface {
 
 // approvalAsk is one call the transcript lists as awaiting approval.
 type approvalAsk struct {
-	block      agent.Block
-	panel      *approvalPrompt
-	decide     func(callID string, decision agent.ApprovalDecision) bool
-	fullAccess func() tea.Cmd // queues the switch to full access; nil if not wired
-	answered   bool           // the decision reached the engine
-	settled    bool           // the transcript no longer lists the call
+	block  agent.Block
+	panel  *approvalPrompt
+	decide func(callID string, decision agent.ApprovalDecision) bool
+	// fullAccess announces the mode switch the engine already made when it
+	// answered the decision; nil if not wired.
+	fullAccess func() tea.Cmd
+	answered   bool // the decision reached the engine
+	settled    bool // the transcript no longer lists the call
 }
 
 func (a *approvalAsk) callID() string            { return a.block.ToolCallID() }
@@ -117,7 +119,10 @@ func (m *Model) syncApprovals(pending []agent.Block) {
 			decide: func(id string, decision agent.ApprovalDecision) bool {
 				return m.engine.Decide(id, decision)
 			},
-			fullAccess: func() tea.Cmd { return m.applyPermissionsMode(agent.ModeSkipPermissions) },
+			fullAccess: func() tea.Cmd {
+				m.syncStatus()
+				return m.postNotice(permissionsChangedNotice(agent.ModeSkipPermissions))
+			},
 		}
 		m.editor.CloseMenu()
 	}

@@ -1080,6 +1080,12 @@ func (r *toolRoundState) handleCommand(command toolCommand) bool {
 	if command.decision == ApprovalAllowSession {
 		r.e.sessionGrants[c.key] = struct{}{}
 	}
+	// Full access answers this call and switches the mode before releasing
+	// siblings, so every parked call in the round clears regardless of key.
+	fullAccess := command.decision == ApprovalAllowFullAccess
+	if fullAccess {
+		_ = r.tools.SetPermissionsMode(ModeSkipPermissions) // ModeSkipPermissions is always a valid mode
+	}
 	if !r.approve(c) {
 		return false
 	}
@@ -1087,7 +1093,8 @@ func (r *toolRoundState) handleCommand(command toolCommand) bool {
 		if sibling.status != callAwaitingApproval {
 			continue
 		}
-		if _, granted := r.e.sessionGrants[sibling.key]; granted && !r.approve(sibling) {
+		_, granted := r.e.sessionGrants[sibling.key]
+		if (fullAccess || granted) && !r.approve(sibling) {
 			return false
 		}
 	}

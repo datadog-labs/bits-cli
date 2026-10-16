@@ -42,9 +42,7 @@ type approvalChoice struct {
 var approvalChoices = [...]approvalChoice{
 	{decision: agent.ApprovalAllowOnce, label: "Allow", compactLabel: "Allow"},
 	{decision: agent.ApprovalAllowSession, label: "Allow for session", compactLabel: "Session", dropPriority: 1},
-	// ApprovalAllowOnce, not ApprovalAllowSession: a session grant is cleared
-	// once the mode leaves manual, so it would not outlive the switch.
-	{decision: agent.ApprovalAllowOnce, label: "Switch to ", emphasis: "full access", compactLabel: "Full", fullAccess: true, dropPriority: 2},
+	{decision: agent.ApprovalAllowFullAccess, label: "Switch to ", emphasis: "full access", compactLabel: "Full", fullAccess: true, dropPriority: 2},
 	{decision: agent.ApprovalDeny, label: "Deny", compactLabel: "Deny"},
 }
 
