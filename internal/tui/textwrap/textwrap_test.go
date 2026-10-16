@@ -150,6 +150,29 @@ func TestWrapEllipsisCutsOverlongWords(t *testing.T) {
 	}
 }
 
+func TestWrapAvoidBreak(t *testing.T) {
+	avoid := func(text string) Segment { return Segment{Text: text, AvoidBreak: true} }
+	for _, test := range []struct {
+		name  string
+		segs  []Segment
+		width int
+		want  []string
+	}{
+		{"moves whole", []Segment{Plain("f("), avoid(`"a b c"`), Plain(", x)")}, 8, []string{"f(", `"a b c",`, "x)"}},
+		{"adjacent text wraps separately", []Segment{Plain("f("), avoid(`"123456"`), Plain(")")}, 8, []string{"f(", `"123456"`, ")"}},
+		{"breakpoints suspended", []Segment{Plain("rg -e "), avoid("'a|b|c'")}, 10, []string{"rg -e", "'a|b|c'"}},
+		{"too long breaks as usual", []Segment{Plain("f("), avoid(`"alpha beta gamma"`)}, 10, []string{`f("alpha`, "beta", `gamma"`}},
+		{"plain unaffected", []Segment{Plain(`f("a b c", x)`)}, 8, []string{`f("a b`, `c", x)`}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := plainRows(Wrap(test.segs, Options{Width: test.width, Breakpoints: "|"}))
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("rows = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestWrapCapsIndentation(t *testing.T) {
 	rows := plainRows(Wrap([]Segment{Plain("            deep words")}, Options{Width: 10, KeepIndent: true}))
 	for _, row := range rows {
@@ -283,6 +306,11 @@ func FuzzWrap(f *testing.F) {
 		}
 		checkProperties(t, []Segment{Plain(text)}, Options{Width: width, KeepIndent: keepIndent, Breakpoints: "/|;-"})
 		checkProperties(t, []Segment{Styled(text, lipgloss.NewStyle().Foreground(lipgloss.Color("1")))}, Options{Width: width, FirstPrefix: "✓ ran ", RestPrefix: "  │   ", KeepIndent: keepIndent})
+		half := len(text) / 2
+		for half > 0 && half < len(text) && !utf8.RuneStart(text[half]) {
+			half--
+		}
+		checkProperties(t, []Segment{Plain(text[:half]), {Text: text[half:], AvoidBreak: true}}, Options{Width: width, KeepIndent: keepIndent, Breakpoints: "/|;-"})
 		for _, row := range Wrap([]Segment{Plain(text)}, Options{Width: width, KeepIndent: keepIndent, Ellipsis: "…"}) {
 			if w := ansi.StringWidth(row); w > width && width > 1 {
 				t.Fatalf("ellipsis row %q is %d cells, over width %d", row, w, width)

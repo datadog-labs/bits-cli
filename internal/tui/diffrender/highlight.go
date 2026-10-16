@@ -39,7 +39,7 @@ func matchLexer(name string) chroma.Lexer {
 // Highlight styles text as one lexer document, so constructs spanning lines
 // such as heredocs keep their state, and returns one segment slice per source
 // line. Text is escaped for the terminal and tabs are expanded, so the result
-// can go straight to textwrap.
+// can go straight to textwrap. Strings and comments avoid breaks.
 func Highlight(path, text string, dark bool, base lipgloss.Style) [][]textwrap.Segment {
 	rows := highlight(path, text, dark, base, true)
 	want := strings.Count(text, "\n") + 1
@@ -78,6 +78,7 @@ func highlight(path, text string, dark bool, base lipgloss.Style, multiline bool
 				style = base.Foreground(lipgloss.Color(colour.String()))
 			}
 		}
+		avoid := token.Type.InSubCategory(chroma.LiteralString) || token.Type.InCategory(chroma.Comment)
 		values := []string{processValue(token.Value)}
 		if multiline {
 			values = strings.Split(escape.Multiline(token.Value), "\n")
@@ -87,7 +88,7 @@ func highlight(path, text string, dark bool, base lipgloss.Style, multiline bool
 				rows = append(rows, nil)
 			}
 			if value != "" {
-				rows[len(rows)-1] = append(rows[len(rows)-1], textwrap.Styled(value, style))
+				rows[len(rows)-1] = append(rows[len(rows)-1], textwrap.Segment{Text: value, Style: style, AvoidBreak: avoid})
 			}
 		}
 	}

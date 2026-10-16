@@ -223,3 +223,12 @@ func TestHighlightReturnsOneRowPerSourceLine(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderWrapAvoidsSplittingStringLiterals(t *testing.T) {
+	line := `	return fmt.Errorf("render %s", p)`
+	diff := filediff.Build("a/f.go", "b/f.go", "package p\n", "package p\n"+line+"\n")
+	out := ansi.Strip(Render(diff, Options{Path: "f.go", Width: 34, Wrap: true}))
+	if !strings.Contains(out, `"render %s"`) {
+		t.Fatalf("string literal was split:\n%s", out)
+	}
+}

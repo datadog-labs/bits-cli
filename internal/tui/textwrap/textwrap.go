@@ -35,6 +35,8 @@ type Style interface {
 type Segment struct {
 	Text  string
 	Style Style
+	// AvoidBreak keeps Text on one row if it fits on one.
+	AvoidBreak bool
 }
 
 // Plain returns an unstyled segment.
@@ -118,6 +120,7 @@ type cell struct {
 	width int
 	seg   int
 	kind  cellKind
+	avoid bool // Segment.AvoidBreak
 }
 
 func toCells(segs []Segment, breakpoints string) []cell {
@@ -126,7 +129,7 @@ func toCells(segs []Segment, breakpoints string) []cell {
 		for text := seg.Text; text != ""; {
 			cluster, width := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
 			text = text[len(cluster):]
-			cells = append(cells, cell{text: cluster, width: width, seg: i, kind: classify(cluster, breakpoints)})
+			cells = append(cells, cell{text: cluster, width: width, seg: i, kind: classify(cluster, breakpoints), avoid: seg.AvoidBreak})
 		}
 	}
 	return cells
@@ -202,11 +205,7 @@ func (l *layout) add(cs []cell) {
 func (l *layout) line(cells []cell, keepIndent bool) {
 	indent := 0
 	if keepIndent {
-		lead := 0
-		for lead < len(cells) && cells[lead].kind == cellSpace && cells[lead].text == " " {
-			lead++
-		}
-		indent = min(lead, min(l.firstRoom, l.restRoom)/2)
+		indent = min(leadingSpaces(cells), min(l.firstRoom, l.restRoom)/2)
 		if indent > 0 {
 			l.indentSeg = cells[0].seg
 		}
@@ -219,19 +218,20 @@ func (l *layout) line(cells []cell, keepIndent bool) {
 	atLineStart := true
 	var pending []cell
 	pendingWidth := 0
+
 	for len(cells) > 0 {
+		// Whitespace waits until we know where the next word goes.
 		if cells[0].kind == cellSpace {
 			pending = append(pending, cells[0])
 			pendingWidth += cells[0].width
 			cells = cells[1:]
 			continue
 		}
-		n, wordWidth := nextWord(cells)
-		word := cells[:n]
-		cells = cells[n:]
 
-		r := &l.rows[len(l.rows)-1]
-		if r.width+pendingWidth+wordWidth <= l.room() {
+		word, wordWidth := l.nextWord(cells, indent)
+		cells = cells[len(word):]
+
+		if l.fits(pendingWidth + wordWidth) {
 			l.add(pending)
 			l.add(word)
 		} else {
@@ -241,28 +241,71 @@ func (l *layout) line(cells []cell, keepIndent bool) {
 			if l.rows[len(l.rows)-1].width > 0 {
 				l.newRow(indent)
 			}
+
 			if l.ellipsis != "" && wordWidth > l.room() {
 				l.add(l.cut(word))
 			} else {
 				l.hardAdd(word, indent)
 			}
 		}
+
 		pending, pendingWidth, atLineStart = nil, 0, false
 	}
+
 	if atLineStart {
 		// A line of only whitespace keeps it, as far as it fits.
 		l.hardAdd(pending, indent)
 	}
 }
 
-// nextWord returns the length and width of the word starting cells: text up
-// to whitespace, or through the first breakpoint.
-func nextWord(cells []cell) (n, width int) {
-	for n < len(cells) && cells[n].kind != cellSpace {
-		width += cells[n].width
+// leadingSpaces counts the plain spaces starting cells.
+func leadingSpaces(cells []cell) int {
+	n := 0
+	for n < len(cells) && cells[n].kind == cellSpace && cells[n].text == " " {
 		n++
-		if cells[n-1].kind == cellBreak {
+	}
+	return n
+}
+
+// fits reports whether width more cells fit on the current row.
+func (l *layout) fits(width int) bool {
+	return l.rows[len(l.rows)-1].width+width <= l.room()
+}
+
+// nextWord returns the word starting cells and its width. AvoidBreak text
+// is a word of its own, unless it is too long for any row: then it breaks
+// like plain text.
+func (l *layout) nextWord(cells []cell, indent int) ([]cell, int) {
+	n, width := wordEnd(cells, true)
+	if width <= max(1, l.restRoom-indent) {
+		return cells[:n], width
+	}
+
+	for i := range cells[:n] {
+		cells[i].avoid = false
+	}
+	n, width = wordEnd(cells, false)
+	return cells[:n], width
+}
+
+// wordEnd returns the length and width of the word starting cells: text up
+// to whitespace, or through the first breakpoint. With avoid, AvoidBreak
+// runs are words of their own, whitespace and breakpoints included.
+func wordEnd(cells []cell, avoid bool) (n, width int) {
+	for ; n < len(cells); n++ {
+		c := cells[n]
+		held := avoid && c.avoid
+
+		if avoid && n > 0 && c.avoid != cells[n-1].avoid {
+			break // an AvoidBreak run starts or ends
+		}
+		if c.kind == cellSpace && !held {
 			break
+		}
+
+		width += c.width
+		if c.kind == cellBreak && !held {
+			return n + 1, width
 		}
 	}
 	return n, width
