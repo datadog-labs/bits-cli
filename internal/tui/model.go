@@ -208,8 +208,6 @@ type Model struct {
 	// cursor is the row on the page shown (on the confirmation, 0 is Yes).
 	permissionConfirm bool
 	permissionCursor  int
-	// A mode selected during an active turn applies when that turn closes.
-	pendingPermissions agent.PermissionsMode
 
 	upgrade upgradePrompt
 

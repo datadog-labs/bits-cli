@@ -28,12 +28,13 @@ type ask interface {
 
 // approvalAsk is one call the transcript lists as awaiting approval.
 type approvalAsk struct {
-	block      agent.Block
-	panel      *approvalPrompt
-	decide     func(callID string, decision agent.ApprovalDecision) bool
-	fullAccess func() tea.Cmd // queues the switch to full access; nil if not wired
-	answered   bool           // the decision reached the engine
-	settled    bool           // the transcript no longer lists the call
+	block  agent.Block
+	panel  *approvalPrompt
+	decide func(callID string, decision agent.ApprovalDecision) bool
+	// grant makes the permissions change a choice comes with.
+	grant    func(approvalGrant) tea.Cmd
+	answered bool // the decision reached the engine
+	settled  bool // the transcript no longer lists the call
 }
 
 func (a *approvalAsk) callID() string            { return a.block.ToolCallID() }
@@ -44,14 +45,11 @@ func (a *approvalAsk) deliver() (tea.Cmd, bool) {
 	if a.answered || a.panel.decision == "" {
 		return nil, false
 	}
+	// Grant first: the engine releases every parked call the change covers,
+	// this one included, and the answer then settles it if nothing did.
+	cmd := a.grant(a.panel.grant)
 	a.answered = a.decide(a.callID(), a.panel.decision)
-	if !a.answered {
-		return nil, false
-	}
-	if a.panel.fullAccess && a.fullAccess != nil {
-		return a.fullAccess(), true
-	}
-	return nil, true
+	return cmd, a.answered
 }
 
 // toolAsk is the interactive UI a client tool asks through.
@@ -117,7 +115,16 @@ func (m *Model) syncApprovals(pending []agent.Block) {
 			decide: func(id string, decision agent.ApprovalDecision) bool {
 				return m.engine.Decide(id, decision)
 			},
-			fullAccess: func() tea.Cmd { return m.applyPermissionsMode(agent.ModeSkipPermissions) },
+			grant: func(grant approvalGrant) tea.Cmd {
+				switch grant {
+				case grantNone:
+				case grantSession:
+					m.engine.GrantSessionFor(block.ToolCallID())
+				case grantFullAccess:
+					return m.setPermissionsMode(agent.ModeSkipPermissions)
+				}
+				return nil
+			},
 		}
 		m.editor.CloseMenu()
 	}

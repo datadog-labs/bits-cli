@@ -11,7 +11,7 @@ import (
 
 func TestDenyStopTransitionsPendingToolsInCallOrder(t *testing.T) {
 	for range 20 {
-		got := approvalTransitionOrder(t, ApprovalDeny)
+		got := approvalTransitionOrder(t, false)
 		want := []string{"call-a", "call-b", "call-c", "call-d"}
 		if !slices.Equal(got, want) {
 			t.Fatalf("tool transition order = %v, want %v", got, want)
@@ -21,7 +21,7 @@ func TestDenyStopTransitionsPendingToolsInCallOrder(t *testing.T) {
 
 func TestAllowSessionStartsPendingToolsInCallOrder(t *testing.T) {
 	for range 20 {
-		got := approvalTransitionOrder(t, ApprovalAllowSession)
+		got := approvalTransitionOrder(t, true)
 		want := []string{"call-a", "call-b", "call-c", "call-d"}
 		if !slices.Equal(got, want) {
 			t.Fatalf("tool transition order = %v, want %v", got, want)
@@ -29,7 +29,9 @@ func TestAllowSessionStartsPendingToolsInCallOrder(t *testing.T) {
 	}
 }
 
-func approvalTransitionOrder(t *testing.T, decision ApprovalDecision) []string {
+// approvalTransitionOrder answers call-a with "Allow for session", or with a
+// denial, and reports the order its parked siblings transition in.
+func approvalTransitionOrder(t *testing.T, allowSession bool) []string {
 	t.Helper()
 
 	names := []string{"a", "b", "c", "d"}
@@ -71,13 +73,19 @@ func approvalTransitionOrder(t *testing.T, decision ApprovalDecision) []string {
 	engine := New(backend, Config{})
 	events := engine.StartTurn(ctx, TurnInput{Message: "run all", Tools: tools, OnDeny: DenyStop})
 	waitForToolStatus(t, events, "call-d", ToolAwaitingApproval)
-	if !engine.Decide("call-a", decision) {
+	queued := false
+	if allowSession {
+		queued = allowForSession(engine, "call-a")
+	} else {
+		queued = engine.Decide("call-a", ApprovalDeny)
+	}
+	if !queued {
 		t.Fatal("decision for call-a was not queued")
 	}
 
 	wantStatuses := []ToolStatus{ToolDenied, ToolCancelled}
 	var afterDecision []Event
-	if decision == ApprovalAllowSession {
+	if allowSession {
 		wantStatuses = []ToolStatus{ToolRunning}
 		for len(toolTransitionOrder(afterDecision, ids, wantStatuses...)) < len(ids) {
 			select {

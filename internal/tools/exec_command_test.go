@@ -429,7 +429,7 @@ func TestExecCommandSessionGrantIsScopedToExactLaunchTuple(t *testing.T) {
 	if !waitForExecApproval(t, events, "exec-1") {
 		t.Fatal("first command did not request approval")
 	}
-	if !engine.Decide("exec-1", agent.ApprovalAllowSession) {
+	if !engine.GrantSessionFor("exec-1") || !engine.Decide("exec-1", agent.ApprovalAllowOnce) {
 		t.Fatal("session approval was not accepted")
 	}
 	if !waitForExecApproval(t, events, "exec-2") {

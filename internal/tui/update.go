@@ -626,21 +626,16 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	}
 	m.clearAsks()
 
-	if done.then == thenLogout {
-		// Logging out makes a queued permissions mode moot.
-		m.pendingPermissions = ""
-		m.syncStatus()
-		return m, m.startLogout()
-	}
-	permissionsCommand := m.applyPendingPermissions()
 	m.syncStatus()
 	switch {
+	case done.then == thenLogout:
+		return m, m.startLogout()
 	case done.then == thenNewConversation:
-		return m, tea.Batch(permissionsCommand, m.startNewConversation())
+		return m, m.startNewConversation()
 	case done.kind == opRestore && done.stop != stopAll:
-		return m, tea.Batch(permissionsCommand, m.resumePendingTools())
+		return m, m.resumePendingTools()
 	}
-	return m, permissionsCommand
+	return m, nil
 }
 
 func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {

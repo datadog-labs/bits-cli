@@ -99,7 +99,7 @@ func NewToolSet(mode PermissionsMode, tools ...Tool) (*ToolSet, error) {
 		definitions: make([]assistant.ClientTool, 0, len(tools)),
 		tools:       make(map[string]registeredTool, len(tools)),
 	}
-	if err := set.SetPermissionsMode(mode); err != nil {
+	if err := set.setPermissionsMode(mode); err != nil {
 		return nil, err
 	}
 	for _, tool := range tools {
@@ -182,10 +182,11 @@ func (s *ToolSet) PermissionsMode() PermissionsMode {
 	return ""
 }
 
-// SetPermissionsMode switches the mode for the rest of the session.
-func (s *ToolSet) SetPermissionsMode(mode PermissionsMode) error {
+// setPermissionsMode stores the mode. Engine.SetPermissionsMode is the only
+// writer after construction: it also revokes grants and re-gates parked calls.
+func (s *ToolSet) setPermissionsMode(mode PermissionsMode) error {
 	if !mode.valid() {
-		return fmt.Errorf("invalid permissions mode %q; expected manual or skip-permissions", mode)
+		return fmt.Errorf("invalid permissions mode %q; expected manual, skip-permissions, or deny", mode)
 	}
 	s.mode.Store(&mode)
 	return nil
@@ -226,10 +227,6 @@ func (g gateSnapshot) approvesServerGate() bool {
 	return g.set != nil && g.mode == ModeSkipPermissions
 }
 
-func (g gateSnapshot) deniesGates() bool {
-	return g.set != nil && g.mode == ModeDeny
-}
-
 // Approval reports whether call must wait for an approval decision before
 // it runs. The set's PermissionsMode is consulted first: ModeSkipPermissions
 // suppresses every declared gate, while ModeManual exposes the server gate and
@@ -242,10 +239,19 @@ func (g gateSnapshot) approval(call ToolCall) (ApprovalRequirement, bool) {
 	if g.set == nil || (g.mode != ModeManual && g.mode != ModeDeny) {
 		return ApprovalRequirement{}, false
 	}
+	return g.set.policy(call)
+}
+
+// policy is the gate call declares, whatever the mode: the server gate's, or
+// its tool's ApprovalPolicy.
+func (s *ToolSet) policy(call ToolCall) (ApprovalRequirement, bool) {
+	if s == nil {
+		return ApprovalRequirement{}, false
+	}
 	if call.Name == assistant.ApprovalRequestTool {
 		return serverGateApprovalRequirement(call)
 	}
-	tool, ok := g.set.tools[call.Name]
+	tool, ok := s.tools[call.Name]
 	if !ok || tool.approval == nil {
 		return ApprovalRequirement{}, false
 	}

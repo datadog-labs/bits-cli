@@ -614,8 +614,8 @@ func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
 				plain := ansi.Strip(model.frame.promptView)
 				focused := approvalChoices[model.approvals[model.shown.callID()].panel.selected]
 				hasDisclaimer := strings.Contains(plain, "Full access skips")
-				if focused.fullAccess != hasDisclaimer {
-					t.Fatalf("focused=%q fullAccess=%v disclaimer-shown=%v:\n%s", focused.label, focused.fullAccess, hasDisclaimer, plain)
+				if focused.fullAccess() != hasDisclaimer {
+					t.Fatalf("focused=%q fullAccess=%v disclaimer-shown=%v:\n%s", focused.label, focused.fullAccess(), hasDisclaimer, plain)
 				}
 				if got := lipgloss.Height(model.frame.promptView); got != unfocusedHeight {
 					t.Fatalf("focused=%q panel height = %d, want %d (unfocused) unchanged:\n%s", focused.label, got, unfocusedHeight, plain)
@@ -665,40 +665,51 @@ func TestApprovalFocusCycleNeverLandsOnAHiddenChoice(t *testing.T) {
 		}
 	}
 	_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if panel.decision == agent.ApprovalAllowSession {
+	if panel.grant == grantSession {
 		t.Fatal("enter on a hidden choice granted a session-wide allow")
 	}
 }
 
-// TestApprovalFullAccessAnswersCallAndQueuesSwitch exercises the whole
-// decision from the plan: choosing full access answers only the call it was
-// raised on (allow_once, not a session grant) and queues the permissions
-// switch for the next turn rather than applying it mid-turn — modeled on
-// TestPermissionsSwitchToSkipTakesEffectOnNextGatedTool.
-func TestApprovalFullAccessAnswersCallAndQueuesSwitch(t *testing.T) {
+// TestApprovalFullAccessSwitchesAtOnce covers the modal's full access: the
+// switch applies and is announced before the call is answered, mid-turn, and
+// exactly once.
+func TestApprovalFullAccessSwitchesAtOnce(t *testing.T) {
 	m, backend := newPermissionsModel(t, agent.ModeManual)
 	awaitApproval(t, m, 80)
 
-	fullAccessIndex := slices.IndexFunc(approvalChoices[:], func(c approvalChoice) bool { return c.fullAccess })
+	fullAccessIndex := slices.IndexFunc(approvalChoices[:], func(c approvalChoice) bool { return c.fullAccess() })
 	for range fullAccessIndex {
 		_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	}
 	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-
 	if waitingApprovals(m) != 0 {
 		t.Fatal("full access did not answer the pending call")
 	}
-	if m.pendingPermissions != agent.ModeSkipPermissions || m.tools.PermissionsMode() != agent.ModeManual {
-		t.Fatalf("pending = %q mode = %q, want the switch queued for next turn, not applied mid-turn", m.pendingPermissions, m.tools.PermissionsMode())
+	if got := m.tools.PermissionsMode(); got != agent.ModeSkipPermissions {
+		t.Fatalf("mode = %q, want skip-permissions as soon as it is chosen", got)
+	}
+	if fullAccessNotices(m) != 1 || !m.op.busy() {
+		t.Fatalf("full access announced %d times mid-turn, want once", fullAccessNotices(m))
 	}
 
 	drainConversationRemote(t, m)
-	if got := m.tools.PermissionsMode(); got != agent.ModeSkipPermissions || m.pendingPermissions != "" {
-		t.Fatalf("mode = %q pending = %q, want full access applied once the turn drained", got, m.pendingPermissions)
+	if got := fullAccessNotices(m); got != 1 {
+		t.Fatalf("full access announced %d times, want once", got)
 	}
-	if backend.calls < 2 {
-		t.Fatalf("backend calls = %d, want the engine to have received the allow_once answer", backend.calls)
+	if backend.calls < 2 || !strings.Contains(backend.responses[0][0].Metadata.Output, `"status":"ok"`) {
+		t.Fatalf("tool responses = %+v, want the call to have run", backend.responses)
 	}
+}
+
+func fullAccessNotices(m *Model) int {
+	want := permissionsChangedNotice(agent.ModeSkipPermissions).Text
+	count := 0
+	for _, n := range m.notices {
+		if n.Notice.Text == want {
+			count++
+		}
+	}
+	return count
 }
 
 // TestApprovalChipKeepsBackgroundAfterBoldSegment guards the subtle failure
@@ -710,7 +721,7 @@ func TestApprovalFullAccessAnswersCallAndQueuesSwitch(t *testing.T) {
 func TestApprovalChipKeepsBackgroundAfterBoldSegment(t *testing.T) {
 	theme := styles.Default(true)
 	style := theme.Approval.FullAccess
-	fullAccessIndex := slices.IndexFunc(approvalChoices[:], func(c approvalChoice) bool { return c.fullAccess })
+	fullAccessIndex := slices.IndexFunc(approvalChoices[:], func(c approvalChoice) bool { return c.fullAccess() })
 	choice := approvalChoices[fullAccessIndex]
 	chip := choice.chip(style, false)
 
@@ -751,8 +762,8 @@ func TestApprovalCompactFormKeepsFocusOnEveryChoice(t *testing.T) {
 					t.Fatalf("selected = %d, want %d after %d tabs", panel.selected, want, want)
 				}
 				plain := ansi.Strip(model.frame.promptView)
-				if approvalChoices[want].fullAccess != strings.Contains(plain, "Full access") {
-					t.Fatalf("disclaimer shown = %v with %q focused:\n%s", !approvalChoices[want].fullAccess, approvalChoices[want].compactLabel, plain)
+				if approvalChoices[want].fullAccess() != strings.Contains(plain, "Full access") {
+					t.Fatalf("disclaimer shown = %v with %q focused:\n%s", !approvalChoices[want].fullAccess(), approvalChoices[want].compactLabel, plain)
 				}
 			}
 		})

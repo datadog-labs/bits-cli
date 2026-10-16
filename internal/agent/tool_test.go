@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -188,9 +189,13 @@ func TestEngineApprovalScope(t *testing.T) {
 	tests := []struct {
 		name          string
 		decision      ApprovalDecision
+		grantSession  bool            // granted with the decision, as "Allow for session"
+		switchTo      PermissionsMode // switched to just before the decision
+		perCallKey    bool            // a distinct approval key per call, so no grant covers a sibling
 		wantDecisions int
 		wantRuns      int32
 		wantCalls     int
+		wantMode      PermissionsMode
 	}{
 		{
 			name:          "allow once prompts for sibling and next round",
@@ -198,13 +203,28 @@ func TestEngineApprovalScope(t *testing.T) {
 			wantDecisions: 3,
 			wantRuns:      3,
 			wantCalls:     3,
+			wantMode:      ModeManual,
 		},
 		{
 			name:          "allow session covers sibling and next round",
-			decision:      ApprovalAllowSession,
+			decision:      ApprovalAllowOnce,
+			grantSession:  true,
 			wantDecisions: 1,
 			wantRuns:      3,
 			wantCalls:     3,
+			wantMode:      ModeManual,
+		},
+		{
+			// The modal's full access: the switch re-gates the parked sibling
+			// despite its own key, and the next round never parks.
+			name:          "full access releases sibling and next round",
+			decision:      ApprovalAllowOnce,
+			switchTo:      ModeSkipPermissions,
+			perCallKey:    true,
+			wantDecisions: 1,
+			wantRuns:      3,
+			wantCalls:     3,
+			wantMode:      ModeSkipPermissions,
 		},
 		{
 			// Deny: the denial is answered, then siblings and follow-up calls cancel.
@@ -213,6 +233,7 @@ func TestEngineApprovalScope(t *testing.T) {
 			wantDecisions: 1,
 			wantRuns:      0,
 			wantCalls:     3,
+			wantMode:      ModeManual,
 		},
 	}
 
@@ -222,9 +243,13 @@ func TestEngineApprovalScope(t *testing.T) {
 			var runs atomic.Int32
 			tools, err := NewToolSet(ModeManual, Tool{
 				Definition: assistant.ClientTool{Name: "write"},
-				Approval: func(ToolCall) (ApprovalRequirement, bool) {
+				Approval: func(call ToolCall) (ApprovalRequirement, bool) {
+					resource := "workspace"
+					if tt.perCallKey {
+						resource = call.ID
+					}
 					return ApprovalRequirement{
-						Key:    ApprovalKey{Tool: "write", Resource: "workspace"},
+						Key:    ApprovalKey{Tool: "write", Resource: resource},
 						Prompt: ApprovalPrompt{Title: "Write record?"},
 					}, true
 				},
@@ -243,17 +268,32 @@ func TestEngineApprovalScope(t *testing.T) {
 			// Interactive surface: stop after the denial is answered on the wire.
 			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools, OnDeny: DenyStop})
 			decisions := 0
+			var all []Event
 			decide := func(id string) {
-				if !engine.Decide(id, tt.decision) {
+				if tt.switchTo != "" {
+					if err := engine.SetPermissionsMode(tools, tt.switchTo); err != nil {
+						t.Fatal(err)
+					}
+				}
+				queued := false
+				if tt.grantSession {
+					queued = allowForSession(engine, id)
+				} else {
+					queued = engine.Decide(id, tt.decision)
+				}
+				if !queued {
 					t.Fatalf("decision for %q was not queued", id)
 				}
 				decisions++
 			}
 
-			var all []Event
 			all = append(all, waitForToolStatusEvents(t, events, "call-a", ToolAwaitingApproval)...)
+			if tt.perCallKey {
+				// Park the sibling too, so the decision has to release it.
+				all = append(all, waitForToolStatusEvents(t, events, "call-b", ToolAwaitingApproval)...)
+			}
 			decide("call-a")
-			if tt.decision == ApprovalAllowOnce {
+			if tt.decision == ApprovalAllowOnce && !tt.grantSession && tt.switchTo == "" {
 				beforeACompleted := waitForToolStatusEvents(t, events, "call-a", ToolSuccess)
 				if !hasToolStatus(beforeACompleted, "call-b", ToolAwaitingApproval) {
 					t.Fatal("sibling call did not request its own approval")
@@ -281,6 +321,9 @@ func TestEngineApprovalScope(t *testing.T) {
 			}
 			if backend.calls != tt.wantCalls {
 				t.Fatalf("backend calls = %d, want %d", backend.calls, tt.wantCalls)
+			}
+			if got := tools.PermissionsMode(); got != tt.wantMode {
+				t.Fatalf("mode = %q, want %q", got, tt.wantMode)
 			}
 
 			if tt.decision == ApprovalDeny {
@@ -313,6 +356,102 @@ func TestEngineApprovalScope(t *testing.T) {
 				t.Fatalf("response batch sizes = %v, want [2 1]", responseBatchSizes(backend.responses))
 			}
 		})
+	}
+}
+
+// TestEngineModeSwitchMidTurnOverridesSessionGrant switches mode while the
+// next round's call is being gated, its approval policy still running. Back
+// to manual revokes the grant, so that call asks; deny overrides it, so that
+// call is denied. Neither may run under the grant once the switch returned.
+func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
+	for _, tt := range []struct {
+		mode  PermissionsMode
+		callC ToolStatus
+	}{
+		{mode: ModeManual, callC: ToolAwaitingApproval},
+		{mode: ModeDeny, callC: ToolDenied},
+	} {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			backend := &approvalScopeBackend{t: t}
+			release := make(chan struct{})
+			gating, switched := make(chan struct{}), make(chan struct{})
+			var pause sync.Once
+			tools, err := NewToolSet(ModeManual, Tool{
+				Definition: assistant.ClientTool{Name: "write"},
+				Approval: func(call ToolCall) (ApprovalRequirement, bool) {
+					if call.ID == "call-c" {
+						pause.Do(func() { close(gating); <-switched })
+					}
+					return ApprovalRequirement{
+						Key:    ApprovalKey{Tool: "write", Resource: "workspace"},
+						Prompt: ApprovalPrompt{Title: "Write record?"},
+					}, true
+				},
+				Handler: func(_ context.Context, call ToolCall) (ToolResult, error) {
+					if call.ID == "call-b" {
+						<-release
+					}
+					return ToolResult{Title: "Wrote record", Output: "ok"}, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			engine := New(backend, Config{})
+			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools})
+			waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
+			if !allowForSession(engine, "call-a") {
+				t.Fatal("decision for call-a was not queued")
+			}
+			waitForToolStatus(t, events, "call-b", ToolRunning)
+			if engine.GrantSessionFor("call-b") {
+				t.Fatal("granted for call-b while it runs")
+			}
+			close(release)
+			<-gating
+			if err := engine.SetPermissionsMode(tools, tt.mode); err != nil {
+				t.Fatal(err)
+			}
+			close(switched)
+
+			waitForToolStatus(t, events, "call-c", tt.callC)
+			if tt.callC == ToolAwaitingApproval && !engine.Decide("call-c", ApprovalAllowOnce) {
+				t.Fatal("decision for call-c was not queued")
+			}
+			if all := drain(events); len(all) == 0 || all[len(all)-1].Kind != EventTurnDone {
+				t.Fatalf("turn did not complete: %v", kinds(all))
+			}
+			if engine.GrantSessionFor("call-c") {
+				t.Fatal("granted for call-c after its turn ended")
+			}
+		})
+	}
+}
+
+// TestEngineAbortedRoundUnparksItsCalls cancels a turn while a call waits
+// for approval: the call can no longer be granted for.
+func TestEngineAbortedRoundUnparksItsCalls(t *testing.T) {
+	tools, err := NewToolSet(ModeManual, Tool{
+		Definition: assistant.ClientTool{Name: "write"},
+		Approval: func(ToolCall) (ApprovalRequirement, bool) {
+			return ApprovalRequirement{Key: ApprovalKey{Tool: "write", Resource: "workspace"}}, true
+		},
+		Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	engine := New(&approvalScopeBackend{t: t}, Config{})
+	events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools})
+	waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
+	cancel()
+	drain(events)
+	if engine.GrantSessionFor("call-a") {
+		t.Fatal("granted for call-a after its turn was cancelled")
 	}
 }
 
@@ -582,7 +721,7 @@ func TestGateSnapshotGovernsOneGateEvaluation(t *testing.T) {
 	}
 
 	manual := set.snapshotPermissions()
-	if err := set.SetPermissionsMode(ModeSkipPermissions); err != nil {
+	if err := set.setPermissionsMode(ModeSkipPermissions); err != nil {
 		t.Fatal(err)
 	}
 	if manual.approvesServerGate() {
@@ -596,7 +735,7 @@ func TestGateSnapshotGovernsOneGateEvaluation(t *testing.T) {
 	}
 
 	skip := set.snapshotPermissions()
-	if err := set.SetPermissionsMode(ModeManual); err != nil {
+	if err := set.setPermissionsMode(ModeManual); err != nil {
 		t.Fatal(err)
 	}
 	if !skip.approvesServerGate() {
@@ -681,7 +820,7 @@ func TestEngineManualModeLeavesUngatedToolsUnblocked(t *testing.T) {
 		t.Fatalf("ungated tool did not start before a decision: first started = %q", name)
 	}
 	waitForToolStatus(t, events, "call-write", ToolAwaitingApproval)
-	if !engine.Decide("call-write", ApprovalAllowSession) {
+	if !allowForSession(engine, "call-write") {
 		t.Fatal("decision for call-write was not queued")
 	}
 	if name := receiveName(t, started); name != "write" {
@@ -761,7 +900,7 @@ func TestEngineParallelApprovalKeepsCallOrder(t *testing.T) {
 	engine := New(backend, Config{})
 	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
 	waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
-	engine.Decide("call-a", ApprovalAllowSession)
+	allowForSession(engine, "call-a")
 	receiveNames(t, started, 2)
 	close(gates["b"])
 	if name := receiveName(t, finished); name != "b" {
@@ -890,6 +1029,12 @@ func gatedHandler(started, finished chan<- string, gates map[string]chan struct{
 		finished <- call.Name
 		return ToolResult{Output: call.Name}, nil
 	}
+}
+
+// allowForSession answers a parked call the way the modal's "Allow for
+// session" does: grant its key, then allow once.
+func allowForSession(engine *Engine, id string) bool {
+	return engine.GrantSessionFor(id) && engine.Decide(id, ApprovalAllowOnce)
 }
 
 func waitForToolStatus(t *testing.T, events <-chan Event, id string, status ToolStatus) {
