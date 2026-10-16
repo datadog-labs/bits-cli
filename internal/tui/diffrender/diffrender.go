@@ -94,21 +94,18 @@ func renderLine(line filediff.DiffLine, digits int, opts Options) string {
 	content := highlightLine(opts.Path, line.Content, opts.Style.SyntaxDark, lineStyle)
 	if !opts.Wrap {
 		available := max(1, opts.Width-ansi.StringWidth(gutter))
-		return gutter + ansi.Truncate(textwrap.Render(content), available, "…")
+		return gutter + ansi.Truncate(textwrap.Render(content...), available, "…")
 	}
 	// Continuations repeat the marker without the number, in the line style
 	// so added and deleted backgrounds stay continuous.
-	return strings.Join(textwrap.Wrap(content, textwrap.Options{
+	return strings.Join(textwrap.Wrap(textwrap.Options{
 		Width:       opts.Width,
 		FirstPrefix: gutter,
 		RestPrefix:  gutterStyle.Render(diffLeftMargin + strings.Repeat(" ", digits) + separator),
-		Breakpoints: codeBreakpoints,
+		Breakpoints: textwrap.Code,
 		KeepIndent:  true,
-	}), "\n")
+	}, content...), "\n")
 }
-
-// codeBreakpoints are wrap opportunities in source besides whitespace.
-const codeBreakpoints = ",;/"
 
 func gutterNumber(n, digits int) string {
 	if n > 0 {

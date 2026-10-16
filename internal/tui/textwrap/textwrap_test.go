@@ -46,6 +46,12 @@ func TestWrap(t *testing.T) {
 			want: []string{"• run alpha", "      beta", "      gamma"},
 		},
 		{
+			name: "a prefix leaving no room is cut",
+			text: "ab",
+			o:    Options{Width: 4, FirstPrefix: "• run ", RestPrefix: "      "},
+			want: []string{"• ra", "   b"},
+		},
+		{
 			name: "first and rest rooms differ",
 			text: "aa bb cc dd ee",
 			o:    Options{Width: 9, FirstPrefix: "> ", RestPrefix: ">>>>> "},
@@ -108,7 +114,7 @@ func TestWrap(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := plainRows(Wrap([]Segment{Plain(test.text)}, test.o))
+			got := plainRows(Wrap(test.o, Plain(test.text)))
 			if !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("Wrap(%q) =\n%q\nwant\n%q", test.text, got, test.want)
 			}
@@ -118,7 +124,7 @@ func TestWrap(t *testing.T) {
 
 func TestWrapOverflowingBreakpointsStayInWidth(t *testing.T) {
 	// ansi.Wrap lets "&&" overflow the row here; Wrap must not.
-	rows := plainRows(Wrap([]Segment{Plain("go test ./... && go vet ./...")}, Options{Width: 14, Breakpoints: "/|;&"}))
+	rows := plainRows(Wrap(Options{Width: 14, Breakpoints: "/|;&"}, Plain("go test ./... && go vet ./...")))
 	for _, row := range rows {
 		if ansi.StringWidth(row) > 14 {
 			t.Fatalf("row %q exceeds 14 cells in %q", row, rows)
@@ -142,7 +148,7 @@ func TestWrapEllipsisCutsOverlongWords(t *testing.T) {
 		{"wide grapheme", "界界界 a", 5, []string{"界界…", "a"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := plainRows(Wrap([]Segment{Plain(test.text)}, Options{Width: test.width, Ellipsis: "…"}))
+			got := plainRows(Wrap(Options{Width: test.width, Ellipsis: "…"}, Plain(test.text)))
 			if !slices.Equal(got, test.want) {
 				t.Fatalf("rows = %q, want %q", got, test.want)
 			}
@@ -165,7 +171,7 @@ func TestWrapAvoidBreak(t *testing.T) {
 		{"plain unaffected", []Segment{Plain(`f("a b c", x)`)}, 8, []string{`f("a b`, `c", x)`}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := plainRows(Wrap(test.segs, Options{Width: test.width, Breakpoints: "|"}))
+			got := plainRows(Wrap(Options{Width: test.width, Breakpoints: "|"}, test.segs...))
 			if !slices.Equal(got, test.want) {
 				t.Fatalf("rows = %q, want %q", got, test.want)
 			}
@@ -174,7 +180,7 @@ func TestWrapAvoidBreak(t *testing.T) {
 }
 
 func TestWrapCapsIndentation(t *testing.T) {
-	rows := plainRows(Wrap([]Segment{Plain("            deep words")}, Options{Width: 10, KeepIndent: true}))
+	rows := plainRows(Wrap(Options{Width: 10, KeepIndent: true}, Plain("            deep words")))
 	for _, row := range rows {
 		if indent := len(row) - len(strings.TrimLeft(row, " ")); indent > 5 && strings.TrimSpace(row) != "" {
 			t.Fatalf("indent %d exceeds half the room in %q", indent, rows)
@@ -187,7 +193,7 @@ func TestWrapReappliesStylesOnEveryRow(t *testing.T) {
 	red := lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	blue := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("4"))
 	segs := []Segment{Styled("red words that wrap", red), Plain(" plain "), Styled("bold blue tail", blue)}
-	rows := Wrap(segs, Options{Width: 8})
+	rows := Wrap(Options{Width: 8}, segs...)
 	if len(rows) < 3 {
 		t.Fatalf("expected several rows, got %q", rows)
 	}
@@ -204,18 +210,18 @@ func TestWrapReappliesStylesOnEveryRow(t *testing.T) {
 }
 
 func TestWrapRendersSegmentsWithTheirStyles(t *testing.T) {
-	rows := Wrap([]Segment{Styled("run", tag("A")), Plain(" "), Styled("ls", tag("B"))}, Options{Width: 20})
+	rows := Wrap(Options{Width: 20}, Styled("run", tag("A")), Plain(" "), Styled("ls", tag("B")))
 	if want := []string{"<A>run</A> <B>ls</B>"}; !reflect.DeepEqual(rows, want) {
 		t.Fatalf("rows = %q, want %q", rows, want)
 	}
-	rows = Wrap([]Segment{Styled("alpha beta", tag("A"))}, Options{Width: 6, RestPrefix: "  "})
+	rows = Wrap(Options{Width: 6, RestPrefix: "  "}, Styled("alpha beta", tag("A")))
 	if want := []string{"<A>alpha</A>", "  <A>beta</A>"}; !reflect.DeepEqual(rows, want) {
 		t.Fatalf("rows = %q, want %q", rows, want)
 	}
 }
 
 func TestWrapStylesKeptIndent(t *testing.T) {
-	rows := Wrap([]Segment{Styled("    alpha beta", tag("A"))}, Options{Width: 10, KeepIndent: true})
+	rows := Wrap(Options{Width: 10, KeepIndent: true}, Styled("    alpha beta", tag("A")))
 	want := []string{"<A>    </A><A>alpha</A>", "<A>    </A><A>beta</A>"}
 	if !reflect.DeepEqual(rows, want) {
 		t.Fatalf("rows = %q, want %q", rows, want)
@@ -223,7 +229,7 @@ func TestWrapStylesKeptIndent(t *testing.T) {
 }
 
 func TestRender(t *testing.T) {
-	if got, want := Render([]Segment{Styled("a b", tag("A")), Plain(" "), Styled("c", tag("B"))}), "<A>a b</A> <B>c</B>"; got != want {
+	if got, want := Render(Styled("a b", tag("A")), Plain(" "), Styled("c", tag("B"))), "<A>a b</A> <B>c</B>"; got != want {
 		t.Fatalf("Render = %q, want %q", got, want)
 	}
 }
@@ -238,9 +244,10 @@ func (s tag) Render(strs ...string) string {
 // checkProperties asserts the package guarantees for one layout.
 func checkProperties(t *testing.T, segs []Segment, o Options) {
 	t.Helper()
-	rows := Wrap(segs, o)
+	rows := Wrap(o, segs...)
 	width := max(1, o.Width)
-	prefixWidth := max(ansi.StringWidth(o.FirstPrefix), ansi.StringWidth(o.RestPrefix))
+	first, rest := fitPrefix(o.FirstPrefix, width), fitPrefix(o.RestPrefix, width)
+	prefixWidth := max(ansi.StringWidth(first), ansi.StringWidth(rest))
 	widest := 0
 	for _, seg := range segs {
 		for text := seg.Text; text != ""; {
@@ -260,9 +267,9 @@ func checkProperties(t *testing.T, segs []Segment, o Options) {
 	}
 	var out strings.Builder
 	for i, row := range plainRows(rows) {
-		prefix := ansi.Strip(o.RestPrefix)
+		prefix := ansi.Strip(rest)
 		if i == 0 {
-			prefix = ansi.Strip(o.FirstPrefix)
+			prefix = ansi.Strip(first)
 		}
 		if !strings.HasPrefix(row, prefix) {
 			t.Fatalf("row %q lacks its prefix %q", row, prefix)
@@ -311,7 +318,7 @@ func FuzzWrap(f *testing.F) {
 			half--
 		}
 		checkProperties(t, []Segment{Plain(text[:half]), {Text: text[half:], AvoidBreak: true}}, Options{Width: width, KeepIndent: keepIndent, Breakpoints: "/|;-"})
-		for _, row := range Wrap([]Segment{Plain(text)}, Options{Width: width, KeepIndent: keepIndent, Ellipsis: "…"}) {
+		for _, row := range Wrap(Options{Width: width, KeepIndent: keepIndent, Ellipsis: "…"}, Plain(text)) {
 			if w := ansi.StringWidth(row); w > width && width > 1 {
 				t.Fatalf("ellipsis row %q is %d cells, over width %d", row, w, width)
 			}

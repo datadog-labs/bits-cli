@@ -216,7 +216,7 @@ func TestHighlightReturnsOneRowPerSourceLine(t *testing.T) {
 		}
 		var lines []string
 		for _, row := range rows {
-			lines = append(lines, ansi.Strip(textwrap.Render(row)))
+			lines = append(lines, ansi.Strip(textwrap.Render(row...)))
 		}
 		if got := strings.Join(lines, "\n"); got != text {
 			t.Fatalf("Highlight(%q) text = %q", text, got)

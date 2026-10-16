@@ -553,7 +553,7 @@ func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, st
 	command := strings.TrimRight(p.argument, "\n")
 	var rows []string
 	for _, line := range highlightShellCommand(command, sty) {
-		rows = append(rows, ansi.Hardwrap(textwrap.Render(line), width, true))
+		rows = append(rows, textwrap.Wrap(textwrap.Options{Width: width, Breakpoints: textwrap.Shell, KeepIndent: true}, line...)...)
 	}
 
 	detail := ""
@@ -561,7 +561,7 @@ func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, st
 		detail = escape.Inline(tool.Approval.Detail)
 	}
 	if detail != "" {
-		rows = append(rows, sty.ToolDetail.Render(ansi.Wordwrap(detail, width, "-")))
+		rows = append(rows, textwrap.WrapProse(width, detail, sty.ToolDetail)...)
 	}
 	return strings.Join(rows, "\n")
 }
@@ -596,7 +596,7 @@ func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []su
 	if c.disclosure == fullView {
 		return renderExecInvocationFull(tool, p, lines, suffix, c)
 	}
-	p.argument = textwrap.Render(lines[0])
+	p.argument = textwrap.Render(lines[0]...)
 	header := renderToolHeader(tool, p.summary(tool), suffix, c)
 	if len(lines) == 1 {
 		return header
@@ -604,7 +604,7 @@ func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []su
 
 	rows := make([]string, 0, len(lines)-1)
 	for _, line := range lines[1:] {
-		rows = append(rows, textwrap.Render(line))
+		rows = append(rows, textwrap.Render(line...))
 	}
 	limit := execCommandMaxLines - 1
 	omissionRow := -1
@@ -637,37 +637,24 @@ func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [
 	leadWidth := statusGlyphWidth + ansi.StringWidth(action) + 1
 
 	meta := append(append(p.execMeta(), suffix...), lifecycleSpans(state)...)
-	out := textwrap.Wrap(slices.Concat(lines[0], spanSegments(meta, c.sty)), textwrap.Options{
+	out := textwrap.Wrap(textwrap.Options{
 		Width:       c.width,
 		FirstPrefix: lead,
 		RestPrefix:  strings.Repeat(" ", leadWidth),
-		Breakpoints: shellBreakpoints,
+		Breakpoints: textwrap.Shell,
 		KeepIndent:  true,
-	})
+	}, slices.Concat(lines[0], spanSegments(meta, c.sty))...)
 	branch := textwrap.Options{
 		Width:       c.width,
 		FirstPrefix: c.sty.ToolDetail.Render("  │ "),
 		RestPrefix:  c.sty.ToolDetail.Render("  │   "),
-		Breakpoints: shellBreakpoints,
+		Breakpoints: textwrap.Shell,
 		KeepIndent:  true,
 	}
 	for _, row := range lines[1:] {
-		out = append(out, textwrap.Wrap(row, branch)...)
+		out = append(out, textwrap.Wrap(branch, row...)...)
 	}
-	return strings.Join(truncateRows(out, c.width), "\n")
-}
-
-// shellBreakpoints are extra word-wrap opportunities in shell source. "&" is
-// left out: splitting "&&" helps no one.
-const shellBreakpoints = "/|;"
-
-// truncateRows cuts rows wider than width, which wrapping only leaves when a
-// prefix alone does not fit.
-func truncateRows(rows []string, width int) []string {
-	for i := range rows {
-		rows[i] = ansi.Truncate(rows[i], max(1, width), "…")
-	}
-	return rows
+	return strings.Join(out, "\n")
 }
 
 func execSuffix(result spec.ExecCommandOutput) []summarySpan {
@@ -734,11 +721,13 @@ func execRows(result spec.ExecCommandOutput, bodyWidth int, d disclosure) []stri
 	return rows
 }
 
+// wrappedRows wraps plain multiline output, keeping each line's indentation
+// and breaking paths at slashes.
 func wrappedRows(s string, width int) []string {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}
-	return strings.Split(wrap(s, max(1, width)), "\n")
+	return textwrap.Wrap(textwrap.Options{Width: width, Breakpoints: textwrap.Output, KeepIndent: true}, textwrap.Plain(s))
 }
 
 func middleClamp(rows []string, limit int) []string {
@@ -1030,14 +1019,13 @@ func renderInspectionChild(spans, outcome []summarySpan, first bool, width int, 
 		line := sty.ToolDetail.Render(prefix) + actionRendered + sty.ToolDetail.Render(" ") + renderSpans(rest, sty)
 		return []string{ansi.Truncate(line, max(1, width), "…")}
 	}
-	rows := textwrap.Wrap(spanSegments(rest, sty), textwrap.Options{
+	return textwrap.Wrap(textwrap.Options{
 		Width:       width,
 		FirstPrefix: sty.ToolDetail.Render(prefix) + actionRendered + sty.ToolDetail.Render(" "),
 		RestPrefix:  sty.ToolDetail.Render(strings.Repeat(" ", indentWidth)),
-		Breakpoints: "-",
+		Breakpoints: textwrap.Prose,
 		Ellipsis:    "…",
-	})
-	return truncateRows(rows, width)
+	}, spanSegments(rest, sty)...)
 }
 
 // collapseWS joins whitespace runs.

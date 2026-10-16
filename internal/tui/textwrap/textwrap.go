@@ -4,9 +4,9 @@
 // styles never have to be recovered from escape sequences mid-row. For every
 // row [Wrap] returns:
 //
-//   - it is at most [Options.Width] cells wide, prefix included. The only
-//     exceptions are a prefix wider than the width and a single grapheme
-//     wider than the room left after the prefix;
+//   - it is at most [Options.Width] cells wide, prefix included. A prefix
+//     leaving no room for text is cut to leave one cell. The only exception
+//     is a single grapheme wider than the room left after the prefix;
 //   - no printable text is lost: only whitespace at a soft row break or at
 //     the end of a line is dropped, unless [Options.Ellipsis] asks to cut
 //     words wider than a row;
@@ -54,7 +54,7 @@ type Options struct {
 	// are rendered as given; their cell widths are measured.
 	FirstPrefix, RestPrefix string
 	// Breakpoints lists characters after which a row may break, in addition
-	// to whitespace, e.g. "-" for prose or "/|;" for shell.
+	// to whitespace, e.g. [Prose] or [Shell].
 	Breakpoints string
 	// KeepIndent repeats each source line's leading spaces on every row of
 	// that line, capped at half the room, instead of treating them as a
@@ -66,9 +66,19 @@ type Options struct {
 	Ellipsis string
 }
 
+// Breakpoint sets for [Options.Breakpoints].
+const (
+	Prose  = "-"
+	Output = "-/"  // command output: hyphens and paths
+	Shell  = "/|;" // "&" is left out: splitting "&&" helps no one
+	Code   = ",;/"
+)
+
 // Wrap lays segs out in rows according to o and renders them.
-func Wrap(segs []Segment, o Options) []string {
+func Wrap(o Options, segs ...Segment) []string {
 	o.Width = max(1, o.Width)
+	o.FirstPrefix = fitPrefix(o.FirstPrefix, o.Width)
+	o.RestPrefix = fitPrefix(o.RestPrefix, o.Width)
 	l := layout{
 		firstRoom: max(1, o.Width-ansi.StringWidth(o.FirstPrefix)),
 		restRoom:  max(1, o.Width-ansi.StringWidth(o.RestPrefix)),
@@ -92,8 +102,22 @@ func Wrap(segs []Segment, o Options) []string {
 	return out
 }
 
+// WrapProse word-wraps text to width rows in style, which may be nil, with
+// [Prose] breakpoints.
+func WrapProse(width int, text string, style Style) []string {
+	return Wrap(Options{Width: width, Breakpoints: Prose}, Segment{Text: text, Style: style})
+}
+
+// fitPrefix cuts a prefix that leaves no room for text in a row of width.
+func fitPrefix(prefix string, width int) string {
+	if ansi.StringWidth(prefix) < width {
+		return prefix
+	}
+	return ansi.Truncate(prefix, width-1, "")
+}
+
 // Render renders segs on one row, each with its style, without wrapping.
-func Render(segs []Segment) string {
+func Render(segs ...Segment) string {
 	var b strings.Builder
 	for _, seg := range segs {
 		if seg.Style != nil {

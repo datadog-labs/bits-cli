@@ -14,6 +14,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 const (
@@ -184,7 +185,7 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 		Title:   queue,
 		Dismiss: "ESC x",
 		BodyHeader: func(width int) string {
-			return sty.Text.Render(ansi.Wordwrap(title, width, "-"))
+			return prose(title, sty.Text, width)
 		},
 		ScrollOffset: a.window.Offset,
 		ScrollHint:   "pgup/pgdown scroll",
@@ -192,7 +193,7 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 			if rendered, ok := chat.RenderToolApproval(block.Tool, width, a.chat); ok {
 				return rendered
 			}
-			return sty.Detail.Render(ansi.Wordwrap(escape.Inline(detail), width, "-"))
+			return prose(escape.Inline(detail), sty.Detail, width)
 		},
 		BodyFooter:    a.actions,
 		BodyFooterGap: 1,
@@ -200,11 +201,11 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 		CompactBody: func(width int) string {
 			// Wrapped, not truncated: a request that does not fit whole falls
 			// back to the one-line form, which cannot be answered.
-			lines := []string{sty.Text.Render(ansi.Wordwrap(title, width, "-"))}
+			lines := []string{prose(title, sty.Text, width)}
 			if rendered, ok := chat.RenderToolApproval(block.Tool, width, a.chat); ok {
 				lines = append(lines, rendered)
 			} else if detail != "" {
-				lines = append(lines, sty.Detail.Render(ansi.Wordwrap(escape.Inline(detail), width, "-")))
+				lines = append(lines, prose(escape.Inline(detail), sty.Detail, width))
 			}
 			// No blank line before actions: it already ends in the
 			// disclaimer-or-blank row, keeping this form's height unchanged.
@@ -309,4 +310,9 @@ func lowestDroppable(visible []int) (int, bool) {
 		}
 	}
 	return best, best != -1
+}
+
+// prose word-wraps text to width in style.
+func prose(text string, style lipgloss.Style, width int) string {
+	return strings.Join(textwrap.WrapProse(width, text, style), "\n")
 }
