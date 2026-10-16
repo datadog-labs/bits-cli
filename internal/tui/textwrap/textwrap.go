@@ -1,0 +1,299 @@
+// Package textwrap lays styled text out in rows of a fixed cell width.
+//
+// Text is wrapped as styled segments rather than as rendered ANSI strings, so
+// styles never have to be recovered from escape sequences mid-row. For every
+// row [Wrap] returns:
+//
+//   - it is at most [Options.Width] cells wide, prefix included. The only
+//     exceptions are a prefix wider than the width and a single grapheme
+//     wider than the room left after the prefix;
+//   - no printable text is lost: only whitespace at a soft row break or at
+//     the end of a line is dropped, unless [Options.Ellipsis] asks to cut
+//     words wider than a row;
+//   - each segment renders with its own style on every row it reaches, so no
+//     row depends on terminal state left by the previous one.
+//
+// Width is measured in terminal cells per grapheme cluster. Tabs measure zero
+// cells: expand them before wrapping.
+package textwrap
+
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
+)
+
+// Style renders text in a style. lipgloss.Style satisfies it.
+type Style interface {
+	Render(strs ...string) string
+}
+
+// Segment is a run of text sharing one style. A nil Style renders the text
+// unstyled. A "\n" in Text ends the source line.
+type Segment struct {
+	Text  string
+	Style Style
+}
+
+// Plain returns an unstyled segment.
+func Plain(text string) Segment { return Segment{Text: text} }
+
+// Styled returns a segment rendered with style.
+func Styled(text string, style Style) Segment { return Segment{Text: text, Style: style} }
+
+// Options controls a layout.
+type Options struct {
+	// Width is the cell width of every row, prefix included. Values below 1
+	// are treated as 1.
+	Width int
+	// FirstPrefix starts the first row and RestPrefix every other row. Both
+	// are rendered as given; their cell widths are measured.
+	FirstPrefix, RestPrefix string
+	// Breakpoints lists characters after which a row may break, in addition
+	// to whitespace, e.g. "-" for prose or "/|;" for shell.
+	Breakpoints string
+	// KeepIndent repeats each source line's leading spaces on every row of
+	// that line, capped at half the room, instead of treating them as a
+	// word break.
+	KeepIndent bool
+	// Ellipsis, if set, cuts a word wider than a whole row to one row ending
+	// in Ellipsis instead of breaking it across rows. Use it where a compact
+	// summary matters more than the full text.
+	Ellipsis string
+}
+
+// Wrap lays segs out in rows according to o and renders them.
+func Wrap(segs []Segment, o Options) []string {
+	o.Width = max(1, o.Width)
+	l := layout{
+		firstRoom: max(1, o.Width-ansi.StringWidth(o.FirstPrefix)),
+		restRoom:  max(1, o.Width-ansi.StringWidth(o.RestPrefix)),
+		ellipsis:  o.Ellipsis,
+	}
+	for _, line := range splitLines(toCells(segs, o.Breakpoints)) {
+		l.line(line, o.KeepIndent)
+	}
+	out := make([]string, len(l.rows))
+	for i, r := range l.rows {
+		prefix := o.RestPrefix
+		if i == 0 {
+			prefix = o.FirstPrefix
+		}
+		out[i] = prefix + strings.Repeat(" ", r.indent) + renderCells(r.cells, segs)
+	}
+	return out
+}
+
+type cellKind uint8
+
+const (
+	cellText  cellKind = iota
+	cellSpace          // breakable whitespace, dropped at a soft break
+	cellBreak          // text after which a row may break
+	cellNewline
+)
+
+// cell is one grapheme cluster and the segment it came from.
+type cell struct {
+	text  string
+	width int
+	seg   int
+	kind  cellKind
+}
+
+func toCells(segs []Segment, breakpoints string) []cell {
+	var cells []cell
+	for i, seg := range segs {
+		for text := seg.Text; text != ""; {
+			cluster, width := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
+			text = text[len(cluster):]
+			cells = append(cells, cell{text: cluster, width: width, seg: i, kind: classify(cluster, breakpoints)})
+		}
+	}
+	return cells
+}
+
+func classify(cluster, breakpoints string) cellKind {
+	r, size := utf8.DecodeRuneInString(cluster)
+	switch {
+	case cluster == "\n" || cluster == "\r\n":
+		return cellNewline
+	case size == len(cluster) && unicode.IsSpace(r) && r != '\u00a0':
+		// A space carrying combining marks is text, not a break.
+		return cellSpace
+	case breakpoints != "" && strings.Contains(breakpoints, cluster):
+		return cellBreak
+	default:
+		return cellText
+	}
+}
+
+func splitLines(cells []cell) [][]cell {
+	lines := make([][]cell, 0, 1)
+	start := 0
+	for i, c := range cells {
+		if c.kind == cellNewline {
+			lines = append(lines, cells[start:i])
+			start = i + 1
+			continue
+		}
+	}
+	return append(lines, cells[start:])
+}
+
+type row struct {
+	indent int
+	cells  []cell
+	width  int
+}
+
+type layout struct {
+	firstRoom, restRoom int
+	ellipsis            string
+	rows                []row
+}
+
+// room is the text width available on the current row.
+func (l *layout) room() int {
+	return max(1, l.prefixRoom()-l.rows[len(l.rows)-1].indent)
+}
+
+// prefixRoom is the width after the current row's prefix, indent included.
+func (l *layout) prefixRoom() int {
+	if len(l.rows) == 1 {
+		return l.firstRoom
+	}
+	return l.restRoom
+}
+
+func (l *layout) newRow(indent int) { l.rows = append(l.rows, row{indent: indent}) }
+
+func (l *layout) add(cs []cell) {
+	r := &l.rows[len(l.rows)-1]
+	for _, c := range cs {
+		r.cells = append(r.cells, c)
+		r.width += c.width
+	}
+}
+
+func (l *layout) line(cells []cell, keepIndent bool) {
+	indent := 0
+	if keepIndent {
+		lead := 0
+		for lead < len(cells) && cells[lead].kind == cellSpace && cells[lead].text == " " {
+			lead++
+		}
+		indent = min(lead, min(l.firstRoom, l.restRoom)/2)
+		cells = cells[indent:]
+	}
+	l.newRow(indent)
+
+	// Leading whitespace is content until the line's first word lands; after
+	// that, whitespace before a word is dropped if the word wraps.
+	atLineStart := true
+	var pending []cell
+	pendingWidth := 0
+	for len(cells) > 0 {
+		if cells[0].kind == cellSpace {
+			pending = append(pending, cells[0])
+			pendingWidth += cells[0].width
+			cells = cells[1:]
+			continue
+		}
+		n, wordWidth := nextWord(cells)
+		word := cells[:n]
+		cells = cells[n:]
+
+		r := &l.rows[len(l.rows)-1]
+		if r.width+pendingWidth+wordWidth <= l.room() {
+			l.add(pending)
+			l.add(word)
+		} else {
+			if atLineStart {
+				l.hardAdd(pending, indent) // leading whitespace beyond the indent cap
+			}
+			if l.rows[len(l.rows)-1].width > 0 {
+				l.newRow(indent)
+			}
+			if l.ellipsis != "" && wordWidth > l.room() {
+				l.add(l.cut(word))
+			} else {
+				l.hardAdd(word, indent)
+			}
+		}
+		pending, pendingWidth, atLineStart = nil, 0, false
+	}
+	if atLineStart {
+		// A line of only whitespace keeps it, as far as it fits.
+		l.hardAdd(pending, indent)
+	}
+}
+
+// nextWord returns the length and width of the word starting cells: text up
+// to whitespace, or through the first breakpoint.
+func nextWord(cells []cell) (n, width int) {
+	for n < len(cells) && cells[n].kind != cellSpace {
+		width += cells[n].width
+		n++
+		if cells[n-1].kind == cellBreak {
+			break
+		}
+	}
+	return n, width
+}
+
+// cut shortens word to fit the current row, ending in the ellipsis styled
+// like the last grapheme kept.
+func (l *layout) cut(word []cell) []cell {
+	room := l.room() - ansi.StringWidth(l.ellipsis)
+	n, width := 0, 0
+	for n < len(word)-1 && width+word[n].width <= room {
+		width += word[n].width
+		n++
+	}
+	last := word[max(0, n-1)]
+	return append(word[:n:n], cell{text: l.ellipsis, width: ansi.StringWidth(l.ellipsis), seg: last.seg, kind: cellText})
+}
+
+// hardAdd places cells grapheme by grapheme, opening rows as needed.
+func (l *layout) hardAdd(cells []cell, indent int) {
+	for _, c := range cells {
+		if r := l.rows[len(l.rows)-1]; r.width > 0 && r.width+c.width > l.room() {
+			l.newRow(indent)
+		}
+		if r := &l.rows[len(l.rows)-1]; r.width == 0 && c.width > l.room() {
+			// A grapheme wider than the room left by the indent gives up
+			// indentation rather than overflowing the row.
+			r.indent = max(0, min(r.indent, l.prefixRoom()-c.width))
+		}
+		l.add([]cell{c})
+	}
+}
+
+// renderCells renders runs of cells from the same segment with its style.
+func renderCells(cells []cell, segs []Segment) string {
+	var b, run strings.Builder
+	flush := func(seg int) {
+		if run.Len() == 0 {
+			return
+		}
+		if style := segs[seg].Style; style != nil {
+			b.WriteString(style.Render(run.String()))
+		} else {
+			b.WriteString(run.String())
+		}
+		run.Reset()
+	}
+	for i, c := range cells {
+		if i > 0 && cells[i-1].seg != c.seg {
+			flush(cells[i-1].seg)
+		}
+		run.WriteString(c.text)
+	}
+	if len(cells) > 0 {
+		flush(cells[len(cells)-1].seg)
+	}
+	return b.String()
+}

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -20,6 +18,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/diffrender"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 const (
@@ -633,92 +632,37 @@ func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [
 	leadWidth := statusGlyphWidth + ansi.StringWidth(action) + 1
 
 	meta := append(append(p.execMeta(), suffix...), lifecycleSpans(state)...)
-	out := hangWrap(lead, strings.Repeat(" ", leadWidth), leadWidth, leadWidth, lines[0]+renderSpans(meta, c.sty), c.width)
-
-	const branchText, contText = "  │ ", "  │   "
-	branch, cont := c.sty.ToolDetail.Render(branchText), c.sty.ToolDetail.Render(contText)
-	for _, row := range lines[1:] {
-		out = append(out, hangWrap(branch, cont, ansi.StringWidth(branchText), ansi.StringWidth(contText), row, c.width)...)
+	out := textwrap.Wrap(append(textwrap.FromANSI(lines[0]), spanSegments(meta, c.sty)...), textwrap.Options{
+		Width:       c.width,
+		FirstPrefix: lead,
+		RestPrefix:  strings.Repeat(" ", leadWidth),
+		Breakpoints: shellBreakpoints,
+		KeepIndent:  true,
+	})
+	branch := textwrap.Options{
+		Width:       c.width,
+		FirstPrefix: c.sty.ToolDetail.Render("  │ "),
+		RestPrefix:  c.sty.ToolDetail.Render("  │   "),
+		Breakpoints: shellBreakpoints,
+		KeepIndent:  true,
 	}
-	return strings.Join(out, "\n")
+	for _, row := range lines[1:] {
+		out = append(out, textwrap.Wrap(textwrap.FromANSI(row), branch)...)
+	}
+	return strings.Join(truncateRows(out, c.width), "\n")
 }
 
 // shellBreakpoints are extra word-wrap opportunities in shell source. "&" is
-// left out: ansi.Wrap lets a run of breakpoints overflow the width, and
-// splitting "&&" helps no one.
+// left out: splitting "&&" helps no one.
 const shellBreakpoints = "/|;"
 
-// hangWrap lays body out after lead without losing any of it:
-//   - the first row wraps to the width left after lead (leadWidth cells), the
-//     others to the width left after cont (contWidth cells);
-//   - body's leading indentation is repeated on every row instead of being
-//     eaten as a word break, capped at half the room so text still fits;
-//   - whatever the word wrapper leaves too wide is hard-wrapped, not cut.
-//
-// Styles are re-applied on every row. Only a width too narrow to hold a
-// prefix at all truncates.
-func hangWrap(lead, cont string, leadWidth, contWidth int, body string, width int) []string {
-	width = max(1, width)
-	indent := min(leadingSpaces(body), max(0, width-max(leadWidth, contWidth))/2)
-	body = ansi.TruncateLeft(body, indent, "")
-	pad := strings.Repeat(" ", indent)
-	firstWidth := max(1, width-leadWidth-indent)
-	restWidth := max(1, width-contWidth-indent)
-
-	var rows []string
-	if first, rest, ok := splitFirstRow(body, firstWidth); ok {
-		rows = append(rows, lead+pad+first)
-		if rest != "" {
-			for _, row := range wrapLossless(rest, restWidth) {
-				rows = append(rows, cont+pad+row)
-			}
-		}
-	} else {
-		// Unexpected wrapper output: fall back to one width that fits every row.
-		for i, row := range wrapLossless(body, min(firstWidth, restWidth)) {
-			prefix := cont
-			if i == 0 {
-				prefix = lead
-			}
-			rows = append(rows, prefix+pad+row)
-		}
-	}
+// truncateRows cuts rows wider than width, which wrapping only leaves when a
+// prefix alone does not fit.
+func truncateRows(rows []string, width int) []string {
 	for i := range rows {
-		rows[i] = ansi.Truncate(rows[i], width, "…")
+		rows[i] = ansi.Truncate(rows[i], max(1, width), "…")
 	}
 	return rows
-}
-
-// wrapLossless word-wraps s to width and hard-wraps anything still wider:
-// ansi.Wrap lets trailing breakpoints such as "-" overflow. lipgloss.Wrap then
-// only re-applies styles on each row.
-func wrapLossless(s string, width int) []string {
-	s = ansi.Hardwrap(ansi.Wrap(s, width, shellBreakpoints), width, true)
-	return strings.Split(lipgloss.Wrap(s, width, ""), "\n")
-}
-
-// splitFirstRow wraps s to width and returns its first row plus the styled
-// remainder, so the remainder can wrap to another width. The whitespace the
-// row break consumed is dropped. ok is false if the first row is not a plain
-// prefix of s, which the wrappers should never produce.
-func splitFirstRow(s string, width int) (first, rest string, ok bool) {
-	rows := wrapLossless(s, width)
-	if len(rows) == 1 {
-		return rows[0], "", true
-	}
-	plain := ansi.Strip(s)
-	head := strings.TrimRight(ansi.Strip(rows[0]), " ")
-	if head == "" || !strings.HasPrefix(plain, head) {
-		return "", "", false
-	}
-	skip := ansi.StringWidth(head) + leadingSpaces(plain[len(head):])
-	return rows[0], ansi.TruncateLeft(s, skip, ""), true
-}
-
-// leadingSpaces counts the spaces s starts with, ignoring escape sequences.
-func leadingSpaces(s string) int {
-	plain := ansi.Strip(s)
-	return len(plain) - len(strings.TrimLeft(plain, " "))
 }
 
 func execSuffix(result spec.ExecCommandOutput) []summarySpan {
@@ -914,93 +858,31 @@ func renderActivityHeader(state agent.ToolStatus, label, suffix string, c render
 func renderSpans(spans []summarySpan, sty Styles) string {
 	var b strings.Builder
 	for _, span := range spans {
-		switch span.kind {
-		case spanAction:
-			b.WriteString(sty.ToolName.Render(span.text))
-		case spanArgument:
-			b.WriteString(sty.ToolArgument.Render(span.text))
-		case spanError:
-			b.WriteString(sty.ToolError.Render(span.text))
-		default:
-			b.WriteString(sty.ToolDetail.Render(span.text))
-		}
+		b.WriteString(spanStyle(span.kind, sty).Render(span.text))
 	}
 	return b.String()
 }
 
-// renderSummaryClusters styles a complete row of one-grapheme spans, merging
-// runs of the same kind, so every continuation starts with its own color
-// instead of relying on terminal state from the prior row.
-func renderSummaryClusters(clusters []summarySpan, sty Styles) string {
-	var spans []summarySpan
-	var run strings.Builder
-	var kind spanKind
-	for _, cluster := range clusters {
-		if run.Len() > 0 && kind != cluster.kind {
-			spans = append(spans, summarySpan{text: run.String(), kind: kind})
-			run.Reset()
-		}
-		kind = cluster.kind
-		run.WriteString(cluster.text)
+// spanSegments converts spans to segments for textwrap.
+func spanSegments(spans []summarySpan, sty Styles) []textwrap.Segment {
+	segs := make([]textwrap.Segment, len(spans))
+	for i, span := range spans {
+		segs[i] = textwrap.Styled(span.text, spanStyle(span.kind, sty))
 	}
-	if run.Len() > 0 {
-		spans = append(spans, summarySpan{text: run.String(), kind: kind})
-	}
-	return renderSpans(spans, sty)
+	return segs
 }
 
-// wrapSummarySpans keeps colors attached to text while laying out rows.
-func wrapSummarySpans(spans []summarySpan, width int, sty Styles) []string {
-	var lines []string
-	var row, word, space []summarySpan
-	rowWidth, wordWidth, spaceWidth := 0, 0, 0
-	flushSpace := func() {
-		row = append(row, space...)
-		rowWidth += spaceWidth
-		space = nil
-		spaceWidth = 0
+func spanStyle(kind spanKind, sty Styles) lipgloss.Style {
+	switch kind {
+	case spanAction:
+		return sty.ToolName
+	case spanArgument:
+		return sty.ToolArgument
+	case spanError:
+		return sty.ToolError
+	default:
+		return sty.ToolDetail
 	}
-	flushWord := func() {
-		if len(word) == 0 {
-			return
-		}
-		flushSpace()
-		row = append(row, word...)
-		rowWidth += wordWidth
-		word = nil
-		wordWidth = 0
-	}
-	for _, span := range spans {
-		for text := span.text; text != ""; {
-			cluster, cellWidth := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
-			text = text[len(cluster):]
-			r, _ := utf8.DecodeRuneInString(cluster)
-			item := summarySpan{text: cluster, kind: span.kind}
-			switch {
-			case unicode.IsSpace(r) && r != '\u00a0':
-				flushWord()
-				space = append(space, item)
-				spaceWidth += cellWidth
-			case cluster == "-":
-				flushSpace()
-				flushWord()
-				row = append(row, item)
-				rowWidth += cellWidth
-			default:
-				word = append(word, item)
-				wordWidth += cellWidth
-				if rowWidth+spaceWidth+wordWidth > width && wordWidth <= width {
-					if len(row) > 0 {
-						lines = append(lines, renderSummaryClusters(row, sty))
-					}
-					row, space = nil, nil
-					rowWidth, spaceWidth = 0, 0
-				}
-			}
-		}
-	}
-	flushWord()
-	return append(lines, renderSummaryClusters(row, sty))
 }
 
 // inspectionLifecycle is the group's activity: running or awaiting approval
@@ -1139,22 +1021,18 @@ func renderInspectionChild(spans, outcome []summarySpan, first bool, width int, 
 		return []string{ansi.Truncate(line, max(1, width), "…")}
 	}
 	indentWidth := ansi.StringWidth(prefix) + ansi.StringWidth(action.text) + 1
-	bodyWidth := width - indentWidth
-	if bodyWidth < 1 {
+	if width-indentWidth < 1 {
 		line := sty.ToolDetail.Render(prefix) + actionRendered + sty.ToolDetail.Render(" ") + renderSpans(rest, sty)
 		return []string{ansi.Truncate(line, max(1, width), "…")}
 	}
-	wrapped := wrapSummarySpans(rest, bodyWidth, sty)
-	lines := make([]string, 0, len(wrapped))
-	for i, row := range wrapped {
-		lead := strings.Repeat(" ", indentWidth)
-		if i == 0 {
-			lead = prefix
-			row = actionRendered + sty.ToolDetail.Render(" ") + row
-		}
-		lines = append(lines, ansi.Truncate(sty.ToolDetail.Render(lead)+row, max(1, width), "…"))
-	}
-	return lines
+	rows := textwrap.Wrap(spanSegments(rest, sty), textwrap.Options{
+		Width:       width,
+		FirstPrefix: sty.ToolDetail.Render(prefix) + actionRendered + sty.ToolDetail.Render(" "),
+		RestPrefix:  sty.ToolDetail.Render(strings.Repeat(" ", indentWidth)),
+		Breakpoints: "-",
+		Ellipsis:    "…",
+	})
+	return truncateRows(rows, width)
 }
 
 // collapseWS joins whitespace runs.
