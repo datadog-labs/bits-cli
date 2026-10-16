@@ -106,6 +106,18 @@ func TestWrap(t *testing.T) {
 			want: []string{"   "},
 		},
 		{
+			name: "trailing whitespace is dropped",
+			text: "foo  \nbar   ",
+			o:    Options{Width: 5},
+			want: []string{"foo", "bar"},
+		},
+		{
+			name: "trailing whitespace is kept on demand",
+			text: "foo  \nbar   ",
+			o:    Options{Width: 5, KeepTrailingSpace: true},
+			want: []string{"foo  ", "bar  ", " "},
+		},
+		{
 			name: "empty text is one empty row",
 			text: "",
 			o:    Options{Width: 10, FirstPrefix: "> "},

@@ -8,8 +8,8 @@
 //     leaving no room for text is cut to leave one cell. The only exception
 //     is a single grapheme wider than the room left after the prefix;
 //   - no printable text is lost: only whitespace at a soft row break or at
-//     the end of a line is dropped, unless [Options.Ellipsis] asks to cut
-//     words wider than a row;
+//     the end of a line is dropped, unless [Options.KeepTrailingSpace] keeps
+//     the latter or [Options.Ellipsis] asks to cut words wider than a row;
 //   - each segment renders with its own style on every row it reaches, so no
 //     row depends on terminal state left by the previous one.
 //
@@ -60,6 +60,9 @@ type Options struct {
 	// that line, capped at half the room, instead of treating them as a
 	// word break. The indent keeps the style of the spaces it stands for.
 	KeepIndent bool
+	// KeepTrailingSpace keeps whitespace ending a source line, wrapping it
+	// like text, where it is content, e.g. in a diff.
+	KeepTrailingSpace bool
 	// Ellipsis, if set, cuts a word wider than a whole row to one row ending
 	// in Ellipsis instead of breaking it across rows. Use it where a compact
 	// summary matters more than the full text.
@@ -85,7 +88,7 @@ func Wrap(o Options, segs ...Segment) []string {
 		ellipsis:  o.Ellipsis,
 	}
 	for _, line := range splitLines(toCells(segs, o.Breakpoints)) {
-		l.line(line, o.KeepIndent)
+		l.line(line, o.KeepIndent, o.KeepTrailingSpace)
 	}
 	out := make([]string, len(l.rows))
 	for i, r := range l.rows {
@@ -226,7 +229,7 @@ func (l *layout) add(cs []cell) {
 	}
 }
 
-func (l *layout) line(cells []cell, keepIndent bool) {
+func (l *layout) line(cells []cell, keepIndent, keepTrailing bool) {
 	indent := 0
 	if keepIndent {
 		indent = min(leadingSpaces(cells), min(l.firstRoom, l.restRoom)/2)
@@ -276,7 +279,7 @@ func (l *layout) line(cells []cell, keepIndent bool) {
 		pending, pendingWidth, atLineStart = nil, 0, false
 	}
 
-	if atLineStart {
+	if atLineStart || keepTrailing {
 		// A line of only whitespace keeps it, as far as it fits.
 		l.hardAdd(pending, indent)
 	}

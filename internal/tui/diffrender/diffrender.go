@@ -99,11 +99,12 @@ func renderLine(line filediff.DiffLine, digits int, opts Options) string {
 	// Continuations repeat the marker without the number, in the line style
 	// so added and deleted backgrounds stay continuous.
 	return strings.Join(textwrap.Wrap(textwrap.Options{
-		Width:       opts.Width,
-		FirstPrefix: gutter,
-		RestPrefix:  gutterStyle.Render(diffLeftMargin + strings.Repeat(" ", digits) + separator),
-		Breakpoints: textwrap.Code,
-		KeepIndent:  true,
+		Width:             opts.Width,
+		FirstPrefix:       gutter,
+		RestPrefix:        gutterStyle.Render(diffLeftMargin + strings.Repeat(" ", digits) + separator),
+		Breakpoints:       textwrap.Code,
+		KeepIndent:        true,
+		KeepTrailingSpace: true,
 	}, content...), "\n")
 }
 

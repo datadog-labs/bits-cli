@@ -232,3 +232,11 @@ func TestRenderWrapAvoidsSplittingStringLiterals(t *testing.T) {
 		t.Fatalf("string literal was split:\n%s", out)
 	}
 }
+
+func TestRenderWrapKeepsTrailingWhitespace(t *testing.T) {
+	diff := filediff.Build("a/f.go", "b/f.go", "x := 1\n", "x := 1   \n")
+	out := ansi.Strip(Render(diff, Options{Path: "f.go", Width: 40, Wrap: true}))
+	if !strings.Contains(out, "x := 1   ") {
+		t.Fatalf("trailing whitespace was dropped:\n%q", out)
+	}
+}
