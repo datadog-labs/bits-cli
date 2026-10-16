@@ -81,16 +81,18 @@ func (p *Panel) Render(width, height int, content PanelContent) string {
 	return rendered
 }
 
-// Layout also reports the visible body window and whether controls were shown.
-func (p *Panel) Layout(width, height int, content PanelContent) (string, Window, bool) {
+// Layout also reports the visible body window and the width the shown form
+// laid its body out at, 0 when the one-line fallback showed no controls.
+func (p *Panel) Layout(width, height int, content PanelContent) (string, Window, int) {
 	if width <= 0 || height <= 0 {
-		return "", Window{}, false
+		return "", Window{}, 0
 	}
 	if full, window, ok := p.fit(width, height, content); ok {
-		return full, window, true
+		bodyWidth, _ := p.BodySize(width, height, false)
+		return full, window, bodyWidth
 	}
-	compact, shown := p.compact(width, height, content)
-	return compact, Window{}, shown
+	compact, bodyWidth := p.compact(width, height, content)
+	return compact, Window{}, bodyWidth
 }
 
 // Fits reports whether Render shows the full layout rather than a compact
@@ -243,14 +245,14 @@ func (p *Panel) footer(width int, left, right string) string {
 }
 
 // compact renders the compact form, or the one-line fallback when even that
-// does not fit. It reports whether the compact form showed.
-func (p *Panel) compact(width, height int, content PanelContent) (string, bool) {
+// does not fit. It reports the compact body width, 0 for the fallback.
+func (p *Panel) compact(width, height int, content PanelContent) (string, int) {
 	tiny := content.TinyMessage
 	if tiny == "" {
 		tiny = content.CompactTitle
 	}
 	if height < 3 || width < 20 {
-		return p.styles.Compact.Render(ansi.Truncate(tiny, width, "")), false
+		return p.styles.Compact.Render(ansi.Truncate(tiny, width, "")), 0
 	}
 
 	title := content.CompactTitle
@@ -270,7 +272,7 @@ func (p *Panel) compact(width, height int, content PanelContent) (string, bool) 
 	}
 	candidate := p.styles.Compact.Width(compactWidth).Render(title + "\n\n" + message)
 	if lipgloss.Width(candidate) <= width && lipgloss.Height(candidate) <= height {
-		return candidate, true
+		return candidate, compactWidth
 	}
-	return p.styles.Compact.Render(ansi.Truncate(tiny, width, "")), false
+	return p.styles.Compact.Render(ansi.Truncate(tiny, width, "")), 0
 }

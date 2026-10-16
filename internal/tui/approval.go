@@ -67,7 +67,7 @@ func (c approvalChoice) chip(style lipgloss.Style, compact bool) string {
 type approvalPrompt struct {
 	block      agent.Block
 	selected   int                    // index into approvalChoices
-	visible    []int                  // choices the last actions() rendered; empty until the first Layout
+	visible    []int                  // choices the last Layout showed; empty until the first Layout
 	window     components.Window      // the body rows the last layout showed
 	decision   agent.ApprovalDecision // "" until the user decides
 	fullAccess bool                   // the decision also asked to switch to full access
@@ -201,64 +201,76 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 		},
 		TinyMessage: "Resize terminal to approve",
 	}
-	rendered, window, shown := a.panel.Layout(width, slot.Height, content)
+	rendered, window, bodyWidth := a.panel.Layout(width, slot.Height, content)
 	a.window = window
-	return lipgloss.PlaceHorizontal(width, lipgloss.Center, rendered), shown && width >= approvalMinWidth
+	// The panel may measure a form it then rejects, so the choices are
+	// committed only for the width of the form that showed.
+	if bodyWidth > 0 {
+		row := a.fitChoices(bodyWidth)
+		a.visible, a.selected = row.visible, row.selected
+	}
+	return lipgloss.PlaceHorizontal(width, lipgloss.Center, rendered), bodyWidth > 0 && width >= approvalMinWidth
 }
 
-// actions renders the choice row within width by measuring it: full labels,
-// then condensed, then dropping choices by dropPriority until it fits, rather
-// than trusting a width threshold to predict that. It records what rendered
-// in a.visible and clamps a.selected onto that set for cycle.
-func (a *approvalPrompt) actions(width int) string {
-	compact := width < approvalCompactWidth
-	visible := allChoiceIndices()
-	for {
-		row := a.renderChoiceRow(visible, compact)
-		if ansi.StringWidth(row) <= width {
-			break
-		}
-		if !compact {
-			compact = true
+// choiceRow is the choice row that fits a width: the visible choices, the
+// focus clamped onto them, and whether labels are condensed.
+type choiceRow struct {
+	visible  []int
+	selected int
+	compact  bool
+}
+
+// fitChoices measures the choice row within width: full labels, then
+// condensed, then dropping choices by dropPriority until it fits, rather than
+// trusting a width threshold to predict that. It leaves the prompt untouched.
+func (a *approvalPrompt) fitChoices(width int) choiceRow {
+	row := choiceRow{visible: allChoiceIndices(), selected: a.selected, compact: width < approvalCompactWidth}
+	for ansi.StringWidth(a.renderChoiceRow(row)) > width {
+		if !row.compact {
+			row.compact = true
 			continue
 		}
-		drop, ok := lowestDroppable(visible)
+		drop, ok := lowestDroppable(row.visible)
 		if !ok {
 			break
 		}
-		visible = slices.DeleteFunc(visible, func(i int) bool { return i == drop })
+		row.visible = slices.DeleteFunc(row.visible, func(i int) bool { return i == drop })
 	}
-	a.visible = visible
-	if !slices.Contains(visible, a.selected) {
-		a.selected = 0 // clamp toward Allow; a resize must never park the cursor on full access
+	if !slices.Contains(row.visible, row.selected) {
+		row.selected = 0 // clamp toward Allow; a resize must never park the cursor on full access
 	}
+	return row
+}
 
-	row := ansi.Truncate(a.renderChoiceRow(visible, compact), max(1, width), "…")
+// actions renders the choice row that fits width, then its disclaimer row.
+func (a *approvalPrompt) actions(width int) string {
+	choices := a.fitChoices(width)
+	row := ansi.Truncate(a.renderChoiceRow(choices), max(1, width), "…")
 	// The disclaimer row is always present, blank when unfocused, so focusing
 	// full access cannot change the panel's height. It costs nothing: the
 	// approval Frame gives up a row of bottom padding for it (see
 	// builder.go's approvalPanel).
 	disclaimer := ""
-	if approvalChoices[a.selected].fullAccess {
+	if approvalChoices[choices.selected].fullAccess {
 		disclaimer = a.theme.Approval.Disclaimer.Render(ansi.Truncate(fullAccessDisclaimer, max(1, width), "…"))
 	}
 	return row + "\n" + disclaimer
 }
 
-func (a *approvalPrompt) renderChoiceRow(visible []int, compact bool) string {
+func (a *approvalPrompt) renderChoiceRow(row choiceRow) string {
 	sty := a.theme.Approval
-	rendered := make([]string, len(visible))
-	for n, i := range visible {
+	rendered := make([]string, len(row.visible))
+	for n, i := range row.visible {
 		choice := approvalChoices[i]
 		style := sty.Action
-		if i == a.selected {
+		if i == row.selected {
 			if choice.fullAccess {
 				style = sty.FullAccess
 			} else {
 				style = sty.Selected
 			}
 		}
-		rendered[n] = choice.chip(style, compact)
+		rendered[n] = choice.chip(style, row.compact)
 	}
 	return strings.Join(rendered, "  ")
 }

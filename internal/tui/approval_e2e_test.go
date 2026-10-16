@@ -724,3 +724,37 @@ func TestApprovalChipKeepsBackgroundAfterBoldSegment(t *testing.T) {
 		t.Fatalf("chip %q sets its truecolor background fewer than twice; want it reapplied after the bold segment", chip)
 	}
 }
+
+// TestApprovalCompactFormKeepsFocusOnEveryChoice guards against the rejected
+// full-form measurement clamping the focus: at these sizes the panel measures
+// the full form (too narrow for Session and full access), rejects it, and
+// shows the compact form with every choice. Tabbing onto each must stay there.
+func TestApprovalCompactFormKeepsFocusOnEveryChoice(t *testing.T) {
+	for _, size := range [][2]int{{36, 13}, {40, 14}} {
+		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
+			backend := &approvalBackend{t: t}
+			tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
+			if err != nil {
+				t.Fatal(err)
+			}
+			model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
+			awaitApproval(t, model, size[0])
+			model.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+
+			panel := model.approvals[model.shown.callID()].panel
+			if !slices.Equal(panel.visible, allChoiceIndices()) {
+				t.Fatalf("visible = %v, want every choice in the compact form", panel.visible)
+			}
+			for want := 1; want < len(approvalChoices); want++ {
+				model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+				if panel.selected != want {
+					t.Fatalf("selected = %d, want %d after %d tabs", panel.selected, want, want)
+				}
+				plain := ansi.Strip(model.frame.promptView)
+				if approvalChoices[want].fullAccess != strings.Contains(plain, "Full access") {
+					t.Fatalf("disclaimer shown = %v with %q focused:\n%s", !approvalChoices[want].fullAccess, approvalChoices[want].compactLabel, plain)
+				}
+			}
+		})
+	}
+}
