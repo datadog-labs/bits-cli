@@ -13,6 +13,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 // List is a lazily-rendered, vertically-stacked view of transcript items with an
@@ -904,7 +905,7 @@ func renderNotice(n Notice, width int, sty Styles) string {
 	}
 	// Escape untrusted text before wrapping it into selectable document rows.
 	text := escape.Multiline(n.Text)
-	lines := strings.Split(wrap(text, max(1, width-3)), "\n")
+	lines := textwrap.WrapProse(width-3, text, nil)
 	for i, line := range lines {
 		prefix := "   "
 		if i == 0 {

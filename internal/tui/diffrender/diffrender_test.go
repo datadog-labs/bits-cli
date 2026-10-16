@@ -10,6 +10,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/filediff"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 func TestRenderShowsAddedAndDeletedContent(t *testing.T) {
@@ -164,5 +165,78 @@ func TestWindowUnboundedRendersEverything(t *testing.T) {
 	}
 	if !strings.Contains(out, "LINE-1") || !strings.Contains(out, "LINE-30") {
 		t.Fatalf("unbounded render should include first and last changes:\n%s", out)
+	}
+}
+
+func TestRenderWrapKeepsEveryCharacterUnderTheGutter(t *testing.T) {
+	long := "\tx := call(alpha, beta, gamma, delta, epsilon)"
+	diff := filediff.Build("a/f.go", "b/f.go", "package p\n", "package p\n"+long+"\n")
+	out := Render(diff, Options{Path: "f.go", Width: 24, Wrap: true, Style: styles.Diff{
+		Add:     lipgloss.NewStyle().Background(lipgloss.Color("#123456")),
+		Context: lipgloss.NewStyle(),
+	}})
+	rows := strings.Split(out, "\n")
+	if len(rows) < 3 {
+		t.Fatalf("expected the added line to wrap, got:\n%s", ansi.Strip(out))
+	}
+	var text strings.Builder
+	for i, row := range rows {
+		if w := ansi.StringWidth(row); w > 24 {
+			t.Fatalf("row %d is %d cells, over 24: %q", i, w, ansi.Strip(row))
+		}
+		plain := ansi.Strip(row)
+		if i == 0 {
+			continue // context line
+		}
+		gutter := "  2 + "
+		if i > 1 {
+			gutter = "    + "
+		}
+		if !strings.HasPrefix(plain, gutter) {
+			t.Fatalf("row %d = %q, want gutter %q", i, plain, gutter)
+		}
+		if i > 1 && !strings.HasPrefix(plain[len(gutter):], "    ") {
+			t.Fatalf("continuation %q lost the source indentation", plain)
+		}
+		if i > 1 && !strings.HasPrefix(row, "\x1b[48;2;18;52;86m") {
+			t.Fatalf("continuation %q lost the add background", row)
+		}
+		text.WriteString(plain[len(gutter):])
+	}
+	if got, want := strings.Join(strings.Fields(text.String()), ""), strings.Join(strings.Fields(long), ""); got != want {
+		t.Fatalf("wrapped text = %q, want %q", got, want)
+	}
+}
+
+func TestHighlightReturnsOneRowPerSourceLine(t *testing.T) {
+	for _, text := range []string{"", "echo a", "cat <<EOF\nx\nEOF", "a\n", "a\n\nb"} {
+		rows := Highlight("command.sh", text, true, lipgloss.NewStyle())
+		if got, want := len(rows), strings.Count(text, "\n")+1; got != want {
+			t.Fatalf("Highlight(%q) = %d rows, want %d", text, got, want)
+		}
+		var lines []string
+		for _, row := range rows {
+			lines = append(lines, ansi.Strip(textwrap.Render(row...)))
+		}
+		if got := strings.Join(lines, "\n"); got != text {
+			t.Fatalf("Highlight(%q) text = %q", text, got)
+		}
+	}
+}
+
+func TestRenderWrapAvoidsSplittingStringLiterals(t *testing.T) {
+	line := `	return fmt.Errorf("render %s", p)`
+	diff := filediff.Build("a/f.go", "b/f.go", "package p\n", "package p\n"+line+"\n")
+	out := ansi.Strip(Render(diff, Options{Path: "f.go", Width: 34, Wrap: true}))
+	if !strings.Contains(out, `"render %s"`) {
+		t.Fatalf("string literal was split:\n%s", out)
+	}
+}
+
+func TestRenderWrapKeepsTrailingWhitespace(t *testing.T) {
+	diff := filediff.Build("a/f.go", "b/f.go", "x := 1\n", "x := 1   \n")
+	out := ansi.Strip(Render(diff, Options{Path: "f.go", Width: 40, Wrap: true}))
+	if !strings.Contains(out, "x := 1   ") {
+		t.Fatalf("trailing whitespace was dropped:\n%q", out)
 	}
 }

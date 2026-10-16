@@ -11,6 +11,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 type Question struct {
@@ -293,10 +294,13 @@ func (q *Questionnaire) rows(width int) ([]questionRow, int) {
 	q.text.SetStyles(q.styles.TextInput)
 	rows := []questionRow{}
 	add := func(text string, style lipgloss.Style, choice, page int, marker string) {
-		text = ansi.Hardwrap(ansi.Wordwrap(escape.Multiline(text), width-2, "-"), width-2, true)
-		for _, line := range strings.Split(text, "\n") {
-			rows = append(rows, questionRow{text: marker + style.Render(line), choice: choice, page: page})
-			marker = q.styles.Selector.Marker
+		for _, row := range textwrap.Wrap(textwrap.Options{
+			Width:       width,
+			FirstPrefix: marker,
+			RestPrefix:  q.styles.Selector.Marker,
+			Breakpoints: textwrap.Prose,
+		}, textwrap.Styled(escape.Multiline(text), style)) {
+			rows = append(rows, questionRow{text: row, choice: choice, page: page})
 		}
 	}
 	blank := func() { rows = append(rows, questionRow{choice: -1, page: -1}) }

@@ -16,6 +16,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/site"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 const (
@@ -430,7 +431,7 @@ func (m *Model) bodyView(width, _ int) string {
 			ansi.Truncate(m.custom.View(), width, "…"),
 		}
 		if m.loginErr != nil {
-			parts = append(parts, "", feedback.Error.Render(ansi.Hardwrap(m.loginErr.Error(), width, false)))
+			parts = append(parts, "", strings.Join(textwrap.WrapProse(width, m.loginErr.Error(), feedback.Error), "\n"))
 		}
 		return strings.Join(parts, "\n")
 	case phaseWaiting:
@@ -454,7 +455,7 @@ func (m *Model) bodyView(width, _ int) string {
 			message = m.loginErr.Error()
 		}
 		return strings.Join([]string{
-			feedback.Error.Render(ansi.Hardwrap(message, width, false)),
+			strings.Join(textwrap.WrapProse(width, message, feedback.Error), "\n"),
 			text.Secondary.Render(strings.TrimPrefix(m.activeSite, "https://")),
 		}, "\n")
 	case phaseComplete:

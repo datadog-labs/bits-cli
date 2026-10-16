@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -20,6 +19,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/diffrender"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 const (
@@ -329,20 +329,25 @@ func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 		}
 		return spans
 	case spec.ClientExecCommand:
-		spans := actionArgument(action, p.argument)
-		if p.context != "" {
-			spans = append(spans, summarySpan{text: " in ", kind: spanMuted}, summarySpan{text: p.context, kind: spanArgument})
-		}
-		if p.timeout != "" {
-			spans = append(spans, summarySpan{text: " · timeout ", kind: spanMuted}, summarySpan{text: p.timeout, kind: spanArgument})
-		}
-		return spans
+		return append(actionArgument(action, p.argument), p.execMeta()...)
 	default:
 		if action != "" {
 			return actionArgument(action, p.argument)
 		}
 		return []summarySpan{{text: p.name, kind: spanAction}, {text: "(" + p.argument + ")", kind: spanArgument}}
 	}
+}
+
+// execMeta is the metadata the exec header shows after the command.
+func (p toolPresentation) execMeta() []summarySpan {
+	var spans []summarySpan
+	if p.context != "" {
+		spans = append(spans, summarySpan{text: " in ", kind: spanMuted}, summarySpan{text: p.context, kind: spanArgument})
+	}
+	if p.timeout != "" {
+		spans = append(spans, summarySpan{text: " · timeout ", kind: spanMuted}, summarySpan{text: p.timeout, kind: spanArgument})
+	}
+	return spans
 }
 
 func (p toolPresentation) actionLabel(state agent.ToolStatus) string {
@@ -444,7 +449,7 @@ func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, c renderContext
 			// TODO: bound very large expanded diffs if rendering cost shows up.
 			limit = 0
 		}
-		body := diffrender.Render(*diff, diffrender.Options{Path: path, Width: c.width, Style: c.sty.Diff, MaxLines: limit, Tail: true})
+		body := diffrender.Render(*diff, diffrender.Options{Path: path, Width: c.width, Style: c.sty.Diff, MaxLines: limit, Tail: true, Wrap: c.disclosure == fullView})
 		if body != "" {
 			lines = append(lines, body)
 		}
@@ -546,9 +551,9 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) 
 
 func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles) string {
 	command := strings.TrimRight(p.argument, "\n")
-	rows := highlightShellCommand(command, sty)
-	for i, row := range rows {
-		rows[i] = ansi.Hardwrap(row, width, true)
+	var rows []string
+	for _, line := range highlightShellCommand(command, sty) {
+		rows = append(rows, textwrap.Wrap(textwrap.Options{Width: width, Breakpoints: textwrap.Shell, KeepIndent: true}, line...)...)
 	}
 
 	detail := ""
@@ -556,13 +561,14 @@ func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, st
 		detail = escape.Inline(tool.Approval.Detail)
 	}
 	if detail != "" {
-		rows = append(rows, sty.ToolDetail.Render(ansi.Wordwrap(detail, width, "-")))
+		rows = append(rows, textwrap.WrapProse(width, detail, sty.ToolDetail)...)
 	}
 	return strings.Join(rows, "\n")
 }
 
-func highlightShellCommand(command string, sty Styles) []string {
-	return diffrender.HighlightLines("command.sh", command, sty.Diff.SyntaxDark, sty.ToolArgument)
+// highlightShellCommand returns the styled segments of each command line.
+func highlightShellCommand(command string, sty Styles) [][]textwrap.Segment {
+	return diffrender.Highlight("command.sh", command, sty.Diff.SyntaxDark, sty.ToolArgument)
 }
 
 func execResultIsTerminal(status spec.ExecTerminalReason) bool {
@@ -587,13 +593,19 @@ func renderNoOutput(width int, sty Styles) string {
 func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []summarySpan, c renderContext) string {
 	command := strings.TrimRight(p.argument, "\n")
 	lines := highlightShellCommand(command, c.sty)
-	p.argument = lines[0]
+	if c.disclosure == fullView {
+		return renderExecInvocationFull(tool, p, lines, suffix, c)
+	}
+	p.argument = textwrap.Render(lines[0]...)
 	header := renderToolHeader(tool, p.summary(tool), suffix, c)
 	if len(lines) == 1 {
 		return header
 	}
 
-	rows := lines[1:]
+	rows := make([]string, 0, len(lines)-1)
+	for _, line := range lines[1:] {
+		rows = append(rows, textwrap.Render(line...))
+	}
 	limit := execCommandMaxLines - 1
 	omissionRow := -1
 	if len(rows) > limit && c.disclosure == compactView {
@@ -610,6 +622,39 @@ func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []su
 		rows[i] = ansi.Truncate(prefix+body, max(1, c.width), "…")
 	}
 	return header + "\n" + strings.Join(rows, "\n")
+}
+
+// renderExecInvocationFull is the expanded invocation: every source line is
+// shown in full, wrapped instead of truncated. The first line wraps under the
+// command's first column, so expanding only adds rows below the compact
+// header; later lines wrap behind the │ branch, with soft-wrapped
+// continuations indented further to keep them distinct from real newlines.
+// Source indentation is kept on every row.
+func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [][]textwrap.Segment, suffix []summarySpan, c renderContext) string {
+	state := statusOf(tool)
+	action := p.actionLabel(state)
+	lead := headerGlyph(state, c) + c.sty.ToolName.Render(action) + c.sty.ToolDetail.Render(" ")
+	leadWidth := statusGlyphWidth + ansi.StringWidth(action) + 1
+
+	meta := append(append(p.execMeta(), suffix...), lifecycleSpans(state)...)
+	out := textwrap.Wrap(textwrap.Options{
+		Width:       c.width,
+		FirstPrefix: lead,
+		RestPrefix:  strings.Repeat(" ", leadWidth),
+		Breakpoints: textwrap.Shell,
+		KeepIndent:  true,
+	}, slices.Concat(lines[0], spanSegments(meta, c.sty))...)
+	branch := textwrap.Options{
+		Width:       c.width,
+		FirstPrefix: c.sty.ToolDetail.Render("  │ "),
+		RestPrefix:  c.sty.ToolDetail.Render("  │   "),
+		Breakpoints: textwrap.Shell,
+		KeepIndent:  true,
+	}
+	for _, row := range lines[1:] {
+		out = append(out, textwrap.Wrap(branch, row...)...)
+	}
+	return strings.Join(out, "\n")
 }
 
 func execSuffix(result spec.ExecCommandOutput) []summarySpan {
@@ -676,11 +721,13 @@ func execRows(result spec.ExecCommandOutput, bodyWidth int, d disclosure) []stri
 	return rows
 }
 
+// wrappedRows wraps plain multiline output, keeping each line's indentation
+// and breaking paths at slashes.
 func wrappedRows(s string, width int) []string {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}
-	return strings.Split(wrap(s, max(1, width)), "\n")
+	return textwrap.Wrap(textwrap.Options{Width: width, Breakpoints: textwrap.Output, KeepIndent: true}, textwrap.Plain(s))
 }
 
 func middleClamp(rows []string, limit int) []string {
@@ -738,15 +785,24 @@ const statusGlyphWidth = 2
 
 func renderToolHeader(tool *agent.ToolBlock, summary, suffix []summarySpan, c renderContext) string {
 	state := statusOf(tool)
-	glyph, glyphStyle := statusGlyph(state, c.sty, c.frame)
 	spans := make([]summarySpan, 0, len(summary)+len(suffix)+1)
 	spans = append(spans, summary...)
 	spans = append(spans, suffix...)
-	if label := lifecycleSuffix(state); label != "" {
-		spans = append(spans, summarySpan{text: " · " + label, kind: spanMuted})
-	}
-	header := glyphStyle.UnsetBackground().Render(glyph+" ") + renderSpans(spans, c.sty)
+	spans = append(spans, lifecycleSpans(state)...)
+	header := headerGlyph(state, c) + renderSpans(spans, c.sty)
 	return ansi.Truncate(header, max(1, c.width), "…")
+}
+
+func headerGlyph(state agent.ToolStatus, c renderContext) string {
+	glyph, style := statusGlyph(state, c.sty, c.frame)
+	return style.UnsetBackground().Render(glyph + " ")
+}
+
+func lifecycleSpans(state agent.ToolStatus) []summarySpan {
+	if label := lifecycleSuffix(state); label != "" {
+		return []summarySpan{{text: " · " + label, kind: spanMuted}}
+	}
+	return nil
 }
 
 func lifecycleSuffix(state agent.ToolStatus) string {
@@ -796,93 +852,31 @@ func renderActivityHeader(state agent.ToolStatus, label, suffix string, c render
 func renderSpans(spans []summarySpan, sty Styles) string {
 	var b strings.Builder
 	for _, span := range spans {
-		switch span.kind {
-		case spanAction:
-			b.WriteString(sty.ToolName.Render(span.text))
-		case spanArgument:
-			b.WriteString(sty.ToolArgument.Render(span.text))
-		case spanError:
-			b.WriteString(sty.ToolError.Render(span.text))
-		default:
-			b.WriteString(sty.ToolDetail.Render(span.text))
-		}
+		b.WriteString(spanStyle(span.kind, sty).Render(span.text))
 	}
 	return b.String()
 }
 
-// renderSummaryClusters styles a complete row of one-grapheme spans, merging
-// runs of the same kind, so every continuation starts with its own color
-// instead of relying on terminal state from the prior row.
-func renderSummaryClusters(clusters []summarySpan, sty Styles) string {
-	var spans []summarySpan
-	var run strings.Builder
-	var kind spanKind
-	for _, cluster := range clusters {
-		if run.Len() > 0 && kind != cluster.kind {
-			spans = append(spans, summarySpan{text: run.String(), kind: kind})
-			run.Reset()
-		}
-		kind = cluster.kind
-		run.WriteString(cluster.text)
+// spanSegments converts spans to segments for textwrap.
+func spanSegments(spans []summarySpan, sty Styles) []textwrap.Segment {
+	segs := make([]textwrap.Segment, len(spans))
+	for i, span := range spans {
+		segs[i] = textwrap.Styled(span.text, spanStyle(span.kind, sty))
 	}
-	if run.Len() > 0 {
-		spans = append(spans, summarySpan{text: run.String(), kind: kind})
-	}
-	return renderSpans(spans, sty)
+	return segs
 }
 
-// wrapSummarySpans keeps colors attached to text while laying out rows.
-func wrapSummarySpans(spans []summarySpan, width int, sty Styles) []string {
-	var lines []string
-	var row, word, space []summarySpan
-	rowWidth, wordWidth, spaceWidth := 0, 0, 0
-	flushSpace := func() {
-		row = append(row, space...)
-		rowWidth += spaceWidth
-		space = nil
-		spaceWidth = 0
+func spanStyle(kind spanKind, sty Styles) lipgloss.Style {
+	switch kind {
+	case spanAction:
+		return sty.ToolName
+	case spanArgument:
+		return sty.ToolArgument
+	case spanError:
+		return sty.ToolError
+	default:
+		return sty.ToolDetail
 	}
-	flushWord := func() {
-		if len(word) == 0 {
-			return
-		}
-		flushSpace()
-		row = append(row, word...)
-		rowWidth += wordWidth
-		word = nil
-		wordWidth = 0
-	}
-	for _, span := range spans {
-		for text := span.text; text != ""; {
-			cluster, cellWidth := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
-			text = text[len(cluster):]
-			r, _ := utf8.DecodeRuneInString(cluster)
-			item := summarySpan{text: cluster, kind: span.kind}
-			switch {
-			case unicode.IsSpace(r) && r != '\u00a0':
-				flushWord()
-				space = append(space, item)
-				spaceWidth += cellWidth
-			case cluster == "-":
-				flushSpace()
-				flushWord()
-				row = append(row, item)
-				rowWidth += cellWidth
-			default:
-				word = append(word, item)
-				wordWidth += cellWidth
-				if rowWidth+spaceWidth+wordWidth > width && wordWidth <= width {
-					if len(row) > 0 {
-						lines = append(lines, renderSummaryClusters(row, sty))
-					}
-					row, space = nil, nil
-					rowWidth, spaceWidth = 0, 0
-				}
-			}
-		}
-	}
-	flushWord()
-	return append(lines, renderSummaryClusters(row, sty))
 }
 
 // inspectionLifecycle is the group's activity: running or awaiting approval
@@ -1021,22 +1015,17 @@ func renderInspectionChild(spans, outcome []summarySpan, first bool, width int, 
 		return []string{ansi.Truncate(line, max(1, width), "…")}
 	}
 	indentWidth := ansi.StringWidth(prefix) + ansi.StringWidth(action.text) + 1
-	bodyWidth := width - indentWidth
-	if bodyWidth < 1 {
+	if width-indentWidth < 1 {
 		line := sty.ToolDetail.Render(prefix) + actionRendered + sty.ToolDetail.Render(" ") + renderSpans(rest, sty)
 		return []string{ansi.Truncate(line, max(1, width), "…")}
 	}
-	wrapped := wrapSummarySpans(rest, bodyWidth, sty)
-	lines := make([]string, 0, len(wrapped))
-	for i, row := range wrapped {
-		lead := strings.Repeat(" ", indentWidth)
-		if i == 0 {
-			lead = prefix
-			row = actionRendered + sty.ToolDetail.Render(" ") + row
-		}
-		lines = append(lines, ansi.Truncate(sty.ToolDetail.Render(lead)+row, max(1, width), "…"))
-	}
-	return lines
+	return textwrap.Wrap(textwrap.Options{
+		Width:       width,
+		FirstPrefix: sty.ToolDetail.Render(prefix) + actionRendered + sty.ToolDetail.Render(" "),
+		RestPrefix:  sty.ToolDetail.Render(strings.Repeat(" ", indentWidth)),
+		Breakpoints: textwrap.Prose,
+		Ellipsis:    "…",
+	}, spanSegments(rest, sty)...)
 }
 
 // collapseWS joins whitespace runs.

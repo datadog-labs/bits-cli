@@ -3,12 +3,11 @@ package chat
 import (
 	"strings"
 
-	"github.com/charmbracelet/x/ansi"
-
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 // itemSpacing describes outer rows owned by a rendered transcript item. The
@@ -106,7 +105,7 @@ func renderUser(text string, context []assistant.ContextEntity, width int, sty S
 		// Same blank row as the composer between the chips and the prompt.
 		lines = append(lines, "")
 	}
-	for i, ln := range strings.Split(wrap(text, max(1, inner-w)), "\n") {
+	for i, ln := range textwrap.WrapProse(inner-w, text, nil) {
 		if i == 0 {
 			lines = append(lines, sty.Input.Marker.Render(marker)+sty.Input.Text.Render(ln))
 			continue
@@ -188,10 +187,7 @@ func renderProgress(it agent.Block, width int, sty Styles) string {
 	return sty.Meta.Render(wrap(escape.Multiline(it.Progress.Content), width))
 }
 
-// wrap word-wraps s to width.
+// wrap word-wraps plain text s to width.
 func wrap(s string, width int) string {
-	if width < 1 {
-		width = 1
-	}
-	return ansi.Wordwrap(s, width, "-")
+	return strings.Join(textwrap.WrapProse(width, s, nil), "\n")
 }
