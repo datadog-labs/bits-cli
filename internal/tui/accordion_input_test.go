@@ -171,48 +171,28 @@ func rawSequence(cmd tea.Cmd) string {
 	return ""
 }
 
-func TestMouseMotionSetsPointerShapeOverAnAccordionRow(t *testing.T) {
+// TestMouseMotionSetsPointerShapeOverTheAccordionZone: the hand shape tracks
+// the block's whole zone, whether that is a lone collapsed header or every
+// disclosed row once expanded, and resets on the first row past it. OSC 22 is
+// only emitted on a shape change, so each step alternates the expected shape.
+func TestMouseMotionSetsPointerShapeOverTheAccordionZone(t *testing.T) {
 	m := accordionTestModel(t)
 	row := accordionRow(t, m)
-
-	_, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row})
-	if got := rawSequence(cmd); got != ansi.SetPointerShape("pointer") {
-		t.Fatalf("hovering the row did not set the pointer shape: got %q, want %q", got, ansi.SetPointerShape("pointer"))
-	}
-
-	_, cmd = m.Update(tea.MouseMotionMsg{X: 0, Y: row + 1})
-	if got := rawSequence(cmd); got != ansi.SetPointerShape("default") {
-		t.Fatalf("un-hovering the row did not reset the pointer shape: got %q, want %q", got, ansi.SetPointerShape("default"))
-	}
-}
-
-// TestMouseMotionSetsHandPointerAcrossTheWholeExpandedRegion: the hand shape
-// follows List.Hovered, so it covers an expanded block's disclosed rows too.
-func TestMouseMotionSetsHandPointerAcrossTheWholeExpandedRegion(t *testing.T) {
-	m := accordionTestModel(t)
-	row := accordionRow(t, m)
-
-	// The OSC 22 sequence is only emitted on a shape change, so establish a
-	// hand-on baseline before checking the transition away from it.
-	if _, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row}); rawSequence(cmd) != ansi.SetPointerShape("pointer") {
-		t.Fatal("hovering the header did not set the hand pointer shape")
-	}
-	if _, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row + 1}); rawSequence(cmd) != ansi.SetPointerShape("default") {
-		t.Fatal("a collapsed block's body row set the hand pointer shape")
-	}
-
-	m.list.ToggleAllDisclosure()
-	// accordionTestOutput is 5 lines; every one of them is now a target.
-	for offset := 1; offset <= 5; offset++ {
-		m.Update(tea.MouseMotionMsg{X: 0, Y: row + offset})
-		if !m.list.Hovered() {
-			t.Fatalf("disclosed row at offset %d did not report hover", offset)
+	hand, arrow := ansi.SetPointerShape("pointer"), ansi.SetPointerShape("default")
+	expect := func(y int, want, what string) {
+		t.Helper()
+		if _, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: y}); rawSequence(cmd) != want {
+			t.Fatalf("%s: got %q, want %q", what, rawSequence(cmd), want)
 		}
 	}
 
-	if _, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row + 6}); rawSequence(cmd) != ansi.SetPointerShape("default") {
-		t.Fatal("the row after the expanded block kept the hand pointer shape")
-	}
+	expect(row, hand, "hovering the collapsed header")
+	expect(row+1, arrow, "leaving the collapsed header-only block")
+
+	m.list.ToggleAllDisclosure()
+	// accordionTestOutput is 5 lines, so the expanded block spans row..row+5.
+	expect(row+5, hand, "hovering the last disclosed row")
+	expect(row+6, arrow, "leaving the expanded block")
 }
 
 // scrollableAccordionTestModel builds several identical tool blocks in a

@@ -816,103 +816,14 @@ func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseAndScroll(t *testing.T) {
 	}
 }
 
-// TestAccordionAtCoversTheExpandedBlockAndNothingElse: an expanded block's
-// disclosed rows are targets, a collapsed block's compact body rows are not.
-func TestAccordionAtCoversTheExpandedBlockAndNothingElse(t *testing.T) {
-	list := listWithTool(agent.ToolSuccess)
-	list.ToggleDisclosure(list.view[0].id) // give the header detail rows
-	list.ScrollToTop()                     // drop follow so the header starts visible
-	list.SetHeight(2)
-	if id, ok := list.AccordionAt(0); !ok || id != list.view[0].id {
-		t.Fatalf("AccordionAt(0) = %v, %t, want the tool's header", id, ok)
-	}
-	if id, ok := list.AccordionAt(1); !ok || id != list.view[0].id {
-		t.Fatalf("AccordionAt(1) = %v, %t, want the tool's disclosed detail row", id, ok)
-	}
-	if _, ok := list.AccordionAt(2); ok {
-		t.Fatal("AccordionAt matched a row outside the viewport")
-	}
+// Dark-theme hover fills, as SGR background parameters.
+const (
+	headerHoverFill = "48;2;34;36;43" // accordionHover (#22242B)
+	detailHoverFill = "48;2;28;30;38" // accordionDetailHover (#1C1E26)
+)
 
-	list.ToggleDisclosure(list.view[0].id) // collapse again
-	if id, ok := list.AccordionAt(0); !ok || id != list.view[0].id {
-		t.Fatalf("AccordionAt(0) = %v, %t, want the collapsed block's header", id, ok)
-	}
-	if _, ok := list.AccordionAt(1); ok {
-		t.Fatal("AccordionAt matched past a collapsed block's single header row")
-	}
-}
-
-// TestAccordionAtKeepsExpandedDetailRowsAfterTheHeaderScrollsOff: the header
-// is not the hit-test anchor, so scrolling it off must not hide the rest.
-func TestAccordionAtKeepsExpandedDetailRowsAfterTheHeaderScrollsOff(t *testing.T) {
-	list := listWithTool(agent.ToolSuccess)
-	list.ToggleDisclosure(list.view[0].id)
-	list.SetHeight(1)
-	list.ScrollBy(1) // scroll past the header; no chevron remains visible
-
-	if id, ok := list.AccordionAt(0); !ok || id != list.view[0].id {
-		t.Fatalf("AccordionAt(0) = %v, %t, want the block even with its header scrolled off", id, ok)
-	}
-}
-
-func TestHoverPaintsOnlyTheSurfaceNotTheDocument(t *testing.T) {
-	list := listWithTool(agent.ToolSuccess)
-	list.ScrollToTop()
-	resting := list.Render()
-	document := list.Document()
-	height := list.itemHeight(0)
-
-	list.SetPointerRow(0)
-	if !list.Hovered() {
-		t.Fatal("pointer over the header did not hover it")
-	}
-	if list.Render() == resting {
-		t.Fatal("hover did not change the rendered surface")
-	}
-	if list.Document() != document || list.itemHeight(0) != height {
-		t.Fatal("hover leaked into the document or the item height")
-	}
-
-	list.SetPointerRow(1)
-	if list.Hovered() || list.Render() != resting {
-		t.Fatal("moving off the header row did not clear hover")
-	}
-}
-
-// TestHoverPaintsTheWholeExpandedBlock: hovering any row of an expanded block
-// paints the header fill on row 0, the detail fill below, and nothing past
-// the item's last row.
-func TestHoverPaintsTheWholeExpandedBlock(t *testing.T) {
-	const headerFill = "48;2;34;36;43" // dark accordionHover (#22242B)
-	const detailFill = "48;2;28;30;38" // dark accordionDetailHover (#1C1E26)
-
-	list := listWithTool(agent.ToolSuccess)
-	list.ToggleDisclosure(list.view[0].id)
-	list.ScrollToTop()
-	height := list.itemHeight(0)
-
-	assertWholeBlockPainted := func(t *testing.T) {
-		t.Helper()
-		lines := strings.Split(list.Render(), "\n")
-		for row := range height {
-			want := detailFill
-			if row == 0 {
-				want = headerFill
-			}
-			if !strings.Contains(lines[row], want) {
-				t.Fatalf("row %d missing its hover fill %q:\n%s", row, want, lines[row])
-			}
-		}
-		if after := lines[height]; strings.Contains(after, headerFill) || strings.Contains(after, detailFill) {
-			t.Fatalf("hover leaked past the item's last row (%d) into row %d:\n%s", height-1, height, after)
-		}
-	}
-
-	list.SetPointerRow(0)
-	assertWholeBlockPainted(t)
-
-	list.SetPointerRow(height - 1)
-	assertWholeBlockPainted(t)
+func hasHoverFill(line string) bool {
+	return strings.Contains(line, headerHoverFill) || strings.Contains(line, detailHoverFill)
 }
 
 // listWithEditDiff returns a sized list holding one edit_file block whose
@@ -938,51 +849,106 @@ func listWithEditDiff() *List {
 	return list
 }
 
-// TestCollapsedPreviewRowsStayOutsideHoverAndClickTarget: a collapsed block
-// with compact preview rows (edit_file, write_file, exec_command) must paint
-// hover only on its header, matching the collapsed click target. Expanding
-// the same block must then paint — and target — the whole region.
-func TestCollapsedPreviewRowsStayOutsideHoverAndClickTarget(t *testing.T) {
-	const headerFill = "48;2;34;36;43" // dark accordionHover (#22242B)
-	const detailFill = "48;2;28;30;38" // dark accordionDetailHover (#1C1E26)
+// TestAccordionZoneIsTheWholeRenderedBlock: whatever a guttered block renders
+// (a lone header, a collapsed preview such as exec_command or edit_file, or
+// the full disclosure) is both its click target and its hover region. From
+// any of its rows, hover paints the header fill on row 0 and the detail fill
+// below, and neither targeting nor painting reaches past its last row.
+func TestAccordionZoneIsTheWholeRenderedBlock(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		list     func() *List
+		expanded bool
+	}{
+		{"collapsed header only", func() *List { return listWithTool(agent.ToolSuccess) }, false},
+		{"expanded detail", func() *List { return listWithTool(agent.ToolSuccess) }, true},
+		{"collapsed preview", listWithEditDiff, false},
+		{"expanded preview", listWithEditDiff, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			list := tc.list()
+			if tc.expanded {
+				list.ToggleDisclosure(list.view[0].id)
+			}
+			list.ScrollToTop()
+			height := list.itemHeight(0)
+			if height >= list.height {
+				t.Fatalf("fixture is %d rows in a %d-row viewport, want room below it", height, list.height)
+			}
 
-	list := listWithEditDiff()
-	list.ScrollToTop()
-	collapsedHeight := list.itemHeight(0)
-	if collapsedHeight < 2 {
-		t.Fatalf("collapsed fixture only rendered %d line(s), want a compact preview body too", collapsedHeight)
+			for row := range height {
+				if id, ok := list.AccordionAt(row); !ok || id != list.view[0].id {
+					t.Fatalf("AccordionAt(%d) = %v, %t, want the block", row, id, ok)
+				}
+			}
+			if _, ok := list.AccordionAt(height); ok {
+				t.Fatalf("AccordionAt(%d) matched past the block's last row", height)
+			}
+
+			for _, pointer := range []int{0, height - 1} {
+				list.SetPointerRow(pointer)
+				lines := strings.Split(list.Render(), "\n")
+				for row := range height {
+					want := detailHoverFill
+					if row == 0 {
+						want = headerHoverFill
+					}
+					if !strings.Contains(lines[row], want) {
+						t.Fatalf("pointer on row %d: row %d missing its hover fill %q:\n%s", pointer, row, want, lines[row])
+					}
+				}
+				if hasHoverFill(lines[height]) {
+					t.Fatalf("pointer on row %d: hover leaked past the block into row %d:\n%s", pointer, height, lines[height])
+				}
+			}
+		})
 	}
+}
 
-	list.SetPointerRow(0)
+// TestAccordionZoneSurvivesTheHeaderScrollingOff: the header is not the
+// hit-test anchor, so scrolling it off must keep the rest targeted, and the
+// rows left on screen keep the detail fill rather than taking the header's.
+func TestAccordionZoneSurvivesTheHeaderScrollingOff(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	list.ToggleDisclosure(list.view[0].id)
+	list.SetHeight(1)
+	list.ScrollBy(1) // scroll past the header; no chevron remains visible
+
 	if id, ok := list.AccordionAt(0); !ok || id != list.view[0].id {
-		t.Fatalf("AccordionAt(0) on a collapsed block = %v, %t, want the header", id, ok)
+		t.Fatalf("AccordionAt(0) = %v, %t, want the block even with its header scrolled off", id, ok)
 	}
 	if _, ok := list.AccordionAt(1); ok {
-		t.Fatal("collapsed block's preview row is a click target, want header-only")
+		t.Fatal("AccordionAt matched a row outside the viewport")
 	}
 
-	lines := strings.Split(list.Render(), "\n")
-	if !strings.Contains(lines[0], headerFill) {
-		t.Fatalf("collapsed header row missing its hover fill:\n%s", lines[0])
-	}
-	for row := 1; row < collapsedHeight; row++ {
-		if strings.Contains(lines[row], headerFill) || strings.Contains(lines[row], detailFill) {
-			t.Fatalf("collapsed preview row %d painted by header hover, want unpainted:\n%s", row, lines[row])
-		}
-	}
-
-	list.ToggleDisclosure(list.view[0].id)
-	expandedHeight := list.itemHeight(0)
 	list.SetPointerRow(0)
-	lines = strings.Split(list.Render(), "\n")
-	for row := range expandedHeight {
-		want := detailFill
-		if row == 0 {
-			want = headerFill
-		}
-		if !strings.Contains(lines[row], want) {
-			t.Fatalf("expanded row %d missing its hover fill %q:\n%s", row, want, lines[row])
-		}
+	line := list.Render()
+	if !strings.Contains(line, detailHoverFill) || strings.Contains(line, headerHoverFill) {
+		t.Fatalf("visible detail row not painted with the detail fill alone:\n%s", line)
+	}
+}
+
+func TestHoverPaintsOnlyTheSurfaceNotTheDocument(t *testing.T) {
+	list := listWithTool(agent.ToolSuccess)
+	list.ScrollToTop()
+	resting := list.Render()
+	document := list.Document()
+	height := list.itemHeight(0)
+
+	list.SetPointerRow(0)
+	if !list.Hovered() {
+		t.Fatal("pointer over the header did not hover it")
+	}
+	if list.Render() == resting {
+		t.Fatal("hover did not change the rendered surface")
+	}
+	if list.Document() != document || list.itemHeight(0) != height {
+		t.Fatal("hover leaked into the document or the item height")
+	}
+
+	list.SetPointerRow(1)
+	if list.Hovered() || list.Render() != resting {
+		t.Fatal("moving off the header row did not clear hover")
 	}
 }
 

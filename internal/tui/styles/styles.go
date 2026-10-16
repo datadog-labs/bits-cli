@@ -186,8 +186,8 @@ type Accordion struct {
 	// must survive the repaint.
 	HoverBackground color.Color
 
-	// DetailHoverBackground paints an expanded block's disclosed rows while
-	// any row of it is hovered. Softer than HoverBackground so the header
+	// DetailHoverBackground paints a block's rows below its header (compact
+	// preview or full disclosure) while any row of it is hovered. Softer than HoverBackground so the header
 	// stays distinct from its content.
 	DetailHoverBackground color.Color
 }

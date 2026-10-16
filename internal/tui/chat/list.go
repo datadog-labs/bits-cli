@@ -381,8 +381,8 @@ func (l *List) Hovered() bool {
 func (l *List) HoveredLink() (LinkHit, bool) { return l.LinkAt(l.pointerX, l.pointerY) }
 
 // AccordionAt returns the block whose clickable accordion zone sits on
-// viewport row y. A collapsed block's only target is its header row; an
-// expanded block's is every row it renders.
+// viewport row y: every row an expandable block renders, whether collapsed
+// (header plus any compact preview) or expanded.
 func (l *List) AccordionAt(y int) (agent.BlockID, bool) {
 	idx, _, ok := l.accordionAtRow(y)
 	if !ok {
@@ -391,14 +391,11 @@ func (l *List) AccordionAt(y int) (agent.BlockID, bool) {
 	return l.view[idx].id, true
 }
 
-// accordionAtRow maps a viewport row to the accordion item it targets. Row 0
-// of a guttered item is the header; later rows count only once expanded.
+// accordionAtRow maps a viewport row to the guttered item it targets and the
+// row's line within it; line 0 is the header.
 func (l *List) accordionAtRow(y int) (idx, line int, ok bool) {
 	idx, line, ok = l.itemAtRow(y)
 	if !ok || l.gutter(l.view[idx]) == 0 {
-		return 0, 0, false
-	}
-	if line > 0 && !l.expanded(l.view[idx].id) {
 		return 0, 0, false
 	}
 	return idx, line, true
@@ -419,10 +416,7 @@ func (l *List) hoverFillRows() (hoverFill, bool) {
 		return hoverFill{}, false
 	}
 	header := l.pointerY - line
-	end := header + 1
-	if l.expanded(l.view[idx].id) {
-		end = header + len(l.entry(idx).lines)
-	}
+	end := header + len(l.entry(idx).lines)
 	return hoverFill{header: header, start: max(header, 0), end: min(end, l.height)}, true
 }
 
