@@ -7,9 +7,9 @@ import (
 )
 
 // Accordion renders the disclosure control for a block's detail rows. The
-// caller owns the expanded state and the click target — the whole disclosed
-// region once expanded, not just this row; hover is painted by the caller
-// across each of those rows (see PaintRowBackground).
+// caller owns the expanded state and the click target, which once expanded is
+// the whole disclosed region, and paints hover across it (see
+// PaintRowBackground).
 func Accordion(sty styles.Accordion, expanded bool) string {
 	glyph := sty.Collapsed
 	if expanded {

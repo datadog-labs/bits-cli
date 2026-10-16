@@ -37,6 +37,10 @@ type palette struct {
 	// ANSI-256 index rather than a hex value that reads well as a fill; light
 	// just reuses surfaceRaised, which already sits one step above surface.
 	accordionHover string
+
+	// accordionDetailHover is accordionHover blended at 45% over the
+	// background, used for an expanded block's disclosed rows so the header
+	// keeps the stronger tone.
 	accordionDetailHover string
 
 	// accordionBackground is the disclosure control's resting fill. Fixed to

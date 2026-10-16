@@ -263,8 +263,8 @@ type Model struct {
 	follow    followControl
 
 	// pendingAccordionToggle is the block a mouse-down landed on inside an
-	// accordion zone — the header row always, plus every disclosed row once
-	// the block is expanded. Every left-click also begins a potential
+	// accordion zone: the header row, plus every disclosed row once the block
+	// is expanded. Every left-click also begins a potential
 	// drag-select (see beginSelection), so the toggle stays pending until
 	// finishSelection sees the gesture through: it fires only if the release
 	// never turned it into a real selection range.

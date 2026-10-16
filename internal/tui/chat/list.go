@@ -382,8 +382,7 @@ func (l *List) HoveredLink() (LinkHit, bool) { return l.LinkAt(l.pointerX, l.poi
 
 // AccordionAt returns the block whose clickable accordion zone sits on
 // viewport row y. A collapsed block's only target is its header row; an
-// expanded block's target is every row it renders, since the whole disclosed
-// region collapses it back.
+// expanded block's is every row it renders.
 func (l *List) AccordionAt(y int) (agent.BlockID, bool) {
 	idx, _, ok := l.accordionAtRow(y)
 	if !ok {
@@ -392,10 +391,8 @@ func (l *List) AccordionAt(y int) (agent.BlockID, bool) {
 	return l.view[idx].id, true
 }
 
-// accordionAtRow maps a viewport row to the accordion item it targets, if
-// any. Row 0 of a guttered item is always a target (the header); later rows
-// are targets only once the item is expanded, since a collapsed item's
-// compact body rows carry no disclosure semantics.
+// accordionAtRow maps a viewport row to the accordion item it targets. Row 0
+// of a guttered item is the header; later rows count only once expanded.
 func (l *List) accordionAtRow(y int) (idx, line int, ok bool) {
 	idx, line, ok = l.itemAtRow(y)
 	if !ok || l.gutter(l.view[idx]) == 0 {
@@ -407,18 +404,15 @@ func (l *List) accordionAtRow(y int) (idx, line int, ok bool) {
 	return idx, line, true
 }
 
-// hoverFill is the viewport row span an accordion hover paints, split into
-// the stronger header tone and the softer detail tone that covers the rest
-// of an expanded block. header may be negative when the block's header has
-// scrolled above the viewport; start/end are already clamped to [0, height].
+// hoverFill is the row span an accordion hover paints. header is unclamped
+// and may be negative once the header scrolls above the viewport; start and
+// end are clamped to [0, height].
 type hoverFill struct {
 	header, start, end int
 }
 
-// hoverFillRows returns the rows the pointer's accordion hover should paint.
-// The header may have scrolled above row 0, and the item may run past the
-// viewport bottom, so both ends are clamped independently of header, which
-// stays unclamped to tell the paint loop whether row 0 is itself the header.
+// hoverFillRows returns the rows the pointer's accordion hover should paint,
+// clamped to the viewport.
 func (l *List) hoverFillRows() (hoverFill, bool) {
 	idx, line, ok := l.accordionAtRow(l.pointerY)
 	if !ok {

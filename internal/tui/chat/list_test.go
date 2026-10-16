@@ -816,8 +816,7 @@ func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseAndScroll(t *testing.T) {
 }
 
 // TestAccordionAtCoversTheExpandedBlockAndNothingElse: an expanded block's
-// disclosed rows are part of its click target, a collapsed block's compact
-// body rows are not, and neither extends past the viewport.
+// disclosed rows are targets, a collapsed block's compact body rows are not.
 func TestAccordionAtCoversTheExpandedBlockAndNothingElse(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
 	list.ToggleDisclosure(list.view[0].id) // give the header detail rows
@@ -842,9 +841,8 @@ func TestAccordionAtCoversTheExpandedBlockAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestAccordionAtKeepsExpandedDetailRowsAfterTheHeaderScrollsOff: an
-// expanded block's header is not the hit-test anchor, so scrolling it out of
-// view must not blind AccordionAt to the disclosed rows still on screen.
+// TestAccordionAtKeepsExpandedDetailRowsAfterTheHeaderScrollsOff: the header
+// is not the hit-test anchor, so scrolling it off must not hide the rest.
 func TestAccordionAtKeepsExpandedDetailRowsAfterTheHeaderScrollsOff(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
 	list.ToggleDisclosure(list.view[0].id)
@@ -880,11 +878,9 @@ func TestHoverPaintsOnlyTheSurfaceNotTheDocument(t *testing.T) {
 	}
 }
 
-// TestHoverPaintsTheWholeExpandedBlock: once a block is expanded, every row
-// it renders is part of the single click target, so hovering any row of it
-// must paint the header's stronger fill on row 0 and the softer detail fill
-// on every row below it — never the detail fill on the header, and never
-// either fill past the item's last row.
+// TestHoverPaintsTheWholeExpandedBlock: hovering any row of an expanded block
+// paints the header fill on row 0, the detail fill below, and nothing past
+// the item's last row.
 func TestHoverPaintsTheWholeExpandedBlock(t *testing.T) {
 	const headerFill = "48;2;34;36;43" // dark accordionHover (#22242B)
 	const detailFill = "48;2;28;30;38" // dark accordionDetailHover (#1C1E26)
