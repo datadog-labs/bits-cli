@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
@@ -572,10 +573,20 @@ func awaitApproval(t *testing.T, model *Model, width int) {
 	}
 }
 
-// TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused covers decision 2:
-// the disclaimer appears the moment full access is focused, nowhere else,
-// and never wraps past one row — not even at the minimum width.
+// TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused covers decision 2 (one
+// row, never wrapped) and the revision after human testing of the built
+// binary: the disclaimer row is reserved unconditionally — blank unless full
+// access is focused — so the panel's rendered HEIGHT never changes with
+// focus. Only the row's CONTENT does. That invariant is the actual fix the
+// human asked for: before it, focusing full access grew the footer by a row
+// and the whole modal visibly jumped.
+//
+// The disclaimer does not grow the panel at all, focused or not: it occupies
+// a row the approval Frame gives up from its own bottom padding (see
+// builder.go's approvalPanel), so the heights below are pinned to what the
+// panel measured at 851a96c, before this feature existed.
 func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
+	baselineHeight := map[int]int{approvalMinWidth: 11, 44: 11, 80: 10, 120: 10}
 	for _, width := range []int{approvalMinWidth, 44, 80, 120} {
 		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
 			backend := &approvalBackend{t: t}
@@ -590,8 +601,14 @@ func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
 			if strings.Contains(plain, "Full access skips") {
 				t.Fatalf("disclaimer shown before full access is focused:\n%s", plain)
 			}
+			unfocusedHeight := lipgloss.Height(model.frame.promptView)
+			if unfocusedHeight != baselineHeight[width] {
+				t.Fatalf("unfocused panel height = %d, want %d (the height at 851a96c, before full access existed)", unfocusedHeight, baselineHeight[width])
+			}
 
-			// Walk every choice; the disclaimer shows on full access alone.
+			// Walk every choice; the disclaimer TEXT shows on full access
+			// alone, but the panel's HEIGHT must equal unfocusedHeight on
+			// every single one of them — the jump the human flagged.
 			for range approvalChoices {
 				model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 				plain := ansi.Strip(model.frame.promptView)
@@ -599,6 +616,9 @@ func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
 				hasDisclaimer := strings.Contains(plain, "Full access skips")
 				if focused.fullAccess != hasDisclaimer {
 					t.Fatalf("focused=%q fullAccess=%v disclaimer-shown=%v:\n%s", focused.label, focused.fullAccess, hasDisclaimer, plain)
+				}
+				if got := lipgloss.Height(model.frame.promptView); got != unfocusedHeight {
+					t.Fatalf("focused=%q panel height = %d, want %d (unfocused) unchanged:\n%s", focused.label, got, unfocusedHeight, plain)
 				}
 				if hasDisclaimer {
 					lines := strings.Split(plain, "\n")

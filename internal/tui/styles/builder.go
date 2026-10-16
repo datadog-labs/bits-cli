@@ -77,6 +77,13 @@ func build(isDark bool, p palette) Theme {
 	// Cleared MaxWidth spans the terminal like the splash banner rather than
 	// capping like a centered dialog.
 	approvalPanel.MaxWidth = 0
+	// Bottom padding dropped to 0, approval only: the full-access disclaimer
+	// (approval.go's actions) occupies that row instead — blank unless the
+	// choice is focused — so the panel's total height stays exactly what it
+	// was before the disclaimer existed. Trimming the frame by one row here
+	// and having the footer content fill it nets to zero; the shared Panel
+	// default (used by the permissions picker, splash, etc.) is untouched.
+	approvalPanel.Frame = approvalPanel.Frame.Padding(1, 2, 0, 2)
 	permissionsPanel := panel
 	permissionsPanel.SectionGap = 0
 	permissionsPanel.MaxWidth = 0

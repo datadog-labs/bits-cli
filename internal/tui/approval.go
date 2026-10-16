@@ -205,7 +205,12 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 			} else if detail != "" {
 				lines = append(lines, sty.Detail.Render(ansi.Wordwrap(escape.Inline(detail), width, "-")))
 			}
-			lines = append(lines, "", a.actions(width))
+			// No separate blank line before actions: a.actions already ends
+			// in the disclaimer-or-blank row, so the compact form's total
+			// height stays what it was before that row existed, the same
+			// way the full form's Frame.Padding gave up a row below (see
+			// builder.go's approvalPanel).
+			lines = append(lines, a.actions(width))
 			return strings.Join(lines, "\n")
 		},
 		TinyMessage: "Resize terminal to approve",
@@ -250,12 +255,22 @@ func (a *approvalPrompt) actions(width int) string {
 	}
 
 	row := ansi.Truncate(a.renderChoiceRow(visible, compact), max(1, width), "…")
+	// The disclaimer row is reserved unconditionally, not appended only when
+	// full access is focused: Panel measures the footer's height once to
+	// decide between its full and compact forms (components/panel.go), so a
+	// row that only sometimes exists would make the whole modal jump by one
+	// line the moment the user focuses full access. Blank when unfocused,
+	// one line of text when focused — never zero lines either way.
+	//
+	// This does not grow the panel: the approval Frame gives up one row of
+	// its own bottom padding to make room (builder.go's approvalPanel), so
+	// what used to be blank space between the actions row and the border is
+	// now this row — occupied by nothing, or by the warning.
+	disclaimer := ""
 	if approvalChoices[a.selected].fullAccess {
-		// Decision: the disclaimer is exactly one row at every width, never
-		// word-wrapped, so the panel's focused height grows by exactly one row.
-		row += "\n" + a.theme.Approval.Disclaimer.Render(ansi.Truncate(fullAccessDisclaimer, max(1, width), "…"))
+		disclaimer = a.theme.Approval.Disclaimer.Render(ansi.Truncate(fullAccessDisclaimer, max(1, width), "…"))
 	}
-	return row
+	return row + "\n" + disclaimer
 }
 
 func (a *approvalPrompt) renderChoiceRow(visible []int, compact bool) string {
