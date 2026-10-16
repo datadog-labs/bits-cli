@@ -56,7 +56,7 @@ type Options struct {
 	Breakpoints string
 	// KeepIndent repeats each source line's leading spaces on every row of
 	// that line, capped at half the room, instead of treating them as a
-	// word break.
+	// word break. The indent keeps the style of the spaces it stands for.
 	KeepIndent bool
 	// Ellipsis, if set, cuts a word wider than a whole row to one row ending
 	// in Ellipsis instead of breaking it across rows. Use it where a compact
@@ -81,9 +81,26 @@ func Wrap(segs []Segment, o Options) []string {
 		if i == 0 {
 			prefix = o.FirstPrefix
 		}
-		out[i] = prefix + strings.Repeat(" ", r.indent) + renderCells(r.cells, segs)
+		indent := strings.Repeat(" ", r.indent)
+		if r.indent > 0 && segs[r.indentSeg].Style != nil {
+			indent = segs[r.indentSeg].Style.Render(indent)
+		}
+		out[i] = prefix + indent + renderCells(r.cells, segs)
 	}
 	return out
+}
+
+// Render renders segs on one row, each with its style, without wrapping.
+func Render(segs []Segment) string {
+	var b strings.Builder
+	for _, seg := range segs {
+		if seg.Style != nil {
+			b.WriteString(seg.Style.Render(seg.Text))
+		} else {
+			b.WriteString(seg.Text)
+		}
+	}
+	return b.String()
 }
 
 type cellKind uint8
@@ -144,14 +161,16 @@ func splitLines(cells []cell) [][]cell {
 }
 
 type row struct {
-	indent int
-	cells  []cell
-	width  int
+	indent    int
+	indentSeg int // segment whose style the indent takes
+	cells     []cell
+	width     int
 }
 
 type layout struct {
 	firstRoom, restRoom int
 	ellipsis            string
+	indentSeg           int // of the current line
 	rows                []row
 }
 
@@ -168,7 +187,9 @@ func (l *layout) prefixRoom() int {
 	return l.restRoom
 }
 
-func (l *layout) newRow(indent int) { l.rows = append(l.rows, row{indent: indent}) }
+func (l *layout) newRow(indent int) {
+	l.rows = append(l.rows, row{indent: indent, indentSeg: l.indentSeg})
+}
 
 func (l *layout) add(cs []cell) {
 	r := &l.rows[len(l.rows)-1]
@@ -186,6 +207,9 @@ func (l *layout) line(cells []cell, keepIndent bool) {
 			lead++
 		}
 		indent = min(lead, min(l.firstRoom, l.restRoom)/2)
+		if indent > 0 {
+			l.indentSeg = cells[0].seg
+		}
 		cells = cells[indent:]
 	}
 	l.newRow(indent)

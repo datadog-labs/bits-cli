@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -448,7 +449,7 @@ func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, c renderContext
 			// TODO: bound very large expanded diffs if rendering cost shows up.
 			limit = 0
 		}
-		body := diffrender.Render(*diff, diffrender.Options{Path: path, Width: c.width, Style: c.sty.Diff, MaxLines: limit, Tail: true})
+		body := diffrender.Render(*diff, diffrender.Options{Path: path, Width: c.width, Style: c.sty.Diff, MaxLines: limit, Tail: true, Wrap: c.disclosure == fullView})
 		if body != "" {
 			lines = append(lines, body)
 		}
@@ -550,9 +551,9 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) 
 
 func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, sty Styles) string {
 	command := strings.TrimRight(p.argument, "\n")
-	rows := highlightShellCommand(command, sty)
-	for i, row := range rows {
-		rows[i] = ansi.Hardwrap(row, width, true)
+	var rows []string
+	for _, line := range highlightShellCommand(command, sty) {
+		rows = append(rows, ansi.Hardwrap(textwrap.Render(line), width, true))
 	}
 
 	detail := ""
@@ -565,8 +566,9 @@ func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, st
 	return strings.Join(rows, "\n")
 }
 
-func highlightShellCommand(command string, sty Styles) []string {
-	return diffrender.HighlightLines("command.sh", command, sty.Diff.SyntaxDark, sty.ToolArgument)
+// highlightShellCommand returns the styled segments of each command line.
+func highlightShellCommand(command string, sty Styles) [][]textwrap.Segment {
+	return diffrender.Highlight("command.sh", command, sty.Diff.SyntaxDark, sty.ToolArgument)
 }
 
 func execResultIsTerminal(status spec.ExecTerminalReason) bool {
@@ -594,13 +596,16 @@ func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []su
 	if c.disclosure == fullView {
 		return renderExecInvocationFull(tool, p, lines, suffix, c)
 	}
-	p.argument = lines[0]
+	p.argument = textwrap.Render(lines[0])
 	header := renderToolHeader(tool, p.summary(tool), suffix, c)
 	if len(lines) == 1 {
 		return header
 	}
 
-	rows := lines[1:]
+	rows := make([]string, 0, len(lines)-1)
+	for _, line := range lines[1:] {
+		rows = append(rows, textwrap.Render(line))
+	}
 	limit := execCommandMaxLines - 1
 	omissionRow := -1
 	if len(rows) > limit && c.disclosure == compactView {
@@ -625,14 +630,14 @@ func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []su
 // header; later lines wrap behind the │ branch, with soft-wrapped
 // continuations indented further to keep them distinct from real newlines.
 // Source indentation is kept on every row.
-func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines []string, suffix []summarySpan, c renderContext) string {
+func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [][]textwrap.Segment, suffix []summarySpan, c renderContext) string {
 	state := statusOf(tool)
 	action := p.actionLabel(state)
 	lead := headerGlyph(state, c) + c.sty.ToolName.Render(action) + c.sty.ToolDetail.Render(" ")
 	leadWidth := statusGlyphWidth + ansi.StringWidth(action) + 1
 
 	meta := append(append(p.execMeta(), suffix...), lifecycleSpans(state)...)
-	out := textwrap.Wrap(append(textwrap.FromANSI(lines[0]), spanSegments(meta, c.sty)...), textwrap.Options{
+	out := textwrap.Wrap(slices.Concat(lines[0], spanSegments(meta, c.sty)), textwrap.Options{
 		Width:       c.width,
 		FirstPrefix: lead,
 		RestPrefix:  strings.Repeat(" ", leadWidth),
@@ -647,7 +652,7 @@ func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [
 		KeepIndent:  true,
 	}
 	for _, row := range lines[1:] {
-		out = append(out, textwrap.Wrap(textwrap.FromANSI(row), branch)...)
+		out = append(out, textwrap.Wrap(row, branch)...)
 	}
 	return strings.Join(truncateRows(out, c.width), "\n")
 }

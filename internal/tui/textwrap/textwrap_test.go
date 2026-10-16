@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -160,7 +161,9 @@ func TestWrapCapsIndentation(t *testing.T) {
 }
 
 func TestWrapReappliesStylesOnEveryRow(t *testing.T) {
-	segs := FromANSI("\x1b[31mred words that wrap\x1b[m plain \x1b[1;34mbold blue tail\x1b[m")
+	red := lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	blue := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("4"))
+	segs := []Segment{Styled("red words that wrap", red), Plain(" plain "), Styled("bold blue tail", blue)}
 	rows := Wrap(segs, Options{Width: 8})
 	if len(rows) < 3 {
 		t.Fatalf("expected several rows, got %q", rows)
@@ -188,28 +191,17 @@ func TestWrapRendersSegmentsWithTheirStyles(t *testing.T) {
 	}
 }
 
-func TestFromANSI(t *testing.T) {
-	segs := FromANSI("\x1b[31mred\x1b[m \x1b[1m\x1b[34mbold blue\x1b[0m\x1b]8;;https://x\x07link\x1b]8;;\x07 \x1b[0;32mgreen\x1b[m")
-	type got struct {
-		text, style string
+func TestWrapStylesKeptIndent(t *testing.T) {
+	rows := Wrap([]Segment{Styled("    alpha beta", tag("A"))}, Options{Width: 10, KeepIndent: true})
+	want := []string{"<A>    </A><A>alpha</A>", "<A>    </A><A>beta</A>"}
+	if !reflect.DeepEqual(rows, want) {
+		t.Fatalf("rows = %q, want %q", rows, want)
 	}
-	var have []got
-	for _, seg := range segs {
-		style := ""
-		if seg.Style != nil {
-			style = string(seg.Style.(sgrStyle))
-		}
-		have = append(have, got{seg.Text, style})
-	}
-	want := []got{
-		{"red", "\x1b[31m"},
-		{" ", ""},
-		{"bold blue", "\x1b[1m\x1b[34m"},
-		{"link ", ""},
-		{"green", "\x1b[0;32m"},
-	}
-	if !reflect.DeepEqual(have, want) {
-		t.Fatalf("FromANSI segments =\n%q\nwant\n%q", have, want)
+}
+
+func TestRender(t *testing.T) {
+	if got, want := Render([]Segment{Styled("a b", tag("A")), Plain(" "), Styled("c", tag("B"))}), "<A>a b</A> <B>c</B>"; got != want {
+		t.Fatalf("Render = %q, want %q", got, want)
 	}
 }
 
@@ -290,7 +282,7 @@ func FuzzWrap(f *testing.F) {
 			t.Skip()
 		}
 		checkProperties(t, []Segment{Plain(text)}, Options{Width: width, KeepIndent: keepIndent, Breakpoints: "/|;-"})
-		checkProperties(t, FromANSI("\x1b[31m"+text+"\x1b[m"), Options{Width: width, FirstPrefix: "✓ ran ", RestPrefix: "  │   ", KeepIndent: keepIndent})
+		checkProperties(t, []Segment{Styled(text, lipgloss.NewStyle().Foreground(lipgloss.Color("1")))}, Options{Width: width, FirstPrefix: "✓ ran ", RestPrefix: "  │   ", KeepIndent: keepIndent})
 		for _, row := range Wrap([]Segment{Plain(text)}, Options{Width: width, KeepIndent: keepIndent, Ellipsis: "…"}) {
 			if w := ansi.StringWidth(row); w > width && width > 1 {
 				t.Fatalf("ellipsis row %q is %d cells, over width %d", row, w, width)

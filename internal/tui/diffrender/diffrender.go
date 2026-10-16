@@ -11,6 +11,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/filediff"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 // hunkSeparator separates rendered hunks.
@@ -30,6 +31,9 @@ type Options struct {
 	MaxLines int
 	// Tail keeps the newest lines.
 	Tail bool
+	// Wrap wraps long lines under the gutter instead of cutting them.
+	// MaxLines still counts source lines.
+	Wrap bool
 }
 
 // Render returns styled diff text without a trailing newline.
@@ -85,11 +89,26 @@ func renderLine(line filediff.DiffLine, digits int, opts Options) string {
 	if marker != " " {
 		separator = " " + marker + " "
 	}
-	gutter := lineStyle.Foreground(opts.Style.Gutter.GetForeground()).Render(diffLeftMargin + gutterNumber(lineNumber, digits) + separator)
-	available := max(1, opts.Width-ansi.StringWidth(gutter))
-	content := ansi.Truncate(HighlightLine(opts.Path, line.Content, opts.Style.SyntaxDark, lineStyle), available, "…")
-	return gutter + content
+	gutterStyle := lineStyle.Foreground(opts.Style.Gutter.GetForeground())
+	gutter := gutterStyle.Render(diffLeftMargin + gutterNumber(lineNumber, digits) + separator)
+	content := highlightLine(opts.Path, line.Content, opts.Style.SyntaxDark, lineStyle)
+	if !opts.Wrap {
+		available := max(1, opts.Width-ansi.StringWidth(gutter))
+		return gutter + ansi.Truncate(textwrap.Render(content), available, "…")
+	}
+	// Continuations repeat the marker without the number, in the line style
+	// so added and deleted backgrounds stay continuous.
+	return strings.Join(textwrap.Wrap(content, textwrap.Options{
+		Width:       opts.Width,
+		FirstPrefix: gutter,
+		RestPrefix:  gutterStyle.Render(diffLeftMargin + strings.Repeat(" ", digits) + separator),
+		Breakpoints: codeBreakpoints,
+		KeepIndent:  true,
+	}), "\n")
 }
+
+// codeBreakpoints are wrap opportunities in source besides whitespace.
+const codeBreakpoints = ",;/"
 
 func gutterNumber(n, digits int) string {
 	if n > 0 {
