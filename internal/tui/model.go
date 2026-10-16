@@ -263,8 +263,8 @@ type Model struct {
 	follow    followControl
 
 	// pendingAccordionToggle is the block a mouse-down landed on inside an
-	// accordion header row. Every left-click also begins a potential
-	// drag-select (see beginSelection), so the toggle stays pending until
+	// accordion zone: any row an expandable block renders, collapsed preview
+	// rows included. Every left-click also begins a potential drag-select (see beginSelection), so the toggle stays pending until
 	// finishSelection sees the gesture through: it fires only if the release
 	// never turned it into a real selection range.
 	pendingAccordionToggle    agent.BlockID

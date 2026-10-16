@@ -9,6 +9,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/filediff"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
@@ -345,7 +346,7 @@ func TestReasoningExpandsToItsThinkingText(t *testing.T) {
 	if !strings.Contains(compact, "▶ reasoning") || strings.Contains(compact, "idea") {
 		t.Fatalf("reasoning did not start collapsed on its header:\n%s", compact)
 	}
-	if _, ok := list.HeaderAt(0); !ok {
+	if _, ok := list.AccordionAt(0); !ok {
 		t.Fatal("reasoning header is not clickable")
 	}
 
@@ -763,7 +764,7 @@ func TestNothingToExpandDrawsNoGutter(t *testing.T) {
 			list.SetHeight(8)
 			list.SetItems([]agent.Block{tc.block})
 
-			if _, ok := list.HeaderAt(0); ok {
+			if _, ok := list.AccordionAt(0); ok {
 				t.Fatal("block with nothing to expand is clickable")
 			}
 			bare := list.renderPresentationItem(list.view[0], renderContext{width: list.width, sty: list.sty, frame: list.frame})
@@ -815,25 +816,115 @@ func TestDocumentAgreesWithVisibleSurfaceAcrossCollapseAndScroll(t *testing.T) {
 	}
 }
 
-func TestHeaderAtOnlyMatchesAVisibleHeaderRow(t *testing.T) {
+// Dark-theme hover fills, as SGR background parameters.
+const (
+	headerHoverFill = "48;2;34;36;43" // accordionHover (#22242B)
+	detailHoverFill = "48;2;28;30;38" // accordionDetailHover (#1C1E26)
+)
+
+func hasHoverFill(line string) bool {
+	return strings.Contains(line, headerHoverFill) || strings.Contains(line, detailHoverFill)
+}
+
+// listWithEditDiff returns a sized list holding one edit_file block whose
+// collapsed view renders a multi-line diff preview below its header.
+func listWithEditDiff() *List {
+	var before, after strings.Builder
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&before, "line-%d\n", i)
+		fmt.Fprintf(&after, "LINE-%d\n", i)
+	}
+	diff, display := filediff.BuildWithDisplay("a/f.go", "b/f.go", before.String(), after.String())
+	block := editorToolBlock("edit_file", display, &filediff.State{
+		Phase:  filediff.PhaseApplied,
+		Change: &filediff.Change{Path: "f.go", Op: filediff.OpEdit, State: filediff.ChangeApplied, Diff: &diff},
+	})
+	block.ID = agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"}
+
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(20)
+	list.SetItems([]agent.Block{block})
+	return list
+}
+
+// TestAccordionZoneIsTheWholeRenderedBlock: whatever a guttered block renders
+// (a lone header, a collapsed preview such as exec_command or edit_file, or
+// the full disclosure) is both its click target and its hover region. From
+// any of its rows, hover paints the header fill on row 0 and the detail fill
+// below, and neither targeting nor painting reaches past its last row.
+func TestAccordionZoneIsTheWholeRenderedBlock(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		list     func() *List
+		expanded bool
+	}{
+		{"collapsed header only", func() *List { return listWithTool(agent.ToolSuccess) }, false},
+		{"expanded detail", func() *List { return listWithTool(agent.ToolSuccess) }, true},
+		{"collapsed preview", listWithEditDiff, false},
+		{"expanded preview", listWithEditDiff, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			list := tc.list()
+			if tc.expanded {
+				list.ToggleDisclosure(list.view[0].id)
+			}
+			list.ScrollToTop()
+			height := list.itemHeight(0)
+			if height >= list.height {
+				t.Fatalf("fixture is %d rows in a %d-row viewport, want room below it", height, list.height)
+			}
+
+			for row := range height {
+				if id, ok := list.AccordionAt(row); !ok || id != list.view[0].id {
+					t.Fatalf("AccordionAt(%d) = %v, %t, want the block", row, id, ok)
+				}
+			}
+			if _, ok := list.AccordionAt(height); ok {
+				t.Fatalf("AccordionAt(%d) matched past the block's last row", height)
+			}
+
+			for _, pointer := range []int{0, height - 1} {
+				list.SetPointerRow(pointer)
+				lines := strings.Split(list.Render(), "\n")
+				for row := range height {
+					want := detailHoverFill
+					if row == 0 {
+						want = headerHoverFill
+					}
+					if !strings.Contains(lines[row], want) {
+						t.Fatalf("pointer on row %d: row %d missing its hover fill %q:\n%s", pointer, row, want, lines[row])
+					}
+				}
+				if hasHoverFill(lines[height]) {
+					t.Fatalf("pointer on row %d: hover leaked past the block into row %d:\n%s", pointer, height, lines[height])
+				}
+			}
+		})
+	}
+}
+
+// TestAccordionZoneSurvivesTheHeaderScrollingOff: the header is not the
+// hit-test anchor, so scrolling it off must keep the rest targeted, and the
+// rows left on screen keep the detail fill rather than taking the header's.
+func TestAccordionZoneSurvivesTheHeaderScrollingOff(t *testing.T) {
 	list := listWithTool(agent.ToolSuccess)
-	list.ToggleDisclosure(list.view[0].id) // give the header detail rows
-	list.ScrollToTop()                     // drop follow so the header starts visible
-	list.SetHeight(2)
-	if id, ok := list.HeaderAt(0); !ok || id != list.view[0].id {
-		t.Fatalf("HeaderAt(0) = %v, %t, want the tool's header", id, ok)
+	list.ToggleDisclosure(list.view[0].id)
+	list.SetHeight(1)
+	list.ScrollBy(1) // scroll past the header; no chevron remains visible
+
+	if id, ok := list.AccordionAt(0); !ok || id != list.view[0].id {
+		t.Fatalf("AccordionAt(0) = %v, %t, want the block even with its header scrolled off", id, ok)
 	}
-	if _, ok := list.HeaderAt(1); ok {
-		t.Fatal("HeaderAt matched a detail row")
-	}
-	if _, ok := list.HeaderAt(2); ok {
-		t.Fatal("HeaderAt matched a row outside the viewport")
+	if _, ok := list.AccordionAt(1); ok {
+		t.Fatal("AccordionAt matched a row outside the viewport")
 	}
 
-	list.SetHeight(1)
-	list.ScrollBy(1)
-	if _, ok := list.HeaderAt(0); ok {
-		t.Fatal("HeaderAt matched after the header scrolled off the top")
+	list.SetPointerRow(0)
+	line := list.Render()
+	if !strings.Contains(line, detailHoverFill) || strings.Contains(line, headerHoverFill) {
+		t.Fatalf("visible detail row not painted with the detail fill alone:\n%s", line)
 	}
 }
 

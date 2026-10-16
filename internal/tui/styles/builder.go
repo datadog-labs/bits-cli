@@ -118,7 +118,8 @@ func build(isDark bool, p palette) Theme {
 			Foreground(lipgloss.Color(p.textSecondary)).
 			Background(lipgloss.Color(p.accordionBackground)).
 			Padding(0, 1),
-		HoverBackground: lipgloss.Color(p.accordionHover),
+		HoverBackground:       lipgloss.Color(p.accordionHover),
+		DetailHoverBackground: lipgloss.Color(p.accordionDetailHover),
 	}
 	selector := Selector{
 		Item:           text.Primary,

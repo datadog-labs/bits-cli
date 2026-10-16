@@ -185,6 +185,11 @@ type Accordion struct {
 	// wrapping it in a lipgloss style, since the line's own foreground colors
 	// must survive the repaint.
 	HoverBackground color.Color
+
+	// DetailHoverBackground paints a block's rows below its header (compact
+	// preview or full disclosure) while any row of it is hovered. Softer than HoverBackground so the header
+	// stays distinct from its content.
+	DetailHoverBackground color.Color
 }
 
 // Selector styles the reusable two-column keyboard selector.
