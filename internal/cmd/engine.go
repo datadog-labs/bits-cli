@@ -15,36 +15,18 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
-// EnvCustomHeaders carries extra request headers as a comma-separated list of
-// name=value pairs, applied to every Assistant API request:
-//
-//	BITS_CUSTOM_HEADERS='x-route-hint=1,x-trace-me=abc'
-//
-// It is deliberately an environment variable rather than a flag: the mechanism
-// is for development and support, and is not part of the command-line contract.
-// See assistant.ParseCustomHeaders for the accepted syntax.
-const EnvCustomHeaders = "BITS_CUSTOM_HEADERS"
-
 // ErrLoginRequired marks an OAuth state that an interactive caller may replace
 // by starting login. Noninteractive callers should surface the wrapped error
 // with guidance to run `bits login`.
 var ErrLoginRequired = errors.New("OAuth login is required")
-
-// ClientOptions selects and configures one authentication path.
-type ClientOptions struct {
-	Mode    auth.Mode
-	Store   auth.CredentialStore
-	APIKey  string
-	AppKey  string
-	APISite string
-}
 
 // newEngine constructs an engine backed by either the explicit fake backend or
 // an authenticated Assistant client. Explicit API-key mode takes precedence
 // over the fake backend so an invalid automation invocation cannot silently
 // become a demo session.
 func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, store auth.CredentialStore) (*agent.Engine, error) {
-	config := agent.Config{ConversationID: opts.ConversationID, Model: opts.Model, InferenceMode: opts.InferenceMode}
+	cfg := opts.Config
+	config := agent.Config{ConversationID: opts.ConversationID, Model: cfg.Model, InferenceMode: cfg.InferenceMode}
 	if workspace != nil {
 		config.ProjectInstructions = env.NewInstructions(workspace.Path())
 		config.ClientSkills = env.NewSkills(workspace.Path(), opts.SkillPaths)
@@ -53,7 +35,7 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 
 	switch opts.AuthMode {
 	case auth.ModeAuto:
-		if os.Getenv("BITS_FAKE_BACKEND") == "1" {
+		if cfg.FakeBackend {
 			backend := fake.New()
 			// The fake also takes a script for --conversation: it becomes the
 			// first turn of a conversation an earlier session left behind.
@@ -72,13 +54,7 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 		return nil, fmt.Errorf("unsupported authentication mode %q", opts.AuthMode)
 	}
 
-	client, err := NewAuthenticatedClient(ctx, ClientOptions{
-		Mode:    opts.AuthMode,
-		Store:   store,
-		APIKey:  os.Getenv("DD_API_KEY"),
-		AppKey:  os.Getenv("DD_APP_KEY"),
-		APISite: opts.Site,
-	})
+	client, err := newClient(ctx, opts, store)
 	if err != nil {
 		if opts.AuthMode == auth.ModeAPIKey {
 			return nil, fmt.Errorf("authenticate with API/app keys: %w", err)
@@ -88,53 +64,43 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 	return agent.New(client, config), nil
 }
 
-// NewAuthenticatedClient constructs exactly the client selected by opts.Mode.
-// Automatic mode is OAuth-only; ambient API/app keys never change principals.
-func NewAuthenticatedClient(ctx context.Context, opts ClientOptions) (*assistant.Client, error) {
-	// Before authenticating: a malformed configuration is then reported as
-	// itself, rather than behind a login prompt, and without a token refresh
-	// having already persisted new credentials for an invocation that cannot run.
-	custom, err := assistant.ParseCustomHeaders(os.Getenv(EnvCustomHeaders))
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", EnvCustomHeaders, err)
-	}
-	client, err := newClientForMode(ctx, opts)
+// newClient constructs exactly the client selected by opts.AuthMode and
+// configured by opts.Config. Automatic mode is OAuth-only; ambient API/app
+// keys never change principals.
+func newClient(ctx context.Context, opts ChatOptions, store auth.CredentialStore) (*assistant.Client, error) {
+	client, err := newClientForMode(ctx, opts, store)
 	if err != nil {
 		return nil, err
 	}
-	client.CustomHeaders = custom
+	client.CustomHeaders = opts.Config.CustomHeaders
+	// Both constructors leave BaseURL as the canonical https://<host>.
+	client.WebHost, _ = auth.WebHostForAssistantHost(strings.TrimPrefix(client.BaseURL, "https://"))
 	return client, nil
 }
 
-func newClientForMode(ctx context.Context, opts ClientOptions) (*assistant.Client, error) {
-	switch opts.Mode {
+func newClientForMode(ctx context.Context, opts ChatOptions, store auth.CredentialStore) (*assistant.Client, error) {
+	cfg := opts.Config
+	switch opts.AuthMode {
 	case auth.ModeAPIKey:
-		if strings.TrimSpace(opts.APISite) == "" {
+		if strings.TrimSpace(opts.Site) == "" {
 			return nil, fmt.Errorf("api-key authentication requires a Datadog site")
 		}
-		normalizedSite, err := auth.NormalizeAPISite(opts.APISite)
+		normalizedSite, err := auth.NormalizeAPISite(opts.Site)
 		if err != nil {
 			return nil, fmt.Errorf("validate API-key Datadog site: %w", err)
 		}
-		return assistant.NewAPIKeyClient(normalizedSite, opts.APIKey, opts.AppKey)
+		return assistant.NewAPIKeyClient(normalizedSite, cfg.APIKey(), cfg.AppKey())
 
 	case auth.ModeAuto:
-		if opts.Store == nil {
+		if store == nil {
 			return nil, fmt.Errorf("OAuth credential store is required")
 		}
-		session, err := opts.Store.Load()
+		session, err := store.Load()
 		if err != nil {
 			return nil, classifyOAuthError(err)
 		}
-		source, err := auth.NewSource(session, opts.Store, nil)
+		source, err := auth.NewSource(session, store, nil)
 		if err != nil {
-			// A site-configuration failure (for example a staging login whose
-			// BITS_STAGING_* variables are missing or no longer match) is
-			// actionable as written, so it surfaces without the login hint; a
-			// caller must not replace it with the production login picker.
-			if errors.Is(err, auth.ErrSiteConfiguration) {
-				return nil, fmt.Errorf("cannot use stored OAuth session; restore the matching site configuration or run `bits login`: %w", err)
-			}
 			// The stored session can also be unusable for structural reasons, so
 			// never advise deleting credentials here.
 			return nil, fmt.Errorf("%w: cannot use stored OAuth session; run `bits login`: %w: %w", ErrLoginRequired, auth.ErrSessionCorrupt, err)
@@ -148,7 +114,7 @@ func newClientForMode(ctx context.Context, opts ClientOptions) (*assistant.Clien
 		return assistant.NewOAuthClient(source.Site(), source)
 
 	default:
-		return nil, fmt.Errorf("unsupported authentication mode %q", opts.Mode)
+		return nil, fmt.Errorf("unsupported authentication mode %q", opts.AuthMode)
 	}
 }
 

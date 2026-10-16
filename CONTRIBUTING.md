@@ -50,25 +50,16 @@ session. Plain `bits` uses OAuth even when those environment variables are set.
 
 ### Staging
 
-Configure the staging login origin and callback domain before signing in:
+Staging is not offered in the login picker and has no built-in OAuth client.
+Sign in with the staging site and its client ID, given by `--client-id` or
+`BITS_CLIENT_ID` (or `BITS_STAGING_CLIENT_ID`):
 
 ```sh
-export BITS_STAGING_SITE=https://login.staging.test
-export BITS_STAGING_DOMAIN=staging.test
-export BITS_STAGING_CLIENT_ID=staging-test-client
-bits login --site "$BITS_STAGING_SITE"
+bits login --site dd.datad0g.com --client-id <staging-client-id>
 ```
 
-Use your environment's actual values. `BITS_STAGING_SITE` and
-`BITS_STAGING_DOMAIN` are required; `BITS_STAGING_CLIENT_ID` supplies an optional
-default that `bits login --client-id` can override. The login origin must use
-HTTPS and belong to the callback domain. API and token requests go to
-`api.<domain>`.
-
-Keep the staging configuration set while using the saved session. If it is
-missing or names a different domain, Bits reports an error. To switch back to
-production, run `bits logout` with the staging configuration still set, unset
-the staging variables, and sign in again.
+The saved session keeps its client ID, so later runs need no extra
+configuration. Run `bits logout` before signing in to production again.
 
 ### Integration tests
 

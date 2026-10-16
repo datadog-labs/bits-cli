@@ -261,10 +261,11 @@ func New(b Backend, config Config) *Engine {
 	return engine
 }
 
-// Site returns the Assistant API site of the active backend. Backends without
-// a web counterpart, such as the demo backend, return an empty string.
-func (e *Engine) Site() string {
-	return e.runtimeStatus.Backend.Site
+// WebHost returns the Datadog web application host of the active backend.
+// Backends without a web counterpart, such as the demo backend, return an
+// empty string.
+func (e *Engine) WebHost() string {
+	return e.runtimeStatus.Backend.WebHost
 }
 
 // SearchEntities forwards autocomplete queries when the backend supports the

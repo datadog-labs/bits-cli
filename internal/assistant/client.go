@@ -57,10 +57,15 @@ type accessTokenRejector interface {
 
 // Client talks to the Bits AI assistant API over HTTP.
 type Client struct {
-	BaseURL     string
-	APIKey      string
-	AppKey      string
+	BaseURL string
+	// WebHost is the Datadog web application host serving BaseURL, used for
+	// links to the web UI; empty when the site has no known web counterpart.
+	WebHost     string
 	TokenSource AccessTokenSource
+	// apiKey and appKey are private so a printed or serialized client never
+	// carries them; NewAPIKeyClient sets them.
+	apiKey string
+	appKey string
 	// HTTPClient handles non-streaming requests (history, conversations,
 	// skills, flags, rename, share, delete). Its Timeout bounds the whole
 	// request. Nil falls back to fallbackHTTPClient.
@@ -77,8 +82,8 @@ type Client struct {
 	// bufio.ErrTooLong) rather than growing unbounded in memory.
 	MaxLineBytes int
 	// CustomHeaders are extra headers added to every request. They are applied
-	// before the headers the client manages, which therefore always win. Use
-	// ParseCustomHeaders to build one.
+	// before the headers the client manages, which therefore always win.
+	// internal/config builds them from BITS_CUSTOM_HEADERS.
 	CustomHeaders http.Header
 	// MaxRetries is the number of extra attempts for idempotent, non-streaming
 	// requests (GET/DELETE/PUT) on transient failures (network errors,
@@ -95,6 +100,7 @@ type Client struct {
 // render. It intentionally cannot carry tokens, API keys, or user identity.
 type BackendStatus struct {
 	Site                string
+	WebHost             string
 	AuthenticationMode  string
 	AuthenticationState string
 	// HasCredentials means a successful request proves these credentials.
@@ -122,6 +128,7 @@ func (c *Client) BackendStatus() BackendStatus {
 	}
 	return BackendStatus{
 		Site:                c.BaseURL,
+		WebHost:             c.WebHost,
 		AuthenticationMode:  mode,
 		AuthenticationState: "configured, not verified",
 		HasCredentials:      true,
@@ -190,8 +197,8 @@ func NewAPIKeyClient(baseURL, apiKey, appKey string) (*Client, error) {
 		return nil, fmt.Errorf("a Datadog API site is required for api-key authentication; pass --site explicitly")
 	}
 	client := newClient(baseURL)
-	client.APIKey = apiKey
-	client.AppKey = appKey
+	client.apiKey = apiKey
+	client.appKey = appKey
 	return client, nil
 }
 
@@ -277,14 +284,14 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 	if err != nil {
 		return nil, err
 	}
-	// Applied first, then the managed set is cleared, so a header that reached
-	// this point unvalidated cannot displace or impersonate a credential.
+	// Applied first so the headers set below win, and the other mode's
+	// credentials are removed, so a header that reached this point unvalidated
+	// cannot displace or add a credential.
 	for name, values := range c.CustomHeaders {
 		for _, value := range values {
 			req.Header.Add(name, value)
 		}
 	}
-	deleteManagedHeaders(req.Header)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Datadog-Bits-Surface", "cli")
 	if c.TokenSource != nil {
@@ -292,10 +299,13 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 		if err != nil {
 			return nil, fmt.Errorf("get OAuth access token: %w", err)
 		}
+		req.Header.Del("DD-API-KEY")
+		req.Header.Del("DD-APPLICATION-KEY")
 		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
-		req.Header.Set("DD-API-KEY", c.APIKey)
-		req.Header.Set("DD-APPLICATION-KEY", c.AppKey)
+		req.Header.Del("Authorization")
+		req.Header.Set("DD-API-KEY", c.apiKey)
+		req.Header.Set("DD-APPLICATION-KEY", c.appKey)
 	}
 	return req, nil
 }

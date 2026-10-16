@@ -5,26 +5,24 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/config"
 	"github.com/datadog-labs/bits-cli/internal/version"
 	"github.com/spf13/cobra"
 )
 
-// ChatOptions carries the user-supplied root command flags resolved before
-// chat starts.
+// ChatOptions carries the user-supplied root command flags and the resolved
+// configuration, both settled before chat starts.
 type ChatOptions struct {
+	Config          *config.Config
 	SkillPaths      []string
 	ConversationID  string
-	Model           string
-	InferenceMode   string
 	AuthMode        auth.Mode
 	Site            string
 	PermissionsMode agent.PermissionsMode
-	NoUpdateCheck   bool
 }
 
 // Execute builds a fresh command tree for args and runs it with ctx, writing
@@ -73,15 +71,13 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 			if err := validateSiteSelection(mode, opts.Site, command.Flags().Changed("site")); err != nil {
 				return err
 			}
+			cfg, err := config.Load(config.Params{})
+			if err != nil {
+				return err
+			}
+			opts.Config = cfg
 			opts.AuthMode = mode
 			opts.PermissionsMode = permissions
-			if model, ok := os.LookupEnv("BITS_ASSISTANT_MODEL"); ok {
-				opts.Model = model
-			}
-			if inferenceMode, ok := os.LookupEnv("BITS_ASSISTANT_INFERENCE_MODE"); ok {
-				opts.InferenceMode = inferenceMode
-			}
-			opts.NoUpdateCheck = os.Getenv("BITS_NO_UPDATE_CHECK") == "1"
 			*invoked = true
 			return runChat(command.Context(), opts, stdout, stderr)
 		},

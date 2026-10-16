@@ -27,13 +27,13 @@ func printLoggedOut(w io.Writer) error {
 func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	checker := update.New()
+	checker := update.New(opts.Config.Dir)
 	workspace, err := openCurrentWorkspace()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = workspace.Close() }()
-	root, err := startupModel(ctx, opts, workspace, checker.Offer(ctx, !opts.NoUpdateCheck))
+	root, err := startupModel(ctx, opts, workspace, checker.Offer(ctx, !opts.Config.NoUpdateCheck))
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func printResumeHint(w io.Writer, conversationID string) error {
 }
 
 func startupModel(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, upgrade *update.Offer) (*tui.Model, error) {
-	return startupModelWithStore(ctx, opts, auth.DefaultStore(), workspace, upgrade)
+	return startupModelWithStore(ctx, opts, auth.NewStore(opts.Config.Dir), workspace, upgrade)
 }
 
 func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace, upgrade *update.Offer) (*tui.Model, error) {
@@ -116,7 +116,7 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 	loginModel := loginui.New(ctx, func(loginCtx context.Context, site string, report func(loginui.BrowserStatus)) error {
 		_, loginErr := auth.Login(loginCtx, auth.LoginOptions{
 			Site:     site,
-			ClientID: "",
+			ClientID: opts.Config.ClientID,
 			Store:    store,
 			OnBrowserOpen: func(url string, openErr error) {
 				report(loginui.BrowserStatus{AuthorizationURL: url, OpenError: openErr})

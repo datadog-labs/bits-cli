@@ -142,7 +142,7 @@ func TestCrossHostRedirectDropsAPIKeyHeadersOnFallbackClient(t *testing.T) {
 	target, headers := captureServer(t)
 	origin := redirectServer(t, target.URL+"/final")
 
-	c := &Client{BaseURL: origin.URL, APIKey: "api", AppKey: "app"}
+	c := &Client{BaseURL: origin.URL, apiKey: "api", appKey: "app"}
 	if _, err := c.UserConversations(context.Background()); err != nil {
 		t.Fatalf("cross-host redirect failed: %v", err)
 	}

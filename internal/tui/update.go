@@ -375,29 +375,26 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) openConversationInBrowser() tea.Cmd {
-	if strings.TrimSpace(m.convID) == "" {
+	id := strings.TrimSpace(m.convID)
+	if id == "" {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Start a conversation before using /web."))
 	}
-	if m.engine == nil {
-		return m.postNotice(notice(chat.NoticeError, nil, "This conversation has no Datadog web site."))
-	}
-	target, err := browser.ConversationURL(m.engine.Site(), m.convID)
-	if err != nil {
-		return m.postNotice(notice(chat.NoticeError, err, "Could not build a web link for this conversation."))
-	}
-	return m.openBrowser(target, "Opened this conversation in your browser")
+	return m.openWebPage("/ask/"+url.PathEscape(id), "this conversation")
 }
 
 func (m *Model) openSettingsInBrowser() tea.Cmd {
-	if m.engine == nil {
-		return m.postNotice(notice(chat.NoticeError, nil, "Assistant settings have no Datadog web site."))
-	}
-	target, err := browser.SettingsURL(m.engine.Site())
-	if err != nil {
-		return m.postNotice(notice(chat.NoticeError, err, "Could not build a web link for Assistant settings."))
-	}
-	return m.openBrowser(target, "Opened Assistant settings in your browser")
+	return m.openWebPage("/ask/settings", "Assistant settings")
 }
+
+// openWebPage opens path on the Datadog web site of the active backend.
+func (m *Model) openWebPage(path, page string) tea.Cmd {
+	if m.engine == nil || m.engine.WebHost() == "" {
+		return m.postNotice(notice(chat.NoticeError, errNoWebSite, "Could not build a web link for %s.", page))
+	}
+	return m.openBrowser("https://"+m.engine.WebHost()+path, "Opened "+page+" in your browser")
+}
+
+var errNoWebSite = errors.New("the Datadog site has no known web application")
 
 func (m *Model) openBrowser(target, success string) tea.Cmd {
 	openURL := m.openURL

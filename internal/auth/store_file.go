@@ -6,22 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/datadog-labs/bits-cli/internal/config"
 )
 
 // The file fallback persists the session as a mode-0600 JSON file. It has no
 // at-rest encryption, so it is only reached through Store on hosts without a
 // usable OS credential manager (Linux with no Secret Service). These helpers
 // operate on an explicit path; Store owns path resolution and backend choice.
-
-func defaultSessionFilePath() (string, error) {
-	dir, err := config.Dir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, sessionFileName), nil
-}
 
 // loadSessionFile reads the credential file at path. When secure is true it
 // refuses a symlinked file. The group/other-readable rejection always applies,

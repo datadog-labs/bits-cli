@@ -1,4 +1,4 @@
-package assistant
+package config
 
 import (
 	"fmt"
@@ -11,10 +11,11 @@ import (
 // whitespace, or newline, so a name can never close a header and open another.
 var headerFieldName = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+.^_` + "`" + `|~-]+$`)
 
-// managedHeaders are set by the client itself. They are rejected rather than
-// overwritten so a request can never present credentials other than the ones
-// the selected authentication mode established, and so an override that would
-// be silently discarded is reported instead.
+// managedHeaders are set by the Assistant client itself (see
+// assistant.Client.newRequest). They are rejected rather than overwritten so a
+// request can never present credentials other than the ones the selected
+// authentication mode established, and so an override that would be silently
+// discarded is reported instead.
 var managedHeaders = map[string]string{
 	"authorization":          "the authentication mode sets this",
 	"dd-api-key":             "the authentication mode sets this",
@@ -28,7 +29,7 @@ var managedHeaders = map[string]string{
 	"host": "the Datadog site determines this",
 }
 
-// ParseCustomHeaders parses a comma-separated name=value list, for example:
+// parseCustomHeaders parses a comma-separated name=value list, for example:
 //
 //	x-route-hint=1
 //	x-route-hint=1,x-trace-me=abc
@@ -37,9 +38,9 @@ var managedHeaders = map[string]string{
 // around a name or value is ignored, and empty entries are skipped so a
 // trailing comma is accepted. It returns nil for an empty list.
 //
-// Errors describe the offending entry without naming a source, so a caller
-// reading the list from somewhere specific should wrap them with it.
-func ParseCustomHeaders(raw string) (http.Header, error) {
+// Errors describe the offending entry without naming a source; Load wraps
+// them with the variable name.
+func parseCustomHeaders(raw string) (http.Header, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
@@ -69,16 +70,6 @@ func ParseCustomHeaders(raw string) (http.Header, error) {
 		return nil, nil
 	}
 	return headers, nil
-}
-
-// deleteManagedHeaders removes every header the client manages. The client
-// sets only the ones its authentication mode uses, so clearing the whole set
-// is what stops a custom Authorization from surviving an API-key request, or a
-// custom DD-API-KEY from surviving an OAuth one.
-func deleteManagedHeaders(headers http.Header) {
-	for name := range managedHeaders {
-		headers.Del(name)
-	}
 }
 
 // validHeaderValue admits the visible ASCII and horizontal whitespace allowed

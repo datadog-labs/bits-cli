@@ -9,7 +9,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
-	"github.com/datadog-labs/bits-cli/internal/site"
+	"github.com/datadog-labs/bits-cli/internal/config"
 )
 
 type observedStore struct {
@@ -50,29 +50,37 @@ func validSession() auth.Session {
 	}
 }
 
-func TestNewAuthenticatedClientAPIKeyBypassesOAuthStore(t *testing.T) {
-	clearStagingEnv(t)
+// apiKeyConfig loads the configuration with the given API-key credentials.
+func apiKeyConfig(t *testing.T, apiKey, appKey string) *config.Config {
+	t.Helper()
+	t.Setenv(config.EnvAPIKey, apiKey)
+	t.Setenv(config.EnvAppKey, appKey)
+	return loadConfig(t, config.Params{})
+}
+
+func TestNewClientAPIKeyBypassesOAuthStore(t *testing.T) {
 	for _, store := range []*observedStore{
 		{session: validSession()},
 		{err: errors.New("keyring unavailable")},
 	} {
-		client, err := NewAuthenticatedClient(context.Background(), ClientOptions{
-			Mode: auth.ModeAPIKey, Store: store, APIKey: "api-key", AppKey: "app-key", APISite: "api.datadoghq.eu",
-		})
+		client, err := newClient(context.Background(), ChatOptions{
+			Config:   apiKeyConfig(t, "api-key", "app-key"),
+			AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.eu",
+		}, store)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if store.loads != 0 || store.saves != 0 || store.deletes != 0 {
 			t.Fatalf("OAuth store operations = load %d, save %d, delete %d", store.loads, store.saves, store.deletes)
 		}
-		if client.TokenSource != nil || client.APIKey != "api-key" || client.AppKey != "app-key" || client.BaseURL != "https://api.datadoghq.eu" {
+		if client.TokenSource != nil || client.BackendStatus().AuthenticationMode != "api-key" || client.BaseURL != "https://api.datadoghq.eu" ||
+			client.WebHost != "app.datadoghq.eu" {
 			t.Fatalf("API-key client = %#v", client)
 		}
 	}
 }
 
-func TestNewAuthenticatedClientAPIKeyRequiresSecretsAndTrustedSite(t *testing.T) {
-	clearStagingEnv(t)
+func TestNewClientAPIKeyRequiresSecretsAndTrustedSite(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		apiKey  string
@@ -88,9 +96,10 @@ func TestNewAuthenticatedClientAPIKeyRequiresSecretsAndTrustedSite(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := &observedStore{session: validSession()}
-			_, err := NewAuthenticatedClient(context.Background(), ClientOptions{
-				Mode: auth.ModeAPIKey, Store: store, APIKey: test.apiKey, AppKey: test.appKey, APISite: test.site,
-			})
+			_, err := newClient(context.Background(), ChatOptions{
+				Config:   apiKeyConfig(t, test.apiKey, test.appKey),
+				AuthMode: auth.ModeAPIKey, Site: test.site,
+			}, store)
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("error = %v, want %q", err, test.wantErr)
 			}
@@ -101,25 +110,24 @@ func TestNewAuthenticatedClientAPIKeyRequiresSecretsAndTrustedSite(t *testing.T)
 	}
 }
 
-func TestNewAuthenticatedClientAutoUsesOAuthAndIgnoresAmbientKeys(t *testing.T) {
-	clearStagingEnv(t)
+func TestNewClientAutoUsesOAuthAndIgnoresAmbientKeys(t *testing.T) {
 	store := &observedStore{session: validSession()}
-	client, err := NewAuthenticatedClient(context.Background(), ClientOptions{
-		Mode: auth.ModeAuto, Store: store, APIKey: "ignored-api", AppKey: "ignored-app", APISite: "api.datadoghq.eu",
-	})
+	client, err := newClient(context.Background(), ChatOptions{
+		Config:   apiKeyConfig(t, "ignored-api", "ignored-app"),
+		AuthMode: auth.ModeAuto, Site: "api.datadoghq.eu",
+	}, store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client.TokenSource == nil || client.APIKey != "" || client.AppKey != "" {
-		t.Fatalf("client auth = token source %v, API key %q, app key %q", client.TokenSource != nil, client.APIKey, client.AppKey)
+	if client.TokenSource == nil || client.BackendStatus().AuthenticationMode != "oauth" {
+		t.Fatalf("client auth = token source %v, mode %q", client.TokenSource != nil, client.BackendStatus().AuthenticationMode)
 	}
 	if client.BaseURL != "https://api.datadoghq.com" {
 		t.Fatalf("BaseURL = %q", client.BaseURL)
 	}
 }
 
-func TestNewAuthenticatedClientClassifiesOnlyReplaceableOAuthFailures(t *testing.T) {
-	clearStagingEnv(t)
+func TestNewClientClassifiesOnlyReplaceableOAuthFailures(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		store         *observedStore
@@ -132,9 +140,9 @@ func TestNewAuthenticatedClientClassifiesOnlyReplaceableOAuthFailures(t *testing
 		{name: "store failure", store: &observedStore{err: errors.New("keyring unavailable")}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := NewAuthenticatedClient(context.Background(), ClientOptions{Mode: auth.ModeAuto, Store: test.store})
+			_, err := newClient(context.Background(), ChatOptions{Config: &config.Config{}, AuthMode: auth.ModeAuto}, test.store)
 			if err == nil {
-				t.Fatal("NewAuthenticatedClient succeeded")
+				t.Fatal("newClient succeeded")
 			}
 			if got := errors.Is(err, ErrLoginRequired); got != test.loginRequired {
 				t.Fatalf("errors.Is(ErrLoginRequired) = %v, want %v: %v", got, test.loginRequired, err)
@@ -149,32 +157,27 @@ func TestNewAuthenticatedClientClassifiesOnlyReplaceableOAuthFailures(t *testing
 	}
 }
 
-func TestNewAuthenticatedClientMarksExpiredUnrefreshableOAuthForLogin(t *testing.T) {
-	clearStagingEnv(t)
+func TestNewClientMarksExpiredUnrefreshableOAuthForLogin(t *testing.T) {
 	session := validSession()
 	session.Expiry = time.Now().Add(-time.Hour)
 	session.RefreshToken = ""
 	store := &observedStore{session: session}
 
-	_, err := NewAuthenticatedClient(context.Background(), ClientOptions{Mode: auth.ModeAuto, Store: store})
+	_, err := newClient(context.Background(), ChatOptions{Config: &config.Config{}, AuthMode: auth.ModeAuto}, store)
 	if err == nil || !errors.Is(err, ErrLoginRequired) || !errors.Is(err, auth.ErrReauthRequired) {
 		t.Fatalf("error = %v, want login-required reauthentication", err)
 	}
 }
 
-func TestNewAuthenticatedClientRejectsInvalidConfiguration(t *testing.T) {
-	for _, opts := range []ClientOptions{
-		{Mode: auth.ModeAuto},
-		{Mode: auth.Mode("future")},
-	} {
-		if _, err := NewAuthenticatedClient(context.Background(), opts); err == nil {
-			t.Fatalf("NewAuthenticatedClient(%+v) succeeded", opts)
+func TestNewClientRejectsInvalidConfiguration(t *testing.T) {
+	for _, mode := range []auth.Mode{auth.ModeAuto, auth.Mode("future")} {
+		if _, err := newClient(context.Background(), ChatOptions{Config: &config.Config{}, AuthMode: mode}, nil); err == nil {
+			t.Fatalf("newClient(%q) succeeded", mode)
 		}
 	}
 }
 
 func TestNewEngineSelectionAndConfiguration(t *testing.T) {
-	clearStagingEnv(t)
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")
@@ -184,6 +187,7 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 		for _, conversation := range []string{id, `say("earlier")`} {
 			store := &observedStore{err: errors.New("must not load")}
 			engine, err := newEngine(context.Background(), ChatOptions{
+				Config:   loadConfig(t, config.Params{}),
 				AuthMode: auth.ModeAuto, ConversationID: conversation,
 			}, nil, store)
 			if err != nil {
@@ -201,6 +205,7 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 
 	t.Run("API key takes precedence over fake", func(t *testing.T) {
 		_, err := newEngine(context.Background(), ChatOptions{
+			Config:   loadConfig(t, config.Params{}),
 			AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com",
 		}, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "DD_API_KEY and DD_APP_KEY") {
@@ -209,68 +214,9 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 	})
 
 	t.Run("unsupported mode cannot select fake", func(t *testing.T) {
-		_, err := newEngine(context.Background(), ChatOptions{AuthMode: auth.Mode("future")}, nil, nil)
+		_, err := newEngine(context.Background(), ChatOptions{Config: loadConfig(t, config.Params{}), AuthMode: auth.Mode("future")}, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "unsupported authentication mode") {
 			t.Fatalf("error = %v", err)
 		}
 	})
-}
-
-// API-key authentication for a configured staging environment targets the
-// canonical API host even when the caller names the login origin; production
-// login hosts stay rejected.
-func TestNewAuthenticatedClientAPIKeyCanonicalizesStagingLoginOrigin(t *testing.T) {
-	clearStagingEnv(t)
-	t.Setenv(site.EnvStagingSite, "https://login.staging.test")
-	t.Setenv(site.EnvStagingDomain, "staging.test")
-	for _, apiSite := range []string{"https://login.staging.test", "https://api.staging.test"} {
-		client, err := NewAuthenticatedClient(context.Background(), ClientOptions{
-			Mode: auth.ModeAPIKey, APIKey: "api-key", AppKey: "app-key", APISite: apiSite,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if client.BaseURL != "https://api.staging.test" {
-			t.Errorf("API-key client for %q targets %q, want the canonical API host", apiSite, client.BaseURL)
-		}
-	}
-	if _, err := NewAuthenticatedClient(context.Background(), ClientOptions{
-		Mode: auth.ModeAPIKey, APIKey: "api-key", AppKey: "app-key", APISite: "app.datadoghq.com",
-	}); err == nil {
-		t.Error("production login host accepted as an API-key site")
-	}
-}
-
-// A stored staging session without staging configuration fails closed: the
-// error is the actionable configuration failure itself, not a login-required
-// or corrupt-session state, and no store mutation or network fallback
-// happens. Callers therefore surface it instead of opening a login picker.
-func TestNewAuthenticatedClientMissingStagingConfigFailsClosed(t *testing.T) {
-	clearStagingEnv(t)
-	session := validSession()
-	session.Site = "https://api.staging.test"
-	session.ClientID = "saved-staging-client"
-	store := &observedStore{session: session}
-
-	_, err := NewAuthenticatedClient(context.Background(), ClientOptions{Mode: auth.ModeAuto, Store: store})
-	if err == nil {
-		t.Fatal("NewAuthenticatedClient succeeded without staging configuration")
-	}
-	if !errors.Is(err, auth.ErrSiteConfiguration) {
-		t.Fatalf("error = %v, want ErrSiteConfiguration", err)
-	}
-	if errors.Is(err, ErrLoginRequired) || errors.Is(err, auth.ErrSessionCorrupt) {
-		t.Fatalf("error = %v, must not be login-required or corrupt-session so callers do not suppress it into a login picker", err)
-	}
-	for _, want := range []string{site.EnvStagingSite, site.EnvStagingDomain, "bits login"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error = %v, want it to name %q", err, want)
-		}
-	}
-	if strings.Contains(err.Error(), "logout") {
-		t.Errorf("error advises deleting the stored credential: %v", err)
-	}
-	if store.loads != 1 || store.saves != 0 || store.deletes != 0 {
-		t.Fatalf("OAuth store operations = load %d, save %d, delete %d", store.loads, store.saves, store.deletes)
-	}
 }

@@ -7,15 +7,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/datadog-labs/bits-cli/internal/site"
+	"github.com/datadog-labs/bits-cli/internal/config"
 	"github.com/datadog-labs/bits-cli/internal/update"
 )
 
-func clearStagingEnv(t *testing.T) {
+// loadConfig resolves the configuration from params and the test's
+// environment, so callers set any environment first.
+func loadConfig(t *testing.T, params config.Params) *config.Config {
 	t.Helper()
-	t.Setenv(site.EnvStagingSite, "")
-	t.Setenv(site.EnvStagingDomain, "")
-	t.Setenv(site.EnvStagingClientID, "")
+	cfg, err := config.Load(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
 
 func executeForTest(t *testing.T, args []string) (stdout, stderr string, err error) {
@@ -69,6 +73,7 @@ func TestCommandUsageErrors(t *testing.T) {
 		{[]string{"run", "--prompt", "x", "--delivery", "adeep", "--permissions", "manual"}, "invalid permissions mode"},
 		{[]string{"run", "--prompt", "x", "--delivery", "adeep", "--reasoning", "normal"}, "invalid inference mode"},
 		{[]string{"run", "--prompt", "x", "--delivery", "adeep", "--image", "/nonexistent/shot.png"}, `could not attach "/nonexistent/shot.png"`},
+		{[]string{"run", "--prompt", "x", "--delivery", "adeep", "--auth", "api-key", "--site", "example.com"}, "Datadog-owned hostname"},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {

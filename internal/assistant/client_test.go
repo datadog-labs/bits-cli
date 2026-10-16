@@ -43,8 +43,8 @@ func testClient(t *testing.T, h http.HandlerFunc) *Client {
 	t.Cleanup(srv.Close)
 	return &Client{
 		BaseURL:      srv.URL,
-		APIKey:       "api",
-		AppKey:       "app",
+		apiKey:       "api",
+		appKey:       "app",
 		HTTPClient:   srv.Client(),
 		StreamClient: srv.Client(),
 	}
@@ -926,4 +926,59 @@ func TestSendDecodeErrorCapsRawLine(t *testing.T) {
 	if len(err.Error()) > maxRawSnippetBytes+512 {
 		t.Fatalf("error length = %d, want the raw quote capped", len(err.Error()))
 	}
+}
+
+func TestRequestCarriesCustomHeaders(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("x-route-hint"); got != "1" {
+			t.Errorf("x-route-hint = %q, want 1", got)
+		}
+		if r.Header.Get("DD-API-KEY") != "api" || r.Header.Get("DD-APPLICATION-KEY") != "app" {
+			t.Error("credentials were displaced by a custom header")
+		}
+		if got := r.Header.Get("X-Datadog-Bits-Surface"); got != "cli" {
+			t.Errorf("surface = %q, want cli", got)
+		}
+		_, _ = fmt.Fprint(w, `{"data":{"id":"u","type":"user","attributes":{}}}`)
+	})
+	c.CustomHeaders = http.Header{"X-Route-Hint": {"1"}}
+	_, _ = c.CurrentUser(context.Background())
+}
+
+// A custom header that bypassed validation still must not displace or add a
+// credential: the client sets its own last and removes the other mode's.
+func TestManagedHeadersWinOverUnvalidatedCustomHeaders(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization = %q, want it absent for api-key auth", got)
+		}
+		if r.Header.Get("DD-API-KEY") != "api" {
+			t.Error("DD-API-KEY was displaced")
+		}
+		_, _ = fmt.Fprint(w, `{"data":{"id":"u","type":"user","attributes":{}}}`)
+	})
+	c.CustomHeaders = http.Header{
+		"Authorization": {"Bearer attacker"},
+		"Dd-Api-Key":    {"attacker"},
+	}
+	_, _ = c.CurrentUser(context.Background())
+}
+
+func TestOAuthRequestDropsCustomAPIKeyHeaders(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer oauth-token" {
+			t.Errorf("Authorization = %q, want the OAuth token", got)
+		}
+		if r.Header.Get("DD-API-KEY") != "" || r.Header.Get("DD-APPLICATION-KEY") != "" {
+			t.Error("an API key header rode along an OAuth request")
+		}
+		_, _ = fmt.Fprint(w, `{"data":{"id":"u","type":"user","attributes":{}}}`)
+	})
+	c.apiKey, c.appKey = "", ""
+	c.TokenSource = staticAccessToken("oauth-token")
+	c.CustomHeaders = http.Header{
+		"Dd-Api-Key":         {"attacker"},
+		"Dd-Application-Key": {"attacker"},
+	}
+	_, _ = c.CurrentUser(context.Background())
 }

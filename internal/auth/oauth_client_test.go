@@ -55,7 +55,6 @@ func TestNewOAuthHTTPClientSurfacesRedirectWithoutFollowing(t *testing.T) {
 
 // NewSource's default client construction must refuse redirects.
 func TestNewSourceDefaultClientRefusesRedirects(t *testing.T) {
-	noStagingEnv(t)
 	source, err := NewSource(expiredSession(), newMemoryStore(expiredSession()), nil)
 	if err != nil {
 		t.Fatalf("NewSource: %v", err)
@@ -135,7 +134,6 @@ func TestLoginExchangeDoesNotFollowTokenRedirect(t *testing.T) {
 // through Source.AccessToken with the same client NewSource installs by
 // default, routed to the fake endpoint through a transport rewrite.
 func TestSourceRefreshDoesNotFollowTokenRedirect(t *testing.T) {
-	noStagingEnv(t)
 	redirect, targetHits := redirectTestPair(t)
 
 	initial := expiredSession()
@@ -173,7 +171,6 @@ func TestSourceRefreshDoesNotFollowTokenRedirect(t *testing.T) {
 // fake endpoint through a transport rewrite on the same client Revoke builds
 // by default.
 func TestLogoutRevokeDoesNotFollowRedirect(t *testing.T) {
-	noStagingEnv(t)
 	redirect, targetHits := redirectTestPair(t)
 
 	client := newOAuthHTTPClient(revokeHTTPTimeout)

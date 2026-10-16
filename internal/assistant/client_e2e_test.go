@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/config"
 )
 
 // These tests hit the real Bits assistant API. They are opt-in: either set
@@ -29,8 +30,12 @@ import (
 
 func requireE2E(t *testing.T) *Client {
 	t.Helper()
+	cfg, err := config.Load(config.Params{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if os.Getenv("BITS_OAUTH_E2E") != "" {
-		store := auth.DefaultStore()
+		store := auth.NewStore(cfg.Dir)
 		session, err := store.Load()
 		if err != nil {
 			t.Fatalf("load OAuth session: %v (run bits login first)", err)
@@ -52,17 +57,12 @@ func requireE2E(t *testing.T) *Client {
 	if e2eSite == "" {
 		t.Fatal("BITS_ASSISTANT_E2E=1 requires BITS_E2E_SITE naming the API site to use")
 	}
-	// Route e2e credentials through the same canonicalization as the CLI so a
-	// configured staging login origin also targets its API host.
+	// Route e2e credentials through the same canonicalization as the CLI.
 	normalizedSite, err := auth.NormalizeAPISite(e2eSite)
 	if err != nil {
 		t.Fatalf("normalize BITS_E2E_SITE %q: %v", e2eSite, err)
 	}
-	client, err := NewAPIKeyClient(
-		normalizedSite,
-		os.Getenv("DD_API_KEY"),
-		os.Getenv("DD_APP_KEY"),
-	)
+	client, err := NewAPIKeyClient(normalizedSite, cfg.APIKey(), cfg.AppKey())
 	if err != nil {
 		t.Fatalf("NewAPIKeyClient: %v (BITS_ASSISTANT_E2E is set but credentials are missing)", err)
 	}

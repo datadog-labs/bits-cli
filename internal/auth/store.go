@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/datadog-labs/bits-cli/internal/config"
 	"github.com/gofrs/flock"
 	"github.com/zalando/go-keyring"
 	"golang.org/x/oauth2"
@@ -218,12 +217,13 @@ func deleteWithRetry(ctx context.Context, store CredentialStore) error {
 	return firstErr
 }
 
-// DefaultStore returns the credential store for this host. The OS keyring is
+// NewStore returns the credential store for this host, keeping its lock and
+// fallback file under the config directory dir. The OS keyring is
 // authoritative whenever it is reachable. The file is a Linux fallback only:
 // while holding the session lock, a file-only session is promoted to the
 // keyring when it returns, and a duplicate file is removed.
-func DefaultStore() Store {
-	return Store{}
+func NewStore(dir string) Store {
+	return Store{dir: dir}
 }
 
 // Store is the single Bits CLI credential store. It persists the active session
@@ -231,11 +231,13 @@ func DefaultStore() Store {
 // Credential Manager) when one is available, and otherwise (Linux hosts with no
 // Secret Service) in a mode-0600 JSON file under the config directory.
 type Store struct {
+	// dir is the config directory holding the default lock and file.
+	dir string
 	// lockPath overrides the cross-process flock path (tests). Empty uses the
 	// default in the user's config directory; the lock holds no credential.
 	lockPath string
 	// filePath overrides the fallback credential file (tests). Empty uses the
-	// default ~/.bits-cli/oauth-session.json.
+	// default oauth-session.json in the config directory.
 	filePath string
 	// available overrides the keyring probe (tests). nil uses the cached
 	// KeyringAvailable result for this process.
@@ -255,7 +257,7 @@ func (s Store) resolveFilePath() (path string, secure bool, err error) {
 	if s.filePath != "" {
 		return s.filePath, false, nil
 	}
-	path, err = defaultSessionFilePath()
+	path, err = s.configPath(sessionFileName)
 	return path, true, err
 }
 
@@ -469,12 +471,12 @@ func keyringDelete() error {
 // the store's backend choice stable and avoids repeated D-Bus round trips.
 var keyringAvailableCached = sync.OnceValue(KeyringAvailable)
 
-func defaultSessionLockPath() (string, error) {
-	dir, err := config.Dir()
-	if err != nil {
-		return "", err
+// configPath returns name inside the store's config directory.
+func (s Store) configPath(name string) (string, error) {
+	if s.dir == "" {
+		return "", errors.New("the credential store has no config directory")
 	}
-	return filepath.Join(dir, sessionLockFileName), nil
+	return filepath.Join(s.dir, name), nil
 }
 
 func (s Store) WithSessionLock(ctx context.Context, fn func() error) error {
@@ -482,7 +484,7 @@ func (s Store) WithSessionLock(ctx context.Context, fn func() error) error {
 	usingDefaultPath := path == ""
 	if usingDefaultPath {
 		var pathErr error
-		path, pathErr = defaultSessionLockPath()
+		path, pathErr = s.configPath(sessionLockFileName)
 		if pathErr != nil {
 			return pathErr
 		}

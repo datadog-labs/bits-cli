@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/datadog-labs/bits-cli/internal/site"
 	"golang.org/x/oauth2"
 )
 
@@ -277,7 +276,6 @@ func TestCallbackRejectsNonLiteralAndMalformedRedirects(t *testing.T) {
 }
 
 func TestLoginRevokesUnpersistedGrant(t *testing.T) {
-	noStagingEnv(t)
 	var revokedToken string
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -318,7 +316,6 @@ func TestLoginRevokesUnpersistedGrant(t *testing.T) {
 }
 
 func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
-	noStagingEnv(t)
 	previous := Session{
 		Site: "https://api.datadoghq.com", ClientID: "client", AccessToken: "old-access",
 		RefreshToken: "old-refresh", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour),
@@ -364,7 +361,6 @@ func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
 }
 
 func TestReplacementLoginDoesNotRevokeSharedRefreshToken(t *testing.T) {
-	noStagingEnv(t)
 	previous := Session{
 		Site: "https://api.datadoghq.com", ClientID: "client", AccessToken: "old-access",
 		RefreshToken: "shared-refresh", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour),
@@ -483,7 +479,6 @@ func TestLogoutClearsCorruptCredential(t *testing.T) {
 }
 
 func TestLogoutRevokesDistinctSessionsFromBothStoreBackends(t *testing.T) {
-	noStagingEnv(t)
 	store := newTestStore(t, true)
 	keyringSession := fileTestSession()
 	keyringSession.AccessToken = "keyring-access"
@@ -535,7 +530,6 @@ func TestLogoutRevokesDistinctSessionsFromBothStoreBackends(t *testing.T) {
 }
 
 func TestRevokeUsesRefreshToken(t *testing.T) {
-	noStagingEnv(t)
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			t.Errorf("ParseForm: %v", err)
@@ -571,7 +565,6 @@ func TestRevokeUsesRefreshToken(t *testing.T) {
 }
 
 func TestRevokeRefreshesExpiredAccessTokenBeforeRevoking(t *testing.T) {
-	noStagingEnv(t)
 	var refreshed, revoked bool
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -618,7 +611,6 @@ func TestRevokeRefreshesExpiredAccessTokenBeforeRevoking(t *testing.T) {
 }
 
 func TestRevokeTreatsInvalidGrantAsAlreadyRevoked(t *testing.T) {
-	noStagingEnv(t)
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v2/oauth2/token" {
 			t.Errorf("revoke should not be reached; path = %q", r.URL.Path)
@@ -646,7 +638,6 @@ func TestRevokeTreatsInvalidGrantAsAlreadyRevoked(t *testing.T) {
 }
 
 func TestRevokeSanitizesAuthorizationServerError(t *testing.T) {
-	noStagingEnv(t)
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -669,7 +660,6 @@ func TestRevokeSanitizesAuthorizationServerError(t *testing.T) {
 }
 
 func TestLogoutDeletesBeforeBestEffortRevocation(t *testing.T) {
-	noStagingEnv(t)
 	session := Session{
 		Site: DefaultSite, ClientID: "client", AccessToken: "access", RefreshToken: "refresh",
 	}
@@ -793,13 +783,9 @@ func TestCallbackRejectsForeignHosts(t *testing.T) {
 	}
 }
 
-// An end-to-end staging login; a sibling callback domain is rejected before
-// any token traffic or store write.
+// An end-to-end staging login with an explicit client; a production callback
+// domain is rejected before any token traffic or store write.
 func TestLoginStagingEnvironment(t *testing.T) {
-	t.Setenv(site.EnvStagingSite, "https://login.staging.test")
-	t.Setenv(site.EnvStagingDomain, "staging.test")
-	t.Setenv(site.EnvStagingClientID, "staging-test-client")
-
 	login := func(callbackDomain string, httpClient *http.Client) (Session, *memoryStore, error) {
 		store := &memoryStore{}
 		openURL := func(raw string) error {
@@ -807,7 +793,7 @@ func TestLoginStagingEnvironment(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if u.Host != "login.staging.test" || u.Path != "/oauth2/v1/authorize" {
+			if u.Host != "dd.datad0g.com" || u.Path != "/oauth2/v1/authorize" {
 				t.Errorf("authorize URL = %s", u)
 			}
 			query := u.Query()
@@ -823,7 +809,8 @@ func TestLoginStagingEnvironment(t *testing.T) {
 			return nil
 		}
 		session, err := Login(context.Background(), LoginOptions{
-			Site:       "https://login.staging.test",
+			Site:       "https://dd.datad0g.com",
+			ClientID:   "staging-test-client",
 			Store:      store,
 			HTTPClient: httpClient,
 			OpenURL:    openURL,
@@ -843,7 +830,7 @@ func TestLoginStagingEnvironment(t *testing.T) {
 
 	httpClient := issuer.Client()
 	httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Host != "api.staging.test" || req.URL.Path != "/api/v2/oauth2/token" {
+		if req.URL.Host != "api.datad0g.com" || req.URL.Path != "/api/v2/oauth2/token" {
 			t.Errorf("token exchange URL = %s", req.URL)
 		}
 		clone := req.Clone(req.Context())
@@ -853,23 +840,23 @@ func TestLoginStagingEnvironment(t *testing.T) {
 		return http.DefaultTransport.RoundTrip(clone)
 	})
 
-	session, store, err := login("staging.test", httpClient)
+	session, store, err := login("datad0g.com", httpClient)
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if session.Site != "https://api.staging.test" || session.ClientID != "staging-test-client" {
+	if session.Site != "https://api.datad0g.com" || session.ClientID != "staging-test-client" {
 		t.Errorf("session = %#v", session)
 	}
-	if store.saves != 1 || store.session.Site != "https://api.staging.test" {
+	if store.saves != 1 || store.session.Site != "https://api.datad0g.com" {
 		t.Errorf("stored session = %#v, saves = %d", store.session, store.saves)
 	}
 
-	// A sibling callback domain is rejected before the token exchange.
+	// A production callback domain is rejected before the token exchange.
 	noNetwork := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Error("token exchange attempted before the callback domain was accepted")
 		return nil, errors.New("no network in test")
 	})}
-	_, store, err = login("evil.staging.test", noNetwork)
+	_, store, err = login("datadoghq.com", noNetwork)
 	if err == nil || !strings.Contains(err.Error(), "different environment") {
 		t.Fatalf("Login error = %v, want a cross-environment callback rejection", err)
 	}

@@ -12,7 +12,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
-	"github.com/datadog-labs/bits-cli/internal/site"
+	"github.com/datadog-labs/bits-cli/internal/config"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -85,13 +85,12 @@ func testWorkspace(t *testing.T) *workspace.Workspace {
 }
 
 func TestStartupExplicitAPIKeyModeDoesNotFallThroughToFakeBackend(t *testing.T) {
-	clearStagingEnv(t)
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")
 	_, err := startupModelWithStore(
 		context.Background(),
-		ChatOptions{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com", PermissionsMode: agent.ModeManual},
+		ChatOptions{Config: loadConfig(t, config.Params{}), AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com", PermissionsMode: agent.ModeManual},
 		stubCredentialStore{session: validOAuthSession()},
 		testWorkspace(t),
 		nil,
@@ -102,11 +101,10 @@ func TestStartupExplicitAPIKeyModeDoesNotFallThroughToFakeBackend(t *testing.T) 
 }
 
 func TestStartupMissingOAuthSelectsInteractiveLogin(t *testing.T) {
-	clearStagingEnv(t)
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	model, err := startupModelWithStore(
 		context.Background(),
-		ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
+		ChatOptions{Config: loadConfig(t, config.Params{}), AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 		stubCredentialStore{err: auth.ErrNoSession},
 		testWorkspace(t),
 		nil,
@@ -121,12 +119,11 @@ func TestStartupMissingOAuthSelectsInteractiveLogin(t *testing.T) {
 }
 
 func TestStartupCredentialStoreFailureDoesNotSelectLogin(t *testing.T) {
-	clearStagingEnv(t)
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	storeErr := errors.New("keyring unavailable")
 	_, err := startupModelWithStore(
 		context.Background(),
-		ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
+		ChatOptions{Config: loadConfig(t, config.Params{}), AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 		stubCredentialStore{err: storeErr},
 		testWorkspace(t),
 		nil,
@@ -136,67 +133,11 @@ func TestStartupCredentialStoreFailureDoesNotSelectLogin(t *testing.T) {
 	}
 }
 
-// A stored staging session whose environment is missing or names a different
-// domain fails startup with the actionable configuration error: the site
-// picker is never entered to hide it, the stored credential is not mutated,
-// and no network fallback runs.
-func TestStartupStagingConfigFailureDoesNotEnterLoginPicker(t *testing.T) {
-	clearStagingEnv(t)
-	t.Setenv("BITS_FAKE_BACKEND", "")
-	workspace := testWorkspace(t)
-	for name, env := range map[string]struct{ site, domain, clientID string }{
-		"missing staging configuration": {site: "", domain: "", clientID: ""},
-		"mismatched staging domain":     {site: "https://login.other.test", domain: "other.test", clientID: "other-client"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Setenv(site.EnvStagingSite, env.site)
-			t.Setenv(site.EnvStagingDomain, env.domain)
-			t.Setenv(site.EnvStagingClientID, env.clientID)
-			stored := validOAuthSession()
-			stored.Site = "https://api.staging.test"
-			stored.ClientID = "saved-staging-client"
-			store := &recordingCredentialStore{session: stored}
-
-			model, err := startupModelWithStore(
-				context.Background(),
-				ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
-				store,
-				workspace,
-				nil,
-			)
-			if err == nil {
-				t.Fatal("startup succeeded with an unusable stored staging session")
-			}
-			if model != nil {
-				t.Fatal("startup returned a model; the login picker would hide the configuration failure")
-			}
-			if errors.Is(err, ErrLoginRequired) {
-				t.Fatalf("startup error = %v, must not be login-required", err)
-			}
-			if !errors.Is(err, auth.ErrSiteConfiguration) {
-				t.Fatalf("startup error = %v, want auth.ErrSiteConfiguration", err)
-			}
-			for _, want := range []string{site.EnvStagingSite, site.EnvStagingDomain} {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("startup error = %v, want it to name %q", err, want)
-				}
-			}
-			if store.loads != 1 || store.saves != 0 || store.deletes != 0 {
-				t.Fatalf("OAuth store operations = load %d, save %d, delete %d", store.loads, store.saves, store.deletes)
-			}
-			if store.session != stored {
-				t.Fatalf("stored session was mutated: %+v", store.session)
-			}
-		})
-	}
-}
-
 func TestStartupStoredOAuthEntersChatWithConversation(t *testing.T) {
-	clearStagingEnv(t)
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	model, err := startupModelWithStore(
 		context.Background(),
-		ChatOptions{AuthMode: auth.ModeAuto, ConversationID: "conversation-1", PermissionsMode: agent.ModeManual},
+		ChatOptions{Config: loadConfig(t, config.Params{}), AuthMode: auth.ModeAuto, ConversationID: "conversation-1", PermissionsMode: agent.ModeManual},
 		stubCredentialStore{session: validOAuthSession()},
 		testWorkspace(t),
 		nil,

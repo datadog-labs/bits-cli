@@ -13,6 +13,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/config"
 	"github.com/datadog-labs/bits-cli/internal/headless"
 	"github.com/datadog-labs/bits-cli/internal/headless/adeep"
 	"github.com/datadog-labs/bits-cli/internal/imageinput"
@@ -26,6 +27,7 @@ import (
 // are denied unless --permissions skip-permissions is given.
 func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 	opts := RunOptions{ChatOptions: ChatOptions{AuthMode: auth.ModeAuto}}
+	var params config.Params
 	var authMode string
 	var permissionsMode string
 	var imagePaths []string
@@ -46,11 +48,10 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 			if !command.Flags().Changed("delivery") {
 				return fmt.Errorf("required flag \"--delivery\" was not set; the first delivery is adeep")
 			}
-			inferenceMode, err := parseInferenceMode(opts.InferenceMode)
+			cfg, err := config.Load(params)
 			if err != nil {
 				return err
 			}
-			opts.InferenceMode = inferenceMode
 			delivery, err := parseDelivery(opts.Delivery)
 			if err != nil {
 				return err
@@ -78,11 +79,12 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 				return err
 			}
 			opts.Context = images
+			opts.Config = cfg
 			opts.AuthMode = mode
 			opts.PermissionsMode = permissions
 			opts.Delivery = delivery
 			*invoked = true
-			return runRunWithStore(command.Context(), opts, auth.DefaultStore(), stdout)
+			return runRunWithStore(command.Context(), opts, auth.NewStore(cfg.Dir), stdout)
 		},
 	}
 	flags := command.Flags()
@@ -90,8 +92,8 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 	flags.StringVar(&opts.Prompt, "prompt", "", "literal prompt for the one assistant turn (required)")
 	flags.StringArrayVar(&imagePaths, "image", nil, "image file attached to the prompt (repeatable)")
 	flags.StringVar(&opts.Delivery, "delivery", "", "delivery streamed on stdout: adeep (required)")
-	flags.StringVar(&opts.Model, "model", "", "backend model ID override (for example, anthropic/claude-sonnet-4-6)")
-	flags.StringVar(&opts.InferenceMode, "reasoning", "", "reasoning mode: fast or deep (feature flagged by the backend)")
+	flags.StringVar(&params.Model, "model", "", "backend model ID override (for example, anthropic/claude-sonnet-4-6)")
+	flags.StringVar(&params.InferenceMode, "reasoning", "", "reasoning mode: fast or deep (feature flagged by the backend)")
 	flags.StringVar(&permissionsMode, "permissions", string(agent.ModeDeny), "permissions mode for gated actions: deny or skip-permissions")
 	flags.StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
 	flags.StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
@@ -145,17 +147,6 @@ type RunOptions struct {
 	Delivery string
 }
 
-func parseInferenceMode(raw string) (string, error) {
-	switch raw {
-	case "":
-		return "", nil
-	case "fast", "deep":
-		return raw, nil
-	default:
-		return "", fmt.Errorf("invalid inference mode %q; expected fast or deep", raw)
-	}
-}
-
 // runRunWithStore executes one noninteractive turn. Missing OAuth fails fast
 // with guidance to run bits login.
 func runRunWithStore(ctx context.Context, opts RunOptions, store auth.CredentialStore, out io.Writer) error {
@@ -186,7 +177,7 @@ func runEngineTurn(ctx context.Context, engine *agent.Engine, input agent.TurnIn
 	default:
 		return fmt.Errorf("unsupported delivery %q", opts.Delivery)
 	}
-	if err := delivery.Start(headless.Start{StartedAt: time.Now(), RequestedModel: opts.Model}); err != nil {
+	if err := delivery.Start(headless.Start{StartedAt: time.Now(), RequestedModel: opts.Config.Model}); err != nil {
 		return err
 	}
 	input.Message = opts.Prompt // no-dd-sa:datadog/go-promptinjection -- opts.Prompt is intentionally sent as the user's message for this one turn; it is never used as a system instruction

@@ -14,6 +14,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/config"
 	"github.com/datadog-labs/bits-cli/internal/imageinput"
 )
 
@@ -86,9 +87,12 @@ func runToolSet(t *testing.T, mode agent.PermissionsMode) *agent.ToolSet {
 	return tools
 }
 
-func runOptions() RunOptions {
+// runOptions loads the configuration from the test's environment, so callers
+// set any environment first.
+func runOptions(t *testing.T) RunOptions {
+	t.Helper()
 	return RunOptions{
-		ChatOptions: ChatOptions{AuthMode: "auto", Model: "test-model", PermissionsMode: agent.ModeSkipPermissions},
+		ChatOptions: ChatOptions{Config: loadConfig(t, config.Params{Model: "test-model"}), AuthMode: "auto", PermissionsMode: agent.ModeSkipPermissions},
 		Prompt:      "what time is it?",
 		Delivery:    "adeep",
 	}
@@ -147,7 +151,7 @@ func TestRunFakeBackendScriptedRounds(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")
-	opts := runOptions()
+	opts := runOptions(t)
 	opts.Prompt = "call(\"list_files\", {\"path\": \".\"})\nsay(\"done\")"
 	var out bytes.Buffer
 
@@ -179,7 +183,7 @@ func TestRunMissingOAuthFailsFastWithLoginHint(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "")
 	var out bytes.Buffer
 
-	err := runRunWithStore(context.Background(), runOptions(), stubCredentialStore{err: auth.ErrNoSession}, &out)
+	err := runRunWithStore(context.Background(), runOptions(t), stubCredentialStore{err: auth.ErrNoSession}, &out)
 	if err == nil {
 		t.Fatal("run succeeded without an OAuth session")
 	}
@@ -210,7 +214,7 @@ func TestRunInvalidServerGateExitsThree(t *testing.T) {
 	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
-	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
+	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(t), &out)
 	if err == nil {
 		t.Fatal("denial completed with exit 0")
 	}
@@ -250,7 +254,7 @@ func TestRunSkipPermissionsApprovesLocalAndServerGates(t *testing.T) {
 	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
-	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
+	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(t), &out)
 	if err != nil {
 		t.Fatalf("skip-permissions run failed: %v", err)
 	}
@@ -283,7 +287,7 @@ func TestRunDenyModeDeniesLocalAndServerGates(t *testing.T) {
 		},
 	}}
 	engine := agent.New(backend, agent.Config{})
-	opts := runOptions()
+	opts := runOptions(t)
 	opts.PermissionsMode = agent.ModeDeny
 	var out bytes.Buffer
 
@@ -320,7 +324,7 @@ func TestRunRuntimeFailureWinsOverDenial(t *testing.T) {
 	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
-	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
+	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(t), &out)
 	if !errors.Is(err, backendErr) {
 		t.Fatalf("error = %v, want the backend failure to win over exit 3", err)
 	}
@@ -346,7 +350,7 @@ func TestRunCancellationIsRuntimeFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runEngineTurn(ctx, engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
+		done <- runEngineTurn(ctx, engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(t), &out)
 	}()
 	<-backend.started
 	cancel()
@@ -386,7 +390,7 @@ func TestRunWriterFailureIsRuntimeFailure(t *testing.T) {
 	}}
 	engine := agent.New(backend, agent.Config{})
 
-	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), failRunWriter{err: writerErr})
+	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(t), failRunWriter{err: writerErr})
 	if !errors.Is(err, writerErr) {
 		t.Fatalf("error = %v, want the writer failure", err)
 	}
@@ -410,7 +414,7 @@ func TestRunExecutesExactlyOneTurn(t *testing.T) {
 	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
 
-	if err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out); err != nil {
+	if err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(t), &out); err != nil {
 		t.Fatal(err)
 	}
 	if backend.calls != 2 {
@@ -425,7 +429,6 @@ func TestRunExecutesExactlyOneTurn(t *testing.T) {
 }
 
 func TestRunCommandAuthenticationFailureIsNotUsageError(t *testing.T) {
-	clearStagingEnv(t)
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")

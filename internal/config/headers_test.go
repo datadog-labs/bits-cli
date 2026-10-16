@@ -1,8 +1,6 @@
-package assistant
+package config
 
 import (
-	"context"
-	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
@@ -35,12 +33,12 @@ func TestParseCustomHeaders(t *testing.T) {
 		{name: "empty value", raw: "x-empty=", want: http.Header{"X-Empty": {""}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ParseCustomHeaders(tc.raw)
+			got, err := parseCustomHeaders(tc.raw)
 			if err != nil {
-				t.Fatalf("ParseCustomHeaders(%q) = %v", tc.raw, err)
+				t.Fatalf("parseCustomHeaders(%q) = %v", tc.raw, err)
 			}
 			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("ParseCustomHeaders(%q) = %v, want %v", tc.raw, got, tc.want)
+				t.Errorf("parseCustomHeaders(%q) = %v, want %v", tc.raw, got, tc.want)
 			}
 		})
 	}
@@ -58,8 +56,8 @@ func TestParseCustomHeadersRejects(t *testing.T) {
 		{"value non-ascii", "x-a=café"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := ParseCustomHeaders(tc.raw); err == nil {
-				t.Errorf("ParseCustomHeaders(%q) = nil error, want a rejection", tc.raw)
+			if _, err := parseCustomHeaders(tc.raw); err == nil {
+				t.Errorf("parseCustomHeaders(%q) = nil error, want a rejection", tc.raw)
 			}
 		})
 	}
@@ -82,44 +80,8 @@ func TestParseCustomHeadersRejectsManagedHeaders(t *testing.T) {
 		"host=backend.example",
 		"Host=backend.example",
 	} {
-		if _, err := ParseCustomHeaders(raw); err == nil {
-			t.Errorf("ParseCustomHeaders(%q) = nil error, want a rejection", raw)
+		if _, err := parseCustomHeaders(raw); err == nil {
+			t.Errorf("parseCustomHeaders(%q) = nil error, want a rejection", raw)
 		}
 	}
-}
-
-func TestRequestCarriesCustomHeaders(t *testing.T) {
-	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("x-route-hint"); got != "1" {
-			t.Errorf("x-route-hint = %q, want 1", got)
-		}
-		if r.Header.Get("DD-API-KEY") != "api" || r.Header.Get("DD-APPLICATION-KEY") != "app" {
-			t.Error("credentials were displaced by a custom header")
-		}
-		if got := r.Header.Get("X-Datadog-Bits-Surface"); got != "cli" {
-			t.Errorf("surface = %q, want cli", got)
-		}
-		_, _ = fmt.Fprint(w, `{"data":{"id":"u","type":"user","attributes":{}}}`)
-	})
-	c.CustomHeaders = http.Header{"X-Route-Hint": {"1"}}
-	_, _ = c.CurrentUser(context.Background())
-}
-
-// A value that bypassed ParseCustomHeaders still must not displace a managed
-// header, since the client sets those last.
-func TestManagedHeadersWinOverUnvalidatedCustomHeaders(t *testing.T) {
-	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "" {
-			t.Errorf("Authorization = %q, want it absent for api-key auth", got)
-		}
-		if r.Header.Get("DD-API-KEY") != "api" {
-			t.Error("DD-API-KEY was displaced")
-		}
-		_, _ = fmt.Fprint(w, `{"data":{"id":"u","type":"user","attributes":{}}}`)
-	})
-	c.CustomHeaders = http.Header{
-		"Authorization": {"Bearer attacker"},
-		"Dd-Api-Key":    {"attacker"},
-	}
-	_, _ = c.CurrentUser(context.Background())
 }

@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/datadog-labs/bits-cli/internal/config"
 	"github.com/datadog-labs/bits-cli/internal/version"
 	"golang.org/x/mod/semver"
 )
@@ -51,21 +50,17 @@ type Offer struct {
 	Postpone, Skip  func() error
 }
 
-// New always returns a checker. It is unavailable when the binary was not
-// installed by a supported backend (a development build, go install), or the
-// executable or config directory cannot be located. The config directory
-// failure surfaces through sign-in anyway.
-func New() *Checker {
+// New always returns a checker keeping its state under the config directory
+// dir. It is unavailable when the binary was not installed by a supported
+// backend (a development build, go install), or the executable cannot be
+// located.
+func New(dir string) *Checker {
 	c := &Checker{}
 	executable, err := os.Executable()
 	if err != nil {
 		return c
 	}
 	b, err := detectBackend(executable)
-	if err != nil {
-		return c
-	}
-	dir, err := config.Dir()
 	if err != nil {
 		return c
 	}

@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -24,8 +26,12 @@ func newLoginCommand(invoked *bool, stderr io.Writer) *cobra.Command {
 		Short: "Sign in to Datadog",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
+			cfg, err := config.Load(config.Params{})
+			if err != nil {
+				return err
+			}
 			*invoked = true
-			return runLogin(command.Context(), opts, stderr)
+			return runLogin(command.Context(), cfg, opts, stderr)
 		},
 	}
 	command.Flags().StringVar(&opts.Site, "site", opts.Site, "Datadog site URL or hostname")
@@ -39,17 +45,21 @@ func newLogoutCommand(invoked *bool, stderr io.Writer) *cobra.Command {
 		Short: "Sign out of Datadog",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
+			cfg, err := config.Load(config.Params{})
+			if err != nil {
+				return err
+			}
 			*invoked = true
-			return runLogout(command.Context(), stderr)
+			return runLogout(command.Context(), cfg, stderr)
 		},
 	}
 }
 
-func runLogin(ctx context.Context, opts LoginOptions, stderr io.Writer) error {
+func runLogin(ctx context.Context, cfg *config.Config, opts LoginOptions, stderr io.Writer) error {
 	session, err := auth.Login(ctx, auth.LoginOptions{
 		Site:     opts.Site,
-		ClientID: opts.ClientID,
-		Store:    auth.DefaultStore(),
+		ClientID: cmp.Or(opts.ClientID, cfg.ClientID),
+		Store:    auth.NewStore(cfg.Dir),
 		Out:      stderr,
 	})
 	if err != nil {
@@ -59,9 +69,9 @@ func runLogin(ctx context.Context, opts LoginOptions, stderr io.Writer) error {
 	return err
 }
 
-func runLogout(ctx context.Context, stderr io.Writer) error {
+func runLogout(ctx context.Context, cfg *config.Config, stderr io.Writer) error {
 	logoutCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	hadSession, revokeErr, err := auth.Logout(logoutCtx, auth.DefaultStore(), nil)
+	hadSession, revokeErr, err := auth.Logout(logoutCtx, auth.NewStore(cfg.Dir), nil)
 	cancel()
 	if err != nil {
 		return err

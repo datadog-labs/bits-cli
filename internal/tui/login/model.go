@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/auth"
-	"github.com/datadog-labs/bits-cli/internal/site"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
@@ -47,7 +46,7 @@ const (
 	phaseComplete
 )
 
-var siteOptions = site.LoginRegions()
+var siteOptions = auth.LoginRegions()
 
 func customOptionIndex() int { return len(siteOptions) }
 
@@ -98,8 +97,9 @@ type Model struct {
 	canceled         bool
 }
 
-// New creates a startup login model. login must persist a successful session
-// before it returns nil.
+// New creates a startup login model. A custom site is validated against the
+// built-in Datadog sites. login must persist a successful session before it
+// returns nil.
 func New(ctx context.Context, login LoginFunc) *Model {
 	if ctx == nil {
 		ctx = context.Background()

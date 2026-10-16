@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/datadog-labs/bits-cli/internal/config"
 )
 
 // TestE2E_OAuthRefresh is opt-in because it consumes and rotates the real
@@ -13,7 +15,11 @@ func TestE2E_OAuthRefresh(t *testing.T) {
 	if os.Getenv("BITS_OAUTH_E2E") == "" {
 		t.Skip("set BITS_OAUTH_E2E=1 after bits login")
 	}
-	store := DefaultStore()
+	cfg, err := config.Load(config.Params{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(cfg.Dir)
 	before, err := store.Load()
 	if err != nil {
 		t.Fatalf("load OAuth session: %v", err)
@@ -22,9 +28,8 @@ func TestE2E_OAuthRefresh(t *testing.T) {
 		t.Fatal("stored OAuth session has no refresh token")
 	}
 	// Validate the session and its site configuration before mutating the
-	// stored credential: a config problem (for example a staging session whose
-	// BITS_STAGING_SITE/BITS_STAGING_DOMAIN is no longer set) must fail here
-	// rather than after a forced-expiry save.
+	// stored credential, so a problem fails here rather than after a
+	// forced-expiry save.
 	if _, err := NewSource(before, store, nil); err != nil {
 		t.Fatalf("stored OAuth session is unusable: %v", err)
 	}

@@ -14,12 +14,12 @@ import (
 // through to StartTurn, Send runs and the test fails with a clear cause instead
 // of nil-panicking on an unset engine.
 type spyBackend struct {
-	t    *testing.T
-	site string
+	t       *testing.T
+	webHost string
 }
 
 func (s *spyBackend) BackendStatus() assistant.BackendStatus {
-	return assistant.BackendStatus{Site: s.site}
+	return assistant.BackendStatus{WebHost: s.webHost}
 }
 
 func (s *spyBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {

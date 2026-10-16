@@ -70,7 +70,7 @@ func Login(ctx context.Context, opts LoginOptions) (Session, error) {
 
 func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, error) {
 	if opts.Store == nil {
-		opts.Store = DefaultStore()
+		return Session{}, errors.New("OAuth credential store is required")
 	}
 	opts.HTTPClient = defaultOAuthClient(opts.HTTPClient, loginHTTPTimeout)
 	if opts.Out == nil {
@@ -375,7 +375,7 @@ func Revoke(ctx context.Context, session Session, httpClient *http.Client) error
 // will observe deletion and cannot resurrect the session.
 func Logout(ctx context.Context, store CredentialStore, httpClient *http.Client) (bool, error, error) {
 	if store == nil {
-		store = DefaultStore()
+		return false, nil, errors.New("OAuth credential store is required")
 	}
 	var sessions []Session
 	var hadSession, localDeleted bool
