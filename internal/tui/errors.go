@@ -62,8 +62,10 @@ func noticeForNonAPIError(op string, err error) chat.Notice {
 	switch {
 	case errors.Is(err, imageinput.ErrTooManyImages):
 		return notice(chat.NoticeWarn, err, "Attach at most %d images to a message.", imageinput.MaxImages)
+	case errors.Is(err, assistant.ErrStreamIdleTimeout):
+		return notice(chat.NoticeWarn, err, "The assistant stopped sending updates. Check your connection and try again.")
 	case errors.Is(err, context.DeadlineExceeded):
-		return notice(chat.NoticeWarn, err, "The assistant took too long to respond. Try again.")
+		return notice(chat.NoticeWarn, err, "This request took too long and was stopped. Please try again.")
 	case isNet:
 		return notice(chat.NoticeError, err, "Can't reach the assistant service. Check your network and Datadog site.")
 	case errors.Is(err, agent.ErrMaxTurns):
@@ -108,7 +110,7 @@ func noticeForAPIError(apiErr *assistant.APIError) chat.Notice {
 	case errors.Is(apiErr, assistant.ErrBadRequest):
 		return badRequestNotice(apiErr)
 	case apiErr.StatusCode == http.StatusGatewayTimeout:
-		return notice(chat.NoticeWarn, apiErr, "The assistant took too long to respond. Try again.")
+		return notice(chat.NoticeWarn, apiErr, "The assistant couldn't finish this request in time. Please try again shortly.")
 	case errors.Is(apiErr, assistant.ErrServer):
 		return notice(chat.NoticeError, apiErr, "The assistant service is having trouble. Try again shortly.")
 	}

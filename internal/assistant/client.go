@@ -31,10 +31,13 @@ const (
 	// server's own non-streaming request timeout (30s).
 	defaultRequestTimeout = 30 * time.Second
 	// defaultStreamIdleTimeout bounds the gap between streamed lines on the
-	// POST. The server pings every 30s while a turn is live, so a turn that
-	// goes quiet for longer than this is treated as wedged. It intentionally
-	// does NOT cap total turn duration: healthy long turns keep streaming.
-	defaultStreamIdleTimeout = 90 * time.Second
+	// POST. The server pings every 30s and reports its own idle 504 after about
+	// five minutes without producer updates, but the client deliberately does
+	// not rely on those keepalives: the watchdog sits above the server's limit
+	// so a server that pings irregularly (or not at all) still gets to report
+	// its own error. The watchdog is a last resort for dead connections. It
+	// intentionally does NOT cap total turn duration.
+	defaultStreamIdleTimeout = 6 * time.Minute
 	// defaultMaxLineBytes caps a single streamed line so a malformed/endless line
 	// can't grow unbounded (the HTTP client sets no body limit). Generous enough
 	// for any legitimate line; overridable via Client.MaxLineBytes.
@@ -466,8 +469,8 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 	conversationID := opts.ConversationID
 
 	// Bound the gap between lines (not the total duration) by cancelling a
-	// derived context when no data arrives for streamIdleTimeout. The server
-	// keepalives every 30s, so an idle window past that means a wedged stream.
+	// derived context when no data arrives for streamIdleTimeout (see
+	// defaultStreamIdleTimeout for why the default outlasts the server's own).
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var idledOut atomic.Bool
@@ -543,13 +546,7 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 			return conversationID, fmt.Errorf("stream line exceeds max size (%d bytes): %w", maxLine, err)
 		}
 		if idledOut.Load() {
-			return conversationID, &APIError{
-				StatusCode: http.StatusGatewayTimeout,
-				Title:      "Stream idle timeout",
-				Detail:     fmt.Sprintf("no data received for %s", idle),
-				Method:     http.MethodPost,
-				Path:       path,
-			}
+			return conversationID, fmt.Errorf("%w: no data received for %s", ErrStreamIdleTimeout, idle)
 		}
 		if e := ctx.Err(); e != nil {
 			return conversationID, e

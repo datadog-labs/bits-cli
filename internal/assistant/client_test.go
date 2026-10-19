@@ -18,7 +18,7 @@ import (
 
 // testClient points a Client at h with the httptest server's client for both
 // the streaming and non-streaming paths. StreamIdleTimeout is left zero so it
-// defaults (90s); idle-specific tests set it explicitly.
+// defaults (6m); idle-specific tests set it explicitly.
 type staticAccessToken string
 
 func (t staticAccessToken) AccessToken(context.Context) (string, error) { return string(t), nil }
@@ -412,12 +412,14 @@ func TestSend_IdleTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an idle-timeout error")
 	}
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusGatewayTimeout {
-		t.Fatalf("expected 504 idle-timeout APIError, got %v", err)
+	if !errors.Is(err, ErrStreamIdleTimeout) {
+		t.Fatalf("expected ErrStreamIdleTimeout, got %v", err)
 	}
-	if !strings.Contains(apiErr.Detail, "no data received") {
-		t.Errorf("Detail = %q, want idle-timeout message", apiErr.Detail)
+	if errors.Is(err, ErrServer) {
+		t.Errorf("local idle timeout must not look like a server error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no data received") {
+		t.Errorf("err = %q, want idle-timeout message", err)
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("idle timeout took too long: %s", elapsed)

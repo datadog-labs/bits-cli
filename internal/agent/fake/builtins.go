@@ -2,7 +2,6 @@ package fake
 
 import (
 	"cmp"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -389,7 +388,7 @@ func failure(kind starlark.Value, msg string) error {
 		case "net":
 			return &net.OpError{Op: "read", Net: "tcp", Err: errors.New(cmp.Or(msg, "connection reset by peer"))}
 		case "timeout":
-			return fmt.Errorf("%s: %w", cmp.Or(msg, "stream idle timeout"), context.DeadlineExceeded)
+			return fmt.Errorf("%w: %s", assistant.ErrStreamIdleTimeout, cmp.Or(msg, "no data received"))
 		}
 	}
 	return nil
