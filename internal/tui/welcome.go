@@ -12,6 +12,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 	"github.com/datadog-labs/bits-cli/internal/update"
 )
 
@@ -74,11 +75,8 @@ func (m *Model) splashPanelBody() string {
 	if facts := m.welcomeFacts(width - welcomeLogoWidth - welcomeGap); facts != "" {
 		return lipgloss.JoinHorizontal(lipgloss.Center, m.welcomeLogo(), strings.Repeat(" ", welcomeGap), facts)
 	}
-	notice := wordwrap(aiNotice, width)
-	for i, line := range notice {
-		notice[i] = m.styles.Text.Secondary.Render(line)
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, m.welcomeLogo(), "", strings.Join(notice, "\n"))
+	notice := textwrap.WrapProseText(width, aiNotice, m.styles.Text.Secondary)
+	return lipgloss.JoinVertical(lipgloss.Left, m.welcomeLogo(), "", notice)
 }
 
 func (m *Model) welcomeFacts(width int) string {
@@ -110,9 +108,7 @@ func (m *Model) welcomeFacts(width int) string {
 		lines = append(lines, m.styles.Text.Secondary.Render(value))
 	}
 	lines = append(lines, "")
-	for _, line := range wordwrap(aiNotice, width) {
-		lines = append(lines, m.styles.Text.Secondary.Render(line))
-	}
+	lines = append(lines, textwrap.WrapProse(width, aiNotice, m.styles.Text.Secondary)...)
 	return strings.Join(lines, "\n")
 }
 

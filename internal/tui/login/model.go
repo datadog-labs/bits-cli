@@ -15,7 +15,9 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/site"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
+	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 const (
@@ -430,7 +432,7 @@ func (m *Model) bodyView(width, _ int) string {
 			ansi.Truncate(m.custom.View(), width, "…"),
 		}
 		if m.loginErr != nil {
-			parts = append(parts, "", feedback.Error.Render(ansi.Hardwrap(m.loginErr.Error(), width, false)))
+			parts = append(parts, "", textwrap.WrapProseText(width, escape.Multiline(m.loginErr.Error()), feedback.Error))
 		}
 		return strings.Join(parts, "\n")
 	case phaseWaiting:
@@ -451,10 +453,10 @@ func (m *Model) bodyView(width, _ int) string {
 	case phaseError:
 		message := "Login did not complete."
 		if m.loginErr != nil {
-			message = m.loginErr.Error()
+			message = escape.Multiline(m.loginErr.Error())
 		}
 		return strings.Join([]string{
-			feedback.Error.Render(ansi.Hardwrap(message, width, false)),
+			textwrap.WrapProseText(width, message, feedback.Error),
 			text.Secondary.Render(strings.TrimPrefix(m.activeSite, "https://")),
 		}, "\n")
 	case phaseComplete:

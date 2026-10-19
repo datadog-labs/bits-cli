@@ -1,7 +1,6 @@
 package diffrender
 
 import (
-	"io"
 	"strings"
 	"sync"
 
@@ -11,6 +10,7 @@ import (
 	chromastyles "github.com/alecthomas/chroma/v2/styles"
 
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 // lexerCache memoizes filename matches.
@@ -36,51 +36,64 @@ func matchLexer(name string) chroma.Lexer {
 	return lexer
 }
 
-// HighlightLine safely styles one source line using the lexer matched by path.
-func HighlightLine(path, text string, dark bool, rowStyle lipgloss.Style) string {
-	return highlight(path, text, dark, rowStyle, false)
-}
-
-// HighlightLines safely styles text as one lexer document, then returns its
-// source rows. Tokenising before splitting preserves multiline lexer state.
-func HighlightLines(path, text string, dark bool, rowStyle lipgloss.Style) []string {
-	rendered := strings.TrimSuffix(highlight(path, text, dark, rowStyle, true), "\n")
-	rows := strings.Split(rendered, "\n")
+// Highlight styles text as one lexer document, so constructs spanning lines
+// such as heredocs keep their state, and returns one segment slice per source
+// line. Text is escaped for the terminal and tabs are expanded, so the result
+// can go straight to textwrap. Strings and comments avoid breaks.
+func Highlight(path, text string, dark bool, base lipgloss.Style) [][]textwrap.Segment {
+	rows := highlight(path, text, dark, base, true)
 	want := strings.Count(text, "\n") + 1
 	if len(rows) > want {
 		rows = rows[:want]
 	}
 	for len(rows) < want {
-		rows = append(rows, "")
+		rows = append(rows, nil)
 	}
 	return rows
 }
 
-func highlight(path, text string, dark bool, rowStyle lipgloss.Style, multiline bool) string {
+// highlightLine styles one source line on its own.
+func highlightLine(path, text string, dark bool, base lipgloss.Style) []textwrap.Segment {
+	return highlight(path, text, dark, base, false)[0]
+}
+
+// highlight returns the styled tokens of text, split into rows at newlines
+// when multiline is set.
+func highlight(path, text string, dark bool, base lipgloss.Style, multiline bool) [][]textwrap.Segment {
 	lexer := matchLexer(path)
 	if lexer == nil {
 		lexer = lexers.Fallback
 	}
+	theme := chromaStyle(dark)
 	iterator, err := lexer.Tokenise(nil, text)
 	if err != nil {
-		return fallbackHighlight(text, rowStyle, multiline)
+		// Unstyled by the theme, but still escaped and split.
+		iterator, theme = chroma.Literator(chroma.Token{Type: chroma.Text, Value: text}), nil
 	}
-	var b strings.Builder
-	if err := formatter(rowStyle, multiline).Format(&b, chromaStyle(dark), iterator); err != nil {
-		return fallbackHighlight(text, rowStyle, multiline)
+	rows := [][]textwrap.Segment{nil}
+	for token := iterator(); token != chroma.EOF; token = iterator() {
+		style := base
+		if theme != nil {
+			if colour := theme.Get(token.Type).Colour; colour.IsSet() {
+				style = base.Foreground(lipgloss.Color(colour.String()))
+			}
+		}
+		avoid := token.Type.InSubCategory(chroma.LiteralString) ||
+			token.Type.InCategory(chroma.Comment) && !token.Type.InSubCategory(chroma.CommentPreproc)
+		values := []string{processValue(token.Value)}
+		if multiline {
+			values = strings.Split(escape.Multiline(token.Value), "\n")
+		}
+		for i, value := range values {
+			if i > 0 {
+				rows = append(rows, nil)
+			}
+			if value != "" {
+				rows[len(rows)-1] = append(rows[len(rows)-1], textwrap.Segment{Text: value, Style: style, AvoidBreak: avoid})
+			}
+		}
 	}
-	return b.String()
-}
-
-func fallbackHighlight(text string, rowStyle lipgloss.Style, multiline bool) string {
-	if !multiline {
-		return rowStyle.Render(processValue(text))
-	}
-	rows := strings.Split(escape.Multiline(text), "\n")
-	for i := range rows {
-		rows[i] = rowStyle.Render(rows[i])
-	}
-	return strings.Join(rows, "\n")
+	return rows
 }
 
 func chromaStyle(dark bool) *chroma.Style {
@@ -88,39 +101,6 @@ func chromaStyle(dark bool) *chroma.Style {
 		return chromastyles.Get("dracula")
 	}
 	return chromastyles.Get("github")
-}
-
-// formatter styles syntax tokens, optionally preserving source line breaks.
-func formatter(rowStyle lipgloss.Style, multiline bool) chroma.Formatter {
-	return chroma.FormatterFunc(func(w io.Writer, style *chroma.Style, iterator chroma.Iterator) error {
-		for token := iterator(); token != chroma.EOF; token = iterator() {
-			entry := style.Get(token.Type)
-			values := []string{processValue(token.Value)}
-			if multiline {
-				values = strings.Split(escape.Multiline(token.Value), "\n")
-			}
-			for i, value := range values {
-				if i > 0 {
-					if _, err := io.WriteString(w, "\n"); err != nil {
-						return err
-					}
-				}
-				if value == "" {
-					continue
-				}
-				if entry.Colour.IsSet() {
-					if _, err := io.WriteString(w, rowStyle.Foreground(lipgloss.Color(entry.Colour.String())).Render(value)); err != nil {
-						return err
-					}
-					continue
-				}
-				if _, err := io.WriteString(w, rowStyle.Render(value)); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
 }
 
 // processValue makes token text safe for one diff row.

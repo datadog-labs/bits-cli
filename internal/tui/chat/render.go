@@ -3,12 +3,11 @@ package chat
 import (
 	"strings"
 
-	"github.com/charmbracelet/x/ansi"
-
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 // itemSpacing describes outer rows owned by a rendered transcript item. The
@@ -72,7 +71,7 @@ func (r *blockRenderer) RenderBlock(it agent.Block, width int, sty Styles, frame
 
 // fallback renders an unsupported block kind.
 func fallback(it agent.Block, width int, sty Styles) string {
-	return sty.Meta.Render(wrap("["+it.Kind.String()+"]", width))
+	return textwrap.WrapProseText(width, "["+it.Kind.String()+"]", sty.Meta)
 }
 
 func (r *blockRenderer) renderText(it agent.Block, width int, sty Styles) string {
@@ -106,7 +105,7 @@ func renderUser(text string, context []assistant.ContextEntity, width int, sty S
 		// Same blank row as the composer between the chips and the prompt.
 		lines = append(lines, "")
 	}
-	for i, ln := range strings.Split(wrap(text, max(1, inner-w)), "\n") {
+	for i, ln := range textwrap.WrapProse(inner-w, text, nil) {
 		if i == 0 {
 			lines = append(lines, sty.Input.Marker.Render(marker)+sty.Input.Text.Render(ln))
 			continue
@@ -168,7 +167,7 @@ func renderWidget(it agent.Block, width int, sty Styles) string {
 	if it.Widget != nil && it.Widget.Title != "" {
 		label = "widget: " + escape.Inline(it.Widget.Title)
 	}
-	return sty.Meta.Render(wrap("["+label+"]", width))
+	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
 }
 
 // renderDashboard summarizes a dashboard.
@@ -177,7 +176,7 @@ func renderDashboard(it agent.Block, width int, sty Styles) string {
 	if it.Dashboard != nil && it.Dashboard.Title != "" {
 		label = "dashboard: " + escape.Inline(it.Dashboard.Title)
 	}
-	return sty.Meta.Render(wrap("["+label+"]", width))
+	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
 }
 
 // renderProgress renders dimmed progress text.
@@ -185,13 +184,5 @@ func renderProgress(it agent.Block, width int, sty Styles) string {
 	if it.Progress == nil {
 		return fallback(it, width, sty)
 	}
-	return sty.Meta.Render(wrap(escape.Multiline(it.Progress.Content), width))
-}
-
-// wrap word-wraps s to width.
-func wrap(s string, width int) string {
-	if width < 1 {
-		width = 1
-	}
-	return ansi.Wordwrap(s, width, "-")
+	return textwrap.WrapProseText(width, escape.Multiline(it.Progress.Content), sty.Meta)
 }

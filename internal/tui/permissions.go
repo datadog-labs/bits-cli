@@ -11,6 +11,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 var permissionModes = [...]agent.PermissionsMode{agent.ModeManual, agent.ModeSkipPermissions}
@@ -155,7 +156,7 @@ func (m *Model) permissionsBody(width, _ int) string {
 
 	var rows []string
 	if m.permissionConfirm {
-		for _, line := range wordwrap(fullAccessConfirmation, width) {
+		for _, line := range textwrap.WrapProse(width, fullAccessConfirmation, nil) {
 			rows = append(rows, row(style.MenuDetail, line))
 		}
 		rows = append(rows, blank, choice("Yes, enable full access", m.permissionCursor == 0), blank, choice("Cancel", m.permissionCursor == 1))
@@ -186,19 +187,15 @@ func (m *Model) permissionOptionRows(label, detail string, width int, selected b
 	if selected {
 		labelStyle, detailStyle, marker = m.styles.Selector.Selected, m.styles.Selector.Selected, "› "
 	}
-	left := labelStyle.Width(permissionLabelWidth)
-	var rows []string
-	for i, part := range wordwrap(detail, width-permissionLabelWidth-2) {
-		if i == 0 {
-			part = left.Render(marker+label) + "  " + detailStyle.Render(part)
-		} else {
-			part = strings.Repeat(" ", permissionLabelWidth+2) + detailStyle.Render(part)
-		}
-		rows = append(rows, part+strings.Repeat(" ", max(0, width-ansi.StringWidth(part))))
+	rows := textwrap.Wrap(textwrap.Options{
+		Width:       width,
+		FirstPrefix: labelStyle.Width(permissionLabelWidth).Render(marker+label) + "  ",
+		RestPrefix:  strings.Repeat(" ", permissionLabelWidth+2),
+		Breakpoints: textwrap.Prose,
+		TrimSpace:   true,
+	}, textwrap.Styled(detail, detailStyle))
+	for i, row := range rows {
+		rows[i] = row + strings.Repeat(" ", max(0, width-ansi.StringWidth(row)))
 	}
 	return rows
-}
-
-func wordwrap(value string, width int) []string {
-	return strings.Split(ansi.Wordwrap(value, max(1, width), ""), "\n")
 }

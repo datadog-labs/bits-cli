@@ -8,12 +8,12 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 	workspacepkg "github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -207,11 +207,13 @@ func (m Model) renderSection(title string, rows []statusRow) string {
 		if strings.HasPrefix(value, "unavailable") || value == "not applicable" || value == "not a Git repository" || value == "collecting…" {
 			style = m.theme.Text.Secondary
 		}
-		wrapped := strings.Split(ansi.Wordwrap(value, max(1, m.bodyWidth-labelWidth), "-"), "\n")
-		lines = append(lines, label+style.Render(wrapped[0]))
-		for _, continuation := range wrapped[1:] {
-			lines = append(lines, strings.Repeat(" ", labelWidth)+style.Render(continuation))
-		}
+		lines = append(lines, textwrap.Wrap(textwrap.Options{
+			Width:       m.bodyWidth,
+			FirstPrefix: label,
+			RestPrefix:  strings.Repeat(" ", labelWidth),
+			Breakpoints: textwrap.Prose,
+			TrimSpace:   true,
+		}, textwrap.Styled(value, style))...)
 	}
 	return strings.Join(lines, "\n")
 }
