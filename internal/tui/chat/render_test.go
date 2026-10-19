@@ -315,7 +315,7 @@ func TestExecCommandPreservesSafeBoundedMultilineInvocation(t *testing.T) {
 
 	plain := ansi.Strip(RenderBlock(block, 32, DefaultStyles(true), 0))
 	want := strings.Join([]string{
-		"✓ ran python3 - <<'PY'",
+		"✓ ran python3 - <<'PY' in .",
 		"  │     import json",
 		"  │ print('long command line th…",
 		"  │ … +4 lines",
