@@ -160,10 +160,10 @@ func TestNoticeForError(t *testing.T) {
 			wantText:  "Rate limited by the assistant. Give it a moment and try again.",
 		},
 		{
-			name:      "gateway timeout is a timeout, not a generic server error",
+			name:      "gateway timeout names the assistant service timeout",
 			err:       &assistant.APIError{StatusCode: 504},
 			wantLevel: chat.NoticeWarn,
-			wantText:  "The assistant took too long to respond. Try again.",
+			wantText:  "The assistant couldn't finish this request in time. Please try again shortly.",
 		},
 		{
 			name:      "generic server error",
@@ -172,10 +172,16 @@ func TestNoticeForError(t *testing.T) {
 			wantText:  "The assistant service is having trouble. Try again shortly.",
 		},
 		{
-			name:      "context deadline is a timeout",
+			name:      "context deadline is distinct from a service timeout",
 			err:       context.DeadlineExceeded,
 			wantLevel: chat.NoticeWarn,
-			wantText:  "The assistant took too long to respond. Try again.",
+			wantText:  "This request took too long and was stopped. Please try again.",
+		},
+		{
+			name:      "stream idle timeout is a local timeout, not a server error",
+			err:       fmt.Errorf("%w: no data received for 6m0s", assistant.ErrStreamIdleTimeout),
+			wantLevel: chat.NoticeWarn,
+			wantText:  "The assistant stopped sending updates. Check your connection and try again.",
 		},
 		{
 			name:      "history unsupported is a warning",

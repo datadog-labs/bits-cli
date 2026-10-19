@@ -538,7 +538,7 @@ func TestScriptErrors(t *testing.T) {
 		},
 		{
 			name: "timeout", script: `say("partial"); fail("timeout")`,
-			wantErr: func(err error) bool { return errors.Is(err, context.DeadlineExceeded) },
+			wantErr: func(err error) bool { return errors.Is(err, assistant.ErrStreamIdleTimeout) },
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

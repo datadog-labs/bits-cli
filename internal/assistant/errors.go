@@ -28,6 +28,10 @@ var (
 	ErrBadRequest   = errors.New("bad request")  // 400/422: malformed request
 )
 
+// ErrStreamIdleTimeout reports that the streamed response went quiet for longer
+// than Client.StreamIdleTimeout. It is raised locally, not by the server.
+var ErrStreamIdleTimeout = errors.New("assistant response stream went idle")
+
 // APIError is a structured error from the assistant API. It is decoded from the
 // JSON:API error envelope ({"errors":[{status,title,detail,code}]}) that the
 // server uses for both regular HTTP error responses (non-streaming routes) and
