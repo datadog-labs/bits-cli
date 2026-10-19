@@ -20,11 +20,11 @@ import (
 // localEnvironment is the model-facing description of the local machine. Its
 // XML encoding is the exact text sent to the assistant.
 type localEnvironment struct {
-	XMLName   xml.Name  `xml:"local_environment"`
-	Workspace string    `xml:"workspace"`
-	Git       *localGit `xml:"git"`
-	Shell     string    `xml:"shell,omitempty"`
-	Platform  string    `xml:"platform"`
+	XMLName  xml.Name  `xml:"local_environment"`
+	CWD      string    `xml:"cwd"`
+	Git      *localGit `xml:"git"`
+	Shell    string    `xml:"shell,omitempty"`
+	Platform string    `xml:"platform"`
 }
 
 type localGit struct {
@@ -45,8 +45,8 @@ func UserContext(ws *workspace.Workspace) func(context.Context) string {
 
 func renderLocalEnvironment(ctx context.Context, ws *workspace.Workspace) string {
 	env := localEnvironment{
-		Workspace: ws.Path(),
-		Platform:  runtime.GOOS + "/" + runtime.GOARCH,
+		CWD:      ws.Path(),
+		Platform: runtime.GOOS + "/" + runtime.GOARCH,
 	}
 	if shell := ws.DefaultShellPath(); shell != "" {
 		env.Shell = filepath.Base(shell)
