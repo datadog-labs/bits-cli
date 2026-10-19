@@ -311,7 +311,8 @@ func (l *layout) nextWord(cells []cell, indent int) ([]cell, int) {
 	for i := range cells[:n] {
 		cells[i].avoid = false
 	}
-	n, width = wordEnd(cells, false)
+	// Rescan the overlong run alone, so the text after it stays protected.
+	n, width = wordEnd(cells[:n], false)
 	return cells[:n], width
 }
 

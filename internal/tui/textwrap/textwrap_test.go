@@ -180,6 +180,7 @@ func TestWrapAvoidBreak(t *testing.T) {
 		{"adjacent text wraps separately", []Segment{Plain("f("), avoid(`"123456"`), Plain(")")}, 8, []string{"f(", `"123456"`, ")"}},
 		{"breakpoints suspended", []Segment{Plain("rg -e "), avoid("'a|b|c'")}, 10, []string{"rg -e", "'a|b|c'"}},
 		{"too long breaks as usual", []Segment{Plain("f("), avoid(`"alpha beta gamma"`)}, 10, []string{`f("alpha`, "beta", `gamma"`}},
+		{"kept after an overlong word", []Segment{Plain("abcdefghijklmnop("), avoid(`"a b"`)}, 10, []string{"abcdefghij", "klmnop(", `"a b"`}},
 		{"plain unaffected", []Segment{Plain(`f("a b c", x)`)}, 8, []string{`f("a b`, `c", x)`}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
