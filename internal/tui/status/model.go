@@ -212,6 +212,7 @@ func (m Model) renderSection(title string, rows []statusRow) string {
 			FirstPrefix: label,
 			RestPrefix:  strings.Repeat(" ", labelWidth),
 			Breakpoints: textwrap.Prose,
+			TrimSpace:   true,
 		}, textwrap.Styled(value, style))...)
 	}
 	return strings.Join(lines, "\n")

@@ -553,7 +553,7 @@ func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, st
 	command := strings.TrimRight(p.argument, "\n")
 	var rows []string
 	for _, line := range highlightShellCommand(command, sty) {
-		rows = append(rows, textwrap.Wrap(textwrap.Options{Width: width, Breakpoints: textwrap.Shell, KeepIndent: true}, line...)...)
+		rows = append(rows, textwrap.Wrap(textwrap.Options{Width: width, RestPrefix: "  ", Breakpoints: textwrap.Shell, KeepIndent: true}, line...)...)
 	}
 
 	detail := ""
@@ -608,7 +608,7 @@ func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []su
 	}
 	limit := execCommandMaxLines - 1
 	omissionRow := -1
-	if len(rows) > limit && c.disclosure == compactView {
+	if len(rows) > limit {
 		omissionRow = min(2, limit-1)
 		rows = middleClamp(rows, limit)
 	}
@@ -634,7 +634,7 @@ func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [
 	state := statusOf(tool)
 	action := p.actionLabel(state)
 	lead := headerGlyph(state, c) + c.sty.ToolName.Render(action) + c.sty.ToolDetail.Render(" ")
-	leadWidth := statusGlyphWidth + ansi.StringWidth(action) + 1
+	leadWidth := ansi.StringWidth(lead)
 
 	meta := append(append(p.execMeta(), suffix...), lifecycleSpans(state)...)
 	out := textwrap.Wrap(textwrap.Options{
@@ -1024,6 +1024,7 @@ func renderInspectionChild(spans, outcome []summarySpan, first bool, width int, 
 		FirstPrefix: sty.ToolDetail.Render(prefix) + actionRendered + sty.ToolDetail.Render(" "),
 		RestPrefix:  sty.ToolDetail.Render(strings.Repeat(" ", indentWidth)),
 		Breakpoints: textwrap.Prose,
+		TrimSpace:   true,
 		Ellipsis:    "…",
 	}, spanSegments(rest, sty)...)
 }
@@ -1043,20 +1044,20 @@ func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, c renderCont
 	header := renderActivityHeader(state, label, "", c)
 	input, err := spec.ParseQuestions(tool.Input)
 	if err != nil {
-		return header + "\n" + c.sty.ToolError.Render(wrap(escape.Multiline(tool.Output), c.width))
+		return header + "\n" + textwrap.WrapProseText(c.width, escape.Multiline(tool.Output), c.sty.ToolError)
 	}
 	var result spec.AskUserQuestionOutput
 	if json.Unmarshal([]byte(tool.Output), &result) == nil && result.Success {
-		return header + "\n" + c.sty.ToolDetail.Render(wrap(escape.Multiline(result.Message), c.width))
+		return header + "\n" + textwrap.WrapProseText(c.width, escape.Multiline(result.Message), c.sty.ToolDetail)
 	}
 	lines := []string{header}
 	for _, question := range input.Questions {
-		lines = append(lines, c.sty.ToolDetail.Render(wrap(escape.Multiline("Q: "+question.Question), c.width)))
+		lines = append(lines, textwrap.WrapProseText(c.width, escape.Multiline("Q: "+question.Question), c.sty.ToolDetail))
 	}
 	if result.Message != "" {
-		lines = append(lines, c.sty.ToolDetail.Render(wrap(escape.Multiline(result.Message), c.width)))
+		lines = append(lines, textwrap.WrapProseText(c.width, escape.Multiline(result.Message), c.sty.ToolDetail))
 	} else if tool.Output != "" {
-		lines = append(lines, c.sty.ToolDetail.Render(wrap(escape.Multiline(tool.Output), c.width)))
+		lines = append(lines, textwrap.WrapProseText(c.width, escape.Multiline(tool.Output), c.sty.ToolDetail))
 	}
 	return strings.Join(lines, "\n")
 }

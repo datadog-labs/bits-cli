@@ -34,15 +34,21 @@ func TestWrap(t *testing.T) {
 			want: []string{"go test ./..."},
 		},
 		{
-			name: "words drop the space at a soft break",
+			name: "words keep the space at a soft break",
 			text: "alpha beta gamma delta",
 			o:    Options{Width: 11},
+			want: []string{"alpha beta ", "gamma delta"},
+		},
+		{
+			name: "TrimSpace drops the space at a soft break",
+			text: "alpha beta gamma delta",
+			o:    Options{Width: 11, TrimSpace: true},
 			want: []string{"alpha beta", "gamma delta"},
 		},
 		{
 			name: "prefixes count toward the width",
 			text: "alpha beta gamma",
-			o:    Options{Width: 12, FirstPrefix: "• run ", RestPrefix: "      "},
+			o:    Options{Width: 12, FirstPrefix: "• run ", RestPrefix: "      ", TrimSpace: true},
 			want: []string{"• run alpha", "      beta", "      gamma"},
 		},
 		{
@@ -54,7 +60,7 @@ func TestWrap(t *testing.T) {
 		{
 			name: "first and rest rooms differ",
 			text: "aa bb cc dd ee",
-			o:    Options{Width: 9, FirstPrefix: "> ", RestPrefix: ">>>>> "},
+			o:    Options{Width: 9, FirstPrefix: "> ", RestPrefix: ">>>>> ", TrimSpace: true},
 			want: []string{"> aa bb", ">>>>> cc", ">>>>> dd", ">>>>> ee"},
 		},
 		{
@@ -66,7 +72,7 @@ func TestWrap(t *testing.T) {
 		{
 			name: "without breakpoints a long token hard-wraps",
 			text: "echo abcdefghijkl",
-			o:    Options{Width: 5},
+			o:    Options{Width: 5, TrimSpace: true},
 			want: []string{"echo", "abcde", "fghij", "kl"},
 		},
 		{
@@ -84,19 +90,19 @@ func TestWrap(t *testing.T) {
 		{
 			name: "without KeepIndent leading spaces are content",
 			text: "  ab cd",
-			o:    Options{Width: 5},
+			o:    Options{Width: 5, TrimSpace: true},
 			want: []string{"  ab", "cd"},
 		},
 		{
 			name: "non-breaking spaces bind words",
 			text: "a b\u00a0c",
-			o:    Options{Width: 3},
+			o:    Options{Width: 3, TrimSpace: true},
 			want: []string{"a", "b\u00a0c"},
 		},
 		{
 			name: "wide graphemes measure two cells",
 			text: "日本語 abc",
-			o:    Options{Width: 4},
+			o:    Options{Width: 4, TrimSpace: true},
 			want: []string{"日本", "語", "abc"},
 		},
 		{
@@ -106,16 +112,40 @@ func TestWrap(t *testing.T) {
 			want: []string{"   "},
 		},
 		{
-			name: "trailing whitespace is dropped",
+			name: "trailing whitespace is trimmed on demand",
 			text: "foo  \nbar   ",
-			o:    Options{Width: 5},
+			o:    Options{Width: 5, TrimSpace: true},
 			want: []string{"foo", "bar"},
 		},
 		{
-			name: "trailing whitespace is kept on demand",
+			name: "trailing whitespace is kept",
 			text: "foo  \nbar   ",
-			o:    Options{Width: 5, KeepTrailingSpace: true},
-			want: []string{"foo  ", "bar  ", " "},
+			o:    Options{Width: 5},
+			want: []string{"foo  ", "bar  "},
+		},
+		{
+			name: "whitespace at a soft break is kept",
+			text: "abc    def   ",
+			o:    Options{Width: 6},
+			want: []string{"abc   ", " def  "},
+		},
+		{
+			name: "whitespace is not left alone before a word that moves on",
+			text: "a" + strings.Repeat(" ", 15) + "bbbbbbbbb\n   aaaaaaaaa bb",
+			o:    Options{Width: 10},
+			want: []string{"a         ", "bbbbbbbbb", "aaaaaaaaa ", "bb"},
+		},
+		{
+			name: "leading whitespace is not left alone with TrimSpace",
+			text: "   aaaaaaaaa bb",
+			o:    Options{Width: 10, TrimSpace: true},
+			want: []string{"aaaaaaaaa", "bb"},
+		},
+		{
+			name: "whitespace never fills a row alone",
+			text: "ab" + strings.Repeat(" ", 25) + "cd\n" + strings.Repeat(" ", 35),
+			o:    Options{Width: 10},
+			want: []string{"ab        ", "       cd", "          "},
 		},
 		{
 			name: "empty text is one empty row",
@@ -160,7 +190,7 @@ func TestWrapEllipsisCutsOverlongWords(t *testing.T) {
 		{"wide grapheme", "界界界 a", 5, []string{"界界…", "a"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := plainRows(Wrap(Options{Width: test.width, Ellipsis: "…"}, Plain(test.text)))
+			got := plainRows(Wrap(Options{Width: test.width, Ellipsis: "…", TrimSpace: true}, Plain(test.text)))
 			if !slices.Equal(got, test.want) {
 				t.Fatalf("rows = %q, want %q", got, test.want)
 			}
@@ -180,12 +210,34 @@ func TestWrapAvoidBreak(t *testing.T) {
 		{"adjacent text wraps separately", []Segment{Plain("f("), avoid(`"123456"`), Plain(")")}, 8, []string{"f(", `"123456"`, ")"}},
 		{"breakpoints suspended", []Segment{Plain("rg -e "), avoid("'a|b|c'")}, 10, []string{"rg -e", "'a|b|c'"}},
 		{"too long breaks as usual", []Segment{Plain("f("), avoid(`"alpha beta gamma"`)}, 10, []string{`f("alpha`, "beta", `gamma"`}},
+		{"glued to adjacent text", []Segment{Plain("echo --x="), avoid(`"a b"`)}, 12, []string{"echo", `--x="a b"`}},
+		{"split from adjacent text if too long", []Segment{Plain("echo --x="), avoid(`"a b"`)}, 8, []string{"echo", "--x=", `"a b"`}},
 		{"kept after an overlong word", []Segment{Plain("abcdefghijklmnop("), avoid(`"a b"`)}, 10, []string{"abcdefghij", "klmnop(", `"a b"`}},
 		{"plain unaffected", []Segment{Plain(`f("a b c", x)`)}, 8, []string{`f("a b`, `c", x)`}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := plainRows(Wrap(Options{Width: test.width, Breakpoints: "|"}, test.segs...))
+			got := plainRows(Wrap(Options{Width: test.width, Breakpoints: "|", TrimSpace: true}, test.segs...))
 			if !slices.Equal(got, test.want) {
+				t.Fatalf("rows = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestWrapAvoidBreakChecksTheRowItLandsOn: a protected run is measured
+// against the row it lands on, whose room may differ from later rows'.
+func TestWrapAvoidBreakChecksTheRowItLandsOn(t *testing.T) {
+	quoted := Segment{Text: `"abcdefg"`, AvoidBreak: true}
+	for _, test := range []struct {
+		name string
+		o    Options
+		want []string
+	}{
+		{"narrower first row", Options{Width: 10, FirstPrefix: "    "}, []string{"    ", `"abcdefg"`}},
+		{"wider first row", Options{Width: 12, RestPrefix: "    "}, []string{`"abcdefg"`}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := plainRows(Wrap(test.o, quoted)); !slices.Equal(got, test.want) {
 				t.Fatalf("rows = %q, want %q", got, test.want)
 			}
 		})
@@ -206,7 +258,7 @@ func TestWrapReappliesStylesOnEveryRow(t *testing.T) {
 	red := lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	blue := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("4"))
 	segs := []Segment{Styled("red words that wrap", red), Plain(" plain "), Styled("bold blue tail", blue)}
-	rows := Wrap(Options{Width: 8}, segs...)
+	rows := Wrap(Options{Width: 8, TrimSpace: true}, segs...)
 	if len(rows) < 3 {
 		t.Fatalf("expected several rows, got %q", rows)
 	}
@@ -227,14 +279,14 @@ func TestWrapRendersSegmentsWithTheirStyles(t *testing.T) {
 	if want := []string{"<A>run</A> <B>ls</B>"}; !reflect.DeepEqual(rows, want) {
 		t.Fatalf("rows = %q, want %q", rows, want)
 	}
-	rows = Wrap(Options{Width: 6, RestPrefix: "  "}, Styled("alpha beta", tag("A")))
+	rows = Wrap(Options{Width: 6, RestPrefix: "  ", TrimSpace: true}, Styled("alpha beta", tag("A")))
 	if want := []string{"<A>alpha</A>", "  <A>beta</A>"}; !reflect.DeepEqual(rows, want) {
 		t.Fatalf("rows = %q, want %q", rows, want)
 	}
 }
 
 func TestWrapStylesKeptIndent(t *testing.T) {
-	rows := Wrap(Options{Width: 10, KeepIndent: true}, Styled("    alpha beta", tag("A")))
+	rows := Wrap(Options{Width: 10, KeepIndent: true, TrimSpace: true}, Styled("    alpha beta", tag("A")))
 	want := []string{"<A>    </A><A>alpha</A>", "<A>    </A><A>beta</A>"}
 	if !reflect.DeepEqual(rows, want) {
 		t.Fatalf("rows = %q, want %q", rows, want)

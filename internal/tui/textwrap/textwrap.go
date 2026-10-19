@@ -7,9 +7,9 @@
 //   - it is at most [Options.Width] cells wide, prefix included. A prefix
 //     leaving no room for text is cut to leave one cell. The only exception
 //     is a single grapheme wider than the room left after the prefix;
-//   - no printable text is lost: only whitespace at a soft row break or at
-//     the end of a line is dropped, unless [Options.KeepTrailingSpace] keeps
-//     the latter or [Options.Ellipsis] asks to cut words wider than a row;
+//   - no text is lost: only whitespace that would fill rows alone is
+//     dropped, unless [Options.TrimSpace] drops it at every soft row break
+//     and line end or [Options.Ellipsis] asks to cut words wider than a row;
 //   - each segment renders with its own style on every row it reaches, so no
 //     row depends on terminal state left by the previous one.
 //
@@ -18,6 +18,7 @@
 package textwrap
 
 import (
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -60,9 +61,9 @@ type Options struct {
 	// that line, capped at half the room, instead of treating them as a
 	// word break. The indent keeps the style of the spaces it stands for.
 	KeepIndent bool
-	// KeepTrailingSpace keeps whitespace ending a source line, wrapping it
-	// like text, where it is content, e.g. in a diff.
-	KeepTrailingSpace bool
+	// TrimSpace drops whitespace at soft row breaks and ending a source line,
+	// for prose where it only separates words. Otherwise it wraps like text.
+	TrimSpace bool
 	// Ellipsis, if set, cuts a word wider than a whole row to one row ending
 	// in Ellipsis instead of breaking it across rows. Use it where a compact
 	// summary matters more than the full text.
@@ -88,7 +89,7 @@ func Wrap(o Options, segs ...Segment) []string {
 		ellipsis:  o.Ellipsis,
 	}
 	for _, line := range splitLines(toCells(segs, o.Breakpoints)) {
-		l.line(line, o.KeepIndent, o.KeepTrailingSpace)
+		l.line(line, o.KeepIndent, !o.TrimSpace)
 	}
 	out := make([]string, len(l.rows))
 	for i, r := range l.rows {
@@ -106,9 +107,14 @@ func Wrap(o Options, segs ...Segment) []string {
 }
 
 // WrapProse word-wraps text to width rows in style, which may be nil, with
-// [Prose] breakpoints.
+// [Prose] breakpoints and [Options.TrimSpace].
 func WrapProse(width int, text string, style Style) []string {
-	return Wrap(Options{Width: width, Breakpoints: Prose}, Segment{Text: text, Style: style})
+	return Wrap(Options{Width: width, Breakpoints: Prose, TrimSpace: true}, Segment{Text: text, Style: style})
+}
+
+// WrapProseText is [WrapProse] with the rows joined by newlines.
+func WrapProseText(width int, text string, style Style) string {
+	return strings.Join(WrapProse(width, text, style), "\n")
 }
 
 // fitPrefix cuts a prefix that leaves no room for text in a row of width.
@@ -184,7 +190,6 @@ func splitLines(cells []cell) [][]cell {
 		if c.kind == cellNewline {
 			lines = append(lines, cells[start:i])
 			start = i + 1
-			continue
 		}
 	}
 	return append(lines, cells[start:])
@@ -229,7 +234,7 @@ func (l *layout) add(cs []cell) {
 	}
 }
 
-func (l *layout) line(cells []cell, keepIndent, keepTrailing bool) {
+func (l *layout) line(cells []cell, keepIndent, keepSpace bool) {
 	indent := 0
 	if keepIndent {
 		indent = min(leadingSpaces(cells), min(l.firstRoom, l.restRoom)/2)
@@ -241,7 +246,8 @@ func (l *layout) line(cells []cell, keepIndent, keepTrailing bool) {
 	l.newRow(indent)
 
 	// Leading whitespace is content until the line's first word lands; after
-	// that, whitespace before a word is dropped if the word wraps.
+	// that, whitespace before a word is kept, unless the word wraps and
+	// keepSpace is unset.
 	atLineStart := true
 	var pending []cell
 	pendingWidth := 0
@@ -262,11 +268,21 @@ func (l *layout) line(cells []cell, keepIndent, keepTrailing bool) {
 			l.add(pending)
 			l.add(word)
 		} else {
-			if atLineStart {
-				l.hardAdd(pending, indent) // leading whitespace beyond the indent cap
+			if atLineStart || keepSpace {
+				l.addSpace(pending, indent, true)
 			}
-			if l.rows[len(l.rows)-1].width > 0 {
+			// Dropped whitespace still breaks the row; kept whitespace may
+			// leave room for the word after it.
+			r := &l.rows[len(l.rows)-1]
+			breakRow := r.width > 0 && (!keepSpace || !l.fits(wordWidth))
+			if breakRow && onlySpace(r.cells) {
+				// Whitespace alone on a row shows nothing: the word replaces it.
+				r.cells, r.width, breakRow = r.cells[:0], 0, false
+			}
+			if breakRow {
 				l.newRow(indent)
+			} else if !l.fits(wordWidth) && wordWidth <= l.restRoom-indent {
+				l.newRow(indent) // an empty first row narrower than the rest
 			}
 
 			if l.ellipsis != "" && wordWidth > l.room() {
@@ -279,10 +295,33 @@ func (l *layout) line(cells []cell, keepIndent, keepTrailing bool) {
 		pending, pendingWidth, atLineStart = nil, 0, false
 	}
 
-	if atLineStart || keepTrailing {
+	if atLineStart || keepSpace {
 		// A line of only whitespace keeps it, as far as it fits.
-		l.hardAdd(pending, indent)
+		l.addSpace(pending, indent, false)
 	}
+}
+
+// addSpace adds whitespace like hardAdd, but drops the rows it would fill
+// alone, which show nothing: only the last one is kept, when a word follows
+// to share it.
+func (l *layout) addSpace(cells []cell, indent int, wordFollows bool) {
+	first := len(l.rows)
+	l.hardAdd(cells, indent)
+	last := len(l.rows)
+	if wordFollows && last > first {
+		last--
+	}
+	l.rows = slices.Delete(l.rows, first, last)
+}
+
+// onlySpace reports whether cells hold whitespace alone.
+func onlySpace(cells []cell) bool {
+	for _, c := range cells {
+		if c.kind != cellSpace {
+			return false
+		}
+	}
+	return true
 }
 
 // leadingSpaces counts the plain spaces starting cells.
@@ -300,11 +339,22 @@ func (l *layout) fits(width int) bool {
 }
 
 // nextWord returns the word starting cells and its width. AvoidBreak text
-// is a word of its own, unless it is too long for any row: then it breaks
-// like plain text.
+// is a word of its own, unless it is too long for any row it can land on:
+// the current row while empty, or a later one. Then it breaks like plain
+// text.
 func (l *layout) nextWord(cells []cell, indent int) ([]cell, int) {
-	n, width := wordEnd(cells, true)
-	if width <= max(1, l.restRoom-indent) {
+	limit := l.restRoom - indent
+	if l.rows[len(l.rows)-1].width == 0 {
+		limit = max(limit, l.room())
+	}
+	limit = max(1, limit)
+	// Text touching an AvoidBreak run stays with it if the whole fits, so a
+	// shell word like --x="a b" does not read as two.
+	if n, width := wordEnd(cells, true, false); width <= limit {
+		return cells[:n], width
+	}
+	n, width := wordEnd(cells, true, true)
+	if width <= limit {
 		return cells[:n], width
 	}
 
@@ -312,19 +362,20 @@ func (l *layout) nextWord(cells []cell, indent int) ([]cell, int) {
 		cells[i].avoid = false
 	}
 	// Rescan the overlong run alone, so the text after it stays protected.
-	n, width = wordEnd(cells[:n], false)
+	n, width = wordEnd(cells[:n], false, false)
 	return cells[:n], width
 }
 
 // wordEnd returns the length and width of the word starting cells: text up
 // to whitespace, or through the first breakpoint. With avoid, AvoidBreak
-// runs are words of their own, whitespace and breakpoints included.
-func wordEnd(cells []cell, avoid bool) (n, width int) {
+// runs hold their whitespace and breakpoints; with split too, they are words
+// of their own.
+func wordEnd(cells []cell, avoid, split bool) (n, width int) {
 	for ; n < len(cells); n++ {
 		c := cells[n]
 		held := avoid && c.avoid
 
-		if avoid && n > 0 && c.avoid != cells[n-1].avoid {
+		if avoid && split && n > 0 && c.avoid != cells[n-1].avoid {
 			break // an AvoidBreak run starts or ends
 		}
 		if c.kind == cellSpace && !held {

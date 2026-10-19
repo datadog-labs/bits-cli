@@ -75,11 +75,8 @@ func (m *Model) splashPanelBody() string {
 	if facts := m.welcomeFacts(width - welcomeLogoWidth - welcomeGap); facts != "" {
 		return lipgloss.JoinHorizontal(lipgloss.Center, m.welcomeLogo(), strings.Repeat(" ", welcomeGap), facts)
 	}
-	notice := textwrap.WrapProse(width, aiNotice, nil)
-	for i, line := range notice {
-		notice[i] = m.styles.Text.Secondary.Render(line)
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, m.welcomeLogo(), "", strings.Join(notice, "\n"))
+	notice := textwrap.WrapProseText(width, aiNotice, m.styles.Text.Secondary)
+	return lipgloss.JoinVertical(lipgloss.Left, m.welcomeLogo(), "", notice)
 }
 
 func (m *Model) welcomeFacts(width int) string {
@@ -111,9 +108,7 @@ func (m *Model) welcomeFacts(width int) string {
 		lines = append(lines, m.styles.Text.Secondary.Render(value))
 	}
 	lines = append(lines, "")
-	for _, line := range textwrap.WrapProse(width, aiNotice, nil) {
-		lines = append(lines, m.styles.Text.Secondary.Render(line))
-	}
+	lines = append(lines, textwrap.WrapProse(width, aiNotice, m.styles.Text.Secondary)...)
 	return strings.Join(lines, "\n")
 }
 

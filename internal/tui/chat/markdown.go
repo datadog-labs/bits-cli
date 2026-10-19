@@ -20,6 +20,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
+	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
 // Streaming keeps settled top-level blocks rendered and reparses only the tail.
@@ -182,14 +183,14 @@ func (r *markdownRenderer) Render(src string, width int, style ansi.StyleConfig)
 		r.prefix = markdownPrefix{}
 	}
 	if r.term == nil {
-		return wrap(escape.Multiline(src), width)
+		return textwrap.WrapProseText(width, escape.Multiline(src), nil)
 	}
 	out, err := r.renderStreamed(src)
 	if err != nil {
 		r.term = nil
 		r.ready = false
 		r.prefix = markdownPrefix{}
-		return wrap(escape.Multiline(src), width)
+		return textwrap.WrapProseText(width, escape.Multiline(src), nil)
 	}
 	return strings.Trim(out, "\n")
 }

@@ -192,6 +192,7 @@ func (m *Model) permissionOptionRows(label, detail string, width int, selected b
 		FirstPrefix: labelStyle.Width(permissionLabelWidth).Render(marker+label) + "  ",
 		RestPrefix:  strings.Repeat(" ", permissionLabelWidth+2),
 		Breakpoints: textwrap.Prose,
+		TrimSpace:   true,
 	}, textwrap.Styled(detail, detailStyle))
 	for i, row := range rows {
 		rows[i] = row + strings.Repeat(" ", max(0, width-ansi.StringWidth(row)))

@@ -299,6 +299,7 @@ func (q *Questionnaire) rows(width int) ([]questionRow, int) {
 			FirstPrefix: marker,
 			RestPrefix:  q.styles.Selector.Marker,
 			Breakpoints: textwrap.Prose,
+			TrimSpace:   true,
 		}, textwrap.Styled(escape.Multiline(text), style)) {
 			rows = append(rows, questionRow{text: row, choice: choice, page: page})
 		}

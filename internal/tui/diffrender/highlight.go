@@ -78,7 +78,8 @@ func highlight(path, text string, dark bool, base lipgloss.Style, multiline bool
 				style = base.Foreground(lipgloss.Color(colour.String()))
 			}
 		}
-		avoid := token.Type.InSubCategory(chroma.LiteralString) || token.Type.InCategory(chroma.Comment)
+		avoid := token.Type.InSubCategory(chroma.LiteralString) ||
+			token.Type.InCategory(chroma.Comment) && !token.Type.InSubCategory(chroma.CommentPreproc)
 		values := []string{processValue(token.Value)}
 		if multiline {
 			values = strings.Split(escape.Multiline(token.Value), "\n")

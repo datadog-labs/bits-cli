@@ -71,7 +71,7 @@ func (r *blockRenderer) RenderBlock(it agent.Block, width int, sty Styles, frame
 
 // fallback renders an unsupported block kind.
 func fallback(it agent.Block, width int, sty Styles) string {
-	return sty.Meta.Render(wrap("["+it.Kind.String()+"]", width))
+	return textwrap.WrapProseText(width, "["+it.Kind.String()+"]", sty.Meta)
 }
 
 func (r *blockRenderer) renderText(it agent.Block, width int, sty Styles) string {
@@ -167,7 +167,7 @@ func renderWidget(it agent.Block, width int, sty Styles) string {
 	if it.Widget != nil && it.Widget.Title != "" {
 		label = "widget: " + escape.Inline(it.Widget.Title)
 	}
-	return sty.Meta.Render(wrap("["+label+"]", width))
+	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
 }
 
 // renderDashboard summarizes a dashboard.
@@ -176,7 +176,7 @@ func renderDashboard(it agent.Block, width int, sty Styles) string {
 	if it.Dashboard != nil && it.Dashboard.Title != "" {
 		label = "dashboard: " + escape.Inline(it.Dashboard.Title)
 	}
-	return sty.Meta.Render(wrap("["+label+"]", width))
+	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
 }
 
 // renderProgress renders dimmed progress text.
@@ -184,10 +184,5 @@ func renderProgress(it agent.Block, width int, sty Styles) string {
 	if it.Progress == nil {
 		return fallback(it, width, sty)
 	}
-	return sty.Meta.Render(wrap(escape.Multiline(it.Progress.Content), width))
-}
-
-// wrap word-wraps plain text s to width.
-func wrap(s string, width int) string {
-	return strings.Join(textwrap.WrapProse(width, s, nil), "\n")
+	return textwrap.WrapProseText(width, escape.Multiline(it.Progress.Content), sty.Meta)
 }
