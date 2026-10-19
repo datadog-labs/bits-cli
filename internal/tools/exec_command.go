@@ -35,17 +35,17 @@ func newExecCommandTool(turnCWD string, runner execRunner) agent.Tool {
 					},
 					"shell": map[string]any{
 						"type":        "string",
-						"description": "Shell binary to launch (bash, zsh, or sh). Defaults to the user's default shell.",
+						"description": "Shell binary to launch (bash, zsh, or sh). Defaults to <shell>.",
 					},
 					"workdir": map[string]any{
 						"type":        "string",
-						"description": "Working directory. Defaults to the turn working directory; relative paths resolve from it.",
+						"description": "Working directory. Defaults to <cwd>; relative paths resolve from it.",
 					},
 					"timeout_ms": map[string]any{
 						"type":        "integer",
 						"minimum":     1,
 						"maximum":     spec.ExecMaxTimeoutMS,
-						"description": "Maximum command runtime. Defaults to 10000 ms; maximum 600000 ms.",
+						"description": "Maximum command runtime.",
 					},
 				},
 				"required":             []string{"cmd"},

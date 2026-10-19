@@ -365,7 +365,7 @@ func TestRenderLocalEnvironment(t *testing.T) {
 		shell = "\n  <shell>" + filepath.Base(path) + "</shell>"
 	}
 	want := `<local_environment>
-  <workspace>` + dir + `</workspace>
+  <cwd>` + dir + `</cwd>
   <git>
     <root>` + dir + `</root>
     <branch>feature/&lt;x&gt;</branch>
