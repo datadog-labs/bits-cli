@@ -140,7 +140,7 @@ func (e *Engine) installConversation(conversation *Conversation) {
 }
 
 // Snapshot returns a copy of the current transcript. Call it only while the
-// engine is idle or after synchronizing with the operation's result channel.
+// engine is idle, such as after the operation's event channel closes.
 func (e *Engine) Snapshot() []Block     { return e.snapshot().Blocks }
 func (e *Engine) OperationActive() bool { return e.active.Load() }
 

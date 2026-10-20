@@ -128,8 +128,8 @@ func toolBlock(id, name, input string, status agent.ToolStatus, clientSide bool)
 	return agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: id}, Kind: assistant.KindToolCall, Tool: &tool}
 }
 
-// The real engine's event stream for a two-round turn maps to the documented
-// record sequence; assistant text appears only in run.finished.
+// A real two-round turn run through headless.Run maps to the documented record
+// sequence; assistant text appears only in run.finished.
 func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 	inputTokens, outputTokens := 30, 70
 	clientCall := assistant.ToolCallContent("cli-1", "get_local_time", "{}")
@@ -154,16 +154,10 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := agent.New(backend, agent.Config{})
 	var out bytes.Buffer
-	delivery := startedDelivery(t, &out)
-	for event := range engine.StartTurn(t.Context(), agent.TurnInput{Message: "investigate", Tools: tools}) {
-		if err := delivery.Consume(event); err != nil {
-			t.Error(err)
-		}
-	}
-	if err := delivery.Finish(headless.Finish{Result: agent.TurnResult{Outcome: agent.TurnOutcomeCompleted, Blocks: engine.Snapshot()}}); err != nil {
-		t.Fatal(err)
+	outcome, err := headless.Run(t.Context(), agent.New(backend, agent.Config{}), agent.TurnInput{Message: "investigate", Tools: tools}, startedDelivery(t, &out))
+	if err != nil || outcome != headless.OutcomeCompleted {
+		t.Fatalf("outcome/error = %q, %v", outcome, err)
 	}
 
 	records := parseDelivery(t, out.String())
@@ -215,7 +209,7 @@ func TestDeliveryToolRecords(t *testing.T) {
 		toolBlock("pending-1", "search_logs", malformed, agent.ToolRunning, false),
 		toolBlock("pending-2", "search_logs", "", agent.ToolRunning, false),
 	))
-	if err := delivery.Finish(headless.Finish{Result: agent.TurnResult{Outcome: agent.TurnOutcomeFailed}, Err: errors.New("failed")}); err != nil {
+	if err := delivery.Finish(headless.Finish{Outcome: headless.OutcomeFailed, Err: errors.New("failed")}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -264,7 +258,7 @@ func TestDeliveryResponseOnlyIncludesThisRun(t *testing.T) {
 			var out bytes.Buffer
 			delivery := startedDelivery(t, &out)
 			consume(t, delivery, events...)
-			if err := delivery.Finish(headless.Finish{Result: agent.TurnResult{Outcome: agent.TurnOutcomeCompleted, Blocks: []agent.Block{prior, user, current}}}); err != nil {
+			if err := delivery.Finish(headless.Finish{Outcome: headless.OutcomeCompleted, Blocks: []agent.Block{prior, user, current}}); err != nil {
 				t.Fatal(err)
 			}
 			records := parseDelivery(t, out.String())
@@ -301,7 +295,7 @@ func TestDeliveryRounds(t *testing.T) {
 			var out bytes.Buffer
 			delivery := startedDelivery(t, &out)
 			consume(t, delivery, tt.events...)
-			if err := delivery.Finish(headless.Finish{Result: agent.TurnResult{Outcome: agent.TurnOutcomeCompleted}}); err != nil {
+			if err := delivery.Finish(headless.Finish{Outcome: headless.OutcomeCompleted}); err != nil {
 				t.Fatal(err)
 			}
 			records := parseDelivery(t, out.String())
@@ -325,7 +319,7 @@ func TestDeliveryRunRecords(t *testing.T) {
 	if err := delivery.Start(headless.Start{StartedAt: startedAt, RequestedModel: "test-model"}); err != nil {
 		t.Fatal(err)
 	}
-	finish := headless.Finish{EndedAt: endedAt, Result: agent.TurnResult{Outcome: agent.TurnOutcomeDeadlineExceeded}, Err: context.DeadlineExceeded}
+	finish := headless.Finish{EndedAt: endedAt, Outcome: headless.OutcomeTimedOut, Err: context.DeadlineExceeded}
 	if err := delivery.Finish(finish); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +364,7 @@ func TestDeliveryWriterFailureLatchesAndFinishEmitsNoTerminal(t *testing.T) {
 	}
 	// The writer recovers; Finish must still fail without emitting a terminal
 	// record, so a consumer can never see a well-formed but incomplete stream.
-	finishErr := delivery.Finish(headless.Finish{Result: agent.TurnResult{Outcome: agent.TurnOutcomeCompleted}})
+	finishErr := delivery.Finish(headless.Finish{Outcome: headless.OutcomeCompleted})
 	if !errors.Is(finishErr, writerErr) {
 		t.Fatalf("Finish error = %v, want the latched writer failure", finishErr)
 	}
@@ -413,7 +407,7 @@ func TestDeliveryLifecycleTransitions(t *testing.T) {
 	if err := delivery.Start(headless.Start{}); err == nil {
 		t.Fatal("second Start succeeded")
 	}
-	if err := delivery.Finish(headless.Finish{Result: agent.TurnResult{Outcome: agent.TurnOutcomeCompleted}}); err != nil {
+	if err := delivery.Finish(headless.Finish{Outcome: headless.OutcomeCompleted}); err != nil {
 		t.Fatal(err)
 	}
 	if err := delivery.Consume(agent.Event{Kind: agent.EventTurnDone}); err == nil {

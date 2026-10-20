@@ -3,10 +3,15 @@
 package headless
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 )
+
+var errTurnIncomplete = errors.New("turn ended without a completion or error")
 
 // Start carries the run-opening facts a delivery may need.
 type Start struct {
@@ -14,15 +19,17 @@ type Start struct {
 	RequestedModel string
 }
 
-// Finish carries the engine's authoritative terminal state.
+// Finish carries the turn's terminal state. Blocks is the engine's final
+// transcript and must be treated as read-only.
 type Finish struct {
-	EndedAt time.Time
-	Result  agent.TurnResult
-	Err     error
+	EndedAt        time.Time
+	Outcome        Outcome
+	ConversationID string
+	Blocks         []agent.Block
+	Err            error
 }
 
-// Delivery streams one noninteractive run. A Consume error cancels RunTurn
-// through its existing consumer-failure semantics.
+// Delivery streams one noninteractive run. A Consume error cancels the turn.
 type Delivery interface {
 	Start(Start) error
 	Consume(agent.Event) error
@@ -41,20 +48,77 @@ const (
 	OutcomeTimedOut       Outcome = "timed_out"
 )
 
-// ClassifyTurn reports the terminal outcome. TurnResult.Outcome is
-// authoritative: Denied only refines a completed turn into approval_denied.
-func ClassifyTurn(result agent.TurnResult) Outcome {
-	switch result.Outcome {
-	case agent.TurnOutcomeCompleted:
-		if result.Denied {
-			return OutcomeApprovalDenied
+// Run drives one turn on an idle engine through delivery, then finishes the
+// delivery once. A Consume error cancels the turn, which is still drained. The
+// returned error is the turn's failure, or else the Finish error.
+func Run(ctx context.Context, engine *agent.Engine, input agent.TurnInput, delivery Delivery) (Outcome, error) {
+	turnCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	turnStart := len(engine.Snapshot())
+	completed := false
+	var turnErr, consumeErr error
+	for event := range engine.StartTurn(turnCtx, input) {
+		switch event.Kind {
+		case agent.EventTurnDone:
+			completed = true
+		case agent.EventError:
+			turnErr = event.Err
+		case agent.EventTranscript, agent.EventUsage, agent.EventConversation:
 		}
-		return OutcomeCompleted
-	case agent.TurnOutcomeCanceled:
-		return OutcomeCanceled
-	case agent.TurnOutcomeDeadlineExceeded:
-		return OutcomeTimedOut
-	default:
-		return OutcomeFailed
+		if consumeErr == nil {
+			if consumeErr = delivery.Consume(event); consumeErr != nil {
+				cancel()
+			}
+		}
 	}
+
+	blocks := engine.Snapshot()
+	outcome, err := classify(ctx, completed, denied(blocks[turnStart:]), turnErr, consumeErr)
+	finishErr := delivery.Finish(Finish{
+		EndedAt:        time.Now(),
+		Outcome:        outcome,
+		ConversationID: engine.ConversationID(),
+		Blocks:         blocks,
+		Err:            err,
+	})
+	if err != nil {
+		return outcome, err
+	}
+	return outcome, finishErr
+}
+
+func classify(ctx context.Context, completed, denied bool, turnErr, consumeErr error) (Outcome, error) {
+	if consumeErr != nil {
+		return OutcomeFailed, fmt.Errorf("consume turn event: %w", consumeErr)
+	}
+	if completed {
+		if denied {
+			return OutcomeApprovalDenied, nil
+		}
+		return OutcomeCompleted, nil
+	}
+	err := turnErr
+	if err == nil {
+		err = ctx.Err()
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return OutcomeTimedOut, err
+	case errors.Is(err, context.Canceled):
+		return OutcomeCanceled, err
+	case err != nil:
+		return OutcomeFailed, err
+	default:
+		return OutcomeFailed, errTurnIncomplete
+	}
+}
+
+func denied(blocks []agent.Block) bool {
+	for _, block := range blocks {
+		if block.Tool != nil && block.Tool.Status == agent.ToolDenied {
+			return true
+		}
+	}
+	return false
 }

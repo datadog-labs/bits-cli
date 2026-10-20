@@ -465,22 +465,6 @@ func TestEnginePreservesPerToolInputStreaming(t *testing.T) {
 	}
 }
 
-func TestTurnCompletionSynchronizesOperationRelease(t *testing.T) {
-	e := New(&scriptBackend{convID: "conversation-1"}, Config{})
-	operation := e.beginTurn(context.Background(), TurnInput{Message: "question"})
-	completion := <-operation.completion
-	if !completion.Completed {
-		t.Fatalf("completion = %+v", completion)
-	}
-	if e.OperationActive() {
-		t.Fatal("completion was published before operation release")
-	}
-	if err := e.NewConversation(); err != nil {
-		t.Fatalf("operation after completion: %v", err)
-	}
-	_ = collect(operation.events)
-}
-
 func TestConcurrentTurnReturnsOperationError(t *testing.T) {
 	gate := make(chan struct{})
 	e := New(&scriptBackend{hold: gate}, Config{})

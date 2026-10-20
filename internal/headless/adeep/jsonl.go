@@ -293,8 +293,8 @@ func (d *Delivery) Finish(f headless.Finish) error {
 		}
 	}
 
-	outcome := headless.ClassifyTurn(f.Result)
-	conversationID := f.Result.ConversationID
+	outcome := f.Outcome
+	conversationID := f.ConversationID
 	if conversationID == "" {
 		conversationID = d.conversationID
 	}
@@ -306,7 +306,7 @@ func (d *Delivery) Finish(f headless.Finish) error {
 		envelope:       env(typeRunFinished, 0),
 		Outcome:        string(outcome),
 		ConversationID: conversationID,
-		Response:       assistantResponse(f.Result.Blocks, d.responseBlockIDs),
+		Response:       assistantResponse(f.Blocks, d.responseBlockIDs),
 		Rounds:         d.rounds,
 		EndedAt:        endedAt,
 	}

@@ -72,4 +72,4 @@ Every record carries:
 - Exactly one `run.finished` ends a healthy stream; `Finish` is rejected afterwards.
 - `Consume` before `Start` or after `run.finished` is rejected, as is a second `Start`.
 - The first writer failure is latched: every later write, including the terminal record, fails, so a recovering writer can never emit a well-formed but incomplete stream.
-- The engine cancels the turn on the consumer error (`TurnOutcomeConsumerFailed`); `bits run` maps it to exit `1`.
+- `headless.Run` cancels the turn on the consumer error and reports it as a `failed` outcome; `bits run` maps it to exit `1`.
