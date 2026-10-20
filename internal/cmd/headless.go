@@ -176,8 +176,8 @@ func runRunWithStore(ctx context.Context, opts RunOptions, store auth.Credential
 	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet, Context: opts.Context}, opts, out)
 }
 
-// runEngineTurn drives exactly one turn, attempts Finish once, and maps its
-// authoritative outcome to the process contract.
+// runEngineTurn drives exactly one turn and maps its outcome to the process
+// contract.
 func runEngineTurn(ctx context.Context, engine *agent.Engine, input agent.TurnInput, opts RunOptions, out io.Writer) error {
 	var delivery headless.Delivery
 	switch opts.Delivery {
@@ -191,21 +191,12 @@ func runEngineTurn(ctx context.Context, engine *agent.Engine, input agent.TurnIn
 	}
 	input.Message = opts.Prompt // no-dd-sa:datadog/go-promptinjection -- opts.Prompt is intentionally sent as the user's message for this one turn; it is never used as a system instruction
 	input.OnDeny = agent.DenyContinue
-	result, err := engine.RunTurn(ctx, input, delivery.Consume)
-	finishErr := delivery.Finish(headless.Finish{EndedAt: time.Now(), Result: result, Err: err})
-
-	switch headless.ClassifyTurn(result) {
-	case headless.OutcomeCompleted:
-		return finishErr
-	case headless.OutcomeApprovalDenied:
-		if finishErr != nil {
-			return finishErr
-		}
-		return &ExitError{Code: ExitApprovalDenied, Err: errors.New("an approval gate was denied; the turn finished with the backend's adjusted answer")}
-	default:
-		if err != nil {
-			return err
-		}
-		return finishErr
+	outcome, err := headless.Run(ctx, engine, input, delivery)
+	if err != nil {
+		return err
 	}
+	if outcome == headless.OutcomeApprovalDenied {
+		return &ExitError{Code: ExitApprovalDenied, Err: errors.New("an approval gate was denied; the turn finished with the backend's adjusted answer")}
+	}
+	return nil
 }

@@ -60,7 +60,7 @@ func (e *Engine) ResumePendingTools(ctx context.Context, in TurnInput) <-chan Ev
 	for i, content := range e.continuation {
 		calls[i] = toolCallOf(content)
 	}
-	return e.beginTurnWithCalls(ctx, in, calls).events
+	return e.startTurn(ctx, in, calls)
 }
 
 // continuationFromHistory returns the client tool calls left unanswered by the

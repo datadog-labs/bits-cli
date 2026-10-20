@@ -297,55 +297,24 @@ type TurnInput struct {
 	OnDeny DenyPolicy
 }
 
-// turnCompletion is the final state captured before an engine operation
-// releases ownership. It remains authoritative even if cancellation prevents a
-// corresponding event from reaching the consumer. Its snapshots are read-only.
-type turnCompletion struct {
-	ConversationID string
-	Blocks         []Block
-	Usage          *assistant.Usage
-	Completed      bool
-	Denied         bool
-	Err            error
+// StartTurn runs one user turn and its client-tool round trips, streaming its
+// events. Callers must drain the channel until it closes, including after
+// cancelling the turn context. The channel closes only after the engine has
+// released the operation, so Snapshot and ConversationID then report the
+// turn's final state.
+func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
+	return e.startTurn(ctx, in, nil)
 }
 
-type turnOperation struct {
-	events     <-chan Event
-	completion <-chan turnCompletion
-}
-
-// beginTurn starts one user turn and its client-tool round trips. The event
-// channel closes only after the completion snapshot has been captured and the
-// engine operation has been released.
-func (e *Engine) beginTurn(ctx context.Context, in TurnInput) turnOperation {
-	return e.beginTurnWithCalls(ctx, in, nil)
-}
-
-func (e *Engine) beginTurnWithCalls(ctx context.Context, in TurnInput, resumed []ToolCall) turnOperation {
+func (e *Engine) startTurn(ctx context.Context, in TurnInput, resumed []ToolCall) <-chan Event {
 	if !e.begin() {
-		return completedTurnOperation(ErrOperationActive)
+		return eventResult(Event{Kind: EventError, Err: ErrOperationActive})
 	}
 	e.continuation = nil
 	generation := e.operationGeneration.Load()
 	events := make(chan Event, 64)
-	completion := make(chan turnCompletion, 1)
-	go e.run(ctx, in, resumed, events, completion, generation)
-	return turnOperation{events: events, completion: completion}
-}
-
-// StartTurn preserves the event-only API used by interactive surfaces. Callers
-// must continue draining the returned channel until it closes after cancelling
-// the turn context.
-func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
-	return e.beginTurn(ctx, in).events
-}
-
-func completedTurnOperation(err error) turnOperation {
-	events := eventResult(Event{Kind: EventError, Err: err})
-	completion := make(chan turnCompletion, 1)
-	completion <- turnCompletion{Err: err}
-	close(completion)
-	return turnOperation{events: events, completion: completion}
+	go e.run(ctx, in, resumed, events, generation)
+	return events
 }
 
 // begin claims the engine for one operation, which must release it on completion.
@@ -409,10 +378,8 @@ func (e *Engine) run(
 	in TurnInput,
 	resumed []ToolCall,
 	out chan<- Event,
-	completionOut chan<- turnCompletion,
 	generation uint64,
 ) {
-	completion := turnCompletion{}
 	turnStart := len(e.transcript.Blocks())
 	if len(resumed) > 0 {
 		for i, block := range e.transcript.Blocks() {
@@ -432,14 +399,7 @@ func (e *Engine) run(
 			// even if a worker completed while cancellation prevented its event send.
 			out <- Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()}
 		}
-		if completion.Err == nil && !completion.Completed && ctx.Err() != nil {
-			completion.Err = ctx.Err()
-		}
-		completion.ConversationID = e.opts.ConversationID
-		completion.Blocks = e.snapshot().Blocks
 		e.active.Store(false)
-		completionOut <- completion
-		close(completionOut)
 		close(out)
 	}()
 
@@ -494,7 +454,6 @@ func (e *Engine) run(
 	// An invalid image or a skill that cannot be read fails the turn like a
 	// backend error: the user block stays visible and nothing is sent.
 	if imageErr != nil {
-		completion.Err = imageErr
 		send(Event{Kind: EventError, Err: imageErr})
 		return
 	}
@@ -503,7 +462,6 @@ func (e *Engine) run(
 		var err error
 		skillContext, err = e.prepareSkill(ctx, *in.Skill)
 		if err != nil {
-			completion.Err = err
 			send(Event{Kind: EventError, Err: err})
 			return
 		}
@@ -530,9 +488,6 @@ func (e *Engine) run(
 		var calls []ToolCall
 		streamed := false
 		fold := func(msg assistant.Message) bool {
-			if msg.Results != nil && msg.Results.Usage != nil {
-				completion.Usage = cloneUsage(msg.Results.Usage)
-			}
 			b, ok := e.transcript.AppendMessage(msg)
 			if ok {
 				// Some providers omit is_client_side on a streamed start, then
@@ -587,11 +542,10 @@ func (e *Engine) run(
 			e.sentUserContext = &sent
 		}
 		if err != nil {
-			// Context-derived cancellation remains quiet. An independent backend
-			// failure wins even if the caller canceled at the same time, preserving
-			// the more specific diagnostic in the authoritative completion.
+			// Context-derived cancellation remains quiet. Report an independent
+			// backend failure when its event can be delivered; cancellation may
+			// prevent that event from reaching the caller.
 			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
-				completion.Err = err
 				if !finalizeAndEmit(emit) {
 					return nil, false
 				}
@@ -613,7 +567,7 @@ func (e *Engine) run(
 
 		if len(calls) == 0 {
 			if finalizeAndEmit(emit) {
-				completion.Completed = emit(Event{Kind: EventTurnDone})
+				emit(Event{Kind: EventTurnDone})
 			}
 			return nil, false
 		}
@@ -632,15 +586,12 @@ func (e *Engine) run(
 		}
 		toolRound, err := e.runTools(ctx, tools, calls, generation, emit, in.OnDeny)
 		if err != nil {
-			completion.Err = err
-			completion.Denied = completion.Denied || toolRound.denied
 			if !finalizeAndEmit(emit) {
 				return
 			}
 			emit(Event{Kind: EventError, Err: err})
 			return
 		}
-		completion.Denied = completion.Denied || toolRound.denied
 		switch toolRound.outcome {
 		case roundAborted:
 			return // cancelled: end the turn quietly
@@ -654,7 +605,6 @@ func (e *Engine) run(
 					e.opts.ConversationID = id
 				}
 				if err != nil && (ctx.Err() == nil || !errors.Is(err, ctx.Err())) {
-					completion.Err = err
 					emitTerminal := emitAtRound(terminalRound)
 					if !finalizeAndEmit(emitTerminal) {
 						return
@@ -669,14 +619,13 @@ func (e *Engine) run(
 				if !finalizeAndEmit(emitTerminal) {
 					return
 				}
-				completion.Completed = emitTerminal(Event{Kind: EventTurnDone})
+				emitTerminal(Event{Kind: EventTurnDone})
 			}
 			return
 		case roundAnswered:
 			req = turnRequest{tools: toolRound.responses}
 		}
 	}
-	completion.Err = ErrMaxTurns
 	if !finalizeAndEmit(emitAtRound(maxTurns)) {
 		return
 	}
@@ -745,24 +694,6 @@ const (
 type toolRound struct {
 	outcome   roundOutcome
 	responses []assistant.ClientToolResponse
-	denied    bool
-}
-
-func cloneUsage(usage *assistant.Usage) *assistant.Usage {
-	if usage == nil {
-		return nil
-	}
-	copied := *usage
-	if usage.InputTokens != nil {
-		copied.InputTokens = new(*usage.InputTokens)
-	}
-	if usage.OutputTokens != nil {
-		copied.OutputTokens = new(*usage.OutputTokens)
-	}
-	if usage.TimeToFirstChunkMs != nil {
-		copied.TimeToFirstChunkMs = new(*usage.TimeToFirstChunkMs)
-	}
-	return &copied
 }
 
 // snapshot returns a copy of the current blocks, safe to send on the channel and
@@ -1018,7 +949,7 @@ func (e *Engine) runTools(
 				ok = r.resolve(c, toolFailedResult(done.err))
 			default:
 				r.stopRound(c, done.err)
-				return toolRound{denied: r.denied}, done.err
+				return toolRound{}, done.err
 			}
 
 		case <-ctx.Done():
@@ -1026,12 +957,11 @@ func (e *Engine) runTools(
 		}
 	}
 	if !ok {
-		return toolRound{outcome: roundAborted, denied: r.denied}, nil
+		return toolRound{outcome: roundAborted}, nil
 	}
 	round := toolRound{
 		outcome:   roundAnswered,
 		responses: make([]assistant.ClientToolResponse, len(r.calls)),
-		denied:    r.denied,
 	}
 	if r.stopRequested {
 		round.outcome = roundStopped
