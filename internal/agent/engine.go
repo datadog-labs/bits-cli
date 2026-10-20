@@ -542,9 +542,9 @@ func (e *Engine) run(
 			e.sentUserContext = &sent
 		}
 		if err != nil {
-			// Context-derived cancellation remains quiet. An independent backend
-			// failure wins even if the caller canceled at the same time, preserving
-			// the more specific diagnostic.
+			// Context-derived cancellation remains quiet. Report an independent
+			// backend failure when its event can be delivered; cancellation may
+			// prevent that event from reaching the caller.
 			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
 				if !finalizeAndEmit(emit) {
 					return nil, false
