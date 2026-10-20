@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,59 +14,11 @@ import (
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/imageinput"
 )
-
-// scriptBackend scripts the run surface's backend: round 1 may emit the
-// server-injected approval_request gate and client tool calls; every
-// follow-up send records its response batch and, unless failOn matches,
-// streams the final answer.
-type scriptBackend struct {
-	rounds       [][]assistant.Message
-	failOn       int
-	failErr      error
-	calls        int
-	firstMessage any
-	batches      [][]assistant.ClientToolResponse
-}
-
-func (b *scriptBackend) Send(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
-	b.calls++
-	if b.calls == 1 {
-		b.firstMessage = message
-	}
-	if b.calls > 1 {
-		responses, ok := message.([]assistant.ClientToolResponse)
-		if !ok {
-			return "conversation-1", errors.New("follow-up must carry client tool responses")
-		}
-		b.batches = append(b.batches, responses)
-	}
-	for _, m := range b.rounds[min(b.calls, len(b.rounds))-1] {
-		var response assistant.AssistantResponse
-		response.Data.Attributes.ConversationID = "conversation-1"
-		response.Data.Attributes.StructuredMessage = m
-		if err := emit(response); err != nil {
-			return "conversation-1", err
-		}
-	}
-	if b.calls == b.failOn && b.failOn > 0 {
-		return "conversation-1", b.failErr
-	}
-	return "conversation-1", nil
-}
-
-func clientCallMessage(msgID, callID, name, input string) assistant.Message {
-	content := assistant.ToolCallContent(callID, name, input)
-	content.Type = assistant.ContentClientToolCall
-	return assistant.AssistantMessage(msgID, content)
-}
-
-func runTextMessage(id, text string) assistant.Message {
-	return assistant.AssistantMessage(id, assistant.TextContent(text))
-}
 
 // runToolSet is the shape under test: a local clock tool with a declared gate.
 func runToolSet(t *testing.T, mode agent.PermissionsMode) *agent.ToolSet {
@@ -95,28 +49,23 @@ func runOptions() RunOptions {
 }
 
 // The fake-backend path proves the noninteractive surface end to end: no TUI,
-// no login, strict versioned JSONL, and a completed outcome with exit nil.
+// no login, strict versioned JSONL, a client tool round trip delivered as two
+// rounds, and a completed outcome with exit nil.
 func TestRunFakeBackendStreamsVersionedJSONL(t *testing.T) {
 	t.Setenv("BITS_FAKE_BACKEND", "1")
 	t.Setenv("DD_API_KEY", "")
 	t.Setenv("DD_APP_KEY", "")
 	var out, stderr bytes.Buffer
 	err := Execute(context.Background(), []string{
-		"run", "--prompt", "random()", "--delivery", "adeep", "--model", "test-model",
+		"run", "--prompt", `call("list_files", {"path": "."}); say("done")`, "--delivery", "adeep", "--model", "test-model", "--permissions", "skip-permissions",
 	}, &out, &stderr)
-	if stderr.Len() != 0 {
-		t.Fatalf("unexpected stderr: %s", &stderr)
-	}
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
+	if err != nil || stderr.Len() != 0 {
+		t.Fatalf("run failed: %v, stderr: %s", err, &stderr)
 	}
 
-	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(lines) < 4 {
-		t.Fatalf("delivery lines = %d, want at least 4:\n%s", len(lines), out.String())
-	}
-	var finished map[string]any
-	for _, line := range lines {
+	counts := map[string]int{}
+	var started, finished map[string]any
+	for line := range strings.Lines(out.String()) {
 		var record map[string]any
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
 			t.Fatalf("line is not an independent JSON object: %q: %v", line, err)
@@ -124,52 +73,20 @@ func TestRunFakeBackendStreamsVersionedJSONL(t *testing.T) {
 		if record["schema"] != "bits.delivery.adeep" || record["version"] != float64(1) {
 			t.Fatalf("line lacks the delivery discriminator: %q", line)
 		}
-		if record["type"] == "run.started" {
-			if record["requested_model"] != "test-model" {
-				t.Fatalf("run.started requested_model = %v", record["requested_model"])
-			}
-		}
-		if record["type"] == "assistant.text" {
-			t.Fatalf("assistant text must appear only in run.finished.response: %v", record)
-		}
-		if record["type"] == "run.finished" {
+		typ, _ := record["type"].(string)
+		counts[typ]++
+		switch typ {
+		case "run.started":
+			started = record
+		case "run.finished":
 			finished = record
 		}
 	}
-	if finished == nil || finished["outcome"] != "completed" {
-		t.Fatalf("terminal record = %v, want completed", finished)
+	if started["requested_model"] != "test-model" || finished["outcome"] != "completed" || finished["response"] != "done" {
+		t.Fatalf("run.started = %v, run.finished = %v", started, finished)
 	}
-}
-
-// A scripted fake turn with a client tool call is delivered as two rounds with
-// a correlated tool call and result.
-func TestRunFakeBackendScriptedRounds(t *testing.T) {
-	t.Setenv("BITS_FAKE_BACKEND", "1")
-	t.Setenv("DD_API_KEY", "")
-	t.Setenv("DD_APP_KEY", "")
-	opts := runOptions()
-	opts.Prompt = "call(\"list_files\", {\"path\": \".\"})\nsay(\"done\")"
-	var out bytes.Buffer
-
-	if err := runRunWithStore(context.Background(), opts, stubCredentialStore{}, &out); err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
-
-	counts := map[string]int{}
-	var outcome any
-	for line := range strings.Lines(out.String()) {
-		var record map[string]any
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			t.Fatalf("line is not JSON: %q: %v", line, err)
-		}
-		typ, _ := record["type"].(string)
-		counts[typ]++
-		if typ == "run.finished" {
-			outcome = record["outcome"]
-		}
-	}
-	if counts["round.started"] != 2 || counts["tool.call"] != 1 || counts["tool.result"] != 1 || outcome != "completed" {
-		t.Fatalf("records = %v, outcome = %v:\n%s", counts, outcome, out.String())
+	if counts["round.started"] != 2 || counts["tool.call"] != 1 || counts["tool.result"] != 1 || counts["assistant.text"] != 0 {
+		t.Fatalf("records = %v:\n%s", counts, out.String())
 	}
 }
 
@@ -198,230 +115,113 @@ func TestRunMissingOAuthFailsFastWithLoginHint(t *testing.T) {
 	}
 }
 
-func TestRunInvalidServerGateExitsThree(t *testing.T) {
-	backend := &scriptBackend{rounds: [][]assistant.Message{
-		{
-			clientCallMessage("g1", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"mismatch","approval_message":"Delete it?"}`),
-		},
-		{
-			runTextMessage("a1", "I cannot delete the dashboard."),
-		},
-	}}
-	engine := agent.New(backend, agent.Config{})
-	var out bytes.Buffer
-
-	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
-	if err == nil {
-		t.Fatal("denial completed with exit 0")
-	}
-	var exitErr *ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != ExitApprovalDenied {
-		t.Fatalf("error = %v, want exit %d", err, ExitApprovalDenied)
-	}
-
-	if len(backend.batches) != 1 || len(backend.batches[0]) != 1 {
-		t.Fatalf("response batches = %v", backend.batches)
-	}
-	response := backend.batches[0][0]
-	if response.ToolCallID != "gate-1" || response.Status != assistant.ToolStatusError {
-		t.Fatalf("denial response = %+v", response)
-	}
-	if !strings.Contains(out.String(), `"type":"run.finished"`) ||
-		!strings.Contains(out.String(), `"outcome":"approval_denied"`) {
-		t.Fatalf("terminal record missing the approval_denied outcome:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "I cannot delete the dashboard.") {
-		t.Fatal("the model's adjusted answer was not delivered")
-	}
-}
-
-// Skip-permissions approves both a local gated tool and the backend-injected
-// approval_request gate; both proceed and the run exits 0.
-func TestRunSkipPermissionsApprovesLocalAndServerGates(t *testing.T) {
-	backend := &scriptBackend{rounds: [][]assistant.Message{
-		{
-			clientCallMessage("gate", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1","approval_message":"Delete it?"}`),
-			clientCallMessage("c1", "cli-1", "get_local_time", "{}"),
-		},
-		{
-			runTextMessage("a1", "It is noon."),
-		},
-	}}
-	engine := agent.New(backend, agent.Config{})
-	var out bytes.Buffer
-
-	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
-	if err != nil {
-		t.Fatalf("skip-permissions run failed: %v", err)
-	}
-	if len(backend.batches) != 1 || len(backend.batches[0]) != 2 {
-		t.Fatalf("response batches = %v", backend.batches)
-	}
-	gate, local := backend.batches[0][0], backend.batches[0][1]
-	if gate.ToolCallID != "gate-1" || gate.Status != assistant.ToolStatusSuccess {
-		t.Fatalf("server gate response = %+v, want approval", gate)
-	}
-	if local.ToolCallID != "cli-1" || local.Status != assistant.ToolStatusSuccess || local.Metadata.Output != "noon" {
-		t.Fatalf("local gated tool response = %+v", local)
-	}
-	if !strings.Contains(out.String(), `"outcome":"completed"`) {
-		t.Fatalf("terminal record is not completed:\n%s", out.String())
-	}
-}
-
-// Deny mode refuses both a local gated tool and the backend-injected
-// approval_request gate without an approver; the model adjusts and the run
-// exits 3.
-func TestRunDenyModeDeniesLocalAndServerGates(t *testing.T) {
-	backend := &scriptBackend{rounds: [][]assistant.Message{
-		{
-			clientCallMessage("gate", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1","approval_message":"Delete it?"}`),
-			clientCallMessage("c1", "cli-1", "get_local_time", "{}"),
-		},
-		{
-			runTextMessage("a1", "I could not check the time."),
-		},
-	}}
-	engine := agent.New(backend, agent.Config{})
-	opts := runOptions()
-	opts.PermissionsMode = agent.ModeDeny
-	var out bytes.Buffer
-
-	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeDeny)}, opts, &out)
-	var exitErr *ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != ExitApprovalDenied {
-		t.Fatalf("error = %v, want exit %d", err, ExitApprovalDenied)
-	}
-	if len(backend.batches) != 1 || len(backend.batches[0]) != 2 {
-		t.Fatalf("response batches = %v", backend.batches)
-	}
-	for _, response := range backend.batches[0] {
-		if response.Status != assistant.ToolStatusError || response.Metadata.Output == "noon" {
-			t.Fatalf("response %s = %+v, want a denial", response.ToolCallID, response)
-		}
-	}
-	if !strings.Contains(out.String(), `"outcome":"approval_denied"`) || !strings.Contains(out.String(), "I could not check the time.") {
-		t.Fatalf("delivery missing the denial outcome or adjusted answer:\n%s", out.String())
-	}
-}
-
-// Denial followed by a backend failure: the runtime failure wins over exit 3,
-// while the denial evidence stays in the stream.
-func TestRunRuntimeFailureWinsOverDenial(t *testing.T) {
-	backendErr := errors.New("backend failed after denial")
-	backend := &scriptBackend{
-		rounds: [][]assistant.Message{
-			{clientCallMessage("g1", "gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"mismatch","approval_message":"Delete it?"}`)},
-			{runTextMessage("a1", "unreachable")},
-		},
-		failOn:  2,
-		failErr: backendErr,
-	}
-	engine := agent.New(backend, agent.Config{})
-	var out bytes.Buffer
-
-	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
-	if !errors.Is(err, backendErr) {
-		t.Fatalf("error = %v, want the backend failure to win over exit 3", err)
-	}
-	var exitErr *ExitError
-	if errors.As(err, &exitErr) && exitErr.Code == ExitApprovalDenied {
-		t.Fatalf("denial status won over the runtime failure: %v", err)
-	}
-	if !strings.Contains(out.String(), `"status":"denied"`) {
-		t.Fatalf("denial evidence was lost from the stream:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), `"outcome":"failed"`) {
-		t.Fatalf("terminal outcome is not failed:\n%s", out.String())
-	}
-}
-
-// Cancellation maps to the runtime failure exit, with an authoritative
-// terminal record.
-func TestRunCancellationIsRuntimeFailure(t *testing.T) {
-	backend := &blockingRunBackend{started: make(chan struct{})}
-	engine := agent.New(backend, agent.Config{})
-	var out bytes.Buffer
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- runEngineTurn(ctx, engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out)
-	}()
-	<-backend.started
-	cancel()
-	err := <-done
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("error = %v, want context.Canceled", err)
-	}
-	var exitErr *ExitError
-	if errors.As(err, &exitErr) && exitErr.Code == ExitApprovalDenied {
-		t.Fatalf("cancellation was misclassified as denial: %v", err)
-	}
-	if !strings.Contains(out.String(), `"outcome":"canceled"`) {
-		t.Fatalf("terminal outcome is not canceled:\n%s", out.String())
-	}
-}
-
-type blockingRunBackend struct{ started chan struct{} }
-
-func (b *blockingRunBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
-	var response assistant.AssistantResponse
-	response.Data.Attributes.ConversationID = "conversation-1"
-	response.Data.Attributes.StructuredMessage = runTextMessage("a1", "partial")
-	if err := emit(response); err != nil {
-		return "conversation-1", err
-	}
-	close(b.started)
-	<-ctx.Done()
-	return "conversation-1", ctx.Err()
-}
-
-// A broken delivery writer fails the process through RunTurn's
-// consumer-cancellation path.
-func TestRunWriterFailureIsRuntimeFailure(t *testing.T) {
+// runEngineTurn maps each terminal outcome of the one turn to the process
+// contract; the denial evidence stays in the stream when a failure wins.
+func TestRunOutcomeExitMapping(t *testing.T) {
+	const gates = `g, c = call([("approval_request", {"tool_name": "delete_dashboard", "tool_args": {}}), ("get_local_time", {})]); say(g.status + " " + c.status)`
 	writerErr := errors.New("stdout gone")
-	backend := &scriptBackend{rounds: [][]assistant.Message{
-		{runTextMessage("a1", "answer")},
-	}}
-	engine := agent.New(backend, agent.Config{})
-
-	err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), failRunWriter{err: writerErr})
-	if !errors.Is(err, writerErr) {
-		t.Fatalf("error = %v, want the writer failure", err)
-	}
-	var exitErr *ExitError
-	if errors.As(err, &exitErr) && exitErr.Code == ExitApprovalDenied {
-		t.Fatalf("writer failure was misclassified as denial: %v", err)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tt := range []struct {
+		name    string
+		prompt  string
+		mode    agent.PermissionsMode
+		ctx     context.Context
+		writer  io.Writer
+		wantErr func(error) bool
+		want    []string // in the delivery
+	}{
+		{
+			name:    "skip-permissions approves local and server gates",
+			prompt:  gates,
+			mode:    agent.ModeSkipPermissions,
+			wantErr: func(err error) bool { return err == nil },
+			want:    []string{`"outcome":"completed"`, `"rounds":2`, `"response":"success success"`},
+		},
+		{
+			name:    "a denial exits 3 with the adjusted answer",
+			prompt:  gates,
+			mode:    agent.ModeDeny,
+			wantErr: exitCode(ExitApprovalDenied),
+			want:    []string{`"outcome":"approval_denied"`, `"response":"error error"`},
+		},
+		{
+			name:    "a malformed server gate exits 3 under skip-permissions",
+			prompt:  `g = call("approval_request", {"tool_name": "delete_dashboard", "tool_args": {}, "tool_call_id": "mismatch"}); say(g.status)`,
+			mode:    agent.ModeSkipPermissions,
+			wantErr: exitCode(ExitApprovalDenied),
+			want:    []string{`"outcome":"approval_denied"`, `"response":"error"`},
+		},
+		{
+			name:    "a runtime failure wins over a denial",
+			prompt:  `call("approval_request", {"tool_name": "delete_dashboard", "tool_args": {}}); fail("net")`,
+			mode:    agent.ModeDeny,
+			wantErr: func(err error) bool { return err != nil && !exitCode(ExitApprovalDenied)(err) },
+			want:    []string{`"status":"denied"`, `"outcome":"failed"`},
+		},
+		{
+			name:    "cancellation is a runtime failure",
+			prompt:  `say("never")`,
+			ctx:     canceled,
+			wantErr: func(err error) bool { return errors.Is(err, context.Canceled) },
+			want:    []string{`"outcome":"canceled"`},
+		},
+		{
+			name:    "a broken delivery writer is a runtime failure",
+			prompt:  `say("done")`,
+			writer:  &failRunWriter{err: writerErr},
+			wantErr: func(err error) bool { return errors.Is(err, writerErr) },
+		},
+		{
+			name:    "a delivery writer breaking mid-run cancels the turn",
+			prompt:  `say("done")`,
+			writer:  &failRunWriter{writesLeft: 1, err: writerErr},
+			wantErr: func(err error) bool { return errors.Is(err, writerErr) },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := runOptions()
+			opts.Prompt = tt.prompt
+			ctx, out, writer := tt.ctx, &bytes.Buffer{}, tt.writer
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			if writer == nil {
+				writer = out
+			}
+			mode := cmp.Or(tt.mode, agent.ModeSkipPermissions)
+			err := runEngineTurn(ctx, agent.New(&fake.Fake{}, agent.Config{}), agent.TurnInput{Tools: runToolSet(t, mode)}, opts, writer)
+			if !tt.wantErr(err) {
+				t.Fatalf("error = %v", err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("delivery lacks %s:\n%s", want, out.String())
+				}
+			}
+		})
 	}
 }
 
-type failRunWriter struct{ err error }
+func exitCode(code int) func(error) bool {
+	return func(err error) bool {
+		var exitErr *ExitError
+		return errors.As(err, &exitErr) && exitErr.Code == code
+	}
+}
 
-func (w failRunWriter) Write([]byte) (int, error) { return 0, w.err }
+// failRunWriter fails once its successful writes run out.
+type failRunWriter struct {
+	writesLeft int
+	err        error
+}
 
-// The one-turn guarantee: a scripted two-round backend is sent exactly the
-// initial prompt plus one response batch.
-func TestRunExecutesExactlyOneTurn(t *testing.T) {
-	backend := &scriptBackend{rounds: [][]assistant.Message{
-		{clientCallMessage("c1", "cli-1", "get_local_time", "{}")},
-		{runTextMessage("a1", "It is noon.")},
-	}}
-	engine := agent.New(backend, agent.Config{})
-	var out bytes.Buffer
-
-	if err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: runToolSet(t, agent.ModeSkipPermissions)}, runOptions(), &out); err != nil {
-		t.Fatal(err)
+func (w *failRunWriter) Write(p []byte) (int, error) {
+	if w.writesLeft == 0 {
+		return 0, w.err
 	}
-	if backend.calls != 2 {
-		t.Fatalf("backend sends = %d, want exactly 2 (one turn, one response round)", backend.calls)
-	}
-	if backend.firstMessage != "what time is it?" {
-		t.Fatalf("first backend message = %#v, want the literal user prompt", backend.firstMessage)
-	}
-	if !strings.Contains(out.String(), `"rounds":2`) {
-		t.Fatalf("round count missing from the terminal record:\n%s", out.String())
-	}
+	w.writesLeft--
+	return len(p), nil
 }
 
 func TestRunCommandAuthenticationFailureIsNotUsageError(t *testing.T) {

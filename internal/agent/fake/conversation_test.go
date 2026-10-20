@@ -40,8 +40,8 @@ func TestConversationRoundTrip(t *testing.T) {
 	engine := agent.New(f, agent.Config{})
 	set := workspaceTools(t, agent.ModeSkipPermissions)
 	runTurn(t, engine, "random()", set, agent.DenyContinue, nil)
-	result, _ := runTurn(t, engine, `r = call("read_file", {"path": "go.mod"}); say(r.output)`, set, agent.DenyContinue, nil)
-	id := result.ConversationID
+	blocks, _ := runTurn(t, engine, `r = call("read_file", {"path": "go.mod"}); say(r.output)`, set, agent.DenyContinue, nil)
+	id := engine.ConversationID()
 
 	list := engine.ListConversations(ctx)
 	if list.Err != nil || len(list.Conversations) != 1 || list.Conversations[0].ConversationID != id {
@@ -56,7 +56,7 @@ func TestConversationRoundTrip(t *testing.T) {
 	if err := restored.InstallConversation(ctx, conversation); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := viewOf(restored.Snapshot()), viewOf(result.Blocks); !slices.Equal(got, want) {
+	if got, want := viewOf(restored.Snapshot()), viewOf(blocks); !slices.Equal(got, want) {
 		t.Fatalf("restored blocks differ\n got %+v\nwant %+v", got, want)
 	}
 
@@ -90,8 +90,8 @@ func TestPushedConversationResumesInANewEngine(t *testing.T) {
 	script := `id = push_conversation(lambda: say("earlier"), lambda: say("after " + call("echo", {}).output), title="Pending echo")
 call("echo", {})
 say(id)`
-	result, _ := runTurn(t, agent.New(f, agent.Config{}), script, set, agent.DenyContinue, nil)
-	id := texts(result.Blocks)[0]
+	blocks, _ := runTurn(t, agent.New(f, agent.Config{}), script, set, agent.DenyContinue, nil)
+	id := texts(blocks)[0]
 	list, err := f.UserConversations(ctx)
 	if err != nil || len(list.Data.Attributes.Conversations) != 2 || !slices.ContainsFunc(list.Data.Attributes.Conversations, func(c assistant.ConversationSummary) bool {
 		return c.ConversationID == id && c.Title == "Pending echo"

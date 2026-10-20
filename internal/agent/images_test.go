@@ -38,7 +38,7 @@ func screenshotFile(t *testing.T) (file, sent assistant.ContextEntity) {
 }
 
 func TestImagesAreSentOnlyWithTheUserMessage(t *testing.T) {
-	backend := &contextRecordingBackend{}
+	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
 	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil },
@@ -51,20 +51,20 @@ func TestImagesAreSentOnlyWithTheUserMessage(t *testing.T) {
 	turnContext := &assistant.AssistantContext{Entities: []assistant.ContextEntity{dashboard, file}}
 	engine := New(backend, Config{})
 
-	drain(engine.StartTurn(context.Background(), TurnInput{Message: "what is wrong?", Tools: tools, Context: turnContext}))
+	drain(t, engine, TurnInput{Message: "what is wrong?", Tools: tools, Context: turnContext})
 
 	want := []assistant.ContextEntity{dashboard, sent}
-	if len(backend.contexts) != 2 || backend.contexts[0] == nil || !reflect.DeepEqual(backend.contexts[0].Entities, want) {
-		t.Fatalf("user message context = %+v, want %+v", backend.contexts, want)
+	if len(backend.opts) != 2 || backend.opts[0].Context == nil || !reflect.DeepEqual(backend.opts[0].Context.Entities, want) {
+		t.Fatalf("user message context = %+v, want %+v", backend.opts[0].Context, want)
 	}
-	if backend.contexts[1] != nil {
-		t.Fatalf("tool answers carried context %+v", backend.contexts[1])
+	if backend.opts[1].Context != nil {
+		t.Fatalf("tool answers carried context %+v", backend.opts[1].Context)
 	}
 	if !reflect.DeepEqual(turnContext.Entities, []assistant.ContextEntity{dashboard, file}) {
 		t.Fatalf("caller context was mutated: %+v", turnContext.Entities)
 	}
-	if !strings.Contains(backend.userContexts[0], "Image 1 of 1 attached to this message was resized from 3200x10 to 1568x4 pixels") || backend.userContexts[1] != "" {
-		t.Fatalf("resize notice = %q", backend.userContexts)
+	if !strings.Contains(backend.userContexts()[0], "Image 1 of 1 attached to this message was resized from 3200x10 to 1568x4 pixels") || backend.userContexts()[1] != "" {
+		t.Fatalf("resize notice = %q", backend.userContexts())
 	}
 }
 
@@ -74,18 +74,18 @@ func TestAFileThatIsNotAnImageFailsTheTurnBeforeSending(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := assistant.ContextEntity{Type: assistant.EntityImageURL, ID: imageinput.FileURL(path), Label: "fake.png"}
-	backend := &contextRecordingBackend{}
+	backend := &scriptBackend{}
 	engine := New(backend, Config{})
 
-	events := drain(engine.StartTurn(context.Background(), TurnInput{
+	events := drain(t, engine, TurnInput{
 		Message: "look", Context: &assistant.AssistantContext{Entities: []assistant.ContextEntity{file}},
-	}))
+	})
 
 	if last := events[len(events)-1]; !errors.Is(last.Err, imageinput.ErrNotImage) {
 		t.Fatalf("last event = %+v, want ErrNotImage", last)
 	}
-	if backend.calls != 0 {
-		t.Fatalf("backend received %d requests", backend.calls)
+	if len(backend.opts) != 0 {
+		t.Fatalf("backend received %d requests", len(backend.opts))
 	}
 	// The failed prompt keeps the file reference, so recalling it retries.
 	if blocks := engine.Snapshot(); len(blocks) != 1 || !reflect.DeepEqual(blocks[0].Context, []assistant.ContextEntity{file}) {
@@ -113,14 +113,14 @@ func TestPrepareImageContextPreservesOrderAndDeduplicates(t *testing.T) {
 }
 
 func TestTooManyImagesFailTheTurnBeforeSending(t *testing.T) {
-	backend := &contextRecordingBackend{}
+	backend := &scriptBackend{}
 	engine := New(backend, Config{})
 	var entities []assistant.ContextEntity
 	for i := range imageinput.MaxImages + 1 {
 		entities = append(entities, assistant.ContextEntity{Type: assistant.EntityImageURL, ID: fmt.Sprint("data:image/png;base64,", i)})
 	}
-	events := drain(engine.StartTurn(context.Background(), TurnInput{Message: "look", Context: &assistant.AssistantContext{Entities: entities}}))
-	if backend.calls != 0 {
+	events := drain(t, engine, TurnInput{Message: "look", Context: &assistant.AssistantContext{Entities: entities}})
+	if len(backend.opts) != 0 {
 		t.Fatal("too many images reached the backend")
 	}
 	if last := events[len(events)-1]; !errors.Is(last.Err, imageinput.ErrTooManyImages) {

@@ -54,9 +54,12 @@ func TestHeadlessUnexpectedQuestionReturnsUnsupported(t *testing.T) {
 	}
 	b := &headlessQuestionBackend{t: t}
 	engine := agent.New(b, agent.Config{})
-	result, err := engine.RunTurn(t.Context(), agent.TurnInput{Message: "choose", Tools: set}, nil)
-	if err != nil || result.Outcome != agent.TurnOutcomeCompleted {
-		t.Fatalf("result=%+v err=%v", result, err)
+	var last agent.Event
+	for event := range engine.StartTurn(t.Context(), agent.TurnInput{Message: "choose", Tools: set}) {
+		last = event
+	}
+	if last.Kind != agent.EventTurnDone {
+		t.Fatalf("last event = %+v, want a completed turn", last)
 	}
 	if b.calls != 2 || b.response.Status != assistant.ToolStatusError || !strings.Contains(b.response.Metadata.Output, "no client tool named") {
 		t.Fatalf("calls=%d response=%+v", b.calls, b.response)
