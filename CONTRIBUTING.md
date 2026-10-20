@@ -4,7 +4,7 @@ Thanks for your interest in contributing to Bits CLI! This document covers the b
 
 ## Prerequisites
 
-- Go 1.27.2 or later
+- Go 1.27.3 or later
 
 ## Getting started
 
