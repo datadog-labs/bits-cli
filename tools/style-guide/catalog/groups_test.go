@@ -106,7 +106,7 @@ func TestTextAttributeSamplesCarryAnExplicitForeground(t *testing.T) {
 		want   string // truecolor SGR foreground for that mode's primary level
 	}{
 		{name: "dark", isDark: true, want: "38;2;255;255;255"},
-		{name: "light", isDark: false, want: "38;2;0;0;0"},
+		{name: "light", isDark: false, want: "38;2;32;47;56"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			theme := styles.Default(test.isDark)
@@ -237,7 +237,7 @@ func TestSampleTitlesRenderAtPrimary(t *testing.T) {
 		want   string // truecolor SGR foreground for that mode's primary level
 	}{
 		{name: "dark", isDark: true, want: "38;2;255;255;255"},
-		{name: "light", isDark: false, want: "38;2;0;0;0"},
+		{name: "light", isDark: false, want: "38;2;32;47;56"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			page := renderGroup(groupTextAttrs, 100, styles.Default(test.isDark), 0)

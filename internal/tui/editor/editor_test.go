@@ -79,7 +79,7 @@ func TestTypedTextIsPaintedNotInherited(t *testing.T) {
 		want   string // truecolor SGR foreground the theme should emit
 	}{
 		{name: "dark", isDark: true, want: "38;2;255;255;255"},
-		{name: "light", isDark: false, want: "38;2;0;0;0"},
+		{name: "light", isDark: false, want: "38;2;32;47;56"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			e := New()

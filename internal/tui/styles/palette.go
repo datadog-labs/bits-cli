@@ -77,7 +77,7 @@ type palette struct {
 	// to full access" choice. #EB364B does not exist in this palette (nearest
 	// are critical #C4314B and error), so this is #EB364B at 50% over the
 	// mode's background, pre-derived rather than reusing an existing token:
-	// dark over #171921 -> #812836, light over #ECEFF4 -> #EC93A0.
+	// dark over #171921 -> #812836, light over #EDEFF6 -> #EC93A1.
 	fullAccessSurface string
 }
 
@@ -127,15 +127,16 @@ func darkPalette() palette {
 // The three text levels are picked by eye; see the palette struct.
 func lightPalette() palette {
 	return palette{
-		primary:              "#5e6dd6",
-		interactive:          "#3F4991",
-		secondary:            "#1d2140",
-		onAccent:             "#FFFFFF",
-		onWarning:            "#1A1A1A",
-		textPrimary:          "#000000",
+		primary:     "#5e6dd6",
+		interactive: "#5470E4",
+		secondary:   "#1d2140",
+		onAccent:    "#FFFFFF",
+		onWarning:   "#1A1A1A",
+		// textPrimary is #1C2B34 at 98% over this palette's background.
+		textPrimary:          "#202F38",
 		textSecondary:        "#5E5F62",
 		textTertiary:         "#989BA0",
-		background:           "#ECEFF4",
+		background:           "#EDEFF6",
 		surface:              "#CCD3DF",
 		surfaceRaised:        "#BDC5D3",
 		approvalSurface:      "#B7C1D5",
@@ -144,7 +145,7 @@ func lightPalette() palette {
 		codeSurface:          "#CED3DD",
 		codeText:             "#1C2E38",
 		accordionHover:       "#BDC5D3",
-		accordionDetailHover: "#D7DCE5",
+		accordionDetailHover: "#D7DCE6",
 		accordionBackground:  "#22242B",
 		sweepHot:             "#A2C6FF",
 		link:                 "#006bc2",
@@ -161,6 +162,6 @@ func lightPalette() palette {
 		critical:             "#C4314B",
 		info:                 "#632CA6",
 		warning:              "#F5A623",
-		fullAccessSurface:    "#EC93A0",
+		fullAccessSurface:    "#EC93A1",
 	}
 }
