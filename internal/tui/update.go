@@ -982,8 +982,10 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	return nil
 }
 
-// setDarkBackground adapts styles to the detected terminal background.
+// setDarkBackground adapts styles to the detected terminal background, unless
+// --theme pinned a polarity.
 func (m *Model) setDarkBackground(isDark bool) {
+	isDark = m.themeMode.Dark(isDark)
 	if isDark == m.styles.IsDark {
 		return
 	}

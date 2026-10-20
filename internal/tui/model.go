@@ -147,6 +147,7 @@ type Config struct {
 	OpenURL        func(context.Context, string) error
 	Logout         LogoutFunc
 	Upgrade        *update.Offer // nil when this installation cannot update itself
+	Theme          styles.Mode   // empty follows the terminal background
 }
 
 // Model is the root Bubble Tea model. All state lives here and is mutated only
@@ -241,6 +242,7 @@ type Model struct {
 	list       *chat.List
 	chatStyles chat.Styles
 	styles     styles.Theme // terminal styles; dark until detected
+	themeMode  styles.Mode  // pins polarity when set, ignoring the terminal
 
 	// One repaint clock samples independent elapsed-time timelines. Activity
 	// covers chat spinners and picker loading; the second timeline drives the
@@ -330,6 +332,13 @@ func (m *Model) configure(configs []Config) {
 		m.logout = configs[0].Logout
 		m.version = configs[0].Version
 		m.upgrade = newUpgradePrompt(configs[0].Upgrade)
+		m.themeMode = configs[0].Theme
+	}
+	// newShell starts dark, so a pin has to be applied here rather than waiting
+	// for a background reply that either contradicts it or never arrives.
+	m.setDarkBackground(m.styles.IsDark)
+	if m.loginModel != nil {
+		m.loginModel.SetThemeMode(m.themeMode)
 	}
 	if m.entitySearcher == nil && m.engine != nil {
 		m.entitySearcher = m.engine

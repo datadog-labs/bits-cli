@@ -81,13 +81,14 @@ type Model struct {
 	ctx   context.Context
 	login LoginFunc
 
-	phase    phase
-	custom   textinput.Model
-	selector *components.Selector
-	panel    *components.Panel
-	theme    styles.Theme
-	width    int
-	height   int
+	phase     phase
+	custom    textinput.Model
+	selector  *components.Selector
+	panel     *components.Panel
+	theme     styles.Theme
+	themeMode styles.Mode
+	width     int
+	height    int
 
 	attempt          uint64
 	cancel           context.CancelFunc
@@ -140,6 +141,13 @@ func (m *Model) Init() tea.Cmd {
 	return func() tea.Msg { return tea.RequestBackgroundColor() }
 }
 
+// SetThemeMode pins the polarity, ignoring the terminal background. The root
+// model calls it before Init so the picker never paints the wrong polarity.
+func (m *Model) SetThemeMode(mode styles.Mode) {
+	m.themeMode = mode
+	m.applyTheme(styles.Default(mode.Dark(m.theme.IsDark)))
+}
+
 func (m *Model) applyTheme(theme styles.Theme) {
 	m.theme = theme
 	m.custom.SetStyles(theme.TextInput)
@@ -155,7 +163,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.custom.SetWidth(max(12, min(48, msg.Width-10)))
 		return m, nil
 	case tea.BackgroundColorMsg:
-		m.applyTheme(styles.Default(msg.IsDark()))
+		m.applyTheme(styles.Default(m.themeMode.Dark(msg.IsDark())))
 		return m, nil
 	case tea.KeyPressMsg:
 		key := msg.String()
