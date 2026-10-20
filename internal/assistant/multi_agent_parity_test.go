@@ -191,20 +191,27 @@ func TestMultiAgentServerToolApprovalCorrelation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			event("model.response_started", `{}`)
 			if started {
 				event("tool.call_started", `{"tool_call_id":"write","tool_name":"server_write","is_client_side":false}`)
 			}
 			event("tool.call_requested", `{"tool_call_id":"write","tool_name":"server_write","tool_input":"{}","is_client_side":false}`)
 			event("tool.call_requested", `{"tool_call_id":"write","tool_name":"approval_request","tool_input":"{\"tool_call_id\":\"write\",\"tool_name\":\"server_write\",\"tool_args\":{}}","is_client_side":true}`)
-			event("client_tool.batch_ready", `{"generation":7,"tool_call_ids":["write"]}`)
+			event("client_tool.batch_ready", `{"generation":1,"tool_call_ids":["write"]}`)
 			event("tool.call_completed", `{"tool_call_id":"write","tool_name":"server_write","status":"success"}`)
 			for _, id := range ids {
 				if id != ids[0] {
 					t.Fatalf("server call, approval and completion must share one local identity: %v", ids)
 				}
 			}
-			if correlation := run.pendingTools[ids[0]]; correlation.wireToolCallID != "write" || correlation.generation != 7 {
+			if correlation := run.pendingTools[ids[0]]; correlation.wireToolCallID != "write" || correlation.generation != 1 {
 				t.Fatalf("approval correlation = %+v", correlation)
+			}
+			originalID := ids[0]
+			event("tool.call_requested", `{"tool_call_id":"write","tool_name":"approval_request","tool_input":"{\"tool_call_id\":\"write\",\"tool_name\":\"server_write\",\"tool_args\":{}}","is_client_side":true}`)
+			event("client_tool.batch_ready", `{"generation":2,"tool_call_ids":["write"]}`)
+			if ids[len(ids)-1] == originalID {
+				t.Fatalf("new approval generation reused resolved ID %q", originalID)
 			}
 		})
 	}

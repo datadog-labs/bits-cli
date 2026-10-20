@@ -450,7 +450,10 @@ func (c *MultiAgentClient) handleEvent(
 	}
 	message := func(content Content) Message {
 		messageID := run.messageIDs[envelope.AgentID]
-		if messageID == "" {
+		if content.Type == ContentWidgetDef || content.Type == ContentDashboard {
+			// Standalone payloads must not replace siblings from the same model response.
+			messageID = fmt.Sprintf("%s:%s:%d", run.id, envelope.AgentID, envelope.Sequence)
+		} else if messageID == "" {
 			messageID = fmt.Sprintf("%s:%s:%d", run.id, envelope.AgentID, envelope.Sequence)
 			run.messageIDs[envelope.AgentID] = messageID
 		}
@@ -505,7 +508,7 @@ func (c *MultiAgentClient) handleEvent(
 		if event.IsClientSide != nil && !*event.IsClientSide {
 			localID := run.toolIDs[key]
 			if localID == "" {
-				localID = multiAgentToolID(envelope.AgentID, envelope.Sequence, event.ToolCallID)
+				localID = fmt.Sprintf("multi-agent:%s:stream:%d:%s", envelope.AgentID, envelope.Sequence, event.ToolCallID)
 				run.toolIDs[key] = localID
 			}
 			// Approval and other deferred markers share the original server
@@ -595,7 +598,8 @@ func (c *MultiAgentClient) handleEvent(
 			localToolCallID = multiAgentToolID(envelope.AgentID, 0, event.ToolCallID)
 			run.toolIDs[key] = localToolCallID
 		}
-		content := ToolResultContent(localToolCallID, event.ToolName, ToolStatus(event.Status), event.DisplayContent)
+		// Display content is presentation only; keep the full locally recorded output.
+		content := ToolResultContent(localToolCallID, event.ToolName, ToolStatus(event.Status), "")
 		content.Tool.Title = event.DisplayTitle
 		if event.DisplayContent != "" {
 			content.Tool.Detail = &MarkdownPayload{Content: event.DisplayContent}
