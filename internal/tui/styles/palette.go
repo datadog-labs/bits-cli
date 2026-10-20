@@ -128,13 +128,13 @@ func darkPalette() palette {
 func lightPalette() palette {
 	return palette{
 		primary:     "#5e6dd6",
-		interactive: "#5470E4",
+		interactive: "#5E6DD6",
 		secondary:   "#1d2140",
 		onAccent:    "#FFFFFF",
 		onWarning:   "#1A1A1A",
 		// textPrimary is #1C2B34 at 98% over this palette's background.
 		textPrimary:          "#202F38",
-		textSecondary:        "#5E5F62",
+		textSecondary:        "#737373",
 		textTertiary:         "#989BA0",
 		background:           "#EDEFF6",
 		surface:              "#CCD3DF",
