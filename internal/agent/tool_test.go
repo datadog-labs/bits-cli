@@ -12,108 +12,13 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
-type toolTurnBackend struct {
-	t           *testing.T
-	toolName    string
-	responses   []assistant.ClientToolResponse
-	definitions []assistant.ClientTool
-	calls       int
-}
-
-type batchToolBackend struct {
-	t         *testing.T
-	toolNames []string
-	responses []assistant.ClientToolResponse
-	calls     int
-}
-
-type approvalScopeBackend struct {
-	t         *testing.T
-	calls     int
-	responses [][]assistant.ClientToolResponse
-}
-
-func (b *approvalScopeBackend) Send(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
-	b.t.Helper()
-	b.calls++
-	if b.calls > 1 {
-		responses, ok := message.([]assistant.ClientToolResponse)
-		if !ok {
-			b.t.Fatalf("tool follow-up has type %T", message)
-		}
-		b.responses = append(b.responses, responses)
+// writeRounds asks for two writes, then one more in a follow-up round.
+func writeRounds() [][]assistant.Message {
+	return [][]assistant.Message{
+		{clientCallMsg("call-a", "write", `{}`), clientCallMsg("call-b", "write", `{}`)},
+		{clientCallMsg("call-c", "write", `{}`)},
+		{textMsg("answer", "done")},
 	}
-
-	var calls []string
-	switch b.calls {
-	case 1:
-		calls = []string{"call-a", "call-b"}
-	case 2:
-		calls = []string{"call-c"}
-	default:
-		var response assistant.AssistantResponse
-		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("done"))
-		return "conversation-1", emit(response)
-	}
-
-	for _, id := range calls {
-		content := assistant.ToolCallContent(id, "write", `{}`)
-		content.Type = assistant.ContentClientToolCall
-		var response assistant.AssistantResponse
-		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-"+id, content)
-		if err := emit(response); err != nil {
-			return "conversation-1", err
-		}
-	}
-	return "conversation-1", nil
-}
-
-func (b *batchToolBackend) Send(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
-	b.t.Helper()
-	b.calls++
-	if b.calls == 1 {
-		for _, name := range b.toolNames {
-			content := assistant.ToolCallContent("call-"+name, name, `{}`)
-			content.Type = assistant.ContentClientToolCall
-			var response assistant.AssistantResponse
-			response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-"+name, content)
-			if err := emit(response); err != nil {
-				return "conversation-1", err
-			}
-		}
-		return "conversation-1", nil
-	}
-
-	var ok bool
-	b.responses, ok = message.([]assistant.ClientToolResponse)
-	if !ok {
-		b.t.Fatalf("tool follow-up has type %T", message)
-	}
-	var response assistant.AssistantResponse
-	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("done"))
-	return "conversation-1", emit(response)
-}
-
-func (b *toolTurnBackend) Send(_ context.Context, message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
-	b.t.Helper()
-	b.definitions = opts.ClientTools
-	b.calls++
-	if b.calls == 1 {
-		content := assistant.ToolCallContent("call-1", b.toolName, `{"value":42}`)
-		content.Type = assistant.ContentClientToolCall
-		var response assistant.AssistantResponse
-		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-message", content)
-		return "conversation-1", emit(response)
-	}
-
-	var ok bool
-	b.responses, ok = message.([]assistant.ClientToolResponse)
-	if !ok {
-		b.t.Fatalf("tool follow-up has type %T", message)
-	}
-	var response assistant.AssistantResponse
-	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("done"))
-	return "conversation-1", emit(response)
 }
 
 func TestEngineToolTurn(t *testing.T) {
@@ -138,7 +43,7 @@ func TestEngineToolTurn(t *testing.T) {
 	for _, mode := range []PermissionsMode{ModeSkipPermissions, ModeManual} {
 		for _, tt := range tests {
 			t.Run(string(mode)+"/"+tt.name, func(t *testing.T) {
-				backend := &toolTurnBackend{t: t, toolName: tt.toolName}
+				backend := &scriptBackend{rounds: [][]assistant.Message{{clientCallMsg("call-1", tt.toolName, `{"value":42}`)}, {textMsg("answer", "done")}}}
 				var tools *ToolSet
 				if tt.toolName != "missing" {
 					var err error
@@ -156,24 +61,25 @@ func TestEngineToolTurn(t *testing.T) {
 					}
 				}
 
-				events := drain(New(backend, Config{}).StartTurn(context.Background(), TurnInput{
+				events := drain(t, New(backend, Config{}), TurnInput{
 					Message: "use a tool",
 					Tools:   tools,
-				}))
+				})
 				if tt.wantErr != nil {
 					if got := events[len(events)-1]; got.Kind != EventError || !errors.Is(got.Err, tt.wantErr) {
 						t.Fatalf("last event = %+v", got)
 					}
-					if backend.calls != 1 {
-						t.Fatalf("backend calls = %d, want 1", backend.calls)
+					if len(backend.opts) != 1 {
+						t.Fatalf("backend calls = %d, want 1", len(backend.opts))
 					}
 					return
 				}
 
-				if len(backend.responses) != 1 {
-					t.Fatalf("tool responses = %d, want 1", len(backend.responses))
+				batches := backend.responses()
+				if len(batches) != 1 || len(batches[0]) != 1 {
+					t.Fatalf("tool responses = %v, want one", batches)
 				}
-				response := backend.responses[0]
+				response := batches[0][0]
 				if response.ToolCallID != "call-1" || response.Status != tt.wantStatus || response.Title != tt.wantTitle || response.Metadata.Output != tt.wantOutput {
 					t.Fatalf("tool response = %+v", response)
 				}
@@ -239,7 +145,7 @@ func TestEngineApprovalScope(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			backend := &approvalScopeBackend{t: t}
+			backend := &scriptBackend{rounds: writeRounds()}
 			var runs atomic.Int32
 			tools, err := NewToolSet(ModeManual, Tool{
 				Definition: assistant.ClientTool{Name: "write"},
@@ -307,7 +213,7 @@ func TestEngineApprovalScope(t *testing.T) {
 			}
 			// ApprovalDeny aborts right after call-a's answer; a session grant
 			// decides later gates on its own. Draining ends both cases.
-			rest := drain(events)
+			rest := collect(events)
 			all = append(all, rest...)
 
 			if decisions != tt.wantDecisions {
@@ -319,8 +225,12 @@ func TestEngineApprovalScope(t *testing.T) {
 			if len(rest) == 0 || rest[len(rest)-1].Kind != EventTurnDone {
 				t.Fatalf("turn did not end cleanly: %v", kinds(rest))
 			}
-			if backend.calls != tt.wantCalls {
-				t.Fatalf("backend calls = %d, want %d", backend.calls, tt.wantCalls)
+			if len(backend.opts) != tt.wantCalls {
+				t.Fatalf("backend calls = %d, want %d", len(backend.opts), tt.wantCalls)
+			}
+			batches := backend.responses()
+			if len(batches) != 2 || len(batches[0]) != 2 || len(batches[1]) != 1 {
+				t.Fatalf("response batch sizes = %v, want [2 1]", responseBatchSizes(batches))
 			}
 			if got := tools.PermissionsMode(); got != tt.wantMode {
 				t.Fatalf("mode = %q, want %q", got, tt.wantMode)
@@ -328,32 +238,21 @@ func TestEngineApprovalScope(t *testing.T) {
 
 			if tt.decision == ApprovalDeny {
 				// Denial and sibling answer first; the follow-up drains as cancelled.
-				if len(backend.responses) != 2 || len(backend.responses[0]) != 2 || len(backend.responses[1]) != 1 {
-					t.Fatalf("response batch sizes = %v, want [2 1]", responseBatchSizes(backend.responses))
-				}
-				if response := backend.responses[0][0]; response.ToolCallID != "call-a" || response.Status != assistant.ToolStatusError || response.Metadata.Output != "local execution was denied by the user" {
+				if response := batches[0][0]; response.ToolCallID != "call-a" || response.Status != assistant.ToolStatusError || response.Metadata.Output != "local execution was denied by the user" {
 					t.Fatalf("denial response = %+v, want the typed error for call-a", response)
 				}
-				if response := backend.responses[0][1]; response.ToolCallID != "call-b" || response.Status != assistant.ToolStatusError {
+				if response := batches[0][1]; response.ToolCallID != "call-b" || response.Status != assistant.ToolStatusError {
 					t.Fatalf("sibling response = %+v, want the cancelled result sent on the wire", response)
 				}
-				if response := backend.responses[1][0]; response.ToolCallID != "call-c" || response.Status != assistant.ToolStatusError || response.Metadata.Output != "tool execution was cancelled by the user" {
+				if response := batches[1][0]; response.ToolCallID != "call-c" || response.Status != assistant.ToolStatusError || response.Metadata.Output != "tool execution was cancelled by the user" {
 					t.Fatalf("follow-up response = %+v, want the cancelled result sent on the wire", response)
 				}
 				assertToolResult(t, all, "call-a", "Permission denied", ToolDenied)
 				assertToolResult(t, all, "call-b", "Cancelled", ToolCancelled)
-				if !hasDeniedToolBlock(t, all, "call-a") {
-					t.Fatal("tool call-a denial was not recorded as a typed outcome")
-				}
 				// The abort happened before the follow-up round: call-c never decides.
 				if hasToolStatus(all, "call-c", ToolAwaitingApproval) {
 					t.Fatal("aborted round still processed the model's follow-up round")
 				}
-				return
-			}
-
-			if len(backend.responses) != 2 || len(backend.responses[0]) != 2 || len(backend.responses[1]) != 1 {
-				t.Fatalf("response batch sizes = %v, want [2 1]", responseBatchSizes(backend.responses))
 			}
 		})
 	}
@@ -372,7 +271,7 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 		{mode: ModeDeny, callC: ToolDenied},
 	} {
 		t.Run(string(tt.mode), func(t *testing.T) {
-			backend := &approvalScopeBackend{t: t}
+			backend := &scriptBackend{rounds: writeRounds()}
 			release := make(chan struct{})
 			gating, switched := make(chan struct{}), make(chan struct{})
 			var pause sync.Once
@@ -421,7 +320,7 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 			if tt.callC == ToolAwaitingApproval && !engine.Decide("call-c", ApprovalAllowOnce) {
 				t.Fatal("decision for call-c was not queued")
 			}
-			if all := drain(events); len(all) == 0 || all[len(all)-1].Kind != EventTurnDone {
+			if all := collect(events); len(all) == 0 || all[len(all)-1].Kind != EventTurnDone {
 				t.Fatalf("turn did not complete: %v", kinds(all))
 			}
 			if engine.GrantSessionFor("call-c") {
@@ -445,11 +344,11 @@ func TestEngineAbortedRoundUnparksItsCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	engine := New(&approvalScopeBackend{t: t}, Config{})
+	engine := New(&scriptBackend{rounds: writeRounds()}, Config{})
 	events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools})
 	waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
 	cancel()
-	drain(events)
+	collect(events)
 	if engine.GrantSessionFor("call-a") {
 		t.Fatal("granted for call-a after its turn was cancelled")
 	}
@@ -746,54 +645,10 @@ func TestGateSnapshotGovernsOneGateEvaluation(t *testing.T) {
 	}
 }
 
-func TestEngineSkipPermissionsSkipsApprovalGates(t *testing.T) {
-	backend := &approvalScopeBackend{t: t}
-	var runs atomic.Int32
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{
-		Definition: assistant.ClientTool{Name: "write"},
-		Approval: func(ToolCall) (ApprovalRequirement, bool) {
-			return ApprovalRequirement{
-				Key:    ApprovalKey{Tool: "write", Resource: "workspace"},
-				Prompt: ApprovalPrompt{Title: "Write record?"},
-			}, true
-		},
-		Handler: func(context.Context, ToolCall) (ToolResult, error) {
-			runs.Add(1)
-			return ToolResult{Title: "Wrote record", Output: "ok"}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	events := drain(New(backend, Config{}).StartTurn(ctx, TurnInput{Message: "write", Tools: tools}))
-
-	// No Decide is ever issued, yet every call runs and the turn completes.
-	if got := runs.Load(); got != 3 {
-		t.Fatalf("handler runs = %d, want 3", got)
-	}
-	for _, id := range []string{"call-a", "call-b", "call-c"} {
-		if hasToolStatus(events, id, ToolAwaitingApproval) {
-			t.Fatalf("tool %q requested approval in skip-permissions mode", id)
-		}
-		if !hasToolStatus(events, id, ToolSuccess) {
-			t.Fatalf("tool %q never completed successfully in skip-permissions mode", id)
-		}
-	}
-	if len(events) == 0 || events[len(events)-1].Kind != EventTurnDone {
-		t.Fatalf("turn did not complete: %v", kinds(events))
-	}
-	if len(backend.responses) != 2 || len(backend.responses[0]) != 2 || len(backend.responses[1]) != 1 {
-		t.Fatalf("response batch sizes = %v, want [2 1]", responseBatchSizes(backend.responses))
-	}
-}
-
 // In a mixed toolset, manual mode gates the gated tool while the ungated
 // sibling runs without any decision.
 func TestEngineManualModeLeavesUngatedToolsUnblocked(t *testing.T) {
-	backend := &batchToolBackend{t: t, toolNames: []string{"read", "write"}}
+	backend := &scriptBackend{rounds: toolRounds("read", "write")}
 	started := make(chan string, 2)
 	gate := func(ToolCall) (ApprovalRequirement, bool) {
 		return ApprovalRequirement{Key: ApprovalKey{Tool: "write", Resource: "workspace"}}, true
@@ -826,61 +681,48 @@ func TestEngineManualModeLeavesUngatedToolsUnblocked(t *testing.T) {
 	if name := receiveName(t, started); name != "write" {
 		t.Fatalf("second started tool = %q, want write", name)
 	}
-	_ = drain(events)
+	_ = collect(events)
 
-	if len(backend.responses) != 2 {
-		t.Fatalf("tool responses = %d, want 2", len(backend.responses))
-	}
-	if backend.responses[0].ToolCallID != "call-read" || backend.responses[1].ToolCallID != "call-write" {
-		t.Fatalf("response order = %q, %q", backend.responses[0].ToolCallID, backend.responses[1].ToolCallID)
+	if got := responseIDs(backend.responses()); got != "call-read,call-write" {
+		t.Fatalf("responses = %s", got)
 	}
 }
 
-// The same mixed toolset in skip-permissions mode: no tool awaits a decision,
-// and the mode leaves per-tool behavior and response order untouched.
-func TestEngineSkipPermissionsRunsMixedToolsetWithoutDecisions(t *testing.T) {
-	backend := &batchToolBackend{t: t, toolNames: []string{"read", "write"}}
-	started := make(chan string, 2)
-	gate := func(ToolCall) (ApprovalRequirement, bool) {
-		return ApprovalRequirement{Key: ApprovalKey{Tool: "write", Resource: "workspace"}}, true
-	}
-	handler := func(_ context.Context, call ToolCall) (ToolResult, error) {
-		started <- call.Name
-		return ToolResult{Output: call.Name}, nil
-	}
+// Skip-permissions runs gated and ungated tools without a decision and
+// approves the server gate on the wire, keeping the response order.
+func TestEngineSkipPermissionsSkipsApprovalGates(t *testing.T) {
+	rounds := toolRounds("read", "write")
+	rounds[0] = append(rounds[0], clientCallMsg("gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"gate-1"}`))
+	backend := &scriptBackend{rounds: rounds}
+	handler := func(_ context.Context, call ToolCall) (ToolResult, error) { return ToolResult{Output: call.Name}, nil }
 	tools, err := NewToolSet(ModeSkipPermissions,
 		Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: handler},
-		Tool{Definition: assistant.ClientTool{Name: "write"}, Approval: gate, Handler: handler},
+		Tool{Definition: assistant.ClientTool{Name: "write"}, Approval: writeApproval, Handler: handler},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	events := drain(New(backend, Config{}).StartTurn(ctx, TurnInput{Message: "run both", Tools: tools}))
-
-	// Every tool runs with no decision; handler start order is scheduler-
-	// dependent, so only the completed set is asserted here.
-	receiveNames(t, started, 2)
-	for _, id := range []string{"call-read", "call-write"} {
-		if hasToolStatus(events, id, ToolAwaitingApproval) {
-			t.Fatalf("tool %q requested approval in skip-permissions mode", id)
-		}
-		if !hasToolStatus(events, id, ToolSuccess) {
-			t.Fatalf("tool %q never completed successfully", id)
+	events := drain(t, New(backend, Config{}), TurnInput{Message: "run all", Tools: tools})
+	if events[len(events)-1].Kind != EventTurnDone {
+		t.Fatalf("turn did not complete: %v", kinds(events))
+	}
+	for _, id := range []string{"call-read", "call-write", "gate-1"} {
+		if hasToolStatus(events, id, ToolAwaitingApproval) || !hasToolStatus(events, id, ToolSuccess) {
+			t.Fatalf("tool %q did not run without a decision", id)
 		}
 	}
-	if len(backend.responses) != 2 {
-		t.Fatalf("tool responses = %d, want 2", len(backend.responses))
+	batches := backend.responses()
+	if got := responseIDs(batches); got != "call-read,call-write,gate-1" {
+		t.Fatalf("responses = %s", got)
 	}
-	if backend.responses[0].ToolCallID != "call-read" || backend.responses[1].ToolCallID != "call-write" {
-		t.Fatalf("response order = %q, %q", backend.responses[0].ToolCallID, backend.responses[1].ToolCallID)
+	if gate := batches[0][2]; gate.Title != "Approved" || gate.Metadata.Output != "the write was approved" {
+		t.Fatalf("gate response = %+v, want an explicit approval", gate)
 	}
 }
 
 func TestEngineParallelApprovalKeepsCallOrder(t *testing.T) {
-	backend := &batchToolBackend{t: t, toolNames: []string{"a", "b"}}
+	backend := &scriptBackend{rounds: toolRounds("a", "b")}
 	started := make(chan string, 2)
 	finished := make(chan string, 2)
 	gates := map[string]chan struct{}{"a": make(chan struct{}), "b": make(chan struct{})}
@@ -907,18 +749,15 @@ func TestEngineParallelApprovalKeepsCallOrder(t *testing.T) {
 		t.Fatalf("first completed tool = %q, want b", name)
 	}
 	close(gates["a"])
-	_ = drain(events)
+	_ = collect(events)
 
-	if len(backend.responses) != 2 {
-		t.Fatalf("tool responses = %d, want 2", len(backend.responses))
-	}
-	if backend.responses[0].ToolCallID != "call-a" || backend.responses[1].ToolCallID != "call-b" {
-		t.Fatalf("response order = %q, %q", backend.responses[0].ToolCallID, backend.responses[1].ToolCallID)
+	if got := responseIDs(backend.responses()); got != "call-a,call-b" {
+		t.Fatalf("responses = %s", got)
 	}
 }
 
 func TestEngineCancelRunningTool(t *testing.T) {
-	backend := &batchToolBackend{t: t, toolNames: []string{"a", "b"}}
+	backend := &scriptBackend{rounds: toolRounds("a", "b")}
 	started := make(chan string, 2)
 	gate := make(chan struct{})
 	tools, err := NewToolSet(ModeManual,
@@ -944,23 +783,24 @@ func TestEngineCancelRunningTool(t *testing.T) {
 	receiveNames(t, started, 2)
 	engine.CancelTool("call-a")
 	close(gate)
-	_ = drain(events)
+	_ = collect(events)
 
-	if len(backend.responses) != 2 {
-		t.Fatalf("tool responses = %d, want 2", len(backend.responses))
+	batches := backend.responses()
+	if got := responseIDs(batches); got != "call-a,call-b" {
+		t.Fatalf("responses = %s", got)
 	}
-	if backend.responses[0].Title != "Cancelled" || backend.responses[0].Status != assistant.ToolStatusError {
-		t.Fatalf("cancelled response = %+v", backend.responses[0])
+	if batches[0][0].Title != "Cancelled" || batches[0][0].Status != assistant.ToolStatusError {
+		t.Fatalf("cancelled response = %+v", batches[0][0])
 	}
-	if backend.responses[1].Metadata.Output != "b" {
-		t.Fatalf("completed response = %+v", backend.responses[1])
+	if batches[0][1].Metadata.Output != "b" {
+		t.Fatalf("completed response = %+v", batches[0][1])
 	}
 }
 
 // StopTools answers every unresolved call in the round as cancelled, persists
 // that batch, and ends the turn without folding the backend's follow-up.
 func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
-	backend := &batchToolBackend{t: t, toolNames: []string{"run", "gated"}}
+	backend := &scriptBackend{rounds: toolRounds("run", "gated")}
 	started := make(chan struct{})
 	handlerErr := make(chan error, 1)
 	tools, err := NewToolSet(ModeManual,
@@ -990,7 +830,7 @@ func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
 	if !engine.StopTools() {
 		t.Fatal("StopTools was not accepted during an active round")
 	}
-	rest := drain(events)
+	rest := collect(events)
 
 	if err := <-handlerErr; !errors.Is(err, context.Canceled) {
 		t.Fatalf("running handler context error = %v, want canceled", err)
@@ -1001,12 +841,13 @@ func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
 	if len(rest) == 0 || rest[len(rest)-1].Kind != EventTurnDone {
 		t.Fatalf("stopped turn did not end with EventTurnDone: %+v", rest)
 	}
-	if backend.calls != 2 || len(backend.responses) != 2 {
-		t.Fatalf("backend calls/responses = %d/%d, want 2/2", backend.calls, len(backend.responses))
+	batches := backend.responses()
+	if len(backend.opts) != 2 || responseIDs(batches) != "call-run,call-gated" {
+		t.Fatalf("backend calls/responses = %d/%s, want 2 and both calls", len(backend.opts), responseIDs(batches))
 	}
 	for i, id := range []string{"call-run", "call-gated"} {
-		response := backend.responses[i]
-		if response.ToolCallID != id || response.Title != "Cancelled" || response.Status != assistant.ToolStatusError {
+		response := batches[0][i]
+		if response.Title != "Cancelled" || response.Status != assistant.ToolStatusError {
 			t.Fatalf("response %d = %+v, want cancelled %s", i, response, id)
 		}
 		if !hasToolStatus(rest, id, ToolCancelled) {
@@ -1066,22 +907,6 @@ func hasToolStatus(events []Event, id string, status ToolStatus) bool {
 	return false
 }
 
-// hasDeniedToolBlock reports whether id's terminal block carries the typed
-// denial status rather than a plain error.
-func hasDeniedToolBlock(t *testing.T, events []Event, id string) bool {
-	t.Helper()
-	for _, event := range events {
-		block, ok := stateBlock(event, id)
-		if !ok || block.Tool == nil {
-			continue
-		}
-		if block.Tool.Status == ToolDenied {
-			return true
-		}
-	}
-	return false
-}
-
 func assertToolResult(t *testing.T, events []Event, id, title string, status ToolStatus) {
 	t.Helper()
 	for i := len(events) - 1; i >= 0; i-- {
@@ -1095,6 +920,26 @@ func assertToolResult(t *testing.T, events []Event, id, title string, status Too
 		return
 	}
 	t.Fatalf("tool %q has no result event", id)
+}
+
+// writeApproval gates writes to the workspace.
+func writeApproval(ToolCall) (ApprovalRequirement, bool) {
+	return ApprovalRequirement{Key: ApprovalKey{Tool: "write", Resource: "workspace"}}, true
+}
+
+// responseIDs lists the tool call IDs of every response batch, "|" between
+// batches.
+func responseIDs(batches [][]assistant.ClientToolResponse) string {
+	var ids []string
+	for i, batch := range batches {
+		if i > 0 {
+			ids = append(ids, "|")
+		}
+		for _, response := range batch {
+			ids = append(ids, response.ToolCallID)
+		}
+	}
+	return strings.ReplaceAll(strings.Join(ids, ","), ",|,", "|")
 }
 
 func responseBatchSizes(batches [][]assistant.ClientToolResponse) []int {

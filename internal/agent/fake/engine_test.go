@@ -40,28 +40,27 @@ func workspaceTools(t *testing.T, mode agent.PermissionsMode) *agent.ToolSet {
 	return set
 }
 
-// runTurn runs one completed turn, calling decide for each newly pending
-// approval, and returns the result and the highest backend round seen.
+// runTurn runs one turn that must complete, calling decide for each newly
+// pending approval, and returns the final blocks and the last backend round.
 func runTurn(t *testing.T, engine *agent.Engine, message string, set *agent.ToolSet, onDeny agent.DenyPolicy,
 	decide func(agent.Block) agent.ApprovalDecision,
-) (agent.TurnResult, int) {
+) ([]agent.Block, int) {
 	t.Helper()
 	decided := map[string]bool{}
-	rounds := 0
-	result, err := engine.RunTurn(context.Background(), agent.TurnInput{Message: message, Tools: set, OnDeny: onDeny}, func(ev agent.Event) error {
-		rounds = max(rounds, ev.Round)
+	var last agent.Event
+	for ev := range engine.StartTurn(context.Background(), agent.TurnInput{Message: message, Tools: set, OnDeny: onDeny}) {
+		last = ev
 		for _, block := range ev.Transcript.PendingApprovals() {
 			if id := block.ToolCallID(); !decided[id] {
 				decided[id] = true
 				engine.Decide(id, decide(block))
 			}
 		}
-		return nil
-	})
-	if err != nil || result.Outcome != agent.TurnOutcomeCompleted {
-		t.Fatalf("turn outcome %q, err %v", result.Outcome, err)
 	}
-	return result, rounds
+	if last.Kind != agent.EventTurnDone {
+		t.Fatalf("last event = %+v, want a completed turn", last)
+	}
+	return engine.Snapshot(), last.Round
 }
 
 func texts(blocks []agent.Block) []string {
@@ -88,11 +87,11 @@ func toolBlock(t *testing.T, blocks []agent.Block, name string) *agent.ToolBlock
 func TestParallelClientCalls(t *testing.T) {
 	engine := agent.New(&Fake{}, agent.Config{})
 	script := `rs = call([("list_files", {"path": "."}), ("read_file", {"path": "go.mod"}), ("grep_files", {"pattern": "TODO"})]); say(str(["go.mod" in rs[0].output, "module demo" in rs[1].output, "notes.txt" in rs[2].output]))`
-	result, rounds := runTurn(t, engine, script, workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
+	blocks, rounds := runTurn(t, engine, script, workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
 	if rounds != 2 {
 		t.Fatalf("backend rounds = %d, want 2", rounds)
 	}
-	if got := texts(result.Blocks); !slices.Equal(got, []string{"[True, True, True]"}) {
+	if got := texts(blocks); !slices.Equal(got, []string{"[True, True, True]"}) {
 		t.Fatalf("results reached the script out of order: %q", got)
 	}
 }
@@ -108,21 +107,21 @@ func TestServerGateWithClientCall(t *testing.T) {
 
 	t.Run("deny continue", func(t *testing.T) {
 		engine := agent.New(&Fake{}, agent.Config{})
-		result, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeManual), agent.DenyContinue, decide)
-		if got := texts(result.Blocks); !slices.Equal(got, []string{"not created"}) {
+		blocks, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeManual), agent.DenyContinue, decide)
+		if got := texts(blocks); !slices.Equal(got, []string{"not created"}) {
 			t.Fatalf("answer = %q", got)
 		}
-		if read := toolBlock(t, result.Blocks, "read_file"); read.Status != agent.ToolSuccess {
+		if read := toolBlock(t, blocks, "read_file"); read.Status != agent.ToolSuccess {
 			t.Fatalf("read status = %v", read.Status)
 		}
 	})
 	t.Run("deny stop", func(t *testing.T) {
 		engine := agent.New(&Fake{}, agent.Config{})
-		result, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeManual), agent.DenyStop, decide)
-		if !result.Denied || len(texts(result.Blocks)) != 0 {
-			t.Fatalf("denied = %t, answers = %q", result.Denied, texts(result.Blocks))
+		blocks, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeManual), agent.DenyStop, decide)
+		if gate := toolBlock(t, blocks, assistant.ApprovalRequestTool); gate.Status != agent.ToolDenied || len(texts(blocks)) != 0 {
+			t.Fatalf("gate status = %v, answers = %q", gate.Status, texts(blocks))
 		}
-		if read := toolBlock(t, result.Blocks, "read_file"); read.Status != agent.ToolCancelled {
+		if read := toolBlock(t, blocks, "read_file"); read.Status != agent.ToolCancelled {
 			t.Fatal("pending read was not cancelled by the denial")
 		}
 	})
@@ -132,9 +131,9 @@ func TestServerGateWithClientCall(t *testing.T) {
 // so schema drift fails here rather than during manual QA.
 func TestDisclosureScript(t *testing.T) {
 	engine := agent.New(&Fake{ScriptRoot: "testdata"}, agent.Config{})
-	result, _ := runTurn(t, engine, `load("disclosure.star", "all"); all()`, workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
+	blocks, _ := runTurn(t, engine, `load("disclosure.star", "all"); all()`, workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
 	var calls int
-	for _, block := range result.Blocks {
+	for _, block := range blocks {
 		if block.Kind == assistant.KindText && strings.Contains(block.Markdown.Content, "fake script error") {
 			t.Fatalf("script failed:\n%s", block.Markdown.Content)
 		}
@@ -157,10 +156,10 @@ func TestDisclosureScript(t *testing.T) {
 
 func TestKitchen(t *testing.T) {
 	engine := agent.New(&Fake{}, agent.Config{})
-	result, _ := runTurn(t, engine, "kitchen()", workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
+	blocks, _ := runTurn(t, engine, "kitchen()", workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
 	kinds := map[assistant.ContentKind]bool{}
 	styles := chat.DefaultStyles(true)
-	for _, block := range result.Blocks {
+	for _, block := range blocks {
 		kinds[block.Kind] = true
 		if strings.TrimSpace(chat.RenderBlock(block, 80, styles, 0)) == "" {
 			t.Errorf("block %s rendered empty", block.ID)

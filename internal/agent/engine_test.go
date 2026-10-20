@@ -4,87 +4,142 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
-// scriptBackend replays a fixed set of messages, then returns convID/err.
+// scriptBackend is the test backend: Send i streams rounds[i], if any, and
+// every request is recorded. It returns the request's conversation ID, or
+// convID for a new conversation.
 type scriptBackend struct {
-	msgs   []assistant.Message
+	rounds [][]assistant.Message
 	convID string
+	// After streaming the final round, Send closes started and, when hold is
+	// set, waits for hold to close or the request to be cancelled.
+	started chan struct{}
+	hold    chan struct{}
+	// err is returned by Send failOn (default the first), even if cancelled.
 	err    error
+	failOn int
+
+	startOnce sync.Once
+	opts      []assistant.SendOptions
+	sent      []any
 }
 
-func (b *scriptBackend) Send(_ context.Context, _ any, _ assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
-	for _, m := range b.msgs {
-		var ar assistant.AssistantResponse
-		ar.Data.Attributes.StructuredMessage = m
-		if err := fn(ar); err != nil {
-			return "", err
-		}
-	}
-	return b.convID, b.err
-}
-
-// blockingBackend holds a turn open until gate is closed.
-type blockingBackend struct{ gate chan struct{} }
-
-func (b *blockingBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
-	select {
-	case <-b.gate:
-	case <-ctx.Done():
-	}
-	return "conv", nil
-}
-
-type conversationRecordingBackend struct {
-	opts     []assistant.SendOptions
-	messages map[string][]string
-}
-
-type cancellationIDBackend struct{ started chan struct{} }
-
-type contextRecordingBackend struct {
-	calls        int
-	contexts     []*assistant.AssistantContext
-	userContexts []string
-}
-
-func (b *contextRecordingBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
-	b.calls++
-	b.contexts = append(b.contexts, opts.Context)
-	b.userContexts = append(b.userContexts, opts.CustomUserContext)
-	var response assistant.AssistantResponse
-	if b.calls == 1 {
-		content := assistant.ToolCallContent("tool-call-1", "read", `{}`)
-		content.Type = assistant.ContentClientToolCall
-		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-message", content)
-		return "conversation-1", emit(response)
-	}
-	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer-message", assistant.TextContent("done"))
-	return "conversation-1", emit(response)
-}
-
-func (b *cancellationIDBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
-	close(b.started)
-	<-ctx.Done()
-	return "created-before-cancel", ctx.Err()
-}
-
-func (b *conversationRecordingBackend) Send(_ context.Context, message any, opts assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
+func (b *scriptBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.opts = append(b.opts, opts)
+	b.sent = append(b.sent, message)
+	n := len(b.sent)
 	id := opts.ConversationID
 	if id == "" {
-		id = "new-conversation-1"
+		id = b.convID
 	}
-	b.messages[id] = append(b.messages[id], message.(string))
+	if n <= len(b.rounds) {
+		for _, m := range b.rounds[n-1] {
+			var response assistant.AssistantResponse
+			response.Data.Attributes.StructuredMessage = m
+			if err := emit(response); err != nil {
+				return id, err
+			}
+		}
+	}
+	held := false
+	if n >= len(b.rounds) {
+		if b.started != nil {
+			b.startOnce.Do(func() { close(b.started) })
+		}
+		if b.hold != nil {
+			held = true
+			select {
+			case <-b.hold:
+			case <-ctx.Done():
+			}
+		}
+	}
+	if b.err != nil && n == max(b.failOn, 1) {
+		return id, b.err
+	}
+	if held {
+		return id, ctx.Err()
+	}
 	return id, nil
 }
 
+// last returns the options of the latest request.
+func (b *scriptBackend) last() assistant.SendOptions {
+	if len(b.opts) == 0 {
+		return assistant.SendOptions{}
+	}
+	return b.opts[len(b.opts)-1]
+}
+
+// userContexts returns the custom user context of every request.
+func (b *scriptBackend) userContexts() []string {
+	contexts := make([]string, len(b.opts))
+	for i, opts := range b.opts {
+		contexts[i] = opts.CustomUserContext
+	}
+	return contexts
+}
+
+// responses returns the client tool response batches sent as follow-ups.
+func (b *scriptBackend) responses() [][]assistant.ClientToolResponse {
+	var batches [][]assistant.ClientToolResponse
+	for _, message := range b.sent {
+		if batch, ok := message.([]assistant.ClientToolResponse); ok {
+			batches = append(batches, batch)
+		}
+	}
+	return batches
+}
+
+// userMessages returns the user messages sent to one conversation.
+func (b *scriptBackend) userMessages(conversationID string) []string {
+	var messages []string
+	for i, message := range b.sent {
+		id := b.opts[i].ConversationID
+		if id == "" {
+			id = b.convID
+		}
+		if text, ok := message.(string); ok && id == conversationID {
+			messages = append(messages, text)
+		}
+	}
+	return messages
+}
+
+func textMsg(id, text string) assistant.Message {
+	return assistant.AssistantMessage(id, assistant.TextContent(text))
+}
+
+func serverCallMsg(callID, name, input string) assistant.Message {
+	return assistant.AssistantMessage(callID, assistant.ToolCallContent(callID, name, input))
+}
+
+func clientCallMsg(callID, name, input string) assistant.Message {
+	content := assistant.ToolCallContent(callID, name, input)
+	content.Type = assistant.ContentClientToolCall
+	return assistant.AssistantMessage(callID, content)
+}
+
+// toolRounds asks for a client call "call-<name>" to each tool in one round,
+// then answers.
+func toolRounds(names ...string) [][]assistant.Message {
+	calls := make([]assistant.Message, len(names))
+	for i, name := range names {
+		calls[i] = clientCallMsg("call-"+name, name, `{}`)
+	}
+	return [][]assistant.Message{calls, {textMsg("answer", "done")}}
+}
+
 func TestContextIsSentOnlyWithTheUserMessage(t *testing.T) {
-	backend := &contextRecordingBackend{}
+	backend := &scriptBackend{rounds: toolRounds("read")}
 	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler: func(context.Context, ToolCall) (ToolResult, error) {
@@ -98,22 +153,22 @@ func TestContextIsSentOnlyWithTheUserMessage(t *testing.T) {
 	turnContext := &assistant.AssistantContext{Entities: []assistant.ContextEntity{{
 		Type: "dashboard", ID: "dash-1", Label: "Checkout overview",
 	}}}
-	drain(engine.StartTurn(context.Background(), TurnInput{Message: "inspect", Tools: tools, Context: turnContext}))
-	drain(engine.StartTurn(context.Background(), TurnInput{Message: "next turn", Tools: tools}))
+	drain(t, engine, TurnInput{Message: "inspect", Tools: tools, Context: turnContext})
+	drain(t, engine, TurnInput{Message: "next turn", Tools: tools})
 
-	if len(backend.contexts) != 3 {
-		t.Fatalf("request contexts = %#v", backend.contexts)
+	if len(backend.opts) != 3 {
+		t.Fatalf("requests = %d, want 3", len(backend.opts))
 	}
-	if !reflect.DeepEqual(backend.contexts[0], turnContext) {
-		t.Fatalf("user message context = %#v, want %#v", backend.contexts[0], turnContext)
+	if !reflect.DeepEqual(backend.opts[0].Context, turnContext) {
+		t.Fatalf("user message context = %#v, want %#v", backend.opts[0].Context, turnContext)
 	}
-	if backend.contexts[1] != nil || backend.contexts[2] != nil {
-		t.Fatalf("tool answers or the next turn carried context: %#v", backend.contexts[1:])
+	if backend.opts[1].Context != nil || backend.opts[2].Context != nil {
+		t.Fatalf("tool answers or the next turn carried context: %#v, %#v", backend.opts[1].Context, backend.opts[2].Context)
 	}
 }
 
 func TestUserContextIsSentOnlyWhenTheConversationLacksIt(t *testing.T) {
-	backend := &contextRecordingBackend{}
+	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
 	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler: func(context.Context, ToolCall) (ToolResult, error) {
@@ -127,7 +182,7 @@ func TestUserContextIsSentOnlyWhenTheConversationLacksIt(t *testing.T) {
 	userContext := func(context.Context) string { return env }
 	engine := New(backend, Config{UserContext: userContext})
 	turn := func() {
-		drain(engine.StartTurn(context.Background(), TurnInput{Message: "hi", Tools: tools}))
+		drain(t, engine, TurnInput{Message: "hi", Tools: tools})
 	}
 
 	turn() // tool call, then continuation
@@ -145,23 +200,28 @@ func TestUserContextIsSentOnlyWhenTheConversationLacksIt(t *testing.T) {
 	turn()
 
 	want := []string{"env-a", "", "", "env-b", "env-b", "env-b"}
-	if !reflect.DeepEqual(backend.userContexts, want) {
-		t.Fatalf("user contexts = %q, want %q", backend.userContexts, want)
+	if got := backend.userContexts(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("user contexts = %q, want %q", got, want)
 	}
 }
 
-// historyBackend also serves conversation history.
-type historyBackend struct {
-	scriptBackend
-	resp *assistant.ConversationHistoryResponse
-	err  error
+// drain runs one turn to its end and returns its events, passing each to
+// observe first. The engine is idle once drain returns.
+func drain(t *testing.T, e *Engine, in TurnInput, observe ...func(Event)) []Event {
+	t.Helper()
+	var evs []Event
+	for ev := range e.StartTurn(t.Context(), in) {
+		for _, fn := range observe {
+			fn(ev)
+		}
+		evs = append(evs, ev)
+	}
+	return evs
 }
 
-func (b *historyBackend) ConversationHistory(_ context.Context, _ assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
-	return b.resp, b.err
-}
-
-func drain(ch <-chan Event) []Event {
+// collect gathers the events of an operation already started until its
+// channel closes.
+func collect(ch <-chan Event) []Event {
 	var evs []Event
 	for ev := range ch {
 		evs = append(evs, ev)
@@ -179,10 +239,10 @@ func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T
 		{name: "explicit server marker", known: true, want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			backend := &scriptBackend{msgs: []assistant.Message{assistant.AssistantMessage("started", assistant.Content{
+			backend := &scriptBackend{rounds: [][]assistant.Message{{assistant.AssistantMessage("started", assistant.Content{
 				Type: assistant.ContentToolCallStarted,
 				Tool: &assistant.ToolPayload{ToolCallID: "read-1", ToolName: "read_file", HasClientSide: test.known},
-			})}}
+			})}}}
 			tools, err := NewToolSet(ModeSkipPermissions, Tool{
 				Definition: assistant.ClientTool{Name: "read_file"},
 				Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
@@ -190,7 +250,7 @@ func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			events := drain(New(backend, Config{}).StartTurn(context.Background(), TurnInput{Message: "read", Tools: tools}))
+			events := drain(t, New(backend, Config{}), TurnInput{Message: "read", Tools: tools})
 			var got *ToolBlock
 			for _, event := range events {
 				if event.Kind != EventTranscript {
@@ -303,51 +363,15 @@ type streamedInputState struct {
 	final string
 }
 
-type streamedInputBackend struct {
-	opts   []assistant.SendOptions
-	calls  int
-	server bool
-}
-
-func (b *streamedInputBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
-	b.opts = append(b.opts, opts)
-	b.calls++
-	if b.calls > 1 {
-		var response assistant.AssistantResponse
-		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("done"))
-		return "conversation-1", emit(response)
-	}
-	content := assistant.Content{Type: assistant.ContentToolCallStarted, Tool: &assistant.ToolPayload{
-		ToolCallID: "call-1", ToolName: "preview", IsClientSide: true,
-	}}
-	if b.server {
-		content.Type = assistant.ContentToolCall
-		content.Tool.IsClientSide = false
-		content.Tool.Metadata = &assistant.ToolMetadata{Name: "preview", Input: `{"value":"server"}`}
-		var response assistant.AssistantResponse
-		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("server-call", content)
-		return "conversation-1", emit(response)
-	}
-	for _, payload := range []assistant.Content{
-		content,
-		{Type: assistant.ContentToolCallInputDelta, Tool: &assistant.ToolPayload{ToolCallID: "call-1", PartialJSON: `{"value":`}},
-		{Type: assistant.ContentToolCallInputDelta, Tool: &assistant.ToolPayload{ToolCallID: "call-1", PartialJSON: `"delta"}`}},
-	} {
-		var response assistant.AssistantResponse
-		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-call", payload)
-		if err := emit(response); err != nil {
-			return "conversation-1", err
-		}
-	}
-	final := assistant.ToolCallContent("call-1", "preview", `{"value":"final"}`)
-	final.Type = assistant.ContentClientToolCall
-	var response assistant.AssistantResponse
-	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("client-call", final)
-	return "conversation-1", emit(response)
-}
-
 func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
-	backend := &streamedInputBackend{}
+	backend := &scriptBackend{rounds: [][]assistant.Message{{
+		assistant.AssistantMessage("tool-call", assistant.Content{Type: assistant.ContentToolCallStarted, Tool: &assistant.ToolPayload{
+			ToolCallID: "call-1", ToolName: "preview", IsClientSide: true,
+		}}),
+		assistant.AssistantMessage("tool-call", assistant.Content{Type: assistant.ContentToolCallInputDelta, Tool: &assistant.ToolPayload{ToolCallID: "call-1", PartialJSON: `{"value":`}}),
+		assistant.AssistantMessage("tool-call", assistant.Content{Type: assistant.ContentToolCallInputDelta, Tool: &assistant.ToolPayload{ToolCallID: "call-1", PartialJSON: `"delta"}`}}),
+		clientCallMsg("call-1", "preview", `{"value":"final"}`),
+	}, {textMsg("answer", "done")}}}
 	reducerCalls := 0
 	handlerSawReducer := false
 	tools, err := NewToolSet(ModeSkipPermissions, Tool{
@@ -371,7 +395,7 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := drain(New(backend, Config{}).StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
+	events := drain(t, New(backend, Config{}), TurnInput{Message: "go", Tools: tools})
 	if len(backend.opts) != 2 {
 		t.Fatalf("backend requests = %d, want initial and continuation", len(backend.opts))
 	}
@@ -403,7 +427,7 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 }
 
 func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
-	backend := &streamedInputBackend{server: true}
+	backend := &scriptBackend{rounds: [][]assistant.Message{{serverCallMsg("call-1", "preview", `{"value":"server"}`)}}}
 	reducerCalls := 0
 	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "preview"},
@@ -416,7 +440,7 @@ func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	drain(New(backend, Config{}).StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
+	drain(t, New(backend, Config{}), TurnInput{Message: "go", Tools: tools})
 	if reducerCalls != 0 {
 		t.Fatalf("server-side tool triggered %d reductions", reducerCalls)
 	}
@@ -426,7 +450,7 @@ func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
 }
 
 func TestEnginePreservesPerToolInputStreaming(t *testing.T) {
-	backend := &conversationRecordingBackend{messages: make(map[string][]string)}
+	backend := &scriptBackend{}
 	tools, err := NewToolSet(ModeSkipPermissions, Tool{
 		Definition: assistant.ClientTool{Name: "ordinary", StreamInput: true},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
@@ -435,7 +459,7 @@ func TestEnginePreservesPerToolInputStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := New(backend, Config{})
-	_ = drain(e.StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools}))
+	_ = drain(t, e, TurnInput{Message: "go", Tools: tools})
 	if len(backend.opts) == 0 || !backend.opts[0].ClientTools[0].StreamInput {
 		t.Fatalf("caller-provided per-tool streaming was disabled: %+v", backend.opts)
 	}
@@ -454,19 +478,19 @@ func TestTurnCompletionSynchronizesOperationRelease(t *testing.T) {
 	if err := e.NewConversation(); err != nil {
 		t.Fatalf("operation after completion: %v", err)
 	}
-	_ = drain(operation.events)
+	_ = collect(operation.events)
 }
 
 func TestConcurrentTurnReturnsOperationError(t *testing.T) {
 	gate := make(chan struct{})
-	e := New(&blockingBackend{gate: gate}, Config{})
+	e := New(&scriptBackend{hold: gate}, Config{})
 	ch := e.StartTurn(context.Background(), TurnInput{Message: "one"})
-	events := drain(e.StartTurn(context.Background(), TurnInput{Message: "two"}))
+	events := drain(t, e, TurnInput{Message: "two"})
 	if len(events) != 1 || events[0].Kind != EventError || !errors.Is(events[0].Err, ErrOperationActive) {
 		t.Fatalf("overlap events = %+v, want ErrOperationActive", events)
 	}
 	close(gate)
-	_ = drain(ch)
+	_ = collect(ch)
 }
 
 func TestTurnEmitsEventSequence(t *testing.T) {
@@ -474,15 +498,11 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	usage.Results = &assistant.Results{Usage: &assistant.Usage{TokensUsed: 5}}
 	b := &scriptBackend{
 		convID: "conv-1",
-		msgs: []assistant.Message{
-			assistant.AssistantMessage("m1", assistant.TextContent("Hello")),
-			assistant.AssistantMessage("m1", assistant.TextContent(" world")),
-			usage,
-		},
+		rounds: [][]assistant.Message{{textMsg("m1", "Hello"), textMsg("m1", " world"), usage}},
 	}
 	e := New(b, Config{})
 
-	evs := drain(e.StartTurn(context.Background(), TurnInput{Message: "hi"}))
+	evs := drain(t, e, TurnInput{Message: "hi"})
 	want := []EventKind{EventTranscript, EventTranscript, EventTranscript, EventUsage, EventConversation, EventTranscript, EventTurnDone}
 	if got := kinds(evs); !reflect.DeepEqual(got, want) {
 		t.Fatalf("event kinds = %v, want %v", got, want)
@@ -511,10 +531,10 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 	e := New(&scriptBackend{
 		convID: "created-before-error",
 		err:    backendErr,
-		msgs:   []assistant.Message{assistant.AssistantMessage("m1", assistant.TextContent("partial"))},
+		rounds: [][]assistant.Message{{textMsg("m1", "partial")}},
 	}, Config{})
 
-	events := drain(e.StartTurn(context.Background(), TurnInput{Message: "question"}))
+	events := drain(t, e, TurnInput{Message: "question"})
 	wantKinds := []EventKind{EventTranscript, EventTranscript, EventTranscript, EventConversation, EventError}
 	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
@@ -536,7 +556,7 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 }
 
 func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
-	backend := &conversationRecordingBackend{messages: map[string][]string{}}
+	backend := &scriptBackend{convID: "new-conversation-1"}
 	opts := Config{
 		ConversationID: "old-conversation",
 		Model:          "retained-model",
@@ -545,7 +565,7 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 	}
 	e := New(backend, opts)
 
-	_ = drain(e.StartTurn(context.Background(), TurnInput{Message: "old prompt"}))
+	_ = drain(t, e, TurnInput{Message: "old prompt"})
 	callsBeforeReset := len(backend.opts)
 	if err := e.NewConversation(); err != nil {
 		t.Fatal(err)
@@ -563,7 +583,7 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 		t.Fatalf("transcript after reset has %d blocks", len(e.transcript.Blocks()))
 	}
 
-	_ = drain(e.StartTurn(context.Background(), TurnInput{Message: "new prompt"}))
+	_ = drain(t, e, TurnInput{Message: "new prompt"})
 	if got := e.ConversationID(); got != "new-conversation-1" {
 		t.Fatalf("new conversation id = %q", got)
 	}
@@ -572,22 +592,22 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 		got.DebugTag != opts.DebugTag {
 		t.Fatalf("first new request options = %+v; process-wide configuration was not retained", got)
 	}
-	if got := backend.messages["old-conversation"]; !reflect.DeepEqual(got, []string{"old prompt"}) {
+	if got := backend.userMessages("old-conversation"); !reflect.DeepEqual(got, []string{"old prompt"}) {
 		t.Fatalf("prior conversation was mutated: %v", got)
 	}
-	if got := backend.messages["new-conversation-1"]; !reflect.DeepEqual(got, []string{"new prompt"}) {
+	if got := backend.userMessages("new-conversation-1"); !reflect.DeepEqual(got, []string{"new prompt"}) {
 		t.Fatalf("new conversation messages = %v", got)
 	}
 }
 
 func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
-	backend := &cancellationIDBackend{started: make(chan struct{})}
+	backend := &scriptBackend{convID: "created-before-cancel", started: make(chan struct{}), hold: make(chan struct{})}
 	e := New(backend, Config{})
 	ctx, cancel := context.WithCancel(context.Background())
 	turn := e.StartTurn(ctx, TurnInput{Message: "cancel me"})
 	<-backend.started
 	cancel()
-	_ = drain(turn)
+	_ = collect(turn)
 
 	if got := e.ConversationID(); got != "created-before-cancel" {
 		t.Fatalf("conversation id after cancellation = %q", got)
@@ -603,9 +623,50 @@ func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
 	}
 }
 
+// Cancellation settles the turn's unfinished tools, leaves earlier turns'
+// tools untouched, and delivers that settled snapshot even when the consumer
+// has stopped reading and the event buffer is full.
+func TestTurnCancellationSettlesUnfinishedTools(t *testing.T) {
+	second := []assistant.Message{
+		assistant.AssistantMessage("preview", assistant.Content{
+			Type: assistant.ContentToolCallStarted,
+			Tool: &assistant.ToolPayload{ToolCallID: "preview", ToolName: "write_file", IsClientSide: true},
+		}),
+		assistant.AssistantMessage("preview", assistant.Content{
+			Type: assistant.ContentToolCallInputDelta,
+			Tool: &assistant.ToolPayload{ToolCallID: "preview", PartialJSON: `{"path":"half.txt"}`},
+		}),
+		serverCallMsg("server", "search_logs", `{}`),
+	}
+	for i := range 128 { // more than the engine buffers
+		second = append(second, textMsg(fmt.Sprint("filler-", i), "filler"))
+	}
+	backend := &scriptBackend{rounds: [][]assistant.Message{{serverCallMsg("prior", "old_tool", `{}`)}, second}, hold: make(chan struct{})}
+	engine := New(backend, Config{})
+	drain(t, engine, TurnInput{Message: "first"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events := engine.StartTurn(ctx, TurnInput{Message: "second"})
+	for len(events) < cap(events) {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	evs := collect(events)
+
+	status := map[string]ToolStatus{}
+	for _, block := range evs[len(evs)-1].Transcript.Blocks {
+		if block.Tool != nil {
+			status[block.ToolCallID()] = block.Tool.Status
+		}
+	}
+	if status["prior"] == ToolCancelled || status["preview"] != ToolCancelled || status["server"] != ToolCancelled {
+		t.Fatalf("tool statuses = %v, want only this turn's tools cancelled", status)
+	}
+}
+
 func TestNewConversationRejectsActiveTurnWithoutMutation(t *testing.T) {
 	gate := make(chan struct{})
-	e := New(&blockingBackend{gate: gate}, Config{ConversationID: "old"})
+	e := New(&scriptBackend{hold: gate}, Config{ConversationID: "old"})
 	turn := e.StartTurn(context.Background(), TurnInput{Message: "busy"})
 	if err := e.NewConversation(); !errors.Is(err, ErrOperationActive) {
 		t.Fatalf("NewConversation error = %v, want ErrOperationActive", err)
@@ -614,7 +675,7 @@ func TestNewConversationRejectsActiveTurnWithoutMutation(t *testing.T) {
 		t.Fatalf("active reset changed conversation id to %q", got)
 	}
 	close(gate)
-	_ = drain(turn)
+	_ = collect(turn)
 }
 
 func TestRestoreEmitsSingleSnapshot(t *testing.T) {
@@ -630,7 +691,7 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 	}
 	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
-	evs := drain(e.Restore(context.Background()))
+	evs := collect(e.Restore(context.Background()))
 	if len(evs) != 1 || evs[0].Kind != EventTranscript {
 		t.Fatalf("events = %v, want one EventTranscript", kinds(evs))
 	}
@@ -646,7 +707,7 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 func TestRestoreUnsupportedBackendErrors(t *testing.T) {
 	e := New(&scriptBackend{}, Config{ConversationID: testConversationID})
 
-	evs := drain(e.Restore(context.Background()))
+	evs := collect(e.Restore(context.Background()))
 	if len(evs) != 1 || evs[0].Kind != EventError || !errors.Is(evs[0].Err, ErrHistoryUnsupported) {
 		t.Fatalf("events = %+v, want ErrHistoryUnsupported", evs)
 	}
@@ -658,15 +719,14 @@ func TestRestoreEmptyEmitsNothing(t *testing.T) {
 	resp.Data.Type = "conversation-history-response"
 	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
-	if evs := drain(e.Restore(context.Background())); len(evs) != 0 {
+	if evs := collect(e.Restore(context.Background())); len(evs) != 0 {
 		t.Fatalf("events = %v, want none", kinds(evs))
 	}
 }
 
-type statusBackend struct{ calls int }
-
-func (*statusBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {
-	return "", nil
+type statusBackend struct {
+	scriptBackend
+	calls int
 }
 
 func (b *statusBackend) BackendStatus() assistant.BackendStatus {
@@ -704,13 +764,10 @@ func TestEngineStatusReportsEffectiveNonSecretRuntimeConfiguration(t *testing.T)
 }
 
 type currentUserBackend struct {
+	scriptBackend
 	user  assistant.CurrentUser
 	err   error
 	calls int
-}
-
-func (*currentUserBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {
-	return "", nil
 }
 
 func (b *currentUserBackend) CurrentUser(context.Context) (assistant.CurrentUser, error) {

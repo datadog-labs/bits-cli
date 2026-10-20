@@ -12,14 +12,8 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
-func savedCall(id, name string) assistant.Message {
-	call := assistant.ToolCallContent(id, name, `{}`)
-	call.Type = assistant.ContentClientToolCall
-	return assistant.AssistantMessage(id, call)
-}
-
 func TestContinuationHistoryBoundaries(t *testing.T) {
-	first, second := savedCall("one", "input"), savedCall("two", "input")
+	first, second := clientCallMsg("one", "input", `{}`), clientCallMsg("two", "input", `{}`)
 	response := assistant.AssistantMessage("result", assistant.ToolResultContent("one", "input", assistant.ToolStatusSuccess, "done"))
 	response.Role = "user"
 	response.Content.Type = assistant.ContentClientToolResponse
@@ -50,14 +44,6 @@ func TestContinuationHistoryBoundaries(t *testing.T) {
 	}
 }
 
-// optionsBackend records the options of the last Send.
-type optionsBackend struct{ opts assistant.SendOptions }
-
-func (b *optionsBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
-	b.opts = opts
-	return "conversation", nil
-}
-
 func TestResumedToolsDoNotResendTheTurnContext(t *testing.T) {
 	user := assistant.Message{Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api","label":"API"}]`), ContextResources: json.RawMessage(`[{"name":"dashboard","value":42}]`)}
 	set, err := NewToolSet(ModeSkipPermissions, Tool{
@@ -67,11 +53,11 @@ func TestResumedToolsDoNotResendTheTurnContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend := &optionsBackend{}
+	backend := &scriptBackend{}
 	e := New(backend, Config{ConversationID: "conversation"})
-	e.continuation = continuationFromHistory([]assistant.Message{user, savedCall("one", "input")})
-	drain(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
-	if got := backend.opts.Context; got != nil {
+	e.continuation = continuationFromHistory([]assistant.Message{user, clientCallMsg("one", "input", `{}`)})
+	collect(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
+	if got := backend.last().Context; got != nil {
 		t.Fatalf("resumed tool answers carried context %+v", got)
 	}
 }
@@ -91,23 +77,23 @@ func TestStoppingAResumedRoundDrainsWithoutInstructionsOrContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend := &optionsBackend{}
+	backend := &scriptBackend{}
 	e := New(backend, Config{ConversationID: "conversation", ProjectInstructions: env.NewInstructions(dir)})
 	user := assistant.Message{Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api"}]`)}
-	e.continuation = continuationFromHistory([]assistant.Message{user, savedCall("one", "input")})
+	e.continuation = continuationFromHistory([]assistant.Message{user, clientCallMsg("one", "input", `{}`)})
 
 	events := e.ResumePendingTools(t.Context(), TurnInput{Tools: set})
 	<-started
 	if !e.StopTools() {
 		t.Fatal("StopTools was not accepted during the resumed round")
 	}
-	drain(events)
+	collect(events)
 
-	if backend.opts.ConversationID != "conversation" {
+	if backend.last().ConversationID != "conversation" {
 		t.Fatal("the stopped round was not drained")
 	}
-	if backend.opts.CustomUserContext != "" || backend.opts.Context != nil {
-		t.Fatalf("drain carried user context %q and context %+v", backend.opts.CustomUserContext, backend.opts.Context)
+	if backend.last().CustomUserContext != "" || backend.last().Context != nil {
+		t.Fatalf("drain carried user context %q and context %+v", backend.last().CustomUserContext, backend.last().Context)
 	}
 }
 
@@ -124,11 +110,11 @@ func TestResumeRequiresEveryHandlerToOptIn(t *testing.T) {
 	}
 	for _, name := range []string{"write", "unknown", assistant.ApprovalRequestTool} {
 		e := New(&scriptBackend{}, Config{})
-		e.continuation = continuationFromHistory([]assistant.Message{savedCall("one", "input"), savedCall("two", name)})
+		e.continuation = continuationFromHistory([]assistant.Message{clientCallMsg("one", "input", `{}`), clientCallMsg("two", name, `{}`)})
 		if e.CanResumeTools(set) {
 			t.Fatalf("batch containing %s is resumable", name)
 		}
-		events := drain(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
+		events := collect(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
 		if len(events) != 1 || !errors.Is(events[0].Err, ErrNoPendingTools) {
 			t.Fatalf("events = %+v", events)
 		}
@@ -156,8 +142,8 @@ func TestCancelledClientToolPublishesTerminalSnapshot(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			call := savedCall("call-input", "input")
-			e := New(&scriptBackend{msgs: []assistant.Message{call}, convID: "conversation"}, Config{ConversationID: "conversation"})
+			call := clientCallMsg("call-input", "input", `{}`)
+			e := New(&scriptBackend{rounds: [][]assistant.Message{{call}}}, Config{ConversationID: "conversation"})
 			var events <-chan Event
 			if resumed {
 				e.transcript.AppendMessage(call)
