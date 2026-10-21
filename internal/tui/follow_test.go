@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"image/color"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 func followTestModel() *Model {
@@ -113,4 +116,45 @@ func TestFollowControlCancelsReleaseAndYieldsToOtherSurfaces(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFollowControlBorderUsesItsOwnToken covers the resting and hovered borders
+// in both modes. The resting edge was the shared panel border before it became
+// a derivative of the accent, so a regression there would be invisible without
+// reading the escape sequence the control actually emits.
+func TestFollowControlBorderUsesItsOwnToken(t *testing.T) {
+	for _, isDark := range []bool{true, false} {
+		t.Run(map[bool]string{true: "dark", false: "light"}[isDark], func(t *testing.T) {
+			theme := styles.Default(isDark)
+			m := followTestModel()
+			m.applyStyles(theme)
+			m.chatPhase = chat.PhaseStreaming
+			m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+			m.list.ScrollBy(-4)
+
+			resting := m.View().Content
+			if m.follow.area.Empty() {
+				t.Fatal("control not shown")
+			}
+			if want := sgrForeground(t, theme.FollowBorder); !strings.Contains(resting, want) {
+				t.Errorf("resting border %s missing; want the follow token, not the panel edge", want)
+			}
+			if panelEdge := sgrForeground(t, theme.Panel.Frame.GetBorderTopForeground()); strings.Contains(resting, panelEdge) {
+				t.Errorf("resting border still paints the panel edge %s", panelEdge)
+			}
+
+			m.follow.hover = true
+			if want := sgrForeground(t, theme.Input.Marker.GetForeground()); !strings.Contains(m.View().Content, want) {
+				t.Errorf("hovered border %s missing; hover should reach the full accent", want)
+			}
+		})
+	}
+}
+
+// sgrForeground renders the truecolor foreground sequence for a color, so the
+// assertions above follow the tokens instead of pinning escape sequences.
+func sgrForeground(t *testing.T, c color.Color) string {
+	t.Helper()
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)
 }

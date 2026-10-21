@@ -218,6 +218,12 @@ type Theme struct {
 	// revisit if bits-cli ever gets a settings layer to opt out of it.
 	Background color.Color
 
+	// FollowBorder is the resting border of the jump-to-latest control. It is
+	// its own token rather than the panel edge it used to borrow, since the
+	// control turns into the accent on hover and its resting state is derived
+	// from that accent.
+	FollowBorder color.Color
+
 	// Logo is the brand accent for the startup wordmark: decorative, with no
 	// state or interaction behind it.
 	Logo lipgloss.Style

@@ -75,6 +75,13 @@ type palette struct {
 	info            string
 	warning         string
 
+	// followBorder is the resting border of the jump-to-latest control, which
+	// floats over the transcript. It is interactive at 40% over the page, so the
+	// control reads as a quiet relative of the accent it turns into on hover
+	// rather than as a generic panel edge: dark #8B80F9 over #171921 -> #454277,
+	// light #5E6DD6 over #EDEFF6 -> #B4BBE9.
+	followBorder string
+
 	// selectionSurface and onSelection paint dragged-over cells. Selection used
 	// to be the terminal's reverse-video attribute, which inverts the
 	// terminal's own default colors rather than the theme's, so the result
@@ -113,6 +120,7 @@ func darkPalette() palette {
 		accordionHover:       "#22242B",
 		accordionDetailHover: "#1C1E26",
 		accordionBackground:  "#22242B",
+		followBorder:         "#454277",
 		selectionSurface:     "#EDEFF6",
 		onSelection:          "#202F38",
 		sweepHot:             "#A2C6FF",
@@ -163,6 +171,7 @@ func lightPalette() palette {
 		accordionHover:       "#BDC5D3",
 		accordionDetailHover: "#D7DCE6",
 		accordionBackground:  "#E2E2E6",
+		followBorder:         "#B4BBE9",
 		selectionSurface:     "#171921",
 		onSelection:          "#FFFFFF",
 		sweepHot:             "#5E6DD6",

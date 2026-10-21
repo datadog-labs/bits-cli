@@ -156,14 +156,15 @@ func build(isDark bool, p palette) Theme {
 
 		Logo: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
 
-		Input:       input,
-		Text:        text,
-		Feedback:    feedback,
-		Panel:       panel,
-		Approval:    approval,
-		Permissions: permissionsPanel,
-		Accordion:   accordion,
-		Selector:    selector,
+		Input:        input,
+		Text:         text,
+		Feedback:     feedback,
+		Panel:        panel,
+		Approval:     approval,
+		Permissions:  permissionsPanel,
+		Accordion:    accordion,
+		Selector:     selector,
+		FollowBorder: lipgloss.Color(p.followBorder),
 		Selection: Selection{
 			Foreground: lipgloss.Color(p.onSelection),
 			Background: lipgloss.Color(p.selectionSurface),
