@@ -167,7 +167,7 @@ func lightPalette() palette {
 		approvalSurface:      "#B7C1D5",
 		inputRule:            "#D2D2DA",
 		borderSubtle:         "#9AA3B2",
-		codeSurface:          "#E2E2E6",
+		codeSurface:          "#CBCBCF",
 		codeText:             "#1C2E38",
 		accordionHover:       "#C7CDDA",
 		accordionDetailHover: "#DCE0E9",
