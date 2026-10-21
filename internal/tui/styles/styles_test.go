@@ -122,23 +122,25 @@ func TestSurfacesSeparateFromTheirBackground(t *testing.T) {
 			}
 		})
 	}
-	light := lightPalette()
-	if relativeLuminance(light.surface) >= relativeLuminance(light.background) {
-		t.Error("light surface should be darker than the background it sits on")
-	}
 }
 
 // TestElevationRunsAwayFromThePage guards the ramp's direction, which differs
-// by mode: dark elevates by getting lighter, light by getting darker, since a
-// 94%-lightness page has no headroom above it.
+// by mode. Dark elevates by lightening the whole way up. Light turns twice: the
+// composer takes the single step of headroom above the page by going white, and
+// what sits on the composer rises by darkening away from it, since above
+// #FFFFFF there is nowhere left to go. Both of light's turns are asserted, so
+// one surface moving without the other is still caught.
 func TestElevationRunsAwayFromThePage(t *testing.T) {
 	dark := darkPalette()
 	if relativeLuminance(dark.surface) <= relativeLuminance(dark.background) {
 		t.Error("dark surface should be lighter than the background it sits on")
 	}
 	light := lightPalette()
-	if relativeLuminance(light.surface) >= relativeLuminance(light.background) {
-		t.Error("light surface should be darker than the background it sits on")
+	if relativeLuminance(light.surface) <= relativeLuminance(light.background) {
+		t.Error("light's composer should be lighter than the page it sits on")
+	}
+	if relativeLuminance(light.surfaceRaised) >= relativeLuminance(light.surface) {
+		t.Error("light's chips should be darker than the composer they sit on")
 	}
 }
 
