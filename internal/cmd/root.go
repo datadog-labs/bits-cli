@@ -10,7 +10,6 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
-	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 	"github.com/datadog-labs/bits-cli/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -26,7 +25,6 @@ type ChatOptions struct {
 	Site            string
 	PermissionsMode agent.PermissionsMode
 	NoUpdateCheck   bool
-	Theme           styles.Mode
 }
 
 // Execute builds a fresh command tree for args and runs it with ctx, writing
@@ -51,7 +49,6 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 	opts := ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual}
 	var authMode string
 	var permissionsMode string
-	var theme string
 	// Keep root.Args nil so Cobra can identify unknown commands, suggest close
 	// matches, and reject unknown help topics during command discovery. The
 	// RunE check handles arguments after a -- terminator.
@@ -73,14 +70,9 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			themeMode, err := styles.ParseMode(theme)
-			if err != nil {
-				return err
-			}
 			if err := validateSiteSelection(mode, opts.Site, command.Flags().Changed("site")); err != nil {
 				return err
 			}
-			opts.Theme = themeMode
 			opts.AuthMode = mode
 			opts.PermissionsMode = permissions
 			if model, ok := os.LookupEnv("BITS_ASSISTANT_MODEL"); ok {
@@ -102,7 +94,6 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 	root.Flags().StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
 	root.Flags().StringVar(&permissionsMode, "permissions", string(agent.ModeManual), "permissions mode: manual or skip-permissions")
 	root.Flags().StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
-	root.Flags().StringVar(&theme, "theme", string(styles.ModeAuto), "color theme: auto, light, or dark (auto reads the terminal background)")
 	root.Flags().StringVar(
 		&opts.ConversationID,
 		"conversation",

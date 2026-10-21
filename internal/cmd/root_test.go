@@ -62,7 +62,6 @@ func TestCommandUsageErrors(t *testing.T) {
 		{[]string{"--auth", "api-key"}, "--auth api-key requires --site"},
 		{[]string{"--site", "app.datadoghq.eu"}, "--site requires --auth api-key"},
 		{[]string{"--permissions", "allow-all"}, "invalid permissions mode"},
-		{[]string{"--theme", "solarized"}, "invalid theme"},
 		{[]string{"run", "--delivery", "adeep"}, `required flag "--prompt" was not set`},
 		{[]string{"run", "--prompt", " ", "--delivery", "adeep"}, "--prompt must not be empty"},
 		{[]string{"run", "--prompt", "x"}, `required flag "--delivery" was not set`},
