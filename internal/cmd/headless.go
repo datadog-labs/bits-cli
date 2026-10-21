@@ -16,7 +16,6 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/headless"
 	"github.com/datadog-labs/bits-cli/internal/headless/adeep"
 	"github.com/datadog-labs/bits-cli/internal/imageinput"
-	"github.com/datadog-labs/bits-cli/internal/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -164,7 +163,10 @@ func runRunWithStore(ctx context.Context, opts RunOptions, store auth.Credential
 		return err
 	}
 	defer func() { _ = workspace.Close() }()
-	clientTools := tools.NewClientTools(workspace)
+	clientTools, err := configuredClientTools(workspace)
+	if err != nil {
+		return err
+	}
 	toolSet, err := agent.NewToolSet(opts.PermissionsMode, clientTools...)
 	if err != nil {
 		return err

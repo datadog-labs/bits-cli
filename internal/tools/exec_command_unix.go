@@ -8,6 +8,6 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
-func platformExecTools(ws *workspace.Workspace) []agent.Tool {
-	return []agent.Tool{newExecCommandTool(ws.Path(), exectool.NewExecService(ws.DefaultShellPath()))}
+func platformExecTools(ws *workspace.Workspace, excludedEnv ...string) []agent.Tool {
+	return []agent.Tool{newExecCommandTool(ws.Path(), exectool.NewExecService(ws.DefaultShellPath(), excludedEnv...))}
 }

@@ -90,7 +90,11 @@ func startupModel(ctx context.Context, opts ChatOptions, workspace *workspace.Wo
 
 func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace, upgrade *update.Offer) (*tui.Model, error) {
 	toolUI := tools.NewUI()
-	clientTools := append(tools.NewClientTools(workspace), tools.NewAskUserQuestionTool(toolUI))
+	clientTools, err := configuredClientTools(workspace)
+	if err != nil {
+		return nil, err
+	}
+	clientTools = append(clientTools, tools.NewAskUserQuestionTool(toolUI))
 	toolSet, err := agent.NewToolSet(opts.PermissionsMode, clientTools...)
 	if err != nil {
 		return nil, err
