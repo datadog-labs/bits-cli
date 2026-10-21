@@ -102,27 +102,20 @@ func NewAuthenticatedClient(ctx context.Context, opts ClientOptions) (*assistant
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", EnvCustomHeaders, err)
 	}
+	var requiredName, requiredValue string
+	if raw := os.Getenv(EnvRequiredResponseHeader); raw != "" {
+		requiredName, requiredValue, err = assistant.ParseRequiredResponseHeader(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", EnvRequiredResponseHeader, err)
+		}
+	}
 	client, err := newClientForMode(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
 	client.CustomHeaders = custom
-	if raw := os.Getenv(EnvRequiredResponseHeader); raw != "" {
-		if strings.Contains(raw, ",") {
-			return nil, fmt.Errorf("%s requires exactly one name=value header", EnvRequiredResponseHeader)
-		}
-		required, err := assistant.ParseCustomHeaders(raw)
-		if err != nil || len(required) != 1 {
-			return nil, fmt.Errorf("%s requires one valid name=value header", EnvRequiredResponseHeader)
-		}
-		for name, values := range required {
-			if len(values) != 1 || values[0] == "" {
-				return nil, fmt.Errorf("%s requires one non-empty header value", EnvRequiredResponseHeader)
-			}
-			client.RequiredStreamHeaderName = name
-			client.RequiredStreamHeaderValue = values[0]
-		}
-	}
+	client.RequiredStreamHeaderName = requiredName
+	client.RequiredStreamHeaderValue = requiredValue
 	return client, nil
 }
 

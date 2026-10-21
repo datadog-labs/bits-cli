@@ -71,6 +71,31 @@ func ParseCustomHeaders(raw string) (http.Header, error) {
 	return headers, nil
 }
 
+// ParseRequiredResponseHeader parses one name=value requirement for a response.
+// Unlike custom request headers, any valid field name may be required, including
+// names the client manages on outgoing requests.
+func ParseRequiredResponseHeader(raw string) (string, string, error) {
+	if strings.Contains(raw, ",") {
+		return "", "", fmt.Errorf("expected exactly one name=value header")
+	}
+	name, value, found := strings.Cut(raw, "=")
+	if !found {
+		return "", "", fmt.Errorf("expected a name=value header")
+	}
+	name = strings.TrimSpace(name)
+	value = strings.TrimSpace(value)
+	if !headerFieldName.MatchString(name) {
+		return "", "", fmt.Errorf("header name %q is not a valid HTTP header name", name)
+	}
+	if value == "" {
+		return "", "", fmt.Errorf("required header value must not be empty")
+	}
+	if err := validHeaderValue(value); err != nil {
+		return "", "", fmt.Errorf("value for %q: %w", name, err)
+	}
+	return http.CanonicalHeaderKey(name), value, nil
+}
+
 // deleteManagedHeaders removes every header the client manages. The client
 // sets only the ones its authentication mode uses, so clearing the whole set
 // is what stops a custom Authorization from surviving an API-key request, or a

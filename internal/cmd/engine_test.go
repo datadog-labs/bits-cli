@@ -89,6 +89,23 @@ func TestNewAuthenticatedClientRequiresResponseHeader(t *testing.T) {
 	if _, err := NewAuthenticatedClient(context.Background(), opts); err == nil {
 		t.Fatal("multiple required response headers were accepted")
 	}
+	t.Setenv(EnvRequiredResponseHeader, "Content-Type=text/event-stream")
+	client, err = NewAuthenticatedClient(context.Background(), opts)
+	if err != nil || client.RequiredStreamHeaderName != "Content-Type" {
+		t.Fatalf("managed response header requirement: client = %+v, error = %v", client, err)
+	}
+}
+
+func TestRequiredResponseHeaderValidatedBeforeAuthentication(t *testing.T) {
+	t.Setenv(EnvRequiredResponseHeader, "bad name=value")
+	store := &observedStore{session: validSession()}
+	_, err := NewAuthenticatedClient(context.Background(), ClientOptions{Mode: auth.ModeAuto, Store: store})
+	if err == nil || !strings.Contains(err.Error(), EnvRequiredResponseHeader) {
+		t.Fatalf("configuration error = %v, want %s validation", err, EnvRequiredResponseHeader)
+	}
+	if store.loads != 0 || store.saves != 0 {
+		t.Fatalf("invalid configuration touched OAuth store: load %d, save %d", store.loads, store.saves)
+	}
 }
 
 func TestNewAuthenticatedClientAPIKeyRequiresSecretsAndTrustedSite(t *testing.T) {
