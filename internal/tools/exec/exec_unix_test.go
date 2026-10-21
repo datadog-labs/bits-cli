@@ -165,6 +165,27 @@ func TestDirectExecLauncherExcludesOnlySelectedNames(t *testing.T) {
 	}
 }
 
+func TestDirectExecLauncherPreservesLogicalWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	realDirectory := filepath.Join(root, "real", "child")
+	if err := os.MkdirAll(realDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedDirectory := filepath.Join(root, "linked")
+	if err := os.Symlink(realDirectory, linkedDirectory); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRIVATE_TOKEN", "hidden")
+	outcome := NewExecService("/bin/sh", "PRIVATE_TOKEN").Run(context.Background(), ExecRequest{
+		Command: "printf '%s\\n' \"$PWD\"; cd ..; printf '%s\\n' \"$PWD\"",
+		CWD:     linkedDirectory,
+	})
+	want := linkedDirectory + "\n" + root + "\n"
+	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != want {
+		t.Fatalf("logical working directory = %+v, want output %q", outcome, want)
+	}
+}
+
 func TestDirectExecLauncherUsesLoginCommandFlags(t *testing.T) {
 	dir := t.TempDir()
 	shell := filepath.Join(dir, "fake-shell")

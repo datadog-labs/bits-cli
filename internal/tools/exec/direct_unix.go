@@ -5,7 +5,6 @@ package exec
 import (
 	"errors"
 	"io"
-	"os"
 	osexec "os/exec"
 	"strings"
 	"syscall"
@@ -31,7 +30,7 @@ func (launcher directExecLauncher) Start(plan ExecPlan, stdout, stderr io.Writer
 	// the ordinary parent process environment unchanged.
 	command.Stdin = nil
 	if len(launcher.excludedEnv) > 0 {
-		command.Env = shellEnvWithoutExcludedNames(os.Environ(), launcher.excludedEnv)
+		command.Env = shellEnvWithoutExcludedNames(command.Environ(), launcher.excludedEnv)
 	}
 	command.Stdout = stdout
 	command.Stderr = stderr
