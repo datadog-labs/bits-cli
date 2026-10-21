@@ -727,8 +727,8 @@ func TestEveryToolExpandsToItsOutput(t *testing.T) {
 					t.Fatalf("expanded view missing %q:\n%s", want, ansi.Strip(strings.Join(got, "\n")))
 				}
 			}
-			if want := 1 + strings.Count(tc.want, "\n") + 1; len(got) != want {
-				t.Fatalf("expanded height = %d, want the header plus %d rows", len(got), want-1)
+			if height := list.itemHeight(0); height != len(got) {
+				t.Fatalf("expanded height = %d, rendered %d rows", height, len(got))
 			}
 			list.ToggleDisclosure(id)
 			if got := list.itemHeight(0); got != 1 {
@@ -861,7 +861,7 @@ func TestAccordionZoneIsTheWholeRenderedBlock(t *testing.T) {
 		expanded bool
 	}{
 		{"collapsed header only", func() *List { return listWithTool(agent.ToolSuccess) }, false},
-		{"expanded detail", func() *List { return listWithTool(agent.ToolSuccess) }, true},
+		{"expanded detail", func() *List { l := listWithTool(agent.ToolSuccess); l.SetHeight(24); return l }, true},
 		{"collapsed preview", listWithEditDiff, false},
 		{"expanded preview", listWithEditDiff, true},
 	} {
@@ -1108,5 +1108,35 @@ func TestViewportStaysFilledAfterGrowing(t *testing.T) {
 	}
 	if !list.Following() || !list.AtBottom() {
 		t.Fatal("growing the last block lost the bottom pin")
+	}
+}
+
+func TestServerStackKeepsIndependentDisclosureOnCompletion(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(100)
+	list.SetHeight(40)
+	first := disclosableToolBlock("first")
+	first.Tool.Title = "Searching logs"
+	first.Tool.Status = agent.ToolRunning
+	second := disclosableToolBlock("second")
+	second.Tool.Title = "Fetched metric"
+	list.SetItems([]agent.Block{first, second})
+	if len(list.view) != 2 || list.gapAfter(0) != 0 {
+		t.Fatal("server calls should stack tightly as separate items")
+	}
+	list.ToggleDisclosure(first.ID)
+	first.Rev++
+	first.Tool.Title = "Searched logs"
+	first.Tool.Status = agent.ToolSuccess
+	list.SetItems([]agent.Block{first, second})
+	if !list.expanded(first.ID) || list.expanded(second.ID) {
+		t.Fatal("completion changed disclosure")
+	}
+	if got := strings.Join(list.renderItem(0), "\n"); !strings.Contains(got, "Searched logs") || !strings.Contains(got, "Output:") {
+		t.Fatalf("completed expansion: %s", got)
+	}
+	if got := strings.Join(list.renderItem(1), "\n"); strings.Contains(got, "Output:") {
+		t.Fatal("sibling expanded")
 	}
 }

@@ -107,6 +107,7 @@ func NewToolPrompt(call agent.ToolCall) (ToolPrompt, bool) {
 }
 
 var (
+	serverToolRenderSpec       = &toolRenderSpec{render: renderServerTool}
 	questionToolRenderSpec     = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, static: true, interact: newQuestionPrompt}
 	simpleToolRenderSpec       = &toolRenderSpec{render: renderSimpleTool}
 	spawnAgentRenderSpec       = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "start subagent", active: "starting subagent", success: "started subagent", failure: "subagent start failed"}}
@@ -295,6 +296,9 @@ func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 	case spec.ServerSkill:
 		return skillToolRenderSpec
 	default:
+		if !id.ClientSide {
+			return serverToolRenderSpec
+		}
 		return simpleToolRenderSpec
 	}
 }
@@ -425,6 +429,177 @@ func RenderToolApproval(tool *agent.ToolBlock, width int, sty Styles) (string, b
 		return "", false
 	}
 	return p.renderSpec.renderApproval(tool, p, max(1, width), sty), true
+}
+
+type serverToolInfo struct {
+	action      toolAction
+	target      string
+	targetLabel string
+	timeframe   bool
+}
+
+// These are exact wire names used by the web client's chat tool catalog.
+// A different namespace or a client tool must never inherit these summaries.
+var serverToolCatalog = map[spec.Identity]serverToolInfo{
+	spec.ServerGetDatadogMetric:       {action: toolAction{base: "Get Datadog Metric", active: "Getting Datadog Metric", success: "Got Datadog Metric", failure: "Get Datadog Metric failed"}, target: "query", targetLabel: "Query", timeframe: true},
+	spec.ServerSearchDatadogLogs:      serverSearch("Datadog Logs", true),
+	spec.ServerSearchDatadogSpans:     serverSearch("Datadog Spans", true),
+	spec.ServerSearchDatadogEvents:    serverSearch("Datadog Events", true),
+	spec.ServerSearchDatadogRUMEvents: serverSearch("Datadog RUM Events", true),
+	spec.ServerSearchDatadogMonitors:  serverSearch("Datadog Monitors", false),
+	spec.ServerSearchDatadogMetrics:   serverSearch("Datadog Metrics", false),
+	spec.ServerSearchDatadogDocs:      serverSearch("Datadog Docs", false),
+	spec.ServerCodeExplorerView:       {action: toolAction{base: "Read file", active: "Reading file", success: "Read file", failure: "Read file failed"}, target: "file_path", targetLabel: "Path"},
+	spec.ServerCodeExplorerGrep:       {action: toolAction{base: "Search code", active: "Searching code", success: "Searched code", failure: "Search code failed"}, target: "pattern", targetLabel: "Pattern"},
+	spec.ServerCodeExplorerGlob:       {action: toolAction{base: "Find files", active: "Finding files", success: "Found files", failure: "Find files failed"}, target: "pattern", targetLabel: "Pattern"},
+	spec.ServerCodeExplorerList:       {action: toolAction{base: "List directory", active: "Listing directory", success: "Listed directory", failure: "List directory failed"}, target: "path", targetLabel: "Path"},
+}
+
+func serverSearch(subject string, timeframe bool) serverToolInfo {
+	return serverToolInfo{
+		action: toolAction{base: "Search " + subject, active: "Searching " + subject, success: "Searched " + subject, failure: "Search " + subject + " failed"},
+		target: "query", targetLabel: "Query", timeframe: timeframe,
+	}
+}
+
+type serverInputField struct{ label, value string }
+
+func serverInputSummary(tool *agent.ToolBlock, info serverToolInfo) []serverInputField {
+	if info.target == "" {
+		return nil
+	}
+	var input map[string]json.RawMessage
+	if !decodeObject(toolInput(tool), &input) {
+		return nil
+	}
+	var fields []serverInputField
+	add := func(key, label string) {
+		var value string
+		if json.Unmarshal(input[key], &value) == nil && strings.TrimSpace(value) != "" {
+			fields = append(fields, serverInputField{label, escape.Inline(value)})
+		}
+	}
+	add(info.target, info.targetLabel)
+	if info.timeframe {
+		add("from", "From")
+		add("to", "To")
+	}
+	return fields
+}
+
+func renderServerTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
+	info, known := serverToolCatalog[p.identity]
+	fields := serverInputSummary(tool, info)
+	title := strings.TrimSpace(escape.SingleLine(tool.Title))
+	if title == "" && known {
+		title = info.action.label(statusOf(tool))
+	}
+	summary := p.summary(tool)
+	if title != "" {
+		summary = []summarySpan{{text: title, kind: spanAction}}
+		for _, field := range fields {
+			if strings.Contains(strings.ToLower(title), strings.ToLower(field.value)) {
+				continue
+			}
+			value := field.value
+			if field.label == "From" || field.label == "To" {
+				value = strings.ToLower(field.label) + " " + value
+			}
+			summary = append(summary, summarySpan{text: " · ", kind: spanMuted}, summarySpan{text: value, kind: spanArgument})
+		}
+	}
+	header := renderToolHeader(tool, summary, nil, c)
+	if c.disclosure == compactView {
+		if statusOf(tool) != agent.ToolError {
+			return header
+		}
+		reason := tool.Detail
+		if strings.TrimSpace(reason) == "" {
+			reason = serverReadableOutput(tool.Output)
+		}
+		if strings.TrimSpace(reason) == "" {
+			reason = "Tool failed"
+		}
+		return header + "\n" + renderRows([]string{collapseWS(escape.Multiline(reason))}, c.width, c.sty.ToolError, c.sty)
+	}
+	var sections []string
+	for _, field := range fields {
+		sections = append(sections, field.label+": "+field.value)
+	}
+	if detail := strings.TrimSpace(tool.Detail); detail != "" && detail != strings.TrimSpace(tool.Output) {
+		sections = append(sections, detail)
+	} else if strings.TrimSpace(tool.Detail) == "" {
+		if readable := serverMCPText(tool.Output); readable != "" {
+			sections = append(sections, readable)
+		}
+	}
+	sections = append(sections, "Tool: "+p.name)
+	inputLabel := "Input:"
+	if !tool.HasFinalInput && tool.Input == "" && tool.InputPartial != "" {
+		inputLabel = "Input (partial):"
+		if tool.InputPreviewTruncated {
+			inputLabel = "Input (partial, truncated):"
+		}
+	}
+	input := toolInput(tool)
+	if strings.TrimSpace(input) == "" {
+		input = "(no input)"
+	}
+	sections = append(sections, inputLabel+"\n"+indentServerPayload(input))
+	output := tool.Output
+	if strings.TrimSpace(output) != "" {
+		sections = append(sections, "Output:\n"+indentServerPayload(output))
+	} else if statusOf(tool) == agent.ToolSuccess || statusOf(tool) == agent.ToolError {
+		sections = append(sections, "Output:\n  (no output)")
+	}
+	style := c.sty.ToolDetail
+	if statusOf(tool) == agent.ToolError {
+		style = c.sty.ToolError
+	}
+	return header + "\n" + renderPreview(strings.Join(sections, "\n\n"), genericOutputMaxLines, style, false, c)
+}
+
+func indentServerPayload(payload string) string {
+	var buf bytes.Buffer
+	if json.Indent(&buf, []byte(payload), "", "  ") == nil {
+		payload = buf.String()
+	}
+	return "  " + strings.ReplaceAll(payload, "\n", "\n  ")
+}
+
+func serverReadableOutput(output string) string {
+	if text := serverMCPText(output); text != "" {
+		return text
+	}
+	return output
+}
+
+// Only unwrap recognized text blocks. Mixed/image/resource content remains
+// available in the original output; no structured result data is discarded.
+func serverMCPText(output string) string {
+	type block struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	var envelope struct {
+		Content []block `json:"content"`
+	}
+	var blocks []block
+	if json.Unmarshal([]byte(output), &envelope) == nil {
+		blocks = envelope.Content
+	}
+	if blocks == nil {
+		if json.Unmarshal([]byte(output), &blocks) != nil {
+			return ""
+		}
+	}
+	var texts []string
+	for _, b := range blocks {
+		if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+			texts = append(texts, b.Text)
+		}
+	}
+	return strings.Join(texts, "\n\n")
 }
 
 // renderSimpleTool shows only the header until expanded. The full view adds

@@ -37,6 +37,23 @@ var (
 	ClientExecCommand      = Identity{ClientSide: true, Name: ExecCommand}
 )
 
+// Known server identities are shared wire contracts. Recognition does not
+// register a tool for local execution. Keep presentation labels in the TUI.
+var (
+	ServerGetDatadogMetric       = Identity{Name: "mcp_datadog_get_datadog_metric"}
+	ServerSearchDatadogLogs      = Identity{Name: "mcp_datadog_search_datadog_logs"}
+	ServerSearchDatadogSpans     = Identity{Name: "mcp_datadog_search_datadog_spans"}
+	ServerSearchDatadogEvents    = Identity{Name: "mcp_datadog_search_datadog_events"}
+	ServerSearchDatadogRUMEvents = Identity{Name: "mcp_datadog_search_datadog_rum_events"}
+	ServerSearchDatadogMonitors  = Identity{Name: "mcp_datadog_search_datadog_monitors"}
+	ServerSearchDatadogMetrics   = Identity{Name: "mcp_datadog_search_datadog_metrics"}
+	ServerSearchDatadogDocs      = Identity{Name: "mcp_datadog_search_datadog_docs"}
+	ServerCodeExplorerView       = Identity{Name: "mcp_code-explorer_View"}
+	ServerCodeExplorerGrep       = Identity{Name: "mcp_code-explorer_GrepTool"}
+	ServerCodeExplorerGlob       = Identity{Name: "mcp_code-explorer_GlobTool"}
+	ServerCodeExplorerList       = Identity{Name: "mcp_code-explorer_LS"}
+)
+
 // PathInput is the minimal path-bearing projection shared by local tools. It
 // lets presentation code decode a path without retaining unrelated input such
 // as write content or edit operations.

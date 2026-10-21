@@ -605,3 +605,117 @@ func TestSubagentDecorationRequiresExactServerIdentity(t *testing.T) {
 		}
 	}
 }
+
+func serverView(tool *agent.ToolBlock, width int, disclosure disclosure) string {
+	return ansi.Strip(renderPresentedTool(tool, classifyTool(tool), renderContext{width: width, sty: DefaultStyles(true), disclosure: disclosure}))
+}
+
+func TestServerToolTitleAndExactIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tool   agent.ToolBlock
+		want   string
+		absent string
+	}{
+		{name: "server title", tool: agent.ToolBlock{Name: "unknown", Title: "Fetched checkout", Input: `{"id":"checkout"}`, Status: agent.ToolSuccess}, want: "✓ Fetched checkout", absent: `{"id"`},
+		{name: "known running", tool: agent.ToolBlock{Name: spec.ServerSearchDatadogLogs.Name, Input: `{"query":"checkout","from":"now-15m","to":"now"}`, Status: agent.ToolRunning}, want: "Searching Datadog Logs · checkout · from now-15m · to now"},
+		{name: "known complete", tool: agent.ToolBlock{Name: spec.ServerSearchDatadogLogs.Name, Input: `{"query":"checkout"}`, Status: agent.ToolSuccess}, want: "✓ Searched Datadog Logs · checkout"},
+		{name: "deduplicate title", tool: agent.ToolBlock{Name: spec.ServerSearchDatadogLogs.Name, Title: "Searched checkout", Input: `{"query":"checkout"}`, Status: agent.ToolSuccess}, want: "✓ Searched checkout", absent: "· checkout"},
+		{name: "namespace collision", tool: agent.ToolBlock{Name: spec.ServerSearchDatadogLogs.Name, Namespace: new("other"), Input: `{"query":"checkout"}`, Status: agent.ToolSuccess}, want: `other.mcp_datadog_search_datadog_logs({"query":"checkout"})`, absent: "Searched Datadog"},
+		{name: "client collision", tool: agent.ToolBlock{Name: spec.ServerSearchDatadogLogs.Name, IsClientSide: true, Title: "Must not use", Input: `{}`, Status: agent.ToolSuccess}, want: "mcp_datadog_search_datadog_logs({})", absent: "Must not use"},
+		{name: "partial input", tool: agent.ToolBlock{Name: spec.ServerSearchDatadogLogs.Name, InputPartial: `{"query":"check`, Status: agent.ToolRunning}, want: "Searching Datadog Logs", absent: "check"},
+		{name: "invalid typed field", tool: agent.ToolBlock{Name: spec.ServerSearchDatadogLogs.Name, Input: `{"query":{"secret":"hidden"}}`, Status: agent.ToolSuccess}, want: "Searched Datadog Logs", absent: "hidden"},
+		{name: "approval", tool: agent.ToolBlock{Name: "unknown", Title: "Update monitor", Status: agent.ToolAwaitingApproval}, want: "Update monitor · awaiting approval"},
+		{name: "stopped", tool: agent.ToolBlock{Name: "unknown", Title: "Search logs", Status: agent.ToolCancelled}, want: "Search logs · stopped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := serverView(&tc.tool, 160, compactView)
+			if !strings.Contains(got, tc.want) || (tc.absent != "" && strings.Contains(got, tc.absent)) {
+				t.Fatalf("rendered %q, want %q without %q", got, tc.want, tc.absent)
+			}
+		})
+	}
+}
+
+func TestServerDisclosurePreservesInputOutputAndDetail(t *testing.T) {
+	tool := &agent.ToolBlock{Name: spec.ServerSearchDatadogLogs.Name, Title: "Searched logs", Input: `{"query":"checkout","limit":24}`, HasFinalInput: true, Detail: "Found **24** matching logs.", Output: `{"content":[{"type":"text","text":"raw result"}],"extra":true}`, Status: agent.ToolSuccess}
+	full := serverView(tool, 100, fullView)
+	for _, want := range []string{"Query: checkout", "Found **24** matching logs.", "Tool: mcp_datadog_search_datadog_logs", "Input:", `"limit": 24`, "Output:", `"extra": true`, "raw result"} {
+		if !strings.Contains(full, want) {
+			t.Errorf("missing %q in:\n%s", want, full)
+		}
+	}
+	compact := serverView(tool, 100, compactView)
+	if strings.Contains(compact, "\n") || strings.Contains(compact, "raw result") {
+		t.Fatalf("compact output leaked: %s", compact)
+	}
+	tool.Detail = ""
+	full = serverView(tool, 100, fullView)
+	if !strings.Contains(full, "raw result\n") || !strings.Contains(full, `"content": [`) {
+		t.Fatalf("missing readable or original MCP output:\n%s", full)
+	}
+}
+
+func TestServerOutputFormatsAndErrors(t *testing.T) {
+	for _, tc := range []struct{ output, want string }{
+		{`{"content":[{"type":"text","text":"first"},{"type":"image","data":"retained"},{"type":"text","text":"second"}]}`, "first\n\nsecond"},
+		{`[{"type":"text","text":"array text"}]`, "array text"},
+		{`{"content":"not an envelope"}`, ""},
+		{`{"content":[{"type":"text","text":42}]}`, ""},
+		{`broken JSON`, ""},
+	} {
+		if got := serverMCPText(tc.output); got != tc.want {
+			t.Errorf("unwrap %s = %q, want %q", tc.output, got, tc.want)
+		}
+	}
+	tool := &agent.ToolBlock{Name: "unknown", Title: "Search failed", Status: agent.ToolError, Output: `{"content":[{"type":"text","text":"Query timed out\nTry again"}]}`}
+	if got := serverView(tool, 80, compactView); !strings.Contains(got, "Query timed out Try again") || strings.Count(got, "\n") != 1 {
+		t.Fatalf("collapsed error: %s", got)
+	}
+	tool.Status = agent.ToolSuccess
+	tool.Output = ""
+	if got := serverView(tool, 80, fullView); !strings.Contains(got, "(no output)") {
+		t.Fatalf("missing empty output: %s", got)
+	}
+	tool.Status = agent.ToolRunning
+	tool.InputPartial = `{"query":"part`
+	tool.InputPreviewTruncated = true
+	if got := serverView(tool, 80, fullView); !strings.Contains(got, "Input (partial, truncated):") || strings.Contains(got, "(no output)") {
+		t.Fatalf("streaming input: %s", got)
+	}
+	tool.HasFinalInput = true
+	tool.Input = ""
+	if got := serverView(tool, 80, fullView); strings.Contains(got, "partial") || !strings.Contains(got, "(no input)") {
+		t.Fatalf("final empty input: %s", got)
+	}
+}
+
+func TestServerRenderingSafeAtNarrowWidths(t *testing.T) {
+	tool := &agent.ToolBlock{Name: "unknown", Title: "Hello\x1b[2J\nworld", Input: "\x1b[2Jinput", Detail: "detail\x1b[2J", Output: "output\x1b[2J", Status: agent.ToolError}
+	for _, width := range []int{1, 4, 8, 20, 80} {
+		for _, mode := range []disclosure{compactView, fullView} {
+			got := serverView(tool, width, mode)
+			if strings.Contains(got, "\x1b") {
+				t.Fatalf("terminal control leaked: %q", got)
+			}
+			for _, line := range strings.Split(got, "\n") {
+				if ansi.StringWidth(line) > width {
+					t.Fatalf("width %d exceeded: %q", width, line)
+				}
+			}
+		}
+	}
+}
+
+func TestServerDisclosureDoesNotRepeatIdenticalDetail(t *testing.T) {
+	tool := &agent.ToolBlock{Name: "unknown", Detail: "same result", Output: "same result", Status: agent.ToolSuccess}
+	got := serverView(tool, 80, fullView)
+	if strings.Count(got, "same result") != 1 || !strings.Contains(got, "Output:") {
+		t.Fatalf("result should appear once, under Output:\n%s", got)
+	}
+	tool.Detail = "A useful explanation"
+	got = serverView(tool, 80, fullView)
+	if !strings.Contains(got, tool.Detail) || !strings.Contains(got, tool.Output) {
+		t.Fatalf("distinct detail and output must remain available:\n%s", got)
+	}
+}

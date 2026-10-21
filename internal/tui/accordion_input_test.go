@@ -190,15 +190,22 @@ func TestMouseMotionSetsPointerShapeOverTheAccordionZone(t *testing.T) {
 	expect(row+1, arrow, "leaving the collapsed header-only block")
 
 	m.list.ToggleAllDisclosure()
-	// accordionTestOutput is 5 lines, so the expanded block spans row..row+5.
-	expect(row+5, hand, "hovering the last disclosed row")
-	expect(row+6, arrow, "leaving the expanded block")
+	// Find the last row belonging to this block; server details include input/output sections.
+	last := row
+	for next := row + 1; next < accordionDocumentLines(m); next++ {
+		if _, ok := m.list.AccordionAt(next); !ok {
+			break
+		}
+		last = next
+	}
+	expect(last, hand, "hovering the last disclosed row")
+	expect(last+1, arrow, "leaving the expanded block")
 }
 
 // scrollableAccordionTestModel builds several identical tool blocks in a
 // viewport too short to show them all, so ScrollBy actually moves the offset
-// instead of no-oping at AtBottom(). Single-line output keeps an expanded
-// block at two rows, so one wheel notch crosses a block boundary.
+// instead of no-oping at AtBottom(). A generic client tool with single-line
+// output occupies two expanded rows, so one wheel notch crosses a block boundary.
 func scrollableAccordionTestModel(t *testing.T) *Model {
 	t.Helper()
 	m := newShell()
@@ -208,7 +215,7 @@ func scrollableAccordionTestModel(t *testing.T) *Model {
 		blocks = append(blocks, agent.Block{
 			ID:   agent.BlockID{Scope: agent.ScopeTool, Key: fmt.Sprintf("call-%d", i)},
 			Kind: assistant.KindToolResult,
-			Tool: &agent.ToolBlock{Name: "search_logs", Status: agent.ToolSuccess, Output: "row 1"},
+			Tool: &agent.ToolBlock{Name: "search_logs", IsClientSide: true, Status: agent.ToolSuccess, Output: "row 1"},
 		})
 	}
 	m.transcript.Blocks = blocks
