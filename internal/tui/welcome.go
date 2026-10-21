@@ -64,9 +64,13 @@ func (m *Model) welcomeLogo() string {
 }
 
 func (m *Model) splashPanelView() string {
+	// The splash box edges the composer rather than the panels: the two frame
+	// the same column and are often on screen together, so the border is read
+	// off Input.Block instead of keeping a second token in step with it.
 	return m.styles.Panel.Frame.
 		Width(m.welcomePanelWidth()).
 		MarginLeft(max(0, m.styles.Panel.HorizontalMargin)).
+		BorderForeground(m.styles.Input.Block.GetBorderTopForeground()).
 		Render(m.splashPanelBody())
 }
 

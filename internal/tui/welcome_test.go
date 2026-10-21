@@ -15,6 +15,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 	"github.com/datadog-labs/bits-cli/internal/update"
 )
 
@@ -679,5 +680,28 @@ func TestUpgradeOfferVisibility(t *testing.T) {
 	m.relayout()
 	if m.showUpgrade() || !m.showResume() {
 		t.Fatal("offered an update without a newer release")
+	}
+}
+
+// TestSplashPanelBorderMatchesTheComposer pins the splash box to the composer's
+// border rather than the shared panel edge the other panels keep, in both modes.
+func TestSplashPanelBorderMatchesTheComposer(t *testing.T) {
+	for _, isDark := range []bool{true, false} {
+		t.Run(map[bool]string{true: "dark", false: "light"}[isDark], func(t *testing.T) {
+			theme := styles.Default(isDark)
+			m := newShell()
+			m.applyStyles(theme)
+			m.mode = ModeChat
+			m.resize(100, 30)
+
+			view := m.splashPanelView()
+			composer := sgrForeground(t, theme.Input.Block.GetBorderTopForeground())
+			if !strings.Contains(view, composer) {
+				t.Errorf("splash border %s missing; want the composer's border", composer)
+			}
+			if panelEdge := sgrForeground(t, theme.Panel.Frame.GetBorderTopForeground()); strings.Contains(view, panelEdge) {
+				t.Errorf("splash border still paints the shared panel edge %s", panelEdge)
+			}
+		})
 	}
 }
