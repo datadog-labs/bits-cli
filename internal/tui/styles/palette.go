@@ -52,6 +52,8 @@ type palette struct {
 	// (styles.BorderSweepRow). Dedicated rather than reusing primary, the
 	// same way busyHot is dedicated rather than reusing it for the status
 	// chip's shimmer — it lets this specific animation be tuned on its own.
+	// Light's value currently coincides with primary; the field stays separate
+	// so the two can be moved independently, as dark already does.
 	sweepHot string
 
 	link string
@@ -140,14 +142,14 @@ func lightPalette() palette {
 		surface:              "#CCD3DF",
 		surfaceRaised:        "#BDC5D3",
 		approvalSurface:      "#B7C1D5",
-		inputRule:            "#383A40",
+		inputRule:            "#D2D2DA",
 		borderSubtle:         "#9AA3B2",
 		codeSurface:          "#CED3DD",
 		codeText:             "#1C2E38",
 		accordionHover:       "#BDC5D3",
 		accordionDetailHover: "#D7DCE6",
 		accordionBackground:  "#22242B",
-		sweepHot:             "#A2C6FF",
+		sweepHot:             "#5E6DD6",
 		link:                 "#006bc2",
 		busy:                 "#7A5200",
 		busySurface:          "#E5D198",
