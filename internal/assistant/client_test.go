@@ -239,6 +239,58 @@ func TestSend_StreamsTextAndConversationID(t *testing.T) {
 	}
 }
 
+func TestSend_RequiresConfiguredResponseHeaderBeforeStreaming(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		ack       string
+		wantError bool
+	}{
+		{name: "missing", wantError: true},
+		{name: "wrong value", ack: "other-value", wantError: true},
+		{name: "accepted", ack: "expected-value"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				if test.ack != "" {
+					w.Header().Set("X-Request-Accepted", test.ack)
+				}
+				writeStream(t, w, textLine("conv-1", "hello"))
+			})
+			c.RequiredStreamHeaderName = "X-Request-Accepted"
+			c.RequiredStreamHeaderValue = "expected-value"
+			called := false
+			_, err := c.Send(context.Background(), "hi", SendOptions{}, func(AssistantResponse) error {
+				called = true
+				return nil
+			})
+			if (err != nil) != test.wantError || called == test.wantError {
+				t.Fatalf("error = %v, callback called = %v", err, called)
+			}
+		})
+	}
+}
+
+func TestSend_RequiredResponseHeaderRejectsRedirect(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Request-Accepted", "expected-value")
+		writeStream(t, w, textLine("conv-1", "hello"))
+	}))
+	t.Cleanup(target.Close)
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	})
+	c.RequiredStreamHeaderName = "X-Request-Accepted"
+	c.RequiredStreamHeaderValue = "expected-value"
+	called := false
+	_, err := c.Send(context.Background(), "hi", SendOptions{}, func(AssistantResponse) error {
+		called = true
+		return nil
+	})
+	if err == nil || called {
+		t.Fatalf("redirected guarded stream: error = %v, callback called = %v", err, called)
+	}
+}
+
 func TestSend_EmptyConversationIDCreatesOnFirstTurn(t *testing.T) {
 	var request Request
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {

@@ -86,6 +86,9 @@ type Client struct {
 	// before the headers the client manages, which therefore always win. Use
 	// ParseCustomHeaders to build one.
 	CustomHeaders http.Header
+	// RequiredStreamHeader is checked before any streamed response is delivered.
+	RequiredStreamHeaderName  string
+	RequiredStreamHeaderValue string
 	// MaxRetries is the number of extra attempts for idempotent, non-streaming
 	// requests (GET/DELETE/PUT) on transient failures (network errors,
 	// 429/502/503/504). Negative is treated as 0. The streaming POST (Send) is
@@ -480,7 +483,17 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 	if err != nil {
 		return conversationID, err
 	}
-	resp, err := c.streamClient().Do(req)
+	streamClient := c.streamClient()
+	if c.RequiredStreamHeaderName != "" {
+		// An acknowledgment from a redirected origin cannot attest to the
+		// original server's behavior. Keep the original client unchanged.
+		guardedClient := *streamClient
+		guardedClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return fmt.Errorf("redirect is not allowed for a stream requiring a response header")
+		}
+		streamClient = &guardedClient
+	}
+	resp, err := streamClient.Do(req)
 	if err != nil {
 		return conversationID, err
 	}
@@ -494,6 +507,9 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 			rejectErr = c.rejectAccessToken(ctx, req)
 		}
 		return conversationID, errors.Join(apiErr, rejectErr)
+	}
+	if c.RequiredStreamHeaderName != "" && resp.Header.Get(c.RequiredStreamHeaderName) != c.RequiredStreamHeaderValue {
+		return conversationID, fmt.Errorf("assistant response is missing required header %q", c.RequiredStreamHeaderName)
 	}
 
 	// Start the idle budget after authentication and response headers. A lock

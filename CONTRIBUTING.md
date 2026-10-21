@@ -48,6 +48,11 @@ bits --auth api-key --site https://api.datadoghq.com
 This uses the keys for the current invocation without changing your saved OAuth
 session. Plain `bits` uses OAuth even when those environment variables are set.
 
+For an Assistant endpoint that acknowledges a request policy in a streaming
+response header, set `BITS_REQUIRED_RESPONSE_HEADER=Name=value`. Bits checks
+the exact header value before delivering streamed output and rejects redirects
+for these requests. Leave it unset when no acknowledgment is required.
+
 ### Staging
 
 Configure the staging login origin and callback domain before signing in:
