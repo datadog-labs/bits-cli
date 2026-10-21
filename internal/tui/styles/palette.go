@@ -75,6 +75,15 @@ type palette struct {
 	info            string
 	warning         string
 
+	// selectionSurface and onSelection paint dragged-over cells. Selection used
+	// to be the terminal's reverse-video attribute, which inverts the
+	// terminal's own default colors rather than the theme's, so the result
+	// drifted from the palette and read wrong once light mode's surfaces moved.
+	// Each mode borrows the other's page and primary text, so a selection reads
+	// as that row flipped into the opposite theme.
+	selectionSurface string
+	onSelection      string
+
 	// fullAccessSurface is the focused fill for the approval modal's "Switch
 	// to full access" choice. #EB364B does not exist in this palette (nearest
 	// are critical #C4314B and error), so this is #EB364B at 50% over the
@@ -104,6 +113,8 @@ func darkPalette() palette {
 		accordionHover:       "#22242B",
 		accordionDetailHover: "#1C1E26",
 		accordionBackground:  "#22242B",
+		selectionSurface:     "#EDEFF6",
+		onSelection:          "#202F38",
 		sweepHot:             "#A2C6FF",
 		link:                 "#3d8bd0",
 		busy:                 "#F5C453",
@@ -151,6 +162,8 @@ func lightPalette() palette {
 		accordionHover:       "#BDC5D3",
 		accordionDetailHover: "#D7DCE6",
 		accordionBackground:  "#E2E2E6",
+		selectionSurface:     "#171921",
+		onSelection:          "#FFFFFF",
 		sweepHot:             "#5E6DD6",
 		link:                 "#006bc2",
 		busy:                 "#7A5200",

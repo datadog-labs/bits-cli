@@ -234,6 +234,15 @@ type Theme struct {
 	Selector    Selector
 	TextInput   textinput.Styles
 	Tabs        Tabs
+	Selection   Selection
+}
+
+// Selection paints cells the pointer has dragged over. Both colors are stated
+// so a selection renders from the theme; the terminal's reverse-video attribute
+// would invert its own defaults instead.
+type Selection struct {
+	Foreground color.Color
+	Background color.Color
 }
 
 // Default returns the complete UI theme for a terminal background mode.

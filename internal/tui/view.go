@@ -188,7 +188,7 @@ func (m *Model) layout() frame {
 // routed to a shown prompt; a docked one leaves the editor visible but inert.
 func (m *Model) chatView() string {
 	if m.selection.active() {
-		return m.selection.render(m.visibleSelectionFrame(m.selection.scope))
+		return m.selection.render(m.visibleSelectionFrame(m.selection.scope), m.styles.Selection)
 	}
 
 	base := m.followOverlay(m.chatViewBase(m.list.Render()))

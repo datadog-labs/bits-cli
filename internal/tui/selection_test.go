@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"fmt"
 	"image"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 // testSelectionFrame is a transcript-only frame: no lower pane, no header.
@@ -59,7 +62,7 @@ func TestSelectionRemainsRenderedAfterFinishUntilCleared(t *testing.T) {
 	if !got.selected() {
 		t.Fatal("finished selection was not retained")
 	}
-	if rendered := got.render(frame); !strings.Contains(rendered, "7") {
+	if rendered := got.render(frame, styles.Default(true).Selection); !strings.Contains(rendered, "7") {
 		t.Fatalf("render() = %q, want retained reverse highlight", rendered)
 	}
 
@@ -67,7 +70,7 @@ func TestSelectionRemainsRenderedAfterFinishUntilCleared(t *testing.T) {
 	if got.selected() || got.selecting() {
 		t.Fatal("clear did not remove persistent selection")
 	}
-	if rendered := got.render(frame); rendered != frame.content {
+	if rendered := got.render(frame, styles.Default(true).Selection); rendered != frame.content {
 		t.Fatalf("render() after clear = %q, want original content", rendered)
 	}
 
@@ -86,7 +89,7 @@ func TestSelectionUsesVirtualRowsAfterScrolling(t *testing.T) {
 
 	var got selection
 	got.begin(visible, 1, 0)
-	if rendered := got.render(visible); ansi.Strip(rendered) != "FGHIJ\nKLMNO" {
+	if rendered := got.render(visible, styles.Default(true).Selection); ansi.Strip(rendered) != "FGHIJ\nKLMNO" {
 		t.Fatalf("single-point render changed visible frame: %q", rendered)
 	}
 	if text := got.finish(visible, 1, 1, document); text != "ghij\nkl" {
@@ -100,7 +103,7 @@ func TestSelectionRendersReverseAndCopiesANSIText(t *testing.T) {
 	got.begin(frame, 2, 0) // The continuation cell of 界.
 	got.extend(frame, 3, 0)
 
-	rendered := got.render(frame)
+	rendered := got.render(frame, styles.Default(true).Selection)
 	if ansi.Strip(rendered) != "A界B " {
 		t.Fatalf("render() stripped text = %q, want %q", ansi.Strip(rendered), "A界B ")
 	}
@@ -237,6 +240,36 @@ func TestHeaderRowsAreNotSelectableInTheVisibleFrame(t *testing.T) {
 	}
 }
 
+// selectedBackground is the SGR a selected cell's fill emits, derived from the
+// token so these assertions follow it instead of pinning an escape sequence.
+func selectedBackground(t *testing.T, isDark bool) string {
+	t.Helper()
+	r, g, b, _ := styles.Default(isDark).Selection.Background.RGBA()
+	return fmt.Sprintf("48;2;%d;%d;%d", r>>8, g>>8, b>>8)
+}
+
+// TestSelectionPaintsTheThemeNotReverseVideo is the regression guard for
+// selection having been uv.AttrReverse, which inverts the terminal's own
+// default colors rather than the theme's, so the fill drifted from the palette.
+func TestSelectionPaintsTheThemeNotReverseVideo(t *testing.T) {
+	for _, isDark := range []bool{true, false} {
+		t.Run(map[bool]string{true: "dark", false: "light"}[isDark], func(t *testing.T) {
+			frame := testSelectionFrame("abcde", 5, 1)
+			var got selection
+			got.begin(frame, 0, 0)
+			got.extend(frame, 4, 0)
+
+			rendered := got.render(frame, styles.Default(isDark).Selection)
+			if strings.Contains(rendered, "\x1b[7m") {
+				t.Errorf("selection still uses reverse video: %q", rendered)
+			}
+			if want := selectedBackground(t, isDark); !strings.Contains(rendered, want) {
+				t.Errorf("selection fill %s missing from %q", want, rendered)
+			}
+		})
+	}
+}
+
 // Excluding the header from the copy is not enough: an anchor inside it must
 // also leave the rows unpainted.
 func TestSelectionStartedInTheHeaderDoesNotPaintIt(t *testing.T) {
@@ -246,13 +279,14 @@ func TestSelectionStartedInTheHeaderDoesNotPaintIt(t *testing.T) {
 	got.begin(frame, 0, 0)
 	got.extend(frame, 4, 3)
 
-	lines := strings.Split(got.render(frame), "\n")
+	lines := strings.Split(got.render(frame, styles.Default(true).Selection), "\n")
+	fill := selectedBackground(t, true)
 	for i := range 2 {
-		if strings.Contains(lines[i], "\x1b[7m") {
+		if strings.Contains(lines[i], fill) {
 			t.Fatalf("header row %d painted as selected: %q", i, lines[i])
 		}
 	}
-	if !strings.Contains(lines[2], "\x1b[7m") {
+	if !strings.Contains(lines[2], fill) {
 		t.Fatalf("first transcript row not painted: %q", lines[2])
 	}
 }

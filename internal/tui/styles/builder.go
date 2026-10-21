@@ -164,7 +164,11 @@ func build(isDark bool, p palette) Theme {
 		Permissions: permissionsPanel,
 		Accordion:   accordion,
 		Selector:    selector,
-		TextInput:   textInput,
+		Selection: Selection{
+			Foreground: lipgloss.Color(p.onSelection),
+			Background: lipgloss.Color(p.selectionSurface),
+		},
+		TextInput: textInput,
 		Tabs: Tabs{
 			Item: text.Primary.Padding(0, 1),
 			Active: lipgloss.NewStyle().Bold(true).
