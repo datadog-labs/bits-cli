@@ -3,6 +3,8 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -85,100 +87,131 @@ func TestWriteLoginErrorRendersEscapedHTMLPage(t *testing.T) {
 }
 
 func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
-	var redirectURI string
-	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/token" {
-			t.Errorf("token path = %q", r.URL.Path)
-		}
-		if err := r.ParseForm(); err != nil {
-			t.Errorf("ParseForm: %v", err)
-		}
-		if r.Form.Get("grant_type") != "authorization_code" || r.Form.Get("code") != "auth-code" {
-			t.Errorf("exchange form = %v", r.Form)
-		}
-		if r.Form.Get("client_id") != "client" || r.Form.Get("code_verifier") == "" || r.Form.Get("redirect_uri") != redirectURI {
-			t.Errorf("exchange form = %v", r.Form)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"access_token":"access","refresh_token":"refresh","token_type":"Bearer","expires_in":3600}`)
-	}))
-	defer issuer.Close()
+	for _, mode := range []string{"http", "pasted-url", "closed-input"} {
+		t.Run(mode, func(t *testing.T) {
+			callbacks := make(chan string, 3)
+			var callbackErrors int
+			var redirectURI, challenge string
+			issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/token" {
+					t.Errorf("token path = %q", r.URL.Path)
+				}
+				if err := r.ParseForm(); err != nil {
+					t.Errorf("ParseForm: %v", err)
+				}
+				if r.Form.Get("grant_type") != "authorization_code" || r.Form.Get("code") != "auth-code" {
+					t.Errorf("exchange form = %v", r.Form)
+				}
+				if r.Form.Get("client_id") != "client" || r.Form.Get("code_verifier") == "" || r.Form.Get("redirect_uri") != redirectURI {
+					t.Errorf("exchange form = %v", r.Form)
+				}
+				verifierHash := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
+				if base64.RawURLEncoding.EncodeToString(verifierHash[:]) != challenge {
+					t.Error("token exchange verifier does not match the authorization challenge")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, `{"access_token":"access","refresh_token":"refresh","token_type":"Bearer","expires_in":3600}`)
+			}))
+			defer issuer.Close()
 
-	cfg := SiteConfig{
-		Site:         DefaultSite,
-		ClientID:     "client",
-		AuthorizeURL: issuer.URL + "/authorize",
-		TokenURL:     issuer.URL + "/token",
-		RevokeURL:    issuer.URL + "/revoke",
-		RedirectURI:  DefaultRedirectURI,
-	}
-	httpClient := issuer.Client()
-	httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Host != "api.datadoghq.com" || req.URL.Path != "/api/v2/oauth2/token" {
-			t.Errorf("token exchange URL = %s", req.URL)
-		}
-		clone := req.Clone(req.Context())
-		clone.URL.Scheme = "http"
-		clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
-		clone.URL.Path = "/token"
-		return http.DefaultTransport.RoundTrip(clone)
-	})
-
-	store := &memoryStore{}
-	var output bytes.Buffer
-	openURL := func(raw string) error {
-		u, err := url.Parse(raw)
-		if err != nil {
-			return err
-		}
-		query := u.Query()
-		if query.Get("scope") != "" || query.Get("code_challenge") == "" || query.Get("code_challenge_method") != "S256" {
-			t.Errorf("authorization query = %v", query)
-		}
-		redirectURI = query.Get("redirect_uri")
-		callbackURL, callbackErr := url.Parse(redirectURI)
-		if callbackErr != nil || callbackURL.Hostname() != "127.0.0.1" || callbackURL.Port() == "" || callbackURL.Port() == "0" {
-			t.Fatalf("dynamic redirect URI = %q, parse error = %v", redirectURI, callbackErr)
-		}
-		go func() {
-			callback := redirectURI + "?code=auth-code&domain=datadoghq.com&state=" + url.QueryEscape(query.Get("state"))
-			resp, callbackErr := http.Get(callback) //nolint:gosec // loopback test callback
-			if callbackErr != nil {
-				t.Errorf("callback: %v", callbackErr)
-				return
+			cfg := SiteConfig{
+				Site:         DefaultSite,
+				ClientID:     "client",
+				AuthorizeURL: issuer.URL + "/authorize",
+				TokenURL:     issuer.URL + "/token",
+				RevokeURL:    issuer.URL + "/revoke",
+				RedirectURI:  DefaultRedirectURI,
 			}
-			_ = resp.Body.Close()
-		}()
-		return nil
-	}
+			httpClient := issuer.Client()
+			httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Host != "api.datadoghq.com" || req.URL.Path != "/api/v2/oauth2/token" {
+					t.Errorf("token exchange URL = %s", req.URL)
+				}
+				clone := req.Clone(req.Context())
+				clone.URL.Scheme = "http"
+				clone.URL.Host = strings.TrimPrefix(issuer.URL, "http://")
+				clone.URL.Path = "/token"
+				return http.DefaultTransport.RoundTrip(clone)
+			})
 
-	var reportedURL string
-	session, err := login(context.Background(), cfg, LoginOptions{
-		Store:      store,
-		HTTPClient: httpClient,
-		OpenURL:    openURL,
-		OnBrowserOpen: func(raw string, openErr error) {
-			reportedURL = raw
-			if openErr != nil {
-				t.Errorf("reported browser error = %v", openErr)
+			store := &memoryStore{}
+			var output bytes.Buffer
+			prepareCallback := func(raw string) error {
+				u, err := url.Parse(raw)
+				if err != nil {
+					return err
+				}
+				query := u.Query()
+				if query.Get("scope") != "" || query.Get("code_challenge") == "" || query.Get("code_challenge_method") != "S256" {
+					t.Errorf("authorization query = %v", query)
+				}
+				redirectURI = query.Get("redirect_uri")
+				challenge = query.Get("code_challenge")
+				callbackURL, callbackErr := url.Parse(redirectURI)
+				if callbackErr != nil || callbackURL.Hostname() != "127.0.0.1" || callbackURL.Port() == "" || callbackURL.Port() == "0" {
+					t.Fatalf("dynamic redirect URI = %q, parse error = %v", redirectURI, callbackErr)
+				}
+				callback := redirectURI + "?code=auth-code&domain=datadoghq.com&state=" + url.QueryEscape(query.Get("state"))
+				if mode == "pasted-url" {
+					// Invalid input and stale login state must be retryable.
+					callbacks <- "not a URL"
+					callbacks <- redirectURI + "?code=wrong&domain=datadoghq.com&state=stale"
+					callbacks <- callback
+					return nil
+				}
+				if mode == "closed-input" {
+					close(callbacks)
+				}
+				go func() {
+					resp, callbackErr := http.Get(callback) //nolint:gosec // loopback test callback
+					if callbackErr != nil {
+						t.Errorf("callback: %v", callbackErr)
+						return
+					}
+					_ = resp.Body.Close()
+				}()
+				return nil
 			}
-		},
-		Out: &output,
-	})
-	if err != nil {
-		t.Fatalf("login: %v", err)
-	}
-	if session.AccessToken != "access" || session.RefreshToken != "refresh" || session.Site != "https://api.datadoghq.com" {
-		t.Errorf("session = %#v", session)
-	}
-	if store.saves != 1 || store.session.AccessToken != "access" {
-		t.Errorf("stored session = %#v, saves = %d", store.session, store.saves)
-	}
-	if !strings.Contains(output.String(), "Datadog OAuth callback domain: datadoghq.com") {
-		t.Errorf("output did not report callback domain: %q", output.String())
-	}
-	if reportedURL == "" || !strings.Contains(reportedURL, "code_challenge=") {
-		t.Errorf("reported browser URL = %q", reportedURL)
+
+			var reportedURL string
+			session, err := login(context.Background(), cfg, LoginOptions{
+				Store:           store,
+				CallbackURLs:    callbacks,
+				OnCallbackError: func(error) { callbackErrors++ },
+				HTTPClient:      httpClient,
+				OpenURL: func(raw string) error {
+					if err := prepareCallback(raw); err != nil {
+						return err
+					}
+					if mode == "closed-input" {
+						return errors.New("no browser")
+					}
+					return nil
+				},
+				OnBrowserOpen: func(raw string, openErr error) {
+					reportedURL = raw
+				},
+				Out: &output,
+			})
+			if err != nil {
+				t.Fatalf("login: %v", err)
+			}
+			if mode == "pasted-url" && callbackErrors != 2 {
+				t.Fatalf("callback errors = %d, want 2 retryable errors", callbackErrors)
+			}
+			if session.AccessToken != "access" || session.RefreshToken != "refresh" || session.Site != "https://api.datadoghq.com" {
+				t.Errorf("session = %#v", session)
+			}
+			if store.saves != 1 || store.session.AccessToken != "access" {
+				t.Errorf("stored session = %#v, saves = %d", store.session, store.saves)
+			}
+			if !strings.Contains(output.String(), "Datadog OAuth callback domain: datadoghq.com") {
+				t.Errorf("output did not report callback domain: %q", output.String())
+			}
+			if reportedURL == "" || !strings.Contains(reportedURL, "code_challenge=") {
+				t.Errorf("reported browser URL = %q", reportedURL)
+			}
+		})
 	}
 }
 
@@ -875,5 +908,85 @@ func TestLoginStagingEnvironment(t *testing.T) {
 	}
 	if store.saves != 0 {
 		t.Errorf("store saves = %d, want 0", store.saves)
+	}
+}
+
+func TestParseCallbackURL(t *testing.T) {
+	const redirect = "http://127.0.0.1:12345/oauth/callback"
+	for _, tt := range []struct {
+		name       string
+		url        string
+		invalid    bool
+		oauthError bool
+	}{
+		{name: "valid", url: redirect + "?code=abc&state=expected&domain=datadoghq.com"},
+		{name: "whitespace", url: "  " + redirect + "?code=abc&state=expected\n"},
+		{name: "wrong state", url: redirect + "?code=abc&state=wrong", invalid: true},
+		{name: "missing code", url: redirect + "?state=expected", invalid: true},
+		{name: "wrong port", url: "http://127.0.0.1:12346/oauth/callback?code=abc&state=expected", invalid: true},
+		{name: "wrong host", url: "http://example.com:12345/oauth/callback?code=abc&state=expected", invalid: true},
+		{name: "wrong path", url: "http://127.0.0.1:12345/other?code=abc&state=expected", invalid: true},
+		{name: "fragment", url: redirect + "?code=abc&state=expected#fragment", invalid: true},
+		{name: "malformed query", url: redirect + "?code=%zz&state=expected", invalid: true},
+		{name: "denied", url: redirect + "?error=access_denied&state=expected", oauthError: true},
+		{name: "untrusted error", url: redirect + "?error=access_denied&state=wrong", invalid: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseCallbackURL(tt.url, redirect, "expected")
+			if (err != nil) != tt.invalid {
+				t.Fatalf("parse error = %v, want invalid = %v", err, tt.invalid)
+			}
+			if (result.err != nil) != tt.oauthError {
+				t.Fatalf("OAuth error = %v, want error = %v", result.err, tt.oauthError)
+			}
+			if !tt.invalid && !tt.oauthError && result.code != "abc" {
+				t.Fatalf("code = %q", result.code)
+			}
+		})
+	}
+}
+
+func TestLoginPasteCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := login(ctx, SiteConfig{
+		Site:         DefaultSite,
+		ClientID:     "client",
+		AuthorizeURL: "https://example.com/authorize",
+		RedirectURI:  DefaultRedirectURI,
+	}, LoginOptions{
+		CallbackURLs: make(chan string),
+		Store:        &memoryStore{},
+		OpenURL: func(string) error {
+			cancel()
+			return nil
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("login error = %v", err)
+	}
+}
+
+func TestHTTPCallbackMissingCodeStillEndsLogin(t *testing.T) {
+	listener, results, err := listenForCallback(DefaultRedirectURI, "expected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.server.Close() }()
+	resp, err := http.Get(listener.redirectURI + "?state=expected") //nolint:gosec // loopback test callback
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	select {
+	case result := <-results:
+		if !errors.Is(result.err, errCallbackCode) {
+			t.Fatalf("callback error = %v", result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing-code callback did not end login")
 	}
 }
