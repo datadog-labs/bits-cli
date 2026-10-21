@@ -34,8 +34,9 @@ type palette struct {
 
 	// accordionHover is the whole-row hover fill for the clickable disclosure
 	// header. Dark gets a dedicated tone since surfaceRaised there is an
-	// ANSI-256 index rather than a hex value that reads well as a fill; light
-	// just reuses surfaceRaised, which already sits one step above surface.
+	// ANSI-256 index rather than a hex value that reads well as a fill. Light
+	// started as a copy of surfaceRaised and was then lightened to 80% over the
+	// page, the rows having read too heavy against it.
 	accordionHover string
 
 	// accordionDetailHover is accordionHover blended at 45% over the
@@ -168,8 +169,8 @@ func lightPalette() palette {
 		borderSubtle:         "#9AA3B2",
 		codeSurface:          "#E2E2E6",
 		codeText:             "#1C2E38",
-		accordionHover:       "#BDC5D3",
-		accordionDetailHover: "#D7DCE6",
+		accordionHover:       "#C7CDDA",
+		accordionDetailHover: "#DCE0E9",
 		accordionBackground:  "#E2E2E6",
 		followBorder:         "#B4BBE9",
 		selectionSurface:     "#171921",
