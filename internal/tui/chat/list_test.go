@@ -1115,9 +1115,15 @@ func TestViewportStaysFilledAfterGrowing(t *testing.T) {
 // having been wrapped with a nil style: it then drew in the terminal's own
 // foreground over a row this theme paints, which washed out in light mode.
 func TestNoticeTextCarriesItsOwnColor(t *testing.T) {
-	for _, isDark := range []bool{true, false} {
-		t.Run(map[bool]string{true: "dark", false: "light"}[isDark], func(t *testing.T) {
-			sty := DefaultStyles(isDark)
+	for _, test := range []struct {
+		name   string
+		isDark bool
+	}{
+		{name: "dark", isDark: true},
+		{name: "light", isDark: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sty := DefaultStyles(test.isDark)
 			rendered := renderNotice(Notice{Level: NoticeWarn, Text: "something to report"}, 40, sty)
 
 			r, g, b, _ := sty.NoticeText.GetForeground().RGBA()

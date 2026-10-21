@@ -99,9 +99,7 @@ type Chat struct {
 	Meta lipgloss.Style
 
 	// NoticeInfo, NoticeWarn and NoticeError style a notice's leading marker;
-	// NoticeText styles the message beside it. The message was wrapped with no
-	// style at all, so it came from the terminal's own foreground over a row
-	// this theme paints, and washed out once that row went near-white.
+	// NoticeText styles the message beside it, which carries no level of its own.
 	NoticeInfo  lipgloss.Style
 	NoticeWarn  lipgloss.Style
 	NoticeError lipgloss.Style
@@ -224,10 +222,8 @@ type Theme struct {
 	// revisit if bits-cli ever gets a settings layer to opt out of it.
 	Background color.Color
 
-	// FollowBorder is the resting border of the jump-to-latest control. It is
-	// its own token rather than the panel edge it used to borrow, since the
-	// control turns into the accent on hover and its resting state is derived
-	// from that accent.
+	// FollowBorder is the resting border of the jump-to-latest control, derived
+	// from the accent the control takes on hover rather than from the panel edge.
 	FollowBorder color.Color
 
 	// Logo is the brand accent for the startup wordmark: decorative, with no
@@ -250,8 +246,7 @@ type Theme struct {
 }
 
 // Selection paints cells the pointer has dragged over. Both colors are stated
-// so a selection renders from the theme; the terminal's reverse-video attribute
-// would invert its own defaults instead.
+// so the selection renders from the theme rather than from terminal defaults.
 type Selection struct {
 	Foreground color.Color
 	Background color.Color

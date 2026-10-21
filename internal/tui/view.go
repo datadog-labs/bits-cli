@@ -323,8 +323,7 @@ func (m *Model) chatFooter() string {
 	if text == "" {
 		return ""
 	}
-	// Secondary, not tertiary: the workspace path and token count are meant to
-	// be read, and tertiary sits close enough to the page to disappear.
+	// Secondary, not tertiary: the path and token count are meant to be read.
 	return strings.Repeat(" ", indent) + m.styles.Text.Secondary.Render(text)
 }
 

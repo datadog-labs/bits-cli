@@ -8,6 +8,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/clipperhouse/uax29/v2/words"
+
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 

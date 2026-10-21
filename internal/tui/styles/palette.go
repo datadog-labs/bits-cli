@@ -35,8 +35,8 @@ type palette struct {
 	// accordionHover is the whole-row hover fill for the clickable disclosure
 	// header. Dark gets a dedicated tone since surfaceRaised there is an
 	// ANSI-256 index rather than a hex value that reads well as a fill. Light
-	// started as a copy of surfaceRaised and was then lightened to 80% over the
-	// page, the rows having read too heavy against it.
+	// sits at 80% over the page, light enough that a hovered row reads as a
+	// highlight rather than a block.
 	accordionHover string
 
 	// accordionDetailHover is accordionHover blended at 45% over the
@@ -44,17 +44,15 @@ type palette struct {
 	// keeps the stronger tone.
 	accordionDetailHover string
 
-	// accordionBackground is the disclosure control's resting fill. Dark keeps
-	// the hex it was fixed to by design request; light was later tuned off it,
-	// so the two now differ like the rest of this file.
+	// accordionBackground is the disclosure control's resting fill. Dark's hex
+	// is fixed by design request; light is tuned per theme like the rest of
+	// this file.
 	accordionBackground string
 
 	// sweepHot is the peak color of the composer's animated border sweep
 	// (styles.BorderSweepRow). Dedicated rather than reusing primary, the
 	// same way busyHot is dedicated rather than reusing it for the status
 	// chip's shimmer — it lets this specific animation be tuned on its own.
-	// Light took primary's value for a moment and was then darkened 15% off it,
-	// which is what the separate field is for.
 	sweepHot string
 
 	link string
@@ -78,17 +76,14 @@ type palette struct {
 
 	// followBorder is the resting border of the jump-to-latest control, which
 	// floats over the transcript. It is interactive at 40% over the page, so the
-	// control reads as a quiet relative of the accent it turns into on hover
-	// rather than as a generic panel edge: dark #8B80F9 over #171921 -> #454277,
-	// light #5E6DD6 over #EDEFF6 -> #B4BBE9.
+	// resting edge is a quiet relative of the accent the control takes on hover:
+	// dark #8B80F9 over #171921 -> #454277, light #5E6DD6 over #EDEFF6 ->
+	// #B4BBE9.
 	followBorder string
 
-	// selectionSurface and onSelection paint dragged-over cells. Selection used
-	// to be the terminal's reverse-video attribute, which inverts the
-	// terminal's own default colors rather than the theme's, so the result
-	// drifted from the palette and read wrong once light mode's surfaces moved.
-	// Each mode borrows the other's page and primary text, so a selection reads
-	// as that row flipped into the opposite theme.
+	// selectionSurface and onSelection paint dragged-over cells. Each mode takes
+	// the other's page and primary text, so a selection reads as that row
+	// flipped into the opposite theme.
 	selectionSurface string
 	onSelection      string
 
@@ -143,12 +138,12 @@ func darkPalette() palette {
 	}
 }
 
-// lightPalette turns its elevation ramp twice. The composer takes the headroom
-// above the page by going near-white; everything stacked on the composer rises
-// by darkening away from it (as in Nord/Solarized), since there is almost
-// nothing left above. Foregrounds are darkened to match, each checked
-// against the darkest surface it renders on (builder.go). The three text levels
-// are picked by eye; see the palette struct.
+// lightPalette turns its elevation ramp twice: the composer takes the headroom
+// above the page by going near-white, and everything stacked on the composer
+// rises by darkening away from it (as in Nord/Solarized). Foregrounds are
+// darkened to match, each checked against the darkest surface it renders on
+// (builder.go). The three text levels are picked by eye; see the palette
+// struct.
 func lightPalette() palette {
 	return palette{
 		primary:     "#5e6dd6",

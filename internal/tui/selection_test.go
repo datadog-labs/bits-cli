@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"image"
 	"strings"
 	"testing"
@@ -244,26 +243,31 @@ func TestHeaderRowsAreNotSelectableInTheVisibleFrame(t *testing.T) {
 // token so these assertions follow it instead of pinning an escape sequence.
 func selectedBackground(t *testing.T, isDark bool) string {
 	t.Helper()
-	r, g, b, _ := styles.Default(isDark).Selection.Background.RGBA()
-	return fmt.Sprintf("48;2;%d;%d;%d", r>>8, g>>8, b>>8)
+	return sgrColor(t, 48, styles.Default(isDark).Selection.Background)
 }
 
 // TestSelectionPaintsTheThemeNotReverseVideo is the regression guard for
 // selection having been uv.AttrReverse, which inverts the terminal's own
 // default colors rather than the theme's, so the fill drifted from the palette.
 func TestSelectionPaintsTheThemeNotReverseVideo(t *testing.T) {
-	for _, isDark := range []bool{true, false} {
-		t.Run(map[bool]string{true: "dark", false: "light"}[isDark], func(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		isDark bool
+	}{
+		{name: "dark", isDark: true},
+		{name: "light", isDark: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			frame := testSelectionFrame("abcde", 5, 1)
 			var got selection
 			got.begin(frame, 0, 0)
 			got.extend(frame, 4, 0)
 
-			rendered := got.render(frame, styles.Default(isDark).Selection)
+			rendered := got.render(frame, styles.Default(test.isDark).Selection)
 			if strings.Contains(rendered, "\x1b[7m") {
 				t.Errorf("selection still uses reverse video: %q", rendered)
 			}
-			if want := selectedBackground(t, isDark); !strings.Contains(rendered, want) {
+			if want := selectedBackground(t, test.isDark); !strings.Contains(rendered, want) {
 				t.Errorf("selection fill %s missing from %q", want, rendered)
 			}
 		})

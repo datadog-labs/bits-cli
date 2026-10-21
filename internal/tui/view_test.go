@@ -169,11 +169,17 @@ func TestFrameAtClassifiesEveryRow(t *testing.T) {
 }
 
 // TestChatFooterUsesSecondaryText pins the row below the composer to the
-// readable level rather than the texture level it started on.
+// readable text level rather than the texture level.
 func TestChatFooterUsesSecondaryText(t *testing.T) {
-	for _, isDark := range []bool{true, false} {
-		t.Run(map[bool]string{true: "dark", false: "light"}[isDark], func(t *testing.T) {
-			theme := styles.Default(isDark)
+	for _, test := range []struct {
+		name   string
+		isDark bool
+	}{
+		{name: "dark", isDark: true},
+		{name: "light", isDark: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			theme := styles.Default(test.isDark)
 			m := newShell()
 			m.applyStyles(theme)
 			m.mode = ModeChat

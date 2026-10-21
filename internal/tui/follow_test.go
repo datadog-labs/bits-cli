@@ -119,13 +119,18 @@ func TestFollowControlCancelsReleaseAndYieldsToOtherSurfaces(t *testing.T) {
 }
 
 // TestFollowControlBorderUsesItsOwnToken covers the resting and hovered borders
-// in both modes. The resting edge was the shared panel border before it became
-// a derivative of the accent, so a regression there would be invisible without
-// reading the escape sequence the control actually emits.
+// in both modes, reading the escape sequence the control emits: the resting edge
+// must be the follow token and not the panel edge the other panels keep.
 func TestFollowControlBorderUsesItsOwnToken(t *testing.T) {
-	for _, isDark := range []bool{true, false} {
-		t.Run(map[bool]string{true: "dark", false: "light"}[isDark], func(t *testing.T) {
-			theme := styles.Default(isDark)
+	for _, test := range []struct {
+		name   string
+		isDark bool
+	}{
+		{name: "dark", isDark: true},
+		{name: "light", isDark: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			theme := styles.Default(test.isDark)
 			m := followTestModel()
 			m.applyStyles(theme)
 			m.chatPhase = chat.PhaseStreaming
@@ -155,6 +160,13 @@ func TestFollowControlBorderUsesItsOwnToken(t *testing.T) {
 // assertions above follow the tokens instead of pinning escape sequences.
 func sgrForeground(t *testing.T, c color.Color) string {
 	t.Helper()
+	return sgrColor(t, 38, c)
+}
+
+// sgrColor renders a truecolor sequence for layer 38 (foreground) or 48
+// (background).
+func sgrColor(t *testing.T, layer int, c color.Color) string {
+	t.Helper()
 	r, g, b, _ := c.RGBA()
-	return fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)
+	return fmt.Sprintf("%d;2;%d;%d;%d", layer, r>>8, g>>8, b>>8)
 }

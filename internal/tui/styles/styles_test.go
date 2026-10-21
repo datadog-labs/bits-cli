@@ -127,9 +127,8 @@ func TestSurfacesSeparateFromTheirBackground(t *testing.T) {
 // TestElevationRunsAwayFromThePage guards the ramp's direction, which differs
 // by mode. Dark elevates by lightening the whole way up. Light turns twice: the
 // composer takes the headroom above the page by going near-white, and what sits
-// on the composer rises by darkening away from it, since there is almost
-// nothing left above. Both of light's turns are asserted, so one surface moving
-// without the other is still caught.
+// on the composer rises by darkening away from it. Both of light's turns are
+// asserted, so one surface moving without the other is still caught.
 func TestElevationRunsAwayFromThePage(t *testing.T) {
 	dark := darkPalette()
 	if relativeLuminance(dark.surface) <= relativeLuminance(dark.background) {
@@ -154,13 +153,10 @@ func TestElevationRunsAwayFromThePage(t *testing.T) {
 // would mean the ratio picking the palette's colors, which is backwards: the
 // number describes a pair, it does not decide whether the pair works.
 //
-// interactive left for the same reason when light mode moved to #5E6DD6, which
-// reaches 3.01:1 on light's surface and tops out at 4.53:1 on pure white, so no
-// surface clears this bound for it. It is a design-chosen accent, drawn bold
-// wherever it is a foreground, and its load-bearing pair is onAccent on an
-// interactive fill (4.53:1) rather than interactive on a surface. No weaker
-// bound stands in: a number back-solved from the color it is meant to constrain
-// asserts nothing. Check this one by eye, in both modes.
+// interactive is out for the same reason. Light's accent cannot reach this bound
+// against any surface, and the pair that carries it is onAccent on an
+// interactive fill rather than interactive on a surface. No weaker bound stands
+// in: one back-solved from the color it constrains asserts nothing.
 func TestForegroundTokensMeetNormalTextContrast(t *testing.T) {
 	for _, test := range []struct {
 		name    string
