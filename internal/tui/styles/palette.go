@@ -159,7 +159,7 @@ func lightPalette() palette {
 		// textPrimary is #1C2B34 at 98% over this palette's background.
 		textPrimary:   "#202F38",
 		textSecondary: "#737373",
-		textTertiary:  "#989BA0",
+		textTertiary:  "#999BA2",
 		background:    "#EDEFF6",
 		// surface is #FFFFFF at 90% over this palette's background.
 		surface:              "#FDFDFE",
