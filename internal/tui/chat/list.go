@@ -91,6 +91,7 @@ type presentationItem struct {
 	start, end    int
 	presentations []toolPresentation
 	notice        *NoticeItem
+	indent        int // group children retain their normal rendering and disclosure
 }
 
 // itemKind is the shape of a presentation item, decided once when the
@@ -104,8 +105,8 @@ const (
 	// adjacent peers. Its presentations hold exactly that call.
 	itemTool
 	itemReasoning
-	// itemInspectionGroup is a run of two or more adjacent inspection calls.
-	itemInspectionGroup
+	// itemToolGroup is a fixed header followed by ordinary indented children.
+	itemToolGroup
 	// itemHeader is the synthetic header. Its start/end are headerSentinel:
 	// it has no backing block, and every reader of start must tolerate that.
 	itemHeader
@@ -125,6 +126,7 @@ var headerBlockID = agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00header"}
 type listLineEntry struct {
 	rev        uint64
 	width      int
+	indent     int
 	animated   bool
 	frame      int
 	disclosure disclosure
@@ -178,9 +180,23 @@ func (l *List) SetItems(items []agent.Block) {
 // SetTranscript combines agent blocks with session-only UI messages without
 // changing the source blocks or their backend-facing transcript.
 func (l *List) SetTranscript(items []agent.Block, notices []NoticeItem) {
+	var anchor agent.BlockID
+	anchored := !l.follow && l.offsetIdx < len(l.view)
+	if anchored {
+		anchor = l.view[l.offsetIdx].id
+	}
 	l.items = items
 	l.notices = notices
 	l.view = buildPresentationWithNotices(l.header, items, notices)
+	// A new group header can shift a previously visible call down one item.
+	if anchored {
+		for i, it := range l.view {
+			if it.id == anchor {
+				l.offsetIdx = i
+				break
+			}
+		}
+	}
 	if l.offsetIdx >= len(l.view) {
 		l.offsetIdx = max(0, len(l.view)-1)
 		l.offsetLine = 0
@@ -279,9 +295,7 @@ func (l *List) invalidateAll() {
 }
 
 // gapAfter keeps adjacent agent-activity rows together while preserving the
-// normal conversation spacing at either edge. It operates on presentation
-// items so an inspection group behaves as one stacked row regardless of how
-// many source tool blocks it contains.
+// normal conversation spacing at either edge, including around tool groups.
 func (l *List) gapAfter(idx int) int {
 	if idx < 0 || idx >= len(l.view) {
 		return max(l.gap, 0)
@@ -300,7 +314,10 @@ func (l *List) gapAfter(idx int) int {
 }
 
 func (it presentationItem) spacing() itemSpacing {
-	if it.kind != itemTool {
+	if it.kind == itemToolGroup {
+		return itemSpacing{before: 1}
+	}
+	if it.indent > 0 || it.kind != itemTool {
 		return itemSpacing{}
 	}
 	return it.presentations[0].renderSpec.spacing
@@ -318,11 +335,15 @@ func (l *List) stacksTight(it presentationItem) bool {
 	}
 }
 
+func (l *List) itemIndent(it presentationItem) int {
+	return min(it.indent, max(0, l.width-1))
+}
+
 // gutter returns the accordion gutter width it reserves: the control's width
 // for an expandable item when the viewport has room left for content, 0
 // otherwise.
 func (l *List) gutter(it presentationItem) int {
-	if l.gutterWidth == 0 || l.width <= l.gutterWidth || !l.expandable(it) {
+	if l.gutterWidth == 0 || l.width-l.itemIndent(it) <= l.gutterWidth || !l.expandable(it) {
 		return 0
 	}
 	return l.gutterWidth
@@ -330,14 +351,14 @@ func (l *List) gutter(it presentationItem) int {
 
 // expandable reports whether an item has a full view to disclose. Every single
 // tool does, unless its renderer is static; a reasoning group does when it has
-// text. Multi-tool inspection groups keep their left edge.
+// text. Group headers have no disclosure control.
 func (l *List) expandable(it presentationItem) bool {
 	switch it.kind {
 	case itemTool:
 		return !it.presentations[0].renderSpec.static
 	case itemReasoning:
 		return hasReasoningText(l.items[it.start:it.end])
-	case itemBlock, itemNotice, itemInspectionGroup, itemHeader:
+	case itemBlock, itemNotice, itemToolGroup, itemHeader:
 	}
 	return false
 }
@@ -488,14 +509,15 @@ func (l *List) renderItem(idx int) []string { return l.entry(idx).lines }
 func (l *List) entry(idx int) listLineEntry {
 	it := l.view[idx]
 	gutter := l.gutter(it)
-	width := l.width - gutter
+	indent := l.itemIndent(it)
+	width := l.width - indent - gutter
 	animated := l.itemAnimated(it)
 	d := compactView
 	if gutter > 0 && l.expanded(it.id) {
 		d = fullView
 	}
 	if e, ok := l.cache[it.id]; ok &&
-		e.rev == it.rev && e.width == width && e.animated == animated && e.disclosure == d &&
+		e.rev == it.rev && e.width == width && e.indent == indent && e.animated == animated && e.disclosure == d &&
 		(!animated || e.frame == l.frame) {
 		return e
 	}
@@ -503,6 +525,7 @@ func (l *List) entry(idx int) listLineEntry {
 	e := listLineEntry{
 		rev:        it.rev,
 		width:      width,
+		indent:     indent,
 		animated:   animated,
 		frame:      l.frame,
 		disclosure: d,
@@ -510,6 +533,11 @@ func (l *List) entry(idx int) listLineEntry {
 	}
 	if gutter > 0 {
 		e.lines = l.addGutter(e.lines, d == fullView)
+	}
+	if indent > 0 {
+		for i := range e.lines {
+			e.lines[i] = strings.Repeat(" ", indent) + e.lines[i]
+		}
 	}
 	l.cache[it.id] = e
 	return e
@@ -540,8 +568,8 @@ func (l *List) renderPresentationItem(it presentationItem, c renderContext) stri
 		return renderNotice(it.notice.Notice, c.width, c.sty)
 	case itemReasoning:
 		return renderReasoningGroup(l.items[it.start:it.end], c)
-	case itemInspectionGroup:
-		return renderInspectionGroup(l.items[it.start:it.end], it.presentations, c)
+	case itemToolGroup:
+		return renderToolGroupHeader(l.items[it.start:it.end], it.presentations, c)
 	case itemTool:
 		return renderPresentedTool(l.items[it.start].Tool, it.presentations[0], c)
 	case itemBlock:
@@ -872,22 +900,49 @@ func appendBlockPresentations(items []presentationItem, blocks []agent.Block, fr
 		}
 
 		presentations := []toolPresentation{p}
-		group := p.group()
+		group := p.group(blocks[i].Tool)
 		j := i + 1
 		for group != "" && j < to {
+			if blocks[j].Kind == assistant.KindReasoning {
+				presentations = append(presentations, toolPresentation{})
+				j++
+				continue
+			}
 			next, ok := presentationOfBlock(blocks[j])
-			if !ok || next.group() != group {
+			if !ok {
 				break
+			}
+			nextGroup := next.group(blocks[j].Tool)
+			if nextGroup == "" || (nextGroup != group && nextGroup != skillGroupKey && group != skillGroupKey) {
+				break
+			}
+			// Skill loads are neutral: leading loads adopt the first tool family,
+			// while loads inside a group do not split or change that family.
+			if group == skillGroupKey {
+				group = nextGroup
 			}
 			presentations = append(presentations, next)
 			j++
 		}
-		kind := itemTool
-		if len(presentations) > 1 {
-			// inspectionGroupKey is the only tool group key.
-			kind = itemInspectionGroup
+		if j == i+1 {
+			items = append(items, newPresentationItem(blocks, itemTool, i, j, presentations))
+		} else {
+			items = append(items, newPresentationItem(blocks, itemToolGroup, i, j, presentations))
+			for k := i; k < j; {
+				end, kind := k+1, itemTool
+				childPresentations := presentations[k-i : k-i+1]
+				if blocks[k].Kind == assistant.KindReasoning {
+					kind, childPresentations = itemReasoning, nil
+					for end < j && blocks[end].Kind == assistant.KindReasoning {
+						end++
+					}
+				}
+				child := newPresentationItem(blocks, kind, k, end, childPresentations)
+				child.indent = 2
+				items = append(items, child)
+				k = end
+			}
 		}
-		items = append(items, newPresentationItem(blocks, kind, i, j, presentations))
 		i = j
 	}
 	return items
@@ -925,6 +980,9 @@ func presentationOfBlock(block agent.Block) (toolPresentation, bool) {
 
 func newPresentationItem(blocks []agent.Block, kind itemKind, start, end int, presentations []toolPresentation) presentationItem {
 	first := blocks[start].ID
+	if kind == itemToolGroup {
+		first = agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00tool-group:" + strconv.Itoa(int(first.Scope)) + ":" + first.Key}
+	}
 	it := presentationItem{
 		id:            first,
 		kind:          kind,

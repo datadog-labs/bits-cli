@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/filediff"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
@@ -27,7 +28,10 @@ const (
 	execCommandMaxLines   = 10
 	execOutputMaxLines    = 5
 	collapsedDiffLines    = 15
-	inspectionGroupKey    = "inspect"
+	inspectionGroupKey    = "Files"
+	editGroupKey          = "Edits"
+	skillGroupKey         = "Skills"
+	serverGroupKey        = "Tools"
 )
 
 // toolPresentation is derived solely for rendering. The source ToolBlock stays
@@ -39,14 +43,17 @@ type toolPresentation struct {
 	context    string
 	timeout    string
 	validInput bool
-	// renderSpec is never nil: unknown tools use simpleToolRenderSpec.
+	// renderSpec is never nil: unknown tools use their client or server fallback.
 	renderSpec *toolRenderSpec
 }
 
 // group returns the key that merges this call with adjacent calls sharing it,
-// or "" when it stands alone. Only decodable input groups, so a malformed
-// call stays visible as its own row.
-func (p toolPresentation) group() string {
+// or "" when it stands alone. Local inspections require decodable input;
+// server tools can group while their arguments are still streaming.
+func (p toolPresentation) group(tool *agent.ToolBlock) string {
+	if tool.Status == agent.ToolAwaitingApproval || tool.Approval != nil {
+		return ""
+	}
 	if !p.validInput {
 		return ""
 	}
@@ -79,8 +86,8 @@ type toolRenderSpec struct {
 	renderApproval toolApprovalRenderFunc
 	spacing        itemSpacing
 	action         toolAction
-	// group merges adjacent calls with the same key into one presentation
-	// item; "" keeps each call on its own.
+	// group joins compatible calls and intervening reasoning under one
+	// header; "" keeps each call on its own.
 	group string
 	// static marks a renderer that ignores disclosure, so List offers no
 	// disclosure control.
@@ -107,35 +114,37 @@ func NewToolPrompt(call agent.ToolCall) (ToolPrompt, bool) {
 }
 
 var (
-	serverToolRenderSpec       = &toolRenderSpec{render: renderServerTool}
+	serverToolRenderSpec       = &toolRenderSpec{render: renderServerTool, group: serverGroupKey}
 	questionToolRenderSpec     = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, static: true, interact: newQuestionPrompt}
 	simpleToolRenderSpec       = &toolRenderSpec{render: renderSimpleTool}
-	spawnAgentRenderSpec       = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "start subagent", active: "starting subagent", success: "started subagent", failure: "subagent start failed"}}
-	sendAgentMessageRenderSpec = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "send message", active: "sending message", success: "sent message", failure: "message failed"}}
-	waitForAgentsRenderSpec    = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "wait for", active: "waiting for", success: "waited for", failure: "wait failed"}}
-	readToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, group: inspectionGroupKey}
-	listToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, group: inspectionGroupKey}
-	grepToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "search", active: "searching"}, group: inspectionGroupKey}
+	spawnAgentRenderSpec       = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Start subagent", active: "Starting subagent", success: "Started subagent", failure: "Subagent start failed"}}
+	sendAgentMessageRenderSpec = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Send message", active: "Sending message", success: "Sent message", failure: "Message failed"}}
+	waitForAgentsRenderSpec    = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Wait for", active: "Waiting for", success: "Waited for", failure: "Wait failed"}}
+	readToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Read", active: "Reading"}, group: inspectionGroupKey}
+	listToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "List", active: "Listing"}, group: inspectionGroupKey}
+	grepToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Search", active: "Searching"}, group: inspectionGroupKey}
 	writeToolRenderSpec        = &toolRenderSpec{
 		render:  renderChangeTool,
+		group:   editGroupKey,
 		spacing: itemSpacing{before: 1, after: 1},
-		action:  toolAction{base: "write", active: "writing", success: "wrote", failure: "write failed"},
+		action:  toolAction{base: "Write", active: "Writing", success: "Wrote", failure: "Write failed"},
 	}
 	editToolRenderSpec = &toolRenderSpec{
 		render:  renderChangeTool,
+		group:   editGroupKey,
 		spacing: itemSpacing{before: 1, after: 1},
-		action:  toolAction{base: "edit", active: "editing", success: "edited", failure: "edit failed"},
+		action:  toolAction{base: "Edit", active: "Editing", success: "Edited", failure: "Edit failed"},
 	}
 	execToolRenderSpec = &toolRenderSpec{
 		render:         renderExecTool,
 		renderApproval: renderExecApproval,
 		spacing:        itemSpacing{before: 1, after: 1},
-		action:         toolAction{base: "run", success: "ran", failure: "run failed"},
+		action:         toolAction{base: "Run", success: "Ran", failure: "Run failed"},
 	}
 	skillToolRenderSpec = &toolRenderSpec{
-		render:  renderSimpleTool,
-		spacing: itemSpacing{before: 1, after: 1},
-		action:  toolAction{base: "load", active: "loading", success: "loaded", failure: "load failed"},
+		render: renderSimpleTool,
+		group:  skillGroupKey,
+		action: toolAction{base: "Load", active: "Loading", success: "Loaded", failure: "Load failed"},
 	}
 )
 
@@ -431,82 +440,96 @@ func RenderToolApproval(tool *agent.ToolBlock, width int, sty Styles) (string, b
 	return p.renderSpec.renderApproval(tool, p, max(1, width), sty), true
 }
 
-type serverToolInfo struct {
-	action      toolAction
-	target      string
-	targetLabel string
-	timeframe   bool
-}
-
-// These are exact wire names used by the web client's chat tool catalog.
-// A different namespace or a client tool must never inherit these summaries.
-var serverToolCatalog = map[spec.Identity]serverToolInfo{
-	spec.ServerGetDatadogMetric:       {action: toolAction{base: "Get Datadog Metric", active: "Getting Datadog Metric", success: "Got Datadog Metric", failure: "Get Datadog Metric failed"}, target: "query", targetLabel: "Query", timeframe: true},
-	spec.ServerSearchDatadogLogs:      serverSearch("Datadog Logs", true),
-	spec.ServerSearchDatadogSpans:     serverSearch("Datadog Spans", true),
-	spec.ServerSearchDatadogEvents:    serverSearch("Datadog Events", true),
-	spec.ServerSearchDatadogRUMEvents: serverSearch("Datadog RUM Events", true),
-	spec.ServerSearchDatadogMonitors:  serverSearch("Datadog Monitors", false),
-	spec.ServerSearchDatadogMetrics:   serverSearch("Datadog Metrics", false),
-	spec.ServerSearchDatadogDocs:      serverSearch("Datadog Docs", false),
-	spec.ServerCodeExplorerView:       {action: toolAction{base: "Read file", active: "Reading file", success: "Read file", failure: "Read file failed"}, target: "file_path", targetLabel: "Path"},
-	spec.ServerCodeExplorerGrep:       {action: toolAction{base: "Search code", active: "Searching code", success: "Searched code", failure: "Search code failed"}, target: "pattern", targetLabel: "Pattern"},
-	spec.ServerCodeExplorerGlob:       {action: toolAction{base: "Find files", active: "Finding files", success: "Found files", failure: "Find files failed"}, target: "pattern", targetLabel: "Pattern"},
-	spec.ServerCodeExplorerList:       {action: toolAction{base: "List directory", active: "Listing directory", success: "Listed directory", failure: "List directory failed"}, target: "path", targetLabel: "Path"},
-}
-
-func serverSearch(subject string, timeframe bool) serverToolInfo {
-	return serverToolInfo{
-		action: toolAction{base: "Search " + subject, active: "Searching " + subject, success: "Searched " + subject, failure: "Search " + subject + " failed"},
-		target: "query", targetLabel: "Query", timeframe: timeframe,
-	}
-}
-
-type serverInputField struct{ label, value string }
-
-func serverInputSummary(tool *agent.ToolBlock, info serverToolInfo) []serverInputField {
-	if info.target == "" {
-		return nil
-	}
-	var input map[string]json.RawMessage
-	if !decodeObject(toolInput(tool), &input) {
-		return nil
-	}
-	var fields []serverInputField
-	add := func(key, label string) {
-		var value string
-		if json.Unmarshal(input[key], &value) == nil && strings.TrimSpace(value) != "" {
-			fields = append(fields, serverInputField{label, escape.Inline(value)})
+// renderToolGroupHeader counts tool calls, while reasoning only contributes
+// to the running state. Children always remain visible beneath this header.
+func renderToolGroupHeader(blocks []agent.Block, presentations []toolPresentation, c renderContext) string {
+	family := presentations[0].group(blocks[0].Tool)
+	counts := make(map[agent.ToolStatus]int)
+	files := make(map[string]struct{})
+	calls, changes, skills := 0, 0, 0
+	reasoning := false
+	for i, block := range blocks {
+		if block.Kind == assistant.KindReasoning {
+			reasoning = reasoning || !block.Complete
+			continue
+		}
+		calls++
+		counts[statusOf(block.Tool)]++
+		p := presentations[i]
+		if group := p.group(block.Tool); group != skillGroupKey {
+			family = group
+		}
+		if p.identity == spec.ServerSkill {
+			skills++
+		}
+		if p.renderSpec.group == editGroupKey {
+			changes++
+			if p.argument != "" {
+				files[p.argument] = struct{}{}
+			}
 		}
 	}
-	add(info.target, info.targetLabel)
-	if info.timeframe {
-		add("from", "From")
-		add("to", "To")
+	state := agent.ToolUnknown
+	switch {
+	case counts[agent.ToolRunning] > 0 || reasoning:
+		state = agent.ToolRunning
+	case counts[agent.ToolError] > 0:
+		state = agent.ToolError
+	case counts[agent.ToolSuccess] == calls:
+		state = agent.ToolSuccess
 	}
-	return fields
+	noun := "calls"
+	if calls == 1 {
+		noun = "call"
+	}
+	suffix := fmt.Sprintf(" · %d %s", calls, noun)
+	if family == editGroupKey {
+		operations, paths := "changes", "files"
+		if changes == 1 {
+			operations = "change"
+		}
+		if len(files) == 1 {
+			paths = "file"
+		}
+		suffix = fmt.Sprintf(" · %d %s across %d %s", changes, operations, len(files), paths)
+		if skills > 0 {
+			noun := "skills"
+			if skills == 1 {
+				noun = "skill"
+			}
+			suffix += fmt.Sprintf(" · %d %s", skills, noun)
+		}
+	}
+	for _, outcome := range []struct {
+		status agent.ToolStatus
+		label  string
+	}{
+		{agent.ToolRunning, "running"},
+		{agent.ToolError, "failed"},
+		{agent.ToolCancelled, "stopped"},
+		{agent.ToolDenied, "denied"},
+	} {
+		if n := counts[outcome.status]; n > 0 {
+			suffix += fmt.Sprintf(" · %d %s", n, outcome.label)
+		}
+	}
+	if reasoning {
+		suffix += " · reasoning"
+	}
+	title := family
+	if family == serverGroupKey {
+		title = "Analyzed"
+		if state == agent.ToolRunning {
+			title = "Analyzing"
+		}
+	}
+	return renderActivityHeader(state, title, suffix, c)
 }
 
 func renderServerTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
-	info, known := serverToolCatalog[p.identity]
-	fields := serverInputSummary(tool, info)
-	title := strings.TrimSpace(escape.SingleLine(tool.Title))
-	if title == "" && known {
-		title = info.action.label(statusOf(tool))
-	}
 	summary := p.summary(tool)
-	if title != "" {
+	if title := strings.TrimSpace(escape.SingleLine(tool.Title)); title != "" {
 		summary = []summarySpan{{text: title, kind: spanAction}}
-		for _, field := range fields {
-			if strings.Contains(strings.ToLower(title), strings.ToLower(field.value)) {
-				continue
-			}
-			value := field.value
-			if field.label == "From" || field.label == "To" {
-				value = strings.ToLower(field.label) + " " + value
-			}
-			summary = append(summary, summarySpan{text: " · ", kind: spanMuted}, summarySpan{text: value, kind: spanArgument})
-		}
 	}
 	header := renderToolHeader(tool, summary, nil, c)
 	if c.disclosure == compactView {
@@ -523,9 +546,6 @@ func renderServerTool(tool *agent.ToolBlock, p toolPresentation, c renderContext
 		return header + "\n" + renderRows([]string{collapseWS(escape.Multiline(reason))}, c.width, c.sty.ToolError, c.sty)
 	}
 	var sections []string
-	for _, field := range fields {
-		sections = append(sections, field.label+": "+field.value)
-	}
 	if detail := strings.TrimSpace(tool.Detail); detail != "" && detail != strings.TrimSpace(tool.Output) {
 		sections = append(sections, detail)
 	} else if strings.TrimSpace(tool.Detail) == "" {
@@ -607,6 +627,16 @@ func serverMCPText(output string) string {
 func renderSimpleTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
 	header := renderToolHeader(tool, p.summary(tool), nil, c)
 	if c.disclosure == compactView {
+		if statusOf(tool) == agent.ToolError {
+			reason := tool.Detail
+			if reason == "" {
+				reason = tool.Output
+			}
+			if reason == "" {
+				reason = "failed"
+			}
+			return header + "\n" + renderRows([]string{collapseWS(escape.Multiline(reason))}, c.width, c.sty.ToolError, c.sty)
+		}
 		return header
 	}
 	detail := tool.Detail
@@ -1094,77 +1124,6 @@ func spanStyle(kind spanKind, sty Styles) lipgloss.Style {
 	}
 }
 
-// inspectionLifecycle is the group's activity: running or awaiting approval
-// while any call is, then success once any call succeeded. Each call reports
-// its own failure, so a settled group without a success stays neutral rather
-// than alarming: inspection failures are routine.
-func inspectionLifecycle(blocks []agent.Block) agent.ToolStatus {
-	state := agent.ToolUnknown
-	for i := range blocks {
-		switch statusOf(blocks[i].Tool) {
-		case agent.ToolRunning:
-			return agent.ToolRunning
-		case agent.ToolAwaitingApproval:
-			state = agent.ToolAwaitingApproval
-		case agent.ToolSuccess:
-			if state != agent.ToolAwaitingApproval {
-				state = agent.ToolSuccess
-			}
-		case agent.ToolUnknown, agent.ToolError, agent.ToolDenied, agent.ToolCancelled:
-		}
-	}
-	return state
-}
-
-func renderInspectionGroup(blocks []agent.Block, presentations []toolPresentation, c renderContext) string {
-	state := inspectionLifecycle(blocks)
-	label, suffix := "inspected", ""
-	switch state {
-	case agent.ToolRunning:
-		label, suffix = "inspecting", activityEllipsis(c.frame, c.sty.StatusSpinner.Len() > 0)
-	case agent.ToolAwaitingApproval:
-		label, suffix = "inspecting", " · awaiting approval"
-	case agent.ToolUnknown, agent.ToolSuccess, agent.ToolError, agent.ToolDenied, agent.ToolCancelled:
-	}
-	lines := []string{renderActivityHeader(state, label, suffix, c)}
-
-	first := true
-	for i := 0; i < len(blocks); {
-		p := presentations[i]
-		memberState := statusOf(blocks[i].Tool)
-		if p.identity == spec.ClientReadFile && (memberState == agent.ToolRunning || memberState == agent.ToolSuccess) {
-			paths := make([]string, 0, 2)
-			seen := make(map[string]struct{})
-			j := i
-			for j < len(blocks) && presentations[j].identity == spec.ClientReadFile {
-				s := statusOf(blocks[j].Tool)
-				if s != agent.ToolRunning && s != agent.ToolSuccess {
-					break
-				}
-				path := presentations[j].argument
-				if _, ok := seen[path]; !ok {
-					seen[path] = struct{}{}
-					paths = append(paths, path)
-				}
-				j++
-			}
-			spans := []summarySpan{{text: "read", kind: spanAction}, {text: " ", kind: spanMuted}}
-			for n, path := range paths {
-				if n > 0 {
-					spans = append(spans, summarySpan{text: ", ", kind: spanMuted})
-				}
-				spans = append(spans, summarySpan{text: path, kind: spanArgument})
-			}
-			lines = append(lines, renderInspectionChild(spans, nil, first, c.width, c.sty)...)
-			first, i = false, j
-			continue
-		}
-		lines = append(lines, renderInspectionChild(p.summary(blocks[i].Tool), inspectionOutcome(blocks[i].Tool), first, c.width, c.sty)...)
-		first, i = false, i+1
-	}
-	return strings.Join(lines, "\n")
-}
-
 // activityEllipsis returns a fixed-width, low-frequency progress indicator.
 // The shared TUI clock ticks every 50ms; holding each step for eight frames
 // makes the visible dots advance every 400ms without causing header reflow.
@@ -1178,70 +1137,6 @@ func activityEllipsis(frame int, motion bool) string {
 	}
 	dots := step + 1
 	return fmt.Sprintf("%-3s", strings.Repeat(".", dots))
-}
-
-// inspectionOutcome is the suffix a group row adds for a call that did not
-// succeed: its error on one line, or the denied/stopped lifecycle label.
-func inspectionOutcome(tool *agent.ToolBlock) []summarySpan {
-	switch state := statusOf(tool); state {
-	case agent.ToolError:
-		detail := tool.Detail
-		if detail == "" {
-			detail = tool.Output
-		}
-		if detail = collapseWS(escape.Multiline(detail)); detail == "" {
-			detail = "failed"
-		}
-		return []summarySpan{{text: " (" + detail + ")", kind: spanError}}
-	case agent.ToolDenied, agent.ToolCancelled:
-		return []summarySpan{{text: " · " + lifecycleSuffix(state), kind: spanMuted}}
-	case agent.ToolUnknown, agent.ToolRunning, agent.ToolAwaitingApproval, agent.ToolSuccess:
-	}
-	return nil
-}
-
-// renderInspectionChild renders one group row. The summary wraps with a
-// hanging indent; a row with an outcome stays on one line, cut at the width,
-// so failures never grow the group.
-func renderInspectionChild(spans, outcome []summarySpan, first bool, width int, sty Styles) []string {
-	prefix := "    "
-	if first {
-		prefix = "  └ "
-	}
-	if len(spans) == 0 {
-		return []string{sty.ToolDetail.Render(prefix)}
-	}
-	action := spans[0]
-	if action.kind != spanAction || len(outcome) > 0 {
-		spans = append(append([]summarySpan(nil), spans...), outcome...)
-		line := sty.ToolDetail.Render(prefix) + renderSpans(spans, sty)
-		return []string{ansi.Truncate(line, max(1, width), "…")}
-	}
-	rest := append([]summarySpan(nil), spans[1:]...)
-	if len(rest) > 0 && rest[0].kind == spanMuted {
-		rest[0].text = strings.TrimPrefix(rest[0].text, " ")
-		if rest[0].text == "" {
-			rest = rest[1:]
-		}
-	}
-	actionRendered := sty.ToolName.Render(action.text)
-	if len(rest) == 0 {
-		line := sty.ToolDetail.Render(prefix) + actionRendered
-		return []string{ansi.Truncate(line, max(1, width), "…")}
-	}
-	indentWidth := ansi.StringWidth(prefix) + ansi.StringWidth(action.text) + 1
-	if width-indentWidth < 1 {
-		line := sty.ToolDetail.Render(prefix) + actionRendered + sty.ToolDetail.Render(" ") + renderSpans(rest, sty)
-		return []string{ansi.Truncate(line, max(1, width), "…")}
-	}
-	return textwrap.Wrap(textwrap.Options{
-		Width:       width,
-		FirstPrefix: sty.ToolDetail.Render(prefix) + actionRendered + sty.ToolDetail.Render(" "),
-		RestPrefix:  sty.ToolDetail.Render(strings.Repeat(" ", indentWidth)),
-		Breakpoints: textwrap.Prose,
-		TrimSpace:   true,
-		Ellipsis:    "…",
-	}, spanSegments(rest, sty)...)
 }
 
 // collapseWS joins whitespace runs.
