@@ -126,10 +126,10 @@ func TestSurfacesSeparateFromTheirBackground(t *testing.T) {
 
 // TestElevationRunsAwayFromThePage guards the ramp's direction, which differs
 // by mode. Dark elevates by lightening the whole way up. Light turns twice: the
-// composer takes the single step of headroom above the page by going white, and
-// what sits on the composer rises by darkening away from it, since above
-// #FFFFFF there is nowhere left to go. Both of light's turns are asserted, so
-// one surface moving without the other is still caught.
+// composer takes the headroom above the page by going near-white, and what sits
+// on the composer rises by darkening away from it, since there is almost
+// nothing left above. Both of light's turns are asserted, so one surface moving
+// without the other is still caught.
 func TestElevationRunsAwayFromThePage(t *testing.T) {
 	dark := darkPalette()
 	if relativeLuminance(dark.surface) <= relativeLuminance(dark.background) {

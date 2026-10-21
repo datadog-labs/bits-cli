@@ -134,10 +134,10 @@ func darkPalette() palette {
 	}
 }
 
-// lightPalette turns its elevation ramp twice. The composer takes the one step
-// of headroom above the page by going white; everything stacked on the composer
-// rises by darkening away from it (as in Nord/Solarized), since above #FFFFFF
-// there is nowhere left to go. Foregrounds are darkened to match, each checked
+// lightPalette turns its elevation ramp twice. The composer takes the headroom
+// above the page by going near-white; everything stacked on the composer rises
+// by darkening away from it (as in Nord/Solarized), since there is almost
+// nothing left above. Foregrounds are darkened to match, each checked
 // against the darkest surface it renders on (builder.go). The three text levels
 // are picked by eye; see the palette struct.
 func lightPalette() palette {
@@ -148,11 +148,12 @@ func lightPalette() palette {
 		onAccent:    "#FFFFFF",
 		onWarning:   "#1A1A1A",
 		// textPrimary is #1C2B34 at 98% over this palette's background.
-		textPrimary:          "#202F38",
-		textSecondary:        "#737373",
-		textTertiary:         "#989BA0",
-		background:           "#EDEFF6",
-		surface:              "#FFFFFF",
+		textPrimary:   "#202F38",
+		textSecondary: "#737373",
+		textTertiary:  "#989BA0",
+		background:    "#EDEFF6",
+		// surface is #FFFFFF at 90% over this palette's background.
+		surface:              "#FDFDFE",
 		surfaceRaised:        "#BDC5D3",
 		approvalSurface:      "#B7C1D5",
 		inputRule:            "#D2D2DA",
