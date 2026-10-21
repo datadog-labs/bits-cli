@@ -96,10 +96,16 @@ type Chat struct {
 	// rather than busy.
 	StatusSpinner Spinner
 
-	Meta        lipgloss.Style
+	Meta lipgloss.Style
+
+	// NoticeInfo, NoticeWarn and NoticeError style a notice's leading marker;
+	// NoticeText styles the message beside it. The message was wrapped with no
+	// style at all, so it came from the terminal's own foreground over a row
+	// this theme paints, and washed out once that row went near-white.
 	NoticeInfo  lipgloss.Style
 	NoticeWarn  lipgloss.Style
 	NoticeError lipgloss.Style
+	NoticeText  lipgloss.Style
 }
 
 type Diff struct {
