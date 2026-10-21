@@ -92,6 +92,7 @@ func TestMultiAgentPublicEventParity(t *testing.T) {
 	}
 	event("root", "thinking.started", `{}`)
 	event("root", "thinking.fragment_received", `{"fragment":"Reasoning"}`)
+	event("child", "thinking.started", `{}`)
 	event("root", "thinking.completed", `{"full_thinking":"Reasoning","redacted":false}`)
 	event("child", "thinking.completed", `{"full_thinking":"private"}`)
 	event("root", "debug.context", `{"content":"debug prompt"}`)
@@ -154,8 +155,6 @@ func TestMultiAgentTransportEligibility(t *testing.T) {
 		{name: "long prompt", prompt: strings.Repeat("a", 32001)},
 		{name: "long instructions", prompt: "hello", opts: SendOptions{CustomUserContext: strings.Repeat("a", 32001)}},
 		{name: "large image", prompt: "describe", opts: SendOptions{Context: &AssistantContext{Entities: []ContextEntity{ImageEntity("image/png", make([]byte, 128000), "image")}}}},
-		{name: "large tool schema", prompt: "question", opts: SendOptions{ClientTools: []ClientTool{{Name: "tool", InputSchema: map[string]any{"description": strings.Repeat("a", 64001)}}}}},
-		{name: "too many tools", prompt: "question", opts: SendOptions{ClientTools: make([]ClientTool, 65)}},
 		{name: "too many overrides", prompt: "question", opts: SendOptions{SkillOverrides: make([]SkillOverride, 65)}},
 		{name: "unicode prompt", prompt: strings.Repeat("é", 32000), want: true},
 	} {

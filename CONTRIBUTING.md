@@ -144,8 +144,9 @@ checks and a limit of 16 executions.
 
 Turns using `--reasoning`, explicit raw history, or payloads exceeding the bounded
 run API's limits use the regular Assistant endpoint, including its tool-result
-continuations. This preserves existing image, instruction, and tool-schema
-capabilities. There is no retry through another endpoint after a run has started.
+continuations. This preserves existing image and instruction capabilities. Tests verify that
+the shipped tool definitions fit the run API limits. There is no retry through
+another endpoint after a run has started.
 
 For a test drive, set `BITS_CUSTOM_HEADERS='test-drive-NAME=1'`. The shared
 request builder forwards these headers on start, conversation continuation,

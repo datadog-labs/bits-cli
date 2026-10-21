@@ -50,7 +50,7 @@ type multiAgentRun struct {
 	toolsMu            sync.Mutex
 	toolIDs            map[multiAgentToolKey]string
 	unbatchedToolIDs   map[multiAgentToolKey]string
-	thinkingFragmented map[string]bool
+	thinkingFragmented bool
 }
 
 type multiAgentToolKey struct {
@@ -120,29 +120,12 @@ func NewMultiAgentClient(client *Client) *MultiAgentClient {
 
 // CanStream preserves regular-API capabilities outside the bounded run contract.
 // The engine routes these turns through Send, including their tool continuations.
+// Shipped tool definitions are checked against the run contract by tools tests.
 func (c *MultiAgentClient) CanStream(prompt string, opts SendOptions) bool {
 	if opts.InferenceMode != "" || len(opts.MessageHistory) != 0 || utf8.RuneCountInString(prompt) > 32_000 || utf8.RuneCountInString(opts.CustomUserContext) > 32_000 {
 		return false
 	}
-	if utf8.RuneCountInString(opts.Model) > 128 || len(opts.ClientTools) > 64 || len(opts.SkillOverrides) > 64 {
-		return false
-	}
-	totalSchemaBytes := 0
-	for _, tool := range opts.ClientTools {
-		if utf8.RuneCountInString(tool.Name) > 128 || utf8.RuneCountInString(tool.Description) > 4096 {
-			return false
-		}
-		schema, err := json.Marshal(tool.InputSchema)
-		if err != nil || len(schema) > 64_000 {
-			return false
-		}
-		totalSchemaBytes += len(schema)
-		var value any
-		if json.Unmarshal(schema, &value) != nil || !multiAgentSchemaDepthAllowed(value, 0) {
-			return false
-		}
-	}
-	if totalSchemaBytes > 512_000 {
+	if utf8.RuneCountInString(opts.Model) > 128 || len(opts.SkillOverrides) > 64 {
 		return false
 	}
 	contextJSON, err := json.Marshal(opts.Context)
@@ -151,30 +134,6 @@ func (c *MultiAgentClient) CanStream(prompt string, opts SendOptions) bool {
 	}
 	body, err := json.Marshal(multiAgentRequest(prompt, opts))
 	return err == nil && len(body) <= 1_000_000
-}
-
-func multiAgentSchemaDepthAllowed(value any, depth int) bool {
-	switch v := value.(type) {
-	case map[string]any:
-		if depth > 16 {
-			return false
-		}
-		for _, child := range v {
-			if !multiAgentSchemaDepthAllowed(child, depth+1) {
-				return false
-			}
-		}
-	case []any:
-		if depth > 16 {
-			return false
-		}
-		for _, child := range v {
-			if !multiAgentSchemaDepthAllowed(child, depth+1) {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func multiAgentRequest(prompt string, opts SendOptions) multiAgentStartRequest {
@@ -277,17 +236,16 @@ func (c *MultiAgentClient) start(ctx context.Context, prompt string, opts SendOp
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, initial), maxLine)
 	run := &multiAgentRun{
-		id:                 runID,
-		conversationID:     conversationID,
-		rootAgentID:        rootAgentID,
-		response:           resp,
-		scanner:            scanner,
-		messageIDs:         make(map[string]string),
-		requestedTools:     make(map[multiAgentToolKey]multiAgentToolRequested),
-		pendingTools:       make(map[string]multiAgentToolCorrelation),
-		toolIDs:            make(map[multiAgentToolKey]string),
-		unbatchedToolIDs:   make(map[multiAgentToolKey]string),
-		thinkingFragmented: make(map[string]bool),
+		id:               runID,
+		conversationID:   conversationID,
+		rootAgentID:      rootAgentID,
+		response:         resp,
+		scanner:          scanner,
+		messageIDs:       make(map[string]string),
+		requestedTools:   make(map[multiAgentToolKey]multiAgentToolRequested),
+		pendingTools:     make(map[string]multiAgentToolCorrelation),
+		toolIDs:          make(map[multiAgentToolKey]string),
+		unbatchedToolIDs: make(map[multiAgentToolKey]string),
 	}
 	c.mu.Lock()
 	if c.active != nil {
@@ -666,10 +624,9 @@ func (c *MultiAgentClient) handleEvent(
 		}
 		return false, emit(message(Content{Type: ContentToolCallInputDelta, Tool: &ToolPayload{ToolCallID: id, PartialJSON: event.PartialJSON}}))
 	case "thinking.started":
-		if run.thinkingFragmented == nil {
-			run.thinkingFragmented = make(map[string]bool)
+		if envelope.AgentID == run.rootAgentID {
+			run.thinkingFragmented = false
 		}
-		run.thinkingFragmented[envelope.AgentID] = false
 		return false, nil
 	case "thinking.fragment_received", "thinking.completed":
 		if envelope.AgentID != run.rootAgentID {
@@ -684,15 +641,12 @@ func (c *MultiAgentClient) handleEvent(
 			return false, err
 		}
 		text := event.Fragment
-		if run.thinkingFragmented == nil {
-			run.thinkingFragmented = make(map[string]bool)
-		}
 		if envelope.Type == "thinking.completed" {
-			if !run.thinkingFragmented[envelope.AgentID] && !event.Redacted {
+			if !run.thinkingFragmented && !event.Redacted {
 				text = event.FullThinking
 			}
 		} else {
-			run.thinkingFragmented[envelope.AgentID] = true
+			run.thinkingFragmented = true
 		}
 		content := ThinkingContent(text)
 		content.Thinking.Redacted = event.Redacted
