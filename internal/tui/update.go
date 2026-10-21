@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/datadog-labs/bits-cli/internal/agent"
@@ -186,6 +187,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.splashReady = true
 			cmd = splash.Transmit()
 		}
+	case tea.ColorProfileMsg:
+		// Arrives in any mode. Selection is the only paint that needs it: when
+		// colors are off, ultraviolet drops Fg and Bg but keeps attributes.
+		m.monochrome = msg.Profile == colorprofile.NoTTY || msg.Profile == colorprofile.ASCII
 	case recentConversationsMsg:
 		// A failed background read the user never asked for stays silent.
 		if msg.result.Err == nil {
@@ -980,6 +985,16 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// selectionCellStyle is the style painted over selected cells. A terminal that
+// cannot paint color keeps attributes but loses Fg and Bg, which would leave a
+// selection indistinguishable, so those fall back to reverse video.
+func (m *Model) selectionCellStyle() uv.Style {
+	if m.monochrome {
+		return uv.Style{Attrs: uv.AttrReverse}
+	}
+	return uv.Style{Fg: m.styles.Selection.Foreground, Bg: m.styles.Selection.Background}
 }
 
 // setDarkBackground adapts styles to the detected terminal background.

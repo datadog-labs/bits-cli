@@ -8,8 +8,6 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/clipperhouse/uax29/v2/words"
-
-	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 const (
@@ -283,7 +281,7 @@ func (s *selection) active() bool { return s.selecting() || s.selected() }
 
 // render paints the active selection over frame. The original frame content
 // is returned byte-for-byte when no cells are selected.
-func (s *selection) render(frame selectionFrame, sty styles.Selection) string {
+func (s *selection) render(frame selectionFrame, cell uv.Style) string {
 	if !s.selected() {
 		return frame.content
 	}
@@ -312,8 +310,7 @@ func (s *selection) render(frame selectionFrame, sty styles.Selection) string {
 				unitEnd = x + 1
 			}
 			if unitStart <= end && unitEnd-1 >= start {
-				cell := &line[unitStart]
-				cell.Style = uv.Style{Fg: sty.Foreground, Bg: sty.Background}
+				line[unitStart].Style = cell
 			}
 			x = unitEnd
 		}
