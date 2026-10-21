@@ -43,9 +43,9 @@ type palette struct {
 	// keeps the stronger tone.
 	accordionDetailHover string
 
-	// accordionBackground is the disclosure control's resting fill. Fixed to
-	// the same hex in both palettes by design request, rather than tuned per
-	// theme like the rest of this file.
+	// accordionBackground is the disclosure control's resting fill. Dark keeps
+	// the hex it was fixed to by design request; light was later tuned off it,
+	// so the two now differ like the rest of this file.
 	accordionBackground string
 
 	// sweepHot is the peak color of the composer's animated border sweep
@@ -144,11 +144,11 @@ func lightPalette() palette {
 		approvalSurface:      "#B7C1D5",
 		inputRule:            "#D2D2DA",
 		borderSubtle:         "#9AA3B2",
-		codeSurface:          "#CED3DD",
+		codeSurface:          "#E2E2E6",
 		codeText:             "#1C2E38",
 		accordionHover:       "#BDC5D3",
 		accordionDetailHover: "#D7DCE6",
-		accordionBackground:  "#22242B",
+		accordionBackground:  "#E2E2E6",
 		sweepHot:             "#5E6DD6",
 		link:                 "#006bc2",
 		busy:                 "#7A5200",
