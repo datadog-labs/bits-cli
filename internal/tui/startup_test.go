@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -31,7 +32,7 @@ func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
 	_, _ = root.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	_, _ = root.Update(tea.BackgroundColorMsg{Color: lipgloss.Color("#FFFFFF")})
 	loginView := root.View()
-	if !loginView.AltScreen || loginView.MouseMode != tea.MouseModeNone {
+	if !loginView.AltScreen || loginView.MouseMode != tea.MouseModeCellMotion {
 		t.Fatalf("login view alt=%t mouse=%v", loginView.AltScreen, loginView.MouseMode)
 	}
 
@@ -63,9 +64,27 @@ func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
 	}
 }
 
+// A detached model's subscription ends while the engine lives on, even with
+// the turn's events still queued.
+func TestDetachEndsTheEngineSubscription(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		engine := agent.New(fake.New(), agent.Config{})
+		defer engine.Close() // the bubble requires its goroutines to exit
+		m := New(engine)
+		if _, err := engine.StartTurn(context.Background(), agent.TurnInput{Message: "hello"}); err != nil {
+			t.Fatal(err)
+		}
+		m.Detach()
+		synctest.Wait()
+		if _, ok := <-m.events; ok {
+			t.Fatal("the subscription outlived Detach")
+		}
+	})
+}
+
 func TestStartupHandoffKeepsOneAltScreenSession(t *testing.T) {
 	output := &synchronizedBuffer{}
-	loginModel := loginui.New(context.Background(), func(context.Context, string, func(loginui.BrowserStatus)) error {
+	loginModel := loginui.New(context.Background(), func(context.Context, string, <-chan string, func(loginui.BrowserStatus)) error {
 		return nil
 	})
 	root := NewWithLogin(context.Background(), loginModel, func(context.Context) (*agent.Engine, error) {
@@ -213,7 +232,7 @@ func TestStartupLoginFactoryErrorQuitsWithStoredError(t *testing.T) {
 func TestControlCAfterCompletedLoginInvalidatesPendingFactory(t *testing.T) {
 	factoryStarted := make(chan struct{})
 	factoryCanceled := make(chan struct{})
-	loginModel := loginui.New(context.Background(), func(context.Context, string, func(loginui.BrowserStatus)) error {
+	loginModel := loginui.New(context.Background(), func(context.Context, string, <-chan string, func(loginui.BrowserStatus)) error {
 		return nil
 	})
 	root := NewWithLogin(context.Background(), loginModel, func(ctx context.Context) (*agent.Engine, error) {
@@ -276,5 +295,55 @@ func TestStartupLoginInitializesConversationRestore(t *testing.T) {
 	}
 	if root.ConversationID() != "conversation-1" {
 		t.Fatalf("conversation id = %q", root.ConversationID())
+	}
+}
+
+func TestStartupPastedCallbackContinuesIntoChat(t *testing.T) {
+	output := &synchronizedBuffer{}
+	const callback = "pasted callback address"
+	loginModel := loginui.New(context.Background(), func(ctx context.Context, _ string, callbacks <-chan string, report func(loginui.BrowserStatus)) error {
+		report(loginui.BrowserStatus{
+			AuthorizationURL: "https://app.datadoghq.com/authorize",
+			OpenError:        errors.New("SSH session has no graphical display"),
+		})
+		select {
+		case got := <-callbacks:
+			if got != callback {
+				return fmt.Errorf("unexpected callback %q", got)
+			}
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	root := NewWithLogin(context.Background(), loginModel, func(context.Context) (*agent.Engine, error) {
+		return agent.New(fake.New(), agent.Config{}), nil
+	})
+	program := tea.NewProgram(root,
+		tea.WithInput(bytes.NewReader(nil)),
+		tea.WithOutput(output),
+		tea.WithWindowSize(80, 24),
+		tea.WithEnvironment([]string{"TERM=xterm-256color"}),
+	)
+	done := make(chan error, 1)
+	go func() {
+		_, err := program.Run()
+		done <- err
+	}()
+	t.Cleanup(program.Kill)
+	waitForOutput(t, output, "Choose your Datadog site")
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForOutput(t, output, "Paste the full address")
+	program.Send(tea.PasteMsg{Content: callback})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForOutput(t, output, "Ask Bits…")
+	program.Quit()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("program did not stop")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -199,7 +200,7 @@ func TestConversationLoadingRejectsMalformedHistory(t *testing.T) {
 				t.Fatalf("error/id = %v/%q", err, e.ConversationID())
 			}
 			e.opts.ConversationID = testConversationID
-			events := collect(e.Restore(context.Background()))
+			events := collect(restoreEvents(e, context.Background()))
 			if len(events) != 1 || !errors.Is(events[0].Err, ErrMalformedHistory) {
 				t.Fatalf("restore events = %+v", events)
 			}
@@ -212,6 +213,15 @@ func TestConversationLoadingRejectsMalformedHistory(t *testing.T) {
 
 // A startup read must not contend with turns: the gate belongs to operations
 // that mutate engine state, and listing mutates none.
+// hold claims e as an operation does, until the test ends.
+func hold(t *testing.T, e *Engine) {
+	t.Helper()
+	if err := e.idle(func() error { e.busy = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.do(func() { e.busy = false }) })
+}
+
 func TestListConversationsIgnoresTheOperationGate(t *testing.T) {
 	response := &assistant.UserConversationsResponse{}
 	response.Data.Type = "user-conversations-response"
@@ -220,10 +230,7 @@ func TestListConversationsIgnoresTheOperationGate(t *testing.T) {
 	}
 	e := New(&historyBackend{list: response}, Config{})
 
-	if !e.begin() {
-		t.Fatal("could not take the operation gate")
-	}
-	t.Cleanup(func() { e.active.Store(false) })
+	hold(t, e)
 
 	result := e.ListConversations(context.Background())
 	if result.Err != nil {
@@ -241,10 +248,7 @@ func TestConversationLoadIgnoresActiveTurnButInstallRejectsIt(t *testing.T) {
 	response := &assistant.ConversationHistoryResponse{}
 	response.Data.Type = "conversation-history-response"
 	e := New(&historyBackend{resp: response}, Config{ConversationID: "old"})
-	if !e.begin() {
-		t.Fatal("could not take the operation gate")
-	}
-	t.Cleanup(func() { e.active.Store(false) })
+	hold(t, e)
 	conversation, err := e.LoadConversation(context.Background(), testConversationID)
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +256,7 @@ func TestConversationLoadIgnoresActiveTurnButInstallRejectsIt(t *testing.T) {
 	if err := e.InstallConversation(context.Background(), conversation); !errors.Is(err, ErrOperationActive) {
 		t.Fatalf("install overlap = %v", err)
 	}
-	if events := collect(e.Restore(context.Background())); len(events) != 1 || !errors.Is(events[0].Err, ErrOperationActive) {
+	if events := collect(restoreEvents(e, context.Background())); len(events) != 1 || !errors.Is(events[0].Err, ErrOperationActive) {
 		t.Fatalf("restore overlap = %+v", events)
 	}
 	if !e.OperationActive() || e.ConversationID() != "old" {
@@ -291,7 +295,7 @@ func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 	e := New(client, Config{})
 
 	turnCtx, cancelTurn := context.WithCancel(ctx)
-	firstTurn := e.StartTurn(turnCtx, TurnInput{Message: "Count from 1 to 200, with one number per line."})
+	firstTurn := turnEvents(e, turnCtx, TurnInput{Message: "Count from 1 to 200, with one number per line."})
 	cancelledActiveTurn := false
 	for event := range firstTurn {
 		if !cancelledActiveTurn && stateHasAssistant(event) {
@@ -325,7 +329,7 @@ func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 	if e.PreviousConversationID() != firstID {
 		t.Fatalf("previous conversation id = %q, want %q", e.PreviousConversationID(), firstID)
 	}
-	_ = collect(e.StartTurn(ctx, TurnInput{Message: "Reply with exactly: second conversation"}))
+	_ = collect(turnEvents(e, ctx, TurnInput{Message: "Reply with exactly: second conversation"}))
 	secondID = e.ConversationID()
 	if secondID == "" || secondID == firstID {
 		t.Fatalf("conversation ids before/after reset = %q/%q, want distinct non-empty ids", firstID, secondID)
@@ -358,5 +362,84 @@ func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 		if err := client.DeleteConversation(ctx, assistant.DeleteConversationInput{ConversationID: id}); err != nil {
 			t.Errorf("delete %s disposable conversation %q: %v", label, id, err)
 		}
+	}
+}
+
+// Close cancels an operation wherever it blocks: off the actor, or in work
+// the actor runs. It returns once the operation has ended as cancelled, its
+// channel and every subscription closed.
+func TestCloseCancelsAndAwaitsTheOperation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// setup returns an engine, a start for its operation, and a channel
+		// closed once the operation blocks.
+		setup func(t *testing.T) (*Engine, func() <-chan Event, <-chan struct{})
+	}{
+		{
+			name: "loading history off the actor",
+			setup: func(t *testing.T) (*Engine, func() <-chan Event, <-chan struct{}) {
+				loading := make(chan struct{})
+				e := New(&historyBackend{history: func(ctx context.Context, _ assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
+					close(loading)
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}}, Config{ConversationID: testConversationID})
+				return e, func() <-chan Event { return restoreEvents(e, context.Background()) }, loading
+			},
+		},
+		{
+			name: "reducing tool input on the actor",
+			setup: func(t *testing.T) (*Engine, func() <-chan Event, <-chan struct{}) {
+				reducing := make(chan struct{})
+				var once sync.Once
+				tools, err := NewToolSet(Tool{
+					Definition: assistant.ClientTool{Name: "preview"},
+					InputReducer: func(ctx context.Context, _ ToolInputUpdate, _ any) any {
+						once.Do(func() { close(reducing) })
+						<-ctx.Done() // a slow file read
+						return nil
+					},
+					Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				backend := &scriptBackend{rounds: [][]assistant.Message{{clientCallMsg("call-1", "preview", `{}`)}}}
+				e := New(backend, Config{PermissionsMode: ModeSkipPermissions})
+				return e, func() <-chan Event {
+					return turnEvents(e, context.Background(), TurnInput{Message: "go", Tools: tools})
+				}, reducing
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, start, blocked := tc.setup(t)
+			sub, _ := e.Subscribe()
+			events := start()
+			<-blocked
+			closed := make(chan struct{})
+			go func() {
+				e.Close()
+				close(closed)
+			}()
+			select {
+			case <-closed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Close did not cancel the blocked operation")
+			}
+			evs := collect(events)
+			if len(evs) == 0 || evs[len(evs)-1].Kind != EventCanceled || !errors.Is(evs[len(evs)-1].Err, context.Canceled) {
+				t.Fatalf("closed operation events = %+v, want EventCanceled last", evs)
+			}
+			if got := collect(sub); !reflect.DeepEqual(got, evs) {
+				t.Fatalf("subscription after Close = %+v, want the operation's events", got)
+			}
+			if late, _ := e.Subscribe(); len(collect(late)) != 0 {
+				t.Fatal("a subscription after Close delivered events")
+			}
+			if evs := collect(turnEvents(e, context.Background(), TurnInput{Message: "late"})); len(evs) != 1 || !errors.Is(evs[0].Err, ErrClosed) {
+				t.Fatalf("turn after Close = %+v, want ErrClosed", evs)
+			}
+		})
 	}
 }

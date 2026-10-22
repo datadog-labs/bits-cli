@@ -220,7 +220,7 @@ func TestViewContainsVisualHierarchyAndFits(t *testing.T) {
 func TestBrowserStatusCanAddURLThenReportLauncherFailure(t *testing.T) {
 	reported := make(chan struct{})
 	release := make(chan struct{})
-	m := New(context.Background(), func(_ context.Context, _ string, report func(BrowserStatus)) error {
+	m := New(context.Background(), func(_ context.Context, _ string, _ <-chan string, report func(BrowserStatus)) error {
 		report(BrowserStatus{AuthorizationURL: "https://app.datadoghq.com/oauth2/v1/authorize?client_id=bits"})
 		report(BrowserStatus{
 			AuthorizationURL: "https://app.datadoghq.com/oauth2/v1/authorize?client_id=bits",
@@ -248,7 +248,7 @@ func TestBrowserStatusCanAddURLThenReportLauncherFailure(t *testing.T) {
 	_, _ = m.Update(<-finished)
 }
 
-func TestBrowserOpenFailureShowsManualURL(t *testing.T) {
+func TestBrowserOpenFailureShowsSignInLink(t *testing.T) {
 	m := newModel(func(context.Context, string) error { return nil })
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 90, Height: 28})
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -261,17 +261,17 @@ func TestBrowserOpenFailureShowsManualURL(t *testing.T) {
 	})
 	view := m.View().Content
 	plain := ansi.Strip(view)
-	for _, want := range []string{"couldn't open a browser", "browser unavailable", "Open Datadog login manually"} {
+	for _, want := range []string{"Copy the sign-in link and paste it into a browser on your computer", "Click to copy sign-in link", "If the redirect fails, copy the address from your browser", "Paste the full address, then press Enter"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("browser fallback view missing %q:\n%s", want, plain)
 		}
 	}
-	if !strings.Contains(view, m.authorizationURL) {
-		t.Fatal("manual login hyperlink does not retain the copy-safe authorization URL")
+	if strings.Contains(plain, m.authorizationURL) || !strings.Contains(view, ansi.SetHyperlink(m.authorizationURL)) {
+		t.Fatal("manual login link does not retain the authorization URL")
 	}
 }
 
-func TestWaitingViewAlwaysProvidesManualBrowserLink(t *testing.T) {
+func TestWaitingViewHidesURLWhenBrowserOpens(t *testing.T) {
 	m := newModel(func(context.Context, string) error { return nil })
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 90, Height: 28})
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -280,22 +280,40 @@ func TestWaitingViewAlwaysProvidesManualBrowserLink(t *testing.T) {
 		status:  BrowserStatus{AuthorizationURL: "https://app.datadoghq.com/oauth2/v1/authorize?client_id=bits"},
 	})
 	view := m.View().Content
-	if !strings.Contains(ansi.Strip(view), "Open Datadog login manually") || !strings.Contains(view, m.authorizationURL) {
-		t.Fatalf("waiting view missing manual hyperlink: %q", ansi.Strip(view))
+	if strings.Contains(ansi.Strip(view), m.authorizationURL) || !strings.Contains(ansi.Strip(view), "Open sign-in link") || !strings.Contains(view, ansi.SetHyperlink(m.authorizationURL)) {
+		t.Fatalf("waiting view link or visible URL is wrong: %q", ansi.Strip(view))
 	}
 }
 
-func TestCompactWaitingViewRetainsManualBrowserLink(t *testing.T) {
+func TestCompactWaitingViewExplainsHiddenInput(t *testing.T) {
 	m := newModel(func(context.Context, string) error { return nil })
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 24, Height: 8})
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_, _ = m.Update(browserStatusMsg{
 		attempt: m.attempt,
-		status:  BrowserStatus{AuthorizationURL: "https://app.datadoghq.com/oauth2/v1/authorize?client_id=bits"},
+		status:  BrowserStatus{AuthorizationURL: "https://app.datadoghq.com/authorize?state=full-state&code_challenge=" + strings.Repeat("a", 200)},
 	})
 	view := m.View().Content
-	if !strings.Contains(ansi.Strip(view), "Open Datadog login") || !strings.Contains(view, m.authorizationURL) {
-		t.Fatalf("compact waiting view missing manual hyperlink: %q", ansi.Strip(view))
+	for _, want := range []string{"Open sign-in link", "ctrl+y copy link", "Enlarge window to paste"} {
+		if !strings.Contains(ansi.Strip(view), want) {
+			t.Fatalf("compact view missing %q: %q", want, ansi.Strip(view))
+		}
+	}
+	_, copy := m.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+	if copy == nil || fmt.Sprint(copy()) != m.authorizationURL {
+		t.Fatal("compact view cannot copy the login URL")
+	}
+	_, _ = m.Update(tea.PasteMsg{Content: "hidden input"})
+	_, _ = m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.callback.Value() != "" || len(m.callbackURLs) != 0 {
+		t.Fatal("hidden callback field accepted input")
+	}
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_, _ = m.Update(tea.PasteMsg{Content: "visible input"})
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := <-m.callbackURLs; got != "visible input" {
+		t.Fatalf("input after resize = %q", got)
 	}
 }
 
@@ -370,7 +388,7 @@ func TestNormalizeCustomSiteStagingEnvironment(t *testing.T) {
 }
 
 func newModel(login func(context.Context, string) error) *Model {
-	return New(context.Background(), func(ctx context.Context, site string, _ func(BrowserStatus)) error {
+	return New(context.Background(), func(ctx context.Context, site string, _ <-chan string, _ func(BrowserStatus)) error {
 		return login(ctx, site)
 	})
 }
@@ -388,5 +406,94 @@ func runBatch(t *testing.T, m *Model, cmd tea.Cmd) {
 			continue
 		}
 		_, _ = m.Update(msg)
+	}
+}
+
+func TestWaitingForwardsInputAndDisplaysRetryErrors(t *testing.T) {
+	m := newModel(func(context.Context, string) error { return nil })
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	browserErr := errors.New("browser unavailable")
+	_, _ = m.Update(browserStatusMsg{attempt: m.attempt, status: BrowserStatus{
+		AuthorizationURL: "https://example.com/sign-in",
+		OpenError:        browserErr,
+	}})
+	if !strings.Contains(ansi.Strip(m.View().Content), m.callback.Placeholder) {
+		t.Fatal("callback input is not visible")
+	}
+	// The UI forwards text; auth owns URL parsing and validation.
+	_, _ = m.Update(tea.PasteMsg{Content: "first pasted value"})
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := <-m.callbackURLs; got != "first pasted value" {
+		t.Fatalf("submitted input = %q", got)
+	}
+	_, _ = m.Update(browserStatusMsg{attempt: m.attempt, status: BrowserStatus{InputError: errors.New("try again")}})
+	if m.phase != phaseWaiting || !strings.Contains(ansi.Strip(m.View().Content), "try again") {
+		t.Fatal("input error must remain visible in the current login attempt")
+	}
+	if m.browserOpenErr != browserErr {
+		t.Fatal("input error lost browser status")
+	}
+	_, _ = m.Update(tea.PasteMsg{Content: "second pasted value"})
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := <-m.callbackURLs; got != "second pasted value" || m.callbackErr != nil {
+		t.Fatalf("retry submitted %q, error = %v", got, m.callbackErr)
+	}
+}
+
+func TestCallbackInputIsScopedToLoginAttempt(t *testing.T) {
+	m := newModel(func(context.Context, string) error { return nil })
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	previous := m.callbackURLs
+	previous <- "stale callback"
+	attempt := m.attempt
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	select {
+	case stale := <-m.callbackURLs:
+		t.Fatalf("new login received a previous attempt's input: %q", stale)
+	default:
+	}
+	_, _ = m.Update(browserStatusMsg{attempt: attempt, status: BrowserStatus{InputError: errors.New("stale error")}})
+	if m.callbackErr != nil {
+		t.Fatal("old login error affected new attempt")
+	}
+}
+
+func TestLoginStatusDeliveryAndCancellation(t *testing.T) {
+	for _, cancel := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel=%t", cancel), func(t *testing.T) {
+			full := make(chan struct{})
+			m := New(context.Background(), func(_ context.Context, _ string, _ <-chan string, report func(BrowserStatus)) error {
+				report(BrowserStatus{InputError: errors.New("first")})
+				report(BrowserStatus{InputError: errors.New("second")})
+				close(full)
+				report(BrowserStatus{InputError: errors.New("third")})
+				return nil
+			})
+			_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			defer m.abort()
+			batch := cmd().(tea.BatchMsg)
+			done := make(chan tea.Msg, 1)
+			go func() { done <- batch[0]() }()
+			<-full
+			if cancel {
+				m.abort()
+			} else {
+				next := batch[1]
+				for _, want := range []string{"first", "second", "third"} {
+					msg := next().(browserStatusMsg)
+					if msg.done || msg.status.InputError == nil || msg.status.InputError.Error() != want {
+						t.Fatalf("lost status %q: %#v", want, msg.status)
+					}
+					_, next = m.Update(msg)
+				}
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("login remained blocked delivering status")
+			}
+		})
 	}
 }

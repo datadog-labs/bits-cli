@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
@@ -74,33 +73,37 @@ func ClearRenderState() *RenderStateUpdate {
 type Tool struct {
 	// Resumable opts a handler into restarting an unanswered call from history.
 	// Only handlers safe to restart without repeating side effects should opt in.
-	Resumable    bool
-	Definition   assistant.ClientTool
-	Handler      ToolHandler
-	Approval     ApprovalPolicy
-	InputReducer ToolInputReducer
+	Resumable bool
+	// ContextOnResume sends local environment and skills context with the
+	// first response to a restored call. Use for cross-surface handoffs.
+	ContextOnResume bool
+	Definition      assistant.ClientTool
+	Handler         ToolHandler
+	Approval        ApprovalPolicy
+	InputReducer    ToolInputReducer
+	// Hidden registers the handler without advertising the tool to the model.
+	Hidden bool
 }
 
+// ToolSet is an immutable registry of client tools. Tools declare their
+// approval policy; the engine's permissions mode decides what it means.
 type ToolSet struct {
-	mode        atomic.Pointer[PermissionsMode]
 	definitions []assistant.ClientTool
 	tools       map[string]registeredTool
 }
 
 type registeredTool struct {
-	resumable    bool
-	handler      ToolHandler
-	approval     ApprovalPolicy
-	inputReducer ToolInputReducer
+	resumable       bool
+	contextOnResume bool
+	handler         ToolHandler
+	approval        ApprovalPolicy
+	inputReducer    ToolInputReducer
 }
 
-func NewToolSet(mode PermissionsMode, tools ...Tool) (*ToolSet, error) {
+func NewToolSet(tools ...Tool) (*ToolSet, error) {
 	set := &ToolSet{
 		definitions: make([]assistant.ClientTool, 0, len(tools)),
 		tools:       make(map[string]registeredTool, len(tools)),
-	}
-	if err := set.setPermissionsMode(mode); err != nil {
-		return nil, err
 	}
 	for _, tool := range tools {
 		name := tool.Definition.Name
@@ -119,8 +122,10 @@ func NewToolSet(mode PermissionsMode, tools ...Tool) (*ToolSet, error) {
 		definition := tool.Definition
 		// Reducers consume provisional input; opt in only their owning tool.
 		definition.StreamInput = definition.StreamInput || tool.InputReducer != nil
-		set.definitions = append(set.definitions, definition)
-		set.tools[name] = registeredTool{resumable: tool.Resumable, handler: tool.Handler, approval: tool.Approval, inputReducer: tool.InputReducer}
+		if !tool.Hidden {
+			set.definitions = append(set.definitions, definition)
+		}
+		set.tools[name] = registeredTool{resumable: tool.Resumable, contextOnResume: tool.ContextOnResume, handler: tool.Handler, approval: tool.Approval, inputReducer: tool.InputReducer}
 	}
 	return set, nil
 }
@@ -170,26 +175,16 @@ func (s *ToolSet) Has(name string) bool {
 	return ok
 }
 
-// PermissionsMode reports the non-secret permissions mode selected for this
-// tool set.
-func (s *ToolSet) PermissionsMode() PermissionsMode {
+func (s *ToolSet) needsContextOnResume(calls []ToolCall) bool {
 	if s == nil {
-		return ""
+		return false
 	}
-	if mode := s.mode.Load(); mode != nil {
-		return *mode
+	for _, call := range calls {
+		if s.tools[call.Name].contextOnResume {
+			return true
+		}
 	}
-	return ""
-}
-
-// setPermissionsMode stores the mode. Engine.SetPermissionsMode is the only
-// writer after construction: it also revokes grants and re-gates parked calls.
-func (s *ToolSet) setPermissionsMode(mode PermissionsMode) error {
-	if !mode.valid() {
-		return fmt.Errorf("invalid permissions mode %q; expected manual, skip-permissions, or deny", mode)
-	}
-	s.mode.Store(&mode)
-	return nil
+	return false
 }
 
 func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
@@ -205,46 +200,9 @@ func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 	}, nil
 }
 
-type gateSnapshot struct {
-	set  *ToolSet
-	mode PermissionsMode
-}
-
-func (s *ToolSet) snapshotPermissions() gateSnapshot {
-	if s == nil {
-		return gateSnapshot{}
-	}
-	return gateSnapshot{set: s, mode: s.PermissionsMode()}
-}
-
-// ApprovesServerGate reports whether the server write gate is approved without
-// a local decision. Manual mode routes the gate through Approval instead.
-func (s *ToolSet) ApprovesServerGate() bool {
-	return s.snapshotPermissions().approvesServerGate()
-}
-
-func (g gateSnapshot) approvesServerGate() bool {
-	return g.set != nil && g.mode == ModeSkipPermissions
-}
-
-// Approval reports whether call must wait for an approval decision before
-// it runs. The set's PermissionsMode is consulted first: ModeSkipPermissions
-// suppresses every declared gate, while ModeManual exposes the server gate and
-// defers to each registered tool's ApprovalPolicy.
+// Approval reports the gate call declares, whatever the mode: the server
+// gate's, or its tool's ApprovalPolicy.
 func (s *ToolSet) Approval(call ToolCall) (ApprovalRequirement, bool) {
-	return s.snapshotPermissions().approval(call)
-}
-
-func (g gateSnapshot) approval(call ToolCall) (ApprovalRequirement, bool) {
-	if g.set == nil || (g.mode != ModeManual && g.mode != ModeDeny) {
-		return ApprovalRequirement{}, false
-	}
-	return g.set.policy(call)
-}
-
-// policy is the gate call declares, whatever the mode: the server gate's, or
-// its tool's ApprovalPolicy.
-func (s *ToolSet) policy(call ToolCall) (ApprovalRequirement, bool) {
 	if s == nil {
 		return ApprovalRequirement{}, false
 	}

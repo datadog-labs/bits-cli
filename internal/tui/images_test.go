@@ -37,10 +37,10 @@ func TestADroppedImageIsRetriedFromItsFileAndRecalledAsSent(t *testing.T) {
 	m.editor.Focus()
 	submit := func() {
 		_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-		for event := range m.op.events {
+		for event := range agent.Follow(m.events, m.op.run) {
 			m.applyEvent(event)
 		}
-		_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
+		_ = m.endOperation()
 	}
 	path := writePNG(t, "My Shot.png")
 	data, err := os.ReadFile(path)

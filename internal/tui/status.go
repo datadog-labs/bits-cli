@@ -124,8 +124,8 @@ func (m *Model) statusRuntime() statusview.Runtime {
 		authenticationState = m.authStateOverride
 	}
 	permissionsMode := ""
-	if m.tools != nil {
-		permissionsMode = string(m.tools.PermissionsMode())
+	if m.engine != nil && m.tools != nil {
+		permissionsMode = string(m.engine.PermissionsMode())
 	}
 	return statusview.Runtime{
 		Site:                runtime.Backend.Site,
@@ -225,8 +225,9 @@ func (m *Model) observeEvent(event agent.Event) {
 		if event.Origin != agent.TranscriptOriginLocal {
 			m.markConnected()
 		}
-	case agent.EventUsage, agent.EventConversation, agent.EventTurnDone:
+	case agent.EventUsage, agent.EventConversation, agent.EventDone:
 		m.markConnected()
+	case agent.EventCanceled:
 	case agent.EventError:
 		if !event.BackendFailure {
 			return

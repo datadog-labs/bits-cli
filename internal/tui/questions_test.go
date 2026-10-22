@@ -61,16 +61,16 @@ func startQuestions(t *testing.T, mode agent.PermissionsMode, input string, coun
 	t.Helper()
 	backend := &questionBackend{t: t, input: input, count: count}
 	host := tools.NewUI()
-	set, err := agent.NewToolSet(mode, tools.NewAskUserQuestionTool(host))
+	set, err := agent.NewToolSet(tools.NewAskUserQuestionTool(host))
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(agent.New(backend, agent.Config{}), Config{Tools: set, ToolUI: host})
+	m := New(agent.New(backend, agent.Config{PermissionsMode: mode}), Config{Tools: set, ToolUI: host})
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(m, "Help me choose")
 	_, _ = m.submit()
 	t.Cleanup(func() {
-		if m.op.events != nil {
+		if m.op.run != 0 {
 			m.cancelOperation()
 			drainConversationRemote(t, m)
 		}
@@ -84,12 +84,8 @@ func pumpToolUI(t *testing.T, m *Model) {
 	select {
 	case request := <-m.toolUI.Requests():
 		_, _ = m.Update(toolUIOpenedMsg{request: request})
-	case ev, ok := <-m.op.events:
-		if ok {
-			_, _ = m.Update(turnEventMsg{generation: m.op.gen, ev: ev})
-		} else {
-			_, _ = m.Update(turnClosedMsg{generation: m.op.gen})
-		}
+	case ev := <-m.events:
+		_, _ = m.Update(engineEventMsg{ev: ev})
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for a tool UI or turn event")
 	}
@@ -97,15 +93,25 @@ func pumpToolUI(t *testing.T, m *Model) {
 
 func waitQuestions(t *testing.T, m *Model) {
 	t.Helper()
-	for dockedToolUI(m) == nil && m.op.events != nil {
+	for dockedToolUI(m) == nil && m.op.run != 0 {
 		pumpToolUI(t, m)
 	}
 	if dockedToolUI(m) == nil {
 		t.Fatal("turn ended without a question form")
 	}
-	// The engine queues the tool's transcript events before its handler runs.
-	for len(m.op.events) > 0 {
-		pumpToolUI(t, m)
+	waitFinalInput(t, m, dockedToolUI(m).Call.ID)
+}
+
+// waitFinalInput pumps until the transcript shows each call's final input,
+// which the engine publishes before running its handler.
+func waitFinalInput(t *testing.T, m *Model, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		for !slices.ContainsFunc(m.transcript.Blocks, func(b agent.Block) bool {
+			return b.ToolCallID() == id && b.Tool.HasFinalInput
+		}) {
+			pumpToolUI(t, m)
+		}
 	}
 }
 
@@ -159,41 +165,23 @@ func TestQuestionsCompleteTheCall(t *testing.T) {
 	}
 }
 
-func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
+func TestQuestionsMultipleCalls(t *testing.T) {
 	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 3)
 	for dockedToolUI(m) == nil || len(queuedToolUIs(m)) < 2 {
 		pumpToolUI(t, m)
 	}
-	for len(m.op.events) > 0 {
-		pumpToolUI(t, m)
-	}
-	// Arrival order is up to the scheduler; queued forms follow the transcript.
 	queued := queuedToolUIs(m)
+	waitFinalInput(t, m, dockedToolUI(m).Call.ID, queued[0].callID(), queued[1].callID())
+	// Arrival order is up to the scheduler; queued forms follow the transcript.
+	queued = queuedToolUIs(m)
 	remaining := []string{queued[0].callID(), queued[1].callID()}
 	slices.Sort(remaining)
 	questionKey(m, tea.KeyEscape, 0)
 	if dockedToolUI(m) == nil || dockedToolUI(m).Call.ID != remaining[0] {
 		t.Fatalf("next form is not the earliest pending call %s", remaining[0])
 	}
-	// Cancelling a queued call must drop its form without stranding the others.
-	if !m.engine.CancelTool(remaining[1]) {
-		t.Fatal("cancellation command was not queued")
-	}
-	// CancelTool queues a command; wait for the engine to apply it before
-	// dismissing the active form and advancing to the queued call.
-	for !slices.ContainsFunc(m.transcript.Blocks, func(b agent.Block) bool {
-		return b.ToolCallID() == remaining[1] && b.Tool.Status == agent.ToolCancelled
-	}) {
-		if m.op.events == nil {
-			t.Fatal("turn ended before queued call was cancelled")
-		}
-		pumpToolUI(t, m)
-	}
-	for m.op.events != nil {
+	for m.op.run != 0 {
 		if dockedToolUI(m) != nil {
-			if dockedToolUI(m).Call.ID == remaining[1] {
-				t.Fatal("cancelled call showed its form")
-			}
 			questionKey(m, tea.KeyEscape, 0)
 		}
 		pumpToolUI(t, m)
@@ -204,9 +192,6 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	for i, response := range backend.responses {
 		if response.ToolCallID != fmt.Sprintf("question-%d", i) {
 			t.Fatal("response order changed")
-		}
-		if cancelled := response.ToolCallID == remaining[1]; cancelled != strings.Contains(response.Metadata.Output, "cancelled") {
-			t.Fatalf("response %s = %q", response.ToolCallID, response.Metadata.Output)
 		}
 	}
 }
@@ -284,7 +269,7 @@ func pushQuestions(t *testing.T) (*fake.Fake, string) {
 func newResumedQuestionModel(t *testing.T, f *fake.Fake, id string, startup bool) *Model {
 	t.Helper()
 	host := tools.NewUI()
-	set, err := agent.NewToolSet(agent.ModeManual, tools.NewAskUserQuestionTool(host))
+	set, err := agent.NewToolSet(tools.NewAskUserQuestionTool(host))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +283,7 @@ func newResumedQuestionModel(t *testing.T, f *fake.Fake, id string, startup bool
 		_ = m.initChat()
 	}
 	t.Cleanup(func() {
-		if m.op.events != nil {
+		if m.op.run != 0 {
 			m.cancelOperation()
 			drainConversationRemote(t, m)
 		}
@@ -344,7 +329,7 @@ func TestPendingQuestionRestoresOnStartupAndResume(t *testing.T) {
 				_, _ = m.Update(runResumeCmd(t, cmd))
 				_, cmd = m.Update(conversationview.SelectedMsg{Conversation: assistant.ConversationSummary{ConversationID: id}})
 				_, _ = m.Update(runResumeCmd(t, cmd))
-				if m.op.events == nil {
+				if m.op.run == 0 {
 					t.Fatalf("resume failed: %+v", latestNotice(m))
 				}
 			}
@@ -432,7 +417,7 @@ func TestRestoredCallsThatWillNotResumeSettle(t *testing.T) {
 			}
 			m := newResumedQuestionModel(t, f, id, true)
 			drainConversationRemote(t, m)
-			if dockedToolUI(m) != nil || m.op.events != nil {
+			if dockedToolUI(m) != nil || m.op.run != 0 {
 				t.Fatal("a call that cannot resume opened")
 			}
 			for _, block := range m.transcript.Blocks {

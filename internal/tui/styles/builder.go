@@ -48,6 +48,7 @@ func build(isDark bool, p palette) Theme {
 		Primary:   lipgloss.NewStyle().Foreground(lipgloss.Color(p.textPrimary)),
 		Secondary: lipgloss.NewStyle().Foreground(lipgloss.Color(p.textSecondary)),
 		Tertiary:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.textTertiary)),
+		Link:      lipgloss.NewStyle().Foreground(lipgloss.Color(p.link)).Underline(true),
 	}
 	feedback := Feedback{
 		Progress: lipgloss.NewStyle().Foreground(lipgloss.Color(p.interactive)),

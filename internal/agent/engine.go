@@ -1,16 +1,20 @@
 // Package agent drives the remote assistant turn loop and emits fine-grained
-// events on a channel. It composes local context with assistant requests without
+// events to subscriptions. It composes local context with assistant requests without
 // a terminal UI dependency, so interactive and headless surfaces share the engine.
 package agent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
+	"maps"
 	"slices"
 	"strings"
-	"sync/atomic"
+	"sync"
+	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -22,6 +26,8 @@ var (
 	ErrCurrentUserUnsupported = errors.New("backend does not support loading the current user")
 	ErrOperationActive        = errors.New("another conversation operation is active")
 	ErrNoPendingTools         = errors.New("no resumable client tools")
+	ErrClosed                 = errors.New("engine is closed")
+	ErrStale                  = errors.New("no running turn has this call pending")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -46,16 +52,24 @@ type CurrentUserBackend interface {
 	CurrentUser(context.Context) (assistant.CurrentUser, error)
 }
 
-// EventKind discriminates the events the engine streams for a turn.
+// EventKind discriminates the events the engine streams for an operation.
+// Every claimed operation ends with exactly one terminal event, EventDone,
+// EventError or EventCanceled, and emits nothing after it.
 type EventKind int
 
 const (
 	EventTranscript   EventKind = iota // full transcript snapshot; read Transcript
 	EventUsage                         // token usage update; read Usage
 	EventConversation                  // server-assigned/confirmed conversation id
-	EventTurnDone                      // the turn completed with no pending tool calls
-	EventError                         // the turn failed
+	EventDone                          // the operation completed (a turn: with no pending tool calls)
+	EventError                         // the operation failed; read Err
+	EventCanceled                      // the operation's context ended; Err is its error
 )
+
+// RunID identifies one claimed operation. Every event an operation emits
+// carries it, so consumers of a stream shared by several runs can tell them
+// apart. Zero means no run: an operation that failed to claim the engine.
+type RunID uint64
 
 // TranscriptOrigin identifies what caused an EventTranscript snapshot.
 type TranscriptOrigin int
@@ -123,15 +137,16 @@ type UserPrompt struct {
 	Context []assistant.ContextEntity
 }
 
-// Event is one thing that happened during a turn. It is a plain value carried
-// on a channel, with only the fields relevant to Kind populated.
+// Event is one thing that happened during an operation. It is a plain value
+// carried on a channel, with only the fields relevant to Kind populated.
 type Event struct {
 	Kind           EventKind
+	Run            RunID
 	Transcript     TranscriptSnapshot // for EventTranscript; read-only full transcript snapshot
 	Origin         TranscriptOrigin   // for EventTranscript
 	Usage          *assistant.Usage   // for EventUsage
 	ConvID         string             // for EventConversation
-	Err            error              // for EventError
+	Err            error              // for EventError and EventCanceled
 	BackendFailure bool               // EventError originated at the Assistant backend boundary
 	// Round is the 1-based backend send the event belongs to (0 for
 	// out-of-turn events). Drained rounds after a denial count but emit
@@ -139,7 +154,95 @@ type Event struct {
 	Round int
 }
 
-const maxQueuedCommands = 64
+// outbox is a subscription: it hands events to its consumer without ever
+// blocking the engine on it. A transcript snapshot still queued is replaced
+// by a newer one of the same run, round and origin: snapshots are complete,
+// so consumers lose no state (ADEEP diffs blocks by revision), and the queue
+// stays bounded by the other, rarer events.
+type outbox struct {
+	mu     sync.Mutex
+	ready  sync.Cond // signals a push or the close
+	queue  []Event
+	closed bool
+	// dropped ends forwarding at once, even to a consumer no longer reading.
+	dropped context.Context
+	drop    context.CancelFunc
+}
+
+// supersedes reports whether ev may replace prev, queued just before it.
+func (ev Event) supersedes(prev Event) bool {
+	return ev.Kind == EventTranscript && prev.Kind == EventTranscript &&
+		ev.Run == prev.Run && ev.Round == prev.Round && ev.Origin == prev.Origin
+}
+
+// Terminal reports whether ev is the last event of its run.
+func (ev Event) Terminal() bool {
+	return ev.Kind == EventDone || ev.Kind == EventError || ev.Kind == EventCanceled
+}
+
+// newOutbox returns an outbox and the channel it forwards to, which closes
+// once the outbox is closed and drained, or dropped.
+func newOutbox() (*outbox, <-chan Event) {
+	o := &outbox{}
+	o.ready.L = &o.mu
+	o.dropped, o.drop = context.WithCancel(context.Background())
+	out := make(chan Event)
+	go o.forward(out)
+	return o, out
+}
+
+func (o *outbox) push(ev Event) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if n := len(o.queue); n > 0 && ev.supersedes(o.queue[n-1]) {
+		o.queue[n-1] = ev
+	} else {
+		o.queue = append(o.queue, ev)
+	}
+	o.ready.Signal()
+}
+
+// close ends the stream after the events already pushed.
+func (o *outbox) close() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.closed = true
+	o.ready.Signal()
+}
+
+// cancel ends the stream at once, dropping the events still queued.
+func (o *outbox) cancel() {
+	o.mu.Lock()
+	o.queue = nil
+	o.mu.Unlock()
+	o.close()
+	o.drop()
+}
+
+// forward takes one event at a time, so events pushed while the consumer is
+// busy can still coalesce.
+func (o *outbox) forward(out chan<- Event) {
+	defer close(out)
+	for {
+		o.mu.Lock()
+		for len(o.queue) == 0 && !o.closed {
+			o.ready.Wait()
+		}
+		if len(o.queue) == 0 {
+			o.mu.Unlock()
+			return
+		}
+		ev := o.queue[0]
+		o.queue[0] = Event{} // release the snapshot
+		o.queue = o.queue[1:]
+		o.mu.Unlock()
+		select {
+		case out <- ev:
+		case <-o.dropped.Done():
+			return
+		}
+	}
+}
 
 // maxTurns caps the client-tool loop so a misbehaving backend can't spin
 // forever.
@@ -149,14 +252,14 @@ const maxTurns = 150
 // owns the aggregated conversation transcript, folding streamed deltas into it
 // and emitting snapshots.
 //
-// The current design is a serialized operation/actor model: a claimed operation
-// exclusively owns all mutable conversation state, including opts, transcript,
-// and previousConversationID; the permission gate carries its own lock. State crosses goroutine boundaries
-// through copied events/results and channel synchronization. Only Decide,
-// CancelTool, StopTools, SetPermissionsMode, GrantSessionFor, ClientSkills, and explicitly
-// atomic methods may be called concurrently with an operation. Do not add a mutex around Engine state without first changing this
-// ownership model and identifying accesses that its existing operation gate and
-// channel boundaries do not order.
+// One actor goroutine, started by New and stopped by Close, owns the mutable
+// conversation state: opts, transcript, continuation, delivery, and the active
+// turn. Methods reach it through do, which runs a function on the actor. An
+// operation (a turn or a restore) holds the engine from its claim until its
+// release; idle methods fail with ErrOperationActive meanwhile. Blocking work
+// (request preparation, history loading, transport, tool handlers) runs on
+// other goroutines and reports back to the actor. Commands such as Decide and
+// SetPermissionsMode apply on the actor before returning.
 type Engine struct {
 	backend                Backend
 	opts                   assistant.SendOptions
@@ -164,36 +267,34 @@ type Engine struct {
 	transcript             *Transcript
 	continuation           []assistant.Content
 	previousConversationID string
-	// sentUserContext is the custom user context the current conversation is
-	// known to carry; nil when unknown, as after loading a conversation.
-	sentUserContext *string
-	commands        chan toolCommand
-	gate            permissionGate
-	// permissionsChanged wakes a running round to re-gate its parked calls
-	// after a mode switch or a grant. It holds at most one signal: rounds
-	// re-read the current permissions anyway.
-	permissionsChanged  chan struct{}
-	active              atomic.Bool
-	operationGeneration atomic.Uint64
-	projectInstructions *instructionDelivery
-	clientSkills        *env.Skills
-	userContext         func(context.Context) string
+	// delivery is the context the current conversation is known to carry.
+	delivery contextDelivery
+	gate     permissionGate
+	busy     bool  // an operation holds the engine
+	turn     *turn // the turn whose exchange is running, if any
+	lastRun  RunID // the most recently claimed run
+	subs     map[*outbox]struct{}
+
+	requests chan func() // run on the actor
+	// life ends when Close starts, cancelling every operation's worker.
+	life         context.Context
+	endLife      context.CancelFunc
+	workers      sync.WaitGroup
+	closing      chan struct{} // closed once the workers are done
+	closeOnce    sync.Once
+	stopped      chan struct{} // closed once the actor returns
+	instructions *env.Instructions
+	clientSkills *env.Skills
+	userContext  func(context.Context) string
 }
 
 // RuntimeStatus is the non-secret request and backend state needed by local
 // status surfaces.
 type RuntimeStatus struct {
-	Profile assistant.Profile
-	Model   string
-	Backend assistant.BackendStatus
-}
-
-type toolCommand struct {
-	generation uint64
-	id         string
-	decision   ApprovalDecision
-	cancel     bool
-	stop       bool
+	MultiAgent bool
+	Profile    assistant.Profile
+	Model      string
+	Backend    assistant.BackendStatus
 }
 
 // Config holds engine-lifetime dependencies and backend request defaults.
@@ -203,6 +304,8 @@ type Config struct {
 	// installing another conversation clears the initial message history.
 	ConversationID string
 	MessageHistory []json.RawMessage
+	// PermissionsMode is the initial mode; empty means manual.
+	PermissionsMode PermissionsMode
 
 	Model         string
 	InferenceMode string
@@ -243,26 +346,172 @@ func New(b Backend, config Config) *Engine {
 	if profile == "" {
 		profile = assistant.DefaultProfile
 	}
-	runtimeStatus := RuntimeStatus{Profile: profile, Model: opts.Model}
+	_, multiAgent := b.(DuplexBackend)
+	runtimeStatus := RuntimeStatus{Profile: profile, Model: opts.Model, MultiAgent: multiAgent}
 	if provider, ok := b.(interface {
 		BackendStatus() assistant.BackendStatus
 	}); ok {
 		runtimeStatus.Backend = provider.BackendStatus()
 	}
 	engine := &Engine{
-		backend:            b,
-		opts:               opts,
-		runtimeStatus:      runtimeStatus,
-		transcript:         NewTranscript(),
-		commands:           make(chan toolCommand, maxQueuedCommands),
-		permissionsChanged: make(chan struct{}, 1),
-		clientSkills:       config.ClientSkills,
-		userContext:        config.UserContext,
+		backend:       b,
+		opts:          opts,
+		runtimeStatus: runtimeStatus,
+		transcript:    NewTranscript(),
+		gate:          permissionGate{mode: cmp.Or(config.PermissionsMode, ModeManual)},
+		instructions:  config.ProjectInstructions,
+		clientSkills:  config.ClientSkills,
+		userContext:   config.UserContext,
+		subs:          make(map[*outbox]struct{}),
+		requests:      make(chan func()),
+		closing:       make(chan struct{}),
+		stopped:       make(chan struct{}),
 	}
-	if config.ProjectInstructions != nil {
-		engine.projectInstructions = &instructionDelivery{source: config.ProjectInstructions}
-	}
+	engine.life, engine.endLife = context.WithCancel(context.Background())
+	go engine.loop()
 	return engine
+}
+
+// Close cancels the active operation, waits for it to end as on cancellation,
+// ends every subscription after the events already queued, and stops the
+// engine. Later operations fail with ErrClosed and accessors report zero
+// values.
+func (e *Engine) Close() {
+	e.closeOnce.Do(func() {
+		// Ending life directly cancels work the actor may be blocked on; the
+		// request then waits out any claim or subscription that saw the
+		// engine live.
+		e.endLife()
+		e.do(func() {})
+		e.workers.Wait()
+		e.do(func() {
+			for o := range e.subs {
+				o.close()
+			}
+			clear(e.subs)
+		})
+		close(e.closing)
+	})
+	<-e.stopped
+}
+
+// loop is the actor. A turn runs nested in the request that hands it over, so
+// the turn's loop serves requests until the turn ends.
+func (e *Engine) loop() {
+	defer close(e.stopped)
+	for {
+		select {
+		case fn := <-e.requests:
+			fn()
+		case <-e.closing:
+			return
+		}
+	}
+}
+
+// do runs fn on the actor and waits for it. Once the engine is closed, it
+// returns without running fn. fn must not call do.
+func (e *Engine) do(fn func()) {
+	done := make(chan struct{})
+	select {
+	case e.requests <- func() { defer close(done); fn() }:
+		<-done
+	case <-e.closing:
+	}
+}
+
+// idle runs fn on the actor unless an operation holds the engine.
+func (e *Engine) idle(fn func() error) error {
+	err := ErrClosed
+	e.do(func() {
+		err = ErrOperationActive
+		if !e.busy {
+			err = fn()
+		}
+	})
+	return err
+}
+
+// get returns f's result, computed on the actor, or the zero value once the
+// engine is closed.
+func get[T any](e *Engine, f func() T) (v T) {
+	e.do(func() { v = f() })
+	return v
+}
+
+// claim holds the engine for a new run, whose worker must then be started
+// with work, unless the engine is closing.
+func (e *Engine) claim() (RunID, error) {
+	if e.life.Err() != nil {
+		return 0, ErrClosed
+	}
+	e.busy = true
+	e.workers.Add(1)
+	e.lastRun++
+	return e.lastRun, nil
+}
+
+// work runs a claimed operation's worker with a context that also ends when
+// the engine closes. Close waits for it.
+func (e *Engine) work(ctx context.Context, fn func(context.Context)) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(e.life, cancel)
+	go func() {
+		defer e.workers.Done()
+		defer cancel()
+		defer stop()
+		fn(ctx)
+	}()
+}
+
+// release ends the operation, after its terminal event.
+func (e *Engine) release() {
+	e.busy = false
+}
+
+// emit publishes run's event to every subscription.
+func (e *Engine) emit(run RunID, ev Event) {
+	ev.Run = run
+	for o := range e.subs {
+		o.push(ev)
+	}
+}
+
+// Subscribe streams every event the engine emits from now on, of every run.
+// Queued transcript snapshots may be superseded by newer ones (see outbox).
+// Operations only return their run, so a consumer subscribes before starting
+// one, then follows the run (see Follow).
+//
+// The returned function ends the subscription at once, dropping what is still
+// queued, so the consumer may stop reading. Close ends every subscription
+// after the events already queued; on a closed engine the channel is closed
+// at once.
+func (e *Engine) Subscribe() (<-chan Event, func()) {
+	o, events := newOutbox()
+	unsubscribe := func() {
+		e.do(func() { delete(e.subs, o) })
+		o.cancel()
+	}
+	live := get(e, func() bool {
+		e.subs[o] = struct{}{} // removed again below once closing
+		return e.life.Err() == nil
+	})
+	if !live {
+		unsubscribe()
+	}
+	return events, unsubscribe
+}
+
+// Follow yields run's events from a subscription made before the run started,
+// up to its terminal event. It stops early if the subscription ends.
+func Follow(events <-chan Event, run RunID) iter.Seq[Event] {
+	return func(yield func(Event) bool) {
+		for ev := range events {
+			if ev.Run == run && (!yield(ev) || ev.Terminal()) {
+				return
+			}
+		}
+	}
 }
 
 // Site returns the Assistant API site of the active backend. Backends without
@@ -297,407 +546,224 @@ type TurnInput struct {
 	OnDeny DenyPolicy
 }
 
-// StartTurn runs one user turn and its client-tool round trips, streaming its
-// events. Callers must drain the channel until it closes, including after
-// cancelling the turn context. The channel closes only after the engine has
-// released the operation, so Snapshot and ConversationID then report the
-// turn's final state.
-func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
-	return e.startTurn(ctx, in, nil)
+// StartTurn starts one user turn and its client-tool round trips, and returns
+// its run. The run's events reach subscriptions; its terminal event is
+// emitted as the engine releases the operation, so Snapshot and
+// ConversationID then report the turn's final state. It fails with
+// ErrOperationActive while another operation runs, and ErrClosed once closed.
+func (e *Engine) StartTurn(ctx context.Context, in TurnInput) (RunID, error) {
+	return e.startTurn(ctx, in, false)
 }
 
-func (e *Engine) startTurn(ctx context.Context, in TurnInput, resumed []ToolCall) <-chan Event {
-	if !e.begin() {
-		return eventResult(Event{Kind: EventError, Err: ErrOperationActive})
-	}
-	e.continuation = nil
-	generation := e.operationGeneration.Load()
-	events := make(chan Event, 64)
-	go e.run(ctx, in, resumed, events, generation)
-	return events
-}
-
-// begin claims the engine for one operation, which must release it on completion.
-func (e *Engine) begin() bool {
-	if !e.active.CompareAndSwap(false, true) {
-		return false
-	}
-	e.operationGeneration.Add(1)
-	return true
-}
-
-func eventResult(ev Event) <-chan Event {
-	out := make(chan Event, 1)
-	out <- ev
-	close(out)
-	return out
-}
-
-// Decide answers a call parked for approval. It reports whether the answer
-// was queued, not applied: the round drops it if the call is no longer parked.
-func (e *Engine) Decide(toolCallID string, decision ApprovalDecision) bool {
-	if !decision.valid() {
-		return false
-	}
-	return e.command(toolCommand{
-		generation: e.operationGeneration.Load(),
-		id:         toolCallID,
-		decision:   decision,
+// startTurn claims the engine for a user turn or, with resume, for answering
+// the restored calls.
+func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) (RunID, error) {
+	var resumed []ToolCall
+	var run RunID
+	err := e.idle(func() (err error) {
+		if resume {
+			if !e.canResumeTools(in.Tools) {
+				return ErrNoPendingTools
+			}
+			for _, content := range e.continuation {
+				resumed = append(resumed, toolCallOf(content))
+			}
+		}
+		e.continuation = nil
+		run, err = e.claim()
+		return err
 	})
+	if err != nil {
+		return 0, err
+	}
+	e.work(ctx, func(ctx context.Context) { e.run(ctx, run, in, resumed) })
+	return run, nil
 }
 
-// CancelTool cancels one call of the active round. Like Decide, it reports
-// whether the command was queued.
-func (e *Engine) CancelTool(toolCallID string) bool {
-	return e.command(toolCommand{
-		generation: e.operationGeneration.Load(),
-		id:         toolCallID,
-		cancel:     true,
+// Decide answers a call parked for approval, at once. It fails with ErrStale
+// when no turn has the call parked.
+func (e *Engine) Decide(toolCallID string, decision ApprovalDecision) error {
+	if !decision.valid() {
+		return fmt.Errorf("invalid approval decision %q", decision)
+	}
+	return e.command(func(t *turn) error {
+		c, err := t.parked(toolCallID)
+		switch {
+		case err != nil:
+		case decision == ApprovalDeny:
+			t.deny(c, approvalDeniedResult(c.call))
+		default:
+			t.admit(c, true)
+		}
+		return err
 	})
 }
 
 // StopTools cancels the active client-tool round and persists its cancellation
-// responses before ending the turn. Cancelling the turn context instead leaves
-// unanswered calls available for a later process to resume. It reports
-// whether the stop was queued.
-func (e *Engine) StopTools() bool {
-	return e.command(toolCommand{generation: e.operationGeneration.Load(), stop: true})
+// responses, as for every later call, then ends the turn without showing the
+// model's follow-up. Cancelling the turn context instead leaves unanswered
+// calls available for a later process to resume. It fails with ErrStale when
+// no turn is running.
+func (e *Engine) StopTools() error {
+	return e.command(func(t *turn) error {
+		t.requestStop()
+		t.stopCalls(nil, nil)
+		return nil
+	})
 }
 
-func (e *Engine) command(command toolCommand) bool {
-	select {
-	case e.commands <- command:
-		return true
-	default:
-		return false
-	}
+// command runs fn on the running turn, if any.
+func (e *Engine) command(fn func(*turn) error) error {
+	err := ErrClosed
+	e.do(func() {
+		err = ErrStale
+		if e.turn != nil {
+			err = fn(e.turn)
+		}
+	})
+	return err
 }
 
-func (e *Engine) run(
-	ctx context.Context,
-	in TurnInput,
-	resumed []ToolCall,
-	out chan<- Event,
-	generation uint64,
-) {
-	turnStart := len(e.transcript.Blocks())
-	if len(resumed) > 0 {
-		for i, block := range e.transcript.Blocks() {
-			for _, call := range resumed {
-				if block.ToolCallID() == call.ID {
-					turnStart = min(turnStart, i)
-				}
-			}
-		}
-	}
-	defer func() {
-		if ctx.Err() != nil {
-			e.transcript.CancelUnfinishedTools(turnStart)
-			// Cancellation makes send's context-aware select unavailable, but this
-			// terminal snapshot must not be dropped. It is sent after all queued
-			// events and callers drain the channel after cancellation. Always flush,
-			// even if a worker completed while cancellation prevented its event send.
-			out <- Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()}
-		}
-		e.active.Store(false)
-		close(out)
-	}()
-
-	tools := in.Tools
-	defs := tools.Definitions()
-
-	// send is cancellation-aware so a stalled consumer during cancel can't
-	// wedge the engine goroutine.
-	send := func(ev Event) bool {
-		select {
-		case out <- ev:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
-	finalizeAndEmit := func(emit func(Event) bool) bool {
-		if !e.transcript.FinalizeAll() {
-			return true
-		}
-		return emit(Event{Kind: EventTranscript, Transcript: e.snapshot()})
-	}
-	emitAtRound := func(round int) func(Event) bool {
-		return func(ev Event) bool {
-			ev.Round = round
-			if ev.Kind == EventTranscript {
-				ev.Origin = TranscriptOriginRemote
-			}
-			return send(ev)
-		}
-	}
-
-	// A restored tool call is already in the transcript; only a new turn adds a
-	// user block before contacting the backend. The block lists the context
-	// exactly as it is sent.
-	sentContext, imageNotices, imageErr := prepareImageContext(ctx, in.Context)
-	if imageErr != nil {
+// run prepares a claimed turn off the actor, where it may block on files and
+// the environment, then drives it on the actor until it ends.
+func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []ToolCall) {
+	t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, run: run, round: 1}
+	sentContext, imageNotices, err := prepareImageContext(ctx, in.Context)
+	if err != nil {
 		// Keep file references in the failed prompt so history can retry them.
 		sentContext = in.Context
 	}
-	if len(resumed) == 0 {
-		var sent []assistant.ContextEntity
-		if sentContext != nil {
-			sent = sentContext.Entities
+	var opts assistant.SendOptions
+	var delivery contextDelivery
+	e.do(func() {
+		t.from = e.turnStart(resumed)
+		// A restored tool call is already in the transcript; only a new turn
+		// adds a user block before contacting the backend. The block lists the
+		// context exactly as it is sent.
+		if len(resumed) == 0 {
+			var sent []assistant.ContextEntity
+			if sentContext != nil {
+				sent = sentContext.Entities
+			}
+			e.transcript.AppendUser(in.Message, sent)
+			e.emit(run, Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal})
 		}
-		e.transcript.AppendUser(in.Message, sent)
-		if !send(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal}) {
-			return
-		}
-	}
+		opts, delivery = e.sendOptions(in.Tools), e.delivery
+	})
 
 	// An invalid image or a skill that cannot be read fails the turn like a
 	// backend error: the user block stays visible and nothing is sent.
-	if imageErr != nil {
-		send(Event{Kind: EventError, Err: imageErr})
-		return
+	var request userRequest
+	switch {
+	case err != nil:
+	case len(resumed) == 0:
+		opts.Context = sentContext
+		request, err = e.prepare(ctx, in, opts, delivery, resizeNotice(imageNotices))
+	case in.Tools.needsContextOnResume(resumed):
+		request, err = e.prepare(ctx, TurnInput{}, opts, delivery, "")
+	default:
+		request, err = e.prepareResume(ctx, opts, delivery)
 	}
-	var skillContext string
-	if len(resumed) == 0 && in.Skill != nil {
-		var err error
-		skillContext, err = e.prepareSkill(ctx, *in.Skill)
+	e.do(func() {
+		if err == nil {
+			e.delivery.pending(request)
+			t.request = &request
+			t.ex = e.newExchange(request, resumed)
+			err = t.drive()
+		}
+		t.finish(err)
+	})
+}
+
+// turnStart is where a turn's blocks start: the transcript's end, or the
+// first resumed call.
+func (e *Engine) turnStart(resumed []ToolCall) int {
+	start := len(e.transcript.Blocks())
+	for i, block := range e.transcript.Blocks() {
+		for _, call := range resumed {
+			if block.ToolCallID() == call.ID {
+				start = min(start, i)
+			}
+		}
+	}
+	return start
+}
+
+// finish publishes how the turn ended, its terminal event last, and releases
+// the engine. A turn that failed before its exchange started reports the error
+// alone. A cancelled turn settles every open block, publishes the final
+// snapshot, and ends with EventCanceled unless it had already failed.
+func (t *turn) finish(err error) {
+	e := t.e
+	cause := t.parent.Err()
+	var end Event
+	switch {
+	case cause != nil && (t.ex == nil || err == nil || errors.Is(err, cause)):
+		end = Event{Kind: EventCanceled, Err: cause}
+	case t.ex == nil:
+		end = Event{Kind: EventError, Err: err}
+	default:
+		settled := e.settleUnfinishedTools(t.tools, t.from, t.ex.final())
+		if e.transcript.FinalizeAll() || settled {
+			t.publish()
+		}
+		end = Event{Kind: EventDone, Round: t.round}
 		if err != nil {
-			send(Event{Kind: EventError, Err: err})
-			return
+			var backend backendError
+			failure := errors.As(err, &backend)
+			if failure {
+				err = backend.error
+			}
+			end = Event{Kind: EventError, Err: err, BackendFailure: failure, Round: t.round}
 		}
 	}
-
-	var req turnRequest
-	if len(resumed) == 0 {
-		req.user = &userMessage{
-			text:         in.Message,
-			context:      sentContext,
-			userContext:  e.pendingUserContext(ctx),
-			imageNotice:  resizeNotice(imageNotices),
-			skillContext: skillContext,
-		}
+	if cause != nil {
+		e.transcript.FinalizeAll()
+		e.settleUnfinishedTools(t.tools, t.from, true)
+		e.emit(t.run, Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()})
 	}
+	e.emit(t.run, end)
+	e.release()
+}
 
-	// request sends one round and collects the client calls it pauses on. It
-	// returns false once the turn has ended.
-	request := func(emit func(Event) bool) ([]ToolCall, bool) {
-		opts := e.projectInstructions.apply(ctx, e.sendOptions(defs, req))
-		if req.user != nil {
-			opts = e.applySkills(ctx, opts, req.user.skillContext)
-		}
-		var calls []ToolCall
-		streamed := false
-		fold := func(msg assistant.Message) bool {
-			b, ok := e.transcript.AppendMessage(msg)
-			if ok {
-				// Some providers omit is_client_side on a streamed start, then
-				// supply it only implicitly with the final client_tool_call. The
-				// registered tool set is authoritative for this turn, so recover
-				// that missing identity without overriding an explicit false server
-				// marker.
-				if msg.Content.Type == assistant.ContentToolCallStarted && msg.Content.Tool != nil &&
-					!msg.Content.Tool.HasClientSide && tools.Has(msg.Content.Tool.ToolName) {
-					e.transcript.MarkToolClientSide(msg.Content.Tool.ToolCallID)
-				}
-				// Reducers run in the engine goroutine immediately after the wire
-				// update is folded. This ordering lets the emitted snapshot carry
-				// the reducer's state and keeps filesystem-aware reducers ahead of
-				// client-tool execution.
-				e.reduceToolInput(ctx, tools, msg, b)
-				if !emit(Event{Kind: EventTranscript, Transcript: e.snapshot()}) {
-					return false
-				}
-			}
-			if msg.Results != nil && msg.Results.Usage != nil {
-				if !emit(Event{Kind: EventUsage, Usage: msg.Results.Usage}) {
-					return false
-				}
-			}
-			return true
-		}
-
-		id, err := e.backend.Send(ctx, req.payload(), opts, func(ar assistant.AssistantResponse) error {
-			streamed = true
-			msg := ar.Data.Attributes.StructuredMessage
-			// A client_tool_call pauses the stream until we answer it; collect it
-			// for runTools.
-			if msg.Content.Type == assistant.ContentClientToolCall {
-				calls = append(calls, toolCallOf(msg.Content))
-			}
-			if !fold(msg) {
-				return ctx.Err()
-			}
-			return nil
+// newExchange uses a duplex stream when the backend supports this user request;
+// otherwise, and to answer resumed calls, it uses request rounds.
+func (e *Engine) newExchange(req userRequest, resumed []ToolCall) exchange {
+	if len(resumed) > 0 {
+		return newRoundsExchange(e.backend, nil, req.opts, resumed)
+	}
+	if backend, ok := e.backend.(DuplexBackend); ok {
+		selector, selective := backend.(interface {
+			CanStream(string, assistant.SendOptions) bool
 		})
-		// Send may discover a server-assigned ID before a later stream failure or
-		// cancellation. Preserve it so every surface can report a resumable handle.
-		if id != "" {
-			e.opts.ConversationID = id
-		}
-		if streamed || err == nil {
-			e.projectInstructions.acknowledge()
-		}
-		if streamed && req.user != nil && req.user.userContext != "" {
-			sent := req.user.userContext
-			e.sentUserContext = &sent
-		}
-		if err != nil {
-			// Context-derived cancellation remains quiet. Report an independent
-			// backend failure when its event can be delivered; cancellation may
-			// prevent that event from reaching the caller.
-			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
-				if !finalizeAndEmit(emit) {
-					return nil, false
-				}
-				if id != "" {
-					if !emit(Event{Kind: EventConversation, ConvID: id}) {
-						return nil, false
-					}
-				}
-				emit(Event{Kind: EventError, Err: err, BackendFailure: true})
-				return nil, false
-			}
-		}
-		if ctx.Err() != nil {
-			return nil, false // cancelled: end the turn quietly
-		}
-
-		e.opts.ConversationID = id
-		emit(Event{Kind: EventConversation, ConvID: id})
-
-		if len(calls) == 0 {
-			if finalizeAndEmit(emit) {
-				emit(Event{Kind: EventTurnDone})
-			}
-			return nil, false
-		}
-		return calls, true
-	}
-
-	for round := 1; round <= maxTurns; round++ {
-		emit := emitAtRound(round)
-		calls := resumed
-		resumed = nil
-		if calls == nil {
-			var ok bool
-			if calls, ok = request(emit); !ok {
-				return
-			}
-		}
-		toolRound, err := e.runTools(ctx, tools, calls, generation, emit, in.OnDeny)
-		if err != nil {
-			if !finalizeAndEmit(emit) {
-				return
-			}
-			emit(Event{Kind: EventError, Err: err})
-			return
-		}
-		switch toolRound.outcome {
-		case roundAborted:
-			return // cancelled: end the turn quietly
-		case roundStopped:
-			// The round was answered on the wire; discard the follow-up and end the turn.
-			if ctx.Err() == nil {
-				opts := e.sendOptions(defs, turnRequest{tools: toolRound.responses})
-				id, drainRounds, err := e.drainStoppedToolCalls(ctx, toolRound.responses, opts)
-				terminalRound := round + drainRounds
-				if id != "" {
-					e.opts.ConversationID = id
-				}
-				if err != nil && (ctx.Err() == nil || !errors.Is(err, ctx.Err())) {
-					emitTerminal := emitAtRound(terminalRound)
-					if !finalizeAndEmit(emitTerminal) {
-						return
-					}
-					send(Event{Kind: EventError, Round: terminalRound, Err: err, BackendFailure: true})
-					return
-				}
-				if ctx.Err() != nil {
-					return // cancelled: end the turn quietly
-				}
-				emitTerminal := emitAtRound(terminalRound)
-				if !finalizeAndEmit(emitTerminal) {
-					return
-				}
-				emitTerminal(Event{Kind: EventTurnDone})
-			}
-			return
-		case roundAnswered:
-			req = turnRequest{tools: toolRound.responses}
+		if !selective || selector.CanStream(req.message, req.opts) {
+			return &streamExchange{backend: backend, message: req.message, opts: req.opts}
 		}
 	}
-	if !finalizeAndEmit(emitAtRound(maxTurns)) {
-		return
-	}
-	send(Event{Kind: EventError, Round: maxTurns, Err: ErrMaxTurns})
+	return newRoundsExchange(e.backend, req.message, req.opts, nil)
 }
 
-// drainStoppedToolCalls cancels follow-up client calls after a stopped
-// round so the backend is never left waiting.
-func (e *Engine) drainStoppedToolCalls(
-	ctx context.Context,
-	responses []assistant.ClientToolResponse,
-	opts assistant.SendOptions,
-) (string, int, error) {
-	payload := any(responses)
-	conversationID := opts.ConversationID
-	rounds := 0
-	for range maxTurns {
-		rounds++
-		var calls []ToolCall
-		seen := make(map[string]struct{})
-		id, err := e.backend.Send(ctx, payload, opts, func(response assistant.AssistantResponse) error {
-			content := response.Data.Attributes.StructuredMessage.Content
-			if content.Type != assistant.ContentClientToolCall {
-				return nil
-			}
-			call := toolCallOf(content)
-			if call.ID == "" {
-				return errors.New("client tool call has no id")
-			}
-			if _, duplicate := seen[call.ID]; !duplicate {
-				seen[call.ID] = struct{}{}
-				calls = append(calls, call)
-			}
-			return nil
-		})
-		if id != "" {
-			conversationID = id
-			opts.ConversationID = id
+// settleUnfinishedTools cancels open client tool blocks starting at the given
+// transcript index, including provisional calls that never became ready to
+// execute. It also settles server tool blocks when they can no longer complete.
+// Normalizing results clears speculative UI state.
+func (e *Engine) settleUnfinishedTools(tools *ToolSet, from int, server bool) bool {
+	changed := false
+	for _, block := range e.transcript.Blocks()[from:] {
+		if block.Tool == nil || block.Tool.Status.IsTerminal() || !block.Tool.IsClientSide && !server {
+			continue
 		}
-		if err != nil {
-			return conversationID, rounds, err
-		}
-		if len(calls) == 0 {
-			return conversationID, rounds, nil
-		}
-		drained := make([]assistant.ClientToolResponse, len(calls))
-		for i, call := range calls {
-			drained[i] = toolResponse(call, cancelledResult())
-		}
-		payload = drained
+		call := ToolCall{ID: block.ToolCallID(), Name: block.Tool.Name, Input: block.Tool.Input}
+		result := tools.NormalizeResult(call, cancelledResult())
+		_, updated := e.transcript.MarkToolExecuted(call.ID, result)
+		changed = changed || updated
 	}
-	return conversationID, rounds, ErrMaxTurns
+	return changed
 }
 
-// roundOutcome is how a client-tool round ended.
-type roundOutcome uint8
-
-const (
-	roundAborted  roundOutcome = iota // the turn was cancelled; nothing is answered
-	roundAnswered                     // send the responses as the next round
-	roundStopped                      // answer on the wire, drain follow-ups, end the turn
-)
-
-// toolRound is one client-tool round trip's outcome and wire responses.
-// Responses are set unless the round was aborted.
-type toolRound struct {
-	outcome   roundOutcome
-	responses []assistant.ClientToolResponse
-}
-
-// snapshot returns a copy of the current blocks, safe to send on the channel and
-// retain: the engine keeps mutating its own transcript on later folds.
+// snapshot returns a copy of the current blocks, safe to share with every
+// subscription and retain: the engine keeps mutating its own transcript on
+// later folds.
 func (e *Engine) snapshot() TranscriptSnapshot {
 	blocks := e.transcript.Blocks()
 	snapshot := TranscriptSnapshot{Blocks: make([]Block, len(blocks))}
@@ -707,7 +773,9 @@ func (e *Engine) snapshot() TranscriptSnapshot {
 
 // ConversationID reports the conversation the engine is bound to. It is set
 // from SendOptions and updated as turns run; empty means a new conversation.
-func (e *Engine) ConversationID() string { return e.opts.ConversationID }
+func (e *Engine) ConversationID() string {
+	return get(e, func() string { return e.opts.ConversationID })
+}
 
 // Status reports the immutable effective request configuration and non-secret
 // backend metadata captured when the engine was constructed. An empty model
@@ -729,7 +797,9 @@ func (e *Engine) CurrentUser(ctx context.Context) (assistant.CurrentUser, error)
 // PreviousConversationID reports the most recent non-empty conversation that
 // NewConversation left behind. It remains available after reset so navigation
 // and lifecycle checks can recover the prior persisted conversation.
-func (e *Engine) PreviousConversationID() string { return e.previousConversationID }
+func (e *Engine) PreviousConversationID() string {
+	return get(e, func() string { return e.previousConversationID })
+}
 
 // NewConversation clears the conversation-scoped engine state without making a
 // backend request. Non-history request configuration and the backend/client
@@ -740,101 +810,96 @@ func (e *Engine) PreviousConversationID() string { return e.previousConversation
 // Callers must cancel and drain an active turn or restore before resetting.
 // The operation gate makes a premature reset fail without mutation.
 func (e *Engine) NewConversation() error {
-	if !e.active.CompareAndSwap(false, true) {
-		return ErrOperationActive
-	}
-	defer e.active.Store(false)
-
-	if e.opts.ConversationID != "" {
-		e.previousConversationID = e.opts.ConversationID
-	}
-	e.opts.ConversationID = ""
-	e.opts.MessageHistory = nil
-	e.resetContext()
-	e.transcript = NewTranscript()
-	e.continuation = nil
-	e.gate.clearGrants()
-	return nil
+	return e.idle(func() error {
+		if e.opts.ConversationID != "" {
+			e.previousConversationID = e.opts.ConversationID
+		}
+		e.opts.ConversationID = ""
+		e.opts.MessageHistory = nil
+		e.resetContext()
+		e.transcript = NewTranscript()
+		e.continuation = nil
+		clear(e.gate.grants)
+		return nil
+	})
 }
 
-// SetPermissionsMode switches the process tool mode at once, even mid-turn.
-// The switch governs every gate decision made after it: dispatching a call,
-// re-gating parked calls (so a switch away from manual releases them), and
-// applying a queued answer: once it returns, no gated call starts under the
-// earlier mode. Calls already running are not stopped. Deny mode
-// is absolute: no gated call runs, whatever grants or answers exist.
-// Returning to manual revokes session grants.
-func (e *Engine) SetPermissionsMode(tools *ToolSet, mode PermissionsMode) error {
-	if tools == nil {
-		return fmt.Errorf("tool set is nil")
-	}
-	if err := e.gate.setMode(tools, mode); err != nil {
-		return err
-	}
-	e.permissionsUpdated()
-	return nil
+// PermissionsMode reports the current permissions mode.
+func (e *Engine) PermissionsMode() PermissionsMode {
+	return get(e, func() PermissionsMode { return e.gate.mode })
+}
+
+// SetPermissionsMode switches the process tool mode at once, even mid-turn:
+// it re-gates parked calls (so a switch away from manual releases them), and
+// once it returns every later gate decision follows it. Calls already running
+// are not stopped. Deny mode is absolute: no gated call runs, whatever grants
+// or answers exist. Returning to manual revokes session grants.
+func (e *Engine) SetPermissionsMode(mode PermissionsMode) error {
+	err := ErrClosed
+	e.do(func() {
+		if err = e.gate.setMode(mode); err == nil && e.turn != nil {
+			e.turn.regateParked()
+		}
+	})
+	return err
 }
 
 // GrantSessionFor stops asking, for the rest of the conversation, for calls
 // sharing the approval key of the call parked as callID. It applies at once:
-// a running round releases every parked call the grant covers, callID
-// included. It reports false when no call is parked as callID.
-func (e *Engine) GrantSessionFor(callID string) bool {
-	if !e.gate.grantParked(callID) {
-		return false
-	}
-	e.permissionsUpdated()
-	return true
-}
-
-func (e *Engine) permissionsUpdated() {
-	select {
-	case e.permissionsChanged <- struct{}{}:
-	default: // a wake-up is already pending
-	}
-}
-
-// Restore fetches the persisted history for the engine's conversation, folds it
-// into the transcript.
-func (e *Engine) Restore(ctx context.Context) <-chan Event {
-	if !e.begin() {
-		return eventResult(Event{Kind: EventError, Err: ErrOperationActive})
-	}
-	out := make(chan Event, 64)
-	go e.restore(ctx, out)
-	return out
-}
-
-func (e *Engine) restore(ctx context.Context, out chan<- Event) {
-	defer close(out)
-	defer e.active.Store(false)
-
-	send := func(ev Event) {
-		select {
-		case out <- ev:
-		case <-ctx.Done():
+// it releases every parked call the grant covers, callID included.
+func (e *Engine) GrantSessionFor(callID string) error {
+	return e.command(func(t *turn) error {
+		c, err := t.parked(callID)
+		if err == nil {
+			e.gate.grant(c.gate.Key)
+			t.regateParked()
 		}
-	}
-
-	conversationID := e.ConversationID()
-	if conversationID == "" {
-		return
-	}
-	conversation, err := e.LoadConversation(ctx, conversationID)
-	if ctx.Err() != nil {
-		return // cancelled: end quietly
-	}
-	if err != nil {
-		send(Event{Kind: EventError, Err: err, BackendFailure: !errors.Is(err, ErrHistoryUnsupported) && !errors.Is(err, ErrInvalidConversationID)})
-		return
-	}
-	e.installConversation(conversation)
-	if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
-		send(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
-	}
+		return err
+	})
 }
 
-// callStatus is where one client tool call is within its round.
+// Restore starts fetching the persisted history for the engine's
+// conversation, to fold it into the transcript, and returns its run. The run
+// ends with EventDone when there is nothing to restore.
+func (e *Engine) Restore(ctx context.Context) (RunID, error) {
+	var id string
+	var run RunID
+	err := e.idle(func() (err error) {
+		id = e.opts.ConversationID
+		run, err = e.claim()
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	e.work(ctx, func(ctx context.Context) {
+		var conversation *Conversation
+		var err error
+		if id != "" {
+			conversation, err = e.LoadConversation(ctx, id)
+		}
+		e.do(func() {
+			defer e.release()
+			switch {
+			case ctx.Err() != nil:
+				e.emit(run, Event{Kind: EventCanceled, Err: ctx.Err()})
+			case err != nil:
+				e.emit(run, Event{Kind: EventError, Err: err, BackendFailure: !errors.Is(err, ErrHistoryUnsupported) && !errors.Is(err, ErrInvalidConversationID)})
+			default:
+				if id != "" {
+					e.installConversation(conversation)
+					if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
+						e.emit(run, Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
+					}
+				}
+				e.emit(run, Event{Kind: EventDone})
+			}
+		})
+	})
+	return run, nil
+}
+
+// callStatus is where one client tool call is within its turn.
 type callStatus int
 
 const (
@@ -844,8 +909,8 @@ const (
 	callResolved // its wire response is recorded
 )
 
-// roundCall is the engine goroutine's state for one client tool call.
-type roundCall struct {
+// clientCall is the engine goroutine's state for one client tool call.
+type clientCall struct {
 	call     ToolCall
 	status   callStatus
 	gate     ApprovalRequirement          // the call's declared gate, set once dispatched
@@ -853,324 +918,404 @@ type roundCall struct {
 	response assistant.ClientToolResponse // set once resolved
 }
 
-func unresolved(c *roundCall) bool { return c.status != callResolved }
+func resolved(c *clientCall) bool { return c.status == callResolved }
 
 type toolDone struct {
-	call   *roundCall
+	call   *clientCall
 	result ToolResult
 	err    error
 }
 
-// toolRoundState is one runTools invocation. Only the engine goroutine touches
-// it; handler goroutines report back through results.
-type toolRoundState struct {
-	e             *Engine
-	ctx           context.Context // parent of every handler context
-	cancelRound   context.CancelFunc
-	tools         *ToolSet
-	send          func(Event) bool
-	onDeny        DenyPolicy
-	calls         []*roundCall // in wire order
-	byID          map[string]*roundCall
-	results       chan toolDone
-	denied        bool
+type exchangeResult struct {
+	conversation string
+	err          error
+}
+
+// maxConcurrentTools bounds the handlers of a turn running at once.
+const maxConcurrentTools = 16
+
+// turn owns one turn's state. Only the actor changes it; the exchange and
+// handler goroutines report back through channels.
+type turn struct {
+	e      *Engine
+	parent context.Context // the caller's; its cancellation ends the turn as canceled
+	from   int             // the turn's first transcript block
+	ctx    context.Context // scopes the exchange and every handler
+	cancel context.CancelFunc
+	// handlers parents every handler context; a stop cancels it.
+	handlers     context.Context
+	stopHandlers context.CancelFunc
+	tools        *ToolSet
+	ex           exchange
+	request      *userRequest // acknowledged on first response or request success
+	onDeny       DenyPolicy
+	run          RunID
+	round        int
+	calls        []*clientCall // the current round's calls, in wire order
+	byID         map[string]*clientCall
+	results      chan toolDone
+	slots        chan struct{}
+	denied       bool
+	ended        bool // the exchange has ended; answers go nowhere
+	// stopRequested answers every open and later call as cancelled and hides
+	// further content until the exchange ends.
 	stopRequested bool
 }
 
-// Workers only execute handlers. The engine goroutine owns approvals,
-// transcript changes, and response ordering.
-func (e *Engine) runTools(
-	ctx context.Context,
-	tools *ToolSet,
-	calls []ToolCall,
-	generation uint64,
-	send func(Event) bool,
-	onDeny DenyPolicy,
-) (toolRound, error) {
-	roundCtx, cancelRound := context.WithCancel(ctx)
-	defer cancelRound()
-	r := &toolRoundState{
-		e:           e,
-		ctx:         roundCtx,
-		cancelRound: cancelRound,
-		tools:       tools,
-		send:        send,
-		onDeny:      onDeny,
-		calls:       make([]*roundCall, len(calls)),
-		byID:        make(map[string]*roundCall, len(calls)),
-		results:     make(chan toolDone, len(calls)),
-	}
-	for i, call := range calls {
-		if call.ID == "" {
-			return toolRound{}, errors.New("client tool call has no id")
-		}
-		if _, exists := r.byID[call.ID]; exists {
-			return toolRound{}, fmt.Errorf("duplicate client tool call id %q", call.ID)
-		}
-		r.calls[i] = &roundCall{call: call}
-		r.byID[call.ID] = r.calls[i]
-	}
-	// However the round ends, none of its calls stays parked.
-	defer func() {
-		for _, c := range r.calls {
-			e.gate.unpark(c.call.ID)
-		}
-	}()
+// drive runs the exchange on the actor and executes its calls, serving
+// requests meanwhile. It returns the exchange's terminal error, or the
+// parent's error if the turn is cancelled. Workers only run handlers; the
+// actor owns approvals, transcript changes, and answers.
+func (t *turn) drive() error {
+	ctx := t.parent
+	t.ctx, t.cancel = context.WithCancel(ctx)
+	defer t.cancel()
+	t.handlers, t.stopHandlers = context.WithCancel(t.ctx)
+	t.byID = make(map[string]*clientCall)
+	t.results = make(chan toolDone, maxConcurrentTools)
+	t.slots = make(chan struct{}, maxConcurrentTools)
+	events, done := t.startExchange()
+	defer func() { t.joinExchange(done) }()
+	// Commands reach the turn until its loop ends.
+	t.e.turn = t
+	defer func() { t.e.turn = nil }()
 
-	// ok turns false once an event can no longer be delivered or the turn is
-	// cancelled; the round then ends without responses.
-	ok := true
-	for _, c := range r.calls {
-		if ok = r.dispatch(c); !ok {
-			break
-		}
-	}
-	for ok && slices.ContainsFunc(r.calls, unresolved) {
+	for {
 		select {
-		case command := <-e.commands:
-			if command.generation == generation {
-				ok = r.handleCommand(command)
+		case event := <-events:
+			if err := t.apply(event); err != nil {
+				t.ended = true
+				return err
 			}
-
-		case <-e.permissionsChanged:
-			ok = r.regateParked()
-
-		case done := <-r.results:
-			c := done.call
-			if c.status == callResolved {
+		case result := <-done:
+			done = nil
+			t.ended = true
+			t.adopt(result.conversation)
+			if result.err == nil {
+				t.acknowledge()
+			}
+			t.stopCalls(nil, nil)
+			return result.err
+		case finished := <-t.results:
+			c := finished.call
+			if resolved(c) {
 				continue // cancelled or stopped before its handler returned
 			}
 			c.cancel()
 			switch {
-			case done.err == nil:
-				ok = r.resolve(c, done.result)
-			case r.stopRequested || r.denied:
+			case finished.err == nil:
+				t.resolve(c, finished.result)
+			case t.stopRequested || t.denied:
 				// Record the failure so the round's batch still gets answered.
-				ok = r.resolve(c, toolFailedResult(done.err))
+				t.resolve(c, toolFailedResult(finished.err))
+			case ctx.Err() != nil:
+				return ctx.Err() // the handler failed because the turn was cancelled
 			default:
-				r.stopRound(c, done.err)
-				return toolRound{}, done.err
+				t.ended = true
+				t.stopCalls(c, finished.err)
+				return finished.err
 			}
-
+		case fn := <-t.e.requests:
+			fn()
 		case <-ctx.Done():
-			ok = false
+			return ctx.Err()
 		}
 	}
-	if !ok {
-		return toolRound{outcome: roundAborted}, nil
+}
+
+// emit publishes an event of the current backend round.
+func (t *turn) emit(ev Event) {
+	ev.Round = t.round
+	if ev.Kind == EventTranscript {
+		ev.Origin = TranscriptOriginRemote
 	}
-	round := toolRound{
-		outcome:   roundAnswered,
-		responses: make([]assistant.ClientToolResponse, len(r.calls)),
+	t.e.emit(t.run, ev)
+}
+
+// publish emits the current transcript.
+func (t *turn) publish() {
+	t.emit(Event{Kind: EventTranscript, Transcript: t.e.snapshot()})
+}
+
+// startExchange runs the exchange until it ends or the turn is cancelled.
+func (t *turn) startExchange() (<-chan exchangeEvent, <-chan exchangeResult) {
+	events := make(chan exchangeEvent)
+	done := make(chan exchangeResult, 1)
+	go func() {
+		conversation, err := t.ex.run(t.ctx, func(event exchangeEvent) bool {
+			select {
+			case events <- event:
+				return true
+			case <-t.ctx.Done():
+				return false
+			}
+		})
+		done <- exchangeResult{conversation: conversation, err: err}
+	}()
+	return events, done
+}
+
+// joinExchange cancels an exchange that has not ended, and waits a bounded
+// time for its transport cleanup, such as the server cancellation request,
+// still serving requests. Cancelling the turn stops every handler first;
+// handlers are never joined.
+func (t *turn) joinExchange(done <-chan exchangeResult) {
+	if done == nil {
+		return
 	}
-	if r.stopRequested {
-		round.outcome = roundStopped
+	t.cancel()
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case result := <-done:
+			t.adopt(result.conversation)
+			return
+		case fn := <-t.e.requests:
+			fn()
+		case <-timer.C:
+			return
+		}
 	}
-	for i, c := range r.calls {
-		round.responses[i] = c.response
+}
+
+// apply folds one exchange event and dispatches the call it executes.
+func (t *turn) apply(event exchangeEvent) error {
+	if event.err != nil {
+		return event.err
 	}
-	return round, nil
+	if event.round > t.round {
+		// A new round starts afresh: its calls may reuse the IDs of answered
+		// ones, and an earlier denial no longer excuses a handler failure. A
+		// stop spans the rounds that drain it.
+		t.round = event.round
+		t.calls = slices.DeleteFunc(t.calls, resolved)
+		maps.DeleteFunc(t.byID, func(_ string, c *clientCall) bool { return resolved(c) })
+		t.denied = false
+	}
+	if event.conversation != "" {
+		t.adopt(event.conversation)
+		if !t.stopRequested {
+			t.emit(Event{Kind: EventConversation, ConvID: event.conversation})
+		}
+	}
+	if event.message != nil {
+		t.acknowledge()
+		if !t.stopRequested {
+			t.fold(*event.message)
+		}
+	}
+	calls := make([]*clientCall, len(event.execute))
+	for i, call := range event.execute {
+		var err error
+		if calls[i], err = t.add(call); err != nil {
+			return err
+		}
+	}
+	for _, c := range calls {
+		t.dispatch(c)
+	}
+	return nil
+}
+
+// add registers an execution-ready call; its ID must be unique in the round.
+func (t *turn) add(call ToolCall) (*clientCall, error) {
+	if call.ID == "" {
+		return nil, errors.New("client tool call has no id")
+	}
+	if _, exists := t.byID[call.ID]; exists {
+		return nil, fmt.Errorf("duplicate client tool call id %q", call.ID)
+	}
+	c := &clientCall{call: call}
+	t.calls = append(t.calls, c)
+	t.byID[call.ID] = c
+	return c, nil
+}
+
+// adopt records a conversation ID the backend assigned or confirmed.
+func (t *turn) adopt(conversation string) {
+	if conversation != "" {
+		t.e.opts.ConversationID = conversation
+	}
+}
+
+// acknowledge records the user request as delivered after a backend response
+// or a successful request with no response.
+func (t *turn) acknowledge() {
+	if t.request != nil {
+		t.e.delivery.delivered(*t.request)
+		t.request = nil
+	}
 }
 
 // dispatch decides how a call starts: answered locally, parked for approval,
 // or launched. Once a stop is requested nothing new starts. The approval
-// policy runs here, once and outside the gate lock; the mode only decides
-// what the declared gate means.
-func (r *toolRoundState) dispatch(c *roundCall) bool {
-	if r.stopRequested {
-		return r.resolve(c, cancelledResult())
+// policy runs here, once; the mode only decides what the declared gate means.
+func (t *turn) dispatch(c *clientCall) {
+	if t.stopRequested {
+		t.resolve(c, cancelledResult())
+		return
 	}
 	if c.call.Name == assistant.ApprovalRequestTool {
 		// The server write gate never runs a handler; it is answered locally.
 		if _, err := parseServerGateInput(c.call); err != nil {
-			return r.deny(c, invalidServerGateResult())
+			t.deny(c, invalidServerGateResult())
+			return
 		}
-		if r.tools == nil {
-			return r.deny(c, serverDeniedResult()) // no tool set, so no one to approve it
+		if t.tools == nil {
+			t.deny(c, serverDeniedResult()) // no tool set, so no one to approve it
+			return
 		}
 	}
-	requirement, gated := r.tools.policy(c.call)
+	requirement, gated := t.tools.Approval(c.call)
 	if !gated {
-		r.start(c)
-		return true
+		t.start(c, false)
+		return
 	}
 	c.gate = requirement
-	switch r.admit(c, false) {
-	case verdictRun:
-		return r.publishStarted(c, false)
-	case verdictDeny:
-		return r.deny(c, modeDeniedResult())
-	default:
-		return r.awaitApproval(c)
-	}
+	t.admit(c, false)
 }
 
-func (r *toolRoundState) handleCommand(command toolCommand) bool {
-	if command.stop {
-		r.stopRequested = true
-		r.stopRound(nil, nil)
-		return true
+// parked returns the call parked as id.
+func (t *turn) parked(id string) (*clientCall, error) {
+	c, ok := t.byID[id]
+	if !ok || c.status != callAwaitingApproval {
+		return nil, ErrStale
 	}
-	c, ok := r.byID[command.id]
-	if !ok {
-		return true
-	}
-	if command.cancel {
-		switch c.status {
-		case callAwaitingApproval:
-			return r.resolve(c, cancelledResult())
-		case callRunning:
-			c.cancel()
-			return r.resolve(c, cancelledResult())
-		default:
-			return true
-		}
-	}
-
-	if c.status != callAwaitingApproval {
-		return true
-	}
-	if command.decision == ApprovalDeny {
-		return r.deny(c, approvalDeniedResult(c.call))
-	}
-	switch r.admit(c, true) {
-	case verdictRun:
-		return r.publishStarted(c, true)
-	case verdictDeny:
-		return r.deny(c, modeDeniedResult())
-	default:
-		return true // an answer never parks
-	}
+	return c, nil
 }
 
 // regateParked re-gates parked calls after a mode switch or a grant: a call
 // the permissions now allow runs, one the mode denies is denied, and the rest
 // stay parked.
-func (r *toolRoundState) regateParked() bool {
-	for _, c := range r.calls {
-		if c.status != callAwaitingApproval {
-			continue
-		}
-		switch r.admit(c, false) {
-		case verdictRun:
-			if !r.publishStarted(c, true) {
-				return false
-			}
-		case verdictDeny:
-			if !r.deny(c, modeDeniedResult()) {
-				return false
-			}
-		case verdictPark:
+func (t *turn) regateParked() {
+	for _, c := range t.calls {
+		if c.status == callAwaitingApproval {
+			t.admit(c, false)
 		}
 	}
-	return true
 }
 
-// admit decides how gated call c proceeds and, when it may run, starts it,
-// atomically with respect to permission changes. Callers publish the outcome.
-func (r *toolRoundState) admit(c *roundCall, allowOnce bool) verdict {
-	return r.e.gate.admit(r.tools, c.call.ID, c.gate.Key, allowOnce, func() { r.start(c) })
-}
-
-func (r *toolRoundState) awaitApproval(c *roundCall) bool {
-	c.status = callAwaitingApproval
-	if _, updated := r.e.transcript.MarkAwaitingApproval(c.call.ID, c.gate.Prompt); !updated {
-		return true
+// admit decides how gated call c proceeds under the current permissions and
+// publishes the outcome. An answer (allowOnce) never parks.
+func (t *turn) admit(c *clientCall, allowOnce bool) {
+	parked := c.status == callAwaitingApproval
+	switch t.e.gate.admit(c.gate.Key, allowOnce) {
+	case verdictRun:
+		t.start(c, parked)
+	case verdictDeny:
+		t.deny(c, modeDeniedResult())
+	case verdictPark:
+		if !parked {
+			c.status = callAwaitingApproval
+			if _, updated := t.e.transcript.MarkAwaitingApproval(c.call.ID, c.gate.Prompt); updated {
+				t.publish()
+			}
+		}
 	}
-	return r.send(Event{Kind: EventTranscript, Transcript: r.e.snapshot()})
 }
 
-// start begins c without publishing anything, so it may run under the gate
-// lock: a handler is launched, or the server gate is answered as approved.
-func (r *toolRoundState) start(c *roundCall) {
+// start begins c: the server gate is answered as approved; any other call
+// launches its handler, shown running if it waited for approval.
+func (t *turn) start(c *clientCall, wasParked bool) {
 	if c.call.Name == assistant.ApprovalRequestTool {
-		r.settle(c, approvedResult())
+		t.resolve(c, approvedResult())
 		return
 	}
-	toolCtx, cancel := context.WithCancel(r.ctx)
+	if wasParked {
+		if _, updated := t.e.transcript.MarkToolRunning(c.call.ID); updated {
+			t.publish()
+		}
+	}
+	toolCtx, cancel := context.WithCancel(t.handlers)
 	c.status = callRunning
 	c.cancel = cancel
 	call := c.call
 	go func() {
-		result, err := r.tools.Run(toolCtx, call)
-		r.results <- toolDone{call: c, result: result, err: err}
+		select {
+		case t.slots <- struct{}{}:
+			defer func() { <-t.slots }()
+		case <-toolCtx.Done():
+			return
+		}
+		// The parent is cancelled before its children: check it so no handler
+		// starts in a slot released by a stop.
+		if t.handlers.Err() != nil || toolCtx.Err() != nil {
+			return
+		}
+		result, err := t.tools.Run(toolCtx, call)
+		select {
+		case t.results <- toolDone{call: c, result: result, err: err}:
+		case <-t.ctx.Done():
+		}
 	}()
 }
 
-// publishStarted shows a call start began: the server gate's approval, or a
-// handler running once it had waited for approval.
-func (r *toolRoundState) publishStarted(c *roundCall, wasParked bool) bool {
-	if c.call.Name == assistant.ApprovalRequestTool {
-		return r.publishResult(c, approvedResult())
-	}
-	if !wasParked {
-		return true
-	}
-	if _, updated := r.e.transcript.MarkToolRunning(c.call.ID); !updated {
-		return true
-	}
-	return r.send(Event{Kind: EventTranscript, Transcript: r.e.snapshot()})
-}
-
 // deny answers the denial on the wire; siblings still resolve. Under DenyStop
-// still-pending approvals are answered as cancelled and the round then ends
-// without a follow-up round, while running siblings finish so their real
-// results reach the wire batch.
-func (r *toolRoundState) deny(c *roundCall, result ToolResult) bool {
-	r.denied = true
-	if !r.resolve(c, result) {
-		return false
+// still-pending approvals are answered as cancelled and the turn stops as on
+// StopTools, while running siblings finish so their real results reach the
+// wire.
+func (t *turn) deny(c *clientCall, result ToolResult) {
+	t.denied = true
+	t.resolve(c, result)
+	if t.onDeny != DenyStop {
+		return
 	}
-	if r.onDeny != DenyStop {
-		return true
-	}
-	r.stopRequested = true
-	for _, sibling := range r.calls {
-		if sibling.status == callAwaitingApproval && !r.resolve(sibling, cancelledResult()) {
-			return false
+	t.requestStop()
+	for _, sibling := range t.calls {
+		if sibling.status == callAwaitingApproval {
+			t.resolve(sibling, cancelledResult())
 		}
 	}
-	return true
 }
 
-// stopRound cancels every handler and answers each unresolved call as
+// requestStop makes the remaining requests only release the backend. Their
+// replies are hidden, so the pending request is not delivered by them.
+func (t *turn) requestStop() {
+	t.stopRequested = true
+	t.request = nil
+	t.ex.stop()
+}
+
+// stopCalls cancels every handler and answers each unresolved call as
 // cancelled, or as failed for the call whose handler failed.
-func (r *toolRoundState) stopRound(failed *roundCall, err error) {
-	r.cancelRound()
-	for _, c := range r.calls {
-		if c.status == callResolved {
+func (t *turn) stopCalls(failed *clientCall, err error) {
+	t.stopHandlers()
+	for _, c := range t.calls {
+		if resolved(c) {
 			continue
 		}
 		result := cancelledResult()
 		if c == failed {
 			result = toolFailedResult(err)
 		}
-		r.resolve(c, result)
+		t.resolve(c, result)
 	}
 }
 
 // resolve records the call's wire response once and publishes its result.
-func (r *toolRoundState) resolve(c *roundCall, result ToolResult) bool {
-	if c.status == callResolved {
-		return true
+func (t *turn) resolve(c *clientCall, result ToolResult) {
+	if resolved(c) {
+		return
 	}
-	r.e.gate.unpark(c.call.ID)
-	r.settle(c, result)
-	return r.publishResult(c, result)
+	t.settle(c, result)
+	t.publishResult(c, result)
 }
 
 // settle records c's wire response without publishing it.
-func (r *toolRoundState) settle(c *roundCall, result ToolResult) {
+func (t *turn) settle(c *clientCall, result ToolResult) {
 	c.status = callResolved
 	c.response = toolResponse(c.call, result)
 }
 
-func (r *toolRoundState) publishResult(c *roundCall, result ToolResult) bool {
-	result = r.tools.NormalizeResult(c.call, result)
-	if _, updated := r.e.transcript.MarkToolExecuted(c.call.ID, result); !updated {
-		return true
+func (t *turn) publishResult(c *clientCall, result ToolResult) {
+	if !t.ended && t.ctx.Err() == nil {
+		t.ex.answer(c.response)
 	}
-	return r.send(Event{Kind: EventTranscript, Transcript: r.e.snapshot()})
+	result = t.tools.NormalizeResult(c.call, result)
+	if _, updated := t.e.transcript.MarkToolExecuted(c.call.ID, result); updated {
+		t.publish()
+	}
 }
 
 func toolFailedResult(err error) ToolResult {
@@ -1188,6 +1333,33 @@ func toolCallOf(content assistant.Content) ToolCall {
 		call.Input = content.Tool.Metadata.Input
 	}
 	return call
+}
+
+// fold applies remote content and tool-input reducers, then publishes the
+// transcript and usage.
+func (t *turn) fold(msg assistant.Message) {
+	e := t.e
+	b, ok := e.transcript.AppendMessage(msg)
+	if ok {
+		// Some providers omit is_client_side on a streamed start, then
+		// supply it only implicitly with the final client_tool_call. The
+		// registered tool set is authoritative for this turn, so recover
+		// that missing identity without overriding an explicit false server
+		// marker.
+		if msg.Content.Type == assistant.ContentToolCallStarted && msg.Content.Tool != nil &&
+			!msg.Content.Tool.HasClientSide && t.tools.Has(msg.Content.Tool.ToolName) {
+			e.transcript.MarkToolClientSide(msg.Content.Tool.ToolCallID)
+		}
+		// Reducers run in the engine goroutine immediately after the wire
+		// update is folded. This ordering lets the emitted snapshot carry
+		// the reducer's state and keeps filesystem-aware reducers ahead of
+		// client-tool execution.
+		e.reduceToolInput(t.ctx, t.tools, msg, b)
+		t.publish()
+	}
+	if msg.Results != nil && msg.Results.Usage != nil {
+		t.emit(Event{Kind: EventUsage, Usage: msg.Results.Usage})
+	}
 }
 
 // reduceToolInput invokes a registered reducer for the client-side tool

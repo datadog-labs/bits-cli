@@ -94,10 +94,10 @@ func TestClientSkillSlashInvocation(t *testing.T) {
 			} else {
 				_, _ = m.submit()
 			}
-			if m.op.events == nil {
+			if m.op.run == 0 {
 				t.Fatal("skill invocation did not start a turn")
 			}
-			for event := range m.op.events {
+			for event := range agent.Follow(m.events, m.op.run) {
 				if event.Err != nil {
 					t.Fatal(event.Err)
 				}
@@ -143,7 +143,7 @@ func TestClientSkillBuiltinCollisionsAndBusyGuard(t *testing.T) {
 	if !strings.Contains(m.editor.MenuView(), "␛[2J") {
 		t.Fatal("skill description controls were not escaped")
 	}
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.editor.SetValue("/skill:review Keep CASE")
 	_, cmd := m.submit()
 	if cmd != nil || m.editor.Value() != "/skill:review Keep CASE" {
@@ -231,10 +231,10 @@ func TestClientSkillInvocationPreservesAttachments(t *testing.T) {
 		t.Fatal("skill completion did not reopen at first token")
 	}
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.op.events == nil {
+	if m.op.run == 0 {
 		t.Fatal("skill turn did not start")
 	}
-	for event := range m.op.events {
+	for event := range agent.Follow(m.events, m.op.run) {
 		if event.Err != nil {
 			t.Fatal(event.Err)
 		}
@@ -333,7 +333,7 @@ func TestClientSkillUnknownNameKeepsDraftOnceMenuLoaded(t *testing.T) {
 	m.applyClientSkills(clientSkillsResultMsg{skills: []agent.SkillSummary{{Name: "review"}}})
 	m.editor.SetValue("/skill:missing Keep CASE")
 	_, _ = m.submit()
-	if m.op.events != nil || m.editor.Value() != "/skill:missing Keep CASE" {
+	if m.op.run != 0 || m.editor.Value() != "/skill:missing Keep CASE" {
 		t.Fatal("unknown skill started a turn or cleared the draft")
 	}
 	if !strings.Contains(latestNotice(m).Text, "Unknown client skill: missing") {
@@ -353,7 +353,7 @@ func TestClientSkillReadFailureFailsTurnLikeBackendError(t *testing.T) {
 	m.editor.SetValue("/skill:review argument")
 	_, _ = m.submit()
 	var failure error
-	for event := range m.op.events {
+	for event := range agent.Follow(m.events, m.op.run) {
 		if event.Err != nil {
 			failure = event.Err
 		}

@@ -7,4 +7,4 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
-func platformExecTools(*workspace.Workspace) []agent.Tool { return nil }
+func platformExecTools(*workspace.Workspace, ...string) []agent.Tool { return nil }

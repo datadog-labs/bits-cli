@@ -41,6 +41,10 @@ const (
 	sessionPersistTimeout = 5 * time.Second
 )
 
+// ErrLoginTimedOut means the authorization callback did not arrive before the
+// sign-in window expired. A new attempt creates a fresh authorization URL.
+var ErrLoginTimedOut = errors.New("sign-in timed out; please retry")
+
 // LoginOptions contains the testable dependencies for an interactive login.
 type LoginOptions struct {
 	Site          string
@@ -50,6 +54,9 @@ type LoginOptions struct {
 	OpenURL       func(string) error
 	OnBrowserOpen func(url string, err error)
 	Out           io.Writer
+	// CallbackURLs supplies pasted URLs from the caller's terminal interface.
+	CallbackURLs    <-chan string
+	OnCallbackError func(error)
 }
 
 // printf writes a best-effort status message to the configured output. Output
@@ -100,7 +107,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	if openURL == nil {
 		openURL = func(target string) error { return browser.Open(waitCtx, target) }
 	}
-	opts.printf("Opening Datadog login in your browser…\nIf it does not open, visit:\n%s\n", authURL)
+	opts.printf("Open this link to sign in to Datadog:\n%s\n", authURL)
 	if opts.OnBrowserOpen != nil {
 		opts.OnBrowserOpen(authURL, nil)
 	}
@@ -111,17 +118,44 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	if openErr != nil {
 		opts.printf("Could not open a browser automatically: %v\n", openErr)
 	}
+	pastedURLs := opts.CallbackURLs
 
 	var code, callbackDomain string
-	select {
-	case <-waitCtx.Done():
-		return Session{}, fmt.Errorf("wait for OAuth callback: %w", waitCtx.Err())
-	case result := <-callback:
-		if result.err != nil {
-			return Session{}, result.err
+waiting:
+	for {
+		select {
+		case <-waitCtx.Done():
+			if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+				return Session{}, ErrLoginTimedOut
+			}
+			return Session{}, fmt.Errorf("wait for OAuth callback: %w", waitCtx.Err())
+		case result := <-callback:
+			if result.err != nil {
+				return Session{}, result.err
+			}
+			code = result.code
+			callbackDomain = result.domain
+			break waiting
+		case raw, ok := <-pastedURLs:
+			if !ok {
+				// Closed stdin must not prevent a forwarded HTTP callback.
+				pastedURLs = nil
+				continue
+			}
+			result, err := parseCallbackURL(raw, cfg.RedirectURI, state)
+			if err != nil {
+				opts.printf("%v. Copy the full address from your browser’s address bar and try again:\n", err)
+				if opts.OnCallbackError != nil {
+					opts.OnCallbackError(err)
+				}
+				continue
+			}
+			if result.err != nil {
+				return Session{}, result.err
+			}
+			code, callbackDomain = result.code, result.domain
+			break waiting
 		}
-		code = result.code
-		callbackDomain = result.domain
 	}
 	cfg, err = cfg.WithCallbackDomain(callbackDomain)
 	if err != nil {
@@ -206,6 +240,40 @@ type callbackResult struct {
 	err    error
 }
 
+func parseCallbackURL(raw, redirectURI, wantState string) (callbackResult, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.User != nil || u.Fragment != "" || u.Scheme+"://"+u.Host+u.EscapedPath() != redirectURI {
+		return callbackResult{}, errors.New("paste the full browser address after signing in")
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return callbackResult{}, errors.New("the pasted address is incomplete or invalid")
+	}
+	return validateCallbackQuery(query, wantState)
+}
+
+var (
+	errCallbackState = errors.New("this address does not match the current sign-in attempt")
+	errCallbackCode  = errors.New("the address is missing sign-in details")
+)
+
+func validateCallbackQuery(query url.Values, wantState string) (callbackResult, error) {
+	if subtle.ConstantTimeCompare([]byte(query.Get("state")), []byte(wantState)) != 1 {
+		return callbackResult{}, errCallbackState
+	}
+	if oauthErr := query.Get("error"); oauthErr != "" {
+		code := safeOAuthErrorCode(oauthErr)
+		if code == "" {
+			code = "authorization_error"
+		}
+		return callbackResult{err: fmt.Errorf("datadog OAuth authorization failed: %s", code)}, nil
+	}
+	if query.Get("code") == "" {
+		return callbackResult{}, errCallbackCode
+	}
+	return callbackResult{code: query.Get("code"), domain: strings.TrimSpace(query.Get("domain"))}, nil
+}
+
 type callbackListener struct {
 	server      *http.Server
 	redirectURI string
@@ -239,38 +307,24 @@ func listenForCallback(redirectURI, wantState string) (*callbackListener, <-chan
 			writeLoginError(w, http.StatusBadRequest, "The login callback was sent to an unexpected host. Return to the terminal and try again.")
 			return
 		}
-		query := r.URL.Query()
-		if subtle.ConstantTimeCompare([]byte(query.Get("state")), []byte(wantState)) != 1 {
-			// Ignore unsolicited localhost probes rather than letting them cancel
-			// the real browser flow. A matching state remains mandatory.
+		result, err := validateCallbackQuery(r.URL.Query(), wantState)
+		if errors.Is(err, errCallbackState) {
+			// Unsolicited probes must not cancel the real login.
 			writeLoginError(w, http.StatusBadRequest, "OAuth state did not match. Return to the terminal and try again.")
 			return
 		}
-		if oauthErr := query.Get("error"); oauthErr != "" {
-			code := safeOAuthErrorCode(oauthErr)
-			if code == "" {
-				code = "authorization_error"
-			}
-			writeLoginError(w, http.StatusBadRequest, "Datadog login was not completed. Return to the terminal.")
-			select {
-			case results <- callbackResult{err: fmt.Errorf("datadog OAuth authorization failed: %s", code)}:
-			default:
-			}
-			return
-		}
-		code := query.Get("code")
-		if code == "" {
+		switch {
+		case err != nil:
 			writeLoginError(w, http.StatusBadRequest, "Missing OAuth authorization code.")
-			select {
-			case results <- callbackResult{err: errors.New("OAuth callback did not include an authorization code")}:
-			default:
-			}
-			return
+			result.err = err
+		case result.err != nil:
+			writeLoginError(w, http.StatusBadRequest, "Datadog login was not completed. Return to the terminal.")
+		default:
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_ = renderLoginComplete(w)
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = renderLoginComplete(w)
 		select {
-		case results <- callbackResult{code: code, domain: strings.TrimSpace(query.Get("domain"))}:
+		case results <- result:
 		default:
 		}
 	})

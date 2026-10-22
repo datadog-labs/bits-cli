@@ -21,9 +21,9 @@ import (
 )
 
 // runToolSet is the shape under test: a local clock tool with a declared gate.
-func runToolSet(t *testing.T, mode agent.PermissionsMode) *agent.ToolSet {
+func runToolSet(t *testing.T) *agent.ToolSet {
 	t.Helper()
-	tools, err := agent.NewToolSet(mode,
+	tools, err := agent.NewToolSet(
 		agent.Tool{
 			Definition: assistant.ClientTool{Name: "get_local_time"},
 			Approval: func(agent.ToolCall) (agent.ApprovalRequirement, bool) {
@@ -190,7 +190,7 @@ func TestRunOutcomeExitMapping(t *testing.T) {
 				writer = out
 			}
 			mode := cmp.Or(tt.mode, agent.ModeSkipPermissions)
-			err := runEngineTurn(ctx, agent.New(&fake.Fake{}, agent.Config{}), agent.TurnInput{Tools: runToolSet(t, mode)}, opts, writer)
+			err := runEngineTurn(ctx, agent.New(&fake.Fake{}, agent.Config{PermissionsMode: mode}), agent.TurnInput{Tools: runToolSet(t)}, opts, writer)
 			if !tt.wantErr(err) {
 				t.Fatalf("error = %v", err)
 			}

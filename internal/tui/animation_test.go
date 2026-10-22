@@ -28,7 +28,7 @@ func animModelWithBlock(block agent.Block) *Model {
 	m := newShell()
 	m.mode = ModeChat
 	m.transcript.Blocks = []agent.Block{block}
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.syncTranscript()
 	m.editor.Focus()
@@ -147,16 +147,16 @@ func TestAnimationClockDisarmsAfterClosedTurnWithStaleTool(t *testing.T) {
 	}
 }
 
-func TestTurnClosedUpdateDisarmsDespiteStaleRunningBlock(t *testing.T) {
+func TestTerminalEventDisarmsDespiteStaleRunningBlock(t *testing.T) {
 	m := animModel(agent.ToolRunning)
 	m.syncAnimations()
 	if !m.animClock.armed {
 		t.Fatal("test setup did not arm the clock")
 	}
 
-	m.Update(turnClosedMsg{generation: m.op.gen})
+	m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventDone, Run: m.op.run}})
 	if m.animClock.armed || m.animActivity.active || m.animBorderSweep.active {
-		t.Fatal("turnClosedMsg left animations active")
+		t.Fatal("the terminal event left animations active")
 	}
 	if !m.list.HasAnimated() {
 		t.Fatal("test setup invalid: running block should remain stale")
@@ -169,11 +169,11 @@ func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.op.then = thenNewConversation
 	m.syncAnimations()
 
-	m.Update(turnClosedMsg{generation: m.op.gen})
+	m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventDone, Run: m.op.run}})
 	if m.animClock.armed || m.animActivity.active || m.animBorderSweep.active {
 		t.Fatal("pending /new left animations active")
 	}
@@ -188,9 +188,9 @@ func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.syncAnimations()
-	m.Update(turnClosedMsg{generation: m.op.gen})
+	m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventDone, Run: m.op.run}})
 
 	m.dispatchCommand("new", "")
 	// dispatchCommand is normally reached from Update; run the centralized
@@ -208,9 +208,9 @@ func TestConversationSwitchSettlesPersistedRunningBlockAndStaysDisarmed(t *testi
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.syncAnimations()
-	m.Update(turnClosedMsg{generation: m.op.gen})
+	m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventDone, Run: m.op.run}})
 
 	m.dispatchCommand("resume", "")
 	if m.mode != ModeConversations {

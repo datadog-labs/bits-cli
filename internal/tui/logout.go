@@ -29,7 +29,7 @@ func (m *Model) startLogout() tea.Cmd {
 		return closeFileSearch
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), logoutTimeout)
-	m.begin(opLogout, nil, cancel)
+	m.begin(opLogout, 0, nil, cancel)
 	generation := m.op.gen
 	m.editor.CloseMenu()
 	logout := m.logout

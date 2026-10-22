@@ -48,6 +48,11 @@ bits --auth api-key --site https://api.datadoghq.com
 This uses the keys for the current invocation without changing your saved OAuth
 session. Plain `bits` uses OAuth even when those environment variables are set.
 
+For an Assistant endpoint that acknowledges a request policy in a streaming
+response header, set `BITS_REQUIRED_RESPONSE_HEADER=Name=value`. Bits checks
+the exact header value before delivering streamed output and rejects redirects
+for these requests. Leave it unset when no acknowledgment is required.
+
 ### Staging
 
 Configure the staging login origin and callback domain before signing in:
@@ -69,6 +74,11 @@ Keep the staging configuration set while using the saved session. If it is
 missing or names a different domain, Bits reports an error. To switch back to
 production, run `bits logout` with the staging configuration still set, unset
 the staging variables, and sign in again.
+
+To omit selected variables from local shell commands run by Bits, set
+`BITS_EXEC_EXCLUDE_ENV` to a comma-separated list of exact environment variable
+names, such as `PRIVATE_TOKEN,SESSION_KEY`. Bits also omits this setting from
+those commands. When unset, shell commands inherit the normal environment.
 
 ### Integration tests
 
@@ -125,3 +135,29 @@ license identifier and copyright holder of each module.
 ## License
 
 By contributing to Bits CLI, you agree that your contributions will be licensed under the [Apache-2.0 License](LICENSE).
+
+## Multi-agent Assistant transport
+
+The regular Assistant endpoint remains the default. Opt into experimental
+subagents with `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits`, or with
+`BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits run --prompt '…' --delivery adeep`.
+Only `1` enables it; unset, empty, or other values keep the regular endpoint.
+The setting is not persisted.
+
+With the environment variable enabled, eligible turns use multi-agent run
+endpoints with the `cli` profile. The server must support these endpoints and enable
+`command-assistant-multi-agent-runs` for the organization. Each turn creates a new
+run while keeping the conversation ID; history and conversation management use
+the existing APIs. Child answers stay out of the final root answer, and local
+tools from different agents can run concurrently, subject to the same permission
+checks and a limit of 16 executions.
+
+Turns using `--reasoning`, explicit raw history, or payloads exceeding the bounded
+run API's limits use the regular Assistant endpoint, including its tool-result
+continuations. This preserves existing image and instruction capabilities. Tests verify that
+the shipped tool definitions fit the run API limits. There is no retry through
+another endpoint after a run has started.
+
+For a test drive, set `BITS_CUSTOM_HEADERS='test-drive-NAME=1'`. The shared
+request builder forwards these headers on start, conversation continuation,
+tool-result submission, cancellation, and regular API requests.

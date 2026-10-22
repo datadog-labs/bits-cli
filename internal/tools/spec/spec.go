@@ -25,13 +25,16 @@ type Identity struct {
 }
 
 var (
-	ServerSkill       = Identity{Name: Skill}
-	ClientReadFile    = Identity{ClientSide: true, Name: ReadFile}
-	ClientListFiles   = Identity{ClientSide: true, Name: ListFiles}
-	ClientGrepFiles   = Identity{ClientSide: true, Name: GrepFiles}
-	ClientWriteFile   = Identity{ClientSide: true, Name: WriteFile}
-	ClientEditFile    = Identity{ClientSide: true, Name: EditFile}
-	ClientExecCommand = Identity{ClientSide: true, Name: ExecCommand}
+	ServerSkill            = Identity{Name: Skill}
+	ServerSpawnAgent       = Identity{Name: "spawn_agent"}
+	ServerSendAgentMessage = Identity{Name: "send_agent_message"}
+	ServerWaitForAgents    = Identity{Name: "wait_for_agents"}
+	ClientReadFile         = Identity{ClientSide: true, Name: ReadFile}
+	ClientListFiles        = Identity{ClientSide: true, Name: ListFiles}
+	ClientGrepFiles        = Identity{ClientSide: true, Name: GrepFiles}
+	ClientWriteFile        = Identity{ClientSide: true, Name: WriteFile}
+	ClientEditFile         = Identity{ClientSide: true, Name: EditFile}
+	ClientExecCommand      = Identity{ClientSide: true, Name: ExecCommand}
 )
 
 // PathInput is the minimal path-bearing projection shared by local tools. It

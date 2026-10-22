@@ -2,6 +2,7 @@ package tui
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -113,13 +114,16 @@ func (m *Model) syncApprovals(pending []agent.Block) {
 			block: block,
 			panel: panel,
 			decide: func(id string, decision agent.ApprovalDecision) bool {
-				return m.engine.Decide(id, decision)
+				// A stale call was settled otherwise, such as by the grant.
+				err := m.engine.Decide(id, decision)
+				return err == nil || errors.Is(err, agent.ErrStale)
 			},
 			grant: func(grant approvalGrant) tea.Cmd {
 				switch grant {
 				case grantNone:
 				case grantSession:
-					m.engine.GrantSessionFor(block.ToolCallID())
+					// A call no longer parked needs no grant; the decision follows.
+					_ = m.engine.GrantSessionFor(block.ToolCallID())
 				case grantFullAccess:
 					return m.setPermissionsMode(agent.ModeSkipPermissions)
 				}
@@ -209,7 +213,7 @@ func (m *Model) updatePrompt(msg tea.Msg) (tea.Cmd, bool) {
 // client-tool round, settling its approvals and tool UIs, or the whole
 // operation when it cannot.
 func (m *Model) stopTools() {
-	if m.engine.StopTools() {
+	if m.engine.StopTools() == nil {
 		m.op.stop = max(m.op.stop, stopTools)
 		m.dropToolUIs()
 	} else {

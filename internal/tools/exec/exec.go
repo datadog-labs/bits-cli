@@ -44,7 +44,8 @@ const (
 )
 
 // ExecEnvironmentStrategy describes how a command receives its environment.
-// V1 intentionally supports only ordinary process-environment inheritance.
+// V1 inherits the process environment, with an optional exact-name exclusion
+// list configured by the process that launches Bits.
 type ExecEnvironmentStrategy uint8
 
 const (
@@ -115,8 +116,9 @@ type ExecService struct {
 // NewExecService constructs the Linux/macOS direct execution service with the
 // default shell selected by the workspace. On an unsupported platform it remains
 // constructible, but Run reports a launch failure instead of Unix execution.
-func NewExecService(defaultShellPath string) *ExecService {
-	return newExecService(newDirectExecLauncher(), execServiceConfig{
+// Optional names are excluded from child process environments.
+func NewExecService(defaultShellPath string, excludedEnv ...string) *ExecService {
+	return newExecService(newDirectExecLauncher(excludedEnv...), execServiceConfig{
 		concurrency:      execConcurrencyLimit,
 		timeout:          execTimeout,
 		outputLimit:      execOutputLimit,

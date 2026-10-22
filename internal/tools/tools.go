@@ -43,10 +43,11 @@ func NewEditorTools(ws *workspace.Workspace) []agent.Tool {
 
 // NewClientTools returns every local tool available on the current platform.
 // The editor tools are available everywhere. Linux and macOS additionally get
-// the deliberately unsandboxed, one-shot exec_command tool.
-func NewClientTools(ws *workspace.Workspace) []agent.Tool {
+// the deliberately unsandboxed, one-shot exec_command tool. Optional names are
+// omitted from that tool's child process environment.
+func NewClientTools(ws *workspace.Workspace, execExcludedEnv ...string) []agent.Tool {
 	clientTools := NewEditorTools(ws)
-	return append(clientTools, platformExecTools(ws)...)
+	return append(clientTools, platformExecTools(ws, execExcludedEnv...)...)
 }
 
 // errorResult builds an error ToolResult with a formatted output message.

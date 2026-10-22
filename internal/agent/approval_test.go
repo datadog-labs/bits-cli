@@ -28,13 +28,13 @@ func gateRounds(first ...assistant.Message) [][]assistant.Message {
 }
 
 // writeTools registers one write tool, gated when gated is set.
-func writeTools(t *testing.T, mode PermissionsMode, gated bool, handler ToolHandler) *ToolSet {
+func writeTools(t *testing.T, gated bool, handler ToolHandler) *ToolSet {
 	t.Helper()
 	tool := Tool{Definition: assistant.ClientTool{Name: "write"}, Handler: handler}
 	if gated {
 		tool.Approval = writeApproval
 	}
-	tools, err := NewToolSet(mode, tool)
+	tools, err := NewToolSet(tool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func decideGates(t *testing.T, decide func(id string) bool) func(Event) {
 			if block.Tool.Name == assistant.ApprovalRequestTool && !decided[id] {
 				decided[id] = true
 				if !decide(id) {
-					t.Errorf("decision for %s was not queued", id)
+					t.Errorf("decision for %s was not applied", id)
 				}
 			}
 		}
@@ -100,6 +100,7 @@ func TestGatesDeniedWithoutAsking(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		round  []assistant.Message
+		mode   PermissionsMode
 		tools  *ToolSet
 		onDeny DenyPolicy
 		want   []string
@@ -107,7 +108,8 @@ func TestGatesDeniedWithoutAsking(t *testing.T) {
 		{
 			name:   "deny mode",
 			round:  []assistant.Message{deleteGate, writeSibling},
-			tools:  writeTools(t, ModeDeny, true, written),
+			mode:   ModeDeny,
+			tools:  writeTools(t, true, written),
 			onDeny: DenyContinue,
 			want:   []string{"gate-1 error " + modeDenied, "write-1 error " + modeDenied},
 		},
@@ -122,19 +124,20 @@ func TestGatesDeniedWithoutAsking(t *testing.T) {
 			// the sibling dispatched after it.
 			name:  "malformed gate",
 			round: []assistant.Message{gateMsg("gate-1", `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"other"}`), writeSibling},
-			tools: writeTools(t, ModeSkipPermissions, true, written),
+			mode:  ModeSkipPermissions,
+			tools: writeTools(t, true, written),
 			want:  []string{"gate-1 error the server approval request was invalid", "write-1 error tool execution was cancelled by the user"},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &scriptBackend{rounds: gateRounds(tt.round...)}
-			engine := New(backend, Config{})
+			engine := New(backend, Config{PermissionsMode: tt.mode})
 			events := drain(t, engine, TurnInput{Message: "write", Tools: tt.tools, OnDeny: tt.onDeny}, func(event Event) {
 				if len(event.Transcript.PendingApprovals()) > 0 {
 					t.Error("a gate surfaced as a pending approval")
 				}
 			})
-			if events[len(events)-1].Kind != EventTurnDone || !hasToolStatus(events, "gate-1", ToolDenied) {
+			if events[len(events)-1].Kind != EventDone || !hasToolStatus(events, "gate-1", ToolDenied) {
 				t.Fatalf("turn = %v, want a completed turn with a typed denial", kinds(events))
 			}
 			if batches := backend.responses(); len(batches) != 1 || !slices.Equal(summarize(batches[0]), tt.want) {
@@ -171,7 +174,7 @@ func TestServerGateApprovals(t *testing.T) {
 			backend := &scriptBackend{rounds: gateRounds(tt.round...)}
 			engine := New(backend, Config{})
 			decisions := 0
-			events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, ModeManual, true, written)},
+			events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, true, written)},
 				func(event Event) {
 					for _, block := range event.Transcript.PendingApprovals() {
 						if block.ToolCallID() == "gate-1" && (block.Tool.Approval == nil || block.Tool.Approval.Title != "Delete it?" || block.Tool.Approval.Detail != "tool: delete_dashboard") {
@@ -187,9 +190,9 @@ func TestServerGateApprovals(t *testing.T) {
 					if tt.session {
 						return allowForSession(engine, id)
 					}
-					return engine.Decide(id, ApprovalAllowOnce)
+					return engine.Decide(id, ApprovalAllowOnce) == nil
 				}))
-			if events[len(events)-1].Kind != EventTurnDone || decisions != tt.decisions {
+			if events[len(events)-1].Kind != EventDone || decisions != tt.decisions {
 				t.Fatalf("turn = %v, decisions = %d, want a completed turn after %d", kinds(events), decisions, tt.decisions)
 			}
 			batches := backend.responses()
@@ -242,9 +245,9 @@ func TestServerGateDenials(t *testing.T) {
 			}
 			backend := &scriptBackend{rounds: gateRounds(tt.round...)}
 			engine := New(backend, Config{})
-			events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, ModeManual, tt.gatedSibling, handler), OnDeny: tt.onDeny},
-				decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) }))
-			if events[len(events)-1].Kind != EventTurnDone || !hasToolStatus(events, "gate-1", ToolDenied) {
+			events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, tt.gatedSibling, handler), OnDeny: tt.onDeny},
+				decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) == nil }))
+			if events[len(events)-1].Kind != EventDone || !hasToolStatus(events, "gate-1", ToolDenied) {
 				t.Fatalf("turn = %v, want a completed turn with a typed denial", kinds(events))
 			}
 			if batches := backend.responses(); len(batches) != 1 || !slices.Equal(summarize(batches[0]), tt.want) {
@@ -260,12 +263,29 @@ func TestServerGateDenials(t *testing.T) {
 	}
 }
 
+// A denial excuses handler failures only in its own round: a later round's
+// failure still fails the turn.
+func TestDenialDoesNotExcuseLaterRoundFailures(t *testing.T) {
+	failure := errors.New("handler exploded")
+	backend := &scriptBackend{rounds: [][]assistant.Message{{deleteGate}, {writeSibling}, {textMsg("answer", "unreachable")}}}
+	engine := New(backend, Config{})
+	tools := writeTools(t, false, func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, failure })
+	events := drain(t, engine, TurnInput{Message: "write", Tools: tools, OnDeny: DenyContinue},
+		decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) == nil }))
+	if last := events[len(events)-1]; last.Kind != EventError || !errors.Is(last.Err, failure) {
+		t.Fatalf("last event = %+v, want the round-2 handler failure", last)
+	}
+	if len(backend.opts) != 2 {
+		t.Fatalf("backend calls = %d, want 2: the failure is not answered", len(backend.opts))
+	}
+}
+
 func TestDenyStopDrainsFollowUpClientToolCalls(t *testing.T) {
 	backend := &scriptBackend{rounds: [][]assistant.Message{{deleteGate}, {clientCallMsg("follow-1", "write", `{"value":"discarded"}`)}, {textMsg("answer", "adjusted answer")}}}
 	engine := New(backend, Config{})
-	events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, ModeManual, true, written)},
-		decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) }))
-	if last := events[len(events)-1]; last.Kind != EventTurnDone || last.Round != 3 {
+	events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, true, written)},
+		decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) == nil }))
+	if last := events[len(events)-1]; last.Kind != EventDone || last.Round != 3 {
 		t.Fatalf("last event = %+v, want the turn done at round 3", last)
 	}
 	if got := responseIDs(backend.responses()); got != "gate-1|follow-1" {
@@ -285,8 +305,8 @@ func TestDenyStopBackendFailureRetainsBackendProvenance(t *testing.T) {
 	backendErr := errors.New("backend failed while recording denial")
 	backend := &scriptBackend{rounds: [][]assistant.Message{{deleteGate}}, err: backendErr, failOn: 2}
 	engine := New(backend, Config{})
-	events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, ModeManual, true, written)},
-		decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) }))
+	events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, true, written)},
+		decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) == nil }))
 	if last := events[len(events)-1]; last.Kind != EventError || !last.BackendFailure || !errors.Is(last.Err, backendErr) {
 		t.Fatalf("last event = %+v, want the backend failure", last)
 	}
@@ -332,7 +352,7 @@ func approvalTransitionOrder(t *testing.T, allowSession bool, ids []string) []st
 			},
 		})
 	}
-	tools, err := NewToolSet(ModeManual, definitions...)
+	tools, err := NewToolSet(definitions...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +360,7 @@ func approvalTransitionOrder(t *testing.T, allowSession bool, ids []string) []st
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := New(&scriptBackend{rounds: toolRounds("a", "b", "c", "d")}, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "run all", Tools: tools, OnDeny: DenyStop})
+	events := turnEvents(engine, ctx, TurnInput{Message: "run all", Tools: tools, OnDeny: DenyStop})
 	waitForToolStatus(t, events, "call-d", ToolAwaitingApproval)
 	wantStatuses := []ToolStatus{ToolDenied, ToolCancelled}
 	var afterDecision []Event
@@ -357,12 +377,12 @@ func approvalTransitionOrder(t *testing.T, allowSession bool, ids []string) []st
 			afterDecision = append(afterDecision, event)
 		}
 		close(release)
-	} else if !engine.Decide("call-a", ApprovalDeny) {
-		t.Fatal("decision for call-a was not queued")
+	} else if err := engine.Decide("call-a", ApprovalDeny); err != nil {
+		t.Fatalf("decision for call-a: %v", err)
 	}
 	afterDecision = append(afterDecision, collect(events)...)
-	if got := afterDecision[len(afterDecision)-1].Kind; got != EventTurnDone {
-		t.Fatalf("last event = %v, want EventTurnDone", got)
+	if got := afterDecision[len(afterDecision)-1].Kind; got != EventDone {
+		t.Fatalf("last event = %v, want EventDone", got)
 	}
 	return toolTransitionOrder(afterDecision, ids, wantStatuses...)
 }

@@ -37,6 +37,7 @@ func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer)
 	if err != nil {
 		return err
 	}
+	defer root.Detach()
 
 	// Login and chat are modes of one Bubble Tea program. Keeping the same
 	// renderer alive prevents an alt-screen teardown flash after OAuth succeeds.
@@ -90,8 +91,12 @@ func startupModel(ctx context.Context, opts ChatOptions, workspace *workspace.Wo
 
 func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace, upgrade *update.Offer) (*tui.Model, error) {
 	toolUI := tools.NewUI()
-	clientTools := append(tools.NewClientTools(workspace), tools.NewAskUserQuestionTool(toolUI))
-	toolSet, err := agent.NewToolSet(opts.PermissionsMode, clientTools...)
+	clientTools, err := configuredClientTools(workspace)
+	if err != nil {
+		return nil, err
+	}
+	clientTools = append(clientTools, tools.NewAskUserQuestionTool(toolUI), tools.NewHandoffTool())
+	toolSet, err := agent.NewToolSet(clientTools...)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +110,15 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 			return auth.Logout(logoutCtx, store, nil)
 		},
 	}
-	engine, err := newEngine(ctx, opts, workspace, store)
+	// An engine lives as long as the chat: runChat cancels ctx on every exit
+	// path, including logout and errors, which closes it.
+	bound := func(engine *agent.Engine, err error) (*agent.Engine, error) {
+		if err == nil {
+			context.AfterFunc(ctx, engine.Close)
+		}
+		return engine, err
+	}
+	engine, err := bound(newEngine(ctx, opts, workspace, store))
 	if err == nil {
 		return tui.New(engine, config), nil
 	}
@@ -113,11 +126,15 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		return nil, err
 	}
 
-	loginModel := loginui.New(ctx, func(loginCtx context.Context, site string, report func(loginui.BrowserStatus)) error {
+	loginModel := loginui.New(ctx, func(loginCtx context.Context, site string, callbacks <-chan string, report func(loginui.BrowserStatus)) error {
 		_, loginErr := auth.Login(loginCtx, auth.LoginOptions{
-			Site:     site,
-			ClientID: "",
-			Store:    store,
+			Site:         site,
+			ClientID:     "",
+			Store:        store,
+			CallbackURLs: callbacks,
+			OnCallbackError: func(err error) {
+				report(loginui.BrowserStatus{InputError: err})
+			},
 			OnBrowserOpen: func(url string, openErr error) {
 				report(loginui.BrowserStatus{AuthorizationURL: url, OpenError: openErr})
 			},
@@ -126,6 +143,6 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		return loginErr
 	})
 	return tui.NewWithLogin(ctx, loginModel, func(factoryCtx context.Context) (*agent.Engine, error) {
-		return newEngine(factoryCtx, opts, workspace, store)
+		return bound(newEngine(factoryCtx, opts, workspace, store))
 	}, config), nil
 }

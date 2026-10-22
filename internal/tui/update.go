@@ -32,15 +32,9 @@ const mouseWheelDelta = 1
 // transcript while its pointer rests against a viewport edge.
 const selectionAutoScrollInterval = 25 * time.Millisecond
 
-// turnEventMsg carries one engine event into Update; turnClosedMsg signals the
-// turn's channel was closed (turn finished or cancelled). A history restore runs
-// through the same pump, so its events flow here too.
+// engineEventMsg carries one event of the engine subscription into Update.
 type (
-	turnEventMsg struct {
-		generation uint64
-		ev         agent.Event
-	}
-	turnClosedMsg    struct{ generation uint64 }
+	engineEventMsg   struct{ ev agent.Event }
 	selectionTickMsg struct{ token uint64 }
 	engineReadyMsg   struct {
 		generation uint64
@@ -73,16 +67,18 @@ func (m *Model) postNotice(n chat.Notice) tea.Cmd {
 	return nil
 }
 
-// waitEvent reads one event from the turn channel and re-arms after each event
-// in Update — the turn-scoped pump. Reading a closed channel yields
-// turnClosedMsg.
-func waitEvent(generation uint64, ch <-chan agent.Event) tea.Cmd {
+// waitEvent reads one event from the engine subscription; Update re-arms it
+// after each event, so one pump serves the engine's lifetime. It stops once
+// the subscription closes with the engine; without one there is no pump.
+func waitEvent(ch <-chan agent.Event) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
 	return func() tea.Msg {
-		ev, ok := <-ch
-		if !ok {
-			return turnClosedMsg{generation: generation}
+		if ev, ok := <-ch; ok {
+			return engineEventMsg{ev: ev}
 		}
-		return turnEventMsg{generation: generation, ev: ev}
+		return nil
 	}
 }
 
@@ -294,19 +290,14 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case selectionTickMsg:
 		return m, m.advanceSelectionScroll(msg)
 
-	case turnEventMsg:
-		if !m.op.accepts(msg.generation) {
-			return m, nil
+	case engineEventMsg:
+		var cmd tea.Cmd
+		// Every run is an operation this model started, so other runs' events
+		// are ignored.
+		if m.op.run != 0 && msg.ev.Run == m.op.run {
+			cmd = m.applyRunEvent(msg.ev)
 		}
-		cmd := m.applyEvent(msg.ev)
-		m.syncStatus()
-		if msg.ev.Kind == agent.EventTranscript {
-			m.syncTranscript()
-		}
-		return m, tea.Batch(cmd, waitEvent(msg.generation, m.op.events))
-
-	case turnClosedMsg:
-		return m.handleTurnClosed(msg)
+		return m, tea.Batch(cmd, waitEvent(m.events))
 
 	case logoutResultMsg:
 		return m.applyLogoutResult(msg)
@@ -612,14 +603,33 @@ func (m *Model) inComposer(msg tea.MouseMsg) (image.Point, bool) {
 	return p.Sub(m.frame.composer.Min), true
 }
 
-// handleTurnClosed ends the engine operation whose channel closed, then runs
-// what was queued behind it.
-func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
-	if !m.op.accepts(msg.generation) {
-		return m, nil
+// applyRunEvent folds an event of the operation's run, and ends the operation
+// after the run's terminal event.
+func (m *Model) applyRunEvent(ev agent.Event) tea.Cmd {
+	cmd := m.applyEvent(ev)
+	m.syncStatus()
+	if ev.Kind == agent.EventTranscript {
+		m.syncTranscript()
 	}
+	if ev.Terminal() {
+		cmd = tea.Batch(cmd, m.endOperation())
+	}
+	return cmd
+}
+
+// endOperation ends the engine operation after its run's terminal event, then
+// runs what was queued behind it.
+func (m *Model) endOperation() tea.Cmd {
 	done := m.op
 	m.op = operation{gen: done.gen}
+	// The engine emits the terminal event as it releases the operation, so
+	// engine calls now see the final state. Cancellation may have suppressed
+	// the events carrying these last updates.
+	if m.engine != nil && m.engine.Status().MultiAgent {
+		m.convID = m.engine.ConversationID()
+		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+		m.syncTranscript()
+	}
 	if m.chatPhase != chat.PhaseError {
 		m.chatPhase = chat.PhaseIdle
 	}
@@ -634,13 +644,13 @@ func (m *Model) handleTurnClosed(msg turnClosedMsg) (tea.Model, tea.Cmd) {
 	m.syncStatus()
 	switch {
 	case done.then == thenLogout:
-		return m, m.startLogout()
+		return m.startLogout()
 	case done.then == thenNewConversation:
-		return m, m.startNewConversation()
+		return m.startNewConversation()
 	case done.kind == opRestore && done.stop != stopAll:
-		return m, m.resumePendingTools()
+		return m.resumePendingTools()
 	}
-	return m, nil
+	return nil
 }
 
 func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
@@ -676,11 +686,10 @@ func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
 			m.startupErr = errors.New("authenticated chat returned no engine")
 			return tea.Quit
 		}
-		m.engine = msg.engine
+		m.attach(msg.engine)
 		if m.entitySearcher == nil {
 			m.entitySearcher = msg.engine
 		}
-		m.convID = msg.engine.ConversationID()
 		m.loginModel = nil
 		m.engineFactory = nil
 		m.startupCtx = nil
@@ -889,29 +898,30 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.StartTurn(ctx, agent.TurnInput{
+	run, err := m.engine.StartTurn(ctx, agent.TurnInput{
 		Message: text,
 		Skill:   skillInvocation,
 		Tools:   m.tools,
 		Context: turnContext,
 		OnDeny:  agent.DenyContinue,
 	})
-	wait := m.begin(opTurn, events, cancel)
 	m.chatPhase = chat.PhaseWaiting
+	failed := m.begin(opTurn, run, err, cancel)
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
-	return m, tea.Batch(closeFileSearch, wait)
+	return m, tea.Batch(closeFileSearch, failed)
 }
 
-// begin starts an exclusive operation. Its generation drops any late message
-// from an earlier one.
-func (m *Model) begin(kind opKind, events <-chan agent.Event, cancel context.CancelFunc) tea.Cmd {
-	m.op = operation{kind: kind, gen: m.op.gen + 1, events: events, cancel: cancel}
-	if events == nil {
-		return nil
+// begin starts an exclusive operation, streaming the engine run if any. Its
+// generation drops any late message from an earlier one. An engine operation
+// that failed to start ends at once with its error.
+func (m *Model) begin(kind opKind, run agent.RunID, err error, cancel context.CancelFunc) tea.Cmd {
+	m.op = operation{kind: kind, gen: m.op.gen + 1, run: run, cancel: cancel}
+	if err != nil {
+		return m.applyRunEvent(agent.Event{Kind: agent.EventError, Err: err})
 	}
-	return waitEvent(m.op.gen, events)
+	return nil
 }
 
 func (m *Model) resumePendingTools() tea.Cmd {
@@ -926,17 +936,17 @@ func (m *Model) resumePendingTools() tea.Cmd {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
+	run, err := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
 	m.chatPhase = chat.PhaseWaiting
 	m.list.ScrollToBottom()
-	return m.begin(opTurn, events, cancel)
+	return m.begin(opTurn, run, err, cancel)
 }
 
 // cancelOperation cancels a running engine operation once and drops its tool
 // UIs; its approvals go when the operation closes. Logout is never
 // interrupted this way.
 func (m *Model) cancelOperation() {
-	if m.op.events == nil || m.op.stop == stopAll {
+	if m.op.run == 0 || m.op.stop == stopAll {
 		return
 	}
 	m.op.stop = stopAll
@@ -967,8 +977,10 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 		m.usage = ev.Usage
 	case agent.EventConversation:
 		m.convID = ev.ConvID
-	case agent.EventTurnDone:
+	case agent.EventDone:
 		m.chatPhase = chat.PhaseIdle
+	case agent.EventCanceled:
+		// endOperation settles the chat phase and resyncs the transcript.
 	case agent.EventError:
 		// A failure during restore is benign: drop to idle with a notice so the
 		// user can still type. A failure mid-turn is the turn's error state.

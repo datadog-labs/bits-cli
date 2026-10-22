@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,7 +46,7 @@ func TestEngineToolTurn(t *testing.T) {
 				var tools *ToolSet
 				if tt.toolName != "missing" {
 					var err error
-					tools, err = NewToolSet(mode, Tool{
+					tools, err = NewToolSet(Tool{
 						Definition: assistant.ClientTool{Name: "calculate"},
 						Handler: func(_ context.Context, call ToolCall) (ToolResult, error) {
 							if call.ID != "call-1" || call.Input != `{"value":42}` {
@@ -61,7 +60,7 @@ func TestEngineToolTurn(t *testing.T) {
 					}
 				}
 
-				events := drain(t, New(backend, Config{}), TurnInput{
+				events := drain(t, New(backend, Config{PermissionsMode: mode}), TurnInput{
 					Message: "use a tool",
 					Tools:   tools,
 				})
@@ -83,7 +82,7 @@ func TestEngineToolTurn(t *testing.T) {
 				if response.ToolCallID != "call-1" || response.Status != tt.wantStatus || response.Title != tt.wantTitle || response.Metadata.Output != tt.wantOutput {
 					t.Fatalf("tool response = %+v", response)
 				}
-				if len(events) == 0 || events[len(events)-1].Kind != EventTurnDone {
+				if len(events) == 0 || events[len(events)-1].Kind != EventDone {
 					t.Fatalf("turn did not complete: %v", kinds(events))
 				}
 			})
@@ -147,7 +146,7 @@ func TestEngineApprovalScope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &scriptBackend{rounds: writeRounds()}
 			var runs atomic.Int32
-			tools, err := NewToolSet(ModeManual, Tool{
+			tools, err := NewToolSet(Tool{
 				Definition: assistant.ClientTool{Name: "write"},
 				Approval: func(call ToolCall) (ApprovalRequirement, bool) {
 					resource := "workspace"
@@ -172,32 +171,33 @@ func TestEngineApprovalScope(t *testing.T) {
 			defer cancel()
 			engine := New(backend, Config{})
 			// Interactive surface: stop after the denial is answered on the wire.
-			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools, OnDeny: DenyStop})
+			events := turnEvents(engine, ctx, TurnInput{Message: "write", Tools: tools, OnDeny: DenyStop})
 			decisions := 0
 			var all []Event
+			// A switch or a grant releases the parked call itself, as in the modal.
 			decide := func(id string) {
-				if tt.switchTo != "" {
-					if err := engine.SetPermissionsMode(tools, tt.switchTo); err != nil {
-						t.Fatal(err)
-					}
+				var err error
+				switch {
+				case tt.switchTo != "":
+					err = engine.SetPermissionsMode(tt.switchTo)
+				case tt.grantSession:
+					err = engine.GrantSessionFor(id)
+				default:
+					err = engine.Decide(id, tt.decision)
 				}
-				queued := false
-				if tt.grantSession {
-					queued = allowForSession(engine, id)
-				} else {
-					queued = engine.Decide(id, tt.decision)
-				}
-				if !queued {
-					t.Fatalf("decision for %q was not queued", id)
+				if err != nil {
+					t.Fatalf("decision for %q: %v", id, err)
 				}
 				decisions++
 			}
 
-			all = append(all, waitForToolStatusEvents(t, events, "call-a", ToolAwaitingApproval)...)
+			// With per-call keys, wait for the sibling to park too, after call-a,
+			// so the decision has to release it.
+			parked := "call-a"
 			if tt.perCallKey {
-				// Park the sibling too, so the decision has to release it.
-				all = append(all, waitForToolStatusEvents(t, events, "call-b", ToolAwaitingApproval)...)
+				parked = "call-b"
 			}
+			all = append(all, waitForToolStatusEvents(t, events, parked, ToolAwaitingApproval)...)
 			decide("call-a")
 			if tt.decision == ApprovalAllowOnce && !tt.grantSession && tt.switchTo == "" {
 				beforeACompleted := waitForToolStatusEvents(t, events, "call-a", ToolSuccess)
@@ -222,7 +222,7 @@ func TestEngineApprovalScope(t *testing.T) {
 			if got := runs.Load(); got != tt.wantRuns {
 				t.Fatalf("handler runs = %d, want %d", got, tt.wantRuns)
 			}
-			if len(rest) == 0 || rest[len(rest)-1].Kind != EventTurnDone {
+			if len(rest) == 0 || rest[len(rest)-1].Kind != EventDone {
 				t.Fatalf("turn did not end cleanly: %v", kinds(rest))
 			}
 			if len(backend.opts) != tt.wantCalls {
@@ -232,7 +232,7 @@ func TestEngineApprovalScope(t *testing.T) {
 			if len(batches) != 2 || len(batches[0]) != 2 || len(batches[1]) != 1 {
 				t.Fatalf("response batch sizes = %v, want [2 1]", responseBatchSizes(batches))
 			}
-			if got := tools.PermissionsMode(); got != tt.wantMode {
+			if got := engine.PermissionsMode(); got != tt.wantMode {
 				t.Fatalf("mode = %q, want %q", got, tt.wantMode)
 			}
 
@@ -273,14 +273,9 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 		t.Run(string(tt.mode), func(t *testing.T) {
 			backend := &scriptBackend{rounds: writeRounds()}
 			release := make(chan struct{})
-			gating, switched := make(chan struct{}), make(chan struct{})
-			var pause sync.Once
-			tools, err := NewToolSet(ModeManual, Tool{
+			tools, err := NewToolSet(Tool{
 				Definition: assistant.ClientTool{Name: "write"},
-				Approval: func(call ToolCall) (ApprovalRequirement, bool) {
-					if call.ID == "call-c" {
-						pause.Do(func() { close(gating); <-switched })
-					}
+				Approval: func(ToolCall) (ApprovalRequirement, bool) {
 					return ApprovalRequirement{
 						Key:    ApprovalKey{Tool: "write", Resource: "workspace"},
 						Prompt: ApprovalPrompt{Title: "Write record?"},
@@ -300,30 +295,30 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			engine := New(backend, Config{})
-			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools})
+			events := turnEvents(engine, ctx, TurnInput{Message: "write", Tools: tools})
 			waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
 			if !allowForSession(engine, "call-a") {
-				t.Fatal("decision for call-a was not queued")
+				t.Fatal("decision for call-a was not applied")
 			}
 			waitForToolStatus(t, events, "call-b", ToolRunning)
-			if engine.GrantSessionFor("call-b") {
+			if engine.GrantSessionFor("call-b") == nil {
 				t.Fatal("granted for call-b while it runs")
 			}
-			close(release)
-			<-gating
-			if err := engine.SetPermissionsMode(tools, tt.mode); err != nil {
+			// Switch while call-b runs, so call-c, in the next round, is gated
+			// under the new mode.
+			if err := engine.SetPermissionsMode(tt.mode); err != nil {
 				t.Fatal(err)
 			}
-			close(switched)
+			close(release)
 
 			waitForToolStatus(t, events, "call-c", tt.callC)
-			if tt.callC == ToolAwaitingApproval && !engine.Decide("call-c", ApprovalAllowOnce) {
-				t.Fatal("decision for call-c was not queued")
+			if tt.callC == ToolAwaitingApproval && engine.Decide("call-c", ApprovalAllowOnce) != nil {
+				t.Fatal("decision for call-c was not applied")
 			}
-			if all := collect(events); len(all) == 0 || all[len(all)-1].Kind != EventTurnDone {
+			if all := collect(events); len(all) == 0 || all[len(all)-1].Kind != EventDone {
 				t.Fatalf("turn did not complete: %v", kinds(all))
 			}
-			if engine.GrantSessionFor("call-c") {
+			if engine.GrantSessionFor("call-c") == nil {
 				t.Fatal("granted for call-c after its turn ended")
 			}
 		})
@@ -333,7 +328,7 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 // TestEngineAbortedRoundUnparksItsCalls cancels a turn while a call waits
 // for approval: the call can no longer be granted for.
 func TestEngineAbortedRoundUnparksItsCalls(t *testing.T) {
-	tools, err := NewToolSet(ModeManual, Tool{
+	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "write"},
 		Approval: func(ToolCall) (ApprovalRequirement, bool) {
 			return ApprovalRequirement{Key: ApprovalKey{Tool: "write", Resource: "workspace"}}, true
@@ -345,34 +340,32 @@ func TestEngineAbortedRoundUnparksItsCalls(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	engine := New(&scriptBackend{rounds: writeRounds()}, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools})
+	events := turnEvents(engine, ctx, TurnInput{Message: "write", Tools: tools})
 	waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
 	cancel()
 	collect(events)
-	if engine.GrantSessionFor("call-a") {
+	if engine.GrantSessionFor("call-a") == nil {
 		t.Fatal("granted for call-a after its turn was cancelled")
 	}
 }
 
-func TestNewToolSetRejectsInvalidPermissionsMode(t *testing.T) {
+func TestSetPermissionsModeRejectsInvalidModes(t *testing.T) {
+	engine := New(nil, Config{})
 	for _, mode := range []PermissionsMode{"", "ask", "allow-all", "gated"} {
-		set, err := NewToolSet(mode, Tool{
-			Definition: assistant.ClientTool{Name: "calculate"},
-			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
-		})
-		if err == nil || set != nil {
-			t.Fatalf("NewToolSet(%q) = (%v, %v), want an invalid-mode error", mode, set, err)
+		err := engine.SetPermissionsMode(mode)
+		if err == nil || !strings.Contains(err.Error(), "manual") || !strings.Contains(err.Error(), "skip-permissions") {
+			t.Fatalf("SetPermissionsMode(%q) = %v, want an error listing the valid modes", mode, err)
 		}
-		if !strings.Contains(err.Error(), "manual") || !strings.Contains(err.Error(), "skip-permissions") {
-			t.Fatalf("NewToolSet(%q) error %q does not list the valid modes", mode, err)
-		}
+	}
+	if got := engine.PermissionsMode(); got != ModeManual {
+		t.Fatalf("mode = %q, want the manual default", got)
 	}
 }
 
 // The server-injected gate name is reserved; a registered tool with that
 // name would be silently intercepted by the engine.
 func TestNewToolSetRejectsApprovalRequestName(t *testing.T) {
-	set, err := NewToolSet(ModeSkipPermissions, Tool{
+	set, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: assistant.ApprovalRequestTool},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 	})
@@ -393,17 +386,16 @@ func TestToolSetReduceInput(t *testing.T) {
 	var gotContext context.Context
 	var gotUpdate ToolInputUpdate
 	var gotPrior any
-	set, err := NewToolSet(ModeSkipPermissions,
-		Tool{
-			Definition: assistant.ClientTool{Name: "reduce"},
-			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
-			InputReducer: func(ctx context.Context, update ToolInputUpdate, prior any) any {
-				gotContext = ctx
-				gotUpdate = update
-				gotPrior = prior
-				return renderState{input: update.RawPrefix, prior: prior}
-			},
+	set, err := NewToolSet(Tool{
+		Definition: assistant.ClientTool{Name: "reduce"},
+		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+		InputReducer: func(ctx context.Context, update ToolInputUpdate, prior any) any {
+			gotContext = ctx
+			gotUpdate = update
+			gotPrior = prior
+			return renderState{input: update.RawPrefix, prior: prior}
 		},
+	},
 		Tool{
 			Definition: assistant.ClientTool{Name: "ordinary"},
 			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
@@ -449,7 +441,7 @@ func TestToolSetReduceInput(t *testing.T) {
 }
 
 func TestToolSetReduceInputAllowsNilState(t *testing.T) {
-	set, err := NewToolSet(ModeSkipPermissions, Tool{
+	set, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "reduce"},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 		InputReducer: func(context.Context, ToolInputUpdate, any) any {
@@ -476,7 +468,7 @@ func TestToolSetPerToolInputStreaming(t *testing.T) {
 	explicit := ordinary
 	explicit.Definition.Name = "explicit"
 	explicit.Definition.StreamInput = true
-	set, err := NewToolSet(ModeSkipPermissions, ordinary, withReducer, explicit)
+	set, err := NewToolSet(ordinary, withReducer, explicit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,14 +486,13 @@ func TestToolSetPerToolInputStreaming(t *testing.T) {
 }
 
 func TestToolSetNormalizeResult(t *testing.T) {
-	set, err := NewToolSet(ModeSkipPermissions,
-		Tool{
-			Definition: assistant.ClientTool{Name: "reduce"},
-			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
-			InputReducer: func(context.Context, ToolInputUpdate, any) any {
-				return nil
-			},
+	set, err := NewToolSet(Tool{
+		Definition: assistant.ClientTool{Name: "reduce"},
+		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+		InputReducer: func(context.Context, ToolInputUpdate, any) any {
+			return nil
 		},
+	},
 		Tool{
 			Definition: assistant.ClientTool{Name: "ordinary"},
 			Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
@@ -539,109 +530,37 @@ func TestToolSetNormalizeResult(t *testing.T) {
 	}
 }
 
-func TestToolSetApprovalModeGatesPolicyConsultation(t *testing.T) {
-	var policyCalls atomic.Int32
+// Approval reports the declared gates, whatever the mode: the tool's policy,
+// or the server-injected approval_request gate.
+func TestToolSetApprovalReportsDeclaredGates(t *testing.T) {
 	declaredGate := func(ToolCall) (ApprovalRequirement, bool) {
-		policyCalls.Add(1)
 		return ApprovalRequirement{
 			Key:    ApprovalKey{Tool: "write", Resource: "workspace"},
 			Prompt: ApprovalPrompt{Title: "Write record?"},
 		}, true
 	}
-	newSet := func(mode PermissionsMode) *ToolSet {
-		set, err := NewToolSet(mode,
-			Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }},
-			Tool{Definition: assistant.ClientTool{Name: "write"}, Approval: declaredGate, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }},
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return set
+	set, err := NewToolSet(
+		Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }},
+		Tool{Definition: assistant.ClientTool{Name: "write"}, Approval: declaredGate, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }},
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// In manual mode the declared gate is consulted and returned.
-	requirement, needs := newSet(ModeManual).Approval(ToolCall{Name: "write"})
-	if !needs || requirement.Prompt.Title != "Write record?" || requirement.Key.Tool != "write" {
-		t.Fatalf("manual Approval(write) = (%+v, %v), want the declared gate", requirement, needs)
+	if requirement, needs := set.Approval(ToolCall{Name: "write"}); !needs || requirement.Prompt.Title != "Write record?" || requirement.Key.Tool != "write" {
+		t.Fatalf("Approval(write) = (%+v, %v), want the declared gate", requirement, needs)
 	}
-	if got := policyCalls.Load(); got != 1 {
-		t.Fatalf("policy calls after manual consultation = %d, want 1", got)
-	}
-
-	// In skip-permissions mode the gate is suppressed without consulting the policy.
-	requirement, needs = newSet(ModeSkipPermissions).Approval(ToolCall{Name: "write"})
-	if needs {
-		t.Fatal("skip-permissions Approval(write) reported a gate")
-	}
-	if requirement != (ApprovalRequirement{}) {
-		t.Fatalf("skip-permissions Approval(write) = %+v, want a zero requirement", requirement)
-	}
-	if got := policyCalls.Load(); got != 1 {
-		t.Fatalf("policy calls after skip-permissions consultation = %d, want 1; the mode must suppress the gate without re-declaring it", got)
-	}
-
-	// Tools without a declared gate report none in both modes, as do calls to
-	// tools the set does not register. The server-injected approval_request is
-	// the one protocol-level exception: manual mode exposes it as an approval.
-	for _, mode := range []PermissionsMode{ModeSkipPermissions, ModeManual} {
-		set := newSet(mode)
-		if _, needs := set.Approval(ToolCall{Name: "read"}); needs {
-			t.Fatalf("%s Approval(read) reported a gate", mode)
-		}
-		if _, needs := set.Approval(ToolCall{Name: "unknown"}); needs {
-			t.Fatalf("%s Approval(unknown) reported a gate", mode)
+	for _, name := range []string{"read", "unknown"} {
+		if _, needs := set.Approval(ToolCall{Name: name}); needs {
+			t.Fatalf("Approval(%s) reported a gate", name)
 		}
 	}
-	requirement, needs = newSet(ModeManual).Approval(ToolCall{
+	requirement, needs := set.Approval(ToolCall{
 		ID:    "gate-1",
 		Name:  assistant.ApprovalRequestTool,
 		Input: `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1"}`,
 	})
 	if !needs || requirement.Key != (ApprovalKey{Tool: assistant.ApprovalRequestTool, Resource: "delete_dashboard"}) || requirement.Prompt.Title != `Allow the assistant to perform the "delete_dashboard" action?` || requirement.Prompt.Detail != "tool: delete_dashboard" {
-		t.Fatalf("manual Approval(approval_request) = (%+v, %v), want the server gate", requirement, needs)
-	}
-}
-
-func TestGateSnapshotGovernsOneGateEvaluation(t *testing.T) {
-	set, err := NewToolSet(ModeManual, Tool{
-		Definition: assistant.ClientTool{Name: "write"},
-		Approval: func(ToolCall) (ApprovalRequirement, bool) {
-			return ApprovalRequirement{Key: ApprovalKey{Tool: "write", Resource: "workspace"}}, true
-		},
-		Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	serverGate := ToolCall{
-		ID:    "gate-1",
-		Name:  assistant.ApprovalRequestTool,
-		Input: `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1"}`,
-	}
-
-	manual := set.snapshotPermissions()
-	if err := set.setPermissionsMode(ModeSkipPermissions); err != nil {
-		t.Fatal(err)
-	}
-	if manual.approvesServerGate() {
-		t.Fatal("manual snapshot approved the server gate after the set switched to skip-permissions")
-	}
-	if _, needs := manual.approval(serverGate); !needs {
-		t.Fatal("manual snapshot dropped the server-gate approval after the set switched to skip-permissions")
-	}
-	if _, needs := manual.approval(ToolCall{Name: "write"}); !needs {
-		t.Fatal("manual snapshot dropped the write-tool gate after the set switched to skip-permissions")
-	}
-
-	skip := set.snapshotPermissions()
-	if err := set.setPermissionsMode(ModeManual); err != nil {
-		t.Fatal(err)
-	}
-	if !skip.approvesServerGate() {
-		t.Fatal("skip-permissions snapshot denied the server gate after the set switched to manual")
-	}
-	if _, needs := skip.approval(ToolCall{Name: "write"}); needs {
-		t.Fatal("skip-permissions snapshot re-declared the write-tool gate after the set switched to manual")
+		t.Fatalf("Approval(approval_request) = (%+v, %v), want the server gate", requirement, needs)
 	}
 }
 
@@ -657,8 +576,7 @@ func TestEngineManualModeLeavesUngatedToolsUnblocked(t *testing.T) {
 		started <- call.Name
 		return ToolResult{Output: call.Name}, nil
 	}
-	tools, err := NewToolSet(ModeManual,
-		Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: handler},
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: handler},
 		Tool{Definition: assistant.ClientTool{Name: "write"}, Approval: gate, Handler: handler},
 	)
 	if err != nil {
@@ -668,7 +586,7 @@ func TestEngineManualModeLeavesUngatedToolsUnblocked(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := New(backend, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
+	events := turnEvents(engine, ctx, TurnInput{Message: "run both", Tools: tools})
 
 	// The ungated tool runs immediately, before any decision is made.
 	if name := receiveName(t, started); name != "read" {
@@ -695,16 +613,15 @@ func TestEngineSkipPermissionsSkipsApprovalGates(t *testing.T) {
 	rounds[0] = append(rounds[0], clientCallMsg("gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"gate-1"}`))
 	backend := &scriptBackend{rounds: rounds}
 	handler := func(_ context.Context, call ToolCall) (ToolResult, error) { return ToolResult{Output: call.Name}, nil }
-	tools, err := NewToolSet(ModeSkipPermissions,
-		Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: handler},
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: handler},
 		Tool{Definition: assistant.ClientTool{Name: "write"}, Approval: writeApproval, Handler: handler},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	events := drain(t, New(backend, Config{}), TurnInput{Message: "run all", Tools: tools})
-	if events[len(events)-1].Kind != EventTurnDone {
+	events := drain(t, New(backend, Config{PermissionsMode: ModeSkipPermissions}), TurnInput{Message: "run all", Tools: tools})
+	if events[len(events)-1].Kind != EventDone {
 		t.Fatalf("turn did not complete: %v", kinds(events))
 	}
 	for _, id := range []string{"call-read", "call-write", "gate-1"} {
@@ -729,8 +646,7 @@ func TestEngineParallelApprovalKeepsCallOrder(t *testing.T) {
 	approval := func(ToolCall) (ApprovalRequirement, bool) {
 		return ApprovalRequirement{Key: ApprovalKey{Tool: "shared", Resource: "workspace"}}, true
 	}
-	tools, err := NewToolSet(ModeManual,
-		Tool{Definition: assistant.ClientTool{Name: "a"}, Approval: approval, Handler: gatedHandler(started, finished, gates)},
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "a"}, Approval: approval, Handler: gatedHandler(started, finished, gates)},
 		Tool{Definition: assistant.ClientTool{Name: "b"}, Approval: approval, Handler: gatedHandler(started, finished, gates)},
 	)
 	if err != nil {
@@ -740,7 +656,7 @@ func TestEngineParallelApprovalKeepsCallOrder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := New(backend, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
+	events := turnEvents(engine, ctx, TurnInput{Message: "run both", Tools: tools})
 	waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
 	allowForSession(engine, "call-a")
 	receiveNames(t, started, 2)
@@ -756,60 +672,18 @@ func TestEngineParallelApprovalKeepsCallOrder(t *testing.T) {
 	}
 }
 
-func TestEngineCancelRunningTool(t *testing.T) {
-	backend := &scriptBackend{rounds: toolRounds("a", "b")}
-	started := make(chan string, 2)
-	gate := make(chan struct{})
-	tools, err := NewToolSet(ModeManual,
-		Tool{Definition: assistant.ClientTool{Name: "a"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
-			started <- "a"
-			<-ctx.Done()
-			return ToolResult{}, ctx.Err()
-		}},
-		Tool{Definition: assistant.ClientTool{Name: "b"}, Handler: func(context.Context, ToolCall) (ToolResult, error) {
-			started <- "b"
-			<-gate
-			return ToolResult{Output: "b"}, nil
-		}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	engine := New(backend, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
-	receiveNames(t, started, 2)
-	engine.CancelTool("call-a")
-	close(gate)
-	_ = collect(events)
-
-	batches := backend.responses()
-	if got := responseIDs(batches); got != "call-a,call-b" {
-		t.Fatalf("responses = %s", got)
-	}
-	if batches[0][0].Title != "Cancelled" || batches[0][0].Status != assistant.ToolStatusError {
-		t.Fatalf("cancelled response = %+v", batches[0][0])
-	}
-	if batches[0][1].Metadata.Output != "b" {
-		t.Fatalf("completed response = %+v", batches[0][1])
-	}
-}
-
 // StopTools answers every unresolved call in the round as cancelled, persists
 // that batch, and ends the turn without folding the backend's follow-up.
 func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
 	backend := &scriptBackend{rounds: toolRounds("run", "gated")}
 	started := make(chan struct{})
 	handlerErr := make(chan error, 1)
-	tools, err := NewToolSet(ModeManual,
-		Tool{Definition: assistant.ClientTool{Name: "run"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
-			close(started)
-			<-ctx.Done()
-			handlerErr <- ctx.Err()
-			return ToolResult{}, ctx.Err()
-		}},
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "run"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+		close(started)
+		<-ctx.Done()
+		handlerErr <- ctx.Err()
+		return ToolResult{}, ctx.Err()
+	}},
 		Tool{Definition: assistant.ClientTool{Name: "gated"}, Approval: func(ToolCall) (ApprovalRequirement, bool) {
 			return ApprovalRequirement{Key: ApprovalKey{Tool: "gated"}}, true
 		}, Handler: func(context.Context, ToolCall) (ToolResult, error) {
@@ -824,11 +698,11 @@ func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := New(backend, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
+	events := turnEvents(engine, ctx, TurnInput{Message: "run both", Tools: tools})
 	<-started
 	waitForToolStatus(t, events, "call-gated", ToolAwaitingApproval)
-	if !engine.StopTools() {
-		t.Fatal("StopTools was not accepted during an active round")
+	if err := engine.StopTools(); err != nil {
+		t.Fatalf("StopTools during an active round: %v", err)
 	}
 	rest := collect(events)
 
@@ -838,8 +712,8 @@ func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("turn only ended through its context (%v); StopTools must end it", err)
 	}
-	if len(rest) == 0 || rest[len(rest)-1].Kind != EventTurnDone {
-		t.Fatalf("stopped turn did not end with EventTurnDone: %+v", rest)
+	if len(rest) == 0 || rest[len(rest)-1].Kind != EventDone {
+		t.Fatalf("stopped turn did not end with EventDone: %+v", rest)
 	}
 	batches := backend.responses()
 	if len(backend.opts) != 2 || responseIDs(batches) != "call-run,call-gated" {
@@ -873,9 +747,9 @@ func gatedHandler(started, finished chan<- string, gates map[string]chan struct{
 }
 
 // allowForSession answers a parked call the way the modal's "Allow for
-// session" does: grant its key, then allow once.
+// session" does: the grant releases the call itself.
 func allowForSession(engine *Engine, id string) bool {
-	return engine.GrantSessionFor(id) && engine.Decide(id, ApprovalAllowOnce)
+	return engine.GrantSessionFor(id) == nil
 }
 
 func waitForToolStatus(t *testing.T, events <-chan Event, id string, status ToolStatus) {

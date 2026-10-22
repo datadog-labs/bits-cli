@@ -125,13 +125,14 @@ type Editor struct {
 	MenuHelp           lipgloss.Style
 }
 
-// Text exposes the palette's three foreground levels to components outside the
-// transcript. The levels are ordered by how much attention the text should
-// draw; see the palette for what each one is for.
+// Text exposes the palette's foreground levels and link treatment to components
+// outside the transcript. The levels are ordered by how much attention the
+// text should draw; see the palette for what each one is for.
 type Text struct {
 	Primary   lipgloss.Style
 	Secondary lipgloss.Style
 	Tertiary  lipgloss.Style
+	Link      lipgloss.Style
 }
 
 // Feedback contains shared progress and outcome roles.

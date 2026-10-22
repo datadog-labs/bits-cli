@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -165,13 +166,6 @@ func TestExecCommandApprovalShowsFinalCommandAndEffectiveWorkdir(t *testing.T) {
 	if strings.Contains(requirement.Prompt.Detail, "go test ./...") {
 		t.Fatalf("approval detail duplicates command input: %s", requirement.Prompt.Detail)
 	}
-	skipPermissions, err := agent.NewToolSet(agent.ModeSkipPermissions, tool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, needed := skipPermissions.Approval(agent.ToolCall{Name: spec.ExecCommand, Input: `{"cmd":"true"}`}); needed {
-		t.Fatal("skip-permissions did not suppress the exec command approval gate")
-	}
 }
 
 func TestExecCommandTranslatesEveryTerminalOutcome(t *testing.T) {
@@ -302,14 +296,14 @@ func TestExecCommandManualEngineDoesNotLaunchBeforeApproval(t *testing.T) {
 		preview: `{"cmd":"touch speculative"}`,
 		input:   `{"cmd":"true"}`,
 	}
-	set, err := agent.NewToolSet(agent.ModeManual, newExecCommandTool(t.TempDir(), runner))
+	set, err := agent.NewToolSet(newExecCommandTool(t.TempDir(), runner))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := agent.New(backend, agent.Config{})
-	events := engine.StartTurn(ctx, agent.TurnInput{Message: "run", Tools: set, OnDeny: agent.DenyContinue})
+	events := startTurn(t, engine, ctx, agent.TurnInput{Message: "run", Tools: set, OnDeny: agent.DenyContinue})
 
 	approved := false
 	for event := range events {
@@ -323,7 +317,7 @@ func TestExecCommandManualEngineDoesNotLaunchBeforeApproval(t *testing.T) {
 		if got := runner.requestCount(); got != 0 {
 			t.Fatalf("runner calls before approval = %d", got)
 		}
-		if !engine.Decide(pending[0].ToolCallID(), agent.ApprovalAllowOnce) {
+		if engine.Decide(pending[0].ToolCallID(), agent.ApprovalAllowOnce) != nil {
 			t.Fatal("approval decision was not accepted")
 		}
 		approved = true
@@ -348,20 +342,20 @@ func TestExecCommandManualEngineDoesNotLaunchBeforeApproval(t *testing.T) {
 func TestExecCommandDenialNeverLaunches(t *testing.T) {
 	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Reason: exectool.ExecSucceeded}}
 	backend := &execApprovalBackend{t: t, input: `{"cmd":"true"}`}
-	set, err := agent.NewToolSet(agent.ModeManual, newExecCommandTool(t.TempDir(), runner))
+	set, err := agent.NewToolSet(newExecCommandTool(t.TempDir(), runner))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := agent.New(backend, agent.Config{})
-	events := engine.StartTurn(ctx, agent.TurnInput{Message: "run", Tools: set, OnDeny: agent.DenyContinue})
+	events := startTurn(t, engine, ctx, agent.TurnInput{Message: "run", Tools: set, OnDeny: agent.DenyContinue})
 	denied := false
 	for event := range events {
 		if event.Kind != agent.EventTranscript || len(event.Transcript.PendingApprovals()) == 0 {
 			continue
 		}
-		if !engine.Decide("exec-1", agent.ApprovalDeny) {
+		if engine.Decide("exec-1", agent.ApprovalDeny) != nil {
 			t.Fatal("denial decision was not accepted")
 		}
 		denied = true
@@ -417,19 +411,19 @@ func TestExecCommandSessionGrantIsScopedToExactLaunchTuple(t *testing.T) {
 		t:      t,
 		inputs: []string{`{"cmd":"printf first"}`, `{"cmd":"printf second"}`},
 	}
-	set, err := agent.NewToolSet(agent.ModeManual, newExecCommandTool(t.TempDir(), runner))
+	set, err := agent.NewToolSet(newExecCommandTool(t.TempDir(), runner))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := agent.New(backend, agent.Config{})
-	events := engine.StartTurn(ctx, agent.TurnInput{Message: "run both", Tools: set, OnDeny: agent.DenyContinue})
+	events := startTurn(t, engine, ctx, agent.TurnInput{Message: "run both", Tools: set, OnDeny: agent.DenyContinue})
 
 	if !waitForExecApproval(t, events, "exec-1") {
 		t.Fatal("first command did not request approval")
 	}
-	if !engine.GrantSessionFor("exec-1") || !engine.Decide("exec-1", agent.ApprovalAllowOnce) {
+	if engine.GrantSessionFor("exec-1") != nil { // the grant releases the call
 		t.Fatal("session approval was not accepted")
 	}
 	if !waitForExecApproval(t, events, "exec-2") {
@@ -438,7 +432,7 @@ func TestExecCommandSessionGrantIsScopedToExactLaunchTuple(t *testing.T) {
 	if got := runner.requestCount(); got != 1 {
 		t.Fatalf("runner calls while second command awaits approval = %d, want 1", got)
 	}
-	if !engine.Decide("exec-2", agent.ApprovalAllowOnce) {
+	if engine.Decide("exec-2", agent.ApprovalAllowOnce) != nil {
 		t.Fatal("second approval was not accepted")
 	}
 	for range events {
@@ -448,7 +442,20 @@ func TestExecCommandSessionGrantIsScopedToExactLaunchTuple(t *testing.T) {
 	}
 }
 
-func waitForExecApproval(t *testing.T, events <-chan agent.Event, callID string) bool {
+// startTurn starts a turn and returns its run's events. Each range resumes
+// where the previous one stopped, and the last ends with the terminal event.
+func startTurn(t *testing.T, engine *agent.Engine, ctx context.Context, in agent.TurnInput) iter.Seq[agent.Event] {
+	t.Helper()
+	events, unsubscribe := engine.Subscribe()
+	t.Cleanup(unsubscribe)
+	run, err := engine.StartTurn(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return agent.Follow(events, run)
+}
+
+func waitForExecApproval(t *testing.T, events iter.Seq[agent.Event], callID string) bool {
 	t.Helper()
 	for event := range events {
 		if event.Kind != agent.EventTranscript {

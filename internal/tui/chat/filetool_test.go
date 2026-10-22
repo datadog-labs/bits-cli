@@ -31,7 +31,7 @@ func TestRenderEditorToolUsesLocalStructuredState(t *testing.T) {
 	})
 
 	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
-	for _, want := range []string{"edited", "f.go", "func old() {}", "func new() {}"} {
+	for _, want := range []string{"Edited", "f.go", "func old() {}", "func new() {}"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("render missing %q:\n%s", want, got)
 		}
@@ -58,7 +58,7 @@ func TestRenderEditorToolRestoresRawDisplay(t *testing.T) {
 	block := editorToolBlock("edit_file", display, nil)
 
 	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(false), 0))
-	for _, want := range []string{"edited", "f.txt", "before", "after"} {
+	for _, want := range []string{"Edited", "f.txt", "before", "after"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("restored render missing %q:\n%s", want, got)
 		}
@@ -72,7 +72,7 @@ func TestRenderEditorToolWithoutDiffFallsBackToGenericTool(t *testing.T) {
 		block.Tool.Output = "the tool returned an error"
 
 		got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(false), 0))
-		for _, want := range []string{"wrote", "f.txt", "not a unified diff"} {
+		for _, want := range []string{"Wrote", "f.txt", "not a unified diff"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("generic fallback missing %q:\n%s", want, got)
 			}
@@ -217,7 +217,7 @@ func TestRenderStreamingWriteUsesPathFromDiffState(t *testing.T) {
 	block.Tool.Status = agent.ToolRunning
 
 	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
-	if !strings.Contains(got, "writing f.txt") {
+	if !strings.Contains(got, "Writing f.txt") {
 		t.Fatalf("streaming write header = %q", got)
 	}
 	if strings.Contains(got, "writeing") || strings.Contains(got, "write_file") {
@@ -234,7 +234,7 @@ func TestRenderUnavailableChangeShowsReasonWhileAwaitingApproval(t *testing.T) {
 	block.Tool.Status = agent.ToolAwaitingApproval
 
 	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
-	for _, want := range []string{"writing binary.dat · awaiting approval", "binary file preview is unavailable"} {
+	for _, want := range []string{"Writing binary.dat · awaiting approval", "binary file preview is unavailable"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("awaiting unavailable change missing %q: %q", want, got)
 		}
