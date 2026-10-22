@@ -25,6 +25,10 @@ import (
 // See assistant.ParseCustomHeaders for the accepted syntax.
 const EnvCustomHeaders = "BITS_CUSTOM_HEADERS"
 
+// EnvRequiredResponseHeader requires a matching header before streamed output
+// is delivered. It uses the same name=value syntax as EnvCustomHeaders.
+const EnvRequiredResponseHeader = "BITS_REQUIRED_RESPONSE_HEADER"
+
 // ErrLoginRequired marks an OAuth state that an interactive caller may replace
 // by starting login. Noninteractive callers should surface the wrapped error
 // with guidance to run `bits login`.
@@ -102,11 +106,20 @@ func NewAuthenticatedClient(ctx context.Context, opts ClientOptions) (*assistant
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", EnvCustomHeaders, err)
 	}
+	var requiredName, requiredValue string
+	if raw := os.Getenv(EnvRequiredResponseHeader); raw != "" {
+		requiredName, requiredValue, err = assistant.ParseRequiredResponseHeader(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", EnvRequiredResponseHeader, err)
+		}
+	}
 	client, err := newClientForMode(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
 	client.CustomHeaders = custom
+	client.RequiredStreamHeaderName = requiredName
+	client.RequiredStreamHeaderValue = requiredValue
 	return client, nil
 }
 
