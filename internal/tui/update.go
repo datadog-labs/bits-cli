@@ -287,9 +287,13 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case engineEventMsg:
 		var cmd tea.Cmd
-		// Every run is an operation this model started, so other runs' events
-		// are ignored.
-		if m.op.run != 0 && msg.ev.Run == m.op.run {
+		// Background tasks belong to no run. Every run is an operation this
+		// model started, so other runs' events are ignored.
+		switch {
+		case msg.ev.Kind == agent.EventTasks:
+			m.tasks = msg.ev.Tasks
+			m.syncTranscript()
+		case m.op.run != 0 && msg.ev.Run == m.op.run:
 			cmd = m.applyRunEvent(msg.ev)
 		}
 		return m, tea.Batch(cmd, waitEvent(m.events))
@@ -1032,7 +1036,13 @@ func (m *Model) relayout() {
 	m.list.SetHeader(m.headerView())
 }
 
-// syncTranscript rebuilds presentation metadata after m.transcript changes.
+// syncTranscript rebuilds presentation metadata after m.transcript or m.tasks
+// change. Each task's blocks follow the conversation's.
 func (m *Model) syncTranscript() {
-	m.list.SetTranscript(m.transcript.Blocks, m.notices)
+	blocks := m.transcript.Blocks
+	for _, task := range m.tasks {
+		// The capped slice makes append copy rather than write into the snapshot.
+		blocks = append(blocks[:len(blocks):len(blocks)], task.Blocks...)
+	}
+	m.list.SetTranscript(blocks, m.notices)
 }

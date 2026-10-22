@@ -116,6 +116,33 @@ func TestChatFooterRendersBelowEditor(t *testing.T) {
 	}
 }
 
+func TestRunningTaskShowsInFooterAndItsUpdatesInTranscript(t *testing.T) {
+	m := New(agent.New(&spyBackend{t: t}, agent.Config{}), Config{})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	update := agent.Block{
+		ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "u1", Kind: assistant.KindProgress}, Role: assistant.RoleAssistant,
+		Kind: assistant.KindProgress, Complete: true, Progress: &assistant.ProgressPayload{Content: "Gathering **signals**"},
+	}
+	task := agent.Task{ID: "assistant-task.1", Name: "Why 500s", Status: agent.TaskRunning, Blocks: []agent.Block{update}}
+	m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventTasks, Tasks: []agent.Task{task}}})
+
+	view := strings.Split(ansi.Strip(m.chatView()), "\n")
+	if footer := view[len(view)-1]; !strings.Contains(footer, "task running: Why 500s") {
+		t.Errorf("footer = %q", footer)
+	}
+	if !slices.ContainsFunc(view, func(row string) bool {
+		return strings.HasPrefix(row, "│") && strings.Contains(row, "Gathering signals")
+	}) {
+		t.Errorf("view has no quoted update:\n%s", strings.Join(view, "\n"))
+	}
+
+	task.Status = agent.TaskDone
+	m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventTasks, Tasks: []agent.Task{task}}})
+	if view := ansi.Strip(m.chatView()); strings.Contains(view, "task running") {
+		t.Error("footer still shows a finished task")
+	}
+}
+
 func TestChatFooterTextIsSafeAndWidthBounded(t *testing.T) {
 	usage := &assistant.Usage{TokensUsed: 330_000}
 	for _, width := range []int{1, 8, 24, 80} {

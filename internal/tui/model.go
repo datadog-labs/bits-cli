@@ -186,6 +186,8 @@ type Model struct {
 
 	// transcript is the latest snapshot of the engine's aggregated transcript.
 	transcript agent.TranscriptSnapshot
+	// tasks are the conversation's background tasks, from EventTasks.
+	tasks []agent.Task
 
 	// op is the one exclusive session operation; see operation.
 	op operation

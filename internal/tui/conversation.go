@@ -40,6 +40,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	m.conversationEpoch++
 	m.selection.clear()
 	m.transcript = agent.TranscriptSnapshot{}
+	m.tasks = nil
 	m.list.Reset()
 	m.convID = ""
 	m.usage = nil

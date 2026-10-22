@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"image"
 	"os"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
@@ -319,11 +321,40 @@ func (m *Model) promptPlaceholder() string {
 func (m *Model) chatFooter() string {
 	width := max(1, m.list.Width())
 	indent := min(m.editor.ContentOffset(), max(0, width-1))
-	text := chatFooterText(m.workspaceDisplayPath, m.usage, max(1, width-indent))
+	width = max(1, width-indent)
+	text := chatFooterText(m.workspaceDisplayPath, m.usage, width)
+	if task := runningTaskText(m.tasks); task != "" {
+		if text != "" {
+			task += " · " + text
+		}
+		text = ansi.Truncate(task, width, "…")
+	}
 	if text == "" {
 		return ""
 	}
 	return strings.Repeat(" ", indent) + m.styles.Text.Tertiary.Render(text)
+}
+
+// runningTaskText names the running background tasks, or returns "".
+func runningTaskText(tasks []agent.Task) string {
+	var running []agent.Task
+	for _, task := range tasks {
+		if task.Status == agent.TaskRunning {
+			running = append(running, task)
+		}
+	}
+	switch len(running) {
+	case 0:
+		return ""
+	case 1:
+		text := "task running: " + escape.SingleLine(cmp.Or(running[0].Name, running[0].ID))
+		if running[0].Connection == agent.TaskReconnecting {
+			text += " (reconnecting)"
+		}
+		return text
+	default:
+		return strconv.Itoa(len(running)) + " tasks running"
+	}
 }
 
 func chatFooterText(path string, usage *assistant.Usage, width int) string {
