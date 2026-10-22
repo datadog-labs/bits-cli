@@ -95,7 +95,7 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 	if err != nil {
 		return nil, err
 	}
-	clientTools = append(clientTools, tools.NewAskUserQuestionTool(toolUI))
+	clientTools = append(clientTools, tools.NewAskUserQuestionTool(toolUI), tools.NewHandoffTool())
 	toolSet, err := agent.NewToolSet(clientTools...)
 	if err != nil {
 		return nil, err
