@@ -146,6 +146,10 @@ var (
 		group:  skillGroupKey,
 		action: toolAction{base: "Load", active: "Loading", success: "Loaded", failure: "Load failed"},
 	}
+	handoffToolRenderSpec = &toolRenderSpec{
+		render: renderSimpleTool,
+		action: toolAction{base: "Continue in terminal", active: "Continuing in terminal", success: "Continued in terminal", failure: "Handoff failed"},
+	}
 )
 
 type summarySpan struct {
@@ -274,6 +278,14 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			p.argument = "skill " + escape.Inline(in.SkillName)
 		}
 		p.validInput = true
+	case spec.ClientHandoff:
+		var in struct {
+			Reason string `json:"reason"`
+		}
+		if decodeObject(input, &in) && in.Reason != "" {
+			p.argument = "Reason: " + escape.Inline(in.Reason)
+		}
+		p.validInput = true
 	default:
 		p.argument, p.validInput = compactInput(input), true
 	}
@@ -304,6 +316,8 @@ func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 		return waitForAgentsRenderSpec
 	case spec.ServerSkill:
 		return skillToolRenderSpec
+	case spec.ClientHandoff:
+		return handoffToolRenderSpec
 	default:
 		if !id.ClientSide {
 			return serverToolRenderSpec

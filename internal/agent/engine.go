@@ -659,6 +659,8 @@ func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []Too
 	case len(resumed) == 0:
 		opts.Context = sentContext
 		request, err = e.prepare(ctx, in, opts, delivery, resizeNotice(imageNotices))
+	case in.Tools.needsContextOnResume(resumed):
+		request, err = e.prepare(ctx, TurnInput{}, opts, delivery, "")
 	default:
 		request, err = e.prepareResume(ctx, opts, delivery)
 	}

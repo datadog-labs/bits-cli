@@ -483,6 +483,82 @@ func TestClientSkillsDeferredUntilUserMessageAfterToolResume(t *testing.T) {
 	}
 }
 
+func TestContextOnResumeSendsLocalContextWithToolAnswer(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	writeSkill(t, dir, ".agents/skills/example", "example", "example description")
+	writeInstructionTestFile(t, dir, "AGENTS.md", "local instructions")
+	tools, err := NewToolSet(Tool{
+		Definition: assistant.ClientTool{Name: "handoff"}, Resumable: true, ContextOnResume: true,
+		Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &scriptBackend{rounds: [][]assistant.Message{
+		{textMsg("resumed", "continuing")},
+		{textMsg("next", "done")},
+	}}
+	renders := 0
+	engine := New(backend, Config{
+		PermissionsMode:     ModeSkipPermissions,
+		ConversationID:      "conversation",
+		ClientSkills:        env.NewSkills(dir, nil),
+		ProjectInstructions: env.NewInstructions(dir),
+		UserContext: func(context.Context) string {
+			renders++
+			return "environment"
+		},
+	})
+	engine.continuation = continuationFromHistory([]assistant.Message{clientCallMsg("one", "handoff", `{}`)})
+	collect(resumeEvents(engine, t.Context(), TurnInput{Tools: tools}))
+	if len(backend.responses()) != 1 {
+		t.Fatalf("resumed answers = %+v", backend.responses())
+	}
+	resumed := backend.last().CustomUserContext
+	if renders != 1 || !strings.HasPrefix(resumed, "environment\n\n") || !strings.Contains(resumed, "local instructions") || !strings.Contains(resumed, "example description") {
+		t.Fatalf("resumed context = %q, want environment, project instructions, and skills catalog", resumed)
+	}
+
+	drain(t, engine, TurnInput{Message: "continue", Tools: tools})
+	next := backend.last().CustomUserContext
+	if renders != 2 || strings.Contains(next, "environment") || strings.Contains(next, "local instructions") || !strings.Contains(next, "example description") {
+		t.Fatalf("next turn context = %q", next)
+	}
+}
+
+func TestHiddenResumableToolIsNotAdvertised(t *testing.T) {
+	ran := false
+	set, err := NewToolSet(
+		Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil }},
+		Tool{Definition: assistant.ClientTool{Name: "handoff"}, Resumable: true, Hidden: true, Handler: func(context.Context, ToolCall) (ToolResult, error) {
+			ran = true
+			return ToolResult{Output: "ok"}, nil
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defs := set.Definitions(); len(defs) != 1 || defs[0].Name != "read" {
+		t.Fatalf("definitions = %+v, want only read", defs)
+	}
+	backend := &scriptBackend{}
+	e := New(backend, Config{ConversationID: "conversation"})
+	e.continuation = continuationFromHistory([]assistant.Message{clientCallMsg("one", "handoff", `{}`)})
+	if !e.CanResumeTools(set) {
+		t.Fatal("resume-only tool is not resumable")
+	}
+	collect(resumeEvents(e, t.Context(), TurnInput{Tools: set}))
+	if !ran {
+		t.Fatal("resume-only handler did not run")
+	}
+	for _, def := range backend.last().ClientTools {
+		if def.Name == "handoff" {
+			t.Fatalf("resumed request advertised the resume-only tool: %+v", backend.last().ClientTools)
+		}
+	}
+}
+
 func TestSkillRegistrySharedByMenuAndCatalog(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()

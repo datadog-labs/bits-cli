@@ -73,11 +73,16 @@ func ClearRenderState() *RenderStateUpdate {
 type Tool struct {
 	// Resumable opts a handler into restarting an unanswered call from history.
 	// Only handlers safe to restart without repeating side effects should opt in.
-	Resumable    bool
-	Definition   assistant.ClientTool
-	Handler      ToolHandler
-	Approval     ApprovalPolicy
-	InputReducer ToolInputReducer
+	Resumable bool
+	// ContextOnResume sends local environment and skills context with the
+	// first response to a restored call. Use for cross-surface handoffs.
+	ContextOnResume bool
+	Definition      assistant.ClientTool
+	Handler         ToolHandler
+	Approval        ApprovalPolicy
+	InputReducer    ToolInputReducer
+	// Hidden registers the handler without advertising the tool to the model.
+	Hidden bool
 }
 
 // ToolSet is an immutable registry of client tools. Tools declare their
@@ -88,10 +93,11 @@ type ToolSet struct {
 }
 
 type registeredTool struct {
-	resumable    bool
-	handler      ToolHandler
-	approval     ApprovalPolicy
-	inputReducer ToolInputReducer
+	resumable       bool
+	contextOnResume bool
+	handler         ToolHandler
+	approval        ApprovalPolicy
+	inputReducer    ToolInputReducer
 }
 
 func NewToolSet(tools ...Tool) (*ToolSet, error) {
@@ -116,8 +122,10 @@ func NewToolSet(tools ...Tool) (*ToolSet, error) {
 		definition := tool.Definition
 		// Reducers consume provisional input; opt in only their owning tool.
 		definition.StreamInput = definition.StreamInput || tool.InputReducer != nil
-		set.definitions = append(set.definitions, definition)
-		set.tools[name] = registeredTool{resumable: tool.Resumable, handler: tool.Handler, approval: tool.Approval, inputReducer: tool.InputReducer}
+		if !tool.Hidden {
+			set.definitions = append(set.definitions, definition)
+		}
+		set.tools[name] = registeredTool{resumable: tool.Resumable, contextOnResume: tool.ContextOnResume, handler: tool.Handler, approval: tool.Approval, inputReducer: tool.InputReducer}
 	}
 	return set, nil
 }
@@ -165,6 +173,18 @@ func (s *ToolSet) Has(name string) bool {
 	}
 	_, ok := s.tools[name]
 	return ok
+}
+
+func (s *ToolSet) needsContextOnResume(calls []ToolCall) bool {
+	if s == nil {
+		return false
+	}
+	for _, call := range calls {
+		if s.tools[call.Name].contextOnResume {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ToolSet) Run(ctx context.Context, call ToolCall) (ToolResult, error) {

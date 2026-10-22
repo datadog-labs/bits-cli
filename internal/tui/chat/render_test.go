@@ -592,6 +592,21 @@ func TestSubagentToolSummaries(t *testing.T) {
 	}
 }
 
+func TestHandoffToolSummary(t *testing.T) {
+	for _, test := range []struct {
+		input, want string
+	}{
+		{`{"reason":"Applying this fix needs your local repository."}`, "Continued in terminal Reason: Applying this fix needs your local repository."},
+		{`{}`, "Continued in terminal"},
+	} {
+		block := agent.Block{Kind: assistant.KindToolCall, Tool: &agent.ToolBlock{Name: "bits_cli_handoff", IsClientSide: true, Input: test.input, Status: agent.ToolSuccess}}
+		got := ansi.Strip(RenderBlock(block, 100, DefaultStyles(true), 0))
+		if !strings.Contains(got, test.want) || strings.Contains(got, "bits_cli_handoff") {
+			t.Fatalf("rendered %q, want %q", got, test.want)
+		}
+	}
+}
+
 func TestSubagentDecorationRequiresExactServerIdentity(t *testing.T) {
 	for _, tool := range []*agent.ToolBlock{
 		{Name: "spawn_agent", IsClientSide: true},
