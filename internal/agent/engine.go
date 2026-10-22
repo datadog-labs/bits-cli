@@ -445,28 +445,30 @@ func (e *Engine) run(
 		send(Event{Kind: EventError, Err: imageErr})
 		return
 	}
-	var user *userRequest
+	var request userRequest
+	var err error
 	if len(resumed) == 0 {
-		prepared, err := e.prepare(ctx, in, sentContext, resizeNotice(imageNotices))
-		if err != nil {
-			send(Event{Kind: EventError, Err: err})
-			return
-		}
-		e.delivery.pending(prepared)
-		user = &prepared
+		request, err = e.prepare(ctx, in, sentContext, resizeNotice(imageNotices))
+	} else {
+		request, err = e.prepareResume(ctx, in.Tools)
 	}
+	if err != nil {
+		send(Event{Kind: EventError, Err: err})
+		return
+	}
+	e.delivery.pending(request)
 
 	t := &turn{
 		e:          e,
 		generation: generation,
 		tools:      in.Tools,
-		ex:         e.newExchange(user, resumed, in.Tools),
-		user:       user,
+		ex:         e.newExchange(request, resumed),
+		request:    &request,
 		onDeny:     in.OnDeny,
 		send:       send,
 		round:      1,
 	}
-	err := t.drive(ctx)
+	err = t.drive(ctx)
 	if ctx.Err() != nil && (err == nil || errors.Is(err, ctx.Err())) {
 		return // cancelled: end the turn quietly
 	}
@@ -489,20 +491,20 @@ func (e *Engine) run(
 }
 
 // newExchange uses a duplex stream when the backend supports this user request;
-// otherwise it uses request rounds.
-func (e *Engine) newExchange(user *userRequest, resumed []ToolCall, tools *ToolSet) exchange {
-	if user == nil {
-		return newRoundsExchange(e.backend, nil, e.sendOptions(tools), resumed)
+// otherwise, and to answer resumed calls, it uses request rounds.
+func (e *Engine) newExchange(req userRequest, resumed []ToolCall) exchange {
+	if len(resumed) > 0 {
+		return newRoundsExchange(e.backend, nil, req.opts, resumed)
 	}
 	if backend, ok := e.backend.(DuplexBackend); ok {
 		selector, selective := backend.(interface {
 			CanStream(string, assistant.SendOptions) bool
 		})
-		if !selective || selector.CanStream(user.message, user.opts) {
-			return &streamExchange{backend: backend, message: user.message, opts: user.opts}
+		if !selective || selector.CanStream(req.message, req.opts) {
+			return &streamExchange{backend: backend, message: req.message, opts: req.opts}
 		}
 	}
-	return newRoundsExchange(e.backend, user.message, user.opts, nil)
+	return newRoundsExchange(e.backend, req.message, req.opts, nil)
 }
 
 // settleUnfinishedTools cancels open client tool blocks starting at the given
@@ -708,7 +710,7 @@ type turn struct {
 	stopHandlers context.CancelFunc
 	tools        *ToolSet
 	ex           exchange
-	user         *userRequest // acknowledged on first response or request success
+	request      *userRequest // acknowledged on first response or request success
 	onDeny       DenyPolicy
 	send         func(Event) bool
 	round        int
@@ -901,9 +903,9 @@ func (t *turn) adopt(conversation string) {
 // acknowledge records the user request as delivered after a backend response
 // or a successful request with no response.
 func (t *turn) acknowledge() {
-	if t.user != nil {
-		t.e.delivery.delivered(*t.user)
-		t.user = nil
+	if t.request != nil {
+		t.e.delivery.delivered(*t.request)
+		t.request = nil
 	}
 }
 
@@ -942,7 +944,7 @@ func (t *turn) dispatch(c *clientCall) bool {
 
 func (t *turn) handleCommand(command toolCommand) bool {
 	if command.stop {
-		t.stopRequested = true
+		t.requestStop()
 		t.stopCalls(nil, nil)
 		return true
 	}
@@ -1073,13 +1075,21 @@ func (t *turn) deny(c *clientCall, result ToolResult) bool {
 	if t.onDeny != DenyStop {
 		return true
 	}
-	t.stopRequested = true
+	t.requestStop()
 	for _, sibling := range t.calls {
 		if sibling.status == callAwaitingApproval && !t.resolve(sibling, cancelledResult()) {
 			return false
 		}
 	}
 	return true
+}
+
+// requestStop makes the remaining requests only release the backend. Their
+// replies are hidden, so the pending request is not delivered by them.
+func (t *turn) requestStop() {
+	t.stopRequested = true
+	t.request = nil
+	t.ex.stop()
 }
 
 // stopCalls cancels every handler and answers each unresolved call as

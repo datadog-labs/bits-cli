@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
@@ -53,12 +54,27 @@ func TestResumedToolsDoNotResendTheTurnContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dir := t.TempDir()
+	writeInstructionTestFile(t, dir, "AGENTS.md", "local instructions")
 	backend := &scriptBackend{}
-	e := New(backend, Config{PermissionsMode: ModeSkipPermissions, ConversationID: "conversation"})
+	e := New(backend, Config{
+		PermissionsMode:     ModeSkipPermissions,
+		ConversationID:      "conversation",
+		ProjectInstructions: env.NewInstructions(dir),
+		UserContext:         func(context.Context) string { return "environment" },
+	})
 	e.continuation = continuationFromHistory([]assistant.Message{user, clientCallMsg("one", "input", `{}`)})
 	collect(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
 	if got := backend.last().Context; got != nil {
 		t.Fatalf("resumed tool answers carried context %+v", got)
+	}
+	// The restored conversation may carry outdated instructions.
+	got := backend.last().CustomUserContext
+	if !strings.HasPrefix(got, instructionsReplacementNotice) || !strings.Contains(got, "local instructions") || strings.Contains(got, "environment") {
+		t.Fatalf("resumed tool answers carried user context %q", got)
+	}
+	if !e.delivery.instructionsDelivered {
+		t.Fatal("delivered instructions are still pending")
 	}
 }
 
@@ -94,6 +110,9 @@ func TestStoppingAResumedRoundDrainsWithoutInstructionsOrContext(t *testing.T) {
 	}
 	if backend.last().CustomUserContext != "" || backend.last().Context != nil {
 		t.Fatalf("drain carried user context %q and context %+v", backend.last().CustomUserContext, backend.last().Context)
+	}
+	if e.delivery.instructionsDelivered {
+		t.Fatal("instructions the drain withheld were recorded as delivered")
 	}
 }
 

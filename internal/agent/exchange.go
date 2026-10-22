@@ -24,11 +24,13 @@ type DuplexBackend interface {
 // false when the turn stops listening, and is safe for concurrent use. answer
 // submits an executed call's result without blocking; it is called only after
 // run emits that call. final reports whether ending the exchange makes every
-// streamed tool terminal.
+// streamed tool terminal. stop reports that the turn is stopping, so later
+// requests only release the backend.
 type exchange interface {
 	run(ctx context.Context, emit func(exchangeEvent) bool) (conversation string, err error)
 	answer(assistant.ClientToolResponse)
 	final() bool
+	stop()
 }
 
 // exchangeEvent is one backend fact, applied field by field. Only execute
@@ -59,6 +61,7 @@ type roundsExchange struct {
 
 	mu       sync.Mutex
 	answered []assistant.ClientToolResponse
+	stopped  bool
 	ready    chan struct{}
 }
 
@@ -73,18 +76,24 @@ func (x *roundsExchange) run(ctx context.Context, emit func(exchangeEvent) bool)
 			return opts.ConversationID, ctx.Err()
 		}
 		if calls == nil {
+			x.mu.Lock()
+			if x.stopped {
+				// The pending context waits for a request whose reply is shown.
+				opts.Context, opts.CustomUserContext = nil, ""
+			}
+			x.mu.Unlock()
 			var err error
 			if calls, err = x.send(ctx, message, &opts, emit); err != nil || len(calls) == 0 {
 				return opts.ConversationID, err
 			}
+			// Only the turn's first request carries its context.
+			opts.Context, opts.CustomUserContext = nil, ""
 		}
 		answers, err := x.collect(ctx, calls, emit)
 		if err != nil {
 			return opts.ConversationID, err
 		}
-		// Only the user message carries the turn's context.
 		message, calls = answers, nil
-		opts.Context, opts.CustomUserContext = nil, ""
 	}
 	return opts.ConversationID, ErrMaxTurns
 }
@@ -148,6 +157,12 @@ func (x *roundsExchange) collect(ctx context.Context, calls []ToolCall, emit fun
 // request, so ending request rounds does not settle it.
 func (x *roundsExchange) final() bool { return false }
 
+func (x *roundsExchange) stop() {
+	x.mu.Lock()
+	x.stopped = true
+	x.mu.Unlock()
+}
+
 func (x *roundsExchange) answer(response assistant.ClientToolResponse) {
 	x.mu.Lock()
 	x.answered = append(x.answered, response)
@@ -201,6 +216,9 @@ func (x *streamExchange) run(ctx context.Context, emit func(exchangeEvent) bool)
 
 // The stream ends with the run, so its unfinished tools cannot report again.
 func (x *streamExchange) final() bool { return true }
+
+// The stream's only request opened it, so a stop has no request to change.
+func (x *streamExchange) stop() {}
 
 func (x *streamExchange) answer(response assistant.ClientToolResponse) {
 	go func() {

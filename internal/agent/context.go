@@ -68,18 +68,11 @@ func (e *Engine) prepare(ctx context.Context, in TurnInput, attached *assistant.
 		}
 	}
 	parts := []string{req.userContext, imageNotice}
-	if e.instructions != nil && !e.delivery.instructionsDelivered {
-		req.instructions = e.delivery.instructions
-		if req.instructions == nil {
-			update := e.instructions.Snapshot(ctx)
-			if err := ctx.Err(); err != nil {
-				return req, err
-			}
-			if resumed {
-				update = env.ReplaceInstructions(update)
-			}
-			req.instructions = &update
-		}
+	var err error
+	if req.instructions, err = e.pendingInstructions(ctx); err != nil {
+		return req, err
+	}
+	if req.instructions != nil {
 		parts = append(parts, *req.instructions)
 	}
 	if e.clientSkills != nil {
@@ -103,6 +96,41 @@ func (e *Engine) prepare(ctx context.Context, in TurnInput, attached *assistant.
 	parts = slices.DeleteFunc(parts, func(part string) bool { return part == "" })
 	req.opts.CustomUserContext = strings.Join(parts, "\n\n")
 	return req, nil
+}
+
+// prepareResume builds the answer to restored tool calls. It carries the
+// pending project instructions, since the restored conversation may hold
+// outdated ones or another project's. The rest of the context belongs to a
+// user message.
+func (e *Engine) prepareResume(ctx context.Context, tools *ToolSet) (userRequest, error) {
+	req := userRequest{opts: e.sendOptions(tools)}
+	var err error
+	if req.instructions, err = e.pendingInstructions(ctx); err != nil {
+		return req, err
+	}
+	if req.instructions != nil {
+		req.opts.CustomUserContext = *req.instructions
+	}
+	return req, nil
+}
+
+// pendingInstructions returns the project instructions update the
+// conversation still needs, or nil once delivered.
+func (e *Engine) pendingInstructions(ctx context.Context) (*string, error) {
+	if e.instructions == nil || e.delivery.instructionsDelivered {
+		return nil, nil
+	}
+	if e.delivery.instructions != nil {
+		return e.delivery.instructions, nil
+	}
+	update := e.instructions.Snapshot(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if e.opts.ConversationID != "" {
+		update = env.ReplaceInstructions(update)
+	}
+	return &update, nil
 }
 
 // SkillSummary is presentation metadata exposed to completion clients.
