@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -175,29 +174,30 @@ func TestEngineApprovalScope(t *testing.T) {
 			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools, OnDeny: DenyStop})
 			decisions := 0
 			var all []Event
+			// A switch or a grant releases the parked call itself, as in the modal.
 			decide := func(id string) {
-				if tt.switchTo != "" {
-					if err := engine.SetPermissionsMode(tt.switchTo); err != nil {
-						t.Fatal(err)
-					}
+				var err error
+				switch {
+				case tt.switchTo != "":
+					err = engine.SetPermissionsMode(tt.switchTo)
+				case tt.grantSession:
+					err = engine.GrantSessionFor(id)
+				default:
+					err = engine.Decide(id, tt.decision)
 				}
-				queued := false
-				if tt.grantSession {
-					queued = allowForSession(engine, id)
-				} else {
-					queued = engine.Decide(id, tt.decision)
-				}
-				if !queued {
-					t.Fatalf("decision for %q was not queued", id)
+				if err != nil {
+					t.Fatalf("decision for %q: %v", id, err)
 				}
 				decisions++
 			}
 
-			all = append(all, waitForToolStatusEvents(t, events, "call-a", ToolAwaitingApproval)...)
+			// With per-call keys, wait for the sibling to park too, after call-a,
+			// so the decision has to release it.
+			parked := "call-a"
 			if tt.perCallKey {
-				// Park the sibling too, so the decision has to release it.
-				all = append(all, waitForToolStatusEvents(t, events, "call-b", ToolAwaitingApproval)...)
+				parked = "call-b"
 			}
+			all = append(all, waitForToolStatusEvents(t, events, parked, ToolAwaitingApproval)...)
 			decide("call-a")
 			if tt.decision == ApprovalAllowOnce && !tt.grantSession && tt.switchTo == "" {
 				beforeACompleted := waitForToolStatusEvents(t, events, "call-a", ToolSuccess)
@@ -273,14 +273,9 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 		t.Run(string(tt.mode), func(t *testing.T) {
 			backend := &scriptBackend{rounds: writeRounds()}
 			release := make(chan struct{})
-			gating, switched := make(chan struct{}), make(chan struct{})
-			var pause sync.Once
 			tools, err := NewToolSet(Tool{
 				Definition: assistant.ClientTool{Name: "write"},
-				Approval: func(call ToolCall) (ApprovalRequirement, bool) {
-					if call.ID == "call-c" {
-						pause.Do(func() { close(gating); <-switched })
-					}
+				Approval: func(ToolCall) (ApprovalRequirement, bool) {
 					return ApprovalRequirement{
 						Key:    ApprovalKey{Tool: "write", Resource: "workspace"},
 						Prompt: ApprovalPrompt{Title: "Write record?"},
@@ -303,27 +298,27 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools})
 			waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
 			if !allowForSession(engine, "call-a") {
-				t.Fatal("decision for call-a was not queued")
+				t.Fatal("decision for call-a was not applied")
 			}
 			waitForToolStatus(t, events, "call-b", ToolRunning)
-			if engine.GrantSessionFor("call-b") {
+			if engine.GrantSessionFor("call-b") == nil {
 				t.Fatal("granted for call-b while it runs")
 			}
-			close(release)
-			<-gating
+			// Switch while call-b runs, so call-c, in the next round, is gated
+			// under the new mode.
 			if err := engine.SetPermissionsMode(tt.mode); err != nil {
 				t.Fatal(err)
 			}
-			close(switched)
+			close(release)
 
 			waitForToolStatus(t, events, "call-c", tt.callC)
-			if tt.callC == ToolAwaitingApproval && !engine.Decide("call-c", ApprovalAllowOnce) {
-				t.Fatal("decision for call-c was not queued")
+			if tt.callC == ToolAwaitingApproval && engine.Decide("call-c", ApprovalAllowOnce) != nil {
+				t.Fatal("decision for call-c was not applied")
 			}
 			if all := collect(events); len(all) == 0 || all[len(all)-1].Kind != EventTurnDone {
 				t.Fatalf("turn did not complete: %v", kinds(all))
 			}
-			if engine.GrantSessionFor("call-c") {
+			if engine.GrantSessionFor("call-c") == nil {
 				t.Fatal("granted for call-c after its turn ended")
 			}
 		})
@@ -349,7 +344,7 @@ func TestEngineAbortedRoundUnparksItsCalls(t *testing.T) {
 	waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
 	cancel()
 	collect(events)
-	if engine.GrantSessionFor("call-a") {
+	if engine.GrantSessionFor("call-a") == nil {
 		t.Fatal("granted for call-a after its turn was cancelled")
 	}
 }
@@ -677,46 +672,6 @@ func TestEngineParallelApprovalKeepsCallOrder(t *testing.T) {
 	}
 }
 
-func TestEngineCancelRunningTool(t *testing.T) {
-	backend := &scriptBackend{rounds: toolRounds("a", "b")}
-	started := make(chan string, 2)
-	gate := make(chan struct{})
-	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "a"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
-		started <- "a"
-		<-ctx.Done()
-		return ToolResult{}, ctx.Err()
-	}},
-		Tool{Definition: assistant.ClientTool{Name: "b"}, Handler: func(context.Context, ToolCall) (ToolResult, error) {
-			started <- "b"
-			<-gate
-			return ToolResult{Output: "b"}, nil
-		}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	engine := New(backend, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
-	receiveNames(t, started, 2)
-	engine.CancelTool("call-a")
-	close(gate)
-	_ = collect(events)
-
-	batches := backend.responses()
-	if got := responseIDs(batches); got != "call-a,call-b" {
-		t.Fatalf("responses = %s", got)
-	}
-	if batches[0][0].Title != "Cancelled" || batches[0][0].Status != assistant.ToolStatusError {
-		t.Fatalf("cancelled response = %+v", batches[0][0])
-	}
-	if batches[0][1].Metadata.Output != "b" {
-		t.Fatalf("completed response = %+v", batches[0][1])
-	}
-}
-
 // StopTools answers every unresolved call in the round as cancelled, persists
 // that batch, and ends the turn without folding the backend's follow-up.
 func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
@@ -746,8 +701,8 @@ func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
 	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
 	<-started
 	waitForToolStatus(t, events, "call-gated", ToolAwaitingApproval)
-	if !engine.StopTools() {
-		t.Fatal("StopTools was not accepted during an active round")
+	if err := engine.StopTools(); err != nil {
+		t.Fatalf("StopTools during an active round: %v", err)
 	}
 	rest := collect(events)
 
@@ -792,9 +747,9 @@ func gatedHandler(started, finished chan<- string, gates map[string]chan struct{
 }
 
 // allowForSession answers a parked call the way the modal's "Allow for
-// session" does: grant its key, then allow once.
+// session" does: the grant releases the call itself.
 func allowForSession(engine *Engine, id string) bool {
-	return engine.GrantSessionFor(id) && engine.Decide(id, ApprovalAllowOnce)
+	return engine.GrantSessionFor(id) == nil
 }
 
 func waitForToolStatus(t *testing.T, events <-chan Event, id string, status ToolStatus) {

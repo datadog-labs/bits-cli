@@ -175,6 +175,7 @@ func runRunWithStore(ctx context.Context, opts RunOptions, store auth.Credential
 	if err != nil {
 		return err
 	}
+	defer engine.Close()
 	return runEngineTurn(ctx, engine, agent.TurnInput{Tools: toolSet, Context: opts.Context}, opts, out)
 }
 

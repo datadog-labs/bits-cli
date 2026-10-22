@@ -109,7 +109,15 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 			return auth.Logout(logoutCtx, store, nil)
 		},
 	}
-	engine, err := newEngine(ctx, opts, workspace, store)
+	// An engine lives as long as the chat: runChat cancels ctx on every exit
+	// path, including logout and errors, which closes it.
+	bound := func(engine *agent.Engine, err error) (*agent.Engine, error) {
+		if err == nil {
+			context.AfterFunc(ctx, engine.Close)
+		}
+		return engine, err
+	}
+	engine, err := bound(newEngine(ctx, opts, workspace, store))
 	if err == nil {
 		return tui.New(engine, config), nil
 	}
@@ -134,6 +142,6 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		return loginErr
 	})
 	return tui.NewWithLogin(ctx, loginModel, func(factoryCtx context.Context) (*agent.Engine, error) {
-		return newEngine(factoryCtx, opts, workspace, store)
+		return bound(newEngine(factoryCtx, opts, workspace, store))
 	}, config), nil
 }

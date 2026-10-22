@@ -316,7 +316,7 @@ func TestExecCommandManualEngineDoesNotLaunchBeforeApproval(t *testing.T) {
 		if got := runner.requestCount(); got != 0 {
 			t.Fatalf("runner calls before approval = %d", got)
 		}
-		if !engine.Decide(pending[0].ToolCallID(), agent.ApprovalAllowOnce) {
+		if engine.Decide(pending[0].ToolCallID(), agent.ApprovalAllowOnce) != nil {
 			t.Fatal("approval decision was not accepted")
 		}
 		approved = true
@@ -354,7 +354,7 @@ func TestExecCommandDenialNeverLaunches(t *testing.T) {
 		if event.Kind != agent.EventTranscript || len(event.Transcript.PendingApprovals()) == 0 {
 			continue
 		}
-		if !engine.Decide("exec-1", agent.ApprovalDeny) {
+		if engine.Decide("exec-1", agent.ApprovalDeny) != nil {
 			t.Fatal("denial decision was not accepted")
 		}
 		denied = true
@@ -422,7 +422,7 @@ func TestExecCommandSessionGrantIsScopedToExactLaunchTuple(t *testing.T) {
 	if !waitForExecApproval(t, events, "exec-1") {
 		t.Fatal("first command did not request approval")
 	}
-	if !engine.GrantSessionFor("exec-1") || !engine.Decide("exec-1", agent.ApprovalAllowOnce) {
+	if engine.GrantSessionFor("exec-1") != nil { // the grant releases the call
 		t.Fatal("session approval was not accepted")
 	}
 	if !waitForExecApproval(t, events, "exec-2") {
@@ -431,7 +431,7 @@ func TestExecCommandSessionGrantIsScopedToExactLaunchTuple(t *testing.T) {
 	if got := runner.requestCount(); got != 1 {
 		t.Fatalf("runner calls while second command awaits approval = %d, want 1", got)
 	}
-	if !engine.Decide("exec-2", agent.ApprovalAllowOnce) {
+	if engine.Decide("exec-2", agent.ApprovalAllowOnce) != nil {
 		t.Fatal("second approval was not accepted")
 	}
 	for range events {
