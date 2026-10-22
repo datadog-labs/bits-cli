@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -349,6 +348,20 @@ func TestSnapshotUserPrompts(t *testing.T) {
 	}
 }
 
+// coalesced returns evs as a consumer that read none of them yet receives
+// them, so sequences do not depend on how fast the test reads.
+func coalesced(evs []Event) []Event {
+	var out []Event
+	for _, ev := range evs {
+		if n := len(out); n > 0 && ev.supersedes(out[n-1]) {
+			out[n-1] = ev
+		} else {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
 func kinds(evs []Event) []EventKind {
 	ks := make([]EventKind, len(evs))
 	for i, e := range evs {
@@ -374,6 +387,9 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 	}, {textMsg("answer", "done")}}}
 	reducerCalls := 0
 	handlerSawReducer := false
+	// The handler holds its result until the test saw the final reduced
+	// state: the result's snapshot clears it and could supersede it.
+	release := make(chan struct{})
 	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "preview"},
 		InputReducer: func(_ context.Context, update ToolInputUpdate, prior any) any {
@@ -384,8 +400,12 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 			}
 			return state
 		},
-		Handler: func(_ context.Context, _ ToolCall) (ToolResult, error) {
+		Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
 			handlerSawReducer = reducerCalls == 4
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
 			return ToolResult{Output: "ok"}, nil
 		},
 	}, Tool{
@@ -395,7 +415,17 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := drain(t, New(backend, Config{PermissionsMode: ModeSkipPermissions}), TurnInput{Message: "go", Tools: tools})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var final *streamedInputState
+	for event := range New(backend, Config{PermissionsMode: ModeSkipPermissions}).StartTurn(ctx, TurnInput{Message: "go", Tools: tools}) {
+		if block, ok := stateBlock(event, "call-1"); ok && final == nil {
+			if state, ok := block.Tool.RenderState.(*streamedInputState); ok && state.final != "" {
+				final = state
+				close(release)
+			}
+		}
+	}
 	if len(backend.opts) != 2 {
 		t.Fatalf("backend requests = %d, want initial and continuation", len(backend.opts))
 	}
@@ -410,19 +440,8 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 	if !handlerSawReducer {
 		t.Fatal("handler ran before all streamed input reductions")
 	}
-	var final Block
-	for _, event := range events {
-		block, ok := stateBlock(event, "call-1")
-		if !ok {
-			continue
-		}
-		if block.Tool != nil && block.Tool.RenderState != nil {
-			final = block
-		}
-	}
-	state, ok := final.Tool.RenderState.(*streamedInputState)
-	if !ok || state.final != `{"value":"final"}` {
-		t.Fatalf("final reducer state = %#v, want final input", final.Tool.RenderState)
+	if final == nil || final.final != `{"value":"final"}` {
+		t.Fatalf("final reducer state = %#v, want final input", final)
 	}
 }
 
@@ -486,25 +505,25 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	}
 	e := New(b, Config{})
 
-	evs := drain(t, e, TurnInput{Message: "hi"})
-	want := []EventKind{EventTranscript, EventTranscript, EventTranscript, EventUsage, EventConversation, EventTranscript, EventTurnDone}
+	evs := coalesced(drain(t, e, TurnInput{Message: "hi"}))
+	want := []EventKind{EventTranscript, EventTranscript, EventUsage, EventConversation, EventTranscript, EventTurnDone}
 	if got := kinds(evs); !reflect.DeepEqual(got, want) {
 		t.Fatalf("event kinds = %v, want %v", got, want)
 	}
 	if evs[0].Origin != TranscriptOriginLocal || evs[1].Origin != TranscriptOriginRemote {
 		t.Fatalf("transcript origins = %v, %v; want local, remote", evs[0].Origin, evs[1].Origin)
 	}
-	blocks := evs[2].Transcript.Blocks
+	blocks := evs[1].Transcript.Blocks
 	if len(blocks) == 0 || blocks[len(blocks)-1].Markdown == nil || blocks[len(blocks)-1].Markdown.Content != "Hello world" {
 		t.Fatalf("final text blocks = %+v", blocks)
 	}
 	if blocks[len(blocks)-1].Complete {
 		t.Fatal("streaming transcript snapshot unexpectedly marked the answer complete")
 	}
-	if evs[4].ConvID != "conv-1" {
-		t.Fatalf("conv id = %q, want conv-1", evs[4].ConvID)
+	if evs[3].ConvID != "conv-1" {
+		t.Fatalf("conv id = %q, want conv-1", evs[3].ConvID)
 	}
-	final := evs[5].Transcript.Blocks
+	final := evs[4].Transcript.Blocks
 	if len(final) == 0 || !final[len(final)-1].Complete {
 		t.Fatalf("final transcript snapshot = %+v, want completed answer", final)
 	}
@@ -609,7 +628,7 @@ func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
 
 // Cancellation settles the turn's unfinished tools, leaves earlier turns'
 // tools untouched, and delivers that settled snapshot even when the consumer
-// has stopped reading and the event buffer is full.
+// has not read any of the turn's events yet.
 func TestTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 	second := []assistant.Message{
 		assistant.AssistantMessage("preview", assistant.Content{
@@ -622,18 +641,16 @@ func TestTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 		}),
 		serverCallMsg("server", "search_logs", `{}`),
 	}
-	for i := range 128 { // more than the engine buffers
-		second = append(second, textMsg(fmt.Sprint("filler-", i), "filler"))
+	backend := &scriptBackend{
+		rounds:  [][]assistant.Message{{serverCallMsg("prior", "old_tool", `{}`)}, second},
+		started: make(chan struct{}), hold: make(chan struct{}),
 	}
-	backend := &scriptBackend{rounds: [][]assistant.Message{{serverCallMsg("prior", "old_tool", `{}`)}, second}, hold: make(chan struct{})}
 	engine := New(backend, Config{})
 	drain(t, engine, TurnInput{Message: "first"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	events := engine.StartTurn(ctx, TurnInput{Message: "second"})
-	for len(events) < cap(events) {
-		time.Sleep(time.Millisecond)
-	}
+	<-backend.started
 	cancel()
 	evs := collect(events)
 

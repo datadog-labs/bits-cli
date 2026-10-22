@@ -193,11 +193,13 @@ func TestEngineApprovalScope(t *testing.T) {
 				decisions++
 			}
 
-			all = append(all, waitForToolStatusEvents(t, events, "call-a", ToolAwaitingApproval)...)
+			// With per-call keys, wait for the sibling to park too, after call-a,
+			// so the decision has to release it.
+			parked := "call-a"
 			if tt.perCallKey {
-				// Park the sibling too, so the decision has to release it.
-				all = append(all, waitForToolStatusEvents(t, events, "call-b", ToolAwaitingApproval)...)
+				parked = "call-b"
 			}
+			all = append(all, waitForToolStatusEvents(t, events, parked, ToolAwaitingApproval)...)
 			decide("call-a")
 			if tt.decision == ApprovalAllowOnce && !tt.grantSession && tt.switchTo == "" {
 				beforeACompleted := waitForToolStatusEvents(t, events, "call-a", ToolSuccess)

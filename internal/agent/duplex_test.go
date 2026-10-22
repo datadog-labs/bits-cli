@@ -55,21 +55,17 @@ func TestDuplexPublishesFinalizedTranscriptBeforeTerminalEvent(t *testing.T) {
 				return failure
 			}}
 			engine := New(backend, Config{})
-			events := collect(engine.StartTurn(context.Background(), TurnInput{Message: "question"}))
-			want := []EventKind{EventTranscript, EventTranscript, EventTranscript, terminal}
+			events := coalesced(collect(engine.StartTurn(context.Background(), TurnInput{Message: "question"})))
+			want := []EventKind{EventTranscript, EventTranscript, terminal}
 			if got := kinds(events); !reflect.DeepEqual(got, want) {
 				t.Fatalf("event kinds = %v, want %v", got, want)
 			}
-			streaming := events[1].Transcript.Blocks
-			if len(streaming) != 2 || streaming[1].Complete {
-				t.Fatalf("streaming blocks = %+v", streaming)
+			final := events[1].Transcript.Blocks
+			if len(final) != 2 || !final[1].Complete || events[1].Origin != TranscriptOriginRemote {
+				t.Fatalf("final transcript = %+v", events[1])
 			}
-			final := events[2].Transcript.Blocks
-			if len(final) != 2 || !final[1].Complete || events[2].Origin != TranscriptOriginRemote {
-				t.Fatalf("final transcript = %+v", events[2])
-			}
-			if !errors.Is(events[3].Err, failure) {
-				t.Fatalf("terminal error = %v, want %v", events[3].Err, failure)
+			if !errors.Is(events[2].Err, failure) {
+				t.Fatalf("terminal error = %v, want %v", events[2].Err, failure)
 			}
 		})
 	}

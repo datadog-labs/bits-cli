@@ -103,9 +103,19 @@ func waitQuestions(t *testing.T, m *Model) {
 	if dockedToolUI(m) == nil {
 		t.Fatal("turn ended without a question form")
 	}
-	// The engine queues the tool's transcript events before its handler runs.
-	for len(m.op.events) > 0 {
-		pumpToolUI(t, m)
+	waitFinalInput(t, m, dockedToolUI(m).Call.ID)
+}
+
+// waitFinalInput pumps until the transcript shows each call's final input,
+// which the engine publishes before running its handler.
+func waitFinalInput(t *testing.T, m *Model, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		for !slices.ContainsFunc(m.transcript.Blocks, func(b agent.Block) bool {
+			return b.ToolCallID() == id && b.Tool.HasFinalInput
+		}) {
+			pumpToolUI(t, m)
+		}
 	}
 }
 
@@ -164,11 +174,10 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	for dockedToolUI(m) == nil || len(queuedToolUIs(m)) < 2 {
 		pumpToolUI(t, m)
 	}
-	for len(m.op.events) > 0 {
-		pumpToolUI(t, m)
-	}
-	// Arrival order is up to the scheduler; queued forms follow the transcript.
 	queued := queuedToolUIs(m)
+	waitFinalInput(t, m, dockedToolUI(m).Call.ID, queued[0].callID(), queued[1].callID())
+	// Arrival order is up to the scheduler; queued forms follow the transcript.
+	queued = queuedToolUIs(m)
 	remaining := []string{queued[0].callID(), queued[1].callID()}
 	slices.Sort(remaining)
 	questionKey(m, tea.KeyEscape, 0)
