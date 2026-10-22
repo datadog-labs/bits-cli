@@ -171,9 +171,9 @@ func TestTurnDoneDisarmsSweepClock(t *testing.T) {
 	m.chatPhase = chat.PhaseStreaming
 	m.op = operation{kind: opTurn, gen: 1, events: make(chan agent.Event)}
 	m.syncAnimations()
-	m.Update(turnEventMsg{generation: 1, ev: agent.Event{Kind: agent.EventTurnDone}})
+	m.Update(turnEventMsg{generation: 1, ev: agent.Event{Kind: agent.EventDone}})
 
 	if m.animClock.armed || m.animBorderSweep.active {
-		t.Fatal("EventTurnDone left the sweep clock armed")
+		t.Fatal("EventDone left the sweep clock armed")
 	}
 }

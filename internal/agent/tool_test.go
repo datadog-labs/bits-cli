@@ -82,7 +82,7 @@ func TestEngineToolTurn(t *testing.T) {
 				if response.ToolCallID != "call-1" || response.Status != tt.wantStatus || response.Title != tt.wantTitle || response.Metadata.Output != tt.wantOutput {
 					t.Fatalf("tool response = %+v", response)
 				}
-				if len(events) == 0 || events[len(events)-1].Kind != EventTurnDone {
+				if len(events) == 0 || events[len(events)-1].Kind != EventDone {
 					t.Fatalf("turn did not complete: %v", kinds(events))
 				}
 			})
@@ -222,7 +222,7 @@ func TestEngineApprovalScope(t *testing.T) {
 			if got := runs.Load(); got != tt.wantRuns {
 				t.Fatalf("handler runs = %d, want %d", got, tt.wantRuns)
 			}
-			if len(rest) == 0 || rest[len(rest)-1].Kind != EventTurnDone {
+			if len(rest) == 0 || rest[len(rest)-1].Kind != EventDone {
 				t.Fatalf("turn did not end cleanly: %v", kinds(rest))
 			}
 			if len(backend.opts) != tt.wantCalls {
@@ -315,7 +315,7 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 			if tt.callC == ToolAwaitingApproval && engine.Decide("call-c", ApprovalAllowOnce) != nil {
 				t.Fatal("decision for call-c was not applied")
 			}
-			if all := collect(events); len(all) == 0 || all[len(all)-1].Kind != EventTurnDone {
+			if all := collect(events); len(all) == 0 || all[len(all)-1].Kind != EventDone {
 				t.Fatalf("turn did not complete: %v", kinds(all))
 			}
 			if engine.GrantSessionFor("call-c") == nil {
@@ -621,7 +621,7 @@ func TestEngineSkipPermissionsSkipsApprovalGates(t *testing.T) {
 	}
 
 	events := drain(t, New(backend, Config{PermissionsMode: ModeSkipPermissions}), TurnInput{Message: "run all", Tools: tools})
-	if events[len(events)-1].Kind != EventTurnDone {
+	if events[len(events)-1].Kind != EventDone {
 		t.Fatalf("turn did not complete: %v", kinds(events))
 	}
 	for _, id := range []string{"call-read", "call-write", "gate-1"} {
@@ -712,8 +712,8 @@ func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("turn only ended through its context (%v); StopTools must end it", err)
 	}
-	if len(rest) == 0 || rest[len(rest)-1].Kind != EventTurnDone {
-		t.Fatalf("stopped turn did not end with EventTurnDone: %+v", rest)
+	if len(rest) == 0 || rest[len(rest)-1].Kind != EventDone {
+		t.Fatalf("stopped turn did not end with EventDone: %+v", rest)
 	}
 	batches := backend.responses()
 	if len(backend.opts) != 2 || responseIDs(batches) != "call-run,call-gated" {

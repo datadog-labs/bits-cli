@@ -366,7 +366,8 @@ func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 }
 
 // Close cancels an operation wherever it blocks: off the actor, or in work
-// the actor runs. It returns once the operation's channel is closed.
+// the actor runs. It returns once the operation has ended as cancelled and its
+// channel is closed.
 func TestCloseCancelsAndAwaitsTheOperation(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -417,10 +418,8 @@ func TestCloseCancelsAndAwaitsTheOperation(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("Close did not cancel the blocked operation")
 			}
-			for _, ev := range collect(events) {
-				if ev.Kind == EventError {
-					t.Fatalf("closed operation reported %v", ev.Err)
-				}
+			if evs := collect(events); len(evs) == 0 || evs[len(evs)-1].Kind != EventCanceled || !errors.Is(evs[len(evs)-1].Err, context.Canceled) {
+				t.Fatalf("closed operation events = %+v, want EventCanceled last", evs)
 			}
 			if evs := collect(e.StartTurn(context.Background(), TurnInput{Message: "late"})); len(evs) != 1 || !errors.Is(evs[0].Err, ErrClosed) {
 				t.Fatalf("turn after Close = %+v, want ErrClosed", evs)

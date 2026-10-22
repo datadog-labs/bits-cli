@@ -137,7 +137,7 @@ func TestGatesDeniedWithoutAsking(t *testing.T) {
 					t.Error("a gate surfaced as a pending approval")
 				}
 			})
-			if events[len(events)-1].Kind != EventTurnDone || !hasToolStatus(events, "gate-1", ToolDenied) {
+			if events[len(events)-1].Kind != EventDone || !hasToolStatus(events, "gate-1", ToolDenied) {
 				t.Fatalf("turn = %v, want a completed turn with a typed denial", kinds(events))
 			}
 			if batches := backend.responses(); len(batches) != 1 || !slices.Equal(summarize(batches[0]), tt.want) {
@@ -192,7 +192,7 @@ func TestServerGateApprovals(t *testing.T) {
 					}
 					return engine.Decide(id, ApprovalAllowOnce) == nil
 				}))
-			if events[len(events)-1].Kind != EventTurnDone || decisions != tt.decisions {
+			if events[len(events)-1].Kind != EventDone || decisions != tt.decisions {
 				t.Fatalf("turn = %v, decisions = %d, want a completed turn after %d", kinds(events), decisions, tt.decisions)
 			}
 			batches := backend.responses()
@@ -247,7 +247,7 @@ func TestServerGateDenials(t *testing.T) {
 			engine := New(backend, Config{})
 			events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, tt.gatedSibling, handler), OnDeny: tt.onDeny},
 				decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) == nil }))
-			if events[len(events)-1].Kind != EventTurnDone || !hasToolStatus(events, "gate-1", ToolDenied) {
+			if events[len(events)-1].Kind != EventDone || !hasToolStatus(events, "gate-1", ToolDenied) {
 				t.Fatalf("turn = %v, want a completed turn with a typed denial", kinds(events))
 			}
 			if batches := backend.responses(); len(batches) != 1 || !slices.Equal(summarize(batches[0]), tt.want) {
@@ -285,7 +285,7 @@ func TestDenyStopDrainsFollowUpClientToolCalls(t *testing.T) {
 	engine := New(backend, Config{})
 	events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, true, written)},
 		decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) == nil }))
-	if last := events[len(events)-1]; last.Kind != EventTurnDone || last.Round != 3 {
+	if last := events[len(events)-1]; last.Kind != EventDone || last.Round != 3 {
 		t.Fatalf("last event = %+v, want the turn done at round 3", last)
 	}
 	if got := responseIDs(backend.responses()); got != "gate-1|follow-1" {
@@ -381,8 +381,8 @@ func approvalTransitionOrder(t *testing.T, allowSession bool, ids []string) []st
 		t.Fatalf("decision for call-a: %v", err)
 	}
 	afterDecision = append(afterDecision, collect(events)...)
-	if got := afterDecision[len(afterDecision)-1].Kind; got != EventTurnDone {
-		t.Fatalf("last event = %v, want EventTurnDone", got)
+	if got := afterDecision[len(afterDecision)-1].Kind; got != EventDone {
+		t.Fatalf("last event = %v, want EventDone", got)
 	}
 	return toolTransitionOrder(afterDecision, ids, wantStatuses...)
 }

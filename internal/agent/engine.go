@@ -51,16 +51,24 @@ type CurrentUserBackend interface {
 	CurrentUser(context.Context) (assistant.CurrentUser, error)
 }
 
-// EventKind discriminates the events the engine streams for a turn.
+// EventKind discriminates the events the engine streams for an operation.
+// Every claimed operation ends with exactly one terminal event, EventDone,
+// EventError or EventCanceled, and emits nothing after it.
 type EventKind int
 
 const (
 	EventTranscript   EventKind = iota // full transcript snapshot; read Transcript
 	EventUsage                         // token usage update; read Usage
 	EventConversation                  // server-assigned/confirmed conversation id
-	EventTurnDone                      // the turn completed with no pending tool calls
-	EventError                         // the turn failed
+	EventDone                          // the operation completed (a turn: with no pending tool calls)
+	EventError                         // the operation failed; read Err
+	EventCanceled                      // the operation's context ended; Err is its error
 )
+
+// RunID identifies one claimed operation. Every event an operation emits
+// carries it, so consumers of a stream shared by several runs can tell them
+// apart. Zero means no run: an operation that failed to claim the engine.
+type RunID uint64
 
 // TranscriptOrigin identifies what caused an EventTranscript snapshot.
 type TranscriptOrigin int
@@ -128,15 +136,16 @@ type UserPrompt struct {
 	Context []assistant.ContextEntity
 }
 
-// Event is one thing that happened during a turn. It is a plain value carried
-// on a channel, with only the fields relevant to Kind populated.
+// Event is one thing that happened during an operation. It is a plain value
+// carried on a channel, with only the fields relevant to Kind populated.
 type Event struct {
 	Kind           EventKind
+	Run            RunID
 	Transcript     TranscriptSnapshot // for EventTranscript; read-only full transcript snapshot
 	Origin         TranscriptOrigin   // for EventTranscript
 	Usage          *assistant.Usage   // for EventUsage
 	ConvID         string             // for EventConversation
-	Err            error              // for EventError
+	Err            error              // for EventError and EventCanceled
 	BackendFailure bool               // EventError originated at the Assistant backend boundary
 	// Round is the 1-based backend send the event belongs to (0 for
 	// out-of-turn events). Drained rounds after a denial count but emit
@@ -150,6 +159,7 @@ type Event struct {
 // no state (ADEEP diffs blocks by revision), and the queue stays bounded by
 // the other, rarer events.
 type outbox struct {
+	run    RunID // stamped on every event
 	mu     sync.Mutex
 	ready  sync.Cond // signals a push or the close
 	queue  []Event
@@ -161,10 +171,10 @@ func (ev Event) supersedes(prev Event) bool {
 	return ev.Kind == EventTranscript && prev.Kind == EventTranscript && ev.Round == prev.Round && ev.Origin == prev.Origin
 }
 
-// newOutbox returns an outbox and the channel it forwards to, which closes
+// newOutbox returns run's outbox and the channel it forwards to, which closes
 // once the outbox is closed and drained.
-func newOutbox() (*outbox, <-chan Event) {
-	o := &outbox{}
+func newOutbox(run RunID) (*outbox, <-chan Event) {
+	o := &outbox{run: run}
 	o.ready.L = &o.mu
 	out := make(chan Event)
 	go o.forward(out)
@@ -172,6 +182,7 @@ func newOutbox() (*outbox, <-chan Event) {
 }
 
 func (o *outbox) push(ev Event) {
+	ev.Run = o.run
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if n := len(o.queue); n > 0 && ev.supersedes(o.queue[n-1]) {
@@ -239,6 +250,7 @@ type Engine struct {
 	gate     permissionGate
 	busy     bool  // an operation holds the engine
 	turn     *turn // the turn whose exchange is running, if any
+	lastRun  RunID // the most recently claimed run
 
 	requests chan func() // run on the actor
 	// life ends when Close starts, cancelling every operation's worker.
@@ -395,15 +407,16 @@ func get[T any](e *Engine, f func() T) (v T) {
 	return v
 }
 
-// claim holds the engine for an operation, whose worker must then be started
+// claim holds the engine for a new run, whose worker must then be started
 // with work, unless the engine is closing.
-func (e *Engine) claim() error {
+func (e *Engine) claim() (RunID, error) {
 	if e.life.Err() != nil {
-		return ErrClosed
+		return 0, ErrClosed
 	}
 	e.busy = true
 	e.workers.Add(1)
-	return nil
+	e.lastRun++
+	return e.lastRun, nil
 }
 
 // work runs a claimed operation's worker with a context that also ends when
@@ -470,7 +483,8 @@ func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
 // the restored calls.
 func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) <-chan Event {
 	var resumed []ToolCall
-	err := e.idle(func() error {
+	var run RunID
+	err := e.idle(func() (err error) {
 		if resume {
 			if !e.canResumeTools(in.Tools) {
 				return ErrNoPendingTools
@@ -480,12 +494,13 @@ func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) <-cha
 			}
 		}
 		e.continuation = nil
-		return e.claim()
+		run, err = e.claim()
+		return err
 	})
 	if err != nil {
 		return eventResult(Event{Kind: EventError, Err: err})
 	}
-	out, events := newOutbox()
+	out, events := newOutbox(run)
 	e.work(ctx, func(ctx context.Context) { e.run(ctx, in, resumed, out) })
 	return events
 }
@@ -604,39 +619,40 @@ func (e *Engine) turnStart(resumed []ToolCall) int {
 	return start
 }
 
-// finish publishes how the turn ended and releases the engine. A turn that
-// failed before its exchange started reports the error alone.
+// finish publishes how the turn ended, its terminal event last, and releases
+// the engine. A turn that failed before its exchange started reports the error
+// alone. A cancelled turn settles every open block, publishes the final
+// snapshot, and ends with EventCanceled unless it had already failed.
 func (t *turn) finish(err error) {
 	e := t.e
-	cancelled := t.parent.Err() != nil
+	cause := t.parent.Err()
+	var end Event
 	switch {
+	case cause != nil && (t.ex == nil || err == nil || errors.Is(err, cause)):
+		end = Event{Kind: EventCanceled, Err: cause}
 	case t.ex == nil:
-		if !cancelled {
-			t.out.push(Event{Kind: EventError, Err: err})
-		}
-	case cancelled && (err == nil || errors.Is(err, t.parent.Err())):
-		// cancelled: end the turn quietly
+		end = Event{Kind: EventError, Err: err}
 	default:
 		settled := e.settleUnfinishedTools(t.tools, t.from, t.ex.final())
 		if e.transcript.FinalizeAll() || settled {
 			t.publish()
 		}
-		if err == nil {
-			t.emit(Event{Kind: EventTurnDone})
-			break
+		end = Event{Kind: EventDone, Round: t.round}
+		if err != nil {
+			var backend backendError
+			failure := errors.As(err, &backend)
+			if failure {
+				err = backend.error
+			}
+			end = Event{Kind: EventError, Err: err, BackendFailure: failure, Round: t.round}
 		}
-		var backend backendError
-		failure := errors.As(err, &backend)
-		if failure {
-			err = backend.error
-		}
-		t.emit(Event{Kind: EventError, Err: err, BackendFailure: failure})
 	}
-	if cancelled {
+	if cause != nil {
 		e.transcript.FinalizeAll()
 		e.settleUnfinishedTools(t.tools, t.from, true)
 		t.out.push(Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()})
 	}
+	t.out.push(end)
 	e.release(t.out)
 }
 
@@ -772,13 +788,19 @@ func (e *Engine) GrantSessionFor(callID string) error {
 }
 
 // Restore fetches the persisted history for the engine's conversation, folds it
-// into the transcript.
+// into the transcript. It ends with EventDone when there is nothing to restore.
 func (e *Engine) Restore(ctx context.Context) <-chan Event {
 	var id string
-	if err := e.idle(func() error { id = e.opts.ConversationID; return e.claim() }); err != nil {
+	var run RunID
+	err := e.idle(func() (err error) {
+		id = e.opts.ConversationID
+		run, err = e.claim()
+		return err
+	})
+	if err != nil {
 		return eventResult(Event{Kind: EventError, Err: err})
 	}
-	out, events := newOutbox()
+	out, events := newOutbox(run)
 	e.work(ctx, func(ctx context.Context) {
 		var conversation *Conversation
 		var err error
@@ -788,14 +810,18 @@ func (e *Engine) Restore(ctx context.Context) <-chan Event {
 		e.do(func() {
 			defer e.release(out)
 			switch {
-			case id == "" || ctx.Err() != nil: // nothing to restore, or cancelled: end quietly
+			case ctx.Err() != nil:
+				out.push(Event{Kind: EventCanceled, Err: ctx.Err()})
 			case err != nil:
 				out.push(Event{Kind: EventError, Err: err, BackendFailure: !errors.Is(err, ErrHistoryUnsupported) && !errors.Is(err, ErrInvalidConversationID)})
 			default:
-				e.installConversation(conversation)
-				if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
-					out.push(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
+				if id != "" {
+					e.installConversation(conversation)
+					if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
+						out.push(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
+					}
 				}
+				out.push(Event{Kind: EventDone})
 			}
 		})
 	})
@@ -841,7 +867,7 @@ const maxConcurrentTools = 16
 // handler goroutines report back through channels.
 type turn struct {
 	e      *Engine
-	parent context.Context // the caller's; its cancellation ends the turn quietly
+	parent context.Context // the caller's; its cancellation ends the turn as canceled
 	from   int             // the turn's first transcript block
 	ctx    context.Context // scopes the exchange and every handler
 	cancel context.CancelFunc

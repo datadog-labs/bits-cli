@@ -969,8 +969,10 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 		m.usage = ev.Usage
 	case agent.EventConversation:
 		m.convID = ev.ConvID
-	case agent.EventTurnDone:
+	case agent.EventDone:
 		m.chatPhase = chat.PhaseIdle
+	case agent.EventCanceled:
+		// handleTurnClosed settles the chat phase and resyncs the transcript.
 	case agent.EventError:
 		// A failure during restore is benign: drop to idle with a notice so the
 		// user can still type. A failure mid-turn is the turn's error state.

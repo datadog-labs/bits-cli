@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -506,7 +507,7 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	e := New(b, Config{})
 
 	evs := coalesced(drain(t, e, TurnInput{Message: "hi"}))
-	want := []EventKind{EventTranscript, EventTranscript, EventUsage, EventConversation, EventTranscript, EventTurnDone}
+	want := []EventKind{EventTranscript, EventTranscript, EventUsage, EventConversation, EventTranscript, EventDone}
 	if got := kinds(evs); !reflect.DeepEqual(got, want) {
 		t.Fatalf("event kinds = %v, want %v", got, want)
 	}
@@ -627,8 +628,9 @@ func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
 }
 
 // Cancellation settles the turn's unfinished tools, leaves earlier turns'
-// tools untouched, and delivers that settled snapshot even when the consumer
-// has not read any of the turn's events yet.
+// tools untouched, and delivers that settled snapshot, then EventCanceled,
+// even when the consumer has not read any of the turn's events yet. Each
+// turn's events carry its own run.
 func TestTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 	second := []assistant.Message{
 		assistant.AssistantMessage("preview", assistant.Content{
@@ -646,7 +648,7 @@ func TestTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 		started: make(chan struct{}), hold: make(chan struct{}),
 	}
 	engine := New(backend, Config{})
-	drain(t, engine, TurnInput{Message: "first"})
+	first := drain(t, engine, TurnInput{Message: "first"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	events := engine.StartTurn(ctx, TurnInput{Message: "second"})
@@ -654,8 +656,21 @@ func TestTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 	cancel()
 	evs := collect(events)
 
+	if end := evs[len(evs)-1]; end.Kind != EventCanceled || !errors.Is(end.Err, context.Canceled) {
+		t.Fatalf("last event = %+v, want EventCanceled", end)
+	}
+	for _, run := range []struct {
+		evs  []Event
+		want RunID
+	}{{first, 1}, {evs, 2}} {
+		for _, ev := range run.evs {
+			if ev.Run != run.want {
+				t.Fatalf("event %+v, want run %d", ev, run.want)
+			}
+		}
+	}
 	status := map[string]ToolStatus{}
-	for _, block := range evs[len(evs)-1].Transcript.Blocks {
+	for _, block := range evs[len(evs)-2].Transcript.Blocks {
 		if block.Tool != nil {
 			status[block.ToolCallID()] = block.Tool.Status
 		}
@@ -693,8 +708,8 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
 	evs := collect(e.Restore(context.Background()))
-	if len(evs) != 1 || evs[0].Kind != EventTranscript {
-		t.Fatalf("events = %v, want one EventTranscript", kinds(evs))
+	if !slices.Equal(kinds(evs), []EventKind{EventTranscript, EventDone}) {
+		t.Fatalf("events = %v, want one EventTranscript, then EventDone", kinds(evs))
 	}
 	if evs[0].Origin != TranscriptOriginRestore {
 		t.Fatalf("restore origin = %v, want restore", evs[0].Origin)
@@ -714,14 +729,14 @@ func TestRestoreUnsupportedBackendErrors(t *testing.T) {
 	}
 }
 
-// An empty history folds to no blocks, so the len>0 guard emits nothing.
-func TestRestoreEmptyEmitsNothing(t *testing.T) {
+// An empty history folds to no blocks, so the restore emits no snapshot.
+func TestRestoreEmptyEmitsOnlyDone(t *testing.T) {
 	resp := &assistant.ConversationHistoryResponse{}
 	resp.Data.Type = "conversation-history-response"
 	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
-	if evs := collect(e.Restore(context.Background())); len(evs) != 0 {
-		t.Fatalf("events = %v, want none", kinds(evs))
+	if evs := collect(e.Restore(context.Background())); !slices.Equal(kinds(evs), []EventKind{EventDone}) {
+		t.Fatalf("events = %v, want only EventDone", kinds(evs))
 	}
 }
 

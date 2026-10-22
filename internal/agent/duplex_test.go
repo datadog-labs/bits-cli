@@ -41,7 +41,7 @@ func duplexCall(id, name string) assistant.AssistantResponse {
 func TestDuplexPublishesFinalizedTranscriptBeforeTerminalEvent(t *testing.T) {
 	for _, failure := range []error{nil, errors.New("stream failed")} {
 		name := "success"
-		terminal := EventTurnDone
+		terminal := EventDone
 		if failure != nil {
 			name, terminal = "failure", EventError
 		}
@@ -130,7 +130,7 @@ func TestDuplexOverlapsSeparatelyArrivingToolsAndSubmitsDuringStream(t *testing.
 	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read both", Tools: tools})
 	events := collect(eventsCh)
 	terminal := events[len(events)-1]
-	if terminal.Kind != EventTurnDone || terminal.Err != nil {
+	if terminal.Kind != EventDone || terminal.Err != nil {
 		t.Fatalf("terminal = %+v", terminal)
 	}
 }
@@ -256,7 +256,7 @@ func TestDuplexApprovalDenialIsSubmittedAndControlsFutureCalls(t *testing.T) {
 				}
 			}
 			terminal := events[len(events)-1]
-			if !decided || terminal.Kind != EventTurnDone || terminal.Err != nil {
+			if !decided || terminal.Kind != EventDone || terminal.Err != nil {
 				t.Fatalf("terminal = %+v; decided = %v", terminal, decided)
 			}
 			wantRuns := int32(0)
@@ -360,7 +360,7 @@ func TestDuplexBoundsExecutionAcrossArrivingBatches(t *testing.T) {
 	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read many", Tools: tools})
 	events := collect(eventsCh)
 	terminal := events[len(events)-1]
-	if terminal.Kind != EventTurnDone || terminal.Err != nil {
+	if terminal.Kind != EventDone || terminal.Err != nil {
 		t.Fatalf("terminal = %+v", terminal)
 	}
 	if got := count.Load(); got > 16 {
@@ -487,7 +487,7 @@ func TestDuplexPermissionChangeReleasesParkedTools(t *testing.T) {
 			}
 			events := collect(eventsCh)
 			terminal := events[len(events)-1]
-			if terminal.Kind != EventTurnDone || terminal.Err != nil {
+			if terminal.Kind != EventDone || terminal.Err != nil {
 				t.Fatalf("terminal = %+v", terminal)
 			}
 			wantRuns := int32(2)
@@ -555,7 +555,7 @@ func TestDuplexLateChildResultPreservesTerminalOutcome(t *testing.T) {
 				start := time.Now()
 				events := collect(engine.StartTurn(context.Background(), TurnInput{Message: "question", Tools: tools}))
 				terminal := events[len(events)-1]
-				wantKind := EventTurnDone
+				wantKind := EventDone
 				if tc.wantErr != nil {
 					wantKind = EventError
 				}
