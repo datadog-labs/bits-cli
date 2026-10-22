@@ -64,6 +64,7 @@ const (
 	EventDone                          // the operation completed (a turn: with no pending tool calls)
 	EventError                         // the operation failed; read Err
 	EventCanceled                      // the operation's context ended; Err is its error
+	EventTasks                         // background tasks changed, outside any run; read Tasks
 )
 
 // RunID identifies one claimed operation. Every event an operation emits
@@ -146,6 +147,7 @@ type Event struct {
 	Origin         TranscriptOrigin   // for EventTranscript
 	Usage          *assistant.Usage   // for EventUsage
 	ConvID         string             // for EventConversation
+	Tasks          []Task             // for EventTasks; read-only, every task of the conversation
 	Err            error              // for EventError and EventCanceled
 	BackendFailure bool               // EventError originated at the Assistant backend boundary
 	// Round is the 1-based backend send the event belongs to (0 for
@@ -170,7 +172,11 @@ type outbox struct {
 }
 
 // supersedes reports whether ev may replace prev, queued just before it.
+// Task snapshots are complete too.
 func (ev Event) supersedes(prev Event) bool {
+	if ev.Kind == EventTasks {
+		return prev.Kind == EventTasks
+	}
 	return ev.Kind == EventTranscript && prev.Kind == EventTranscript &&
 		ev.Run == prev.Run && ev.Round == prev.Round && ev.Origin == prev.Origin
 }
@@ -274,6 +280,11 @@ type Engine struct {
 	turn     *turn // the turn whose exchange is running, if any
 	lastRun  RunID // the most recently claimed run
 	subs     map[*outbox]struct{}
+	// tasks are the conversation's background tasks. Their observers are
+	// workers that end with observing, on a conversation change or Close.
+	tasks         []*task
+	observing     context.Context
+	stopObserving context.CancelFunc
 
 	requests chan func() // run on the actor
 	// life ends when Close starts, cancelling every operation's worker.
@@ -368,12 +379,13 @@ func New(b Backend, config Config) *Engine {
 		stopped:       make(chan struct{}),
 	}
 	engine.life, engine.endLife = context.WithCancel(context.Background())
+	engine.observing, engine.stopObserving = context.WithCancel(engine.life)
 	go engine.loop()
 	return engine
 }
 
-// Close cancels the active operation, waits for it to end as on cancellation,
-// ends every subscription after the events already queued, and stops the
+// Close cancels the active operation and the task observers, waits for them
+// to end as on cancellation, ends every subscription after the events already queued, and stops the
 // engine. Later operations fail with ErrClosed and accessors report zero
 // values.
 func (e *Engine) Close() {
@@ -720,6 +732,7 @@ func (t *turn) finish(err error) {
 		e.settleUnfinishedTools(t.tools, t.from, true)
 		e.emit(t.run, Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()})
 	}
+	e.discover(t.from)
 	e.emit(t.run, end)
 	e.release()
 }
@@ -818,6 +831,7 @@ func (e *Engine) NewConversation() error {
 		e.transcript = NewTranscript()
 		e.continuation = nil
 		clear(e.gate.grants)
+		e.setTasks(nil)
 		return nil
 	})
 }

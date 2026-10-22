@@ -976,6 +976,8 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 		m.chatPhase = chat.PhaseIdle
 	case agent.EventCanceled:
 		// endOperation settles the chat phase and resyncs the transcript.
+	case agent.EventTasks:
+		// Background tasks belong to no run, so they never reach this switch.
 	case agent.EventError:
 		// A failure during restore is benign: drop to idle with a notice so the
 		// user can still type. A failure mid-turn is the turn's error state.

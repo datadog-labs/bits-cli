@@ -227,7 +227,7 @@ func (m *Model) observeEvent(event agent.Event) {
 		}
 	case agent.EventUsage, agent.EventConversation, agent.EventDone:
 		m.markConnected()
-	case agent.EventCanceled:
+	case agent.EventCanceled, agent.EventTasks:
 	case agent.EventError:
 		if !event.BackendFailure {
 			return

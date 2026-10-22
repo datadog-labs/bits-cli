@@ -216,6 +216,8 @@ func (d *Delivery) Consume(ev agent.Event) error {
 		return d.write(conversationUpdatedRecord{envelope: env(typeConversationUpdated, ev.Round), ConversationID: ev.ConvID})
 	case agent.EventDone, agent.EventError, agent.EventCanceled:
 		// Finish owns the sole terminal record.
+	case agent.EventTasks:
+		// Background tasks belong to no run; Follow never yields them.
 	}
 	return nil
 }
