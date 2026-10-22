@@ -26,6 +26,7 @@ var (
 	ErrCurrentUserUnsupported = errors.New("backend does not support loading the current user")
 	ErrOperationActive        = errors.New("another conversation operation is active")
 	ErrNoPendingTools         = errors.New("no resumable client tools")
+	ErrClosed                 = errors.New("engine is closed")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -220,13 +221,14 @@ const maxTurns = 150
 // owns the aggregated conversation transcript, folding streamed deltas into it
 // and emitting snapshots.
 //
-// One claimed operation owns the mutable conversation state, including opts,
-// transcript, and previousConversationID. The permission gate has its own lock;
-// goroutines exchange copied events and results over channels. During an
-// operation, callers may use Decide, CancelTool, StopTools, PermissionsMode,
-// SetPermissionsMode, GrantSessionFor, ClientSkills, and explicitly atomic
-// methods. Other access must respect the operation gate and channel ordering;
-// adding a lock around this state would require revisiting that ownership model.
+// One actor goroutine, started by New and stopped by Close, owns the mutable
+// conversation state: opts, transcript, continuation, delivery, and the active
+// turn. Methods reach it through do, which runs a function on the actor. An
+// operation (a turn or a restore) holds the engine from its claim until its
+// release; idle methods fail with ErrOperationActive meanwhile. Blocking work
+// (request preparation, history loading, transport, tool handlers) runs on
+// other goroutines and reports back to the actor. The permission gate keeps
+// its own lock until commands become synchronous.
 type Engine struct {
 	backend                Backend
 	opts                   assistant.SendOptions
@@ -242,11 +244,16 @@ type Engine struct {
 	// after a mode switch or a grant. It holds at most one signal: rounds
 	// re-read the current permissions anyway.
 	permissionsChanged  chan struct{}
-	active              atomic.Bool
 	operationGeneration atomic.Uint64
-	instructions        *env.Instructions
-	clientSkills        *env.Skills
-	userContext         func(context.Context) string
+	busy                bool // an operation holds the engine
+
+	requests     chan func() // run on the actor
+	closing      chan struct{}
+	closeOnce    sync.Once
+	stopped      chan struct{} // closed once the actor returns
+	instructions *env.Instructions
+	clientSkills *env.Skills
+	userContext  func(context.Context) string
 }
 
 // RuntimeStatus is the non-secret request and backend state needed by local
@@ -333,8 +340,77 @@ func New(b Backend, config Config) *Engine {
 		instructions:       config.ProjectInstructions,
 		clientSkills:       config.ClientSkills,
 		userContext:        config.UserContext,
+		requests:           make(chan func()),
+		closing:            make(chan struct{}),
+		stopped:            make(chan struct{}),
 	}
+	go engine.loop()
 	return engine
+}
+
+// Close cancels the active operation, waits for it to end, and stops the
+// engine. Later operations fail with ErrClosed and accessors report zero values.
+func (e *Engine) Close() {
+	e.closeOnce.Do(func() { close(e.closing) })
+	<-e.stopped
+}
+
+// loop is the actor. A turn runs nested in the request that hands it over, so
+// the turn's loop serves requests until the turn ends.
+func (e *Engine) loop() {
+	defer close(e.stopped)
+	for {
+		select {
+		case fn := <-e.requests:
+			fn()
+		case <-e.closing:
+			return
+		}
+	}
+}
+
+// do runs fn on the actor and waits for it. It reports false, without running
+// fn, once the engine is closed. fn must not call do.
+func (e *Engine) do(fn func()) bool {
+	done := make(chan struct{})
+	select {
+	case e.requests <- func() { defer close(done); fn() }:
+		<-done
+		return true
+	case <-e.closing:
+		return false
+	}
+}
+
+// idle runs fn on the actor unless an operation holds the engine.
+func (e *Engine) idle(fn func() error) error {
+	err := ErrClosed
+	e.do(func() {
+		err = ErrOperationActive
+		if !e.busy {
+			err = fn()
+		}
+	})
+	return err
+}
+
+// get returns f's result, computed on the actor, or the zero value once the
+// engine is closed.
+func get[T any](e *Engine, f func() T) (v T) {
+	e.do(func() { v = f() })
+	return v
+}
+
+// claim holds the engine for an operation, which must release it.
+func (e *Engine) claim() uint64 {
+	e.busy = true
+	return e.operationGeneration.Add(1)
+}
+
+// release ends the operation; its stream closes once drained.
+func (e *Engine) release(out *outbox) {
+	e.busy = false
+	out.close()
 }
 
 // Site returns the Assistant API site of the active backend. Backends without
@@ -375,27 +451,33 @@ type TurnInput struct {
 // released the operation, so Snapshot and ConversationID then report the
 // turn's final state.
 func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
-	return e.startTurn(ctx, in, nil)
+	return e.startTurn(ctx, in, false)
 }
 
-func (e *Engine) startTurn(ctx context.Context, in TurnInput, resumed []ToolCall) <-chan Event {
-	if !e.begin() {
-		return eventResult(Event{Kind: EventError, Err: ErrOperationActive})
+// startTurn claims the engine for a user turn or, with resume, for answering
+// the restored calls.
+func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) <-chan Event {
+	var resumed []ToolCall
+	var generation uint64
+	err := e.idle(func() error {
+		if resume {
+			if !e.canResumeTools(in.Tools) {
+				return ErrNoPendingTools
+			}
+			for _, content := range e.continuation {
+				resumed = append(resumed, toolCallOf(content))
+			}
+		}
+		e.continuation = nil
+		generation = e.claim()
+		return nil
+	})
+	if err != nil {
+		return eventResult(Event{Kind: EventError, Err: err})
 	}
-	e.continuation = nil
-	generation := e.operationGeneration.Load()
 	out, events := newOutbox()
 	go e.run(ctx, in, resumed, out, generation)
 	return events
-}
-
-// begin claims the engine for one operation, which must release it on completion.
-func (e *Engine) begin() bool {
-	if !e.active.CompareAndSwap(false, true) {
-		return false
-	}
-	e.operationGeneration.Add(1)
-	return true
 }
 
 func eventResult(ev Event) <-chan Event {
@@ -446,97 +528,108 @@ func (e *Engine) command(command toolCommand) bool {
 	}
 }
 
-func (e *Engine) run(
-	ctx context.Context,
-	in TurnInput,
-	resumed []ToolCall,
-	out *outbox,
-	generation uint64,
-) {
-	turnStart := len(e.transcript.Blocks())
-	if len(resumed) > 0 {
-		for i, block := range e.transcript.Blocks() {
-			for _, call := range resumed {
-				if block.ToolCallID() == call.ID {
-					turnStart = min(turnStart, i)
-				}
-			}
-		}
-	}
-	defer func() {
-		if ctx.Err() != nil {
-			e.transcript.FinalizeAll()
-			e.settleUnfinishedTools(in.Tools, turnStart, true)
-			out.push(Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()})
-		}
-		e.active.Store(false)
-		out.close()
-	}()
-
-	// A restored tool call is already in the transcript; only a new turn adds a
-	// user block before contacting the backend. The block lists the context
-	// exactly as it is sent.
-	sentContext, imageNotices, imageErr := prepareImageContext(ctx, in.Context)
-	if imageErr != nil {
+// run prepares a claimed turn off the actor, where it may block on files and
+// the environment, then drives it on the actor until it ends.
+func (e *Engine) run(ctx context.Context, in TurnInput, resumed []ToolCall, out *outbox, generation uint64) {
+	t := &turn{e: e, parent: ctx, generation: generation, tools: in.Tools, onDeny: in.OnDeny, out: out, round: 1}
+	sentContext, imageNotices, err := prepareImageContext(ctx, in.Context)
+	if err != nil {
 		// Keep file references in the failed prompt so history can retry them.
 		sentContext = in.Context
 	}
-	if len(resumed) == 0 {
-		var sent []assistant.ContextEntity
-		if sentContext != nil {
-			sent = sentContext.Entities
+	var opts assistant.SendOptions
+	var delivery contextDelivery
+	if !e.do(func() {
+		t.from = e.turnStart(resumed)
+		// A restored tool call is already in the transcript; only a new turn
+		// adds a user block before contacting the backend. The block lists the
+		// context exactly as it is sent.
+		if len(resumed) == 0 {
+			var sent []assistant.ContextEntity
+			if sentContext != nil {
+				sent = sentContext.Entities
+			}
+			e.transcript.AppendUser(in.Message, sent)
+			out.push(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal})
 		}
-		e.transcript.AppendUser(in.Message, sent)
-		out.push(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal})
+		opts, delivery = e.sendOptions(in.Tools), e.delivery
+	}) {
+		out.close()
+		return
 	}
 
 	// An invalid image or a skill that cannot be read fails the turn like a
 	// backend error: the user block stays visible and nothing is sent.
-	err := imageErr
 	var request userRequest
 	switch {
 	case err != nil:
 	case len(resumed) == 0:
-		request, err = e.prepare(ctx, in, sentContext, resizeNotice(imageNotices))
+		opts.Context = sentContext
+		request, err = e.prepare(ctx, in, opts, delivery, resizeNotice(imageNotices))
 	default:
-		request, err = e.prepareResume(ctx, in.Tools)
+		request, err = e.prepareResume(ctx, opts, delivery)
 	}
-	if err != nil {
-		if ctx.Err() == nil { // cancelled: end the turn quietly
-			out.push(Event{Kind: EventError, Err: err})
+	if !e.do(func() {
+		if err == nil {
+			e.delivery.pending(request)
+			t.request = &request
+			t.ex = e.newExchange(request, resumed)
+			err = t.drive()
 		}
-		return
+		t.finish(err)
+	}) {
+		out.close()
 	}
-	e.delivery.pending(request)
+}
 
-	t := &turn{
-		e:          e,
-		generation: generation,
-		tools:      in.Tools,
-		ex:         e.newExchange(request, resumed),
-		request:    &request,
-		onDeny:     in.OnDeny,
-		out:        out,
-		round:      1,
+// turnStart is where a turn's blocks start: the transcript's end, or the
+// first resumed call.
+func (e *Engine) turnStart(resumed []ToolCall) int {
+	start := len(e.transcript.Blocks())
+	for i, block := range e.transcript.Blocks() {
+		for _, call := range resumed {
+			if block.ToolCallID() == call.ID {
+				start = min(start, i)
+			}
+		}
 	}
-	err = t.drive(ctx)
-	if ctx.Err() != nil && (err == nil || errors.Is(err, ctx.Err())) {
-		return // cancelled: end the turn quietly
-	}
-	settled := e.settleUnfinishedTools(in.Tools, turnStart, t.ex.final())
-	if e.transcript.FinalizeAll() || settled {
-		t.publish()
-	}
-	if err != nil {
+	return start
+}
+
+// finish publishes how the turn ended and releases the engine. A turn that
+// failed before its exchange started reports the error alone.
+func (t *turn) finish(err error) {
+	e := t.e
+	cancelled := t.parent.Err() != nil
+	switch {
+	case t.ex == nil:
+		if !cancelled {
+			t.out.push(Event{Kind: EventError, Err: err})
+		}
+	case cancelled && (err == nil || errors.Is(err, t.parent.Err())):
+		// cancelled: end the turn quietly
+	default:
+		settled := e.settleUnfinishedTools(t.tools, t.from, t.ex.final())
+		if e.transcript.FinalizeAll() || settled {
+			t.publish()
+		}
+		if err == nil {
+			t.emit(Event{Kind: EventTurnDone})
+			break
+		}
 		var backend backendError
 		failure := errors.As(err, &backend)
 		if failure {
 			err = backend.error
 		}
 		t.emit(Event{Kind: EventError, Err: err, BackendFailure: failure})
-		return
 	}
-	t.emit(Event{Kind: EventTurnDone})
+	if cancelled {
+		e.transcript.FinalizeAll()
+		e.settleUnfinishedTools(t.tools, t.from, true)
+		t.out.push(Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()})
+	}
+	e.release(t.out)
 }
 
 // newExchange uses a duplex stream when the backend supports this user request;
@@ -585,7 +678,9 @@ func (e *Engine) snapshot() TranscriptSnapshot {
 
 // ConversationID reports the conversation the engine is bound to. It is set
 // from SendOptions and updated as turns run; empty means a new conversation.
-func (e *Engine) ConversationID() string { return e.opts.ConversationID }
+func (e *Engine) ConversationID() string {
+	return get(e, func() string { return e.opts.ConversationID })
+}
 
 // Status reports the immutable effective request configuration and non-secret
 // backend metadata captured when the engine was constructed. An empty model
@@ -607,7 +702,9 @@ func (e *Engine) CurrentUser(ctx context.Context) (assistant.CurrentUser, error)
 // PreviousConversationID reports the most recent non-empty conversation that
 // NewConversation left behind. It remains available after reset so navigation
 // and lifecycle checks can recover the prior persisted conversation.
-func (e *Engine) PreviousConversationID() string { return e.previousConversationID }
+func (e *Engine) PreviousConversationID() string {
+	return get(e, func() string { return e.previousConversationID })
+}
 
 // NewConversation clears the conversation-scoped engine state without making a
 // backend request. Non-history request configuration and the backend/client
@@ -618,21 +715,18 @@ func (e *Engine) PreviousConversationID() string { return e.previousConversation
 // Callers must cancel and drain an active turn or restore before resetting.
 // The operation gate makes a premature reset fail without mutation.
 func (e *Engine) NewConversation() error {
-	if !e.active.CompareAndSwap(false, true) {
-		return ErrOperationActive
-	}
-	defer e.active.Store(false)
-
-	if e.opts.ConversationID != "" {
-		e.previousConversationID = e.opts.ConversationID
-	}
-	e.opts.ConversationID = ""
-	e.opts.MessageHistory = nil
-	e.resetContext()
-	e.transcript = NewTranscript()
-	e.continuation = nil
-	e.gate.clearGrants()
-	return nil
+	return e.idle(func() error {
+		if e.opts.ConversationID != "" {
+			e.previousConversationID = e.opts.ConversationID
+		}
+		e.opts.ConversationID = ""
+		e.opts.MessageHistory = nil
+		e.resetContext()
+		e.transcript = NewTranscript()
+		e.continuation = nil
+		e.gate.clearGrants()
+		return nil
+	})
 }
 
 // PermissionsMode reports the current permissions mode.
@@ -675,34 +769,34 @@ func (e *Engine) permissionsUpdated() {
 // Restore fetches the persisted history for the engine's conversation, folds it
 // into the transcript.
 func (e *Engine) Restore(ctx context.Context) <-chan Event {
-	if !e.begin() {
-		return eventResult(Event{Kind: EventError, Err: ErrOperationActive})
+	var id string
+	if err := e.idle(func() error { id = e.opts.ConversationID; e.claim(); return nil }); err != nil {
+		return eventResult(Event{Kind: EventError, Err: err})
 	}
 	out, events := newOutbox()
-	go e.restore(ctx, out)
+	go func() {
+		var conversation *Conversation
+		var err error
+		if id != "" {
+			conversation, err = e.LoadConversation(ctx, id)
+		}
+		if !e.do(func() {
+			defer e.release(out)
+			switch {
+			case id == "" || ctx.Err() != nil: // nothing to restore, or cancelled: end quietly
+			case err != nil:
+				out.push(Event{Kind: EventError, Err: err, BackendFailure: !errors.Is(err, ErrHistoryUnsupported) && !errors.Is(err, ErrInvalidConversationID)})
+			default:
+				e.installConversation(conversation)
+				if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
+					out.push(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
+				}
+			}
+		}) {
+			out.close()
+		}
+	}()
 	return events
-}
-
-func (e *Engine) restore(ctx context.Context, out *outbox) {
-	defer out.close()
-	defer e.active.Store(false)
-
-	conversationID := e.ConversationID()
-	if conversationID == "" {
-		return
-	}
-	conversation, err := e.LoadConversation(ctx, conversationID)
-	if ctx.Err() != nil {
-		return // cancelled: end quietly
-	}
-	if err != nil {
-		out.push(Event{Kind: EventError, Err: err, BackendFailure: !errors.Is(err, ErrHistoryUnsupported) && !errors.Is(err, ErrInvalidConversationID)})
-		return
-	}
-	e.installConversation(conversation)
-	if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
-		out.push(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
-	}
 }
 
 // callStatus is where one client tool call is within its turn.
@@ -740,11 +834,13 @@ type exchangeResult struct {
 // maxConcurrentTools bounds the handlers of a turn running at once.
 const maxConcurrentTools = 16
 
-// turn owns one turn's state. Only its driver goroutine changes it; the
-// exchange and handler goroutines report back through channels.
+// turn owns one turn's state. Only the actor changes it; the exchange and
+// handler goroutines report back through channels.
 type turn struct {
 	e          *Engine
 	generation uint64
+	parent     context.Context // the caller's; its cancellation ends the turn quietly
+	from       int             // the turn's first transcript block
 	ctx        context.Context // scopes the exchange and every handler
 	cancel     context.CancelFunc
 	// handlers parents every handler context; a stop cancels it.
@@ -767,10 +863,12 @@ type turn struct {
 	stopRequested bool
 }
 
-// drive runs the exchange and executes its calls. It returns the exchange's
-// terminal error, or the context error if the turn is cancelled. Workers only
-// run handlers; the driver owns approvals, transcript changes, and answers.
-func (t *turn) drive(ctx context.Context) error {
+// drive runs the exchange on the actor and executes its calls, serving
+// requests meanwhile. It returns the exchange's terminal error, the parent's
+// error if the turn is cancelled, or ErrClosed. Workers only run handlers; the
+// actor owns approvals, transcript changes, and answers.
+func (t *turn) drive() error {
+	ctx := t.parent
 	t.ctx, t.cancel = context.WithCancel(ctx)
 	defer t.cancel()
 	t.handlers, t.stopHandlers = context.WithCancel(t.ctx)
@@ -827,8 +925,12 @@ func (t *turn) drive(ctx context.Context) error {
 				t.stopCalls(c, finished.err)
 				return finished.err
 			}
+		case fn := <-t.e.requests:
+			fn()
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-t.e.closing:
+			return ErrClosed
 		}
 	}
 }
@@ -866,8 +968,9 @@ func (t *turn) startExchange() (<-chan exchangeEvent, <-chan exchangeResult) {
 }
 
 // joinExchange cancels an exchange that has not ended, and waits a bounded
-// time for its transport cleanup, such as the server cancellation request.
-// Cancelling the turn stops every handler first; handlers are never joined.
+// time for its transport cleanup, such as the server cancellation request,
+// still serving requests. Cancelling the turn stops every handler first;
+// handlers are never joined.
 func (t *turn) joinExchange(done <-chan exchangeResult) {
 	if done == nil {
 		return
@@ -875,10 +978,16 @@ func (t *turn) joinExchange(done <-chan exchangeResult) {
 	t.cancel()
 	timer := time.NewTimer(30 * time.Second)
 	defer timer.Stop()
-	select {
-	case result := <-done:
-		t.adopt(result.conversation)
-	case <-timer.C:
+	for {
+		select {
+		case result := <-done:
+			t.adopt(result.conversation)
+			return
+		case fn := <-t.e.requests:
+			fn()
+		case <-timer.C:
+			return
+		}
 	}
 }
 

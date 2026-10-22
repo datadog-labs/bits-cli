@@ -550,8 +550,10 @@ func TestDuplexLateChildResultPreservesTerminalOutcome(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
+				defer engine.Close() // the bubble requires its goroutines to exit
 				start := time.Now()
-				events := collect(New(backend, Config{PermissionsMode: ModeSkipPermissions}).StartTurn(context.Background(), TurnInput{Message: "question", Tools: tools}))
+				events := collect(engine.StartTurn(context.Background(), TurnInput{Message: "question", Tools: tools}))
 				terminal := events[len(events)-1]
 				wantKind := EventTurnDone
 				if tc.wantErr != nil {

@@ -10,6 +10,10 @@ import (
 // CanResumeTools requires every unanswered call to opt into replay. A mixed
 // batch must not silently re-execute a file write, command, or approval gate.
 func (e *Engine) CanResumeTools(tools *ToolSet) bool {
+	return get(e, func() bool { return e.canResumeTools(tools) })
+}
+
+func (e *Engine) canResumeTools(tools *ToolSet) bool {
 	if len(e.continuation) == 0 || tools == nil {
 		return false
 	}
@@ -25,12 +29,14 @@ func (e *Engine) CanResumeTools(tools *ToolSet) bool {
 // in the local transcript, leaving conversation history unchanged. It reports
 // whether any block changed and does nothing while an operation is active.
 func (e *Engine) SettleRestoredTools(tools *ToolSet) bool {
-	if !e.active.CompareAndSwap(false, true) {
-		return false
-	}
-	defer e.active.Store(false)
+	changed := false
+	_ = e.idle(func() error { changed = e.settleRestoredTools(tools); return nil })
+	return changed
+}
+
+func (e *Engine) settleRestoredTools(tools *ToolSet) bool {
 	resuming := map[string]bool{}
-	if e.CanResumeTools(tools) {
+	if e.canResumeTools(tools) {
 		for _, call := range e.continuation {
 			resuming[call.Tool.ToolCallID] = true
 		}
@@ -53,14 +59,7 @@ func (e *Engine) SettleRestoredTools(tools *ToolSet) bool {
 // ResumePendingTools restores safe handlers and sends their responses on the
 // original conversation.
 func (e *Engine) ResumePendingTools(ctx context.Context, in TurnInput) <-chan Event {
-	if !e.CanResumeTools(in.Tools) {
-		return eventResult(Event{Kind: EventError, Err: ErrNoPendingTools})
-	}
-	calls := make([]ToolCall, len(e.continuation))
-	for i, content := range e.continuation {
-		calls[i] = toolCallOf(content)
-	}
-	return e.startTurn(ctx, in, calls)
+	return e.startTurn(ctx, in, true)
 }
 
 // continuationFromHistory returns the client tool calls left unanswered by the

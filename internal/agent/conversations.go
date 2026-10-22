@@ -119,18 +119,13 @@ func (e *Engine) LoadConversation(ctx context.Context, conversationID string) (*
 // InstallConversation replaces the current conversation while idle. The caller
 // must first check that the load still belongs to its current request.
 func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversation) error {
-	if !e.begin() {
-		return ErrOperationActive
-	}
-	defer e.active.Store(false)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	e.installConversation(conversation)
-	return nil
+	return e.idle(func() error { e.installConversation(conversation); return nil })
 }
 
-// installConversation runs only while the caller owns the operation gate.
+// installConversation runs on the actor, while idle or restoring.
 func (e *Engine) installConversation(conversation *Conversation) {
 	e.opts.ConversationID = conversation.id
 	e.opts.MessageHistory = nil
@@ -139,10 +134,14 @@ func (e *Engine) installConversation(conversation *Conversation) {
 	e.continuation = conversation.continuation
 }
 
-// Snapshot returns a copy of the current transcript. Call it only while the
-// engine is idle, such as after the operation's event channel closes.
-func (e *Engine) Snapshot() []Block     { return e.snapshot().Blocks }
-func (e *Engine) OperationActive() bool { return e.active.Load() }
+// Snapshot returns a copy of the current transcript. During an operation it
+// may be ahead of the events consumed so far; after the operation's channel
+// closes it is the operation's final state.
+func (e *Engine) Snapshot() []Block {
+	return get(e, func() []Block { return e.snapshot().Blocks })
+}
+
+func (e *Engine) OperationActive() bool { return get(e, func() bool { return e.busy }) }
 
 // ValidConversationID reports the canonical lowercase UUID spelling emitted
 // by the backend's uuid.UUID route/model, without adding another dependency.

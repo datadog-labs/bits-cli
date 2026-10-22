@@ -212,6 +212,15 @@ func TestConversationLoadingRejectsMalformedHistory(t *testing.T) {
 
 // A startup read must not contend with turns: the gate belongs to operations
 // that mutate engine state, and listing mutates none.
+// hold claims e as an operation does, until the test ends.
+func hold(t *testing.T, e *Engine) {
+	t.Helper()
+	if err := e.idle(func() error { e.claim(); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.do(func() { e.busy = false }) })
+}
+
 func TestListConversationsIgnoresTheOperationGate(t *testing.T) {
 	response := &assistant.UserConversationsResponse{}
 	response.Data.Type = "user-conversations-response"
@@ -220,10 +229,7 @@ func TestListConversationsIgnoresTheOperationGate(t *testing.T) {
 	}
 	e := New(&historyBackend{list: response}, Config{})
 
-	if !e.begin() {
-		t.Fatal("could not take the operation gate")
-	}
-	t.Cleanup(func() { e.active.Store(false) })
+	hold(t, e)
 
 	result := e.ListConversations(context.Background())
 	if result.Err != nil {
@@ -241,10 +247,7 @@ func TestConversationLoadIgnoresActiveTurnButInstallRejectsIt(t *testing.T) {
 	response := &assistant.ConversationHistoryResponse{}
 	response.Data.Type = "conversation-history-response"
 	e := New(&historyBackend{resp: response}, Config{ConversationID: "old"})
-	if !e.begin() {
-		t.Fatal("could not take the operation gate")
-	}
-	t.Cleanup(func() { e.active.Store(false) })
+	hold(t, e)
 	conversation, err := e.LoadConversation(context.Background(), testConversationID)
 	if err != nil {
 		t.Fatal(err)

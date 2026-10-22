@@ -54,22 +54,22 @@ func (e *Engine) sendOptions(tools *ToolSet) assistant.SendOptions {
 	return opts
 }
 
-// prepare builds a user request with its attachments, environment context,
-// pending project instructions, skills catalog, and invoked skill. It reads
-// delivery state without changing it.
-func (e *Engine) prepare(ctx context.Context, in TurnInput, attached *assistant.AssistantContext, imageNotice string) (userRequest, error) {
-	req := userRequest{message: in.Message, opts: e.sendOptions(in.Tools)}
-	req.opts.Context = attached
+// prepare builds a user request from opts with its environment context,
+// pending project instructions, skills catalog, and invoked skill. It runs off
+// the actor, so it reads only its arguments and the engine's immutable
+// configuration, and never changes delivery state.
+func (e *Engine) prepare(ctx context.Context, in TurnInput, opts assistant.SendOptions, delivery contextDelivery, imageNotice string) (userRequest, error) {
+	req := userRequest{message: in.Message, opts: opts}
 	resumed := req.opts.ConversationID != ""
 	if e.userContext != nil {
 		rendered := e.userContext(ctx)
-		if sent := e.delivery.userContext; sent == nil || *sent != rendered {
+		if sent := delivery.userContext; sent == nil || *sent != rendered {
 			req.userContext = rendered
 		}
 	}
 	parts := []string{req.userContext, imageNotice}
 	var err error
-	if req.instructions, err = e.pendingInstructions(ctx); err != nil {
+	if req.instructions, err = e.pendingInstructions(ctx, resumed, delivery); err != nil {
 		return req, err
 	}
 	if req.instructions != nil {
@@ -98,14 +98,14 @@ func (e *Engine) prepare(ctx context.Context, in TurnInput, attached *assistant.
 	return req, nil
 }
 
-// prepareResume builds the answer to restored tool calls. It carries the
-// pending project instructions, since the restored conversation may hold
+// prepareResume builds the answer to restored tool calls from opts. It carries
+// the pending project instructions, since the restored conversation may hold
 // outdated ones or another project's. The rest of the context belongs to a
-// user message.
-func (e *Engine) prepareResume(ctx context.Context, tools *ToolSet) (userRequest, error) {
-	req := userRequest{opts: e.sendOptions(tools)}
+// user message. Like prepare, it runs off the actor.
+func (e *Engine) prepareResume(ctx context.Context, opts assistant.SendOptions, delivery contextDelivery) (userRequest, error) {
+	req := userRequest{opts: opts}
 	var err error
-	if req.instructions, err = e.pendingInstructions(ctx); err != nil {
+	if req.instructions, err = e.pendingInstructions(ctx, opts.ConversationID != "", delivery); err != nil {
 		return req, err
 	}
 	if req.instructions != nil {
@@ -116,18 +116,18 @@ func (e *Engine) prepareResume(ctx context.Context, tools *ToolSet) (userRequest
 
 // pendingInstructions returns the project instructions update the
 // conversation still needs, or nil once delivered.
-func (e *Engine) pendingInstructions(ctx context.Context) (*string, error) {
-	if e.instructions == nil || e.delivery.instructionsDelivered {
+func (e *Engine) pendingInstructions(ctx context.Context, resumed bool, delivery contextDelivery) (*string, error) {
+	if e.instructions == nil || delivery.instructionsDelivered {
 		return nil, nil
 	}
-	if e.delivery.instructions != nil {
-		return e.delivery.instructions, nil
+	if delivery.instructions != nil {
+		return delivery.instructions, nil
 	}
 	update := e.instructions.Snapshot(ctx)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if e.opts.ConversationID != "" {
+	if resumed {
 		update = env.ReplaceInstructions(update)
 	}
 	return &update, nil

@@ -72,7 +72,7 @@ func writeInstructionTestFile(t *testing.T, dir, name, content string) {
 func deliverUserRequest(t *testing.T, e *Engine, conversation string) string {
 	t.Helper()
 	e.opts.ConversationID = conversation
-	req, err := e.prepare(context.Background(), TurnInput{}, nil, "")
+	req, err := e.prepare(context.Background(), TurnInput{}, e.sendOptions(nil), e.delivery, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestClientSkillsResumeAndEmptySnapshot(t *testing.T) {
 	engine.resetContext()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, _ = engine.prepare(ctx, TurnInput{}, nil, "")
+	_, _ = engine.prepare(ctx, TurnInput{}, engine.sendOptions(nil), engine.delivery, "")
 
 	if got := deliverUserRequest(t, engine, ""); !strings.Contains(got, "created later") {
 		t.Fatal("reset did not discover skills")
