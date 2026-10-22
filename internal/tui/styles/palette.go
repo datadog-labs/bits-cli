@@ -34,8 +34,9 @@ type palette struct {
 
 	// accordionHover is the whole-row hover fill for the clickable disclosure
 	// header. Dark gets a dedicated tone since surfaceRaised there is an
-	// ANSI-256 index rather than a hex value that reads well as a fill; light
-	// just reuses surfaceRaised, which already sits one step above surface.
+	// ANSI-256 index rather than a hex value that reads well as a fill. Light
+	// sits at 80% over the page, light enough that a hovered row reads as a
+	// highlight rather than a block.
 	accordionHover string
 
 	// accordionDetailHover is accordionHover blended at 45% over the
@@ -43,9 +44,9 @@ type palette struct {
 	// keeps the stronger tone.
 	accordionDetailHover string
 
-	// accordionBackground is the disclosure control's resting fill. Fixed to
-	// the same hex in both palettes by design request, rather than tuned per
-	// theme like the rest of this file.
+	// accordionBackground is the disclosure control's resting fill. Dark's hex
+	// is fixed by design request; light is tuned per theme like the rest of
+	// this file.
 	accordionBackground string
 
 	// sweepHot is the peak color of the composer's animated border sweep
@@ -73,11 +74,24 @@ type palette struct {
 	info            string
 	warning         string
 
+	// followBorder is the resting border of the jump-to-latest control, which
+	// floats over the transcript. It is interactive at 40% over the page, so the
+	// resting edge is a quiet relative of the accent the control takes on hover:
+	// dark #8B80F9 over #171921 -> #454277, light #5E6DD6 over #EDEFF6 ->
+	// #B4BBE9.
+	followBorder string
+
+	// selectionSurface and onSelection paint dragged-over cells. Each mode takes
+	// the other's page and primary text, so a selection reads as that row
+	// flipped into the opposite theme.
+	selectionSurface string
+	onSelection      string
+
 	// fullAccessSurface is the focused fill for the approval modal's "Switch
 	// to full access" choice. #EB364B does not exist in this palette (nearest
 	// are critical #C4314B and error), so this is #EB364B at 50% over the
 	// mode's background, pre-derived rather than reusing an existing token:
-	// dark over #171921 -> #812836, light over #ECEFF4 -> #EC93A0.
+	// dark over #171921 -> #812836, light over #EDEFF6 -> #EC93A1.
 	fullAccessSurface string
 }
 
@@ -102,6 +116,9 @@ func darkPalette() palette {
 		accordionHover:       "#22242B",
 		accordionDetailHover: "#1C1E26",
 		accordionBackground:  "#22242B",
+		followBorder:         "#454277",
+		selectionSurface:     "#EDEFF6",
+		onSelection:          "#202F38",
 		sweepHot:             "#A2C6FF",
 		link:                 "#3d8bd0",
 		busy:                 "#F5C453",
@@ -121,32 +138,39 @@ func darkPalette() palette {
 	}
 }
 
-// background (darker = raised, as in Nord/Solarized), since there is no
-// headroom above a 94%-lightness background. Foregrounds are darkened to
-// match, each checked against the darkest surface it renders on (builder.go).
-// The three text levels are picked by eye; see the palette struct.
+// lightPalette turns its elevation ramp twice: the composer takes the headroom
+// above the page by going near-white, and everything stacked on the composer
+// rises by darkening away from it (as in Nord/Solarized). Foregrounds are
+// darkened to match, each checked against the darkest surface it renders on
+// (builder.go). The three text levels are picked by eye; see the palette
+// struct.
 func lightPalette() palette {
 	return palette{
-		primary:              "#5e6dd6",
-		interactive:          "#3F4991",
-		secondary:            "#1d2140",
-		onAccent:             "#FFFFFF",
-		onWarning:            "#1A1A1A",
-		textPrimary:          "#000000",
-		textSecondary:        "#5E5F62",
-		textTertiary:         "#989BA0",
-		background:           "#ECEFF4",
-		surface:              "#CCD3DF",
+		primary:     "#5e6dd6",
+		interactive: "#5E6DD6",
+		secondary:   "#1d2140",
+		onAccent:    "#FFFFFF",
+		onWarning:   "#1A1A1A",
+		// textPrimary is #1C2B34 at 98% over this palette's background.
+		textPrimary:   "#202F38",
+		textSecondary: "#737373",
+		textTertiary:  "#999BA2",
+		background:    "#EDEFF6",
+		// surface is #FFFFFF at 90% over this palette's background.
+		surface:              "#FDFDFE",
 		surfaceRaised:        "#BDC5D3",
 		approvalSurface:      "#B7C1D5",
-		inputRule:            "#383A40",
+		inputRule:            "#D2D2DA",
 		borderSubtle:         "#9AA3B2",
-		codeSurface:          "#CED3DD",
+		codeSurface:          "#CBCBCF",
 		codeText:             "#1C2E38",
-		accordionHover:       "#BDC5D3",
-		accordionDetailHover: "#D7DCE5",
-		accordionBackground:  "#22242B",
-		sweepHot:             "#A2C6FF",
+		accordionHover:       "#C7CDDA",
+		accordionDetailHover: "#DCE0E9",
+		accordionBackground:  "#E2E2E6",
+		followBorder:         "#B4BBE9",
+		selectionSurface:     "#171921",
+		onSelection:          "#FFFFFF",
+		sweepHot:             "#505DB6",
 		link:                 "#006bc2",
 		busy:                 "#7A5200",
 		busySurface:          "#E5D198",
@@ -161,6 +185,6 @@ func lightPalette() palette {
 		critical:             "#C4314B",
 		info:                 "#632CA6",
 		warning:              "#F5A623",
-		fullAccessSurface:    "#EC93A0",
+		fullAccessSurface:    "#EC93A1",
 	}
 }

@@ -14,6 +14,8 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
+
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 // A frame's surfaces tile the screen top to bottom, View draws each one on the
@@ -163,5 +165,34 @@ func TestFrameAtClassifiesEveryRow(t *testing.T) {
 		if got := f.at(image.Pt(3, y)); got != want {
 			t.Errorf("row %d = %v, want %v", y, got, want)
 		}
+	}
+}
+
+// TestChatFooterUsesSecondaryText pins the row below the composer to the
+// readable text level rather than the texture level.
+func TestChatFooterUsesSecondaryText(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		isDark bool
+	}{
+		{name: "dark", isDark: true},
+		{name: "light", isDark: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			theme := styles.Default(test.isDark)
+			m := newShell()
+			m.applyStyles(theme)
+			m.mode = ModeChat
+			m.resize(80, 24)
+			m.workspaceDisplayPath = "/tmp/workspace"
+
+			footer := m.chatFooter()
+			if !strings.Contains(footer, sgrForeground(t, theme.Text.Secondary.GetForeground())) {
+				t.Errorf("footer is not painted with secondary text: %q", footer)
+			}
+			if strings.Contains(footer, sgrForeground(t, theme.Text.Tertiary.GetForeground())) {
+				t.Errorf("footer still painted with tertiary text: %q", footer)
+			}
+		})
 	}
 }

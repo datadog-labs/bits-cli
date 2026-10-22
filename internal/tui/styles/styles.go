@@ -96,10 +96,14 @@ type Chat struct {
 	// rather than busy.
 	StatusSpinner Spinner
 
-	Meta        lipgloss.Style
+	Meta lipgloss.Style
+
+	// NoticeInfo, NoticeWarn and NoticeError style a notice's leading marker;
+	// NoticeText styles the message beside it, which carries no level of its own.
 	NoticeInfo  lipgloss.Style
 	NoticeWarn  lipgloss.Style
 	NoticeError lipgloss.Style
+	NoticeText  lipgloss.Style
 }
 
 type Diff struct {
@@ -219,6 +223,10 @@ type Theme struct {
 	// revisit if bits-cli ever gets a settings layer to opt out of it.
 	Background color.Color
 
+	// FollowBorder is the resting border of the jump-to-latest control, derived
+	// from the accent the control takes on hover rather than from the panel edge.
+	FollowBorder color.Color
+
 	// Logo is the brand accent for the startup wordmark: decorative, with no
 	// state or interaction behind it.
 	Logo lipgloss.Style
@@ -235,6 +243,14 @@ type Theme struct {
 	Selector    Selector
 	TextInput   textinput.Styles
 	Tabs        Tabs
+	Selection   Selection
+}
+
+// Selection paints cells the pointer has dragged over. Both colors are stated
+// so the selection renders from the theme rather than from terminal defaults.
+type Selection struct {
+	Foreground color.Color
+	Background color.Color
 }
 
 // Default returns the complete UI theme for a terminal background mode.

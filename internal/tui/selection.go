@@ -281,7 +281,7 @@ func (s *selection) active() bool { return s.selecting() || s.selected() }
 
 // render paints the active selection over frame. The original frame content
 // is returned byte-for-byte when no cells are selected.
-func (s *selection) render(frame selectionFrame) string {
+func (s *selection) render(frame selectionFrame, cell uv.Style) string {
 	if !s.selected() {
 		return frame.content
 	}
@@ -310,8 +310,7 @@ func (s *selection) render(frame selectionFrame) string {
 				unitEnd = x + 1
 			}
 			if unitStart <= end && unitEnd-1 >= start {
-				cell := &line[unitStart]
-				cell.Style = uv.Style{Attrs: uv.AttrReverse}
+				line[unitStart].Style = cell
 			}
 			x = unitEnd
 		}

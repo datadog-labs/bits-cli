@@ -157,15 +157,20 @@ func build(isDark bool, p palette) Theme {
 
 		Logo: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.interactive)),
 
-		Input:       input,
-		Text:        text,
-		Feedback:    feedback,
-		Panel:       panel,
-		Approval:    approval,
-		Permissions: permissionsPanel,
-		Accordion:   accordion,
-		Selector:    selector,
-		TextInput:   textInput,
+		Input:        input,
+		Text:         text,
+		Feedback:     feedback,
+		Panel:        panel,
+		Approval:     approval,
+		Permissions:  permissionsPanel,
+		Accordion:    accordion,
+		Selector:     selector,
+		FollowBorder: lipgloss.Color(p.followBorder),
+		Selection: Selection{
+			Foreground: lipgloss.Color(p.onSelection),
+			Background: lipgloss.Color(p.selectionSurface),
+		},
+		TextInput: textInput,
 		Tabs: Tabs{
 			Item: text.Primary.Padding(0, 1),
 			Active: lipgloss.NewStyle().Bold(true).
@@ -213,6 +218,8 @@ func build(isDark bool, p palette) Theme {
 			NoticeInfo:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.info)),
 			NoticeWarn:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.warning)),
 			NoticeError: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.critical)),
+			// The marker carries the level; the message itself is ordinary prose.
+			NoticeText: lipgloss.NewStyle().Foreground(lipgloss.Color(p.textSecondary)),
 		},
 		Editor: Editor{
 			MenuFrame: lipgloss.NewStyle().

@@ -238,6 +238,7 @@ type Model struct {
 	list       *chat.List
 	chatStyles chat.Styles
 	styles     styles.Theme // terminal styles; dark until detected
+	monochrome bool         // terminal cannot paint color; set from ColorProfileMsg
 
 	// One repaint clock samples independent elapsed-time timelines. Activity
 	// covers chat spinners and picker loading; the second timeline drives the

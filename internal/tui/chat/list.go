@@ -960,7 +960,7 @@ func renderNotice(n Notice, width int, sty Styles) string {
 	}
 	// Escape untrusted text before wrapping it into selectable document rows.
 	text := escape.Multiline(n.Text)
-	lines := textwrap.WrapProse(width-3, text, nil)
+	lines := textwrap.WrapProse(width-3, text, sty.NoticeText)
 	for i, line := range lines {
 		prefix := "   "
 		if i == 0 {

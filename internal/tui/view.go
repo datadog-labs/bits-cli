@@ -188,7 +188,7 @@ func (m *Model) layout() frame {
 // routed to a shown prompt; a docked one leaves the editor visible but inert.
 func (m *Model) chatView() string {
 	if m.selection.active() {
-		return m.selection.render(m.visibleSelectionFrame(m.selection.scope))
+		return m.selection.render(m.visibleSelectionFrame(m.selection.scope), m.selectionCellStyle())
 	}
 
 	base := m.followOverlay(m.chatViewBase(m.list.Render()))
@@ -323,7 +323,8 @@ func (m *Model) chatFooter() string {
 	if text == "" {
 		return ""
 	}
-	return strings.Repeat(" ", indent) + m.styles.Text.Tertiary.Render(text)
+	// Secondary, not tertiary: the path and token count are meant to be read.
+	return strings.Repeat(" ", indent) + m.styles.Text.Secondary.Render(text)
 }
 
 func chatFooterText(path string, usage *assistant.Usage, width int) string {

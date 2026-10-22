@@ -1031,6 +1031,30 @@ func TestViewportStaysFilledAfterGrowing(t *testing.T) {
 	}
 }
 
+// TestNoticeTextCarriesItsOwnColor is the regression guard for the notice body
+// having been wrapped with a nil style: it then drew in the terminal's own
+// foreground over a row this theme paints, which washed out in light mode.
+func TestNoticeTextCarriesItsOwnColor(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		isDark bool
+	}{
+		{name: "dark", isDark: true},
+		{name: "light", isDark: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sty := DefaultStyles(test.isDark)
+			rendered := renderNotice(Notice{Level: NoticeWarn, Text: "something to report"}, 40, sty)
+
+			r, g, b, _ := sty.NoticeText.GetForeground().RGBA()
+			want := fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)
+			if !strings.Contains(rendered, want) {
+				t.Errorf("notice text foreground %s missing from %q", want, rendered)
+			}
+		})
+	}
+}
+
 func TestServerStackKeepsIndependentDisclosureOnCompletion(t *testing.T) {
 	list := NewList()
 	list.SetStyles(DefaultStyles(true))

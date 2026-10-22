@@ -59,7 +59,7 @@ func (m *Model) followOverlay(base string) string {
 		return base
 	}
 	marker := m.styles.Input.Marker
-	borderColor := m.styles.Panel.Frame.GetBorderTopForeground()
+	borderColor := m.styles.FollowBorder
 	style := lipgloss.NewStyle().
 		Foreground(marker.GetForeground()).
 		Border(lipgloss.RoundedBorder())

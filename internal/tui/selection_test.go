@@ -6,7 +6,12 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
 // testSelectionFrame is a transcript-only frame: no lower pane, no header.
@@ -59,7 +64,7 @@ func TestSelectionRemainsRenderedAfterFinishUntilCleared(t *testing.T) {
 	if !got.selected() {
 		t.Fatal("finished selection was not retained")
 	}
-	if rendered := got.render(frame); !strings.Contains(rendered, "7") {
+	if rendered := got.render(frame, themeSelection(true)); !strings.Contains(rendered, "7") {
 		t.Fatalf("render() = %q, want retained reverse highlight", rendered)
 	}
 
@@ -67,7 +72,7 @@ func TestSelectionRemainsRenderedAfterFinishUntilCleared(t *testing.T) {
 	if got.selected() || got.selecting() {
 		t.Fatal("clear did not remove persistent selection")
 	}
-	if rendered := got.render(frame); rendered != frame.content {
+	if rendered := got.render(frame, themeSelection(true)); rendered != frame.content {
 		t.Fatalf("render() after clear = %q, want original content", rendered)
 	}
 
@@ -86,7 +91,7 @@ func TestSelectionUsesVirtualRowsAfterScrolling(t *testing.T) {
 
 	var got selection
 	got.begin(visible, 1, 0)
-	if rendered := got.render(visible); ansi.Strip(rendered) != "FGHIJ\nKLMNO" {
+	if rendered := got.render(visible, themeSelection(true)); ansi.Strip(rendered) != "FGHIJ\nKLMNO" {
 		t.Fatalf("single-point render changed visible frame: %q", rendered)
 	}
 	if text := got.finish(visible, 1, 1, document); text != "ghij\nkl" {
@@ -100,7 +105,7 @@ func TestSelectionRendersReverseAndCopiesANSIText(t *testing.T) {
 	got.begin(frame, 2, 0) // The continuation cell of 界.
 	got.extend(frame, 3, 0)
 
-	rendered := got.render(frame)
+	rendered := got.render(frame, themeSelection(true))
 	if ansi.Strip(rendered) != "A界B " {
 		t.Fatalf("render() stripped text = %q, want %q", ansi.Strip(rendered), "A界B ")
 	}
@@ -237,6 +242,48 @@ func TestHeaderRowsAreNotSelectableInTheVisibleFrame(t *testing.T) {
 	}
 }
 
+// themeSelection is the cell style the model paints when the terminal can show
+// color, mirroring Model.selectionCellStyle.
+func themeSelection(isDark bool) uv.Style {
+	sel := styles.Default(isDark).Selection
+	return uv.Style{Fg: sel.Foreground, Bg: sel.Background}
+}
+
+// selectedBackground is the SGR a selected cell's fill emits, derived from the
+// token so these assertions follow it instead of pinning an escape sequence.
+func selectedBackground(t *testing.T, isDark bool) string {
+	t.Helper()
+	return sgrColor(t, 48, styles.Default(isDark).Selection.Background)
+}
+
+// TestSelectionPaintsTheThemeNotReverseVideo is the regression guard for
+// selection having been uv.AttrReverse, which inverts the terminal's own
+// default colors rather than the theme's, so the fill drifted from the palette.
+func TestSelectionPaintsTheThemeNotReverseVideo(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		isDark bool
+	}{
+		{name: "dark", isDark: true},
+		{name: "light", isDark: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			frame := testSelectionFrame("abcde", 5, 1)
+			var got selection
+			got.begin(frame, 0, 0)
+			got.extend(frame, 4, 0)
+
+			rendered := got.render(frame, themeSelection(test.isDark))
+			if strings.Contains(rendered, "\x1b[7m") {
+				t.Errorf("selection still uses reverse video: %q", rendered)
+			}
+			if want := selectedBackground(t, test.isDark); !strings.Contains(rendered, want) {
+				t.Errorf("selection fill %s missing from %q", want, rendered)
+			}
+		})
+	}
+}
+
 // Excluding the header from the copy is not enough: an anchor inside it must
 // also leave the rows unpainted.
 func TestSelectionStartedInTheHeaderDoesNotPaintIt(t *testing.T) {
@@ -246,13 +293,14 @@ func TestSelectionStartedInTheHeaderDoesNotPaintIt(t *testing.T) {
 	got.begin(frame, 0, 0)
 	got.extend(frame, 4, 3)
 
-	lines := strings.Split(got.render(frame), "\n")
+	lines := strings.Split(got.render(frame, themeSelection(true)), "\n")
+	fill := selectedBackground(t, true)
 	for i := range 2 {
-		if strings.Contains(lines[i], "\x1b[7m") {
+		if strings.Contains(lines[i], fill) {
 			t.Fatalf("header row %d painted as selected: %q", i, lines[i])
 		}
 	}
-	if !strings.Contains(lines[2], "\x1b[7m") {
+	if !strings.Contains(lines[2], fill) {
 		t.Fatalf("first transcript row not painted: %q", lines[2])
 	}
 }
@@ -389,5 +437,44 @@ func TestControlClickBreaksMultiClickSequence(t *testing.T) {
 	got.beginClick(frame, selectionScopeTranscript, 1, 0, false, start.Add(200*time.Millisecond))
 	if got.selected() || got.clicks.count != 1 {
 		t.Fatalf("click after control continued the sequence: selected=%t count=%d", got.selected(), got.clicks.count)
+	}
+}
+
+// TestSelectionStaysVisibleWithoutColor covers the profiles where ultraviolet
+// drops Fg and Bg but keeps attributes: painting only colors would leave a
+// selection indistinguishable from unselected text, so those fall back to
+// reverse video. ANSI and above keep the theme's colors.
+func TestSelectionStaysVisibleWithoutColor(t *testing.T) {
+	for _, test := range []struct {
+		profile colorprofile.Profile
+		reverse bool
+	}{
+		{profile: colorprofile.NoTTY, reverse: true},
+		{profile: colorprofile.ASCII, reverse: true},
+		{profile: colorprofile.ANSI, reverse: false},
+		{profile: colorprofile.ANSI256, reverse: false},
+		{profile: colorprofile.TrueColor, reverse: false},
+	} {
+		t.Run(test.profile.String(), func(t *testing.T) {
+			m := newShell()
+			m.Update(tea.ColorProfileMsg{Profile: test.profile})
+
+			cell := m.selectionCellStyle()
+			if test.reverse {
+				if cell.Attrs&uv.AttrReverse == 0 {
+					t.Errorf("%s: no reverse attribute; the selection would vanish", test.profile)
+				}
+				if cell.Fg != nil || cell.Bg != nil {
+					t.Errorf("%s: colors set alongside reverse, which would invert them", test.profile)
+				}
+				return
+			}
+			if cell.Attrs&uv.AttrReverse != 0 {
+				t.Errorf("%s: reverse attribute would invert the theme's colors", test.profile)
+			}
+			if cell.Fg == nil || cell.Bg == nil {
+				t.Errorf("%s: selection colors not set", test.profile)
+			}
+		})
 	}
 }
