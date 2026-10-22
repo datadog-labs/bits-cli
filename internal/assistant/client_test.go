@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -288,6 +289,31 @@ func TestSend_RequiredResponseHeaderRejectsRedirect(t *testing.T) {
 	})
 	if err == nil || called {
 		t.Fatalf("redirected guarded stream: error = %v, callback called = %v", err, called)
+	}
+}
+
+func TestSubscribe_StreamsTaskReplayMarkerAndLive(t *testing.T) {
+	const id = "0b6f1a52-2f2c-4c43-9a3e-1d2b3c4d5e6f"
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v2/assistant/conversation/"+id+"/subscribe" ||
+			r.URL.Query().Get("subtask_id") != "assistant-task.1" {
+			t.Errorf("request = %s %s", r.Method, r.URL)
+		}
+		writeStream(t, w, textLine(id, "replayed"), keepaliveLine(id),
+			`{"data":{"type":"assistant-response","attributes":{"structured_message":{"role":"assistant","message_id":"replay_complete","content":{"type":"replay_complete","replay_kind":"full"}}}}}`+"\n\n",
+			textLine(id, "live"))
+	})
+	var got []string
+	err := c.Subscribe(context.Background(), id, SubscribeOptions{TaskID: "assistant-task.1"}, func(msg Message) error {
+		got = append(got, msg.Content.Type+":"+msg.Content.TextBody())
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	want := []string{"markdown_fragment:replayed", "replay_complete:", "markdown_fragment:live"}
+	if !slices.Equal(got, want) {
+		t.Errorf("messages = %q, want %q", got, want)
 	}
 }
 

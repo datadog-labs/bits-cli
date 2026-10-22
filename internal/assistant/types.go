@@ -385,6 +385,9 @@ const (
 
 	ContentBackgroundTaskUpdate = "background_task_update" // async investigation/agent progress + final
 	ContentTurnStatus           = "turn_status"            // turn started/ended marker (skipped on POST responses)
+	// ContentReplayComplete ends a /subscribe replay: what came before it is a
+	// complete snapshot. Its message id is constant; never dedupe on it.
+	ContentReplayComplete = "replay_complete"
 
 	// --- never streamed to clients (backend LLM-context optimization) ---
 
@@ -710,7 +713,7 @@ const (
 	KindWidget                        // widget_def / widget: rich viz, render or summarize
 	KindDashboard                     // dashboard: whole dashboard, summarize
 	KindProgress                      // background_task_update: async task progress/final
-	KindTurnMarker                    // turn_status: turn started/ended (not seen on POST)
+	KindTurnMarker                    // turn_status, replay_complete: stream markers (not seen on POST)
 	KindStop                          // user_stop: interrupted-turn marker
 	KindInternal                      // provider_compaction: never client-visible
 )
@@ -734,7 +737,7 @@ func (c *Content) Kind() ContentKind {
 		return KindDashboard
 	case ContentBackgroundTaskUpdate:
 		return KindProgress
-	case ContentTurnStatus:
+	case ContentTurnStatus, ContentReplayComplete:
 		return KindTurnMarker
 	case ContentUserStop:
 		return KindStop
