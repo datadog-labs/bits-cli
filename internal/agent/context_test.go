@@ -67,27 +67,33 @@ func writeInstructionTestFile(t *testing.T, dir, name, content string) {
 	}
 }
 
+// deliverUserRequest prepares a user message on conversation as if the
+// backend received it, and returns its custom user context.
+func deliverUserRequest(t *testing.T, e *Engine, conversation string) string {
+	t.Helper()
+	e.opts.ConversationID = conversation
+	req, err := e.prepare(context.Background(), TurnInput{}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.delivery.pending(req)
+	e.delivery.delivered(req)
+	return req.opts.CustomUserContext
+}
+
 func TestProjectInstructionsEmptySnapshotLoadsOnce(t *testing.T) {
 	dir := t.TempDir()
-	instructions := newProjectInstructions(dir)
-	opts := assistant.SendOptions{CustomUserContext: "existing"}
-	first := instructions.apply(context.Background(), opts)
-	instructions.acknowledge()
-	if first.CustomUserContext != "existing" {
-		t.Fatalf("empty snapshot = %q", first.CustomUserContext)
+	engine := New(nil, Config{ProjectInstructions: env.NewInstructions(dir)})
+	if got := deliverUserRequest(t, engine, ""); got != "" {
+		t.Fatalf("empty snapshot = %q", got)
 	}
 	writeInstructionTestFile(t, dir, "AGENTS.md", "created later")
-	second := instructions.apply(context.Background(), opts)
-	if second.CustomUserContext != "existing" {
-		t.Fatalf("snapshot was reloaded: %q", second.CustomUserContext)
+	if got := deliverUserRequest(t, engine, ""); got != "" {
+		t.Fatalf("snapshot was reloaded: %q", got)
 	}
-	instructions.reset()
-	third := instructions.apply(context.Background(), opts)
-	if !strings.Contains(third.CustomUserContext, "created later") {
-		t.Fatalf("reset did not reload: %q", third.CustomUserContext)
-	}
-	if opts.CustomUserContext != "existing" {
-		t.Fatalf("default context mutated: %q", opts.CustomUserContext)
+	engine.resetContext()
+	if got := deliverUserRequest(t, engine, ""); !strings.Contains(got, "created later") {
+		t.Fatalf("reset did not reload: %q", got)
 	}
 }
 
@@ -110,15 +116,13 @@ func TestProjectInstructionsResumeUpdates(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			instructions := newProjectInstructions(dir)
-			ctx := context.Background()
+			engine := New(nil, Config{ProjectInstructions: env.NewInstructions(dir)})
 			if !tc.resume {
 				if tc.before != "" {
 					writeInstructionTestFile(t, dir, "AGENTS.md", tc.before)
 				}
-				instructions.apply(ctx, assistant.SendOptions{})
-				instructions.acknowledge()
-				instructions.reset()
+				deliverUserRequest(t, engine, "")
+				engine.resetContext()
 			}
 			if tc.after != "" {
 				writeInstructionTestFile(t, dir, "AGENTS.md", tc.after)
@@ -127,16 +131,14 @@ func TestProjectInstructionsResumeUpdates(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			opts := assistant.SendOptions{ConversationID: "conversation", CustomUserContext: "existing"}
-			got := instructions.apply(ctx, opts).CustomUserContext
-			instructions.acknowledge()
-			if !strings.HasPrefix(got, "existing\n\n"+tc.want) {
+			got := deliverUserRequest(t, engine, "conversation")
+			if !strings.HasPrefix(got, tc.want) {
 				t.Fatalf("update = %q, want notice %q", got, tc.want)
 			}
 			if strings.TrimSpace(tc.after) != "" && !strings.Contains(got, "\n"+tc.after+"\n") {
 				t.Fatalf("missing new contents in %q", got)
 			}
-			if next := instructions.apply(ctx, opts).CustomUserContext; next != "existing" {
+			if next := deliverUserRequest(t, engine, "conversation"); next != "" {
 				t.Fatalf("continuation repeated update: %q", next)
 			}
 		})
@@ -152,14 +154,13 @@ func TestProjectInstructionsCascadingReplacement(t *testing.T) {
 	}
 	writeInstructionTestFile(t, repo, "AGENTS.md", "root instructions")
 	writeInstructionTestFile(t, nested, "AGENTS.md", "nested instructions")
-	instructions := newProjectInstructions(nested)
-	instructions.apply(context.Background(), assistant.SendOptions{})
-	instructions.acknowledge()
+	engine := New(nil, Config{ProjectInstructions: env.NewInstructions(nested)})
+	deliverUserRequest(t, engine, "")
 	if err := os.Remove(filepath.Join(nested, "AGENTS.md")); err != nil {
 		t.Fatal(err)
 	}
-	instructions.reset()
-	got := instructions.apply(context.Background(), assistant.SendOptions{ConversationID: "conversation"}).CustomUserContext
+	engine.resetContext()
+	got := deliverUserRequest(t, engine, "conversation")
 	if !strings.HasPrefix(got, instructionsReplacementNotice) || !strings.Contains(got, "root instructions") || strings.Contains(got, "nested instructions") {
 		t.Fatalf("remaining cascade = %q", got)
 	}
@@ -176,7 +177,7 @@ func TestConversationInstructionsSnapshotAndReset(t *testing.T) {
 	}
 	writeInstructionTestFile(t, dir, "AGENTS.md", "updated instructions")
 	drain(t, engine, TurnInput{Message: "visible prompt"})
-	if got := backend.opts[1].CustomUserContext; got != "existing" {
+	if got := backend.opts[1].CustomUserContext; got != "" {
 		t.Fatalf("later context = %q", got)
 	}
 	for _, message := range backend.userMessages("new-conversation-1") {
@@ -198,7 +199,6 @@ func TestResumedConversationReplacesUnknownInstructions(t *testing.T) {
 	dir := t.TempDir()
 	writeInstructionTestFile(t, dir, "AGENTS.md", "local instructions")
 	engine := New(backend, Config{ConversationID: "existing", ProjectInstructions: env.NewInstructions(dir)})
-	instructions := engine.projectInstructions
 	drain(t, engine, TurnInput{Message: "resume"})
 	if !strings.HasPrefix(backend.opts[0].CustomUserContext, instructionsReplacementNotice) || !strings.Contains(backend.opts[0].CustomUserContext, "local instructions") {
 		t.Fatal("resumed conversation did not replace unknown prior instructions")
@@ -207,7 +207,7 @@ func TestResumedConversationReplacesUnknownInstructions(t *testing.T) {
 		t.Fatal(err)
 	}
 	drain(t, engine, TurnInput{Message: "new"})
-	if instructions.phase != instructionsDelivered || !strings.Contains(backend.opts[1].CustomUserContext, "local instructions") {
+	if !engine.delivery.instructionsDelivered || !strings.Contains(backend.opts[1].CustomUserContext, "local instructions") {
 		t.Fatal("new conversation did not load instructions")
 	}
 }
@@ -255,25 +255,23 @@ func TestConversationSwitchResetsInstructionsOnlyOnCommit(t *testing.T) {
 			response.Data.Type = "conversation-history-response"
 			backend := &historyBackend{resp: response}
 			engine := New(backend, Config{ConversationID: "old", ProjectInstructions: env.NewInstructions(t.TempDir())})
-			instructions := engine.projectInstructions
-			instructions.apply(context.Background(), assistant.SendOptions{})
-			instructions.acknowledge()
+			deliverUserRequest(t, engine, "old")
 			conversation, err := engine.LoadConversation(context.Background(), testConversationID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if instructions.phase != instructionsDelivered {
+			if !engine.delivery.instructionsDelivered {
 				t.Fatal("switch reset instructions before commit")
 			}
 			if commit {
 				if err := engine.InstallConversation(context.Background(), conversation); err != nil {
 					t.Fatal(err)
 				}
-				if instructions.phase != instructionsUnprepared {
+				if engine.delivery != (contextDelivery{}) {
 					t.Fatal("committed switch retained previous conversation instructions")
 				}
 			} else {
-				if instructions.phase != instructionsDelivered {
+				if !engine.delivery.instructionsDelivered {
 					t.Fatal("discarded switch lost previous conversation instructions")
 				}
 			}
@@ -328,10 +326,6 @@ func TestProjectInstructionsRetryUntilDelivered(t *testing.T) {
 			})
 		}
 	}
-}
-
-func newProjectInstructions(path string) *instructionDelivery {
-	return &instructionDelivery{source: env.NewInstructions(path)}
 }
 
 const instructionsReplacementNotice = "<project_instructions>\nThis block replaces all earlier provided <project_instructions> blocks."
@@ -403,24 +397,23 @@ func TestClientSkillsResumeAndEmptySnapshot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	engine := New(nil, Config{ClientSkills: env.NewSkills(dir, nil)})
-	opts := engine.applySkills(context.Background(), assistant.SendOptions{}, "")
-	if opts.CustomUserContext != "" {
+	if got := deliverUserRequest(t, engine, ""); got != "" {
 		t.Fatal("unexpected empty catalog")
 	}
 	writeSkill(t, dir, ".agents/skills/example", "example", "created later")
-	if got := engine.applySkills(context.Background(), opts, ""); got.CustomUserContext != "" {
+	if got := deliverUserRequest(t, engine, ""); got != "" {
 		t.Fatal("empty snapshot was rediscovered")
 	}
 	engine.resetContext()
-	if got := engine.applySkills(context.Background(), assistant.SendOptions{ConversationID: "existing"}, ""); !strings.Contains(got.CustomUserContext, "created later") {
-		t.Fatalf("resumed conversation did not rescan skills: %q", got.CustomUserContext)
+	if got := deliverUserRequest(t, engine, "existing"); !strings.Contains(got, "created later") {
+		t.Fatalf("resumed conversation did not rescan skills: %q", got)
 	}
 	engine.resetContext()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	engine.applySkills(ctx, assistant.SendOptions{}, "")
+	_, _ = engine.prepare(ctx, TurnInput{}, nil, "")
 
-	if got := engine.applySkills(context.Background(), assistant.SendOptions{}, ""); !strings.Contains(got.CustomUserContext, "created later") {
+	if got := deliverUserRequest(t, engine, ""); !strings.Contains(got, "created later") {
 		t.Fatal("reset did not discover skills")
 	}
 }
@@ -429,14 +422,13 @@ func TestClientSkillsResumeWithoutSkillsSupersedesOlderCatalog(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	engine := New(nil, Config{ClientSkills: env.NewSkills(t.TempDir(), nil)})
 	for range 2 {
-		got := engine.applySkills(context.Background(), assistant.SendOptions{ConversationID: "existing"}, "")
-		if got.CustomUserContext != clientSkillsRemovalNotice {
-			t.Fatalf("resume without skills = %q", got.CustomUserContext)
+		if got := deliverUserRequest(t, engine, "existing"); got != clientSkillsRemovalNotice {
+			t.Fatalf("resume without skills = %q", got)
 		}
 	}
 	engine.resetContext()
-	if got := engine.applySkills(context.Background(), assistant.SendOptions{}, ""); got.CustomUserContext != "" {
-		t.Fatalf("new conversation without skills = %q", got.CustomUserContext)
+	if got := deliverUserRequest(t, engine, ""); got != "" {
+		t.Fatalf("new conversation without skills = %q", got)
 	}
 }
 

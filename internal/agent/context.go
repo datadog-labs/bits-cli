@@ -3,106 +3,106 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
-// turnRequest is one backend request of a turn: the user's message, or the
-// answers to a round of client tool calls.
-type turnRequest struct {
-	user  *userMessage
-	tools []assistant.ClientToolResponse
+// contextDelivery tracks context known to be in the current conversation.
+// Delivery is recorded after a response arrives or a request succeeds.
+type contextDelivery struct {
+	// instructions is the prepared project instructions update. It is resent
+	// unchanged until delivered, even if the files change in the meantime.
+	instructions          *string
+	instructionsDelivered bool
+	// userContext is the environment context last delivered; nil when unknown.
+	userContext *string
 }
 
-// userMessage holds what is sent with the user's text and never with tool
-// answers.
-type userMessage struct {
-	text         string
-	context      *assistant.AssistantContext
-	userContext  string
-	imageNotice  string
-	skillContext string
+// userRequest is a prepared user message and the context it carries.
+type userRequest struct {
+	message      string
+	opts         assistant.SendOptions
+	instructions *string // instructions update, until delivered
+	userContext  string  // environment context, unless already delivered
 }
 
-func (r turnRequest) payload() any {
-	if r.user != nil {
-		return r.user.text
+// pending retains the request's instructions update for retries.
+func (d *contextDelivery) pending(req userRequest) {
+	if req.instructions != nil {
+		d.instructions = req.instructions
 	}
-	return r.tools
 }
 
-// sendOptions describes one request. Client tools ride on every request
-// because the backend does not retain them. Conversation-level deliveries,
-// such as project instructions, are added by the caller that acknowledges them.
-func (e *Engine) sendOptions(tools []assistant.ClientTool, req turnRequest) assistant.SendOptions {
+// delivered records the context carried by a successful request or response.
+func (d *contextDelivery) delivered(req userRequest) {
+	if req.instructions != nil {
+		d.instructionsDelivered = true
+	}
+	if req.userContext != "" {
+		d.userContext = &req.userContext
+	}
+}
+
+// sendOptions builds the options shared by user and tool-result requests.
+// Client tools are included each time because the backend does not retain them.
+func (e *Engine) sendOptions(tools *ToolSet) assistant.SendOptions {
 	opts := e.opts
-	opts.ClientTools = tools
-	if req.user != nil {
-		opts.Context = req.user.context
-		opts.CustomUserContext = joinUserContext(req.user.userContext, req.user.imageNotice)
-	}
+	opts.ClientTools = tools.Definitions()
 	return opts
 }
 
-type instructionsPhase uint8
-
-const (
-	instructionsUnprepared instructionsPhase = iota
-	instructionsPending
-	instructionsDelivered
-)
-
-// instructionDelivery tracks instruction delivery for one conversation.
-// Its engine serializes access.
-type instructionDelivery struct {
-	source         *env.Instructions
-	phase          instructionsPhase
-	pendingContext string
-}
-
-// apply prepares an update once per conversation. The exact update stays pending
-// until delivery, even if a failed request assigns a conversation ID.
-func (p *instructionDelivery) apply(ctx context.Context, opts assistant.SendOptions) assistant.SendOptions {
-	if p == nil || p.phase == instructionsDelivered {
-		return opts
-	}
-	if p.phase == instructionsUnprepared {
-		current := p.source.Snapshot(ctx)
-		if ctx.Err() != nil {
-			return opts
+// prepare builds a user request with its attachments, environment context,
+// pending project instructions, skills catalog, and invoked skill. It reads
+// delivery state without changing it.
+func (e *Engine) prepare(ctx context.Context, in TurnInput, attached *assistant.AssistantContext, imageNotice string) (userRequest, error) {
+	req := userRequest{message: in.Message, opts: e.sendOptions(in.Tools)}
+	req.opts.Context = attached
+	resumed := req.opts.ConversationID != ""
+	if e.userContext != nil {
+		rendered := e.userContext(ctx)
+		if sent := e.delivery.userContext; sent == nil || *sent != rendered {
+			req.userContext = rendered
 		}
-		update := current
-		if opts.ConversationID != "" {
-			update = env.ReplaceInstructions(current)
+	}
+	parts := []string{req.userContext, imageNotice}
+	if e.instructions != nil && !e.delivery.instructionsDelivered {
+		req.instructions = e.delivery.instructions
+		if req.instructions == nil {
+			update := e.instructions.Snapshot(ctx)
+			if err := ctx.Err(); err != nil {
+				return req, err
+			}
+			if resumed {
+				update = env.ReplaceInstructions(update)
+			}
+			req.instructions = &update
 		}
-		p.pendingContext = update
-		p.phase = instructionsPending
+		parts = append(parts, *req.instructions)
 	}
-	if p.pendingContext != "" {
-		if opts.CustomUserContext != "" {
-			opts.CustomUserContext += "\n\n"
+	if e.clientSkills != nil {
+		if catalog, err := e.clientSkills.Catalog(ctx); err == nil {
+			if catalog == "" && resumed {
+				catalog = env.SkillsRemovalNotice
+			}
+			parts = append(parts, catalog)
 		}
-		opts.CustomUserContext += p.pendingContext
 	}
-	return opts
-}
-
-// acknowledge records delivery after a response starts streaming or Send succeeds.
-// Unstreamed failures retain the exact prepared update for the next request.
-func (p *instructionDelivery) acknowledge() {
-	if p != nil && p.phase == instructionsPending {
-		p.phase = instructionsDelivered
-		p.pendingContext = ""
+	if in.Skill != nil {
+		if e.clientSkills == nil {
+			return req, fmt.Errorf("unknown client skill: %s", in.Skill.Name)
+		}
+		body, err := e.clientSkills.Invoke(ctx, in.Skill.Name, in.Skill.Arguments)
+		if err != nil {
+			return req, err
+		}
+		parts = append(parts, body)
 	}
-}
-
-// reset discards the conversation snapshot so the next request reloads the files.
-func (p *instructionDelivery) reset() {
-	if p != nil {
-		p.phase = instructionsUnprepared
-		p.pendingContext = ""
-	}
+	parts = slices.DeleteFunc(parts, func(part string) bool { return part == "" })
+	req.opts.CustomUserContext = strings.Join(parts, "\n\n")
+	return req, nil
 }
 
 // SkillSummary is presentation metadata exposed to completion clients.
@@ -116,55 +116,12 @@ func (e *Engine) ClientSkills(ctx context.Context) ([]SkillSummary, error) {
 	return e.clientSkills.List(ctx)
 }
 
-// applySkills adds the catalog, then an explicitly invoked skill's instructions.
-func (e *Engine) applySkills(ctx context.Context, opts assistant.SendOptions, skillContext string) assistant.SendOptions {
-	if e.clientSkills == nil {
-		return opts
-	}
-	if catalog, err := e.clientSkills.Catalog(ctx); err == nil {
-		if catalog == "" && opts.ConversationID != "" {
-			catalog = env.SkillsRemovalNotice
-		}
-		opts.CustomUserContext = joinUserContext(opts.CustomUserContext, catalog)
-	}
-	opts.CustomUserContext = joinUserContext(opts.CustomUserContext, skillContext)
-	return opts
-}
-
-func joinUserContext(existing, block string) string {
-	if existing == "" || block == "" {
-		return existing + block
-	}
-	return existing + "\n\n" + block
-}
-
 // SkillInvocation is a user request resolved against the current conversation registry.
 type SkillInvocation struct{ Name, Arguments string }
 
-func (e *Engine) prepareSkill(ctx context.Context, invocation SkillInvocation) (string, error) {
-	if e.clientSkills == nil {
-		return "", fmt.Errorf("unknown client skill: %s", invocation.Name)
-	}
-	return e.clientSkills.Invoke(ctx, invocation.Name, invocation.Arguments)
-}
-
-// pendingUserContext returns the user context to send with a new user turn, or
-// "" when the conversation already carries it.
-func (e *Engine) pendingUserContext(ctx context.Context) string {
-	if e.userContext == nil {
-		return ""
-	}
-	rendered := e.userContext(ctx)
-	if e.sentUserContext != nil && *e.sentUserContext == rendered {
-		return ""
-	}
-	return rendered
-}
-
 // resetContext discards conversation snapshots only after a conversation change commits.
 func (e *Engine) resetContext() {
-	e.sentUserContext = nil
-	e.projectInstructions.reset()
+	e.delivery = contextDelivery{}
 	if e.clientSkills != nil {
 		e.clientSkills.Reset()
 	}

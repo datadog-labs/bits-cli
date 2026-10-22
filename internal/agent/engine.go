@@ -164,18 +164,17 @@ type Engine struct {
 	transcript             *Transcript
 	continuation           []assistant.Content
 	previousConversationID string
-	// sentUserContext is the custom user context the current conversation is
-	// known to carry; nil when unknown, as after loading a conversation.
-	sentUserContext *string
-	commands        chan toolCommand
-	gate            permissionGate
+	// delivery is the context the current conversation is known to carry.
+	delivery contextDelivery
+	commands chan toolCommand
+	gate     permissionGate
 	// permissionsChanged wakes a running round to re-gate its parked calls
 	// after a mode switch or a grant. It holds at most one signal: rounds
 	// re-read the current permissions anyway.
 	permissionsChanged  chan struct{}
 	active              atomic.Bool
 	operationGeneration atomic.Uint64
-	projectInstructions *instructionDelivery
+	instructions        *env.Instructions
 	clientSkills        *env.Skills
 	userContext         func(context.Context) string
 }
@@ -258,11 +257,9 @@ func New(b Backend, config Config) *Engine {
 		transcript:         NewTranscript(),
 		commands:           make(chan toolCommand, maxQueuedCommands),
 		permissionsChanged: make(chan struct{}, 1),
+		instructions:       config.ProjectInstructions,
 		clientSkills:       config.ClientSkills,
 		userContext:        config.UserContext,
-	}
-	if config.ProjectInstructions != nil {
-		engine.projectInstructions = &instructionDelivery{source: config.ProjectInstructions}
 	}
 	return engine
 }
@@ -413,7 +410,6 @@ func (e *Engine) run(
 	}()
 
 	tools := in.Tools
-	defs := tools.Definitions()
 
 	// send is cancellation-aware so a stalled consumer during cancel can't
 	// wedge the engine goroutine.
@@ -466,39 +462,30 @@ func (e *Engine) run(
 		send(Event{Kind: EventError, Err: imageErr})
 		return
 	}
-	var skillContext string
-	if len(resumed) == 0 && in.Skill != nil {
-		var err error
-		skillContext, err = e.prepareSkill(ctx, *in.Skill)
+	// The first request of a new turn is the prepared user message; later ones
+	// answer client tool calls.
+	var user *userRequest
+	var responses []assistant.ClientToolResponse
+	if len(resumed) == 0 {
+		prepared, err := e.prepare(ctx, in, sentContext, resizeNotice(imageNotices))
 		if err != nil {
 			send(Event{Kind: EventError, Err: err})
 			return
 		}
+		e.delivery.pending(prepared)
+		user = &prepared
 	}
 
-	var req turnRequest
-	if len(resumed) == 0 {
-		req.user = &userMessage{
-			text:         in.Message,
-			context:      sentContext,
-			userContext:  e.pendingUserContext(ctx),
-			imageNotice:  resizeNotice(imageNotices),
-			skillContext: skillContext,
-		}
-	}
-
-	if backend, ok := e.backend.(DuplexBackend); ok && len(resumed) == 0 {
-		opts := e.projectInstructions.apply(ctx, e.sendOptions(defs, req))
-		opts = e.applySkills(ctx, opts, req.user.skillContext)
+	if backend, ok := e.backend.(DuplexBackend); ok && user != nil {
 		capable := true
 		if selector, ok := backend.(interface {
 			CanStream(string, assistant.SendOptions) bool
 		}); ok {
-			capable = selector.CanStream(req.user.text, opts)
+			capable = selector.CanStream(user.message, user.opts)
 		}
 		if capable {
 			duplexTurn = true
-			e.runDuplex(ctx, in, backend, req, opts, generation, send)
+			e.runDuplex(ctx, in, backend, *user, generation, send)
 			return
 		}
 	}
@@ -506,14 +493,14 @@ func (e *Engine) run(
 	// request sends one round and collects the client calls it pauses on. It
 	// returns false once the turn has ended.
 	request := func(emit func(Event) bool) ([]ToolCall, bool) {
-		opts := e.projectInstructions.apply(ctx, e.sendOptions(defs, req))
-		if req.user != nil {
-			opts = e.applySkills(ctx, opts, req.user.skillContext)
+		payload, opts := any(responses), e.sendOptions(tools)
+		if user != nil {
+			payload, opts = user.message, user.opts
 		}
 		var calls []ToolCall
 		streamed := false
 
-		id, err := e.backend.Send(ctx, req.payload(), opts, func(ar assistant.AssistantResponse) error {
+		id, err := e.backend.Send(ctx, payload, opts, func(ar assistant.AssistantResponse) error {
 			streamed = true
 			msg := ar.Data.Attributes.StructuredMessage
 			// A client_tool_call pauses the stream until we answer it; collect it
@@ -531,12 +518,8 @@ func (e *Engine) run(
 		if id != "" {
 			e.opts.ConversationID = id
 		}
-		if streamed || err == nil {
-			e.projectInstructions.acknowledge()
-		}
-		if streamed && req.user != nil && req.user.userContext != "" {
-			sent := req.user.userContext
-			e.sentUserContext = &sent
+		if user != nil && (streamed || err == nil) {
+			e.delivery.delivered(*user)
 		}
 		if err != nil {
 			// Context-derived cancellation remains quiet. Report an independent
@@ -595,7 +578,7 @@ func (e *Engine) run(
 		case roundStopped:
 			// The round was answered on the wire; discard the follow-up and end the turn.
 			if ctx.Err() == nil {
-				opts := e.sendOptions(defs, turnRequest{tools: toolRound.responses})
+				opts := e.sendOptions(tools)
 				id, drainRounds, err := e.drainStoppedToolCalls(ctx, toolRound.responses, opts)
 				terminalRound := round + drainRounds
 				if id != "" {
@@ -620,7 +603,7 @@ func (e *Engine) run(
 			}
 			return
 		case roundAnswered:
-			req = turnRequest{tools: toolRound.responses}
+			user, responses = nil, toolRound.responses
 		}
 	}
 	if !finalizeAndEmit(emitAtRound(maxTurns)) {

@@ -47,14 +47,12 @@ func (e *Engine) runDuplex(
 	ctx context.Context,
 	in TurnInput,
 	backend DuplexBackend,
-	req turnRequest,
-	opts assistant.SendOptions,
+	user userRequest,
 	generation uint64,
 	send func(Event) bool,
 ) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	userContext := req.user.userContext
 	turnStart := len(e.transcript.Blocks())
 	emit := func(event Event) bool {
 		event.Round = 1
@@ -81,10 +79,7 @@ func (e *Engine) runDuplex(
 		select {
 		case result := <-streamReturned:
 			if result.streamed || result.err == nil {
-				e.projectInstructions.acknowledge()
-			}
-			if result.streamed && userContext != "" {
-				e.sentUserContext = &userContext
+				e.delivery.delivered(user)
 			}
 			if result.conversationID != "" {
 				e.opts.ConversationID = result.conversationID
@@ -134,7 +129,7 @@ func (e *Engine) runDuplex(
 	go func() {
 		var conversationID string
 		streamed := false
-		err := backend.Stream(runCtx, in.Message, opts, func(response assistant.AssistantResponse) error {
+		err := backend.Stream(runCtx, user.message, user.opts, func(response assistant.AssistantResponse) error {
 			streamed = true
 			if id := response.Data.Attributes.ConversationID; id != "" {
 				conversationID = id
