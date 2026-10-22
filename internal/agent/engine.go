@@ -820,6 +820,8 @@ func (t *turn) drive(ctx context.Context) error {
 			case t.stopRequested || t.denied:
 				// Record the failure so the round's batch still gets answered.
 				t.resolve(c, toolFailedResult(finished.err))
+			case ctx.Err() != nil:
+				return ctx.Err() // the handler failed because the turn was cancelled
 			default:
 				t.ended = true
 				t.stopCalls(c, finished.err)
