@@ -150,6 +150,7 @@ type Model struct {
 	// Collaborators the model drives.
 	engine                 *agent.Engine
 	events                 <-chan agent.Event // the engine subscription, pumped for the model's lifetime
+	unsubscribe            func()
 	tools                  *agent.ToolSet
 	openURL                func(context.Context, string) error
 	editor                 *editor.Editor
@@ -301,7 +302,16 @@ func New(engine *agent.Engine, configs ...Config) *Model {
 func (m *Model) attach(engine *agent.Engine) {
 	m.engine = engine
 	m.convID = engine.ConversationID()
-	m.events, _ = engine.Subscribe() // ends when the engine closes
+	m.events, m.unsubscribe = engine.Subscribe()
+}
+
+// Detach ends the model's engine subscription once the program has stopped.
+// Closing the engine is not enough: its subscriptions deliver their queued
+// events first, and nothing reads them anymore.
+func (m *Model) Detach() {
+	if m.unsubscribe != nil {
+		m.unsubscribe()
+	}
 }
 
 // NewWithLogin creates the same root TUI in login mode. On successful OAuth,

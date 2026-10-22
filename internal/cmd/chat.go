@@ -37,6 +37,7 @@ func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer)
 	if err != nil {
 		return err
 	}
+	defer root.Detach()
 
 	// Login and chat are modes of one Bubble Tea program. Keeping the same
 	// renderer alive prevents an alt-screen teardown flash after OAuth succeeds.

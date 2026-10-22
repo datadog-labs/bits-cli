@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -61,6 +62,24 @@ func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
 	if got := root.editor.Value(); got != "x" {
 		t.Fatalf("editor value = %q, want focused input after handoff", got)
 	}
+}
+
+// A detached model's subscription ends while the engine lives on, even with
+// the turn's events still queued.
+func TestDetachEndsTheEngineSubscription(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		engine := agent.New(fake.New(), agent.Config{})
+		defer engine.Close() // the bubble requires its goroutines to exit
+		m := New(engine)
+		if _, err := engine.StartTurn(context.Background(), agent.TurnInput{Message: "hello"}); err != nil {
+			t.Fatal(err)
+		}
+		m.Detach()
+		synctest.Wait()
+		if _, ok := <-m.events; ok {
+			t.Fatal("the subscription outlived Detach")
+		}
+	})
 }
 
 func TestStartupHandoffKeepsOneAltScreenSession(t *testing.T) {
