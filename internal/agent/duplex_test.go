@@ -116,7 +116,7 @@ func TestDuplexOverlapsSeparatelyArrivingToolsAndSubmitsDuringStream(t *testing.
 			return nil
 		},
 	}
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(ctx context.Context, call ToolCall) (ToolResult, error) {
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(ctx context.Context, call ToolCall) (ToolResult, error) {
 		if call.ID == "first" {
 			close(firstStarted)
 			select {
@@ -130,7 +130,7 @@ func TestDuplexOverlapsSeparatelyArrivingToolsAndSubmitsDuringStream(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(backend, Config{})
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
 	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read both", Tools: tools})
 	events := collect(eventsCh)
 	terminal := events[len(events)-1]
@@ -158,7 +158,7 @@ func TestDuplexTerminalFailureCancelsUncooperativeHandler(t *testing.T) {
 			return ctx.Err()
 		}
 	}, submit: func(context.Context, []assistant.ClientToolResponse) error { return nil }}
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
 		close(started)
 		<-ctx.Done()
 		close(cancelled)
@@ -168,7 +168,7 @@ func TestDuplexTerminalFailureCancelsUncooperativeHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(backend, Config{})
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
 	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read", Tools: tools})
 	events := collect(eventsCh)
 	terminal := events[len(events)-1]
@@ -241,10 +241,9 @@ func TestDuplexApprovalDenialIsSubmittedAndControlsFutureCalls(t *testing.T) {
 				executions.Add(1)
 				return ToolResult{Output: "ok"}, nil
 			}
-			tools, err := NewToolSet(ModeManual,
-				Tool{Definition: assistant.ClientTool{Name: "write"}, Handler: handler, Approval: func(ToolCall) (ApprovalRequirement, bool) {
-					return ApprovalRequirement{Key: ApprovalKey{Tool: "write"}}, true
-				}},
+			tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "write"}, Handler: handler, Approval: func(ToolCall) (ApprovalRequirement, bool) {
+				return ApprovalRequirement{Key: ApprovalKey{Tool: "write"}}, true
+			}},
 				Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: handler},
 			)
 			if err != nil {
@@ -280,37 +279,55 @@ func TestDuplexApprovalDenialIsSubmittedAndControlsFutureCalls(t *testing.T) {
 	}
 }
 
-func TestDuplexSubmissionFailureCancelsStream(t *testing.T) {
+// A failed submission stops sibling calls at once: stream cancellation may
+// wait on the server, as the multi-agent client's cancel request does.
+func TestDuplexSubmissionFailureStopsSiblingsBeforeStreamCleanup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	cancelled := make(chan struct{})
+	siblingStarted, siblingStopped := make(chan struct{}), make(chan struct{})
 	failure := errors.New("result POST failed")
-	backend := &duplexBackend{stream: func(ctx context.Context, emit func(assistant.AssistantResponse) error) error {
-		if err := emit(duplexCall("read", "read")); err != nil {
-			return err
+	backend := &duplexBackend{stream: func(streamCtx context.Context, emit func(assistant.AssistantResponse) error) error {
+		for _, id := range []string{"slow", "read"} {
+			if err := emit(duplexCall(id, id)); err != nil {
+				return err
+			}
 		}
-		<-ctx.Done()
-		close(cancelled)
-		return ctx.Err()
+		<-streamCtx.Done()
+		select {
+		case <-siblingStopped:
+		case <-ctx.Done():
+			t.Error("sibling handler kept running during stream cleanup")
+		}
+		return streamCtx.Err()
 	}, submit: func(context.Context, []assistant.ClientToolResponse) error { return failure }}
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }})
+	tools, err := NewToolSet(
+		// The failing answer waits for the sibling to run: a sibling cancelled
+		// before it starts never runs at all.
+		Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+			select {
+			case <-siblingStarted:
+			case <-ctx.Done():
+			}
+			return ToolResult{Output: "ok"}, nil
+		}},
+		Tool{Definition: assistant.ClientTool{Name: "slow"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+			close(siblingStarted)
+			<-ctx.Done()
+			close(siblingStopped)
+			return ToolResult{}, ctx.Err()
+		}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(backend, Config{})
-	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read", Tools: tools})
-	events := collect(eventsCh)
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
+	events := collect(engine.StartTurn(ctx, TurnInput{Message: "read", Tools: tools}))
 	terminal := events[len(events)-1]
-	if !errors.Is(terminal.Err, failure) || terminal.Kind == EventTurnDone {
+	if terminal.Kind != EventError || !errors.Is(terminal.Err, failure) || !terminal.BackendFailure {
 		t.Fatalf("terminal = %+v", terminal)
 	}
-	select {
-	case <-cancelled:
-	case <-ctx.Done():
-		t.Fatal("stream was not cancelled")
-	}
-	if len(events) == 0 || !events[len(events)-1].BackendFailure {
-		t.Fatalf("events = %+v", events)
+	if !hasToolStatus(events, "slow", ToolCancelled) {
+		t.Fatal("stopped sibling was not settled as cancelled")
 	}
 }
 
@@ -334,7 +351,7 @@ func TestDuplexBoundsExecutionAcrossArrivingBatches(t *testing.T) {
 		}
 		return nil
 	}, submit: func(context.Context, []assistant.ClientToolResponse) error { return nil }}
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
 		count.Add(1)
 		started <- struct{}{}
 		<-ctx.Done()
@@ -343,7 +360,7 @@ func TestDuplexBoundsExecutionAcrossArrivingBatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(backend, Config{})
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
 	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read many", Tools: tools})
 	events := collect(eventsCh)
 	terminal := events[len(events)-1]
@@ -379,11 +396,11 @@ func TestDuplexWaitsForTransportCleanupAfterLocalFailure(t *testing.T) {
 		}
 		return ctx.Err()
 	}, submit: func(context.Context, []assistant.ClientToolResponse) error { return nil }}
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, failure }})
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, failure }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(backend, Config{})
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
 	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read", Tools: tools})
 	finished := make(chan struct{})
 	var events []Event
@@ -453,7 +470,7 @@ func TestDuplexPermissionChangeReleasesParkedTools(t *testing.T) {
 				},
 			}
 			var runs atomic.Int32
-			tools, err := NewToolSet(ModeManual, Tool{
+			tools, err := NewToolSet(Tool{
 				Definition: assistant.ClientTool{Name: "write"},
 				Approval: func(call ToolCall) (ApprovalRequirement, bool) {
 					return ApprovalRequirement{Key: ApprovalKey{Tool: "write", Resource: call.ID}}, true
@@ -469,7 +486,7 @@ func TestDuplexPermissionChangeReleasesParkedTools(t *testing.T) {
 			engine := New(backend, Config{})
 			eventsCh := engine.StartTurn(ctx, TurnInput{Message: "write both", Tools: tools})
 			waitForToolStatusEvents(t, eventsCh, "second", ToolAwaitingApproval)
-			if err := engine.SetPermissionsMode(tools, ModeSkipPermissions); err != nil {
+			if err := engine.SetPermissionsMode(ModeSkipPermissions); err != nil {
 				t.Fatal(err)
 			}
 			events := collect(eventsCh)
@@ -533,12 +550,12 @@ func TestDuplexLateChildResultPreservesTerminalOutcome(t *testing.T) {
 						return tc.submissionErr
 					},
 				}
-				tools, err := NewToolSet(ModeSkipPermissions, Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }})
+				tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }})
 				if err != nil {
 					t.Fatal(err)
 				}
 				start := time.Now()
-				events := collect(New(backend, Config{}).StartTurn(context.Background(), TurnInput{Message: "question", Tools: tools}))
+				events := collect(New(backend, Config{PermissionsMode: ModeSkipPermissions}).StartTurn(context.Background(), TurnInput{Message: "question", Tools: tools}))
 				terminal := events[len(events)-1]
 				wantKind := EventTurnDone
 				if tc.wantErr != nil {

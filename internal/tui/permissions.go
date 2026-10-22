@@ -27,7 +27,7 @@ func (m *Model) switchPermissions(argument string) tea.Cmd {
 	if m.tools == nil || m.engine == nil {
 		return m.postNotice(notice(chat.NoticeError, nil, "This session has no tool permissions to configure."))
 	}
-	current := m.tools.PermissionsMode()
+	current := m.engine.PermissionsMode()
 	if argument == "" {
 		m.permissionConfirm, m.permissionCursor = false, slices.Index(permissionModes[:], current)
 		m.editor.CloseMenu()
@@ -59,7 +59,7 @@ func (m *Model) applyPermissionsMode(mode agent.PermissionsMode) tea.Cmd {
 // setPermissionsMode switches the mode at once, mid-turn included: the engine
 // re-gates calls already waiting for approval.
 func (m *Model) setPermissionsMode(mode agent.PermissionsMode) tea.Cmd {
-	if err := m.engine.SetPermissionsMode(m.tools, mode); err != nil {
+	if err := m.engine.SetPermissionsMode(mode); err != nil {
 		return m.postNotice(notice(chat.NoticeError, err, "Could not switch the permissions mode."))
 	}
 	m.syncStatus()
@@ -92,14 +92,14 @@ func (m *Model) updatePermissionsKey(msg tea.KeyPressMsg) tea.Cmd {
 				m.setMode(ModeChat)
 				return nil
 			}
-			if m.tools.PermissionsMode() != agent.ModeManual {
+			if m.engine.PermissionsMode() != agent.ModeManual {
 				m.setMode(ModeChat)
 				return m.postNotice(notice(chat.NoticeWarn, nil, "Permissions changed while the picker was open. Open it again."))
 			}
 			return m.applyPermissionsMode(agent.ModeSkipPermissions)
 		}
 		mode := permissionModes[m.permissionCursor]
-		if mode == m.tools.PermissionsMode() {
+		if mode == m.engine.PermissionsMode() {
 			m.setMode(ModeChat)
 			return nil
 		}
@@ -172,7 +172,7 @@ func (m *Model) permissionsBody(width, _ int) string {
 
 func (m *Model) permissionOptionLabels() [2]string {
 	labels := [2]string{"Ask for Approval", "Full Access"}
-	if m.tools.PermissionsMode() == agent.ModeManual {
+	if m.engine.PermissionsMode() == agent.ModeManual {
 		labels[0] += " (current)"
 	} else {
 		labels[1] += " (current)"

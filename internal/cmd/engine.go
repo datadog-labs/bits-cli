@@ -53,7 +53,10 @@ type ClientOptions struct {
 // over the fake backend so an invalid automation invocation cannot silently
 // become a demo session.
 func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, store auth.CredentialStore) (*agent.Engine, error) {
-	config := agent.Config{ConversationID: opts.ConversationID, Model: opts.Model, InferenceMode: opts.InferenceMode}
+	config := agent.Config{
+		ConversationID: opts.ConversationID, PermissionsMode: opts.PermissionsMode,
+		Model: opts.Model, InferenceMode: opts.InferenceMode,
+	}
 	if workspace != nil {
 		config.ProjectInstructions = env.NewInstructions(workspace.Path())
 		config.ClientSkills = env.NewSkills(workspace.Path(), opts.SkillPaths)

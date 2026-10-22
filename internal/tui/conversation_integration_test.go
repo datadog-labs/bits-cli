@@ -379,11 +379,11 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ws.Close() })
-	toolSet, err := agent.NewToolSet(agent.ModeSkipPermissions, tools.NewClientTools(ws)...)
+	toolSet, err := agent.NewToolSet(tools.NewClientTools(ws)...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(agent.New(&halfStreamedWriteBackend{}, agent.Config{}), Config{Tools: toolSet, Workspace: ws})
+	m := New(agent.New(&halfStreamedWriteBackend{}, agent.Config{PermissionsMode: agent.ModeSkipPermissions}), Config{Tools: toolSet, Workspace: ws})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	setConversationInput(m, "write half.txt")

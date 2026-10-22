@@ -24,11 +24,10 @@ func (d ApprovalDecision) valid() bool {
 	}
 }
 
-// PermissionsMode decides how the ToolSet treats per-tool permission gates.
-// It is consulted once at gate time: ModeSkipPermissions suppresses every
-// declared gate, while ModeManual defers to each tool's ApprovalPolicy
-// unchanged. Tool policies stay declarative — they say what needs approval, the
-// mode says what happens.
+// PermissionsMode decides what the engine does with a tool's declared approval
+// gate. ModeSkipPermissions runs gated calls, ModeDeny rejects them, and
+// ModeManual waits for approval unless a session grant applies. The tool's
+// ApprovalPolicy only declares whether a gate is needed.
 type PermissionsMode string
 
 const (
@@ -183,14 +182,13 @@ func cancelledResult() ToolResult {
 	}
 }
 
-// permissionGate orders permission changes against gate decisions. Its lock
-// covers the mode store, the session grants, the key of each parked call (so
-// a grant can name the call), and the start of every gated call: a change
-// lands wholly before or after a decision and the start it leads to. It is
-// never held across a channel send or an approval policy, so neither the UI
-// nor the engine goroutine ever waits on the other through it.
+// permissionGate keeps mode changes, grants, and gated starts in order. Its
+// lock protects the mode, grants, and parked call keys. A gate decision and
+// any resulting call start are atomic with mode changes. The lock is never
+// held while sending on a channel or consulting an approval policy.
 type permissionGate struct {
 	mu     sync.Mutex
+	mode   PermissionsMode
 	grants map[ApprovalKey]struct{}
 	parked map[string]ApprovalKey // by call ID
 }
@@ -209,10 +207,10 @@ const (
 // over grants and answers; skip-permissions runs every call; manual runs a
 // call answered allowOnce or covered by a grant, and parks the rest. start
 // must not block.
-func (g *permissionGate) admit(tools *ToolSet, callID string, key ApprovalKey, allowOnce bool, start func()) verdict {
+func (g *permissionGate) admit(callID string, key ApprovalKey, allowOnce bool, start func()) verdict {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	switch tools.PermissionsMode() {
+	switch g.mode {
 	case ModeDeny:
 		delete(g.parked, callID)
 		return verdictDeny
@@ -232,16 +230,23 @@ func (g *permissionGate) admit(tools *ToolSet, callID string, key ApprovalKey, a
 }
 
 // setMode stores mode, revoking every grant when it is manual.
-func (g *permissionGate) setMode(tools *ToolSet, mode PermissionsMode) error {
+func (g *permissionGate) setMode(mode PermissionsMode) error {
+	if !mode.valid() {
+		return fmt.Errorf("invalid permissions mode %q; expected manual, skip-permissions, or deny", mode)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if err := tools.setPermissionsMode(mode); err != nil {
-		return err
-	}
+	g.mode = mode
 	if mode == ModeManual {
 		clear(g.grants)
 	}
 	return nil
+}
+
+func (g *permissionGate) currentMode() PermissionsMode {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.mode
 }
 
 // grantParked grants the key of the call parked as callID, if any.

@@ -140,7 +140,7 @@ func toolRounds(names ...string) [][]assistant.Message {
 
 func TestContextIsSentOnlyWithTheUserMessage(t *testing.T) {
 	backend := &scriptBackend{rounds: toolRounds("read")}
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{
+	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler: func(context.Context, ToolCall) (ToolResult, error) {
 			return ToolResult{Output: "ok"}, nil
@@ -149,7 +149,7 @@ func TestContextIsSentOnlyWithTheUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(backend, Config{})
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
 	turnContext := &assistant.AssistantContext{Entities: []assistant.ContextEntity{{
 		Type: "dashboard", ID: "dash-1", Label: "Checkout overview",
 	}}}
@@ -169,7 +169,7 @@ func TestContextIsSentOnlyWithTheUserMessage(t *testing.T) {
 
 func TestUserContextIsSentOnlyWhenTheConversationLacksIt(t *testing.T) {
 	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{
+	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler: func(context.Context, ToolCall) (ToolResult, error) {
 			return ToolResult{Output: "ok"}, nil
@@ -180,7 +180,7 @@ func TestUserContextIsSentOnlyWhenTheConversationLacksIt(t *testing.T) {
 	}
 	env := "env-a"
 	userContext := func(context.Context) string { return env }
-	engine := New(backend, Config{UserContext: userContext})
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions, UserContext: userContext})
 	turn := func() {
 		drain(t, engine, TurnInput{Message: "hi", Tools: tools})
 	}
@@ -243,14 +243,14 @@ func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T
 				Type: assistant.ContentToolCallStarted,
 				Tool: &assistant.ToolPayload{ToolCallID: "read-1", ToolName: "read_file", HasClientSide: test.known},
 			})}}}
-			tools, err := NewToolSet(ModeSkipPermissions, Tool{
+			tools, err := NewToolSet(Tool{
 				Definition: assistant.ClientTool{Name: "read_file"},
 				Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			events := drain(t, New(backend, Config{}), TurnInput{Message: "read", Tools: tools})
+			events := drain(t, New(backend, Config{PermissionsMode: ModeSkipPermissions}), TurnInput{Message: "read", Tools: tools})
 			var got *ToolBlock
 			for _, event := range events {
 				if event.Kind != EventTranscript {
@@ -374,7 +374,7 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 	}, {textMsg("answer", "done")}}}
 	reducerCalls := 0
 	handlerSawReducer := false
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{
+	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "preview"},
 		InputReducer: func(_ context.Context, update ToolInputUpdate, prior any) any {
 			reducerCalls++
@@ -395,7 +395,7 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := drain(t, New(backend, Config{}), TurnInput{Message: "go", Tools: tools})
+	events := drain(t, New(backend, Config{PermissionsMode: ModeSkipPermissions}), TurnInput{Message: "go", Tools: tools})
 	if len(backend.opts) != 2 {
 		t.Fatalf("backend requests = %d, want initial and continuation", len(backend.opts))
 	}
@@ -429,7 +429,7 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
 	backend := &scriptBackend{rounds: [][]assistant.Message{{serverCallMsg("call-1", "preview", `{"value":"server"}`)}}}
 	reducerCalls := 0
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{
+	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "preview"},
 		InputReducer: func(context.Context, ToolInputUpdate, any) any {
 			reducerCalls++
@@ -440,7 +440,7 @@ func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	drain(t, New(backend, Config{}), TurnInput{Message: "go", Tools: tools})
+	drain(t, New(backend, Config{PermissionsMode: ModeSkipPermissions}), TurnInput{Message: "go", Tools: tools})
 	if reducerCalls != 0 {
 		t.Fatalf("server-side tool triggered %d reductions", reducerCalls)
 	}
@@ -451,14 +451,14 @@ func TestEngineDoesNotReduceServerToolCall(t *testing.T) {
 
 func TestEnginePreservesPerToolInputStreaming(t *testing.T) {
 	backend := &scriptBackend{}
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{
+	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "ordinary", StreamInput: true},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := New(backend, Config{})
+	e := New(backend, Config{PermissionsMode: ModeSkipPermissions})
 	_ = drain(t, e, TurnInput{Message: "go", Tools: tools})
 	if len(backend.opts) == 0 || !backend.opts[0].ClientTools[0].StreamInput {
 		t.Fatalf("caller-provided per-tool streaming was disabled: %+v", backend.opts)
@@ -519,14 +519,14 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 	}, Config{})
 
 	events := drain(t, e, TurnInput{Message: "question"})
-	wantKinds := []EventKind{EventTranscript, EventTranscript, EventTranscript, EventConversation, EventError}
+	wantKinds := []EventKind{EventTranscript, EventTranscript, EventConversation, EventTranscript, EventError}
 	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
 	}
-	if events[3].ConvID != "created-before-error" || !errors.Is(events[4].Err, backendErr) || !events[4].BackendFailure {
+	if events[2].ConvID != "created-before-error" || !errors.Is(events[4].Err, backendErr) || !events[4].BackendFailure {
 		t.Fatalf("terminal events = %+v", events[2:])
 	}
-	final := events[2].Transcript.Blocks
+	final := events[3].Transcript.Blocks
 	if len(final) == 0 || !final[len(final)-1].Complete {
 		t.Fatalf("final transcript snapshot = %+v, want completed answer", final)
 	}

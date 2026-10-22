@@ -124,8 +124,8 @@ func (m *Model) statusRuntime() statusview.Runtime {
 		authenticationState = m.authStateOverride
 	}
 	permissionsMode := ""
-	if m.tools != nil {
-		permissionsMode = string(m.tools.PermissionsMode())
+	if m.engine != nil && m.tools != nil {
+		permissionsMode = string(m.engine.PermissionsMode())
 	}
 	return statusview.Runtime{
 		Site:                runtime.Backend.Site,

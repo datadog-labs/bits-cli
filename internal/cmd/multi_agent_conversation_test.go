@@ -97,9 +97,9 @@ func TestMultiAgentEngineConversationLifecycle(t *testing.T) {
 	defer server.Close()
 	newEngine := func(id string) *agent.Engine {
 		backend := assistant.NewMultiAgentClient(&assistant.Client{BaseURL: server.URL, HTTPClient: server.Client()})
-		return agent.New(backend, agent.Config{ConversationID: id, Model: "selected-model"})
+		return agent.New(backend, agent.Config{PermissionsMode: agent.ModeSkipPermissions, ConversationID: id, Model: "selected-model"})
 	}
-	tools, err := agent.NewToolSet(agent.ModeSkipPermissions)
+	tools, err := agent.NewToolSet()
 	if err != nil {
 		t.Fatal(err)
 	}

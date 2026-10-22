@@ -39,7 +39,7 @@ func screenshotFile(t *testing.T) (file, sent assistant.ContextEntity) {
 
 func TestImagesAreSentOnlyWithTheUserMessage(t *testing.T) {
 	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{
+	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil },
 	})
@@ -49,7 +49,7 @@ func TestImagesAreSentOnlyWithTheUserMessage(t *testing.T) {
 	dashboard := assistant.ContextEntity{Type: assistant.EntityDashboard, ID: "dash-1"}
 	file, sent := screenshotFile(t)
 	turnContext := &assistant.AssistantContext{Entities: []assistant.ContextEntity{dashboard, file}}
-	engine := New(backend, Config{})
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
 
 	drain(t, engine, TurnInput{Message: "what is wrong?", Tools: tools, Context: turnContext})
 

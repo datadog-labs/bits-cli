@@ -62,7 +62,7 @@ func newStatusModelWithBackend(t *testing.T, backend agent.Backend) *Model {
 
 func newStatusModelAt(t *testing.T, root string, backend agent.Backend) *Model {
 	t.Helper()
-	tools, err := agent.NewToolSet(agent.ModeManual)
+	tools, err := agent.NewToolSet()
 	if err != nil {
 		t.Fatal(err)
 	}
