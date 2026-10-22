@@ -363,3 +363,23 @@ func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 		}
 	}
 }
+
+// Close cancels an operation blocked off the actor, here loading history, and
+// returns once the operation's channel is closed.
+func TestCloseCancelsAndAwaitsAnOperationOffTheActor(t *testing.T) {
+	loading := make(chan struct{})
+	e := New(&historyBackend{history: func(ctx context.Context, _ assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
+		close(loading)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}, Config{ConversationID: testConversationID})
+	events := e.Restore(context.Background())
+	<-loading
+	e.Close()
+	if evs := collect(events); len(evs) != 0 {
+		t.Fatalf("closed restore events = %+v, want none", evs)
+	}
+	if evs := collect(e.StartTurn(context.Background(), TurnInput{Message: "late"})); len(evs) != 1 || !errors.Is(evs[0].Err, ErrClosed) {
+		t.Fatalf("turn after Close = %+v, want ErrClosed", evs)
+	}
+}

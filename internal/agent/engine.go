@@ -240,8 +240,12 @@ type Engine struct {
 	busy     bool  // an operation holds the engine
 	turn     *turn // the turn whose exchange is running, if any
 
-	requests     chan func() // run on the actor
-	closing      chan struct{}
+	requests chan func() // run on the actor
+	// life ends when Close starts, cancelling every operation's worker.
+	life         context.Context
+	endLife      context.CancelFunc
+	workers      sync.WaitGroup
+	closing      chan struct{} // closed once the workers are done
 	closeOnce    sync.Once
 	stopped      chan struct{} // closed once the actor returns
 	instructions *env.Instructions
@@ -327,14 +331,20 @@ func New(b Backend, config Config) *Engine {
 		closing:       make(chan struct{}),
 		stopped:       make(chan struct{}),
 	}
+	engine.life, engine.endLife = context.WithCancel(context.Background())
 	go engine.loop()
 	return engine
 }
 
-// Close cancels the active operation, waits for it to end, and stops the
-// engine. Later operations fail with ErrClosed and accessors report zero values.
+// Close cancels the active operation, waits for it to end as on cancellation,
+// its channel closed, and stops the engine. Later operations fail with
+// ErrClosed and accessors report zero values.
 func (e *Engine) Close() {
-	e.closeOnce.Do(func() { close(e.closing) })
+	e.closeOnce.Do(func() {
+		e.do(e.endLife) // on the actor, so no operation is claimed after it
+		e.workers.Wait()
+		close(e.closing)
+	})
 	<-e.stopped
 }
 
@@ -352,16 +362,14 @@ func (e *Engine) loop() {
 	}
 }
 
-// do runs fn on the actor and waits for it. It reports false, without running
-// fn, once the engine is closed. fn must not call do.
-func (e *Engine) do(fn func()) bool {
+// do runs fn on the actor and waits for it. Once the engine is closed, it
+// returns without running fn. fn must not call do.
+func (e *Engine) do(fn func()) {
 	done := make(chan struct{})
 	select {
 	case e.requests <- func() { defer close(done); fn() }:
 		<-done
-		return true
 	case <-e.closing:
-		return false
 	}
 }
 
@@ -382,6 +390,30 @@ func (e *Engine) idle(fn func() error) error {
 func get[T any](e *Engine, f func() T) (v T) {
 	e.do(func() { v = f() })
 	return v
+}
+
+// claim holds the engine for an operation, whose worker must then be started
+// with work, unless the engine is closing.
+func (e *Engine) claim() error {
+	if e.life.Err() != nil {
+		return ErrClosed
+	}
+	e.busy = true
+	e.workers.Add(1)
+	return nil
+}
+
+// work runs a claimed operation's worker with a context that also ends when
+// the engine closes. Close waits for it.
+func (e *Engine) work(ctx context.Context, fn func(context.Context)) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(e.life, cancel)
+	go func() {
+		defer e.workers.Done()
+		defer cancel()
+		defer stop()
+		fn(ctx)
+	}()
 }
 
 // release ends the operation; its stream closes once drained.
@@ -445,14 +477,13 @@ func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) <-cha
 			}
 		}
 		e.continuation = nil
-		e.busy = true
-		return nil
+		return e.claim()
 	})
 	if err != nil {
 		return eventResult(Event{Kind: EventError, Err: err})
 	}
 	out, events := newOutbox()
-	go e.run(ctx, in, resumed, out)
+	e.work(ctx, func(ctx context.Context) { e.run(ctx, in, resumed, out) })
 	return events
 }
 
@@ -518,7 +549,7 @@ func (e *Engine) run(ctx context.Context, in TurnInput, resumed []ToolCall, out 
 	}
 	var opts assistant.SendOptions
 	var delivery contextDelivery
-	if !e.do(func() {
+	e.do(func() {
 		t.from = e.turnStart(resumed)
 		// A restored tool call is already in the transcript; only a new turn
 		// adds a user block before contacting the backend. The block lists the
@@ -532,10 +563,7 @@ func (e *Engine) run(ctx context.Context, in TurnInput, resumed []ToolCall, out 
 			out.push(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal})
 		}
 		opts, delivery = e.sendOptions(in.Tools), e.delivery
-	}) {
-		out.close()
-		return
-	}
+	})
 
 	// An invalid image or a skill that cannot be read fails the turn like a
 	// backend error: the user block stays visible and nothing is sent.
@@ -548,7 +576,7 @@ func (e *Engine) run(ctx context.Context, in TurnInput, resumed []ToolCall, out 
 	default:
 		request, err = e.prepareResume(ctx, opts, delivery)
 	}
-	if !e.do(func() {
+	e.do(func() {
 		if err == nil {
 			e.delivery.pending(request)
 			t.request = &request
@@ -556,9 +584,7 @@ func (e *Engine) run(ctx context.Context, in TurnInput, resumed []ToolCall, out 
 			err = t.drive()
 		}
 		t.finish(err)
-	}) {
-		out.close()
-	}
+	})
 }
 
 // turnStart is where a turn's blocks start: the transcript's end, or the
@@ -746,17 +772,17 @@ func (e *Engine) GrantSessionFor(callID string) error {
 // into the transcript.
 func (e *Engine) Restore(ctx context.Context) <-chan Event {
 	var id string
-	if err := e.idle(func() error { id = e.opts.ConversationID; e.busy = true; return nil }); err != nil {
+	if err := e.idle(func() error { id = e.opts.ConversationID; return e.claim() }); err != nil {
 		return eventResult(Event{Kind: EventError, Err: err})
 	}
 	out, events := newOutbox()
-	go func() {
+	e.work(ctx, func(ctx context.Context) {
 		var conversation *Conversation
 		var err error
 		if id != "" {
 			conversation, err = e.LoadConversation(ctx, id)
 		}
-		if !e.do(func() {
+		e.do(func() {
 			defer e.release(out)
 			switch {
 			case id == "" || ctx.Err() != nil: // nothing to restore, or cancelled: end quietly
@@ -768,10 +794,8 @@ func (e *Engine) Restore(ctx context.Context) <-chan Event {
 					out.push(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
 				}
 			}
-		}) {
-			out.close()
-		}
-	}()
+		})
+	})
 	return events
 }
 
@@ -839,8 +863,8 @@ type turn struct {
 }
 
 // drive runs the exchange on the actor and executes its calls, serving
-// requests meanwhile. It returns the exchange's terminal error, the parent's
-// error if the turn is cancelled, or ErrClosed. Workers only run handlers; the
+// requests meanwhile. It returns the exchange's terminal error, or the
+// parent's error if the turn is cancelled. Workers only run handlers; the
 // actor owns approvals, transcript changes, and answers.
 func (t *turn) drive() error {
 	ctx := t.parent
@@ -895,8 +919,6 @@ func (t *turn) drive() error {
 			fn()
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-t.e.closing:
-			return ErrClosed
 		}
 	}
 }
