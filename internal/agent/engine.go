@@ -341,7 +341,10 @@ func New(b Backend, config Config) *Engine {
 // ErrClosed and accessors report zero values.
 func (e *Engine) Close() {
 	e.closeOnce.Do(func() {
-		e.do(e.endLife) // on the actor, so no operation is claimed after it
+		// Ending life directly cancels work the actor may be blocked on; the
+		// request then waits out any claim that saw the engine live.
+		e.endLife()
+		e.do(func() {})
 		e.workers.Wait()
 		close(e.closing)
 	})

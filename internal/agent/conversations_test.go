@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -364,22 +365,66 @@ func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 	}
 }
 
-// Close cancels an operation blocked off the actor, here loading history, and
-// returns once the operation's channel is closed.
-func TestCloseCancelsAndAwaitsAnOperationOffTheActor(t *testing.T) {
-	loading := make(chan struct{})
-	e := New(&historyBackend{history: func(ctx context.Context, _ assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
-		close(loading)
-		<-ctx.Done()
-		return nil, ctx.Err()
-	}}, Config{ConversationID: testConversationID})
-	events := e.Restore(context.Background())
-	<-loading
-	e.Close()
-	if evs := collect(events); len(evs) != 0 {
-		t.Fatalf("closed restore events = %+v, want none", evs)
-	}
-	if evs := collect(e.StartTurn(context.Background(), TurnInput{Message: "late"})); len(evs) != 1 || !errors.Is(evs[0].Err, ErrClosed) {
-		t.Fatalf("turn after Close = %+v, want ErrClosed", evs)
+// Close cancels an operation wherever it blocks: off the actor, or in work
+// the actor runs. It returns once the operation's channel is closed.
+func TestCloseCancelsAndAwaitsTheOperation(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		start func(t *testing.T) (*Engine, <-chan Event)
+	}{
+		{"loading history off the actor", func(t *testing.T) (*Engine, <-chan Event) {
+			loading := make(chan struct{})
+			e := New(&historyBackend{history: func(ctx context.Context, _ assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
+				close(loading)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}}, Config{ConversationID: testConversationID})
+			events := e.Restore(context.Background())
+			<-loading
+			return e, events
+		}},
+		{"reducing tool input on the actor", func(t *testing.T) (*Engine, <-chan Event) {
+			reducing := make(chan struct{})
+			var once sync.Once
+			tools, err := NewToolSet(Tool{
+				Definition: assistant.ClientTool{Name: "preview"},
+				InputReducer: func(ctx context.Context, _ ToolInputUpdate, _ any) any {
+					once.Do(func() { close(reducing) })
+					<-ctx.Done() // a slow file read
+					return nil
+				},
+				Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend := &scriptBackend{rounds: [][]assistant.Message{{clientCallMsg("call-1", "preview", `{}`)}}}
+			e := New(backend, Config{PermissionsMode: ModeSkipPermissions})
+			events := e.StartTurn(context.Background(), TurnInput{Message: "go", Tools: tools})
+			<-reducing
+			return e, events
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, events := tc.start(t)
+			closed := make(chan struct{})
+			go func() {
+				e.Close()
+				close(closed)
+			}()
+			select {
+			case <-closed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Close did not cancel the blocked operation")
+			}
+			for _, ev := range collect(events) {
+				if ev.Kind == EventError {
+					t.Fatalf("closed operation reported %v", ev.Err)
+				}
+			}
+			if evs := collect(e.StartTurn(context.Background(), TurnInput{Message: "late"})); len(evs) != 1 || !errors.Is(evs[0].Err, ErrClosed) {
+				t.Fatalf("turn after Close = %+v, want ErrClosed", evs)
+			}
+		})
 	}
 }
