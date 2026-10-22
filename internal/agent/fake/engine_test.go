@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"iter"
 	"os"
 	"path/filepath"
 	"slices"
@@ -48,7 +49,9 @@ func runTurn(t *testing.T, engine *agent.Engine, message string, set *agent.Tool
 	t.Helper()
 	decided := map[string]bool{}
 	var last agent.Event
-	for ev := range engine.StartTurn(context.Background(), agent.TurnInput{Message: message, Tools: set, OnDeny: onDeny}) {
+	for ev := range follow(t, engine, func() (agent.RunID, error) {
+		return engine.StartTurn(context.Background(), agent.TurnInput{Message: message, Tools: set, OnDeny: onDeny})
+	}) {
 		last = ev
 		for _, block := range ev.Transcript.PendingApprovals() {
 			if id := block.ToolCallID(); !decided[id] {
@@ -57,10 +60,22 @@ func runTurn(t *testing.T, engine *agent.Engine, message string, set *agent.Tool
 			}
 		}
 	}
-	if last.Kind != agent.EventTurnDone {
+	if last.Kind != agent.EventDone {
 		t.Fatalf("last event = %+v, want a completed turn", last)
 	}
 	return engine.Snapshot(), last.Round
+}
+
+// follow subscribes, starts an operation, and returns its run's events.
+func follow(t *testing.T, engine *agent.Engine, start func() (agent.RunID, error)) iter.Seq[agent.Event] {
+	t.Helper()
+	events, unsubscribe := engine.Subscribe()
+	t.Cleanup(unsubscribe)
+	run, err := start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return agent.Follow(events, run)
 }
 
 func texts(blocks []agent.Block) []string {

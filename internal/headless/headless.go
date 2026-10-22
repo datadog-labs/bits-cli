@@ -11,8 +11,6 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 )
 
-var errTurnIncomplete = errors.New("turn ended without a completion or error")
-
 // Start carries the run-opening facts a delivery may need.
 type Start struct {
 	StartedAt      time.Time
@@ -56,25 +54,30 @@ func Run(ctx context.Context, engine *agent.Engine, input agent.TurnInput, deliv
 	defer cancel()
 
 	turnStart := len(engine.Snapshot())
+	events, unsubscribe := engine.Subscribe()
+	defer unsubscribe()
 	completed := false
-	var turnErr, consumeErr error
-	for event := range engine.StartTurn(turnCtx, input) {
-		switch event.Kind {
-		case agent.EventTurnDone:
-			completed = true
-		case agent.EventError:
-			turnErr = event.Err
-		case agent.EventTranscript, agent.EventUsage, agent.EventConversation:
-		}
-		if consumeErr == nil {
-			if consumeErr = delivery.Consume(event); consumeErr != nil {
-				cancel()
+	var consumeErr error
+	run, turnErr := engine.StartTurn(turnCtx, input)
+	if turnErr == nil {
+		for event := range agent.Follow(events, run) {
+			switch event.Kind {
+			case agent.EventDone:
+				completed = true
+			case agent.EventError, agent.EventCanceled:
+				turnErr = event.Err
+			case agent.EventTranscript, agent.EventUsage, agent.EventConversation:
+			}
+			if consumeErr == nil {
+				if consumeErr = delivery.Consume(event); consumeErr != nil {
+					cancel()
+				}
 			}
 		}
 	}
 
 	blocks := engine.Snapshot()
-	outcome, err := classify(ctx, completed, denied(blocks[turnStart:]), turnErr, consumeErr)
+	outcome, err := classify(completed, denied(blocks[turnStart:]), turnErr, consumeErr)
 	finishErr := delivery.Finish(Finish{
 		EndedAt:        time.Now(),
 		Outcome:        outcome,
@@ -88,29 +91,22 @@ func Run(ctx context.Context, engine *agent.Engine, input agent.TurnInput, deliv
 	return outcome, finishErr
 }
 
-func classify(ctx context.Context, completed, denied bool, turnErr, consumeErr error) (Outcome, error) {
-	if consumeErr != nil {
-		return OutcomeFailed, fmt.Errorf("consume turn event: %w", consumeErr)
-	}
-	if completed {
-		if denied {
-			return OutcomeApprovalDenied, nil
-		}
-		return OutcomeCompleted, nil
-	}
-	err := turnErr
-	if err == nil {
-		err = ctx.Err()
-	}
+// classify maps the turn's terminal event to an outcome. A cancelled turn's
+// error is its context's: canceled, or timed out at the deadline.
+func classify(completed, denied bool, turnErr, consumeErr error) (Outcome, error) {
 	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		return OutcomeTimedOut, err
-	case errors.Is(err, context.Canceled):
-		return OutcomeCanceled, err
-	case err != nil:
-		return OutcomeFailed, err
+	case consumeErr != nil:
+		return OutcomeFailed, fmt.Errorf("consume turn event: %w", consumeErr)
+	case completed && denied:
+		return OutcomeApprovalDenied, nil
+	case completed:
+		return OutcomeCompleted, nil
+	case errors.Is(turnErr, context.DeadlineExceeded):
+		return OutcomeTimedOut, turnErr
+	case errors.Is(turnErr, context.Canceled):
+		return OutcomeCanceled, turnErr
 	default:
-		return OutcomeFailed, errTurnIncomplete
+		return OutcomeFailed, turnErr
 	}
 }
 

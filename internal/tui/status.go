@@ -225,8 +225,9 @@ func (m *Model) observeEvent(event agent.Event) {
 		if event.Origin != agent.TranscriptOriginLocal {
 			m.markConnected()
 		}
-	case agent.EventUsage, agent.EventConversation, agent.EventTurnDone:
+	case agent.EventUsage, agent.EventConversation, agent.EventDone:
 		m.markConnected()
+	case agent.EventCanceled:
 	case agent.EventError:
 		if !event.BackendFailure {
 			return

@@ -43,8 +43,8 @@ const (
 // drives what the chat displays.
 type operation struct {
 	kind   opKind
-	gen    uint64             // stamps the operation's messages; never reset, so stale ones drop
-	events <-chan agent.Event // engine operations only
+	gen    uint64      // stamps the operation's messages; never reset, so stale ones drop
+	run    agent.RunID // the engine run, while one streams; zero otherwise
 	cancel context.CancelFunc
 	stop   stopLevel
 	then   followUp
@@ -82,11 +82,6 @@ const (
 func (o operation) busy() bool { return o.kind != opIdle }
 
 func (o operation) loggingOut() bool { return o.kind == opLogout || o.then == thenLogout }
-
-// accepts reports whether an engine message belongs to the running operation.
-func (o operation) accepts(generation uint64) bool {
-	return o.events != nil && generation == o.gen
-}
 
 // task is one cancellable request whose results carry its generation.
 // Starting or stopping advances the generation, so a result from an earlier
@@ -154,6 +149,8 @@ type Config struct {
 type Model struct {
 	// Collaborators the model drives.
 	engine                 *agent.Engine
+	events                 <-chan agent.Event // the engine subscription, pumped for the model's lifetime
+	unsubscribe            func()
 	tools                  *agent.ToolSet
 	openURL                func(context.Context, string) error
 	editor                 *editor.Editor
@@ -295,10 +292,26 @@ type Model struct {
 // Init.
 func New(engine *agent.Engine, configs ...Config) *Model {
 	m := newShell()
-	m.engine = engine
-	m.convID = engine.ConversationID()
+	m.attach(engine)
 	m.configure(configs)
 	return m
+}
+
+// attach binds the model to its engine and subscribes to the engine's events
+// before any operation starts, so the pump started by initChat misses none.
+func (m *Model) attach(engine *agent.Engine) {
+	m.engine = engine
+	m.convID = engine.ConversationID()
+	m.events, m.unsubscribe = engine.Subscribe()
+}
+
+// Detach ends the model's engine subscription once the program has stopped.
+// Closing the engine is not enough: its subscriptions deliver their queued
+// events first, and nothing reads them anymore.
+func (m *Model) Detach() {
+	if m.unsubscribe != nil {
+		m.unsubscribe()
+	}
 }
 
 // NewWithLogin creates the same root TUI in login mode. On successful OAuth,
@@ -427,21 +440,23 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(m.initChat(), splash.Query())
 }
 
-// initChat focuses the editor and, when restoring a conversation, starts the
-// history restore through the normal turn-event pump. It is called explicitly
-// on login handoff because Bubble Tea calls Init only on the original model.
+// initChat focuses the editor, starts the engine event pump and, when
+// restoring a conversation, the history restore. It is called explicitly on
+// login handoff because Bubble Tea calls Init only on the original model.
 func (m *Model) initChat() tea.Cmd {
 	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
 	commands := []tea.Cmd{m.editor.Focus(), requestBG, waitToolUI(m.toolUI)}
 	if m.engine == nil {
 		return tea.Batch(commands...)
 	}
+	commands = append(commands, waitEvent(m.events))
 	if m.engine.ConversationID() == "" {
 		// Fetch the startup offer only when there is no history to restore.
 		return tea.Batch(append(commands, m.fetchRecentConversations(), m.syncClientSkills())...)
 	}
 	m.chatPhase = chat.PhaseLoading
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
-	commands = append(commands, m.begin(opRestore, m.engine.Restore(ctx), cancel))
+	run, err := m.engine.Restore(ctx)
+	commands = append(commands, m.begin(opRestore, run, err, cancel))
 	return tea.Batch(commands...)
 }

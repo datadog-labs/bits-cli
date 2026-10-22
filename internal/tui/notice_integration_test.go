@@ -21,7 +21,7 @@ func TestFakeTurnAndCommandsRenderLocalMessagesInOrder(t *testing.T) {
 	m.editor.Update(tea.PasteMsg{Content: `load("fakedata/notices.star", "rate_limit"); rate_limit()`})
 	_, _ = m.submit()
 	for m.op.busy() {
-		_, _ = m.Update(runConversationCmd(t, waitEvent(m.op.gen, m.op.events)))
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
 	}
 	if latestNotice(m).Level != chat.NoticeWarn {
 		t.Fatalf("fake rate-limit severity = %v, want warning", latestNotice(m).Level)

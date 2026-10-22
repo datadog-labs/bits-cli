@@ -64,7 +64,7 @@ func TestResumedToolsDoNotResendTheTurnContext(t *testing.T) {
 		UserContext:         func(context.Context) string { return "environment" },
 	})
 	e.continuation = continuationFromHistory([]assistant.Message{user, clientCallMsg("one", "input", `{}`)})
-	collect(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
+	collect(resumeEvents(e, t.Context(), TurnInput{Tools: set}))
 	if got := backend.last().Context; got != nil {
 		t.Fatalf("resumed tool answers carried context %+v", got)
 	}
@@ -98,7 +98,7 @@ func TestStoppingAResumedRoundDrainsWithoutInstructionsOrContext(t *testing.T) {
 	user := assistant.Message{Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api"}]`)}
 	e.continuation = continuationFromHistory([]assistant.Message{user, clientCallMsg("one", "input", `{}`)})
 
-	events := e.ResumePendingTools(t.Context(), TurnInput{Tools: set})
+	events := resumeEvents(e, t.Context(), TurnInput{Tools: set})
 	<-started
 	if err := e.StopTools(); err != nil {
 		t.Fatalf("StopTools during the resumed round: %v", err)
@@ -132,7 +132,7 @@ func TestResumeRequiresEveryHandlerToOptIn(t *testing.T) {
 		if e.CanResumeTools(set) {
 			t.Fatalf("batch containing %s is resumable", name)
 		}
-		events := collect(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
+		events := collect(resumeEvents(e, t.Context(), TurnInput{Tools: set}))
 		if len(events) != 1 || !errors.Is(events[0].Err, ErrNoPendingTools) {
 			t.Fatalf("events = %+v", events)
 		}
@@ -166,9 +166,9 @@ func TestCancelledClientToolPublishesTerminalSnapshot(t *testing.T) {
 			if resumed {
 				e.transcript.AppendMessage(call)
 				e.continuation = continuationFromHistory([]assistant.Message{call})
-				events = e.ResumePendingTools(ctx, TurnInput{Tools: set})
+				events = resumeEvents(e, ctx, TurnInput{Tools: set})
 			} else {
-				events = e.StartTurn(ctx, TurnInput{Message: "ask", Tools: set})
+				events = turnEvents(e, ctx, TurnInput{Message: "ask", Tools: set})
 			}
 			<-started
 			cancel()

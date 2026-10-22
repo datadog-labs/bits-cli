@@ -37,7 +37,7 @@ func TestFollowControlReturnsToStreamingTailWithoutGrowingView(t *testing.T) {
 	m.list.ScrollBy(-4)
 	top := m.list.VisibleSurface().Top
 	m.chatPhase = chat.PhaseStreaming
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.transcript.Blocks[0].Markdown.Content += "\n\nnew output"
 	m.transcript.Blocks[0].Rev++
 	m.syncTranscript()

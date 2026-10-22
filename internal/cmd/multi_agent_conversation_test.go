@@ -141,7 +141,13 @@ func TestMultiAgentEngineConversationLifecycle(t *testing.T) {
 
 	resumed := newEngine(conversationID)
 	var restored []agent.Block
-	for event := range resumed.Restore(ctx) {
+	events, unsubscribe := resumed.Subscribe()
+	defer unsubscribe()
+	run, err := resumed.Restore(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event := range agent.Follow(events, run) {
 		if event.Kind == agent.EventError {
 			t.Fatal(event.Err)
 		}

@@ -70,7 +70,7 @@ func startQuestions(t *testing.T, mode agent.PermissionsMode, input string, coun
 	setConversationInput(m, "Help me choose")
 	_, _ = m.submit()
 	t.Cleanup(func() {
-		if m.op.events != nil {
+		if m.op.run != 0 {
 			m.cancelOperation()
 			drainConversationRemote(t, m)
 		}
@@ -84,12 +84,8 @@ func pumpToolUI(t *testing.T, m *Model) {
 	select {
 	case request := <-m.toolUI.Requests():
 		_, _ = m.Update(toolUIOpenedMsg{request: request})
-	case ev, ok := <-m.op.events:
-		if ok {
-			_, _ = m.Update(turnEventMsg{generation: m.op.gen, ev: ev})
-		} else {
-			_, _ = m.Update(turnClosedMsg{generation: m.op.gen})
-		}
+	case ev := <-m.events:
+		_, _ = m.Update(engineEventMsg{ev: ev})
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for a tool UI or turn event")
 	}
@@ -97,7 +93,7 @@ func pumpToolUI(t *testing.T, m *Model) {
 
 func waitQuestions(t *testing.T, m *Model) {
 	t.Helper()
-	for dockedToolUI(m) == nil && m.op.events != nil {
+	for dockedToolUI(m) == nil && m.op.run != 0 {
 		pumpToolUI(t, m)
 	}
 	if dockedToolUI(m) == nil {
@@ -184,7 +180,7 @@ func TestQuestionsMultipleCalls(t *testing.T) {
 	if dockedToolUI(m) == nil || dockedToolUI(m).Call.ID != remaining[0] {
 		t.Fatalf("next form is not the earliest pending call %s", remaining[0])
 	}
-	for m.op.events != nil {
+	for m.op.run != 0 {
 		if dockedToolUI(m) != nil {
 			questionKey(m, tea.KeyEscape, 0)
 		}
@@ -287,7 +283,7 @@ func newResumedQuestionModel(t *testing.T, f *fake.Fake, id string, startup bool
 		_ = m.initChat()
 	}
 	t.Cleanup(func() {
-		if m.op.events != nil {
+		if m.op.run != 0 {
 			m.cancelOperation()
 			drainConversationRemote(t, m)
 		}
@@ -333,7 +329,7 @@ func TestPendingQuestionRestoresOnStartupAndResume(t *testing.T) {
 				_, _ = m.Update(runResumeCmd(t, cmd))
 				_, cmd = m.Update(conversationview.SelectedMsg{Conversation: assistant.ConversationSummary{ConversationID: id}})
 				_, _ = m.Update(runResumeCmd(t, cmd))
-				if m.op.events == nil {
+				if m.op.run == 0 {
 					t.Fatalf("resume failed: %+v", latestNotice(m))
 				}
 			}
@@ -421,7 +417,7 @@ func TestRestoredCallsThatWillNotResumeSettle(t *testing.T) {
 			}
 			m := newResumedQuestionModel(t, f, id, true)
 			drainConversationRemote(t, m)
-			if dockedToolUI(m) != nil || m.op.events != nil {
+			if dockedToolUI(m) != nil || m.op.run != 0 {
 				t.Fatal("a call that cannot resume opened")
 			}
 			for _, block := range m.transcript.Blocks {

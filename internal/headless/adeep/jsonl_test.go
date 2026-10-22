@@ -281,7 +281,7 @@ func TestDeliveryRounds(t *testing.T) {
 	}{
 		{
 			name:   "suppressed stopped rounds",
-			events: []agent.Event{{Kind: agent.EventTurnDone, Round: 3}},
+			events: []agent.Event{{Kind: agent.EventDone, Round: 3}},
 			want:   []string{"run.started:0", "round.started:1", "round.finished:1", "round.started:2", "round.finished:2", "round.started:3", "round.finished:3", "run.finished:0"},
 			rounds: 3,
 		},
@@ -371,7 +371,7 @@ func TestDeliveryWriterFailureLatchesAndFinishEmitsNoTerminal(t *testing.T) {
 	if strings.Contains(out.String(), "run.finished") {
 		t.Fatalf("terminal record emitted after a writer failure: %s", out.String())
 	}
-	if err := delivery.Consume(agent.Event{Kind: agent.EventTurnDone}); err == nil {
+	if err := delivery.Consume(agent.Event{Kind: agent.EventDone}); err == nil {
 		t.Fatal("Consume after Finish succeeded")
 	}
 }
@@ -410,7 +410,7 @@ func TestDeliveryLifecycleTransitions(t *testing.T) {
 	if err := delivery.Finish(headless.Finish{Outcome: headless.OutcomeCompleted}); err != nil {
 		t.Fatal(err)
 	}
-	if err := delivery.Consume(agent.Event{Kind: agent.EventTurnDone}); err == nil {
+	if err := delivery.Consume(agent.Event{Kind: agent.EventDone}); err == nil {
 		t.Fatal("Consume after Finish succeeded")
 	}
 }

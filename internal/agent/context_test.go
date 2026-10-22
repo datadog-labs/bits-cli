@@ -472,7 +472,7 @@ func TestClientSkillsDeferredUntilUserMessageAfterToolResume(t *testing.T) {
 		},
 	})
 	engine.continuation = continuationFromHistory([]assistant.Message{clientCallMsg("one", "input", `{}`)})
-	collect(engine.ResumePendingTools(t.Context(), TurnInput{Tools: tools}))
+	collect(resumeEvents(engine, t.Context(), TurnInput{Tools: tools}))
 	if backend.last().CustomUserContext != "" || renders != 0 {
 		t.Fatal("resumed client tool response prepared or sent the catalog")
 	}
@@ -662,7 +662,7 @@ func TestClientSkillInvocationKeepsDiscoveredDefaultName(t *testing.T) {
 	}
 	backend := &scriptBackend{convID: "new-conversation-1"}
 	engine := New(backend, Config{ClientSkills: env.NewSkills(root, nil)})
-	if last := drain(t, engine, TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: "review"}}); last[len(last)-1].Kind != EventTurnDone {
+	if last := drain(t, engine, TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: "review"}}); last[len(last)-1].Kind != EventDone {
 		t.Fatal(last[len(last)-1].Err)
 	}
 	if len(backend.opts) != 1 || !strings.Contains(backend.opts[0].CustomUserContext, "SHARED BODY") {

@@ -332,14 +332,11 @@ func TestSearchFailureLeavesSubmissionUsable(t *testing.T) {
 		t.Fatalf("error menu = %q", m.editor.MenuView())
 	}
 
-	_, wait := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if wait == nil {
-		t.Fatal("Enter did not submit from an error-only menu")
-	}
+	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	select {
 	case <-backend.requests:
 	case <-time.After(time.Second):
-		t.Fatal("prompt submission did not reach backend")
+		t.Fatal("Enter from an error-only menu did not submit the prompt")
 	}
 }
 
@@ -377,9 +374,9 @@ func TestSelectedEntityContextIsSentOnceAndClearedAfterSubmit(t *testing.T) {
 	if len(m.editor.Attachments()) != 0 {
 		t.Fatalf("attachments survived submit: %#v", m.editor.Attachments())
 	}
-	for range m.op.events {
+	for range agent.Follow(m.events, m.op.run) {
 	}
-	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
+	_ = m.endOperation()
 
 	m.editor.Update(tea.PasteMsg{Content: "next independent turn"})
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -435,10 +432,10 @@ func TestUpRestoresThePreviousPromptWithItsChips(t *testing.T) {
 	m.editor.Update(tea.PasteMsg{Content: "inspect"})
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	first := <-backend.requests
-	for event := range m.op.events {
+	for event := range agent.Follow(m.events, m.op.run) {
 		m.applyEvent(event)
 	}
-	_, _ = m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
+	_ = m.endOperation()
 
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	if got := m.editor.Attachments(); len(got) != 1 || got[0].ID != "checkout-api" {

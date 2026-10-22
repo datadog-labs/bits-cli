@@ -100,9 +100,9 @@ say(id)`
 	}
 
 	engine := agent.New(f, agent.Config{PermissionsMode: agent.ModeSkipPermissions, ConversationID: id})
-	for range engine.Restore(ctx) {
+	for range follow(t, engine, func() (agent.RunID, error) { return engine.Restore(ctx) }) {
 	}
-	for ev := range engine.ResumePendingTools(ctx, agent.TurnInput{Tools: set}) {
+	for ev := range follow(t, engine, func() (agent.RunID, error) { return engine.ResumePendingTools(ctx, agent.TurnInput{Tools: set}) }) {
 		if ev.Err != nil {
 			t.Fatal(ev.Err)
 		}
