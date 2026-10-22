@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -396,7 +397,7 @@ func (e *Engine) run(
 		}
 		if ctx.Err() != nil {
 			if duplexTurn {
-				e.cancelDuplexTools(in.Tools, turnStart)
+				e.settleUnfinishedTools(in.Tools, turnStart)
 			}
 			e.transcript.CancelUnfinishedTools(turnStart)
 			// Cancellation makes send's context-aware select unavailable, but this
@@ -485,7 +486,7 @@ func (e *Engine) run(
 		}
 		if capable {
 			duplexTurn = true
-			e.runDuplex(ctx, in, backend, *user, generation, send)
+			e.runExchange(ctx, in, &streamExchange{backend: backend, message: user.message, opts: user.opts}, user, generation, send)
 			return
 		}
 	}
@@ -610,6 +611,55 @@ func (e *Engine) run(
 		return
 	}
 	send(Event{Kind: EventError, Round: maxTurns, Err: ErrMaxTurns})
+}
+
+// runExchange drives a turn whose backend traffic is one exchange.
+func (e *Engine) runExchange(ctx context.Context, in TurnInput, ex exchange, user *userRequest, generation uint64, send func(Event) bool) {
+	turnStart := len(e.transcript.Blocks())
+	emit := func(event Event) bool {
+		event.Round = 1
+		if event.Kind == EventTranscript {
+			event.Origin = TranscriptOriginRemote
+		}
+		return send(event)
+	}
+	_, err := e.runToolActor(ctx, in.Tools, nil, generation, emit, in.OnDeny, ex, user)
+	if ctx.Err() != nil && (err == nil || errors.Is(err, ctx.Err())) {
+		return // cancelled: end the turn quietly
+	}
+	settled := e.settleUnfinishedTools(in.Tools, turnStart)
+	if e.transcript.FinalizeAll() || settled {
+		if !emit(Event{Kind: EventTranscript, Transcript: e.snapshot()}) {
+			return
+		}
+	}
+	if err != nil {
+		var backend backendError
+		failure := errors.As(err, &backend)
+		if failure {
+			err = backend.error
+		}
+		emit(Event{Kind: EventError, Err: err, BackendFailure: failure})
+		return
+	}
+	emit(Event{Kind: EventTurnDone})
+}
+
+// settleUnfinishedTools cancels the tool blocks from blocks[from:] still open,
+// including provisional calls that never became execution-ready. Normalizing
+// their results clears speculative UI state.
+func (e *Engine) settleUnfinishedTools(tools *ToolSet, from int) bool {
+	changed := false
+	for _, block := range e.transcript.Blocks()[from:] {
+		if block.Tool == nil || block.Tool.Status.IsTerminal() {
+			continue
+		}
+		call := ToolCall{ID: block.ToolCallID(), Name: block.Tool.Name, Input: block.Tool.Input}
+		result := tools.NormalizeResult(call, cancelledResult())
+		_, updated := e.transcript.MarkToolExecuted(call.ID, result)
+		changed = changed || updated
+	}
+	return changed
 }
 
 // drainStoppedToolCalls cancels follow-up client calls after a stopped
@@ -855,8 +905,19 @@ type toolRoundState struct {
 	results       chan toolDone
 	denied        bool
 	stopRequested bool
-	stream        *duplexToolStream
-	slots         chan struct{}
+	// ex carries the round's calls and answers; nil for a legacy round.
+	ex    exchange
+	ended bool         // ex has ended; answers go nowhere
+	user  *userRequest // acknowledged once the backend responds
+	slots chan struct{}
+}
+
+// maxConcurrentTools bounds the handlers of an exchange running at once.
+const maxConcurrentTools = 16
+
+type exchangeResult struct {
+	conversation string
+	err          error
 }
 
 // Workers only execute handlers. The engine goroutine owns approvals,
@@ -869,7 +930,7 @@ func (e *Engine) runTools(
 	send func(Event) bool,
 	onDeny DenyPolicy,
 ) (toolRound, error) {
-	return e.runToolActor(ctx, tools, calls, generation, send, onDeny, nil)
+	return e.runToolActor(ctx, tools, calls, generation, send, onDeny, nil, nil)
 }
 
 func (e *Engine) runToolActor(
@@ -879,7 +940,8 @@ func (e *Engine) runToolActor(
 	generation uint64,
 	send func(Event) bool,
 	onDeny DenyPolicy,
-	stream *duplexToolStream,
+	ex exchange,
+	user *userRequest,
 ) (toolRound, error) {
 	roundCtx, cancelRound := context.WithCancel(ctx)
 	defer cancelRound()
@@ -890,27 +952,24 @@ func (e *Engine) runToolActor(
 		tools:       tools,
 		send:        send,
 		onDeny:      onDeny,
-		calls:       make([]*roundCall, len(calls)),
+		calls:       make([]*roundCall, 0, len(calls)),
 		byID:        make(map[string]*roundCall, len(calls)),
 		results:     make(chan toolDone, len(calls)),
-		stream:      stream,
+		ex:          ex,
+		user:        user,
 	}
-	var incoming <-chan duplexStreamEvent
-	var submissionErrors <-chan error
-	if stream != nil {
-		incoming, submissionErrors = stream.events, stream.submissionErrors
-		r.results = make(chan toolDone, duplexToolConcurrency)
-		r.slots = make(chan struct{}, duplexToolConcurrency)
+	var events <-chan exchangeEvent
+	var done <-chan exchangeResult
+	if ex != nil {
+		r.results = make(chan toolDone, maxConcurrentTools)
+		r.slots = make(chan struct{}, maxConcurrentTools)
+		events, done = r.startExchange()
+		defer func() { r.joinExchange(done) }()
 	}
-	for i, call := range calls {
-		if call.ID == "" {
-			return toolRound{}, errors.New("client tool call has no id")
+	for _, call := range calls {
+		if _, err := r.add(call); err != nil {
+			return toolRound{}, err
 		}
-		if _, exists := r.byID[call.ID]; exists {
-			return toolRound{}, fmt.Errorf("duplicate client tool call id %q", call.ID)
-		}
-		r.calls[i] = &roundCall{call: call}
-		r.byID[call.ID] = r.calls[i]
 	}
 	// However the round ends, none of its calls stays parked.
 	defer func() {
@@ -927,44 +986,23 @@ func (e *Engine) runToolActor(
 			break
 		}
 	}
-	for ok && (stream != nil || slices.ContainsFunc(r.calls, unresolved)) {
+	for ok && (ex != nil || slices.ContainsFunc(r.calls, unresolved)) {
 		select {
-		case event := <-incoming:
-			if event.terminal {
-				stream.terminal = true
-				stream.backendFailure = event.err != nil
-				stream.cancel()
-				r.stopRound(nil, nil)
-				return toolRound{outcome: roundAnswered}, event.err
+		case event := <-events:
+			var err error
+			if ok, err = r.apply(event); err != nil {
+				r.ended = true
+				return toolRound{}, err
 			}
-			if !r.stopRequested && !stream.fold(event.response) {
-				ok = false
-				continue
+		case result := <-done:
+			done = nil
+			r.ended = true
+			r.adopt(result.conversation)
+			if result.err == nil {
+				r.acknowledge()
 			}
-			content := event.response.Data.Attributes.StructuredMessage.Content
-			if content.Type != assistant.ContentClientToolCall {
-				continue
-			}
-			call := toolCallOf(content)
-			if call.ID == "" {
-				return toolRound{}, errors.New("client tool call has no id")
-			}
-			if _, duplicate := r.byID[call.ID]; duplicate {
-				return toolRound{}, fmt.Errorf("duplicate client tool call id %q", call.ID)
-			}
-			c := &roundCall{call: call}
-			r.calls = append(r.calls, c)
-			r.byID[call.ID] = c
-			if r.stopRequested {
-				ok = r.resolve(c, cancelledResult())
-			} else {
-				ok = r.dispatch(c)
-			}
-		case err := <-submissionErrors:
-			stream.terminal, stream.backendFailure = true, true
-			stream.cancel()
 			r.stopRound(nil, nil)
-			return toolRound{}, err
+			return toolRound{outcome: roundAnswered}, result.err
 		case command := <-e.commands:
 			if command.generation == generation {
 				ok = r.handleCommand(command)
@@ -974,11 +1012,6 @@ func (e *Engine) runToolActor(
 			ok = r.regateParked()
 
 		case done := <-r.results:
-			if stream != nil && ctx.Err() != nil {
-				stream.terminal = true
-				r.stopRound(nil, nil)
-				return toolRound{}, ctx.Err()
-			}
 			c := done.call
 			if c.status == callResolved {
 				continue // cancelled or stopped before its handler returned
@@ -991,10 +1024,7 @@ func (e *Engine) runToolActor(
 				// Record the failure so the round's batch still gets answered.
 				ok = r.resolve(c, toolFailedResult(done.err))
 			default:
-				if stream != nil {
-					stream.terminal = true
-					stream.cancel()
-				}
+				r.ended = true
 				r.stopRound(c, done.err)
 				return toolRound{}, done.err
 			}
@@ -1017,6 +1047,95 @@ func (e *Engine) runToolActor(
 		round.responses[i] = c.response
 	}
 	return round, nil
+}
+
+// startExchange runs the exchange until it ends or the round is cancelled.
+func (r *toolRoundState) startExchange() (<-chan exchangeEvent, <-chan exchangeResult) {
+	events := make(chan exchangeEvent)
+	done := make(chan exchangeResult, 1)
+	go func() {
+		conversation, err := r.ex.run(r.ctx, func(event exchangeEvent) bool {
+			select {
+			case events <- event:
+				return true
+			case <-r.ctx.Done():
+				return false
+			}
+		})
+		done <- exchangeResult{conversation: conversation, err: err}
+	}()
+	return events, done
+}
+
+// joinExchange cancels an exchange that has not ended, and waits a bounded
+// time for its transport cleanup, such as the server cancellation request.
+// Tool handlers are never joined.
+func (r *toolRoundState) joinExchange(done <-chan exchangeResult) {
+	if done == nil {
+		return
+	}
+	r.cancelRound()
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	select {
+	case result := <-done:
+		r.adopt(result.conversation)
+	case <-timer.C:
+	}
+}
+
+// apply folds one exchange event and dispatches the call it executes. Once a
+// stop is requested, content is no longer shown.
+func (r *toolRoundState) apply(event exchangeEvent) (bool, error) {
+	if event.conversation != "" {
+		r.adopt(event.conversation)
+		if !r.send(Event{Kind: EventConversation, ConvID: event.conversation}) {
+			return false, nil
+		}
+	}
+	if event.message != nil {
+		r.acknowledge()
+		if !r.stopRequested && !r.e.foldMessage(r.ctx, r.tools, *event.message, r.send) {
+			return false, nil
+		}
+	}
+	if event.execute == nil {
+		return true, nil
+	}
+	c, err := r.add(*event.execute)
+	if err != nil {
+		return false, err
+	}
+	return r.dispatch(c), nil
+}
+
+// add registers an execution-ready call; its ID must be unique in the round.
+func (r *toolRoundState) add(call ToolCall) (*roundCall, error) {
+	if call.ID == "" {
+		return nil, errors.New("client tool call has no id")
+	}
+	if _, exists := r.byID[call.ID]; exists {
+		return nil, fmt.Errorf("duplicate client tool call id %q", call.ID)
+	}
+	c := &roundCall{call: call}
+	r.calls = append(r.calls, c)
+	r.byID[call.ID] = c
+	return c, nil
+}
+
+// adopt records a conversation ID the backend assigned or confirmed.
+func (r *toolRoundState) adopt(conversation string) {
+	if conversation != "" {
+		r.e.opts.ConversationID = conversation
+	}
+}
+
+// acknowledge records the user request as delivered once the backend responds.
+func (r *toolRoundState) acknowledge() {
+	if r.user != nil {
+		r.e.delivery.delivered(*r.user)
+		r.user = nil
+	}
 }
 
 // dispatch decides how a call starts: answered locally, parked for approval,
@@ -1151,7 +1270,7 @@ func (r *toolRoundState) start(c *roundCall) {
 			}
 		}
 		result, err := r.tools.Run(toolCtx, call)
-		if r.stream == nil {
+		if r.ex == nil {
 			r.results <- toolDone{call: c, result: result, err: err}
 			return
 		}
@@ -1231,8 +1350,8 @@ func (r *toolRoundState) settle(c *roundCall, result ToolResult) {
 }
 
 func (r *toolRoundState) publishResult(c *roundCall, result ToolResult) bool {
-	if r.stream != nil && !r.stream.terminal {
-		r.stream.submit(c.response)
+	if r.ex != nil && !r.ended && r.ctx.Err() == nil {
+		r.ex.answer(c.response)
 	}
 	result = r.tools.NormalizeResult(c.call, result)
 	if _, updated := r.e.transcript.MarkToolExecuted(c.call.ID, result); !updated {
