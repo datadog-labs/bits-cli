@@ -468,9 +468,37 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 		Attributes: attrs,
 	}}
 
-	path := "/api/v2/assistant"
-	conversationID := opts.ConversationID
+	return c.stream(ctx, http.MethodPost, "/api/v2/assistant", reqBody, opts.ConversationID, fn)
+}
 
+// SubscribeOptions selects what a /subscribe stream carries.
+type SubscribeOptions struct {
+	// TaskID restricts the stream to one background task's messages; the
+	// server then closes it once the task has ended.
+	TaskID string
+}
+
+// Subscribe observes a conversation through GET .../subscribe: the server
+// replays the persisted messages, sends one ContentReplayComplete marker, then
+// live messages until it closes the stream (after 120s without one, or at the
+// end of the task with TaskID). Each attachment replays everything again: a
+// replay is a complete snapshot, never a continuation of a previous stream.
+// fn sees every message, the marker included; returning an error stops the
+// stream with that error.
+func (c *Client) Subscribe(ctx context.Context, conversationID string, opts SubscribeOptions, fn func(Message) error) error {
+	path := "/api/v2/assistant/conversation/" + url.PathEscape(conversationID) + "/subscribe"
+	if opts.TaskID != "" {
+		path += "?" + url.Values{"subtask_id": {opts.TaskID}}.Encode()
+	}
+	_, err := c.stream(ctx, http.MethodGet, path, nil, conversationID, func(ar AssistantResponse) error {
+		return fn(ar.Data.Attributes.StructuredMessage)
+	})
+	return err
+}
+
+// stream issues a streaming request and hands every non-keepalive line to fn.
+// It returns the last conversation id the stream reported, or conversationID.
+func (c *Client) stream(ctx context.Context, method, path string, body any, conversationID string, fn func(AssistantResponse) error) (string, error) {
 	// Bound the gap between lines (not the total duration) by cancelling a
 	// derived context when no data arrives for streamIdleTimeout (see
 	// defaultStreamIdleTimeout for why the default outlasts the server's own).
@@ -479,7 +507,7 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 	var idledOut atomic.Bool
 	idle := c.streamIdleTimeout()
 
-	req, err := c.newRequest(streamCtx, http.MethodPost, path, reqBody)
+	req, err := c.newRequest(streamCtx, method, path, body)
 	if err != nil {
 		return conversationID, err
 	}
@@ -501,7 +529,7 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 	if resp.StatusCode >= 400 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		_ = resp.Body.Close()
-		apiErr := httpError(snippet, resp.StatusCode, http.MethodPost, path)
+		apiErr := httpError(snippet, resp.StatusCode, method, path)
 		var rejectErr error
 		if resp.StatusCode == http.StatusUnauthorized {
 			rejectErr = c.rejectAccessToken(ctx, req)
@@ -542,7 +570,7 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 		// In-band errors arrive on a 200 as a JSON:API error document
 		// ({"errors":[...]}) with no data; a normal line has no "errors".
 		if len(ar.Errors) > 0 {
-			return conversationID, newAPIError(ar.Errors, 0, http.MethodPost, path)
+			return conversationID, newAPIError(ar.Errors, 0, method, path)
 		}
 		if id := ar.Data.Attributes.ConversationID; id != "" {
 			conversationID = id
