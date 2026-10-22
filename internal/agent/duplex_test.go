@@ -279,37 +279,46 @@ func TestDuplexApprovalDenialIsSubmittedAndControlsFutureCalls(t *testing.T) {
 	}
 }
 
-func TestDuplexSubmissionFailureCancelsStream(t *testing.T) {
+// A failed submission stops sibling calls at once: stream cancellation may
+// wait on the server, as the multi-agent client's cancel request does.
+func TestDuplexSubmissionFailureStopsSiblingsBeforeStreamCleanup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	cancelled := make(chan struct{})
+	siblingStopped := make(chan struct{})
 	failure := errors.New("result POST failed")
-	backend := &duplexBackend{stream: func(ctx context.Context, emit func(assistant.AssistantResponse) error) error {
-		if err := emit(duplexCall("read", "read")); err != nil {
-			return err
+	backend := &duplexBackend{stream: func(streamCtx context.Context, emit func(assistant.AssistantResponse) error) error {
+		for _, id := range []string{"slow", "read"} {
+			if err := emit(duplexCall(id, id)); err != nil {
+				return err
+			}
 		}
-		<-ctx.Done()
-		close(cancelled)
-		return ctx.Err()
+		<-streamCtx.Done()
+		select {
+		case <-siblingStopped:
+		case <-ctx.Done():
+			t.Error("sibling handler kept running during stream cleanup")
+		}
+		return streamCtx.Err()
 	}, submit: func(context.Context, []assistant.ClientToolResponse) error { return failure }}
-	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }})
+	tools, err := NewToolSet(
+		Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }},
+		Tool{Definition: assistant.ClientTool{Name: "slow"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+			<-ctx.Done()
+			close(siblingStopped)
+			return ToolResult{}, ctx.Err()
+		}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
-	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read", Tools: tools})
-	events := collect(eventsCh)
+	events := collect(engine.StartTurn(ctx, TurnInput{Message: "read", Tools: tools}))
 	terminal := events[len(events)-1]
-	if !errors.Is(terminal.Err, failure) || terminal.Kind == EventTurnDone {
+	if terminal.Kind != EventError || !errors.Is(terminal.Err, failure) || !terminal.BackendFailure {
 		t.Fatalf("terminal = %+v", terminal)
 	}
-	select {
-	case <-cancelled:
-	case <-ctx.Done():
-		t.Fatal("stream was not cancelled")
-	}
-	if len(events) == 0 || !events[len(events)-1].BackendFailure {
-		t.Fatalf("events = %+v", events)
+	if !hasToolStatus(events, "slow", ToolCancelled) {
+		t.Fatal("stopped sibling was not settled as cancelled")
 	}
 }
 

@@ -821,7 +821,7 @@ func (t *turn) startExchange() (<-chan exchangeEvent, <-chan exchangeResult) {
 
 // joinExchange cancels an exchange that has not ended, and waits a bounded
 // time for its transport cleanup, such as the server cancellation request.
-// Tool handlers are never joined.
+// Cancelling the turn stops every handler first; handlers are never joined.
 func (t *turn) joinExchange(done <-chan exchangeResult) {
 	if done == nil {
 		return
@@ -838,6 +838,9 @@ func (t *turn) joinExchange(done <-chan exchangeResult) {
 
 // apply folds one exchange event and dispatches the call it executes.
 func (t *turn) apply(event exchangeEvent) (bool, error) {
+	if event.err != nil {
+		return false, event.err
+	}
 	if event.round > t.round {
 		// A new round starts afresh: its calls may reuse the IDs of answered
 		// ones, and an earlier denial no longer excuses a handler failure. A

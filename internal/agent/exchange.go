@@ -21,9 +21,10 @@ type DuplexBackend interface {
 
 // exchange handles one turn's traffic with the backend. run emits events in
 // order and returns the last conversation ID and terminal error. emit returns
-// false when the turn stops listening. answer submits an executed call's result
-// without blocking; it is called only after run emits that call. final reports
-// whether ending the exchange makes every streamed tool terminal.
+// false when the turn stops listening, and is safe for concurrent use. answer
+// submits an executed call's result without blocking; it is called only after
+// run emits that call. final reports whether ending the exchange makes every
+// streamed tool terminal.
 type exchange interface {
 	run(ctx context.Context, emit func(exchangeEvent) bool) (conversation string, err error)
 	answer(assistant.ClientToolResponse)
@@ -37,6 +38,10 @@ type exchangeEvent struct {
 	conversation string // server-assigned conversation ID
 	message      *assistant.Message
 	execute      []ToolCall // a batch, dispatched at once
+	// err fails the turn at once, before run returns: the exchange cannot
+	// continue, so its running calls must stop rather than await transport
+	// cleanup.
+	err error
 }
 
 // backendError marks a failure at the Assistant backend boundary.
@@ -163,12 +168,13 @@ type streamExchange struct {
 	// Set by run before it emits any call, so before any answer.
 	ctx  context.Context
 	fail context.CancelCauseFunc
+	emit func(exchangeEvent) bool
 }
 
 func (x *streamExchange) run(ctx context.Context, emit func(exchangeEvent) bool) (string, error) {
 	ctx, x.fail = context.WithCancelCause(ctx)
 	defer x.fail(nil)
-	x.ctx = ctx
+	x.ctx, x.emit = ctx, emit
 	conversation := x.opts.ConversationID
 	err := x.backend.Stream(ctx, x.message, x.opts, func(response assistant.AssistantResponse) error {
 		msg := response.Data.Attributes.StructuredMessage
@@ -214,7 +220,11 @@ func (x *streamExchange) answer(response assistant.ClientToolResponse) {
 			case <-timer.C:
 			}
 		}
-		x.fail(backendError{err})
+		// Cancelling the stream can wait on the server's cancellation, so
+		// also fail the turn now, which stops the sibling calls at once.
+		cause := backendError{err}
+		x.fail(cause)
+		x.emit(exchangeEvent{err: cause})
 	}()
 }
 
