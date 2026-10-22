@@ -284,7 +284,7 @@ func TestDuplexApprovalDenialIsSubmittedAndControlsFutureCalls(t *testing.T) {
 func TestDuplexSubmissionFailureStopsSiblingsBeforeStreamCleanup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	siblingStopped := make(chan struct{})
+	siblingStarted, siblingStopped := make(chan struct{}), make(chan struct{})
 	failure := errors.New("result POST failed")
 	backend := &duplexBackend{stream: func(streamCtx context.Context, emit func(assistant.AssistantResponse) error) error {
 		for _, id := range []string{"slow", "read"} {
@@ -301,8 +301,17 @@ func TestDuplexSubmissionFailureStopsSiblingsBeforeStreamCleanup(t *testing.T) {
 		return streamCtx.Err()
 	}, submit: func(context.Context, []assistant.ClientToolResponse) error { return failure }}
 	tools, err := NewToolSet(
-		Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }},
+		// The failing answer waits for the sibling to run: a sibling cancelled
+		// before it starts never runs at all.
+		Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+			select {
+			case <-siblingStarted:
+			case <-ctx.Done():
+			}
+			return ToolResult{Output: "ok"}, nil
+		}},
 		Tool{Definition: assistant.ClientTool{Name: "slow"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+			close(siblingStarted)
 			<-ctx.Done()
 			close(siblingStopped)
 			return ToolResult{}, ctx.Err()
