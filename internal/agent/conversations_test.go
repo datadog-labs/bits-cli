@@ -215,7 +215,7 @@ func TestConversationLoadingRejectsMalformedHistory(t *testing.T) {
 // hold claims e as an operation does, until the test ends.
 func hold(t *testing.T, e *Engine) {
 	t.Helper()
-	if err := e.idle(func() error { e.claim(); return nil }); err != nil {
+	if err := e.idle(func() error { e.busy = true; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { e.do(func() { e.busy = false }) })

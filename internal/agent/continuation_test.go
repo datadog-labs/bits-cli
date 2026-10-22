@@ -100,8 +100,8 @@ func TestStoppingAResumedRoundDrainsWithoutInstructionsOrContext(t *testing.T) {
 
 	events := e.ResumePendingTools(t.Context(), TurnInput{Tools: set})
 	<-started
-	if !e.StopTools() {
-		t.Fatal("StopTools was not accepted during the resumed round")
+	if err := e.StopTools(); err != nil {
+		t.Fatalf("StopTools during the resumed round: %v", err)
 	}
 	collect(events)
 

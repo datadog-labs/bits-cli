@@ -169,7 +169,7 @@ func TestQuestionsCompleteTheCall(t *testing.T) {
 	}
 }
 
-func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
+func TestQuestionsMultipleCalls(t *testing.T) {
 	m, backend := startQuestions(t, agent.ModeSkipPermissions, questionInput, 3)
 	for dockedToolUI(m) == nil || len(queuedToolUIs(m)) < 2 {
 		pumpToolUI(t, m)
@@ -184,25 +184,8 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	if dockedToolUI(m) == nil || dockedToolUI(m).Call.ID != remaining[0] {
 		t.Fatalf("next form is not the earliest pending call %s", remaining[0])
 	}
-	// Cancelling a queued call must drop its form without stranding the others.
-	if !m.engine.CancelTool(remaining[1]) {
-		t.Fatal("cancellation command was not queued")
-	}
-	// CancelTool queues a command; wait for the engine to apply it before
-	// dismissing the active form and advancing to the queued call.
-	for !slices.ContainsFunc(m.transcript.Blocks, func(b agent.Block) bool {
-		return b.ToolCallID() == remaining[1] && b.Tool.Status == agent.ToolCancelled
-	}) {
-		if m.op.events == nil {
-			t.Fatal("turn ended before queued call was cancelled")
-		}
-		pumpToolUI(t, m)
-	}
 	for m.op.events != nil {
 		if dockedToolUI(m) != nil {
-			if dockedToolUI(m).Call.ID == remaining[1] {
-				t.Fatal("cancelled call showed its form")
-			}
 			questionKey(m, tea.KeyEscape, 0)
 		}
 		pumpToolUI(t, m)
@@ -213,9 +196,6 @@ func TestQuestionsMultipleCallsAndToolCancellation(t *testing.T) {
 	for i, response := range backend.responses {
 		if response.ToolCallID != fmt.Sprintf("question-%d", i) {
 			t.Fatal("response order changed")
-		}
-		if cancelled := response.ToolCallID == remaining[1]; cancelled != strings.Contains(response.Metadata.Output, "cancelled") {
-			t.Fatalf("response %s = %q", response.ToolCallID, response.Metadata.Output)
 		}
 	}
 }

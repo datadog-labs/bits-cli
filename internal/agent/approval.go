@@ -3,7 +3,6 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
@@ -182,15 +181,12 @@ func cancelledResult() ToolResult {
 	}
 }
 
-// permissionGate keeps mode changes, grants, and gated starts in order. Its
-// lock protects the mode, grants, and parked call keys. A gate decision and
-// any resulting call start are atomic with mode changes. The lock is never
-// held while sending on a channel or consulting an approval policy.
+// permissionGate is the actor's permission state: the mode and the session
+// grants. The approval policy only declares a call's gate; the mode decides
+// what it means.
 type permissionGate struct {
-	mu     sync.Mutex
 	mode   PermissionsMode
 	grants map[ApprovalKey]struct{}
-	parked map[string]ApprovalKey // by call ID
 }
 
 // verdict is how a gated call proceeds.
@@ -198,35 +194,25 @@ type verdict uint8
 
 const (
 	verdictPark verdict = iota // wait for an answer
-	verdictRun                 // started under the gate lock
-	verdictDeny                // the mode denies it
+	verdictRun
+	verdictDeny // the mode denies it
 )
 
-// admit decides how the gated call parked or dispatched as callID proceeds,
-// and calls start before releasing the lock when it may run. Deny mode wins
-// over grants and answers; skip-permissions runs every call; manual runs a
-// call answered allowOnce or covered by a grant, and parks the rest. start
-// must not block.
-func (g *permissionGate) admit(callID string, key ApprovalKey, allowOnce bool, start func()) verdict {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+// admit decides how a gated call with key proceeds. Deny mode wins over
+// grants and answers; skip-permissions runs every call; manual runs a call
+// answered allowOnce or covered by a grant, and parks the rest.
+func (g *permissionGate) admit(key ApprovalKey, allowOnce bool) verdict {
 	switch g.mode {
 	case ModeDeny:
-		delete(g.parked, callID)
 		return verdictDeny
 	case ModeSkipPermissions:
-	default:
-		if _, granted := g.grants[key]; !granted && !allowOnce {
-			if g.parked == nil {
-				g.parked = make(map[string]ApprovalKey)
-			}
-			g.parked[callID] = key
-			return verdictPark
-		}
+		return verdictRun
+	case ModeManual:
 	}
-	delete(g.parked, callID)
-	start()
-	return verdictRun
+	if _, granted := g.grants[key]; granted || allowOnce {
+		return verdictRun
+	}
+	return verdictPark
 }
 
 // setMode stores mode, revoking every grant when it is manual.
@@ -234,8 +220,6 @@ func (g *permissionGate) setMode(mode PermissionsMode) error {
 	if !mode.valid() {
 		return fmt.Errorf("invalid permissions mode %q; expected manual, skip-permissions, or deny", mode)
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
 	g.mode = mode
 	if mode == ModeManual {
 		clear(g.grants)
@@ -243,36 +227,9 @@ func (g *permissionGate) setMode(mode PermissionsMode) error {
 	return nil
 }
 
-func (g *permissionGate) currentMode() PermissionsMode {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.mode
-}
-
-// grantParked grants the key of the call parked as callID, if any.
-func (g *permissionGate) grantParked(callID string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	key, ok := g.parked[callID]
-	if !ok {
-		return false
-	}
+func (g *permissionGate) grant(key ApprovalKey) {
 	if g.grants == nil {
 		g.grants = make(map[ApprovalKey]struct{})
 	}
 	g.grants[key] = struct{}{}
-	return true
-}
-
-func (g *permissionGate) unpark(callID string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	delete(g.parked, callID)
-}
-
-// clearGrants revokes every grant; calls stay parked.
-func (g *permissionGate) clearGrants() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	clear(g.grants)
 }

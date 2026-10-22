@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
@@ -27,6 +26,7 @@ var (
 	ErrOperationActive        = errors.New("another conversation operation is active")
 	ErrNoPendingTools         = errors.New("no resumable client tools")
 	ErrClosed                 = errors.New("engine is closed")
+	ErrStale                  = errors.New("no running turn has this call pending")
 )
 
 // Backend is the minimal transport the engine drives. *assistant.Client
@@ -211,8 +211,6 @@ func (o *outbox) forward(out chan<- Event) {
 	}
 }
 
-const maxQueuedCommands = 64
-
 // maxTurns caps the client-tool loop so a misbehaving backend can't spin
 // forever.
 const maxTurns = 150
@@ -227,8 +225,8 @@ const maxTurns = 150
 // operation (a turn or a restore) holds the engine from its claim until its
 // release; idle methods fail with ErrOperationActive meanwhile. Blocking work
 // (request preparation, history loading, transport, tool handlers) runs on
-// other goroutines and reports back to the actor. The permission gate keeps
-// its own lock until commands become synchronous.
+// other goroutines and reports back to the actor. Commands such as Decide and
+// SetPermissionsMode apply on the actor before returning.
 type Engine struct {
 	backend                Backend
 	opts                   assistant.SendOptions
@@ -238,14 +236,9 @@ type Engine struct {
 	previousConversationID string
 	// delivery is the context the current conversation is known to carry.
 	delivery contextDelivery
-	commands chan toolCommand
 	gate     permissionGate
-	// permissionsChanged wakes a running round to re-gate its parked calls
-	// after a mode switch or a grant. It holds at most one signal: rounds
-	// re-read the current permissions anyway.
-	permissionsChanged  chan struct{}
-	operationGeneration atomic.Uint64
-	busy                bool // an operation holds the engine
+	busy     bool  // an operation holds the engine
+	turn     *turn // the turn whose exchange is running, if any
 
 	requests     chan func() // run on the actor
 	closing      chan struct{}
@@ -263,14 +256,6 @@ type RuntimeStatus struct {
 	Profile    assistant.Profile
 	Model      string
 	Backend    assistant.BackendStatus
-}
-
-type toolCommand struct {
-	generation uint64
-	id         string
-	decision   ApprovalDecision
-	cancel     bool
-	stop       bool
 }
 
 // Config holds engine-lifetime dependencies and backend request defaults.
@@ -330,19 +315,17 @@ func New(b Backend, config Config) *Engine {
 		runtimeStatus.Backend = provider.BackendStatus()
 	}
 	engine := &Engine{
-		backend:            b,
-		opts:               opts,
-		runtimeStatus:      runtimeStatus,
-		transcript:         NewTranscript(),
-		commands:           make(chan toolCommand, maxQueuedCommands),
-		gate:               permissionGate{mode: cmp.Or(config.PermissionsMode, ModeManual)},
-		permissionsChanged: make(chan struct{}, 1),
-		instructions:       config.ProjectInstructions,
-		clientSkills:       config.ClientSkills,
-		userContext:        config.UserContext,
-		requests:           make(chan func()),
-		closing:            make(chan struct{}),
-		stopped:            make(chan struct{}),
+		backend:       b,
+		opts:          opts,
+		runtimeStatus: runtimeStatus,
+		transcript:    NewTranscript(),
+		gate:          permissionGate{mode: cmp.Or(config.PermissionsMode, ModeManual)},
+		instructions:  config.ProjectInstructions,
+		clientSkills:  config.ClientSkills,
+		userContext:   config.UserContext,
+		requests:      make(chan func()),
+		closing:       make(chan struct{}),
+		stopped:       make(chan struct{}),
 	}
 	go engine.loop()
 	return engine
@@ -401,12 +384,6 @@ func get[T any](e *Engine, f func() T) (v T) {
 	return v
 }
 
-// claim holds the engine for an operation, which must release it.
-func (e *Engine) claim() uint64 {
-	e.busy = true
-	return e.operationGeneration.Add(1)
-}
-
 // release ends the operation; its stream closes once drained.
 func (e *Engine) release(out *outbox) {
 	e.busy = false
@@ -458,7 +435,6 @@ func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
 // the restored calls.
 func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) <-chan Event {
 	var resumed []ToolCall
-	var generation uint64
 	err := e.idle(func() error {
 		if resume {
 			if !e.canResumeTools(in.Tools) {
@@ -469,14 +445,14 @@ func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) <-cha
 			}
 		}
 		e.continuation = nil
-		generation = e.claim()
+		e.busy = true
 		return nil
 	})
 	if err != nil {
 		return eventResult(Event{Kind: EventError, Err: err})
 	}
 	out, events := newOutbox()
-	go e.run(ctx, in, resumed, out, generation)
+	go e.run(ctx, in, resumed, out)
 	return events
 }
 
@@ -487,51 +463,54 @@ func eventResult(ev Event) <-chan Event {
 	return out
 }
 
-// Decide answers a call parked for approval. It reports whether the answer
-// was queued, not applied: the round drops it if the call is no longer parked.
-func (e *Engine) Decide(toolCallID string, decision ApprovalDecision) bool {
+// Decide answers a call parked for approval, at once. It fails with ErrStale
+// when no turn has the call parked.
+func (e *Engine) Decide(toolCallID string, decision ApprovalDecision) error {
 	if !decision.valid() {
-		return false
+		return fmt.Errorf("invalid approval decision %q", decision)
 	}
-	return e.command(toolCommand{
-		generation: e.operationGeneration.Load(),
-		id:         toolCallID,
-		decision:   decision,
-	})
-}
-
-// CancelTool cancels one call of the active round. Like Decide, it reports
-// whether the command was queued.
-func (e *Engine) CancelTool(toolCallID string) bool {
-	return e.command(toolCommand{
-		generation: e.operationGeneration.Load(),
-		id:         toolCallID,
-		cancel:     true,
+	return e.command(func(t *turn) error {
+		c, err := t.parked(toolCallID)
+		switch {
+		case err != nil:
+		case decision == ApprovalDeny:
+			t.deny(c, approvalDeniedResult(c.call))
+		default:
+			t.admit(c, true)
+		}
+		return err
 	})
 }
 
 // StopTools cancels the active client-tool round and persists its cancellation
 // responses, as for every later call, then ends the turn without showing the
 // model's follow-up. Cancelling the turn context instead leaves unanswered
-// calls available for a later process to resume. It reports whether the stop
-// was queued.
-func (e *Engine) StopTools() bool {
-	return e.command(toolCommand{generation: e.operationGeneration.Load(), stop: true})
+// calls available for a later process to resume. It fails with ErrStale when
+// no turn is running.
+func (e *Engine) StopTools() error {
+	return e.command(func(t *turn) error {
+		t.requestStop()
+		t.stopCalls(nil, nil)
+		return nil
+	})
 }
 
-func (e *Engine) command(command toolCommand) bool {
-	select {
-	case e.commands <- command:
-		return true
-	default:
-		return false
-	}
+// command runs fn on the running turn, if any.
+func (e *Engine) command(fn func(*turn) error) error {
+	err := ErrClosed
+	e.do(func() {
+		err = ErrStale
+		if e.turn != nil {
+			err = fn(e.turn)
+		}
+	})
+	return err
 }
 
 // run prepares a claimed turn off the actor, where it may block on files and
 // the environment, then drives it on the actor until it ends.
-func (e *Engine) run(ctx context.Context, in TurnInput, resumed []ToolCall, out *outbox, generation uint64) {
-	t := &turn{e: e, parent: ctx, generation: generation, tools: in.Tools, onDeny: in.OnDeny, out: out, round: 1}
+func (e *Engine) run(ctx context.Context, in TurnInput, resumed []ToolCall, out *outbox) {
+	t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, out: out, round: 1}
 	sentContext, imageNotices, err := prepareImageContext(ctx, in.Context)
 	if err != nil {
 		// Keep file references in the failed prompt so history can retry them.
@@ -724,53 +703,50 @@ func (e *Engine) NewConversation() error {
 		e.resetContext()
 		e.transcript = NewTranscript()
 		e.continuation = nil
-		e.gate.clearGrants()
+		clear(e.gate.grants)
 		return nil
 	})
 }
 
 // PermissionsMode reports the current permissions mode.
-func (e *Engine) PermissionsMode() PermissionsMode { return e.gate.currentMode() }
+func (e *Engine) PermissionsMode() PermissionsMode {
+	return get(e, func() PermissionsMode { return e.gate.mode })
+}
 
-// SetPermissionsMode switches the process tool mode at once, even mid-turn.
-// The switch governs every gate decision made after it: dispatching a call,
-// re-gating parked calls (so a switch away from manual releases them), and
-// applying a queued answer: once it returns, no gated call starts under the
-// earlier mode. Calls already running are not stopped. Deny mode
-// is absolute: no gated call runs, whatever grants or answers exist.
-// Returning to manual revokes session grants.
+// SetPermissionsMode switches the process tool mode at once, even mid-turn:
+// it re-gates parked calls (so a switch away from manual releases them), and
+// once it returns every later gate decision follows it. Calls already running
+// are not stopped. Deny mode is absolute: no gated call runs, whatever grants
+// or answers exist. Returning to manual revokes session grants.
 func (e *Engine) SetPermissionsMode(mode PermissionsMode) error {
-	if err := e.gate.setMode(mode); err != nil {
-		return err
-	}
-	e.permissionsUpdated()
-	return nil
+	err := ErrClosed
+	e.do(func() {
+		if err = e.gate.setMode(mode); err == nil && e.turn != nil {
+			e.turn.regateParked()
+		}
+	})
+	return err
 }
 
 // GrantSessionFor stops asking, for the rest of the conversation, for calls
 // sharing the approval key of the call parked as callID. It applies at once:
-// a running round releases every parked call the grant covers, callID
-// included. It reports false when no call is parked as callID.
-func (e *Engine) GrantSessionFor(callID string) bool {
-	if !e.gate.grantParked(callID) {
-		return false
-	}
-	e.permissionsUpdated()
-	return true
-}
-
-func (e *Engine) permissionsUpdated() {
-	select {
-	case e.permissionsChanged <- struct{}{}:
-	default: // a wake-up is already pending
-	}
+// it releases every parked call the grant covers, callID included.
+func (e *Engine) GrantSessionFor(callID string) error {
+	return e.command(func(t *turn) error {
+		c, err := t.parked(callID)
+		if err == nil {
+			e.gate.grant(c.gate.Key)
+			t.regateParked()
+		}
+		return err
+	})
 }
 
 // Restore fetches the persisted history for the engine's conversation, folds it
 // into the transcript.
 func (e *Engine) Restore(ctx context.Context) <-chan Event {
 	var id string
-	if err := e.idle(func() error { id = e.opts.ConversationID; e.claim(); return nil }); err != nil {
+	if err := e.idle(func() error { id = e.opts.ConversationID; e.busy = true; return nil }); err != nil {
 		return eventResult(Event{Kind: EventError, Err: err})
 	}
 	out, events := newOutbox()
@@ -837,12 +813,11 @@ const maxConcurrentTools = 16
 // turn owns one turn's state. Only the actor changes it; the exchange and
 // handler goroutines report back through channels.
 type turn struct {
-	e          *Engine
-	generation uint64
-	parent     context.Context // the caller's; its cancellation ends the turn quietly
-	from       int             // the turn's first transcript block
-	ctx        context.Context // scopes the exchange and every handler
-	cancel     context.CancelFunc
+	e      *Engine
+	parent context.Context // the caller's; its cancellation ends the turn quietly
+	from   int             // the turn's first transcript block
+	ctx    context.Context // scopes the exchange and every handler
+	cancel context.CancelFunc
 	// handlers parents every handler context; a stop cancels it.
 	handlers     context.Context
 	stopHandlers context.CancelFunc
@@ -877,12 +852,9 @@ func (t *turn) drive() error {
 	t.slots = make(chan struct{}, maxConcurrentTools)
 	events, done := t.startExchange()
 	defer func() { t.joinExchange(done) }()
-	// However the turn ends, none of its calls stays parked.
-	defer func() {
-		for _, c := range t.calls {
-			t.e.gate.unpark(c.call.ID)
-		}
-	}()
+	// Commands reach the turn until its loop ends.
+	t.e.turn = t
+	defer func() { t.e.turn = nil }()
 
 	for {
 		select {
@@ -900,12 +872,6 @@ func (t *turn) drive() error {
 			}
 			t.stopCalls(nil, nil)
 			return result.err
-		case command := <-t.e.commands:
-			if command.generation == t.generation {
-				t.handleCommand(command)
-			}
-		case <-t.e.permissionsChanged:
-			t.regateParked()
 		case finished := <-t.results:
 			c := finished.call
 			if resolved(c) {
@@ -1062,8 +1028,7 @@ func (t *turn) acknowledge() {
 
 // dispatch decides how a call starts: answered locally, parked for approval,
 // or launched. Once a stop is requested nothing new starts. The approval
-// policy runs here, once and outside the gate lock; the mode only decides
-// what the declared gate means.
+// policy runs here, once; the mode only decides what the declared gate means.
 func (t *turn) dispatch(c *clientCall) {
 	if t.stopRequested {
 		t.resolve(c, cancelledResult())
@@ -1082,39 +1047,20 @@ func (t *turn) dispatch(c *clientCall) {
 	}
 	requirement, gated := t.tools.Approval(c.call)
 	if !gated {
-		t.start(c)
+		t.start(c, false)
 		return
 	}
 	c.gate = requirement
 	t.admit(c, false)
 }
 
-func (t *turn) handleCommand(command toolCommand) {
-	if command.stop {
-		t.requestStop()
-		t.stopCalls(nil, nil)
-		return
+// parked returns the call parked as id.
+func (t *turn) parked(id string) (*clientCall, error) {
+	c, ok := t.byID[id]
+	if !ok || c.status != callAwaitingApproval {
+		return nil, ErrStale
 	}
-	c, ok := t.byID[command.id]
-	if !ok {
-		return
-	}
-	if command.cancel {
-		if c.status == callRunning {
-			c.cancel()
-		}
-		if c.status == callRunning || c.status == callAwaitingApproval {
-			t.resolve(c, cancelledResult())
-		}
-		return
-	}
-	switch {
-	case c.status != callAwaitingApproval:
-	case command.decision == ApprovalDeny:
-		t.deny(c, approvalDeniedResult(c.call))
-	default:
-		t.admit(c, true)
-	}
+	return c, nil
 }
 
 // regateParked re-gates parked calls after a mode switch or a grant: a call
@@ -1128,14 +1074,13 @@ func (t *turn) regateParked() {
 	}
 }
 
-// admit decides how gated call c proceeds and, when it may run, starts it,
-// atomically with respect to permission changes, then publishes the outcome.
-// An answer (allowOnce) never parks.
+// admit decides how gated call c proceeds under the current permissions and
+// publishes the outcome. An answer (allowOnce) never parks.
 func (t *turn) admit(c *clientCall, allowOnce bool) {
 	parked := c.status == callAwaitingApproval
-	switch t.e.gate.admit(c.call.ID, c.gate.Key, allowOnce, func() { t.start(c) }) {
+	switch t.e.gate.admit(c.gate.Key, allowOnce) {
 	case verdictRun:
-		t.publishStarted(c, parked)
+		t.start(c, parked)
 	case verdictDeny:
 		t.deny(c, modeDeniedResult())
 	case verdictPark:
@@ -1148,12 +1093,17 @@ func (t *turn) admit(c *clientCall, allowOnce bool) {
 	}
 }
 
-// start begins c without publishing anything, so it may run under the gate
-// lock: a handler is launched, or the server gate is answered as approved.
-func (t *turn) start(c *clientCall) {
+// start begins c: the server gate is answered as approved; any other call
+// launches its handler, shown running if it waited for approval.
+func (t *turn) start(c *clientCall, wasParked bool) {
 	if c.call.Name == assistant.ApprovalRequestTool {
-		t.settle(c, approvedResult())
+		t.resolve(c, approvedResult())
 		return
+	}
+	if wasParked {
+		if _, updated := t.e.transcript.MarkToolRunning(c.call.ID); updated {
+			t.publish()
+		}
 	}
 	toolCtx, cancel := context.WithCancel(t.handlers)
 	c.status = callRunning
@@ -1177,21 +1127,6 @@ func (t *turn) start(c *clientCall) {
 		case <-t.ctx.Done():
 		}
 	}()
-}
-
-// publishStarted shows a call start began: the server gate's approval, or a
-// handler running once it had waited for approval.
-func (t *turn) publishStarted(c *clientCall, wasParked bool) {
-	if c.call.Name == assistant.ApprovalRequestTool {
-		t.publishResult(c, approvedResult())
-		return
-	}
-	if !wasParked {
-		return
-	}
-	if _, updated := t.e.transcript.MarkToolRunning(c.call.ID); updated {
-		t.publish()
-	}
 }
 
 // deny answers the denial on the wire; siblings still resolve. Under DenyStop
@@ -1241,7 +1176,6 @@ func (t *turn) resolve(c *clientCall, result ToolResult) {
 	if resolved(c) {
 		return
 	}
-	t.e.gate.unpark(c.call.ID)
 	t.settle(c, result)
 	t.publishResult(c, result)
 }

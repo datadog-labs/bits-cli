@@ -252,7 +252,7 @@ func TestDuplexApprovalDenialIsSubmittedAndControlsFutureCalls(t *testing.T) {
 			for event := range eventsCh {
 				events = append(events, event)
 				if !decided && len(event.Transcript.PendingApprovals()) > 0 {
-					decided = engine.Decide("gated", ApprovalDeny)
+					decided = engine.Decide("gated", ApprovalDeny) == nil
 				}
 			}
 			terminal := events[len(events)-1]
