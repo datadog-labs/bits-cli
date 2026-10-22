@@ -30,6 +30,10 @@ const EnvCustomHeaders = "BITS_CUSTOM_HEADERS"
 // When unset, shell commands inherit the ordinary process environment.
 const EnvExecExcludeEnv = "BITS_EXEC_EXCLUDE_ENV"
 
+// EnvRequiredResponseHeader requires a matching header before streamed output
+// is delivered. It uses the same name=value syntax as EnvCustomHeaders.
+const EnvRequiredResponseHeader = "BITS_REQUIRED_RESPONSE_HEADER"
+
 // ErrLoginRequired marks an OAuth state that an interactive caller may replace
 // by starting login. Noninteractive callers should surface the wrapped error
 // with guidance to run `bits login`.
@@ -90,7 +94,11 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 		}
 		return nil, err
 	}
-	return agent.New(client, config), nil
+	var backend agent.Backend = client
+	if os.Getenv("BITS_USE_EXPERIMENTAL_SUBAGENTS") == "1" {
+		backend = assistant.NewMultiAgentClient(client)
+	}
+	return agent.New(backend, config), nil
 }
 
 func configuredClientTools(ws *workspace.Workspace) ([]agent.Tool, error) {
@@ -141,11 +149,20 @@ func NewAuthenticatedClient(ctx context.Context, opts ClientOptions) (*assistant
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", EnvCustomHeaders, err)
 	}
+	var requiredName, requiredValue string
+	if raw := os.Getenv(EnvRequiredResponseHeader); raw != "" {
+		requiredName, requiredValue, err = assistant.ParseRequiredResponseHeader(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", EnvRequiredResponseHeader, err)
+		}
+	}
 	client, err := newClientForMode(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
 	client.CustomHeaders = custom
+	client.RequiredStreamHeaderName = requiredName
+	client.RequiredStreamHeaderValue = requiredValue
 	return client, nil
 }
 

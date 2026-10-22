@@ -107,12 +107,15 @@ func NewToolPrompt(call agent.ToolCall) (ToolPrompt, bool) {
 }
 
 var (
-	questionToolRenderSpec = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, static: true, interact: newQuestionPrompt}
-	simpleToolRenderSpec   = &toolRenderSpec{render: renderSimpleTool}
-	readToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, group: inspectionGroupKey}
-	listToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, group: inspectionGroupKey}
-	grepToolRenderSpec     = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "search", active: "searching"}, group: inspectionGroupKey}
-	writeToolRenderSpec    = &toolRenderSpec{
+	questionToolRenderSpec     = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, static: true, interact: newQuestionPrompt}
+	simpleToolRenderSpec       = &toolRenderSpec{render: renderSimpleTool}
+	spawnAgentRenderSpec       = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "start subagent", active: "starting subagent", success: "started subagent", failure: "subagent start failed"}}
+	sendAgentMessageRenderSpec = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "send message", active: "sending message", success: "sent message", failure: "message failed"}}
+	waitForAgentsRenderSpec    = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "wait for", active: "waiting for", success: "waited for", failure: "wait failed"}}
+	readToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "read", active: "reading"}, group: inspectionGroupKey}
+	listToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "list", active: "listing"}, group: inspectionGroupKey}
+	grepToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "search", active: "searching"}, group: inspectionGroupKey}
+	writeToolRenderSpec        = &toolRenderSpec{
 		render:  renderChangeTool,
 		spacing: itemSpacing{before: 1, after: 1},
 		action:  toolAction{base: "write", active: "writing", success: "wrote", failure: "write failed"},
@@ -225,6 +228,35 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			}
 			p.validInput = true
 		}
+	case spec.ServerSpawnAgent:
+		var in struct {
+			Prompt string `json:"prompt"`
+		}
+		if decodeObject(input, &in) && in.Prompt != "" {
+			p.argument, p.validInput = escape.Inline(in.Prompt), true
+		}
+	case spec.ServerSendAgentMessage:
+		var in struct {
+			Message string `json:"message"`
+		}
+		if decodeObject(input, &in) && in.Message != "" {
+			p.argument, p.validInput = escape.Inline(in.Message), true
+		}
+	case spec.ServerWaitForAgents:
+		var in struct {
+			AgentIDs []string `json:"agent_ids"`
+			Mode     string   `json:"mode"`
+		}
+		if decodeObject(input, &in) && len(in.AgentIDs) > 0 {
+			p.argument = fmt.Sprintf("%d subagents", len(in.AgentIDs))
+			if len(in.AgentIDs) == 1 {
+				p.argument = "1 subagent"
+			}
+			if in.Mode == "any" && len(in.AgentIDs) > 1 {
+				p.argument = "any of " + p.argument
+			}
+			p.validInput = true
+		}
 	case spec.ServerSkill:
 		p.argument = "skill"
 		var in spec.SkillInput
@@ -254,6 +286,12 @@ func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 		return editToolRenderSpec
 	case spec.ClientExecCommand:
 		return execToolRenderSpec
+	case spec.ServerSpawnAgent:
+		return spawnAgentRenderSpec
+	case spec.ServerSendAgentMessage:
+		return sendAgentMessageRenderSpec
+	case spec.ServerWaitForAgents:
+		return waitForAgentsRenderSpec
 	case spec.ServerSkill:
 		return skillToolRenderSpec
 	default:
@@ -309,10 +347,9 @@ func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 	state := statusOf(tool)
 	action := p.actionLabel(state)
 	if !p.validInput {
-		// Keep local inspection tools recognizable while their input is still
-		// streaming or malformed. Exact client identity is enough to choose the
-		// action; arguments remain omitted until decoding succeeds. Server tools
-		// stay generic so similarly named remote tools are not specialized.
+		// Keep known tools recognizable while input is streaming or malformed.
+		// Exact identity selects the action; arguments remain omitted until
+		// decoding succeeds. Other tools retain their qualified name.
 		if action != "" {
 			return actionArgument(action, "")
 		}

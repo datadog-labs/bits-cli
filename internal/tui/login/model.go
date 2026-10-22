@@ -10,9 +10,11 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/browser"
 	"github.com/datadog-labs/bits-cli/internal/site"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
@@ -23,21 +25,23 @@ import (
 const (
 	completionPause = 650 * time.Millisecond
 	spinnerInterval = 90 * time.Millisecond
+	copyFeedback    = 2 * time.Second
 )
 
 // ErrCanceled means the required startup login was canceled by the user.
 var ErrCanceled = errors.New("login canceled")
 
-// BrowserStatus reports where the OAuth flow opened and whether launching the
-// browser failed. The authorization URL remains usable as a manual fallback.
+// BrowserStatus reports the login URL, browser launch failures, and retryable
+// errors from pasted callback URLs.
 type BrowserStatus struct {
 	AuthorizationURL string
 	OpenError        error
+	InputError       error
 }
 
 // LoginFunc performs and persists OAuth for the selected Datadog site. Status
 // reports are synchronous: implementations must not call report after returning.
-type LoginFunc func(context.Context, string, func(BrowserStatus)) error
+type LoginFunc func(context.Context, string, <-chan string, func(BrowserStatus)) error
 
 type phase uint8
 
@@ -69,6 +73,10 @@ type browserStatusMsg struct {
 type (
 	spinnerTickMsg     struct{ attempt uint64 }
 	completionPauseMsg struct{ attempt uint64 }
+	linkOpenMsg        struct {
+		attempt uint64
+		err     error
+	}
 )
 
 // CompletedMsg tells the owning application that the persisted OAuth session
@@ -81,19 +89,27 @@ type Model struct {
 	ctx   context.Context
 	login LoginFunc
 
-	phase    phase
-	custom   textinput.Model
-	selector *components.Selector
-	panel    *components.Panel
-	theme    styles.Theme
-	width    int
-	height   int
+	phase        phase
+	custom       textinput.Model
+	callback     textinput.Model
+	callbackURLs chan string
+	callbackErr  error
+	selector     *components.Selector
+	panel        *components.Panel
+	theme        styles.Theme
+	width        int
+	height       int
 
 	attempt          uint64
+	attemptCtx       context.Context
 	cancel           context.CancelFunc
 	activeSite       string
 	authorizationURL string
 	browserOpenErr   error
+	linkPressX       int
+	linkPressY       int
+	linkPressed      bool
+	copiedUntil      time.Time
 	loginErr         error
 	spinner          int
 	completed        bool
@@ -113,6 +129,11 @@ func New(ctx context.Context, login LoginFunc) *Model {
 	input.CharLimit = 253
 	input.SetWidth(48)
 	input.SetStyles(theme.TextInput)
+	callback := textinput.New()
+	callback.Prompt = theme.Input.Prompt
+	callback.Placeholder = "Paste the full address, then press Enter"
+	callback.SetWidth(48)
+	callback.SetStyles(theme.TextInput)
 
 	choices := make([]components.Choice, 0, len(siteOptions)+1)
 	for _, option := range siteOptions {
@@ -123,6 +144,7 @@ func New(ctx context.Context, login LoginFunc) *Model {
 		ctx:      ctx,
 		login:    login,
 		custom:   input,
+		callback: callback,
 		selector: components.NewSelector(choices, theme.Selector),
 		panel:    components.NewPanel(theme.Panel),
 		theme:    theme,
@@ -143,6 +165,7 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) applyTheme(theme styles.Theme) {
 	m.theme = theme
 	m.custom.SetStyles(theme.TextInput)
+	m.callback.SetStyles(theme.TextInput)
 	m.panel.SetStyles(theme.Panel)
 	m.selector.SetStyles(theme.Selector)
 }
@@ -153,26 +176,64 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.custom.SetWidth(max(12, min(48, msg.Width-10)))
+		bodyWidth, _ := m.panel.BodySize(msg.Width, msg.Height, true)
+		m.callback.SetWidth(max(1, bodyWidth-ansi.StringWidth(m.callback.Prompt)-1))
 		return m, nil
 	case tea.BackgroundColorMsg:
 		m.applyTheme(styles.Default(msg.IsDark()))
 		return m, nil
 	case tea.KeyPressMsg:
 		key := msg.String()
+		if m.phase == phaseWaiting && key != "ctrl+c" && key != "ctrl+y" && key != "enter" && key != "esc" {
+			if !m.callbackVisible() {
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.callback, cmd = m.callback.Update(msg)
+			return m, cmd
+		}
 		if m.phase == phaseCustom && key != "ctrl+c" && key != "enter" && key != "esc" {
 			var cmd tea.Cmd
 			m.custom, cmd = m.custom.Update(msg)
 			return m, cmd
 		}
 		return m.handleKey(key)
+	case tea.MouseClickMsg:
+		m.linkPressed = msg.Button == tea.MouseLeft && msg.Mod == 0 && m.linkAt(msg.X, msg.Y)
+		m.linkPressX, m.linkPressY = msg.X, msg.Y
+		return m, nil
+	case tea.MouseMotionMsg:
+		if m.linkPressed && (msg.X != m.linkPressX || msg.Y != m.linkPressY) {
+			m.linkPressed = false
+		}
+		return m, nil
+	case tea.MouseReleaseMsg:
+		pressed := m.linkPressed
+		m.linkPressed = false
+		if pressed && msg.Button == tea.MouseLeft && msg.Mod == 0 && msg.X == m.linkPressX && msg.Y == m.linkPressY && m.linkAt(msg.X, msg.Y) {
+			if m.browserOpenErr != nil {
+				m.copiedUntil = time.Now().Add(copyFeedback)
+				return m, tea.SetClipboard(m.authorizationURL)
+			}
+			attempt, target := m.attempt, m.authorizationURL
+			ctx := m.attemptCtx
+			return m, func() tea.Msg { return linkOpenMsg{attempt: attempt, err: browser.Open(ctx, target)} }
+		}
+		return m, nil
+	case linkOpenMsg:
+		if msg.attempt == m.attempt && m.phase == phaseWaiting {
+			m.browserOpenErr = msg.err
+		}
+		return m, nil
 	case browserStatusMsg:
 		if msg.attempt != m.attempt || m.phase != phaseWaiting || msg.done {
 			return m, nil
 		}
 		if msg.status.AuthorizationURL != "" {
 			m.authorizationURL = msg.status.AuthorizationURL
+			m.browserOpenErr = msg.status.OpenError
 		}
-		m.browserOpenErr = msg.status.OpenError
+		m.callbackErr = msg.status.InputError
 		if msg.updates != nil {
 			return m, waitBrowserStatus(msg.attempt, msg.updates, msg.ctx)
 		}
@@ -199,6 +260,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinnerTickMsg:
 		if msg.attempt == m.attempt && m.phase == phaseWaiting {
 			m.spinner++
+			if time.Now().After(m.copiedUntil) {
+				m.copiedUntil = time.Time{}
+			}
 			return m, spinnerTick(m.attempt)
 		}
 	case completionPauseMsg:
@@ -210,6 +274,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.phase == phaseCustom {
 		var cmd tea.Cmd
 		m.custom, cmd = m.custom.Update(msg)
+		return m, cmd
+	}
+	if m.phase == phaseWaiting && m.callbackVisible() {
+		var cmd tea.Cmd
+		m.callback, cmd = m.callback.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -259,6 +328,21 @@ func (m *Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case phaseWaiting:
+		if key == "ctrl+y" && m.authorizationURL != "" {
+			m.copiedUntil = time.Now().Add(copyFeedback)
+			return m, tea.SetClipboard(m.authorizationURL)
+		}
+		if key == "enter" && m.callbackVisible() {
+			if raw := strings.TrimSpace(m.callback.Value()); raw != "" {
+				select {
+				case m.callbackURLs <- raw:
+					m.callback.SetValue("")
+					m.callbackErr = nil
+				default:
+				}
+			}
+			return m, nil
+		}
 		if key == "esc" {
 			m.abort()
 			m.phase = phaseSelect
@@ -286,10 +370,17 @@ func (m *Model) startLogin(site string) tea.Cmd {
 	m.attempt++
 	attempt := m.attempt
 	ctx, cancel := context.WithCancel(m.ctx)
+	m.attemptCtx = ctx
 	m.cancel = cancel
 	m.activeSite = site
 	m.authorizationURL = ""
 	m.browserOpenErr = nil
+	m.linkPressed = false
+	m.copiedUntil = time.Time{}
+	m.callback.SetValue("")
+	m.callbackErr = nil
+	m.callbackURLs = make(chan string, 1)
+	callbacks := m.callbackURLs
 	m.loginErr = nil
 	m.phase = phaseWaiting
 	m.spinner = 0
@@ -299,7 +390,7 @@ func (m *Model) startLogin(site string) tea.Cmd {
 	report := func(update BrowserStatus) {
 		select {
 		case status <- update:
-		default:
+		case <-ctx.Done():
 		}
 	}
 	return tea.Batch(
@@ -308,12 +399,13 @@ func (m *Model) startLogin(site string) tea.Cmd {
 				close(status)
 				return loginFinishedMsg{attempt: attempt, err: errors.New("OAuth login is unavailable")}
 			}
-			err := login(ctx, site, report)
+			err := login(ctx, site, callbacks, report)
 			close(status)
 			return loginFinishedMsg{attempt: attempt, err: err}
 		},
 		waitBrowserStatus(attempt, status, ctx),
 		spinnerTick(attempt),
+		m.callback.Focus(),
 	)
 }
 
@@ -336,6 +428,7 @@ func (m *Model) abort() {
 		m.cancel()
 		m.cancel = nil
 	}
+	m.attemptCtx = nil
 	m.attempt++ // make any result already in flight stale
 }
 
@@ -362,13 +455,17 @@ func normalizeCustomSite(raw string) (string, error) {
 
 // View composes the login state into shared panel and selector components.
 func (m *Model) View() tea.View {
-	view := tea.View{AltScreen: true, BackgroundColor: m.theme.Background}
+	view := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion, BackgroundColor: m.theme.Background}
 	if m.width <= 0 || m.height <= 0 {
 		view.Content = "Loading…"
 		return view
 	}
 	view.Content = m.panel.View(m.width, m.height, m.panelContent())
 	return view
+}
+
+func (m *Model) callbackVisible() bool {
+	return m.panel.Fits(m.width, m.height, m.panelContent())
 }
 
 func (m *Model) panelContent() components.PanelContent {
@@ -381,8 +478,16 @@ func (m *Model) panelContent() components.PanelContent {
 		TinyMessage:    "Resize terminal to sign in",
 	}
 	if m.phase == phaseWaiting && m.authorizationURL != "" {
-		content.CompactMessage = m.authorizationLink("Open Datadog login manually")
-		content.TinyMessage = m.authorizationLink("Open login")
+		compactLabel := "Open sign-in link"
+		if m.browserOpenErr != nil {
+			compactLabel = "Copy sign-in link"
+		}
+		copyHint := "ctrl+y copy link"
+		if m.copyVisible() {
+			copyHint = "Copied sign-in link"
+		}
+		content.CompactMessage = m.authorizationLink(compactLabel) + "\n" + copyHint + "\nEnlarge window to paste"
+		content.TinyMessage = "Enlarge window to paste"
 	}
 	switch m.phase {
 	case phaseSelect:
@@ -393,6 +498,9 @@ func (m *Model) panelContent() components.PanelContent {
 		content.FooterRight = "enter to continue"
 	case phaseWaiting:
 		content.FooterLeft = "esc choose another site"
+		if m.authorizationURL != "" {
+			content.FooterRight = "ctrl+y copy sign-in link"
+		}
 	case phaseError:
 		content.FooterLeft = "esc choose another site"
 		content.FooterRight = "enter to retry"
@@ -403,7 +511,37 @@ func (m *Model) panelContent() components.PanelContent {
 }
 
 func (m *Model) authorizationLink(label string) string {
-	return ansi.SetHyperlink(m.authorizationURL) + m.theme.Text.Secondary.Render(label) + ansi.ResetHyperlink()
+	return ansi.SetHyperlink(m.authorizationURL) + m.theme.Text.Link.Render(label) + ansi.ResetHyperlink()
+}
+
+func (m *Model) linkLabel() string {
+	if m.browserOpenErr != nil {
+		return "Click to copy sign-in link"
+	}
+	return "Open sign-in link"
+}
+
+func (m *Model) copyVisible() bool {
+	return !m.copiedUntil.IsZero() && time.Now().Before(m.copiedUntil)
+}
+
+// linkAt reads the rendered cells, like the chat transcript's LinkAt. This
+// follows both centered and compact panel layouts without duplicated geometry.
+func (m *Model) linkAt(x, y int) bool {
+	if m.phase != phaseWaiting || m.authorizationURL == "" || x < 0 || x >= m.width || y < 0 || y >= m.height {
+		return false
+	}
+	buf := uv.NewScreenBuffer(m.width, m.height)
+	buf.Method = ansi.GraphemeWidth
+	uv.NewStyledString(m.View().Content).Draw(&buf, buf.Bounds())
+	line := buf.Line(y)
+	if x >= len(line) {
+		return false
+	}
+	for x > 0 && line[x].Width == 0 {
+		x--
+	}
+	return line[x].Width > 0 && line[x].Link.URL == m.authorizationURL
 }
 
 func (m *Model) title() string {
@@ -438,21 +576,30 @@ func (m *Model) bodyView(width, _ int) string {
 	case phaseWaiting:
 		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 		parts := []string{
-			text.Secondary.Render("Complete sign-in in the browser window."),
+			text.Secondary.Render("Sign in to Datadog in your browser."),
 			"",
 			feedback.Progress.Render(frames[m.spinner%len(frames)] + "  Waiting for Datadog"),
 			text.Secondary.Render(strings.TrimPrefix(m.activeSite, "https://")),
 		}
 		if m.browserOpenErr != nil {
-			parts[0] = feedback.Error.Render("We couldn't open a browser: " + m.browserOpenErr.Error())
+			parts[0] = text.Secondary.Render("Copy the sign-in link and paste it into a browser on your computer.")
 		}
 		if m.authorizationURL != "" {
-			parts = append(parts, "", m.authorizationLink("Open Datadog login manually"))
+			parts = append(parts, "", m.authorizationLink(m.linkLabel()))
+			if m.copyVisible() {
+				parts = append(parts, feedback.Success.Render("✓  Copied sign-in link"))
+			}
+			parts = append(parts, "", textwrap.WrapProseText(width, "If the redirect fails, copy the address from your browser.", text.Secondary), ansi.Truncate(m.callback.View(), width, "…"))
+		}
+		if m.callbackErr != nil {
+			parts = append(parts, textwrap.WrapProseText(width, m.callbackErr.Error(), feedback.Error))
 		}
 		return strings.Join(parts, "\n")
 	case phaseError:
 		message := "Login did not complete."
-		if m.loginErr != nil {
+		if errors.Is(m.loginErr, auth.ErrLoginTimedOut) {
+			message = "Sign-in timed out. Press Enter to retry."
+		} else if m.loginErr != nil {
 			message = escape.Multiline(m.loginErr.Error())
 		}
 		return strings.Join([]string{

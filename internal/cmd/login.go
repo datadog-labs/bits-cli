@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/auth"
@@ -46,11 +49,22 @@ func newLogoutCommand(invoked *bool, stderr io.Writer) *cobra.Command {
 }
 
 func runLogin(ctx context.Context, opts LoginOptions, stderr io.Writer) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	callbacks := make(chan string)
+	readCallbackURLs(ctx, os.Stdin, callbacks)
 	session, err := auth.Login(ctx, auth.LoginOptions{
-		Site:     opts.Site,
-		ClientID: opts.ClientID,
-		Store:    auth.DefaultStore(),
-		Out:      stderr,
+		Site:         opts.Site,
+		ClientID:     opts.ClientID,
+		CallbackURLs: callbacks,
+		OnBrowserOpen: func(_ string, openErr error) {
+			if openErr != nil {
+				return
+			}
+			_, _ = fmt.Fprintln(stderr, "\nOpen the sign-in link above in a browser on your computer.\nAfter signing in, if the final page can’t open, copy its full address\nfrom your browser’s address bar and paste it here, then press Enter:")
+		},
+		Store: auth.DefaultStore(),
+		Out:   stderr,
 	})
 	if err != nil {
 		return err
@@ -76,4 +90,28 @@ func runLogout(ctx context.Context, stderr io.Writer) error {
 	}
 	_, err = fmt.Fprintln(stderr, "Logged out.")
 	return err
+}
+
+// readCallbackURLs reads lines without changing the terminal's input mode.
+// Cancellation stops delivery, but a pending stdin read can remain blocked until
+// more input arrives or the standalone login command exits. Stdin stays open.
+func readCallbackURLs(ctx context.Context, in io.Reader, urls chan<- string) {
+	go func() {
+		defer close(urls)
+		scanner := bufio.NewScanner(in)
+		for ctx.Err() == nil && scanner.Scan() {
+			if ctx.Err() != nil {
+				return
+			}
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			select {
+			case urls <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }

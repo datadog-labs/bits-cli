@@ -88,6 +88,29 @@ func TestParseCustomHeadersRejectsManagedHeaders(t *testing.T) {
 	}
 }
 
+func TestParseRequiredResponseHeaderAcceptsManagedResponseNames(t *testing.T) {
+	for _, raw := range []string{"Content-Type=text/event-stream", "X-Datadog-Bits-Surface=cli"} {
+		name, value, err := ParseRequiredResponseHeader(raw)
+		if err != nil || name == "" || value == "" {
+			t.Fatalf("ParseRequiredResponseHeader(%q) = %q, %q, %v", raw, name, value, err)
+		}
+		if _, err := ParseCustomHeaders(raw); err == nil {
+			t.Fatalf("ParseCustomHeaders(%q) unexpectedly accepted a managed request header", raw)
+		}
+	}
+}
+
+func TestParseRequiredResponseHeaderRejectsInvalidRequirements(t *testing.T) {
+	for _, raw := range []string{
+		"Content-Type=", "X-First=one,X-Second=two", "bad name=value",
+		"X-Name=value\r\nInjected: yes",
+	} {
+		if _, _, err := ParseRequiredResponseHeader(raw); err == nil {
+			t.Errorf("ParseRequiredResponseHeader(%q) accepted invalid requirement", raw)
+		}
+	}
+}
+
 func TestRequestCarriesCustomHeaders(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("x-route-hint"); got != "1" {

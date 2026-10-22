@@ -117,11 +117,15 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		return nil, err
 	}
 
-	loginModel := loginui.New(ctx, func(loginCtx context.Context, site string, report func(loginui.BrowserStatus)) error {
+	loginModel := loginui.New(ctx, func(loginCtx context.Context, site string, callbacks <-chan string, report func(loginui.BrowserStatus)) error {
 		_, loginErr := auth.Login(loginCtx, auth.LoginOptions{
-			Site:     site,
-			ClientID: "",
-			Store:    store,
+			Site:         site,
+			ClientID:     "",
+			Store:        store,
+			CallbackURLs: callbacks,
+			OnCallbackError: func(err error) {
+				report(loginui.BrowserStatus{InputError: err})
+			},
 			OnBrowserOpen: func(url string, openErr error) {
 				report(loginui.BrowserStatus{AuthorizationURL: url, OpenError: openErr})
 			},
