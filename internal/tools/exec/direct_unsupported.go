@@ -8,7 +8,7 @@ import (
 
 type unsupportedExecLauncher struct{}
 
-func newDirectExecLauncher() execLauncher {
+func newDirectExecLauncher(...string) execLauncher {
 	return unsupportedExecLauncher{}
 }
 

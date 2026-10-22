@@ -10,6 +10,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/site"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 type observedStore struct {
@@ -67,6 +68,24 @@ func TestNewAuthenticatedClientAPIKeyBypassesOAuthStore(t *testing.T) {
 		}
 		if client.TokenSource != nil || client.APIKey != "api-key" || client.AppKey != "app-key" || client.BaseURL != "https://api.datadoghq.eu" {
 			t.Fatalf("API-key client = %#v", client)
+		}
+	}
+}
+
+func TestConfiguredClientToolsReadsExecExclusionList(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ws.Close() }()
+	t.Setenv(EnvExecExcludeEnv, "PRIVATE_TOKEN, SESSION_KEY")
+	if _, err := configuredClientTools(ws); err != nil {
+		t.Fatalf("valid exclusion list: %v", err)
+	}
+	for _, raw := range []string{"PRIVATE_TOKEN,", "PRIVATE_TOKEN=secret", "1INVALID"} {
+		t.Setenv(EnvExecExcludeEnv, raw)
+		if _, err := configuredClientTools(ws); err == nil || !strings.Contains(err.Error(), EnvExecExcludeEnv) {
+			t.Fatalf("invalid exclusion list %q: %v", raw, err)
 		}
 	}
 }

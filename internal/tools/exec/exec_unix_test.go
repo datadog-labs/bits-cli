@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -135,6 +136,53 @@ func TestExecServiceUnixResolvesRelativeShellBeforeChangingDirectory(t *testing.
 	})
 	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != "selected" {
 		t.Fatalf("relative shell outcome = %+v", outcome)
+	}
+}
+
+func TestShellEnvWithoutExcludedNames(t *testing.T) {
+	got := shellEnvWithoutExcludedNames([]string{
+		"PATH=/usr/bin", "PRIVATE_TOKEN=hidden", "SESSION_KEY=hidden",
+		"TASK_CONTEXT=hidden", "BITS_EXEC_EXCLUDE_ENV=PRIVATE_TOKEN,SESSION_KEY",
+		"TASK_VAR=visible", "private_token=case-sensitive",
+	}, []string{"PRIVATE_TOKEN", "SESSION_KEY", "TASK_CONTEXT", "BITS_EXEC_EXCLUDE_ENV"})
+	if want := []string{"PATH=/usr/bin", "TASK_VAR=visible", "private_token=case-sensitive"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("shell environment = %q, want %q", got, want)
+	}
+}
+
+func TestDirectExecLauncherExcludesOnlySelectedNames(t *testing.T) {
+	t.Setenv("PRIVATE_TOKEN", "hidden")
+	t.Setenv("VISIBLE_KEY", "visible")
+	t.Setenv("BITS_EXEC_EXCLUDE_ENV", "PRIVATE_TOKEN")
+	service := newUnixTestExecService(5*time.Second, execOutputLimit)
+	request := ExecRequest{Command: "printf '%s|%s|%s' \"$PRIVATE_TOKEN\" \"$VISIBLE_KEY\" \"$BITS_EXEC_EXCLUDE_ENV\"", CWD: t.TempDir()}
+	if got := service.Run(context.Background(), request); got.Reason != ExecSucceeded || got.Output.Stdout != "hidden|visible|PRIVATE_TOKEN" {
+		t.Fatalf("default environment = %+v", got)
+	}
+	protected := NewExecService("/bin/sh", "PRIVATE_TOKEN", "BITS_EXEC_EXCLUDE_ENV")
+	if got := protected.Run(context.Background(), request); got.Reason != ExecSucceeded || got.Output.Stdout != "|visible|" {
+		t.Fatalf("selected environment exclusion = %+v", got)
+	}
+}
+
+func TestDirectExecLauncherPreservesLogicalWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	realDirectory := filepath.Join(root, "real", "child")
+	if err := os.MkdirAll(realDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedDirectory := filepath.Join(root, "linked")
+	if err := os.Symlink(realDirectory, linkedDirectory); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRIVATE_TOKEN", "hidden")
+	outcome := NewExecService("/bin/sh", "PRIVATE_TOKEN").Run(context.Background(), ExecRequest{
+		Command: "printf '%s\\n' \"$PWD\"; cd ..; printf '%s\\n' \"$PWD\"",
+		CWD:     linkedDirectory,
+	})
+	want := linkedDirectory + "\n" + root + "\n"
+	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != want {
+		t.Fatalf("logical working directory = %+v, want output %q", outcome, want)
 	}
 }
 

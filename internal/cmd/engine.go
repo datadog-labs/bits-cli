@@ -12,6 +12,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/tools"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -24,6 +25,10 @@ import (
 // is for development and support, and is not part of the command-line contract.
 // See assistant.ParseCustomHeaders for the accepted syntax.
 const EnvCustomHeaders = "BITS_CUSTOM_HEADERS"
+
+// EnvExecExcludeEnv lists variables to omit from agent shell subprocesses.
+// When unset, shell commands inherit the ordinary process environment.
+const EnvExecExcludeEnv = "BITS_EXEC_EXCLUDE_ENV"
 
 // EnvRequiredResponseHeader requires a matching header before streamed output
 // is delivered. It uses the same name=value syntax as EnvCustomHeaders.
@@ -94,6 +99,44 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 		backend = assistant.NewMultiAgentClient(client)
 	}
 	return agent.New(backend, config), nil
+}
+
+func configuredClientTools(ws *workspace.Workspace) ([]agent.Tool, error) {
+	raw := os.Getenv(EnvExecExcludeEnv)
+	if raw == "" {
+		return tools.NewClientTools(ws), nil
+	}
+	names, err := parseExecExcludedNames(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", EnvExecExcludeEnv, err)
+	}
+	return tools.NewClientTools(ws, append(names, EnvExecExcludeEnv)...), nil
+}
+
+func parseExecExcludedNames(raw string) ([]string, error) {
+	var names []string
+	for _, part := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(part)
+		if !validExecEnvName(name) {
+			return nil, fmt.Errorf("invalid environment variable name")
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func validExecEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := range len(name) {
+		c := name[i]
+		if c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || i > 0 && c >= '0' && c <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // NewAuthenticatedClient constructs exactly the client selected by opts.Mode.

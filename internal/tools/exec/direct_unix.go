@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	osexec "os/exec"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -14,19 +15,23 @@ import (
 // descendant after the direct child exits. It is not an execution timeout.
 const execPipeWaitDelay = 100 * time.Millisecond
 
-type directExecLauncher struct{}
-
-func newDirectExecLauncher() execLauncher {
-	return directExecLauncher{}
+type directExecLauncher struct {
+	excludedEnv []string
 }
 
-func (directExecLauncher) Start(plan ExecPlan, stdout, stderr io.Writer) (execProcess, error) {
+func newDirectExecLauncher(excludedEnv ...string) execLauncher {
+	return directExecLauncher{excludedEnv: append([]string(nil), excludedEnv...)}
+}
+
+func (launcher directExecLauncher) Start(plan ExecPlan, stdout, stderr io.Writer) (execProcess, error) {
 	command := osexec.Command(plan.Shell, "-lc", plan.Command)
 	command.Dir = plan.CWD
 	// A nil Stdin connects the child to the null device. A nil Env inherits
 	// the ordinary parent process environment unchanged.
 	command.Stdin = nil
-	command.Env = nil
+	if len(launcher.excludedEnv) > 0 {
+		command.Env = shellEnvWithoutExcludedNames(command.Environ(), launcher.excludedEnv)
+	}
 	command.Stdout = stdout
 	command.Stderr = stderr
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -35,6 +40,21 @@ func (directExecLauncher) Start(plan ExecPlan, stdout, stderr io.Writer) (execPr
 		return nil, err
 	}
 	return &directExecProcess{command: command}, nil
+}
+
+func shellEnvWithoutExcludedNames(env, names []string) []string {
+	excluded := make(map[string]bool, len(names))
+	for _, name := range names {
+		excluded[name] = true
+	}
+	filtered := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if !excluded[name] {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 type directExecProcess struct {

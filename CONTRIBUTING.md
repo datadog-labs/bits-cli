@@ -75,6 +75,11 @@ missing or names a different domain, Bits reports an error. To switch back to
 production, run `bits logout` with the staging configuration still set, unset
 the staging variables, and sign in again.
 
+To omit selected variables from local shell commands run by Bits, set
+`BITS_EXEC_EXCLUDE_ENV` to a comma-separated list of exact environment variable
+names, such as `PRIVATE_TOKEN,SESSION_KEY`. Bits also omits this setting from
+those commands. When unset, shell commands inherit the normal environment.
+
 ### Integration tests
 
 Tests that contact Datadog are opt-in:
