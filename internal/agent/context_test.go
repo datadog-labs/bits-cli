@@ -432,25 +432,19 @@ func TestClientSkillsResumeWithoutSkillsSupersedesOlderCatalog(t *testing.T) {
 	}
 }
 
-func TestClientSkillsSwitchAndStoppedToolDrain(t *testing.T) {
+func TestClientSkillsRescannedOnConversationSwitch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	writeSkill(t, dir, ".agents/skills/example", "example", "example description")
 	backend := failingFirstRequest(false)
 	engine := New(backend, Config{ClientSkills: env.NewSkills(dir, nil)})
 	drain(t, engine, TurnInput{Message: "first"})
-	if _, _, err := engine.drainStoppedToolCalls(context.Background(), nil, assistant.SendOptions{ConversationID: engine.ConversationID()}); err != nil {
-		t.Fatal(err)
-	}
-	if backend.userContexts()[1] != "" {
-		t.Fatal("stopped tool drain included catalog")
-	}
 	if err := engine.InstallConversation(context.Background(), &Conversation{id: "existing", transcript: NewTranscript()}); err != nil {
 		t.Fatal(err)
 	}
 	drain(t, engine, TurnInput{Message: "resumed"})
-	if !strings.Contains(backend.userContexts()[2], "example description") {
-		t.Fatalf("restored conversation did not rescan skills: %q", backend.userContexts()[2])
+	if !strings.Contains(backend.userContexts()[1], "example description") {
+		t.Fatalf("restored conversation did not rescan skills: %q", backend.userContexts()[1])
 	}
 }
 

@@ -260,6 +260,23 @@ func TestServerGateDenials(t *testing.T) {
 	}
 }
 
+// A denial excuses handler failures only in its own round: a later round's
+// failure still fails the turn.
+func TestDenialDoesNotExcuseLaterRoundFailures(t *testing.T) {
+	failure := errors.New("handler exploded")
+	backend := &scriptBackend{rounds: [][]assistant.Message{{deleteGate}, {writeSibling}, {textMsg("answer", "unreachable")}}}
+	engine := New(backend, Config{})
+	tools := writeTools(t, ModeManual, false, func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, failure })
+	events := drain(t, engine, TurnInput{Message: "write", Tools: tools, OnDeny: DenyContinue},
+		decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) }))
+	if last := events[len(events)-1]; last.Kind != EventError || !errors.Is(last.Err, failure) {
+		t.Fatalf("last event = %+v, want the round-2 handler failure", last)
+	}
+	if len(backend.opts) != 2 {
+		t.Fatalf("backend calls = %d, want 2: the failure is not answered", len(backend.opts))
+	}
+}
+
 func TestDenyStopDrainsFollowUpClientToolCalls(t *testing.T) {
 	backend := &scriptBackend{rounds: [][]assistant.Message{{deleteGate}, {clientCallMsg("follow-1", "write", `{"value":"discarded"}`)}, {textMsg("answer", "adjusted answer")}}}
 	engine := New(backend, Config{})

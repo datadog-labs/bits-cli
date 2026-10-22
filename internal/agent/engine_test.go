@@ -519,14 +519,14 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 	}, Config{})
 
 	events := drain(t, e, TurnInput{Message: "question"})
-	wantKinds := []EventKind{EventTranscript, EventTranscript, EventTranscript, EventConversation, EventError}
+	wantKinds := []EventKind{EventTranscript, EventTranscript, EventConversation, EventTranscript, EventError}
 	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
 	}
-	if events[3].ConvID != "created-before-error" || !errors.Is(events[4].Err, backendErr) || !events[4].BackendFailure {
+	if events[2].ConvID != "created-before-error" || !errors.Is(events[4].Err, backendErr) || !events[4].BackendFailure {
 		t.Fatalf("terminal events = %+v", events[2:])
 	}
-	final := events[2].Transcript.Blocks
+	final := events[3].Transcript.Blocks
 	if len(final) == 0 || !final[len(final)-1].Complete {
 		t.Fatalf("final transcript snapshot = %+v, want completed answer", final)
 	}

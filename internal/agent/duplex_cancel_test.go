@@ -110,7 +110,9 @@ func TestDuplexCancellationSettlesRunningAndAwaitingTools(t *testing.T) {
 	}
 }
 
-func TestDuplexTerminalSettlesToolInputPreview(t *testing.T) {
+// The stream ends with its run, so neither a client preview that never became
+// execution-ready nor a server tool without a result can complete afterwards.
+func TestDuplexTerminalSettlesUnfinishedTools(t *testing.T) {
 	failure := errors.New("connection lost before tool batch")
 	for _, terminal := range []struct {
 		name string
@@ -118,12 +120,13 @@ func TestDuplexTerminalSettlesToolInputPreview(t *testing.T) {
 	}{{"completed", nil}, {"backend failure", failure}} {
 		t.Run(terminal.name, func(t *testing.T) {
 			backend := &duplexBackend{stream: func(_ context.Context, emit func(assistant.AssistantResponse) error) error {
-				for _, content := range []assistant.Content{
-					{Type: assistant.ContentToolCallStarted, Tool: &assistant.ToolPayload{ToolCallID: "preview", ToolName: "read", IsClientSide: true, HasClientSide: true}},
-					{Type: assistant.ContentToolCallInputDelta, Tool: &assistant.ToolPayload{ToolCallID: "preview", PartialJSON: `{"path":`}},
+				for _, message := range []assistant.Message{
+					assistant.AssistantMessage("message", assistant.Content{Type: assistant.ContentToolCallStarted, Tool: &assistant.ToolPayload{ToolCallID: "preview", ToolName: "read", IsClientSide: true, HasClientSide: true}}),
+					assistant.AssistantMessage("message", assistant.Content{Type: assistant.ContentToolCallInputDelta, Tool: &assistant.ToolPayload{ToolCallID: "preview", PartialJSON: `{"path":`}}),
+					serverCallMsg("server", "search_logs", `{}`),
 				} {
 					var response assistant.AssistantResponse
-					response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("message", content)
+					response.Data.Attributes.StructuredMessage = message
 					if err := emit(response); err != nil {
 						return err
 					}
@@ -148,12 +151,14 @@ func TestDuplexTerminalSettlesToolInputPreview(t *testing.T) {
 			if !errors.Is(err, terminal.err) {
 				t.Fatalf("error=%v, want %v", err, terminal.err)
 			}
-			if len(blocks) != 2 {
+			if len(blocks) != 3 {
 				t.Fatalf("blocks=%+v", blocks)
 			}
-			tool := blocks[1].Tool
-			if tool == nil || !tool.Status.IsTerminal() || tool.RenderState != nil {
+			if tool := blocks[1].Tool; tool == nil || tool.Status != ToolCancelled || tool.RenderState != nil {
 				t.Fatalf("unfinished preview after terminal: %+v", tool)
+			}
+			if tool := blocks[2].Tool; tool == nil || tool.Status != ToolCancelled {
+				t.Fatalf("unfinished server tool after terminal: %+v", tool)
 			}
 		})
 	}
