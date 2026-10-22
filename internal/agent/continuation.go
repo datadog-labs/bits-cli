@@ -56,9 +56,9 @@ func (e *Engine) settleRestoredTools(tools *ToolSet) bool {
 	return changed
 }
 
-// ResumePendingTools restores safe handlers and sends their responses on the
-// original conversation.
-func (e *Engine) ResumePendingTools(ctx context.Context, in TurnInput) <-chan Event {
+// ResumePendingTools starts a run that restores safe handlers and sends their
+// responses on the original conversation, as StartTurn does for a new turn.
+func (e *Engine) ResumePendingTools(ctx context.Context, in TurnInput) (RunID, error) {
 	return e.startTurn(ctx, in, true)
 }
 

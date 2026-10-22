@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -302,7 +303,7 @@ func TestExecCommandManualEngineDoesNotLaunchBeforeApproval(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := agent.New(backend, agent.Config{})
-	events := engine.StartTurn(ctx, agent.TurnInput{Message: "run", Tools: set, OnDeny: agent.DenyContinue})
+	events := startTurn(t, engine, ctx, agent.TurnInput{Message: "run", Tools: set, OnDeny: agent.DenyContinue})
 
 	approved := false
 	for event := range events {
@@ -348,7 +349,7 @@ func TestExecCommandDenialNeverLaunches(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := agent.New(backend, agent.Config{})
-	events := engine.StartTurn(ctx, agent.TurnInput{Message: "run", Tools: set, OnDeny: agent.DenyContinue})
+	events := startTurn(t, engine, ctx, agent.TurnInput{Message: "run", Tools: set, OnDeny: agent.DenyContinue})
 	denied := false
 	for event := range events {
 		if event.Kind != agent.EventTranscript || len(event.Transcript.PendingApprovals()) == 0 {
@@ -417,7 +418,7 @@ func TestExecCommandSessionGrantIsScopedToExactLaunchTuple(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := agent.New(backend, agent.Config{})
-	events := engine.StartTurn(ctx, agent.TurnInput{Message: "run both", Tools: set, OnDeny: agent.DenyContinue})
+	events := startTurn(t, engine, ctx, agent.TurnInput{Message: "run both", Tools: set, OnDeny: agent.DenyContinue})
 
 	if !waitForExecApproval(t, events, "exec-1") {
 		t.Fatal("first command did not request approval")
@@ -441,7 +442,20 @@ func TestExecCommandSessionGrantIsScopedToExactLaunchTuple(t *testing.T) {
 	}
 }
 
-func waitForExecApproval(t *testing.T, events <-chan agent.Event, callID string) bool {
+// startTurn starts a turn and returns its run's events. Each range resumes
+// where the previous one stopped, and the last ends with the terminal event.
+func startTurn(t *testing.T, engine *agent.Engine, ctx context.Context, in agent.TurnInput) iter.Seq[agent.Event] {
+	t.Helper()
+	events, unsubscribe := engine.Subscribe()
+	t.Cleanup(unsubscribe)
+	run, err := engine.StartTurn(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return agent.Follow(events, run)
+}
+
+func waitForExecApproval(t *testing.T, events iter.Seq[agent.Event], callID string) bool {
 	t.Helper()
 	for event := range events {
 		if event.Kind != agent.EventTranscript {

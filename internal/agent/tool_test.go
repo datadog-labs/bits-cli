@@ -171,7 +171,7 @@ func TestEngineApprovalScope(t *testing.T) {
 			defer cancel()
 			engine := New(backend, Config{})
 			// Interactive surface: stop after the denial is answered on the wire.
-			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools, OnDeny: DenyStop})
+			events := turnEvents(engine, ctx, TurnInput{Message: "write", Tools: tools, OnDeny: DenyStop})
 			decisions := 0
 			var all []Event
 			// A switch or a grant releases the parked call itself, as in the modal.
@@ -295,7 +295,7 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			engine := New(backend, Config{})
-			events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools})
+			events := turnEvents(engine, ctx, TurnInput{Message: "write", Tools: tools})
 			waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
 			if !allowForSession(engine, "call-a") {
 				t.Fatal("decision for call-a was not applied")
@@ -340,7 +340,7 @@ func TestEngineAbortedRoundUnparksItsCalls(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	engine := New(&scriptBackend{rounds: writeRounds()}, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools})
+	events := turnEvents(engine, ctx, TurnInput{Message: "write", Tools: tools})
 	waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
 	cancel()
 	collect(events)
@@ -586,7 +586,7 @@ func TestEngineManualModeLeavesUngatedToolsUnblocked(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := New(backend, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
+	events := turnEvents(engine, ctx, TurnInput{Message: "run both", Tools: tools})
 
 	// The ungated tool runs immediately, before any decision is made.
 	if name := receiveName(t, started); name != "read" {
@@ -656,7 +656,7 @@ func TestEngineParallelApprovalKeepsCallOrder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := New(backend, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
+	events := turnEvents(engine, ctx, TurnInput{Message: "run both", Tools: tools})
 	waitForToolStatus(t, events, "call-a", ToolAwaitingApproval)
 	allowForSession(engine, "call-a")
 	receiveNames(t, started, 2)
@@ -698,7 +698,7 @@ func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := New(backend, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "run both", Tools: tools})
+	events := turnEvents(engine, ctx, TurnInput{Message: "run both", Tools: tools})
 	<-started
 	waitForToolStatus(t, events, "call-gated", ToolAwaitingApproval)
 	if err := engine.StopTools(); err != nil {

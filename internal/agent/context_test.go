@@ -472,7 +472,7 @@ func TestClientSkillsDeferredUntilUserMessageAfterToolResume(t *testing.T) {
 		},
 	})
 	engine.continuation = continuationFromHistory([]assistant.Message{clientCallMsg("one", "input", `{}`)})
-	collect(engine.ResumePendingTools(t.Context(), TurnInput{Tools: tools}))
+	collect(resumeEvents(engine, t.Context(), TurnInput{Tools: tools}))
 	if backend.last().CustomUserContext != "" || renders != 0 {
 		t.Fatal("resumed client tool response prepared or sent the catalog")
 	}

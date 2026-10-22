@@ -70,7 +70,7 @@ func TestMultiAgentUsesRegularAPIForUnsupportedTurns(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			events := collect(engine.StartTurn(context.Background(), TurnInput{Message: "question", Context: test.context, Tools: tools}))
+			events := collect(turnEvents(engine, context.Background(), TurnInput{Message: "question", Context: test.context, Tools: tools}))
 			terminal := events[len(events)-1]
 			if terminal.Err != nil || terminal.Kind != EventDone || requests != 1 {
 				t.Fatalf("terminal=%+v requests=%d", terminal, requests)
@@ -97,7 +97,7 @@ func TestDuplexUsesPreparedImageAndResizeNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := collect(engine.StartTurn(context.Background(), TurnInput{Message: "describe", Tools: tools, Context: &assistant.AssistantContext{Entities: []assistant.ContextEntity{file}}}))
+	events := collect(turnEvents(engine, context.Background(), TurnInput{Message: "describe", Tools: tools, Context: &assistant.AssistantContext{Entities: []assistant.ContextEntity{file}}}))
 	terminal := events[len(events)-1]
 	if terminal.Err != nil || terminal.Kind != EventDone {
 		t.Fatalf("terminal=%+v", terminal)

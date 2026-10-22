@@ -891,12 +891,15 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.StartTurn(ctx, agent.TurnInput{
-		Message: text,
-		Skill:   skillInvocation,
-		Tools:   m.tools,
-		Context: turnContext,
-		OnDeny:  agent.DenyContinue,
+	engine := m.engine
+	events := follow(engine, func() (agent.RunID, error) {
+		return engine.StartTurn(ctx, agent.TurnInput{
+			Message: text,
+			Skill:   skillInvocation,
+			Tools:   m.tools,
+			Context: turnContext,
+			OnDeny:  agent.DenyContinue,
+		})
 	})
 	wait := m.begin(opTurn, events, cancel)
 	m.chatPhase = chat.PhaseWaiting
@@ -904,6 +907,26 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
 	return m, tea.Batch(closeFileSearch, wait)
+}
+
+// follow subscribes to the engine, starts an operation, and streams its run's
+// events until its terminal event, or the claim error alone.
+func follow(engine *agent.Engine, start func() (agent.RunID, error)) <-chan agent.Event {
+	events, unsubscribe := engine.Subscribe()
+	run, err := start()
+	out := make(chan agent.Event)
+	go func() {
+		defer close(out)
+		defer unsubscribe()
+		if err != nil {
+			out <- agent.Event{Kind: agent.EventError, Err: err}
+			return
+		}
+		for ev := range agent.Follow(events, run) {
+			out <- ev
+		}
+	}()
+	return out
 }
 
 // begin starts an exclusive operation. Its generation drops any late message
@@ -928,7 +951,8 @@ func (m *Model) resumePendingTools() tea.Cmd {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	events := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
+	engine, in := m.engine, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue}
+	events := follow(engine, func() (agent.RunID, error) { return engine.ResumePendingTools(ctx, in) })
 	m.chatPhase = chat.PhaseWaiting
 	m.list.ScrollToBottom()
 	return m.begin(opTurn, events, cancel)

@@ -360,7 +360,7 @@ func approvalTransitionOrder(t *testing.T, allowSession bool, ids []string) []st
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	engine := New(&scriptBackend{rounds: toolRounds("a", "b", "c", "d")}, Config{})
-	events := engine.StartTurn(ctx, TurnInput{Message: "run all", Tools: tools, OnDeny: DenyStop})
+	events := turnEvents(engine, ctx, TurnInput{Message: "run all", Tools: tools, OnDeny: DenyStop})
 	waitForToolStatus(t, events, "call-d", ToolAwaitingApproval)
 	wantStatuses := []ToolStatus{ToolDenied, ToolCancelled}
 	var afterDecision []Event

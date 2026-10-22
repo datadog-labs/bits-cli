@@ -54,19 +54,24 @@ func Run(ctx context.Context, engine *agent.Engine, input agent.TurnInput, deliv
 	defer cancel()
 
 	turnStart := len(engine.Snapshot())
+	events, unsubscribe := engine.Subscribe()
+	defer unsubscribe()
 	completed := false
-	var turnErr, consumeErr error
-	for event := range engine.StartTurn(turnCtx, input) {
-		switch event.Kind {
-		case agent.EventDone:
-			completed = true
-		case agent.EventError, agent.EventCanceled:
-			turnErr = event.Err
-		case agent.EventTranscript, agent.EventUsage, agent.EventConversation:
-		}
-		if consumeErr == nil {
-			if consumeErr = delivery.Consume(event); consumeErr != nil {
-				cancel()
+	var consumeErr error
+	run, turnErr := engine.StartTurn(turnCtx, input)
+	if turnErr == nil {
+		for event := range agent.Follow(events, run) {
+			switch event.Kind {
+			case agent.EventDone:
+				completed = true
+			case agent.EventError, agent.EventCanceled:
+				turnErr = event.Err
+			case agent.EventTranscript, agent.EventUsage, agent.EventConversation:
+			}
+			if consumeErr == nil {
+				if consumeErr = delivery.Consume(event); consumeErr != nil {
+					cancel()
+				}
 			}
 		}
 	}

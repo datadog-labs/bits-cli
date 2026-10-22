@@ -229,7 +229,7 @@ func TestNewDuringHistoryLoadingCancelsAndDrains(t *testing.T) {
 	m := New(engine)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.chatPhase = chat.PhaseLoading
-	_ = m.begin(opRestore, engine.Restore(ctx), cancel)
+	_ = m.begin(opRestore, follow(engine, func() (agent.RunID, error) { return engine.Restore(ctx) }), cancel)
 	waitSignal(t, backend.historyStarted)
 
 	setConversationInput(m, "/new")

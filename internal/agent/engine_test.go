@@ -210,13 +210,45 @@ func TestUserContextIsSentOnlyWhenTheConversationLacksIt(t *testing.T) {
 func drain(t *testing.T, e *Engine, in TurnInput, observe ...func(Event)) []Event {
 	t.Helper()
 	var evs []Event
-	for ev := range e.StartTurn(t.Context(), in) {
+	for ev := range turnEvents(e, t.Context(), in) {
 		for _, fn := range observe {
 			fn(ev)
 		}
 		evs = append(evs, ev)
 	}
 	return evs
+}
+
+// follow subscribes, starts an operation, and forwards its run's events until
+// its terminal event, or a claim error alone, then closes the channel.
+func follow(e *Engine, start func() (RunID, error)) <-chan Event {
+	events, unsubscribe := e.Subscribe()
+	run, err := start()
+	out := make(chan Event)
+	go func() {
+		defer close(out)
+		defer unsubscribe()
+		if err != nil {
+			out <- Event{Kind: EventError, Err: err}
+			return
+		}
+		for ev := range Follow(events, run) {
+			out <- ev
+		}
+	}()
+	return out
+}
+
+func turnEvents(e *Engine, ctx context.Context, in TurnInput) <-chan Event {
+	return follow(e, func() (RunID, error) { return e.StartTurn(ctx, in) })
+}
+
+func resumeEvents(e *Engine, ctx context.Context, in TurnInput) <-chan Event {
+	return follow(e, func() (RunID, error) { return e.ResumePendingTools(ctx, in) })
+}
+
+func restoreEvents(e *Engine, ctx context.Context) <-chan Event {
+	return follow(e, func() (RunID, error) { return e.Restore(ctx) })
 }
 
 // collect gathers the events of an operation already started until its
@@ -419,7 +451,7 @@ func TestEngineReducesClientToolInputBeforeEventAndHandler(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var final *streamedInputState
-	for event := range New(backend, Config{PermissionsMode: ModeSkipPermissions}).StartTurn(ctx, TurnInput{Message: "go", Tools: tools}) {
+	for event := range turnEvents(New(backend, Config{PermissionsMode: ModeSkipPermissions}), ctx, TurnInput{Message: "go", Tools: tools}) {
 		if block, ok := stateBlock(event, "call-1"); ok && final == nil {
 			if state, ok := block.Tool.RenderState.(*streamedInputState); ok && state.final != "" {
 				final = state
@@ -488,7 +520,7 @@ func TestEnginePreservesPerToolInputStreaming(t *testing.T) {
 func TestConcurrentTurnReturnsOperationError(t *testing.T) {
 	gate := make(chan struct{})
 	e := New(&scriptBackend{hold: gate}, Config{})
-	ch := e.StartTurn(context.Background(), TurnInput{Message: "one"})
+	ch := turnEvents(e, context.Background(), TurnInput{Message: "one"})
 	events := drain(t, e, TurnInput{Message: "two"})
 	if len(events) != 1 || events[0].Kind != EventError || !errors.Is(events[0].Err, ErrOperationActive) {
 		t.Fatalf("overlap events = %+v, want ErrOperationActive", events)
@@ -608,7 +640,7 @@ func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
 	backend := &scriptBackend{convID: "created-before-cancel", started: make(chan struct{}), hold: make(chan struct{})}
 	e := New(backend, Config{})
 	ctx, cancel := context.WithCancel(context.Background())
-	turn := e.StartTurn(ctx, TurnInput{Message: "cancel me"})
+	turn := turnEvents(e, ctx, TurnInput{Message: "cancel me"})
 	<-backend.started
 	cancel()
 	_ = collect(turn)
@@ -651,7 +683,7 @@ func TestTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 	first := drain(t, engine, TurnInput{Message: "first"})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events := engine.StartTurn(ctx, TurnInput{Message: "second"})
+	events := turnEvents(engine, ctx, TurnInput{Message: "second"})
 	<-backend.started
 	cancel()
 	evs := collect(events)
@@ -680,10 +712,35 @@ func TestTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 	}
 }
 
+// A subscription sees every run's events, as following each run does. Ending
+// a subscription closes it even if its consumer stopped reading.
+func TestSubscribeSpansRuns(t *testing.T) {
+	e := New(&scriptBackend{convID: "conversation-1", rounds: [][]assistant.Message{
+		{assistant.AssistantMessage("one", assistant.TextContent("first"))},
+		{assistant.AssistantMessage("two", assistant.TextContent("second"))},
+	}}, Config{})
+	defer e.Close()
+	sub, unsubscribe := e.Subscribe()
+	defer unsubscribe()
+	unread, drop := e.Subscribe()
+	runs := append(drain(t, e, TurnInput{Message: "one"}), drain(t, e, TurnInput{Message: "two"})...)
+	var got []Event
+	for ev := range sub {
+		if got = append(got, ev); ev.Run == 2 && ev.Terminal() {
+			break
+		}
+	}
+	if got, want := coalesced(got), coalesced(runs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("subscription = %v, want the runs' events %v", kinds(got), kinds(want))
+	}
+	drop()
+	_ = collect(unread) // returns once the channel closes
+}
+
 func TestNewConversationRejectsActiveTurnWithoutMutation(t *testing.T) {
 	gate := make(chan struct{})
 	e := New(&scriptBackend{hold: gate}, Config{ConversationID: "old"})
-	turn := e.StartTurn(context.Background(), TurnInput{Message: "busy"})
+	turn := turnEvents(e, context.Background(), TurnInput{Message: "busy"})
 	if err := e.NewConversation(); !errors.Is(err, ErrOperationActive) {
 		t.Fatalf("NewConversation error = %v, want ErrOperationActive", err)
 	}
@@ -707,7 +764,7 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 	}
 	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
-	evs := collect(e.Restore(context.Background()))
+	evs := collect(restoreEvents(e, context.Background()))
 	if !slices.Equal(kinds(evs), []EventKind{EventTranscript, EventDone}) {
 		t.Fatalf("events = %v, want one EventTranscript, then EventDone", kinds(evs))
 	}
@@ -723,7 +780,7 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 func TestRestoreUnsupportedBackendErrors(t *testing.T) {
 	e := New(&scriptBackend{}, Config{ConversationID: testConversationID})
 
-	evs := collect(e.Restore(context.Background()))
+	evs := collect(restoreEvents(e, context.Background()))
 	if len(evs) != 1 || evs[0].Kind != EventError || !errors.Is(evs[0].Err, ErrHistoryUnsupported) {
 		t.Fatalf("events = %+v, want ErrHistoryUnsupported", evs)
 	}
@@ -735,7 +792,7 @@ func TestRestoreEmptyEmitsOnlyDone(t *testing.T) {
 	resp.Data.Type = "conversation-history-response"
 	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
-	if evs := collect(e.Restore(context.Background())); !slices.Equal(kinds(evs), []EventKind{EventDone}) {
+	if evs := collect(restoreEvents(e, context.Background())); !slices.Equal(kinds(evs), []EventKind{EventDone}) {
 		t.Fatalf("events = %v, want only EventDone", kinds(evs))
 	}
 }

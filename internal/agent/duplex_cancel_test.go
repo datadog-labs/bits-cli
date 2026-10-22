@@ -24,7 +24,7 @@ func TestDuplexRetainsPartialTranscriptDuringCancellation(t *testing.T) {
 		return failure
 	}}
 	engine := New(backend, Config{})
-	for event := range engine.StartTurn(ctx, TurnInput{Message: "question"}) {
+	for event := range turnEvents(engine, ctx, TurnInput{Message: "question"}) {
 		if event.Kind == EventTranscript && event.Origin == TranscriptOriginRemote {
 			cancel()
 		}
@@ -49,7 +49,7 @@ func TestDuplexRetainsConversationDiscoveredDuringCancellation(t *testing.T) {
 		return ctx.Err()
 	}}
 	engine := New(backend, Config{})
-	for event := range engine.StartTurn(ctx, TurnInput{Message: "question"}) {
+	for event := range turnEvents(engine, ctx, TurnInput{Message: "question"}) {
 		if event.Kind == EventTranscript && event.Origin == TranscriptOriginLocal {
 			cancel()
 		}
@@ -94,7 +94,7 @@ func TestDuplexCancellationSettlesRunningAndAwaitingTools(t *testing.T) {
 	}
 	engine := New(backend, Config{})
 	go func() { <-started; cancel() }()
-	collect(engine.StartTurn(ctx, TurnInput{Message: "read and write", Tools: tools}))
+	collect(turnEvents(engine, ctx, TurnInput{Message: "read and write", Tools: tools}))
 	if ctx.Err() != context.Canceled {
 		t.Fatalf("context error = %v", ctx.Err())
 	}
@@ -144,7 +144,7 @@ func TestDuplexTerminalSettlesUnfinishedTools(t *testing.T) {
 				t.Fatal(err)
 			}
 			engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
-			events := collect(engine.StartTurn(context.Background(), TurnInput{Message: "read", Tools: tools}))
+			events := collect(turnEvents(engine, context.Background(), TurnInput{Message: "read", Tools: tools}))
 			err = events[len(events)-1].Err
 			blocks := engine.Snapshot()
 			if !errors.Is(err, terminal.err) {

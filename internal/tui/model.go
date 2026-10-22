@@ -442,6 +442,8 @@ func (m *Model) initChat() tea.Cmd {
 	}
 	m.chatPhase = chat.PhaseLoading
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
-	commands = append(commands, m.begin(opRestore, m.engine.Restore(ctx), cancel))
+	engine := m.engine
+	restore := follow(engine, func() (agent.RunID, error) { return engine.Restore(ctx) })
+	commands = append(commands, m.begin(opRestore, restore, cancel))
 	return tea.Batch(commands...)
 }

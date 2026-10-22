@@ -1,5 +1,5 @@
 // Package agent drives the remote assistant turn loop and emits fine-grained
-// events on a channel. It composes local context with assistant requests without
+// events to subscriptions. It composes local context with assistant requests without
 // a terminal UI dependency, so interactive and headless surfaces share the engine.
 package agent
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"strings"
@@ -153,36 +154,44 @@ type Event struct {
 	Round int
 }
 
-// outbox hands an operation's events to its consumer without ever blocking
-// the engine on it. A transcript snapshot still queued is replaced by a newer
-// one of the same round and origin: snapshots are complete, so consumers lose
-// no state (ADEEP diffs blocks by revision), and the queue stays bounded by
-// the other, rarer events.
+// outbox is a subscription: it hands events to its consumer without ever
+// blocking the engine on it. A transcript snapshot still queued is replaced
+// by a newer one of the same run, round and origin: snapshots are complete,
+// so consumers lose no state (ADEEP diffs blocks by revision), and the queue
+// stays bounded by the other, rarer events.
 type outbox struct {
-	run    RunID // stamped on every event
 	mu     sync.Mutex
 	ready  sync.Cond // signals a push or the close
 	queue  []Event
 	closed bool
+	// dropped ends forwarding at once, even to a consumer no longer reading.
+	dropped context.Context
+	drop    context.CancelFunc
 }
 
 // supersedes reports whether ev may replace prev, queued just before it.
 func (ev Event) supersedes(prev Event) bool {
-	return ev.Kind == EventTranscript && prev.Kind == EventTranscript && ev.Round == prev.Round && ev.Origin == prev.Origin
+	return ev.Kind == EventTranscript && prev.Kind == EventTranscript &&
+		ev.Run == prev.Run && ev.Round == prev.Round && ev.Origin == prev.Origin
 }
 
-// newOutbox returns run's outbox and the channel it forwards to, which closes
-// once the outbox is closed and drained.
-func newOutbox(run RunID) (*outbox, <-chan Event) {
-	o := &outbox{run: run}
+// Terminal reports whether ev is the last event of its run.
+func (ev Event) Terminal() bool {
+	return ev.Kind == EventDone || ev.Kind == EventError || ev.Kind == EventCanceled
+}
+
+// newOutbox returns an outbox and the channel it forwards to, which closes
+// once the outbox is closed and drained, or dropped.
+func newOutbox() (*outbox, <-chan Event) {
+	o := &outbox{}
 	o.ready.L = &o.mu
+	o.dropped, o.drop = context.WithCancel(context.Background())
 	out := make(chan Event)
 	go o.forward(out)
 	return o, out
 }
 
 func (o *outbox) push(ev Event) {
-	ev.Run = o.run
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if n := len(o.queue); n > 0 && ev.supersedes(o.queue[n-1]) {
@@ -199,6 +208,15 @@ func (o *outbox) close() {
 	defer o.mu.Unlock()
 	o.closed = true
 	o.ready.Signal()
+}
+
+// cancel ends the stream at once, dropping the events still queued.
+func (o *outbox) cancel() {
+	o.mu.Lock()
+	o.queue = nil
+	o.mu.Unlock()
+	o.close()
+	o.drop()
 }
 
 // forward takes one event at a time, so events pushed while the consumer is
@@ -218,7 +236,11 @@ func (o *outbox) forward(out chan<- Event) {
 		o.queue[0] = Event{} // release the snapshot
 		o.queue = o.queue[1:]
 		o.mu.Unlock()
-		out <- ev
+		select {
+		case out <- ev:
+		case <-o.dropped.Done():
+			return
+		}
 	}
 }
 
@@ -251,6 +273,7 @@ type Engine struct {
 	busy     bool  // an operation holds the engine
 	turn     *turn // the turn whose exchange is running, if any
 	lastRun  RunID // the most recently claimed run
+	subs     map[*outbox]struct{}
 
 	requests chan func() // run on the actor
 	// life ends when Close starts, cancelling every operation's worker.
@@ -339,6 +362,7 @@ func New(b Backend, config Config) *Engine {
 		instructions:  config.ProjectInstructions,
 		clientSkills:  config.ClientSkills,
 		userContext:   config.UserContext,
+		subs:          make(map[*outbox]struct{}),
 		requests:      make(chan func()),
 		closing:       make(chan struct{}),
 		stopped:       make(chan struct{}),
@@ -349,15 +373,23 @@ func New(b Backend, config Config) *Engine {
 }
 
 // Close cancels the active operation, waits for it to end as on cancellation,
-// its channel closed, and stops the engine. Later operations fail with
-// ErrClosed and accessors report zero values.
+// ends every subscription after the events already queued, and stops the
+// engine. Later operations fail with ErrClosed and accessors report zero
+// values.
 func (e *Engine) Close() {
 	e.closeOnce.Do(func() {
 		// Ending life directly cancels work the actor may be blocked on; the
-		// request then waits out any claim that saw the engine live.
+		// request then waits out any claim or subscription that saw the
+		// engine live.
 		e.endLife()
 		e.do(func() {})
 		e.workers.Wait()
+		e.do(func() {
+			for o := range e.subs {
+				o.close()
+			}
+			clear(e.subs)
+		})
 		close(e.closing)
 	})
 	<-e.stopped
@@ -432,10 +464,54 @@ func (e *Engine) work(ctx context.Context, fn func(context.Context)) {
 	}()
 }
 
-// release ends the operation; its stream closes once drained.
-func (e *Engine) release(out *outbox) {
+// release ends the operation, after its terminal event.
+func (e *Engine) release() {
 	e.busy = false
-	out.close()
+}
+
+// emit publishes run's event to every subscription.
+func (e *Engine) emit(run RunID, ev Event) {
+	ev.Run = run
+	for o := range e.subs {
+		o.push(ev)
+	}
+}
+
+// Subscribe streams every event the engine emits from now on, of every run.
+// Queued transcript snapshots may be superseded by newer ones (see outbox).
+// Operations only return their run, so a consumer subscribes before starting
+// one, then follows the run (see Follow).
+//
+// The returned function ends the subscription at once, dropping what is still
+// queued, so the consumer may stop reading. Close ends every subscription
+// after the events already queued; on a closed engine the channel is closed
+// at once.
+func (e *Engine) Subscribe() (<-chan Event, func()) {
+	o, events := newOutbox()
+	unsubscribe := func() {
+		e.do(func() { delete(e.subs, o) })
+		o.cancel()
+	}
+	live := get(e, func() bool {
+		e.subs[o] = struct{}{} // removed again below once closing
+		return e.life.Err() == nil
+	})
+	if !live {
+		unsubscribe()
+	}
+	return events, unsubscribe
+}
+
+// Follow yields run's events from a subscription made before the run started,
+// up to its terminal event. It stops early if the subscription ends.
+func Follow(events <-chan Event, run RunID) iter.Seq[Event] {
+	return func(yield func(Event) bool) {
+		for ev := range events {
+			if ev.Run == run && (!yield(ev) || ev.Terminal()) {
+				return
+			}
+		}
+	}
 }
 
 // Site returns the Assistant API site of the active backend. Backends without
@@ -470,18 +546,18 @@ type TurnInput struct {
 	OnDeny DenyPolicy
 }
 
-// StartTurn runs one user turn and its client-tool round trips, streaming its
-// events. Callers must drain the channel until it closes, including after
-// cancelling the turn context. The channel closes only after the engine has
-// released the operation, so Snapshot and ConversationID then report the
-// turn's final state.
-func (e *Engine) StartTurn(ctx context.Context, in TurnInput) <-chan Event {
+// StartTurn starts one user turn and its client-tool round trips, and returns
+// its run. The run's events reach subscriptions; its terminal event is
+// emitted as the engine releases the operation, so Snapshot and
+// ConversationID then report the turn's final state. It fails with
+// ErrOperationActive while another operation runs, and ErrClosed once closed.
+func (e *Engine) StartTurn(ctx context.Context, in TurnInput) (RunID, error) {
 	return e.startTurn(ctx, in, false)
 }
 
 // startTurn claims the engine for a user turn or, with resume, for answering
 // the restored calls.
-func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) <-chan Event {
+func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) (RunID, error) {
 	var resumed []ToolCall
 	var run RunID
 	err := e.idle(func() (err error) {
@@ -498,18 +574,10 @@ func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) <-cha
 		return err
 	})
 	if err != nil {
-		return eventResult(Event{Kind: EventError, Err: err})
+		return 0, err
 	}
-	out, events := newOutbox(run)
-	e.work(ctx, func(ctx context.Context) { e.run(ctx, in, resumed, out) })
-	return events
-}
-
-func eventResult(ev Event) <-chan Event {
-	out := make(chan Event, 1)
-	out <- ev
-	close(out)
-	return out
+	e.work(ctx, func(ctx context.Context) { e.run(ctx, run, in, resumed) })
+	return run, nil
 }
 
 // Decide answers a call parked for approval, at once. It fails with ErrStale
@@ -558,8 +626,8 @@ func (e *Engine) command(fn func(*turn) error) error {
 
 // run prepares a claimed turn off the actor, where it may block on files and
 // the environment, then drives it on the actor until it ends.
-func (e *Engine) run(ctx context.Context, in TurnInput, resumed []ToolCall, out *outbox) {
-	t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, out: out, round: 1}
+func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []ToolCall) {
+	t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, run: run, round: 1}
 	sentContext, imageNotices, err := prepareImageContext(ctx, in.Context)
 	if err != nil {
 		// Keep file references in the failed prompt so history can retry them.
@@ -578,7 +646,7 @@ func (e *Engine) run(ctx context.Context, in TurnInput, resumed []ToolCall, out 
 				sent = sentContext.Entities
 			}
 			e.transcript.AppendUser(in.Message, sent)
-			out.push(Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal})
+			e.emit(run, Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal})
 		}
 		opts, delivery = e.sendOptions(in.Tools), e.delivery
 	})
@@ -650,10 +718,10 @@ func (t *turn) finish(err error) {
 	if cause != nil {
 		e.transcript.FinalizeAll()
 		e.settleUnfinishedTools(t.tools, t.from, true)
-		t.out.push(Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()})
+		e.emit(t.run, Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()})
 	}
-	t.out.push(end)
-	e.release(t.out)
+	e.emit(t.run, end)
+	e.release()
 }
 
 // newExchange uses a duplex stream when the backend supports this user request;
@@ -691,8 +759,9 @@ func (e *Engine) settleUnfinishedTools(tools *ToolSet, from int, server bool) bo
 	return changed
 }
 
-// snapshot returns a copy of the current blocks, safe to send on the channel and
-// retain: the engine keeps mutating its own transcript on later folds.
+// snapshot returns a copy of the current blocks, safe to share with every
+// subscription and retain: the engine keeps mutating its own transcript on
+// later folds.
 func (e *Engine) snapshot() TranscriptSnapshot {
 	blocks := e.transcript.Blocks()
 	snapshot := TranscriptSnapshot{Blocks: make([]Block, len(blocks))}
@@ -787,9 +856,10 @@ func (e *Engine) GrantSessionFor(callID string) error {
 	})
 }
 
-// Restore fetches the persisted history for the engine's conversation, folds it
-// into the transcript. It ends with EventDone when there is nothing to restore.
-func (e *Engine) Restore(ctx context.Context) <-chan Event {
+// Restore starts fetching the persisted history for the engine's
+// conversation, to fold it into the transcript, and returns its run. The run
+// ends with EventDone when there is nothing to restore.
+func (e *Engine) Restore(ctx context.Context) (RunID, error) {
 	var id string
 	var run RunID
 	err := e.idle(func() (err error) {
@@ -798,9 +868,8 @@ func (e *Engine) Restore(ctx context.Context) <-chan Event {
 		return err
 	})
 	if err != nil {
-		return eventResult(Event{Kind: EventError, Err: err})
+		return 0, err
 	}
-	out, events := newOutbox(run)
 	e.work(ctx, func(ctx context.Context) {
 		var conversation *Conversation
 		var err error
@@ -808,24 +877,24 @@ func (e *Engine) Restore(ctx context.Context) <-chan Event {
 			conversation, err = e.LoadConversation(ctx, id)
 		}
 		e.do(func() {
-			defer e.release(out)
+			defer e.release()
 			switch {
 			case ctx.Err() != nil:
-				out.push(Event{Kind: EventCanceled, Err: ctx.Err()})
+				e.emit(run, Event{Kind: EventCanceled, Err: ctx.Err()})
 			case err != nil:
-				out.push(Event{Kind: EventError, Err: err, BackendFailure: !errors.Is(err, ErrHistoryUnsupported) && !errors.Is(err, ErrInvalidConversationID)})
+				e.emit(run, Event{Kind: EventError, Err: err, BackendFailure: !errors.Is(err, ErrHistoryUnsupported) && !errors.Is(err, ErrInvalidConversationID)})
 			default:
 				if id != "" {
 					e.installConversation(conversation)
 					if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
-						out.push(Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
+						e.emit(run, Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
 					}
 				}
-				out.push(Event{Kind: EventDone})
+				e.emit(run, Event{Kind: EventDone})
 			}
 		})
 	})
-	return events
+	return run, nil
 }
 
 // callStatus is where one client tool call is within its turn.
@@ -878,7 +947,7 @@ type turn struct {
 	ex           exchange
 	request      *userRequest // acknowledged on first response or request success
 	onDeny       DenyPolicy
-	out          *outbox
+	run          RunID
 	round        int
 	calls        []*clientCall // the current round's calls, in wire order
 	byID         map[string]*clientCall
@@ -958,7 +1027,7 @@ func (t *turn) emit(ev Event) {
 	if ev.Kind == EventTranscript {
 		ev.Origin = TranscriptOriginRemote
 	}
-	t.out.push(ev)
+	t.e.emit(t.run, ev)
 }
 
 // publish emits the current transcript.

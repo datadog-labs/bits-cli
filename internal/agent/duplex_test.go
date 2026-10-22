@@ -55,7 +55,7 @@ func TestDuplexPublishesFinalizedTranscriptBeforeTerminalEvent(t *testing.T) {
 				return failure
 			}}
 			engine := New(backend, Config{})
-			events := coalesced(collect(engine.StartTurn(context.Background(), TurnInput{Message: "question"})))
+			events := coalesced(collect(turnEvents(engine, context.Background(), TurnInput{Message: "question"})))
 			want := []EventKind{EventTranscript, EventTranscript, terminal}
 			if got := kinds(events); !reflect.DeepEqual(got, want) {
 				t.Fatalf("event kinds = %v, want %v", got, want)
@@ -127,7 +127,7 @@ func TestDuplexOverlapsSeparatelyArrivingToolsAndSubmitsDuringStream(t *testing.
 		t.Fatal(err)
 	}
 	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
-	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read both", Tools: tools})
+	eventsCh := turnEvents(engine, ctx, TurnInput{Message: "read both", Tools: tools})
 	events := collect(eventsCh)
 	terminal := events[len(events)-1]
 	if terminal.Kind != EventDone || terminal.Err != nil {
@@ -165,7 +165,7 @@ func TestDuplexTerminalFailureCancelsUncooperativeHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
-	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read", Tools: tools})
+	eventsCh := turnEvents(engine, ctx, TurnInput{Message: "read", Tools: tools})
 	events := collect(eventsCh)
 	terminal := events[len(events)-1]
 	if !errors.Is(terminal.Err, failure) {
@@ -246,7 +246,7 @@ func TestDuplexApprovalDenialIsSubmittedAndControlsFutureCalls(t *testing.T) {
 				t.Fatal(err)
 			}
 			engine := New(backend, Config{})
-			eventsCh := engine.StartTurn(ctx, TurnInput{Message: "write", Tools: tools, OnDeny: policy})
+			eventsCh := turnEvents(engine, ctx, TurnInput{Message: "write", Tools: tools, OnDeny: policy})
 			decided := false
 			var events []Event
 			for event := range eventsCh {
@@ -317,7 +317,7 @@ func TestDuplexSubmissionFailureStopsSiblingsBeforeStreamCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
-	events := collect(engine.StartTurn(ctx, TurnInput{Message: "read", Tools: tools}))
+	events := collect(turnEvents(engine, ctx, TurnInput{Message: "read", Tools: tools}))
 	terminal := events[len(events)-1]
 	if terminal.Kind != EventError || !errors.Is(terminal.Err, failure) || !terminal.BackendFailure {
 		t.Fatalf("terminal = %+v", terminal)
@@ -357,7 +357,7 @@ func TestDuplexBoundsExecutionAcrossArrivingBatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
-	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read many", Tools: tools})
+	eventsCh := turnEvents(engine, ctx, TurnInput{Message: "read many", Tools: tools})
 	events := collect(eventsCh)
 	terminal := events[len(events)-1]
 	if terminal.Kind != EventDone || terminal.Err != nil {
@@ -397,7 +397,7 @@ func TestDuplexWaitsForTransportCleanupAfterLocalFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
-	eventsCh := engine.StartTurn(ctx, TurnInput{Message: "read", Tools: tools})
+	eventsCh := turnEvents(engine, ctx, TurnInput{Message: "read", Tools: tools})
 	finished := make(chan struct{})
 	var events []Event
 	go func() { events = collect(eventsCh); close(finished) }()
@@ -480,7 +480,7 @@ func TestDuplexPermissionChangeReleasesParkedTools(t *testing.T) {
 				t.Fatal(err)
 			}
 			engine := New(backend, Config{})
-			eventsCh := engine.StartTurn(ctx, TurnInput{Message: "write both", Tools: tools})
+			eventsCh := turnEvents(engine, ctx, TurnInput{Message: "write both", Tools: tools})
 			waitForToolStatusEvents(t, eventsCh, "second", ToolAwaitingApproval)
 			if err := engine.SetPermissionsMode(ModeSkipPermissions); err != nil {
 				t.Fatal(err)
@@ -553,7 +553,7 @@ func TestDuplexLateChildResultPreservesTerminalOutcome(t *testing.T) {
 				engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
 				defer engine.Close() // the bubble requires its goroutines to exit
 				start := time.Now()
-				events := collect(engine.StartTurn(context.Background(), TurnInput{Message: "question", Tools: tools}))
+				events := collect(turnEvents(engine, context.Background(), TurnInput{Message: "question", Tools: tools}))
 				terminal := events[len(events)-1]
 				wantKind := EventDone
 				if tc.wantErr != nil {
