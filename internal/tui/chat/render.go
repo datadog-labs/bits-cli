@@ -140,12 +140,12 @@ func hasReasoningText(blocks []agent.Block) bool {
 // The compact view is the header alone; the full view adds the thinking text.
 func renderReasoningGroup(blocks []agent.Block, c renderContext) string {
 	state := agent.ToolSuccess
-	label := "reasoning"
+	label := "Reasoning"
 	parts := make([]string, 0, len(blocks))
 	for _, block := range blocks {
 		if !block.Complete && state != agent.ToolRunning {
 			state = agent.ToolRunning
-			label = "reasoning" + activityEllipsis(c.frame, c.sty.StatusSpinner.Len() > 0)
+			label = "Reasoning" + activityEllipsis(c.frame, c.sty.StatusSpinner.Len() > 0)
 		}
 		if block.Thinking != nil {
 			if text := strings.TrimSpace(escape.Multiline(block.Thinking.Content)); text != "" {

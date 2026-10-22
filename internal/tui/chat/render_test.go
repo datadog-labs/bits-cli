@@ -43,7 +43,7 @@ func TestReasoningRendersAsCompactActivity(t *testing.T) {
 
 	first := ansi.Strip(RenderBlock(block, 80, sty, 0))
 	second := ansi.Strip(RenderBlock(block, 80, sty, 8))
-	if !strings.Contains(first, sty.StatusSpinner.Frame(0)+" reasoning.") || first == second {
+	if !strings.Contains(first, sty.StatusSpinner.Frame(0)+" Reasoning.") || first == second {
 		t.Fatalf("active reasoning did not render compact animated status: %q, %q", first, second)
 	}
 	if strings.Contains(first, block.Thinking.Content) {
@@ -52,8 +52,8 @@ func TestReasoningRendersAsCompactActivity(t *testing.T) {
 
 	block.Complete = true
 	settled := ansi.Strip(RenderBlock(block, 80, sty, 16))
-	if settled != "✓ reasoning" {
-		t.Fatalf("completed reasoning = %q, want %q", settled, "✓ reasoning")
+	if settled != "✓ Reasoning" {
+		t.Fatalf("completed reasoning = %q, want %q", settled, "✓ Reasoning")
 	}
 }
 
@@ -84,7 +84,7 @@ func TestExactToolIdentityControlsSpecialization(t *testing.T) {
 	server := local
 	server.Tool = &agent.ToolBlock{Name: "read_file", Namespace: new("remote"), Input: `{"path":"README.md"}`, Output: "body", Status: agent.ToolSuccess}
 
-	if got := ansi.Strip(RenderBlock(local, 80, DefaultStyles(true), 0)); !strings.Contains(got, "read README.md") || strings.Contains(got, "body") {
+	if got := ansi.Strip(RenderBlock(local, 80, DefaultStyles(true), 0)); !strings.Contains(got, "Read README.md") || strings.Contains(got, "body") {
 		t.Fatalf("local read rendering = %q", got)
 	}
 	full := renderContext{width: 80, sty: DefaultStyles(true), disclosure: fullView}
@@ -98,7 +98,7 @@ func TestListFilesRendersExplicitDepth(t *testing.T) {
 		Name: spec.ListFiles, Input: `{"path":"internal","depth":2}`, Status: agent.ToolSuccess, IsClientSide: true,
 	}}
 	plain := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
-	if !strings.Contains(plain, "list internal · depth 2") {
+	if !strings.Contains(plain, "List internal · depth 2") {
 		t.Fatalf("list_files summary = %q, want path and depth", plain)
 	}
 }
@@ -135,13 +135,13 @@ func TestLocalInspectionActionsUseLifecycleVerbsForValidAndPartialInput(t *testi
 		want    string
 		output  bool
 	}{
-		{name: "reading valid path", tool: spec.ReadFile, input: `{"path":"README.md"}`, status: agent.ToolRunning, want: "reading README.md"},
-		{name: "listing valid path", tool: spec.ListFiles, input: `{"path":""}`, status: agent.ToolRunning, want: "listing ."},
-		{name: "searching valid pattern", tool: spec.GrepFiles, input: `{"pattern":"TODO","path":"internal"}`, status: agent.ToolRunning, want: "searching TODO in internal"},
-		{name: "searching awaiting approval", tool: spec.GrepFiles, input: `{"pattern":"TODO","path":"internal"}`, status: agent.ToolAwaitingApproval, want: "searching TODO in internal · awaiting approval"},
-		{name: "reading partial input", tool: spec.ReadFile, input: `{"path":"READ`, partial: true, status: agent.ToolRunning, want: "reading"},
-		{name: "listing malformed settled input", tool: spec.ListFiles, input: `{"path":`, status: agent.ToolSuccess, want: "✓ list"},
-		{name: "searching malformed error input", tool: spec.GrepFiles, input: `{"pattern":`, status: agent.ToolError, want: "✗ search", output: true},
+		{name: "Reading valid path", tool: spec.ReadFile, input: `{"path":"README.md"}`, status: agent.ToolRunning, want: "Reading README.md"},
+		{name: "Listing valid path", tool: spec.ListFiles, input: `{"path":""}`, status: agent.ToolRunning, want: "Listing ."},
+		{name: "Searching valid pattern", tool: spec.GrepFiles, input: `{"pattern":"TODO","path":"internal"}`, status: agent.ToolRunning, want: "Searching TODO in internal"},
+		{name: "Searching awaiting approval", tool: spec.GrepFiles, input: `{"pattern":"TODO","path":"internal"}`, status: agent.ToolAwaitingApproval, want: "Searching TODO in internal · awaiting approval"},
+		{name: "Reading partial input", tool: spec.ReadFile, input: `{"path":"READ`, partial: true, status: agent.ToolRunning, want: "Reading"},
+		{name: "Listing malformed settled input", tool: spec.ListFiles, input: `{"path":`, status: agent.ToolSuccess, want: "✓ List"},
+		{name: "Searching malformed error input", tool: spec.GrepFiles, input: `{"pattern":`, status: agent.ToolError, want: "✗ Search", output: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tool := &agent.ToolBlock{
@@ -161,8 +161,8 @@ func TestLocalInspectionActionsUseLifecycleVerbsForValidAndPartialInput(t *testi
 			if !strings.Contains(got, test.want) {
 				t.Fatalf("rendering = %q, want %q", got, test.want)
 			}
-			if strings.Contains(got, "inspection diagnostic") {
-				t.Fatalf("compact view showed inspection output: %q", got)
+			if strings.Contains(got, "inspection diagnostic") != test.output {
+				t.Fatalf("compact view did not respect error visibility: %q", got)
 			}
 			full := ansi.Strip(renderPresentedTool(tool, classifyTool(tool), renderContext{width: 80, sty: DefaultStyles(true), disclosure: fullView}))
 			if test.output && !strings.Contains(full, "inspection diagnostic") {
@@ -181,7 +181,7 @@ func TestRemoteInspectionNamedToolStaysGenericWithPartialInput(t *testing.T) {
 	}}
 
 	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
-	if !strings.Contains(got, "remote.read_file") || strings.Contains(got, "reading") {
+	if !strings.Contains(got, "remote.read_file") || strings.Contains(got, "Reading") {
 		t.Fatalf("remote partial inspection rendering = %q", got)
 	}
 }
@@ -194,7 +194,7 @@ func TestExecCommandDecodesEnvelopeAndBoundsOutput(t *testing.T) {
 		Status: agent.ToolError, IsClientSide: true,
 	}}
 	plain := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
-	for _, want := range []string{"run failed go   test in . · timeout 30s · exit 1", "  │ ./...", "stdout: out-1", "err-3", "… output truncated and incomplete"} {
+	for _, want := range []string{"Run failed go   test in . · timeout 30s · exit 1", "  │ ./...", "stdout: out-1", "err-3", "… output truncated and incomplete"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("exec rendering missing %q:\n%s", want, plain)
 		}
@@ -315,7 +315,7 @@ func TestExecCommandPreservesSafeBoundedMultilineInvocation(t *testing.T) {
 
 	plain := ansi.Strip(RenderBlock(block, 32, DefaultStyles(true), 0))
 	want := strings.Join([]string{
-		"✓ ran python3 - <<'PY' in .",
+		"✓ Ran python3 - <<'PY' in .",
 		"  │     import json",
 		"  │ print('long command line th…",
 		"  │ … +4 lines",
@@ -576,11 +576,11 @@ func TestSubagentToolSummaries(t *testing.T) {
 		name, input, want string
 		status            agent.ToolStatus
 	}{
-		{"spawn_agent", `{"prompt":"Investigate checkout errors"}`, "starting subagent Investigate checkout errors", agent.ToolRunning},
-		{"spawn_agent", `{"prompt":"Investigate checkout errors"}`, "started subagent Investigate checkout errors", agent.ToolSuccess},
-		{"wait_for_agents", `{"agent_ids":["a","b"],"mode":"all"}`, "waiting for 2 subagents", agent.ToolRunning},
-		{"wait_for_agents", `{"agent_ids":["a","b"],"mode":"any"}`, "waiting for any of 2 subagents", agent.ToolRunning},
-		{"send_agent_message", `{"agent_id":"a","message":"Check the logs"}`, "sending message Check the logs", agent.ToolRunning},
+		{"spawn_agent", `{"prompt":"Investigate checkout errors"}`, "Starting subagent Investigate checkout errors", agent.ToolRunning},
+		{"spawn_agent", `{"prompt":"Investigate checkout errors"}`, "Started subagent Investigate checkout errors", agent.ToolSuccess},
+		{"wait_for_agents", `{"agent_ids":["a","b"],"mode":"all"}`, "Waiting for 2 subagents", agent.ToolRunning},
+		{"wait_for_agents", `{"agent_ids":["a","b"],"mode":"any"}`, "Waiting for any of 2 subagents", agent.ToolRunning},
+		{"send_agent_message", `{"agent_id":"a","message":"Check the logs"}`, "Sending message Check the logs", agent.ToolRunning},
 	} {
 		t.Run(test.want, func(t *testing.T) {
 			block := agent.Block{Kind: assistant.KindToolCall, Tool: &agent.ToolBlock{Name: test.name, Input: test.input, Status: test.status}}
@@ -600,8 +600,119 @@ func TestSubagentDecorationRequiresExactServerIdentity(t *testing.T) {
 		tool.Input, tool.Status = `{"prompt":"task"}`, agent.ToolRunning
 		block := agent.Block{Kind: assistant.KindToolCall, Tool: tool}
 		got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
-		if strings.Contains(got, "starting subagent") || !strings.Contains(got, "spawn_agent(") {
+		if strings.Contains(got, "Starting subagent") || !strings.Contains(got, "spawn_agent(") {
 			t.Fatalf("unrelated tool received subagent decoration: %q", got)
 		}
+	}
+}
+
+func serverView(tool *agent.ToolBlock, width int, disclosure disclosure) string {
+	return ansi.Strip(renderPresentedTool(tool, classifyTool(tool), renderContext{width: width, sty: DefaultStyles(true), disclosure: disclosure}))
+}
+
+func TestServerToolTitleAndExactIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tool   agent.ToolBlock
+		want   string
+		absent string
+	}{
+		{name: "server title", tool: agent.ToolBlock{Name: "unknown", Title: "Fetched checkout", Input: `{"id":"checkout"}`, Status: agent.ToolSuccess}, want: "✓ Fetched checkout", absent: `{"id"`},
+		{name: "backend title", tool: agent.ToolBlock{Name: "search_datadog_logs", Title: "Searching checkout logs", Input: `{"query":"checkout"}`, Status: agent.ToolRunning}, want: "Searching checkout logs", absent: `{"query"`},
+		{name: "missing title", tool: agent.ToolBlock{Name: "new_backend_tool", Namespace: new("vendor"), Input: `{"id":"checkout"}`, Status: agent.ToolSuccess}, want: `vendor.new_backend_tool({"id":"checkout"})`},
+		{name: "client collision", tool: agent.ToolBlock{Name: "search_datadog_logs", IsClientSide: true, Title: "Must not use", Input: `{}`, Status: agent.ToolSuccess}, want: "search_datadog_logs({})", absent: "Must not use"},
+		{name: "partial input", tool: agent.ToolBlock{Name: "new_backend_tool", Title: "Searching logs", InputPartial: `{"query":"check`, Status: agent.ToolRunning}, want: "Searching logs", absent: "check"},
+		{name: "approval", tool: agent.ToolBlock{Name: "unknown", Title: "Update monitor", Status: agent.ToolAwaitingApproval}, want: "Update monitor · awaiting approval"},
+		{name: "stopped", tool: agent.ToolBlock{Name: "unknown", Title: "Search logs", Status: agent.ToolCancelled}, want: "Search logs · stopped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := serverView(&tc.tool, 160, compactView)
+			if !strings.Contains(got, tc.want) || (tc.absent != "" && strings.Contains(got, tc.absent)) {
+				t.Fatalf("rendered %q, want %q without %q", got, tc.want, tc.absent)
+			}
+		})
+	}
+}
+
+func TestServerDisclosurePreservesInputOutputAndDetail(t *testing.T) {
+	tool := &agent.ToolBlock{Name: "search_datadog_logs", Title: "Searched logs", Input: `{"query":"checkout","limit":24}`, HasFinalInput: true, Detail: "Found **24** matching logs.", Output: `{"content":[{"type":"text","text":"raw result"}],"extra":true}`, Status: agent.ToolSuccess}
+	full := serverView(tool, 100, fullView)
+	for _, want := range []string{`"query": "checkout"`, "Found **24** matching logs.", "Tool: search_datadog_logs", "Input:", `"limit": 24`, "Output:", `"extra": true`, "raw result"} {
+		if !strings.Contains(full, want) {
+			t.Errorf("missing %q in:\n%s", want, full)
+		}
+	}
+	compact := serverView(tool, 100, compactView)
+	if strings.Contains(compact, "\n") || strings.Contains(compact, "raw result") {
+		t.Fatalf("compact output leaked: %s", compact)
+	}
+	tool.Detail = ""
+	full = serverView(tool, 100, fullView)
+	if !strings.Contains(full, "raw result\n") || !strings.Contains(full, `"content": [`) {
+		t.Fatalf("missing readable or original MCP output:\n%s", full)
+	}
+}
+
+func TestServerOutputFormatsAndErrors(t *testing.T) {
+	for _, tc := range []struct{ output, want string }{
+		{`{"content":[{"type":"text","text":"first"},{"type":"image","data":"retained"},{"type":"text","text":"second"}]}`, "first\n\nsecond"},
+		{`[{"type":"text","text":"array text"}]`, "array text"},
+		{`{"content":"not an envelope"}`, ""},
+		{`{"content":[{"type":"text","text":42}]}`, ""},
+		{`broken JSON`, ""},
+	} {
+		if got := serverMCPText(tc.output); got != tc.want {
+			t.Errorf("unwrap %s = %q, want %q", tc.output, got, tc.want)
+		}
+	}
+	tool := &agent.ToolBlock{Name: "unknown", Title: "Search failed", Status: agent.ToolError, Output: `{"content":[{"type":"text","text":"Query timed out\nTry again"}]}`}
+	if got := serverView(tool, 80, compactView); !strings.Contains(got, "Query timed out Try again") || strings.Count(got, "\n") != 1 {
+		t.Fatalf("collapsed error: %s", got)
+	}
+	tool.Status = agent.ToolSuccess
+	tool.Output = ""
+	if got := serverView(tool, 80, fullView); !strings.Contains(got, "(no output)") {
+		t.Fatalf("missing empty output: %s", got)
+	}
+	tool.Status = agent.ToolRunning
+	tool.InputPartial = `{"query":"part`
+	tool.InputPreviewTruncated = true
+	if got := serverView(tool, 80, fullView); !strings.Contains(got, "Input (partial, truncated):") || strings.Contains(got, "(no output)") {
+		t.Fatalf("streaming input: %s", got)
+	}
+	tool.HasFinalInput = true
+	tool.Input = ""
+	if got := serverView(tool, 80, fullView); strings.Contains(got, "partial") || !strings.Contains(got, "(no input)") {
+		t.Fatalf("final empty input: %s", got)
+	}
+}
+
+func TestServerRenderingSafeAtNarrowWidths(t *testing.T) {
+	tool := &agent.ToolBlock{Name: "unknown", Title: "Hello\x1b[2J\nworld", Input: "\x1b[2Jinput", Detail: "detail\x1b[2J", Output: "output\x1b[2J", Status: agent.ToolError}
+	for _, width := range []int{1, 4, 8, 20, 80} {
+		for _, mode := range []disclosure{compactView, fullView} {
+			got := serverView(tool, width, mode)
+			if strings.Contains(got, "\x1b") {
+				t.Fatalf("terminal control leaked: %q", got)
+			}
+			for _, line := range strings.Split(got, "\n") {
+				if ansi.StringWidth(line) > width {
+					t.Fatalf("width %d exceeded: %q", width, line)
+				}
+			}
+		}
+	}
+}
+
+func TestServerDisclosureDoesNotRepeatIdenticalDetail(t *testing.T) {
+	tool := &agent.ToolBlock{Name: "unknown", Detail: "same result", Output: "same result", Status: agent.ToolSuccess}
+	got := serverView(tool, 80, fullView)
+	if strings.Count(got, "same result") != 1 || !strings.Contains(got, "Output:") {
+		t.Fatalf("result should appear once, under Output:\n%s", got)
+	}
+	tool.Detail = "A useful explanation"
+	got = serverView(tool, 80, fullView)
+	if !strings.Contains(got, tool.Detail) || !strings.Contains(got, tool.Output) {
+		t.Fatalf("distinct detail and output must remain available:\n%s", got)
 	}
 }

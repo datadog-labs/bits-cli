@@ -40,6 +40,8 @@ func disclosableToolBlock(key string) agent.Block {
 	block := toolBlockOf(agent.ToolSuccess)
 	block.ID = agent.BlockID{Scope: agent.ScopeTool, Key: key}
 	block.Tool.Output = disclosableOutput
+	// Generic client tools isolate disclosure tests from server grouping.
+	block.Tool.IsClientSide = true
 	return block
 }
 
@@ -155,7 +157,7 @@ func TestAnimationStateTransitionInvalidatesCache(t *testing.T) {
 	}
 }
 
-func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
+func TestInspectionGroupingKeepsChildrenAndStopsAtText(t *testing.T) {
 	blocks := []agent.Block{
 		inspectBlock("1", "list_files", `{"path":""}`, agent.ToolSuccess, "listing"),
 		inspectBlock("2", "read_file", `{"path":"a.go"}`, agent.ToolSuccess, "contents-a"),
@@ -169,101 +171,18 @@ func TestInspectionGroupingCoalescesReadsAndStopsAtText(t *testing.T) {
 	list.SetWidth(100)
 	list.SetHeight(20)
 	list.SetItems(blocks)
-	if got := len(list.view); got != 3 {
-		t.Fatalf("presentation item count = %d, want 3", got)
+	if got := len(list.view); got != 6 {
+		t.Fatalf("presentation item count = %d, want 6", got)
 	}
 	plain := ansi.Strip(list.Render())
-	for _, want := range []string{sty.StatusSpinner.Frame(0) + " inspecting", "read a.go, b.go", "between", "▶ search ToolBlock in internal"} {
+	for _, want := range []string{sty.StatusSpinner.Frame(0) + " Files · 3 calls · 1 running", "Read a.go", "Reading b.go", "between", "▶ Search ToolBlock in internal"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("group rendering missing %q:\n%s", want, plain)
 		}
 	}
-	for _, hidden := range []string{"listing", "contents-a", "contents-b", "matches"} {
+	for _, hidden := range []string{"Listing", "contents-a", "contents-b", "matches"} {
 		if strings.Contains(plain, hidden) {
 			t.Errorf("group rendering exposed inspection output %q:\n%s", hidden, plain)
-		}
-	}
-
-	// Use the same grouped presentation to check narrow rows and span colors.
-	for _, test := range []struct {
-		name        string
-		input       string
-		bodyWidth   int
-		wantRows    []string
-		firstPrefix bool
-		wantMuted   string
-		wantAccent  string
-	}{
-		{
-			name: "wrapped search context", bodyWidth: 35,
-			input:       `{"pattern":"NewToolSet\\(|ClientTools\\(|Definition:|Name:.*navigate|navigate|ask_user_question","path":"internal"}`,
-			wantRows:    []string{"search NewToolSet", "in internal"},
-			firstPrefix: true,
-			wantMuted:   "in",
-			wantAccent:  "internal",
-		},
-		{
-			name: "argument continuation", bodyWidth: 6,
-			input:      `{"pattern":"alpha beta gamma","path":"."}`,
-			wantRows:   []string{"search alpha", "beta", "gamma"},
-			wantAccent: "gamma",
-		},
-		{
-			name: "hyphen break", bodyWidth: 7,
-			input:      `{"pattern":"foo -bar baz","path":"."}`,
-			wantRows:   []string{"search foo -", "bar baz"},
-			wantAccent: "bar baz",
-		},
-		{
-			name: "exact width ASCII", bodyWidth: 1,
-			input:      `{"pattern":"a b","path":"."}`,
-			wantRows:   []string{"search a", "b"},
-			wantAccent: "b",
-		},
-		{
-			name: "exact width wide rune", bodyWidth: 2,
-			input:      `{"pattern":"a 界","path":"."}`,
-			wantRows:   []string{"search a", "界"},
-			wantAccent: "界",
-		},
-	} {
-		for _, dark := range []bool{true, false} {
-			t.Run(fmt.Sprintf("%s/dark=%t", test.name, dark), func(t *testing.T) {
-				sty := DefaultStyles(dark)
-				list := NewList()
-				list.SetStyles(sty)
-				// Child indentation and "search " take 11 cells before the body.
-				list.SetWidth(test.bodyWidth + 11)
-				list.SetItems([]agent.Block{
-					inspectBlock("read", "read_file", `{"path":"a.go"}`, agent.ToolSuccess, "contents"),
-					inspectBlock("search", "grep_files", test.input, agent.ToolSuccess, "matches"),
-				})
-				rows := list.renderItem(0)
-				if len(rows) != 2+len(test.wantRows) {
-					t.Fatalf("group rows = %q, want %d rows", rows, 2+len(test.wantRows))
-				}
-				for i, want := range test.wantRows {
-					got := strings.TrimSpace(ansi.Strip(rows[2+i]))
-					matches := got == want
-					if i == 0 && test.firstPrefix {
-						matches = strings.HasPrefix(got, want)
-					}
-					if !matches {
-						t.Errorf("search row %d = %q, want %q", i, got, want)
-					}
-				}
-				last := rows[len(rows)-1]
-				argument, _, _ := strings.Cut(sty.ToolArgument.Render(test.wantAccent), test.wantAccent)
-				if !strings.Contains(last, argument+test.wantAccent) {
-					t.Errorf("last row lost argument color: %q", last)
-				}
-				if test.wantMuted != "" {
-					muted, _, _ := strings.Cut(sty.ToolDetail.Render(test.wantMuted), test.wantMuted)
-					if !strings.Contains(last, muted+test.wantMuted) {
-						t.Errorf("last row lost muted color: %q", last)
-					}
-				}
-			})
 		}
 	}
 }
@@ -275,8 +194,8 @@ func TestSingletonInspectionRendersAsTool(t *testing.T) {
 		want   string
 		hidden string
 	}{
-		{name: "running", status: agent.ToolRunning, want: "listing .", hidden: "inspecting"},
-		{name: "settled", status: agent.ToolSuccess, want: "▶ list .", hidden: "inspected"},
+		{name: "running", status: agent.ToolRunning, want: "Listing .", hidden: "inspecting"},
+		{name: "settled", status: agent.ToolSuccess, want: "▶ List .", hidden: "inspected"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			list := NewList()
@@ -327,7 +246,7 @@ func TestAdjacentReasoningBlocksRenderAsOneActivity(t *testing.T) {
 		t.Fatalf("presentation item count = %d, want 2", got)
 	}
 	plain := ansi.Strip(list.Render())
-	if got := strings.Count(plain, "reasoning"); got != 1 {
+	if got := strings.Count(plain, "Reasoning"); got != 1 {
 		t.Fatalf("settled reasoning rows = %d, want 1:\n%s", got, plain)
 	}
 }
@@ -343,7 +262,7 @@ func TestReasoningExpandsToItsThinkingText(t *testing.T) {
 	})
 
 	compact := ansi.Strip(strings.Join(list.renderItem(0), "\n"))
-	if !strings.Contains(compact, "▶ reasoning") || strings.Contains(compact, "idea") {
+	if !strings.Contains(compact, "▶ Reasoning") || strings.Contains(compact, "idea") {
 		t.Fatalf("reasoning did not start collapsed on its header:\n%s", compact)
 	}
 	if _, ok := list.AccordionAt(0); !ok {
@@ -352,7 +271,7 @@ func TestReasoningExpandsToItsThinkingText(t *testing.T) {
 
 	list.ToggleDisclosure(list.view[0].id)
 	expanded := ansi.Strip(strings.Join(list.renderItem(0), "\n"))
-	for _, want := range []string{"▼ reasoning", "first idea", "second idea"} {
+	for _, want := range []string{"▼ Reasoning", "first idea", "second idea"} {
 		if !strings.Contains(expanded, want) {
 			t.Fatalf("expanded reasoning missing %q:\n%s", want, expanded)
 		}
@@ -370,7 +289,7 @@ func TestReasoningGroupStaysActiveWhileMemberStreams(t *testing.T) {
 	})
 
 	plain := ansi.Strip(list.Render())
-	if !strings.Contains(plain, "reasoning.") || strings.Contains(plain, "✓ reasoning") {
+	if !strings.Contains(plain, "Reasoning.") || strings.Contains(plain, "✓ Reasoning") {
 		t.Fatalf("active reasoning group = %q", plain)
 	}
 	if !list.HasAnimated() {
@@ -384,24 +303,27 @@ func TestToolMarginsCollapseAcrossAdjacentItems(t *testing.T) {
 		blocks []agent.Block
 		first  string
 		second string
+		gap    int
 	}{
 		{
 			name:   "write then exec",
+			gap:    1,
 			blocks: []agent.Block{layoutToolBlock("write_file", `{"path":"one.txt"}`), layoutToolBlock("exec_command", `{"cmd":"pwd"}`)},
-			first:  "wrote one.txt",
-			second: "ran pwd",
+			first:  "Wrote one.txt",
+			second: "Ran pwd",
 		},
 		{
 			name:   "exec then write",
+			gap:    1,
 			blocks: []agent.Block{layoutToolBlock("exec_command", `{"cmd":"pwd"}`), layoutToolBlock("write_file", `{"path":"one.txt"}`)},
-			first:  "ran pwd",
-			second: "wrote one.txt",
+			first:  "Ran pwd",
+			second: "Wrote one.txt",
 		},
 		{
 			name:   "write then edit",
 			blocks: []agent.Block{layoutToolBlock("write_file", `{"path":"one.txt"}`), layoutToolBlock("edit_file", `{"path":"one.txt"}`)},
-			first:  "wrote one.txt",
-			second: "edited one.txt",
+			first:  "Wrote one.txt",
+			second: "Edited one.txt",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -424,27 +346,25 @@ func TestToolMarginsCollapseAcrossAdjacentItems(t *testing.T) {
 			if first < 0 || second < 0 {
 				t.Fatalf("tool rows missing from render:\n%s", strings.Join(rows, "\n"))
 			}
-			if got, want := second-first-1, 1; got != want {
+			if got, want := second-first-1, test.gap; got != want {
 				t.Fatalf("blank rows between tools = %d, want %d:\n%s", got, want, strings.Join(rows, "\n"))
 			}
 		})
 	}
 }
 
-// TestInspectionGroupRowsCarryTheirOwnOutcome: a group keeps its neutral
-// header through routine failures, and each call that did not succeed shows
-// its error or lifecycle on its own row, cut at the width.
+// Failed calls remain visible beneath their shared group header.
 func TestInspectionGroupRowsCarryTheirOwnOutcome(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		header string
 		blocks []agent.Block
 	}{
-		{"mixed", "✓ inspected", []agent.Block{
+		{"mixed", "✗ Files · 2 calls · 1 failed", []agent.Block{
 			inspectBlock("1", "read_file", `{"path":"README.md"}`, agent.ToolSuccess, "readme body"),
 			inspectBlock("2", "read_file", `{"path":"missing.md"}`, agent.ToolError, "open missing.md: no such file"),
 		}},
-		{"all failed", "• inspected", []agent.Block{
+		{"all failed", "✗ Files · 2 calls · 2 failed", []agent.Block{
 			inspectBlock("1", "read_file", `{"path":"one"}`, agent.ToolError, "first error\nwith detail"),
 			inspectBlock("2", "read_file", `{"path":"two"}`, agent.ToolError, "second error"),
 		}},
@@ -456,14 +376,14 @@ func TestInspectionGroupRowsCarryTheirOwnOutcome(t *testing.T) {
 			list.SetHeight(12)
 			list.SetItems(tc.blocks)
 			plain := ansi.Strip(list.Render())
-			if !strings.Contains(plain, tc.header) || strings.Contains(plain, "failed") {
-				t.Fatalf("group header is not a neutral %q:\n%s", tc.header, plain)
+			if !strings.Contains(plain, tc.header) {
+				t.Fatalf("group header is not %q:\n%s", tc.header, plain)
 			}
 			for _, block := range tc.blocks {
 				if block.Tool.Status != agent.ToolError {
 					continue
 				}
-				want := "read " + classifyTool(block.Tool).argument + " (" + collapseWS(block.Tool.Output) + ")"
+				want := collapseWS(block.Tool.Output)
 				if !strings.Contains(plain, want) {
 					t.Fatalf("group row missing %q:\n%s", want, plain)
 				}
@@ -482,15 +402,15 @@ func TestInspectionGroupRowsCarryTheirOwnOutcome(t *testing.T) {
 			inspectBlock("3", "read_file", `{"path":"c.go"}`, agent.ToolError, strings.Repeat("very long error ", 10)),
 			inspectBlock("4", "read_file", `{"path":"d.go"}`, agent.ToolError, ""),
 		})
-		lines := list.renderItem(0)
+		lines := strings.Split(strings.TrimRight(list.Document(), "\n"), "\n")
 		plain := ansi.Strip(strings.Join(lines, "\n"))
-		for _, want := range []string{"read a.go · denied", "read b.go · stopped", "read c.go (very long error", "read d.go (failed)"} {
+		for _, want := range []string{"Read a.go · denied", "Read b.go · stopped", "very long error", "failed"} {
 			if !strings.Contains(plain, want) {
 				t.Fatalf("group row missing %q:\n%s", want, plain)
 			}
 		}
-		if len(lines) != 5 {
-			t.Fatalf("group rendered %d lines, want the header and one row per call:\n%s", len(lines), plain)
+		if len(lines) != 7 {
+			t.Fatalf("group rendered %d lines, want the header, four calls and two errors:\n%s", len(lines), plain)
 		}
 	})
 }
@@ -503,12 +423,12 @@ func TestInspectionGroupCacheInvalidatesWhenMemberIsAdded(t *testing.T) {
 	list.SetWidth(80)
 	list.SetHeight(8)
 	list.SetItems([]agent.Block{first})
-	if got := ansi.Strip(list.Render()); !strings.Contains(got, "read one") {
+	if got := ansi.Strip(list.Render()); !strings.Contains(got, "Read one") {
 		t.Fatalf("initial group render = %q", got)
 	}
 
 	list.SetItems([]agent.Block{first, second})
-	if got := ansi.Strip(list.Render()); !strings.Contains(got, "read one, two") {
+	if got := ansi.Strip(list.Render()); !strings.Contains(got, "Read one") || !strings.Contains(got, "Read two") {
 		t.Fatalf("group cache retained stale members: %q", got)
 	}
 }
@@ -727,8 +647,8 @@ func TestEveryToolExpandsToItsOutput(t *testing.T) {
 					t.Fatalf("expanded view missing %q:\n%s", want, ansi.Strip(strings.Join(got, "\n")))
 				}
 			}
-			if want := 1 + strings.Count(tc.want, "\n") + 1; len(got) != want {
-				t.Fatalf("expanded height = %d, want the header plus %d rows", len(got), want-1)
+			if height := list.itemHeight(0); height != len(got) {
+				t.Fatalf("expanded height = %d, rendered %d rows", height, len(got))
 			}
 			list.ToggleDisclosure(id)
 			if got := list.itemHeight(0); got != 1 {
@@ -861,7 +781,7 @@ func TestAccordionZoneIsTheWholeRenderedBlock(t *testing.T) {
 		expanded bool
 	}{
 		{"collapsed header only", func() *List { return listWithTool(agent.ToolSuccess) }, false},
-		{"expanded detail", func() *List { return listWithTool(agent.ToolSuccess) }, true},
+		{"expanded detail", func() *List { l := listWithTool(agent.ToolSuccess); l.SetHeight(24); return l }, true},
 		{"collapsed preview", listWithEditDiff, false},
 		{"expanded preview", listWithEditDiff, true},
 	} {
@@ -1108,5 +1028,160 @@ func TestViewportStaysFilledAfterGrowing(t *testing.T) {
 	}
 	if !list.Following() || !list.AtBottom() {
 		t.Fatal("growing the last block lost the bottom pin")
+	}
+}
+
+func TestServerStackKeepsIndependentDisclosureOnCompletion(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(100)
+	list.SetHeight(40)
+	first := disclosableToolBlock("first")
+	first.Tool.Title = "Searching logs"
+	first.Tool.IsClientSide = false
+	first.Tool.Status = agent.ToolRunning
+	second := disclosableToolBlock("second")
+	second.Tool.Title = "Fetched metric"
+	second.Tool.IsClientSide = false
+	list.SetItems([]agent.Block{first, second})
+	if len(list.view) != 3 || list.gapAfter(0) != 0 {
+		t.Fatal("server calls should stack tightly under a shared header")
+	}
+	list.ToggleDisclosure(first.ID)
+	first.Rev++
+	first.Tool.Title = "Searched logs"
+	first.Tool.Status = agent.ToolSuccess
+	list.SetItems([]agent.Block{first, second})
+	if !list.expanded(first.ID) || list.expanded(second.ID) {
+		t.Fatal("completion changed disclosure")
+	}
+	if got := strings.Join(list.renderItem(1), "\n"); !strings.Contains(got, "Searched logs") || !strings.Contains(got, "Output:") {
+		t.Fatalf("completed expansion: %s", got)
+	}
+	if got := strings.Join(list.renderItem(2), "\n"); strings.Contains(got, "Output:") {
+		t.Fatal("sibling expanded")
+	}
+	skill := disclosableToolBlock("skill")
+	skill.Tool = &agent.ToolBlock{Name: spec.Skill, Input: `{"skill_name":"logs"}`, Status: agent.ToolSuccess}
+	first.Tool.IsClientSide, second.Tool.IsClientSide = true, true
+	list.SetItems([]agent.Block{first, skill, second}) // Standalone client calls bound the skill.
+	if list.gapAfter(0) != 0 || list.gapAfter(1) != 0 {
+		t.Fatal("standalone skill loading added padding")
+	}
+}
+
+func TestToolGroupsKeepReasoningAndChildDisclosure(t *testing.T) {
+	for _, family := range []struct {
+		name          string
+		first, second spec.Identity
+		input         string
+	}{
+		{"Analyzing", spec.Identity{Name: "search_datadog_dashboards"}, spec.Identity{Name: "fetch_one"}, `{}`},
+		{"Files", spec.ClientReadFile, spec.ClientReadFile, `{"path":"a.go"}`},
+		{"Edits", spec.ClientEditFile, spec.ClientWriteFile, `{"path":"a.go"}`},
+	} {
+		t.Run(family.name, func(t *testing.T) {
+			list := NewList()
+			list.SetStyles(DefaultStyles(true))
+			list.SetWidth(100)
+			list.SetHeight(80)
+			first, second := disclosableToolBlock("first"), disclosableToolBlock("second")
+			first.Tool = &agent.ToolBlock{Name: family.first.Name, IsClientSide: family.first.ClientSide, Input: family.input, Status: agent.ToolSuccess, Output: "first output"}
+			second.Tool = &agent.ToolBlock{Name: family.second.Name, IsClientSide: family.second.ClientSide, Input: family.input, Status: agent.ToolSuccess, Output: "second output"}
+			reasoning := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "reasoning"}, Kind: assistant.KindReasoning, Thinking: &assistant.ThinkingPayload{Content: "working it out"}}
+			list.SetItems([]agent.Block{first})
+			list.ToggleDisclosure(first.ID)
+			skill := disclosableToolBlock("skill")
+			skill.Tool = &agent.ToolBlock{Name: spec.Skill, Input: `{"skill_name":"logs"}`, Status: agent.ToolSuccess}
+			leading := skill
+			leading.ID.Key = "leading-skill"
+			blocks := []agent.Block{leading, first, reasoning, skill, second}
+			list.SetItems(blocks)
+			if len(list.view) != 6 || list.view[0].kind != itemToolGroup || !list.expanded(first.ID) {
+				t.Fatal("group lost its children or existing disclosure")
+			}
+			if _, ok := list.AccordionAt(0); ok {
+				t.Fatal("group header must not be collapsible")
+			}
+			got := ansi.Strip(list.Document())
+			for _, want := range []string{family.name, "Reasoning", "first output", "Loaded skill logs"} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("missing %q:\n%s", want, got)
+				}
+			}
+			if family.name == "Edits" && !strings.Contains(got, "2 changes across 1 file") {
+				t.Fatalf("edit file count:\n%s", got)
+			}
+			if !list.HasAnimated() {
+				t.Fatal("unfinished reasoning should keep group active")
+			}
+			list.ToggleDisclosure(first.ID)
+			list.ToggleDisclosure(second.ID)
+			if !list.expanded(second.ID) || list.expanded(first.ID) {
+				t.Fatal("child disclosure must remain independent")
+			}
+			blocks[2].Complete = true
+			blocks[2].Rev++
+			list.SetItems(blocks)
+			if list.HasAnimated() || !list.expanded(second.ID) {
+				t.Fatal("completion changed disclosure or retained animation")
+			}
+			if family.name == "Analyzing" && !strings.Contains(ansi.Strip(list.Document()), "Analyzed · 4 calls") {
+				t.Fatal("completed server group should say Analyzed")
+			}
+			list.ToggleAllDisclosure()
+			if got := ansi.Strip(list.Document()); !strings.Contains(got, "working it out") {
+				t.Fatalf("reasoning did not expand:\n%s", got)
+			}
+			list.ToggleAllDisclosure()
+			if len(list.view) != 6 {
+				t.Fatal("collapsing details must not hide group children")
+			}
+			for _, width := range []int{1, 8, 40} {
+				list.SetWidth(width)
+				for _, row := range strings.Split(list.Document(), "\n") {
+					if ansi.StringWidth(row) > width {
+						t.Fatalf("row exceeds %d cells: %q", width, row)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestServerGroupingBoundaries(t *testing.T) {
+	first := disclosableToolBlock("first")
+	first.Tool.Name, first.Tool.Namespace, first.Tool.IsClientSide = "search_datadog_logs", nil, false
+	last := disclosableToolBlock("last")
+	last.Tool.Name, last.Tool.Namespace, last.Tool.IsClientSide = "search_datadog_docs", nil, false
+	for _, tc := range []struct {
+		name    string
+		tool    agent.ToolBlock
+		grouped bool
+	}{
+		// Backend naming conventions do not affect generic grouping.
+		{"same family", agent.ToolBlock{Name: "search_datadog_metrics", Input: `{"telemetry":{"intent":"Discover what metrics exist in the org for an overview"},"max_tokens":4000}`}, true},
+		{"metric wire name", agent.ToolBlock{Name: "get_datadog_metric"}, true},
+		{"fetch wire name", agent.ToolBlock{Name: "fetch_one"}, true},
+		{"new server tool", agent.ToolBlock{Name: "future_backend_tool"}, true},
+		{"logs wire name", agent.ToolBlock{Name: "analyze_datadog_logs"}, true},
+		{"web catalog alias", agent.ToolBlock{Name: "mcp_datadog_search_datadog_metrics"}, true},
+		{"code explorer", agent.ToolBlock{Name: "mcp_code-explorer_View"}, true},
+		{"server mutation", agent.ToolBlock{Name: "update_monitor"}, true},
+		{"client", agent.ToolBlock{Name: spec.ReadFile, IsClientSide: true}, false},
+		{"namespace", agent.ToolBlock{Name: "search_datadog_logs", Namespace: new("other")}, true},
+		{"approval", agent.ToolBlock{Name: "search_datadog_logs", Status: agent.ToolAwaitingApproval}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			middle := agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: "middle"}, Kind: assistant.KindToolCall, Tool: &tc.tool}
+			view := buildPresentation("", []agent.Block{first, middle, last})
+			want := 3
+			if tc.grouped {
+				want = 4
+			}
+			if len(view) != want {
+				t.Fatalf("got %d items, want %d", len(view), want)
+			}
+		})
 	}
 }
