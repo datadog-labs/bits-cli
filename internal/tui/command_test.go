@@ -69,7 +69,7 @@ func TestEnterOnLeadingCommandCompletionDispatchesImmediately(t *testing.T) {
 
 func TestSlashCompletionDoesNotOpenMidPrompt(t *testing.T) {
 	m := newModelWithSpy(t)
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "explain /new"})
 	if m.editor.MenuOpen() {
@@ -272,7 +272,7 @@ func TestSubmitSettingsDuringActiveTurnDoesNotCancel(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancel}
+	m.op = operation{kind: opTurn, run: 1, cancel: cancel}
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "/settings"})
@@ -397,7 +397,7 @@ func TestSubmitWebDuringActiveTurnDoesNotCancel(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancel}
+	m.op = operation{kind: opTurn, run: 1, cancel: cancel}
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Focus()
 	m.editor.Update(tea.PasteMsg{Content: "/web"})
@@ -429,7 +429,7 @@ func TestSubmitResumeDuringTurnIsRejectedWithoutCancellation(t *testing.T) {
 	m := newModelWithSpy(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancel}
+	m.op = operation{kind: opTurn, run: 1, cancel: cancel}
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "/resume"})
 	_, _ = m.submit()
@@ -445,7 +445,7 @@ func TestSubmitResumeDuringStartupHistoryLoadIsRejected(t *testing.T) {
 	m := newModelWithSpy(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancel}
+	m.op = operation{kind: opTurn, run: 1, cancel: cancel}
 	m.chatPhase = chat.PhaseLoading
 	m.editor.Update(tea.PasteMsg{Content: "/resume"})
 	_, _ = m.submit()
@@ -524,7 +524,7 @@ func TestSubmitQuitAndExitDuringActiveTurnCancelAndQuit(t *testing.T) {
 		t.Run(input, func(t *testing.T) {
 			m := newModelWithSpy(t)
 			ctx, cancel := context.WithCancel(context.Background())
-			m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancel}
+			m.op = operation{kind: opTurn, run: 1, cancel: cancel}
 			m.chatPhase = chat.PhaseStreaming
 			m.editor.Update(tea.PasteMsg{Content: input})
 
@@ -573,7 +573,7 @@ func TestSubmitQuitWhenIdleQuitsWithoutBackendCall(t *testing.T) {
 
 func TestSubmitOrdinaryInputDuringActiveTurnRemainsPending(t *testing.T) {
 	m := newModelWithSpy(t)
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "send this later"})
 
@@ -609,7 +609,7 @@ func TestSubmitUnknownCommandDuringActiveTurnDoesNotCancel(t *testing.T) {
 	m := newModelWithSpy(t)
 	m.chatPhase = chat.PhaseStreaming
 	ctx, cancel := context.WithCancel(context.Background())
-	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancel}
+	m.op = operation{kind: opTurn, run: 1, cancel: cancel}
 	m.editor.Update(tea.PasteMsg{Content: "/nope"})
 
 	_, _ = m.submit()
@@ -702,7 +702,7 @@ func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
 	m := New(agent.New(&spyBackend{t: t}, agent.Config{}))
 	m.editor.Focus()
 	m.transcript.Blocks = []agent.Block{{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "previous answer"}}}
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "/copy"})
 

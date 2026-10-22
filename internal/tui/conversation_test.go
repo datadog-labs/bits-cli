@@ -105,8 +105,8 @@ func setConversationInput(m *Model, value string) {
 
 func drainConversationRemote(t *testing.T, m *Model) {
 	t.Helper()
-	for m.op.events != nil {
-		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
+	for m.op.run != 0 {
+		msg := runConversationCmd(t, waitEvent(m.events))
 		_, _ = m.Update(msg)
 	}
 }
@@ -149,7 +149,7 @@ func TestCanceledTurnRetainsConversationHandle(t *testing.T) {
 	_, _ = m.submit()
 	waitSignal(t, backend.sendStarted)
 	for len(m.transcript.Blocks) < 2 {
-		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
+		msg := runConversationCmd(t, waitEvent(m.events))
 		_, _ = m.Update(msg)
 	}
 	m.cancelOperation()
@@ -229,7 +229,8 @@ func TestNewDuringHistoryLoadingCancelsAndDrains(t *testing.T) {
 	m := New(engine)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.chatPhase = chat.PhaseLoading
-	_ = m.begin(opRestore, follow(engine, func() (agent.RunID, error) { return engine.Restore(ctx) }), cancel)
+	run, err := engine.Restore(ctx)
+	_ = m.begin(opRestore, run, err, cancel)
 	waitSignal(t, backend.historyStarted)
 
 	setConversationInput(m, "/new")
@@ -268,21 +269,18 @@ func TestNewAfterCancellationDoesNotCancelTwice(t *testing.T) {
 	}
 }
 
-func TestNewAfterFailedTurnDrainsThenClearsError(t *testing.T) {
+// A failed turn has ended once its error shows, so /new resets at once.
+func TestNewAfterFailedTurnClearsError(t *testing.T) {
 	m := New(agent.New(&failedConversationBackend{err: errors.New("turn failed")}, agent.Config{ConversationID: "old"}))
 	setConversationInput(m, "failing prompt")
 	_, _ = m.submit()
 
 	for m.chatPhase != chat.PhaseError {
-		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
+		msg := runConversationCmd(t, waitEvent(m.events))
 		_, _ = m.Update(msg)
 	}
 	setConversationInput(m, "/new")
 	_, _ = m.submit()
-	if m.convID != "old" || m.op.then != thenNewConversation {
-		t.Fatal("failed turn reset before its event channel drained")
-	}
-	drainConversationRemote(t, m)
 	if m.convID != "" || m.chatPhase != chat.PhaseIdle || latestNotice(m).Text != "Started a new conversation." || m.usage != nil {
 		t.Fatalf("failed-turn state survived reset: id=%q phase=%v notice=%+v usage=%v", m.convID, m.chatPhase, latestNotice(m), m.usage)
 	}
@@ -292,15 +290,15 @@ func TestNewRejectsStaleEventsFromPriorConversation(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, agent.Config{ConversationID: "old"}))
 	setConversationInput(m, "/new")
 	_, _ = m.submit()
-	oldGeneration := m.op.gen - 1
 
 	setConversationInput(m, "fresh prompt")
 	_, _ = m.submit()
 	freshGeneration := m.op.gen
-	_, _ = m.Update(turnEventMsg{generation: oldGeneration, ev: agent.Event{Kind: agent.EventConversation, ConvID: "stale"}})
-	_, _ = m.Update(turnClosedMsg{generation: oldGeneration})
-	if m.convID != "" || m.op.gen != freshGeneration || m.op.events == nil {
-		t.Fatalf("stale event mutated fresh operation: id=%q generation=%d active=%v", m.convID, m.op.gen, m.op.events != nil)
+	stale := m.op.run - 1
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventConversation, ConvID: "stale", Run: stale}})
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventDone, Run: stale}})
+	if m.convID != "" || m.op.gen != freshGeneration || m.op.run == 0 {
+		t.Fatalf("stale event mutated fresh operation: id=%q generation=%d active=%v", m.convID, m.op.gen, m.op.run != 0)
 	}
 	drainConversationRemote(t, m)
 	if m.convID != "fresh" {

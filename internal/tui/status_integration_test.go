@@ -156,34 +156,34 @@ func TestStatusExecutesOnFirstEnterWithExactCompletionOpen(t *testing.T) {
 func TestStatusDuringActiveTurnPreservesTurnAndTracksObservedState(t *testing.T) {
 	m := newStatusModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
-	turn := make(chan agent.Event)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m.op = operation{kind: opTurn, gen: 7, events: turn, cancel: cancel}
+	m.op = operation{kind: opTurn, gen: 7, run: 1, cancel: cancel}
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "draft survives"})
 
 	_, load := m.dispatchCommand("status", "")
-	if load == nil || m.mode != ModeStatus || m.op.events != turn || ctx.Err() != nil {
-		t.Fatalf("opening status changed active turn: load=%v mode=%v turn=%v cancelled=%v", load != nil, m.mode, m.op.events == turn, ctx.Err() != nil)
+	if load == nil || m.mode != ModeStatus || m.op.run != 1 || ctx.Err() != nil {
+		t.Fatalf("opening status changed active turn: load=%v mode=%v run=%v cancelled=%v", load != nil, m.mode, m.op.run, ctx.Err() != nil)
 	}
 	runStatusLoad(t, m, load)
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "streaming") || !strings.Contains(view, "connected") {
 		t.Fatalf("active status did not show observed stream state:\n%s", view)
 	}
 
-	_, _ = m.Update(turnEventMsg{generation: 7, ev: agent.Event{Kind: agent.EventConversation, ConvID: "conversation-live"}})
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventConversation, ConvID: "conversation-live", Run: 1}})
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "conversation-live") {
 		t.Fatalf("open status did not refresh conversation id:\n%s", view)
 	}
+	if m.op.run != 1 || ctx.Err() != nil {
+		t.Fatal("status updates ended the active turn")
+	}
 
+	// The failure ends the turn; status keeps what it observed.
 	offline := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("network unavailable")}
-	_, _ = m.Update(turnEventMsg{generation: 7, ev: agent.Event{Kind: agent.EventError, Err: offline, BackendFailure: true}})
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventError, Err: offline, BackendFailure: true, Run: 1}})
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "offline") || !strings.Contains(view, "error") {
 		t.Fatalf("open status did not retain observed offline failure:\n%s", view)
-	}
-	if ctx.Err() != nil {
-		t.Fatal("status updates cancelled the active turn")
 	}
 
 	closeCommand := m.updateStatus(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -191,8 +191,8 @@ func TestStatusDuringActiveTurnPreservesTurnAndTracksObservedState(t *testing.T)
 		t.Fatal("status escape returned no close command")
 	}
 	_, _ = m.Update(closeCommand())
-	if m.mode != ModeChat || m.editor.Value() != "draft survives" || m.op.events != turn || ctx.Err() != nil {
-		t.Fatalf("closing status changed chat: mode=%v draft=%q turn=%v cancelled=%v", m.mode, m.editor.Value(), m.op.events == turn, ctx.Err() != nil)
+	if m.mode != ModeChat || m.editor.Value() != "draft survives" {
+		t.Fatalf("closing status changed chat: mode=%v draft=%q", m.mode, m.editor.Value())
 	}
 }
 
@@ -278,18 +278,18 @@ func TestActiveTurnEventCannotClearNewerIdentityAuthenticationFailure(t *testing
 	}
 	m := newStatusModelWithBackend(t, backend)
 	m.Update(tea.WindowSizeMsg{Width: 96, Height: 40})
-	m.op = operation{kind: opTurn, gen: 7, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, gen: 7, run: 1}
 	m.chatPhase = chat.PhaseStreaming
 
 	_, command := m.dispatchCommand("status", "")
 	runStatusLoad(t, m, command)
-	_, _ = m.Update(turnEventMsg{generation: 7, ev: agent.Event{Kind: agent.EventUsage}})
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventUsage, Run: 1}})
 	if got := m.statusRuntime().AuthenticationState; got != "authentication failed" {
 		t.Fatalf("same-turn event changed authentication state to %q", got)
 	}
 
 	m.op.gen = 8
-	_, _ = m.Update(turnEventMsg{generation: 8, ev: agent.Event{Kind: agent.EventUsage}})
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventUsage, Run: 1}})
 	if got := m.statusRuntime().AuthenticationState; got != "authenticated" {
 		t.Fatalf("newer-turn success left authentication state at %q", got)
 	}

@@ -30,7 +30,7 @@ func (m *Model) followTarget() (string, image.Rectangle) {
 		return "", image.Rectangle{}
 	}
 	labels := []string{"↓ Jump to latest", "↓ Latest"}
-	if m.chatPhase == chat.PhaseStreaming && m.op.events != nil {
+	if m.chatPhase == chat.PhaseStreaming && m.op.run != 0 {
 		labels = []string{"New activity · ↓ Jump to latest", "Streaming · ↓ Latest", "New · ↓"}
 	}
 	for _, label := range labels {

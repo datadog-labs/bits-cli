@@ -16,7 +16,7 @@ func sweepModel(phase chat.Phase) *Model {
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.editor.Focus()
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.chatPhase = phase
 	return m
 }
@@ -169,9 +169,9 @@ func TestTurnDoneDisarmsSweepClock(t *testing.T) {
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.chatPhase = chat.PhaseStreaming
-	m.op = operation{kind: opTurn, gen: 1, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, gen: 1, run: 1}
 	m.syncAnimations()
-	m.Update(turnEventMsg{generation: 1, ev: agent.Event{Kind: agent.EventDone}})
+	m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventDone, Run: 1}})
 
 	if m.animClock.armed || m.animBorderSweep.active {
 		t.Fatal("EventDone left the sweep clock armed")

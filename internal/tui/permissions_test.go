@@ -125,7 +125,7 @@ func TestPermissionsSwitchingToCurrentModeIsANoOp(t *testing.T) {
 
 func TestPermissionsAppliesDuringActiveTurn(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.chatPhase = chat.PhaseStreaming
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
 	if m.mode != ModePermissions || !m.permissionConfirm {
@@ -138,7 +138,7 @@ func TestPermissionsAppliesDuringActiveTurn(t *testing.T) {
 	if latestNotice(m).Text != "Full Access enabled. Actions will run without approval." {
 		t.Fatalf("notice = %#v, want the switch announced at once", latestNotice(m))
 	}
-	if m.chatPhase != chat.PhaseStreaming || m.op.events == nil {
+	if m.chatPhase != chat.PhaseStreaming || m.op.run == 0 {
 		t.Fatal("switching the mode disturbed the active turn")
 	}
 	_, _ = m.dispatchCommand("permissions", "")
@@ -149,13 +149,13 @@ func TestPermissionsAppliesDuringActiveTurn(t *testing.T) {
 
 func TestPermissionsPickerOpensDuringActiveTurn(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	m.chatPhase = chat.PhaseStreaming
 	_, _ = m.dispatchCommand("permissions", "")
 	if m.mode != ModePermissions || !strings.Contains(ansi.Strip(m.permissionsView()), "Permission changes take effect immediately.") {
 		t.Fatal("picker did not explain when changes take effect")
 	}
-	if m.chatPhase != chat.PhaseStreaming || m.op.events == nil {
+	if m.chatPhase != chat.PhaseStreaming || m.op.run == 0 {
 		t.Fatal("opening the picker disturbed the active turn")
 	}
 	if got := m.engine.PermissionsMode(); got != agent.ModeManual {
@@ -208,8 +208,8 @@ func TestPermissionsSwitchBackToManualPromptsAgain(t *testing.T) {
 	}
 	// The second turn's call may already have run under full access; if not,
 	// it asks now. Either way the turn after that asks.
-	for m.op.events != nil && waitingApprovals(m) == 0 {
-		_, _ = m.Update(runConversationCmd(t, waitEvent(m.op.gen, m.op.events)))
+	for m.op.run != 0 && waitingApprovals(m) == 0 {
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
 	}
 	if waitingApprovals(m) == 0 {
 		setConversationInput(m, "Run the action")
@@ -224,7 +224,7 @@ func TestPermissionsSwitchBackToManualPromptsAgain(t *testing.T) {
 func awaitPendingApproval(t *testing.T, m *Model) {
 	t.Helper()
 	for waitingApprovals(m) == 0 {
-		_, _ = m.Update(runConversationCmd(t, waitEvent(m.op.gen, m.op.events)))
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
 	}
 }
 
@@ -233,7 +233,7 @@ func TestPermissionsSwitchBackToManualClearsExistingSessionGrants(t *testing.T) 
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
 	for waitingApprovals(m) == 0 {
-		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
+		msg := runConversationCmd(t, waitEvent(m.events))
 		_, _ = m.Update(msg)
 	}
 	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight}) // select "Allow for session"
@@ -250,7 +250,7 @@ func TestPermissionsSwitchBackToManualClearsExistingSessionGrants(t *testing.T) 
 	setConversationInput(m, "Run the action")
 	_, _ = m.submit()
 	for waitingApprovals(m) == 0 {
-		msg := runConversationCmd(t, waitEvent(m.op.gen, m.op.events))
+		msg := runConversationCmd(t, waitEvent(m.events))
 		_, _ = m.Update(msg)
 	}
 	if waitingApprovals(m) != 1 {
@@ -438,7 +438,7 @@ func TestPermissionsPickerCompactResizeKeepsSelection(t *testing.T) {
 func TestPermissionsConfirmationAppliesDuringNewActiveWork(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
-	m.op = operation{kind: opTurn, events: make(chan agent.Event)}
+	m.op = operation{kind: opTurn, run: 1}
 	_ = m.updatePermissionsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.engine.PermissionsMode() != agent.ModeSkipPermissions || m.mode != ModeChat {
 		t.Fatal("confirmation did not apply the mode during the new active turn")

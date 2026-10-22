@@ -391,10 +391,10 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 	// The backend waits right after its last delta, so once the TUI shows
 	// the partial input, the turn is parked mid-input.
 	for !hasPartialTool(m.transcript.Blocks, "write_file", "bravo") {
-		if m.op.events == nil {
+		if m.op.run == 0 {
 			t.Fatal("turn ended before the write_file input was half-streamed")
 		}
-		_, _ = m.Update(runConversationCmd(t, waitEvent(m.op.gen, m.op.events)))
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
 	}
 
 	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -411,8 +411,8 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 	setConversationInput(m, "are you there?")
 	_, _ = m.submit()
 	drainConversationRemote(t, m)
-	if m.chatPhase != chat.PhaseIdle || m.op.events != nil {
-		t.Fatalf("follow-up turn did not complete: phase=%v active=%t", m.chatPhase, m.op.events != nil)
+	if m.chatPhase != chat.PhaseIdle || m.op.run != 0 {
+		t.Fatalf("follow-up turn did not complete: phase=%v active=%t", m.chatPhase, m.op.run != 0)
 	}
 	if !hasTextBlock(m.transcript.Blocks, "still alive") {
 		t.Fatalf("follow-up transcript = %+v, want normal answer", m.transcript.Blocks)

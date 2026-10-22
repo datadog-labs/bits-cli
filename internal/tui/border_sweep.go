@@ -17,14 +17,14 @@ func (m *Model) animationsVisible() bool {
 }
 
 func (m *Model) toolAnimationWanted() bool {
-	return m.animationsVisible() && m.op.events != nil && m.list.HasAnimated()
+	return m.animationsVisible() && m.op.run != 0 && m.list.HasAnimated()
 }
 
 // borderSweepWanted distinguishes active work from a wait on the user. If a
 // shown prompt coexists with a running tool, work is still progressing and
 // the sweep remains active.
 func (m *Model) borderSweepWanted() bool {
-	if !m.animationsVisible() || !m.styles.Input.SweepMotion || m.op.events == nil {
+	if !m.animationsVisible() || !m.styles.Input.SweepMotion || m.op.run == 0 {
 		return false
 	}
 	if m.chatPhase != chat.PhaseWaiting && m.chatPhase != chat.PhaseStreaming {

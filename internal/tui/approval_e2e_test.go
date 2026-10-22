@@ -104,7 +104,7 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 				setConversationInput(model, "Run the action")
 				_, _ = model.submit()
 				for waitingApprovals(model) == 0 {
-					msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+					msg := runConversationCmd(t, waitEvent(model.events))
 					_, _ = model.Update(msg)
 				}
 
@@ -116,8 +116,8 @@ func TestApprovalDenialContinuesStreaming(t *testing.T) {
 					_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
 				}
 				_, _ = model.handleKey(tea.KeyPressMsg{Code: key})
-				for model.op.events != nil {
-					msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+				for model.op.run != 0 {
+					msg := runConversationCmd(t, waitEvent(model.events))
 					_, _ = model.Update(msg)
 				}
 				if backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError {
@@ -147,7 +147,7 @@ func TestApprovalBlursEditorUntilResolved(t *testing.T) {
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	for waitingApprovals(model) == 0 {
-		msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+		msg := runConversationCmd(t, waitEvent(model.events))
 		_, _ = model.Update(msg)
 	}
 	if model.editor.Focused() {
@@ -172,7 +172,7 @@ func TestConcealedApprovalIgnoresAllKeysUntilResized(t *testing.T) {
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	for waitingApprovals(model) == 0 {
-		msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+		msg := runConversationCmd(t, waitEvent(model.events))
 		_, _ = model.Update(msg)
 	}
 
@@ -258,7 +258,7 @@ func TestApprovalPanelResponsiveLayout(t *testing.T) {
 			setConversationInput(model, "Run the action")
 			_, _ = model.submit()
 			for waitingApprovals(model) == 0 {
-				msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+				msg := runConversationCmd(t, waitEvent(model.events))
 				_, _ = model.Update(msg)
 			}
 
@@ -407,7 +407,7 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 			_, _ = model.submit()
 
 			for waitingApprovals(model) == 0 {
-				msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+				msg := runConversationCmd(t, waitEvent(model.events))
 				_, _ = model.Update(msg)
 			}
 			for range tt.navigate {
@@ -538,7 +538,7 @@ func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	for waitingApprovals(model) == 0 {
-		_, _ = model.Update(runConversationCmd(t, waitEvent(model.op.gen, model.op.events)))
+		_, _ = model.Update(runConversationCmd(t, waitEvent(model.events)))
 	}
 
 	_, _ = model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
@@ -559,7 +559,7 @@ func awaitApproval(t *testing.T, model *Model, width int) {
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
 	for waitingApprovals(model) == 0 {
-		msg := runConversationCmd(t, waitEvent(model.op.gen, model.op.events))
+		msg := runConversationCmd(t, waitEvent(model.events))
 		_, _ = model.Update(msg)
 	}
 }

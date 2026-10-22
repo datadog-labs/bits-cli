@@ -281,7 +281,7 @@ func TestArrowKeysRecallPromptsOutsideTheOffer(t *testing.T) {
 		want  string
 	}{
 		{name: "idle", want: "second"},
-		{name: "a running turn", setup: func(m *Model) { m.op = operation{kind: opTurn, events: make(chan agent.Event)} }, want: "second"},
+		{name: "a running turn", setup: func(m *Model) { m.op = operation{kind: opTurn, run: 1} }, want: "second"},
 		{name: "a pending approval owns the keys", setup: func(m *Model) {
 			m.syncApprovals([]agent.Block{animToolBlock(agent.ToolAwaitingApproval)})
 		}, want: ""},
@@ -379,8 +379,7 @@ func TestResumeHiddenWhileATurnIsRunning(t *testing.T) {
 		t.Fatal("offer not shown while idle")
 	}
 
-	events := make(chan agent.Event)
-	m.op = operation{kind: opTurn, events: events}
+	m.op = operation{kind: opTurn, run: 1}
 	if m.showResume() {
 		t.Fatal("offer shown while a turn was running")
 	}

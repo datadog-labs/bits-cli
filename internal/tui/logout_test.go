@@ -61,7 +61,7 @@ func TestLogoutDuringActiveTurnCancelsAndDrainsBeforeDeleting(t *testing.T) {
 		},
 	})
 	turnCtx, cancelTurn := context.WithCancel(context.Background())
-	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancelTurn}
+	m.op = operation{kind: opTurn, run: 1, cancel: cancelTurn}
 	m.chatPhase = chat.PhaseStreaming
 
 	// A /new queued first must not swallow the logout.
@@ -77,7 +77,7 @@ func TestLogoutDuringActiveTurnCancelsAndDrainsBeforeDeleting(t *testing.T) {
 		t.Fatal("credentials were deleted before the turn drained")
 	}
 
-	_, cmd := m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
+	cmd := m.endOperation()
 	if cmd == nil || m.op.kind != opLogout {
 		t.Fatal("logout did not start after the turn closed")
 	}
@@ -99,14 +99,14 @@ func TestQueuedLogoutFailurePostsOneNotice(t *testing.T) {
 		},
 	})
 	_, cancel := context.WithCancel(context.Background())
-	m.op = operation{kind: opTurn, events: make(chan agent.Event), cancel: cancel}
+	m.op = operation{kind: opTurn, run: 1, cancel: cancel}
 	_, _ = m.dispatchCommand("new", "")
 	_, _ = m.dispatchCommand("logout", "")
 	if len(m.notices) != 0 {
 		t.Fatalf("queued operation posted transcript progress: %+v", m.notices)
 	}
 
-	_, cmd := m.handleTurnClosed(turnClosedMsg{generation: m.op.gen})
+	cmd := m.endOperation()
 	if cmd == nil || m.op.kind != opLogout || m.promptPlaceholder() != "Logging out…" {
 		t.Fatal("logout did not continue after the turn drained")
 	}
