@@ -167,7 +167,7 @@ func runRunWithStore(ctx context.Context, opts RunOptions, store auth.Credential
 	if err != nil {
 		return err
 	}
-	toolSet, err := agent.NewToolSet(opts.PermissionsMode, clientTools...)
+	toolSet, err := agent.NewToolSet(clientTools...)
 	if err != nil {
 		return err
 	}

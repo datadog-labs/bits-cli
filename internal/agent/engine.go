@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -151,14 +152,13 @@ const maxTurns = 150
 // owns the aggregated conversation transcript, folding streamed deltas into it
 // and emitting snapshots.
 //
-// The current design is a serialized operation/actor model: a claimed operation
-// exclusively owns all mutable conversation state, including opts, transcript,
-// and previousConversationID; the permission gate carries its own lock. State crosses goroutine boundaries
-// through copied events/results and channel synchronization. Only Decide,
-// CancelTool, StopTools, SetPermissionsMode, GrantSessionFor, ClientSkills, and explicitly
-// atomic methods may be called concurrently with an operation. Do not add a mutex around Engine state without first changing this
-// ownership model and identifying accesses that its existing operation gate and
-// channel boundaries do not order.
+// One claimed operation owns the mutable conversation state, including opts,
+// transcript, and previousConversationID. The permission gate has its own lock;
+// goroutines exchange copied events and results over channels. During an
+// operation, callers may use Decide, CancelTool, StopTools, PermissionsMode,
+// SetPermissionsMode, GrantSessionFor, ClientSkills, and explicitly atomic
+// methods. Other access must respect the operation gate and channel ordering;
+// adding a lock around this state would require revisiting that ownership model.
 type Engine struct {
 	backend                Backend
 	opts                   assistant.SendOptions
@@ -205,6 +205,8 @@ type Config struct {
 	// installing another conversation clears the initial message history.
 	ConversationID string
 	MessageHistory []json.RawMessage
+	// PermissionsMode is the initial mode; empty means manual.
+	PermissionsMode PermissionsMode
 
 	Model         string
 	InferenceMode string
@@ -258,6 +260,7 @@ func New(b Backend, config Config) *Engine {
 		runtimeStatus:      runtimeStatus,
 		transcript:         NewTranscript(),
 		commands:           make(chan toolCommand, maxQueuedCommands),
+		gate:               permissionGate{mode: cmp.Or(config.PermissionsMode, ModeManual)},
 		permissionsChanged: make(chan struct{}, 1),
 		instructions:       config.ProjectInstructions,
 		clientSkills:       config.ClientSkills,
@@ -581,6 +584,9 @@ func (e *Engine) NewConversation() error {
 	return nil
 }
 
+// PermissionsMode reports the current permissions mode.
+func (e *Engine) PermissionsMode() PermissionsMode { return e.gate.currentMode() }
+
 // SetPermissionsMode switches the process tool mode at once, even mid-turn.
 // The switch governs every gate decision made after it: dispatching a call,
 // re-gating parked calls (so a switch away from manual releases them), and
@@ -588,11 +594,8 @@ func (e *Engine) NewConversation() error {
 // earlier mode. Calls already running are not stopped. Deny mode
 // is absolute: no gated call runs, whatever grants or answers exist.
 // Returning to manual revokes session grants.
-func (e *Engine) SetPermissionsMode(tools *ToolSet, mode PermissionsMode) error {
-	if tools == nil {
-		return fmt.Errorf("tool set is nil")
-	}
-	if err := e.gate.setMode(tools, mode); err != nil {
+func (e *Engine) SetPermissionsMode(mode PermissionsMode) error {
+	if err := e.gate.setMode(mode); err != nil {
 		return err
 	}
 	e.permissionsUpdated()
@@ -918,7 +921,7 @@ func (t *turn) dispatch(c *clientCall) bool {
 			return t.deny(c, serverDeniedResult()) // no tool set, so no one to approve it
 		}
 	}
-	requirement, gated := t.tools.policy(c.call)
+	requirement, gated := t.tools.Approval(c.call)
 	if !gated {
 		t.start(c)
 		return true
@@ -998,7 +1001,7 @@ func (t *turn) regateParked() bool {
 // admit decides how gated call c proceeds and, when it may run, starts it,
 // atomically with respect to permission changes. Callers publish the outcome.
 func (t *turn) admit(c *clientCall, allowOnce bool) verdict {
-	return t.e.gate.admit(t.tools, c.call.ID, c.gate.Key, allowOnce, func() { t.start(c) })
+	return t.e.gate.admit(c.call.ID, c.gate.Key, allowOnce, func() { t.start(c) })
 }
 
 func (t *turn) awaitApproval(c *clientCall) bool {

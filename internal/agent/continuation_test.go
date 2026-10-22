@@ -46,7 +46,7 @@ func TestContinuationHistoryBoundaries(t *testing.T) {
 
 func TestResumedToolsDoNotResendTheTurnContext(t *testing.T) {
 	user := assistant.Message{Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api","label":"API"}]`), ContextResources: json.RawMessage(`[{"name":"dashboard","value":42}]`)}
-	set, err := NewToolSet(ModeSkipPermissions, Tool{
+	set, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "input"}, Resumable: true,
 		Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 	})
@@ -54,7 +54,7 @@ func TestResumedToolsDoNotResendTheTurnContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := &scriptBackend{}
-	e := New(backend, Config{ConversationID: "conversation"})
+	e := New(backend, Config{PermissionsMode: ModeSkipPermissions, ConversationID: "conversation"})
 	e.continuation = continuationFromHistory([]assistant.Message{user, clientCallMsg("one", "input", `{}`)})
 	collect(e.ResumePendingTools(t.Context(), TurnInput{Tools: set}))
 	if got := backend.last().Context; got != nil {
@@ -66,7 +66,7 @@ func TestStoppingAResumedRoundDrainsWithoutInstructionsOrContext(t *testing.T) {
 	dir := t.TempDir()
 	writeInstructionTestFile(t, dir, "AGENTS.md", "local instructions")
 	started := make(chan struct{})
-	set, err := NewToolSet(ModeSkipPermissions, Tool{
+	set, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "input"}, Resumable: true,
 		Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
 			close(started)
@@ -78,7 +78,7 @@ func TestStoppingAResumedRoundDrainsWithoutInstructionsOrContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := &scriptBackend{}
-	e := New(backend, Config{ConversationID: "conversation", ProjectInstructions: env.NewInstructions(dir)})
+	e := New(backend, Config{PermissionsMode: ModeSkipPermissions, ConversationID: "conversation", ProjectInstructions: env.NewInstructions(dir)})
 	user := assistant.Message{Role: "user", Content: assistant.TextContent("investigate"), ContextEntities: json.RawMessage(`[{"type":"service","id":"api"}]`)}
 	e.continuation = continuationFromHistory([]assistant.Message{user, clientCallMsg("one", "input", `{}`)})
 
@@ -102,14 +102,13 @@ func TestResumeRequiresEveryHandlerToOptIn(t *testing.T) {
 		t.Error("unsafe handler executed")
 		return ToolResult{}, nil
 	}
-	set, err := NewToolSet(ModeSkipPermissions,
-		Tool{Definition: assistant.ClientTool{Name: "input"}, Handler: handler, Resumable: true},
+	set, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "input"}, Handler: handler, Resumable: true},
 		Tool{Definition: assistant.ClientTool{Name: "write"}, Handler: handler})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"write", "unknown", assistant.ApprovalRequestTool} {
-		e := New(&scriptBackend{}, Config{})
+		e := New(&scriptBackend{}, Config{PermissionsMode: ModeSkipPermissions})
 		e.continuation = continuationFromHistory([]assistant.Message{clientCallMsg("one", "input", `{}`), clientCallMsg("two", name, `{}`)})
 		if e.CanResumeTools(set) {
 			t.Fatalf("batch containing %s is resumable", name)
@@ -128,7 +127,7 @@ func TestCancelledClientToolPublishesTerminalSnapshot(t *testing.T) {
 			defer cancel()
 			started, release := make(chan struct{}), make(chan struct{})
 			defer close(release)
-			set, err := NewToolSet(ModeManual, Tool{
+			set, err := NewToolSet(Tool{
 				Definition: assistant.ClientTool{Name: "input"}, Resumable: true,
 				Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
 					close(started)

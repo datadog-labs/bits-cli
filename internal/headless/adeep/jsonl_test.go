@@ -145,7 +145,7 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 		},
 		{textMsg("a2", "done."), usageMsg("u2", assistant.Usage{TokensUsed: 50})},
 	}}
-	tools, err := agent.NewToolSet(agent.ModeSkipPermissions, agent.Tool{
+	tools, err := agent.NewToolSet(agent.Tool{
 		Definition: assistant.ClientTool{Name: "get_local_time"},
 		Handler: func(context.Context, agent.ToolCall) (agent.ToolResult, error) {
 			return agent.ToolResult{Title: "Local time", Output: `{"timestamp":"2026-09-01T12:00:00Z"}`}, nil
@@ -155,7 +155,7 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	outcome, err := headless.Run(t.Context(), agent.New(backend, agent.Config{}), agent.TurnInput{Message: "investigate", Tools: tools}, startedDelivery(t, &out))
+	outcome, err := headless.Run(t.Context(), agent.New(backend, agent.Config{PermissionsMode: agent.ModeSkipPermissions}), agent.TurnInput{Message: "investigate", Tools: tools}, startedDelivery(t, &out))
 	if err != nil || outcome != headless.OutcomeCompleted {
 		t.Fatalf("outcome/error = %q, %v", outcome, err)
 	}

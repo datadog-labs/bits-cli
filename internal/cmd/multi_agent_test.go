@@ -33,8 +33,8 @@ func TestMultiAgentFinalAnswerUsesServerDeclaredRoot(t *testing.T) {
 	}))
 	defer server.Close()
 	backend := assistant.NewMultiAgentClient(&assistant.Client{BaseURL: server.URL, HTTPClient: server.Client()})
-	engine := agent.New(backend, agent.Config{})
-	tools, err := agent.NewToolSet(agent.ModeSkipPermissions)
+	engine := agent.New(backend, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
+	tools, err := agent.NewToolSet()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,8 +116,8 @@ func TestMultiAgentSiblingToolsOverlapAcrossHTTPBatches(t *testing.T) {
 	}))
 	defer server.Close()
 	backend := assistant.NewMultiAgentClient(&assistant.Client{BaseURL: server.URL, HTTPClient: server.Client()})
-	engine := agent.New(backend, agent.Config{})
-	tools, err := agent.NewToolSet(agent.ModeSkipPermissions, agent.Tool{
+	engine := agent.New(backend, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
+	tools, err := agent.NewToolSet(agent.Tool{
 		Definition: assistant.ClientTool{Name: "barrier"},
 		Handler: func(ctx context.Context, _ agent.ToolCall) (agent.ToolResult, error) {
 			if started.Add(1) == 2 {
@@ -212,8 +212,8 @@ func TestMultiAgentServerApprovalSupportsRepeatedDeferral(t *testing.T) {
 		emit("run.terminal", map[string]any{"outcome": "completed"})
 	}))
 	defer server.Close()
-	engine := agent.New(assistant.NewMultiAgentClient(&assistant.Client{BaseURL: server.URL, HTTPClient: server.Client()}), agent.Config{})
-	tools, err := agent.NewToolSet(agent.ModeSkipPermissions)
+	engine := agent.New(assistant.NewMultiAgentClient(&assistant.Client{BaseURL: server.URL, HTTPClient: server.Client()}), agent.Config{PermissionsMode: agent.ModeSkipPermissions})
+	tools, err := agent.NewToolSet()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -61,11 +61,11 @@ func startQuestions(t *testing.T, mode agent.PermissionsMode, input string, coun
 	t.Helper()
 	backend := &questionBackend{t: t, input: input, count: count}
 	host := tools.NewUI()
-	set, err := agent.NewToolSet(mode, tools.NewAskUserQuestionTool(host))
+	set, err := agent.NewToolSet(tools.NewAskUserQuestionTool(host))
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(agent.New(backend, agent.Config{}), Config{Tools: set, ToolUI: host})
+	m := New(agent.New(backend, agent.Config{PermissionsMode: mode}), Config{Tools: set, ToolUI: host})
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(m, "Help me choose")
 	_, _ = m.submit()
@@ -284,7 +284,7 @@ func pushQuestions(t *testing.T) (*fake.Fake, string) {
 func newResumedQuestionModel(t *testing.T, f *fake.Fake, id string, startup bool) *Model {
 	t.Helper()
 	host := tools.NewUI()
-	set, err := agent.NewToolSet(agent.ModeManual, tools.NewAskUserQuestionTool(host))
+	set, err := agent.NewToolSet(tools.NewAskUserQuestionTool(host))
 	if err != nil {
 		t.Fatal(err)
 	}

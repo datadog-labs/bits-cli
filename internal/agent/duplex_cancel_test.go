@@ -78,11 +78,10 @@ func TestDuplexCancellationSettlesRunningAndAwaitingTools(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	}}
-	tools, err := NewToolSet(ModeManual,
-		Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
-			<-ctx.Done()
-			return ToolResult{}, ctx.Err()
-		}},
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(ctx context.Context, _ ToolCall) (ToolResult, error) {
+		<-ctx.Done()
+		return ToolResult{}, ctx.Err()
+	}},
 		Tool{Definition: assistant.ClientTool{Name: "write"}, Handler: func(context.Context, ToolCall) (ToolResult, error) {
 			t.Error("unapproved tool executed")
 			return ToolResult{}, nil
@@ -133,7 +132,7 @@ func TestDuplexTerminalSettlesUnfinishedTools(t *testing.T) {
 				}
 				return terminal.err
 			}}
-			tools, err := NewToolSet(ModeSkipPermissions, Tool{
+			tools, err := NewToolSet(Tool{
 				Definition: assistant.ClientTool{Name: "read"},
 				Handler: func(context.Context, ToolCall) (ToolResult, error) {
 					t.Error("preview executed without final input")
@@ -144,7 +143,7 @@ func TestDuplexTerminalSettlesUnfinishedTools(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			engine := New(backend, Config{})
+			engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
 			events := collect(engine.StartTurn(context.Background(), TurnInput{Message: "read", Tools: tools}))
 			err = events[len(events)-1].Err
 			blocks := engine.Snapshot()

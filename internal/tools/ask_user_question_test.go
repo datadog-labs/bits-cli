@@ -48,12 +48,12 @@ func TestHeadlessUnexpectedQuestionReturnsUnsupported(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ws.Close() })
-	set, err := agent.NewToolSet(agent.ModeSkipPermissions, NewClientTools(ws)...)
+	set, err := agent.NewToolSet(NewClientTools(ws)...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	b := &headlessQuestionBackend{t: t}
-	engine := agent.New(b, agent.Config{})
+	engine := agent.New(b, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
 	var last agent.Event
 	for event := range engine.StartTurn(t.Context(), agent.TurnInput{Message: "choose", Tools: set}) {
 		last = event

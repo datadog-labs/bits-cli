@@ -28,13 +28,13 @@ func gateRounds(first ...assistant.Message) [][]assistant.Message {
 }
 
 // writeTools registers one write tool, gated when gated is set.
-func writeTools(t *testing.T, mode PermissionsMode, gated bool, handler ToolHandler) *ToolSet {
+func writeTools(t *testing.T, gated bool, handler ToolHandler) *ToolSet {
 	t.Helper()
 	tool := Tool{Definition: assistant.ClientTool{Name: "write"}, Handler: handler}
 	if gated {
 		tool.Approval = writeApproval
 	}
-	tools, err := NewToolSet(mode, tool)
+	tools, err := NewToolSet(tool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +100,7 @@ func TestGatesDeniedWithoutAsking(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		round  []assistant.Message
+		mode   PermissionsMode
 		tools  *ToolSet
 		onDeny DenyPolicy
 		want   []string
@@ -107,7 +108,8 @@ func TestGatesDeniedWithoutAsking(t *testing.T) {
 		{
 			name:   "deny mode",
 			round:  []assistant.Message{deleteGate, writeSibling},
-			tools:  writeTools(t, ModeDeny, true, written),
+			mode:   ModeDeny,
+			tools:  writeTools(t, true, written),
 			onDeny: DenyContinue,
 			want:   []string{"gate-1 error " + modeDenied, "write-1 error " + modeDenied},
 		},
@@ -122,13 +124,14 @@ func TestGatesDeniedWithoutAsking(t *testing.T) {
 			// the sibling dispatched after it.
 			name:  "malformed gate",
 			round: []assistant.Message{gateMsg("gate-1", `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"other"}`), writeSibling},
-			tools: writeTools(t, ModeSkipPermissions, true, written),
+			mode:  ModeSkipPermissions,
+			tools: writeTools(t, true, written),
 			want:  []string{"gate-1 error the server approval request was invalid", "write-1 error tool execution was cancelled by the user"},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &scriptBackend{rounds: gateRounds(tt.round...)}
-			engine := New(backend, Config{})
+			engine := New(backend, Config{PermissionsMode: tt.mode})
 			events := drain(t, engine, TurnInput{Message: "write", Tools: tt.tools, OnDeny: tt.onDeny}, func(event Event) {
 				if len(event.Transcript.PendingApprovals()) > 0 {
 					t.Error("a gate surfaced as a pending approval")
@@ -171,7 +174,7 @@ func TestServerGateApprovals(t *testing.T) {
 			backend := &scriptBackend{rounds: gateRounds(tt.round...)}
 			engine := New(backend, Config{})
 			decisions := 0
-			events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, ModeManual, true, written)},
+			events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, true, written)},
 				func(event Event) {
 					for _, block := range event.Transcript.PendingApprovals() {
 						if block.ToolCallID() == "gate-1" && (block.Tool.Approval == nil || block.Tool.Approval.Title != "Delete it?" || block.Tool.Approval.Detail != "tool: delete_dashboard") {
@@ -242,7 +245,7 @@ func TestServerGateDenials(t *testing.T) {
 			}
 			backend := &scriptBackend{rounds: gateRounds(tt.round...)}
 			engine := New(backend, Config{})
-			events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, ModeManual, tt.gatedSibling, handler), OnDeny: tt.onDeny},
+			events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, tt.gatedSibling, handler), OnDeny: tt.onDeny},
 				decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) }))
 			if events[len(events)-1].Kind != EventTurnDone || !hasToolStatus(events, "gate-1", ToolDenied) {
 				t.Fatalf("turn = %v, want a completed turn with a typed denial", kinds(events))
@@ -266,7 +269,7 @@ func TestDenialDoesNotExcuseLaterRoundFailures(t *testing.T) {
 	failure := errors.New("handler exploded")
 	backend := &scriptBackend{rounds: [][]assistant.Message{{deleteGate}, {writeSibling}, {textMsg("answer", "unreachable")}}}
 	engine := New(backend, Config{})
-	tools := writeTools(t, ModeManual, false, func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, failure })
+	tools := writeTools(t, false, func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, failure })
 	events := drain(t, engine, TurnInput{Message: "write", Tools: tools, OnDeny: DenyContinue},
 		decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) }))
 	if last := events[len(events)-1]; last.Kind != EventError || !errors.Is(last.Err, failure) {
@@ -280,7 +283,7 @@ func TestDenialDoesNotExcuseLaterRoundFailures(t *testing.T) {
 func TestDenyStopDrainsFollowUpClientToolCalls(t *testing.T) {
 	backend := &scriptBackend{rounds: [][]assistant.Message{{deleteGate}, {clientCallMsg("follow-1", "write", `{"value":"discarded"}`)}, {textMsg("answer", "adjusted answer")}}}
 	engine := New(backend, Config{})
-	events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, ModeManual, true, written)},
+	events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, true, written)},
 		decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) }))
 	if last := events[len(events)-1]; last.Kind != EventTurnDone || last.Round != 3 {
 		t.Fatalf("last event = %+v, want the turn done at round 3", last)
@@ -302,7 +305,7 @@ func TestDenyStopBackendFailureRetainsBackendProvenance(t *testing.T) {
 	backendErr := errors.New("backend failed while recording denial")
 	backend := &scriptBackend{rounds: [][]assistant.Message{{deleteGate}}, err: backendErr, failOn: 2}
 	engine := New(backend, Config{})
-	events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, ModeManual, true, written)},
+	events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, true, written)},
 		decideGates(t, func(id string) bool { return engine.Decide(id, ApprovalDeny) }))
 	if last := events[len(events)-1]; last.Kind != EventError || !last.BackendFailure || !errors.Is(last.Err, backendErr) {
 		t.Fatalf("last event = %+v, want the backend failure", last)
@@ -349,7 +352,7 @@ func approvalTransitionOrder(t *testing.T, allowSession bool, ids []string) []st
 			},
 		})
 	}
-	tools, err := NewToolSet(ModeManual, definitions...)
+	tools, err := NewToolSet(definitions...)
 	if err != nil {
 		t.Fatal(err)
 	}

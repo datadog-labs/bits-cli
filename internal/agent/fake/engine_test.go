@@ -20,7 +20,7 @@ import (
 
 // workspaceTools returns the real client tools over a temp workspace holding
 // go.mod and a file containing TODO.
-func workspaceTools(t *testing.T, mode agent.PermissionsMode) *agent.ToolSet {
+func workspaceTools(t *testing.T) *agent.ToolSet {
 	t.Helper()
 	dir := t.TempDir()
 	for name, content := range map[string]string{"go.mod": "module demo\n", "notes.txt": "TODO: ship\n"} {
@@ -33,7 +33,7 @@ func workspaceTools(t *testing.T, mode agent.PermissionsMode) *agent.ToolSet {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ws.Close() })
-	set, err := agent.NewToolSet(mode, tools.NewClientTools(ws)...)
+	set, err := agent.NewToolSet(tools.NewClientTools(ws)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,9 +85,9 @@ func toolBlock(t *testing.T, blocks []agent.Block, name string) *agent.ToolBlock
 }
 
 func TestParallelClientCalls(t *testing.T) {
-	engine := agent.New(&Fake{}, agent.Config{})
+	engine := agent.New(&Fake{}, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
 	script := `rs = call([("list_files", {"path": "."}), ("read_file", {"path": "go.mod"}), ("grep_files", {"pattern": "TODO"})]); say(str(["go.mod" in rs[0].output, "module demo" in rs[1].output, "notes.txt" in rs[2].output]))`
-	blocks, rounds := runTurn(t, engine, script, workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
+	blocks, rounds := runTurn(t, engine, script, workspaceTools(t), agent.DenyContinue, nil)
 	if rounds != 2 {
 		t.Fatalf("backend rounds = %d, want 2", rounds)
 	}
@@ -107,7 +107,7 @@ func TestServerGateWithClientCall(t *testing.T) {
 
 	t.Run("deny continue", func(t *testing.T) {
 		engine := agent.New(&Fake{}, agent.Config{})
-		blocks, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeManual), agent.DenyContinue, decide)
+		blocks, _ := runTurn(t, engine, script, workspaceTools(t), agent.DenyContinue, decide)
 		if got := texts(blocks); !slices.Equal(got, []string{"not created"}) {
 			t.Fatalf("answer = %q", got)
 		}
@@ -117,7 +117,7 @@ func TestServerGateWithClientCall(t *testing.T) {
 	})
 	t.Run("deny stop", func(t *testing.T) {
 		engine := agent.New(&Fake{}, agent.Config{})
-		blocks, _ := runTurn(t, engine, script, workspaceTools(t, agent.ModeManual), agent.DenyStop, decide)
+		blocks, _ := runTurn(t, engine, script, workspaceTools(t), agent.DenyStop, decide)
 		if gate := toolBlock(t, blocks, assistant.ApprovalRequestTool); gate.Status != agent.ToolDenied || len(texts(blocks)) != 0 {
 			t.Fatalf("gate status = %v, answers = %q", gate.Status, texts(blocks))
 		}
@@ -130,8 +130,8 @@ func TestServerGateWithClientCall(t *testing.T) {
 // TestDisclosureScript runs the disclosure QA script against the real tools,
 // so schema drift fails here rather than during manual QA.
 func TestDisclosureScript(t *testing.T) {
-	engine := agent.New(&Fake{ScriptRoot: "testdata"}, agent.Config{})
-	blocks, _ := runTurn(t, engine, `load("disclosure.star", "all"); all()`, workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
+	engine := agent.New(&Fake{ScriptRoot: "testdata"}, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
+	blocks, _ := runTurn(t, engine, `load("disclosure.star", "all"); all()`, workspaceTools(t), agent.DenyContinue, nil)
 	var calls int
 	for _, block := range blocks {
 		if block.Kind == assistant.KindText && strings.Contains(block.Markdown.Content, "fake script error") {
@@ -155,8 +155,8 @@ func TestDisclosureScript(t *testing.T) {
 }
 
 func TestKitchen(t *testing.T) {
-	engine := agent.New(&Fake{}, agent.Config{})
-	blocks, _ := runTurn(t, engine, "kitchen()", workspaceTools(t, agent.ModeSkipPermissions), agent.DenyContinue, nil)
+	engine := agent.New(&Fake{}, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
+	blocks, _ := runTurn(t, engine, "kitchen()", workspaceTools(t), agent.DenyContinue, nil)
 	kinds := map[assistant.ContentKind]bool{}
 	styles := chat.DefaultStyles(true)
 	for _, block := range blocks {

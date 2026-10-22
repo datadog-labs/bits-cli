@@ -27,7 +27,7 @@ func TestClientToolsFitMultiAgentContract(t *testing.T) {
 			if interactive {
 				tools = append(tools, NewAskUserQuestionTool(nil))
 			}
-			set, err := agent.NewToolSet(agent.ModeManual, tools...)
+			set, err := agent.NewToolSet(tools...)
 			if err != nil {
 				t.Fatal(err)
 			}

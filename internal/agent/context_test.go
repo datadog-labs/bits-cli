@@ -214,7 +214,7 @@ func TestResumedConversationReplacesUnknownInstructions(t *testing.T) {
 
 func TestInstructionsAreNotResentOnToolContinuations(t *testing.T) {
 	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{
+	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil },
 	})
@@ -223,7 +223,7 @@ func TestInstructionsAreNotResentOnToolContinuations(t *testing.T) {
 	}
 	dir := t.TempDir()
 	writeInstructionTestFile(t, dir, "AGENTS.md", "local instructions")
-	engine := New(backend, Config{UserContext: func(context.Context) string { return "environment" }, ProjectInstructions: env.NewInstructions(dir)})
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions, UserContext: func(context.Context) string { return "environment" }, ProjectInstructions: env.NewInstructions(dir)})
 	drain(t, engine, TurnInput{Message: "inspect", Tools: tools})
 	if len(backend.userContexts()) != 2 {
 		t.Fatalf("requests = %d", len(backend.userContexts()))
@@ -378,11 +378,11 @@ func TestClientSkillsOnlySentWithUserMessages(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, ".agents/skills/example", "example", "example description")
 	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }})
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(backend, Config{UserContext: func(context.Context) string { return "environment" }, ClientSkills: env.NewSkills(dir, nil)})
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions, UserContext: func(context.Context) string { return "environment" }, ClientSkills: env.NewSkills(dir, nil)})
 	drain(t, engine, TurnInput{Message: "inspect", Tools: tools})
 	if len(backend.userContexts()) != 2 || !strings.HasPrefix(backend.userContexts()[0], "environment\n\n") || !strings.Contains(backend.userContexts()[0], "example description") || backend.userContexts()[1] != "" {
 		t.Fatalf("contexts = %q", backend.userContexts())
@@ -452,7 +452,7 @@ func TestClientSkillsDeferredUntilUserMessageAfterToolResume(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	writeSkill(t, dir, ".agents/skills/example", "example", "example description")
-	tools, err := NewToolSet(ModeSkipPermissions, Tool{
+	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "input"}, Resumable: true,
 		Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 	})
@@ -463,8 +463,9 @@ func TestClientSkillsDeferredUntilUserMessageAfterToolResume(t *testing.T) {
 	skills := env.NewSkills(dir, nil)
 	renders := 0
 	engine := New(backend, Config{
-		ConversationID: "conversation",
-		ClientSkills:   skills,
+		PermissionsMode: ModeSkipPermissions,
+		ConversationID:  "conversation",
+		ClientSkills:    skills,
 		UserContext: func(context.Context) string {
 			renders++
 			return "environment"

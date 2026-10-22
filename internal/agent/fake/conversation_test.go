@@ -37,8 +37,8 @@ func viewOf(blocks []agent.Block) []blockView {
 func TestConversationRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	f := &Fake{}
-	engine := agent.New(f, agent.Config{})
-	set := workspaceTools(t, agent.ModeSkipPermissions)
+	engine := agent.New(f, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
+	set := workspaceTools(t)
 	runTurn(t, engine, "random()", set, agent.DenyContinue, nil)
 	blocks, _ := runTurn(t, engine, `r = call("read_file", {"path": "go.mod"}); say(r.output)`, set, agent.DenyContinue, nil)
 	id := engine.ConversationID()
@@ -75,7 +75,7 @@ func TestConversationRoundTrip(t *testing.T) {
 func TestPushedConversationResumesInANewEngine(t *testing.T) {
 	ctx := context.Background()
 	f := &Fake{}
-	set, err := agent.NewToolSet(agent.ModeSkipPermissions, agent.Tool{
+	set, err := agent.NewToolSet(agent.Tool{
 		Resumable:  true,
 		Definition: assistant.ClientTool{Name: "echo"},
 		Handler: func(context.Context, agent.ToolCall) (agent.ToolResult, error) {
@@ -90,7 +90,7 @@ func TestPushedConversationResumesInANewEngine(t *testing.T) {
 	script := `id = push_conversation(lambda: say("earlier"), lambda: say("after " + call("echo", {}).output), title="Pending echo")
 call("echo", {})
 say(id)`
-	blocks, _ := runTurn(t, agent.New(f, agent.Config{}), script, set, agent.DenyContinue, nil)
+	blocks, _ := runTurn(t, agent.New(f, agent.Config{PermissionsMode: agent.ModeSkipPermissions}), script, set, agent.DenyContinue, nil)
 	id := texts(blocks)[0]
 	list, err := f.UserConversations(ctx)
 	if err != nil || len(list.Data.Attributes.Conversations) != 2 || !slices.ContainsFunc(list.Data.Attributes.Conversations, func(c assistant.ConversationSummary) bool {
@@ -99,7 +99,7 @@ say(id)`
 		t.Fatalf("conversations = %+v, want one pushed %s", list, id)
 	}
 
-	engine := agent.New(f, agent.Config{ConversationID: id})
+	engine := agent.New(f, agent.Config{PermissionsMode: agent.ModeSkipPermissions, ConversationID: id})
 	for range engine.Restore(ctx) {
 	}
 	for ev := range engine.ResumePendingTools(ctx, agent.TurnInput{Tools: set}) {

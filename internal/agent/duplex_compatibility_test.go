@@ -66,7 +66,7 @@ func TestMultiAgentUsesRegularAPIForUnsupportedTurns(t *testing.T) {
 			defer server.Close()
 			client := assistant.NewMultiAgentClient(&assistant.Client{BaseURL: server.URL, HTTPClient: server.Client(), CustomHeaders: http.Header{"Test-Drive-Ds-Rl": []string{"1"}}})
 			engine := New(client, test.config)
-			tools, err := NewToolSet(ModeSkipPermissions)
+			tools, err := NewToolSet()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,8 +92,8 @@ func (b *imageDuplexBackend) Stream(ctx context.Context, _ string, opts assistan
 func TestDuplexUsesPreparedImageAndResizeNotice(t *testing.T) {
 	file, sent := screenshotFile(t)
 	backend := &imageDuplexBackend{duplexBackend: &duplexBackend{stream: func(context.Context, func(assistant.AssistantResponse) error) error { return nil }}}
-	engine := New(backend, Config{})
-	tools, err := NewToolSet(ModeSkipPermissions)
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
+	tools, err := NewToolSet()
 	if err != nil {
 		t.Fatal(err)
 	}
