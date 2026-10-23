@@ -362,7 +362,7 @@ func TestClientSkillReadFailureFailsTurnLikeBackendError(t *testing.T) {
 	if failure == nil || m.chatPhase != chat.PhaseError {
 		t.Fatalf("failure = %v, phase = %v", failure, m.chatPhase)
 	}
-	if prompts := m.transcript.UserPrompts(); len(prompts) != 1 || m.editor.Value() != "" {
+	if prompts := m.state.UserPrompts(); len(prompts) != 1 || m.editor.Value() != "" {
 		t.Fatal("failed skill turn did not keep its user block")
 	}
 }

@@ -78,7 +78,7 @@ func TestApprovalsDockOneAtATimeInTranscriptOrder(t *testing.T) {
 	m := newShell()
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
 	a, b, c := awaitingCall("a"), awaitingCall("b"), awaitingCall("c")
-	m.transcript.Blocks = []agent.Block{a, b, c}
+	m.state.Blocks = []agent.Block{a, b, c}
 
 	m.syncApprovals([]agent.Block{b})
 	docked := m.prompt().(*approvalPrompt)
@@ -108,7 +108,7 @@ func TestApprovalsDockOneAtATimeInTranscriptOrder(t *testing.T) {
 func TestQuestionAndApprovalTakeTurns(t *testing.T) {
 	m := newShell()
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
-	m.transcript.Blocks = []agent.Block{awaitingCall("approve"), {ID: agent.BlockID{Scope: agent.ScopeTool, Key: "question"}, Kind: assistant.KindToolCall}}
+	m.state.Blocks = []agent.Block{awaitingCall("approve"), {ID: agent.BlockID{Scope: agent.ScopeTool, Key: "question"}, Kind: assistant.KindToolCall}}
 
 	m.openToolUI(questionRequest(t, "question"))
 	m.syncApprovals([]agent.Block{awaitingCall("approve")})

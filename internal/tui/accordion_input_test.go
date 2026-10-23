@@ -36,7 +36,7 @@ func accordionTestModel(t *testing.T) *Model {
 	t.Helper()
 	m := newShell()
 	m.mode = ModeChat
-	m.transcript.Blocks = []agent.Block{accordionTestBlock()}
+	m.state.Blocks = []agent.Block{accordionTestBlock()}
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.syncTranscript()
 	m.editor.Focus()
@@ -218,7 +218,7 @@ func scrollableAccordionTestModel(t *testing.T) *Model {
 			Tool: &agent.ToolBlock{Name: "search_logs", IsClientSide: true, Status: agent.ToolSuccess, Output: "row 1"},
 		})
 	}
-	m.transcript.Blocks = blocks
+	m.state.Blocks = blocks
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
 	m.syncTranscript()
 	m.editor.Focus()

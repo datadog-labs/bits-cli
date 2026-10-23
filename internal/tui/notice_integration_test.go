@@ -38,12 +38,12 @@ func TestFakeTurnAndCommandsRenderLocalMessagesInOrder(t *testing.T) {
 		}
 		previous = at
 	}
-	if len(m.transcript.Blocks) != 2 || len(m.notices) != 3 {
-		t.Fatalf("agent blocks=%d local messages=%d", len(m.transcript.Blocks), len(m.notices))
+	if len(m.state.Blocks) != 2 || len(m.notices) != 3 {
+		t.Fatalf("agent blocks=%d local messages=%d", len(m.state.Blocks), len(m.notices))
 	}
 	_, _ = m.dispatchCommand("new", "")
-	if len(m.transcript.Blocks) != 0 || len(m.notices) != 1 || latestNotice(m).Text != "Started a new conversation." {
-		t.Fatalf("new conversation retained old messages: blocks=%d notices=%+v", len(m.transcript.Blocks), m.notices)
+	if len(m.state.Blocks) != 0 || len(m.notices) != 1 || latestNotice(m).Text != "Started a new conversation." {
+		t.Fatalf("new conversation retained old messages: blocks=%d notices=%+v", len(m.state.Blocks), m.notices)
 	}
 }
 

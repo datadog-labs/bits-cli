@@ -107,7 +107,7 @@ func waitQuestions(t *testing.T, m *Model) {
 func waitFinalInput(t *testing.T, m *Model, ids ...string) {
 	t.Helper()
 	for _, id := range ids {
-		for !slices.ContainsFunc(m.transcript.Blocks, func(b agent.Block) bool {
+		for !slices.ContainsFunc(m.state.Blocks, func(b agent.Block) bool {
 			return b.ToolCallID() == id && b.Tool.HasFinalInput
 		}) {
 			pumpToolUI(t, m)
@@ -294,7 +294,7 @@ func newResumedQuestionModel(t *testing.T, f *fake.Fake, id string, startup bool
 // continued reports whether the assistant answered after the questions. The
 // user block holds the same text as script source.
 func continued(m *Model) bool {
-	return slices.ContainsFunc(m.transcript.Blocks, func(b agent.Block) bool {
+	return slices.ContainsFunc(m.state.Blocks, func(b agent.Block) bool {
 		return b.Role == assistant.RoleAssistant && b.Markdown != nil && strings.Contains(b.Markdown.Content, "Continuing after the answer.")
 	})
 }
@@ -420,7 +420,7 @@ func TestRestoredCallsThatWillNotResumeSettle(t *testing.T) {
 			if dockedToolUI(m) != nil || m.op.run != 0 {
 				t.Fatal("a call that cannot resume opened")
 			}
-			for _, block := range m.transcript.Blocks {
+			for _, block := range m.state.Blocks {
 				if block.Tool != nil && block.Tool.Status != agent.ToolCancelled {
 					t.Fatalf("restored %s still looks running", block.Tool.Name)
 				}

@@ -133,13 +133,13 @@ func (m *Model) statusRuntime() statusview.Runtime {
 		AuthenticationMode:  runtime.Backend.AuthenticationMode,
 		AuthenticationState: authenticationState,
 		Identity:            m.statusIdentity,
-		ConversationID:      m.convID,
+		ConversationID:      m.state.ConversationID,
 		Profile:             string(runtime.Profile),
 		Model:               runtime.Model,
 		PermissionsMode:     permissionsMode,
 		Phase:               phaseName(m.chatPhase),
 		Connectivity:        m.statusConnectivity(),
-		Usage:               m.usage,
+		Usage:               m.state.Usage,
 	}
 }
 

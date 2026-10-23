@@ -21,7 +21,7 @@ func followTestModel() *Model {
 	m.mode = ModeChat
 	m.resize(60, 16)
 	m.relayout()
-	m.transcript.Blocks = []agent.Block{{
+	m.state.Blocks = []agent.Block{{
 		ID:   agent.BlockID{Scope: agent.ScopeMessage, Key: "response"},
 		Role: assistant.RoleAssistant, Kind: assistant.KindText,
 		Markdown: &assistant.MarkdownPayload{Content: strings.Repeat("response row\n\n", 40)},
@@ -41,8 +41,8 @@ func TestFollowControlReturnsToStreamingTailWithoutGrowingView(t *testing.T) {
 	top := m.list.VisibleSurface().Top
 	m.chatPhase = chat.PhaseStreaming
 	m.op = operation{kind: opTurn, run: 1}
-	m.transcript.Blocks[0].Markdown.Content += "\n\nnew output"
-	m.transcript.Blocks[0].Rev++
+	m.state.Blocks[0].Markdown.Content += "\n\nnew output"
+	m.state.Blocks[0].Rev++
 	m.syncTranscript()
 	view := m.View().Content
 	if m.list.VisibleSurface().Top != top || m.list.Following() {
@@ -80,8 +80,8 @@ func TestFollowControlReturnsToStreamingTailWithoutGrowingView(t *testing.T) {
 	if !m.list.Following() || !m.list.AtBottom() {
 		t.Fatal("button release did not resume following")
 	}
-	m.transcript.Blocks[0].Markdown.Content += "\n\nnext output"
-	m.transcript.Blocks[0].Rev++
+	m.state.Blocks[0].Markdown.Content += "\n\nnext output"
+	m.state.Blocks[0].Rev++
 	m.syncTranscript()
 	m.View()
 	if !m.list.AtBottom() || !m.follow.area.Empty() {

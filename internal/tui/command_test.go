@@ -151,15 +151,15 @@ func TestExactNewCommandsExecuteOnFirstEnterWithCompletionOpen(t *testing.T) {
 	for _, input := range []string{"/new", "/clear"} {
 		t.Run(input, func(t *testing.T) {
 			m := newModelWithSpy(t)
-			m.convID = "conversation-before-reset"
+			m.state.ConversationID = "conversation-before-reset"
 			m.editor.Update(tea.PasteMsg{Content: input})
 			if !m.editor.MenuOpen() {
 				t.Fatal("expected exact command completion menu to be open")
 			}
 
 			_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-			if m.convID != "" || m.editor.Value() != "" {
-				t.Fatalf("first Enter did not reset conversation: conv=%q editor=%q", m.convID, m.editor.Value())
+			if m.state.ConversationID != "" || m.editor.Value() != "" {
+				t.Fatalf("first Enter did not reset conversation: conv=%q editor=%q", m.state.ConversationID, m.editor.Value())
 			}
 		})
 	}
@@ -167,7 +167,7 @@ func TestExactNewCommandsExecuteOnFirstEnterWithCompletionOpen(t *testing.T) {
 
 func TestFileCompletionRemainsEditorOwned(t *testing.T) {
 	m := newModelWithSpy(t)
-	m.convID = "conversation-preserved"
+	m.state.ConversationID = "conversation-preserved"
 	m.editor.Update(tea.PasteMsg{Content: "@README"})
 	m.editor.SetFileResults("README", tuieditor.FileReady, []tuieditor.Candidate{{
 		Kind: tuieditor.CandidateFile, ID: "README.md", Label: "+ README.md", Insert: "@README.md",
@@ -177,8 +177,8 @@ func TestFileCompletionRemainsEditorOwned(t *testing.T) {
 	}
 
 	_, command := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if command != nil || m.convID != "conversation-preserved" || m.editor.Value() != "@README.md " {
-		t.Fatalf("completion routing: command=%v conv=%q editor=%q, want nil/preserved/@README.md ", command != nil, m.convID, m.editor.Value())
+	if command != nil || m.state.ConversationID != "conversation-preserved" || m.editor.Value() != "@README.md " {
+		t.Fatalf("completion routing: command=%v conv=%q editor=%q, want nil/preserved/@README.md ", command != nil, m.state.ConversationID, m.editor.Value())
 	}
 }
 
@@ -680,7 +680,7 @@ func TestLatestCopyableAssistantResponse(t *testing.T) {
 func TestCopyCommandWritesLatestAssistantResponseLocally(t *testing.T) {
 	m := New(agent.New(&spyBackend{t: t}, agent.Config{}))
 	m.editor.Focus()
-	m.transcript.Blocks = []agent.Block{
+	m.state.Blocks = []agent.Block{
 		{Role: assistant.RoleUser, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "prompt"}},
 		{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "answer"}},
 	}
@@ -701,7 +701,7 @@ func TestCopyCommandWritesLatestAssistantResponseLocally(t *testing.T) {
 func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
 	m := New(agent.New(&spyBackend{t: t}, agent.Config{}))
 	m.editor.Focus()
-	m.transcript.Blocks = []agent.Block{{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "previous answer"}}}
+	m.state.Blocks = []agent.Block{{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "previous answer"}}}
 	m.op = operation{kind: opTurn, run: 1}
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "/copy"})
@@ -717,7 +717,7 @@ func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
 
 func TestCopyCommandReportsNoCompletedAssistantResponse(t *testing.T) {
 	m := New(agent.New(&spyBackend{t: t}, agent.Config{}))
-	m.transcript.Blocks = []agent.Block{
+	m.state.Blocks = []agent.Block{
 		{Role: assistant.RoleUser, Kind: assistant.KindText, Complete: true, Markdown: &assistant.MarkdownPayload{Content: "prompt"}},
 		{Role: assistant.RoleAssistant, Kind: assistant.KindText, Complete: false, Markdown: &assistant.MarkdownPayload{Content: "partial"}},
 	}

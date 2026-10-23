@@ -319,7 +319,7 @@ func (m *Model) promptPlaceholder() string {
 func (m *Model) chatFooter() string {
 	width := max(1, m.list.Width())
 	indent := min(m.editor.ContentOffset(), max(0, width-1))
-	text := chatFooterText(m.workspaceDisplayPath, m.usage, max(1, width-indent))
+	text := chatFooterText(m.workspaceDisplayPath, m.state.Usage, max(1, width-indent))
 	if text == "" {
 		return ""
 	}
