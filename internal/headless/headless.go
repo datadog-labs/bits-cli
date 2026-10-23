@@ -53,7 +53,6 @@ func Run(ctx context.Context, engine *agent.Engine, input agent.TurnInput, deliv
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	turnStart := len(engine.Snapshot())
 	events, unsubscribe := engine.Subscribe()
 	defer unsubscribe()
 	completed := false
@@ -77,7 +76,7 @@ func Run(ctx context.Context, engine *agent.Engine, input agent.TurnInput, deliv
 	}
 
 	blocks := engine.Snapshot()
-	outcome, err := classify(completed, denied(blocks[turnStart:]), turnErr, consumeErr)
+	outcome, err := classify(completed, denied(blocks, run), turnErr, consumeErr)
 	finishErr := delivery.Finish(Finish{
 		EndedAt:        time.Now(),
 		Outcome:        outcome,
@@ -110,9 +109,10 @@ func classify(completed, denied bool, turnErr, consumeErr error) (Outcome, error
 	}
 }
 
-func denied(blocks []agent.Block) bool {
+// denied reports whether run denied a tool call. Run 0 started nothing.
+func denied(blocks []agent.Block, run agent.RunID) bool {
 	for _, block := range blocks {
-		if block.Tool != nil && block.Tool.Status == agent.ToolDenied {
+		if run != 0 && block.Run == run && block.Tool != nil && block.Tool.Status == agent.ToolDenied {
 			return true
 		}
 	}
