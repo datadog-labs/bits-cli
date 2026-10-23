@@ -74,7 +74,7 @@ type Surface struct {
 	Top     int
 }
 
-// LinkHit identifies a rendered hyperlink in an assistant text item.
+// LinkHit identifies a hyperlink a block's rendered markdown shows.
 type LinkHit struct {
 	URL     string
 	BlockID agent.BlockID
@@ -476,10 +476,8 @@ func (l *List) LinkAt(x, y int) (LinkHit, bool) {
 	if item.kind != itemBlock || item.start < 0 {
 		return LinkHit{}, false
 	}
-	block := l.items[item.start]
-	if block.Kind != assistant.KindText || block.Role != assistant.RoleAssistant {
-		return LinkHit{}, false
-	}
+	// Only the markdown renderer emits hyperlinks: every other renderer
+	// escapes what it shows, so a cell's link is one a block's markdown had.
 	hit := LinkHit{BlockID: item.id, Rev: item.rev, Row: row}
 
 	buf := uv.NewScreenBuffer(l.width, l.height)
