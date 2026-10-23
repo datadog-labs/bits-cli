@@ -80,6 +80,17 @@ func taskOf(b Block) (*task, bool) {
 	return t, true
 }
 
+// taskIDOf returns the task a wire message belongs to, if any.
+func taskIDOf(msg assistant.Message) string {
+	if msg.BackgroundTaskID != nil && *msg.BackgroundTaskID != "" {
+		return *msg.BackgroundTaskID
+	}
+	if msg.Content.Progress != nil {
+		return msg.Content.Progress.TaskID
+	}
+	return ""
+}
+
 func isFinalUpdate(msg assistant.Message) bool {
 	return msg.Content.Progress != nil && msg.Content.Progress.EventType == "final"
 }
@@ -101,6 +112,39 @@ func startedTasks(tasks []*task, blocks []Block) []*task {
 		}
 	}
 	return tasks
+}
+
+// historyTasks folds a conversation's messages: each task's messages into the
+// task, the rest into the returned transcript. A task whose final update is
+// persisted is done; one whose start call is missing is kept, unnamed.
+func historyTasks(messages []assistant.Message) (*Transcript, []*task) {
+	transcript := NewTranscript()
+	for _, msg := range messages {
+		if taskIDOf(msg) == "" {
+			transcript.AppendMessage(msg)
+		}
+	}
+	transcript.FinalizeAll()
+	tasks := startedTasks(nil, transcript.Blocks())
+	for _, msg := range messages {
+		id := taskIDOf(msg)
+		if id == "" {
+			continue
+		}
+		t := findTask(tasks, id)
+		if t == nil {
+			t = newTask(id)
+			tasks = append(tasks, t)
+		}
+		t.transcript.AppendMessage(msg)
+		if isFinalUpdate(msg) {
+			t.Status = TaskDone
+		}
+	}
+	for _, t := range tasks {
+		t.transcript.FinalizeAll()
+	}
+	return transcript, tasks
 }
 
 // taskViews copies the tasks for a state.

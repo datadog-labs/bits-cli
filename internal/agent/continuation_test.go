@@ -20,6 +20,9 @@ func TestContinuationHistoryBoundaries(t *testing.T) {
 	response.Content.Type = assistant.ContentClientToolResponse
 	stop := assistant.AssistantMessage("stop", assistant.Content{Type: assistant.ContentUserStop})
 	user := assistant.Message{Role: "user", Content: assistant.TextContent("new turn")}
+	taskID := "assistant-task.1"
+	taskUser, taskCall := user, clientCallMsg("task-call", "input", `{}`)
+	taskUser.BackgroundTaskID, taskCall.BackgroundTaskID = &taskID, &taskID
 	for _, tc := range []struct {
 		name     string
 		messages []assistant.Message
@@ -31,6 +34,7 @@ func TestContinuationHistoryBoundaries(t *testing.T) {
 		{"stopped", []assistant.Message{first, second, stop}, nil},
 		{"new user turn", []assistant.Message{first, user}, nil},
 		{"duplicate final call", []assistant.Message{first, first}, []string{"one"}},
+		{"background task messages", []assistant.Message{first, taskUser, taskCall}, []string{"one"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pending := continuationFromHistory(tc.messages)
