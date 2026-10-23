@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -71,6 +72,14 @@ type (
 	toolApprovalRenderFunc func(*agent.ToolBlock, toolPresentation, int, Styles) string
 )
 
+// toolApprovalSpec is a tool's own design for the prompt approving a call:
+// its title, or nil to keep the prompt's, and its body, or nil to keep the
+// prompt's detail. It applies to a server tool an approval_request gates too.
+type toolApprovalSpec struct {
+	title  func(*agent.ToolBlock, toolPresentation) string
+	render toolApprovalRenderFunc
+}
+
 // toolAction contains the human-facing verb forms for a local tool. Empty
 // lifecycle forms fall back to base, which keeps tools with quiet terminal
 // states compact while allowing active work to use a natural progressive verb.
@@ -82,10 +91,10 @@ type toolAction struct {
 }
 
 type toolRenderSpec struct {
-	render         toolRenderFunc
-	renderApproval toolApprovalRenderFunc
-	spacing        itemSpacing
-	action         toolAction
+	render   toolRenderFunc
+	approval *toolApprovalSpec // nil: the approval prompt's own title and detail
+	spacing  itemSpacing
+	action   toolAction
 	// group joins compatible calls and intervening reasoning under one
 	// header; "" keeps each call on its own.
 	group string
@@ -136,15 +145,20 @@ var (
 		action:  toolAction{base: "Edit", active: "Editing", success: "Edited", failure: "Edit failed"},
 	}
 	execToolRenderSpec = &toolRenderSpec{
-		render:         renderExecTool,
-		renderApproval: renderExecApproval,
-		spacing:        itemSpacing{before: 1, after: 1},
-		action:         toolAction{base: "Run", success: "Ran", failure: "Run failed"},
+		render:   renderExecTool,
+		approval: &toolApprovalSpec{render: renderExecApproval},
+		spacing:  itemSpacing{before: 1, after: 1},
+		action:   toolAction{base: "Run", success: "Ran", failure: "Run failed"},
 	}
 	skillToolRenderSpec = &toolRenderSpec{
 		render: renderSimpleTool,
 		group:  skillGroupKey,
 		action: toolAction{base: "Load", active: "Loading", success: "Loaded", failure: "Load failed"},
+	}
+	startBackgroundTaskRenderSpec = &toolRenderSpec{
+		render:   renderSimpleTool,
+		approval: &toolApprovalSpec{title: backgroundTaskApprovalTitle, render: renderBackgroundTaskApproval},
+		action:   toolAction{base: "Start background task", active: "Starting background task", success: "Started background task", failure: "Background task failed"},
 	}
 	handoffToolRenderSpec = &toolRenderSpec{
 		render: renderSimpleTool,
@@ -278,6 +292,10 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			p.argument = "skill " + escape.Inline(in.SkillName)
 		}
 		p.validInput = true
+	case spec.ServerStartBackgroundTask:
+		if in, ok := backgroundTaskInput(input); ok {
+			p.argument, p.validInput = escape.Inline(cmp.Or(in.Task.TaskName, backgroundAgentName(in.Task.AgentID))), true
+		}
 	case spec.ClientHandoff:
 		var in struct {
 			Reason string `json:"reason"`
@@ -316,6 +334,8 @@ func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 		return waitForAgentsRenderSpec
 	case spec.ServerSkill:
 		return skillToolRenderSpec
+	case spec.ServerStartBackgroundTask:
+		return startBackgroundTaskRenderSpec
 	case spec.ClientHandoff:
 		return handoffToolRenderSpec
 	default:
@@ -443,15 +463,41 @@ func renderPresentedTool(tool *agent.ToolBlock, p toolPresentation, c renderCont
 	return p.renderSpec.render(tool, p, c)
 }
 
-// RenderToolApproval renders the tool-specific portion of an approval prompt.
-// The caller retains ownership of the surrounding panel, title, and actions.
-// Tools without a specialized approval design use the caller's generic fallback.
-func RenderToolApproval(tool *agent.ToolBlock, width int, sty Styles) (string, bool) {
-	p := classifyTool(tool)
-	if p.renderSpec.renderApproval == nil || !p.validInput {
-		return "", false
+// ToolApproval is a tool's own design for its approval prompt. The caller
+// keeps the surrounding panel and actions, and its generic title and detail
+// where the design has none: an empty Title, a nil Render.
+type ToolApproval struct {
+	Title  string
+	Render func(width int) string
+}
+
+// ApprovalOf returns the approval design of the call a pending tool block asks
+// to approve: the server call an approval_request gates, or the tool itself.
+func ApprovalOf(tool *agent.ToolBlock, sty Styles) ToolApproval {
+	subject := approvalSubject(tool)
+	p := classifyTool(subject)
+	design := p.renderSpec.approval
+	if design == nil || !p.validInput {
+		return ToolApproval{}
 	}
-	return p.renderSpec.renderApproval(tool, p, max(1, width), sty), true
+	var approval ToolApproval
+	if design.title != nil {
+		approval.Title = design.title(subject, p)
+	}
+	if design.render != nil {
+		approval.Render = func(width int) string { return design.render(subject, p, max(1, width), sty) }
+	}
+	return approval
+}
+
+// approvalSubject returns the server call tool's approval prompt gates, as a
+// tool block awaiting approval, or tool itself.
+func approvalSubject(tool *agent.ToolBlock) *agent.ToolBlock {
+	if tool == nil || tool.Approval == nil || tool.Approval.Gated == nil {
+		return tool
+	}
+	gated := tool.Approval.Gated
+	return &agent.ToolBlock{Name: gated.Name, Input: gated.Input, HasFinalInput: true, Status: tool.Status, Approval: tool.Approval}
 }
 
 // renderToolGroupHeader counts tool calls, while reasoning only contributes
@@ -823,6 +869,71 @@ func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, st
 		rows = append(rows, textwrap.WrapProse(width, detail, sty.ToolDetail)...)
 	}
 	return strings.Join(rows, "\n")
+}
+
+// backgroundTaskInput decodes a startBackgroundTask call's task.
+func backgroundTaskInput(input string) (spec.StartBackgroundTaskInput, bool) {
+	var in spec.StartBackgroundTaskInput
+	return in, decodeObject(input, &in) && strings.TrimSpace(in.Task.AgentID) != ""
+}
+
+func backgroundAgentName(agentID string) string {
+	if agentID == "investigation" {
+		return "Bits Investigation"
+	}
+	return escape.Inline(agentID)
+}
+
+func backgroundTaskApprovalTitle(tool *agent.ToolBlock, _ toolPresentation) string {
+	if in, _ := backgroundTaskInput(tool.Input); in.Task.AgentID == "investigation" {
+		return "Start a Bits Investigation?"
+	}
+	return "Start a background task?"
+}
+
+// renderBackgroundTaskApproval lists what the task will look into.
+func renderBackgroundTaskApproval(tool *agent.ToolBlock, _ toolPresentation, width int, sty Styles) string {
+	in, _ := backgroundTaskInput(tool.Input)
+	task := in.Task
+	investigation := task.AgentID == "investigation"
+	var lines []string
+	add := func(label, value string) {
+		if value = escape.SingleLine(value); value != "" {
+			lines = append(lines, label+": "+value)
+		}
+	}
+	if !investigation {
+		add("Agent", task.AgentID)
+	}
+	add("Task", task.TaskName)
+	p := task.Payload
+	add("Investigate", p.Description)
+	if p.IncidentPublicID != nil {
+		add("Incident", fmt.Sprintf("IR-%d", *p.IncidentPublicID))
+	}
+	if p.MonitorID != nil {
+		add("Monitor", fmt.Sprint(*p.MonitorID))
+	}
+	add("Alert event", p.EventID)
+	if p.EventTS != nil {
+		add("Alert time", approvalTime(*p.EventTS))
+	}
+	add("Scope", strings.Join(p.Tags, ", "))
+	if p.StartTime != nil && p.EndTime != nil {
+		add("Time window", approvalTime(*p.StartTime)+" to "+approvalTime(*p.EndTime))
+	}
+	if investigation {
+		lines = append(lines, "Progress and findings will appear in this conversation.")
+	}
+	var rows []string
+	for _, line := range lines {
+		rows = append(rows, textwrap.WrapProse(width, line, sty.ToolDetail)...)
+	}
+	return strings.Join(rows, "\n")
+}
+
+func approvalTime(milliseconds int64) string {
+	return time.UnixMilli(milliseconds).UTC().Format("2006-01-02 15:04 UTC")
 }
 
 // highlightShellCommand returns the styled segments of each command line.

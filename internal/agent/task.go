@@ -212,7 +212,11 @@ func (e *Engine) observe(ctx context.Context, backend TaskBackend, conversation 
 		// Until live, replay is the observer's: the actor gets it whole.
 		show := func() {
 			live = true
-			e.updateTask(t, func() bool { t.transcript, t.Err = replay, nil; return true })
+			e.updateTask(t, func() bool {
+				replay.supersede(t.transcript)
+				t.transcript, t.Err = replay, nil
+				return true
+			})
 		}
 		err := backend.Subscribe(ctx, conversation, assistant.SubscribeOptions{TaskID: t.ID}, func(msg assistant.Message) error {
 			final = final || isFinalUpdate(msg)
