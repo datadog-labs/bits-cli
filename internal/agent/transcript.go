@@ -514,6 +514,19 @@ func (t *Transcript) adopt(id string) {
 	}
 }
 
+// supersede makes t, which replaces prev, newer than it: its blocks start at
+// revisions above prev's, so a consumer that caches a block by id and
+// revision does not take a replayed block for one it already has.
+func (t *Transcript) supersede(prev *Transcript) {
+	base := 0
+	for _, b := range prev.blocks {
+		base = max(base, b.Rev+1)
+	}
+	for i := range t.blocks {
+		t.blocks[i].Rev += base
+	}
+}
+
 // revise records a change to the block at i.
 func (t *Transcript) revise(i int) {
 	t.blocks[i].Rev++

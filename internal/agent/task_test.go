@@ -173,6 +173,47 @@ func TestTaskReconnectsAndShowsEachCompleteReplay(t *testing.T) {
 	})
 }
 
+// A replay's blocks are newer than those it replaces, even where a message
+// keeps its id: a consumer caching blocks by id and revision must not keep
+// showing what the replay completed.
+func TestTaskReplayRevisesTheBlocksItReplaces(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		answer := func(text string) assistant.Message {
+			msg := textMsg("m1", text)
+			id := testTaskID
+			msg.BackgroundTaskID = &id
+			return msg
+		}
+		backend := &taskBackend{attachments: [][]assistant.Message{
+			{replayComplete, answer("partial "), answer("more "), taskEnded},
+			{answer("partial more answer"), updateMsg("u1", "final", "done"), taskEnded},
+		}}
+		e, events := newTaskEngine(t, backend)
+
+		collect(turnEvents(e, context.Background(), TurnInput{Message: "investigate"}))
+		rev := func(tasks []Task, text string) (int, bool) {
+			for _, task := range tasks {
+				for _, b := range task.Blocks {
+					if b.Markdown != nil && b.Markdown.Content == text {
+						return b.Rev, true
+					}
+				}
+			}
+			return 0, false
+		}
+		var partial int
+		waitTasks(t, events, func(tasks []Task) bool {
+			var ok bool
+			partial, ok = rev(tasks, "partial more ")
+			return ok
+		})
+		final, ok := rev(waitTasks(t, events, taskEnds), "partial more answer")
+		if !ok || final <= partial {
+			t.Fatalf("replayed answer revision = %d (found %v), want above the live one's %d", final, ok, partial)
+		}
+	})
+}
+
 // A stream that fails right after going live backs off like any failure.
 func TestTaskBacksOffAStreamThatFailsOnceLive(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
