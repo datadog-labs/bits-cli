@@ -638,7 +638,11 @@ func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []Too
 	var opts assistant.SendOptions
 	var delivery contextDelivery
 	e.do(func() {
-		t.from = e.turnStart(resumed)
+		// The turn answers restored calls: they are its own, even if it is
+		// cancelled before it changes them.
+		for _, call := range resumed {
+			e.transcript.adopt(call.ID)
+		}
 		// A restored tool call is already in the transcript; only a new turn
 		// adds a user block before contacting the backend. The block lists the
 		// context exactly as it is sent.
@@ -677,20 +681,6 @@ func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []Too
 	})
 }
 
-// turnStart is where a turn's blocks start: the transcript's end, or the
-// first resumed call.
-func (e *Engine) turnStart(resumed []ToolCall) int {
-	start := len(e.transcript.Blocks())
-	for i, block := range e.transcript.Blocks() {
-		for _, call := range resumed {
-			if block.ToolCallID() == call.ID {
-				start = min(start, i)
-			}
-		}
-	}
-	return start
-}
-
 // finish publishes how the turn ended, its terminal event last, and releases
 // the engine. A turn that failed before its exchange started reports the error
 // alone. A cancelled turn settles every open block, publishes the final
@@ -705,7 +695,7 @@ func (t *turn) finish(err error) {
 	case t.ex == nil:
 		end = Event{Kind: EventError, Err: err}
 	default:
-		settled := e.settleUnfinishedTools(t.tools, t.from, t.ex.final())
+		settled := e.settleUnfinishedTools(t.tools, t.run, t.ex.final())
 		if e.transcript.FinalizeAll() || settled {
 			t.publish()
 		}
@@ -721,7 +711,7 @@ func (t *turn) finish(err error) {
 	}
 	if cause != nil {
 		e.transcript.FinalizeAll()
-		e.settleUnfinishedTools(t.tools, t.from, true)
+		e.settleUnfinishedTools(t.tools, t.run, true)
 		e.emit(t.run, Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()})
 	}
 	e.emit(t.run, end)
@@ -745,14 +735,14 @@ func (e *Engine) newExchange(req userRequest, resumed []ToolCall) exchange {
 	return newRoundsExchange(e.backend, req.message, req.opts, nil)
 }
 
-// settleUnfinishedTools cancels open client tool blocks starting at the given
-// transcript index, including provisional calls that never became ready to
-// execute. It also settles server tool blocks when they can no longer complete.
-// Normalizing results clears speculative UI state.
-func (e *Engine) settleUnfinishedTools(tools *ToolSet, from int, server bool) bool {
+// settleUnfinishedTools cancels run's open client tool blocks, including
+// provisional calls that never became ready to execute. It also settles server
+// tool blocks when they can no longer complete. Normalizing results clears
+// speculative UI state.
+func (e *Engine) settleUnfinishedTools(tools *ToolSet, run RunID, server bool) bool {
 	changed := false
-	for _, block := range e.transcript.Blocks()[from:] {
-		if block.Tool == nil || block.Tool.Status.IsTerminal() || !block.Tool.IsClientSide && !server {
+	for _, block := range e.transcript.Blocks() {
+		if block.Run != run || block.Tool == nil || block.Tool.Status.IsTerminal() || !block.Tool.IsClientSide && !server {
 			continue
 		}
 		call := ToolCall{ID: block.ToolCallID(), Name: block.Tool.Name, Input: block.Tool.Input}
@@ -941,7 +931,6 @@ const maxConcurrentTools = 16
 type turn struct {
 	e      *Engine
 	parent context.Context // the caller's; its cancellation ends the turn as canceled
-	from   int             // the turn's first transcript block
 	ctx    context.Context // scopes the exchange and every handler
 	cancel context.CancelFunc
 	// handlers parents every handler context; a stop cancels it.

@@ -506,6 +506,14 @@ func (t *Transcript) releaseAccumulator(id BlockID) {
 	}
 }
 
+// adopt records that the current run takes over the tool call id, which it
+// did not create, before changing it.
+func (t *Transcript) adopt(id string) {
+	if i, ok := t.index[BlockID{Scope: ScopeTool, Key: id}]; ok {
+		t.revise(i)
+	}
+}
+
 // revise records a change to the block at i.
 func (t *Transcript) revise(i int) {
 	t.blocks[i].Rev++
