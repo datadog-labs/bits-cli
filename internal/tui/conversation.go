@@ -39,10 +39,8 @@ func (m *Model) startNewConversation() tea.Cmd {
 	m.op.gen++
 	m.conversationEpoch++
 	m.selection.clear()
-	m.transcript = agent.TranscriptSnapshot{}
+	m.state = m.engine.State()
 	m.list.Reset()
-	m.convID = ""
-	m.usage = nil
 	m.chatPhase = chat.PhaseIdle
 	m.editor.Reset()
 	closeFileSearch := m.stopCompletionSearches()
@@ -113,7 +111,7 @@ func (m *Model) startConversationSwitch(conversationID string) tea.Cmd {
 	if m.picker == nil {
 		return nil
 	}
-	if conversationID == m.convID {
+	if conversationID == m.state.ConversationID {
 		return m.closeConversationPicker()
 	}
 	m.picker.SetLoading(conversationview.OperationOpen)
@@ -142,10 +140,8 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 		m.picker.SetError(n.Text, err)
 		return m.postNotice(n)
 	}
-	m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+	m.state = m.engine.State()
 	m.conversationEpoch++
-	m.convID = m.engine.ConversationID()
-	m.usage = nil
 	m.chatPhase = chat.PhaseIdle
 	m.list.Reset()
 	m.notices = nil

@@ -27,7 +27,7 @@ func animModel(status agent.ToolStatus) *Model {
 func animModelWithBlock(block agent.Block) *Model {
 	m := newShell()
 	m.mode = ModeChat
-	m.transcript.Blocks = []agent.Block{block}
+	m.state.Blocks = []agent.Block{block}
 	m.op = operation{kind: opTurn, run: 1}
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.syncTranscript()
@@ -167,7 +167,7 @@ func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, agent.Config{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
+	m.state.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
 	m.op = operation{kind: opTurn, run: 1}
 	m.op.then = thenNewConversation
@@ -177,7 +177,7 @@ func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
 	if m.animClock.armed || m.animActivity.active || m.animBorderSweep.active {
 		t.Fatal("pending /new left animations active")
 	}
-	if m.list.HasAnimated() || len(m.transcript.Blocks) != 0 {
+	if m.list.HasAnimated() || len(m.state.Blocks) != 0 {
 		t.Fatal("pending /new did not clear stale running transcript")
 	}
 }
@@ -186,7 +186,7 @@ func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, agent.Config{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
+	m.state.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
 	m.op = operation{kind: opTurn, run: 1}
 	m.syncAnimations()
@@ -206,7 +206,7 @@ func TestConversationSwitchSettlesPersistedRunningBlockAndStaysDisarmed(t *testi
 	m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
 	m.mode = ModeChat
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
+	m.state.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
 	m.op = operation{kind: opTurn, run: 1}
 	m.syncAnimations()
@@ -226,7 +226,7 @@ func TestConversationSwitchSettlesPersistedRunningBlockAndStaysDisarmed(t *testi
 	if m.animClock.armed || m.animActivity.active {
 		t.Fatal("persisted running block armed clock without a live turn")
 	}
-	if tool := findToolBlock(m.transcript.Blocks, "server_tool"); tool == nil || tool.Status != agent.ToolCancelled {
+	if tool := findToolBlock(m.state.Blocks, "server_tool"); tool == nil || tool.Status != agent.ToolCancelled {
 		t.Fatalf("restored tool = %+v, want cancelled", tool)
 	}
 }

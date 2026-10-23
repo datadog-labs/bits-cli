@@ -56,12 +56,12 @@ func TestDuplexPublishesFinalizedTranscriptBeforeTerminalEvent(t *testing.T) {
 			}}
 			engine := New(backend, Config{})
 			events := coalesced(collect(turnEvents(engine, context.Background(), TurnInput{Message: "question"})))
-			want := []EventKind{EventTranscript, EventTranscript, terminal}
+			want := []EventKind{EventState, EventState, terminal}
 			if got := kinds(events); !reflect.DeepEqual(got, want) {
 				t.Fatalf("event kinds = %v, want %v", got, want)
 			}
-			final := events[1].Transcript.Blocks
-			if len(final) != 2 || !final[1].Complete || events[1].Origin != TranscriptOriginRemote {
+			final := events[1].State.Blocks
+			if len(final) != 2 || !final[1].Complete || events[1].Round == 0 {
 				t.Fatalf("final transcript = %+v", events[1])
 			}
 			if !errors.Is(events[2].Err, failure) {
@@ -251,7 +251,7 @@ func TestDuplexApprovalDenialIsSubmittedAndControlsFutureCalls(t *testing.T) {
 			var events []Event
 			for event := range eventsCh {
 				events = append(events, event)
-				if !decided && len(event.Transcript.PendingApprovals()) > 0 {
+				if !decided && len(event.State.PendingApprovals()) > 0 {
 					decided = engine.Decide("gated", ApprovalDeny) == nil
 				}
 			}
@@ -266,7 +266,7 @@ func TestDuplexApprovalDenialIsSubmittedAndControlsFutureCalls(t *testing.T) {
 			if got := executions.Load(); got != wantRuns {
 				t.Fatalf("executions = %d, want %d", got, wantRuns)
 			}
-			for _, block := range engine.Snapshot() {
+			for _, block := range engine.State().Blocks {
 				if policy == DenyStop && block.MessageID == "answer" {
 					t.Fatal("stopped run exposed follow-up answer")
 				}
@@ -366,7 +366,7 @@ func TestDuplexBoundsExecutionAcrossArrivingBatches(t *testing.T) {
 	if got := count.Load(); got > 16 {
 		t.Fatalf("started %d blocking handlers; expected at most 16 across all batches", got)
 	}
-	for _, block := range engine.Snapshot() {
+	for _, block := range engine.State().Blocks {
 		if block.Tool != nil && block.Tool.Status != ToolCancelled {
 			t.Fatalf("tool %s was not cancelled at terminal: %+v", block.ToolCallID(), block.Tool)
 		}

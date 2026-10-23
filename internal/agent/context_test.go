@@ -23,7 +23,7 @@ func TestUserBlocksKeepTheContextTheyWereSentWith(t *testing.T) {
 	drain(t, engine, TurnInput{Message: "compare", Context: turnContext})
 
 	want := []assistant.ContextEntity{dashboard, sent}
-	if got := engine.Snapshot()[0].Context; !reflect.DeepEqual(got, want) {
+	if got := engine.State().Blocks[0].Context; !reflect.DeepEqual(got, want) {
 		t.Fatalf("user block context = %+v, want %+v", got, want)
 	}
 }
@@ -689,8 +689,8 @@ func TestClientSkillInvocationReadFailuresNeverSend(t *testing.T) {
 			engine := New(backend, Config{ClientSkills: provider})
 			events := drain(t, engine, TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: skill.Name}})
 			// The failed turn keeps its user block, like a backend failure.
-			if failureErr := events[len(events)-1].Err; failureErr == nil || len(backend.opts) != 0 || len(engine.Snapshot()) != 1 {
-				t.Fatalf("failure = %v, backend requests = %d, transcript = %+v", failureErr, len(backend.opts), engine.Snapshot())
+			if failureErr := events[len(events)-1].Err; failureErr == nil || len(backend.opts) != 0 || len(engine.State().Blocks) != 1 {
+				t.Fatalf("failure = %v, backend requests = %d, transcript = %+v", failureErr, len(backend.opts), engine.State().Blocks)
 			}
 		})
 	}

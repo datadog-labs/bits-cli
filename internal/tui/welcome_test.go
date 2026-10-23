@@ -318,7 +318,7 @@ func TestGraphicsReplyDrivesLogoForm(t *testing.T) {
 // The panel is a session header: a filled transcript must not hide it.
 func TestSplashPanelSurvivesTranscriptContent(t *testing.T) {
 	m := welcomeModel(120, 40)
-	m.transcript.Blocks = []agent.Block{{
+	m.state.Blocks = []agent.Block{{
 		ID:       agent.BlockID{Scope: agent.ScopeLocal, Key: "a", Kind: assistant.KindText},
 		Kind:     assistant.KindText,
 		Complete: true,

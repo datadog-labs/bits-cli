@@ -26,6 +26,9 @@ type Transcript struct {
 	// openStream tracks the currently streaming (incomplete) text/reasoning
 	openStream BlockID
 	hasOpen    bool
+	// run is the run changing the transcript, stamped on what it changes; 0
+	// outside any run.
+	run RunID
 	// inputPreviews are keyed by wire tool-call id because input deltas for
 	// multiple calls can be interleaved. Builders are transcript-owned and are
 	// never published through a Block snapshot.
@@ -116,7 +119,7 @@ func (t *Transcript) markTool(id string, mutate func(*ToolBlock)) (Block, bool) 
 	tool := *t.blocks[i].Tool
 	mutate(&tool)
 	t.blocks[i].Tool = &tool
-	t.blocks[i].Rev++
+	t.revise(i)
 	return t.blocks[i], true
 }
 
@@ -195,7 +198,7 @@ func (t *Transcript) appendMarkdown(msg assistant.Message) (Block, bool) {
 		_, _ = acc.WriteString(p.Content)
 		t.blocks[i].Markdown = &assistant.MarkdownPayload{Content: acc.String()}
 		t.blocks[i].Complete = false
-		t.blocks[i].Rev++
+		t.revise(i)
 		return t.blocks[i], true
 	}
 	acc := t.accumulatorFor(id, "")
@@ -243,7 +246,7 @@ func (t *Transcript) appendReasoning(msg assistant.Message) (Block, bool) {
 		}
 		t.blocks[i].Thinking = next
 		t.blocks[i].Complete = false
-		t.blocks[i].Rev++
+		t.revise(i)
 		return t.blocks[i], true
 	}
 	acc := t.accumulatorFor(id, "")
@@ -347,7 +350,7 @@ func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 			t.inputToolPreview(&merged, tp.ToolCallID, tp.PartialJSON)
 		}
 		t.blocks[i].Tool = &merged
-		t.blocks[i].Rev++
+		t.revise(i)
 		if hasFinalToolInput(msg) || msg.Content.Type == assistant.ContentToolResponse || msg.Content.Type == assistant.ContentClientToolResponse {
 			delete(t.inputPreviews, tp.ToolCallID)
 		}
@@ -425,7 +428,7 @@ func (t *Transcript) appendPassthrough(msg assistant.Message, kind assistant.Con
 	id := BlockIDOf(msg)
 	if i, ok := t.index[id]; ok {
 		set(&t.blocks[i])
-		t.blocks[i].Rev++
+		t.revise(i)
 		return t.blocks[i], true
 	}
 	b := Block{
@@ -452,7 +455,7 @@ func (t *Transcript) closePrior(b Block) {
 		priorID := t.openStream
 		if i, ok := t.index[priorID]; ok && !t.blocks[i].Complete {
 			t.blocks[i].Complete = true
-			t.blocks[i].Rev++
+			t.revise(i)
 		}
 		t.releaseAccumulator(priorID)
 		t.hasOpen = false
@@ -474,7 +477,7 @@ func (t *Transcript) FinalizeAll() bool {
 		id := t.openStream
 		if i, ok := t.index[id]; ok && !t.blocks[i].Complete {
 			t.blocks[i].Complete = true
-			t.blocks[i].Rev++
+			t.revise(i)
 			finalized = true
 		}
 		t.releaseAccumulator(id)
@@ -503,12 +506,27 @@ func (t *Transcript) releaseAccumulator(id BlockID) {
 	}
 }
 
+// adopt records that the current run takes over the tool call id, which it
+// did not create, before changing it.
+func (t *Transcript) adopt(id string) {
+	if i, ok := t.index[BlockID{Scope: ScopeTool, Key: id}]; ok {
+		t.revise(i)
+	}
+}
+
+// revise records a change to the block at i.
+func (t *Transcript) revise(i int) {
+	t.blocks[i].Rev++
+	t.blocks[i].Run = t.run
+}
+
 func (t *Transcript) push(b Block) {
 	// Mutators upsert by id before reaching push, so a duplicate is a programmer
 	// error, not bad input; fail loudly.
 	if _, ok := t.index[b.ID]; ok {
 		panic("agent: push of duplicate block id " + b.ID.String())
 	}
+	b.Run = t.run
 	t.index[b.ID] = len(t.blocks)
 	t.blocks = append(t.blocks, b)
 }

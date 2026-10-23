@@ -47,8 +47,8 @@ func TestBorderSweepRequiresLiveTurn(t *testing.T) {
 
 func TestBorderSweepPausesWhenEverythingWaitsForApproval(t *testing.T) {
 	m := sweepModel(chat.PhaseWaiting)
-	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolAwaitingApproval)}
-	m.syncApprovals(append([]agent.Block(nil), m.transcript.Blocks...))
+	m.state.Blocks = []agent.Block{animToolBlock(agent.ToolAwaitingApproval)}
+	m.syncApprovals(append([]agent.Block(nil), m.state.Blocks...))
 	m.syncTranscript()
 
 	if cmd := m.syncAnimations(); cmd != nil || m.animClock.armed || m.animBorderSweep.active {
@@ -61,7 +61,7 @@ func TestBorderSweepContinuesWhenApprovalAndRunningToolCoexist(t *testing.T) {
 	approval := animToolBlock(agent.ToolAwaitingApproval)
 	running := animToolBlock(agent.ToolRunning)
 	running.ID.Key = "call-2"
-	m.transcript.Blocks = []agent.Block{approval, running}
+	m.state.Blocks = []agent.Block{approval, running}
 	m.syncApprovals([]agent.Block{approval})
 	m.syncTranscript()
 
@@ -75,7 +75,7 @@ func TestBorderSweepContinuesWhenApprovalAndRunningToolCoexist(t *testing.T) {
 
 func TestWithoutMotionKeepsAnimationClockIdle(t *testing.T) {
 	m := sweepModel(chat.PhaseWaiting)
-	m.transcript.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
+	m.state.Blocks = []agent.Block{animToolBlock(agent.ToolRunning)}
 	m.syncTranscript()
 	m.applyStyles(styles.Default(true).WithoutMotion())
 
@@ -119,7 +119,7 @@ func TestSweepStopsAtApprovalMinimumSizeAndRestarts(t *testing.T) {
 	running := animToolBlock(agent.ToolRunning)
 	approval := animToolBlock(agent.ToolAwaitingApproval)
 	approval.ID.Key = "approval"
-	m.transcript.Blocks = []agent.Block{running, approval}
+	m.state.Blocks = []agent.Block{running, approval}
 	m.syncApprovals([]agent.Block{approval})
 	m.syncTranscript()
 	m.syncAnimations()

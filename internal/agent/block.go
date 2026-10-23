@@ -116,6 +116,9 @@ type Block struct {
 	CreatedAt int64
 	Complete  bool
 	Rev       int
+	// Run is the run that last changed the block: 0 if none did, as for
+	// restored history. It tells a run's changes apart wherever they sit.
+	Run RunID
 
 	Markdown  *assistant.MarkdownPayload  // KindText: assistant answer or user prompt
 	Thinking  *assistant.ThinkingPayload  // KindReasoning: model thinking

@@ -109,8 +109,12 @@ func consume(t *testing.T, delivery *Delivery, events ...agent.Event) {
 	}
 }
 
-func transcript(origin agent.TranscriptOrigin, round int, blocks ...agent.Block) agent.Event {
-	return agent.Event{Kind: agent.EventTranscript, Origin: origin, Round: round, Transcript: agent.TranscriptSnapshot{Blocks: blocks}}
+// testRun is the run every test event belongs to, and that changed every test
+// block unless the test says otherwise.
+const testRun agent.RunID = 1
+
+func transcript(round int, blocks ...agent.Block) agent.Event {
+	return agent.Event{Kind: agent.EventState, Run: testRun, Round: round, State: agent.State{Blocks: blocks}}
 }
 
 func textBlock(id string, role assistant.Role, text string) agent.Block {
@@ -119,13 +123,14 @@ func textBlock(id string, role assistant.Role, text string) agent.Block {
 		Role:     role,
 		Kind:     assistant.KindText,
 		Markdown: assistant.TextContent(text).Markdown,
+		Run:      testRun,
 	}
 }
 
 func toolBlock(id, name, input string, status agent.ToolStatus, clientSide bool) agent.Block {
 	tool := agent.ToolBlockOf(assistant.ToolCallContent(id, name, input).Tool)
 	tool.Status, tool.IsClientSide, tool.Output = status, clientSide, name+" output"
-	return agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: id}, Kind: assistant.KindToolCall, Tool: &tool}
+	return agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: id}, Kind: assistant.KindToolCall, Tool: &tool, Run: testRun}
 }
 
 // A real two-round turn run through headless.Run maps to the documented record
@@ -201,7 +206,7 @@ func TestDeliveryToolRecords(t *testing.T) {
 	const malformed = "{\"query\":\nnot-json"
 	var out bytes.Buffer
 	delivery := startedDelivery(t, &out)
-	consume(t, delivery, transcript(agent.TranscriptOriginRemote, 1,
+	consume(t, delivery, transcript(1,
 		toolBlock("read-1", "read", "{}", agent.ToolSuccess, true),
 		toolBlock("write-1", "write", "{}", agent.ToolError, true),
 		toolBlock("gate-1", assistant.ApprovalRequestTool, "{}", agent.ToolDenied, true),
@@ -248,11 +253,12 @@ func TestDeliveryToolRecords(t *testing.T) {
 // when the engine's snapshots carry history restored before it.
 func TestDeliveryResponseOnlyIncludesThisRun(t *testing.T) {
 	prior := textBlock("prior", assistant.RoleAssistant, "prior answer")
+	prior.Run = 0
 	user := textBlock("user", assistant.RoleUser, "new question")
 	current := textBlock("current", assistant.RoleAssistant, "current answer")
 	for name, events := range map[string][]agent.Event{
-		"unobserved blocks": {transcript(agent.TranscriptOriginRemote, 1, current)},
-		"restored history":  {transcript(agent.TranscriptOriginLocal, 0, prior, user), transcript(agent.TranscriptOriginRemote, 1, prior, user, current)},
+		"unobserved blocks": {transcript(1, current)},
+		"restored history":  {transcript(0, prior, user), transcript(1, prior, user, current)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out bytes.Buffer
@@ -272,7 +278,7 @@ func TestDeliveryResponseOnlyIncludesThisRun(t *testing.T) {
 // Rounds follow the backend sends the engine reports: rounds that emitted no
 // content still count, and a turn rejected before any send reports none.
 func TestDeliveryRounds(t *testing.T) {
-	userEcho := transcript(agent.TranscriptOriginLocal, 0, textBlock("user", assistant.RoleUser, "investigate"))
+	userEcho := transcript(0, textBlock("user", assistant.RoleUser, "investigate"))
 	for _, tt := range []struct {
 		name   string
 		events []agent.Event
@@ -359,7 +365,7 @@ func TestDeliveryWriterFailureLatchesAndFinishEmitsNoTerminal(t *testing.T) {
 	if err := delivery.Start(headless.Start{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := delivery.Consume(transcript(agent.TranscriptOriginRemote, 1, toolBlock("read-1", "read", "{}", agent.ToolSuccess, true))); !errors.Is(err, writerErr) {
+	if err := delivery.Consume(transcript(1, toolBlock("read-1", "read", "{}", agent.ToolSuccess, true))); !errors.Is(err, writerErr) {
 		t.Fatalf("Consume error = %v, want the writer failure", err)
 	}
 	// The writer recovers; Finish must still fail without emitting a terminal

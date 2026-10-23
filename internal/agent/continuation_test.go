@@ -174,10 +174,10 @@ func TestCancelledClientToolPublishesTerminalSnapshot(t *testing.T) {
 			cancel()
 			var last *ToolBlock
 			for event := range events {
-				if event.Kind != EventTranscript {
+				if event.Kind != EventState {
 					continue
 				}
-				for _, b := range event.Transcript.Blocks {
+				for _, b := range event.State.Blocks {
 					if b.ToolCallID() == "call-input" {
 						last = b.Tool
 					}

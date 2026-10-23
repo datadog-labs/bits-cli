@@ -104,7 +104,7 @@ func TestChatFooterRendersBelowEditor(t *testing.T) {
 		Config{Workspace: ws},
 	)
 	_ = m.editor.Focus()
-	m.usage = &assistant.Usage{TokensUsed: 330_000}
+	m.state.Usage = &assistant.Usage{TokensUsed: 330_000}
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 
 	view := m.chatView()

@@ -187,10 +187,10 @@ func (m *Model) waitingAsks() []ask {
 // not in the transcript yet come last; the call ID breaks ties.
 func (m *Model) compareAsks(a, b ask) int {
 	position := func(x ask) int {
-		if i := slices.IndexFunc(m.transcript.Blocks, func(block agent.Block) bool { return block.ToolCallID() == x.callID() }); i >= 0 {
+		if i := slices.IndexFunc(m.state.Blocks, func(block agent.Block) bool { return block.ToolCallID() == x.callID() }); i >= 0 {
 			return i
 		}
-		return len(m.transcript.Blocks)
+		return len(m.state.Blocks)
 	}
 	return cmp.Or(cmp.Compare(position(a), position(b)), cmp.Compare(a.callID(), b.callID()))
 }

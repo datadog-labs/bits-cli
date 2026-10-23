@@ -58,7 +58,7 @@ type CurrentUserBackend interface {
 type EventKind int
 
 const (
-	EventTranscript   EventKind = iota // full transcript snapshot; read Transcript
+	EventState        EventKind = iota // the conversation's state; read State
 	EventUsage                         // token usage update; read Usage
 	EventConversation                  // server-assigned/confirmed conversation id
 	EventDone                          // the operation completed (a turn: with no pending tool calls)
@@ -71,25 +71,24 @@ const (
 // apart. Zero means no run: an operation that failed to claim the engine.
 type RunID uint64
 
-// TranscriptOrigin identifies what caused an EventTranscript snapshot.
-type TranscriptOrigin int
-
-const (
-	TranscriptOriginLocal   TranscriptOrigin = iota // local user echo, before a backend send
-	TranscriptOriginRemote                          // a backend turn or its client-tool work
-	TranscriptOriginRestore                         // restored conversation history
-)
-
-// TranscriptSnapshot is a read-only view of the complete renderable transcript.
-// Its query methods centralize common block traversal and may gain indexes or
-// cached values without changing event consumers.
-type TranscriptSnapshot struct {
-	Blocks []Block
+// State is a read-only view of the conversation: its id, its renderable
+// transcript and the latest token usage. Its query methods centralize common
+// block traversal and may gain indexes or cached values without changing
+// event consumers.
+type State struct {
+	// Version increases with every state the engine publishes. A higher
+	// version is newer.
+	Version uint64
+	// ConversationID is the conversation the engine is bound to: set from
+	// Config, then by the backend as turns run. Empty means a new one.
+	ConversationID string
+	Blocks         []Block
+	Usage          *assistant.Usage // nil until a turn reports it
 }
 
 // HasStreamingContent reports whether an assistant text or reasoning block is
 // still open.
-func (s TranscriptSnapshot) HasStreamingContent() bool {
+func (s State) HasStreamingContent() bool {
 	for _, block := range s.Blocks {
 		if !block.Complete && (block.Kind == assistant.KindText || block.Kind == assistant.KindReasoning) {
 			return true
@@ -100,7 +99,7 @@ func (s TranscriptSnapshot) HasStreamingContent() bool {
 
 // PendingApprovals returns tool blocks awaiting an approval decision, in
 // transcript order.
-func (s TranscriptSnapshot) PendingApprovals() []Block {
+func (s State) PendingApprovals() []Block {
 	var pending []Block
 	for _, block := range s.Blocks {
 		if block.Tool != nil && block.Tool.Status == ToolAwaitingApproval {
@@ -113,7 +112,7 @@ func (s TranscriptSnapshot) PendingApprovals() []Block {
 // UserPrompts returns the user messages in transcript order, repeats kept.
 // Blank text (an attachment-only submit is stored as " ") is returned empty,
 // and a message with neither text nor context is skipped.
-func (s TranscriptSnapshot) UserPrompts() []UserPrompt {
+func (s State) UserPrompts() []UserPrompt {
 	var prompts []UserPrompt
 	for _, block := range s.Blocks {
 		if block.Role != assistant.RoleUser || block.Kind != assistant.KindText || block.Markdown == nil {
@@ -142,23 +141,22 @@ type UserPrompt struct {
 type Event struct {
 	Kind           EventKind
 	Run            RunID
-	Transcript     TranscriptSnapshot // for EventTranscript; read-only full transcript snapshot
-	Origin         TranscriptOrigin   // for EventTranscript
-	Usage          *assistant.Usage   // for EventUsage
-	ConvID         string             // for EventConversation
-	Err            error              // for EventError and EventCanceled
-	BackendFailure bool               // EventError originated at the Assistant backend boundary
-	// Round is the 1-based backend send the event belongs to (0 for
-	// out-of-turn events). Drained rounds after a denial count but emit
-	// no content events.
+	State          State            // for EventState; read-only
+	Usage          *assistant.Usage // for EventUsage
+	ConvID         string           // for EventConversation
+	Err            error            // for EventError and EventCanceled
+	BackendFailure bool             // EventError originated at the Assistant backend boundary
+	// Round is the 1-based backend send the event belongs to, or 0 outside
+	// any send: a turn's local echo of the user's text, a restore. Drained
+	// rounds after a denial count but emit no content events.
 	Round int
 }
 
 // outbox is a subscription: it hands events to its consumer without ever
-// blocking the engine on it. A transcript snapshot still queued is replaced
-// by a newer one of the same run, round and origin: snapshots are complete,
-// so consumers lose no state (ADEEP diffs blocks by revision), and the queue
-// stays bounded by the other, rarer events.
+// blocking the engine on it. A state still queued is replaced by a newer one
+// of the same run and round: states are complete, so consumers lose nothing
+// (ADEEP diffs blocks by revision), and the queue stays bounded by the other,
+// rarer events.
 type outbox struct {
 	mu     sync.Mutex
 	ready  sync.Cond // signals a push or the close
@@ -171,8 +169,8 @@ type outbox struct {
 
 // supersedes reports whether ev may replace prev, queued just before it.
 func (ev Event) supersedes(prev Event) bool {
-	return ev.Kind == EventTranscript && prev.Kind == EventTranscript &&
-		ev.Run == prev.Run && ev.Round == prev.Round && ev.Origin == prev.Origin
+	return ev.Kind == EventState && prev.Kind == EventState &&
+		ev.Run == prev.Run && ev.Round == prev.Round
 }
 
 // Terminal reports whether ev is the last event of its run.
@@ -270,10 +268,12 @@ type Engine struct {
 	// delivery is the context the current conversation is known to carry.
 	delivery contextDelivery
 	gate     permissionGate
-	busy     bool  // an operation holds the engine
-	turn     *turn // the turn whose exchange is running, if any
-	lastRun  RunID // the most recently claimed run
+	busy     bool   // an operation holds the engine
+	turn     *turn  // the turn whose exchange is running, if any
+	lastRun  RunID  // the most recently claimed run
+	version  uint64 // the last published state version
 	subs     map[*outbox]struct{}
+	usage    *assistant.Usage // the conversation's latest, if a turn reported it
 
 	requests chan func() // run on the actor
 	// life ends when Close starts, cancelling every operation's worker.
@@ -448,6 +448,7 @@ func (e *Engine) claim() (RunID, error) {
 	e.busy = true
 	e.workers.Add(1)
 	e.lastRun++
+	e.transcript.run = e.lastRun
 	return e.lastRun, nil
 }
 
@@ -467,18 +468,23 @@ func (e *Engine) work(ctx context.Context, fn func(context.Context)) {
 // release ends the operation, after its terminal event.
 func (e *Engine) release() {
 	e.busy = false
+	e.transcript.run = 0
 }
 
 // emit publishes run's event to every subscription.
 func (e *Engine) emit(run RunID, ev Event) {
 	ev.Run = run
+	if ev.Kind == EventState {
+		e.version++
+		ev.State.Version = e.version
+	}
 	for o := range e.subs {
 		o.push(ev)
 	}
 }
 
 // Subscribe streams every event the engine emits from now on, of every run.
-// Queued transcript snapshots may be superseded by newer ones (see outbox).
+// Queued states may be superseded by newer ones (see outbox).
 // Operations only return their run, so a consumer subscribes before starting
 // one, then follows the run (see Follow).
 //
@@ -540,7 +546,7 @@ type TurnInput struct {
 	// message, so tool continuations must not repeat it.
 	// Image file URLs are loaded and replaced with data URLs inside the turn.
 	// Once submitted, callers must treat it and all nested data as immutable:
-	// the engine retains its entities in transcript snapshots without copying.
+	// the engine retains its entities in published states without copying.
 	Context *assistant.AssistantContext
 	// OnDeny is the turn's policy after a denial is answered on the wire.
 	OnDeny DenyPolicy
@@ -627,7 +633,7 @@ func (e *Engine) command(fn func(*turn) error) error {
 // run prepares a claimed turn off the actor, where it may block on files and
 // the environment, then drives it on the actor until it ends.
 func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []ToolCall) {
-	t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, run: run, round: 1}
+	t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, run: run}
 	sentContext, imageNotices, err := prepareImageContext(ctx, in.Context)
 	if err != nil {
 		// Keep file references in the failed prompt so history can retry them.
@@ -636,7 +642,11 @@ func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []Too
 	var opts assistant.SendOptions
 	var delivery contextDelivery
 	e.do(func() {
-		t.from = e.turnStart(resumed)
+		// The turn answers restored calls: they are its own, even if it is
+		// cancelled before it changes them.
+		for _, call := range resumed {
+			e.transcript.adopt(call.ID)
+		}
 		// A restored tool call is already in the transcript; only a new turn
 		// adds a user block before contacting the backend. The block lists the
 		// context exactly as it is sent.
@@ -646,7 +656,7 @@ func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []Too
 				sent = sentContext.Entities
 			}
 			e.transcript.AppendUser(in.Message, sent)
-			e.emit(run, Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal})
+			e.emit(run, Event{Kind: EventState, State: e.state()})
 		}
 		opts, delivery = e.sendOptions(in.Tools), e.delivery
 	})
@@ -675,20 +685,6 @@ func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []Too
 	})
 }
 
-// turnStart is where a turn's blocks start: the transcript's end, or the
-// first resumed call.
-func (e *Engine) turnStart(resumed []ToolCall) int {
-	start := len(e.transcript.Blocks())
-	for i, block := range e.transcript.Blocks() {
-		for _, call := range resumed {
-			if block.ToolCallID() == call.ID {
-				start = min(start, i)
-			}
-		}
-	}
-	return start
-}
-
 // finish publishes how the turn ended, its terminal event last, and releases
 // the engine. A turn that failed before its exchange started reports the error
 // alone. A cancelled turn settles every open block, publishes the final
@@ -703,10 +699,11 @@ func (t *turn) finish(err error) {
 	case t.ex == nil:
 		end = Event{Kind: EventError, Err: err}
 	default:
-		settled := e.settleUnfinishedTools(t.tools, t.from, t.ex.final())
-		if e.transcript.FinalizeAll() || settled {
-			t.publish()
-		}
+		// The final state carries what the turn changed without publishing,
+		// such as the conversation id adopted while a stop drained the stream.
+		e.settleUnfinishedTools(t.tools, t.run, t.ex.final())
+		e.transcript.FinalizeAll()
+		t.publish()
 		end = Event{Kind: EventDone, Round: t.round}
 		if err != nil {
 			var backend backendError
@@ -719,8 +716,8 @@ func (t *turn) finish(err error) {
 	}
 	if cause != nil {
 		e.transcript.FinalizeAll()
-		e.settleUnfinishedTools(t.tools, t.from, true)
-		e.emit(t.run, Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()})
+		e.settleUnfinishedTools(t.tools, t.run, true)
+		t.publish()
 	}
 	e.emit(t.run, end)
 	e.release()
@@ -743,14 +740,14 @@ func (e *Engine) newExchange(req userRequest, resumed []ToolCall) exchange {
 	return newRoundsExchange(e.backend, req.message, req.opts, nil)
 }
 
-// settleUnfinishedTools cancels open client tool blocks starting at the given
-// transcript index, including provisional calls that never became ready to
-// execute. It also settles server tool blocks when they can no longer complete.
-// Normalizing results clears speculative UI state.
-func (e *Engine) settleUnfinishedTools(tools *ToolSet, from int, server bool) bool {
+// settleUnfinishedTools cancels run's open client tool blocks, including
+// provisional calls that never became ready to execute. It also settles server
+// tool blocks when they can no longer complete. Normalizing results clears
+// speculative UI state.
+func (e *Engine) settleUnfinishedTools(tools *ToolSet, run RunID, server bool) bool {
 	changed := false
-	for _, block := range e.transcript.Blocks()[from:] {
-		if block.Tool == nil || block.Tool.Status.IsTerminal() || !block.Tool.IsClientSide && !server {
+	for _, block := range e.transcript.Blocks() {
+		if block.Run != run || block.Tool == nil || block.Tool.Status.IsTerminal() || !block.Tool.IsClientSide && !server {
 			continue
 		}
 		call := ToolCall{ID: block.ToolCallID(), Name: block.Tool.Name, Input: block.Tool.Input}
@@ -761,20 +758,15 @@ func (e *Engine) settleUnfinishedTools(tools *ToolSet, from int, server bool) bo
 	return changed
 }
 
-// snapshot returns a copy of the current blocks, safe to share with every
-// subscription and retain: the engine keeps mutating its own transcript on
-// later folds.
-func (e *Engine) snapshot() TranscriptSnapshot {
-	blocks := e.transcript.Blocks()
-	snapshot := TranscriptSnapshot{Blocks: make([]Block, len(blocks))}
-	copy(snapshot.Blocks, blocks)
-	return snapshot
+// publish emits the current state outside any run, for a change no run made.
+func (e *Engine) publish() {
+	e.emit(0, Event{Kind: EventState, State: e.state()})
 }
 
-// ConversationID reports the conversation the engine is bound to. It is set
-// from SendOptions and updated as turns run; empty means a new conversation.
-func (e *Engine) ConversationID() string {
-	return get(e, func() string { return e.opts.ConversationID })
+// state returns the current state, safe to share with every subscription and
+// retain: the engine keeps mutating its own transcript on later folds.
+func (e *Engine) state() State {
+	return State{Version: e.version, ConversationID: e.opts.ConversationID, Blocks: slices.Clone(e.transcript.Blocks()), Usage: e.usage}
 }
 
 // Status reports the immutable effective request configuration and non-secret
@@ -818,8 +810,10 @@ func (e *Engine) NewConversation() error {
 		e.opts.MessageHistory = nil
 		e.resetContext()
 		e.transcript = NewTranscript()
+		e.usage = nil
 		e.continuation = nil
 		clear(e.gate.grants)
+		e.publish()
 		return nil
 	})
 }
@@ -888,9 +882,7 @@ func (e *Engine) Restore(ctx context.Context) (RunID, error) {
 			default:
 				if id != "" {
 					e.installConversation(conversation)
-					if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
-						e.emit(run, Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
-					}
+					e.emit(run, Event{Kind: EventState, State: e.state()})
 				}
 				e.emit(run, Event{Kind: EventDone})
 			}
@@ -939,7 +931,6 @@ const maxConcurrentTools = 16
 type turn struct {
 	e      *Engine
 	parent context.Context // the caller's; its cancellation ends the turn as canceled
-	from   int             // the turn's first transcript block
 	ctx    context.Context // scopes the exchange and every handler
 	cancel context.CancelFunc
 	// handlers parents every handler context; a stop cancels it.
@@ -1026,15 +1017,12 @@ func (t *turn) drive() error {
 // emit publishes an event of the current backend round.
 func (t *turn) emit(ev Event) {
 	ev.Round = t.round
-	if ev.Kind == EventTranscript {
-		ev.Origin = TranscriptOriginRemote
-	}
 	t.e.emit(t.run, ev)
 }
 
-// publish emits the current transcript.
+// publish emits the current state.
 func (t *turn) publish() {
-	t.emit(Event{Kind: EventTranscript, Transcript: t.e.snapshot()})
+	t.emit(Event{Kind: EventState, State: t.e.state()})
 }
 
 // startExchange runs the exchange until it ends or the turn is cancelled.
@@ -1094,9 +1082,12 @@ func (t *turn) apply(event exchangeEvent) error {
 		t.denied = false
 	}
 	if event.conversation != "" {
-		t.adopt(event.conversation)
+		changed := t.adopt(event.conversation)
 		if !t.stopRequested {
 			t.emit(Event{Kind: EventConversation, ConvID: event.conversation})
+			if changed {
+				t.publish()
+			}
 		}
 	}
 	if event.message != nil {
@@ -1132,11 +1123,14 @@ func (t *turn) add(call ToolCall) (*clientCall, error) {
 	return c, nil
 }
 
-// adopt records a conversation ID the backend assigned or confirmed.
-func (t *turn) adopt(conversation string) {
-	if conversation != "" {
-		t.e.opts.ConversationID = conversation
+// adopt records a conversation ID the backend assigned or confirmed, and
+// reports whether it changed.
+func (t *turn) adopt(conversation string) bool {
+	if conversation == "" || conversation == t.e.opts.ConversationID {
+		return false
 	}
+	t.e.opts.ConversationID = conversation
+	return true
 }
 
 // acknowledge records the user request as delivered after a backend response
@@ -1355,9 +1349,15 @@ func (t *turn) fold(msg assistant.Message) {
 		// the reducer's state and keeps filesystem-aware reducers ahead of
 		// client-tool execution.
 		e.reduceToolInput(t.ctx, t.tools, msg, b)
+	}
+	usage := msg.Results != nil && msg.Results.Usage != nil
+	if usage {
+		e.usage = msg.Results.Usage
+	}
+	if ok || usage {
 		t.publish()
 	}
-	if msg.Results != nil && msg.Results.Usage != nil {
+	if usage {
 		t.emit(Event{Kind: EventUsage, Usage: msg.Results.Usage})
 	}
 }

@@ -173,26 +173,19 @@ func (d *Delivery) Consume(ev agent.Event) error {
 	if d.writeErr != nil {
 		return d.writeErr
 	}
-	// The engine's local echo of the user's text precedes any backend send;
-	// it must not open a delivery round on its own.
-	if ev.Kind != agent.EventTranscript || ev.Origin != agent.TranscriptOriginLocal {
-		if err := d.setRound(ev.Round); err != nil {
-			return err
-		}
+	// Events outside a backend send, such as the local echo of the user's
+	// text, have round 0 and open no delivery round.
+	if err := d.setRound(ev.Round); err != nil {
+		return err
 	}
 	switch ev.Kind {
-	case agent.EventTranscript:
-		// A local echo establishes the run boundary. Its full snapshot can
-		// include history restored before this turn, which must not produce
-		// delivery records or become part of this run's response. Remember its
-		// revisions so the first remote snapshot emits only new changes.
-		if ev.Origin == agent.TranscriptOriginLocal {
-			for _, block := range ev.Transcript.Blocks {
-				d.lastRev[block.ID] = block.Rev
+	case agent.EventState:
+		// A snapshot holds the whole conversation: only the run's own changes
+		// are delivered, not history restored before it.
+		for _, block := range ev.State.Blocks {
+			if block.Run != ev.Run {
+				continue
 			}
-			return nil
-		}
-		for _, block := range ev.Transcript.Blocks {
 			if rev, seen := d.lastRev[block.ID]; seen && rev == block.Rev {
 				continue
 			}

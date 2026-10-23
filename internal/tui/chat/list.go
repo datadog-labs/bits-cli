@@ -867,7 +867,18 @@ func buildPresentationWithNotices(header string, blocks []agent.Block, notices [
 	// adjacent tools cannot later absorb a message posted between them.
 	previous := 0
 	for i := range notices {
-		at := min(max(notices[i].After, previous), len(blocks))
+		// Notices come in order, each anchored at or after the previous one's
+		// block, so the search resumes there: one pass over the blocks.
+		at := previous
+		if after := notices[i].After; after != (agent.BlockID{}) {
+			at = len(blocks) // its block is gone
+			for j := max(previous-1, 0); j < len(blocks); j++ {
+				if blocks[j].ID == after {
+					at = max(j+1, previous)
+					break
+				}
+			}
+		}
 		items = appendBlockPresentations(items, blocks, previous, at)
 		entry := &notices[i]
 		items = append(items, presentationItem{

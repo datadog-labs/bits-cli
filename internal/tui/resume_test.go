@@ -288,7 +288,7 @@ func TestArrowKeysRecallPromptsOutsideTheOffer(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := resumeKeyModel(t)
-			m.transcript.Blocks = []agent.Block{user("first"), user("second")}
+			m.state.Blocks = []agent.Block{user("first"), user("second")}
 			m.syncTranscript()
 			if test.setup != nil {
 				test.setup(m)
@@ -331,7 +331,7 @@ func TestPageKeysDoNotMoveTheOffer(t *testing.T) {
 // The spec requires /new to bring the offer back.
 func TestNewConversationBringsTheOfferBack(t *testing.T) {
 	m := resumeKeyModel(t)
-	m.transcript.Blocks = []agent.Block{{
+	m.state.Blocks = []agent.Block{{
 		ID:       agent.BlockID{Scope: agent.ScopeLocal, Key: "a", Kind: assistant.KindText},
 		Kind:     assistant.KindText,
 		Complete: true,

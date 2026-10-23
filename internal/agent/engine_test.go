@@ -261,6 +261,20 @@ func collect(ch <-chan Event) []Event {
 	return evs
 }
 
+// superseded keeps the last of each run of events that supersede each other,
+// as a slow consumer's subscription may deliver them.
+func superseded(evs []Event) []Event {
+	var kept []Event
+	for _, ev := range evs {
+		if n := len(kept); n > 0 && ev.supersedes(kept[n-1]) {
+			kept[n-1] = ev
+			continue
+		}
+		kept = append(kept, ev)
+	}
+	return kept
+}
+
 func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -285,10 +299,10 @@ func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T
 			events := drain(t, New(backend, Config{PermissionsMode: ModeSkipPermissions}), TurnInput{Message: "read", Tools: tools})
 			var got *ToolBlock
 			for _, event := range events {
-				if event.Kind != EventTranscript {
+				if event.Kind != EventState {
 					continue
 				}
-				for _, block := range event.Transcript.Blocks {
+				for _, block := range event.State.Blocks {
 					if block.Tool != nil && block.ToolCallID() == "read-1" {
 						value := *block.Tool
 						got = &value
@@ -303,10 +317,10 @@ func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T
 }
 
 func stateBlock(event Event, id string) (Block, bool) {
-	if event.Kind != EventTranscript {
+	if event.Kind != EventState {
 		return Block{}, false
 	}
-	for _, block := range event.Transcript.Blocks {
+	for _, block := range event.State.Blocks {
 		if block.ToolCallID() == id {
 			return block, true
 		}
@@ -315,10 +329,10 @@ func stateBlock(event Event, id string) (Block, bool) {
 }
 
 func stateHasAssistant(event Event) bool {
-	if event.Kind != EventTranscript {
+	if event.Kind != EventState {
 		return false
 	}
-	for _, block := range event.Transcript.Blocks {
+	for _, block := range event.State.Blocks {
 		if block.Role == assistant.RoleAssistant {
 			return true
 		}
@@ -334,7 +348,7 @@ func TestSnapshotDerivesTranscriptViewState(t *testing.T) {
 	}
 	e.transcript.AppendMessage(assistant.AssistantMessage("text", assistant.TextContent("partial")))
 
-	snapshot := e.snapshot()
+	snapshot := e.state()
 	if !snapshot.HasStreamingContent() {
 		t.Fatal("HasStreamingContent() = false, want true for open assistant text")
 	}
@@ -374,7 +388,7 @@ func TestSnapshotUserPrompts(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := (TranscriptSnapshot{Blocks: test.blocks}).UserPrompts(); !reflect.DeepEqual(got, test.want) {
+			if got := (State{Blocks: test.blocks}).UserPrompts(); !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("UserPrompts() = %q, want %q", got, test.want)
 			}
 		})
@@ -539,14 +553,14 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	e := New(b, Config{})
 
 	evs := coalesced(drain(t, e, TurnInput{Message: "hi"}))
-	want := []EventKind{EventTranscript, EventTranscript, EventUsage, EventConversation, EventTranscript, EventDone}
+	want := []EventKind{EventState, EventState, EventUsage, EventConversation, EventState, EventDone}
 	if got := kinds(evs); !reflect.DeepEqual(got, want) {
 		t.Fatalf("event kinds = %v, want %v", got, want)
 	}
-	if evs[0].Origin != TranscriptOriginLocal || evs[1].Origin != TranscriptOriginRemote {
-		t.Fatalf("transcript origins = %v, %v; want local, remote", evs[0].Origin, evs[1].Origin)
+	if evs[0].Round != 0 || evs[1].Round != 1 {
+		t.Fatalf("transcript rounds = %d, %d; want the local echo outside any send, then round 1", evs[0].Round, evs[1].Round)
 	}
-	blocks := evs[1].Transcript.Blocks
+	blocks := evs[1].State.Blocks
 	if len(blocks) == 0 || blocks[len(blocks)-1].Markdown == nil || blocks[len(blocks)-1].Markdown.Content != "Hello world" {
 		t.Fatalf("final text blocks = %+v", blocks)
 	}
@@ -556,9 +570,28 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	if evs[3].ConvID != "conv-1" {
 		t.Fatalf("conv id = %q, want conv-1", evs[3].ConvID)
 	}
-	final := evs[4].Transcript.Blocks
-	if len(final) == 0 || !final[len(final)-1].Complete {
-		t.Fatalf("final transcript snapshot = %+v, want completed answer", final)
+	final := evs[4].State
+	if len(final.Blocks) == 0 || !final.Blocks[len(final.Blocks)-1].Complete {
+		t.Fatalf("final transcript = %+v, want completed answer", final.Blocks)
+	}
+	if final.ConversationID != "conv-1" || final.Usage == nil || final.Usage.TokensUsed != 5 {
+		t.Fatalf("final state = conversation %q, usage %+v; want conv-1 and the reported usage", final.ConversationID, final.Usage)
+	}
+}
+
+func TestBlocksRecordTheRunThatLastChangedThem(t *testing.T) {
+	backend := &scriptBackend{rounds: [][]assistant.Message{{textMsg("a", "first")}, {textMsg("b", "second")}}}
+	e := New(backend, Config{})
+	defer e.Close()
+	first := collect(turnEvents(e, context.Background(), TurnInput{Message: "one"}))[0].Run
+	second := collect(turnEvents(e, context.Background(), TurnInput{Message: "two"}))[0].Run
+
+	var got []RunID
+	for _, b := range e.State().Blocks {
+		got = append(got, b.Run)
+	}
+	if want := []RunID{first, first, second, second}; first == second || !slices.Equal(got, want) {
+		t.Errorf("block runs = %v, want %v", got, want)
 	}
 }
 
@@ -570,22 +603,22 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 		rounds: [][]assistant.Message{{textMsg("m1", "partial")}},
 	}, Config{})
 
-	events := drain(t, e, TurnInput{Message: "question"})
-	wantKinds := []EventKind{EventTranscript, EventTranscript, EventConversation, EventTranscript, EventError}
+	events := coalesced(drain(t, e, TurnInput{Message: "question"}))
+	wantKinds := []EventKind{EventState, EventState, EventConversation, EventState, EventError}
 	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
 	}
 	if events[2].ConvID != "created-before-error" || !errors.Is(events[4].Err, backendErr) || !events[4].BackendFailure {
 		t.Fatalf("terminal events = %+v", events[2:])
 	}
-	final := events[3].Transcript.Blocks
+	final := events[3].State.Blocks
 	if len(final) == 0 || !final[len(final)-1].Complete {
 		t.Fatalf("final transcript snapshot = %+v, want completed answer", final)
 	}
-	if got := e.ConversationID(); got != "created-before-error" {
+	if got := e.State().ConversationID; got != "created-before-error" {
 		t.Fatalf("conversation ID = %q", got)
 	}
-	blocks := e.Snapshot()
+	blocks := e.State().Blocks
 	if len(blocks) != 2 || !blocks[1].Complete {
 		t.Fatalf("final blocks = %+v", blocks)
 	}
@@ -609,7 +642,7 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 	if len(backend.opts) != callsBeforeReset {
 		t.Fatal("NewConversation made a backend request")
 	}
-	if got := e.ConversationID(); got != "" {
+	if got := e.State().ConversationID; got != "" {
 		t.Fatalf("conversation id after reset = %q, want empty", got)
 	}
 	if got := e.PreviousConversationID(); got != "old-conversation" {
@@ -620,7 +653,7 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 	}
 
 	_ = drain(t, e, TurnInput{Message: "new prompt"})
-	if got := e.ConversationID(); got != "new-conversation-1" {
+	if got := e.State().ConversationID; got != "new-conversation-1" {
 		t.Fatalf("new conversation id = %q", got)
 	}
 	if got := backend.opts[len(backend.opts)-1]; got.ConversationID != "" ||
@@ -636,17 +669,32 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 	}
 }
 
+// A cancelled turn's last state carries the conversation the backend assigned,
+// and a new conversation publishes its empty state outside any run.
 func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
 	backend := &scriptBackend{convID: "created-before-cancel", started: make(chan struct{}), hold: make(chan struct{})}
 	e := New(backend, Config{})
+	events, unsubscribe := e.Subscribe()
+	defer unsubscribe()
 	ctx, cancel := context.WithCancel(context.Background())
-	turn := turnEvents(e, ctx, TurnInput{Message: "cancel me"})
+	run, err := e.StartTurn(ctx, TurnInput{Message: "cancel me"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	<-backend.started
 	cancel()
-	_ = collect(turn)
+	var last State
+	for ev := range Follow(events, run) {
+		if ev.Kind == EventState {
+			if ev.State.Version <= last.Version {
+				t.Fatalf("published version %d after %d", ev.State.Version, last.Version)
+			}
+			last = ev.State
+		}
+	}
 
-	if got := e.ConversationID(); got != "created-before-cancel" {
-		t.Fatalf("conversation id after cancellation = %q", got)
+	if last.ConversationID != "created-before-cancel" {
+		t.Fatalf("conversation id after cancellation = %q", last.ConversationID)
 	}
 	if err := e.NewConversation(); err != nil {
 		t.Fatal(err)
@@ -654,8 +702,10 @@ func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
 	if got := e.PreviousConversationID(); got != "created-before-cancel" {
 		t.Fatalf("previous conversation id after reset = %q", got)
 	}
-	if e.ConversationID() != "" {
-		t.Fatalf("current conversation id after reset = %q", e.ConversationID())
+	if ev := <-events; ev.Kind != EventState || ev.Run != 0 || ev.State.ConversationID != "" || len(ev.State.Blocks) != 0 {
+		t.Fatalf("reset published %+v, want an empty conversation outside any run", ev)
+	} else if ev.State.Version <= last.Version || e.State().Version != ev.State.Version {
+		t.Fatalf("reset version = %d, previous = %d, State() = %d", ev.State.Version, last.Version, e.State().Version)
 	}
 }
 
@@ -702,13 +752,35 @@ func TestTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 		}
 	}
 	status := map[string]ToolStatus{}
-	for _, block := range evs[len(evs)-2].Transcript.Blocks {
+	for _, block := range evs[len(evs)-2].State.Blocks {
 		if block.Tool != nil {
 			status[block.ToolCallID()] = block.Tool.Status
 		}
 	}
 	if status["prior"] == ToolCancelled || status["preview"] != ToolCancelled || status["server"] != ToolCancelled {
 		t.Fatalf("tool statuses = %v, want only this turn's tools cancelled", status)
+	}
+}
+
+// A turn cancelled while preparing its request never reaches the backend: its
+// final snapshot is outside any send, so consumers see no backend round.
+func TestTurnCancelledBeforeSendPublishesOutsideAnyRound(t *testing.T) {
+	backend := &scriptBackend{}
+	engine := New(backend, Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	evs := collect(turnEvents(engine, ctx, TurnInput{Message: "never sent"}))
+
+	if end := evs[len(evs)-1]; end.Kind != EventCanceled {
+		t.Fatalf("last event = %+v, want EventCanceled", end)
+	}
+	for _, ev := range evs {
+		if ev.Round != 0 {
+			t.Fatalf("event %+v, want round 0 before any backend send", ev)
+		}
+	}
+	if len(backend.opts) != 0 {
+		t.Fatalf("backend received %d sends, want none", len(backend.opts))
 	}
 }
 
@@ -744,7 +816,7 @@ func TestNewConversationRejectsActiveTurnWithoutMutation(t *testing.T) {
 	if err := e.NewConversation(); !errors.Is(err, ErrOperationActive) {
 		t.Fatalf("NewConversation error = %v, want ErrOperationActive", err)
 	}
-	if got := e.ConversationID(); got != "old" {
+	if got := e.State().ConversationID; got != "old" {
 		t.Fatalf("active reset changed conversation id to %q", got)
 	}
 	close(gate)
@@ -765,13 +837,10 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
 	evs := collect(restoreEvents(e, context.Background()))
-	if !slices.Equal(kinds(evs), []EventKind{EventTranscript, EventDone}) {
-		t.Fatalf("events = %v, want one EventTranscript, then EventDone", kinds(evs))
+	if !slices.Equal(kinds(evs), []EventKind{EventState, EventDone}) {
+		t.Fatalf("events = %v, want one EventState, then EventDone", kinds(evs))
 	}
-	if evs[0].Origin != TranscriptOriginRestore {
-		t.Fatalf("restore origin = %v, want restore", evs[0].Origin)
-	}
-	blocks := evs[0].Transcript.Blocks
+	blocks := evs[0].State.Blocks
 	if len(blocks) != 3 || blocks[0].Kind != assistant.KindText || blocks[1].Kind != assistant.KindText || blocks[2].Kind != assistant.KindUnknown {
 		t.Fatalf("restored blocks = %+v, want text/text/unknown without technical markers", blocks)
 	}
@@ -786,14 +855,16 @@ func TestRestoreUnsupportedBackendErrors(t *testing.T) {
 	}
 }
 
-// An empty history folds to no blocks, so the restore emits no snapshot.
-func TestRestoreEmptyEmitsOnlyDone(t *testing.T) {
+// An empty history folds to no blocks, but the restore still publishes the
+// conversation it installed.
+func TestRestoreEmptyPublishesItsConversation(t *testing.T) {
 	resp := &assistant.ConversationHistoryResponse{}
 	resp.Data.Type = "conversation-history-response"
 	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
-	if evs := collect(restoreEvents(e, context.Background())); !slices.Equal(kinds(evs), []EventKind{EventDone}) {
-		t.Fatalf("events = %v, want only EventDone", kinds(evs))
+	evs := collect(restoreEvents(e, context.Background()))
+	if !slices.Equal(kinds(evs), []EventKind{EventState, EventDone}) || evs[0].State.ConversationID != testConversationID || len(evs[0].State.Blocks) != 0 {
+		t.Fatalf("events = %+v, want the empty conversation's state, then EventDone", evs)
 	}
 }
 

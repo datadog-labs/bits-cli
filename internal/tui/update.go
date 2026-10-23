@@ -60,7 +60,11 @@ func (m *Model) postNotice(n chat.Notice) tea.Cmd {
 		return nil
 	}
 	m.nextNoticeID++
-	m.notices = append(m.notices, chat.NoticeItem{ID: m.nextNoticeID, After: len(m.transcript.Blocks), Notice: n})
+	var after agent.BlockID
+	if blocks := m.state.Blocks; len(blocks) > 0 {
+		after = blocks[len(blocks)-1].ID
+	}
+	m.notices = append(m.notices, chat.NoticeItem{ID: m.nextNoticeID, After: after, Notice: n})
 	if m.list != nil {
 		m.syncTranscript()
 	}
@@ -292,9 +296,16 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case engineEventMsg:
 		var cmd tea.Cmd
-		// Every run is an operation this model started, so other runs' events
-		// are ignored.
-		if m.op.run != 0 && msg.ev.Run == m.op.run {
+		switch {
+		case msg.ev.Run == 0 && msg.ev.Kind == agent.EventState:
+			// A change no run made, such as a command's.
+			if msg.ev.State.Version > m.state.Version {
+				m.state = msg.ev.State
+				m.syncTranscript()
+			}
+		case m.op.run != 0 && msg.ev.Run == m.op.run:
+			// Every run is an operation this model started, so other runs'
+			// events are ignored.
 			cmd = m.applyRunEvent(msg.ev)
 		}
 		return m, tea.Batch(cmd, waitEvent(m.events))
@@ -371,13 +382,13 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) openConversationInBrowser() tea.Cmd {
-	if strings.TrimSpace(m.convID) == "" {
+	if strings.TrimSpace(m.state.ConversationID) == "" {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Start a conversation before using /web."))
 	}
 	if m.engine == nil {
 		return m.postNotice(notice(chat.NoticeError, nil, "This conversation has no Datadog web site."))
 	}
-	target, err := browser.ConversationURL(m.engine.Site(), m.convID)
+	target, err := browser.ConversationURL(m.engine.Site(), m.state.ConversationID)
 	if err != nil {
 		return m.postNotice(notice(chat.NoticeError, err, "Could not build a web link for this conversation."))
 	}
@@ -608,7 +619,7 @@ func (m *Model) inComposer(msg tea.MouseMsg) (image.Point, bool) {
 func (m *Model) applyRunEvent(ev agent.Event) tea.Cmd {
 	cmd := m.applyEvent(ev)
 	m.syncStatus()
-	if ev.Kind == agent.EventTranscript {
+	if ev.Kind == agent.EventState {
 		m.syncTranscript()
 	}
 	if ev.Terminal() {
@@ -622,21 +633,11 @@ func (m *Model) applyRunEvent(ev agent.Event) tea.Cmd {
 func (m *Model) endOperation() tea.Cmd {
 	done := m.op
 	m.op = operation{gen: done.gen}
-	// The engine emits the terminal event as it releases the operation, so
-	// engine calls now see the final state. Cancellation may have suppressed
-	// the events carrying these last updates.
-	if m.engine != nil && m.engine.Status().MultiAgent {
-		m.convID = m.engine.ConversationID()
-		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
-		m.syncTranscript()
-	}
+	// The run published its final state before its terminal event.
 	if m.chatPhase != chat.PhaseError {
 		m.chatPhase = chat.PhaseIdle
 	}
-	if done.stop == stopAll {
-		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
-		m.syncTranscript()
-	} else if done.cancel != nil {
+	if done.stop != stopAll && done.cancel != nil {
 		done.cancel() // release the turn/restore context
 	}
 	m.clearAsks()
@@ -928,10 +929,9 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	if m.engine == nil {
 		return nil
 	}
-	if m.engine.SettleRestoredTools(m.tools) {
-		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
-		m.syncTranscript()
-	}
+	m.engine.SettleRestoredTools(m.tools)
+	m.state = m.engine.State() // the event that publishes it follows
+	m.syncTranscript()
 	if m.tools == nil || !m.engine.CanResumeTools(m.tools) {
 		return nil
 	}
@@ -967,16 +967,16 @@ func (m *Model) after(next followUp) {
 func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
-	case agent.EventTranscript:
-		m.transcript = ev.Transcript
-		m.syncApprovals(ev.Transcript.PendingApprovals())
-		if ev.Transcript.HasStreamingContent() {
+	case agent.EventState:
+		if ev.State.Version > m.state.Version {
+			m.state = ev.State
+		}
+		m.syncApprovals(ev.State.PendingApprovals())
+		if ev.State.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}
-	case agent.EventUsage:
-		m.usage = ev.Usage
-	case agent.EventConversation:
-		m.convID = ev.ConvID
+	case agent.EventUsage, agent.EventConversation:
+		// The state carries both; these report a backend send.
 	case agent.EventDone:
 		m.chatPhase = chat.PhaseIdle
 	case agent.EventCanceled:
@@ -1045,7 +1045,7 @@ func (m *Model) relayout() {
 	m.list.SetHeader(m.headerView())
 }
 
-// syncTranscript rebuilds presentation metadata after m.transcript changes.
+// syncTranscript rebuilds presentation metadata after m.state changes.
 func (m *Model) syncTranscript() {
-	m.list.SetTranscript(m.transcript.Blocks, m.notices)
+	m.list.SetTranscript(m.state.Blocks, m.notices)
 }

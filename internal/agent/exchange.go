@@ -36,7 +36,9 @@ type exchange interface {
 // exchangeEvent is one backend fact, applied field by field. Only execute
 // makes a client call run: content alone, whatever its type, never does.
 type exchangeEvent struct {
-	round        int    // starts this later backend send; turns start at 1
+	// round starts this backend send, 1-based. Every send is announced
+	// before it is made, so a turn cancelled earlier stays outside any round.
+	round        int
 	conversation string // server-assigned conversation ID
 	message      *assistant.Message
 	execute      []ToolCall // a batch, dispatched at once
@@ -72,7 +74,7 @@ func newRoundsExchange(backend Backend, message any, opts assistant.SendOptions,
 func (x *roundsExchange) run(ctx context.Context, emit func(exchangeEvent) bool) (string, error) {
 	message, opts, calls := x.message, x.opts, x.resumed
 	for round := 1; round <= maxTurns; round++ {
-		if round > 1 && !emit(exchangeEvent{round: round}) {
+		if !emit(exchangeEvent{round: round}) {
 			return opts.ConversationID, ctx.Err()
 		}
 		if calls == nil {
@@ -191,6 +193,9 @@ func (x *streamExchange) run(ctx context.Context, emit func(exchangeEvent) bool)
 	defer x.fail(nil)
 	x.ctx, x.emit = ctx, emit
 	conversation := x.opts.ConversationID
+	if !emit(exchangeEvent{round: 1}) {
+		return conversation, ctx.Err()
+	}
 	err := x.backend.Stream(ctx, x.message, x.opts, func(response assistant.AssistantResponse) error {
 		msg := response.Data.Attributes.StructuredMessage
 		ev := exchangeEvent{message: &msg}

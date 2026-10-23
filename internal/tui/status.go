@@ -133,13 +133,13 @@ func (m *Model) statusRuntime() statusview.Runtime {
 		AuthenticationMode:  runtime.Backend.AuthenticationMode,
 		AuthenticationState: authenticationState,
 		Identity:            m.statusIdentity,
-		ConversationID:      m.convID,
+		ConversationID:      m.state.ConversationID,
 		Profile:             string(runtime.Profile),
 		Model:               runtime.Model,
 		PermissionsMode:     permissionsMode,
 		Phase:               phaseName(m.chatPhase),
 		Connectivity:        m.statusConnectivity(),
-		Usage:               m.usage,
+		Usage:               m.state.Usage,
 	}
 }
 
@@ -221,8 +221,8 @@ func (m *Model) statusConnectivity() statusview.Connectivity {
 // never copied into status state.
 func (m *Model) observeEvent(event agent.Event) {
 	switch event.Kind {
-	case agent.EventTranscript:
-		if event.Origin != agent.TranscriptOriginLocal {
+	case agent.EventState:
+		if event.Round > 0 { // the backend answered
 			m.markConnected()
 		}
 	case agent.EventUsage, agent.EventConversation, agent.EventDone:

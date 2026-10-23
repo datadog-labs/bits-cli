@@ -120,8 +120,8 @@ func TestCompletedTurnAppliesFinalTranscriptSnapshot(t *testing.T) {
 	if m.chatPhase != chat.PhaseIdle {
 		t.Fatalf("chat phase = %v, want idle", m.chatPhase)
 	}
-	if len(m.transcript.Blocks) != 2 || !m.transcript.Blocks[1].Complete {
-		t.Fatalf("blocks = %+v, want completed assistant response", m.transcript.Blocks)
+	if len(m.state.Blocks) != 2 || !m.state.Blocks[1].Complete {
+		t.Fatalf("blocks = %+v, want completed assistant response", m.state.Blocks)
 	}
 }
 
@@ -148,18 +148,18 @@ func TestCanceledTurnRetainsConversationHandle(t *testing.T) {
 	setConversationInput(m, "prompt")
 	_, _ = m.submit()
 	waitSignal(t, backend.sendStarted)
-	for len(m.transcript.Blocks) < 2 {
+	for len(m.state.Blocks) < 2 {
 		msg := runConversationCmd(t, waitEvent(m.events))
 		_, _ = m.Update(msg)
 	}
 	m.cancelOperation()
 	drainConversationRemote(t, m)
 
-	if m.convID != "old" || m.ConversationID() != "old" || m.statusRuntime().ConversationID != "old" {
+	if m.state.ConversationID != "old" || m.ConversationID() != "old" || m.statusRuntime().ConversationID != "old" {
 		t.Fatalf("canceled conversation handle = %q, status = %q", m.ConversationID(), m.statusRuntime().ConversationID)
 	}
-	if len(m.transcript.Blocks) != 2 || !m.transcript.Blocks[1].Complete {
-		t.Fatalf("canceled transcript = %+v", m.transcript.Blocks)
+	if len(m.state.Blocks) != 2 || !m.state.Blocks[1].Complete {
+		t.Fatalf("canceled transcript = %+v", m.state.Blocks)
 	}
 }
 
@@ -168,9 +168,9 @@ func TestNewAndClearResetConversationStateLocally(t *testing.T) {
 		t.Run(input, func(t *testing.T) {
 			m := newModelWithSpy(t)
 			m.engine = agent.New(&spyBackend{t: t}, agent.Config{ConversationID: "old"})
-			m.convID = "old"
-			m.transcript.Blocks = []agent.Block{{Markdown: &assistant.MarkdownPayload{Content: "old transcript"}}}
-			m.usage = &assistant.Usage{TokensUsed: 99, MaxTokens: 100}
+			m.state.ConversationID = "old"
+			m.state.Blocks = []agent.Block{{Markdown: &assistant.MarkdownPayload{Content: "old transcript"}}}
+			m.state.Usage = &assistant.Usage{TokensUsed: 99, MaxTokens: 100}
 			m.chatPhase = chat.PhaseError
 			m.postNotice(notice(chat.NoticeError, errors.New("old error"), "old error"))
 			setConversationInput(m, input)
@@ -179,11 +179,11 @@ func TestNewAndClearResetConversationStateLocally(t *testing.T) {
 			if !m.editor.Focused() {
 				t.Fatal("reset left the editor unfocused")
 			}
-			if m.convID != "" || m.engine.ConversationID() != "" || len(m.transcript.Blocks) != 0 {
-				t.Fatalf("identity/transcript not reset: root=%q engine=%q blocks=%d", m.convID, m.engine.ConversationID(), len(m.transcript.Blocks))
+			if m.state.ConversationID != "" || m.engine.State().ConversationID != "" || len(m.state.Blocks) != 0 {
+				t.Fatalf("identity/transcript not reset: root=%q engine=%q blocks=%d", m.state.ConversationID, m.engine.State().ConversationID, len(m.state.Blocks))
 			}
-			if m.usage != nil || m.chatPhase != chat.PhaseIdle || latestNotice(m).Text != "Started a new conversation." {
-				t.Fatalf("turn state not reset: usage=%v phase=%v notice=%+v", m.usage, m.chatPhase, latestNotice(m))
+			if m.state.Usage != nil || m.chatPhase != chat.PhaseIdle || latestNotice(m).Text != "Started a new conversation." {
+				t.Fatalf("turn state not reset: usage=%v phase=%v notice=%+v", m.state.Usage, m.chatPhase, latestNotice(m))
 			}
 		})
 	}
@@ -211,15 +211,15 @@ func TestNewDuringActiveTurnCancelsOnceAndDrainsBeforeReset(t *testing.T) {
 	if got := cancelCalls.Load(); got != 1 {
 		t.Fatalf("cancel function calls = %d, want exactly 1", got)
 	}
-	if m.convID != "old" || m.op.then != thenNewConversation {
-		t.Fatalf("conversation reset before drain: id=%q pending=%v", m.convID, m.op.then)
+	if m.state.ConversationID != "old" || m.op.then != thenNewConversation {
+		t.Fatalf("conversation reset before drain: id=%q pending=%v", m.state.ConversationID, m.op.then)
 	}
 	drainConversationRemote(t, m)
 	if got := cancelCalls.Load(); got != 1 {
 		t.Fatalf("cancel function calls after drain = %d, want exactly 1", got)
 	}
-	if m.convID != "" || m.engine.ConversationID() != "" || m.op.gen == oldGeneration {
-		t.Fatalf("post-drain reset failed: root=%q engine=%q generation=%d", m.convID, m.engine.ConversationID(), m.op.gen)
+	if m.state.ConversationID != "" || m.engine.State().ConversationID != "" || m.op.gen == oldGeneration {
+		t.Fatalf("post-drain reset failed: root=%q engine=%q generation=%d", m.state.ConversationID, m.engine.State().ConversationID, m.op.gen)
 	}
 }
 
@@ -235,12 +235,12 @@ func TestNewDuringHistoryLoadingCancelsAndDrains(t *testing.T) {
 
 	setConversationInput(m, "/new")
 	_, _ = m.submit()
-	if m.convID != resumeConversationID {
+	if m.state.ConversationID != resumeConversationID {
 		t.Fatal("history-loading conversation reset before its operation drained")
 	}
 	drainConversationRemote(t, m)
-	if m.convID != "" || engine.ConversationID() != "" || backend.cancelled.Load() != 1 {
-		t.Fatalf("history reset result: root=%q engine=%q cancellations=%d", m.convID, engine.ConversationID(), backend.cancelled.Load())
+	if m.state.ConversationID != "" || engine.State().ConversationID != "" || backend.cancelled.Load() != 1 {
+		t.Fatalf("history reset result: root=%q engine=%q cancellations=%d", m.state.ConversationID, engine.State().ConversationID, backend.cancelled.Load())
 	}
 }
 
@@ -264,8 +264,8 @@ func TestNewAfterCancellationDoesNotCancelTwice(t *testing.T) {
 		t.Fatalf("cancel function calls = %d after Esc then /new, want 1", got)
 	}
 	drainConversationRemote(t, m)
-	if m.convID != "" || cancelCalls.Load() != 1 {
-		t.Fatalf("post-cancellation reset: id=%q cancel calls=%d", m.convID, cancelCalls.Load())
+	if m.state.ConversationID != "" || cancelCalls.Load() != 1 {
+		t.Fatalf("post-cancellation reset: id=%q cancel calls=%d", m.state.ConversationID, cancelCalls.Load())
 	}
 }
 
@@ -281,8 +281,8 @@ func TestNewAfterFailedTurnClearsError(t *testing.T) {
 	}
 	setConversationInput(m, "/new")
 	_, _ = m.submit()
-	if m.convID != "" || m.chatPhase != chat.PhaseIdle || latestNotice(m).Text != "Started a new conversation." || m.usage != nil {
-		t.Fatalf("failed-turn state survived reset: id=%q phase=%v notice=%+v usage=%v", m.convID, m.chatPhase, latestNotice(m), m.usage)
+	if m.state.ConversationID != "" || m.chatPhase != chat.PhaseIdle || latestNotice(m).Text != "Started a new conversation." || m.state.Usage != nil {
+		t.Fatalf("failed-turn state survived reset: id=%q phase=%v notice=%+v usage=%v", m.state.ConversationID, m.chatPhase, latestNotice(m), m.state.Usage)
 	}
 }
 
@@ -297,11 +297,75 @@ func TestNewRejectsStaleEventsFromPriorConversation(t *testing.T) {
 	stale := m.op.run - 1
 	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventConversation, ConvID: "stale", Run: stale}})
 	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventDone, Run: stale}})
-	if m.convID != "" || m.op.gen != freshGeneration || m.op.run == 0 {
-		t.Fatalf("stale event mutated fresh operation: id=%q generation=%d active=%v", m.convID, m.op.gen, m.op.run != 0)
+	if m.state.ConversationID != "" || m.op.gen != freshGeneration || m.op.run == 0 {
+		t.Fatalf("stale event mutated fresh operation: id=%q generation=%d active=%v", m.state.ConversationID, m.op.gen, m.op.run != 0)
 	}
 	drainConversationRemote(t, m)
-	if m.convID != "fresh" {
-		t.Fatalf("first prompt after reset got conversation id %q, want fresh", m.convID)
+	if m.state.ConversationID != "fresh" {
+		t.Fatalf("first prompt after reset got conversation id %q, want fresh", m.state.ConversationID)
+	}
+}
+
+func TestNewIgnoresInFlightConversationInstallState(t *testing.T) {
+	backend := newResumeBackend()
+	engine := agent.New(backend, agent.Config{})
+	m := New(engine)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	backend.histories <- resumeHistoryReply{response: history(assistant.AssistantMessage("old", assistant.TextContent("old transcript")))}
+	conversation, err := engine.LoadConversation(context.Background(), resumeConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.InstallConversation(context.Background(), conversation); err != nil {
+		t.Fatal(err)
+	}
+
+	// The event pump has read the install snapshot, but Bubble Tea has not
+	// delivered its message yet. /resume itself already showed this state.
+	inFlight := runConversationCmd(t, waitEvent(m.events))
+	m.state = engine.State()
+	m.syncTranscript()
+	if m.state.ConversationID != resumeConversationID || len(m.state.Blocks) == 0 {
+		t.Fatalf("install state = %+v", m.state)
+	}
+
+	if cmd := m.startNewConversation(); cmd != nil {
+		t.Fatal("unexpected completion cleanup")
+	}
+	resetVersion := m.state.Version
+	if inFlight.(engineEventMsg).ev.State.Version >= resetVersion {
+		t.Fatalf("queued version %d is not older than reset version %d", inFlight.(engineEventMsg).ev.State.Version, resetVersion)
+	}
+	_, _ = m.Update(inFlight)
+	if m.state.ConversationID != "" || len(m.state.Blocks) != 0 || m.state.Version != resetVersion {
+		t.Fatalf("in-flight install restored old conversation: %+v", m.state)
+	}
+	if cmd := m.openConversationInBrowser(); cmd != nil || latestNotice(m).Text != "Start a conversation before using /web." {
+		t.Fatalf("/web targeted stale conversation: notice=%+v, command=%v", latestNotice(m), cmd)
+	}
+
+	// The reset's own publication has the same version already read by /new.
+	_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+	if m.state.ConversationID != "" || len(m.state.Blocks) != 0 || m.state.Version != resetVersion {
+		t.Fatalf("reset event changed conversation: %+v", m.state)
+	}
+}
+
+func TestOutOfRunStateUpdatesDuringTurn(t *testing.T) {
+	m := New(agent.New(&immediateConversationBackend{}, agent.Config{}))
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.op = operation{kind: opTurn, run: 1, cancel: cancel}
+
+	newer := agent.State{Version: m.state.Version + 2, ConversationID: "background-update"}
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventState, Run: 0, State: newer}})
+	if m.state.ConversationID != newer.ConversationID || m.state.Version != newer.Version || m.op.run != 1 {
+		t.Fatalf("background state during turn = %+v, run = %d", m.state, m.op.run)
+	}
+
+	older := agent.State{Version: newer.Version - 1, ConversationID: "old-run-state"}
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventState, Run: 1, State: older}})
+	if m.state.ConversationID != newer.ConversationID || m.state.Version != newer.Version {
+		t.Fatalf("older run state replaced background state: %+v", m.state)
 	}
 }

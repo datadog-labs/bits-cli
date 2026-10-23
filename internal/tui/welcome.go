@@ -153,7 +153,7 @@ func (m *Model) welcomeIdle() bool {
 	// The operation, not just the transcript: a submitted turn empties the
 	// composer and publishes no block until its first event, and resuming during
 	// it would hit the engine gate.
-	if len(m.transcript.Blocks) != 0 || m.op.busy() || m.editor.Value() != "" || len(m.editor.Attachments()) > 0 {
+	if len(m.state.Blocks) != 0 || m.op.busy() || m.editor.Value() != "" || len(m.editor.Attachments()) > 0 {
 		return false
 	}
 	return m.showSplashPanel()

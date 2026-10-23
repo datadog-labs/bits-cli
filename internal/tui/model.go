@@ -184,8 +184,8 @@ type Model struct {
 	engineFactory   EngineFactory
 	startupErr      error
 
-	// transcript is the latest snapshot of the engine's aggregated transcript.
-	transcript agent.TranscriptSnapshot
+	// state is the conversation's latest state, as the engine published it.
+	state agent.State
 
 	// op is the one exclusive session operation; see operation.
 	op operation
@@ -218,11 +218,9 @@ type Model struct {
 
 	// Turn status, surfaced in the editor and local status view.
 	chatPhase chat.Phase
-	convID    string
 	// Increments when the visible conversation changes; delayed local results
 	// from an earlier conversation must not enter the new transcript.
 	conversationEpoch uint64
-	usage             *assistant.Usage
 	// connectivity is the last observed remote outcome. Active phases override
 	// it with connecting/connected when building the status snapshot.
 	connectivity          statusview.Connectivity
@@ -302,7 +300,7 @@ func New(engine *agent.Engine, configs ...Config) *Model {
 // before any operation starts, so the pump started by initChat misses none.
 func (m *Model) attach(engine *agent.Engine) {
 	m.engine = engine
-	m.convID = engine.ConversationID()
+	m.state = engine.State()
 	m.events, m.unsubscribe = engine.Subscribe()
 }
 
@@ -369,7 +367,7 @@ func newShell() *Model {
 		resume:            resume{now: time.Now},
 		chatMouseMode:     chatMouseMode(),
 	}
-	m.editor.SetHistorySource(func() []editor.HistoryEntry { return historyEntries(m.transcript.UserPrompts()) })
+	m.editor.SetHistorySource(func() []editor.HistoryEntry { return historyEntries(m.state.UserPrompts()) })
 	m.editor.SetCommands(commandCompletionSpecs())
 	m.applyStyles(m.styles)
 	return m
@@ -377,7 +375,7 @@ func newShell() *Model {
 
 // ConversationID returns the active conversation id, or "" when none has been
 // established yet. main reads it after the program exits to print a resume hint.
-func (m *Model) ConversationID() string { return m.convID }
+func (m *Model) ConversationID() string { return m.state.ConversationID }
 
 // LoggedOut show confirmation message after /logout is used
 func (m *Model) LoggedOut() bool { return m.loggedOut }
@@ -451,7 +449,7 @@ func (m *Model) initChat() tea.Cmd {
 		return tea.Batch(commands...)
 	}
 	commands = append(commands, waitEvent(m.events))
-	if m.engine.ConversationID() == "" {
+	if m.engine.State().ConversationID == "" {
 		// Fetch the startup offer only when there is no history to restore.
 		return tea.Batch(append(commands, m.fetchRecentConversations(), m.syncClientSkills())...)
 	}

@@ -25,37 +25,34 @@ func TestDuplexRetainsPartialTranscriptDuringCancellation(t *testing.T) {
 	}}
 	engine := New(backend, Config{})
 	for event := range turnEvents(engine, ctx, TurnInput{Message: "question"}) {
-		if event.Kind == EventTranscript && event.Origin == TranscriptOriginRemote {
+		if event.Kind == EventState && event.Round > 0 {
 			cancel()
 		}
 	}
-	blocks := engine.Snapshot()
+	blocks := engine.State().Blocks
 	if ctx.Err() != context.Canceled {
 		t.Fatalf("context error = %v", ctx.Err())
 	}
-	if engine.ConversationID() != "persisted-conversation" || len(blocks) != 2 || !blocks[1].Complete {
-		t.Fatalf("partial transcript = %+v, conversation = %q", blocks, engine.ConversationID())
+	if engine.State().ConversationID != "persisted-conversation" || len(blocks) != 2 || !blocks[1].Complete {
+		t.Fatalf("partial transcript = %+v, conversation = %q", blocks, engine.State().ConversationID)
 	}
 }
 
 func TestDuplexRetainsConversationDiscoveredDuringCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	backend := &duplexBackend{stream: func(ctx context.Context, emit func(assistant.AssistantResponse) error) error {
-		<-ctx.Done()
+	backend := &duplexBackend{stream: func(streamCtx context.Context, emit func(assistant.AssistantResponse) error) error {
+		cancel() // the turn is cancelled once its stream is open
+		<-streamCtx.Done()
 		var response assistant.AssistantResponse
 		response.Data.Attributes.ConversationID = "persisted-after-cancel"
 		_ = emit(response)
-		return ctx.Err()
+		return streamCtx.Err()
 	}}
 	engine := New(backend, Config{})
-	for event := range turnEvents(engine, ctx, TurnInput{Message: "question"}) {
-		if event.Kind == EventTranscript && event.Origin == TranscriptOriginLocal {
-			cancel()
-		}
-	}
-	if ctx.Err() != context.Canceled || engine.ConversationID() != "persisted-after-cancel" {
-		t.Fatalf("context error = %v, conversation = %q", ctx.Err(), engine.ConversationID())
+	_ = collect(turnEvents(engine, ctx, TurnInput{Message: "question"}))
+	if ctx.Err() != context.Canceled || engine.State().ConversationID != "persisted-after-cancel" {
+		t.Fatalf("context error = %v, conversation = %q", ctx.Err(), engine.State().ConversationID)
 	}
 }
 
@@ -98,7 +95,7 @@ func TestDuplexCancellationSettlesRunningAndAwaitingTools(t *testing.T) {
 	if ctx.Err() != context.Canceled {
 		t.Fatalf("context error = %v", ctx.Err())
 	}
-	blocks := engine.Snapshot()
+	blocks := engine.State().Blocks
 	if len(blocks) != 4 || !blocks[3].Complete {
 		t.Fatalf("partial blocks = %+v", blocks)
 	}
@@ -146,7 +143,7 @@ func TestDuplexTerminalSettlesUnfinishedTools(t *testing.T) {
 			engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
 			events := collect(turnEvents(engine, context.Background(), TurnInput{Message: "read", Tools: tools}))
 			err = events[len(events)-1].Err
-			blocks := engine.Snapshot()
+			blocks := engine.State().Blocks
 			if !errors.Is(err, terminal.err) {
 				t.Fatalf("error=%v, want %v", err, terminal.err)
 			}
