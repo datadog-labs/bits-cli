@@ -61,7 +61,7 @@ func TestDuplexPublishesFinalizedTranscriptBeforeTerminalEvent(t *testing.T) {
 				t.Fatalf("event kinds = %v, want %v", got, want)
 			}
 			final := events[1].Transcript.Blocks
-			if len(final) != 2 || !final[1].Complete || events[1].Origin != TranscriptOriginRemote {
+			if len(final) != 2 || !final[1].Complete || events[1].Round == 0 {
 				t.Fatalf("final transcript = %+v", events[1])
 			}
 			if !errors.Is(events[2].Err, failure) {

@@ -25,7 +25,7 @@ func TestDuplexRetainsPartialTranscriptDuringCancellation(t *testing.T) {
 	}}
 	engine := New(backend, Config{})
 	for event := range turnEvents(engine, ctx, TurnInput{Message: "question"}) {
-		if event.Kind == EventTranscript && event.Origin == TranscriptOriginRemote {
+		if event.Kind == EventTranscript && event.Round > 0 {
 			cancel()
 		}
 	}
@@ -41,19 +41,16 @@ func TestDuplexRetainsPartialTranscriptDuringCancellation(t *testing.T) {
 func TestDuplexRetainsConversationDiscoveredDuringCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	backend := &duplexBackend{stream: func(ctx context.Context, emit func(assistant.AssistantResponse) error) error {
-		<-ctx.Done()
+	backend := &duplexBackend{stream: func(streamCtx context.Context, emit func(assistant.AssistantResponse) error) error {
+		cancel() // the turn is cancelled once its stream is open
+		<-streamCtx.Done()
 		var response assistant.AssistantResponse
 		response.Data.Attributes.ConversationID = "persisted-after-cancel"
 		_ = emit(response)
-		return ctx.Err()
+		return streamCtx.Err()
 	}}
 	engine := New(backend, Config{})
-	for event := range turnEvents(engine, ctx, TurnInput{Message: "question"}) {
-		if event.Kind == EventTranscript && event.Origin == TranscriptOriginLocal {
-			cancel()
-		}
-	}
+	_ = collect(turnEvents(engine, ctx, TurnInput{Message: "question"}))
 	if ctx.Err() != context.Canceled || engine.ConversationID() != "persisted-after-cancel" {
 		t.Fatalf("context error = %v, conversation = %q", ctx.Err(), engine.ConversationID())
 	}

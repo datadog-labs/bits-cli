@@ -222,7 +222,7 @@ func (m *Model) statusConnectivity() statusview.Connectivity {
 func (m *Model) observeEvent(event agent.Event) {
 	switch event.Kind {
 	case agent.EventTranscript:
-		if event.Origin != agent.TranscriptOriginLocal {
+		if event.Round > 0 { // the backend answered
 			m.markConnected()
 		}
 	case agent.EventUsage, agent.EventConversation, agent.EventDone:

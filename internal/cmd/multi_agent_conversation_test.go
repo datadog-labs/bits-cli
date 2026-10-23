@@ -153,9 +153,6 @@ func TestMultiAgentEngineConversationLifecycle(t *testing.T) {
 		}
 		if event.Kind == agent.EventTranscript {
 			restored = event.Transcript.Blocks
-			if event.Origin != agent.TranscriptOriginRestore {
-				t.Errorf("restored transcript origin = %v", event.Origin)
-			}
 		}
 	}
 	assertTranscript(restored, "First question", "First answer", "Follow-up question", "Follow-up answer")

@@ -261,6 +261,20 @@ func collect(ch <-chan Event) []Event {
 	return evs
 }
 
+// superseded keeps the last of each run of events that supersede each other,
+// as a slow consumer's subscription may deliver them.
+func superseded(evs []Event) []Event {
+	var kept []Event
+	for _, ev := range evs {
+		if n := len(kept); n > 0 && ev.supersedes(kept[n-1]) {
+			kept[n-1] = ev
+			continue
+		}
+		kept = append(kept, ev)
+	}
+	return kept
+}
+
 func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -543,8 +557,8 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	if got := kinds(evs); !reflect.DeepEqual(got, want) {
 		t.Fatalf("event kinds = %v, want %v", got, want)
 	}
-	if evs[0].Origin != TranscriptOriginLocal || evs[1].Origin != TranscriptOriginRemote {
-		t.Fatalf("transcript origins = %v, %v; want local, remote", evs[0].Origin, evs[1].Origin)
+	if evs[0].Round != 0 || evs[1].Round != 1 {
+		t.Fatalf("transcript rounds = %d, %d; want the local echo outside any send, then round 1", evs[0].Round, evs[1].Round)
 	}
 	blocks := evs[1].Transcript.Blocks
 	if len(blocks) == 0 || blocks[len(blocks)-1].Markdown == nil || blocks[len(blocks)-1].Markdown.Content != "Hello world" {
@@ -728,6 +742,28 @@ func TestTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 	}
 }
 
+// A turn cancelled while preparing its request never reaches the backend: its
+// final snapshot is outside any send, so consumers see no backend round.
+func TestTurnCancelledBeforeSendPublishesOutsideAnyRound(t *testing.T) {
+	backend := &scriptBackend{}
+	engine := New(backend, Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	evs := collect(turnEvents(engine, ctx, TurnInput{Message: "never sent"}))
+
+	if end := evs[len(evs)-1]; end.Kind != EventCanceled {
+		t.Fatalf("last event = %+v, want EventCanceled", end)
+	}
+	for _, ev := range evs {
+		if ev.Round != 0 {
+			t.Fatalf("event %+v, want round 0 before any backend send", ev)
+		}
+	}
+	if len(backend.opts) != 0 {
+		t.Fatalf("backend received %d sends, want none", len(backend.opts))
+	}
+}
+
 // A subscription sees every run's events, as following each run does. Ending
 // a subscription closes it even if its consumer stopped reading.
 func TestSubscribeSpansRuns(t *testing.T) {
@@ -783,9 +819,6 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 	evs := collect(restoreEvents(e, context.Background()))
 	if !slices.Equal(kinds(evs), []EventKind{EventTranscript, EventDone}) {
 		t.Fatalf("events = %v, want one EventTranscript, then EventDone", kinds(evs))
-	}
-	if evs[0].Origin != TranscriptOriginRestore {
-		t.Fatalf("restore origin = %v, want restore", evs[0].Origin)
 	}
 	blocks := evs[0].Transcript.Blocks
 	if len(blocks) != 3 || blocks[0].Kind != assistant.KindText || blocks[1].Kind != assistant.KindText || blocks[2].Kind != assistant.KindUnknown {

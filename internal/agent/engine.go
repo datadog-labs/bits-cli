@@ -71,15 +71,6 @@ const (
 // apart. Zero means no run: an operation that failed to claim the engine.
 type RunID uint64
 
-// TranscriptOrigin identifies what caused an EventTranscript snapshot.
-type TranscriptOrigin int
-
-const (
-	TranscriptOriginLocal   TranscriptOrigin = iota // local user echo, before a backend send
-	TranscriptOriginRemote                          // a backend turn or its client-tool work
-	TranscriptOriginRestore                         // restored conversation history
-)
-
 // TranscriptSnapshot is a read-only view of the complete renderable transcript.
 // Its query methods centralize common block traversal and may gain indexes or
 // cached values without changing event consumers.
@@ -143,20 +134,19 @@ type Event struct {
 	Kind           EventKind
 	Run            RunID
 	Transcript     TranscriptSnapshot // for EventTranscript; read-only full transcript snapshot
-	Origin         TranscriptOrigin   // for EventTranscript
 	Usage          *assistant.Usage   // for EventUsage
 	ConvID         string             // for EventConversation
 	Err            error              // for EventError and EventCanceled
 	BackendFailure bool               // EventError originated at the Assistant backend boundary
-	// Round is the 1-based backend send the event belongs to (0 for
-	// out-of-turn events). Drained rounds after a denial count but emit
-	// no content events.
+	// Round is the 1-based backend send the event belongs to, or 0 outside
+	// any send: a turn's local echo of the user's text, a restore. Drained
+	// rounds after a denial count but emit no content events.
 	Round int
 }
 
 // outbox is a subscription: it hands events to its consumer without ever
 // blocking the engine on it. A transcript snapshot still queued is replaced
-// by a newer one of the same run, round and origin: snapshots are complete,
+// by a newer one of the same run and round: snapshots are complete,
 // so consumers lose no state (ADEEP diffs blocks by revision), and the queue
 // stays bounded by the other, rarer events.
 type outbox struct {
@@ -172,7 +162,7 @@ type outbox struct {
 // supersedes reports whether ev may replace prev, queued just before it.
 func (ev Event) supersedes(prev Event) bool {
 	return ev.Kind == EventTranscript && prev.Kind == EventTranscript &&
-		ev.Run == prev.Run && ev.Round == prev.Round && ev.Origin == prev.Origin
+		ev.Run == prev.Run && ev.Round == prev.Round
 }
 
 // Terminal reports whether ev is the last event of its run.
@@ -629,7 +619,7 @@ func (e *Engine) command(fn func(*turn) error) error {
 // run prepares a claimed turn off the actor, where it may block on files and
 // the environment, then drives it on the actor until it ends.
 func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []ToolCall) {
-	t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, run: run, round: 1}
+	t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, run: run}
 	sentContext, imageNotices, err := prepareImageContext(ctx, in.Context)
 	if err != nil {
 		// Keep file references in the failed prompt so history can retry them.
@@ -652,7 +642,7 @@ func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []Too
 				sent = sentContext.Entities
 			}
 			e.transcript.AppendUser(in.Message, sent)
-			e.emit(run, Event{Kind: EventTranscript, Transcript: e.snapshot(), Origin: TranscriptOriginLocal})
+			e.emit(run, Event{Kind: EventTranscript, Transcript: e.snapshot()})
 		}
 		opts, delivery = e.sendOptions(in.Tools), e.delivery
 	})
@@ -712,7 +702,7 @@ func (t *turn) finish(err error) {
 	if cause != nil {
 		e.transcript.FinalizeAll()
 		e.settleUnfinishedTools(t.tools, t.run, true)
-		e.emit(t.run, Event{Kind: EventTranscript, Origin: TranscriptOriginRemote, Transcript: e.snapshot()})
+		t.publish()
 	}
 	e.emit(t.run, end)
 	e.release()
@@ -881,7 +871,7 @@ func (e *Engine) Restore(ctx context.Context) (RunID, error) {
 				if id != "" {
 					e.installConversation(conversation)
 					if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
-						e.emit(run, Event{Kind: EventTranscript, Transcript: snapshot, Origin: TranscriptOriginRestore})
+						e.emit(run, Event{Kind: EventTranscript, Transcript: snapshot})
 					}
 				}
 				e.emit(run, Event{Kind: EventDone})
@@ -1017,9 +1007,6 @@ func (t *turn) drive() error {
 // emit publishes an event of the current backend round.
 func (t *turn) emit(ev Event) {
 	ev.Round = t.round
-	if ev.Kind == EventTranscript {
-		ev.Origin = TranscriptOriginRemote
-	}
 	t.e.emit(t.run, ev)
 }
 
