@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 // TaskBackend observes background tasks. *assistant.Client satisfies it.
@@ -16,10 +17,6 @@ type TaskBackend interface {
 	Subscribe(ctx context.Context, conversationID string, opts assistant.SubscribeOptions,
 		fn func(assistant.Message) error) error
 }
-
-// startBackgroundTaskTool is the server tool through which the model starts a
-// background task. Its result names the task.
-const startBackgroundTaskTool = "startBackgroundTask"
 
 // TaskStatus is where a background task is, as far as the client knows.
 type TaskStatus int
@@ -60,7 +57,7 @@ func newTask(id string) *task {
 
 // taskOf returns the task a successful startBackgroundTask call started.
 func taskOf(b Block) (*task, bool) {
-	if b.Tool == nil || b.Tool.Name != startBackgroundTaskTool || b.Tool.Status != ToolSuccess {
+	if b.Tool == nil || b.Tool.IsClientSide || b.Tool.Name != spec.StartBackgroundTask || b.Tool.Status != ToolSuccess {
 		return nil, false
 	}
 	var output struct {
@@ -69,11 +66,7 @@ func taskOf(b Block) (*task, bool) {
 	if json.Unmarshal([]byte(b.Tool.Output), &output) != nil || output.TaskID == "" {
 		return nil, false
 	}
-	var input struct {
-		Task struct {
-			TaskName string `json:"task_name"`
-		} `json:"task"`
-	}
+	var input spec.StartBackgroundTaskInput
 	_ = json.Unmarshal([]byte(b.Tool.Input), &input)
 	t := newTask(output.TaskID)
 	t.Name, t.CallID = input.Task.TaskName, b.ToolCallID()

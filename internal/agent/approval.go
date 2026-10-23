@@ -67,6 +67,10 @@ type ApprovalKey struct {
 type ApprovalPrompt struct {
 	Title  string
 	Detail string
+	// Gated is the server call an approval_request asks to approve, which a
+	// surface can present instead of the request itself; nil for a call that
+	// is approved for itself.
+	Gated *ToolCall
 }
 
 type ApprovalRequirement struct {
@@ -113,11 +117,16 @@ func serverGateApprovalRequirement(call ToolCall) (ApprovalRequirement, bool) {
 		title = fmt.Sprintf("Allow the assistant to perform the %q action?", input.ToolName)
 	}
 	detail := "tool: " + input.ToolName
+	args, err := json.Marshal(input.ToolArgs)
+	if err != nil {
+		return ApprovalRequirement{}, false
+	}
 	return ApprovalRequirement{
 		Key: ApprovalKey{Tool: assistant.ApprovalRequestTool, Resource: input.ToolName},
 		Prompt: ApprovalPrompt{
 			Title:  title,
 			Detail: detail,
+			Gated:  &ToolCall{ID: input.ToolCallID, Name: input.ToolName, Input: string(args)},
 		},
 	}, true
 }
