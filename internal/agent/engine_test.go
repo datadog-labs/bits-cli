@@ -603,7 +603,7 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 		rounds: [][]assistant.Message{{textMsg("m1", "partial")}},
 	}, Config{})
 
-	events := drain(t, e, TurnInput{Message: "question"})
+	events := coalesced(drain(t, e, TurnInput{Message: "question"}))
 	wantKinds := []EventKind{EventState, EventState, EventConversation, EventState, EventError}
 	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
