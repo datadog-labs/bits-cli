@@ -122,7 +122,11 @@ func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversa
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return e.idle(func() error { e.installConversation(conversation); return nil })
+	return e.idle(func() error {
+		e.installConversation(conversation)
+		e.publish()
+		return nil
+	})
 }
 
 // installConversation runs on the actor, while idle or restoring.
@@ -135,11 +139,11 @@ func (e *Engine) installConversation(conversation *Conversation) {
 	e.continuation = conversation.continuation
 }
 
-// Snapshot returns a copy of the current transcript. During an operation it
-// may be ahead of the events consumed so far; after the operation's channel
-// closes it is the operation's final state.
-func (e *Engine) Snapshot() []Block {
-	return get(e, func() []Block { return e.state().Blocks })
+// State returns the conversation's current state, which every change also
+// publishes. During an operation it may be ahead of the events consumed so
+// far; once the operation's terminal event is read it is its final state.
+func (e *Engine) State() State {
+	return get(e, e.state)
 }
 
 func (e *Engine) OperationActive() bool { return get(e, func() bool { return e.busy }) }

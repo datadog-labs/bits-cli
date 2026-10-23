@@ -113,8 +113,8 @@ func TestMultiAgentEngineConversationLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		result := delivery.finish
-		if outcome != headless.OutcomeCompleted || result.Outcome != headless.OutcomeCompleted || result.ConversationID != id || engine.ConversationID() != id {
-			t.Fatalf("turn result = %+v, engine conversation = %q, want completed %q", result, engine.ConversationID(), id)
+		if outcome != headless.OutcomeCompleted || result.Outcome != headless.OutcomeCompleted || result.ConversationID != id || engine.State().ConversationID != id {
+			t.Fatalf("turn result = %+v, engine conversation = %q, want completed %q", result, engine.State().ConversationID, id)
 		}
 		return result
 	}
@@ -162,8 +162,8 @@ func TestMultiAgentEngineConversationLifecycle(t *testing.T) {
 	if err := resumed.NewConversation(); err != nil {
 		t.Fatal(err)
 	}
-	if resumed.ConversationID() != "" || resumed.PreviousConversationID() != conversationID {
-		t.Fatalf("reset conversation = %q, previous = %q", resumed.ConversationID(), resumed.PreviousConversationID())
+	if resumed.State().ConversationID != "" || resumed.PreviousConversationID() != conversationID {
+		t.Fatalf("reset conversation = %q, previous = %q", resumed.State().ConversationID, resumed.PreviousConversationID())
 	}
 	newTurn := turn(resumed, "New question", newConversationID)
 	assertTranscript(newTurn.Blocks, "New question", "New answer")

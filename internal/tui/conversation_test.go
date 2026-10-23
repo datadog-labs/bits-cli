@@ -179,8 +179,8 @@ func TestNewAndClearResetConversationStateLocally(t *testing.T) {
 			if !m.editor.Focused() {
 				t.Fatal("reset left the editor unfocused")
 			}
-			if m.convID != "" || m.engine.ConversationID() != "" || len(m.transcript.Blocks) != 0 {
-				t.Fatalf("identity/transcript not reset: root=%q engine=%q blocks=%d", m.convID, m.engine.ConversationID(), len(m.transcript.Blocks))
+			if m.convID != "" || m.engine.State().ConversationID != "" || len(m.transcript.Blocks) != 0 {
+				t.Fatalf("identity/transcript not reset: root=%q engine=%q blocks=%d", m.convID, m.engine.State().ConversationID, len(m.transcript.Blocks))
 			}
 			if m.usage != nil || m.chatPhase != chat.PhaseIdle || latestNotice(m).Text != "Started a new conversation." {
 				t.Fatalf("turn state not reset: usage=%v phase=%v notice=%+v", m.usage, m.chatPhase, latestNotice(m))
@@ -218,8 +218,8 @@ func TestNewDuringActiveTurnCancelsOnceAndDrainsBeforeReset(t *testing.T) {
 	if got := cancelCalls.Load(); got != 1 {
 		t.Fatalf("cancel function calls after drain = %d, want exactly 1", got)
 	}
-	if m.convID != "" || m.engine.ConversationID() != "" || m.op.gen == oldGeneration {
-		t.Fatalf("post-drain reset failed: root=%q engine=%q generation=%d", m.convID, m.engine.ConversationID(), m.op.gen)
+	if m.convID != "" || m.engine.State().ConversationID != "" || m.op.gen == oldGeneration {
+		t.Fatalf("post-drain reset failed: root=%q engine=%q generation=%d", m.convID, m.engine.State().ConversationID, m.op.gen)
 	}
 }
 
@@ -239,8 +239,8 @@ func TestNewDuringHistoryLoadingCancelsAndDrains(t *testing.T) {
 		t.Fatal("history-loading conversation reset before its operation drained")
 	}
 	drainConversationRemote(t, m)
-	if m.convID != "" || engine.ConversationID() != "" || backend.cancelled.Load() != 1 {
-		t.Fatalf("history reset result: root=%q engine=%q cancellations=%d", m.convID, engine.ConversationID(), backend.cancelled.Load())
+	if m.convID != "" || engine.State().ConversationID != "" || backend.cancelled.Load() != 1 {
+		t.Fatalf("history reset result: root=%q engine=%q cancellations=%d", m.convID, engine.State().ConversationID, backend.cancelled.Load())
 	}
 }
 

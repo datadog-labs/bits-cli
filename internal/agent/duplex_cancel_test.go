@@ -29,12 +29,12 @@ func TestDuplexRetainsPartialTranscriptDuringCancellation(t *testing.T) {
 			cancel()
 		}
 	}
-	blocks := engine.Snapshot()
+	blocks := engine.State().Blocks
 	if ctx.Err() != context.Canceled {
 		t.Fatalf("context error = %v", ctx.Err())
 	}
-	if engine.ConversationID() != "persisted-conversation" || len(blocks) != 2 || !blocks[1].Complete {
-		t.Fatalf("partial transcript = %+v, conversation = %q", blocks, engine.ConversationID())
+	if engine.State().ConversationID != "persisted-conversation" || len(blocks) != 2 || !blocks[1].Complete {
+		t.Fatalf("partial transcript = %+v, conversation = %q", blocks, engine.State().ConversationID)
 	}
 }
 
@@ -51,8 +51,8 @@ func TestDuplexRetainsConversationDiscoveredDuringCancellation(t *testing.T) {
 	}}
 	engine := New(backend, Config{})
 	_ = collect(turnEvents(engine, ctx, TurnInput{Message: "question"}))
-	if ctx.Err() != context.Canceled || engine.ConversationID() != "persisted-after-cancel" {
-		t.Fatalf("context error = %v, conversation = %q", ctx.Err(), engine.ConversationID())
+	if ctx.Err() != context.Canceled || engine.State().ConversationID != "persisted-after-cancel" {
+		t.Fatalf("context error = %v, conversation = %q", ctx.Err(), engine.State().ConversationID)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestDuplexCancellationSettlesRunningAndAwaitingTools(t *testing.T) {
 	if ctx.Err() != context.Canceled {
 		t.Fatalf("context error = %v", ctx.Err())
 	}
-	blocks := engine.Snapshot()
+	blocks := engine.State().Blocks
 	if len(blocks) != 4 || !blocks[3].Complete {
 		t.Fatalf("partial blocks = %+v", blocks)
 	}
@@ -143,7 +143,7 @@ func TestDuplexTerminalSettlesUnfinishedTools(t *testing.T) {
 			engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
 			events := collect(turnEvents(engine, context.Background(), TurnInput{Message: "read", Tools: tools}))
 			err = events[len(events)-1].Err
-			blocks := engine.Snapshot()
+			blocks := engine.State().Blocks
 			if !errors.Is(err, terminal.err) {
 				t.Fatalf("error=%v, want %v", err, terminal.err)
 			}

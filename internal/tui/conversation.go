@@ -142,9 +142,9 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 		m.picker.SetError(n.Text, err)
 		return m.postNotice(n)
 	}
-	m.transcript = agent.State{Blocks: m.engine.Snapshot()}
+	m.transcript = agent.State{Blocks: m.engine.State().Blocks}
 	m.conversationEpoch++
-	m.convID = m.engine.ConversationID()
+	m.convID = m.engine.State().ConversationID
 	m.usage = nil
 	m.chatPhase = chat.PhaseIdle
 	m.list.Reset()

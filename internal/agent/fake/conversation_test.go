@@ -41,7 +41,7 @@ func TestConversationRoundTrip(t *testing.T) {
 	set := workspaceTools(t)
 	runTurn(t, engine, "random()", set, agent.DenyContinue, nil)
 	blocks, _ := runTurn(t, engine, `r = call("read_file", {"path": "go.mod"}); say(r.output)`, set, agent.DenyContinue, nil)
-	id := engine.ConversationID()
+	id := engine.State().ConversationID
 
 	list := engine.ListConversations(ctx)
 	if list.Err != nil || len(list.Conversations) != 1 || list.Conversations[0].ConversationID != id {
@@ -56,7 +56,7 @@ func TestConversationRoundTrip(t *testing.T) {
 	if err := restored.InstallConversation(ctx, conversation); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := viewOf(restored.Snapshot()), viewOf(blocks); !slices.Equal(got, want) {
+	if got, want := viewOf(restored.State().Blocks), viewOf(blocks); !slices.Equal(got, want) {
 		t.Fatalf("restored blocks differ\n got %+v\nwant %+v", got, want)
 	}
 
@@ -107,7 +107,7 @@ say(id)`
 			t.Fatal(ev.Err)
 		}
 	}
-	if got := texts(engine.Snapshot()); !slices.Equal(got, []string{"earlier", "after resumed"}) {
+	if got := texts(engine.State().Blocks); !slices.Equal(got, []string{"earlier", "after resumed"}) {
 		t.Fatalf("answers = %q", got)
 	}
 }

@@ -63,7 +63,7 @@ func runTurn(t *testing.T, engine *agent.Engine, message string, set *agent.Tool
 	if last.Kind != agent.EventDone {
 		t.Fatalf("last event = %+v, want a completed turn", last)
 	}
-	return engine.Snapshot(), last.Round
+	return engine.State().Blocks, last.Round
 }
 
 // follow subscribes, starts an operation, and returns its run's events.

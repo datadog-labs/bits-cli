@@ -630,15 +630,15 @@ func (m *Model) endOperation() tea.Cmd {
 	// engine calls now see the final state. Cancellation may have suppressed
 	// the events carrying these last updates.
 	if m.engine != nil && m.engine.Status().MultiAgent {
-		m.convID = m.engine.ConversationID()
-		m.transcript = agent.State{Blocks: m.engine.Snapshot()}
+		m.convID = m.engine.State().ConversationID
+		m.transcript = agent.State{Blocks: m.engine.State().Blocks}
 		m.syncTranscript()
 	}
 	if m.chatPhase != chat.PhaseError {
 		m.chatPhase = chat.PhaseIdle
 	}
 	if done.stop == stopAll {
-		m.transcript = agent.State{Blocks: m.engine.Snapshot()}
+		m.transcript = agent.State{Blocks: m.engine.State().Blocks}
 		m.syncTranscript()
 	} else if done.cancel != nil {
 		done.cancel() // release the turn/restore context
@@ -933,7 +933,7 @@ func (m *Model) resumePendingTools() tea.Cmd {
 		return nil
 	}
 	if m.engine.SettleRestoredTools(m.tools) {
-		m.transcript = agent.State{Blocks: m.engine.Snapshot()}
+		m.transcript = agent.State{Blocks: m.engine.State().Blocks}
 		m.syncTranscript()
 	}
 	if m.tools == nil || !m.engine.CanResumeTools(m.tools) {

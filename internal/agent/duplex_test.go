@@ -266,7 +266,7 @@ func TestDuplexApprovalDenialIsSubmittedAndControlsFutureCalls(t *testing.T) {
 			if got := executions.Load(); got != wantRuns {
 				t.Fatalf("executions = %d, want %d", got, wantRuns)
 			}
-			for _, block := range engine.Snapshot() {
+			for _, block := range engine.State().Blocks {
 				if policy == DenyStop && block.MessageID == "answer" {
 					t.Fatal("stopped run exposed follow-up answer")
 				}
@@ -366,7 +366,7 @@ func TestDuplexBoundsExecutionAcrossArrivingBatches(t *testing.T) {
 	if got := count.Load(); got > 16 {
 		t.Fatalf("started %d blocking handlers; expected at most 16 across all batches", got)
 	}
-	for _, block := range engine.Snapshot() {
+	for _, block := range engine.State().Blocks {
 		if block.Tool != nil && block.Tool.Status != ToolCancelled {
 			t.Fatalf("tool %s was not cancelled at terminal: %+v", block.ToolCallID(), block.Tool)
 		}

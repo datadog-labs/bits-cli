@@ -318,8 +318,8 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	backend.histories <- resumeHistoryReply{err: errors.New("network down")}
 	_, wait = m.Update(conversationview.SelectedMsg{Conversation: summary})
 	_, _ = m.Update(runResumeCmd(t, wait))
-	if m.picker.State() != conversationview.StateError || m.convID != "old" || engine.ConversationID() != "old" || m.transcript.Blocks[0].Markdown.Content != "OLD-CACHED" {
-		t.Fatalf("failed load mutated state: picker=%v root=%q engine=%q blocks=%+v", m.picker.State(), m.convID, engine.ConversationID(), m.transcript.Blocks)
+	if m.picker.State() != conversationview.StateError || m.convID != "old" || engine.State().ConversationID != "old" || m.transcript.Blocks[0].Markdown.Content != "OLD-CACHED" {
+		t.Fatalf("failed load mutated state: picker=%v root=%q engine=%q blocks=%+v", m.picker.State(), m.convID, engine.State().ConversationID, m.transcript.Blocks)
 	}
 
 	backend.histories <- resumeHistoryReply{response: history(
@@ -328,8 +328,8 @@ func TestResumeSwitchFailureRetryThenAtomicSuccess(t *testing.T) {
 	)}
 	_, wait = m.Update(conversationview.RetryMsg{})
 	_, _ = m.Update(runResumeCmd(t, wait))
-	if m.mode != ModeChat || m.picker != nil || m.convID != resumeConversationID || engine.ConversationID() != resumeConversationID {
-		t.Fatalf("success state: mode=%v picker=%v root=%q engine=%q", m.mode, m.picker != nil, m.convID, engine.ConversationID())
+	if m.mode != ModeChat || m.picker != nil || m.convID != resumeConversationID || engine.State().ConversationID != resumeConversationID {
+		t.Fatalf("success state: mode=%v picker=%v root=%q engine=%q", m.mode, m.picker != nil, m.convID, engine.State().ConversationID)
 	}
 	if len(m.transcript.Blocks) != 1 || m.transcript.Blocks[0].Markdown.Content != "NEW-TRANSCRIPT" {
 		t.Fatalf("new blocks = %+v", m.transcript.Blocks)
@@ -365,8 +365,8 @@ func TestCancelLoadedButUnappliedResultCannotSwitchEngine(t *testing.T) {
 	backend.lists <- resumeListReply{response: summaries(summary)}
 	_, _ = m.Update(runResumeCmd(t, m.openConversationPicker()))
 	_, _ = m.Update(loadedMsg)
-	if m.mode != ModeConversations || m.picker.State() != conversationview.StateReady || m.convID != "old" || engine.ConversationID() != "old" {
-		t.Fatalf("stale loaded result switched state: mode=%v root=%q engine=%q", m.mode, m.convID, engine.ConversationID())
+	if m.mode != ModeConversations || m.picker.State() != conversationview.StateReady || m.convID != "old" || engine.State().ConversationID != "old" {
+		t.Fatalf("stale loaded result switched state: mode=%v root=%q engine=%q", m.mode, m.convID, engine.State().ConversationID)
 	}
 }
 

@@ -75,12 +75,12 @@ func Run(ctx context.Context, engine *agent.Engine, input agent.TurnInput, deliv
 		}
 	}
 
-	blocks := engine.Snapshot()
+	blocks := engine.State().Blocks
 	outcome, err := classify(completed, denied(blocks, run), turnErr, consumeErr)
 	finishErr := delivery.Finish(Finish{
 		EndedAt:        time.Now(),
 		Outcome:        outcome,
-		ConversationID: engine.ConversationID(),
+		ConversationID: engine.State().ConversationID,
 		Blocks:         blocks,
 		Err:            err,
 	})

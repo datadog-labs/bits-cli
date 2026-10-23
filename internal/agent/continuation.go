@@ -26,11 +26,17 @@ func (e *Engine) canResumeTools(tools *ToolSet) bool {
 }
 
 // SettleRestoredTools marks unfinished calls that cannot resume as cancelled
-// in the local transcript, leaving conversation history unchanged. It reports
-// whether any block changed and does nothing while an operation is active.
+// in the local transcript, leaving conversation history unchanged. It
+// publishes the state and reports whether any block changed, and does nothing
+// while an operation is active.
 func (e *Engine) SettleRestoredTools(tools *ToolSet) bool {
 	changed := false
-	_ = e.idle(func() error { changed = e.settleRestoredTools(tools); return nil })
+	_ = e.idle(func() error {
+		if changed = e.settleRestoredTools(tools); changed {
+			e.publish()
+		}
+		return nil
+	})
 	return changed
 }
 

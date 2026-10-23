@@ -248,7 +248,7 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 			if store.loads != 0 {
 				t.Fatalf("store loads = %d", store.loads)
 			}
-			got := engine.ConversationID()
+			got := engine.State().ConversationID
 			if (conversation == id) != (got == id) || !agent.ValidConversationID(got) {
 				t.Fatalf("conversation ID = %q", got)
 			}

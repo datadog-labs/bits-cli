@@ -76,7 +76,9 @@ type RunID uint64
 // block traversal and may gain indexes or cached values without changing
 // event consumers.
 type State struct {
-	ConversationID string // empty until the backend knows the conversation
+	// ConversationID is the conversation the engine is bound to: set from
+	// Config, then by the backend as turns run. Empty means a new one.
+	ConversationID string
 	Blocks         []Block
 	Usage          *assistant.Usage // nil until a turn reports it
 }
@@ -689,10 +691,11 @@ func (t *turn) finish(err error) {
 	case t.ex == nil:
 		end = Event{Kind: EventError, Err: err}
 	default:
-		settled := e.settleUnfinishedTools(t.tools, t.run, t.ex.final())
-		if e.transcript.FinalizeAll() || settled {
-			t.publish()
-		}
+		// The final state carries what the turn changed without publishing,
+		// such as the conversation id adopted while a stop drained the stream.
+		e.settleUnfinishedTools(t.tools, t.run, t.ex.final())
+		e.transcript.FinalizeAll()
+		t.publish()
 		end = Event{Kind: EventDone, Round: t.round}
 		if err != nil {
 			var backend backendError
@@ -747,16 +750,15 @@ func (e *Engine) settleUnfinishedTools(tools *ToolSet, run RunID, server bool) b
 	return changed
 }
 
+// publish emits the current state outside any run, for a change no run made.
+func (e *Engine) publish() {
+	e.emit(0, Event{Kind: EventState, State: e.state()})
+}
+
 // state returns the current state, safe to share with every subscription and
 // retain: the engine keeps mutating its own transcript on later folds.
 func (e *Engine) state() State {
 	return State{ConversationID: e.opts.ConversationID, Blocks: slices.Clone(e.transcript.Blocks()), Usage: e.usage}
-}
-
-// ConversationID reports the conversation the engine is bound to. It is set
-// from SendOptions and updated as turns run; empty means a new conversation.
-func (e *Engine) ConversationID() string {
-	return get(e, func() string { return e.opts.ConversationID })
 }
 
 // Status reports the immutable effective request configuration and non-secret
@@ -803,6 +805,7 @@ func (e *Engine) NewConversation() error {
 		e.usage = nil
 		e.continuation = nil
 		clear(e.gate.grants)
+		e.publish()
 		return nil
 	})
 }
@@ -871,9 +874,7 @@ func (e *Engine) Restore(ctx context.Context) (RunID, error) {
 			default:
 				if id != "" {
 					e.installConversation(conversation)
-					if state := e.state(); len(state.Blocks) > 0 {
-						e.emit(run, Event{Kind: EventState, State: state})
-					}
+					e.emit(run, Event{Kind: EventState, State: e.state()})
 				}
 				e.emit(run, Event{Kind: EventDone})
 			}
@@ -1073,9 +1074,12 @@ func (t *turn) apply(event exchangeEvent) error {
 		t.denied = false
 	}
 	if event.conversation != "" {
-		t.adopt(event.conversation)
+		changed := t.adopt(event.conversation)
 		if !t.stopRequested {
 			t.emit(Event{Kind: EventConversation, ConvID: event.conversation})
+			if changed {
+				t.publish()
+			}
 		}
 	}
 	if event.message != nil {
@@ -1111,11 +1115,14 @@ func (t *turn) add(call ToolCall) (*clientCall, error) {
 	return c, nil
 }
 
-// adopt records a conversation ID the backend assigned or confirmed.
-func (t *turn) adopt(conversation string) {
-	if conversation != "" {
-		t.e.opts.ConversationID = conversation
+// adopt records a conversation ID the backend assigned or confirmed, and
+// reports whether it changed.
+func (t *turn) adopt(conversation string) bool {
+	if conversation == "" || conversation == t.e.opts.ConversationID {
+		return false
 	}
+	t.e.opts.ConversationID = conversation
+	return true
 }
 
 // acknowledge records the user request as delivered after a backend response

@@ -223,8 +223,8 @@ func TestMultiAgentServerApprovalSupportsRepeatedDeferral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if engine.ConversationID() != "approval-conversation" {
-		t.Fatalf("conversation = %q", engine.ConversationID())
+	if engine.State().ConversationID != "approval-conversation" {
+		t.Fatalf("conversation = %q", engine.State().ConversationID)
 	}
 }
 

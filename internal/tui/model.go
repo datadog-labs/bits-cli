@@ -302,7 +302,7 @@ func New(engine *agent.Engine, configs ...Config) *Model {
 // before any operation starts, so the pump started by initChat misses none.
 func (m *Model) attach(engine *agent.Engine) {
 	m.engine = engine
-	m.convID = engine.ConversationID()
+	m.convID = engine.State().ConversationID
 	m.events, m.unsubscribe = engine.Subscribe()
 }
 
@@ -451,7 +451,7 @@ func (m *Model) initChat() tea.Cmd {
 		return tea.Batch(commands...)
 	}
 	commands = append(commands, waitEvent(m.events))
-	if m.engine.ConversationID() == "" {
+	if m.engine.State().ConversationID == "" {
 		// Fetch the startup offer only when there is no history to restore.
 		return tea.Batch(append(commands, m.fetchRecentConversations(), m.syncClientSkills())...)
 	}

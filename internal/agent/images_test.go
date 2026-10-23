@@ -88,7 +88,7 @@ func TestAFileThatIsNotAnImageFailsTheTurnBeforeSending(t *testing.T) {
 		t.Fatalf("backend received %d requests", len(backend.opts))
 	}
 	// The failed prompt keeps the file reference, so recalling it retries.
-	if blocks := engine.Snapshot(); len(blocks) != 1 || !reflect.DeepEqual(blocks[0].Context, []assistant.ContextEntity{file}) {
+	if blocks := engine.State().Blocks; len(blocks) != 1 || !reflect.DeepEqual(blocks[0].Context, []assistant.ContextEntity{file}) {
 		t.Fatalf("user block = %+v", blocks)
 	}
 }

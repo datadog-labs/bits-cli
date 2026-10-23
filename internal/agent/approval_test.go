@@ -253,7 +253,7 @@ func TestServerGateDenials(t *testing.T) {
 			if batches := backend.responses(); len(batches) != 1 || !slices.Equal(summarize(batches[0]), tt.want) {
 				t.Fatalf("responses = %v, want %q", batches, tt.want)
 			}
-			answered := slices.ContainsFunc(engine.Snapshot(), func(block Block) bool {
+			answered := slices.ContainsFunc(engine.State().Blocks, func(block Block) bool {
 				return block.Markdown != nil && block.Markdown.Content == "adjusted answer"
 			})
 			if answered != (tt.onDeny == DenyContinue) {
@@ -294,7 +294,7 @@ func TestDenyStopDrainsFollowUpClientToolCalls(t *testing.T) {
 	if drained := backend.responses()[1][0]; drained.Status != assistant.ToolStatusError || drained.Metadata.Output != "tool execution was cancelled by the user" {
 		t.Fatalf("drained response = %+v", drained)
 	}
-	for _, block := range engine.Snapshot() {
+	for _, block := range engine.State().Blocks {
 		if block.ToolCallID() == "follow-1" || block.Markdown != nil && block.Markdown.Content == "adjusted answer" {
 			t.Fatalf("stopped follow-up was folded into the transcript: %+v", block)
 		}
