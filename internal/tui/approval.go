@@ -175,6 +175,10 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 		}
 		detail = prompt.Detail
 	}
+	design := chat.ApprovalOf(block.Tool, a.chat)
+	if design.Title != "" {
+		title = escape.Inline(design.Title)
+	}
 
 	queue := "Permission Required"
 	if slot.Waiting > 1 {
@@ -190,8 +194,8 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 		ScrollOffset: a.window.Offset,
 		ScrollHint:   "pgup/pgdown scroll",
 		ScrollableBody: func(width int) string {
-			if rendered, ok := chat.RenderToolApproval(block.Tool, width, a.chat); ok {
-				return rendered
+			if design.Render != nil {
+				return design.Render(width)
 			}
 			return textwrap.WrapProseText(width, escape.Inline(detail), sty.Detail)
 		},
@@ -202,8 +206,8 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 			// Wrapped, not truncated: a request that does not fit whole falls
 			// back to the one-line form, which cannot be answered.
 			lines := []string{textwrap.WrapProseText(width, title, sty.Text)}
-			if rendered, ok := chat.RenderToolApproval(block.Tool, width, a.chat); ok {
-				lines = append(lines, rendered)
+			if design.Render != nil {
+				lines = append(lines, design.Render(width))
 			} else if detail != "" {
 				lines = append(lines, textwrap.WrapProseText(width, escape.Inline(detail), sty.Detail))
 			}

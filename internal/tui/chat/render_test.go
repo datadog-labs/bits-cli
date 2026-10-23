@@ -397,7 +397,7 @@ func TestExecCommandApprovalUsesSpecializedMultilineRenderer(t *testing.T) {
 	sty.ToolArgument = lipgloss.NewStyle()
 	sty.ToolDetail = lipgloss.NewStyle()
 
-	rendered, ok := RenderToolApproval(tool, 80, sty)
+	rendered, ok := approvalBody(tool, sty)
 	if !ok {
 		t.Fatal("exec_command did not select its approval renderer")
 	}
@@ -412,8 +412,51 @@ func TestExecCommandApprovalUsesSpecializedMultilineRenderer(t *testing.T) {
 		t.Fatalf("exec approval was not syntax highlighted: %q", rendered)
 	}
 
-	if rendered, ok := RenderToolApproval(&agent.ToolBlock{Name: "other", Approval: &agent.ApprovalPrompt{Detail: "generic"}}, 80, sty); ok || rendered != "" {
+	if rendered, ok := approvalBody(&agent.ToolBlock{Name: "other", Approval: &agent.ApprovalPrompt{Detail: "generic"}}, sty); ok || rendered != "" {
 		t.Fatalf("generic tool selected specialized approval rendering: %q, %v", rendered, ok)
+	}
+}
+
+// approvalBody renders tool's own approval body at width 80, if it has one.
+func approvalBody(tool *agent.ToolBlock, sty Styles) (string, bool) {
+	design := ApprovalOf(tool, sty)
+	if design.Render == nil {
+		return "", false
+	}
+	return design.Render(80), true
+}
+
+// An approval_request gating startBackgroundTask presents the task, and the
+// call that starts it reads as an action on the task.
+func TestBackgroundTaskApprovalAndCallPresentTheTask(t *testing.T) {
+	args := `{"task":{"agent_id":"investigation","task_name":"Why 500s","payload":{
+		"type":"general_investigation","description":"Error spike on checkout","tags":["service:checkout","env:prod"],
+		"start_time":1792670400000,"end_time":1792679400000}}}`
+	gate := func(name string) *agent.ToolBlock {
+		return &agent.ToolBlock{
+			Name: assistant.ApprovalRequestTool, IsClientSide: true, Status: agent.ToolAwaitingApproval,
+			Approval: &agent.ApprovalPrompt{Title: "Start it?", Detail: "tool: " + name, Gated: &agent.ToolCall{ID: "call-1", Name: name, Input: args}},
+		}
+	}
+	sty := DefaultStyles(true)
+	sty.ToolDetail = lipgloss.NewStyle()
+
+	design := ApprovalOf(gate(spec.StartBackgroundTask), sty)
+	want := "Task: Why 500s\nInvestigate: Error spike on checkout\nScope: service:checkout, env:prod\n" +
+		"Time window: 2026-10-22 12:00 UTC to 2026-10-22 14:30 UTC\nProgress and findings will appear in this conversation."
+	if design.Title != "Start a Bits Investigation?" || design.Render == nil || ansi.Strip(design.Render(80)) != want {
+		t.Fatalf("investigation approval = %+v", design)
+	}
+	if other := ApprovalOf(gate("deleteMonitor"), sty); other.Title != "" || other.Render != nil {
+		t.Fatalf("another gated tool has the background task approval: %+v", other)
+	}
+
+	call := agent.Block{
+		ID: agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"}, Kind: assistant.KindToolCall, Complete: true,
+		Tool: &agent.ToolBlock{Name: spec.StartBackgroundTask, Input: args, HasFinalInput: true, Status: agent.ToolSuccess},
+	}
+	if got := ansi.Strip(RenderBlock(call, 80, DefaultStyles(true), 0)); !strings.Contains(got, "Started background task Why 500s") {
+		t.Fatalf("start call = %q", got)
 	}
 }
 
@@ -487,7 +530,7 @@ func TestExecApprovalNeutralizesBidiReorderedCommand(t *testing.T) {
 	sty.ToolArgument = lipgloss.NewStyle()
 	sty.ToolDetail = lipgloss.NewStyle()
 
-	rendered, ok := RenderToolApproval(tool, 80, sty)
+	rendered, ok := approvalBody(tool, sty)
 	if !ok {
 		t.Fatal("exec_command did not select its approval renderer")
 	}
