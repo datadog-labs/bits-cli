@@ -66,20 +66,15 @@ func TestBuildMeasuresCreatesStableCIVisibilityNames(t *testing.T) {
 }
 
 func TestRunWritesArtifactMeasuresAndRunnerTags(t *testing.T) {
-	t.Setenv("CI_COMMIT_SHA", "abc123")
-	t.Setenv("CI_COMMIT_REF_NAME", "main")
-	t.Setenv("CI_PIPELINE_ID", "42")
-	t.Setenv("CI_JOB_ID", "84")
-	t.Setenv("DDCI_REQUEST_KIND", "REQUEST_KIND_INTEGRATION_REQUEST")
-	t.Setenv("CI_RUNNER_ID", "12345")
-	t.Setenv("CI_RUNNER_DESCRIPTION", "kubernetes-runner")
-	t.Setenv("CI_RUNNER_TAGS", `["arch:arm64","kubernetes"]`)
-	t.Setenv("CI_RUNNER_VERSION", "18.2.0")
-	t.Setenv("CI_RUNNER_EXECUTABLE_ARCH", "linux/arm64")
-	t.Setenv("KUBERNETES_CPU_REQUEST", "1")
-	t.Setenv("KUBERNETES_CPU_LIMIT", "1")
-	t.Setenv("KUBERNETES_MEMORY_REQUEST", "2Gi")
-	t.Setenv("KUBERNETES_MEMORY_LIMIT", "2Gi")
+	t.Setenv("GITHUB_SHA", "abc123")
+	t.Setenv("GITHUB_REF_NAME", "main")
+	t.Setenv("GITHUB_RUN_ID", "42")
+	t.Setenv("GITHUB_JOB", "benchmarks")
+	t.Setenv("GITHUB_EVENT_NAME", "push")
+	t.Setenv("RUNNER_NAME", "runner-1234")
+	t.Setenv("RUNNER_ENVIRONMENT", "github-hosted")
+	t.Setenv("ImageVersion", "20260929.1.0")
+	t.Setenv("RUNNER_ARCH", "ARM64")
 	t.Setenv("GOMAXPROCS", "1")
 
 	dir := t.TempDir()
@@ -115,17 +110,15 @@ BenchmarkTranscriptStreaming/fragments_800-1  5  220 ns/op
 	if !ok || metadata["git_sha"] != "abc123" || metadata["git_ref"] != "main" {
 		t.Fatalf("metadata = %#v", artifact["metadata"])
 	}
+	if metadata["ci_job_id"] != "benchmarks" || metadata["ci_event_name"] != "push" {
+		t.Fatalf("metadata = %#v", artifact["metadata"])
+	}
 	wantRunner := map[string]any{
-		"id":              "12345",
-		"description":     "kubernetes-runner",
-		"tags":            []any{"arch:arm64", "kubernetes"},
-		"version":         "18.2.0",
-		"executable_arch": "linux/arm64",
+		"id":              "runner-1234",
+		"description":     "github-hosted",
+		"version":         "20260929.1.0",
+		"executable_arch": "ARM64",
 		"cpu_model":       "AWS Graviton4",
-		"cpu_request":     "1",
-		"cpu_limit":       "1",
-		"memory_request":  "2Gi",
-		"memory_limit":    "2Gi",
 		"gomaxprocs":      "1",
 	}
 	if got := metadata["runner"]; !reflect.DeepEqual(got, wantRunner) {
@@ -157,21 +150,16 @@ BenchmarkTranscriptStreaming/fragments_800-1  5  220 ns/op
 		t.Fatalf("decode tags: %v", err)
 	}
 	wantTags := map[string]string{
-		"bits_cli.benchmark.ddci_request_kind":      "REQUEST_KIND_INTEGRATION_REQUEST",
+		"bits_cli.benchmark.ci_event_name":          "push",
 		"bits_cli.benchmark.go_version":             runtime.Version(),
 		"bits_cli.benchmark.goarch":                 runtime.GOARCH,
 		"bits_cli.benchmark.goos":                   runtime.GOOS,
-		"bits_cli.benchmark.runner.cpu_limit":       "1",
 		"bits_cli.benchmark.runner.cpu_model":       "AWS Graviton4",
-		"bits_cli.benchmark.runner.cpu_request":     "1",
-		"bits_cli.benchmark.runner.description":     "kubernetes-runner",
-		"bits_cli.benchmark.runner.executable_arch": "linux/arm64",
+		"bits_cli.benchmark.runner.description":     "github-hosted",
+		"bits_cli.benchmark.runner.executable_arch": "ARM64",
 		"bits_cli.benchmark.runner.gomaxprocs":      "1",
-		"bits_cli.benchmark.runner.id":              "12345",
-		"bits_cli.benchmark.runner.memory_limit":    "2Gi",
-		"bits_cli.benchmark.runner.memory_request":  "2Gi",
-		"bits_cli.benchmark.runner.tags":            "arch:arm64,kubernetes",
-		"bits_cli.benchmark.runner.version":         "18.2.0",
+		"bits_cli.benchmark.runner.id":              "runner-1234",
+		"bits_cli.benchmark.runner.version":         "20260929.1.0",
 	}
 	if !reflect.DeepEqual(tags, wantTags) {
 		t.Fatalf("tags = %#v, want %#v", tags, wantTags)
