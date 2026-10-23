@@ -17,13 +17,15 @@ func TestLocalNoticesStayBetweenAgentBlocks(t *testing.T) {
 	l.SetHeight(10)
 	first := textBlock("a", "FIRST BLOCK")
 	second := textBlock("b", "SECOND BLOCK")
-	n := NoticeItem{ID: 1, After: 1, Notice: Notice{
+	n := NoticeItem{ID: 1, After: first.ID, Notice: Notice{
 		Level: NoticeWarn, Text: "A warning that wraps across more than one line", Err: errors.New("private backend detail"),
 	}}
-	l.SetTranscript([]agent.Block{first}, []NoticeItem{n})
-	l.SetTranscript([]agent.Block{first, second}, []NoticeItem{n})
+	next := NoticeItem{ID: 2, After: first.ID, Notice: Notice{Level: NoticeInfo, Text: "NEXT NOTICE"}}
+	l.SetTranscript([]agent.Block{first}, []NoticeItem{n, next})
+	// A block shown before their anchor does not move the notices.
+	l.SetTranscript([]agent.Block{textBlock("z", "EARLIER BLOCK"), first, second}, []NoticeItem{n, next})
 	doc := ansi.Strip(l.Document())
-	if a, b, c := strings.Index(doc, "FIRST BLOCK"), strings.Index(doc, "A warning"), strings.Index(doc, "SECOND BLOCK"); a < 0 || b <= a || c <= b {
+	if z, a, b, d, c := strings.Index(doc, "EARLIER BLOCK"), strings.Index(doc, "FIRST BLOCK"), strings.Index(doc, "A warning"), strings.Index(doc, "NEXT NOTICE"), strings.Index(doc, "SECOND BLOCK"); z < 0 || a <= z || b <= a || d <= b || c <= d {
 		t.Fatalf("incorrect message order:\n%s", doc)
 	}
 	if strings.Contains(doc, "private backend detail") {

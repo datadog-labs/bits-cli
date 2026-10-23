@@ -60,7 +60,11 @@ func (m *Model) postNotice(n chat.Notice) tea.Cmd {
 		return nil
 	}
 	m.nextNoticeID++
-	m.notices = append(m.notices, chat.NoticeItem{ID: m.nextNoticeID, After: len(m.transcript.Blocks), Notice: n})
+	var after agent.BlockID
+	if blocks := m.transcript.Blocks; len(blocks) > 0 {
+		after = blocks[len(blocks)-1].ID
+	}
+	m.notices = append(m.notices, chat.NoticeItem{ID: m.nextNoticeID, After: after, Notice: n})
 	if m.list != nil {
 		m.syncTranscript()
 	}
