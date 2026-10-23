@@ -61,7 +61,7 @@ func (r *blockRenderer) RenderBlock(it agent.Block, width int, sty Styles, frame
 	case assistant.KindDashboard:
 		return renderDashboard(it, width, sty)
 	case assistant.KindProgress:
-		return renderProgress(it, width, sty)
+		return r.renderProgress(it, width, sty)
 	case assistant.KindTurnMarker, assistant.KindStop,
 		assistant.KindInternal, assistant.KindUnknown:
 		return fallback(it, width, sty)
@@ -179,10 +179,16 @@ func renderDashboard(it agent.Block, width int, sty Styles) string {
 	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
 }
 
-// renderProgress renders dimmed progress text.
-func renderProgress(it agent.Block, width int, sty Styles) string {
+// renderProgress renders a background task update, which is markdown, quoted
+// to set it apart from the conversation it is shown in.
+func (r *blockRenderer) renderProgress(it agent.Block, width int, sty Styles) string {
 	if it.Progress == nil {
 		return fallback(it, width, sty)
 	}
-	return textwrap.WrapProseText(width, escape.Multiline(it.Progress.Content), sty.Meta)
+	bar := sty.Meta.Render("│ ")
+	lines := strings.Split(r.markdown.Render(it.Progress.Content, max(1, width-2), sty.Markdown), "\n")
+	for i, line := range lines {
+		lines[i] = bar + line
+	}
+	return strings.Join(lines, "\n")
 }

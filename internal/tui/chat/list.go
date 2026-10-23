@@ -174,12 +174,14 @@ func (l *List) SetStyles(sty Styles) {
 // TODO: Revisit the cost of rebuilding presentation data on UI-only updates if
 // large transcripts become common.
 func (l *List) SetItems(items []agent.Block) {
-	l.SetTranscript(items, nil)
+	l.SetTranscript(items, nil, nil)
 }
 
-// SetTranscript combines agent blocks with session-only UI messages without
-// changing the source blocks or their backend-facing transcript.
-func (l *List) SetTranscript(items []agent.Block, notices []NoticeItem) {
+// SetTranscript combines the conversation's blocks with its background tasks'
+// and with session-only UI messages, without changing the source blocks or
+// their backend-facing transcript.
+func (l *List) SetTranscript(blocks []agent.Block, tasks []agent.Task, notices []NoticeItem) {
+	items := withTasks(blocks, tasks)
 	var anchor agent.BlockID
 	anchored := !l.follow && l.offsetIdx < len(l.view)
 	if anchored {
@@ -846,6 +848,32 @@ func (l *List) ScrollByChanged(lines int) bool {
 	idx, line, follow := l.offsetIdx, l.offsetLine, l.follow
 	l.ScrollBy(lines)
 	return idx != l.offsetIdx || line != l.offsetLine || follow != l.follow
+}
+
+// withTasks shows each background task's blocks right after the call that
+// started it, so a task reads the same live and restored however the
+// conversation went on. A task whose call is not shown goes last.
+func withTasks(blocks []agent.Block, tasks []agent.Task) []agent.Block {
+	if len(tasks) == 0 {
+		return blocks
+	}
+	out := make([]agent.Block, 0, len(blocks))
+	placed := make([]bool, len(tasks))
+	for _, b := range blocks {
+		out = append(out, b)
+		for i, task := range tasks {
+			if task.CallID != "" && task.CallID == b.ToolCallID() {
+				out = append(out, task.Blocks...)
+				placed[i] = true
+			}
+		}
+	}
+	for i, task := range tasks {
+		if !placed[i] {
+			out = append(out, task.Blocks...)
+		}
+	}
+	return out
 }
 
 func buildPresentation(header string, blocks []agent.Block) []presentationItem {

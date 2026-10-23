@@ -1047,5 +1047,5 @@ func (m *Model) relayout() {
 
 // syncTranscript rebuilds presentation metadata after m.state changes.
 func (m *Model) syncTranscript() {
-	m.list.SetTranscript(m.state.Blocks, m.notices)
+	m.list.SetTranscript(m.state.Blocks, m.state.Tasks, m.notices)
 }
