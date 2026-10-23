@@ -49,7 +49,7 @@ func written(context.Context, ToolCall) (ToolResult, error) {
 func decideGates(t *testing.T, decide func(id string) bool) func(Event) {
 	decided := map[string]bool{}
 	return func(event Event) {
-		for _, block := range event.Transcript.PendingApprovals() {
+		for _, block := range event.State.PendingApprovals() {
 			id := block.ToolCallID()
 			if block.Tool.Name == assistant.ApprovalRequestTool && !decided[id] {
 				decided[id] = true
@@ -133,7 +133,7 @@ func TestGatesDeniedWithoutAsking(t *testing.T) {
 			backend := &scriptBackend{rounds: gateRounds(tt.round...)}
 			engine := New(backend, Config{PermissionsMode: tt.mode})
 			events := drain(t, engine, TurnInput{Message: "write", Tools: tt.tools, OnDeny: tt.onDeny}, func(event Event) {
-				if len(event.Transcript.PendingApprovals()) > 0 {
+				if len(event.State.PendingApprovals()) > 0 {
 					t.Error("a gate surfaced as a pending approval")
 				}
 			})
@@ -176,7 +176,7 @@ func TestServerGateApprovals(t *testing.T) {
 			decisions := 0
 			events := drain(t, engine, TurnInput{Message: "write", Tools: writeTools(t, true, written)},
 				func(event Event) {
-					for _, block := range event.Transcript.PendingApprovals() {
+					for _, block := range event.State.PendingApprovals() {
 						if block.ToolCallID() == "gate-1" && (block.Tool.Approval == nil || block.Tool.Approval.Title != "Delete it?" || block.Tool.Approval.Detail != "tool: delete_dashboard") {
 							t.Errorf("server-gate prompt = %+v, want the action-specific prompt", block.Tool.Approval)
 						}

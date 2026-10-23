@@ -114,7 +114,7 @@ func consume(t *testing.T, delivery *Delivery, events ...agent.Event) {
 const testRun agent.RunID = 1
 
 func transcript(round int, blocks ...agent.Block) agent.Event {
-	return agent.Event{Kind: agent.EventTranscript, Run: testRun, Round: round, Transcript: agent.TranscriptSnapshot{Blocks: blocks}}
+	return agent.Event{Kind: agent.EventState, Run: testRun, Round: round, State: agent.State{Blocks: blocks}}
 }
 
 func textBlock(id string, role assistant.Role, text string) agent.Block {

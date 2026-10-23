@@ -185,7 +185,7 @@ type Model struct {
 	startupErr      error
 
 	// transcript is the latest snapshot of the engine's aggregated transcript.
-	transcript agent.TranscriptSnapshot
+	transcript agent.State
 
 	// op is the one exclusive session operation; see operation.
 	op operation

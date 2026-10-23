@@ -612,7 +612,7 @@ func (m *Model) inComposer(msg tea.MouseMsg) (image.Point, bool) {
 func (m *Model) applyRunEvent(ev agent.Event) tea.Cmd {
 	cmd := m.applyEvent(ev)
 	m.syncStatus()
-	if ev.Kind == agent.EventTranscript {
+	if ev.Kind == agent.EventState {
 		m.syncTranscript()
 	}
 	if ev.Terminal() {
@@ -631,14 +631,14 @@ func (m *Model) endOperation() tea.Cmd {
 	// the events carrying these last updates.
 	if m.engine != nil && m.engine.Status().MultiAgent {
 		m.convID = m.engine.ConversationID()
-		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+		m.transcript = agent.State{Blocks: m.engine.Snapshot()}
 		m.syncTranscript()
 	}
 	if m.chatPhase != chat.PhaseError {
 		m.chatPhase = chat.PhaseIdle
 	}
 	if done.stop == stopAll {
-		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+		m.transcript = agent.State{Blocks: m.engine.Snapshot()}
 		m.syncTranscript()
 	} else if done.cancel != nil {
 		done.cancel() // release the turn/restore context
@@ -933,7 +933,7 @@ func (m *Model) resumePendingTools() tea.Cmd {
 		return nil
 	}
 	if m.engine.SettleRestoredTools(m.tools) {
-		m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+		m.transcript = agent.State{Blocks: m.engine.Snapshot()}
 		m.syncTranscript()
 	}
 	if m.tools == nil || !m.engine.CanResumeTools(m.tools) {
@@ -971,10 +971,10 @@ func (m *Model) after(next followUp) {
 func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
-	case agent.EventTranscript:
-		m.transcript = ev.Transcript
-		m.syncApprovals(ev.Transcript.PendingApprovals())
-		if ev.Transcript.HasStreamingContent() {
+	case agent.EventState:
+		m.transcript = ev.State
+		m.syncApprovals(ev.State.PendingApprovals())
+		if ev.State.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}
 	case agent.EventUsage:

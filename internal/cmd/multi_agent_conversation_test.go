@@ -151,8 +151,8 @@ func TestMultiAgentEngineConversationLifecycle(t *testing.T) {
 		if event.Kind == agent.EventError {
 			t.Fatal(event.Err)
 		}
-		if event.Kind == agent.EventTranscript {
-			restored = event.Transcript.Blocks
+		if event.Kind == agent.EventState {
+			restored = event.State.Blocks
 		}
 	}
 	assertTranscript(restored, "First question", "First answer", "Follow-up question", "Follow-up answer")

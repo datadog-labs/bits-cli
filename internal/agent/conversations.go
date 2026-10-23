@@ -131,6 +131,7 @@ func (e *Engine) installConversation(conversation *Conversation) {
 	e.opts.MessageHistory = nil
 	e.resetContext()
 	e.transcript = conversation.transcript
+	e.usage = nil
 	e.continuation = conversation.continuation
 }
 
@@ -138,7 +139,7 @@ func (e *Engine) installConversation(conversation *Conversation) {
 // may be ahead of the events consumed so far; after the operation's channel
 // closes it is the operation's final state.
 func (e *Engine) Snapshot() []Block {
-	return get(e, func() []Block { return e.snapshot().Blocks })
+	return get(e, func() []Block { return e.state().Blocks })
 }
 
 func (e *Engine) OperationActive() bool { return get(e, func() bool { return e.busy }) }

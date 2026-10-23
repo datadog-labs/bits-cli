@@ -53,7 +53,7 @@ func runTurn(t *testing.T, engine *agent.Engine, message string, set *agent.Tool
 		return engine.StartTurn(context.Background(), agent.TurnInput{Message: message, Tools: set, OnDeny: onDeny})
 	}) {
 		last = ev
-		for _, block := range ev.Transcript.PendingApprovals() {
+		for _, block := range ev.State.PendingApprovals() {
 			if id := block.ToolCallID(); !decided[id] {
 				decided[id] = true
 				_ = engine.Decide(id, decide(block))

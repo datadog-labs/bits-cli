@@ -221,7 +221,7 @@ func (m *Model) statusConnectivity() statusview.Connectivity {
 // never copied into status state.
 func (m *Model) observeEvent(event agent.Event) {
 	switch event.Kind {
-	case agent.EventTranscript:
+	case agent.EventState:
 		if event.Round > 0 { // the backend answered
 			m.markConnected()
 		}

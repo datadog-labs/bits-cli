@@ -25,7 +25,7 @@ func TestDuplexRetainsPartialTranscriptDuringCancellation(t *testing.T) {
 	}}
 	engine := New(backend, Config{})
 	for event := range turnEvents(engine, ctx, TurnInput{Message: "question"}) {
-		if event.Kind == EventTranscript && event.Round > 0 {
+		if event.Kind == EventState && event.Round > 0 {
 			cancel()
 		}
 	}

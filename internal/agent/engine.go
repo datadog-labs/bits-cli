@@ -58,7 +58,7 @@ type CurrentUserBackend interface {
 type EventKind int
 
 const (
-	EventTranscript   EventKind = iota // full transcript snapshot; read Transcript
+	EventState        EventKind = iota // the conversation's state; read State
 	EventUsage                         // token usage update; read Usage
 	EventConversation                  // server-assigned/confirmed conversation id
 	EventDone                          // the operation completed (a turn: with no pending tool calls)
@@ -71,16 +71,19 @@ const (
 // apart. Zero means no run: an operation that failed to claim the engine.
 type RunID uint64
 
-// TranscriptSnapshot is a read-only view of the complete renderable transcript.
-// Its query methods centralize common block traversal and may gain indexes or
-// cached values without changing event consumers.
-type TranscriptSnapshot struct {
-	Blocks []Block
+// State is a read-only view of the conversation: its id, its renderable
+// transcript and the latest token usage. Its query methods centralize common
+// block traversal and may gain indexes or cached values without changing
+// event consumers.
+type State struct {
+	ConversationID string // empty until the backend knows the conversation
+	Blocks         []Block
+	Usage          *assistant.Usage // nil until a turn reports it
 }
 
 // HasStreamingContent reports whether an assistant text or reasoning block is
 // still open.
-func (s TranscriptSnapshot) HasStreamingContent() bool {
+func (s State) HasStreamingContent() bool {
 	for _, block := range s.Blocks {
 		if !block.Complete && (block.Kind == assistant.KindText || block.Kind == assistant.KindReasoning) {
 			return true
@@ -91,7 +94,7 @@ func (s TranscriptSnapshot) HasStreamingContent() bool {
 
 // PendingApprovals returns tool blocks awaiting an approval decision, in
 // transcript order.
-func (s TranscriptSnapshot) PendingApprovals() []Block {
+func (s State) PendingApprovals() []Block {
 	var pending []Block
 	for _, block := range s.Blocks {
 		if block.Tool != nil && block.Tool.Status == ToolAwaitingApproval {
@@ -104,7 +107,7 @@ func (s TranscriptSnapshot) PendingApprovals() []Block {
 // UserPrompts returns the user messages in transcript order, repeats kept.
 // Blank text (an attachment-only submit is stored as " ") is returned empty,
 // and a message with neither text nor context is skipped.
-func (s TranscriptSnapshot) UserPrompts() []UserPrompt {
+func (s State) UserPrompts() []UserPrompt {
 	var prompts []UserPrompt
 	for _, block := range s.Blocks {
 		if block.Role != assistant.RoleUser || block.Kind != assistant.KindText || block.Markdown == nil {
@@ -133,11 +136,11 @@ type UserPrompt struct {
 type Event struct {
 	Kind           EventKind
 	Run            RunID
-	Transcript     TranscriptSnapshot // for EventTranscript; read-only full transcript snapshot
-	Usage          *assistant.Usage   // for EventUsage
-	ConvID         string             // for EventConversation
-	Err            error              // for EventError and EventCanceled
-	BackendFailure bool               // EventError originated at the Assistant backend boundary
+	State          State            // for EventState; read-only
+	Usage          *assistant.Usage // for EventUsage
+	ConvID         string           // for EventConversation
+	Err            error            // for EventError and EventCanceled
+	BackendFailure bool             // EventError originated at the Assistant backend boundary
 	// Round is the 1-based backend send the event belongs to, or 0 outside
 	// any send: a turn's local echo of the user's text, a restore. Drained
 	// rounds after a denial count but emit no content events.
@@ -145,10 +148,10 @@ type Event struct {
 }
 
 // outbox is a subscription: it hands events to its consumer without ever
-// blocking the engine on it. A transcript snapshot still queued is replaced
-// by a newer one of the same run and round: snapshots are complete,
-// so consumers lose no state (ADEEP diffs blocks by revision), and the queue
-// stays bounded by the other, rarer events.
+// blocking the engine on it. A state still queued is replaced by a newer one
+// of the same run and round: states are complete, so consumers lose nothing
+// (ADEEP diffs blocks by revision), and the queue stays bounded by the other,
+// rarer events.
 type outbox struct {
 	mu     sync.Mutex
 	ready  sync.Cond // signals a push or the close
@@ -161,7 +164,7 @@ type outbox struct {
 
 // supersedes reports whether ev may replace prev, queued just before it.
 func (ev Event) supersedes(prev Event) bool {
-	return ev.Kind == EventTranscript && prev.Kind == EventTranscript &&
+	return ev.Kind == EventState && prev.Kind == EventState &&
 		ev.Run == prev.Run && ev.Round == prev.Round
 }
 
@@ -264,6 +267,7 @@ type Engine struct {
 	turn     *turn // the turn whose exchange is running, if any
 	lastRun  RunID // the most recently claimed run
 	subs     map[*outbox]struct{}
+	usage    *assistant.Usage // the conversation's latest, if a turn reported it
 
 	requests chan func() // run on the actor
 	// life ends when Close starts, cancelling every operation's worker.
@@ -470,7 +474,7 @@ func (e *Engine) emit(run RunID, ev Event) {
 }
 
 // Subscribe streams every event the engine emits from now on, of every run.
-// Queued transcript snapshots may be superseded by newer ones (see outbox).
+// Queued states may be superseded by newer ones (see outbox).
 // Operations only return their run, so a consumer subscribes before starting
 // one, then follows the run (see Follow).
 //
@@ -532,7 +536,7 @@ type TurnInput struct {
 	// message, so tool continuations must not repeat it.
 	// Image file URLs are loaded and replaced with data URLs inside the turn.
 	// Once submitted, callers must treat it and all nested data as immutable:
-	// the engine retains its entities in transcript snapshots without copying.
+	// the engine retains its entities in published states without copying.
 	Context *assistant.AssistantContext
 	// OnDeny is the turn's policy after a denial is answered on the wire.
 	OnDeny DenyPolicy
@@ -642,7 +646,7 @@ func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []Too
 				sent = sentContext.Entities
 			}
 			e.transcript.AppendUser(in.Message, sent)
-			e.emit(run, Event{Kind: EventTranscript, Transcript: e.snapshot()})
+			e.emit(run, Event{Kind: EventState, State: e.state()})
 		}
 		opts, delivery = e.sendOptions(in.Tools), e.delivery
 	})
@@ -743,14 +747,10 @@ func (e *Engine) settleUnfinishedTools(tools *ToolSet, run RunID, server bool) b
 	return changed
 }
 
-// snapshot returns a copy of the current blocks, safe to share with every
-// subscription and retain: the engine keeps mutating its own transcript on
-// later folds.
-func (e *Engine) snapshot() TranscriptSnapshot {
-	blocks := e.transcript.Blocks()
-	snapshot := TranscriptSnapshot{Blocks: make([]Block, len(blocks))}
-	copy(snapshot.Blocks, blocks)
-	return snapshot
+// state returns the current state, safe to share with every subscription and
+// retain: the engine keeps mutating its own transcript on later folds.
+func (e *Engine) state() State {
+	return State{ConversationID: e.opts.ConversationID, Blocks: slices.Clone(e.transcript.Blocks()), Usage: e.usage}
 }
 
 // ConversationID reports the conversation the engine is bound to. It is set
@@ -800,6 +800,7 @@ func (e *Engine) NewConversation() error {
 		e.opts.MessageHistory = nil
 		e.resetContext()
 		e.transcript = NewTranscript()
+		e.usage = nil
 		e.continuation = nil
 		clear(e.gate.grants)
 		return nil
@@ -870,8 +871,8 @@ func (e *Engine) Restore(ctx context.Context) (RunID, error) {
 			default:
 				if id != "" {
 					e.installConversation(conversation)
-					if snapshot := e.snapshot(); len(snapshot.Blocks) > 0 {
-						e.emit(run, Event{Kind: EventTranscript, Transcript: snapshot})
+					if state := e.state(); len(state.Blocks) > 0 {
+						e.emit(run, Event{Kind: EventState, State: state})
 					}
 				}
 				e.emit(run, Event{Kind: EventDone})
@@ -1010,9 +1011,9 @@ func (t *turn) emit(ev Event) {
 	t.e.emit(t.run, ev)
 }
 
-// publish emits the current transcript.
+// publish emits the current state.
 func (t *turn) publish() {
-	t.emit(Event{Kind: EventTranscript, Transcript: t.e.snapshot()})
+	t.emit(Event{Kind: EventState, State: t.e.state()})
 }
 
 // startExchange runs the exchange until it ends or the turn is cancelled.
@@ -1333,9 +1334,15 @@ func (t *turn) fold(msg assistant.Message) {
 		// the reducer's state and keeps filesystem-aware reducers ahead of
 		// client-tool execution.
 		e.reduceToolInput(t.ctx, t.tools, msg, b)
+	}
+	usage := msg.Results != nil && msg.Results.Usage != nil
+	if usage {
+		e.usage = msg.Results.Usage
+	}
+	if ok || usage {
 		t.publish()
 	}
-	if msg.Results != nil && msg.Results.Usage != nil {
+	if usage {
 		t.emit(Event{Kind: EventUsage, Usage: msg.Results.Usage})
 	}
 }

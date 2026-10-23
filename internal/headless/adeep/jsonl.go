@@ -179,10 +179,10 @@ func (d *Delivery) Consume(ev agent.Event) error {
 		return err
 	}
 	switch ev.Kind {
-	case agent.EventTranscript:
+	case agent.EventState:
 		// A snapshot holds the whole conversation: only the run's own changes
 		// are delivered, not history restored before it.
-		for _, block := range ev.Transcript.Blocks {
+		for _, block := range ev.State.Blocks {
 			if block.Run != ev.Run {
 				continue
 			}

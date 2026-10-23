@@ -39,7 +39,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	m.op.gen++
 	m.conversationEpoch++
 	m.selection.clear()
-	m.transcript = agent.TranscriptSnapshot{}
+	m.transcript = agent.State{}
 	m.list.Reset()
 	m.convID = ""
 	m.usage = nil
@@ -142,7 +142,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 		m.picker.SetError(n.Text, err)
 		return m.postNotice(n)
 	}
-	m.transcript = agent.TranscriptSnapshot{Blocks: m.engine.Snapshot()}
+	m.transcript = agent.State{Blocks: m.engine.Snapshot()}
 	m.conversationEpoch++
 	m.convID = m.engine.ConversationID()
 	m.usage = nil

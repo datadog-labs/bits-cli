@@ -65,7 +65,7 @@ func Run(ctx context.Context, engine *agent.Engine, input agent.TurnInput, deliv
 				completed = true
 			case agent.EventError, agent.EventCanceled:
 				turnErr = event.Err
-			case agent.EventTranscript, agent.EventUsage, agent.EventConversation:
+			case agent.EventState, agent.EventUsage, agent.EventConversation:
 			}
 			if consumeErr == nil {
 				if consumeErr = delivery.Consume(event); consumeErr != nil {

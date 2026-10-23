@@ -729,7 +729,7 @@ func TestEngineStopToolsAnswersRoundAndEndsTurn(t *testing.T) {
 		}
 	}
 	for _, event := range rest {
-		for _, block := range event.Transcript.Blocks {
+		for _, block := range event.State.Blocks {
 			if block.Markdown != nil && block.Markdown.Content == "done" {
 				t.Fatal("follow-up after StopTools was folded into the transcript")
 			}

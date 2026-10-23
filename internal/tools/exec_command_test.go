@@ -307,10 +307,10 @@ func TestExecCommandManualEngineDoesNotLaunchBeforeApproval(t *testing.T) {
 
 	approved := false
 	for event := range events {
-		if event.Kind != agent.EventTranscript {
+		if event.Kind != agent.EventState {
 			continue
 		}
-		pending := event.Transcript.PendingApprovals()
+		pending := event.State.PendingApprovals()
 		if len(pending) == 0 {
 			continue
 		}
@@ -352,7 +352,7 @@ func TestExecCommandDenialNeverLaunches(t *testing.T) {
 	events := startTurn(t, engine, ctx, agent.TurnInput{Message: "run", Tools: set, OnDeny: agent.DenyContinue})
 	denied := false
 	for event := range events {
-		if event.Kind != agent.EventTranscript || len(event.Transcript.PendingApprovals()) == 0 {
+		if event.Kind != agent.EventState || len(event.State.PendingApprovals()) == 0 {
 			continue
 		}
 		if engine.Decide("exec-1", agent.ApprovalDeny) != nil {
@@ -458,10 +458,10 @@ func startTurn(t *testing.T, engine *agent.Engine, ctx context.Context, in agent
 func waitForExecApproval(t *testing.T, events iter.Seq[agent.Event], callID string) bool {
 	t.Helper()
 	for event := range events {
-		if event.Kind != agent.EventTranscript {
+		if event.Kind != agent.EventState {
 			continue
 		}
-		for _, pending := range event.Transcript.PendingApprovals() {
+		for _, pending := range event.State.PendingApprovals() {
 			if pending.ToolCallID() == callID {
 				return true
 			}
