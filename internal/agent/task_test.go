@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 const testTaskID = "assistant-task.1"
@@ -69,8 +70,8 @@ func newTaskEngine(t *testing.T, backend *taskBackend) (*Engine, <-chan Event) {
 
 func startTaskMsgs(callID, taskID string) []assistant.Message {
 	return []assistant.Message{
-		serverCallMsg(callID, startBackgroundTaskTool, `{"task":{"agent_id":"investigation","task_name":"Why 500s"}}`),
-		assistant.AssistantMessage(callID+"-result", assistant.ToolResultContent(callID, startBackgroundTaskTool,
+		serverCallMsg(callID, spec.StartBackgroundTask, `{"task":{"agent_id":"investigation","task_name":"Why 500s"}}`),
+		assistant.AssistantMessage(callID+"-result", assistant.ToolResultContent(callID, spec.StartBackgroundTask,
 			assistant.ToolStatusSuccess, fmt.Sprintf(`{"task_id":%q,"start_result":{}}`, taskID))),
 	}
 }

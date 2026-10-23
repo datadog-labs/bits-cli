@@ -11,7 +11,8 @@ const (
 	ExecCommand = "exec_command"
 
 	// Remote tools.
-	Skill = "Skill"
+	Skill               = "Skill"
+	StartBackgroundTask = "startBackgroundTask"
 
 	ExecDefaultTimeoutMS int64 = 10_000
 	ExecMaxTimeoutMS     int64 = 10 * 60 * 1_000
@@ -29,12 +30,15 @@ var (
 	ServerSpawnAgent       = Identity{Name: "spawn_agent"}
 	ServerSendAgentMessage = Identity{Name: "send_agent_message"}
 	ServerWaitForAgents    = Identity{Name: "wait_for_agents"}
-	ClientReadFile         = Identity{ClientSide: true, Name: ReadFile}
-	ClientListFiles        = Identity{ClientSide: true, Name: ListFiles}
-	ClientGrepFiles        = Identity{ClientSide: true, Name: GrepFiles}
-	ClientWriteFile        = Identity{ClientSide: true, Name: WriteFile}
-	ClientEditFile         = Identity{ClientSide: true, Name: EditFile}
-	ClientExecCommand      = Identity{ClientSide: true, Name: ExecCommand}
+	// ServerStartBackgroundTask starts server work that reports into the
+	// conversation after the turn; its result names the task.
+	ServerStartBackgroundTask = Identity{Name: StartBackgroundTask}
+	ClientReadFile            = Identity{ClientSide: true, Name: ReadFile}
+	ClientListFiles           = Identity{ClientSide: true, Name: ListFiles}
+	ClientGrepFiles           = Identity{ClientSide: true, Name: GrepFiles}
+	ClientWriteFile           = Identity{ClientSide: true, Name: WriteFile}
+	ClientEditFile            = Identity{ClientSide: true, Name: EditFile}
+	ClientExecCommand         = Identity{ClientSide: true, Name: ExecCommand}
 )
 
 // PathInput is the minimal path-bearing projection shared by local tools. It
@@ -48,6 +52,26 @@ type PathInput struct {
 // here so presentation code and tool integrations share the same wire shape.
 type SkillInput struct {
 	SkillName string `json:"skill_name"`
+}
+
+// StartBackgroundTaskInput is the task a startBackgroundTask call asks to
+// start. Payload holds the fields an investigation may carry; times are Unix
+// milliseconds.
+type StartBackgroundTaskInput struct {
+	Task struct {
+		AgentID  string `json:"agent_id"`
+		TaskName string `json:"task_name"`
+		Payload  struct {
+			Description      string   `json:"description"`
+			Tags             []string `json:"tags"`
+			MonitorID        *int64   `json:"monitor_id"`
+			EventID          string   `json:"event_id"`
+			EventTS          *int64   `json:"event_ts"`
+			IncidentPublicID *int64   `json:"incident_public_id"`
+			StartTime        *int64   `json:"start_time"`
+			EndTime          *int64   `json:"end_time"`
+		} `json:"payload"`
+	} `json:"task"`
 }
 
 type ReadFileInput struct {
