@@ -35,6 +35,7 @@ type ConversationListResult struct {
 type Conversation struct {
 	id           string
 	transcript   *Transcript
+	tasks        []*task
 	continuation []assistant.Content
 }
 
@@ -99,19 +100,17 @@ func (e *Engine) LoadConversation(ctx context.Context, conversationID string) (*
 	if response.Data.Type != "conversation-history-response" {
 		return nil, fmt.Errorf("%w: unexpected response type %q", ErrMalformedHistory, response.Data.Type)
 	}
-	transcript := NewTranscript()
 	for i, message := range response.Data.Attributes.Messages {
 		if err := validateHistoryMessage(message); err != nil {
 			return nil, fmt.Errorf("%w: message %d: %w", ErrMalformedHistory, i, err)
 		}
-		transcript.AppendMessage(message)
 	}
-	transcript.FinalizeAll()
+	transcript, tasks := historyTasks(response.Data.Attributes.Messages)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return &Conversation{
-		id: conversationID, transcript: transcript,
+		id: conversationID, transcript: transcript, tasks: tasks,
 		continuation: continuationFromHistory(response.Data.Attributes.Messages),
 	}, nil
 }
@@ -137,6 +136,7 @@ func (e *Engine) installConversation(conversation *Conversation) {
 	e.transcript = conversation.transcript
 	e.usage = nil
 	e.continuation = conversation.continuation
+	e.setTasks(conversation.tasks)
 }
 
 // State returns the conversation's current state, which every change also

@@ -71,6 +71,11 @@ func (e *Engine) ResumePendingTools(ctx context.Context, in TurnInput) (RunID, e
 func continuationFromHistory(messages []assistant.Message) []assistant.Content {
 	var pending []assistant.Content
 	for _, message := range messages {
+		if taskIDOf(message) != "" {
+			// A background task's messages are its own: they neither answer
+			// nor end the conversation's pending calls.
+			continue
+		}
 		content := message.Content
 		kind := content.Kind()
 		if kind == assistant.KindTurnMarker || kind == assistant.KindInternal || strings.TrimSpace(content.Type) == "" {

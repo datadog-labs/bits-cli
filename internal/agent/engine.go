@@ -84,6 +84,9 @@ type State struct {
 	ConversationID string
 	Blocks         []Block
 	Usage          *assistant.Usage // nil until a turn reports it
+	// Tasks are the background tasks the conversation started, in start
+	// order. Their blocks are apart from Blocks.
+	Tasks []Task
 }
 
 // HasStreamingContent reports whether an assistant text or reasoning block is
@@ -274,6 +277,9 @@ type Engine struct {
 	version  uint64 // the last published state version
 	subs     map[*outbox]struct{}
 	usage    *assistant.Usage // the conversation's latest, if a turn reported it
+	// tasks are the conversation's background tasks. Their observers are
+	// workers too, stopped when the conversation changes.
+	tasks []*task
 
 	requests chan func() // run on the actor
 	// life ends when Close starts, cancelling every operation's worker.
@@ -372,10 +378,10 @@ func New(b Backend, config Config) *Engine {
 	return engine
 }
 
-// Close cancels the active operation, waits for it to end as on cancellation,
-// ends every subscription after the events already queued, and stops the
-// engine. Later operations fail with ErrClosed and accessors report zero
-// values.
+// Close cancels the active operation and the task observers, waits for them
+// to end as on cancellation, ends every subscription after the events already
+// queued, and stops the engine. Later operations fail with ErrClosed and
+// accessors report zero values.
 func (e *Engine) Close() {
 	e.closeOnce.Do(func() {
 		// Ending life directly cancels work the actor may be blocked on; the
@@ -691,6 +697,8 @@ func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []Too
 // snapshot, and ends with EventCanceled unless it had already failed.
 func (t *turn) finish(err error) {
 	e := t.e
+	// The turn's last state shows the tasks it started.
+	e.discoverTasks()
 	cause := t.parent.Err()
 	var end Event
 	switch {
@@ -766,7 +774,10 @@ func (e *Engine) publish() {
 // state returns the current state, safe to share with every subscription and
 // retain: the engine keeps mutating its own transcript on later folds.
 func (e *Engine) state() State {
-	return State{Version: e.version, ConversationID: e.opts.ConversationID, Blocks: slices.Clone(e.transcript.Blocks()), Usage: e.usage}
+	return State{
+		Version: e.version, ConversationID: e.opts.ConversationID, Blocks: slices.Clone(e.transcript.Blocks()),
+		Usage: e.usage, Tasks: e.taskViews(),
+	}
 }
 
 // Status reports the immutable effective request configuration and non-secret
@@ -813,6 +824,7 @@ func (e *Engine) NewConversation() error {
 		e.usage = nil
 		e.continuation = nil
 		clear(e.gate.grants)
+		e.setTasks(nil)
 		e.publish()
 		return nil
 	})
