@@ -448,6 +448,7 @@ func (e *Engine) claim() (RunID, error) {
 	e.busy = true
 	e.workers.Add(1)
 	e.lastRun++
+	e.transcript.run = e.lastRun
 	return e.lastRun, nil
 }
 
@@ -467,6 +468,7 @@ func (e *Engine) work(ctx context.Context, fn func(context.Context)) {
 // release ends the operation, after its terminal event.
 func (e *Engine) release() {
 	e.busy = false
+	e.transcript.run = 0
 }
 
 // emit publishes run's event to every subscription.

@@ -562,6 +562,22 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	}
 }
 
+func TestBlocksRecordTheRunThatLastChangedThem(t *testing.T) {
+	backend := &scriptBackend{rounds: [][]assistant.Message{{textMsg("a", "first")}, {textMsg("b", "second")}}}
+	e := New(backend, Config{})
+	defer e.Close()
+	first := collect(turnEvents(e, context.Background(), TurnInput{Message: "one"}))[0].Run
+	second := collect(turnEvents(e, context.Background(), TurnInput{Message: "two"}))[0].Run
+
+	var got []RunID
+	for _, b := range e.Snapshot() {
+		got = append(got, b.Run)
+	}
+	if want := []RunID{first, first, second, second}; first == second || !slices.Equal(got, want) {
+		t.Errorf("block runs = %v, want %v", got, want)
+	}
+}
+
 func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 	backendErr := errors.New("stream failed")
 	e := New(&scriptBackend{
