@@ -299,8 +299,10 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.ev.Run == 0 && msg.ev.Kind == agent.EventState:
 			// A change no run made, such as a command's.
-			m.state = msg.ev.State
-			m.syncTranscript()
+			if msg.ev.State.Version > m.state.Version {
+				m.state = msg.ev.State
+				m.syncTranscript()
+			}
 		case m.op.run != 0 && msg.ev.Run == m.op.run:
 			// Every run is an operation this model started, so other runs'
 			// events are ignored.
@@ -966,7 +968,9 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
 	case agent.EventState:
-		m.state = ev.State
+		if ev.State.Version > m.state.Version {
+			m.state = ev.State
+		}
 		m.syncApprovals(ev.State.PendingApprovals())
 		if ev.State.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming

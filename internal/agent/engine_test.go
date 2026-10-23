@@ -686,6 +686,9 @@ func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
 	var last State
 	for ev := range Follow(events, run) {
 		if ev.Kind == EventState {
+			if ev.State.Version <= last.Version {
+				t.Fatalf("published version %d after %d", ev.State.Version, last.Version)
+			}
 			last = ev.State
 		}
 	}
@@ -701,6 +704,8 @@ func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
 	}
 	if ev := <-events; ev.Kind != EventState || ev.Run != 0 || ev.State.ConversationID != "" || len(ev.State.Blocks) != 0 {
 		t.Fatalf("reset published %+v, want an empty conversation outside any run", ev)
+	} else if ev.State.Version <= last.Version || e.State().Version != ev.State.Version {
+		t.Fatalf("reset version = %d, previous = %d, State() = %d", ev.State.Version, last.Version, e.State().Version)
 	}
 }
 

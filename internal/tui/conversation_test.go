@@ -305,3 +305,67 @@ func TestNewRejectsStaleEventsFromPriorConversation(t *testing.T) {
 		t.Fatalf("first prompt after reset got conversation id %q, want fresh", m.state.ConversationID)
 	}
 }
+
+func TestNewIgnoresInFlightConversationInstallState(t *testing.T) {
+	backend := newResumeBackend()
+	engine := agent.New(backend, agent.Config{})
+	m := New(engine)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	backend.histories <- resumeHistoryReply{response: history(assistant.AssistantMessage("old", assistant.TextContent("old transcript")))}
+	conversation, err := engine.LoadConversation(context.Background(), resumeConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.InstallConversation(context.Background(), conversation); err != nil {
+		t.Fatal(err)
+	}
+
+	// The event pump has read the install snapshot, but Bubble Tea has not
+	// delivered its message yet. /resume itself already showed this state.
+	inFlight := runConversationCmd(t, waitEvent(m.events))
+	m.state = engine.State()
+	m.syncTranscript()
+	if m.state.ConversationID != resumeConversationID || len(m.state.Blocks) == 0 {
+		t.Fatalf("install state = %+v", m.state)
+	}
+
+	if cmd := m.startNewConversation(); cmd != nil {
+		t.Fatal("unexpected completion cleanup")
+	}
+	resetVersion := m.state.Version
+	if inFlight.(engineEventMsg).ev.State.Version >= resetVersion {
+		t.Fatalf("queued version %d is not older than reset version %d", inFlight.(engineEventMsg).ev.State.Version, resetVersion)
+	}
+	_, _ = m.Update(inFlight)
+	if m.state.ConversationID != "" || len(m.state.Blocks) != 0 || m.state.Version != resetVersion {
+		t.Fatalf("in-flight install restored old conversation: %+v", m.state)
+	}
+	if cmd := m.openConversationInBrowser(); cmd != nil || latestNotice(m).Text != "Start a conversation before using /web." {
+		t.Fatalf("/web targeted stale conversation: notice=%+v, command=%v", latestNotice(m), cmd)
+	}
+
+	// The reset's own publication has the same version already read by /new.
+	_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+	if m.state.ConversationID != "" || len(m.state.Blocks) != 0 || m.state.Version != resetVersion {
+		t.Fatalf("reset event changed conversation: %+v", m.state)
+	}
+}
+
+func TestOutOfRunStateUpdatesDuringTurn(t *testing.T) {
+	m := New(agent.New(&immediateConversationBackend{}, agent.Config{}))
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.op = operation{kind: opTurn, run: 1, cancel: cancel}
+
+	newer := agent.State{Version: m.state.Version + 2, ConversationID: "background-update"}
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventState, Run: 0, State: newer}})
+	if m.state.ConversationID != newer.ConversationID || m.state.Version != newer.Version || m.op.run != 1 {
+		t.Fatalf("background state during turn = %+v, run = %d", m.state, m.op.run)
+	}
+
+	older := agent.State{Version: newer.Version - 1, ConversationID: "old-run-state"}
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventState, Run: 1, State: older}})
+	if m.state.ConversationID != newer.ConversationID || m.state.Version != newer.Version {
+		t.Fatalf("older run state replaced background state: %+v", m.state)
+	}
+}

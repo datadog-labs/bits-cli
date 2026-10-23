@@ -171,7 +171,7 @@ func TestStatusDuringActiveTurnPreservesTurnAndTracksObservedState(t *testing.T)
 		t.Fatalf("active status did not show observed stream state:\n%s", view)
 	}
 
-	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventState, State: agent.State{ConversationID: "conversation-live"}, Run: 1, Round: 1}})
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventState, State: agent.State{Version: m.state.Version + 1, ConversationID: "conversation-live"}, Run: 1, Round: 1}})
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "conversation-live") {
 		t.Fatalf("open status did not refresh conversation id:\n%s", view)
 	}

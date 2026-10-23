@@ -76,6 +76,9 @@ type RunID uint64
 // block traversal and may gain indexes or cached values without changing
 // event consumers.
 type State struct {
+	// Version increases with every state the engine publishes. A higher
+	// version is newer.
+	Version uint64
 	// ConversationID is the conversation the engine is bound to: set from
 	// Config, then by the backend as turns run. Empty means a new one.
 	ConversationID string
@@ -265,9 +268,10 @@ type Engine struct {
 	// delivery is the context the current conversation is known to carry.
 	delivery contextDelivery
 	gate     permissionGate
-	busy     bool  // an operation holds the engine
-	turn     *turn // the turn whose exchange is running, if any
-	lastRun  RunID // the most recently claimed run
+	busy     bool   // an operation holds the engine
+	turn     *turn  // the turn whose exchange is running, if any
+	lastRun  RunID  // the most recently claimed run
+	version  uint64 // the last published state version
 	subs     map[*outbox]struct{}
 	usage    *assistant.Usage // the conversation's latest, if a turn reported it
 
@@ -470,6 +474,10 @@ func (e *Engine) release() {
 // emit publishes run's event to every subscription.
 func (e *Engine) emit(run RunID, ev Event) {
 	ev.Run = run
+	if ev.Kind == EventState {
+		e.version++
+		ev.State.Version = e.version
+	}
 	for o := range e.subs {
 		o.push(ev)
 	}
@@ -758,7 +766,7 @@ func (e *Engine) publish() {
 // state returns the current state, safe to share with every subscription and
 // retain: the engine keeps mutating its own transcript on later folds.
 func (e *Engine) state() State {
-	return State{ConversationID: e.opts.ConversationID, Blocks: slices.Clone(e.transcript.Blocks()), Usage: e.usage}
+	return State{Version: e.version, ConversationID: e.opts.ConversationID, Blocks: slices.Clone(e.transcript.Blocks()), Usage: e.usage}
 }
 
 // Status reports the immutable effective request configuration and non-secret

@@ -39,7 +39,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	m.op.gen++
 	m.conversationEpoch++
 	m.selection.clear()
-	m.state = agent.State{} // as the engine publishes it
+	m.state = m.engine.State()
 	m.list.Reset()
 	m.chatPhase = chat.PhaseIdle
 	m.editor.Reset()
