@@ -137,6 +137,7 @@ func (e *Engine) installConversation(conversation *Conversation) {
 	e.transcript = conversation.transcript
 	e.usage = nil
 	e.continuation = conversation.continuation
+	e.setTasks(nil)
 }
 
 // State returns the conversation's current state, which every change also
