@@ -223,3 +223,42 @@ func TestNewConversationStopsTaskObservers(t *testing.T) {
 	// Close waits for every worker: a stray observer would hang it.
 	e.Close()
 }
+
+func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
+	const doneID = "assistant-task.0"
+	doneUpdate := updateMsg("d1", "final", "old result")
+	doneUpdate.Content.Progress.TaskID, doneUpdate.BackgroundTaskID = doneID, nil
+	history := slices.Concat(
+		startTaskMsgs("call-0", doneID), []assistant.Message{doneUpdate},
+		startTaskMsgs("call-1", testTaskID), []assistant.Message{updateMsg("u1", "progress", "persisted")},
+	)
+	backend := &taskBackend{attachments: [][]assistant.Message{{
+		updateMsg("u1", "progress", "persisted"), replayComplete, updateMsg("u2", "final", "new result"), taskEnded,
+	}}}
+	backend.resp = &assistant.ConversationHistoryResponse{}
+	backend.resp.Data.Type = "conversation-history-response"
+	backend.resp.Data.Attributes.Messages = history
+	e := New(backend, Config{ConversationID: testConversationID})
+	defer e.Close()
+	events, unsubscribe := e.Subscribe()
+	defer unsubscribe()
+
+	collect(restoreEvents(e, context.Background()))
+	tasks := waitTasks(t, events, func(tasks []Task) bool { return len(tasks) == 2 && tasks[1].Status == TaskDone })
+
+	if tasks[0].ID != doneID || tasks[0].CallID != "call-0" || tasks[0].Status != TaskDone {
+		t.Errorf("finished task = %+v, want done", tasks[0])
+	}
+	if got := progressTexts(tasks[0].Blocks); !slices.Equal(got, []string{"old result"}) {
+		t.Errorf("finished task updates = %q", got)
+	}
+	if got := progressTexts(tasks[1].Blocks); !slices.Equal(got, []string{"persisted", "new result"}) {
+		t.Errorf("observed task updates = %q", got)
+	}
+	if got := backend.attached(); !slices.Equal(got, []string{testConversationID + "/" + testTaskID}) {
+		t.Errorf("attachments = %q, want only the unfinished task", got)
+	}
+	if blocks := e.State().Blocks; len(blocks) != 2 || slices.ContainsFunc(blocks, func(b Block) bool { return b.Progress != nil }) {
+		t.Errorf("conversation transcript = %+v, want the two start calls and no task update", blocks)
+	}
+}
