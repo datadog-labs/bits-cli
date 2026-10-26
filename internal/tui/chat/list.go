@@ -181,7 +181,7 @@ func (l *List) SetItems(items []agent.Block) {
 // and with session-only UI messages, without changing the source blocks or
 // their backend-facing transcript.
 func (l *List) SetTranscript(blocks []agent.Block, tasks []agent.Task, notices []NoticeItem) {
-	items := withTasks(blocks, tasks)
+	items := agent.BlocksWithTasks(blocks, tasks)
 	var anchor agent.BlockID
 	anchored := !l.follow && l.offsetIdx < len(l.view)
 	if anchored {
@@ -848,32 +848,6 @@ func (l *List) ScrollByChanged(lines int) bool {
 	return idx != l.offsetIdx || line != l.offsetLine || follow != l.follow
 }
 
-// withTasks shows each background task's blocks right after the call that
-// started it, so a task reads the same live and restored however the
-// conversation went on. A task whose call is not shown goes last.
-func withTasks(blocks []agent.Block, tasks []agent.Task) []agent.Block {
-	if len(tasks) == 0 {
-		return blocks
-	}
-	out := make([]agent.Block, 0, len(blocks))
-	placed := make([]bool, len(tasks))
-	for _, b := range blocks {
-		out = append(out, b)
-		for i, task := range tasks {
-			if task.CallID != "" && task.CallID == b.ToolCallID() {
-				out = append(out, task.Blocks...)
-				placed[i] = true
-			}
-		}
-	}
-	for i, task := range tasks {
-		if !placed[i] {
-			out = append(out, task.Blocks...)
-		}
-	}
-	return out
-}
-
 func buildPresentation(header string, blocks []agent.Block) []presentationItem {
 	return buildPresentationWithNotices(header, blocks, nil)
 }
@@ -898,11 +872,16 @@ func buildPresentationWithNotices(header string, blocks []agent.Block, notices [
 		at := previous
 		if after := notices[i].After; after != (agent.BlockID{}) {
 			at = len(blocks) // its block is gone
+			found := false
 			for j := max(previous-1, 0); j < len(blocks); j++ {
 				if blocks[j].ID == after {
 					at = max(j+1, previous)
+					found = true
 					break
 				}
+			}
+			if !found && notices[i].Notice.Level == NoticeFork {
+				continue
 			}
 		}
 		items = appendBlockPresentations(items, blocks, previous, at)
@@ -988,6 +967,8 @@ func appendBlockPresentations(items []presentationItem, blocks []agent.Block, fr
 func renderNotice(n Notice, width int, sty Styles) string {
 	marker := ""
 	switch n.Level {
+	case NoticeFork:
+		marker = "⑂"
 	case NoticeInfo:
 		marker = "✓"
 	case NoticeWarn:
@@ -1053,4 +1034,12 @@ func presentationRevision(blocks []agent.Block, start, end int) uint64 {
 		mixUint(uint64(block.Rev))
 	}
 	return h.Sum64()
+}
+
+// ReplaceTranscript installs another conversation in place. Cached renders and
+// expansion choices belong to the old identity; viewport and follow mode stay.
+func (l *List) ReplaceTranscript(blocks []agent.Block, tasks []agent.Task, notices []NoticeItem) {
+	l.invalidateAll()
+	clear(l.toggled)
+	l.SetTranscript(blocks, tasks, notices)
 }

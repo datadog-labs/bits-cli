@@ -785,12 +785,21 @@ type ConversationHistoryResponse struct {
 		ID         string `json:"id"`
 		Type       string `json:"type"`
 		Attributes struct {
-			Title         string    `json:"title"`
-			Messages      []Message `json:"messages"`
-			OwnerUserUUID string    `json:"owner_user_uuid"`
-			SharedExpires *int64    `json:"shared_expires_at"`
+			Title         string      `json:"title"`
+			ForkedFrom    *ForkedFrom `json:"forked_from,omitempty"`
+			Messages      []Message   `json:"messages"`
+			OwnerUserUUID string      `json:"owner_user_uuid"`
+			SharedExpires *int64      `json:"shared_expires_at"`
 		} `json:"attributes"`
 	} `json:"data"`
+}
+
+// ForkedFrom is server-owned provenance. ForkMessageID belongs to the copy,
+// and is optional for older forks or histories with no visible copied message.
+type ForkedFrom struct {
+	ConversationID string `json:"conversation_id"`
+	ForkMessageID  string `json:"fork_message_id,omitempty"`
+	SourceTitle    string `json:"source_title,omitempty"`
 }
 
 // ConversationSummary is one entry in UserConversationsResponse.

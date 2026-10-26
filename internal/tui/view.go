@@ -304,6 +304,9 @@ func (m *Model) promptPlaceholder() string {
 	case m.op.then == thenNewConversation:
 		return "Starting a new conversation…"
 	}
+	if m.op.kind == opFork {
+		return "Forking…"
+	}
 	switch m.chatPhase {
 	case chat.PhaseLoading:
 		return "Loading…"

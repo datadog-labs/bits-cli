@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	// defaultRequestTimeout bounds each non-streaming request. It matches the
+	// defaultRequestTimeout bounds ordinary non-streaming requests. It matches the
 	// server's own non-streaming request timeout (30s).
 	defaultRequestTimeout = 30 * time.Second
 	// defaultStreamIdleTimeout bounds the gap between streamed lines on the
@@ -146,7 +146,9 @@ func newTransport() *http.Transport {
 	tr.MaxIdleConnsPerHost = 10
 	tr.IdleConnTimeout = 90 * time.Second
 	tr.TLSHandshakeTimeout = 10 * time.Second
-	tr.ResponseHeaderTimeout = defaultRequestTimeout
+	// Fork creation may wait for a 45-second server-side transaction.
+	// Ordinary requests retain their shorter HTTP client deadline.
+	tr.ResponseHeaderTimeout = 60 * time.Second
 	return tr
 }
 
@@ -335,7 +337,14 @@ func (c *Client) rejectAccessToken(ctx context.Context, req *http.Request) error
 // It retries transient failures for idempotent requests only; the streaming
 // POST does not go through do and is never retried.
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	return c.doWithClient(ctx, c.httpClient(), method, path, body)
+}
+
+func (c *Client) doWithClient(ctx context.Context, client *http.Client, method, path string, body any) (*http.Response, error) {
 	attempts := c.maxRetries() + 1
+	if method == http.MethodPost {
+		attempts = 1
+	}
 	var lastErr error
 	var wait time.Duration // Retry-After from the previous response, if any
 	for attempt := range attempts {
@@ -358,7 +367,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 		if err != nil {
 			return nil, err
 		}
-		resp, err := c.httpClient().Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -774,5 +783,35 @@ func (c *Client) ShareConversation(ctx context.Context, in ShareConversationInpu
 	if err := decodeJSONBody(&out, resp.Body, maxResponseBodyBytes); err != nil {
 		return nil, fmt.Errorf("decode sharing response: %w", err)
 	}
+	return &out.Data.Attributes, nil
+}
+
+// ForkConversation creates a private copy without retrying the non-idempotent POST.
+func (c *Client) ForkConversation(ctx context.Context, conversationID string) (*ConversationSummary, error) {
+	// Share the connection pool while allowing the server's 45-second fork RPC to finish.
+	client := *c.httpClient()
+	client.Timeout = 60 * time.Second
+	resp, err := c.doWithClient(ctx, &client, http.MethodPost, "/api/v2/assistant/conversation/"+conversationID+"/fork", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("unexpected fork status: %d", resp.StatusCode)
+	}
+	var out struct {
+		Data struct {
+			ID         string              `json:"id"`
+			Type       string              `json:"type"`
+			Attributes ConversationSummary `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := decodeJSONBody(&out, resp.Body, maxResponseBodyBytes); err != nil {
+		return nil, fmt.Errorf("decode fork: %w", err)
+	}
+	if out.Data.Type != "conversation" || out.Data.ID == "" || out.Data.ID != out.Data.Attributes.ConversationID {
+		return nil, fmt.Errorf("malformed fork response")
+	}
+	out.Data.Attributes.ID = out.Data.ID
 	return &out.Data.Attributes, nil
 }

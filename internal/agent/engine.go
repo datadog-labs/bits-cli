@@ -82,6 +82,7 @@ type State struct {
 	// ConversationID is the conversation the engine is bound to: set from
 	// Config, then by the backend as turns run. Empty means a new one.
 	ConversationID string
+	Fork           ForkBoundary
 	Blocks         []Block
 	Usage          *assistant.Usage // nil until a turn reports it
 	// Tasks are the background tasks the conversation started, in start
@@ -266,6 +267,7 @@ type Engine struct {
 	opts                   assistant.SendOptions
 	runtimeStatus          RuntimeStatus
 	transcript             *Transcript
+	fork                   ForkBoundary
 	continuation           []assistant.Content
 	previousConversationID string
 	// delivery is the context the current conversation is known to carry.
@@ -776,7 +778,7 @@ func (e *Engine) publish() {
 func (e *Engine) state() State {
 	return State{
 		Version: e.version, ConversationID: e.opts.ConversationID, Blocks: slices.Clone(e.transcript.Blocks()),
-		Usage: e.usage, Tasks: e.taskViews(),
+		Usage: e.usage, Tasks: e.taskViews(), Fork: e.fork,
 	}
 }
 
@@ -818,6 +820,7 @@ func (e *Engine) NewConversation() error {
 			e.previousConversationID = e.opts.ConversationID
 		}
 		e.opts.ConversationID = ""
+		e.fork = ForkBoundary{}
 		e.opts.MessageHistory = nil
 		e.resetContext()
 		e.transcript = NewTranscript()

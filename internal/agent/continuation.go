@@ -45,13 +45,18 @@ func (e *Engine) settleRestoredTools(tools *ToolSet) bool {
 			resuming[call.Tool.ToolCallID] = true
 		}
 	}
+	return e.transcript.settleTools(resuming)
+}
+
+// settleTools interrupts unfinished tools except those selected for replay.
+func (t *Transcript) settleTools(resuming map[string]bool) bool {
 	changed := false
-	for _, block := range e.transcript.Blocks() {
+	for _, block := range t.Blocks() {
 		tool := block.Tool
 		if tool == nil || resuming[block.ID.Key] || tool.Status.IsTerminal() {
 			continue
 		}
-		if _, updated := e.transcript.MarkToolExecuted(block.ID.Key, ToolResult{
+		if _, updated := t.MarkToolExecuted(block.ID.Key, ToolResult{
 			Title: "Interrupted", Output: "the session ended before this call was answered", IsError: true, Cancelled: true,
 		}); updated {
 			changed = true
