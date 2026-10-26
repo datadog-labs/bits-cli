@@ -33,9 +33,16 @@ func (m *Model) startLogout() tea.Cmd {
 	generation := m.op.gen
 	m.editor.CloseMenu()
 	logout := m.logout
+	engine := m.engine
+	m.clearBackgroundRuns()
 	return func() tea.Msg {
 		if closeFileSearch != nil {
 			_ = closeFileSearch()
+		}
+		if engine != nil {
+			if err := engine.StopBackground(ctx); err != nil {
+				return logoutResultMsg{generation: generation, err: err}
+			}
 		}
 		_, _, err := logout(ctx)
 		return logoutResultMsg{

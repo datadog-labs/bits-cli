@@ -283,7 +283,10 @@ type ClientToolMetadata struct {
 
 // AssistantResponse is a single newline-delimited line from the POST stream.
 type AssistantResponse struct {
-	Data struct {
+	// RootTurnCompleted marks a successful root turn while its run may continue
+	// serving children and subsequent root turns. It is transport metadata.
+	RootTurnCompleted bool `json:"-"`
+	Data              struct {
 		ID         string             `json:"id"`
 		Type       string             `json:"type"` // "assistant-response"
 		Attributes ResponseAttributes `json:"attributes"`
