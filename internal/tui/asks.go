@@ -85,7 +85,7 @@ func waitToolUI(ui *tools.UI) tea.Cmd {
 
 func (m *Model) openToolUI(ui *tools.Request) {
 	// A tool may present before a requested stop reaches its context.
-	if ui.Context().Err() != nil || m.op.stop != stopNone {
+	if ui.Context().Err() != nil {
 		return
 	}
 	form, ok := chat.NewToolPrompt(ui.Call)
@@ -213,6 +213,18 @@ func (m *Model) updatePrompt(msg tea.Msg) (tea.Cmd, bool) {
 // client-tool round, settling its approvals and tool UIs, or the whole
 // operation when it cannot.
 func (m *Model) stopTools() {
+	if m.shown != nil {
+		id := m.shown.callID()
+		if m.engine.StopToolsFor(id) == nil {
+			for _, block := range m.state.Blocks {
+				if block.ToolCallID() == id && block.Run == m.op.run {
+					m.op.stop = max(m.op.stop, stopTools)
+				}
+			}
+			m.reshow()
+		}
+		return
+	}
 	if m.engine.StopTools() == nil {
 		m.op.stop = max(m.op.stop, stopTools)
 		m.dropToolUIs()

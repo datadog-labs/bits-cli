@@ -38,10 +38,11 @@ type exchange interface {
 type exchangeEvent struct {
 	// round starts this backend send, 1-based. Every send is announced
 	// before it is made, so a turn cancelled earlier stays outside any round.
-	round        int
-	conversation string // server-assigned conversation ID
-	message      *assistant.Message
-	execute      []ToolCall // a batch, dispatched at once
+	rootTurnCompleted bool
+	round             int
+	conversation      string // server-assigned conversation ID
+	message           *assistant.Message
+	execute           []ToolCall // a batch, dispatched at once
 	// err fails the turn at once, before run returns: the exchange cannot
 	// continue, so its running calls must stop rather than await transport
 	// cleanup.
@@ -198,7 +199,7 @@ func (x *streamExchange) run(ctx context.Context, emit func(exchangeEvent) bool)
 	}
 	err := x.backend.Stream(ctx, x.message, x.opts, func(response assistant.AssistantResponse) error {
 		msg := response.Data.Attributes.StructuredMessage
-		ev := exchangeEvent{message: &msg}
+		ev := exchangeEvent{message: &msg, rootTurnCompleted: response.RootTurnCompleted}
 		if id := response.Data.Attributes.ConversationID; id != "" && id != conversation {
 			conversation, ev.conversation = id, id
 		}

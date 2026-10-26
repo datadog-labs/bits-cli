@@ -145,6 +145,19 @@ Actions that need approval are denied by default. Add
 See the [noninteractive guide](internal/headless/adeep/README.md) for output fields,
 exit codes, and authentication details.
 
+## Experimental subagents
+
+With `BITS_USE_EXPERIMENTAL_SUBAGENTS=1`, a main-agent answer can finish while its
+subagents continue working. When the server signals that the main turn is done,
+you can send another message; child tool requests and later answers continue in
+the same conversation. Each active run keeps its own connection and tool results.
+
+This requires a server that sends `assistant.turn_completed`. With older servers,
+Bits waits for the entire run to finish. Quitting, logging out, or switching
+conversations cancels outstanding runs. Headless commands wait for the entire
+run, including child results. Disconnect recovery and saved child history are
+not supported.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and the contribution workflow.
