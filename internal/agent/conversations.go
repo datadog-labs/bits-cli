@@ -34,6 +34,7 @@ type ConversationListResult struct {
 // to the engine; a Conversation must only be installed once.
 type Conversation struct {
 	id           string
+	fork         ForkBoundary
 	transcript   *Transcript
 	tasks        []*task
 	continuation []assistant.Content
@@ -105,14 +106,12 @@ func (e *Engine) LoadConversation(ctx context.Context, conversationID string) (*
 			return nil, fmt.Errorf("%w: message %d: %w", ErrMalformedHistory, i, err)
 		}
 	}
-	transcript, tasks := historyTasks(response.Data.Attributes.Messages)
+	conversation := conversationFromHistory(response.Data.Attributes.ForkedFrom, response.Data.Attributes.Messages)
+	conversation.id = conversationID
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Conversation{
-		id: conversationID, transcript: transcript, tasks: tasks,
-		continuation: continuationFromHistory(response.Data.Attributes.Messages),
-	}, nil
+	return conversation, nil
 }
 
 // InstallConversation replaces the current conversation while idle. The caller
@@ -131,6 +130,7 @@ func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversa
 // installConversation runs on the actor, while idle or restoring.
 func (e *Engine) installConversation(conversation *Conversation) {
 	e.opts.ConversationID = conversation.id
+	e.fork = conversation.fork
 	e.opts.MessageHistory = nil
 	e.resetContext()
 	e.transcript = conversation.transcript
@@ -222,4 +222,90 @@ func validateHistoryMessage(message assistant.Message) error {
 		// fields are intentionally unavailable to the renderer.
 	}
 	return nil
+}
+
+// ConversationForkBackend is the optional capability to copy saved conversations.
+type ConversationForkBackend interface {
+	ForkConversation(context.Context, string) (*assistant.ConversationSummary, error)
+}
+
+// ForkConversation creates a saved copy without changing the current conversation.
+// A successful creation is returned even if cancellation prevents loading it.
+func (e *Engine) ForkConversation(ctx context.Context, sourceID string) (*assistant.ConversationSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !ValidConversationID(sourceID) {
+		return nil, ErrInvalidConversationID
+	}
+	backend, ok := e.backend.(ConversationForkBackend)
+	if !ok {
+		return nil, errors.New("backend does not support forking conversations")
+	}
+	if _, ok := e.backend.(HistoryBackend); !ok {
+		return nil, ErrHistoryUnsupported
+	}
+	summary, err := backend.ForkConversation(ctx, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	if summary == nil || !ValidConversationID(summary.ConversationID) || summary.ID != summary.ConversationID || summary.ConversationID == sourceID {
+		return nil, errors.New("conversation fork response is malformed")
+	}
+	return summary, ctx.Err()
+}
+
+// ForkBoundary anchors server provenance to the CLI's folded transcript.
+// A zero After means there is no known boundary to display.
+type ForkBoundary struct {
+	After       BlockID
+	SourceID    string
+	SourceTitle string
+}
+
+// conversationFromHistory folds the copied prefix separately so subsequent
+// results cannot mutate it or pull new task output above the fork boundary.
+func conversationFromHistory(source *assistant.ForkedFrom, messages []assistant.Message) *Conversation {
+	split := 0
+	if source != nil && source.ForkMessageID != "" && ValidConversationID(source.ConversationID) {
+		for i, message := range messages {
+			if message.MessageID == source.ForkMessageID {
+				split = i + 1
+				break
+			}
+		}
+	}
+	transcript, tasks := historyTasks(messages[split:])
+	conversation := &Conversation{transcript: transcript, tasks: tasks, continuation: continuationFromHistory(messages[split:])}
+	if split == 0 {
+		return conversation
+	}
+
+	copied, copiedTasks := historyTasks(messages[:split])
+	copied.settleTools(nil)
+	views := make([]Task, 0, len(copiedTasks))
+	for _, task := range copiedTasks {
+		task.transcript.settleTools(nil)
+		views = append(views, Task{CallID: task.CallID, Blocks: task.transcript.Blocks()})
+	}
+	// Copied task IDs still belong to the source, even if later history contains
+	// additional messages for them. Only tasks started in the fork are observed.
+	for _, task := range tasks {
+		if findTask(copiedTasks, task.ID) != nil {
+			task.Status = TaskHistorical
+			task.transcript.settleTools(nil)
+		}
+	}
+	combined := NewTranscript()
+	for _, block := range BlocksWithTasks(copied.Blocks(), views) {
+		block.ID = BlockID{Scope: ScopeCopied, Key: block.ID.String()}
+		combined.push(block)
+		conversation.fork.After = block.ID
+	}
+	for _, block := range transcript.Blocks() {
+		combined.push(block)
+	}
+	conversation.transcript = combined
+	conversation.fork.SourceID, conversation.fork.SourceTitle = source.ConversationID, source.SourceTitle
+	return conversation
 }

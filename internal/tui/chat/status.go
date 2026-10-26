@@ -21,6 +21,7 @@ const (
 	NoticeInfo NoticeLevel = iota
 	NoticeWarn
 	NoticeError
+	NoticeFork
 )
 
 // Notice is a local UI message. Err is retained for diagnostics, not displayed.

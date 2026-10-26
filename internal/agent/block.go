@@ -10,6 +10,7 @@ const (
 	ScopeLocal   BlockScope = iota // client-minted: user messages, which have no wire id
 	ScopeMessage                   // keyed by Message.MessageID
 	ScopeTool                      // keyed by ToolPayload.ToolCallID
+	ScopeCopied                    // frozen block from the source conversation, keyed by its original BlockID.String()
 )
 
 // ToolStatus is the lifecycle state of a tool block.
@@ -169,6 +170,8 @@ func BlockIDOf(msg assistant.Message) BlockID {
 // String renders a BlockID for logs, tests, and panic messages.
 func (id BlockID) String() string {
 	switch id.Scope {
+	case ScopeCopied:
+		return "copied:" + id.Key
 	case ScopeTool:
 		return "tool:" + id.Key
 	case ScopeMessage:

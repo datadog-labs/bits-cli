@@ -99,7 +99,7 @@ func TestTaskUpdateLinksAreLinks(t *testing.T) {
 func TestNoticeRowsUseEditorBackground(t *testing.T) {
 	for _, isDark := range []bool{true, false} {
 		sty := DefaultStyles(isDark)
-		for _, level := range []NoticeLevel{NoticeInfo, NoticeWarn, NoticeError} {
+		for _, level := range []NoticeLevel{NoticeInfo, NoticeWarn, NoticeError, NoticeFork} {
 			rows := strings.Split(renderNotice(Notice{Level: level, Text: "A notice that wraps onto another line"}, 20, sty), "\n")
 			if len(rows) < 2 {
 				t.Fatal("setup: notice did not wrap")
@@ -118,5 +118,52 @@ func TestNoticeRowsUseEditorBackground(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestForkMarkerSeparatesCopiedAndNewMessages(t *testing.T) {
+	l := NewList()
+	l.SetWidth(40)
+	l.SetHeight(10)
+	copied := agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: "copied-tool"}, Role: assistant.RoleAssistant, Kind: assistant.KindToolCall, Complete: true, Tool: &agent.ToolBlock{Name: "read_file", Status: agent.ToolSuccess}}
+	next := textBlock("next", "NEW MESSAGE")
+	marker := NoticeItem{ID: 1, After: copied.ID, Notice: Notice{Level: NoticeFork, Text: "Forked conversation · abcdef12\nOriginal: original-id · available in /resume"}}
+	l.ReplaceTranscript([]agent.Block{copied}, nil, []NoticeItem{marker})
+	l.SetTranscript([]agent.Block{copied, next}, nil, []NoticeItem{marker})
+	doc := ansi.Strip(l.Document())
+	if !strings.Contains(doc, "Forked conversation") || !strings.Contains(doc, "NEW MESSAGE") || !strings.Contains(doc, "⑂") || strings.Index(doc, "Forked conversation") >= strings.Index(doc, "NEW MESSAGE") {
+		t.Fatalf("marker order: %s", doc)
+	}
+	for _, line := range strings.Split(doc, "\n") {
+		if ansi.StringWidth(line) > 40 {
+			t.Fatalf("overflow: %q", line)
+		}
+	}
+}
+
+func TestReplaceTranscriptRefreshesCacheAndKeepsViewport(t *testing.T) {
+	l := headerList(t, 40, 3)
+	blocks := []agent.Block{textBlock("one", "OLD CONTENT"), textBlock("two", "second"), textBlock("three", "third"), textBlock("four", "fourth")}
+	l.SetTranscript(blocks, nil, nil)
+	_ = l.Document()
+	l.ScrollToTop()
+	index, line := l.offsetIdx, l.offsetLine
+	blocks[0] = textBlock("one", "NEW CONTENT")
+	l.ReplaceTranscript(blocks, nil, nil)
+	doc := ansi.Strip(l.Document())
+	if strings.Contains(doc, "OLD CONTENT") || !strings.Contains(doc, "NEW CONTENT") {
+		t.Fatalf("stale cache: %s", doc)
+	}
+	if l.Following() || l.offsetIdx != index || l.offsetLine != line {
+		t.Fatal("viewport changed")
+	}
+}
+
+func TestForkMarkerWithMissingAnchorIsOmitted(t *testing.T) {
+	l := headerList(t, 60, 10)
+	l.SetTranscript([]agent.Block{textBlock("new", "CURRENT")}, nil, []NoticeItem{{After: agent.BlockID{Scope: agent.ScopeMessage, Key: "missing"}, Notice: Notice{Level: NoticeFork, Text: "Forked conversation"}}})
+	doc := l.Document()
+	if strings.Contains(doc, "Forked conversation") || !strings.Contains(doc, "CURRENT") {
+		t.Fatalf("invented marker: %s", doc)
 	}
 }

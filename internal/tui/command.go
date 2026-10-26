@@ -29,6 +29,7 @@ const (
 	commandQuit commandID = iota + 1
 	commandNew
 	commandResume
+	commandFork
 	commandStatus
 	commandCopy
 	commandWeb
@@ -47,6 +48,7 @@ type commandDefinition struct {
 }
 
 var commandDefinitions = []commandDefinition{
+	{id: commandFork, name: "fork", aliases: []string{"branch"}, activeTurnPolicy: commandRejectedDuringTurn, description: "fork this conversation and continue in the copy"},
 	{
 		id:               commandNew,
 		name:             "new",
@@ -213,6 +215,8 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 		return m, m.startNewConversation()
 	case commandQuit:
 		return m.quit()
+	case commandFork:
+		return m, m.startFork(argument)
 	case commandResume:
 		return m, tea.Batch(m.stopCompletionSearches(), m.openConversationPicker())
 	case commandStatus:

@@ -38,7 +38,7 @@ const (
 )
 
 // operation is the one exclusive session operation: a turn (resumed client
-// tools included), a history restore, or logout. Anything that asks "can I
+// tools included), a history restore, a fork, or logout. Anything that asks "can I
 // start something?" or "what happens when it ends?" reads it; chatPhase only
 // drives what the chat displays.
 type operation struct {
@@ -55,6 +55,7 @@ type opKind uint8
 const (
 	opIdle    opKind = iota
 	opTurn           // a user turn or resumed client tools
+	opFork           // create and load a conversation copy in place
 	opRestore        // conversation history loading at startup
 	opLogout         // credential deletion; the session quits once it succeeds
 )

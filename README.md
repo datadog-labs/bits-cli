@@ -78,6 +78,11 @@ Use `/resume` to select a conversation, or open it by ID:
 bits --conversation YOUR_CONVERSATION_ID
 ```
 
+Use `/fork` (alias `/branch`) to copy the current saved conversation and continue
+in the copy. The chat stays in place, with a marker at the copied-history boundary
+when the server provides it. That marker is restored when you resume the fork.
+Forking does not change your working directory or modify the original conversation.
+
 Use `/web` to reopen the active conversation in Datadog.
 
 Bits asks for permission before reading workspace files, editing files, or

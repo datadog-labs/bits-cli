@@ -316,6 +316,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case conversationListResultMsg:
 		return m, m.applyConversationListResult(msg)
 
+	case forkResultMsg:
+		return m, m.applyForkResult(msg)
+
 	case conversationSwitchResultMsg:
 		return m, m.applyConversationSwitchResult(msg)
 
@@ -628,7 +631,7 @@ func (m *Model) applyRunEvent(ev agent.Event) tea.Cmd {
 	return cmd
 }
 
-// endOperation ends the engine operation after its run's terminal event, then
+// endOperation ends an exclusive operation after its terminal result, then
 // runs what was queued behind it.
 func (m *Model) endOperation() tea.Cmd {
 	done := m.op
@@ -942,11 +945,11 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	return m.begin(opTurn, run, err, cancel)
 }
 
-// cancelOperation cancels a running engine operation once and drops its tool
+// cancelOperation cancels a running turn, restore, or fork once and drops its tool
 // UIs; its approvals go when the operation closes. Logout is never
 // interrupted this way.
 func (m *Model) cancelOperation() {
-	if m.op.run == 0 || m.op.stop == stopAll {
+	if (m.op.run == 0 && m.op.kind != opFork) || m.op.stop == stopAll {
 		return
 	}
 	m.op.stop = stopAll
@@ -1047,5 +1050,5 @@ func (m *Model) relayout() {
 
 // syncTranscript rebuilds presentation metadata after m.state changes.
 func (m *Model) syncTranscript() {
-	m.list.SetTranscript(m.state.Blocks, m.state.Tasks, m.notices)
+	m.list.SetTranscript(m.state.Blocks, m.state.Tasks, m.transcriptNotices())
 }

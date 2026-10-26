@@ -22,9 +22,10 @@ type TaskBackend interface {
 type TaskStatus int
 
 const (
-	TaskRunning TaskStatus = iota
-	TaskDone               // its final update was observed
-	TaskFailed             // the server refused to show it; read Err
+	TaskRunning    TaskStatus = iota
+	TaskDone                  // its final update was observed
+	TaskFailed                // the server refused to show it; read Err
+	TaskHistorical            // copied from another conversation; no worker belongs to this one
 )
 
 // Task is a background task: server work that a turn started and that reports
@@ -57,7 +58,7 @@ func newTask(id string) *task {
 
 // taskOf returns the task a successful startBackgroundTask call started.
 func taskOf(b Block) (*task, bool) {
-	if b.Tool == nil || b.Tool.IsClientSide || b.Tool.Name != spec.StartBackgroundTask || b.Tool.Status != ToolSuccess {
+	if b.ID.Scope == ScopeCopied || b.Tool == nil || b.Tool.IsClientSide || b.Tool.Name != spec.StartBackgroundTask || b.Tool.Status != ToolSuccess {
 		return nil, false
 	}
 	var output struct {
@@ -287,4 +288,30 @@ func (e *Engine) updateTask(t *task, change func() bool) {
 			e.publish()
 		}
 	})
+}
+
+// BlocksWithTasks shows each background task's blocks right after the call that
+// started it, so a task reads the same live and restored however the
+// conversation went on. A task whose call is not shown goes last.
+func BlocksWithTasks(blocks []Block, tasks []Task) []Block {
+	if len(tasks) == 0 {
+		return blocks
+	}
+	out := make([]Block, 0, len(blocks))
+	placed := make([]bool, len(tasks))
+	for _, b := range blocks {
+		out = append(out, b)
+		for i, task := range tasks {
+			if task.CallID != "" && task.CallID == b.ToolCallID() {
+				out = append(out, task.Blocks...)
+				placed[i] = true
+			}
+		}
+	}
+	for i, task := range tasks {
+		if !placed[i] {
+			out = append(out, task.Blocks...)
+		}
+	}
+	return out
 }
