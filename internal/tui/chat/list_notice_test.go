@@ -306,7 +306,7 @@ func TestDoneActionDegradesToThePlainForm(t *testing.T) {
 func TestDoneActionNarrowWidths(t *testing.T) {
 	sty := DefaultStyles(true)
 	text := "Done · Oct 26, 3:12 PM"
-	for _, width := range []int{1, 3, 4, 6, 32, 33} {
+	for _, width := range []int{1, 3, 4, 6, 37, 38} {
 		out := RenderDoneNoticeAction(text, width, sty, false)
 		for _, row := range strings.Split(out, "\n") {
 			if got := ansi.StringWidth(ansi.Strip(row)); got > width {
@@ -314,7 +314,7 @@ func TestDoneActionNarrowWidths(t *testing.T) {
 			}
 		}
 		hasGlyph := strings.Contains(out, "⑂")
-		wantGlyph := width >= 33
+		wantGlyph := width >= 38
 		if hasGlyph != wantGlyph {
 			t.Errorf("width %d: glyph present = %v, want %v", width, hasGlyph, wantGlyph)
 		}
@@ -323,7 +323,7 @@ func TestDoneActionNarrowWidths(t *testing.T) {
 
 // TestDoneActionButtonAreaMatchesRender asserts the seam DoneButtonAt
 // hit-tests against the real render, not a parallel re-computation: the
-// rectangle it reports must cut exactly the button box — "│ ⑂ │" on the
+// rectangle it reports must cut exactly the button box — "│ ⑂ fork │" on the
 // middle row, the border on the rows above and below — not merely contain
 // the glyph somewhere inside a looser range.
 func TestDoneActionButtonAreaMatchesRender(t *testing.T) {
@@ -340,7 +340,7 @@ func TestDoneActionButtonAreaMatchesRender(t *testing.T) {
 	rows := strings.Split(RenderDoneNoticeAction(text, width, sty, false), "\n")
 	for y := area.Min.Y; y < area.Max.Y; y++ {
 		got := ansi.Strip(ansi.Cut(rows[y], area.Min.X, area.Max.X))
-		want := []string{"╭───╮", "│ ⑂ │", "╰───╯"}[y]
+		want := []string{"╭────────╮", "│ ⑂ fork │", "╰────────╯"}[y]
 		if got != want {
 			t.Fatalf("row %d, cols %d:%d = %q, want %q; full row = %q", y, area.Min.X, area.Max.X, got, want, ansi.Strip(rows[y]))
 		}

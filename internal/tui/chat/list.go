@@ -1088,14 +1088,17 @@ const donePrefix = "  ✦ "
 
 var donePrefixWidth = ansi.StringWidth(donePrefix)
 
-// doneButtonGap and doneButtonWidth are the rest of the fixed geometry
-// around the done row's fork button, shared by the renderer and
-// doneActionButtonArea so the two never disagree about where the button
-// sits.
+// doneButtonGap and doneButtonLabel are the rest of the fixed geometry around
+// the done row's fork button, shared by the renderer and doneActionButtonArea
+// so the two never disagree about where the button sits. doneButtonWidth is
+// derived from the label for the same reason donePrefixWidth is.
 const (
-	doneButtonGap   = 2 // blank run separating the timestamp from the button
-	doneButtonWidth = 5 // rounded border + one cell of padding each side + the glyph
+	doneButtonGap   = 2          // blank run separating the timestamp from the button
+	doneButtonLabel = " ⑂ fork " // content inside the rounded border
 )
+
+// +2 for the rounded border's left and right edge columns.
+var doneButtonWidth = ansi.StringWidth(doneButtonLabel) + 2
 
 // doneActionButtonArea returns the fork button's rectangle in notice-local
 // coordinates — Y in [0,3) for all three rows of the button, border included
@@ -1125,7 +1128,7 @@ func renderDoneAction(text string, width int, sty Styles, hovered bool) (string,
 	}
 	// Shares followOverlay's active look (tui/follow.go); its resting state is
 	// quieter, so the two differ only at rest.
-	button := strings.Split(styles.FollowButtonStyle(sty.DoneButtonIcon, sty.DoneButtonBorder, sty.Input.Marker.GetForeground(), hovered).Render(" ⑂ "), "\n")
+	button := strings.Split(styles.FollowButtonStyle(sty.DoneButtonIcon, sty.DoneButtonBorder, sty.Input.Marker.GetForeground(), hovered).Render(doneButtonLabel), "\n")
 	timestamp := "  " + sty.NoticeDone.Render("✦") + " " + sty.NoticeDone.Render(text)
 	spaces := strings.Repeat(" ", area.Min.X)
 	gap := strings.Repeat(" ", doneButtonGap)

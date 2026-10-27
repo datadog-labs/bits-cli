@@ -71,7 +71,10 @@ func TestDoneButtonAtMatchesRenderedButton(t *testing.T) {
 	l, anchor := doneActionList(t, width)
 	rows := strings.Split(l.Render(), "\n")
 	top, glyphX := buttonCellsFromRender(t, rows)
-	left, right := glyphX-2, glyphX+3 // "│ ⑂ │": border, pad, glyph, pad, border
+	// The glyph sits two cells into the box (border, pad, glyph); the width
+	// comes from the shared constant so this cannot drift from the label.
+	left := glyphX - 2
+	right := left + doneButtonWidth
 
 	for y := top; y < top+3; y++ {
 		for x := left; x < right; x++ {

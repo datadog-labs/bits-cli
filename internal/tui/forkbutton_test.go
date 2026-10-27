@@ -77,9 +77,10 @@ func TestForkButtonClickAndReleaseFiresFork(t *testing.T) {
 func TestForkButtonOneColumnOutsideMisses(t *testing.T) {
 	m, b := forkButtonTestModel(t)
 	x, y := forkButtonCell(t, m)
-	// forkButtonCell returns the glyph column; the button's left border sits
-	// two cells left of it ("│ ⑂ │"), so one past either edge is x-3 and x+3.
-	for _, miss := range []int{x - 3, x + 3} {
+	// forkButtonCell returns the glyph column; the button renders as
+	// "│ ⑂ fork │", so its left border sits two cells left of the glyph and its
+	// right edge eight to the right — one past either edge is x-3 and x+8.
+	for _, miss := range []int{x - 3, x + 8} {
 		m.selection.clear()
 		m.forkButton.pressed = false
 		m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: miss, Y: y})
