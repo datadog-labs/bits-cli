@@ -164,8 +164,38 @@ func TestReplaceTranscriptRefreshesCacheAndKeepsViewport(t *testing.T) {
 func TestRenderDoneNoticeShowsSparkle(t *testing.T) {
 	sty := DefaultStyles(true)
 	rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty), "\n")
-	if got := ansi.Strip(rows[0]); got != "  ✦ Done · Oct 26, 3:12 PM" {
-		t.Fatalf("row 0 = %q, want two leading spaces, the sparkle, one space, then the done text", got)
+	if got := ansi.Strip(rows[0]); !strings.HasPrefix(got, "  ✦ Done · Oct 26, 3:12 PM ─") {
+		t.Fatalf("row 0 = %q, want two leading spaces, the sparkle, the done text, then a rule", got)
+	}
+}
+
+// TestDoneNoticeRuleFillsRow confirms the rule runs to the right edge, the way
+// the startup resume offer's hint rows do.
+func TestDoneNoticeRuleFillsRow(t *testing.T) {
+	sty := DefaultStyles(true)
+	for _, width := range []int{80, 60, 40} {
+		rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, width, sty), "\n")
+		got := ansi.Strip(rows[0])
+		if ansi.StringWidth(got) != width {
+			t.Errorf("width %d: row width = %d, want the rule to fill the row", width, ansi.StringWidth(got))
+		}
+		if !strings.HasSuffix(got, "─") {
+			t.Errorf("width %d: row = %q, want it to end in a rule", width, got)
+		}
+	}
+}
+
+// TestWrappedDoneNoticeHasNoRule covers the degenerate case: a done line too
+// long for one row gets no rule, since a rule trailing a wrapped paragraph
+// reads as a second element rather than part of the same mark.
+func TestWrappedDoneNoticeHasNoRule(t *testing.T) {
+	sty := DefaultStyles(true)
+	doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM, with enough trailing text that it cannot fit"}, 40, sty)
+	if rows := strings.Split(doc, "\n"); len(rows) < 2 {
+		t.Fatal("setup: notice did not wrap")
+	}
+	if strings.Contains(ansi.Strip(doc), "─") {
+		t.Fatalf("wrapped done notice carries a rule: %q", ansi.Strip(doc))
 	}
 }
 
@@ -174,15 +204,33 @@ func TestRenderDoneNoticeShowsSparkle(t *testing.T) {
 // rather than announcing something, so it carries no background band.
 func TestDoneNoticePaintsNoRowBackground(t *testing.T) {
 	sty := DefaultStyles(true)
-	rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty), "\n")
-	if got := ansi.StringWidth(ansi.Strip(rows[0])); got >= 80 {
-		t.Fatalf("row 0 width = %d, want well under 80 (unpadded, so no background band)", got)
+	done := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty)
+	if strings.Contains(done, backgroundSGR) {
+		t.Fatalf("done notice paints a row background: %q", done)
 	}
-	info := strings.Split(renderNotice(Notice{Level: NoticeInfo, Text: "Copied to clipboard."}, 80, sty), "\n")
-	if got := ansi.StringWidth(ansi.Strip(info[0])); got != 80 {
-		t.Fatalf("setup: NoticeInfo row width = %d, want 80 — the comparison only means something if other notices still pad", got)
+	info := renderNotice(Notice{Level: NoticeInfo, Text: "Copied to clipboard."}, 80, sty)
+	if !strings.Contains(info, backgroundSGR) {
+		t.Fatal("setup: NoticeInfo paints no row background either — the comparison only means something if other notices still do")
 	}
 }
+
+// TestDoneNoticeNeverOverflowsRow pins the narrow-terminal guard. This path does
+// not go through PaintRowBackground, which is what clips every other level, so
+// without an explicit clamp a terminal narrower than the marker overflows.
+func TestDoneNoticeNeverOverflowsRow(t *testing.T) {
+	sty := DefaultStyles(true)
+	for _, width := range []int{1, 3, 4, 6, 12, 24} {
+		doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, width, sty)
+		for _, row := range strings.Split(doc, "\n") {
+			if got := ansi.StringWidth(ansi.Strip(row)); got > width {
+				t.Errorf("width %d: row width %d: %q", width, got, ansi.Strip(row))
+			}
+		}
+	}
+}
+
+// backgroundSGR is the truecolor background introducer PaintRowBackground emits.
+const backgroundSGR = "48;2;"
 
 // TestDoneNoticeWrapsAtNarrowWidth is Review Focus 4: a done notice wraps
 // like any other notice at narrow widths, with continuation rows indented.
