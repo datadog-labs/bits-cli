@@ -27,7 +27,7 @@ func doneActionList(t *testing.T, width int) (*List, agent.BlockID) {
 
 // buttonCellsFromRender scans the list's real rendered viewport for the
 // fork button's three rows — the rounded corners and the glyph row — rather
-// than recomputing its span from DoneActionButtonArea, so these tests catch
+// than recomputing its span from doneActionButtonArea, so these tests catch
 // a List-side hit-test that disagrees with what is actually on screen.
 func buttonCellsFromRender(t *testing.T, rows []string) (top, glyphX int) {
 	t.Helper()
@@ -63,7 +63,7 @@ func buttonCellsFromRender(t *testing.T, rows []string) (top, glyphX int) {
 
 // TestDoneButtonAtMatchesRenderedButton pins DoneButtonAt to the button's
 // real on-screen footprint: every cell of all three rendered rows hits
-// (border rows included, matching DoneActionButtonArea's full rectangle),
+// (border rows included, matching doneActionButtonArea's full rectangle),
 // while a column just outside either edge, and the rows immediately above
 // and below the button, all miss.
 func TestDoneButtonAtMatchesRenderedButton(t *testing.T) {
@@ -134,6 +134,33 @@ func TestDoneButtonAtIgnoresNonActionDoneNotice(t *testing.T) {
 	}
 	if _, ok := l.DoneButtonAnchor(); ok {
 		t.Fatal("DoneButtonAnchor() found one with no actionable notice present")
+	}
+}
+
+// TestDoneButtonActionFlipRepaints pins the critical bug where the line
+// cache's identity omitted Notice.Action: flipping Action off on the same
+// NoticeItem.ID must drop the three-row button form, not just repaint it
+// inactive. doneButtonActive (Action && l.doneButtonActive) stays false
+// both before and after the flip while nothing is hovered, so a cache key
+// built only from doneButtonActive cannot see the change and keeps
+// returning the stale three-row lines forever.
+func TestDoneButtonActionFlipRepaints(t *testing.T) {
+	const width = 80
+	l := NewList()
+	l.SetStyles(DefaultStyles(true))
+	l.SetWidth(width)
+	l.SetHeight(10)
+	anchor := textBlock("response", "the answer")
+	notice := NoticeItem{ID: 1, After: anchor.ID, Notice: Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM", Action: true}}
+	l.SetTranscript([]agent.Block{anchor}, nil, []NoticeItem{notice})
+	if got := strings.Count(l.Render(), "⑂"); got != 1 {
+		t.Fatalf("setup: got %d fork glyphs, want 1", got)
+	}
+
+	notice.Notice.Action = false
+	l.SetTranscript([]agent.Block{anchor}, nil, []NoticeItem{notice})
+	if got := strings.Count(l.Render(), "⑂"); got != 0 {
+		t.Fatalf("Action=false still rendered %d fork glyph(s); stale cache entry kept the button form", got)
 	}
 }
 

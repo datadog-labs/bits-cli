@@ -32,12 +32,12 @@ func (m *Model) startFork(argument, fromMessageID string) tea.Cmd {
 	if argument != "" {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Usage: /fork (or /branch)"))
 	}
-	if m.op.busy() || m.conversationTask.running() || m.picker != nil {
-		return m.postNotice(notice(chat.NoticeWarn, nil, "Wait for the current operation to finish before forking."))
-	}
 	sourceID := m.state.ConversationID
 	if !agent.ValidConversationID(sourceID) {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Start a conversation before using /fork."))
+	}
+	if !m.forkEligible() {
+		return m.postNotice(notice(chat.NoticeWarn, nil, "Wait for the current operation to finish before forking."))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	m.begin(opFork, 0, nil, cancel)
@@ -67,10 +67,9 @@ func (m *Model) startFork(argument, fromMessageID string) tea.Cmd {
 }
 
 // forkEligible reports whether a fork could start right now: the same guards
-// startFork enforces for /fork and /branch. The done row's button shares this
-// check so it never renders only to reject the click it invites — a button
-// that only ever posts "Wait for the current operation to finish before
-// forking." is worse than no button.
+// startFork enforces for /fork and /branch. The done row's button renders
+// independently of this (see transcriptNotices) and re-checks it live at
+// press and release instead, since eligibility can change mid-gesture.
 func (m *Model) forkEligible() bool {
 	return !m.op.busy() && !m.conversationTask.running() && m.picker == nil && agent.ValidConversationID(m.state.ConversationID)
 }
@@ -168,13 +167,16 @@ func (m *Model) transcriptNotices() []chat.NoticeItem {
 	// the high end means any number of done lines can never collide with
 	// either of those, or with each other.
 	timestamps := m.responseTimestamps()
-	eligible := m.forkEligible()
 	for i, ts := range timestamps {
 		n := notice(chat.NoticeDone, nil, "Done · %s", chat.FormatFinishedAt(ts.At))
 		// Only the last done line can ever carry the button: forking always
 		// forks from the conversation's end, so offering it on an earlier
-		// response would show a control that lies about what it does.
-		n.Action = i == len(timestamps)-1 && eligible
+		// response would show a control that lies about what it does. Action
+		// expresses only that stable fact; whether a fork can actually start
+		// is re-checked live by forkEligible at press and release, since
+		// that can change independently of the transcript (busy op, running
+		// task, open picker) and folding it in here would thrash the cache.
+		n.Action = i == len(timestamps)-1
 		all = append(all, chat.NoticeItem{
 			ID:     math.MaxUint64 - uint64(i),
 			After:  ts.After,

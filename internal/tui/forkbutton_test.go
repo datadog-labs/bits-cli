@@ -227,8 +227,11 @@ func TestForkButtonPressClearsWhenIneligible(t *testing.T) {
 }
 
 // TestActionFlagOnLastDoneLineOnly confirms transcriptNotices sets Action on
-// the transcript's last done line and no other, and only while a fork is
-// actually possible.
+// the transcript's last done line and no other — a stable fact about
+// position in the transcript, independent of whether a fork could actually
+// start right now. (Eligibility is a separate, volatile question: see
+// TestForkButtonPressReleaseBlockedWhenIneligible, which re-checks it live
+// at press and release instead of baking it into the render.)
 func TestActionFlagOnLastDoneLineOnly(t *testing.T) {
 	t1 := time.Date(2026, 10, 26, 15, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 10, 26, 15, 30, 0, 0, time.UTC)
@@ -252,6 +255,10 @@ func TestActionFlagOnLastDoneLineOnly(t *testing.T) {
 		t.Fatalf("Action flags = %+v, want [false, true]", actions)
 	}
 
+	// The flag must stay true on the last done line even while a fork is
+	// not currently possible: the button renders inert rather than
+	// disappearing, and a click is blocked by forkEligible at release, not
+	// by the button's absence.
 	for _, kind := range []string{"busy", "conversationTask", "picker", "invalidID"} {
 		t.Run(kind, func(t *testing.T) {
 			m := base()
@@ -266,10 +273,39 @@ func TestActionFlagOnLastDoneLineOnly(t *testing.T) {
 				m.state.ConversationID = ""
 			}
 			notices := m.transcriptNotices()
-			for _, n := range notices {
-				if n.Notice.Action {
-					t.Fatalf("Action set while ineligible (%s): %+v", kind, notices)
-				}
+			if len(notices) != 2 || notices[0].Notice.Action || !notices[1].Notice.Action {
+				t.Fatalf("Action flags changed while ineligible (%s): %+v", kind, notices)
+			}
+		})
+	}
+}
+
+// TestForkButtonPressReleaseBlockedWhenIneligible is where the four guards
+// TestActionFlagOnLastDoneLineOnly used to table now live: the button still
+// renders on the last done line (Action no longer encodes eligibility), but
+// a press-then-release on it must not start a fork while any of startFork's
+// guards would reject it.
+func TestForkButtonPressReleaseBlockedWhenIneligible(t *testing.T) {
+	for _, kind := range []string{"busy", "conversationTask", "picker", "invalidID"} {
+		t.Run(kind, func(t *testing.T) {
+			m, b := forkButtonTestModel(t)
+			x, y := forkButtonCell(t, m)
+
+			switch kind {
+			case "busy":
+				m.op.kind = opRestore
+			case "conversationTask":
+				m.conversationTask.cancel = func() {}
+			case "picker":
+				m.picker = &conversationview.Model{}
+			case "invalidID":
+				m.state.ConversationID = ""
+			}
+
+			m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: x, Y: y})
+			_, cmd := m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: x, Y: y})
+			if cmd != nil || m.op.kind == opFork || b.calls != 0 {
+				t.Fatalf("%s: press+release fired a fork while ineligible", kind)
 			}
 		})
 	}

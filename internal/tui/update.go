@@ -147,7 +147,10 @@ func (m *Model) reconcileFocus() tea.Cmd {
 func (m *Model) reconcilePointerShape() tea.Cmd {
 	hand := false
 	if m.mode == ModeChat && !m.frame.tooSmall {
-		_, forkHover := m.list.HoveredDoneButton()
+		forkHover := false
+		if m.forkButtonMouseEnabled() {
+			_, forkHover = m.list.HoveredDoneButton()
+		}
 		hand = m.list.Hovered() || m.follow.hover || forkHover || (m.focus() == focusEditor && m.editor.ChipHovered())
 		if !hand && !m.frame.replaced && !m.editor.MenuOpen() {
 			if hit, ok := m.list.HoveredLink(); ok && webLink(hit.URL) {

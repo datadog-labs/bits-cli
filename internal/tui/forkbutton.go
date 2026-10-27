@@ -15,6 +15,18 @@ type forkButtonState struct {
 	anchor  agent.BlockID
 }
 
+// forkButtonMouseEnabled reports whether the done row's fork button can
+// receive pointer input right now. The button is only ever part of the
+// rendered chat transcript: outside ModeChat (status, permissions, the
+// resize hint), or with an overlay shown or the editor's menu open, the
+// transcript is either not drawn or deliberately not driven by the pointer,
+// same as followTarget's own guard. Both the click handler and the pointer
+// shape reconciler must agree on this, or the cursor can promise a click the
+// handler would then ignore.
+func (m *Model) forkButtonMouseEnabled() bool {
+	return m.mode == ModeChat && !m.frame.tooSmall && m.shown == nil && !m.editor.MenuOpen()
+}
+
 // handleForkButtonMouse drives the done row's fork button, copying
 // handleFollowMouse's discipline: a click records the pressed target and
 // clears any selection, and a release fires only when it lands back on that
@@ -22,11 +34,7 @@ type forkButtonState struct {
 // trusted from the press, because a busy operation, a new response, or an
 // opened picker can change that between press and release.
 func (m *Model) handleForkButtonMouse(msg tea.Msg) (tea.Cmd, bool) {
-	// The button is only ever part of the rendered chat transcript: outside
-	// ModeChat (status, permissions, the resize hint) the transcript is
-	// either not drawn or deliberately not driven by the pointer, same as
-	// followTarget's own guard.
-	if m.mode != ModeChat || m.frame.tooSmall || m.shown != nil || m.editor.MenuOpen() {
+	if !m.forkButtonMouseEnabled() {
 		return nil, false
 	}
 	switch msg := msg.(type) {

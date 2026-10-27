@@ -142,6 +142,11 @@ type listLineEntry struct {
 	// rendered with; false for every item but the one actionable done notice,
 	// so toggling it never invalidates unrelated cache entries.
 	doneButtonActive bool
+	// doneButtonAction is whether this notice carried Action when rendered.
+	// It is not folded into rev, so it must be checked on its own: Action
+	// going false must drop the three-row button form even though
+	// doneButtonActive (Action && hover) is unchanged (false) on that edge.
+	doneButtonAction bool
 	lines            []string
 }
 
@@ -424,7 +429,7 @@ func (l *List) SetDoneButtonActive(active bool) { l.doneButtonActive = active }
 // DoneButtonAt returns the anchor block of the done row's fork button under a
 // transcript viewport cell, and whether the cell lands inside it. It follows
 // LinkAt's pattern: resolve the cell to its presentation item via itemAtRow,
-// then test DoneActionButtonArea rather than re-deriving the layout.
+// then test doneActionButtonArea rather than re-deriving the layout.
 func (l *List) DoneButtonAt(x, y int) (agent.BlockID, bool) {
 	if x < 0 || x >= l.width {
 		return agent.BlockID{}, false
@@ -437,8 +442,15 @@ func (l *List) DoneButtonAt(x, y int) (agent.BlockID, bool) {
 	if item.kind != itemNotice || item.notice == nil || item.notice.Notice.Level != NoticeDone || !item.notice.Notice.Action {
 		return agent.BlockID{}, false
 	}
-	area, ok := DoneActionButtonArea(escape.Multiline(item.notice.Notice.Text), l.width)
-	if !ok || !image.Pt(x, row).In(area) {
+	// Derive the same width entry() renders with, and offset by the same
+	// indent it prepends, rather than assuming the item has neither: that
+	// assumption holds for every notice today only because notice items are
+	// built with indent 0 and gutter() excludes itemNotice, which this must
+	// not depend on silently.
+	indent := l.itemIndent(item)
+	width := l.width - indent - l.gutter(item)
+	area, ok := doneActionButtonArea(escape.Multiline(item.notice.Notice.Text), width)
+	if !ok || !image.Pt(x-indent, row).In(area) {
 		return agent.BlockID{}, false
 	}
 	return item.notice.After, true
@@ -578,12 +590,18 @@ func (l *List) entry(idx int) listLineEntry {
 	if gutter > 0 && l.expanded(it.id) {
 		d = fullView
 	}
+	// doneAction is not folded into it.rev, so it must be its own cache key
+	// component: otherwise a notice that once carried Action keeps rendering
+	// the three-row button form after Action goes false, since doneActive
+	// (Action && l.doneButtonActive) is false in both states whenever
+	// nothing is hovered.
+	doneAction := it.kind == itemNotice && it.notice != nil && it.notice.Notice.Action
 	// Only the one notice carrying Action cares about this, so a hover toggle
 	// never invalidates any other item's cache entry.
-	doneActive := it.kind == itemNotice && it.notice != nil && it.notice.Notice.Action && l.doneButtonActive
+	doneActive := doneAction && l.doneButtonActive
 	if e, ok := l.cache[it.id]; ok &&
 		e.rev == it.rev && e.width == width && e.indent == indent && e.animated == animated && e.disclosure == d &&
-		e.doneButtonActive == doneActive && (!animated || e.frame == l.frame) {
+		e.doneButtonActive == doneActive && e.doneButtonAction == doneAction && (!animated || e.frame == l.frame) {
 		return e
 	}
 	content := l.renderPresentationItem(it, renderContext{width: width, sty: l.sty, frame: l.frame, disclosure: d, doneButtonActive: doneActive})
@@ -595,6 +613,7 @@ func (l *List) entry(idx int) listLineEntry {
 		frame:            l.frame,
 		disclosure:       d,
 		doneButtonActive: doneActive,
+		doneButtonAction: doneAction,
 		lines:            strings.Split(content, "\n"),
 	}
 	if gutter > 0 {
@@ -1071,14 +1090,14 @@ var donePrefixWidth = ansi.StringWidth(donePrefix)
 
 // doneButtonGap and doneButtonWidth are the rest of the fixed geometry
 // around the done row's fork button, shared by the renderer and
-// DoneActionButtonArea so the two never disagree about where the button
+// doneActionButtonArea so the two never disagree about where the button
 // sits.
 const (
 	doneButtonGap   = 2 // blank run separating the timestamp from the button
 	doneButtonWidth = 5 // rounded border + one cell of padding each side + the glyph
 )
 
-// DoneActionButtonArea returns the fork button's rectangle in notice-local
+// doneActionButtonArea returns the fork button's rectangle in notice-local
 // coordinates — Y in [0,3) for all three rows of the button, border included
 // — for the given timestamp text and row width, and whether the button
 // renders at all. A width too narrow for the timestamp plus the button
@@ -1086,7 +1105,7 @@ const (
 // false in that case. All three rows, not just the middle one, since
 // followOverlay hit-tests its full rectangle the same way; hit-testing
 // reuses this rectangle rather than re-deriving the layout.
-func DoneActionButtonArea(text string, width int) (area image.Rectangle, ok bool) {
+func doneActionButtonArea(text string, width int) (area image.Rectangle, ok bool) {
 	textWidth := ansi.StringWidth(text)
 	available := width - donePrefixWidth - doneButtonGap - doneButtonWidth
 	if available < 1 || textWidth > available {
@@ -1097,10 +1116,10 @@ func DoneActionButtonArea(text string, width int) (area image.Rectangle, ok bool
 }
 
 // renderDoneAction renders the three-row done-plus-button form. ok is false
-// when DoneActionButtonArea says the button does not fit, so the caller
+// when doneActionButtonArea says the button does not fit, so the caller
 // falls back to the plain form rather than overflowing or reflowing.
 func renderDoneAction(text string, width int, sty Styles, hovered bool) (string, bool) {
-	area, ok := DoneActionButtonArea(text, width)
+	area, ok := doneActionButtonArea(text, width)
 	if !ok {
 		return "", false
 	}

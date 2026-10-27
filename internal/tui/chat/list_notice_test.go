@@ -289,7 +289,7 @@ func TestDoneActionHoverMatchesRestingShape(t *testing.T) {
 func TestDoneActionDegradesToThePlainForm(t *testing.T) {
 	sty := DefaultStyles(true)
 	text := "Done · Oct 26, 3:12 PM"
-	if _, ok := DoneActionButtonArea(text, 20); ok {
+	if _, ok := doneActionButtonArea(text, 20); ok {
 		t.Fatal("setup: expected width 20 too narrow for the button")
 	}
 	got := RenderDoneNoticeAction(text, 20, sty, false)
@@ -321,7 +321,7 @@ func TestDoneActionNarrowWidths(t *testing.T) {
 	}
 }
 
-// TestDoneActionButtonAreaMatchesRender asserts the exported seam Task 2
+// TestDoneActionButtonAreaMatchesRender asserts the seam DoneButtonAt
 // hit-tests against the real render, not a parallel re-computation: the
 // rectangle it reports must cut exactly the button box — "│ ⑂ │" on the
 // middle row, the border on the rows above and below — not merely contain
@@ -330,7 +330,7 @@ func TestDoneActionButtonAreaMatchesRender(t *testing.T) {
 	sty := DefaultStyles(true)
 	text := "Done · Oct 26, 3:12 PM"
 	const width = 80
-	area, ok := DoneActionButtonArea(text, width)
+	area, ok := doneActionButtonArea(text, width)
 	if !ok {
 		t.Fatal("setup: expected the button to fit at width 80")
 	}
