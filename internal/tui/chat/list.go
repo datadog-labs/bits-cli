@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/binary"
 	"hash/fnv"
+	"image"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
+	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 )
 
@@ -66,6 +68,12 @@ type List struct {
 	// The pointer position is in viewport cells. Hover is derived from it so
 	// scrolling or streaming can change the target beneath a stationary pointer.
 	pointerX, pointerY int
+
+	// doneButtonActive is the fork button's painted hover/press state. The
+	// model drives it (see Model.reconcileForkButton): a press persists while
+	// the pointer wanders off the button, which plain hover-from-pointer
+	// cannot express on its own.
+	doneButtonActive bool
 }
 
 // Surface is the visible transcript and its row offset in the full document.
@@ -130,7 +138,16 @@ type listLineEntry struct {
 	animated   bool
 	frame      int
 	disclosure disclosure
-	lines      []string
+	// doneButtonActive is the fork-button hover/press state this entry was
+	// rendered with; false for every item but the one actionable done notice,
+	// so toggling it never invalidates unrelated cache entries.
+	doneButtonActive bool
+	// doneButtonAction is whether this notice carried Action when rendered.
+	// It is not folded into rev, so it must be checked on its own: Action
+	// going false must drop the three-row button form even though
+	// doneButtonActive (Action && hover) is unchanged (false) on that edge.
+	doneButtonAction bool
+	lines            []string
 }
 
 // NewList returns an empty list with a one-row gap between blocks.
@@ -404,6 +421,63 @@ func (l *List) Hovered() bool {
 // HoveredLink returns the rendered link beneath the stationary pointer.
 func (l *List) HoveredLink() (LinkHit, bool) { return l.LinkAt(l.pointerX, l.pointerY) }
 
+// SetDoneButtonActive sets the fork button's painted hover/press state. The
+// model computes it (press persists past the pointer leaving the button,
+// which is why this isn't derived from pointerX/pointerY alone).
+func (l *List) SetDoneButtonActive(active bool) { l.doneButtonActive = active }
+
+// DoneButtonAt returns the anchor block of the done row's fork button under a
+// transcript viewport cell, and whether the cell lands inside it. It follows
+// LinkAt's pattern: resolve the cell to its presentation item via itemAtRow,
+// then test doneActionButtonArea rather than re-deriving the layout.
+func (l *List) DoneButtonAt(x, y int) (agent.BlockID, bool) {
+	if x < 0 || x >= l.width {
+		return agent.BlockID{}, false
+	}
+	idx, row, ok := l.itemAtRow(y)
+	if !ok {
+		return agent.BlockID{}, false
+	}
+	item := l.view[idx]
+	if item.kind != itemNotice || item.notice == nil || item.notice.Notice.Level != NoticeDone || !item.notice.Notice.Action {
+		return agent.BlockID{}, false
+	}
+	// Derive the same width entry() renders with, and offset by the same
+	// indent it prepends, rather than assuming the item has neither: that
+	// assumption holds for every notice today only because notice items are
+	// built with indent 0 and gutter() excludes itemNotice, which this must
+	// not depend on silently.
+	indent := l.itemIndent(item)
+	width := l.width - indent - l.gutter(item)
+	area, ok := doneActionButtonArea(escape.Multiline(item.notice.Notice.Text), width)
+	if !ok || !image.Pt(x-indent, row).In(area) {
+		return agent.BlockID{}, false
+	}
+	return item.notice.After, true
+}
+
+// HoveredDoneButton returns the fork button beneath the stationary pointer,
+// the HoveredLink equivalent for the done row's button.
+func (l *List) HoveredDoneButton() (agent.BlockID, bool) {
+	return l.DoneButtonAt(l.pointerX, l.pointerY)
+}
+
+// DoneButtonAnchor returns the anchor of the transcript's actionable done
+// notice, independent of the pointer. transcriptNotices sets Action on at
+// most one notice, so there is at most one to find. The model uses this to
+// drop a stuck press when the button it was pressed on stops existing —
+// a new response finished, or the one it was anchored to scrolled out of the
+// rebuilt presentation — rather than firing on whatever the pointer now sits
+// over.
+func (l *List) DoneButtonAnchor() (agent.BlockID, bool) {
+	for _, it := range l.view {
+		if it.kind == itemNotice && it.notice != nil && it.notice.Notice.Level == NoticeDone && it.notice.Notice.Action {
+			return it.notice.After, true
+		}
+	}
+	return agent.BlockID{}, false
+}
+
 // AccordionAt returns the block whose clickable accordion zone sits on
 // viewport row y: every row an expandable block renders, whether collapsed
 // (header plus any compact preview) or expanded.
@@ -516,20 +590,31 @@ func (l *List) entry(idx int) listLineEntry {
 	if gutter > 0 && l.expanded(it.id) {
 		d = fullView
 	}
+	// doneAction is not folded into it.rev, so it must be its own cache key
+	// component: otherwise a notice that once carried Action keeps rendering
+	// the three-row button form after Action goes false, since doneActive
+	// (Action && l.doneButtonActive) is false in both states whenever
+	// nothing is hovered.
+	doneAction := it.kind == itemNotice && it.notice != nil && it.notice.Notice.Action
+	// Only the one notice carrying Action cares about this, so a hover toggle
+	// never invalidates any other item's cache entry.
+	doneActive := doneAction && l.doneButtonActive
 	if e, ok := l.cache[it.id]; ok &&
 		e.rev == it.rev && e.width == width && e.indent == indent && e.animated == animated && e.disclosure == d &&
-		(!animated || e.frame == l.frame) {
+		e.doneButtonActive == doneActive && e.doneButtonAction == doneAction && (!animated || e.frame == l.frame) {
 		return e
 	}
-	content := l.renderPresentationItem(it, renderContext{width: width, sty: l.sty, frame: l.frame, disclosure: d})
+	content := l.renderPresentationItem(it, renderContext{width: width, sty: l.sty, frame: l.frame, disclosure: d, doneButtonActive: doneActive})
 	e := listLineEntry{
-		rev:        it.rev,
-		width:      width,
-		indent:     indent,
-		animated:   animated,
-		frame:      l.frame,
-		disclosure: d,
-		lines:      strings.Split(content, "\n"),
+		rev:              it.rev,
+		width:            width,
+		indent:           indent,
+		animated:         animated,
+		frame:            l.frame,
+		disclosure:       d,
+		doneButtonActive: doneActive,
+		doneButtonAction: doneAction,
+		lines:            strings.Split(content, "\n"),
 	}
 	if gutter > 0 {
 		e.lines = l.addGutter(e.lines, d == fullView)
@@ -565,7 +650,7 @@ func (l *List) renderPresentationItem(it presentationItem, c renderContext) stri
 	case itemHeader:
 		return l.header
 	case itemNotice:
-		return renderNotice(it.notice.Notice, c.width, c.sty)
+		return renderNotice(it.notice.Notice, c.width, c.sty, c.doneButtonActive)
 	case itemReasoning:
 		return renderReasoningGroup(l.items[it.start:it.end], c)
 	case itemToolGroup:
@@ -964,11 +1049,14 @@ func appendBlockPresentations(items []presentationItem, blocks []agent.Block, fr
 	return items
 }
 
-func renderNotice(n Notice, width int, sty Styles) string {
+func renderNotice(n Notice, width int, sty Styles, doneButtonActive bool) string {
 	// Escape untrusted text before wrapping it into selectable document rows.
 	text := escape.Multiline(n.Text)
 	if n.Level == NoticeDone {
-		return renderDoneNotice(text, width, sty)
+		if n.Action {
+			return RenderDoneNoticeAction(text, width, sty, doneButtonActive)
+		}
+		return RenderDoneNotice(text, width, sty)
 	}
 	marker := ""
 	switch n.Level {
@@ -994,13 +1082,71 @@ func renderNotice(n Notice, width int, sty Styles) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderDoneNotice renders a finished response's timestamp line. Unlike the
-// other notices it styles the whole row, not just the marker, and paints no row
-// background: it marks the end of an exchange rather than announcing something,
-// so it has to recede against the response above it.
-func renderDoneNotice(text string, width int, sty Styles) string {
-	const prefix = "  ✦ "
-	lines := textwrap.WrapProse(width-ansi.StringWidth(prefix), text, sty.NoticeDone)
+// donePrefix is the done row's leading "  ✦ "; donePrefixWidth is derived
+// from it so the string and its width can never disagree.
+const donePrefix = "  ✦ "
+
+var donePrefixWidth = ansi.StringWidth(donePrefix)
+
+// doneButtonGap and doneButtonLabel are the rest of the fixed geometry around
+// the done row's fork button, shared by the renderer and doneActionButtonArea
+// so the two never disagree about where the button sits. doneButtonWidth is
+// derived from the label for the same reason donePrefixWidth is.
+const (
+	doneButtonGap   = 2          // blank run separating the timestamp from the button
+	doneButtonLabel = " ⑂ fork " // content inside the rounded border
+)
+
+// +2 for the rounded border's left and right edge columns.
+var doneButtonWidth = ansi.StringWidth(doneButtonLabel) + 2
+
+// doneActionButtonArea returns the fork button's rectangle in notice-local
+// coordinates — Y in [0,3) for all three rows of the button, border included
+// — for the given timestamp text and row width, and whether the button
+// renders at all. A width too narrow for the timestamp plus the button
+// degrades to the plain single-row form instead of overflowing, so ok is
+// false in that case. All three rows, not just the middle one, since
+// followOverlay hit-tests its full rectangle the same way; hit-testing
+// reuses this rectangle rather than re-deriving the layout.
+func doneActionButtonArea(text string, width int) (area image.Rectangle, ok bool) {
+	textWidth := ansi.StringWidth(text)
+	available := width - donePrefixWidth - doneButtonGap - doneButtonWidth
+	if available < 1 || textWidth > available {
+		return image.Rectangle{}, false
+	}
+	start := donePrefixWidth + textWidth + doneButtonGap
+	return image.Rect(start, 0, start+doneButtonWidth, 3), true
+}
+
+// renderDoneAction renders the three-row done-plus-button form. ok is false
+// when doneActionButtonArea says the button does not fit, so the caller
+// falls back to the plain form rather than overflowing or reflowing.
+func renderDoneAction(text string, width int, sty Styles, hovered bool) (string, bool) {
+	area, ok := doneActionButtonArea(text, width)
+	if !ok {
+		return "", false
+	}
+	// Shares followOverlay's active look (tui/follow.go); its resting state is
+	// quieter, so the two differ only at rest.
+	button := strings.Split(styles.FollowButtonStyle(sty.DoneButtonIcon, sty.DoneButtonBorder, sty.Input.Marker.GetForeground(), hovered).Render(doneButtonLabel), "\n")
+	timestamp := "  " + sty.NoticeDone.Render("✦") + " " + sty.NoticeDone.Render(text)
+	spaces := strings.Repeat(" ", area.Min.X)
+	gap := strings.Repeat(" ", doneButtonGap)
+	rows := []string{
+		ansi.Truncate(spaces+button[0], width, ""),
+		ansi.Truncate(timestamp+gap+button[1], width, ""),
+		ansi.Truncate(spaces+button[2], width, ""),
+	}
+	return strings.Join(rows, "\n"), true
+}
+
+// RenderDoneNotice renders a finished response's timestamp line in its plain,
+// buttonless form. Unlike the other notices it styles the whole row, not
+// just the marker, and paints no row background: it marks the end of an
+// exchange rather than announcing something, so it has to recede against the
+// response above it.
+func RenderDoneNotice(text string, width int, sty Styles) string {
+	lines := textwrap.WrapProse(width-donePrefixWidth, text, sty.NoticeDone)
 	for i, line := range lines {
 		indent := "    "
 		if i == 0 {
@@ -1012,6 +1158,18 @@ func renderDoneNotice(text string, width int, sty Styles) string {
 		lines[i] = ansi.Truncate(indent+line, width, "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// RenderDoneNoticeAction renders the done row's three-row form with its fork
+// button, falling back to RenderDoneNotice when the button does not fit.
+// hovered/pressed share this renderer with the resting form so the two
+// states stay the same width and row count; only the button's own colors
+// differ.
+func RenderDoneNoticeAction(text string, width int, sty Styles, hovered bool) string {
+	if rendered, ok := renderDoneAction(text, width, sty, hovered); ok {
+		return rendered
+	}
+	return RenderDoneNotice(text, width, sty)
 }
 
 func presentationOfBlock(block agent.Block) (toolPresentation, bool) {

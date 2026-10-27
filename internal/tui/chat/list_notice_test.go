@@ -100,7 +100,7 @@ func TestNoticeRowsUseEditorBackground(t *testing.T) {
 	for _, isDark := range []bool{true, false} {
 		sty := DefaultStyles(isDark)
 		for _, level := range []NoticeLevel{NoticeInfo, NoticeWarn, NoticeError, NoticeFork} {
-			rows := strings.Split(renderNotice(Notice{Level: level, Text: "A notice that wraps onto another line"}, 20, sty), "\n")
+			rows := strings.Split(renderNotice(Notice{Level: level, Text: "A notice that wraps onto another line"}, 20, sty, false), "\n")
 			if len(rows) < 2 {
 				t.Fatal("setup: notice did not wrap")
 			}
@@ -163,7 +163,7 @@ func TestReplaceTranscriptRefreshesCacheAndKeepsViewport(t *testing.T) {
 // the sparkle marker alongside its "Done · <time>" text.
 func TestRenderDoneNoticeShowsSparkle(t *testing.T) {
 	sty := DefaultStyles(true)
-	rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty), "\n")
+	rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty, false), "\n")
 	if got := ansi.Strip(rows[0]); got != "  ✦ Done · Oct 26, 3:12 PM" {
 		t.Fatalf("row 0 = %q, want two leading spaces, the sparkle, one space, then the done text", got)
 	}
@@ -174,11 +174,11 @@ func TestRenderDoneNoticeShowsSparkle(t *testing.T) {
 // rather than announcing something, so it carries no background band.
 func TestDoneNoticePaintsNoRowBackground(t *testing.T) {
 	sty := DefaultStyles(true)
-	done := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty)
+	done := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty, false)
 	if strings.Contains(done, backgroundSGR) {
 		t.Fatalf("done notice paints a row background: %q", done)
 	}
-	info := renderNotice(Notice{Level: NoticeInfo, Text: "Copied to clipboard."}, 80, sty)
+	info := renderNotice(Notice{Level: NoticeInfo, Text: "Copied to clipboard."}, 80, sty, false)
 	if !strings.Contains(info, backgroundSGR) {
 		t.Fatal("setup: NoticeInfo paints no row background either — the comparison only means something if other notices still do")
 	}
@@ -190,7 +190,7 @@ func TestDoneNoticePaintsNoRowBackground(t *testing.T) {
 func TestDoneNoticeNeverOverflowsRow(t *testing.T) {
 	sty := DefaultStyles(true)
 	for _, width := range []int{1, 3, 4, 6, 12, 24} {
-		doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, width, sty)
+		doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, width, sty, false)
 		for _, row := range strings.Split(doc, "\n") {
 			if got := ansi.StringWidth(ansi.Strip(row)); got > width {
 				t.Errorf("width %d: row width %d: %q", width, got, ansi.Strip(row))
@@ -206,7 +206,7 @@ const backgroundSGR = "48;2;"
 // like any other notice at narrow widths, with continuation rows indented.
 func TestDoneNoticeWrapsAtNarrowWidth(t *testing.T) {
 	sty := DefaultStyles(true)
-	doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM, a notice that is long enough to wrap"}, 40, sty)
+	doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM, a notice that is long enough to wrap"}, 40, sty, false)
 	rows := strings.Split(doc, "\n")
 	if len(rows) < 2 {
 		t.Fatal("setup: notice did not wrap")
@@ -220,6 +220,134 @@ func TestDoneNoticeWrapsAtNarrowWidth(t *testing.T) {
 		if !strings.HasPrefix(ansi.Strip(row), "    ") {
 			t.Fatalf("continuation row not indented by 4, under the text: %q", row)
 		}
+	}
+}
+
+// TestDoneNoticeWithoutActionIsUnchanged pins that a notice without Action
+// set renders byte-identically to today's single-row form — the common case,
+// since only the transcript's last done notice ever sets it.
+func TestDoneNoticeWithoutActionIsUnchanged(t *testing.T) {
+	sty := DefaultStyles(true)
+	text := "Done · Oct 26, 3:12 PM"
+	got := renderNotice(Notice{Level: NoticeDone, Text: text}, 80, sty, false)
+	want := RenderDoneNotice(text, 80, sty)
+	if got != want {
+		t.Fatalf("notice without Action = %q, want plain form %q", got, want)
+	}
+	if ansi.Strip(got) != "  ✦ "+text {
+		t.Fatalf("row = %q, want unchanged single-row form", ansi.Strip(got))
+	}
+}
+
+// TestDoneActionRendersBorderAndButton checks the three-row form: a rounded
+// border box around the ⑂ glyph, joined to the timestamp's right, with the
+// timestamp itself on the middle row.
+func TestDoneActionRendersBorderAndButton(t *testing.T) {
+	sty := DefaultStyles(true)
+	text := "Done · Oct 26, 3:12 PM"
+	out := RenderDoneNoticeAction(text, 80, sty, false)
+	rows := strings.Split(out, "\n")
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3:\n%s", len(rows), ansi.Strip(out))
+	}
+	if !strings.HasPrefix(ansi.Strip(rows[1]), "  ✦ "+text) {
+		t.Fatalf("middle row = %q, want it to start with the timestamp", ansi.Strip(rows[1]))
+	}
+	if !strings.Contains(out, "⑂") {
+		t.Fatalf("no fork glyph in:\n%s", ansi.Strip(out))
+	}
+	if !strings.Contains(ansi.Strip(rows[0]), "╭") || !strings.Contains(ansi.Strip(rows[2]), "╰") {
+		t.Fatalf("missing rounded border corners:\nrow0=%q\nrow2=%q", ansi.Strip(rows[0]), ansi.Strip(rows[2]))
+	}
+}
+
+// TestDoneActionHoverMatchesRestingShape pins the global constraint that
+// hover never reflows the transcript: both forms share width and row count,
+// differing only in the button's own colors.
+func TestDoneActionHoverMatchesRestingShape(t *testing.T) {
+	sty := DefaultStyles(true)
+	text := "Done · Oct 26, 3:12 PM"
+	resting := strings.Split(RenderDoneNoticeAction(text, 80, sty, false), "\n")
+	hovered := strings.Split(RenderDoneNoticeAction(text, 80, sty, true), "\n")
+	if len(resting) != len(hovered) {
+		t.Fatalf("row count differs: resting %d, hovered %d", len(resting), len(hovered))
+	}
+	for i := range resting {
+		rw, hw := ansi.StringWidth(ansi.Strip(resting[i])), ansi.StringWidth(ansi.Strip(hovered[i]))
+		if rw != hw {
+			t.Fatalf("row %d width differs: resting %d, hovered %d", i, rw, hw)
+		}
+	}
+	if resting[1] == hovered[1] {
+		t.Fatal("hovered middle row is identical to resting — hover should change the button's styling")
+	}
+}
+
+// TestDoneActionDegradesToThePlainForm checks the global constraint that a
+// width too narrow for the timestamp plus the button falls back to exactly
+// the plain form, not just "some" row that happens to fit.
+func TestDoneActionDegradesToThePlainForm(t *testing.T) {
+	sty := DefaultStyles(true)
+	text := "Done · Oct 26, 3:12 PM"
+	if _, ok := doneActionButtonArea(text, 20); ok {
+		t.Fatal("setup: expected width 20 too narrow for the button")
+	}
+	got := RenderDoneNoticeAction(text, 20, sty, false)
+	want := RenderDoneNotice(text, 20, sty)
+	if got != want {
+		t.Fatalf("degraded form = %q, want the plain form %q", got, want)
+	}
+}
+
+// TestDoneActionNarrowWidths sweeps the boundary around where the button
+// starts fitting: no row ever exceeds its width, and 33 — the first width
+// wide enough for "Done · Oct 26, 3:12 PM" plus the button — is exactly
+// where the glyph starts appearing.
+func TestDoneActionNarrowWidths(t *testing.T) {
+	sty := DefaultStyles(true)
+	text := "Done · Oct 26, 3:12 PM"
+	for _, width := range []int{1, 3, 4, 6, 37, 38} {
+		out := RenderDoneNoticeAction(text, width, sty, false)
+		for _, row := range strings.Split(out, "\n") {
+			if got := ansi.StringWidth(ansi.Strip(row)); got > width {
+				t.Errorf("width %d: row exceeds it: %q", width, ansi.Strip(row))
+			}
+		}
+		hasGlyph := strings.Contains(out, "⑂")
+		wantGlyph := width >= 38
+		if hasGlyph != wantGlyph {
+			t.Errorf("width %d: glyph present = %v, want %v", width, hasGlyph, wantGlyph)
+		}
+	}
+}
+
+// TestDoneActionButtonAreaMatchesRender asserts the seam DoneButtonAt
+// hit-tests against the real render, not a parallel re-computation: the
+// rectangle it reports must cut exactly the button box — "│ ⑂ fork │" on the
+// middle row, the border on the rows above and below — not merely contain
+// the glyph somewhere inside a looser range.
+func TestDoneActionButtonAreaMatchesRender(t *testing.T) {
+	sty := DefaultStyles(true)
+	text := "Done · Oct 26, 3:12 PM"
+	const width = 80
+	area, ok := doneActionButtonArea(text, width)
+	if !ok {
+		t.Fatal("setup: expected the button to fit at width 80")
+	}
+	if area.Dy() != 3 {
+		t.Fatalf("area height = %d, want 3 (all three rows of the button)", area.Dy())
+	}
+	rows := strings.Split(RenderDoneNoticeAction(text, width, sty, false), "\n")
+	for y := area.Min.Y; y < area.Max.Y; y++ {
+		got := ansi.Strip(ansi.Cut(rows[y], area.Min.X, area.Max.X))
+		want := []string{"╭────────╮", "│ ⑂ fork │", "╰────────╯"}[y]
+		if got != want {
+			t.Fatalf("row %d, cols %d:%d = %q, want %q; full row = %q", y, area.Min.X, area.Max.X, got, want, ansi.Strip(rows[y]))
+		}
+	}
+	before := ansi.Strip(ansi.Cut(rows[area.Min.Y+1], 0, area.Min.X))
+	if strings.Contains(before, "⑂") {
+		t.Fatalf("glyph appears before the reported area start %d: %q", area.Min.X, before)
 	}
 }
 

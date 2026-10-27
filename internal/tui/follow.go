@@ -58,16 +58,8 @@ func (m *Model) followOverlay(base string) string {
 		m.follow.hover = false
 		return base
 	}
-	marker := m.styles.Input.Marker
-	borderColor := m.styles.FollowBorder
-	style := lipgloss.NewStyle().
-		Foreground(marker.GetForeground()).
-		Border(lipgloss.RoundedBorder())
-	if m.follow.pressed == area || m.follow.hover {
-		borderColor = marker.GetForeground()
-		style = style.Bold(true)
-	}
-	style = style.BorderForeground(borderColor)
+	active := m.follow.pressed == area || m.follow.hover
+	style := m.styles.FollowButton(active)
 	return lipgloss.NewCompositor(
 		lipgloss.NewLayer(base),
 		lipgloss.NewLayer(style.Render(label)).X(area.Min.X).Y(area.Min.Y).Z(1),

@@ -35,6 +35,10 @@ type renderContext struct {
 	sty        Styles
 	frame      int
 	disclosure disclosure
+	// doneButtonActive paints the done row's fork button hovered/pressed. It
+	// only ever applies to the one notice carrying Action; every other
+	// renderer ignores it.
+	doneButtonActive bool
 }
 
 // RenderBlock renders a block without a trailing newline.

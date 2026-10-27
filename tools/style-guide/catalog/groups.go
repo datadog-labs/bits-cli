@@ -126,6 +126,11 @@ func semanticRoleSamples(width int, sty chat.Styles, title lipgloss.Style, tag s
 		// Unlike the other notices, a done line styles the whole row and paints
 		// no row background, so the sample renders it as one span.
 		renderSample(title, tag, "NoticeDone", sty.NoticeDone.Render("  ✦ Done · Oct 26, 3:12 PM")),
+		// The action form only appears on the transcript's last done notice.
+		// Both states are shown since hover must be pixel-identical in shape
+		// to resting, differing only in the button's own colors.
+		renderSample(title, tag, "NoticeDone (action, resting)", chat.RenderDoneNoticeAction("Done · Oct 26, 3:12 PM", width, sty, false)),
+		renderSample(title, tag, "NoticeDone (action, hovered)", chat.RenderDoneNoticeAction("Done · Oct 26, 3:12 PM", width, sty, true)),
 	}
 }
 

@@ -107,6 +107,12 @@ type Chat struct {
 	// bold like the others — it should recede, not compete with tool headers.
 	NoticeDone lipgloss.Style
 	NoticeText lipgloss.Style
+
+	// DoneButtonIcon and DoneButtonBorder are the done row's fork button at
+	// rest, quieter than the jump-to-latest control it otherwise mirrors. Only
+	// the resting state differs; the active look is shared.
+	DoneButtonIcon   color.Color
+	DoneButtonBorder color.Color
 }
 
 type Diff struct {
@@ -262,4 +268,35 @@ func Default(isDark bool) Theme {
 		return build(true, darkPalette())
 	}
 	return build(false, lightPalette())
+}
+
+// FollowButtonStyle is the rounded-border control shared by the jump-to-
+// latest overlay and the done row's fork button: marker foreground, border
+// at rest, border→marker plus bold when active (hovered or pressed). Content
+// padding is the caller's job, by including the blank cells in what it
+// renders, so both callers pad identically and nothing here depends on
+// lipgloss's own Padding. A free function rather than a Theme method alone
+// because chat.Styles, which has no Theme, needs it too.
+func FollowButtonStyle(restFg, restBorder, activeFg color.Color, active bool) lipgloss.Style {
+	fg, border := restFg, restBorder
+	if active {
+		// Active collapses to one colour for glyph and border, so callers that
+		// want a quieter resting state still share the active look.
+		fg, border = activeFg, activeFg
+	}
+	style := lipgloss.NewStyle().
+		Foreground(fg).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border)
+	if active {
+		style = style.Bold(true)
+	}
+	return style
+}
+
+// FollowButton is FollowButtonStyle applied to this theme's own marker and
+// FollowBorder.
+func (t Theme) FollowButton(active bool) lipgloss.Style {
+	marker := t.Input.Marker.GetForeground()
+	return FollowButtonStyle(marker, t.FollowBorder, marker, active)
 }

@@ -260,8 +260,9 @@ type Model struct {
 
 	// Selection belongs to ModeChat; selection.go encapsulates its gesture and
 	// auto-scroll state while the model supplies rendered pane frames.
-	selection selection
-	follow    followControl
+	selection  selection
+	follow     followControl
+	forkButton forkButtonState
 
 	// pendingAccordionToggle is the block a mouse-down landed on inside an
 	// accordion zone: any row an expandable block renders, collapsed preview
