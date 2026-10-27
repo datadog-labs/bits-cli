@@ -164,8 +164,23 @@ func TestReplaceTranscriptRefreshesCacheAndKeepsViewport(t *testing.T) {
 func TestRenderDoneNoticeShowsSparkle(t *testing.T) {
 	sty := DefaultStyles(true)
 	rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty), "\n")
-	if !strings.Contains(rows[0], "✦") || !strings.Contains(rows[0], "Done · Oct 26, 3:12 PM") {
-		t.Fatalf("row 0 = %q, want sparkle marker and done text", rows[0])
+	if got := ansi.Strip(rows[0]); got != "  ✦ Done · Oct 26, 3:12 PM" {
+		t.Fatalf("row 0 = %q, want two leading spaces, the sparkle, one space, then the done text", got)
+	}
+}
+
+// TestDoneNoticePaintsNoRowBackground pins that a done line is not padded out to
+// the full width the way other notices are: it marks the end of an exchange
+// rather than announcing something, so it carries no background band.
+func TestDoneNoticePaintsNoRowBackground(t *testing.T) {
+	sty := DefaultStyles(true)
+	rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty), "\n")
+	if got := ansi.StringWidth(ansi.Strip(rows[0])); got >= 80 {
+		t.Fatalf("row 0 width = %d, want well under 80 (unpadded, so no background band)", got)
+	}
+	info := strings.Split(renderNotice(Notice{Level: NoticeInfo, Text: "Copied to clipboard."}, 80, sty), "\n")
+	if got := ansi.StringWidth(ansi.Strip(info[0])); got != 80 {
+		t.Fatalf("setup: NoticeInfo row width = %d, want 80 — the comparison only means something if other notices still pad", got)
 	}
 }
 
@@ -184,8 +199,8 @@ func TestDoneNoticeWrapsAtNarrowWidth(t *testing.T) {
 		}
 	}
 	for _, row := range rows[1:] {
-		if !strings.HasPrefix(ansi.Strip(row), "   ") {
-			t.Fatalf("continuation row not indented by 3: %q", row)
+		if !strings.HasPrefix(ansi.Strip(row), "    ") {
+			t.Fatalf("continuation row not indented by 4, under the text: %q", row)
 		}
 	}
 }
