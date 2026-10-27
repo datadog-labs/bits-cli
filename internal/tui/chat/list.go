@@ -68,6 +68,12 @@ type List struct {
 	// The pointer position is in viewport cells. Hover is derived from it so
 	// scrolling or streaming can change the target beneath a stationary pointer.
 	pointerX, pointerY int
+
+	// doneButtonActive is the fork button's painted hover/press state. The
+	// model drives it (see Model.reconcileForkButton): a press persists while
+	// the pointer wanders off the button, which plain hover-from-pointer
+	// cannot express on its own.
+	doneButtonActive bool
 }
 
 // Surface is the visible transcript and its row offset in the full document.
@@ -132,7 +138,11 @@ type listLineEntry struct {
 	animated   bool
 	frame      int
 	disclosure disclosure
-	lines      []string
+	// doneButtonActive is the fork-button hover/press state this entry was
+	// rendered with; false for every item but the one actionable done notice,
+	// so toggling it never invalidates unrelated cache entries.
+	doneButtonActive bool
+	lines            []string
 }
 
 // NewList returns an empty list with a one-row gap between blocks.
@@ -406,6 +416,56 @@ func (l *List) Hovered() bool {
 // HoveredLink returns the rendered link beneath the stationary pointer.
 func (l *List) HoveredLink() (LinkHit, bool) { return l.LinkAt(l.pointerX, l.pointerY) }
 
+// SetDoneButtonActive sets the fork button's painted hover/press state. The
+// model computes it (press persists past the pointer leaving the button,
+// which is why this isn't derived from pointerX/pointerY alone).
+func (l *List) SetDoneButtonActive(active bool) { l.doneButtonActive = active }
+
+// DoneButtonAt returns the anchor block of the done row's fork button under a
+// transcript viewport cell, and whether the cell lands inside it. It follows
+// LinkAt's pattern: resolve the cell to its presentation item via itemAtRow,
+// then test Task 1's DoneActionButtonArea rather than re-deriving the layout.
+func (l *List) DoneButtonAt(x, y int) (agent.BlockID, bool) {
+	if x < 0 || x >= l.width {
+		return agent.BlockID{}, false
+	}
+	idx, row, ok := l.itemAtRow(y)
+	if !ok {
+		return agent.BlockID{}, false
+	}
+	item := l.view[idx]
+	if item.kind != itemNotice || item.notice == nil || item.notice.Notice.Level != NoticeDone || !item.notice.Notice.Action {
+		return agent.BlockID{}, false
+	}
+	area, ok := DoneActionButtonArea(escape.Multiline(item.notice.Notice.Text), l.width)
+	if !ok || !image.Pt(x, row).In(area) {
+		return agent.BlockID{}, false
+	}
+	return item.notice.After, true
+}
+
+// HoveredDoneButton returns the fork button beneath the stationary pointer,
+// the HoveredLink equivalent for the done row's button.
+func (l *List) HoveredDoneButton() (agent.BlockID, bool) {
+	return l.DoneButtonAt(l.pointerX, l.pointerY)
+}
+
+// DoneButtonAnchor returns the anchor of the transcript's actionable done
+// notice, independent of the pointer. transcriptNotices sets Action on at
+// most one notice, so there is at most one to find. The model uses this to
+// drop a stuck press when the button it was pressed on stops existing —
+// a new response finished, or the one it was anchored to scrolled out of the
+// rebuilt presentation — rather than firing on whatever the pointer now sits
+// over.
+func (l *List) DoneButtonAnchor() (agent.BlockID, bool) {
+	for _, it := range l.view {
+		if it.kind == itemNotice && it.notice != nil && it.notice.Notice.Level == NoticeDone && it.notice.Notice.Action {
+			return it.notice.After, true
+		}
+	}
+	return agent.BlockID{}, false
+}
+
 // AccordionAt returns the block whose clickable accordion zone sits on
 // viewport row y: every row an expandable block renders, whether collapsed
 // (header plus any compact preview) or expanded.
@@ -518,20 +578,24 @@ func (l *List) entry(idx int) listLineEntry {
 	if gutter > 0 && l.expanded(it.id) {
 		d = fullView
 	}
+	// Only the one notice carrying Action cares about this, so a hover toggle
+	// never invalidates any other item's cache entry.
+	doneActive := it.kind == itemNotice && it.notice != nil && it.notice.Notice.Action && l.doneButtonActive
 	if e, ok := l.cache[it.id]; ok &&
 		e.rev == it.rev && e.width == width && e.indent == indent && e.animated == animated && e.disclosure == d &&
-		(!animated || e.frame == l.frame) {
+		e.doneButtonActive == doneActive && (!animated || e.frame == l.frame) {
 		return e
 	}
-	content := l.renderPresentationItem(it, renderContext{width: width, sty: l.sty, frame: l.frame, disclosure: d})
+	content := l.renderPresentationItem(it, renderContext{width: width, sty: l.sty, frame: l.frame, disclosure: d, doneButtonActive: doneActive})
 	e := listLineEntry{
-		rev:        it.rev,
-		width:      width,
-		indent:     indent,
-		animated:   animated,
-		frame:      l.frame,
-		disclosure: d,
-		lines:      strings.Split(content, "\n"),
+		rev:              it.rev,
+		width:            width,
+		indent:           indent,
+		animated:         animated,
+		frame:            l.frame,
+		disclosure:       d,
+		doneButtonActive: doneActive,
+		lines:            strings.Split(content, "\n"),
 	}
 	if gutter > 0 {
 		e.lines = l.addGutter(e.lines, d == fullView)
@@ -567,7 +631,7 @@ func (l *List) renderPresentationItem(it presentationItem, c renderContext) stri
 	case itemHeader:
 		return l.header
 	case itemNotice:
-		return renderNotice(it.notice.Notice, c.width, c.sty)
+		return renderNotice(it.notice.Notice, c.width, c.sty, c.doneButtonActive)
 	case itemReasoning:
 		return renderReasoningGroup(l.items[it.start:it.end], c)
 	case itemToolGroup:
@@ -966,12 +1030,12 @@ func appendBlockPresentations(items []presentationItem, blocks []agent.Block, fr
 	return items
 }
 
-func renderNotice(n Notice, width int, sty Styles) string {
+func renderNotice(n Notice, width int, sty Styles, doneButtonActive bool) string {
 	// Escape untrusted text before wrapping it into selectable document rows.
 	text := escape.Multiline(n.Text)
 	if n.Level == NoticeDone {
 		if n.Action {
-			return RenderDoneNoticeAction(text, width, sty, false)
+			return RenderDoneNoticeAction(text, width, sty, doneButtonActive)
 		}
 		return RenderDoneNotice(text, width, sty)
 	}

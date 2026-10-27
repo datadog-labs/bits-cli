@@ -147,7 +147,8 @@ func (m *Model) reconcileFocus() tea.Cmd {
 func (m *Model) reconcilePointerShape() tea.Cmd {
 	hand := false
 	if m.mode == ModeChat && !m.frame.tooSmall {
-		hand = m.list.Hovered() || m.follow.hover || (m.focus() == focusEditor && m.editor.ChipHovered())
+		_, forkHover := m.list.HoveredDoneButton()
+		hand = m.list.Hovered() || m.follow.hover || forkHover || (m.focus() == focusEditor && m.editor.ChipHovered())
 		if !hand && !m.frame.replaced && !m.editor.MenuOpen() {
 			if hit, ok := m.list.HoveredLink(); ok && webLink(hit.URL) {
 				hand = true
@@ -213,6 +214,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	loadSkillMenu := m.syncClientSkills()
 	m.relayout()
+	m.reconcileForkButton()
 	return m, tea.Batch(cmd, loadSkillMenu, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
 }
 
@@ -252,6 +254,9 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.handleFollowMouse(msg) {
 		return m, nil
+	}
+	if cmd, handled := m.handleForkButtonMouse(msg); handled {
+		return m, cmd
 	}
 	switch msg := msg.(type) {
 	case clientSkillsResultMsg:

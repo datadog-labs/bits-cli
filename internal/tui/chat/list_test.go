@@ -1044,7 +1044,7 @@ func TestNoticeTextCarriesItsOwnColor(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			sty := DefaultStyles(test.isDark)
-			rendered := renderNotice(Notice{Level: NoticeWarn, Text: "something to report"}, 40, sty)
+			rendered := renderNotice(Notice{Level: NoticeWarn, Text: "something to report"}, 40, sty, false)
 
 			r, g, b, _ := sty.NoticeText.GetForeground().RGBA()
 			want := fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)

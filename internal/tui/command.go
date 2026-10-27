@@ -216,7 +216,7 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 	case commandQuit:
 		return m.quit()
 	case commandFork:
-		return m, m.startFork(argument)
+		return m, m.startFork(argument, "")
 	case commandResume:
 		return m, tea.Batch(m.stopCompletionSearches(), m.openConversationPicker())
 	case commandStatus:

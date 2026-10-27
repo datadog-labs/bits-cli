@@ -22,7 +22,13 @@ type forkResultMsg struct {
 	err          error
 }
 
-func (m *Model) startFork(argument string) tea.Cmd {
+// startFork creates and loads a copy of the current conversation. fromMessageID
+// names the response the caller forked from — the done row's button passes its
+// anchor, /fork and /branch pass "" — but ForkConversation only takes a
+// conversation id today, so it goes unused here. It is threaded through now so
+// a future fork-from-here is a backend change plus wiring this parameter in,
+// rather than a client-side feature the server cannot actually honor.
+func (m *Model) startFork(argument, fromMessageID string) tea.Cmd {
 	if argument != "" {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Usage: /fork (or /branch)"))
 	}
@@ -58,6 +64,26 @@ func (m *Model) startFork(argument string) tea.Cmd {
 		result.err = err
 		return result
 	}
+}
+
+// forkEligible reports whether a fork could start right now: the same guards
+// startFork enforces for /fork and /branch. The done row's button shares this
+// check so it never renders only to reject the click it invites — a button
+// that only ever posts "Wait for the current operation to finish before
+// forking." is worse than no button.
+func (m *Model) forkEligible() bool {
+	return !m.op.busy() && !m.conversationTask.running() && m.picker == nil && agent.ValidConversationID(m.state.ConversationID)
+}
+
+// blockMessageID resolves a BlockID to the wire message id it carries, or ""
+// for a block that no longer survives or never had one (client-minted).
+func (m *Model) blockMessageID(id agent.BlockID) string {
+	for _, b := range m.state.Blocks {
+		if b.ID == id {
+			return b.MessageID
+		}
+	}
+	return ""
 }
 
 func (m *Model) applyForkResult(msg forkResultMsg) tea.Cmd {
@@ -141,11 +167,18 @@ func (m *Model) transcriptNotices() []chat.NoticeItem {
 	// climbs from 1 and the fork marker sits at the zero value, so reserving
 	// the high end means any number of done lines can never collide with
 	// either of those, or with each other.
-	for i, ts := range m.responseTimestamps() {
+	timestamps := m.responseTimestamps()
+	eligible := m.forkEligible()
+	for i, ts := range timestamps {
+		n := notice(chat.NoticeDone, nil, "Done · %s", chat.FormatFinishedAt(ts.At))
+		// Only the last done line can ever carry the button: forking always
+		// forks from the conversation's end, so offering it on an earlier
+		// response would show a control that lies about what it does.
+		n.Action = i == len(timestamps)-1 && eligible
 		all = append(all, chat.NoticeItem{
 			ID:     math.MaxUint64 - uint64(i),
 			After:  ts.After,
-			Notice: notice(chat.NoticeDone, nil, "Done · %s", chat.FormatFinishedAt(ts.At)),
+			Notice: n,
 		})
 	}
 	all = append(all, m.notices...)

@@ -100,7 +100,7 @@ func TestNoticeRowsUseEditorBackground(t *testing.T) {
 	for _, isDark := range []bool{true, false} {
 		sty := DefaultStyles(isDark)
 		for _, level := range []NoticeLevel{NoticeInfo, NoticeWarn, NoticeError, NoticeFork} {
-			rows := strings.Split(renderNotice(Notice{Level: level, Text: "A notice that wraps onto another line"}, 20, sty), "\n")
+			rows := strings.Split(renderNotice(Notice{Level: level, Text: "A notice that wraps onto another line"}, 20, sty, false), "\n")
 			if len(rows) < 2 {
 				t.Fatal("setup: notice did not wrap")
 			}
@@ -163,7 +163,7 @@ func TestReplaceTranscriptRefreshesCacheAndKeepsViewport(t *testing.T) {
 // the sparkle marker alongside its "Done · <time>" text.
 func TestRenderDoneNoticeShowsSparkle(t *testing.T) {
 	sty := DefaultStyles(true)
-	rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty), "\n")
+	rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty, false), "\n")
 	if got := ansi.Strip(rows[0]); got != "  ✦ Done · Oct 26, 3:12 PM" {
 		t.Fatalf("row 0 = %q, want two leading spaces, the sparkle, one space, then the done text", got)
 	}
@@ -174,11 +174,11 @@ func TestRenderDoneNoticeShowsSparkle(t *testing.T) {
 // rather than announcing something, so it carries no background band.
 func TestDoneNoticePaintsNoRowBackground(t *testing.T) {
 	sty := DefaultStyles(true)
-	done := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty)
+	done := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty, false)
 	if strings.Contains(done, backgroundSGR) {
 		t.Fatalf("done notice paints a row background: %q", done)
 	}
-	info := renderNotice(Notice{Level: NoticeInfo, Text: "Copied to clipboard."}, 80, sty)
+	info := renderNotice(Notice{Level: NoticeInfo, Text: "Copied to clipboard."}, 80, sty, false)
 	if !strings.Contains(info, backgroundSGR) {
 		t.Fatal("setup: NoticeInfo paints no row background either — the comparison only means something if other notices still do")
 	}
@@ -190,7 +190,7 @@ func TestDoneNoticePaintsNoRowBackground(t *testing.T) {
 func TestDoneNoticeNeverOverflowsRow(t *testing.T) {
 	sty := DefaultStyles(true)
 	for _, width := range []int{1, 3, 4, 6, 12, 24} {
-		doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, width, sty)
+		doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, width, sty, false)
 		for _, row := range strings.Split(doc, "\n") {
 			if got := ansi.StringWidth(ansi.Strip(row)); got > width {
 				t.Errorf("width %d: row width %d: %q", width, got, ansi.Strip(row))
@@ -206,7 +206,7 @@ const backgroundSGR = "48;2;"
 // like any other notice at narrow widths, with continuation rows indented.
 func TestDoneNoticeWrapsAtNarrowWidth(t *testing.T) {
 	sty := DefaultStyles(true)
-	doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM, a notice that is long enough to wrap"}, 40, sty)
+	doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM, a notice that is long enough to wrap"}, 40, sty, false)
 	rows := strings.Split(doc, "\n")
 	if len(rows) < 2 {
 		t.Fatal("setup: notice did not wrap")
@@ -229,7 +229,7 @@ func TestDoneNoticeWrapsAtNarrowWidth(t *testing.T) {
 func TestDoneNoticeWithoutActionIsUnchanged(t *testing.T) {
 	sty := DefaultStyles(true)
 	text := "Done · Oct 26, 3:12 PM"
-	got := renderNotice(Notice{Level: NoticeDone, Text: text}, 80, sty)
+	got := renderNotice(Notice{Level: NoticeDone, Text: text}, 80, sty, false)
 	want := RenderDoneNotice(text, 80, sty)
 	if got != want {
 		t.Fatalf("notice without Action = %q, want plain form %q", got, want)
