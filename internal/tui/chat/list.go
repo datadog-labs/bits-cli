@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 
@@ -968,7 +969,11 @@ func renderNotice(n Notice, width int, sty Styles) string {
 	// Escape untrusted text before wrapping it into selectable document rows.
 	text := escape.Multiline(n.Text)
 	if n.Level == NoticeDone {
-		return renderDoneNotice(text, width, sty)
+		// hovered is always false here: the pointer hit-test that would drive
+		// it is wired in by Task 2, which also decides whose done notice is
+		// hovered. RenderDoneNotice stays exported so both that wiring and the
+		// style catalog can render the hovered form directly.
+		return RenderDoneNotice(text, width, sty, n.Action, false)
 	}
 	marker := ""
 	switch n.Level {
@@ -994,11 +999,90 @@ func renderNotice(n Notice, width int, sty Styles) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderDoneNotice renders a finished response's timestamp line. Unlike the
-// other notices it styles the whole row, not just the marker, and paints no row
-// background: it marks the end of an exchange rather than announcing something,
-// so it has to recede against the response above it.
-func renderDoneNotice(text string, width int, sty Styles) string {
+// Fixed geometry around the done row's fork button, shared by the renderer
+// and DoneActionButtonSpan so the two never disagree about where the button
+// sits.
+const (
+	donePrefixWidth = 4 // "  ✦ "
+	doneButtonGap   = 2 // blank run separating the timestamp from the button
+	doneButtonWidth = 5 // rounded border + one cell of padding each side + the glyph
+)
+
+// DoneActionButtonSpan returns the half-open column range the fork button
+// occupies on an action done notice's middle row, for the given timestamp
+// text and row width, and whether the button renders at all. A width too
+// narrow for the timestamp plus the button degrades to the plain single-row
+// form instead of overflowing, so ok is false in that case. Task 2 hit-tests
+// this range rather than re-deriving the layout.
+func DoneActionButtonSpan(text string, width int) (start, end int, ok bool) {
+	textWidth := ansi.StringWidth(text)
+	available := width - donePrefixWidth - doneButtonGap - doneButtonWidth
+	if available < 1 || textWidth > available {
+		return 0, 0, false
+	}
+	start = donePrefixWidth + textWidth + doneButtonGap
+	return start, start + doneButtonWidth, true
+}
+
+// doneButtonStyle mirrors followOverlay's button exactly (tui/follow.go):
+// rounded border, foreground from Input.Marker, border FollowBorder at rest,
+// border→marker foreground plus bold when hovered or pressed. Reproducing it
+// here rather than sharing code keeps the chat package's rendering
+// self-contained; Styles.FollowBorder is what makes the color reachable.
+func doneButtonStyle(sty Styles, hovered bool) lipgloss.Style {
+	marker := sty.Input.Marker.GetForeground()
+	style := lipgloss.NewStyle().Foreground(marker).Border(lipgloss.RoundedBorder()).Padding(0, 1)
+	borderColor := sty.FollowBorder
+	if hovered {
+		borderColor = marker
+		style = style.Bold(true)
+	}
+	return style.BorderForeground(borderColor)
+}
+
+// renderDoneAction renders the three-row done-plus-button form. ok is false
+// when DoneActionButtonSpan says the button does not fit, so the caller falls
+// back to the plain form rather than overflowing or reflowing.
+func renderDoneAction(text string, width int, sty Styles, hovered bool) (string, bool) {
+	start, _, ok := DoneActionButtonSpan(text, width)
+	if !ok {
+		return "", false
+	}
+	button := strings.Split(doneButtonStyle(sty, hovered).Render("⑂"), "\n")
+	if len(button) != 3 {
+		// Defensive: a one-line bordered Render always yields three rows
+		// (top border, content, bottom border); treating anything else as
+		// "doesn't fit" keeps this honest if that assumption ever breaks.
+		return "", false
+	}
+	timestamp := "  " + sty.NoticeDone.Render("✦") + " " + sty.NoticeDone.Render(text)
+	spaces := strings.Repeat(" ", start)
+	gap := strings.Repeat(" ", doneButtonGap)
+	rows := []string{
+		ansi.Truncate(spaces+button[0], width, ""),
+		ansi.Truncate(timestamp+gap+button[1], width, ""),
+		ansi.Truncate(spaces+button[2], width, ""),
+	}
+	return strings.Join(rows, "\n"), true
+}
+
+// RenderDoneNotice renders a finished response's timestamp line. Unlike the
+// other notices it styles the whole row, not just the marker, and paints no
+// row background: it marks the end of an exchange rather than announcing
+// something, so it has to recede against the response above it.
+//
+// action renders a fork button beside the timestamp — set only for the
+// transcript's last done notice, since the rendering layer itself has no
+// notion of "last". hovered/pressed share this renderer with the resting
+// form so the two states stay the same width and row count; only the
+// button's own colors differ. Exported so the style catalog and Task 2's
+// hover wiring can render either form directly.
+func RenderDoneNotice(text string, width int, sty Styles, action, hovered bool) string {
+	if action {
+		if rendered, ok := renderDoneAction(text, width, sty, hovered); ok {
+			return rendered
+		}
+	}
 	const prefix = "  ✦ "
 	lines := textwrap.WrapProse(width-ansi.StringWidth(prefix), text, sty.NoticeDone)
 	for i, line := range lines {

@@ -30,6 +30,10 @@ type Notice struct {
 	Level NoticeLevel
 	Text  string
 	Err   error
+	// Action marks the transcript's last done notice, the only one that gets
+	// a fork button. The rendering layer has no notion of "last"; the caller
+	// that builds NoticeItems decides and sets this.
+	Action bool
 }
 
 // Empty reports whether there is no notice to display.

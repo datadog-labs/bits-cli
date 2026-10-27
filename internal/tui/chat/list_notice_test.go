@@ -223,6 +223,109 @@ func TestDoneNoticeWrapsAtNarrowWidth(t *testing.T) {
 	}
 }
 
+// TestDoneNoticeWithoutActionIsUnchanged pins that a notice without Action
+// set renders byte-identically to today's single-row form — the common case,
+// since only the transcript's last done notice ever sets it.
+func TestDoneNoticeWithoutActionIsUnchanged(t *testing.T) {
+	sty := DefaultStyles(true)
+	text := "Done · Oct 26, 3:12 PM"
+	got := renderNotice(Notice{Level: NoticeDone, Text: text}, 80, sty)
+	want := RenderDoneNotice(text, 80, sty, false, false)
+	if got != want {
+		t.Fatalf("notice without Action = %q, want plain form %q", got, want)
+	}
+	if ansi.Strip(got) != "  ✦ "+text {
+		t.Fatalf("row = %q, want unchanged single-row form", ansi.Strip(got))
+	}
+}
+
+// TestDoneActionRendersBorderAndButton checks the three-row form: a rounded
+// border box around the ⑂ glyph, joined to the timestamp's right, with the
+// timestamp itself on the middle row.
+func TestDoneActionRendersBorderAndButton(t *testing.T) {
+	sty := DefaultStyles(true)
+	text := "Done · Oct 26, 3:12 PM"
+	out := RenderDoneNotice(text, 80, sty, true, false)
+	rows := strings.Split(out, "\n")
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3:\n%s", len(rows), ansi.Strip(out))
+	}
+	if !strings.HasPrefix(ansi.Strip(rows[1]), "  ✦ "+text) {
+		t.Fatalf("middle row = %q, want it to start with the timestamp", ansi.Strip(rows[1]))
+	}
+	if !strings.Contains(out, "⑂") {
+		t.Fatalf("no fork glyph in:\n%s", ansi.Strip(out))
+	}
+	if !strings.Contains(ansi.Strip(rows[0]), "╭") || !strings.Contains(ansi.Strip(rows[2]), "╰") {
+		t.Fatalf("missing rounded border corners:\nrow0=%q\nrow2=%q", ansi.Strip(rows[0]), ansi.Strip(rows[2]))
+	}
+}
+
+// TestDoneActionHoverMatchesRestingShape pins the global constraint that
+// hover never reflows the transcript: both forms share width and row count,
+// differing only in the button's own colors.
+func TestDoneActionHoverMatchesRestingShape(t *testing.T) {
+	sty := DefaultStyles(true)
+	text := "Done · Oct 26, 3:12 PM"
+	resting := strings.Split(RenderDoneNotice(text, 80, sty, true, false), "\n")
+	hovered := strings.Split(RenderDoneNotice(text, 80, sty, true, true), "\n")
+	if len(resting) != len(hovered) {
+		t.Fatalf("row count differs: resting %d, hovered %d", len(resting), len(hovered))
+	}
+	for i := range resting {
+		rw, hw := ansi.StringWidth(ansi.Strip(resting[i])), ansi.StringWidth(ansi.Strip(hovered[i]))
+		if rw != hw {
+			t.Fatalf("row %d width differs: resting %d, hovered %d", i, rw, hw)
+		}
+	}
+	if resting[1] == hovered[1] {
+		t.Fatal("hovered middle row is identical to resting — hover should change the button's styling")
+	}
+}
+
+// TestDoneActionNarrowWidthDegradesToSingleRow checks the global constraint
+// that a width too narrow for the timestamp plus the button falls back to
+// the plain form rather than overflowing.
+func TestDoneActionNarrowWidthDegradesToSingleRow(t *testing.T) {
+	sty := DefaultStyles(true)
+	text := "Done · Oct 26, 3:12 PM"
+	start, _, ok := DoneActionButtonSpan(text, 20)
+	if ok {
+		t.Fatalf("setup: expected width 20 too narrow for the button, got span start=%d", start)
+	}
+	out := RenderDoneNotice(text, 20, sty, true, false)
+	for _, row := range strings.Split(out, "\n") {
+		if got := ansi.StringWidth(ansi.Strip(row)); got > 20 {
+			t.Fatalf("row exceeds width 20: %q", ansi.Strip(row))
+		}
+	}
+	if strings.Contains(out, "⑂") {
+		t.Fatalf("narrow width still rendered the button:\n%s", ansi.Strip(out))
+	}
+}
+
+// TestDoneActionButtonSpanMatchesRender asserts the exported seam Task 2
+// hit-tests against the real render, not a parallel re-computation: the
+// column range it reports must be exactly where "⑂" sits on the middle row.
+func TestDoneActionButtonSpanMatchesRender(t *testing.T) {
+	sty := DefaultStyles(true)
+	text := "Done · Oct 26, 3:12 PM"
+	const width = 80
+	start, end, ok := DoneActionButtonSpan(text, width)
+	if !ok {
+		t.Fatal("setup: expected the button to fit at width 80")
+	}
+	rows := strings.Split(RenderDoneNotice(text, width, sty, true, false), "\n")
+	span := ansi.Strip(ansi.Cut(rows[1], start, end))
+	if !strings.Contains(span, "⑂") {
+		t.Fatalf("span %d:%d = %q, want it to contain the fork glyph; full row = %q", start, end, span, ansi.Strip(rows[1]))
+	}
+	before := ansi.Strip(ansi.Cut(rows[1], 0, start))
+	if strings.Contains(before, "⑂") {
+		t.Fatalf("glyph appears before the reported span start %d: %q", start, before)
+	}
+}
+
 func TestForkMarkerWithMissingAnchorIsOmitted(t *testing.T) {
 	l := headerList(t, 60, 10)
 	l.SetTranscript([]agent.Block{textBlock("new", "CURRENT")}, nil, []NoticeItem{{After: agent.BlockID{Scope: agent.ScopeMessage, Key: "missing"}, Notice: Notice{Level: NoticeFork, Text: "Forked conversation"}}})

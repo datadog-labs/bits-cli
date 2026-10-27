@@ -444,6 +444,16 @@ func TestSharedComponentStylesDeriveFromSemanticTokens(t *testing.T) {
 			if got, want := test.theme.Chat.ToolError.GetForeground(), lipgloss.Color(test.palette.textSecondary); got != want {
 				t.Errorf("tool error = %v, want token %v", got, want)
 			}
+			// Chat.FollowBorder duplicates Theme.FollowBorder so the chat
+			// package can render the done row's fork button with the same
+			// resting border as the jump-to-latest control; both must stay
+			// the same token rather than drifting into two colors.
+			if got, want := test.theme.Chat.FollowBorder, test.theme.FollowBorder; got != want {
+				t.Errorf("Chat.FollowBorder = %v, want it to match Theme.FollowBorder %v", got, want)
+			}
+			if got, want := test.theme.Chat.FollowBorder, lipgloss.Color(test.palette.followBorder); got != want {
+				t.Errorf("Chat.FollowBorder = %v, want token %v", got, want)
+			}
 		})
 	}
 }

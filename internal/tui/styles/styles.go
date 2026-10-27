@@ -107,6 +107,12 @@ type Chat struct {
 	// bold like the others — it should recede, not compete with tool headers.
 	NoticeDone lipgloss.Style
 	NoticeText lipgloss.Style
+
+	// FollowBorder mirrors Theme.FollowBorder: the chat package renders the
+	// done row's fork button with the same resting border as the jump-to-latest
+	// control, but cannot reach Theme from here, so the role is duplicated onto
+	// Chat rather than given a second palette entry.
+	FollowBorder color.Color
 }
 
 type Diff struct {
