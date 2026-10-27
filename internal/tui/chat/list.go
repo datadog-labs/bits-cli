@@ -1011,14 +1011,6 @@ func renderDoneNotice(text string, width int, sty Styles) string {
 		// otherwise push the row past its width.
 		lines[i] = ansi.Truncate(indent+line, width, "")
 	}
-	// A rule fills the rest of the row, as the startup resume offer's hint rows
-	// do. Only when the line fits on one row: trailing a rule off a wrapped
-	// paragraph would read as a second element rather than the same mark.
-	if len(lines) == 1 {
-		if rule := width - ansi.StringWidth(ansi.Strip(lines[0])) - 1; rule > 0 {
-			lines[0] += " " + sty.NoticeDone.Render(strings.Repeat("─", rule))
-		}
-	}
 	return strings.Join(lines, "\n")
 }
 

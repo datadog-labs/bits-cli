@@ -164,38 +164,8 @@ func TestReplaceTranscriptRefreshesCacheAndKeepsViewport(t *testing.T) {
 func TestRenderDoneNoticeShowsSparkle(t *testing.T) {
 	sty := DefaultStyles(true)
 	rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty), "\n")
-	if got := ansi.Strip(rows[0]); !strings.HasPrefix(got, "  ✦ Done · Oct 26, 3:12 PM ─") {
-		t.Fatalf("row 0 = %q, want two leading spaces, the sparkle, the done text, then a rule", got)
-	}
-}
-
-// TestDoneNoticeRuleFillsRow confirms the rule runs to the right edge, the way
-// the startup resume offer's hint rows do.
-func TestDoneNoticeRuleFillsRow(t *testing.T) {
-	sty := DefaultStyles(true)
-	for _, width := range []int{80, 60, 40} {
-		rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, width, sty), "\n")
-		got := ansi.Strip(rows[0])
-		if ansi.StringWidth(got) != width {
-			t.Errorf("width %d: row width = %d, want the rule to fill the row", width, ansi.StringWidth(got))
-		}
-		if !strings.HasSuffix(got, "─") {
-			t.Errorf("width %d: row = %q, want it to end in a rule", width, got)
-		}
-	}
-}
-
-// TestWrappedDoneNoticeHasNoRule covers the degenerate case: a done line too
-// long for one row gets no rule, since a rule trailing a wrapped paragraph
-// reads as a second element rather than part of the same mark.
-func TestWrappedDoneNoticeHasNoRule(t *testing.T) {
-	sty := DefaultStyles(true)
-	doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM, with enough trailing text that it cannot fit"}, 40, sty)
-	if rows := strings.Split(doc, "\n"); len(rows) < 2 {
-		t.Fatal("setup: notice did not wrap")
-	}
-	if strings.Contains(ansi.Strip(doc), "─") {
-		t.Fatalf("wrapped done notice carries a rule: %q", ansi.Strip(doc))
+	if got := ansi.Strip(rows[0]); got != "  ✦ Done · Oct 26, 3:12 PM" {
+		t.Fatalf("row 0 = %q, want two leading spaces, the sparkle, one space, then the done text", got)
 	}
 }
 
