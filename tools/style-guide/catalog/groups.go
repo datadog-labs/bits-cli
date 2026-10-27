@@ -129,8 +129,8 @@ func semanticRoleSamples(width int, sty chat.Styles, title lipgloss.Style, tag s
 		// The action form only appears on the transcript's last done notice.
 		// Both states are shown since hover must be pixel-identical in shape
 		// to resting, differing only in the button's own colors.
-		renderSample(title, tag, "NoticeDone (action, resting)", chat.RenderDoneNotice("Done · Oct 26, 3:12 PM", width, sty, true, false)),
-		renderSample(title, tag, "NoticeDone (action, hovered)", chat.RenderDoneNotice("Done · Oct 26, 3:12 PM", width, sty, true, true)),
+		renderSample(title, tag, "NoticeDone (action, resting)", chat.RenderDoneNoticeAction("Done · Oct 26, 3:12 PM", width, sty, false)),
+		renderSample(title, tag, "NoticeDone (action, hovered)", chat.RenderDoneNoticeAction("Done · Oct 26, 3:12 PM", width, sty, true)),
 	}
 }
 

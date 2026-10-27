@@ -269,3 +269,28 @@ func Default(isDark bool) Theme {
 	}
 	return build(false, lightPalette())
 }
+
+// FollowButtonStyle is the rounded-border control shared by the jump-to-
+// latest overlay and the done row's fork button: marker foreground, border
+// at rest, border→marker plus bold when active (hovered or pressed). Content
+// padding is the caller's job, by including the blank cells in what it
+// renders, so both callers pad identically and nothing here depends on
+// lipgloss's own Padding. A free function rather than a Theme method alone
+// because chat.Styles, which has no Theme, needs it too.
+func FollowButtonStyle(marker lipgloss.Style, border color.Color, active bool) lipgloss.Style {
+	style := lipgloss.NewStyle().
+		Foreground(marker.GetForeground()).
+		Border(lipgloss.RoundedBorder())
+	borderColor := border
+	if active {
+		borderColor = marker.GetForeground()
+		style = style.Bold(true)
+	}
+	return style.BorderForeground(borderColor)
+}
+
+// FollowButton is FollowButtonStyle applied to this theme's own marker and
+// FollowBorder.
+func (t Theme) FollowButton(active bool) lipgloss.Style {
+	return FollowButtonStyle(t.Input.Marker, t.FollowBorder, active)
+}
