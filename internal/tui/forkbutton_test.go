@@ -52,7 +52,7 @@ func forkButtonCell(t *testing.T, m *Model) (x, y int) {
 }
 
 func TestForkButtonClickAndReleaseFiresFork(t *testing.T) {
-	m, b := forkButtonTestModel(t)
+	m, _ := forkButtonTestModel(t)
 	x, y := forkButtonCell(t, m)
 
 	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: x, Y: y})
@@ -67,7 +67,100 @@ func TestForkButtonClickAndReleaseFiresFork(t *testing.T) {
 	if cmd == nil || m.op.kind != opFork || !m.op.busy() {
 		t.Fatal("release on the same cell did not fire the fork")
 	}
-	_ = b // the backend call itself is covered by TestForkSwitchesInPlace
+	// The backend call itself is covered by TestForkSwitchesInPlace.
+}
+
+// TestForkButtonOneColumnOutsideMisses is the boundary case
+// TestForkButtonMissColumnDoesNotFireAndStartsSelection's x-5 can't pin: the
+// very next cell past the button's edge must still miss and fall through to
+// selection, at both the left and right edges.
+func TestForkButtonOneColumnOutsideMisses(t *testing.T) {
+	m, b := forkButtonTestModel(t)
+	x, y := forkButtonCell(t, m)
+	// forkButtonCell returns the glyph column; the button's left border sits
+	// two cells left of it ("│ ⑂ │"), so one past either edge is x-3 and x+3.
+	for _, miss := range []int{x - 3, x + 3} {
+		m.selection.clear()
+		m.forkButton.pressed = false
+		m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: miss, Y: y})
+		if m.forkButton.pressed {
+			t.Fatalf("column %d (one outside the button) recorded a press", miss)
+		}
+		if !m.selection.selecting() {
+			t.Fatalf("column %d (one outside the button) did not begin a selection", miss)
+		}
+		m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: miss, Y: y})
+		if m.op.busy() || b.calls != 0 {
+			t.Fatalf("column %d fired the fork", miss)
+		}
+	}
+}
+
+// TestForkButtonHoverRepaints confirms motion over the button changes its
+// painted colors without shifting any cell — the repaint goes through the
+// per-Update reconcileForkButton pass (see its doc comment for why this
+// isn't a dedicated MouseMotionMsg case), not a bespoke motion handler.
+func TestForkButtonHoverRepaints(t *testing.T) {
+	m, _ := forkButtonTestModel(t)
+	x, y := forkButtonCell(t, m)
+	rest := strings.Split(m.View().Content, "\n")[y]
+
+	m.Update(tea.MouseMotionMsg{X: x, Y: y})
+	hover := strings.Split(m.View().Content, "\n")[y]
+	if hover == rest {
+		t.Error("motion over the button did not repaint it active")
+	}
+	// Hover must not shift the row: same cells, different colors only.
+	if ansi.Strip(hover) != ansi.Strip(rest) {
+		t.Errorf("hover changed layout:\n%q\n%q", ansi.Strip(rest), ansi.Strip(hover))
+	}
+	m.Update(tea.MouseMotionMsg{X: 0, Y: y})
+	if away := strings.Split(m.View().Content, "\n")[y]; away != rest {
+		t.Error("moving off the button did not restore the resting paint")
+	}
+}
+
+// TestForkButtonMouseIgnoredOutsideChatMode pins the critical guard: the
+// button must never fire, nor swallow a click meant for another surface,
+// anywhere but ModeChat — the transcript isn't even drawn in ModeStatus, and
+// ModePermissions deliberately swallows chat pointer input itself.
+func TestForkButtonMouseIgnoredOutsideChatMode(t *testing.T) {
+	cases := []struct {
+		name string
+		mode Mode
+	}{
+		{"chat", ModeChat},
+		{"status", ModeStatus},
+		{"permissions", ModePermissions},
+		{"conversations", ModeConversations},
+	}
+	for _, c := range cases {
+		mode := c.mode
+		t.Run(c.name, func(t *testing.T) {
+			m, b := forkButtonTestModel(t)
+			x, y := forkButtonCell(t, m)
+			m.mode = mode
+
+			m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: x, Y: y})
+			m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: x, Y: y})
+
+			if mode == ModeChat {
+				// The backend call itself only happens once the returned
+				// command runs; op.kind flips synchronously in dispatch,
+				// same as TestForkButtonClickAndReleaseFiresFork.
+				if !m.op.busy() || m.op.kind != opFork {
+					t.Fatalf("setup: ModeChat should still fire (op=%+v)", m.op)
+				}
+				return
+			}
+			if m.op.busy() || b.calls != 0 {
+				t.Fatalf("mode %v: fork fired outside chat", mode)
+			}
+			if m.forkButton.pressed {
+				t.Fatalf("mode %v: press recorded outside chat", mode)
+			}
+		})
+	}
 }
 
 func TestForkButtonMissColumnDoesNotFireAndStartsSelection(t *testing.T) {

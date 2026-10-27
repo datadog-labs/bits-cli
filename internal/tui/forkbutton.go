@@ -22,6 +22,13 @@ type forkButtonState struct {
 // trusted from the press, because a busy operation, a new response, or an
 // opened picker can change that between press and release.
 func (m *Model) handleForkButtonMouse(msg tea.Msg) (tea.Cmd, bool) {
+	// The button is only ever part of the rendered chat transcript: outside
+	// ModeChat (status, permissions, the resize hint) the transcript is
+	// either not drawn or deliberately not driven by the pointer, same as
+	// followTarget's own guard.
+	if m.mode != ModeChat || m.frame.tooSmall || m.shown != nil || m.editor.MenuOpen() {
+		return nil, false
+	}
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
 		if msg.Button != tea.MouseLeft {

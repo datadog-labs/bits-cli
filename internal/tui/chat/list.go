@@ -424,7 +424,7 @@ func (l *List) SetDoneButtonActive(active bool) { l.doneButtonActive = active }
 // DoneButtonAt returns the anchor block of the done row's fork button under a
 // transcript viewport cell, and whether the cell lands inside it. It follows
 // LinkAt's pattern: resolve the cell to its presentation item via itemAtRow,
-// then test Task 1's DoneActionButtonArea rather than re-deriving the layout.
+// then test DoneActionButtonArea rather than re-deriving the layout.
 func (l *List) DoneButtonAt(x, y int) (agent.BlockID, bool) {
 	if x < 0 || x >= l.width {
 		return agent.BlockID{}, false
@@ -1084,8 +1084,8 @@ const (
 // renders at all. A width too narrow for the timestamp plus the button
 // degrades to the plain single-row form instead of overflowing, so ok is
 // false in that case. All three rows, not just the middle one, since
-// followOverlay hit-tests its full rectangle the same way. Task 2 hit-tests
-// this rectangle rather than re-deriving the layout.
+// followOverlay hit-tests its full rectangle the same way; hit-testing
+// reuses this rectangle rather than re-deriving the layout.
 func DoneActionButtonArea(text string, width int) (area image.Rectangle, ok bool) {
 	textWidth := ansi.StringWidth(text)
 	available := width - donePrefixWidth - doneButtonGap - doneButtonWidth
