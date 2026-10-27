@@ -159,6 +159,37 @@ func TestReplaceTranscriptRefreshesCacheAndKeepsViewport(t *testing.T) {
 	}
 }
 
+// TestRenderDoneNoticeShowsSparkle confirms a finished-response notice shows
+// the sparkle marker alongside its "Done · <time>" text.
+func TestRenderDoneNoticeShowsSparkle(t *testing.T) {
+	sty := DefaultStyles(true)
+	rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty), "\n")
+	if !strings.Contains(rows[0], "✦") || !strings.Contains(rows[0], "Done · Oct 26, 3:12 PM") {
+		t.Fatalf("row 0 = %q, want sparkle marker and done text", rows[0])
+	}
+}
+
+// TestDoneNoticeWrapsAtNarrowWidth is Review Focus 4: a done notice wraps
+// like any other notice at narrow widths, with continuation rows indented.
+func TestDoneNoticeWrapsAtNarrowWidth(t *testing.T) {
+	sty := DefaultStyles(true)
+	doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM, a notice that is long enough to wrap"}, 40, sty)
+	rows := strings.Split(doc, "\n")
+	if len(rows) < 2 {
+		t.Fatal("setup: notice did not wrap")
+	}
+	for _, row := range rows {
+		if ansi.StringWidth(ansi.Strip(row)) > 40 {
+			t.Fatalf("row exceeds width 40: %q", row)
+		}
+	}
+	for _, row := range rows[1:] {
+		if !strings.HasPrefix(ansi.Strip(row), "   ") {
+			t.Fatalf("continuation row not indented by 3: %q", row)
+		}
+	}
+}
+
 func TestForkMarkerWithMissingAnchorIsOmitted(t *testing.T) {
 	l := headerList(t, 60, 10)
 	l.SetTranscript([]agent.Block{textBlock("new", "CURRENT")}, nil, []NoticeItem{{After: agent.BlockID{Scope: agent.ScopeMessage, Key: "missing"}, Notice: Notice{Level: NoticeFork, Text: "Forked conversation"}}})

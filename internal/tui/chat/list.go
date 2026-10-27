@@ -975,6 +975,8 @@ func renderNotice(n Notice, width int, sty Styles) string {
 		marker = "!"
 	case NoticeError:
 		marker = "×"
+	case NoticeDone:
+		marker = "✦"
 	}
 	// Escape untrusted text before wrapping it into selectable document rows.
 	text := escape.Multiline(n.Text)

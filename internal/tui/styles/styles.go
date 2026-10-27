@@ -103,7 +103,10 @@ type Chat struct {
 	NoticeInfo  lipgloss.Style
 	NoticeWarn  lipgloss.Style
 	NoticeError lipgloss.Style
-	NoticeText  lipgloss.Style
+	// NoticeDone marks a finished response's timestamp line. Deliberately not
+	// bold like the others — it should recede, not compete with tool headers.
+	NoticeDone lipgloss.Style
+	NoticeText lipgloss.Style
 }
 
 type Diff struct {

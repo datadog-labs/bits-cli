@@ -123,6 +123,10 @@ func semanticRoleSamples(width int, sty chat.Styles, title lipgloss.Style, tag s
 		renderSample(title, tag, "NoticeInfo", sty.NoticeInfo.Render(" heads up: restored 3 messages ")),
 		renderSample(title, tag, "NoticeWarn", sty.NoticeWarn.Render(" warning: partial results ")),
 		renderSample(title, tag, "NoticeError", sty.NoticeError.Render(" error: request failed ")),
+		// renderNotice applies the level style to the marker only; the message
+		// text always goes through NoticeText. Mirror that split here so the
+		// sample shows what production actually renders.
+		renderSample(title, tag, "NoticeDone", sty.NoticeDone.Render("✦")+sty.NoticeText.Render("  Done · Oct 26, 3:12 PM")),
 	}
 }
 

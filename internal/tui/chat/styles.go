@@ -20,6 +20,8 @@ func (s Styles) Notice(level NoticeLevel) lipgloss.Style {
 		return s.NoticeError
 	case NoticeWarn:
 		return s.NoticeWarn
+	case NoticeDone:
+		return s.NoticeDone
 	default:
 		return s.NoticeInfo
 	}
