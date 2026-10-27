@@ -123,6 +123,9 @@ func semanticRoleSamples(width int, sty chat.Styles, title lipgloss.Style, tag s
 		renderSample(title, tag, "NoticeInfo", sty.NoticeInfo.Render(" heads up: restored 3 messages ")),
 		renderSample(title, tag, "NoticeWarn", sty.NoticeWarn.Render(" warning: partial results ")),
 		renderSample(title, tag, "NoticeError", sty.NoticeError.Render(" error: request failed ")),
+		// Unlike the other notices, a done line styles the whole row and paints
+		// no row background, so the sample renders it as one span.
+		renderSample(title, tag, "NoticeDone", sty.NoticeDone.Render("  ✦ Done · Oct 26, 3:12 PM")),
 	}
 }
 

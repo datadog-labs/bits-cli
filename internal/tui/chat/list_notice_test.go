@@ -159,6 +159,70 @@ func TestReplaceTranscriptRefreshesCacheAndKeepsViewport(t *testing.T) {
 	}
 }
 
+// TestRenderDoneNoticeShowsSparkle confirms a finished-response notice shows
+// the sparkle marker alongside its "Done · <time>" text.
+func TestRenderDoneNoticeShowsSparkle(t *testing.T) {
+	sty := DefaultStyles(true)
+	rows := strings.Split(renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty), "\n")
+	if got := ansi.Strip(rows[0]); got != "  ✦ Done · Oct 26, 3:12 PM" {
+		t.Fatalf("row 0 = %q, want two leading spaces, the sparkle, one space, then the done text", got)
+	}
+}
+
+// TestDoneNoticePaintsNoRowBackground pins that a done line is not padded out to
+// the full width the way other notices are: it marks the end of an exchange
+// rather than announcing something, so it carries no background band.
+func TestDoneNoticePaintsNoRowBackground(t *testing.T) {
+	sty := DefaultStyles(true)
+	done := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, 80, sty)
+	if strings.Contains(done, backgroundSGR) {
+		t.Fatalf("done notice paints a row background: %q", done)
+	}
+	info := renderNotice(Notice{Level: NoticeInfo, Text: "Copied to clipboard."}, 80, sty)
+	if !strings.Contains(info, backgroundSGR) {
+		t.Fatal("setup: NoticeInfo paints no row background either — the comparison only means something if other notices still do")
+	}
+}
+
+// TestDoneNoticeNeverOverflowsRow pins the narrow-terminal guard. This path does
+// not go through PaintRowBackground, which is what clips every other level, so
+// without an explicit clamp a terminal narrower than the marker overflows.
+func TestDoneNoticeNeverOverflowsRow(t *testing.T) {
+	sty := DefaultStyles(true)
+	for _, width := range []int{1, 3, 4, 6, 12, 24} {
+		doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM"}, width, sty)
+		for _, row := range strings.Split(doc, "\n") {
+			if got := ansi.StringWidth(ansi.Strip(row)); got > width {
+				t.Errorf("width %d: row width %d: %q", width, got, ansi.Strip(row))
+			}
+		}
+	}
+}
+
+// backgroundSGR is the truecolor background introducer PaintRowBackground emits.
+const backgroundSGR = "48;2;"
+
+// TestDoneNoticeWrapsAtNarrowWidth is Review Focus 4: a done notice wraps
+// like any other notice at narrow widths, with continuation rows indented.
+func TestDoneNoticeWrapsAtNarrowWidth(t *testing.T) {
+	sty := DefaultStyles(true)
+	doc := renderNotice(Notice{Level: NoticeDone, Text: "Done · Oct 26, 3:12 PM, a notice that is long enough to wrap"}, 40, sty)
+	rows := strings.Split(doc, "\n")
+	if len(rows) < 2 {
+		t.Fatal("setup: notice did not wrap")
+	}
+	for _, row := range rows {
+		if ansi.StringWidth(ansi.Strip(row)) > 40 {
+			t.Fatalf("row exceeds width 40: %q", row)
+		}
+	}
+	for _, row := range rows[1:] {
+		if !strings.HasPrefix(ansi.Strip(row), "    ") {
+			t.Fatalf("continuation row not indented by 4, under the text: %q", row)
+		}
+	}
+}
+
 func TestForkMarkerWithMissingAnchorIsOmitted(t *testing.T) {
 	l := headerList(t, 60, 10)
 	l.SetTranscript([]agent.Block{textBlock("new", "CURRENT")}, nil, []NoticeItem{{After: agent.BlockID{Scope: agent.ScopeMessage, Key: "missing"}, Notice: Notice{Level: NoticeFork, Text: "Forked conversation"}}})

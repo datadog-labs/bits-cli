@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"math"
+	"slices"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -93,19 +95,65 @@ func (m *Model) applyForkResult(msg forkResultMsg) tea.Cmd {
 	return cmd
 }
 
-// transcriptNotices derives the persisted fork marker independently of local
-// notices, so restore, resume and a new fork all use the same boundary.
+// transcriptNotices derives the persisted fork marker and the per-response
+// "Done" lines independently of local notices, then merges all three streams
+// by anchor position in m.state.Blocks. buildPresentationWithNotices requires
+// notices in non-decreasing block order and silently re-anchors anything out
+// of order to the wrong block.
 func (m *Model) transcriptNotices() []chat.NoticeItem {
-	fork := m.state.Fork
-	if fork.After == (agent.BlockID{}) {
-		return m.notices
+	blocks := m.state.Blocks
+	index := make(map[agent.BlockID]int, len(blocks))
+	for i, b := range blocks {
+		index[b.ID] = i
 	}
-	source := fork.SourceID
-	if fork.SourceTitle != "" {
-		source = escape.SingleLine(fork.SourceTitle) + " (" + source + ")"
+	// anchorIndex turns an After block into a sort key: right after that
+	// block, before everything for the zero BlockID, or past the end when
+	// the block no longer survives — buildPresentationWithNotices drops or
+	// clamps that case downstream exactly as it did before this merge.
+	anchorIndex := func(after agent.BlockID) int {
+		if after == (agent.BlockID{}) {
+			return 0
+		}
+		if i, ok := index[after]; ok {
+			return i + 1
+		}
+		return len(blocks) + 1
 	}
-	marker := chat.NoticeItem{After: fork.After, Notice: notice(chat.NoticeFork, nil, "Forked conversation · %s\nOriginal: %s", m.state.ConversationID, source)}
-	return append([]chat.NoticeItem{marker}, m.notices...)
+
+	var all []chat.NoticeItem
+
+	if fork := m.state.Fork; fork.After != (agent.BlockID{}) {
+		source := fork.SourceID
+		if fork.SourceTitle != "" {
+			source = escape.SingleLine(fork.SourceTitle) + " (" + source + ")"
+		}
+		all = append(all, chat.NoticeItem{After: fork.After, Notice: notice(chat.NoticeFork, nil, "Forked conversation · %s\nOriginal: %s", m.state.ConversationID, source)})
+	}
+	// Done lines go in before m.notices: a run's finish chronologically
+	// precedes anything posted after it, and postNotice anchors to the same
+	// last block a just-finished run anchors to (fork.go:63-67), so on a tied
+	// anchor the done line must sort first to stay directly under its
+	// response rather than drifting below a later notice like "Copied to
+	// clipboard." SortStableFunc keeps this insertion order on ties, so no
+	// extra tie-breaking key is needed.
+	//
+	// Done lines are keyed from the top of the uint64 ID space: nextNoticeID
+	// climbs from 1 and the fork marker sits at the zero value, so reserving
+	// the high end means any number of done lines can never collide with
+	// either of those, or with each other.
+	for i, ts := range m.responseTimestamps() {
+		all = append(all, chat.NoticeItem{
+			ID:     math.MaxUint64 - uint64(i),
+			After:  ts.After,
+			Notice: notice(chat.NoticeDone, nil, "Done · %s", chat.FormatFinishedAt(ts.At)),
+		})
+	}
+	all = append(all, m.notices...)
+
+	slices.SortStableFunc(all, func(a, b chat.NoticeItem) int {
+		return anchorIndex(a.After) - anchorIndex(b.After)
+	})
+	return all
 }
 
 func definitiveForkFailure(err error) bool {

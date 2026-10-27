@@ -965,6 +965,11 @@ func appendBlockPresentations(items []presentationItem, blocks []agent.Block, fr
 }
 
 func renderNotice(n Notice, width int, sty Styles) string {
+	// Escape untrusted text before wrapping it into selectable document rows.
+	text := escape.Multiline(n.Text)
+	if n.Level == NoticeDone {
+		return renderDoneNotice(text, width, sty)
+	}
 	marker := ""
 	switch n.Level {
 	case NoticeFork:
@@ -975,9 +980,9 @@ func renderNotice(n Notice, width int, sty Styles) string {
 		marker = "!"
 	case NoticeError:
 		marker = "×"
+	case NoticeDone:
+		// Returned above: a done line is rendered whole, not marker-plus-text.
 	}
-	// Escape untrusted text before wrapping it into selectable document rows.
-	text := escape.Multiline(n.Text)
 	lines := textwrap.WrapProse(width-3, text, sty.NoticeText)
 	for i, line := range lines {
 		prefix := "   "
@@ -985,6 +990,26 @@ func renderNotice(n Notice, width int, sty Styles) string {
 			prefix = sty.Notice(n.Level).Render(marker) + "  "
 		}
 		lines[i] = components.PaintRowBackground(prefix+line, width, sty.Input.Background)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderDoneNotice renders a finished response's timestamp line. Unlike the
+// other notices it styles the whole row, not just the marker, and paints no row
+// background: it marks the end of an exchange rather than announcing something,
+// so it has to recede against the response above it.
+func renderDoneNotice(text string, width int, sty Styles) string {
+	const prefix = "  ✦ "
+	lines := textwrap.WrapProse(width-ansi.StringWidth(prefix), text, sty.NoticeDone)
+	for i, line := range lines {
+		indent := "    "
+		if i == 0 {
+			indent = "  " + sty.NoticeDone.Render("✦") + " "
+		}
+		// Nothing else clips this path, unlike the levels that go through
+		// PaintRowBackground, so a terminal too narrow for the marker would
+		// otherwise push the row past its width.
+		lines[i] = ansi.Truncate(indent+line, width, "")
 	}
 	return strings.Join(lines, "\n")
 }

@@ -22,6 +22,7 @@ const (
 	NoticeWarn
 	NoticeError
 	NoticeFork
+	NoticeDone
 )
 
 // Notice is a local UI message. Err is retained for diagnostics, not displayed.
