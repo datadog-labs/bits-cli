@@ -48,6 +48,10 @@ type operation struct {
 	cancel context.CancelFunc
 	stop   stopLevel
 	then   followUp
+	// submitted is true only for a user-submitted turn, set by the submit path
+	// after begin returns (begin assigns m.op as a whole literal). It excludes
+	// resumePendingTools and restore from the finish timestamp.
+	submitted bool
 }
 
 type opKind uint8
@@ -285,6 +289,12 @@ type Model struct {
 
 	// version is injected so the TUI stays independent of the command layer.
 	version string
+
+	// runFinished stamps the instant each user-submitted run reached its
+	// terminal event, for the "Done · <time>" indicator under its response.
+	runFinished map[agent.RunID]time.Time
+	// now is injected so tests can stamp a deterministic instant.
+	now func() time.Time
 }
 
 // New builds the root model for the given engine. When the engine is bound to a
@@ -367,6 +377,8 @@ func newShell() *Model {
 		approvals:         make(map[string]*approvalAsk),
 		resume:            resume{now: time.Now},
 		chatMouseMode:     chatMouseMode(),
+		runFinished:       make(map[agent.RunID]time.Time),
+		now:               time.Now,
 	}
 	m.editor.SetHistorySource(func() []editor.HistoryEntry { return historyEntries(m.state.UserPrompts()) })
 	m.editor.SetCommands(commandCompletionSpecs())
