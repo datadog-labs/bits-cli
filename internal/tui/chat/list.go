@@ -1123,9 +1123,9 @@ func renderDoneAction(text string, width int, sty Styles, hovered bool) (string,
 	if !ok {
 		return "", false
 	}
-	// FollowButtonStyle mirrors followOverlay's button exactly (tui/follow.go);
-	// the manual " ⑂ " padding matches how that overlay pads its own label.
-	button := strings.Split(styles.FollowButtonStyle(sty.Input.Marker, sty.FollowBorder, hovered).Render(" ⑂ "), "\n")
+	// Shares followOverlay's active look (tui/follow.go); its resting state is
+	// quieter, so the two differ only at rest.
+	button := strings.Split(styles.FollowButtonStyle(sty.DoneButtonIcon, sty.DoneButtonBorder, sty.Input.Marker.GetForeground(), hovered).Render(" ⑂ "), "\n")
 	timestamp := "  " + sty.NoticeDone.Render("✦") + " " + sty.NoticeDone.Render(text)
 	spaces := strings.Repeat(" ", area.Min.X)
 	gap := strings.Repeat(" ", doneButtonGap)

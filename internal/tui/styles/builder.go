@@ -220,8 +220,9 @@ func build(isDark bool, p palette) Theme {
 			NoticeError: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.critical)),
 			NoticeDone:  lipgloss.NewStyle().Foreground(lipgloss.Color(p.textTertiary)),
 			// The marker carries the level; the message itself is ordinary prose.
-			NoticeText:   lipgloss.NewStyle().Foreground(lipgloss.Color(p.textSecondary)),
-			FollowBorder: lipgloss.Color(p.followBorder),
+			NoticeText:       lipgloss.NewStyle().Foreground(lipgloss.Color(p.textSecondary)),
+			DoneButtonIcon:   lipgloss.Color(p.textSecondary),
+			DoneButtonBorder: lipgloss.Color(p.textTertiary),
 		},
 		Editor: Editor{
 			MenuFrame: lipgloss.NewStyle().

@@ -444,15 +444,27 @@ func TestSharedComponentStylesDeriveFromSemanticTokens(t *testing.T) {
 			if got, want := test.theme.Chat.ToolError.GetForeground(), lipgloss.Color(test.palette.textSecondary); got != want {
 				t.Errorf("tool error = %v, want token %v", got, want)
 			}
-			// Chat.FollowBorder duplicates Theme.FollowBorder so the chat
-			// package can render the done row's fork button with the same
-			// resting border as the jump-to-latest control; both must stay
-			// the same token rather than drifting into two colors.
-			if got, want := test.theme.Chat.FollowBorder, test.theme.FollowBorder; got != want {
-				t.Errorf("Chat.FollowBorder = %v, want it to match Theme.FollowBorder %v", got, want)
+			// The fork button is quieter than the jump-to-latest control it
+			// otherwise mirrors: icon on the secondary text role, border on the
+			// tertiary one. Only its resting state differs; the active look is
+			// shared, so a drift here is a drift in one state only.
+			if got, want := test.theme.Chat.DoneButtonIcon, lipgloss.Color(test.palette.textSecondary); got != want {
+				t.Errorf("DoneButtonIcon = %v, want token %v", got, want)
 			}
-			if got, want := test.theme.Chat.FollowBorder, lipgloss.Color(test.palette.followBorder); got != want {
-				t.Errorf("Chat.FollowBorder = %v, want token %v", got, want)
+			if got, want := test.theme.Chat.DoneButtonBorder, lipgloss.Color(test.palette.textTertiary); got != want {
+				t.Errorf("DoneButtonBorder = %v, want token %v", got, want)
+			}
+			// The two controls diverge at rest and must converge when active:
+			// that is the whole claim behind sharing one renderer.
+			marker := test.theme.Input.Marker.GetForeground()
+			jump := test.theme.FollowButton(true)
+			fork := FollowButtonStyle(test.theme.Chat.DoneButtonIcon, test.theme.Chat.DoneButtonBorder, marker, true)
+			if jump.GetForeground() != fork.GetForeground() ||
+				jump.GetBorderTopForeground() != fork.GetBorderTopForeground() ||
+				jump.GetBold() != fork.GetBold() {
+				t.Errorf("active fork button %v/%v/%v does not match the jump-to-latest control %v/%v/%v",
+					fork.GetForeground(), fork.GetBorderTopForeground(), fork.GetBold(),
+					jump.GetForeground(), jump.GetBorderTopForeground(), jump.GetBold())
 			}
 		})
 	}

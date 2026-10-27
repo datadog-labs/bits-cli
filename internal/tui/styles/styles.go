@@ -108,11 +108,11 @@ type Chat struct {
 	NoticeDone lipgloss.Style
 	NoticeText lipgloss.Style
 
-	// FollowBorder mirrors Theme.FollowBorder: the chat package renders the
-	// done row's fork button with the same resting border as the jump-to-latest
-	// control, but cannot reach Theme from here, so the role is duplicated onto
-	// Chat rather than given a second palette entry.
-	FollowBorder color.Color
+	// DoneButtonIcon and DoneButtonBorder are the done row's fork button at
+	// rest, quieter than the jump-to-latest control it otherwise mirrors. Only
+	// the resting state differs; the active look is shared.
+	DoneButtonIcon   color.Color
+	DoneButtonBorder color.Color
 }
 
 type Diff struct {
@@ -277,20 +277,26 @@ func Default(isDark bool) Theme {
 // renders, so both callers pad identically and nothing here depends on
 // lipgloss's own Padding. A free function rather than a Theme method alone
 // because chat.Styles, which has no Theme, needs it too.
-func FollowButtonStyle(marker lipgloss.Style, border color.Color, active bool) lipgloss.Style {
-	style := lipgloss.NewStyle().
-		Foreground(marker.GetForeground()).
-		Border(lipgloss.RoundedBorder())
-	borderColor := border
+func FollowButtonStyle(restFg, restBorder, activeFg color.Color, active bool) lipgloss.Style {
+	fg, border := restFg, restBorder
 	if active {
-		borderColor = marker.GetForeground()
+		// Active collapses to one colour for glyph and border, so callers that
+		// want a quieter resting state still share the active look.
+		fg, border = activeFg, activeFg
+	}
+	style := lipgloss.NewStyle().
+		Foreground(fg).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border)
+	if active {
 		style = style.Bold(true)
 	}
-	return style.BorderForeground(borderColor)
+	return style
 }
 
 // FollowButton is FollowButtonStyle applied to this theme's own marker and
 // FollowBorder.
 func (t Theme) FollowButton(active bool) lipgloss.Style {
-	return FollowButtonStyle(t.Input.Marker, t.FollowBorder, active)
+	marker := t.Input.Marker.GetForeground()
+	return FollowButtonStyle(marker, t.FollowBorder, marker, active)
 }
