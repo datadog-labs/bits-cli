@@ -622,7 +622,7 @@ func (m *Model) inComposer(msg tea.MouseMsg) (image.Point, bool) {
 func (m *Model) applyRunEvent(ev agent.Event) tea.Cmd {
 	cmd := m.applyEvent(ev)
 	m.syncStatus()
-	if ev.Kind == agent.EventState {
+	if ev.Kind == agent.EventState || ev.Terminal() {
 		m.syncTranscript()
 	}
 	if ev.Terminal() {
@@ -911,6 +911,12 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	})
 	m.chatPhase = chat.PhaseWaiting
 	failed := m.begin(opTurn, run, err, cancel)
+	// On the failure path, begin has already run applyRunEvent(EventError)
+	// synchronously and reset m.op to an idle operation (run == 0), so this
+	// sets submitted on that idle op rather than the failed one. Harmless:
+	// begin is the only assigner of a non-zero m.op.run, so a later read of
+	// m.op.submitted is always paired with m.op.run != 0 from this same call.
+	m.op.submitted = true
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
@@ -969,6 +975,9 @@ func (m *Model) after(next followUp) {
 // error posts a local transcript message); nil otherwise.
 func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	m.observeEvent(ev)
+	if ev.Terminal() && m.op.submitted && m.op.run != 0 {
+		m.runFinished[m.op.run] = m.now()
+	}
 	switch ev.Kind {
 	case agent.EventState:
 		if ev.State.Version > m.state.Version {
@@ -983,7 +992,8 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	case agent.EventDone:
 		m.chatPhase = chat.PhaseIdle
 	case agent.EventCanceled:
-		// endOperation settles the chat phase and resyncs the transcript.
+		// endOperation settles the chat phase; applyRunEvent resyncs the
+		// transcript for every terminal event, this one included.
 	case agent.EventError:
 		// A failure during restore is benign: drop to idle with a notice so the
 		// user can still type. A failure mid-turn is the turn's error state.
