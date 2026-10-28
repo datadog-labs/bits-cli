@@ -14,7 +14,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/clipperhouse/uax29/v2 v2.7.0
 	github.com/git-pkgs/gitignore v1.3.0
-	github.com/godbus/dbus/v5 v5.2.3
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/gofrs/flock v0.13.1
 	github.com/lucasb-eyer/go-colorful v1.4.1
 	github.com/sahilm/fuzzy v0.1.3
