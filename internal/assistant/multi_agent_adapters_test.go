@@ -10,7 +10,7 @@ import (
 
 func TestMultiAgentApprovalInputUsesLocalCorrelation(t *testing.T) {
 	input := `{"tool_name":"write_dashboard","tool_args":{"title":"CPU"},"tool_call_id":"wire-1","approval_message":"Publish dashboard?","tool_activation_source":"builtin"}`
-	for _, localID := range []string{"multi-agent:root:1:wire-1", "multi-agent:child:2:wire-1"} {
+	for _, localID := range []string{"multi-agent:run-1:root:1:wire-1", "multi-agent:run-2:child:2:wire-1"} {
 		got, err := adaptMultiAgentToolInput(ApprovalRequestTool, input, "wire-1", localID)
 		if err != nil {
 			t.Fatal(err)

@@ -129,6 +129,7 @@ func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversa
 
 // installConversation runs on the actor, while idle or restoring.
 func (e *Engine) installConversation(conversation *Conversation) {
+	e.stopBackground()
 	e.opts.ConversationID = conversation.id
 	e.fork = conversation.fork
 	e.opts.MessageHistory = nil

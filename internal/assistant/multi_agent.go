@@ -446,7 +446,7 @@ func (c *MultiAgentClient) handleEvent(
 			return false, err
 		}
 		key := multiAgentToolKey{agentID: envelope.AgentID, toolCallID: event.ToolCallID}
-		localToolCallID := fmt.Sprintf("multi-agent:%s:stream:%d:%s", envelope.AgentID, envelope.Sequence, event.ToolCallID)
+		localToolCallID := fmt.Sprintf("multi-agent:%s:%s:stream:%d:%s", run.id, envelope.AgentID, envelope.Sequence, event.ToolCallID)
 		if run.unbatchedToolIDs == nil {
 			run.unbatchedToolIDs = make(map[multiAgentToolKey]string)
 		}
@@ -466,7 +466,7 @@ func (c *MultiAgentClient) handleEvent(
 		if event.IsClientSide != nil && !*event.IsClientSide {
 			localID := run.toolIDs[key]
 			if localID == "" {
-				localID = fmt.Sprintf("multi-agent:%s:stream:%d:%s", envelope.AgentID, envelope.Sequence, event.ToolCallID)
+				localID = fmt.Sprintf("multi-agent:%s:%s:stream:%d:%s", run.id, envelope.AgentID, envelope.Sequence, event.ToolCallID)
 				run.toolIDs[key] = localID
 			}
 			// Approval and other deferred markers share the original server
@@ -503,7 +503,7 @@ func (c *MultiAgentClient) handleEvent(
 			}
 			localToolCallID := run.unbatchedToolIDs[key]
 			if localToolCallID == "" {
-				localToolCallID = multiAgentToolID(envelope.AgentID, event.Generation, toolCallID)
+				localToolCallID = multiAgentToolID(run.id, envelope.AgentID, event.Generation, toolCallID)
 			}
 			delete(run.unbatchedToolIDs, key)
 			run.toolsMu.Lock()
@@ -553,7 +553,7 @@ func (c *MultiAgentClient) handleEvent(
 		key := multiAgentToolKey{agentID: envelope.AgentID, toolCallID: event.ToolCallID}
 		localToolCallID := run.toolIDs[key]
 		if localToolCallID == "" {
-			localToolCallID = multiAgentToolID(envelope.AgentID, 0, event.ToolCallID)
+			localToolCallID = multiAgentToolID(run.id, envelope.AgentID, 0, event.ToolCallID)
 			run.toolIDs[key] = localToolCallID
 		}
 		// Display content is presentation only; keep the full locally recorded output.
@@ -665,6 +665,14 @@ func (c *MultiAgentClient) handleEvent(
 		response.Data.Attributes.ConversationID = run.conversationID
 		response.Data.Attributes.Prompt = event.Content
 		return false, fn(response)
+	case "assistant.turn_completed":
+		if envelope.AgentID != run.rootAgentID || fn == nil {
+			return false, nil
+		}
+		var response AssistantResponse
+		response.RootTurnCompleted = true
+		response.Data.Attributes.ConversationID = run.conversationID
+		return false, fn(response)
 	case "run.terminal":
 		var event struct {
 			Outcome string `json:"outcome"`
@@ -685,8 +693,8 @@ func (c *MultiAgentClient) handleEvent(
 	}
 }
 
-func multiAgentToolID(agentID string, generation int, wireToolCallID string) string {
-	return fmt.Sprintf("multi-agent:%s:%d:%s", agentID, generation, wireToolCallID)
+func multiAgentToolID(runID, agentID string, generation int, wireToolCallID string) string {
+	return fmt.Sprintf("multi-agent:%s:%s:%d:%s", runID, agentID, generation, wireToolCallID)
 }
 
 func (c *MultiAgentClient) cancelRun(ctx context.Context, runID string) error {

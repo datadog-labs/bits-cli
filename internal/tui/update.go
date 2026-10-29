@@ -225,6 +225,9 @@ func isUserInput(msg tea.Msg) bool {
 }
 
 func (m *Model) quit() (tea.Model, tea.Cmd) {
+	for _, cancel := range m.backgroundRuns {
+		cancel()
+	}
 	// /resume may own a live list/history request that must be cancelled before
 	// the application exits.
 	if m.focus() == focusPicker {
@@ -304,9 +307,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.syncTranscript()
 			}
 		case m.op.run != 0 && msg.ev.Run == m.op.run:
-			// Every run is an operation this model started, so other runs'
-			// events are ignored.
 			cmd = m.applyRunEvent(msg.ev)
+		case m.backgroundRuns[msg.ev.Run] != nil:
+			cmd = m.applyBackgroundEvent(msg.ev)
 		}
 		return m, tea.Batch(cmd, waitEvent(m.events))
 
@@ -625,9 +628,33 @@ func (m *Model) applyRunEvent(ev agent.Event) tea.Cmd {
 	if ev.Kind == agent.EventState {
 		m.syncTranscript()
 	}
-	if ev.Terminal() {
+	if ev.Kind == agent.EventBackground {
+		if m.backgroundRuns == nil {
+			m.backgroundRuns = make(map[agent.RunID]context.CancelFunc)
+		}
+		m.backgroundRuns[ev.Run] = m.op.cancel
+		m.op.cancel = nil
+		cmd = tea.Batch(cmd, m.endOperation())
+		m.syncApprovals(m.state.PendingApprovals())
+	} else if ev.Terminal() {
 		cmd = tea.Batch(cmd, m.endOperation())
 	}
+	return cmd
+}
+
+// Background output updates the conversation without ending a newer operation.
+func (m *Model) applyBackgroundEvent(ev agent.Event) tea.Cmd {
+	phase := m.chatPhase
+	cmd := m.applyEvent(ev)
+	m.chatPhase = phase
+	if ev.Kind == agent.EventState {
+		m.syncTranscript()
+	}
+	if ev.Terminal() {
+		m.backgroundRuns[ev.Run]()
+		delete(m.backgroundRuns, ev.Run)
+	}
+	m.syncStatus()
 	return cmd
 }
 
@@ -643,7 +670,12 @@ func (m *Model) endOperation() tea.Cmd {
 	if done.stop != stopAll && done.cancel != nil {
 		done.cancel() // release the turn/restore context
 	}
-	m.clearAsks()
+	if len(m.backgroundRuns) == 0 {
+		m.clearAsks()
+	} else {
+		m.reshow()
+	}
+	m.syncApprovals(m.state.PendingApprovals())
 
 	m.syncStatus()
 	switch {
@@ -831,7 +863,13 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.editor.ChipsFocused() {
 			return m, m.editor.Update(msg)
 		}
-		m.cancelOperation() // interrupt the running turn
+		if m.op.busy() {
+			m.cancelOperation()
+		} else {
+			for _, cancel := range m.backgroundRuns {
+				cancel()
+			}
+		}
 		return m, nil
 	case "enter":
 		return m.submit()
@@ -954,7 +992,7 @@ func (m *Model) cancelOperation() {
 	}
 	m.op.stop = stopAll
 	m.op.cancel()
-	m.dropToolUIs()
+	m.reshow()
 }
 
 // after queues next for when the running operation ends, and cancels the
@@ -971,16 +1009,17 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
 	case agent.EventState:
-		if ev.State.Version > m.state.Version {
-			m.state = ev.State
+		if ev.State.Version <= m.state.Version {
+			return nil
 		}
-		m.syncApprovals(ev.State.PendingApprovals())
+		m.state = ev.State
+		m.syncApprovals(m.state.PendingApprovals())
 		if ev.State.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}
 	case agent.EventUsage, agent.EventConversation:
 		// The state carries both; these report a backend send.
-	case agent.EventDone:
+	case agent.EventDone, agent.EventBackground:
 		m.chatPhase = chat.PhaseIdle
 	case agent.EventCanceled:
 		// endOperation settles the chat phase and resyncs the transcript.
