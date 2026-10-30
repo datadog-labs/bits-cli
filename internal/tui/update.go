@@ -835,6 +835,13 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m.submit()
+	case "ctrl+d":
+		// Shell convention: ctrl+d on an empty prompt is EOF and quits. With
+		// any text or attachment it falls through to the editor, which deletes
+		// the character under the cursor.
+		if m.editor.Value() == "" && len(m.editor.Attachments()) == 0 {
+			return m.quit()
+		}
 	case "pgup", "pgdown":
 		// ctrl+u / ctrl+d are intentionally NOT scroll keys: the editor is always
 		// focused and owns them for line editing (ctrl+u = delete to line start,
