@@ -1,55 +1,25 @@
 # Bits CLI
 
-Bits CLI brings Bits Chat and its built-in Datadog tools to your terminal. It
-adds coding tools that run in your local workspace, so Bits can inspect and edit
-code, run commands, and help implement and verify fixes using your Datadog
-context. Start a new conversation or continue one you started in Datadog.
+Bits CLI brings Bits Chat and Datadog tools to your terminal. It can read and
+edit local code, run commands, and continue conversations started in Datadog.
 
 > [!NOTE]
-> Bits CLI is currently in preview. Features and interfaces may change.
+> Bits CLI is in preview. Features and interfaces may change.
 
-## Installation
+## Install
 
-### macOS
-
-Install with Homebrew:
+On macOS or Linux, install with Homebrew:
 
 ```sh
 brew tap datadog-labs/pack
 brew install datadog-labs/pack/bits
 ```
 
-### Linux
-
-Install with Homebrew:
-
-```sh
-brew tap datadog-labs/pack
-brew install datadog-labs/pack/bits
-```
-
-Or download the standalone binary from GitHub Releases:
-
-```sh
-VERSION="0.0.7"
-case "$(uname -m)" in
-  x86_64)        ARCH="amd64" ;;
-  arm64|aarch64) ARCH="arm64" ;;
-  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-esac
-
-ASSET="bits_${VERSION}_linux_${ARCH}.tar.gz"
-curl -fL \
-  "https://github.com/datadog-labs/bits-cli/releases/download/v${VERSION}/${ASSET}" \
-  -o "/tmp/${ASSET}"
-tar -xzf "/tmp/${ASSET}" bits
-sudo install -m 755 bits /usr/local/bin/
-rm -f "/tmp/${ASSET}" bits
-```
+Standalone binaries are also available from [GitHub Releases](https://github.com/datadog-labs/bits-cli/releases).
 
 ## Get started
 
-Launch Bits from the project you want to work on:
+Open your project and launch Bits:
 
 ```sh
 cd your-project
@@ -57,41 +27,123 @@ bits
 ```
 
 On first launch, choose your Datadog site and sign in through your browser.
-You'll need a Datadog account with the Bits Chat Access permission.
+You need a Datadog account with the Bits Chat Access permission.
 
 <img width="710" height="573" alt="Bits CLI running Bits Chat in the terminal" src="https://github.com/user-attachments/assets/01c89baf-5a23-4e4c-8c78-64b490b6722c" />
 
-## Datadog integration
+## Use Datadog tools and conversations
 
-Sign in to use the Datadog tools available through Bits Chat.
-The integration is built in, with no separate Datadog tool server to configure
-or API keys to manage for browser sign-in.
+Datadog tools are built in. Browser sign-in needs no API keys or separate tool
+server. Type `@` to find services, monitors, incidents, and dashboards.
 
-Reference services, monitors, incidents, and dashboards directly in your
-conversation. Type `@` to search your Datadog entities and attach the relevant
-context to your question.
+- `/resume` selects a saved conversation.
+- `/fork` (or `/branch`) copies the saved conversation and continues in the copy.
+  It leaves the original conversation and your working directory unchanged.
+- `/web` opens the current conversation in Datadog.
 
-An investigation started in Datadog can continue against your local code.
-Use `/resume` to select a conversation, or open it by ID:
+You can also resume by ID:
 
 ```sh
 bits --conversation YOUR_CONVERSATION_ID
 ```
 
-Use `/fork` (alias `/branch`) to copy the current saved conversation and continue
-in the copy. The chat stays in place, with a marker at the copied-history boundary
-when the server provides it. That marker is restored when you resume the fork.
-Forking does not change your working directory or modify the original conversation.
+Run `bits --help` for CLI commands, or type `/` in chat to find chat commands.
 
-Use `/web` to reopen the active conversation in Datadog.
+## Permissions
 
-Bits asks for permission before reading workspace files, editing files, or
-executing commands. Run `bits --help` for available commands.
+By default, interactive Bits asks before reading files, editing files, or running
+commands. Choose **Allow** for one action or **Allow for session** to reuse approval:
+
+- A read approval covers reading, listing, and searching files in the workspace.
+- A write approval covers creating and editing files in the workspace.
+- A command approval covers that exact command and its execution settings.
+
+Use `/permissions` to switch between `manual` (ask for approval) and
+`skip-permissions` (full access). To start with full access:
+
+```sh
+bits --permissions skip-permissions
+```
+
+Full access allows actions without asking for approval.
+
+## Project instructions
+
+Add an `AGENTS.md` to your project to give Bits shared instructions. Bits reads
+instruction files in parent directories and the working directory, from the
+filesystem root down, including directories outside the Git repository.
+
+In each directory, Bits uses the first readable file in this order:
+`AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`.
+
+## Skills
+
+Skills are reusable instructions in a `SKILL.md` file. Bits looks in:
+
+- `.agents/skills/` in the working directory and its parents, up to the repository root.
+- Extra directories passed with `--skill`.
+- `~/.agents/skills/` for skills shared across projects.
+
+Outside a Git repository, only the working directory, extra directories, and
+home skills are searched. For duplicate names, the nearest project skill wins,
+then extra directories in flag order, then home skills.
+
+Create `.agents/skills/review-code/SKILL.md`:
+
+```markdown
+---
+name: review-code
+description: Review code changes for correctness and missing tests.
+---
+
+Read the diff and surrounding code. Report issues with file references and
+explain their impact.
+```
+
+The header needs a nonempty `description`. If `name` is omitted, Bits uses the
+folder name. Names can contain lowercase letters and numbers separated by
+hyphens or colons, up to 64 characters.
+
+Type `/` in chat to find a skill, or run it with optional arguments:
+
+```text
+/skill:review-code focus on error handling
+```
+
+Bits shares skill names and descriptions with the assistant. Add
+`disable-model-invocation: true` to the header to leave a skill out of that list
+and invoke it yourself.
+
+To add skill directories, repeat `--skill`:
+
+```sh
+bits --skill ./team-skills --skill ~/.claude/skills
+```
+
+Start a new conversation after adding or renaming skills to refresh the list.
+
+## Run without interactive chat
+
+Sign in with `bits login`, then run one turn:
+
+```sh
+bits run --prompt "Summarize this conversation" --conversation YOUR_CONVERSATION_ID --delivery adeep
+```
+
+Omit `--conversation` to start a new conversation. Both `--prompt` and
+`--delivery adeep` are required. Pass the prompt as text in the flag; stdin and
+positional prompts are not supported. Output is JSONL (one JSON object per line).
+
+Actions that need approval are denied by default. Add
+`--permissions skip-permissions` to allow them without prompts.
+See the [noninteractive guide](internal/headless/adeep/README.md) for output fields,
+exit codes, and authentication details.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the contribution workflow.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and the contribution workflow.
 
 ## License
 
-Bits CLI is released under the [Apache-2.0 License](LICENSE). Third-party components and their licenses are listed in [LICENSE-3rdparty.csv](LICENSE-3rdparty.csv).
+Bits CLI uses the [Apache-2.0 License](LICENSE).
+See [LICENSE-3rdparty.csv](LICENSE-3rdparty.csv) for third-party licenses.
