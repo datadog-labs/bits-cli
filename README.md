@@ -31,7 +31,9 @@ brew install datadog-labs/pack/bits
 Or download the standalone binary from GitHub Releases:
 
 ```sh
-VERSION="0.0.7"
+VERSION="$(curl -fsS -o /dev/null -w '%{redirect_url}' \
+  https://github.com/datadog-labs/bits-cli/releases/latest | sed -n 's|.*/tag/v||p')"
+[ -n "$VERSION" ] || { echo "Could not resolve the latest bits release." >&2; exit 1; }
 case "$(uname -m)" in
   x86_64)        ARCH="amd64" ;;
   arm64|aarch64) ARCH="arm64" ;;
