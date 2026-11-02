@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-GOLANGCI_LINT_VERSION="v2.14.0"
+GOLANGCI_LINT_VERSION="v2.15.0"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
