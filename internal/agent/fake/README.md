@@ -20,9 +20,17 @@ say("# Title\n\n| a | b |\n| --- | --- |\n| 1 | 2 |")
 think("checking"); r = call("read_file", {"path": "go.mod"}); say(r.output.splitlines()[0])
 a, b = call([("list_files", {"path": "."}), ("grep_files", {"pattern": "TODO"})])
 g = call("approval_request", {"tool_name": "delete_dashboard", "tool_args": {}}); say("deleted" if g.ok else "kept")
-load("internal/agent/fake/testdata/questions.star", "ask_user_question"); ask_user_question()
-load("internal/agent/fake/testdata/disclosure.star", "all"); all()
+load("questions.star", "ask_user_question"); ask_user_question()
+load("disclosure.star", "all"); all()
 ```
+
+Reusable scripts for tests and manual TUI previews live together in
+[`testdata/`](testdata/). With `BITS_FAKE_BACKEND=1`, load a scenario such as
+`load("notices.star", "rate_limit"); rate_limit()` from any working directory.
+The runner bundles these scripts; a file with the same name in the working
+directory takes precedence. Full paths below the working directory also work.
+The files cover approvals, command wrapping, links, notices, disclosure, and
+questions; each script lists its entry points at the top.
 
 | Built-in | Emits |
 | --- | --- |
@@ -35,7 +43,7 @@ load("internal/agent/fake/testdata/disclosure.star", "all"); all()
 | `sleep("2s")` | a stall |
 | `breakpoint(name)` | nothing; stops until continued ([Breakpoints](#breakpoints)) |
 | `push_conversation(fn, …, title=)` | nothing; records a new conversation, returns its id ([Pushed conversations](#pushed-conversations)) |
-| `load("file.star", "name", …)` | imports definitions from a module below the script root (the working directory) |
+| `load("file.star", "name", …)` | imports definitions from a module below the script root (the working directory), or a bundled fixture by filename |
 | `help()` | the built-ins and the client tools' input schemas |
 | `kitchen()` | every output type once, read-only |
 
@@ -102,15 +110,15 @@ At startup, `--conversation` takes a script instead of an id; the script is
 the only turn of the conversation that opens:
 
 ```sh
-BITS_FAKE_BACKEND=1 bits --conversation 'load("internal/agent/fake/testdata/questions.star", "ask_user_question"); ask_user_question()'
+BITS_FAKE_BACKEND=1 bits --conversation 'load("questions.star", "ask_user_question"); ask_user_question()'
 ```
 
 In a session, `push_conversation` takes functions as the turns, in order,
 and returns the id to open with `/resume`:
 
 ```text
-load("internal/agent/fake/testdata/questions.star", "ask_user_question"); say(push_conversation(ask_user_question, title="Pending question"))
-load("internal/agent/fake/testdata/questions.star", "ask_user_question"); say(push_conversation(lambda: say("hi"), ask_user_question))
+load("questions.star", "ask_user_question"); say(push_conversation(ask_user_question, title="Pending question"))
+load("questions.star", "ask_user_question"); say(push_conversation(lambda: say("hi"), ask_user_question))
 ```
 
 - Several turns script other histories, e.g. a pending call then a new user

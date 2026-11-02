@@ -273,6 +273,24 @@ def run():
 	}
 }
 
+func TestBundledFixtureLoadAndLocalPrecedence(t *testing.T) {
+	dir := t.TempDir()
+	f := New()
+	f.ScriptRoot = dir
+	message := `load("approval.star", "pad"); say(pad(3))`
+	got, err := send(t, f, message, assistant.SendOptions{})
+	if err != nil || !slices.Equal(got, []string{"markdown_fragment:03", "usage"}) {
+		t.Fatalf("bundled fixture: answer = %q, err = %v", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "approval.star"), []byte("def pad(n):\n    return 'local'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = send(t, f, message, assistant.SendOptions{})
+	if err != nil || !slices.Equal(got, []string{"markdown_fragment:local", "usage"}) {
+		t.Fatalf("local module: answer = %q, err = %v", got, err)
+	}
+}
+
 // TestLoadedModuleSnapshotSurvivesReplay pins that a turn's continuation
 // sees the module bytes it loaded, whatever a client tool did to the file
 // in between.

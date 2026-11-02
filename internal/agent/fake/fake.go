@@ -41,6 +41,10 @@ type Fake struct {
 	// starts.
 	ScriptRoot string
 
+	// BundledFixtures lets top-level load() find scripts from testdata by
+	// filename when no file with that name exists under ScriptRoot.
+	BundledFixtures bool
+
 	// ContinueDir holds breakpoint continue files: creating ContinueDir/<name>
 	// continues a script stopped at breakpoint(name). Empty means
 	// $TMPDIR/bits-fake/continue. Tests set a t.TempDir() so parallel runs
@@ -58,7 +62,7 @@ type Fake struct {
 
 // New returns a Fake with a small inter-fragment delay so interactive use looks
 // like a real stream.
-func New() *Fake { return &Fake{Delay: 10 * time.Millisecond} }
+func New() *Fake { return &Fake{Delay: 10 * time.Millisecond, BundledFixtures: true} }
 
 // Send runs a user message as a script, or resumes the current script with
 // the tool responses of its last round. The returned id is the

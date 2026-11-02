@@ -1,7 +1,7 @@
 # Transcript disclosure QA: each function shows one renderer's compact and
 # full views. Run from the repository root, then click a ▶ or press ctrl+o:
 #
-#   load("internal/agent/fake/testdata/disclosure.star", "all"); all()
+#   load("disclosure.star", "all"); all()
 #
 # On Windows, call all(windows=True) to use PowerShell commands.
 # changes() writes, edits, then removes qa-disclosure.txt in the workspace.

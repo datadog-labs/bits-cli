@@ -1,12 +1,12 @@
 """exec_command wrapping scenarios for BITS_FAKE_BACKEND=1. Start with `BITS_FAKE_BACKEND=1 go run .`.
 
 Run everything from the Starlark console:
-  load("fakedata/exec_wrap.star", "all"); all()
+  load("exec_wrap.star", "all"); all()
 
 or one group / one case:
-  load("fakedata/exec_wrap.star", "realistic"); realistic()
-  load("fakedata/exec_wrap.star", "corners"); corners()
-  load("fakedata/exec_wrap.star", "hyphens"); hyphens()
+  load("exec_wrap.star", "realistic"); realistic()
+  load("exec_wrap.star", "corners"); corners()
+  load("exec_wrap.star", "hyphens"); hyphens()
 
 What to check:
 - Collapsed: each command is one header line (plus at most 9 │ rows for

@@ -1,9 +1,9 @@
 """Scenarios for previewing local TUI messages with BITS_FAKE_BACKEND=1.
 
 In the TUI, enter one of these prompts:
-  load("fakedata/notices.star", "rate_limit"); rate_limit()
-  load("fakedata/notices.star", "service_error"); service_error()
-  load("fakedata/notices.star", "network_error"); network_error()
+  load("notices.star", "rate_limit"); rate_limit()
+  load("notices.star", "service_error"); service_error()
+  load("notices.star", "network_error"); network_error()
 
 Then use /notacommand, /copy, and /new to see local command messages.
 """

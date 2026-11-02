@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,10 +14,9 @@ import (
 
 func TestFakeTurnAndCommandsRenderLocalMessagesInOrder(t *testing.T) {
 	backend := fake.New()
-	backend.ScriptRoot = filepath.Join("..", "..")
 	m := New(agent.New(backend, agent.Config{}))
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m.editor.Update(tea.PasteMsg{Content: `load("fakedata/notices.star", "rate_limit"); rate_limit()`})
+	m.editor.Update(tea.PasteMsg{Content: `load("notices.star", "rate_limit"); rate_limit()`})
 	_, _ = m.submit()
 	for m.op.busy() {
 		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))

@@ -451,7 +451,7 @@ const helpText = "## Fake backend scripts\n\n" +
 	"Every message is a Starlark script. Statements may be separated by `;`, but `if`/`for` " +
 	"must start a new line (Shift+Enter or Ctrl+J).\n\n" +
 	"| Built-in | Emits |\n| --- | --- |\n" +
-	"| `load(\"file.star\", \"name\", ...)` | imports definitions/data from a deterministic local Starlark module |\n" +
+	"| `load(\"file.star\", \"name\", ...)` | imports definitions/data from a local module or a bundled fixture by filename (for example, `load(\"notices.star\", \"rate_limit\")`) |\n" +
 	"| `say(text)` | streamed answer text |\n" +
 	"| `think(text)` | streamed reasoning |\n" +
 	"| `random(seed=None, size=None)` | a pseudo-random answer; `size` requests at least that many Markdown bytes |\n" +
