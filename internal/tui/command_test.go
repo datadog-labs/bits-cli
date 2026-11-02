@@ -730,3 +730,30 @@ func TestCopyCommandReportsNoCompletedAssistantResponse(t *testing.T) {
 		t.Fatalf("notice = %+v, want no-response warning", latestNotice(m))
 	}
 }
+
+func TestCtrlDOnEmptyPromptQuits(t *testing.T) {
+	m := newModelWithSpy(t)
+
+	_, cmd := m.handleEditorKey(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("ctrl+d on an empty prompt did not return a quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+d command = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestCtrlDWithTextDoesNotQuit(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.editor.SetValue("hello")
+
+	_, cmd := m.handleEditorKey(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	if cmd != nil {
+		if _, ok := cmd().(tea.QuitMsg); ok {
+			t.Fatal("ctrl+d with prompt text must not quit")
+		}
+	}
+	if m.editor.Value() == "" {
+		t.Fatal("ctrl+d with prompt text cleared the editor")
+	}
+}
