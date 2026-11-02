@@ -31,6 +31,7 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
 mkdir -p "$DIST_DIR"
+DIST_DIR="$(cd "$DIST_DIR" && pwd)"
 rm -f "$DIST_DIR"/bits_*
 
 files=(README.md LICENSE LICENSE-3rdparty.csv)

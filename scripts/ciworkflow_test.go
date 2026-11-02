@@ -354,11 +354,12 @@ func TestDistArchives(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture uses Unix shell paths and executable stubs")
 	}
-	t.Run("archives", func(t *testing.T) { testDistArchives(t, false) })
-	t.Run("sbom", func(t *testing.T) { testDistArchives(t, true) })
+	t.Run("archives", func(t *testing.T) { testDistArchives(t, false, "") })
+	t.Run("sbom", func(t *testing.T) { testDistArchives(t, true, "") })
+	t.Run("relative DIST_DIR", func(t *testing.T) { testDistArchives(t, false, "out") })
 }
 
-func testDistArchives(t *testing.T, sbom bool) {
+func testDistArchives(t *testing.T, sbom bool, distDir string) {
 	t.Helper()
 	dir := t.TempDir()
 	for _, file := range []string{"scripts/dist.sh", "README.md", "LICENSE", "LICENSE-3rdparty.csv"} {
@@ -397,6 +398,11 @@ printf '%s\n' "$1" >"${3#spdx-json=}"
 		args = append(args, "--sbom")
 	}
 	cmd := command(t, dir, "bash", append(args, "v1.2.3")...)
+	if distDir != "" {
+		cmd.Env = append(cmd.Env, "DIST_DIR="+distDir)
+	} else {
+		distDir = "dist"
+	}
 	for i, kv := range cmd.Env {
 		if strings.HasPrefix(kv, "PATH=") {
 			cmd.Env[i] = "PATH=" + filepath.Join(dir, "scripts") + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
@@ -406,7 +412,7 @@ printf '%s\n' "$1" >"${3#spdx-json=}"
 		t.Fatalf("dist.sh: %v\n%s", err, out)
 	}
 
-	dist := filepath.Join(dir, "dist")
+	dist := filepath.Join(dir, distDir)
 	entries, err := os.ReadDir(dist)
 	if err != nil {
 		t.Fatal(err)
