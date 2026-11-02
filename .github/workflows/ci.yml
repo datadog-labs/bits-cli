@@ -25,6 +25,7 @@ concurrency:
 env:
   GOPROXY: https://proxy.golang.org
   GOSUMDB: sum.golang.org
+  BITS_KEYRING_E2E: "1"
 
 jobs:
   lint:
@@ -88,6 +89,15 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: Set up test keychain
+        run: |
+          keychain="$RUNNER_TEMP/bits-cli-test.keychain-db"
+          password="$(openssl rand -hex 16)"
+          security create-keychain -p "$password" "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
       - name: Test
         run: ./scripts/test.sh
 

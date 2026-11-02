@@ -25,6 +25,9 @@ func TestNativeKeyringSessionSize(t *testing.T) {
 		testNativeKeyringSessionSize(t, service)
 		return
 	}
+	if os.Getenv("BITS_KEYRING_E2E") == "" {
+		t.Skip("set BITS_KEYRING_E2E=1 to test the native credential store")
+	}
 	if runtime.GOOS == "linux" && !KeyringAvailable() {
 		testNativeFileFallback(t)
 		return
