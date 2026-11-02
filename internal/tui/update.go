@@ -838,8 +838,13 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+d":
 		// Shell convention: ctrl+d on an empty prompt is EOF and quits. With
 		// any text or attachment it falls through to the editor, which deletes
-		// the character under the cursor.
+		// the character under the cursor. While an operation runs it is ignored,
+		// so a stray press cannot drop a streaming turn: esc interrupts it and
+		// ctrl+c still quits.
 		if m.editor.Value() == "" && len(m.editor.Attachments()) == 0 {
+			if m.op.busy() {
+				return m, nil
+			}
 			return m.quit()
 		}
 	case "pgup", "pgdown":
