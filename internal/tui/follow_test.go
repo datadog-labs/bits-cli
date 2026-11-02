@@ -66,6 +66,9 @@ func TestFollowControlReturnsToStreamingTailWithoutGrowingView(t *testing.T) {
 	m.chatPhase = chat.PhaseStreaming
 	view = m.View().Content
 	area := m.follow.area
+	if area.Max.Y != m.frame.composerGap.Max.Y {
+		t.Fatalf("control leaves an extra row below it: area=%v gap=%v", area, m.frame.composerGap)
+	}
 	contentY := area.Min.Y + 1 // the rounded border occupies the top and bottom rows.
 	row := strings.Split(ansi.Strip(view), "\n")[contentY]
 	if !strings.Contains(row, "Jump to latest") {

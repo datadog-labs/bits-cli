@@ -10,9 +10,9 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 )
 
-// followOverlayRows lifts the control so it floats over the
-// transcript's last two rows instead of sitting in the layout flow.
-const followOverlayRows = 2
+// followOverlayRows places the control's bottom border in the composer gap.
+// Its content row still floats over the transcript without changing layout.
+const followOverlayRows = 1
 
 // followControl owns the painted target and button gesture. The list owns
 // scroll position and auto-follow.
@@ -48,8 +48,8 @@ func (m *Model) followTarget() (string, image.Rectangle) {
 	return "", image.Rectangle{}
 }
 
-// followOverlay floats the jump-to-latest control on top of the transcript's
-// last two rows, the same way the completion menu overlays the editor.
+// followOverlay floats the jump-to-latest control over the transcript and
+// composer gap, the same way the completion menu overlays the editor.
 func (m *Model) followOverlay(base string) string {
 	label, area := m.followTarget()
 	m.follow.area = area
