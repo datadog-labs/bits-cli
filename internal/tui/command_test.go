@@ -757,3 +757,16 @@ func TestCtrlDWithTextDoesNotQuit(t *testing.T) {
 		t.Fatal("ctrl+d with prompt text cleared the editor")
 	}
 }
+
+func TestCtrlDDuringRunIsIgnored(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.op = operation{kind: opTurn, run: 1}
+
+	_, cmd := m.handleEditorKey(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatalf("ctrl+d during a run returned a command (%T), want it ignored", cmd())
+	}
+	if !m.op.busy() {
+		t.Fatal("ctrl+d during a run must not cancel the running turn")
+	}
+}
