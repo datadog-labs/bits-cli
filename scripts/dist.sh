@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-PLATFORMS=(darwin/amd64 darwin/arm64 linux/amd64 linux/arm64)
+PLATFORMS=(darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64)
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${DIST_DIR:-$SRC_DIR/dist}"
@@ -44,15 +44,23 @@ for platform in "${PLATFORMS[@]}"; do
     binary="$(GOOS="$goos" GOARCH="$goarch" VERSION="$version" BUILD_DIR="$work_dir/build" \
         "$SRC_DIR/scripts/build.sh")"
     mkdir -p "$stage"
-    install -m 0755 "$binary" "$stage/bits"
+    executable=bits
+    [[ "$goos" == windows ]] && executable=bits.exe
+    install -m 0755 "$binary" "$stage/$executable"
     (cd "$SRC_DIR" && cp "${files[@]}" "$stage/")
-    COPYFILE_DISABLE=1 tar -czf "$DIST_DIR/$name.tar.gz" -C "$stage" bits "${files[@]}"
-    artifacts+=("$name.tar.gz")
-    echo "$DIST_DIR/$name.tar.gz"
+    if [[ "$goos" == windows ]]; then
+        archive="$name.zip"
+        (cd "$stage" && zip -q "$DIST_DIR/$archive" "$executable" "${files[@]}")
+    else
+        archive="$name.tar.gz"
+        COPYFILE_DISABLE=1 tar -czf "$DIST_DIR/$archive" -C "$stage" "$executable" "${files[@]}"
+    fi
+    artifacts+=("$archive")
+    echo "$DIST_DIR/$archive"
     if [[ "$sbom" == true ]]; then
-        syft "$DIST_DIR/$name.tar.gz" --output "spdx-json=$DIST_DIR/$name.tar.gz.sbom.json"
-        artifacts+=("$name.tar.gz.sbom.json")
-        echo "$DIST_DIR/$name.tar.gz.sbom.json"
+        syft "$DIST_DIR/$archive" --output "spdx-json=$DIST_DIR/$archive.sbom.json"
+        artifacts+=("$archive.sbom.json")
+        echo "$DIST_DIR/$archive.sbom.json"
     fi
 done
 

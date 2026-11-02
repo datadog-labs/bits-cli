@@ -2,6 +2,7 @@ package scripts
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -279,7 +280,12 @@ func TestHomebrewTemplate(t *testing.T) {
 	if m == nil {
 		t.Fatal("no PLATFORMS in scripts/dist.sh")
 	}
-	platforms := strings.Fields(strings.ReplaceAll(string(m[1]), "/", "_"))
+	var platforms []string
+	for _, platform := range strings.Fields(string(m[1])) {
+		if !strings.HasPrefix(platform, "windows/") {
+			platforms = append(platforms, strings.ReplaceAll(platform, "/", "_"))
+		}
+	}
 	args := []string{"-r", "./scripts/homebrew.rb", "-e", `print render("bits.rb", ARGV.map { |arg| arg.split("=", 2) }.to_h)`, "--", "version=1.2.3"}
 	checksums := make(map[string]string)
 	for i, platform := range platforms {
@@ -360,7 +366,7 @@ func testDistArchives(t *testing.T, sbom bool) {
 			t.Fatal(err)
 		}
 	}
-	stub := "#!/usr/bin/env bash\nset -eu\nmkdir -p \"$BUILD_DIR\"\nout=\"$BUILD_DIR/bits-$GOOS-$GOARCH\"\necho \"$GOOS/$GOARCH $VERSION\" >\"$out\"\necho \"$out\"\n"
+	stub := "#!/usr/bin/env bash\nset -eu\nmkdir -p \"$BUILD_DIR\"\nout=\"$BUILD_DIR/bits-$GOOS-$GOARCH\"\n[[ $GOOS == windows ]] && out=$out.exe\necho \"$GOOS/$GOARCH $VERSION\" >\"$out\"\necho \"$out\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "scripts", "build.sh"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +374,7 @@ func testDistArchives(t *testing.T, sbom bool) {
 	syft := `#!/usr/bin/env bash
 set -euo pipefail
 [[ $# == 3 && "$2" == --output && "$3" == spdx-json=* ]]
-tar -tzf "$1" >/dev/null
+if [[ "$1" == *.zip ]]; then unzip -t "$1" >/dev/null; else tar -tzf "$1" >/dev/null; fi
 printf '%s\n' "$1" >"${3#spdx-json=}"
 `
 	if !sbom {
@@ -407,6 +413,8 @@ printf '%s\n' "$1" >"${3#spdx-json=}"
 		"bits_1.2.3_darwin_arm64.tar.gz",
 		"bits_1.2.3_linux_amd64.tar.gz",
 		"bits_1.2.3_linux_arm64.tar.gz",
+		"bits_1.2.3_windows_amd64.zip",
+		"bits_1.2.3_windows_arm64.zip",
 	}
 	if sbom {
 		for _, archive := range want[1:] {
@@ -436,17 +444,50 @@ printf '%s\n' "$1" >"${3#spdx-json=}"
 		t.Errorf("checksums do not verify: %v\n%s", err, out)
 	}
 
-	for _, platform := range []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"} {
-		archive := filepath.Join(dist, "bits_1.2.3_"+strings.ReplaceAll(platform, "/", "_")+".tar.gz")
-		files := readTarGz(t, archive)
-		if got := slices.Sorted(maps.Keys(files)); !slices.Equal(got, []string{"LICENSE", "LICENSE-3rdparty.csv", "README.md", "bits"}) {
+	for _, platform := range []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64", "windows/amd64", "windows/arm64"} {
+		windows := strings.HasPrefix(platform, "windows/")
+		extension, executable := ".tar.gz", "bits"
+		if windows {
+			extension, executable = ".zip", "bits.exe"
+		}
+		archive := filepath.Join(dist, "bits_1.2.3_"+strings.ReplaceAll(platform, "/", "_")+extension)
+		var files map[string]tarFile
+		if windows {
+			files = readZip(t, archive)
+		} else {
+			files = readTarGz(t, archive)
+		}
+		if got := slices.Sorted(maps.Keys(files)); !slices.Equal(got, []string{"LICENSE", "LICENSE-3rdparty.csv", "README.md", executable}) {
 			t.Errorf("%s contains %v", archive, got)
 		}
-		bits := files["bits"]
+		bits := files[executable]
 		if bits.mode&0o111 == 0 || bits.body != platform+" 1.2.3\n" {
 			t.Errorf("%s: bits mode %o body %q", archive, bits.mode, bits.body)
 		}
 	}
+}
+
+func readZip(t *testing.T, path string) map[string]tarFile {
+	t.Helper()
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = zr.Close() }()
+	files := make(map[string]tarFile)
+	for _, file := range zr.File {
+		r, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(r)
+		_ = r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[file.Name] = tarFile{mode: int64(file.Mode().Perm()), body: string(body)}
+	}
+	return files
 }
 
 type tarFile struct {

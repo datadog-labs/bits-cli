@@ -47,6 +47,12 @@ sudo install -m 755 bits /usr/local/bin/
 rm -f "/tmp/${ASSET}" bits
 ```
 
+### Windows
+
+Download `bits_<version>_windows_amd64.zip` (or the `arm64` archive) from
+[GitHub Releases](https://github.com/datadog-labs/bits-cli/releases), extract
+`bits.exe`, and add its folder to your `PATH`.
+
 ## Get started
 
 Launch Bits from the project you want to work on:

@@ -59,6 +59,24 @@ jobs:
       - name: Test
         run: ./scripts/test.sh
 
+  test-windows:
+    name: Test Windows execution
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: |
+          go test ./internal/tools/exec ./internal/tools/spec
+          go test ./internal/tools -run Exec
+
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
@@ -117,7 +135,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [lint, test, build, dist]
+    needs: [lint, test, test-windows, build, dist]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
