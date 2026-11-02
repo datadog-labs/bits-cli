@@ -106,8 +106,8 @@ For noninteractive runs, see the [ADEEP delivery documentation](internal/headles
 `main`, and queued merges. It is unprivileged (read-only token, no secrets,
 SHA-pinned actions) and runs `./scripts/lint.sh`, `./scripts/test.sh`, and
 `./scripts/build.sh` for linux, darwin, and windows on amd64 and arm64.
-Windows also runs the command execution and tool contract tests natively on
-`windows-latest`.
+Windows runs the same test script natively on `windows-latest`, including the
+nested license module.
 Releases are described in RELEASE.md.
 
 ## Third-party licenses

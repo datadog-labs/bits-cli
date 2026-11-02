@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -201,6 +202,9 @@ func command(t *testing.T, dir, name string, args ...string) *exec.Cmd {
 }
 
 func TestReleaseCheck(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses a Unix file URL and shell paths")
+	}
 	dir := t.TempDir()
 	git := func(dir string, args ...string) {
 		t.Helper()
@@ -346,6 +350,9 @@ func TestHomebrewChecksums(t *testing.T) {
 // TestDistArchives runs dist.sh against a stub build.sh and checks the
 // published layout, with and without SBOMs, including checksums for every asset.
 func TestDistArchives(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses Unix shell paths and executable stubs")
+	}
 	t.Run("archives", func(t *testing.T) { testDistArchives(t, false) })
 	t.Run("sbom", func(t *testing.T) { testDistArchives(t, true) })
 }

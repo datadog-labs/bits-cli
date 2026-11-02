@@ -351,7 +351,7 @@ func TestRenderLocalEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("git", "-C", dir, "init", "-b", "feature/<x>").CombinedOutput(); err != nil {
+	if out, err := exec.Command("git", "-C", dir, "init", "-b", "feature/a&b").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	ws, err := workspace.Open(dir)
@@ -368,7 +368,7 @@ func TestRenderLocalEnvironment(t *testing.T) {
   <cwd>` + dir + `</cwd>
   <git>
     <root>` + dir + `</root>
-    <branch>feature/&lt;x&gt;</branch>
+    <branch>feature/a&amp;b</branch>
   </git>` + shell + `
   <platform>` + runtime.GOOS + "/" + runtime.GOARCH + `</platform>
 </local_environment>`
