@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	osexec "os/exec"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -40,21 +39,6 @@ func (launcher directExecLauncher) Start(plan ExecPlan, stdout, stderr io.Writer
 		return nil, err
 	}
 	return &directExecProcess{command: command}, nil
-}
-
-func shellEnvWithoutExcludedNames(env, names []string) []string {
-	excluded := make(map[string]bool, len(names))
-	for _, name := range names {
-		excluded[name] = true
-	}
-	filtered := make([]string, 0, len(env))
-	for _, entry := range env {
-		name, _, _ := strings.Cut(entry, "=")
-		if !excluded[name] {
-			filtered = append(filtered, entry)
-		}
-	}
-	return filtered
 }
 
 type directExecProcess struct {
@@ -102,3 +86,6 @@ func signalExecProcessGroup(pid int, signal syscall.Signal) error {
 	}
 	return err
 }
+
+// Unix command output follows the UTF-8 text contract.
+func decodeExecOutput(bytes []byte) string { return execOutputText(bytes) }

@@ -1,6 +1,29 @@
 package exec
 
-import "testing"
+import (
+	"testing"
+	"unicode/utf8"
+)
+
+func TestBoundedExecOutputPreservesSplitUTF8(t *testing.T) {
+	const value = "café 日本語 😀"
+	for _, limit := range []int{0, 6, 9, 64} {
+		stdout := newHeadTailBuffer(limit)
+		// Split every multi-byte character across writes, including characters
+		// that will be omitted from the retained head/tail output.
+		for _, b := range []byte(value) {
+			_, _ = stdout.Write([]byte{b})
+		}
+		output := boundedExecOutput(stdout, newHeadTailBuffer(0))
+		want := execOutputText(stdout.snapshot(limit))
+		if output.Stdout != want || !utf8.ValidString(output.Stdout) {
+			t.Errorf("limit %d: output = %q, want UTF-8 %q", limit, output.Stdout, want)
+		}
+		if omitted := int64(len(value) - min(limit, len(value))); output.StdoutOmittedBytes != omitted {
+			t.Errorf("limit %d: omitted %d bytes, want %d", limit, output.StdoutOmittedBytes, omitted)
+		}
+	}
+}
 
 func TestHeadTailBufferAndCombinedOutputLimit(t *testing.T) {
 	stdoutLimit, stderrLimit := splitOutputLimit(10)
@@ -43,18 +66,6 @@ func TestCombinedOutputLimitDoesNotDonateQuietStreamBudget(t *testing.T) {
 	}
 	if got := stdout.limit() + stderr.limit(); got != 10 {
 		t.Fatalf("live collector capacity = %d, want combined cap 10", got)
-	}
-}
-
-func TestBoundedExecOutputNormalizesInvalidUTF8(t *testing.T) {
-	stdout := newHeadTailBuffer(16)
-	stderr := newHeadTailBuffer(16)
-	_, _ = stdout.Write([]byte{'o', 'k', 0xff})
-	_, _ = stderr.Write([]byte{0xfe, '!'})
-
-	output := boundedExecOutput(stdout, stderr)
-	if output.Stdout != "ok\uFFFD" || output.Stderr != "\uFFFD!" {
-		t.Fatalf("output = %+v, want invalid bytes replaced", output)
 	}
 }
 
