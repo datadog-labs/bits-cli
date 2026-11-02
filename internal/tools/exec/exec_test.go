@@ -6,10 +6,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 func TestExecServiceRejectsInvalidRequestBeforeLaunch(t *testing.T) {
@@ -382,4 +385,36 @@ func (p *controlledExecProcess) finish(signal string) {
 	p.finishOnce.Do(func() {
 		p.done <- execProcessResult{signal: signal}
 	})
+}
+
+func TestExecServiceDrainsBothStreamsUnderPressure(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ws.Close() })
+	service := NewExecService(ws.DefaultShellPath())
+	const streamBytes = 768 << 10
+	// Both streams exceed their output cap and pipe capacity. Completion
+	// proves the child can finish while both streams are drained.
+	command := `(printf '%786432s' '' | tr ' ' O) & (printf '%786432s' '' | tr ' ' E >&2) & wait`
+	if runtime.GOOS == "windows" {
+		command = `[Console]::Out.Write(('O' * 786432)); [Console]::Error.Write(('E' * 786432))`
+	}
+	outcome := service.Run(context.Background(), ExecRequest{Command: command, CWD: t.TempDir(), Timeout: 10 * time.Second})
+
+	if outcome.Reason != ExecSucceeded {
+		t.Fatalf("outcome = %+v, want success", outcome)
+	}
+	if !outcome.Output.Truncated {
+		t.Fatal("pressure output was not marked truncated")
+	}
+	if got := len(outcome.Output.Stdout) + len(outcome.Output.Stderr); got != execOutputLimit {
+		t.Fatalf("retained output = %d bytes, want %d", got, execOutputLimit)
+	}
+	wantOmitted := int64(streamBytes - execOutputLimit/2)
+	if outcome.Output.StdoutOmittedBytes != wantOmitted || outcome.Output.StderrOmittedBytes != wantOmitted {
+		t.Fatalf("omitted bytes = (%d, %d), want (%d, %d)",
+			outcome.Output.StdoutOmittedBytes, outcome.Output.StderrOmittedBytes, wantOmitted, wantOmitted)
+	}
 }

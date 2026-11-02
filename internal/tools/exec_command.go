@@ -14,7 +14,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
-const execCommandDescription = "Runs a command in a non-interactive login shell and returns its stdout, stderr, and exit status."
+const execCommandDescription = "Runs a command in a non-interactive shell and returns its stdout, stderr, and exit status."
 
 type execRunner interface {
 	Run(context.Context, exectool.ExecRequest) exectool.ExecOutcome
@@ -31,11 +31,11 @@ func newExecCommandTool(turnCWD string, runner execRunner) agent.Tool {
 					"cmd": map[string]any{
 						"type":        "string",
 						"minLength":   1,
-						"description": "Shell command to execute.",
+						"description": "Command in the selected shell's syntax. Windows defaults to PowerShell; request shell bash for Bash syntax.",
 					},
 					"shell": map[string]any{
 						"type":        "string",
-						"description": "Shell binary to launch (bash, zsh, or sh). Defaults to <shell>.",
+						"description": "Shell executable name on PATH or explicit path. Defaults to <shell>. Windows supports pwsh, powershell, and bash (when installed); Unix supports bash, zsh, and sh.",
 					},
 					"workdir": map[string]any{
 						"type":        "string",

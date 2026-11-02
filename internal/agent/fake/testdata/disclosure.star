@@ -3,6 +3,7 @@
 #
 #   load("internal/agent/fake/testdata/disclosure.star", "all"); all()
 #
+# On Windows, call all(windows=True) to use PowerShell commands.
 # changes() writes, edits, then removes qa-disclosure.txt in the workspace.
 
 def reasoning():
@@ -20,13 +21,15 @@ def inspections():
     say("A lone inspection expands like any tool:")
     call("read_file", {"path": "go.mod"})
 
-def commands():
+def commands(windows=False):
     heredoc = "cat <<'EOF'\n" + "\n".join(["row %d" % i for i in range(1, 15)]) + "\nEOF"
+    if windows:
+        heredoc = "@'\n" + "\n".join(["row %d" % i for i in range(1, 15)]) + "\n'@"
     call([
         ("exec_command", {"cmd": "echo hello"}),
-        ("exec_command", {"cmd": "seq 1 40"}),
-        ("exec_command", {"cmd": "true"}),
-        ("exec_command", {"cmd": "ls does-not-exist"}),
+        ("exec_command", {"cmd": "1..40" if windows else "seq 1 40"}),
+        ("exec_command", {"cmd": "exit 0" if windows else "true"}),
+        ("exec_command", {"cmd": "Get-Item does-not-exist -ErrorAction Stop" if windows else "ls does-not-exist"}),
         ("exec_command", {"cmd": heredoc}),
     ])
 
@@ -47,9 +50,9 @@ def streaming_change():
     call("write_file", {"path": path, "content": content}, break_input="disclosure", at="line 25")
     call("exec_command", {"cmd": "rm " + path})
 
-def all():
+def all(windows=False):
     reasoning()
     server_tools()
     inspections()
-    commands()
+    commands(windows=windows)
     changes()

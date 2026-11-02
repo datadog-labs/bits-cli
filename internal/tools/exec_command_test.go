@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"os"
+	osexec "os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +19,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 type recordingExecRunner struct {
@@ -235,7 +239,7 @@ func TestExecCommandSerializesTerminalMetadataBeforeStreams(t *testing.T) {
 	}
 }
 
-func mustJSONString(t *testing.T, value string) string {
+func mustJSONString(t *testing.T, value any) string {
 	t.Helper()
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -468,4 +472,128 @@ func waitForExecApproval(t *testing.T, events iter.Seq[agent.Event], callID stri
 		}
 	}
 	return false
+}
+
+func TestExecCommandBashEndToEnd(t *testing.T) {
+	bash, err := osexec.LookPath("bash")
+	if err != nil {
+		t.Skip("Bash is optional; install it and add it to PATH to run this test")
+	}
+	root := t.TempDir()
+	child := filepath.Join(root, "directory with spaces")
+	if err := os.Mkdir(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(child, "marker.txt"), []byte("expected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ws.Close() })
+	tool := newExecCommandTool(root, exectool.NewExecService(ws.DefaultShellPath()))
+	for _, shell := range []string{"bash", bash} {
+		t.Run(shell, func(t *testing.T) {
+			input := mustJSONString(t, map[string]any{
+				"cmd":     `test -n "$BASH_VERSION" || exit 8; read -r value < marker.txt; printf '%s\n' "$value" | while IFS= read -r line; do printf '%s' "$line"; done`,
+				"shell":   shell,
+				"workdir": "directory with spaces",
+			})
+			result, err := tool.Handler(t.Context(), agent.ToolCall{Input: input})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output spec.ExecCommandOutput
+			if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+				t.Fatal(err)
+			}
+			if output.Status != exectool.ExecSucceeded || output.Stdout != "expected" {
+				t.Fatalf("Bash tool result = %+v", output)
+			}
+		})
+	}
+}
+
+func TestNewClientToolsAdvertisesExecCommand(t *testing.T) {
+	workspace, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workspace.Close() })
+	clientTools := NewClientTools(workspace)
+	var found int
+	for _, tool := range clientTools {
+		if tool.Definition.Name == spec.ExecCommand {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Fatalf("exec_command definitions = %d, want 1", found)
+	}
+}
+
+func TestExecCommandEndToEndWorkdirsAndFailures(t *testing.T) {
+	turnCWD := t.TempDir()
+	child := filepath.Join(turnCWD, "child")
+	if err := os.Mkdir(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	regular := filepath.Join(turnCWD, "file")
+	if err := os.WriteFile(regular, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(turnCWD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ws.Close() })
+	tool := newExecCommandTool(turnCWD, exectool.NewExecService(ws.DefaultShellPath()))
+	pwd := "pwd"
+	if runtime.GOOS == "windows" {
+		pwd = "[Console]::Out.Write((Get-Location).Path)"
+	}
+	commandJSON := mustJSONString(t, pwd)
+	tests := []struct {
+		name       string
+		input      string
+		wantStatus exectool.ExecTerminalReason
+		wantStdout string
+	}{
+		{name: "default", input: `{"cmd":` + commandJSON + `}`, wantStatus: exectool.ExecSucceeded, wantStdout: turnCWD},
+		{name: "relative", input: `{"cmd":` + commandJSON + `,"workdir":"child"}`, wantStatus: exectool.ExecSucceeded, wantStdout: child},
+		{name: "absolute", input: `{"cmd":` + commandJSON + `,"workdir":` + mustJSONString(t, child) + `}`, wantStatus: exectool.ExecSucceeded, wantStdout: child},
+		{name: "missing", input: `{"cmd":` + commandJSON + `,"workdir":"missing"}`, wantStatus: exectool.ExecLaunchFailed},
+		{name: "not directory", input: `{"cmd":` + commandJSON + `,"workdir":` + mustJSONString(t, regular) + `}`, wantStatus: exectool.ExecLaunchFailed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := tool.Handler(context.Background(), agent.ToolCall{Input: test.input})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var model spec.ExecCommandOutput
+			if err := json.Unmarshal([]byte(result.Output), &model); err != nil {
+				t.Fatalf("result is not JSON: %v\n%s", err, result.Output)
+			}
+			if model.Status != test.wantStatus {
+				t.Fatalf("status = %q, want %q (%+v)", model.Status, test.wantStatus, model)
+			}
+			if test.wantStdout != "" {
+				// PowerShell expands Windows 8.3 paths, including the temp
+				// directory used by CI. Compare directory identity, not spelling.
+				got, err := os.Stat(strings.TrimSpace(model.Stdout))
+				if err != nil {
+					t.Fatalf("stat reported working directory %q: %v", model.Stdout, err)
+				}
+				want, err := os.Stat(test.wantStdout)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !os.SameFile(got, want) {
+					t.Fatalf("stdout = %q, want directory %q", model.Stdout, test.wantStdout)
+				}
+			}
+		})
+	}
 }

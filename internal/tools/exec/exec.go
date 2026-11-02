@@ -25,10 +25,6 @@ const (
 	execTerminateGrace = 100 * time.Millisecond
 )
 
-// ErrExecUnsupportedPlatform is returned when the Unix runner is invoked on
-// a platform for which Bits does not provide direct command execution.
-var ErrExecUnsupportedPlatform = errors.New("exec command is unsupported on this platform")
-
 // ExecTerminalReason identifies why a one-shot command stopped. It aliases the
 // wire-contract type in package spec so the execution service and any importer
 // (tool handler, renderers) share a single terminal-status vocabulary. Output
@@ -44,8 +40,9 @@ const (
 )
 
 // ExecEnvironmentStrategy describes how a command receives its environment.
-// V1 inherits the process environment, with an optional exact-name exclusion
-// list configured by the process that launches Bits.
+// ExecEnvironmentInherit uses the process environment, with an optional name
+// exclusion list configured by the process that launches Bits. Names are
+// case-insensitive on Windows.
 type ExecEnvironmentStrategy uint8
 
 const (
@@ -113,10 +110,9 @@ type ExecService struct {
 	defaultShellPath string
 }
 
-// NewExecService constructs the Linux/macOS direct execution service with the
-// default shell selected by the workspace. On an unsupported platform it remains
-// constructible, but Run reports a launch failure instead of Unix execution.
-// Optional names are excluded from child process environments.
+// NewExecService constructs the direct execution service with the default shell
+// selected by the workspace. Optional names are excluded from child process
+// environments.
 func NewExecService(defaultShellPath string, excludedEnv ...string) *ExecService {
 	return newExecService(newDirectExecLauncher(excludedEnv...), execServiceConfig{
 		concurrency:      execConcurrencyLimit,
@@ -259,7 +255,7 @@ func (s *ExecService) resolve(request ExecRequest) (ExecPlan, error) {
 	var shell string
 	if request.Shell != "" {
 		if !supportedExecShell(request.Shell) {
-			return ExecPlan{}, fmt.Errorf("unsupported exec shell %q: use bash, zsh, or sh", request.Shell)
+			return ExecPlan{}, fmt.Errorf("unsupported exec shell %q: use %s", request.Shell, supportedExecShells())
 		}
 		resolved, err := osexec.LookPath(request.Shell)
 		if err != nil {
@@ -291,15 +287,6 @@ func (s *ExecService) resolve(request ExecRequest) (ExecPlan, error) {
 		Timeout:     timeout,
 		OutputLimit: s.outputLimit,
 	}, nil
-}
-
-func supportedExecShell(shell string) bool {
-	switch filepath.Base(shell) {
-	case "bash", "zsh", "sh":
-		return true
-	default:
-		return false
-	}
 }
 
 func terminateAndWait(process execProcess, waited <-chan execProcessResult) execProcessResult {

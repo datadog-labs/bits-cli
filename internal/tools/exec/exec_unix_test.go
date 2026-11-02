@@ -204,31 +204,6 @@ func TestDirectExecLauncherUsesLoginCommandFlags(t *testing.T) {
 	}
 }
 
-func TestExecServiceUnixDrainsBothStreamsUnderPressure(t *testing.T) {
-	service := newUnixTestExecService(5*time.Second, execOutputLimit)
-	const streamBytes = 768 << 10
-	// The two background pipelines concurrently write more than half the
-	// combined cap to each descriptor. Completion proves neither pipe can
-	// block the child while the other stream is being consumed.
-	command := `(yes O | head -c 786432) & (yes E | head -c 786432 >&2) & wait`
-	outcome := service.Run(context.Background(), ExecRequest{Command: command, CWD: t.TempDir()})
-
-	if outcome.Reason != ExecSucceeded {
-		t.Fatalf("outcome = %+v, want success", outcome)
-	}
-	if !outcome.Output.Truncated {
-		t.Fatal("pressure output was not marked truncated")
-	}
-	if got := len(outcome.Output.Stdout) + len(outcome.Output.Stderr); got != execOutputLimit {
-		t.Fatalf("retained output = %d bytes, want %d", got, execOutputLimit)
-	}
-	wantOmitted := int64(streamBytes - execOutputLimit/2)
-	if outcome.Output.StdoutOmittedBytes != wantOmitted || outcome.Output.StderrOmittedBytes != wantOmitted {
-		t.Fatalf("omitted bytes = (%d, %d), want (%d, %d)",
-			outcome.Output.StdoutOmittedBytes, outcome.Output.StderrOmittedBytes, wantOmitted, wantOmitted)
-	}
-}
-
 func TestExecServiceUnixReportsOutputIncompleteAfterForcedPipeClosure(t *testing.T) {
 	service := newUnixTestExecService(time.Second, 4096)
 	outcome := service.Run(context.Background(), ExecRequest{
@@ -422,5 +397,17 @@ func waitForNonEmptyFile(path string, timeout time.Duration) error {
 			return errors.New("descendant activity marker was not populated")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestBoundedExecOutputNormalizesInvalidUTF8(t *testing.T) {
+	stdout := newHeadTailBuffer(16)
+	stderr := newHeadTailBuffer(16)
+	_, _ = stdout.Write([]byte{'o', 'k', 0xff})
+	_, _ = stderr.Write([]byte{0xfe, '!'})
+
+	output := boundedExecOutput(stdout, stderr)
+	if output.Stdout != "ok\uFFFD" || output.Stderr != "\uFFFD!" {
+		t.Fatalf("output = %+v, want invalid bytes replaced", output)
 	}
 }

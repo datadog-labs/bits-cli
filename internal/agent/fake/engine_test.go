@@ -146,11 +146,12 @@ func TestServerGateWithClientCall(t *testing.T) {
 // TestDisclosureScript runs the disclosure QA script against the real tools,
 // so schema drift fails here rather than during manual QA.
 func TestDisclosureScript(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("disclosure script exercises exec_command, which is unavailable on Windows")
-	}
 	engine := agent.New(&Fake{ScriptRoot: "testdata"}, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
-	blocks, _ := runTurn(t, engine, `load("disclosure.star", "all"); all()`, workspaceTools(t), agent.DenyContinue, nil)
+	script := `load("disclosure.star", "all"); all()`
+	if runtime.GOOS == "windows" {
+		script = `load("disclosure.star", "all"); all(windows=True)`
+	}
+	blocks, _ := runTurn(t, engine, script, workspaceTools(t), agent.DenyContinue, nil)
 	var calls int
 	for _, block := range blocks {
 		if block.Kind == assistant.KindText && strings.Contains(block.Markdown.Content, "fake script error") {
