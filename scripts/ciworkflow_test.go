@@ -280,7 +280,7 @@ func TestHomebrewTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`(?m)^PLATFORMS=\((.*)\)$`).FindSubmatch(dist)
+	m := regexp.MustCompile(`(?m)^PLATFORMS=\((.*)\)\r?$`).FindSubmatch(dist)
 	if m == nil {
 		t.Fatal("no PLATFORMS in scripts/dist.sh")
 	}
@@ -300,17 +300,18 @@ func TestHomebrewTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render formula: %v\n%s", err, formula)
 	}
-	if strings.Contains(string(formula), "\n  version ") {
+	formulaText := strings.ReplaceAll(string(formula), "\r\n", "\n")
+	if strings.Contains(formulaText, "\n  version ") {
 		t.Fatal("formula should let Homebrew infer the version from its release URLs")
 	}
 	for _, platform := range platforms {
 		url := `url "https://github.com/datadog-labs/bits-cli/releases/download/v1.2.3/bits_1.2.3_` + platform + `.tar.gz"`
 		sha := `sha256 "` + checksums[platform] + `"`
-		if !strings.Contains(string(formula), url+"\n      "+sha) {
+		if !strings.Contains(formulaText, url+"\n      "+sha) {
 			t.Errorf("formula must install %s with %s and %s", platform, url, sha)
 		}
 	}
-	if got, want := strings.Count(string(formula), "url \""), len(platforms); got != want {
+	if got, want := strings.Count(formulaText, "url \""), len(platforms); got != want {
 		t.Errorf("formula template has %d URLs, want one per released platform (%d)", got, want)
 	}
 	if out, err := command(t, "", "ruby", args[:len(args)-1]...).CombinedOutput(); err == nil || !strings.Contains(string(out), "key not found") {

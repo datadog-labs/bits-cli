@@ -3,13 +3,15 @@ package imageinput
 import (
 	"io/fs"
 	"path"
+	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 // DroppedPaths accepts escaped/quoted absolute paths and file:// URIs.
 // Every token must name an existing image file; otherwise the paste is plain text.
 //
-// TODO: support Windows drive/UNC paths and WSL path translation.
+// WSL path translation is not supported.
 func DroppedPaths(text string, stat func(string) (fs.FileInfo, error)) (paths []string, ok bool) {
 	tokens, ok := splitShellWords(text)
 	if !ok || len(tokens) == 0 {
@@ -41,7 +43,7 @@ func droppedPath(token string) (string, bool) {
 	if p, ok, err := FilePath(token); ok {
 		return p, err == nil
 	}
-	return token, path.IsAbs(token)
+	return token, path.IsAbs(token) || filepath.IsAbs(token)
 }
 
 // splitShellWords fails on unbalanced quotes or a trailing backslash.
@@ -69,12 +71,23 @@ func splitShellWords(text string) ([]string, bool) {
 			case '"':
 				quote = 0
 			case '\\':
-				escaped = true
+				if runtime.GOOS == "windows" {
+					word.WriteRune(r)
+				} else {
+					escaped = true
+				}
 			default:
 				word.WriteRune(r)
 			}
 		case r == '\\':
-			escaped, inWord = true, true
+			if runtime.GOOS == "windows" {
+				word.WriteRune(r)
+			} else {
+				escaped = true
+			}
+			inWord = true
+		case r == '\'' && runtime.GOOS == "windows" && inWord:
+			word.WriteRune(r)
 		case r == '\'' || r == '"':
 			quote, inWord = r, true
 		case r == ' ' || r == '\t' || r == '\n' || r == '\r':

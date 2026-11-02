@@ -303,6 +303,9 @@ func TestStateRecoveryAndTTL(t *testing.T) {
 }
 
 func TestDetectBackend(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew is not available on Windows")
+	}
 	for _, tc := range []struct {
 		name, layout, receipt string
 		want                  bool

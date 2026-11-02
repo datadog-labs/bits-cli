@@ -67,7 +67,8 @@ func TestNoticeForError(t *testing.T) {
 			name:      "a missing file is not a network error",
 			err:       &fs.PathError{Op: "open", Path: "/skills/SKILL.md", Err: syscall.ENOENT},
 			wantLevel: chat.NoticeError,
-			wantText:  "open /skills/SKILL.md: no such file or directory",
+			wantText:  "open /skills/SKILL.md:",
+			substr:    true,
 		},
 		{
 			name:      "an image that cannot be attached is named with its cause",
