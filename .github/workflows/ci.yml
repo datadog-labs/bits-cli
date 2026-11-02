@@ -25,6 +25,7 @@ concurrency:
 env:
   GOPROXY: https://proxy.golang.org
   GOSUMDB: sum.golang.org
+  BITS_KEYRING_E2E: "1"
 
 jobs:
   lint:
@@ -43,8 +44,8 @@ jobs:
       - name: Lint
         run: ./scripts/lint.sh --require-shellcheck
 
-  test:
-    name: Test
+  test-linux:
+    name: Test Linux
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -56,6 +57,47 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: Test
+        run: ./scripts/test.sh
+
+  test-windows:
+    name: Test Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: ./scripts/test.sh
+
+  test-macos:
+    name: Test macOS
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Set up test keychain
+        run: |
+          keychain="$RUNNER_TEMP/bits-cli-test.keychain-db"
+          password="$(openssl rand -hex 16)"
+          security create-keychain -p "$password" "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
       - name: Test
         run: ./scripts/test.sh
 
@@ -117,7 +159,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [lint, test, build, dist]
+    needs: [lint, test-linux, test-windows, test-macos, build, dist]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -16,12 +16,15 @@ This triggers `.github/workflows/release.yml` on `main`, which:
 Tags are protected, so they are only created by the workflow, with a
 dd-octo-sts token scoped by `.github/chainguard/self.release.sts.yaml`.
 
-Release assets, for darwin/amd64, darwin/arm64, linux/amd64, and linux/arm64:
+Release assets, for darwin/amd64, darwin/arm64, linux/amd64, linux/arm64,
+windows/amd64, and windows/arm64:
 
 ```
-bits_<version>_<os>_<arch>.tar.gz            bits, README.md, licenses
-bits_<version>_<os>_<arch>.tar.gz.sbom.json  SPDX JSON SBOM of the archive
-bits_<version>_checksums.txt                 SHA-256 of every archive and SBOM
+bits_<version>_<os>_<arch>.tar.gz            macOS/Linux: bits, README.md, licenses
+bits_<version>_windows_<arch>.zip           Windows: bits.exe, README.md, licenses
+bits_<version>_<os>_<arch>.tar.gz.sbom.json  SPDX JSON SBOM of a macOS/Linux archive
+bits_<version>_windows_<arch>.zip.sbom.json SPDX JSON SBOM of a Windows archive
+bits_<version>_checksums.txt                SHA-256 of every archive and SBOM
 ```
 
 Verify a download with:
@@ -33,6 +36,9 @@ gh attestation verify bits_<version>_<os>_<arch>.tar.gz \
     --signer-workflow datadog-labs/bits-cli/.github/workflows/release.yml \
     --source-ref refs/heads/main
 ```
+
+For Windows, verify `bits_<version>_windows_<arch>.zip` with the same
+attestation command.
 
 `./scripts/dist.sh v1.2.3` builds archives and checksums locally in `dist/`.
 Add `--sbom` before the tag to include SBOMs; this requires

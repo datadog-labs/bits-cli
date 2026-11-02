@@ -5,6 +5,7 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -145,6 +146,9 @@ func TestServerGateWithClientCall(t *testing.T) {
 // TestDisclosureScript runs the disclosure QA script against the real tools,
 // so schema drift fails here rather than during manual QA.
 func TestDisclosureScript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("disclosure script exercises exec_command, which is unavailable on Windows")
+	}
 	engine := agent.New(&Fake{ScriptRoot: "testdata"}, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
 	blocks, _ := runTurn(t, engine, `load("disclosure.star", "all"); all()`, workspaceTools(t), agent.DenyContinue, nil)
 	var calls int

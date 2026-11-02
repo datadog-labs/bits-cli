@@ -27,7 +27,7 @@ func (b *skillRecordingBackend) Send(_ context.Context, message any, opts assist
 
 func installTestSkill(t *testing.T, root, name string, userOnly bool) string {
 	t.Helper()
-	dir := filepath.Join(root, ".agents", "skills", name)
+	dir := filepath.Join(root, ".agents", "skills", strings.ReplaceAll(name, ":", "-"))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -113,10 +113,10 @@ func TestClientSkillSlashInvocation(t *testing.T) {
 				t.Fatalf("message = %q, want %q", backend.message, want)
 			}
 			got := backend.opts.CustomUserContext
-			if !strings.Contains(got, path) || !strings.Contains(got, "explicitly invoked") || !strings.Contains(got, "<instructions>SKILL BODY</instructions>") {
+			if !strings.Contains(got, filepath.ToSlash(path)) || !strings.Contains(got, "explicitly invoked") || !strings.Contains(got, "<instructions>SKILL BODY</instructions>") {
 				t.Fatalf("invocation context = %q", got)
 			}
-			if !strings.Contains(got, `base-directory="`+filepath.Dir(path)+`"`) {
+			if !strings.Contains(got, `base-directory="`+filepath.ToSlash(filepath.Dir(path))+`"`) {
 				t.Fatalf("missing reference base: %q", got)
 			}
 			if tc.userOnly && strings.Contains(got, `<skill name="`+skillName+`"`) {

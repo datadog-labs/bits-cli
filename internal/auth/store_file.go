@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/datadog-labs/bits-cli/internal/config"
 )
@@ -37,7 +38,9 @@ func loadSessionFile(path string, secure bool) (Session, error) {
 	if secure && info.Mode()&os.ModeSymlink != 0 {
 		return Session{}, fmt.Errorf("read OAuth session file: refusing symlink %s", path)
 	}
-	if info.Mode().IsRegular() && info.Mode().Perm()&0o077 != 0 {
+	// Windows does not report POSIX owner/group permission bits. The file
+	// backend is Linux-only; secure=false is used for test-controlled paths.
+	if (runtime.GOOS != "windows" || secure) && info.Mode().IsRegular() && info.Mode().Perm()&0o077 != 0 {
 		return Session{}, fmt.Errorf("%w: OAuth session file %s is accessible by other users (%#o)", ErrSessionCorrupt, path, info.Mode().Perm())
 	}
 	raw, err := os.ReadFile(path)

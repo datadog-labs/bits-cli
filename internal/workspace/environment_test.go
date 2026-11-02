@@ -32,7 +32,7 @@ func TestEnvironmentSnapshotCapturesGitSummaryWithoutFilenames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Repository.State != RepositoryPresent || snapshot.Repository.Root != resolvedRepo || snapshot.Repository.Name != filepath.Base(resolvedRepo) {
+	if snapshot.Repository.State != RepositoryPresent || snapshot.Repository.Root != filepath.ToSlash(resolvedRepo) || snapshot.Repository.Name != filepath.Base(resolvedRepo) {
 		t.Fatalf("repository = %+v", snapshot.Repository)
 	}
 	if snapshot.Repository.Branch != "main" || snapshot.Repository.Commit == "" || snapshot.Repository.Detached || snapshot.Repository.Unborn {

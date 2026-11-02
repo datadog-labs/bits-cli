@@ -443,11 +443,20 @@ func keyringLoad() (Session, error) {
 }
 
 func keyringSave(session Session) error {
+	return saveKeyringSession(keyringService, keyringAccount, session)
+}
+
+func saveKeyringSession(service, account string, session Session) error {
 	raw, err := json.Marshal(session)
 	if err != nil {
 		return fmt.Errorf("encode OAuth session: %w", err)
 	}
-	if err := keyring.Set(keyringService, keyringAccount, string(raw)); err != nil {
+	// go-keyring limits a Windows credential value to 2560 bytes. The whole
+	// session is one value, so larger token pairs will make Set fail.
+	if err := keyring.Set(service, account, string(raw)); err != nil {
+		if errors.Is(err, keyring.ErrSetDataTooBig) {
+			return fmt.Errorf("OAuth session is too large for the OS credential store: %w", err)
+		}
 		return fmt.Errorf("write OAuth session to OS credential store: %w", err)
 	}
 	return nil

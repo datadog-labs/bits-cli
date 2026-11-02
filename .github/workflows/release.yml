@@ -102,6 +102,7 @@ jobs:
         with:
           subject-path: |
             dist/bits_*.tar.gz
+            dist/bits_*.zip
             dist/bits_*.sbom.json
       - name: Get release token
         id: octo-sts

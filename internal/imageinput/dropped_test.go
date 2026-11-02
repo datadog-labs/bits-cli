@@ -2,22 +2,39 @@ package imageinput
 
 import (
 	"io/fs"
+	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
 
 func TestRecognizingFilesDroppedOnTheTerminal(t *testing.T) {
 	fsys := fstest.MapFS{
-		"Users/me/shot.png":    {},
-		"Users/me/My Shot.png": {},
-		"Users/me/b.JPEG":      {},
-		"Users/me/it's.gif":    {},
-		"Users/me/notes.txt":   {},
-		"Users/me/dir.png":     {Mode: fs.ModeDir},
+		"Users/me/shot.png":     {},
+		"Users/me/My Shot.png":  {},
+		"Users/me/b.JPEG":       {},
+		"Users/me/it's.gif":     {},
+		"Users/O'Neil/shot.png": {},
+		"Users/me/notes.txt":    {},
+		"Users/me/dir.png":      {Mode: fs.ModeDir},
 	}
 	stat := func(name string) (fs.FileInfo, error) {
-		return fs.Stat(fsys, name[1:])
+		p := strings.TrimPrefix(filepath.ToSlash(name), "C:")
+		return fs.Stat(fsys, strings.TrimPrefix(p, "/"))
+	}
+	fileURIs := "file:///Users/me/My%20Shot.png\r\nfile://localhost/Users/me/shot.png"
+	fileURIPaths := []string{"/Users/me/My Shot.png", "/Users/me/shot.png"}
+	escapedSpacesWant := []string{"/Users/me/My Shot.png"}
+	var windowsPathWant []string
+	var apostrophePathWant []string
+	if runtime.GOOS == "windows" {
+		fileURIs = "file:///C:/Users/me/My%20Shot.png\r\nfile://localhost/C:/Users/me/shot.png"
+		fileURIPaths = []string{`C:\Users\me\My Shot.png`, `C:\Users\me\shot.png`}
+		escapedSpacesWant = nil
+		windowsPathWant = []string{`C:\Users\me\shot.png`}
+		apostrophePathWant = []string{`C:\Users\O'Neil\shot.png`}
 	}
 	tests := []struct {
 		name string
@@ -25,11 +42,11 @@ func TestRecognizingFilesDroppedOnTheTerminal(t *testing.T) {
 		want []string
 	}{
 		{name: "a plain path", text: "/Users/me/shot.png", want: []string{"/Users/me/shot.png"}},
-		{name: "a path with escaped spaces", text: `/Users/me/My\ Shot.png`, want: []string{"/Users/me/My Shot.png"}},
+		{name: "a path with escaped spaces", text: `/Users/me/My\ Shot.png`, want: escapedSpacesWant},
 		{name: "several paths and a trailing newline", text: "  /Users/me/shot.png /Users/me/b.JPEG\n", want: []string{"/Users/me/shot.png", "/Users/me/b.JPEG"}},
 		{name: "a single-quoted path", text: `'/Users/me/My Shot.png'`, want: []string{"/Users/me/My Shot.png"}},
 		{name: "double-quoted paths", text: `"/Users/me/My Shot.png" "/Users/me/it's.gif"`, want: []string{"/Users/me/My Shot.png", "/Users/me/it's.gif"}},
-		{name: "file URIs", text: "file:///Users/me/My%20Shot.png\r\nfile://localhost/Users/me/shot.png", want: []string{"/Users/me/My Shot.png", "/Users/me/shot.png"}},
+		{name: "file URIs", text: fileURIs, want: fileURIPaths},
 		{name: "nothing but whitespace", text: " \n"},
 		{name: "a relative path", text: "me/shot.png"},
 		{name: "a sentence mentioning a path", text: "look at /Users/me/shot.png"},
@@ -39,7 +56,8 @@ func TestRecognizingFilesDroppedOnTheTerminal(t *testing.T) {
 		{name: "one non-image among images", text: "/Users/me/shot.png /Users/me/notes.txt"},
 		{name: "a file URI on another host", text: "file://host/Users/me/shot.png"},
 		{name: "an unterminated quote", text: `'/Users/me/shot.png`},
-		{name: "a Windows path", text: `C:\Users\me\shot.png`},
+		{name: "a Windows path", text: `C:\Users\me\shot.png`, want: windowsPathWant},
+		{name: "an unquoted Windows path with an apostrophe", text: `C:\Users\O'Neil\shot.png`, want: apostrophePathWant},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

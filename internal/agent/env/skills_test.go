@@ -53,6 +53,7 @@ func TestClientSkillFrontmatter(t *testing.T) {
 func TestClientSkillDiscoveryPrecedenceAndBoundaries(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	repo := t.TempDir()
 	runInstructionsGit(t, repo, "init", "-b", "main")
 	active := filepath.Join(repo, "nested", "active")
@@ -141,6 +142,7 @@ func TestClientSkillDisableModelInvocation(t *testing.T) {
 func TestClientSkillOutsideGitAndExplicitPaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	outer := t.TempDir()
 	active := filepath.Join(outer, "active")
 	if err := os.MkdirAll(active, 0o755); err != nil {

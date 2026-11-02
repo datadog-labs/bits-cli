@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -45,6 +46,9 @@ func TestLoadSessionFileMissingIsNoSession(t *testing.T) {
 }
 
 func TestSaveSessionFileWritesOwnerOnlyPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX permission bits")
+	}
 	path := tempSessionPath(t)
 	if err := saveSessionFile(path, false, fileTestSession()); err != nil {
 		t.Fatalf("saveSessionFile: %v", err)
@@ -85,6 +89,9 @@ func TestLoadSessionFileCorruptIsSessionCorrupt(t *testing.T) {
 }
 
 func TestLoadSessionFileRejectsGroupOrOtherReadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX permission bits")
+	}
 	path := tempSessionPath(t)
 	if err := saveSessionFile(path, false, fileTestSession()); err != nil {
 		t.Fatalf("saveSessionFile: %v", err)

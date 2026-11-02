@@ -98,6 +98,10 @@ func TestWriteFileTool(t *testing.T) {
 		if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
+		before, err := os.Stat(target)
+		if err != nil {
+			t.Fatal(err)
+		}
 		tool, _ := newWriteTool(t, dir)
 		if r := invokeWrite(t, tool, map[string]any{"path": "script.sh", "content": "#!/bin/sh\necho hi\n"}); r.IsError {
 			t.Fatalf("unexpected error: %s", r.Output)
@@ -106,8 +110,8 @@ func TestWriteFileTool(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != 0o755 {
-			t.Errorf("mode = %o, want 0755", info.Mode().Perm())
+		if info.Mode().Perm() != before.Mode().Perm() {
+			t.Errorf("mode = %o, want %o", info.Mode().Perm(), before.Mode().Perm())
 		}
 	})
 

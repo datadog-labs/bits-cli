@@ -41,7 +41,7 @@ func TestRandomStreamGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := b.String(); got != string(want) {
+	if got := b.String(); got != strings.ReplaceAll(string(want), "\r\n", "\n") {
 		t.Fatalf("random stream changed; rerun with -update only if intended\n got:\n%s", got)
 	}
 }
