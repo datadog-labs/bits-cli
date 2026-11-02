@@ -85,7 +85,7 @@ func (f *Fake) startTurn(c *conversation, text string, fn starlark.Callable, tur
 		src:         strings.TrimSpace(text),
 		fn:          fn,
 		index:       c.turns,
-		snapshot:    newSourceSnapshot(f.scriptRoot()),
+		snapshot:    newSourceSnapshot(f.scriptRoot(), f.BundledFixtures),
 		continueDir: cmp.Or(f.ContinueDir, defaultContinueDir()),
 	}
 	c.turns++

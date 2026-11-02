@@ -1,5 +1,5 @@
 """Preview with BITS_FAKE_BACKEND=1:
-  load("fakedata/links.star", "links"); links()
+  load("links.star", "links"); links()
 """
 
 _INLINE = (

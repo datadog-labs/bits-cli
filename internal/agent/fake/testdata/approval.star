@@ -1,7 +1,7 @@
 """Prompt scenarios for BITS_FAKE_BACKEND=1. Start with `BITS_FAKE_BACKEND=1 go run .`.
 
 Run one from the Starlark console, for example:
-  load("fakedata/approval.star", "long_command"); long_command()
+  load("approval.star", "long_command"); long_command()
 
 Scenarios cover short and scrollable approvals, queued prompts, questionnaires,
 and scrolling after a decision. Allowing writes only under tmp/approval-demo/.

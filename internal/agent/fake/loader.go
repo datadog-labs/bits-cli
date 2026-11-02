@@ -2,9 +2,11 @@ package fake
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -20,18 +22,22 @@ const (
 	maxModuleSize = 1 << 20
 )
 
+//go:embed testdata/*.star
+var bundledFixtures embed.FS
+
 // sourceSnapshot is the immutable view of files used by one scripted turn.
 // Files are read lazily, because a load statement may occur after a client
 // tool round. Once read, a file never comes from disk again for this turn.
 type sourceSnapshot struct {
-	root string
+	root            string
+	bundledFixtures bool
 
 	mu    sync.Mutex
 	files map[string][]byte
 }
 
-func newSourceSnapshot(root string) *sourceSnapshot {
-	return &sourceSnapshot{root: root, files: make(map[string][]byte)}
+func newSourceSnapshot(root string, bundledFixtures bool) *sourceSnapshot {
+	return &sourceSnapshot{root: root, bundledFixtures: bundledFixtures, files: make(map[string][]byte)}
 }
 
 // moduleEntry is cached only for one interpreter execution. Starlark module
@@ -57,7 +63,7 @@ func newModuleLoader(ctx context.Context, snapshot *sourceSnapshot, r *run) *mod
 	if snapshot == nil {
 		// A nil snapshot is only possible for a turn assembled by an old caller;
 		// keeping the fallback here makes the loader fail with a useful root error.
-		snapshot = newSourceSnapshot("")
+		snapshot = newSourceSnapshot("", false)
 	}
 	return &moduleLoader{
 		ctx:      ctx,
@@ -85,7 +91,23 @@ func (l *moduleLoader) Load(thread *starlark.Thread, module string) (starlark.St
 	l.loading[id] = true
 	defer delete(l.loading, id)
 
-	src, err := l.snapshot.read(id, func() (string, error) { return l.verify(module, candidate) })
+	src, err := l.snapshot.read(id, func() (io.ReadCloser, error) {
+		path, err := l.verify(module, candidate)
+		if err == nil {
+			return os.Open(path)
+		}
+		// Only top-level, bare filenames get the bundled fallback. A local
+		// file (including a symlink) always takes precedence.
+		parent, _ := thread.Local(modulePathKey).(string)
+		if l.snapshot.bundledFixtures && parent == "" && filepath.Base(module) == module && errors.Is(err, fs.ErrNotExist) {
+			if _, statErr := os.Lstat(candidate); errors.Is(statErr, fs.ErrNotExist) {
+				if file, openErr := bundledFixtures.Open("testdata/" + module); openErr == nil {
+					return file, nil
+				}
+			}
+		}
+		return nil, err
+	})
 	if err != nil {
 		entry := moduleEntry{err: err}
 		l.cache[id] = entry
@@ -178,22 +200,18 @@ func within(root, path string) bool {
 }
 
 // read returns module id's source: from the snapshot when this turn already
-// read it, otherwise from the path locate returns, which then joins the
+// read it, otherwise from the stream open returns, which then joins the
 // snapshot. The read stops one byte past the size limit, so an oversized
 // file is rejected without being loaded into memory.
-func (s *sourceSnapshot) read(id string, locate func() (string, error)) ([]byte, error) {
+func (s *sourceSnapshot) read(id string, open func() (io.ReadCloser, error)) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if src, ok := s.files[id]; ok {
 		return src, nil
 	}
-	path, err := locate()
+	file, err := open()
 	if err != nil {
 		return nil, err
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %q: %w", id, err)
 	}
 	defer func() { _ = file.Close() }()
 	src, err := io.ReadAll(io.LimitReader(file, maxModuleSize+1))
