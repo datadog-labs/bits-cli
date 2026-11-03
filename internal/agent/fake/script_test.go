@@ -198,7 +198,7 @@ func TestBuiltinsEmit(t *testing.T) {
 			want: []string{`client_tool_call:approval_request {"tool_args":{},"tool_call_id":"fake-msg-3","tool_name":"t"}`, "usage"},
 		},
 		{
-			name: "raw content", message: `raw({"type": "widget_def", "title": "p95", "widget_def": {}})`,
+			name: "raw content", message: `raw({"type": "widget_def", "widget_def": {"title": "p95"}})`,
 			want: []string{"widget_def", "usage"},
 		},
 		{
@@ -270,6 +270,19 @@ def run():
 	want := []string{"markdown_fragment:loaded", "usage"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestWidgetFixtures(t *testing.T) {
+	for _, call := range []string{"gallery()", "timing(1700000000000, 1700003600000)", "burst()", `revision(delay="0s")`, "failures()"} {
+		t.Run(call, func(t *testing.T) {
+			f := New()
+			f.ScriptRoot = t.TempDir()
+			_, err := send(t, f, `load("widgets.star", "gallery", "timing", "burst", "revision", "failures"); `+call, assistant.SendOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
