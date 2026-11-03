@@ -14,6 +14,8 @@ go test ./...
 # tree are kept out of the shipped module (see tools/licenses/main.go's
 # package doc for why), so root-module test runs never reach it and it needs
 # its own pass.
-go -C tools/licenses test ./...
+# These tests read the root module's dependency files, outside this module's
+# test-cache inputs. Always rerun them when checking the current inventory.
+go -C tools/licenses test -count=1 ./...
 
 printf 1>&2 "test: all good.\n"

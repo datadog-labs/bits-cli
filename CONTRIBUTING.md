@@ -101,6 +101,8 @@ those commands. When unset, shell commands inherit the normal environment.
 Tests that contact Datadog are opt-in:
 
 - `BITS_OAUTH_E2E=1` reuses your stored OAuth login.
+- `BITS_VIZ_E2E=1` renders a CPU chart through Datadog MCP and ddviz. Requires
+  macOS 13+, a built helper, and a stored Bits login with visualization access.
 - `BITS_ASSISTANT_E2E=1` requires `DD_API_KEY`, `DD_APP_KEY`, and an explicit
   `BITS_E2E_SITE` naming the Datadog API site.
 

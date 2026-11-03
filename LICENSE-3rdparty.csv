@@ -25,7 +25,9 @@ github.com/dlclark/regexp2/v2,https://github.com/dlclark/regexp2,MIT,Copyright (
 github.com/git-pkgs/gitignore,https://github.com/git-pkgs/gitignore,MIT,Copyright (c) 2026 Andrew Nesbitt
 github.com/godbus/dbus/v5,https://github.com/godbus/dbus,BSD-2-Clause,"Copyright (c) 2013, Georg Reinke (<guelfey at gmail dot com>), Google"
 github.com/gofrs/flock,https://github.com/gofrs/flock,BSD-3-Clause,"Copyright (c) 2018-2025, The Gofrs; Copyright (c) 2015-2020, Tim Heckman"
+github.com/golang-jwt/jwt/v5,https://github.com/golang-jwt/jwt,MIT,Copyright (c) 2012 Dave Grijalva; Copyright (c) 2021 golang-jwt maintainers
 github.com/google/go-cmp,https://github.com/google/go-cmp,BSD-3-Clause,Copyright (c) 2017 The Go Authors. All rights reserved.
+github.com/google/jsonschema-go,https://github.com/google/jsonschema-go,MIT,Copyright (c) 2025 JSON Schema Go Project Authors
 github.com/gorilla/css,https://github.com/gorilla/css,BSD-3-Clause,Copyright (c) 2023 The Gorilla Authors. All rights reserved.
 github.com/hexops/gotextdiff,https://github.com/hexops/gotextdiff,BSD-3-Clause,Copyright (c) 2009 The Go Authors. All rights reserved.
 github.com/inconshreveable/mousetrap,https://github.com/inconshreveable/mousetrap,Apache-2.0,Copyright 2022 Alan Shreve (@inconshreveable)
@@ -33,14 +35,18 @@ github.com/kylelemons/godebug,https://github.com/kylelemons/godebug,Apache-2.0,C
 github.com/lucasb-eyer/go-colorful,https://github.com/lucasb-eyer/go-colorful,MIT,Copyright (c) 2013 Lucas Beyer
 github.com/mattn/go-runewidth,https://github.com/mattn/go-runewidth,MIT,Copyright (c) 2016 Yasuhiro Matsumoto
 github.com/microcosm-cc/bluemonday,https://github.com/microcosm-cc/bluemonday,BSD-3-Clause,"Copyright (c) 2014, David Kitchen <david@buro9.com>"
+github.com/modelcontextprotocol/go-sdk,https://github.com/modelcontextprotocol/go-sdk,Apache-2.0 AND MIT,"Copyright (c) 2024-2025 Model Context Protocol a Series of LF Projects, LLC."
 github.com/muesli/cancelreader,https://github.com/muesli/cancelreader,MIT,Copyright (c) 2022 Erik Geiser and Christian Muehlhaeuser
 github.com/rivo/uniseg,https://github.com/rivo/uniseg,MIT,Copyright (c) 2019 Oliver Kuederle
 github.com/sahilm/fuzzy,https://github.com/sahilm/fuzzy,MIT,Copyright (c) 2017 Sahil Muthoo
+github.com/segmentio/asm,https://github.com/segmentio/asm,MIT,Copyright (c) 2021 Segment
+github.com/segmentio/encoding,https://github.com/segmentio/encoding,MIT,"Copyright (c) 2019 Segment.io, Inc."
 github.com/spf13/cobra,https://github.com/spf13/cobra,Apache-2.0,Copyright The Cobra Authors
 github.com/spf13/pflag,https://github.com/spf13/pflag,BSD-3-Clause,Copyright (c) 2012 Alex Ogier. All rights reserved.; Copyright (c) 2012 The Go Authors. All rights reserved.
 github.com/stretchr/objx,https://github.com/stretchr/objx,MIT,"Copyright (c) 2014 Stretchr, Inc.; Copyright (c) 2017-2018 objx contributors"
 github.com/stretchr/testify,https://github.com/stretchr/testify,MIT,"Copyright (c) 2012-2020 Mat Ryer, Tyler Bunnell and contributors."
 github.com/xo/terminfo,https://github.com/xo/terminfo,MIT,Copyright (c) 2016 Anmol Sethi
+github.com/yosida95/uritemplate/v3,https://github.com/yosida95/uritemplate,BSD-3-Clause,"Copyright (C) 2016, Kohei YOSHIDA <https://yosida95.com/>. All rights reserved."
 github.com/yuin/goldmark,https://github.com/yuin/goldmark,MIT,Copyright (c) 2019 Yusuke Inuzuka
 github.com/yuin/goldmark-emoji,https://github.com/yuin/goldmark-emoji,MIT,Copyright (c) 2020 Yusuke Inuzuka
 github.com/zalando/go-keyring,https://github.com/zalando/go-keyring,MIT,Copyright (c) 2016 Zalando SE
@@ -54,6 +60,8 @@ golang.org/x/oauth2,https://github.com/golang/oauth2,BSD-3-Clause,Copyright 2009
 golang.org/x/sync,https://github.com/golang/sync,BSD-3-Clause,Copyright 2009 The Go Authors.
 golang.org/x/sys,https://github.com/golang/sys,BSD-3-Clause,Copyright 2009 The Go Authors.
 golang.org/x/text,https://github.com/golang/text,BSD-3-Clause,Copyright 2009 The Go Authors.
+golang.org/x/time,https://github.com/golang/time,BSD-3-Clause,Copyright 2009 The Go Authors.
+golang.org/x/tools,https://github.com/golang/tools,BSD-3-Clause,Copyright 2009 The Go Authors.
 google.golang.org/protobuf,https://github.com/protocolbuffers/protobuf-go,BSD-3-Clause,Copyright (c) 2018 The Go Authors. All rights reserved.
 gopkg.in/check.v1,https://github.com/go-check/check,BSD-2-Clause,Copyright (c) 2010-2013 Gustavo Niemeyer <gustavo@niemeyer.net>
 gopkg.in/yaml.v3,https://github.com/go-yaml/yaml,MIT AND Apache-2.0,Copyright (c) 2006-2010 Kirill Simonov; Copyright (c) 2006-2011 Kirill Simonov; Copyright (c) 2011-2019 Canonical Ltd; Copyright 2011-2016 Canonical Ltd.
