@@ -39,11 +39,11 @@ URL="http://127.0.0.1:$PORT/Formula/bits.rb"
 
 for version in 0.0.1 0.0.2; do
     keg="$PREFIX/Cellar/bits/$version"
-    mkdir -p "$keg/bin"
-    built="$(VERSION="$version" BUILD_DIR="$PREFIX/build-$version" \
+    mkdir -p "$(dirname "$keg")"
+    built="$(BUILD_LIBEXEC=0 VERSION="$version" BUILD_DIR="$PREFIX/build-$version" \
         EXTRA_LDFLAGS="-X github.com/datadog-labs/bits-cli/internal/update.formulaURL=$URL" \
         "$SRC_DIR/scripts/build.sh")"
-    mv "$built" "$keg/bin/bits"
+    mv "$built" "$keg"
     echo '{"source":{"tap":"datadog-labs/pack"}}' > "$keg/INSTALL_RECEIPT.json"
 done
 

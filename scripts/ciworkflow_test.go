@@ -34,9 +34,15 @@ type workflow struct {
 	Jobs        map[string]struct {
 		If          string
 		Uses        string
+		With        map[string]any
 		Needs       needs
 		Permissions map[string]string
-		Steps       []struct {
+		Strategy    struct {
+			Matrix struct {
+				Include []map[string]string
+			}
+		}
+		Steps []struct {
 			Uses string
 			Run  string
 			With map[string]any
@@ -134,6 +140,38 @@ func TestCIWorkflowGate(t *testing.T) {
 	}
 }
 
+// releasePlatforms returns the os/arch targets of scripts/platforms.sh.
+func releasePlatforms(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile("scripts/platforms.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^PLATFORMS=\((.*)\)\r?$`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("no PLATFORMS in scripts/platforms.sh")
+	}
+	return strings.Fields(string(m[1]))
+}
+
+// The package job needs a prefix for every release platform, built on a
+// runner of its OS.
+func TestCIBuildsReleasePlatforms(t *testing.T) {
+	var targets []string
+	for _, entry := range loadWorkflow(t, "ci.yml").Jobs["build"].Strategy.Matrix.Include {
+		for _, target := range strings.Fields(entry["targets"]) {
+			if !strings.HasPrefix(target, entry["goos"]+"/") {
+				t.Errorf("%s runner builds %s", entry["goos"], target)
+			}
+			targets = append(targets, target)
+		}
+	}
+	slices.Sort(targets)
+	if want := slices.Sorted(slices.Values(releasePlatforms(t))); !slices.Equal(targets, want) {
+		t.Errorf("CI builds %v, want %v", targets, want)
+	}
+}
+
 func TestReleaseWorkflowGating(t *testing.T) {
 	wf := loadWorkflow(t, "release.yml")
 	if len(wf.On) != 1 || wf.On["workflow_dispatch"] == nil {
@@ -155,7 +193,10 @@ func TestReleaseWorkflowGating(t *testing.T) {
 	if wf.Jobs["ci"].Uses != "./.github/workflows/ci.yml" {
 		t.Errorf("release ci job uses %q, want ./.github/workflows/ci.yml", wf.Jobs["ci"].Uses)
 	}
-	for job, needs := range map[string][]string{"ci": {"check"}, "dist": {"check"}, "publish": {"ci", "dist"}} {
+	if tag := wf.Jobs["ci"].With["tag"]; tag != "${{ inputs.tag }}" {
+		t.Errorf("release ci job builds tag %v, want ${{ inputs.tag }}", tag)
+	}
+	for job, needs := range map[string][]string{"ci": {"check"}, "publish": {"ci"}} {
 		for _, need := range needs {
 			if !slices.Contains(wf.Jobs[job].Needs, need) {
 				t.Errorf("%s must need %s, got %v", job, need, wf.Jobs[job].Needs)
@@ -190,7 +231,7 @@ func command(t *testing.T, dir, name string, args ...string) *exec.Cmd {
 	for _, kv := range os.Environ() {
 		key, value, _ := strings.Cut(kv, "=")
 		switch {
-		case strings.HasPrefix(key, "GIT_"), slices.Contains([]string{"BUILD_DIR", "DIST_DIR", "GOARCH", "GOOS", "VERSION"}, key):
+		case strings.HasPrefix(key, "GIT_"), slices.Contains([]string{"BUILD_DIR", "BUILD_LIBEXEC", "DIST_DIR", "GOARCH", "GOOS", "VERSION"}, key):
 			continue
 		case key == "PATH":
 			kv = "PATH=" + bin + string(os.PathListSeparator) + value
@@ -256,7 +297,7 @@ func TestReleaseCheck(t *testing.T) {
 
 // Each release script validates its tag before having any side effect.
 func TestScriptsRejectInvalidTags(t *testing.T) {
-	for _, args := range [][]string{{"bash", "scripts/dist.sh"}, {"bash", "scripts/dist.sh", "--sbom"}, {"bash", "scripts/publish.sh"}, {"bash", "scripts/release.sh"}, {"bash", "scripts/release.sh", "--check"}, {"ruby", "scripts/homebrew.rb"}, {"ruby", "scripts/homebrew.rb", "--dry-run"}} {
+	for _, args := range [][]string{{"bash", "scripts/dist.sh"}, {"bash", "scripts/dist.sh", "--sbom"}, {"bash", "scripts/package.sh"}, {"bash", "scripts/package.sh", "--sbom"}, {"bash", "scripts/publish.sh"}, {"bash", "scripts/release.sh"}, {"bash", "scripts/release.sh", "--check"}, {"ruby", "scripts/homebrew.rb"}, {"ruby", "scripts/homebrew.rb", "--dry-run"}} {
 		if _, err := exec.LookPath(args[0]); err != nil {
 			t.Logf("skipping %s: %v", args[0], err)
 			continue
@@ -276,16 +317,8 @@ func TestHomebrewTemplate(t *testing.T) {
 	if _, err := exec.LookPath("ruby"); err != nil {
 		t.Skip("ruby is required to render Homebrew templates")
 	}
-	dist, err := os.ReadFile("scripts/dist.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := regexp.MustCompile(`(?m)^PLATFORMS=\((.*)\)\r?$`).FindSubmatch(dist)
-	if m == nil {
-		t.Fatal("no PLATFORMS in scripts/dist.sh")
-	}
 	var platforms []string
-	for _, platform := range strings.Fields(string(m[1])) {
+	for _, platform := range releasePlatforms(t) {
 		if !strings.HasPrefix(platform, "windows/") {
 			platforms = append(platforms, strings.ReplaceAll(platform, "/", "_"))
 		}
@@ -348,8 +381,8 @@ func TestHomebrewChecksums(t *testing.T) {
 	}
 }
 
-// TestDistArchives runs dist.sh against a stub build.sh and checks the
-// published layout, with and without SBOMs, including checksums for every asset.
+// TestDistArchives runs dist.sh, and so package.sh, against a stub build.sh
+// and checks the published install prefix layout, with and without SBOMs, including checksums for every asset.
 func TestDistArchives(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture uses Unix shell paths and executable stubs")
@@ -359,10 +392,13 @@ func TestDistArchives(t *testing.T) {
 	t.Run("relative DIST_DIR", func(t *testing.T) { testDistArchives(t, false, "out") })
 }
 
-func testDistArchives(t *testing.T, sbom bool, distDir string) {
+// releaseFixture copies the release scripts into a git repository, with
+// stubs for build.sh, syft, and go version -m. A stub bits executable holds
+// its platform, version, revision, and modified state, as build info would.
+func releaseFixture(t *testing.T, sbom bool) (dir string, run func(args ...string) *exec.Cmd) {
 	t.Helper()
-	dir := t.TempDir()
-	for _, file := range []string{"scripts/dist.sh", "README.md", "LICENSE", "LICENSE-3rdparty.csv"} {
+	dir = t.TempDir()
+	for _, file := range []string{"scripts/dist.sh", "scripts/package.sh", "scripts/platforms.sh", "README.md", "LICENSE", "LICENSE-3rdparty.csv"} {
 		data, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -375,38 +411,132 @@ func testDistArchives(t *testing.T, sbom bool, distDir string) {
 			t.Fatal(err)
 		}
 	}
-	stub := "#!/usr/bin/env bash\nset -eu\nmkdir -p \"$BUILD_DIR\"\nout=\"$BUILD_DIR/bits-$GOOS-$GOARCH\"\n[[ $GOOS == windows ]] && out=$out.exe\necho \"$GOOS/$GOARCH $VERSION\" >\"$out\"\necho \"$out\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "scripts", "build.sh"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Check the scan input and format, then stand in for Syft's output.
-	syft := `#!/usr/bin/env bash
+	stubs := map[string]string{
+		"build.sh": `#!/usr/bin/env bash
+set -eu
+for target in "$@"; do
+    prefix="$BUILD_DIR/${target/\//-}"
+    mkdir -p "$prefix/bin"
+    out="$prefix/bin/bits"
+    [[ $target == windows/* ]] && out=$out.exe
+    echo "$target $VERSION $(git rev-parse HEAD) false" >"$out"
+    chmod +x "$out"
+    if [[ $target == darwin/* ]]; then
+        mkdir -p "$prefix/libexec/bits/tool"
+        echo tool >"$prefix/libexec/bits/tool/tool"
+    fi
+    echo "$prefix"
+done
+`,
+		"go": `#!/usr/bin/env bash
+set -eu
+[[ "$1 $2" == "version -m" ]] || exit 99
+read -r platform version revision modified <"$3"
+printf '%s: go\n\tbuild\tGOARCH=%s\n\tbuild\tGOOS=%s\n\tbuild\tvcs.revision=%s\n\tbuild\tvcs.modified=%s\n' \
+    "$3" "${platform#*/}" "${platform%/*}" "$revision" "$modified"
+`,
+		// Check the scan input and format, then stand in for Syft's output.
+		"syft": `#!/usr/bin/env bash
 set -euo pipefail
 [[ $# == 3 && "$2" == --output && "$3" == spdx-json=* ]]
 if [[ "$1" == *.zip ]]; then unzip -t "$1" >/dev/null; else tar -tzf "$1" >/dev/null; fi
 printf '%s\n' "$1" >"${3#spdx-json=}"
-`
-	if !sbom {
-		syft = "#!/usr/bin/env bash\nexit 99\n"
+`,
 	}
-	if err := os.WriteFile(filepath.Join(dir, "scripts", "syft"), []byte(syft), 0o755); err != nil {
+	if !sbom {
+		stubs["syft"] = "#!/usr/bin/env bash\nexit 99\n"
+	}
+	stubDir := filepath.Join(dir, "stubs")
+	if err := os.Mkdir(stubDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	for name, body := range stubs {
+		path := filepath.Join(stubDir, name)
+		if name == "build.sh" {
+			path = filepath.Join(dir, "scripts", name)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"commit", "-q", "-m", "init"}} {
+		cmd := command(t, dir, "git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run = func(args ...string) *exec.Cmd {
+		cmd := command(t, dir, "bash", args...)
+		for i, kv := range cmd.Env {
+			if strings.HasPrefix(kv, "PATH=") {
+				cmd.Env[i] = "PATH=" + stubDir + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
+			}
+		}
+		return cmd
+	}
+	return dir, run
+}
 
+func TestPackageRejectsBuilds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("package.sh runs on Unix")
+	}
+	dir, run := releaseFixture(t, false)
+	revision := strings.Repeat("0", 40)
+	for _, tc := range []struct {
+		name, prefix, bits, want string
+	}{
+		{"missing", "darwin-amd64", "", "no darwin/amd64 prefix"},
+		{"other commit", "linux-amd64", "linux/amd64 1.2.3 " + revision + " false", "not a clean linux/amd64 build"},
+		{"modified", "linux-amd64", "linux/amd64 1.2.3 HEAD true", "not a clean linux/amd64 build"},
+		{"other platform", "linux-amd64", "linux/arm64 1.2.3 HEAD false", "not a clean linux/amd64 build"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			build, dist := t.TempDir(), t.TempDir()
+			cmd := run(append([]string{"scripts/build.sh"}, releasePlatforms(t)...)...)
+			cmd.Env = append(cmd.Env, "BUILD_DIR="+build, "VERSION=1.2.3")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("build.sh: %v\n%s", err, out)
+			}
+			prefix := filepath.Join(build, tc.prefix)
+			if tc.bits == "" {
+				if err := os.RemoveAll(prefix); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				head, err := command(t, dir, "git", "rev-parse", "HEAD").Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				bits := strings.Replace(tc.bits, "HEAD", strings.TrimSpace(string(head)), 1)
+				if err := os.WriteFile(filepath.Join(prefix, "bin", "bits"), []byte(bits+"\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd = run("scripts/package.sh", "v1.2.3")
+			cmd.Env = append(cmd.Env, "BUILD_DIR="+build, "DIST_DIR="+dist)
+			if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), tc.want) {
+				t.Errorf("package.sh: %v\n%s\nwant %q", err, out, tc.want)
+			}
+			if entries, _ := os.ReadDir(dist); len(entries) != 0 {
+				t.Errorf("package.sh wrote %v", entries)
+			}
+		})
+	}
+}
+
+func testDistArchives(t *testing.T, sbom bool, distDir string) {
+	t.Helper()
+	dir, run := releaseFixture(t, sbom)
 	args := []string{"scripts/dist.sh"}
 	if sbom {
 		args = append(args, "--sbom")
 	}
-	cmd := command(t, dir, "bash", append(args, "v1.2.3")...)
+	cmd := run(append(args, "v1.2.3")...)
 	if distDir != "" {
 		cmd.Env = append(cmd.Env, "DIST_DIR="+distDir)
 	} else {
 		distDir = "dist"
-	}
-	for i, kv := range cmd.Env {
-		if strings.HasPrefix(kv, "PATH=") {
-			cmd.Env[i] = "PATH=" + filepath.Join(dir, "scripts") + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
-		}
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("dist.sh: %v\n%s", err, out)
@@ -471,11 +601,16 @@ printf '%s\n' "$1" >"${3#spdx-json=}"
 		} else {
 			files = readTarGz(t, archive)
 		}
-		if got := slices.Sorted(maps.Keys(files)); !slices.Equal(got, []string{"LICENSE", "LICENSE-3rdparty.csv", "README.md", executable}) {
-			t.Errorf("%s contains %v", archive, got)
+		want := []string{"bin/" + executable, "share/doc/bits/LICENSE", "share/doc/bits/LICENSE-3rdparty.csv", "share/doc/bits/README.md"}
+		if strings.HasPrefix(platform, "darwin/") {
+			want = append(want, "libexec/bits/tool/tool")
 		}
-		bits := files[executable]
-		if bits.mode&0o111 == 0 || bits.body != platform+" 1.2.3\n" {
+		slices.Sort(want)
+		if got := slices.Sorted(maps.Keys(files)); !slices.Equal(got, want) {
+			t.Errorf("%s contains %v, want %v", archive, got, want)
+		}
+		bits := files["bin/"+executable]
+		if bits.mode&0o111 == 0 || !strings.HasPrefix(bits.body, platform+" 1.2.3 ") {
 			t.Errorf("%s: bits mode %o body %q", archive, bits.mode, bits.body)
 		}
 	}
@@ -490,6 +625,9 @@ func readZip(t *testing.T, path string) map[string]tarFile {
 	defer func() { _ = zr.Close() }()
 	files := make(map[string]tarFile)
 	for _, file := range zr.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
 		r, err := file.Open()
 		if err != nil {
 			t.Fatal(err)
@@ -529,6 +667,9 @@ func readTarGz(t *testing.T, path string) map[string]tarFile {
 		}
 		if err != nil {
 			t.Fatal(err)
+		}
+		if hdr.Typeflag == tar.TypeDir {
+			continue
 		}
 		body, err := io.ReadAll(tr)
 		if err != nil {

@@ -5,6 +5,8 @@ Thanks for your interest in contributing to Bits CLI! This document covers the b
 ## Prerequisites
 
 - Go 1.27.3 or later
+- On macOS, the Xcode command line tools (`xcode-select --install`) to build
+  the [ddviz](libexec/ddviz/README.md) helper
 
 ## Getting started
 
@@ -25,6 +27,20 @@ go build ./...
 `go build ./...` covers only the root module. `./scripts/test.sh` runs the
 unit tests of the root module and of the nested `tools/licenses` module,
 which `go test ./...` from the repository root does not reach.
+
+`./scripts/build.sh` builds bits and its [libexec helpers](libexec/README.md)
+into an install prefix and prints it:
+
+```sh
+$ ./scripts/build.sh
+/path/to/bits-cli/build/darwin-arm64
+$ build/darwin-arm64/bin/bits --version
+```
+
+Pass `<os>/<arch>` targets to build others, such as
+`./scripts/build.sh linux/amd64 linux/arm64`. `BUILD_LIBEXEC=0` skips the helpers.
+`go build` builds bits alone; point it at built helpers with
+`BITS_LIBEXEC_DIR=build/darwin-arm64/libexec/bits`.
 
 Lint with the pinned golangci-lint configuration:
 
@@ -104,10 +120,18 @@ For noninteractive runs, see the [ADEEP delivery documentation](internal/headles
 
 `.github/workflows/ci.yml` runs on pull requests (forks included), pushes to
 `main`, and queued merges. It is unprivileged (read-only token, no secrets,
-SHA-pinned actions) and runs `./scripts/lint.sh`, `./scripts/test.sh`, and
-`./scripts/build.sh` for linux, darwin, and windows on amd64 and arm64.
-Windows runs the same test script natively on `windows-latest`, including the
-nested license module.
+SHA-pinned actions):
+
+```
+lint
+build linux   (ubuntu)  ─┐  build.sh <os>/amd64 <os>/arm64, then test.sh
+build darwin  (macOS)   ─┼─→ package (ubuntu): package.sh --sbom → dist artifact
+build windows (Windows) ─┘
+```
+
+Each build job tests natively with `BITS_LIBEXEC_DIR` set to the helpers it
+built for its host, then uploads its install prefixes. Release runs the same
+workflow for its tag and publishes the `dist` artifact.
 Releases are described in RELEASE.md.
 
 ## Third-party licenses

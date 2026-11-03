@@ -33,10 +33,11 @@ class Bits < Formula
   end
 
   def install
-    bin.install "bits"
+    prefix.install Dir["*"]
   end
 
   test do
     assert_equal "bits version v#{version}", shell_output("#{bin}/bits --version").strip
+    assert_predicate libexec/"bits/ddviz/ddviz", :executable? if OS.mac?
   end
 end

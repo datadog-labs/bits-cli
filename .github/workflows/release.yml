@@ -1,6 +1,7 @@
-# Publishes a GitHub release of main, triggered by scripts/release.sh. The
-# GITHUB_TOKEN stays read-only: the publish job creates the release and its
-# tag with a dd-octo-sts token, once CI passed.
+# Publishes a GitHub release of main, triggered by scripts/release.sh, with
+# the archives CI built and tested for the tag. The GITHUB_TOKEN stays
+# read-only: the publish job creates the release and its tag with a
+# dd-octo-sts token, once CI passed.
 
 name: Release
 
@@ -48,39 +49,12 @@ jobs:
     name: CI
     needs: check
     uses: ./.github/workflows/ci.yml
-
-  dist:
-    name: Dist
-    needs: check
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Install Syft
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-      - name: Build release archives and SBOMs
-        env:
-          TAG: ${{ inputs.tag }}
-        run: ./scripts/dist.sh --sbom "$TAG"
-      - name: Upload release artifacts
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: dist
-          path: dist/
-          if-no-files-found: error
-          retention-days: 7
+    with:
+      tag: ${{ inputs.tag }}
 
   publish:
     name: Publish
-    needs: [ci, dist]
+    needs: ci
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
