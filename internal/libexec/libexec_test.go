@@ -1,8 +1,11 @@
 package libexec
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -47,5 +50,22 @@ func TestDirInExecutablePrefix(t *testing.T) {
 	}
 	if want, _ = filepath.EvalSymlinks(want); got != want {
 		t.Errorf("Dir(tool) = %q, want %q", got, want)
+	}
+}
+
+func TestBinaryResolvesWithoutPreflight(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(DirEnv, root)
+	name := "missing"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	want := filepath.Join(root, "missing", name)
+	got, err := Binary("missing")
+	if err != nil || got != want {
+		t.Fatalf("Binary = %q, %v; want %q", got, err, want)
+	}
+	if err := exec.Command(got).Run(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("exec missing helper: %v", err)
 	}
 }

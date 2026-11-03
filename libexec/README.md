@@ -9,10 +9,13 @@ Programs that bits runs and ships with itself, one directory per helper.
   libexec/bits/<tool>/    built by libexec/<tool>/build.sh
 ```
 
-Bits finds a helper with `libexec.Dir("<tool>")` from
+Bits resolves a helper executable with `libexec.Binary("<tool>")` from
 [`internal/libexec`](../internal/libexec), which resolves
-`<prefix>/libexec/bits/<tool>` from the bits executable, or
-`$BITS_LIBEXEC_DIR/<tool>` when set.
+`<prefix>/libexec/bits/<tool>/<tool>` from the bits executable, or
+`$BITS_LIBEXEC_DIR/<tool>/<tool>` when set (`.exe` is appended on Windows).
+Resolution does not check existence, permissions, or platform compatibility:
+start the returned path with `exec.CommandContext` and handle its error.
+`libexec.Dir("<tool>")` remains available for locating an existing asset directory.
 
 | Helper | Platforms |
 |---|---|
