@@ -1,2 +1,3 @@
-# Keep Go formatting consistent on Windows checkouts.
+# Keep byte-sensitive checks consistent on Windows checkouts.
 *.go text eol=lf
+LICENSE-3rdparty.csv text eol=lf
