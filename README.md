@@ -15,13 +15,13 @@ brew tap datadog-labs/pack
 brew install datadog-labs/pack/bits
 ```
 
-Standalone binaries are also available from [GitHub Releases](https://github.com/datadog-labs/bits-cli/releases).
+Release archives are also available from [GitHub Releases](https://github.com/datadog-labs/bits-cli/releases).
 
 ### Windows
 
 Download `bits_<version>_windows_amd64.zip` (or the `arm64` archive) from
 [GitHub Releases](https://github.com/datadog-labs/bits-cli/releases), extract
-`bits.exe`, and add its folder to your `PATH`.
+it, and add its `bin` folder to your `PATH`.
 
 ## Get started
 

@@ -190,7 +190,7 @@ func command(t *testing.T, dir, name string, args ...string) *exec.Cmd {
 	for _, kv := range os.Environ() {
 		key, value, _ := strings.Cut(kv, "=")
 		switch {
-		case strings.HasPrefix(key, "GIT_"), slices.Contains([]string{"BUILD_DIR", "DIST_DIR", "GOARCH", "GOOS", "VERSION"}, key):
+		case strings.HasPrefix(key, "GIT_"), slices.Contains([]string{"BUILD_DIR", "BUILD_LIBEXEC", "DIST_DIR", "GOARCH", "GOOS", "VERSION"}, key):
 			continue
 		case key == "PATH":
 			kv = "PATH=" + bin + string(os.PathListSeparator) + value
@@ -349,7 +349,7 @@ func TestHomebrewChecksums(t *testing.T) {
 }
 
 // TestDistArchives runs dist.sh against a stub build.sh and checks the
-// published layout, with and without SBOMs, including checksums for every asset.
+// published install prefix layout, with and without SBOMs, including checksums for every asset.
 func TestDistArchives(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture uses Unix shell paths and executable stubs")
@@ -375,7 +375,20 @@ func testDistArchives(t *testing.T, sbom bool, distDir string) {
 			t.Fatal(err)
 		}
 	}
-	stub := "#!/usr/bin/env bash\nset -eu\nmkdir -p \"$BUILD_DIR\"\nout=\"$BUILD_DIR/bits-$GOOS-$GOARCH\"\n[[ $GOOS == windows ]] && out=$out.exe\necho \"$GOOS/$GOARCH $VERSION\" >\"$out\"\necho \"$out\"\n"
+	stub := `#!/usr/bin/env bash
+set -eu
+prefix="$BUILD_DIR/$GOOS-$GOARCH"
+mkdir -p "$prefix/bin"
+out="$prefix/bin/bits"
+[[ $GOOS == windows ]] && out=$out.exe
+echo "$GOOS/$GOARCH $VERSION" >"$out"
+chmod +x "$out"
+if [[ $GOOS == darwin ]]; then
+    mkdir -p "$prefix/libexec/bits/tool"
+    echo tool >"$prefix/libexec/bits/tool/tool"
+fi
+echo "$prefix"
+`
 	if err := os.WriteFile(filepath.Join(dir, "scripts", "build.sh"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -471,10 +484,15 @@ printf '%s\n' "$1" >"${3#spdx-json=}"
 		} else {
 			files = readTarGz(t, archive)
 		}
-		if got := slices.Sorted(maps.Keys(files)); !slices.Equal(got, []string{"LICENSE", "LICENSE-3rdparty.csv", "README.md", executable}) {
-			t.Errorf("%s contains %v", archive, got)
+		want := []string{"bin/" + executable, "share/doc/bits/LICENSE", "share/doc/bits/LICENSE-3rdparty.csv", "share/doc/bits/README.md"}
+		if strings.HasPrefix(platform, "darwin/") {
+			want = append(want, "libexec/bits/tool/tool")
 		}
-		bits := files[executable]
+		slices.Sort(want)
+		if got := slices.Sorted(maps.Keys(files)); !slices.Equal(got, want) {
+			t.Errorf("%s contains %v, want %v", archive, got, want)
+		}
+		bits := files["bin/"+executable]
 		if bits.mode&0o111 == 0 || bits.body != platform+" 1.2.3\n" {
 			t.Errorf("%s: bits mode %o body %q", archive, bits.mode, bits.body)
 		}
@@ -490,6 +508,9 @@ func readZip(t *testing.T, path string) map[string]tarFile {
 	defer func() { _ = zr.Close() }()
 	files := make(map[string]tarFile)
 	for _, file := range zr.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
 		r, err := file.Open()
 		if err != nil {
 			t.Fatal(err)
@@ -529,6 +550,9 @@ func readTarGz(t *testing.T, path string) map[string]tarFile {
 		}
 		if err != nil {
 			t.Fatal(err)
+		}
+		if hdr.Typeflag == tar.TypeDir {
+			continue
 		}
 		body, err := io.ReadAll(tr)
 		if err != nil {

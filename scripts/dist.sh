@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 #
 # dist.sh - build release archives, optional SPDX SBOMs, and checksums into DIST_DIR
-# and print their paths.
+# and print their paths. Each archive is an install prefix:
+#
+#     bin/bits
+#     libexec/bits/<tool>/   helpers built for the platform, if any
+#     share/doc/bits/        README.md, LICENSE, LICENSE-3rdparty.csv
 
 set -euo pipefail
 
@@ -34,27 +38,25 @@ mkdir -p "$DIST_DIR"
 DIST_DIR="$(cd "$DIST_DIR" && pwd)"
 rm -f "$DIST_DIR"/bits_*
 
-files=(README.md LICENSE LICENSE-3rdparty.csv)
+docs=(README.md LICENSE LICENSE-3rdparty.csv)
 artifacts=()
 for platform in "${PLATFORMS[@]}"; do
     goos="${platform%/*}"
     goarch="${platform#*/}"
     name="bits_${version}_${goos}_${goarch}"
-    stage="$work_dir/$name"
 
-    binary="$(GOOS="$goos" GOARCH="$goarch" VERSION="$version" BUILD_DIR="$work_dir/build" \
+    prefix="$(GOOS="$goos" GOARCH="$goarch" VERSION="$version" BUILD_DIR="$work_dir/build" \
         "$SRC_DIR/scripts/build.sh")"
-    mkdir -p "$stage"
-    executable=bits
-    [[ "$goos" == windows ]] && executable=bits.exe
-    install -m 0755 "$binary" "$stage/$executable"
-    (cd "$SRC_DIR" && cp "${files[@]}" "$stage/")
+    mkdir -p "$prefix/share/doc/bits"
+    (cd "$SRC_DIR" && install -m 0644 "${docs[@]}" "$prefix/share/doc/bits/")
+    entries=(bin share)
+    [[ -d "$prefix/libexec" ]] && entries+=(libexec)
     if [[ "$goos" == windows ]]; then
         archive="$name.zip"
-        (cd "$stage" && zip -q "$DIST_DIR/$archive" "$executable" "${files[@]}")
+        (cd "$prefix" && zip -qr "$DIST_DIR/$archive" "${entries[@]}")
     else
         archive="$name.tar.gz"
-        COPYFILE_DISABLE=1 tar -czf "$DIST_DIR/$archive" -C "$stage" "$executable" "${files[@]}"
+        COPYFILE_DISABLE=1 tar -czf "$DIST_DIR/$archive" -C "$prefix" "${entries[@]}"
     fi
     artifacts+=("$archive")
     echo "$DIST_DIR/$archive"

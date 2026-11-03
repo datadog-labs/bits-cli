@@ -134,6 +134,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          BUILD_LIBEXEC: "0"
         run: ./scripts/build.sh
 
   dist:

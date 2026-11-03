@@ -26,6 +26,19 @@ go build ./...
 unit tests of the root module and of the nested `tools/licenses` module,
 which `go test ./...` from the repository root does not reach.
 
+`./scripts/build.sh` builds bits and its [libexec helpers](libexec/README.md)
+into an install prefix and prints it:
+
+```sh
+$ ./scripts/build.sh
+/path/to/bits-cli/build/darwin-arm64
+$ build/darwin-arm64/bin/bits --version
+```
+
+`BUILD_LIBEXEC=0` skips the helpers, and `GOOS`/`GOARCH` select the target.
+`go build` builds bits alone; point it at built helpers with
+`BITS_LIBEXEC_DIR=build/darwin-arm64/libexec/bits`.
+
 Lint with the pinned golangci-lint configuration:
 
 ```sh
@@ -105,7 +118,8 @@ For noninteractive runs, see the [ADEEP delivery documentation](internal/headles
 `.github/workflows/ci.yml` runs on pull requests (forks included), pushes to
 `main`, and queued merges. It is unprivileged (read-only token, no secrets,
 SHA-pinned actions) and runs `./scripts/lint.sh`, `./scripts/test.sh`, and
-`./scripts/build.sh` for linux, darwin, and windows on amd64 and arm64.
+`./scripts/build.sh` for linux, darwin, and windows on amd64 and arm64,
+without libexec helpers. The dist job builds every release archive.
 Windows runs the same test script natively on `windows-latest`, including the
 nested license module.
 Releases are described in RELEASE.md.

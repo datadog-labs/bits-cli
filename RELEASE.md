@@ -20,11 +20,19 @@ Release assets, for darwin/amd64, darwin/arm64, linux/amd64, linux/arm64,
 windows/amd64, and windows/arm64:
 
 ```
-bits_<version>_<os>_<arch>.tar.gz            macOS/Linux: bits, README.md, licenses
-bits_<version>_windows_<arch>.zip           Windows: bits.exe, README.md, licenses
+bits_<version>_<os>_<arch>.tar.gz            macOS/Linux install prefix
+bits_<version>_windows_<arch>.zip           Windows install prefix
 bits_<version>_<os>_<arch>.tar.gz.sbom.json  SPDX JSON SBOM of a macOS/Linux archive
 bits_<version>_windows_<arch>.zip.sbom.json SPDX JSON SBOM of a Windows archive
 bits_<version>_checksums.txt                SHA-256 of every archive and SBOM
+```
+
+Each archive is an install prefix, which Homebrew installs as is:
+
+```
+bin/bits                  bits.exe on Windows
+libexec/bits/<tool>/      libexec helpers built for the platform, if any
+share/doc/bits/           README.md, LICENSE, LICENSE-3rdparty.csv
 ```
 
 Verify a download with:

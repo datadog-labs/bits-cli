@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 #
-# build.sh - build the bits binary for GOOS/GOARCH into BUILD_DIR and print
-# its path. A non-empty VERSION (X.Y.Z) produces a stripped release build.
+# build.sh - build bits and its libexec helpers for GOOS/GOARCH into an
+# install prefix, BUILD_DIR/<os>-<arch>, and print the prefix:
+#
+#     bin/bits
+#     libexec/bits/<tool>/   one directory per libexec/<tool>/build.sh
+#
+# A non-empty VERSION (X.Y.Z) produces a stripped release build.
 # EXTRA_LDFLAGS is appended to the linker flags, for local test builds only.
+# BUILD_LIBEXEC=0 builds bits alone, for Go-only and cross-compiled builds.
 
 set -euo pipefail
 
@@ -26,12 +32,25 @@ fi
 ldflags="$ldflags ${EXTRA_LDFLAGS:-}"
 [[ -n "${ldflags// /}" ]] && build_args+=(-ldflags "$ldflags")
 
-output="$BUILD_DIR/bits-$GOOS-$GOARCH"
-[[ "$GOOS" == windows ]] && output="$output.exe"
-
 mkdir -p "$BUILD_DIR"
-printf 'Building %s with %s\n' "$output" "$(go version)" >&2
-cd "$SRC_DIR"
-CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build "${build_args[@]}" -o "$output" .
+BUILD_DIR="$(cd "$BUILD_DIR" && pwd)"
+prefix="$BUILD_DIR/$GOOS-$GOARCH"
+executable="$prefix/bin/bits"
+[[ "$GOOS" == windows ]] && executable="$executable.exe"
 
-echo "$output"
+printf 'Building %s with %s\n' "$executable" "$(go version)" >&2
+cd "$SRC_DIR"
+CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build "${build_args[@]}" -o "$executable" .
+
+rm -rf "$prefix/libexec"
+if [[ "${BUILD_LIBEXEC:-1}" != 0 ]]; then
+    shopt -s nullglob
+    for tool_build in "$SRC_DIR"/libexec/*/build.sh; do
+        tool="$(basename "$(dirname "$tool_build")")"
+        printf 'Building libexec/bits/%s\n' "$tool" >&2
+        GOOS="$GOOS" GOARCH="$GOARCH" VERSION="$VERSION" BUILD_DIR="$BUILD_DIR" \
+            "$tool_build" "$prefix/libexec/bits/$tool" >&2
+    done
+fi
+
+echo "$prefix"

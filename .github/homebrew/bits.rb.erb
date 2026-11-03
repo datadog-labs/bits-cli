@@ -33,7 +33,7 @@ class Bits < Formula
   end
 
   def install
-    bin.install "bits"
+    prefix.install Dir["*"]
   end
 
   test do
