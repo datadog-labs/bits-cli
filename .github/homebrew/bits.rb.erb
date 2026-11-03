@@ -38,5 +38,6 @@ class Bits < Formula
 
   test do
     assert_equal "bits version v#{version}", shell_output("#{bin}/bits --version").strip
+    assert_predicate libexec/"bits/ddviz/ddviz", :executable? if OS.mac?
   end
 end

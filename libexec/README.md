@@ -14,6 +14,10 @@ Bits finds a helper with `libexec.Dir("<tool>")` from
 `<prefix>/libexec/bits/<tool>` from the bits executable, or
 `$BITS_LIBEXEC_DIR/<tool>` when set.
 
+| Helper | Platforms |
+|---|---|
+| [ddviz](ddviz/README.md) | macOS 13+ |
+
 ## Adding a helper
 
 Create `libexec/<tool>/build.sh`. It is called as:

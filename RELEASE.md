@@ -49,6 +49,8 @@ For Windows, verify `bits_<version>_windows_<arch>.zip` with the same
 attestation command.
 
 `./scripts/dist.sh v1.2.3` builds archives and checksums locally in `dist/`.
+It runs on macOS with the Xcode command line tools, which build the
+macOS-only [ddviz](libexec/ddviz/README.md) helper for both architectures.
 Add `--sbom` before the tag to include SBOMs; this requires
 [Syft](https://github.com/anchore/syft).
 

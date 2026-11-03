@@ -139,7 +139,7 @@ jobs:
 
   dist:
     name: Dist
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 15
     steps:
       - name: Check out
