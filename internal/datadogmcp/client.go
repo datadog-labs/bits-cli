@@ -137,10 +137,25 @@ func (c *Client) CallTool(ctx context.Context, params *mcp.CallToolParams) (*mcp
 	if err != nil {
 		return nil, err
 	}
-	return session.CallTool(ctx, params)
+	result, err := session.CallTool(ctx, params)
+	if err != nil && ctx.Err() == nil && terminalCallError(err) {
+		c.retire(session)
+	}
+	return result, err
 }
 
-// retire follows SDK connection termination rather than classifying call errors.
+// The SDK closes the connection for these failures, but its Wait goroutine may
+// not have cleared our cache by the time CallTool returns. The two text checks
+// cover SDK errors that do not expose a sentinel; transient errors stay cached.
+func terminalCallError(err error) bool {
+	if errors.Is(err, mcp.ErrConnectionClosed) || errors.Is(err, mcp.ErrSessionMissing) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "sending \"tools/call\": Unauthorized") ||
+		strings.Contains(message, "failed to decode response:")
+}
+
 // A late termination must not evict a replacement session or its permissions.
 func (c *Client) retire(session *mcp.ClientSession) {
 	c.gate <- struct{}{}

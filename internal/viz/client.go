@@ -125,6 +125,10 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 		return nil, failure(err)
 	}
 
+	if current != nil && current.exited() {
+		current.close()
+		current = nil
+	}
 	if current == nil {
 		started, err := c.launch(c.ctx, ctx, headless)
 		if err != nil {

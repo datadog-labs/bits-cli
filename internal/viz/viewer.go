@@ -30,6 +30,7 @@ type viewer interface {
 	snapshot(context.Context) ([]byte, error)
 	show() error
 	close()
+	exited() bool
 }
 
 type launchFunc func(context.Context, context.Context, bool) (viewer, error)
@@ -334,5 +335,14 @@ func (p *process) close() {
 		_ = p.kill()
 		p.cancel()
 		<-p.done
+	}
+}
+
+func (p *process) exited() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
 	}
 }

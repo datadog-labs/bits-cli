@@ -35,6 +35,7 @@ func (f toolFunc) CallTool(ctx context.Context, params *mcp.CallToolParams) (*mc
 
 type fakeViewer struct {
 	closes     atomic.Int32
+	dead       atomic.Bool
 	snapshotFn func(context.Context) ([]byte, error)
 }
 
@@ -46,7 +47,8 @@ func (f *fakeViewer) snapshot(ctx context.Context) ([]byte, error) {
 	}
 	return imageBytes(), nil
 }
-func (f *fakeViewer) close() { f.closes.Add(1) }
+func (f *fakeViewer) close()       { f.closes.Add(1) }
+func (f *fakeViewer) exited() bool { return f.dead.Load() }
 func testClient(start launchFunc) *localClient {
 	return testClientConcurrency(start, 1)
 }
@@ -61,9 +63,12 @@ func testClientConcurrency(start launchFunc, concurrency int) *localClient {
 
 func TestClientReuseAndSeparatePanel(t *testing.T) {
 	var modes []bool
+	var launched []*fakeViewer
 	c := testClient(func(_, _ context.Context, headless bool) (viewer, error) {
 		modes = append(modes, headless)
-		return &fakeViewer{}, nil
+		v := &fakeViewer{}
+		launched = append(launched, v)
+		return v, nil
 	})
 	defer func() { _ = c.Close() }()
 	w := request(t)
@@ -78,6 +83,13 @@ func TestClientReuseAndSeparatePanel(t *testing.T) {
 	}
 	if len(modes) != 2 || !modes[0] || modes[1] {
 		t.Fatal(modes)
+	}
+	launched[1].dead.Store(true) // The user quit the interactive helper.
+	if r := c.Open(context.Background(), w); r.Phase != Succeeded {
+		t.Fatal(r)
+	}
+	if len(modes) != 3 || modes[2] || launched[1].closes.Load() != 1 {
+		t.Fatalf("exited interactive viewer was reused: modes=%v closes=%d", modes, launched[1].closes.Load())
 	}
 }
 

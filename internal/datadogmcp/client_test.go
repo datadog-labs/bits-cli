@@ -152,6 +152,9 @@ func TestSessionRecovery(t *testing.T) {
 				if _, err := client.CallTool(t.Context(), params); err == nil {
 					t.Fatal("expected call failure")
 				}
+				if tc.terminal && client.session != nil {
+					t.Fatal("terminated session was retained after call failure")
+				}
 				synctest.Wait()
 				if posts.Load() != before+1 {
 					t.Fatal("failed request was replayed")
