@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# lint.sh - install a pinned golangci-lint, lint every module, check the
-# shell scripts with shellcheck, and check LICENSE-3rdparty.csv for drift.
+# lint.sh - install a pinned golangci-lint, lint Go code,
+# check shell scripts with shellcheck, and check LICENSE-3rdparty.csv for drift.
 #
 # The shell script checks are skipped when shellcheck is not installed,
 # unless --require-shellcheck is passed, as CI does.
@@ -14,14 +14,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 require_shellcheck=false
-case "${1:-}" in
-    "") ;;
-    --require-shellcheck) require_shellcheck=true ;;
-    *)
-        printf 'usage: %s [--require-shellcheck]\n' "$0" >&2
-        exit 1
-        ;;
-esac
+all_platforms=false
+for option in "$@"; do
+    case "$option" in
+        --all-platforms) all_platforms=true ;;
+        --require-shellcheck) require_shellcheck=true ;;
+        *)
+            printf 'usage: %s [--all-platforms] [--require-shellcheck]\n' "$0" >&2
+            exit 1
+            ;;
+    esac
+done
 if [[ "$require_shellcheck" == true ]] && ! command -v shellcheck >/dev/null 2>&1; then
     printf 'lint: shellcheck is required but not installed.\n' >&2
     exit 1
@@ -47,7 +50,16 @@ else
 fi
 
 cd "$SRC_DIR"
-"$GOLANGCI_LINT" run ./...
+if [[ "$all_platforms" == true ]]; then
+    # Select each OS's build-tagged files. There are no architecture-specific
+    # Go files, so amd64 covers the source built for both architectures.
+    for target_os in linux darwin windows; do
+        printf 'lint: checking %s/amd64\n' "$target_os" >&2
+        GOOS="$target_os" GOARCH=amd64 CGO_ENABLED=0 "$GOLANGCI_LINT" run ./...
+    done
+else
+    "$GOLANGCI_LINT" run ./...
+fi
 
 # tools/licenses is a nested module, so root-module lints never reach it;
 # see tools/licenses/main.go's package doc for why it is nested.

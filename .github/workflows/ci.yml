@@ -48,7 +48,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Lint
-        run: ./scripts/lint.sh --require-shellcheck
+        run: ./scripts/lint.sh --all-platforms --require-shellcheck
 
   # Each OS builds its release targets natively, tests against the built
   # helpers, and hands the install prefixes over to the package job.
