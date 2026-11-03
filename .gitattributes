@@ -1,0 +1,2 @@
+# Keep Go formatting consistent on Windows checkouts.
+*.go text eol=lf
