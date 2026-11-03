@@ -33,9 +33,23 @@ if [[ "$sbom" == true ]] && ! command -v syft >/dev/null 2>&1; then
     echo "ERROR: syft is required to generate release SBOMs (https://github.com/anchore/syft)" >&2
     exit 1
 fi
+# Each bits executable must be a clean build of this commit for its platform.
+# Build info cannot tell the version or the helpers apart: CI and dist.sh
+# build them with the tag.
+revision="$(git -C "$SRC_DIR" rev-parse HEAD)"
 for platform in "${PLATFORMS[@]}"; do
-    if [[ ! -d "$BUILD_DIR/${platform/\//-}/bin" ]]; then
+    goos="${platform%/*}"
+    executable="$BUILD_DIR/$goos-${platform#*/}/bin/bits"
+    [[ "$goos" == windows ]] && executable="$executable.exe"
+    if [[ ! -f "$executable" ]]; then
         echo "ERROR: no $platform prefix in $BUILD_DIR; run VERSION=$version scripts/build.sh $platform" >&2
+        exit 1
+    fi
+    want="$(printf '%s\n' "GOOS=$goos" "GOARCH=${platform#*/}" "vcs.revision=$revision" vcs.modified=false | sort | xargs)"
+    got="$(go version -m "$executable" |
+        sed -En 's/^[[:space:]]+build[[:space:]]+((GOOS|GOARCH|vcs\.revision|vcs\.modified)=.*)/\1/p' | sort | xargs)"
+    if [[ "$got" != "$want" ]]; then
+        echo "ERROR: $executable is not a clean $platform build of $revision: $got" >&2
         exit 1
     fi
 done

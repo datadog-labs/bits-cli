@@ -392,27 +392,12 @@ func TestDistArchives(t *testing.T) {
 	t.Run("relative DIST_DIR", func(t *testing.T) { testDistArchives(t, false, "out") })
 }
 
-func TestPackageRequiresEveryPlatform(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("package.sh runs on Unix")
-	}
-	build, dist := t.TempDir(), t.TempDir()
-	if err := os.MkdirAll(filepath.Join(build, "linux-amd64", "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := command(t, "", "bash", "scripts/package.sh", "v1.2.3")
-	cmd.Env = append(cmd.Env, "BUILD_DIR="+build, "DIST_DIR="+dist)
-	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "no darwin/amd64 prefix") {
-		t.Errorf("package.sh with a missing prefix: %v\n%s", err, out)
-	}
-	if entries, _ := os.ReadDir(dist); len(entries) != 0 {
-		t.Errorf("package.sh wrote %v", entries)
-	}
-}
-
-func testDistArchives(t *testing.T, sbom bool, distDir string) {
+// releaseFixture copies the release scripts into a git repository, with
+// stubs for build.sh, syft, and go version -m. A stub bits executable holds
+// its platform, version, revision, and modified state, as build info would.
+func releaseFixture(t *testing.T, sbom bool) (dir string, run func(args ...string) *exec.Cmd) {
 	t.Helper()
-	dir := t.TempDir()
+	dir = t.TempDir()
 	for _, file := range []string{"scripts/dist.sh", "scripts/package.sh", "scripts/platforms.sh", "README.md", "LICENSE", "LICENSE-3rdparty.csv"} {
 		data, err := os.ReadFile(file)
 		if err != nil {
@@ -426,14 +411,15 @@ func testDistArchives(t *testing.T, sbom bool, distDir string) {
 			t.Fatal(err)
 		}
 	}
-	stub := `#!/usr/bin/env bash
+	stubs := map[string]string{
+		"build.sh": `#!/usr/bin/env bash
 set -eu
 for target in "$@"; do
     prefix="$BUILD_DIR/${target/\//-}"
     mkdir -p "$prefix/bin"
     out="$prefix/bin/bits"
     [[ $target == windows/* ]] && out=$out.exe
-    echo "$target $VERSION" >"$out"
+    echo "$target $VERSION $(git rev-parse HEAD) false" >"$out"
     chmod +x "$out"
     if [[ $target == darwin/* ]]; then
         mkdir -p "$prefix/libexec/bits/tool"
@@ -441,38 +427,116 @@ for target in "$@"; do
     fi
     echo "$prefix"
 done
-`
-	if err := os.WriteFile(filepath.Join(dir, "scripts", "build.sh"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Check the scan input and format, then stand in for Syft's output.
-	syft := `#!/usr/bin/env bash
+`,
+		"go": `#!/usr/bin/env bash
+set -eu
+[[ "$1 $2" == "version -m" ]] || exit 99
+read -r platform version revision modified <"$3"
+printf '%s: go\n\tbuild\tGOARCH=%s\n\tbuild\tGOOS=%s\n\tbuild\tvcs.revision=%s\n\tbuild\tvcs.modified=%s\n' \
+    "$3" "${platform#*/}" "${platform%/*}" "$revision" "$modified"
+`,
+		// Check the scan input and format, then stand in for Syft's output.
+		"syft": `#!/usr/bin/env bash
 set -euo pipefail
 [[ $# == 3 && "$2" == --output && "$3" == spdx-json=* ]]
 if [[ "$1" == *.zip ]]; then unzip -t "$1" >/dev/null; else tar -tzf "$1" >/dev/null; fi
 printf '%s\n' "$1" >"${3#spdx-json=}"
-`
-	if !sbom {
-		syft = "#!/usr/bin/env bash\nexit 99\n"
+`,
 	}
-	if err := os.WriteFile(filepath.Join(dir, "scripts", "syft"), []byte(syft), 0o755); err != nil {
+	if !sbom {
+		stubs["syft"] = "#!/usr/bin/env bash\nexit 99\n"
+	}
+	stubDir := filepath.Join(dir, "stubs")
+	if err := os.Mkdir(stubDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	for name, body := range stubs {
+		path := filepath.Join(stubDir, name)
+		if name == "build.sh" {
+			path = filepath.Join(dir, "scripts", name)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"commit", "-q", "-m", "init"}} {
+		cmd := command(t, dir, "git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run = func(args ...string) *exec.Cmd {
+		cmd := command(t, dir, "bash", args...)
+		for i, kv := range cmd.Env {
+			if strings.HasPrefix(kv, "PATH=") {
+				cmd.Env[i] = "PATH=" + stubDir + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
+			}
+		}
+		return cmd
+	}
+	return dir, run
+}
 
+func TestPackageRejectsBuilds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("package.sh runs on Unix")
+	}
+	dir, run := releaseFixture(t, false)
+	revision := strings.Repeat("0", 40)
+	for _, tc := range []struct {
+		name, prefix, bits, want string
+	}{
+		{"missing", "darwin-amd64", "", "no darwin/amd64 prefix"},
+		{"other commit", "linux-amd64", "linux/amd64 1.2.3 " + revision + " false", "not a clean linux/amd64 build"},
+		{"modified", "linux-amd64", "linux/amd64 1.2.3 HEAD true", "not a clean linux/amd64 build"},
+		{"other platform", "linux-amd64", "linux/arm64 1.2.3 HEAD false", "not a clean linux/amd64 build"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			build, dist := t.TempDir(), t.TempDir()
+			cmd := run(append([]string{"scripts/build.sh"}, releasePlatforms(t)...)...)
+			cmd.Env = append(cmd.Env, "BUILD_DIR="+build, "VERSION=1.2.3")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("build.sh: %v\n%s", err, out)
+			}
+			prefix := filepath.Join(build, tc.prefix)
+			if tc.bits == "" {
+				if err := os.RemoveAll(prefix); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				head, err := command(t, dir, "git", "rev-parse", "HEAD").Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				bits := strings.Replace(tc.bits, "HEAD", strings.TrimSpace(string(head)), 1)
+				if err := os.WriteFile(filepath.Join(prefix, "bin", "bits"), []byte(bits+"\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd = run("scripts/package.sh", "v1.2.3")
+			cmd.Env = append(cmd.Env, "BUILD_DIR="+build, "DIST_DIR="+dist)
+			if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), tc.want) {
+				t.Errorf("package.sh: %v\n%s\nwant %q", err, out, tc.want)
+			}
+			if entries, _ := os.ReadDir(dist); len(entries) != 0 {
+				t.Errorf("package.sh wrote %v", entries)
+			}
+		})
+	}
+}
+
+func testDistArchives(t *testing.T, sbom bool, distDir string) {
+	t.Helper()
+	dir, run := releaseFixture(t, sbom)
 	args := []string{"scripts/dist.sh"}
 	if sbom {
 		args = append(args, "--sbom")
 	}
-	cmd := command(t, dir, "bash", append(args, "v1.2.3")...)
+	cmd := run(append(args, "v1.2.3")...)
 	if distDir != "" {
 		cmd.Env = append(cmd.Env, "DIST_DIR="+distDir)
 	} else {
 		distDir = "dist"
-	}
-	for i, kv := range cmd.Env {
-		if strings.HasPrefix(kv, "PATH=") {
-			cmd.Env[i] = "PATH=" + filepath.Join(dir, "scripts") + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
-		}
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("dist.sh: %v\n%s", err, out)
@@ -546,7 +610,7 @@ printf '%s\n' "$1" >"${3#spdx-json=}"
 			t.Errorf("%s contains %v, want %v", archive, got, want)
 		}
 		bits := files["bin/"+executable]
-		if bits.mode&0o111 == 0 || bits.body != platform+" 1.2.3\n" {
+		if bits.mode&0o111 == 0 || !strings.HasPrefix(bits.body, platform+" 1.2.3 ") {
 			t.Errorf("%s: bits mode %o body %q", archive, bits.mode, bits.body)
 		}
 	}

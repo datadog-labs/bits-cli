@@ -58,6 +58,8 @@ VERSION=1.2.3 ./scripts/build.sh linux/amd64 …  # what CI runs on each OS
 ./scripts/package.sh v1.2.3                     # every platform's prefix in build/
 ```
 
+`package.sh` refuses an executable that `go version -m` does not report as a
+clean build of the current commit for its platform, so commit first.
 `dist.sh` runs on macOS with the Xcode command line tools, which build the
 macOS-only [ddviz](libexec/ddviz/README.md) helper. Add `--sbom` before the
 tag to include SBOMs; this requires [Syft](https://github.com/anchore/syft).
