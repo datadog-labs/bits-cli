@@ -44,9 +44,15 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
+        id: go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: Cache golangci-lint
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.go.outputs.go-bin-path }}/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ runner.arch }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles('scripts/lint.sh') }}
       - name: Lint
         run: ./scripts/lint.sh --all-platforms --require-shellcheck
 

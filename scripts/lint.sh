@@ -32,6 +32,11 @@ fi
 
 if command -v golangci-lint >/dev/null 2>&1; then
     GOLANGCI_LINT="$(command -v golangci-lint)"
+elif [[ -x "$(go env GOPATH)/bin/golangci-lint" ]]; then
+    GOLANGCI_LINT="$(go env GOPATH)/bin/golangci-lint"
+fi
+
+if [[ -n "${GOLANGCI_LINT:-}" ]]; then
     GOLANGCI_LINT_INSTALLED_VERSION="$("$GOLANGCI_LINT" version --short 2>/dev/null || true)"
     if [[ -z "$GOLANGCI_LINT_INSTALLED_VERSION" ]]; then
         printf 'lint: could not determine the version of pre-installed golangci-lint at %s.\n' "$GOLANGCI_LINT" >&2
