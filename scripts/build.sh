@@ -36,7 +36,6 @@ if [[ -n "$VERSION" ]]; then
         echo "ERROR: VERSION must match <major>.<minor>.<patch>; got '$VERSION'" >&2
         exit 1
     fi
-    build_args+=(-buildvcs=false)
     ldflags="-s -w -buildid= -X github.com/datadog-labs/bits-cli/internal/version.releaseVersion=$VERSION"
 fi
 # go build keeps only the last -ldflags, so both sources share one flag.
