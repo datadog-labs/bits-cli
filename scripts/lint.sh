@@ -14,13 +14,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 require_shellcheck=false
-all_platforms=false
 for option in "$@"; do
     case "$option" in
-        --all-platforms) all_platforms=true ;;
         --require-shellcheck) require_shellcheck=true ;;
         *)
-            printf 'usage: %s [--all-platforms] [--require-shellcheck]\n' "$0" >&2
+            printf 'usage: %s [--require-shellcheck]\n' "$0" >&2
             exit 1
             ;;
     esac
@@ -30,10 +28,14 @@ if [[ "$require_shellcheck" == true ]] && ! command -v shellcheck >/dev/null 2>&
     exit 1
 fi
 
+LINTER_BIN="$(go env GOPATH)/bin/golangci-lint"
+if [[ "$(go env GOOS)" == windows ]]; then
+    LINTER_BIN+=.exe
+fi
 if command -v golangci-lint >/dev/null 2>&1; then
     GOLANGCI_LINT="$(command -v golangci-lint)"
-elif [[ -x "$(go env GOPATH)/bin/golangci-lint" ]]; then
-    GOLANGCI_LINT="$(go env GOPATH)/bin/golangci-lint"
+elif [[ -x "$LINTER_BIN" ]]; then
+    GOLANGCI_LINT="$LINTER_BIN"
 fi
 
 if [[ -n "${GOLANGCI_LINT:-}" ]]; then
@@ -51,20 +53,11 @@ if [[ -n "${GOLANGCI_LINT:-}" ]]; then
     fi
 else
     go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
-    GOLANGCI_LINT="$(go env GOPATH)/bin/golangci-lint"
+    GOLANGCI_LINT="$LINTER_BIN"
 fi
 
 cd "$SRC_DIR"
-if [[ "$all_platforms" == true ]]; then
-    # Select each OS's build-tagged files. There are no architecture-specific
-    # Go files, so amd64 covers the source built for both architectures.
-    for target_os in linux darwin windows; do
-        printf 'lint: checking %s/amd64\n' "$target_os" >&2
-        GOOS="$target_os" GOARCH=amd64 CGO_ENABLED=0 "$GOLANGCI_LINT" run ./...
-    done
-else
-    "$GOLANGCI_LINT" run ./...
-fi
+"$GOLANGCI_LINT" run ./...
 
 # tools/licenses is a nested module, so root-module lints never reach it;
 # see tools/licenses/main.go's package doc for why it is nested.
