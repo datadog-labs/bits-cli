@@ -9,8 +9,9 @@ Releases are cut from `main` by the release workflow. Start one with:
 This triggers `.github/workflows/release.yml` on `main`, which:
 
 1. checks that the tag is the next patch, minor, or major version;
-2. runs CI and builds the release archives and SBOMs with `./scripts/dist.sh`;
-3. attests their build provenance and publishes them as a GitHub release of
+2. runs CI for the tag, which builds and tests each OS on its own runner and
+   packages the release archives and SBOMs (see CONTRIBUTING.md);
+3. attests the provenance of these archives and publishes them as a GitHub release of
    the `main` commit with `./scripts/publish.sh`, which also creates the tag.
 
 Tags are protected, so they are only created by the workflow, with a
@@ -48,11 +49,19 @@ gh attestation verify bits_<version>_<os>_<arch>.tar.gz \
 For Windows, verify `bits_<version>_windows_<arch>.zip` with the same
 attestation command.
 
-`./scripts/dist.sh v1.2.3` builds archives and checksums locally in `dist/`.
-It runs on macOS with the Xcode command line tools, which build the
-macOS-only [ddviz](libexec/ddviz/README.md) helper for both architectures.
-Add `--sbom` before the tag to include SBOMs; this requires
-[Syft](https://github.com/anchore/syft).
+Build archives and checksums locally in `dist/` with either:
+
+```sh
+./scripts/dist.sh v1.2.3                        # build every platform, then package
+
+VERSION=1.2.3 ./scripts/build.sh linux/amd64 …  # what CI runs on each OS
+./scripts/package.sh v1.2.3                     # every platform's prefix in build/
+```
+
+`dist.sh` runs on macOS with the Xcode command line tools, which build the
+macOS-only [ddviz](libexec/ddviz/README.md) helper. Add `--sbom` before the
+tag to include SBOMs; this requires [Syft](https://github.com/anchore/syft).
+Release platforms are listed in `scripts/platforms.sh`.
 
 ## Homebrew
 

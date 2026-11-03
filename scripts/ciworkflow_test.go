@@ -34,9 +34,15 @@ type workflow struct {
 	Jobs        map[string]struct {
 		If          string
 		Uses        string
+		With        map[string]any
 		Needs       needs
 		Permissions map[string]string
-		Steps       []struct {
+		Strategy    struct {
+			Matrix struct {
+				Include []map[string]string
+			}
+		}
+		Steps []struct {
 			Uses string
 			Run  string
 			With map[string]any
@@ -134,6 +140,38 @@ func TestCIWorkflowGate(t *testing.T) {
 	}
 }
 
+// releasePlatforms returns the os/arch targets of scripts/platforms.sh.
+func releasePlatforms(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile("scripts/platforms.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^PLATFORMS=\((.*)\)\r?$`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("no PLATFORMS in scripts/platforms.sh")
+	}
+	return strings.Fields(string(m[1]))
+}
+
+// The package job needs a prefix for every release platform, built on a
+// runner of its OS.
+func TestCIBuildsReleasePlatforms(t *testing.T) {
+	var targets []string
+	for _, entry := range loadWorkflow(t, "ci.yml").Jobs["build"].Strategy.Matrix.Include {
+		for _, target := range strings.Fields(entry["targets"]) {
+			if !strings.HasPrefix(target, entry["goos"]+"/") {
+				t.Errorf("%s runner builds %s", entry["goos"], target)
+			}
+			targets = append(targets, target)
+		}
+	}
+	slices.Sort(targets)
+	if want := slices.Sorted(slices.Values(releasePlatforms(t))); !slices.Equal(targets, want) {
+		t.Errorf("CI builds %v, want %v", targets, want)
+	}
+}
+
 func TestReleaseWorkflowGating(t *testing.T) {
 	wf := loadWorkflow(t, "release.yml")
 	if len(wf.On) != 1 || wf.On["workflow_dispatch"] == nil {
@@ -155,7 +193,10 @@ func TestReleaseWorkflowGating(t *testing.T) {
 	if wf.Jobs["ci"].Uses != "./.github/workflows/ci.yml" {
 		t.Errorf("release ci job uses %q, want ./.github/workflows/ci.yml", wf.Jobs["ci"].Uses)
 	}
-	for job, needs := range map[string][]string{"ci": {"check"}, "dist": {"check"}, "publish": {"ci", "dist"}} {
+	if tag := wf.Jobs["ci"].With["tag"]; tag != "${{ inputs.tag }}" {
+		t.Errorf("release ci job builds tag %v, want ${{ inputs.tag }}", tag)
+	}
+	for job, needs := range map[string][]string{"ci": {"check"}, "publish": {"ci"}} {
 		for _, need := range needs {
 			if !slices.Contains(wf.Jobs[job].Needs, need) {
 				t.Errorf("%s must need %s, got %v", job, need, wf.Jobs[job].Needs)
@@ -256,7 +297,7 @@ func TestReleaseCheck(t *testing.T) {
 
 // Each release script validates its tag before having any side effect.
 func TestScriptsRejectInvalidTags(t *testing.T) {
-	for _, args := range [][]string{{"bash", "scripts/dist.sh"}, {"bash", "scripts/dist.sh", "--sbom"}, {"bash", "scripts/publish.sh"}, {"bash", "scripts/release.sh"}, {"bash", "scripts/release.sh", "--check"}, {"ruby", "scripts/homebrew.rb"}, {"ruby", "scripts/homebrew.rb", "--dry-run"}} {
+	for _, args := range [][]string{{"bash", "scripts/dist.sh"}, {"bash", "scripts/dist.sh", "--sbom"}, {"bash", "scripts/package.sh"}, {"bash", "scripts/package.sh", "--sbom"}, {"bash", "scripts/publish.sh"}, {"bash", "scripts/release.sh"}, {"bash", "scripts/release.sh", "--check"}, {"ruby", "scripts/homebrew.rb"}, {"ruby", "scripts/homebrew.rb", "--dry-run"}} {
 		if _, err := exec.LookPath(args[0]); err != nil {
 			t.Logf("skipping %s: %v", args[0], err)
 			continue
@@ -276,16 +317,8 @@ func TestHomebrewTemplate(t *testing.T) {
 	if _, err := exec.LookPath("ruby"); err != nil {
 		t.Skip("ruby is required to render Homebrew templates")
 	}
-	dist, err := os.ReadFile("scripts/dist.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := regexp.MustCompile(`(?m)^PLATFORMS=\((.*)\)\r?$`).FindSubmatch(dist)
-	if m == nil {
-		t.Fatal("no PLATFORMS in scripts/dist.sh")
-	}
 	var platforms []string
-	for _, platform := range strings.Fields(string(m[1])) {
+	for _, platform := range releasePlatforms(t) {
 		if !strings.HasPrefix(platform, "windows/") {
 			platforms = append(platforms, strings.ReplaceAll(platform, "/", "_"))
 		}
@@ -348,8 +381,8 @@ func TestHomebrewChecksums(t *testing.T) {
 	}
 }
 
-// TestDistArchives runs dist.sh against a stub build.sh and checks the
-// published install prefix layout, with and without SBOMs, including checksums for every asset.
+// TestDistArchives runs dist.sh, and so package.sh, against a stub build.sh
+// and checks the published install prefix layout, with and without SBOMs, including checksums for every asset.
 func TestDistArchives(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture uses Unix shell paths and executable stubs")
@@ -359,10 +392,28 @@ func TestDistArchives(t *testing.T) {
 	t.Run("relative DIST_DIR", func(t *testing.T) { testDistArchives(t, false, "out") })
 }
 
+func TestPackageRequiresEveryPlatform(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("package.sh runs on Unix")
+	}
+	build, dist := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(build, "linux-amd64", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := command(t, "", "bash", "scripts/package.sh", "v1.2.3")
+	cmd.Env = append(cmd.Env, "BUILD_DIR="+build, "DIST_DIR="+dist)
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "no darwin/amd64 prefix") {
+		t.Errorf("package.sh with a missing prefix: %v\n%s", err, out)
+	}
+	if entries, _ := os.ReadDir(dist); len(entries) != 0 {
+		t.Errorf("package.sh wrote %v", entries)
+	}
+}
+
 func testDistArchives(t *testing.T, sbom bool, distDir string) {
 	t.Helper()
 	dir := t.TempDir()
-	for _, file := range []string{"scripts/dist.sh", "README.md", "LICENSE", "LICENSE-3rdparty.csv"} {
+	for _, file := range []string{"scripts/dist.sh", "scripts/package.sh", "scripts/platforms.sh", "README.md", "LICENSE", "LICENSE-3rdparty.csv"} {
 		data, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -377,17 +428,19 @@ func testDistArchives(t *testing.T, sbom bool, distDir string) {
 	}
 	stub := `#!/usr/bin/env bash
 set -eu
-prefix="$BUILD_DIR/$GOOS-$GOARCH"
-mkdir -p "$prefix/bin"
-out="$prefix/bin/bits"
-[[ $GOOS == windows ]] && out=$out.exe
-echo "$GOOS/$GOARCH $VERSION" >"$out"
-chmod +x "$out"
-if [[ $GOOS == darwin ]]; then
-    mkdir -p "$prefix/libexec/bits/tool"
-    echo tool >"$prefix/libexec/bits/tool/tool"
-fi
-echo "$prefix"
+for target in "$@"; do
+    prefix="$BUILD_DIR/${target/\//-}"
+    mkdir -p "$prefix/bin"
+    out="$prefix/bin/bits"
+    [[ $target == windows/* ]] && out=$out.exe
+    echo "$target $VERSION" >"$out"
+    chmod +x "$out"
+    if [[ $target == darwin/* ]]; then
+        mkdir -p "$prefix/libexec/bits/tool"
+        echo tool >"$prefix/libexec/bits/tool/tool"
+    fi
+    echo "$prefix"
+done
 `
 	if err := os.WriteFile(filepath.Join(dir, "scripts", "build.sh"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
