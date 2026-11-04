@@ -93,6 +93,7 @@ type focus int
 
 const (
 	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
+	focusExitCard                 // the "Exit Bits?" confirmation card
 	focusPrompt                   // a tool approval or a tool's UI is shown (see prompt)
 	focusPicker                   // the /resume conversation picker
 	focusStatus                   // the local /status document
@@ -111,6 +112,9 @@ func (m *Model) focus() focus {
 	case ModePermissions:
 		return focusPermissions
 	case ModeChat, ModeTermInit:
+		if m.mode == ModeChat && m.exitCard.open {
+			return focusExitCard
+		}
 		if m.prompt() != nil {
 			return focusPrompt
 		}

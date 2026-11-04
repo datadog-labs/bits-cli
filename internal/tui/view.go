@@ -196,6 +196,8 @@ func (m *Model) chatView() string {
 	case m.mode == ModePermissions:
 		// Spans the terminal inside its margin, so it does not track the composer.
 		return m.chatOverlay(base, m.permissionsView(), m.styles.Permissions.HorizontalMargin)
+	case m.focus() == focusExitCard:
+		return m.exitCardOverlay(base)
 	case m.focus() == focusEditor:
 		return m.chatOverlay(base, m.editor.MenuView(), m.editor.ContentOffset())
 	default:

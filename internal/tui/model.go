@@ -258,6 +258,7 @@ type Model struct {
 	// auto-scroll state while the model supplies rendered pane frames.
 	selection selection
 	follow    followControl
+	exitCard  exitCard
 
 	// pendingAccordionToggle is the block a mouse-down landed on inside an
 	// accordion zone: any row an expandable block renders, collapsed preview
