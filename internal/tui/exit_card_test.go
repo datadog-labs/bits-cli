@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"image"
 	"slices"
 	"strings"
@@ -462,6 +463,23 @@ func startBlockedTurn(t *testing.T) *Model {
 	return m
 }
 
+// startFork leaves a fork running: its command never runs, so the operation
+// stays open until the test cancels it.
+func startFork(t *testing.T) *Model {
+	t.Helper()
+	b := &tuiForkBackend{resumeBackend: newResumeBackend()}
+	e := agent.New(b, agent.Config{ConversationID: forkSourceID})
+	t.Cleanup(e.Close)
+	m := New(e)
+	t.Cleanup(m.Detach)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if _, cmd := m.dispatchCommand("fork", ""); cmd == nil || m.op.kind != opFork {
+		t.Fatalf("fork did not start: op %+v", m.op)
+	}
+	t.Cleanup(m.op.cancel)
+	return m
+}
+
 func TestEscOpensExitCardOnlyAtEndOfChain(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -508,6 +526,54 @@ func TestEscOpensExitCardOnlyAtEndOfChain(t *testing.T) {
 				return m
 			},
 			wantOpen: true,
+		},
+		{
+			name: "fork running",
+			setup: func(t *testing.T) *Model {
+				return startFork(t)
+			},
+			check: func(t *testing.T, m *Model) {
+				if m.op.kind != opFork || m.op.stop != stopAll {
+					t.Fatalf("esc did not cancel the fork: op %+v", m.op)
+				}
+			},
+		},
+		{
+			name: "fork winding down after a cancel",
+			setup: func(t *testing.T) *Model {
+				m := startFork(t)
+				pressEsc(m)
+				if m.op.kind != opFork || m.op.stop != stopAll {
+					t.Fatalf("fixture is not winding down: op %+v", m.op)
+				}
+				return m
+			},
+			wantOpen: true,
+		},
+		{
+			name: "logout in flight",
+			setup: func(t *testing.T) *Model {
+				m := newExitCardModel(t, 120, 40)
+				m.logout = func(context.Context) (bool, error, error) { return true, nil, nil }
+				m.startLogout()
+				if m.op.kind != opLogout {
+					t.Fatalf("fixture is not logging out: op %+v", m.op)
+				}
+				t.Cleanup(m.op.cancel)
+				return m
+			},
+		},
+		{
+			name: "logout queued after a cancelled turn",
+			setup: func(t *testing.T) *Model {
+				m := startBlockedTurn(t)
+				m.logout = func(context.Context) (bool, error, error) { return true, nil, nil }
+				m.requestLogout()
+				if m.op.then != thenLogout || m.op.stop != stopAll {
+					t.Fatalf("fixture has no logout queued: op %+v", m.op)
+				}
+				return m
+			},
 		},
 		{
 			name: "completion menu open",
@@ -596,6 +662,18 @@ func TestEscOpensExitCardOnlyAtEndOfChain(t *testing.T) {
 	}
 }
 
+// scrolledFollowModel scrolls up from the tail and draws once, so the
+// jump-to-latest control is on screen.
+func scrolledFollowModel() *Model {
+	m := followTestModel()
+	m.resize(60, 30)
+	m.relayout()
+	m.list.ScrollToBottom()
+	m.list.ScrollBy(-4)
+	m.View()
+	return m
+}
+
 func TestExitCardOpenClearsHover(t *testing.T) {
 	t.Run("transcript row", func(t *testing.T) {
 		m := accordionTestModel(t)
@@ -611,12 +689,7 @@ func TestExitCardOpenClearsHover(t *testing.T) {
 	})
 
 	t.Run("follow control", func(t *testing.T) {
-		m := followTestModel()
-		m.resize(60, 30)
-		m.relayout()
-		m.list.ScrollToBottom()
-		m.list.ScrollBy(-4)
-		m.View()
+		m := scrolledFollowModel()
 		m.Update(tea.MouseMotionMsg{X: m.follow.area.Min.X + 1, Y: m.follow.area.Min.Y + 1})
 		if !m.follow.hover || !m.pointerIsHand {
 			t.Fatalf("fixture is not hovering the control: hover %v, hand %v", m.follow.hover, m.pointerIsHand)
@@ -630,12 +703,7 @@ func TestExitCardOpenClearsHover(t *testing.T) {
 }
 
 func TestExitCardOpenDropsStaleFollowPress(t *testing.T) {
-	m := followTestModel()
-	m.resize(60, 30)
-	m.relayout()
-	m.list.ScrollToBottom()
-	m.list.ScrollBy(-4)
-	m.View()
+	m := scrolledFollowModel()
 	m.Update(clickAt(m.follow.area.Min.Add(image.Pt(1, 1))))
 	if m.follow.pressed.Empty() {
 		t.Fatal("fixture did not press the control")
@@ -644,4 +712,31 @@ func TestExitCardOpenDropsStaleFollowPress(t *testing.T) {
 	if !m.follow.pressed.Empty() {
 		t.Fatal("a press survived the card")
 	}
+}
+
+// The card swallows motion, so nothing clears hover state that is set while it
+// is open; the pointer shape must not follow it.
+func TestExitCardSuppressesHandWhileOpen(t *testing.T) {
+	t.Run("transcript row", func(t *testing.T) {
+		m := accordionTestModel(t)
+		m.openExitCard()
+		m.list.SetPointer(0, accordionRow(t, m))
+		if !m.list.Hovered() {
+			t.Fatal("fixture row is not hovered")
+		}
+		m.reconcilePointerShape()
+		if m.pointerIsHand {
+			t.Fatal("the hand showed over a hovered row while the card was open")
+		}
+	})
+
+	t.Run("follow control", func(t *testing.T) {
+		m := scrolledFollowModel()
+		m.openExitCard()
+		m.follow.hover = true
+		m.reconcilePointerShape()
+		if m.pointerIsHand {
+			t.Fatal("the hand showed over the control while the card was open")
+		}
+	})
 }

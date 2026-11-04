@@ -837,7 +837,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.editor.ChipsFocused() {
 			return m, m.editor.Update(msg)
 		}
-		if m.mode == ModeChat && !m.cancellable() {
+		if m.mode == ModeChat && !m.cancellable() && !m.op.loggingOut() {
 			m.openExitCard()
 			return m, nil
 		}
