@@ -41,7 +41,10 @@ func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer)
 
 	// Login and chat are modes of one Bubble Tea program. Keeping the same
 	// renderer alive prevents an alt-screen teardown flash after OAuth succeeds.
-	model, err := tea.NewProgram(root, tea.WithContext(ctx)).Run()
+	program := tea.NewProgram(root, tea.WithContext(ctx))
+	stopWatchingJobControl := watchJobControlStops(ctx, program)
+	model, err := program.Run()
+	stopWatchingJobControl()
 	// The chat may leave an OSC 22 hand pointer over a clickable row. Reset it
 	// once the program has stopped, so every exit path (ctrl+c, /quit, /logout,
 	// errors) is covered. Terminals without OSC 22 ignore it.
