@@ -164,8 +164,8 @@ func renderReasoningGroup(blocks []agent.Block, c renderContext) string {
 // renderWidget summarizes a widget.
 func renderWidget(it agent.Block, width int, sty Styles) string {
 	label := "widget"
-	if it.Widget != nil && it.Widget.Title != "" {
-		label = "widget: " + escape.Inline(it.Widget.Title)
+	if title := widgetTitle(it); title != "" {
+		label = "widget: " + title
 	}
 	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
 }

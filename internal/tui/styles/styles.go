@@ -100,6 +100,9 @@ type Chat struct {
 	// rather than busy.
 	StatusSpinner Spinner
 
+	// WidgetBox fills an inline widget's image area until its pixels arrive.
+	WidgetBox lipgloss.Style
+
 	Meta lipgloss.Style
 
 	// NoticeInfo, NoticeWarn and NoticeError style a notice's leading marker;

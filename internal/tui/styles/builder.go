@@ -213,6 +213,7 @@ func build(isDark bool, p palette) Theme {
 			StatusSweepHot:      busy.hot,
 			Motion:              true,
 			StatusSpinner:       Spinner{frames: brailleFrames, stepsPerFrame: spinnerStepsPerFrame},
+			WidgetBox:           lipgloss.NewStyle().Background(lipgloss.Color(p.surface)),
 			// Transcript labels, progress lines and the idle dot: present so nothing
 			// is silently dropped, but not competing with the conversation.
 			Meta:        lipgloss.NewStyle().Foreground(lipgloss.Color(p.textTertiary)),
