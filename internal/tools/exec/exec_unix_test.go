@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/workspace"
+	"golang.org/x/sys/unix"
 )
 
 func TestExecServiceUnixSuccessAndInheritedEnvironment(t *testing.T) {
@@ -433,11 +434,11 @@ func TestExecServiceUnixCommandRunsInNewSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sid, err := syscall.Getsid(pid)
+	sid, err := unix.Getsid(pid)
 	if err != nil {
 		t.Fatalf("getsid(%d): %v", pid, err)
 	}
-	ownSID, err := syscall.Getsid(0)
+	ownSID, err := unix.Getsid(0)
 	if err != nil {
 		t.Fatalf("getsid(self): %v", err)
 	}
