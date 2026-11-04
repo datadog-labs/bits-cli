@@ -13,36 +13,19 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// stopDiscardedWait bounds how long a suspension waits for SIGCONT. The
-// kernel discards SIGTSTP for an orphaned process group, so the TUI would
-// otherwise wait forever with the terminal released. A process that did stop
-// only observes the timer after it is continued.
+// stopDiscardedWait bounds the wait for SIGCONT, since the kernel discards
+// SIGTSTP for an orphaned process group.
 const stopDiscardedWait = 100 * time.Millisecond
 
-// The TUI keeps the terminal in raw mode, on the alternate screen and with
-// mouse reporting enabled. If the kernel stops it with SIGTTIN, because it
-// read the terminal from a background process group, the shell gets back a
-// terminal that echoes every mouse movement as text.
-//
-// SIGTSTP is deliberately not caught. Bubble Tea's own suspend raises it to
-// stop the process after releasing the terminal, and once Go installs a
-// handler for a signal, signal.Reset does not restore the kernel's default
-// stop action.
-
-// programSender is the part of *tea.Program that job-control handling uses.
 type programSender interface {
 	Send(tea.Msg)
 }
 
-// watchJobControlStops turns SIGTTIN into an orderly suspension: the program
-// releases the terminal, the process group stops as if ctrl+z had been
-// pressed, and the program restores the terminal and repaints once it is
-// continued. The returned function stops watching.
+// watchJobControlStops releases the terminal before the process stops on
+// SIGTTIN and restores it on resume. SIGTSTP is left alone: Bubble Tea's
+// suspend relies on its default action, which signal.Reset cannot restore.
 func watchJobControlStops(ctx context.Context, program programSender) func() {
-	// Releasing and restoring the terminal call tcsetattr, which raises
-	// SIGTTOU from a background process group instead of succeeding.
-	// Ignoring it lets the TUI hand the terminal back in cooked mode even
-	// after the shell has taken the foreground.
+	// Lets the terminal be released and restored from the background.
 	signal.Ignore(syscall.SIGTTOU)
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -60,9 +43,6 @@ func watchJobControlStops(ctx context.Context, program programSender) func() {
 			if !suspendProgram(ctx, program) {
 				return
 			}
-			// Drop reads that raised SIGTTIN while suspending. If the
-			// process is still in the background, the next read raises it
-			// again.
 			drainSignals(signals)
 		}
 	}()
@@ -73,12 +53,8 @@ func watchJobControlStops(ctx context.Context, program programSender) func() {
 	}
 }
 
-// suspendProgram runs one suspension through the program's event loop. It
-// reports false if the program ended before the suspension completed.
 func suspendProgram(ctx context.Context, program programSender) bool {
 	resumed := make(chan struct{})
-	// tea.Exec releases the terminal, runs the command, then restores the
-	// terminal and repaints, all on the event loop goroutine.
 	program.Send(tea.Exec(stopProcess{}, func(error) tea.Msg {
 		close(resumed)
 		return nil
@@ -101,8 +77,7 @@ func drainSignals(signals <-chan os.Signal) {
 	}
 }
 
-// stopProcess is a tea.ExecCommand that stops the process group the way
-// ctrl+z does at a shell prompt, and returns once the group is continued.
+// stopProcess stops the process group like ctrl+z and returns once continued.
 type stopProcess struct{}
 
 func (stopProcess) Run() error {

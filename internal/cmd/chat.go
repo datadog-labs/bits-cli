@@ -42,9 +42,6 @@ func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer)
 	// Login and chat are modes of one Bubble Tea program. Keeping the same
 	// renderer alive prevents an alt-screen teardown flash after OAuth succeeds.
 	program := tea.NewProgram(root, tea.WithContext(ctx))
-	// A stop signal from the shell, kill, or background terminal access would
-	// otherwise freeze the process with the terminal still in raw mode and
-	// mouse reporting on. Release the terminal first and repaint on resume.
 	stopWatchingJobControl := watchJobControlStops(ctx, program)
 	model, err := program.Run()
 	stopWatchingJobControl()
