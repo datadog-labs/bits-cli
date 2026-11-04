@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/ansi/kitty"
@@ -14,6 +15,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 	"github.com/datadog-labs/bits-cli/internal/update"
@@ -54,7 +56,7 @@ func TestWelcomeFactsNeverExceedTheirWidth(t *testing.T) {
 func TestWelcomeBlockHeightMatchesReservation(t *testing.T) {
 	for name, m := range welcomeModels(0, 40) {
 		for _, ready := range []bool{false, true} {
-			m.splashReady = ready
+			m.graphics = supportFor(ready)
 			for width := minimumChatWidth; width <= 200; width++ {
 				m.width = width
 				if !m.showSplashPanel() {
@@ -73,7 +75,7 @@ func TestWelcomeBlockHeightMatchesReservation(t *testing.T) {
 func TestWelcomeBlockNeverOverflowsTerminalWidth(t *testing.T) {
 	for name, m := range welcomeModels(0, 40) {
 		for _, ready := range []bool{false, true} {
-			m.splashReady = ready
+			m.graphics = supportFor(ready)
 			for width := minimumChatWidth; width <= 200; width++ {
 				m.width = width
 				if !m.showSplashPanel() {
@@ -91,7 +93,7 @@ func TestWelcomeBlockNeverOverflowsTerminalWidth(t *testing.T) {
 func TestWelcomeLogoCentersAgainstTheTallerColumn(t *testing.T) {
 	for _, ready := range []bool{false, true} {
 		m := welcomeModels(60, 40)["engine"]
-		m.splashReady = ready
+		m.graphics = supportFor(ready)
 		rows := strings.Split(ansi.Strip(m.splashPanelBody()), "\n")
 		logoWidth := lipgloss.Width(m.welcomeLogo())
 
@@ -183,7 +185,7 @@ func TestWelcomeNoticeSitsOneBlankRowBelowTheFacts(t *testing.T) {
 func TestWelcomeNoticeStandsAloneBelowTheLogo(t *testing.T) {
 	for _, ready := range []bool{false, true} {
 		m := welcomeModels(45, 30)["engine"]
-		m.splashReady = ready
+		m.graphics = supportFor(ready)
 		if !m.showSplashPanel() {
 			t.Fatalf("ready=%v: splash panel hidden at 45 columns", ready)
 		}
@@ -269,44 +271,70 @@ func graphicsReply(id int, payload string) uv.KittyGraphicsEvent {
 	return uv.KittyGraphicsEvent{Options: kitty.Options{ID: id}, Payload: []byte(payload)}
 }
 
+func supportFor(ready bool) graphics.Support {
+	if ready {
+		return graphics.Supported
+	}
+	return graphics.Unknown
+}
+
 // The handler is where a regression would silently disable the image path or
 // enable it on a terminal that cannot paint, so the wiring is pinned here and
 // not only in the predicates it calls.
 func TestGraphicsReplyDrivesLogoForm(t *testing.T) {
 	for name, tc := range map[string]struct {
-		before    bool
-		event     uv.KittyGraphicsEvent
-		want      bool
-		wantTrans bool
+		before, want graphics.Support
+		event        tea.Msg
+		wantTrans    bool
 	}{
 		"probe ok enables the image": {
-			event: graphicsReply(splash.ProbeID, "OK"), want: true, wantTrans: true,
+			event: graphicsReply(graphics.ProbeID, "OK"), want: graphics.Supported, wantTrans: true,
 		},
 		"probe error keeps the wordmark": {
-			event: graphicsReply(splash.ProbeID, "EINVAL:bad key"),
+			event: graphicsReply(graphics.ProbeID, "EINVAL:bad key"), want: graphics.Unsupported,
 		},
 		"another image's reply is ignored": {
-			event: graphicsReply(splash.ProbeID+7, "OK"),
+			event: graphicsReply(graphics.ProbeID+7, "OK"),
 		},
 		"a second probe reply does not retransmit": {
-			before: true, event: graphicsReply(splash.ProbeID, "OK"), want: true,
+			before: graphics.Supported, event: graphicsReply(graphics.ProbeID, "OK"), want: graphics.Supported,
 		},
-		"a rejected image falls back to the wordmark": {
-			before: true, event: graphicsReply(splash.ImageID, "ENOENT:no such file"),
+		"a rejected logo falls back to the wordmark": {
+			before: graphics.Supported, event: graphicsReply(splash.ImageID, "ENOENT:no such file"), want: graphics.Unsupported,
+		},
+		"a rejected widget image keeps the logo": {
+			before: graphics.Supported, event: graphicsReply(0xB10001, "EFBIG:too large"), want: graphics.Supported,
 		},
 		"a stored image keeps the image": {
-			before: true, event: graphicsReply(splash.ImageID, "OK"), want: true,
+			before: graphics.Supported, event: graphicsReply(splash.ImageID, "OK"), want: graphics.Supported,
+		},
+		// Device attributes answer after the probe would have.
+		"device attributes settle an ignored probe": {
+			event: uv.PrimaryDeviceAttributesEvent{62}, want: graphics.Unsupported,
+		},
+		"device attributes after the probe keep the image": {
+			before: graphics.Supported, event: uv.PrimaryDeviceAttributesEvent{62}, want: graphics.Supported,
+		},
+		"unsupported is final": {
+			before: graphics.Unsupported, event: graphicsReply(graphics.ProbeID, "OK"), want: graphics.Unsupported,
+		},
+		// Placeholders resolve through an exact 24-bit foreground.
+		"a 256-color profile rules images out": {
+			before: graphics.Supported, event: tea.ColorProfileMsg{Profile: colorprofile.ANSI256}, want: graphics.Unsupported,
+		},
+		"truecolor keeps the image": {
+			before: graphics.Supported, event: tea.ColorProfileMsg{Profile: colorprofile.TrueColor}, want: graphics.Supported,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := welcomeModel(100, 40)
 			m.mode = ModeChat
-			m.splashReady = tc.before
+			m.graphics = tc.before
 
 			_, cmd := m.Update(tc.event)
 
-			if m.splashReady != tc.want {
-				t.Errorf("splashReady = %v, want %v", m.splashReady, tc.want)
+			if m.graphics != tc.want {
+				t.Errorf("graphics = %v, want %v", m.graphics, tc.want)
 			}
 			if got := cmd != nil; got != tc.wantTrans {
 				t.Errorf("transmitted = %v, want %v", got, tc.wantTrans)
@@ -356,7 +384,7 @@ func TestHeaderNeverExceedsTerminalWidth(t *testing.T) {
 	for name, m := range welcomeModels(0, 40) {
 		m.resume = *resumeFixture(32)
 		for _, ready := range []bool{false, true} {
-			m.splashReady = ready
+			m.graphics = supportFor(ready)
 			for width := minimumChatWidth; width <= 200; width++ {
 				m.width = width
 				for i, line := range strings.Split(m.headerView(), "\n") {
@@ -490,10 +518,10 @@ func TestWelcomeVisibilityUnchangedByTheProbe(t *testing.T) {
 		m := welcomeModel(width, 40)
 		m.mode = ModeChat
 
-		m.splashReady = false
+		m.graphics = graphics.Unknown
 		before := m.showSplashPanel()
 		reserved := m.splashPanelHeight()
-		m.splashReady = true
+		m.graphics = graphics.Supported
 		after := m.showSplashPanel()
 		if after != before {
 			t.Fatalf("width=%d: visibility changed from %v to %v when the probe landed",

@@ -17,8 +17,8 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	conversationview "github.com/datadog-labs/bits-cli/internal/tui/conversations"
 	"github.com/datadog-labs/bits-cli/internal/tui/editor"
+	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
 	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
-	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 	statusview "github.com/datadog-labs/bits-cli/internal/tui/status"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 	"github.com/datadog-labs/bits-cli/internal/update"
@@ -276,9 +276,9 @@ type Model struct {
 	// the environment (see chatMouseMode()).
 	chatMouseMode tea.MouseMode
 
-	// splashReady is set once the terminal has answered the Kitty graphics
-	// probe and the logo's pixels have been transmitted.
-	splashReady bool
+	// graphics is whether the terminal paints Kitty images, from its answer to
+	// the probe and any image it rejected.
+	graphics graphics.Support
 
 	// resume is the startup conversation offer shown under the splash panel.
 	resume resume
@@ -435,9 +435,19 @@ func (m *Model) Init() tea.Cmd {
 			return tea.Quit
 		}
 		// Probe during login so the logo is ready at the handoff to chat.
-		return tea.Batch(m.loginModel.Init(), splash.Query())
+		return tea.Batch(m.loginModel.Init(), m.queryGraphics())
 	}
-	return tea.Batch(m.initChat(), splash.Query())
+	return tea.Batch(m.initChat(), m.queryGraphics())
+}
+
+// queryGraphics probes the terminal. One that must not be asked is known
+// unsupported at once, so Unknown always means an answer is on its way.
+func (m *Model) queryGraphics() tea.Cmd {
+	probe := graphics.Query()
+	if probe == nil {
+		m.graphics = graphics.Unsupported
+	}
+	return probe
 }
 
 // initChat focuses the editor, starts the engine event pump and, when

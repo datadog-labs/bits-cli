@@ -178,19 +178,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
+	case uv.PrimaryDeviceAttributesEvent:
+		m.graphics.ObserveDeviceAttributes()
 	case uv.KittyGraphicsEvent:
 		// The probe answer can arrive in any mode, login included.
-		switch {
-		case splash.ImageRejected(msg):
-			m.splashReady = false
-		case !m.splashReady && splash.ProbeSucceeded(msg):
-			m.splashReady = true
+		if m.graphics.Observe(msg, splash.ImageID) {
 			cmd = splash.Transmit()
 		}
 	case tea.ColorProfileMsg:
 		// Arrives in any mode. Selection is the only paint that needs it: when
 		// colors are off, ultraviolet drops Fg and Bg but keeps attributes.
 		m.monochrome = msg.Profile == colorprofile.NoTTY || msg.Profile == colorprofile.ASCII
+		m.graphics.ObserveColorProfile(msg.Profile)
 	case recentConversationsMsg:
 		// A failed background read the user never asked for stays silent.
 		if msg.result.Err == nil {

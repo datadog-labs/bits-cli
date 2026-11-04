@@ -11,6 +11,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
+	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
 	"github.com/datadog-labs/bits-cli/internal/update"
@@ -57,7 +58,7 @@ func (m *Model) welcomeContentWidth() int {
 // welcomeLogo returns the image once the terminal answers the graphics probe,
 // the wordmark otherwise. Both are splash.Rows tall.
 func (m *Model) welcomeLogo() string {
-	if m.splashReady {
+	if m.graphics == graphics.Supported {
 		return splash.Placeholder()
 	}
 	return m.styles.Logo.Render(splash.Wordmark())
