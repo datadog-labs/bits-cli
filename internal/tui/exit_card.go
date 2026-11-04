@@ -37,8 +37,15 @@ type exitCard struct {
 	quit, keep, dismiss image.Rectangle
 }
 
+// openExitCard also drops pointer state: the card swallows motion and
+// releases, so whatever the pointer last touched would stay highlighted
+// (or half-pressed) behind the fade.
 func (m *Model) openExitCard() {
 	m.selection.clear()
+	m.list.SetPointer(-1, -1)
+	m.editor.SetPointer(-1, -1)
+	m.follow.hover = false
+	m.follow.pressed = image.Rectangle{}
 	m.exitCard = exitCard{open: true, selected: exitQuit}
 }
 

@@ -150,7 +150,7 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // stopped, which covers every quit path.
 func (m *Model) reconcilePointerShape() tea.Cmd {
 	hand := false
-	if m.mode == ModeChat && !m.frame.tooSmall {
+	if m.mode == ModeChat && !m.frame.tooSmall && m.focus() != focusExitCard {
 		hand = m.list.Hovered() || m.follow.hover || (m.focus() == focusEditor && m.editor.ChipHovered())
 		if !hand && !m.frame.replaced && !m.editor.MenuOpen() {
 			if hit, ok := m.list.HoveredLink(); ok && webLink(hit.URL) {
@@ -837,6 +837,10 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.editor.ChipsFocused() {
 			return m, m.editor.Update(msg)
 		}
+		if m.mode == ModeChat && !m.cancellable() {
+			m.openExitCard()
+			return m, nil
+		}
 		m.cancelOperation() // interrupt the running turn
 		return m, nil
 	case "enter":
@@ -963,11 +967,17 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	return m.begin(opTurn, run, err, cancel)
 }
 
+// cancellable reports whether an operation is running that cancelOperation
+// has not already stopped.
+func (m *Model) cancellable() bool {
+	return (m.op.run != 0 || m.op.kind == opFork) && m.op.stop != stopAll
+}
+
 // cancelOperation cancels a running turn, restore, or fork once and drops its tool
 // UIs; its approvals go when the operation closes. Logout is never
 // interrupted this way.
 func (m *Model) cancelOperation() {
-	if (m.op.run == 0 && m.op.kind != opFork) || m.op.stop == stopAll {
+	if !m.cancellable() {
 		return
 	}
 	m.op.stop = stopAll

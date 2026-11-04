@@ -9,6 +9,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/tui/editor"
 )
 
 func newExitCardModel(t *testing.T, width, height int) *Model {
@@ -440,5 +443,205 @@ func TestExitCardHitRectsResetWhenNotDrawn(t *testing.T) {
 	m.View()
 	if !m.exitCard.quit.Empty() || !m.exitCard.keep.Empty() || !m.exitCard.dismiss.Empty() {
 		t.Fatalf("stale hit rectangles survived an undrawn card: %+v", m.exitCard)
+	}
+}
+
+func pressEsc(m *Model) {
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+}
+
+func startBlockedTurn(t *testing.T) *Model {
+	t.Helper()
+	backend := newCancellableConversationBackend()
+	m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	setConversationInput(m, "active prompt")
+	_, _ = m.submit()
+	waitSignal(t, backend.sendStarted)
+	t.Cleanup(func() { drainConversationRemote(t, m) })
+	return m
+}
+
+func TestEscOpensExitCardOnlyAtEndOfChain(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		setup    func(t *testing.T) *Model
+		wantOpen bool
+		check    func(t *testing.T, m *Model)
+	}{
+		{
+			name:     "idle, empty composer",
+			setup:    func(t *testing.T) *Model { return newExitCardModel(t, 120, 40) },
+			wantOpen: true,
+		},
+		{
+			name: "idle, draft",
+			setup: func(t *testing.T) *Model {
+				m := newExitCardModel(t, 120, 40)
+				setConversationInput(m, "half")
+				return m
+			},
+			wantOpen: true,
+			check: func(t *testing.T, m *Model) {
+				if got := m.editor.Value(); got != "half" {
+					t.Fatalf("draft = %q, want it untouched", got)
+				}
+			},
+		},
+		{
+			name:  "turn running",
+			setup: startBlockedTurn,
+			check: func(t *testing.T, m *Model) {
+				if m.op.stop != stopAll {
+					t.Fatal("esc did not cancel the running turn")
+				}
+			},
+		},
+		{
+			name: "wind-down after a cancel",
+			setup: func(t *testing.T) *Model {
+				m := startBlockedTurn(t)
+				pressEsc(m)
+				if m.op.run == 0 || m.op.stop != stopAll {
+					t.Fatalf("fixture is not winding down: run %v, stop %v", m.op.run, m.op.stop)
+				}
+				return m
+			},
+			wantOpen: true,
+		},
+		{
+			name: "completion menu open",
+			setup: func(t *testing.T) *Model {
+				m := newExitCardModel(t, 120, 40)
+				m.editor.Update(tea.PasteMsg{Content: "/q"})
+				if !m.editor.MenuOpen() {
+					t.Fatal("fixture menu is not open")
+				}
+				return m
+			},
+			check: func(t *testing.T, m *Model) {
+				if m.editor.MenuOpen() {
+					t.Fatal("esc left the completion menu open")
+				}
+			},
+		},
+		{
+			name: "chips focused",
+			setup: func(t *testing.T) *Model {
+				m := newExitCardModel(t, 120, 40)
+				m.editor.AddAttachment(editor.Attachment{Type: "service", ID: "a", Label: "a"})
+				m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+				if !m.editor.ChipsFocused() {
+					t.Fatal("fixture chips are not focused")
+				}
+				return m
+			},
+			check: func(t *testing.T, m *Model) {
+				if m.editor.ChipsFocused() {
+					t.Fatal("esc left the chips focused")
+				}
+			},
+		},
+		{
+			name: "text selection active",
+			setup: func(t *testing.T) *Model {
+				m := newExitCardModel(t, 120, 40)
+				m.selection.begin(testSelectionFrame("abc", 3, 1), 0, 0)
+				if !m.selection.active() {
+					t.Fatal("fixture selection is not active")
+				}
+				return m
+			},
+			check: func(t *testing.T, m *Model) {
+				if m.selection.active() {
+					t.Fatal("esc left the selection active")
+				}
+			},
+		},
+		{
+			name: "approval prompt shown",
+			setup: func(t *testing.T) *Model {
+				backend := &approvalBackend{t: t}
+				tools, err := agent.NewToolSet(newApprovalTool())
+				if err != nil {
+					t.Fatal(err)
+				}
+				m := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
+				m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+				setConversationInput(m, "Run the action")
+				_, _ = m.submit()
+				for waitingApprovals(m) == 0 {
+					_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+				}
+				t.Cleanup(func() { drainConversationRemote(t, m) })
+				return m
+			},
+			check: func(t *testing.T, m *Model) {
+				if waitingApprovals(m) != 0 {
+					t.Fatal("the prompt did not receive the esc")
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := tc.setup(t)
+			pressEsc(m)
+			if m.exitCard.open != tc.wantOpen {
+				t.Fatalf("card open = %v, want %v", m.exitCard.open, tc.wantOpen)
+			}
+			if tc.check != nil {
+				tc.check(t, m)
+			}
+		})
+	}
+}
+
+func TestExitCardOpenClearsHover(t *testing.T) {
+	t.Run("transcript row", func(t *testing.T) {
+		m := accordionTestModel(t)
+		m.Update(tea.MouseMotionMsg{X: 0, Y: accordionRow(t, m)})
+		if !m.list.Hovered() || !m.pointerIsHand {
+			t.Fatalf("fixture is not hovering a row: hovered %v, hand %v", m.list.Hovered(), m.pointerIsHand)
+		}
+		m.openExitCard()
+		m.Update(tea.MouseMotionMsg{X: 0, Y: accordionRow(t, m)})
+		if m.list.Hovered() || m.pointerIsHand {
+			t.Fatalf("hover survived the card: hovered %v, hand %v", m.list.Hovered(), m.pointerIsHand)
+		}
+	})
+
+	t.Run("follow control", func(t *testing.T) {
+		m := followTestModel()
+		m.resize(60, 30)
+		m.relayout()
+		m.list.ScrollToBottom()
+		m.list.ScrollBy(-4)
+		m.View()
+		m.Update(tea.MouseMotionMsg{X: m.follow.area.Min.X + 1, Y: m.follow.area.Min.Y + 1})
+		if !m.follow.hover || !m.pointerIsHand {
+			t.Fatalf("fixture is not hovering the control: hover %v, hand %v", m.follow.hover, m.pointerIsHand)
+		}
+		m.openExitCard()
+		m.Update(tea.MouseMotionMsg{X: 0, Y: 0})
+		if m.follow.hover || m.pointerIsHand {
+			t.Fatalf("hover survived the card: hover %v, hand %v", m.follow.hover, m.pointerIsHand)
+		}
+	})
+}
+
+func TestExitCardOpenDropsStaleFollowPress(t *testing.T) {
+	m := followTestModel()
+	m.resize(60, 30)
+	m.relayout()
+	m.list.ScrollToBottom()
+	m.list.ScrollBy(-4)
+	m.View()
+	m.Update(clickAt(m.follow.area.Min.Add(image.Pt(1, 1))))
+	if m.follow.pressed.Empty() {
+		t.Fatal("fixture did not press the control")
+	}
+	m.openExitCard()
+	if !m.follow.pressed.Empty() {
+		t.Fatal("a press survived the card")
 	}
 }
