@@ -68,7 +68,7 @@ func TestExitCardRendersCopy(t *testing.T) {
 	for _, want := range []string{
 		"Exit Bits?",
 		"Your conversation is saved. You can pick up where you left off anytime.",
-		"Quit Enter",
+		"Quit",
 		"Keep working",
 		"ESC x",
 	} {
@@ -82,9 +82,13 @@ func TestExitCardHighlightFollowsSelection(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
 	m.openExitCard()
 	m.exitCard.selected = exitKeepWorking
-	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "Keep working Enter") || strings.Contains(view, "Quit Enter") {
-		t.Fatalf("the Enter hint did not follow the highlight to Keep working:\n%s", view)
+	buf := drawnView(t, m)
+	fill := hexOf(m.styles.ExitCard.Selected.GetBackground())
+	quit := buf.Lines[m.exitCard.quit.Min.Y][m.exitCard.quit.Min.X]
+	keep := buf.Lines[m.exitCard.keep.Min.Y][m.exitCard.keep.Min.X]
+	if hexOf(keep.Style.Bg) != fill || hexOf(quit.Style.Bg) == fill {
+		t.Fatalf("the highlight fill did not move to Keep working: quit bg %s, keep bg %s, fill %s",
+			hexOf(quit.Style.Bg), hexOf(keep.Style.Bg), fill)
 	}
 }
 
@@ -108,7 +112,7 @@ func TestExitCardHitRects(t *testing.T) {
 		rect image.Rectangle
 		want string
 	}{
-		"quit":    {m.exitCard.quit, " Quit Enter "},
+		"quit":    {m.exitCard.quit, " Quit "},
 		"keep":    {m.exitCard.keep, " Keep working "},
 		"dismiss": {m.exitCard.dismiss, "ESC x"},
 	} {
@@ -138,15 +142,15 @@ func TestExitCardNarrowWraps(t *testing.T) {
 }
 
 func TestExitCardCompactKeepsKeyHint(t *testing.T) {
-	m := newExitCardModel(t, 30, 20)
+	m := newExitCardModel(t, 24, 20)
 	m.openExitCard()
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "enter quit · esc keep working") {
+	if !strings.Contains(strings.Join(strings.Fields(view), " "), "enter quit · esc keep working") {
 		t.Fatalf("the compact card lost its key hint:\n%s", view)
 	}
 	for _, line := range strings.Split(view, "\n") {
-		if width := ansi.StringWidth(line); width > 30 {
-			t.Fatalf("line is %d cells wide, want at most 30: %q", width, line)
+		if width := ansi.StringWidth(line); width > 24 {
+			t.Fatalf("line is %d cells wide, want at most 24: %q", width, line)
 		}
 	}
 }
@@ -185,8 +189,8 @@ func TestExitCardFadesBehind(t *testing.T) {
 		if now.Content != was.Content {
 			t.Fatalf("cell %v changed text from %q to %q", at, was.Content, now.Content)
 		}
-		if got, want := hexOf(now.Style.Fg), hexOf(blendHalf(was.Style.Fg, m.styles.Background)); got != want {
-			t.Fatalf("cell %v fg = %s, want %s (half-way from %s)", at, got, want, hexOf(was.Style.Fg))
+		if got, want := hexOf(now.Style.Fg), hexOf(fadeColor(was.Style.Fg, m.styles.Background)); got != want {
+			t.Fatalf("cell %v fg = %s, want %s (faded from %s)", at, got, want, hexOf(was.Style.Fg))
 		}
 		if hexOf(now.Style.Fg) != hexOf(was.Style.Fg) {
 			faded++

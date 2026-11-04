@@ -30,17 +30,17 @@ func fadedCell(t *testing.T, content string, text color.Color, x int) uv.Cell {
 	return buf.Lines[0][x]
 }
 
-func TestBlendHalf(t *testing.T) {
+func TestFadeColor(t *testing.T) {
 	tests := []struct{ name, in, want string }{
-		{"brand green", "#41C464", "#2C6F43"},
-		{"white", "#FFFFFF", "#8B8C90"},
+		{"brand green", "#41C464", "#224432"},
+		{"white", "#FFFFFF", "#515359"},
 		{"background", "#171921", "#171921"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := hexOf(blendHalf(lipgloss.Color(test.in), fadeTestBackground))
+			got := hexOf(fadeColor(lipgloss.Color(test.in), fadeTestBackground))
 			if got != test.want {
-				t.Fatalf("blendHalf(%s) = %s, want %s", test.in, got, test.want)
+				t.Fatalf("fadeColor(%s) = %s, want %s", test.in, got, test.want)
 			}
 		})
 	}
@@ -54,19 +54,19 @@ func TestFadeBlendsForegroundAndBackground(t *testing.T) {
 
 	cell := fadedCell(t, content, lipgloss.Color("#E6E8EE"), 0)
 
-	if got := hexOf(cell.Style.Fg); got != "#8B8C90" {
-		t.Errorf("fg = %s, want #8B8C90", got)
+	if got := hexOf(cell.Style.Fg); got != "#515359" {
+		t.Errorf("fg = %s, want #515359", got)
 	}
-	if got := hexOf(cell.Style.Bg); got != "#514D8D" {
-		t.Errorf("bg = %s, want #514D8D", got)
+	if got := hexOf(cell.Style.Bg); got != "#343357" {
+		t.Errorf("bg = %s, want #343357", got)
 	}
 }
 
 func TestFadeDefaultForegroundUsesText(t *testing.T) {
 	cell := fadedCell(t, "hi", lipgloss.Color("#E6E8EE"), 0)
 
-	if got := hexOf(cell.Style.Fg); got != "#7F8188" {
-		t.Errorf("fg = %s, want #7F8188", got)
+	if got := hexOf(cell.Style.Fg); got != "#4B4D54" {
+		t.Errorf("fg = %s, want #4B4D54", got)
 	}
 	if cell.Style.Bg != nil {
 		t.Errorf("bg = %s, want nil so the terminal background shows through", hexOf(cell.Style.Bg))
@@ -78,8 +78,8 @@ func TestFadeIndexedColor(t *testing.T) {
 
 	cell := fadedCell(t, content, lipgloss.Color("#E6E8EE"), 0)
 
-	if got := hexOf(cell.Style.Fg); got != "#242529" {
-		t.Errorf("fg = %s, want #242529", got)
+	if got := hexOf(cell.Style.Fg); got != "#1D1F25" {
+		t.Errorf("fg = %s, want #1D1F25", got)
 	}
 }
 

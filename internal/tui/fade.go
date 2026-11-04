@@ -7,9 +7,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// fade returns content with every cell's colors mixed halfway toward bg. A
-// nil foreground is the terminal default, so it fades from text; a nil
-// background already paints as bg and stays nil.
+// fade returns content with every cell's colors mixed three quarters of the
+// way toward bg. A nil foreground is the terminal default, so it fades from
+// text; a nil background already paints as bg and stays nil.
 func fade(content string, width, height int, text, bg color.Color) string {
 	buf := uv.NewScreenBuffer(width, height)
 	buf.Method = ansi.GraphemeWidth
@@ -21,19 +21,20 @@ func fade(content string, width, height int, text, bg color.Color) string {
 			if style.Fg == nil {
 				style.Fg = text
 			}
-			style.Fg = blendHalf(style.Fg, bg)
+			style.Fg = fadeColor(style.Fg, bg)
 			if style.Bg != nil {
-				style.Bg = blendHalf(style.Bg, bg)
+				style.Bg = fadeColor(style.Bg, bg)
 			}
 		}
 	}
 	return buf.Render()
 }
 
-// blendHalf mixes c halfway toward bg per 8-bit channel, rounding half up.
-func blendHalf(c, bg color.Color) color.Color {
+// fadeColor mixes c three quarters of the way toward bg per 8-bit channel,
+// rounding half up.
+func fadeColor(c, bg color.Color) color.Color {
 	cr, cg, cb, _ := c.RGBA()
 	bgR, bgG, bgB, _ := bg.RGBA()
-	mix := func(a, b uint32) uint8 { return uint8((a>>8 + b>>8 + 1) / 2) }
+	mix := func(a, b uint32) uint8 { return uint8((a>>8 + 3*(b>>8) + 2) / 4) }
 	return color.RGBA{R: mix(cr, bgR), G: mix(cg, bgG), B: mix(cb, bgB), A: 0xFF}
 }

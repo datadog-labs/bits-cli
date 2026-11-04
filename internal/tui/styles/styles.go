@@ -177,8 +177,6 @@ type ExitCard struct {
 	Body     lipgloss.Style
 	Action   lipgloss.Style
 	Selected lipgloss.Style
-	// Hint is the "Enter" key label inside the highlighted button.
-	Hint lipgloss.Style
 	// Text stands in for unstyled cells when the screen behind the card is
 	// faded.
 	Text color.Color

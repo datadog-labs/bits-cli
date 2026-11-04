@@ -15,7 +15,6 @@ const (
 	exitCardTitle   = "Exit Bits?"
 	exitCardDismiss = "ESC x"
 	exitCardBody    = "Your conversation is saved. You can pick up where you left off anytime."
-	exitCardHint    = "Enter"
 	exitQuitLabel   = "Quit"
 	exitKeepLabel   = "Keep working"
 	exitButtonGap   = "  "
@@ -120,13 +119,10 @@ func (m *Model) closeExitCardInto(msg tea.Msg) tea.Cmd {
 }
 
 func exitButton(sty styles.ExitCard, label string, highlighted bool) string {
-	if !highlighted {
-		return sty.Action.Render(label)
+	if highlighted {
+		return sty.Selected.Render(label)
 	}
-	inner := sty.Selected.UnsetPadding()
-	return inner.PaddingLeft(1).Render(label+" ") +
-		sty.Hint.UnsetPadding().Render(exitCardHint) +
-		inner.PaddingRight(1).Render("")
+	return sty.Action.Render(label)
 }
 
 func (m *Model) exitCardButtons() (quit, keep string) {

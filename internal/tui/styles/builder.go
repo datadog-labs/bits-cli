@@ -116,7 +116,6 @@ func build(isDark bool, p palette) Theme {
 		Body:     text.Secondary,
 		Action:   approval.Action,
 		Selected: approval.Selected,
-		Hint:     approval.Selected.Foreground(lipgloss.Color(p.textTertiary)).Bold(false),
 		Text:     lipgloss.Color(p.textPrimary),
 	}
 	// The control is a background fill on its cells rather than a drawn
