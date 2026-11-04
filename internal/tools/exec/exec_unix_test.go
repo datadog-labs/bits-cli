@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/workspace"
+	"golang.org/x/sys/unix"
 )
 
 func TestExecServiceUnixSuccessAndInheritedEnvironment(t *testing.T) {
@@ -409,5 +410,50 @@ func TestBoundedExecOutputNormalizesInvalidUTF8(t *testing.T) {
 	output := boundedExecOutput(stdout, stderr)
 	if output.Stdout != "ok\uFFFD" || output.Stderr != "\uFFFD!" {
 		t.Fatalf("output = %+v, want invalid bytes replaced", output)
+	}
+}
+
+func TestExecServiceUnixCommandRunsInNewSession(t *testing.T) {
+	dir := t.TempDir()
+	service := newUnixTestExecService(5*time.Second, 4096)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	outcomes := make(chan ExecOutcome, 1)
+	go func() {
+		outcomes <- service.Run(ctx, ExecRequest{
+			Command: `echo $$ > shell.pid; sleep 2`,
+			CWD:     dir,
+		})
+	}()
+
+	pid, err := waitForPIDFile(filepath.Join(dir, "shell.pid"), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid, err := unix.Getsid(pid)
+	if err != nil {
+		t.Fatalf("getsid(%d): %v", pid, err)
+	}
+	ownSID, err := unix.Getsid(0)
+	if err != nil {
+		t.Fatalf("getsid(self): %v", err)
+	}
+	if sid != pid {
+		t.Fatalf("command session = %d, want new session led by command pid %d", sid, pid)
+	}
+	if sid == ownSID {
+		t.Fatalf("command shares the parent session %d", ownSID)
+	}
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		t.Fatalf("getpgid(%d): %v", pid, err)
+	}
+	if pgid != pid {
+		t.Fatalf("command process group = %d, want group led by command pid %d", pgid, pid)
+	}
+
+	cancel()
+	if outcome := <-outcomes; outcome.Reason != ExecCancelled {
+		t.Fatalf("outcome = %+v, want cancellation", outcome)
 	}
 }
