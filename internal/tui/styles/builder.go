@@ -211,6 +211,7 @@ func build(isDark bool, p palette) Theme {
 			StatusAwaitingLabel: busy.shimmer("awaiting approval"),
 			StatusSweepDim:      busy.dim,
 			StatusSweepHot:      busy.hot,
+			Motion:              true,
 			StatusSpinner:       Spinner{frames: brailleFrames, stepsPerFrame: spinnerStepsPerFrame},
 			// Transcript labels, progress lines and the idle dot: present so nothing
 			// is silently dropped, but not competing with the conversation.

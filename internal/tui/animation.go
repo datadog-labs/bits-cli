@@ -92,10 +92,11 @@ func (m *Model) syncAnimations() tea.Cmd {
 }
 
 func (m *Model) syncAnimationsAt(now time.Time) tea.Cmd {
+	m.list.SetRunning(m.op.run != 0)
 	var wantActivity, wantSweep bool
 	switch m.mode {
 	case ModeChat:
-		wantActivity = m.toolAnimationWanted()
+		wantActivity = m.transcriptAnimationWanted()
 		wantSweep = m.borderSweepWanted()
 	case ModeConversations:
 		wantActivity = m.picker != nil && m.picker.Animating()

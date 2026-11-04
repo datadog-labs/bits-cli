@@ -142,8 +142,11 @@ func TestAnimationClockDisarmsAfterClosedTurnWithStaleTool(t *testing.T) {
 	if m.animClock.generation == staleGeneration {
 		t.Fatal("disarming did not invalidate the live tick chain")
 	}
-	if !m.list.HasAnimated() {
-		t.Fatal("test setup invalid: stale tool should still report running")
+	if m.state.Blocks[0].Tool.Status != agent.ToolRunning {
+		t.Fatal("test setup: the tool should still be marked running")
+	}
+	if m.list.HasAnimated() {
+		t.Fatal("a stale running tool must not animate once the turn closed")
 	}
 }
 
@@ -158,8 +161,11 @@ func TestTerminalEventDisarmsDespiteStaleRunningBlock(t *testing.T) {
 	if m.animClock.armed || m.animActivity.active || m.animBorderSweep.active {
 		t.Fatal("the terminal event left animations active")
 	}
-	if !m.list.HasAnimated() {
-		t.Fatal("test setup invalid: running block should remain stale")
+	if m.state.Blocks[0].Tool.Status != agent.ToolRunning {
+		t.Fatal("test setup: the tool should still be marked running")
+	}
+	if m.list.HasAnimated() {
+		t.Fatal("a stale running block must not animate once the turn closed")
 	}
 }
 

@@ -49,6 +49,10 @@ type List struct {
 	// cache entries include it in their identity, while settled entries ignore it.
 	frame int
 
+	// running is whether a run is active. Without one, a block left running by
+	// an ended or restored turn is stale, not progressing.
+	running bool
+
 	cache    map[agent.BlockID]listLineEntry
 	renderer blockRenderer
 
@@ -583,9 +587,7 @@ func (l *List) itemAnimated(it presentationItem) bool {
 	if it.kind == itemNotice || it.kind == itemHeader {
 		return false
 	}
-	// WithoutMotion replaces the shared spinner with static fallbacks, so
-	// running blocks no longer justify a repaint clock.
-	if l.sty.StatusSpinner.Len() == 0 {
+	if !l.sty.Motion || !l.running {
 		return false
 	}
 	for i := it.start; i < it.end; i++ {
@@ -608,6 +610,10 @@ func (l *List) HasAnimated() bool {
 	}
 	return false
 }
+
+// SetRunning reports whether a run is active, so the list alone decides
+// whether the transcript animates.
+func (l *List) SetRunning(running bool) { l.running = running }
 
 // SetFrame sets the animation step used by in-flight indicators. Cache entries
 // invalidate lazily: animated entries compare frames, settled entries do not.
