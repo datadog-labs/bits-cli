@@ -108,6 +108,17 @@ func build(isDark bool, p palette) Theme {
 		// light mode's background.
 		Disclaimer: lipgloss.NewStyle().Foreground(lipgloss.Color(p.error)),
 	}
+	exitCardPanel := panel
+	exitCardPanel.MaxWidth = 80
+	exitCardPanel.Frame = exitCardPanel.Frame.Padding(0, 1)
+	exitCard := ExitCard{
+		Panel:    exitCardPanel,
+		Body:     text.Secondary,
+		Action:   approval.Action,
+		Selected: approval.Selected,
+		Hint:     approval.Selected.Foreground(lipgloss.Color(p.textTertiary)).Bold(false),
+		Text:     lipgloss.Color(p.textPrimary),
+	}
 	// The control is a background fill on its cells rather than a drawn
 	// border, so the one-cell padding is what gives the chevron its box. It's
 	// always drawn as a fixed fill, rather than blending into the row until
@@ -162,6 +173,7 @@ func build(isDark bool, p palette) Theme {
 		Feedback:     feedback,
 		Panel:        panel,
 		Approval:     approval,
+		ExitCard:     exitCard,
 		Permissions:  permissionsPanel,
 		Accordion:    accordion,
 		Selector:     selector,

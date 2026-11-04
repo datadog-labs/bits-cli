@@ -464,3 +464,24 @@ func TestSuccessStyleHasNoSurface(t *testing.T) {
 		})
 	}
 }
+
+func TestExitCardStylesBothThemes(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		isDark bool
+	}{{"dark", true}, {"light", false}} {
+		t.Run(test.name, func(t *testing.T) {
+			theme := Default(test.isDark)
+			card := theme.ExitCard
+			if card.Panel.MaxWidth != 80 {
+				t.Errorf("exit card MaxWidth = %d, want 80", card.Panel.MaxWidth)
+			}
+			if got, want := card.Selected.GetBackground(), theme.Approval.Selected.GetBackground(); got != want {
+				t.Errorf("exit card selected background = %v, want approval's %v", got, want)
+			}
+			if card.Text == nil {
+				t.Error("exit card Text is nil")
+			}
+		})
+	}
+}
