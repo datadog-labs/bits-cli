@@ -33,7 +33,7 @@ func fade(content string, width, height int, text, bg color.Color) string {
 // blendHalf mixes c halfway toward bg per 8-bit channel, rounding half up.
 func blendHalf(c, bg color.Color) color.Color {
 	cr, cg, cb, _ := c.RGBA()
-	br, bgr, bb, _ := bg.RGBA()
+	bgR, bgG, bgB, _ := bg.RGBA()
 	mix := func(a, b uint32) uint8 { return uint8((a>>8 + b>>8 + 1) / 2) }
-	return color.RGBA{R: mix(cr, br), G: mix(cg, bgr), B: mix(cb, bb), A: 0xFF}
+	return color.RGBA{R: mix(cr, bgR), G: mix(cg, bgG), B: mix(cb, bgB), A: 0xFF}
 }

@@ -423,6 +423,7 @@ func (m *Model) setMode(mode Mode) {
 	if m.mode == ModeChat && mode != ModeChat {
 		m.selection.clear()
 		m.follow = followControl{}
+		m.closeExitCard()
 	}
 	m.mode = mode
 }

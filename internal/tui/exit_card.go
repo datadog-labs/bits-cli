@@ -19,6 +19,8 @@ const (
 	exitQuitLabel   = "Quit"
 	exitKeepLabel   = "Keep working"
 	exitButtonGap   = "  "
+
+	exitCardCompactHint = "enter quit · esc keep working"
 )
 
 type exitChoice int
@@ -56,7 +58,8 @@ func (m *Model) closeExitCard() {
 // updateExitCard routes input while the card owns it. Typing and pasting
 // hand the card's job back to the composer: the card closes, the editor
 // regains focus ahead of the usual end-of-Update reconcile, and the message
-// reaches it as if the card had never been there.
+// reaches it as if the card had never been there. A prompt waiting behind the
+// card gets nothing: a reflex key must not answer it unseen.
 func (m *Model) updateExitCard(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -108,12 +111,14 @@ func (m *Model) clickExitCard(at image.Point) tea.Cmd {
 
 func (m *Model) closeExitCardInto(msg tea.Msg) tea.Cmd {
 	m.closeExitCard()
+	if m.prompt() != nil {
+		return nil
+	}
 	blink := m.editor.Focus()
 	_, cmd := m.dispatch(msg)
 	return tea.Batch(blink, cmd)
 }
 
-// exitButton renders a button; the highlighted one carries the Enter hint.
 func exitButton(sty styles.ExitCard, label string, highlighted bool) string {
 	if !highlighted {
 		return sty.Action.Render(label)
@@ -131,9 +136,8 @@ func (m *Model) exitCardButtons() (quit, keep string) {
 	return quit, keep
 }
 
-// exitCardOverlay centers the card over base, faded toward the background so
-// the card is what the eye lands on. A terminal that cannot paint color
-// cannot show the fade either, so it keeps the frame as drawn.
+// exitCardOverlay centers the card over base, faded toward the background. A
+// monochrome terminal cannot show the fade, so it keeps the frame as drawn.
 func (m *Model) exitCardOverlay(base string) string {
 	sty := m.styles.ExitCard
 	if !m.monochrome {
@@ -151,9 +155,11 @@ func (m *Model) exitCardOverlay(base string) string {
 			bodyRows = lipgloss.Height(body)
 			return body + "\n\n" + buttons
 		},
-		MinBodyWidth:   lipgloss.Width(buttons),
-		CompactTitle:   exitCardTitle,
-		CompactMessage: exitCardBody,
+		MinBodyWidth: lipgloss.Width(buttons),
+		CompactTitle: exitCardTitle,
+		CompactBody: func(width int) string {
+			return sty.Body.Width(width).Render(exitCardBody) + "\n\n" + sty.Panel.Help.Render(exitCardCompactHint)
+		},
 	}
 	panel := components.NewPanel(sty.Panel)
 	card, _, bodyWidth := panel.Layout(m.width, m.height, content)

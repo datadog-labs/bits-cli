@@ -30,19 +30,18 @@ func drawnView(t *testing.T, m *Model) *uv.ScreenBuffer {
 	return &buf
 }
 
-// drawnCardRect finds the card in a stripped view from its title, one cell
-// inside the border's top-left corner on the next row down, and from the
-// border's corners.
+// drawnCardRect finds the card in a stripped view from its title, two cells
+// inside the border's left edge (border and padding), and from the border's
+// corners.
 func drawnCardRect(t *testing.T, view string) image.Rectangle {
 	t.Helper()
 	lines := strings.Split(view, "\n")
 	for y, line := range lines {
-		runes := []rune(line)
-		title := strings.Index(string(runes), "Exit Bits?")
+		title := strings.Index(line, "Exit Bits?")
 		if title < 0 {
 			continue
 		}
-		x := len([]rune(string(runes)[:title])) - 2
+		x := len([]rune(line[:title])) - 2
 		borderRow := []rune(lines[y-1])
 		right := x + slices.Index(borderRow[x:], '╮') + 1
 		for bottom := y; bottom < len(lines); bottom++ {
@@ -55,7 +54,6 @@ func drawnCardRect(t *testing.T, view string) image.Rectangle {
 	return image.Rectangle{}
 }
 
-// openedCardRect opens the card, reports where it draws, and closes it again.
 func openedCardRect(t *testing.T, m *Model) image.Rectangle {
 	t.Helper()
 	m.openExitCard()
@@ -136,6 +134,20 @@ func TestExitCardNarrowWraps(t *testing.T) {
 	joined := strings.Join(words, " ")
 	if !strings.Contains(joined, "Your conversation is saved. You can pick up where you left off anytime.") {
 		t.Fatalf("the body was truncated, not wrapped:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+func TestExitCardCompactKeepsKeyHint(t *testing.T) {
+	m := newExitCardModel(t, 30, 20)
+	m.openExitCard()
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "enter quit · esc keep working") {
+		t.Fatalf("the compact card lost its key hint:\n%s", view)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if width := ansi.StringWidth(line); width > 30 {
+			t.Fatalf("line is %d cells wide, want at most 30: %q", width, line)
+		}
 	}
 }
 
@@ -332,6 +344,12 @@ func TestExitCardSpaceTypesButTabToggles(t *testing.T) {
 	if m.exitCard.open || m.editor.Value() != "a " {
 		t.Fatalf("space: open %v, editor %q", m.exitCard.open, m.editor.Value())
 	}
+
+	m.openExitCard()
+	m.Update(exitCardKey("", tea.KeyTab))
+	if !m.exitCard.open || m.exitCard.selected != exitKeepWorking || m.editor.Value() != "a " {
+		t.Fatalf("tab: open %v, selected %v, editor %q", m.exitCard.open, m.exitCard.selected, m.editor.Value())
+	}
 }
 
 func TestExitCardPasteLandsInComposer(t *testing.T) {
@@ -347,18 +365,60 @@ func TestExitCardPasteLandsInComposer(t *testing.T) {
 	}
 }
 
+func TestExitCardDropsReflexInputForAPromptBehindIt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{"navigation key", exitCardKey("j", 'j')},
+		{"option key", exitCardKey("2", '2')},
+		{"bracket", exitCardKey("]", ']')},
+		{"paste", tea.PasteMsg{Content: "EU"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
+			waitQuestions(t, m)
+			prompt := ansi.Strip(m.frame.promptView)
+			if !strings.Contains(prompt, "› 1. US") {
+				t.Fatalf("fixture does not start on the first option:\n%s", prompt)
+			}
+			editor := m.editor.Value()
+
+			m.openExitCard()
+			m.Update(tc.msg)
+
+			if m.exitCard.open {
+				t.Fatal("the card stayed open")
+			}
+			if dockedToolUI(m) == nil || m.focus() != focusPrompt {
+				t.Fatalf("the prompt is not showing: focus %v", m.focus())
+			}
+			if got := ansi.Strip(m.frame.promptView); got != prompt {
+				t.Fatalf("the prompt changed:\n%s\nwant\n%s", got, prompt)
+			}
+			if m.editor.Value() != editor {
+				t.Fatalf("editor = %q, want %q", m.editor.Value(), editor)
+			}
+		})
+	}
+}
+
+func TestExitCardClosesWhenLeavingChat(t *testing.T) {
+	m := newExitCardModel(t, 120, 40)
+	m.openExitCard()
+	m.setMode(ModePermissions)
+	if m.exitCard.open {
+		t.Fatal("the card survived leaving chat")
+	}
+}
+
 func clickAt(p image.Point) tea.MouseClickMsg {
 	return tea.MouseClickMsg(tea.Mouse{X: p.X, Y: p.Y, Button: tea.MouseLeft})
 }
 
 func TestExitCardClicks(t *testing.T) {
 	open := func() *Model {
-		m := followTestModel()
-		m.resize(60, 30)
-		m.relayout()
-		m.list.ScrollToBottom()
-		m.list.ScrollBy(-4)
-		m.View()
+		m := scrolledFollowModel()
 		if m.follow.area.Empty() {
 			t.Fatal("fixture shows no jump-to-latest control")
 		}
@@ -389,9 +449,8 @@ func TestExitCardClicks(t *testing.T) {
 
 	m = open()
 	top := m.list.VisibleSurface().Top
-	elsewhere := image.Pt(0, 0)
 	for name, msg := range map[string]tea.Msg{
-		"outside the card": clickAt(elsewhere),
+		"outside the card": clickAt(image.Pt(0, 0)),
 		"jump-to-latest":   clickAt(m.follow.area.Min.Add(image.Pt(1, 1))),
 		"wheel":            tea.MouseWheelMsg(tea.Mouse{X: 5, Y: 5, Button: tea.MouseWheelDown}),
 		"motion":           tea.MouseMotionMsg(tea.Mouse{X: 5, Y: 5}),
@@ -400,7 +459,7 @@ func TestExitCardClicks(t *testing.T) {
 		if !m.exitCard.open || quitsIn(cmd) {
 			t.Fatalf("%s: open %v, quit %v", name, m.exitCard.open, quitsIn(cmd))
 		}
-		if m.list.VisibleSurface().Top != top || m.list.Following() || !m.exitCard.open {
+		if m.list.VisibleSurface().Top != top || m.list.Following() {
 			t.Fatalf("%s moved the transcript behind the card", name)
 		}
 		if click, ok := msg.(tea.MouseClickMsg); ok {
@@ -460,6 +519,18 @@ func startBlockedTurn(t *testing.T) *Model {
 	_, _ = m.submit()
 	waitSignal(t, backend.sendStarted)
 	t.Cleanup(func() { drainConversationRemote(t, m) })
+	return m
+}
+
+func startApprovalTurn(t *testing.T) *Model {
+	t.Helper()
+	m, _ := newPermissionsModel(t, agent.ModeManual)
+	setConversationInput(m, "Run the action")
+	_, _ = m.submit()
+	t.Cleanup(func() {
+		m.cancelOperation()
+		drainConversationRemote(t, m)
+	})
 	return m
 }
 
@@ -528,10 +599,8 @@ func TestEscOpensExitCardOnlyAtEndOfChain(t *testing.T) {
 			wantOpen: true,
 		},
 		{
-			name: "fork running",
-			setup: func(t *testing.T) *Model {
-				return startFork(t)
-			},
+			name:  "fork running",
+			setup: startFork,
 			check: func(t *testing.T, m *Model) {
 				if m.op.kind != opFork || m.op.stop != stopAll {
 					t.Fatalf("esc did not cancel the fork: op %+v", m.op)
@@ -627,19 +696,8 @@ func TestEscOpensExitCardOnlyAtEndOfChain(t *testing.T) {
 		{
 			name: "approval prompt shown",
 			setup: func(t *testing.T) *Model {
-				backend := &approvalBackend{t: t}
-				tools, err := agent.NewToolSet(newApprovalTool())
-				if err != nil {
-					t.Fatal(err)
-				}
-				m := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
-				m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-				setConversationInput(m, "Run the action")
-				_, _ = m.submit()
-				for waitingApprovals(m) == 0 {
-					_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
-				}
-				t.Cleanup(func() { drainConversationRemote(t, m) })
+				m := startApprovalTurn(t)
+				awaitPendingApproval(t, m)
 				return m
 			},
 			check: func(t *testing.T, m *Model) {
@@ -714,8 +772,6 @@ func TestExitCardOpenDropsStaleFollowPress(t *testing.T) {
 	}
 }
 
-// The card swallows motion, so nothing clears hover state that is set while it
-// is open; the pointer shape must not follow it.
 func TestExitCardSuppressesHandWhileOpen(t *testing.T) {
 	t.Run("transcript row", func(t *testing.T) {
 		m := accordionTestModel(t)
