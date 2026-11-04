@@ -68,10 +68,10 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 	m.clearAsks()
 	m.loggedOut = true
 	if closeFileSearch == nil {
-		return m, tea.Quit
+		return m, m.quitWith(tea.Quit)
 	}
-	return m, func() tea.Msg {
+	return m, m.quitWith(func() tea.Msg {
 		_ = closeFileSearch()
 		return tea.Quit()
-	}
+	})
 }

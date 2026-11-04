@@ -665,17 +665,19 @@ func (l *List) HasAnimated() bool {
 	return false
 }
 
-// SetWidgetView replaces how a widget block renders. Views are presentation
-// state owned by the caller; Reset drops them with the conversation.
-func (l *List) SetWidgetView(id agent.BlockID, v WidgetView) {
+// SetWidgetView replaces how a widget block renders, and reports whether the
+// view changed. Views are presentation state owned by the caller; Reset drops
+// them with the conversation.
+func (l *List) SetWidgetView(id agent.BlockID, v WidgetView) bool {
 	if old, ok := l.widgets[id]; ok && old == v {
-		return
+		return false
 	}
 	if l.widgets == nil {
 		l.widgets = make(map[agent.BlockID]WidgetView)
 	}
 	l.widgets[id] = v
 	delete(l.cache, id)
+	return true
 }
 
 // SetRunning reports whether a run is active, so the list alone decides
@@ -1116,4 +1118,28 @@ func (l *List) ReplaceTranscript(blocks []agent.Block, tasks []agent.Task, notic
 	clear(l.toggled)
 	clear(l.widgets)
 	l.SetTranscript(blocks, tasks, notices)
+}
+
+// Widgets returns every widget block, and which of them intersect the
+// viewport, found in one walk of the visible items.
+func (l *List) Widgets() (blocks []agent.Block, visible map[agent.BlockID]bool) {
+	for _, b := range l.items {
+		if b.Kind == assistant.KindWidget {
+			blocks = append(blocks, b)
+		}
+	}
+	if len(blocks) == 0 {
+		return nil, nil
+	}
+	l.settle()
+	visible = make(map[agent.BlockID]bool)
+	row := -l.offsetLine
+	for idx := l.offsetIdx; idx < len(l.view) && row < l.height; idx++ {
+		height := len(l.entry(idx).lines)
+		if item := l.view[idx]; row+height > 0 && item.kind == itemBlock && item.start >= 0 && l.items[item.start].Kind == assistant.KindWidget {
+			visible[item.id] = true
+		}
+		row += height + l.gapAfter(idx)
+	}
+	return blocks, visible
 }

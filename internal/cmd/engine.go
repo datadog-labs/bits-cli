@@ -84,13 +84,7 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 		return nil, fmt.Errorf("unsupported authentication mode %q", opts.AuthMode)
 	}
 
-	client, err := NewAuthenticatedClient(ctx, ClientOptions{
-		Mode:    opts.AuthMode,
-		Store:   store,
-		APIKey:  os.Getenv("DD_API_KEY"),
-		AppKey:  os.Getenv("DD_APP_KEY"),
-		APISite: opts.Site,
-	})
+	client, err := NewAuthenticatedClient(ctx, clientOptions(opts, store))
 	if err != nil {
 		if opts.AuthMode == auth.ModeAPIKey {
 			return nil, fmt.Errorf("authenticate with API/app keys: %w", err)
@@ -140,6 +134,18 @@ func validExecEnvName(name string) bool {
 		return false
 	}
 	return true
+}
+
+// clientOptions selects the chat's credentials, shared by every client the
+// chat authenticates.
+func clientOptions(opts ChatOptions, store auth.CredentialStore) ClientOptions {
+	return ClientOptions{
+		Mode:    opts.AuthMode,
+		Store:   store,
+		APIKey:  os.Getenv("DD_API_KEY"),
+		AppKey:  os.Getenv("DD_APP_KEY"),
+		APISite: opts.Site,
+	}
 }
 
 // NewAuthenticatedClient constructs exactly the client selected by opts.Mode.

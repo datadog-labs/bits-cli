@@ -20,6 +20,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
+	"github.com/datadog-labs/bits-cli/internal/viz"
 )
 
 // historyLoadTimeout bounds the conversation-history fetch on startup.
@@ -149,7 +150,7 @@ func (m *Model) reconcilePointerShape() tea.Cmd {
 	if m.mode == ModeChat && !m.frame.tooSmall {
 		hand = m.list.Hovered() || m.follow.hover || (m.focus() == focusEditor && m.editor.ChipHovered())
 		if !hand && !m.frame.replaced && !m.editor.MenuOpen() {
-			if hit, ok := m.list.HoveredLink(); ok && webLink(hit.URL) {
+			if hit, ok := m.list.HoveredLink(); ok && m.clickableLink(hit) {
 				hand = true
 			}
 		}
@@ -178,6 +179,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
+	case viz.Completion:
+		if page := m.widgets.apply(msg); page != "" {
+			cmd = m.openBrowser(page, "")
+		}
 	case uv.PrimaryDeviceAttributesEvent:
 		m.graphics.ObserveDeviceAttributes()
 	case uv.KittyGraphicsEvent:
@@ -212,7 +217,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	loadSkillMenu := m.syncClientSkills()
 	m.relayout()
-	return m, tea.Batch(cmd, loadSkillMenu, m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
+	return m, tea.Batch(cmd, loadSkillMenu, m.syncWidgets(), m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
 }
 
 func isUserInput(msg tea.Msg) bool {
@@ -237,12 +242,12 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	m.stopEntitySearch()
 	closeFileSearch := m.stopFileSearch()
 	if closeFileSearch == nil {
-		return m, tea.Quit
+		return m, m.quitWith(tea.Quit)
 	}
-	return m, func() tea.Msg {
+	return m, m.quitWith(func() tea.Msg {
 		_ = closeFileSearch()
 		return tea.Quit()
-	}
+	})
 }
 
 // dispatch routes one message to the owning surface. Non-input messages (resize,
@@ -349,7 +354,14 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
+			if msg.success == "" {
+				// A widget's URL carries the whole widget: too long to show.
+				return m, m.postNotice(notice(chat.NoticeError, msg.err, "Could not open a browser for this widget."))
+			}
 			return m, m.postNotice(notice(chat.NoticeError, msg.err, "Could not open a browser. Open this URL: %s", msg.url))
+		}
+		if msg.success == "" {
+			return m, nil
 		}
 		return m, m.postNotice(notice(chat.NoticeInfo, nil, "%s: %s", msg.success, msg.url))
 	}
@@ -474,6 +486,12 @@ type pendingLinkClick struct {
 	dragged bool
 }
 
+// clickableLink reports whether a transcript link reacts to clicks: a live
+// widget action or a web page.
+func (m *Model) clickableLink(hit chat.LinkHit) bool {
+	return hit.Action != chat.WidgetNone || webLink(hit.URL)
+}
+
 // webLink accepts destinations opened by Bits on a plain click. Other OSC 8
 // links remain available to the terminal under its own link behavior.
 func webLink(raw string) bool {
@@ -497,7 +515,7 @@ func (m *Model) beginLinkClick(msg tea.MouseClickMsg) {
 		return
 	}
 	hit, ok := m.list.LinkAt(msg.X, msg.Y)
-	if ok && webLink(hit.URL) {
+	if ok && m.clickableLink(hit) {
 		m.pendingLink = &pendingLinkClick{hit: hit, x: msg.X, y: msg.Y, epoch: m.conversationEpoch}
 	}
 }
@@ -521,8 +539,16 @@ func (m *Model) finishLinkClick(msg tea.MouseReleaseMsg) tea.Cmd {
 		return cmd
 	}
 	hit, ok := m.list.LinkAt(msg.X, msg.Y)
-	if !ok || hit != p.hit || !webLink(hit.URL) {
+	if !ok || hit != p.hit || !m.clickableLink(hit) {
 		return cmd
+	}
+	if hit.Action != chat.WidgetNone {
+		action, page := m.widgets.click(hit)
+		if page != "" {
+			// The URL carries the whole widget: too long to echo as a notice.
+			action = m.openBrowser(page, "")
+		}
+		return tea.Batch(cmd, action)
 	}
 	return tea.Batch(cmd, m.openBrowser(hit.URL, "Opened link in your browser"))
 }

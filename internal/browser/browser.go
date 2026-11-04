@@ -42,11 +42,21 @@ func ConversationURL(apiSite, conversationID string) (string, error) {
 // SettingsURL returns the Assistant settings page on the Datadog site serving
 // the Assistant API.
 func SettingsURL(apiSite string) (string, error) {
+	origin, err := WebOrigin(apiSite)
+	if err != nil {
+		return "", err
+	}
+	return origin + "/ask/settings", nil
+}
+
+// WebOrigin returns the Datadog web app origin for the site serving the
+// Assistant API.
+func WebOrigin(apiSite string) (string, error) {
 	webHost, err := webHostForAssistantSite(apiSite)
 	if err != nil {
 		return "", err
 	}
-	return (&url.URL{Scheme: "https", Host: webHost, Path: "/ask/settings"}).String(), nil
+	return (&url.URL{Scheme: "https", Host: webHost}).String(), nil
 }
 
 func webHostForAssistantSite(apiSite string) (string, error) {

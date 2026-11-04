@@ -22,6 +22,7 @@ import (
 	statusview "github.com/datadog-labs/bits-cli/internal/tui/status"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 	"github.com/datadog-labs/bits-cli/internal/update"
+	"github.com/datadog-labs/bits-cli/internal/viz"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -135,6 +136,9 @@ type EntitySearcher interface {
 }
 
 type Config struct {
+	// Visualization renders widgets; nil where ddviz cannot run, which leaves
+	// widgets as links to the web app.
+	Visualization  viz.Client
 	Tools          *agent.ToolSet
 	ToolUI         *tools.UI
 	Version        string
@@ -276,6 +280,8 @@ type Model struct {
 	// the environment (see chatMouseMode()).
 	chatMouseMode tea.MouseMode
 
+	widgets widgets
+
 	// graphics is whether the terminal paints Kitty images, from its answer to
 	// the probe and any image it rejected.
 	graphics graphics.Support
@@ -301,6 +307,7 @@ func New(engine *agent.Engine, configs ...Config) *Model {
 // before any operation starts, so the pump started by initChat misses none.
 func (m *Model) attach(engine *agent.Engine) {
 	m.engine = engine
+	m.widgets.origin, _ = browser.WebOrigin(engine.Site())
 	m.state = engine.State()
 	m.events, m.unsubscribe = engine.Subscribe()
 }
@@ -309,6 +316,7 @@ func (m *Model) attach(engine *agent.Engine) {
 // Closing the engine is not enough: its subscriptions deliver their queued
 // events first, and nothing reads them anymore.
 func (m *Model) Detach() {
+	m.widgets.close()
 	if m.unsubscribe != nil {
 		m.unsubscribe()
 	}
@@ -332,6 +340,7 @@ func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory Engine
 
 func (m *Model) configure(configs []Config) {
 	if len(configs) > 0 {
+		m.widgets.client = configs[0].Visualization
 		m.tools = configs[0].Tools
 		m.toolUI = configs[0].ToolUI
 		m.workspace = configs[0].Workspace
