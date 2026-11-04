@@ -230,3 +230,215 @@ func TestExitCardSurvivesTooSmall(t *testing.T) {
 		t.Fatalf("card at %v, want it re-centered at %v", rect.Min, want)
 	}
 }
+
+func exitCardKey(text string, code rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Text: text, Code: code}
+}
+
+func quitsIn(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	switch msg := cmd().(type) {
+	case tea.QuitMsg:
+		return true
+	case tea.BatchMsg:
+		return slices.ContainsFunc(msg, quitsIn)
+	}
+	return false
+}
+
+func TestExitCardEnterQuits(t *testing.T) {
+	m := newExitCardModel(t, 120, 40)
+	m.openExitCard()
+	_, cmd := m.Update(exitCardKey("", tea.KeyEnter))
+	if !quitsIn(cmd) {
+		t.Fatal("enter on Quit did not quit")
+	}
+}
+
+func TestExitCardEscCloses(t *testing.T) {
+	m := newExitCardModel(t, 120, 40)
+	m.editor.Update(tea.PasteMsg{Content: "half a prompt"})
+	m.openExitCard()
+	_, cmd := m.Update(exitCardKey("", tea.KeyEscape))
+	if m.exitCard.open || quitsIn(cmd) {
+		t.Fatalf("esc: open %v, quit %v", m.exitCard.open, quitsIn(cmd))
+	}
+	if got := m.editor.Value(); got != "half a prompt" {
+		t.Fatalf("draft = %q, want it untouched", got)
+	}
+}
+
+func TestExitCardTabThenEnterKeepsWorking(t *testing.T) {
+	m := newExitCardModel(t, 120, 40)
+	m.openExitCard()
+	m.Update(exitCardKey("", tea.KeyTab))
+	if m.exitCard.selected != exitKeepWorking {
+		t.Fatalf("selected = %v after tab, want Keep working", m.exitCard.selected)
+	}
+	_, cmd := m.Update(exitCardKey("", tea.KeyEnter))
+	if m.exitCard.open || quitsIn(cmd) {
+		t.Fatalf("enter on Keep working: open %v, quit %v", m.exitCard.open, quitsIn(cmd))
+	}
+}
+
+func TestExitCardArrowsAndShiftTabMoveHighlight(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{"left", exitCardKey("", tea.KeyLeft)},
+		{"right", exitCardKey("", tea.KeyRight)},
+		{"shift+tab", tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newExitCardModel(t, 120, 40)
+			m.openExitCard()
+			m.Update(tc.key)
+			if m.exitCard.selected != exitKeepWorking {
+				t.Fatalf("selected = %v, want Keep working", m.exitCard.selected)
+			}
+			m.Update(tc.key)
+			if m.exitCard.selected != exitQuit {
+				t.Fatalf("selected = %v, want Quit after a second press", m.exitCard.selected)
+			}
+		})
+	}
+}
+
+func TestExitCardTypingClosesAndTypes(t *testing.T) {
+	m := newExitCardModel(t, 120, 40)
+	m.editor.Update(tea.PasteMsg{Content: "fix "})
+	m.openExitCard()
+	m.Update(exitCardKey("t", 't'))
+	if m.exitCard.open {
+		t.Fatal("typing left the card open")
+	}
+	if got := m.editor.Value(); got != "fix t" {
+		t.Fatalf("editor = %q, want %q", got, "fix t")
+	}
+}
+
+func TestExitCardSpaceTypesButTabToggles(t *testing.T) {
+	m := newExitCardModel(t, 120, 40)
+	m.editor.Update(tea.PasteMsg{Content: "a"})
+	m.openExitCard()
+	m.Update(exitCardKey(" ", tea.KeySpace))
+	if m.exitCard.open || m.editor.Value() != "a " {
+		t.Fatalf("space: open %v, editor %q", m.exitCard.open, m.editor.Value())
+	}
+}
+
+func TestExitCardPasteLandsInComposer(t *testing.T) {
+	m := newExitCardModel(t, 120, 40)
+	m.editor.Update(tea.PasteMsg{Content: "a"})
+	m.openExitCard()
+	m.Update(tea.PasteMsg{Content: "bc"})
+	if m.exitCard.open {
+		t.Fatal("paste left the card open")
+	}
+	if got := m.editor.Value(); got != "abc" {
+		t.Fatalf("editor = %q, want %q", got, "abc")
+	}
+}
+
+func clickAt(p image.Point) tea.MouseClickMsg {
+	return tea.MouseClickMsg(tea.Mouse{X: p.X, Y: p.Y, Button: tea.MouseLeft})
+}
+
+func TestExitCardClicks(t *testing.T) {
+	open := func() *Model {
+		m := followTestModel()
+		m.resize(60, 30)
+		m.relayout()
+		m.list.ScrollToBottom()
+		m.list.ScrollBy(-4)
+		m.View()
+		if m.follow.area.Empty() {
+			t.Fatal("fixture shows no jump-to-latest control")
+		}
+		m.openExitCard()
+		m.View()
+		if m.exitCard.quit.Empty() || m.follow.area.Overlaps(image.Rect(0, m.exitCard.dismiss.Min.Y, m.width, m.exitCard.quit.Max.Y)) {
+			t.Fatalf("fixture card %+v overlaps the control %v", m.exitCard, m.follow.area)
+		}
+		return m
+	}
+
+	m := open()
+	_, cmd := m.Update(clickAt(m.exitCard.quit.Min))
+	if !quitsIn(cmd) {
+		t.Fatal("click on Quit did not quit")
+	}
+
+	for name, pick := range map[string]func(*Model) image.Rectangle{
+		"keep":    func(m *Model) image.Rectangle { return m.exitCard.keep },
+		"dismiss": func(m *Model) image.Rectangle { return m.exitCard.dismiss },
+	} {
+		m := open()
+		_, cmd := m.Update(clickAt(pick(m).Min))
+		if m.exitCard.open || quitsIn(cmd) {
+			t.Fatalf("click on %s: open %v, quit %v", name, m.exitCard.open, quitsIn(cmd))
+		}
+	}
+
+	m = open()
+	top := m.list.VisibleSurface().Top
+	elsewhere := image.Pt(0, 0)
+	for name, msg := range map[string]tea.Msg{
+		"outside the card": clickAt(elsewhere),
+		"jump-to-latest":   clickAt(m.follow.area.Min.Add(image.Pt(1, 1))),
+		"wheel":            tea.MouseWheelMsg(tea.Mouse{X: 5, Y: 5, Button: tea.MouseWheelDown}),
+		"motion":           tea.MouseMotionMsg(tea.Mouse{X: 5, Y: 5}),
+	} {
+		_, cmd := m.Update(msg)
+		if !m.exitCard.open || quitsIn(cmd) {
+			t.Fatalf("%s: open %v, quit %v", name, m.exitCard.open, quitsIn(cmd))
+		}
+		if m.list.VisibleSurface().Top != top || m.list.Following() || !m.exitCard.open {
+			t.Fatalf("%s moved the transcript behind the card", name)
+		}
+		if click, ok := msg.(tea.MouseClickMsg); ok {
+			m.Update(tea.MouseReleaseMsg(click))
+		}
+	}
+}
+
+func TestExitCardCtrlCStillQuits(t *testing.T) {
+	m := newExitCardModel(t, 120, 40)
+	m.openExitCard()
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !quitsIn(cmd) {
+		t.Fatal("ctrl+c with the card open did not quit")
+	}
+}
+
+func TestExitCardOpenClearsSelection(t *testing.T) {
+	m := newExitCardModel(t, 120, 40)
+	m.selection.begin(testSelectionFrame("abc", 3, 1), 0, 0)
+	if !m.selection.active() {
+		t.Fatal("fixture selection is not active")
+	}
+	m.openExitCard()
+	if m.selection.active() {
+		t.Fatal("opening the card kept the selection")
+	}
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "Exit Bits?") {
+		t.Fatalf("the card is missing:\n%s", view)
+	}
+}
+
+func TestExitCardHitRectsResetWhenNotDrawn(t *testing.T) {
+	m := newExitCardModel(t, 120, 40)
+	m.openExitCard()
+	m.View()
+	if m.exitCard.quit.Empty() {
+		t.Fatal("fixture drew no hit rectangles")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 6, Height: 4})
+	m.View()
+	if !m.exitCard.quit.Empty() || !m.exitCard.keep.Empty() || !m.exitCard.dismiss.Empty() {
+		t.Fatalf("stale hit rectangles survived an undrawn card: %+v", m.exitCard)
+	}
+}

@@ -3,6 +3,7 @@ package tui
 import (
 	"image"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -37,11 +38,72 @@ type exitCard struct {
 }
 
 func (m *Model) openExitCard() {
+	m.selection.clear()
 	m.exitCard = exitCard{open: true, selected: exitQuit}
 }
 
 func (m *Model) closeExitCard() {
 	m.exitCard = exitCard{}
+}
+
+// updateExitCard routes input while the card owns it. Typing and pasting
+// hand the card's job back to the composer: the card closes, the editor
+// regains focus ahead of the usual end-of-Update reconcile, and the message
+// reaches it as if the card had never been there.
+func (m *Model) updateExitCard(msg tea.Msg) tea.Cmd {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "enter":
+			return m.activateExitChoice(m.exitCard.selected)
+		case "esc":
+			m.closeExitCard()
+		case "left", "right", "tab", "shift+tab":
+			m.exitCard.selected = otherExitChoice(m.exitCard.selected)
+		default:
+			if msg.Text != "" {
+				return m.closeExitCardInto(msg)
+			}
+		}
+	case tea.PasteMsg:
+		return m.closeExitCardInto(msg)
+	case tea.MouseClickMsg:
+		return m.clickExitCard(pointAt(msg))
+	}
+	return nil
+}
+
+func otherExitChoice(choice exitChoice) exitChoice {
+	if choice == exitQuit {
+		return exitKeepWorking
+	}
+	return exitQuit
+}
+
+func (m *Model) activateExitChoice(choice exitChoice) tea.Cmd {
+	if choice == exitQuit {
+		_, cmd := m.quit()
+		return cmd
+	}
+	m.closeExitCard()
+	return nil
+}
+
+func (m *Model) clickExitCard(at image.Point) tea.Cmd {
+	switch {
+	case at.In(m.exitCard.quit):
+		return m.activateExitChoice(exitQuit)
+	case at.In(m.exitCard.keep), at.In(m.exitCard.dismiss):
+		return m.activateExitChoice(exitKeepWorking)
+	}
+	return nil
+}
+
+func (m *Model) closeExitCardInto(msg tea.Msg) tea.Cmd {
+	m.closeExitCard()
+	blink := m.editor.Focus()
+	_, cmd := m.dispatch(msg)
+	return tea.Batch(blink, cmd)
 }
 
 // exitButton renders a button; the highlighted one carries the Enter hint.
@@ -67,7 +129,6 @@ func (m *Model) exitCardButtons() (quit, keep string) {
 // cannot show the fade either, so it keeps the frame as drawn.
 func (m *Model) exitCardOverlay(base string) string {
 	sty := m.styles.ExitCard
-	m.exitCard.quit, m.exitCard.keep, m.exitCard.dismiss = image.Rectangle{}, image.Rectangle{}, image.Rectangle{}
 	if !m.monochrome {
 		base = fade(base, m.width, m.height, sty.Text, m.styles.Background)
 	}
@@ -99,7 +160,7 @@ func (m *Model) exitCardOverlay(base string) string {
 		// Rows between the header and the body mirror the panel's section gap.
 		buttonsY := headerY + 1 + max(0, sty.Panel.SectionGap) + bodyRows + 1
 		quitX := bodyX
-		keepX := quitX + lipgloss.Width(quit) + len(exitButtonGap)
+		keepX := quitX + lipgloss.Width(quit) + lipgloss.Width(exitButtonGap)
 		dismissX := bodyX + bodyWidth - ansi.StringWidth(exitCardDismiss)
 		m.exitCard.quit = image.Rect(quitX, buttonsY, quitX+lipgloss.Width(quit), buttonsY+1)
 		m.exitCard.keep = image.Rect(keepX, buttonsY, keepX+lipgloss.Width(keep), buttonsY+1)

@@ -52,6 +52,7 @@ func chatMouseMode() tea.MouseMode {
 // are now declared on the returned view.
 func (m *Model) View() tea.View {
 	m.follow.area = image.Rectangle{}
+	m.exitCard.quit, m.exitCard.keep, m.exitCard.dismiss = image.Rectangle{}, image.Rectangle{}, image.Rectangle{}
 	if m.mode == ModeLogin && m.loginModel != nil {
 		return m.loginModel.View()
 	}

@@ -207,6 +207,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.frame.tooSmall && isUserInput(msg):
 			// Only a resize hint is visible, so input must not drive a hidden
 			// surface. System and engine messages still flow.
+		case m.mode == ModeChat && m.exitCard.open && isUserInput(msg):
+			cmd = m.updateExitCard(msg)
 		default:
 			_, cmd = m.dispatch(msg)
 		}
