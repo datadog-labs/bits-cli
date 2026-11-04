@@ -155,6 +155,16 @@ func TestExitCardCompactKeepsKeyHint(t *testing.T) {
 	}
 }
 
+func TestExitCardCompactHintFollowsSelection(t *testing.T) {
+	m := newExitCardModel(t, 24, 20)
+	m.openExitCard()
+	m.Update(exitCardKey("", tea.KeyTab))
+	view := strings.Join(strings.Fields(ansi.Strip(m.View().Content)), " ")
+	if !strings.Contains(view, "enter/esc keep working") || strings.Contains(view, "enter quit") {
+		t.Fatalf("the compact hint did not follow the highlight to Keep working:\n%s", view)
+	}
+}
+
 // styledText returns the cells of the closed view that hold text outside the
 // card, where the fade is the only thing that can change them.
 func styledText(t *testing.T, m *Model, card image.Rectangle) map[image.Point]uv.Cell {
@@ -468,6 +478,19 @@ func TestExitCardClicks(t *testing.T) {
 		}
 		if click, ok := msg.(tea.MouseClickMsg); ok {
 			m.Update(tea.MouseReleaseMsg(click))
+		}
+	}
+}
+
+func TestExitCardIgnoresSecondaryClicks(t *testing.T) {
+	for _, button := range []tea.MouseButton{tea.MouseRight, tea.MouseMiddle} {
+		m := newExitCardModel(t, 120, 40)
+		m.openExitCard()
+		m.View()
+		at := m.exitCard.quit.Min
+		_, cmd := m.Update(tea.MouseClickMsg(tea.Mouse{X: at.X, Y: at.Y, Button: button}))
+		if !m.exitCard.open || quitsIn(cmd) {
+			t.Fatalf("button %v on Quit: open %v, quit %v", button, m.exitCard.open, quitsIn(cmd))
 		}
 	}
 }

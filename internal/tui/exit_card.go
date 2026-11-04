@@ -19,7 +19,8 @@ const (
 	exitKeepLabel   = "Keep working"
 	exitButtonGap   = "  "
 
-	exitCardCompactHint = "enter quit · esc keep working"
+	exitCardCompactQuitHint = "enter quit · esc keep working"
+	exitCardCompactKeepHint = "enter/esc keep working"
 )
 
 type exitChoice int
@@ -77,7 +78,9 @@ func (m *Model) updateExitCard(msg tea.Msg) tea.Cmd {
 	case tea.PasteMsg:
 		return m.closeExitCardInto(msg)
 	case tea.MouseClickMsg:
-		return m.clickExitCard(pointAt(msg))
+		if msg.Button == tea.MouseLeft {
+			return m.clickExitCard(pointAt(msg))
+		}
 	}
 	return nil
 }
@@ -154,7 +157,11 @@ func (m *Model) exitCardOverlay(base string) string {
 		MinBodyWidth: lipgloss.Width(buttons),
 		CompactTitle: exitCardTitle,
 		CompactBody: func(width int) string {
-			return sty.Body.Width(width).Render(exitCardBody) + "\n\n" + sty.Panel.Help.Render(exitCardCompactHint)
+			hint := exitCardCompactQuitHint
+			if m.exitCard.selected == exitKeepWorking {
+				hint = exitCardCompactKeepHint
+			}
+			return sty.Body.Width(width).Render(exitCardBody) + "\n\n" + sty.Panel.Help.Render(hint)
 		},
 	}
 	panel := components.NewPanel(sty.Panel)
