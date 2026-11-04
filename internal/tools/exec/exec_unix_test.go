@@ -411,3 +411,52 @@ func TestBoundedExecOutputNormalizesInvalidUTF8(t *testing.T) {
 		t.Fatalf("output = %+v, want invalid bytes replaced", output)
 	}
 }
+
+// A command must run in its own session so it has no controlling terminal.
+// Otherwise a descendant can call tcsetpgrp on the TUI's terminal and leave
+// the TUI in a background process group, where its next read stops it with
+// SIGTTIN ("suspended (tty input)").
+func TestExecServiceUnixCommandRunsInNewSession(t *testing.T) {
+	dir := t.TempDir()
+	service := newUnixTestExecService(5*time.Second, 4096)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	outcomes := make(chan ExecOutcome, 1)
+	go func() {
+		outcomes <- service.Run(ctx, ExecRequest{
+			Command: `echo $$ > shell.pid; sleep 2`,
+			CWD:     dir,
+		})
+	}()
+
+	pid, err := waitForPIDFile(filepath.Join(dir, "shell.pid"), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid, err := syscall.Getsid(pid)
+	if err != nil {
+		t.Fatalf("getsid(%d): %v", pid, err)
+	}
+	ownSID, err := syscall.Getsid(0)
+	if err != nil {
+		t.Fatalf("getsid(self): %v", err)
+	}
+	if sid != pid {
+		t.Fatalf("command session = %d, want new session led by command pid %d", sid, pid)
+	}
+	if sid == ownSID {
+		t.Fatalf("command shares the parent session %d", ownSID)
+	}
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		t.Fatalf("getpgid(%d): %v", pid, err)
+	}
+	if pgid != pid {
+		t.Fatalf("command process group = %d, want group led by command pid %d", pgid, pid)
+	}
+
+	cancel()
+	if outcome := <-outcomes; outcome.Reason != ExecCancelled {
+		t.Fatalf("outcome = %+v, want cancellation", outcome)
+	}
+}

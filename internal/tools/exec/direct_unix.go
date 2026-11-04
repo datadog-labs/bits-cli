@@ -33,7 +33,14 @@ func (launcher directExecLauncher) Start(plan ExecPlan, stdout, stderr io.Writer
 	}
 	command.Stdout = stdout
 	command.Stderr = stderr
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Setsid starts the command in a new session, which is also a new process
+	// group led by the child (so group signalling still works). Crucially, the
+	// new session has no controlling terminal: descendants cannot open
+	// /dev/tty, change terminal modes, or call tcsetpgrp to take the
+	// foreground away from the TUI. A plain Setpgid child stays in our session
+	// and can do all of those, which leaves the TUI in a background process
+	// group where its next read stops it with SIGTTIN.
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	command.WaitDelay = execPipeWaitDelay
 	if err := command.Start(); err != nil {
 		return nil, err
