@@ -1,0 +1,50 @@
+# Kept apart from codeql.yml because the macOS build takes about 15 minutes
+# under CodeQL; the weekly run picks up new queries.
+
+name: CodeQL Swift
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - libexec/ddviz/**
+      - .github/workflows/codeql-swift.yml
+  push:
+    branches: [main]
+    paths:
+      - libexec/ddviz/**
+      - .github/workflows/codeql-swift.yml
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (swift)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          languages: swift
+          build-mode: autobuild
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+      - name: Analyze
+        uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          category: /language:swift
