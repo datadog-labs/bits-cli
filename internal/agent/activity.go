@@ -125,3 +125,64 @@ func (e *Engine) SyncConversationTranscript(id string, replay *ActivityReplay, a
 	})
 	return state, err
 }
+
+// PendingActivityTools returns unanswered calls observed on this CLI's request
+// stream. A later remote turn, or a changed call with the same ID, cannot gain
+// local execution authority merely by appearing in a replay.
+func (e *Engine) PendingActivityTools(replay *ActivityReplay) []assistant.Content {
+	if replay == nil {
+		return nil
+	}
+	return get(e, func() []assistant.Content {
+		pending := continuationFromHistory(replay.messages[historyForkSplit(e.forkSource, replay.messages):])
+		var owned []assistant.Content
+		for _, content := range pending {
+			call := toolCallOf(content)
+			if original, ok := e.recoveryCalls[call.ID]; ok && original == call {
+				owned = append(owned, content)
+			}
+		}
+		return owned
+	})
+}
+
+type ToolRecoveryInput struct {
+	ConversationID string
+	Calls          []assistant.Content
+	Tools          *ToolSet
+	OnDeny         DenyPolicy
+}
+
+type recoveredResult struct {
+	call   ToolCall
+	result ToolResult
+}
+
+// ResumeToolTurn reuses cached results for calls whose response POST failed.
+func (e *Engine) ResumeToolTurn(ctx context.Context, in ToolRecoveryInput) (RunID, error) {
+	var run RunID
+	var calls []ToolCall
+	err := e.idle(func() (err error) {
+		if in.ConversationID == "" || in.ConversationID != e.opts.ConversationID {
+			return ErrConversationChanged
+		}
+		if len(in.Calls) == 0 {
+			return ErrNoPendingTools
+		}
+		for _, content := range in.Calls {
+			call := toolCallOf(content)
+			if owned, ok := e.recoveryCalls[call.ID]; !ok || owned != call {
+				return ErrNoPendingTools
+			}
+			calls = append(calls, call)
+		}
+		e.continuation = nil
+		run, err = e.claim()
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	e.work(ctx, func(ctx context.Context) { e.run(ctx, run, TurnInput{Tools: in.Tools, OnDeny: in.OnDeny}, calls) })
+	return run, nil
+}

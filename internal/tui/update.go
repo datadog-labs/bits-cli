@@ -699,10 +699,10 @@ func (m *Model) endOperation() tea.Cmd {
 	case done.kind == opRestore && done.stop != stopAll:
 		return tea.Batch(m.startConversationSubscription(m.state.ConversationID), m.resumePendingTools())
 	case done.kind == opTurn:
-		// Refresh the transcript after a local request completes or fails.
+		// Recover only from a fresh replay after a failed local request.
 		return m.startConversationSubscription(m.state.ConversationID)
 	}
-	return nil
+	return m.maybeResumeLocalTurn()
 }
 
 func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
@@ -977,6 +977,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	}
 	m.localTurnOwned = true
 	m.localTurnRecoverable = false
+	m.localTurnInput = in
 	run, err := m.engine.StartTurn(ctx, in)
 	m.chatPhase = chat.PhaseWaiting
 	failed := m.begin(opTurn, run, err, cancel)
@@ -1010,7 +1011,8 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.localTurnOwned = true
 	m.localTurnRecoverable = false
-	run, err := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
+	m.localTurnInput = agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue}
+	run, err := m.engine.ResumePendingTools(ctx, m.localTurnInput)
 	m.chatPhase = chat.PhaseWaiting
 	m.list.ScrollToBottom()
 	return m.begin(opTurn, run, err, cancel)

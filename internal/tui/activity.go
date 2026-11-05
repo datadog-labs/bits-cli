@@ -111,6 +111,7 @@ func (m *Model) applyActivityUpdate(msg activityUpdateMsg) tea.Cmd {
 	if msg.update.Err != nil {
 		return m.handleActivityDisconnect(msg.generation, msg.update.Err)
 	}
+	var recovery tea.Cmd
 	switch msg.update.Activity.Kind {
 	case assistant.ConversationActivityReady:
 		m.activitySnapshotReady = true
@@ -132,6 +133,7 @@ func (m *Model) applyActivityUpdate(msg activityUpdateMsg) tea.Cmd {
 				}
 			}
 		}
+		recovery = m.maybeResumeLocalTurn()
 	case assistant.ConversationActivityStarted:
 		m.activityTurnActive = true
 		if m.subscriptionRendersTurn() {
@@ -159,8 +161,9 @@ func (m *Model) applyActivityUpdate(msg activityUpdateMsg) tea.Cmd {
 				m.publishActivityTranscript()
 			}
 		}
+		recovery = m.maybeResumeLocalTurn()
 	}
-	return waitActivity(msg.generation, m.activityEvents)
+	return tea.Batch(waitActivity(msg.generation, m.activityEvents), recovery)
 }
 
 func (m *Model) publishActivityTranscript() {
@@ -189,9 +192,40 @@ func (m *Model) syncActivityTranscript() bool {
 	return true
 }
 
+// maybeResumeLocalTurn recovers only a turn started by this TUI and only after
+// the subscription's ready frame has terminated replay. Waiting for that frame
+// prevents replaying a tool call before its already-persisted response arrives.
+func (m *Model) maybeResumeLocalTurn() tea.Cmd {
+	if !m.localTurnOwned || !m.localTurnRecoverable || m.op.run != 0 ||
+		!m.activitySnapshotReady || !m.activityTurnActive || m.engine == nil {
+		return nil
+	}
+	calls := m.engine.PendingActivityTools(m.activityReplay)
+	if len(calls) == 0 {
+		return nil
+	}
+	snapshot, err := m.engine.SyncConversationTranscript(m.activityConversationID, m.activityReplay, m.activityTurnActive)
+	if err != nil {
+		return nil
+	}
+	m.state = snapshot
+	m.activityNeedsSync = false
+	m.localTurnRecoverable = false
+	ctx, cancel := context.WithCancel(context.Background())
+	run, err := m.engine.ResumeToolTurn(ctx, agent.ToolRecoveryInput{
+		ConversationID: m.state.ConversationID,
+		Calls:          calls,
+		Tools:          m.localTurnInput.Tools,
+		OnDeny:         m.localTurnInput.OnDeny,
+	})
+	m.chatPhase = chat.PhaseWaiting
+	return m.begin(opTurn, run, err, cancel)
+}
+
 func (m *Model) clearLocalTurnOwnership() {
 	m.localTurnOwned = false
 	m.localTurnRecoverable = false
+	m.localTurnInput = agent.TurnInput{}
 }
 
 func (m *Model) handleActivityDisconnect(generation uint64, err error) tea.Cmd {
