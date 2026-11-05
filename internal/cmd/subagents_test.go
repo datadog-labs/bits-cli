@@ -29,12 +29,12 @@ func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
 		{name: "org 2 default", orgID: 2, path: "/api/unstable/assistant/multi-agent/runs"},
 		{name: "org 2 ignores disable", orgID: 2, value: "0", path: "/api/unstable/assistant/multi-agent/runs"},
 		{name: "org 2 ignores other value", orgID: 2, value: "true", path: "/api/unstable/assistant/multi-agent/runs"},
-		{name: "other org", orgID: 3, path: "/api/v2/assistant"},
-		{name: "lookup unavailable", lookupStatus: http.StatusServiceUnavailable, path: "/api/v2/assistant"},
-		{name: "default", path: "/api/v2/assistant"},
+		{name: "other org", orgID: 3, path: "/api/v2/assistant/conversation"},
+		{name: "lookup unavailable", lookupStatus: http.StatusServiceUnavailable, path: "/api/v2/assistant/conversation"},
+		{name: "default", path: "/api/v2/assistant/conversation"},
 		{name: "enabled", value: "1", path: "/api/unstable/assistant/multi-agent/runs"},
-		{name: "explicitly disabled", value: "0", path: "/api/v2/assistant"},
-		{name: "other value", value: "true", path: "/api/v2/assistant"},
+		{name: "explicitly disabled", value: "0", path: "/api/v2/assistant/conversation"},
+		{name: "other value", value: "true", path: "/api/v2/assistant/conversation"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("BITS_USE_EXPERIMENTAL_SUBAGENTS", test.value)
@@ -57,7 +57,7 @@ func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
 					return
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
-				if test.path == "/api/v2/assistant" {
+				if test.path == "/api/v2/assistant/conversation" {
 					_, _ = fmt.Fprintln(w, `{"data":{"type":"assistant-response","attributes":{"conversation_id":"11111111-1111-4111-8111-111111111111","structured_message":{"role":"assistant","message_id":"answer","content":{"type":"markdown_fragment","content":"answer"}}}}}`)
 				} else {
 					w.Header().Set("X-Assistant-Conversation-ID", "11111111-1111-4111-8111-111111111111")
