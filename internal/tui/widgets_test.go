@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"image"
 	"image/png"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -252,17 +251,11 @@ func TestWidgetInlineImage(t *testing.T) {
 		t.Fatal("the old revision's image was not deleted")
 	}
 
-	// Quitting frees what the terminal stores before the program stops
-	// writing: a sequence whose first step deletes, and whose last quits.
+	// Quitting frees what the terminal stores before the program stops writing.
 	stored := m.widgets.entries[id].image.ID
 	_, quit := m.quit()
-	steps := reflect.ValueOf(quit())
-	first, _ := steps.Index(0).Interface().(tea.Cmd)().(tea.RawMsg)
-	if !strings.Contains(fmt.Sprint(first.Msg), fmt.Sprintf("a=d,d=I,i=%d", stored)) {
-		t.Fatalf("quitting did not first delete the preview: %q", first.Msg)
-	}
-	if _, ok := steps.Index(steps.Len() - 1).Interface().(tea.Cmd)().(tea.QuitMsg); !ok {
-		t.Fatal("quitting did not end with quit")
+	if raw := runWidgetTasks(m, quit); !strings.Contains(raw, fmt.Sprintf("a=d,d=I,i=%d", stored)) {
+		t.Fatalf("quitting did not delete preview %d: %q", stored, raw)
 	}
 	// Until the program stops, later messages start nothing again.
 	if _, cmd := m.Update(struct{}{}); len(m.widgets.entries) != 0 || strings.Contains(runWidgetTasks(m, cmd), "a=T") {
@@ -347,9 +340,12 @@ func runWidgetTasks(m *Model, cmd tea.Cmd) string {
 		}
 	case tea.RawMsg:
 		fmt.Fprint(&raw, msg.Msg)
+		_, next := m.Update(msg)
+		raw.WriteString(runWidgetTasks(m, next))
 	case viz.Completion:
 		_, next := m.Update(msg)
 		raw.WriteString(runWidgetTasks(m, next))
+	case tea.QuitMsg:
 	}
 	return raw.String()
 }

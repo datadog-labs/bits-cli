@@ -50,7 +50,7 @@ func (m *Model) syncWidgets() tea.Cmd {
 	case m.op.loggingOut() || m.loggedOut:
 		// Until the program quits, nothing may start with revoked credentials.
 		m.list.ClearWidgetViews()
-		return graphics.Delete(m.widgets.release()...)
+		return m.widgets.images.Enqueue(graphics.Delete(m.widgets.release()...))
 	case m.mode != ModeChat || m.frame.tooSmall:
 		// Nobody sees the transcript: start nothing, keep what exists.
 		return nil
@@ -70,11 +70,13 @@ func (m *Model) quitWith(quit tea.Cmd) tea.Cmd {
 	if m.graphics == graphics.Supported {
 		images = append(images, graphics.Image{ID: splash.ImageID})
 	}
-	return tea.Sequence(graphics.Delete(images...), quit)
+	deleteCmd := m.widgets.images.Enqueue(graphics.Delete(images...))
+	return tea.Batch(deleteCmd, m.widgets.images.DrainThen(quit))
 }
 
 // widgets owns widget operations and stored images for the transcript.
 type widgets struct {
+	images      graphics.Queue
 	client      viz.Client // nil when ddviz is not supported here
 	origin      string     // web app origin for sandbox links, "" if unknown
 	unavailable bool       // ddviz turned out not to run; links for the session
@@ -103,7 +105,7 @@ func (w *widgets) sync(list *chat.List, mode widgetMode, epoch uint64) tea.Cmd {
 	}
 	var cmds []tea.Cmd
 	if w.epoch != epoch {
-		cmds = append(cmds, graphics.Delete(w.release()...))
+		cmds = append(cmds, w.images.Enqueue(graphics.Delete(w.release()...)))
 		w.epoch = epoch
 	}
 	live := make(map[agent.BlockID]bool)
@@ -172,7 +174,7 @@ func (w *widgets) view(e *widgetEntry, mode widgetMode, visible bool, width int)
 	if mode == widgetInline {
 		var draw tea.Cmd
 		view.Image, draw = e.place(state.Image, width, visible)
-		cmd = tea.Batch(cmd, draw)
+		cmd = tea.Batch(cmd, w.images.Enqueue(draw))
 		if view.Loading == "" && state.Render.Phase == viz.Loading {
 			view.Loading = "Rendering"
 		}
@@ -270,11 +272,10 @@ func (w *widgets) click(hit chat.LinkHit) (tea.Cmd, string) {
 // terminal still stores for them.
 func (w *widgets) release() []graphics.Image {
 	var stored []graphics.Image
-	for id, e := range w.entries {
-		if e.snapshot != nil {
-			stored = append(stored, e.image)
+	for id := range w.entries {
+		if image, ok := w.drop(id); ok {
+			stored = append(stored, image)
 		}
-		w.remove(id)
 	}
 	return stored
 }
@@ -289,18 +290,25 @@ func (w *widgets) close() {
 }
 
 func (w *widgets) remove(id agent.BlockID) tea.Cmd {
+	image, ok := w.drop(id)
+	if !ok {
+		return nil
+	}
+	return w.images.Enqueue(graphics.Delete(image))
+}
+
+// drop removes an entry without scheduling a terminal write. release collects
+// those writes into one deletion command.
+func (w *widgets) drop(id agent.BlockID) (graphics.Image, bool) {
 	e := w.entries[id]
 	if e == nil {
-		return nil
+		return graphics.Image{}, false
 	}
 	delete(w.entries, id)
 	if e.controller != nil {
 		e.controller.Close()
 	}
-	if e.snapshot == nil {
-		return nil
-	}
-	return graphics.Delete(e.image)
+	return e.image, e.snapshot != nil
 }
 
 // place sizes the box to the transcript width. When visible, it stores a new

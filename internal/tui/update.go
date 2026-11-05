@@ -171,6 +171,9 @@ func (m *Model) reconcilePointerShape() tea.Cmd {
 // follows from state — geometry, animations, editor focus, pointer shape — in
 // one place, so no handler has to remember to relayout.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if cmd, ok := m.widgets.images.Handle(msg); ok {
+		return m, cmd
+	}
 	// Global quit wins over every chat surface and skips reconciliation (we are
 	// tearing down). Login handles its own ctrl+c.
 	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" && m.mode != ModeLogin {
@@ -187,8 +190,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.graphics.ObserveDeviceAttributes()
 	case uv.KittyGraphicsEvent:
 		// The probe answer can arrive in any mode, login included.
-		if m.graphics.Observe(msg, splash.ImageID) {
-			cmd = splash.Transmit()
+		if !m.widgets.closed && m.graphics.Observe(msg, splash.ImageID) {
+			cmd = m.widgets.images.Enqueue(splash.Transmit())
 		}
 	case tea.ColorProfileMsg:
 		// Arrives in any mode. Selection is the only paint that needs it: when
