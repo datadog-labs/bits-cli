@@ -109,6 +109,19 @@ func drainConversationRemote(t *testing.T, m *Model) {
 		msg := runConversationCmd(t, waitEvent(m.events))
 		_, _ = m.Update(msg)
 	}
+
+	for m.activityEvents != nil {
+		select {
+		case update, ok := <-m.activityEvents:
+			if !ok {
+				_, _ = m.Update(activityClosedMsg{generation: m.activityGeneration})
+			} else {
+				_, _ = m.Update(activityUpdateMsg{generation: m.activityGeneration, update: update})
+			}
+		default:
+			return
+		}
+	}
 }
 
 func TestCompletedTurnAppliesFinalTranscriptSnapshot(t *testing.T) {

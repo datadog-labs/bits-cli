@@ -195,6 +195,22 @@ type Model struct {
 	// op is the one exclusive session operation; see operation.
 	op operation
 
+	// Conversation activity is a passive, independently cancellable stream.
+	// Its generation prevents a late marker from a prior conversation from
+	// changing the current prompt gate.
+	activityEvents         <-chan agent.ActivityUpdate
+	activityCancel         context.CancelFunc
+	activityGeneration     uint64
+	activityConversationID string
+	activityState          conversationActivityState
+	activityRetry          int
+	activityReplay         *agent.ActivityReplay
+	activityNeedsSync      bool
+	activitySnapshotReady  bool
+	activityTurnActive     bool
+	localTurnOwned         bool
+	localTurnRecoverable   bool
+
 	// /logout stops active work before deleting credentials, then discards the
 	// authenticated engine.
 	logout    LogoutFunc
@@ -316,6 +332,7 @@ func (m *Model) attach(engine *agent.Engine) {
 // Closing the engine is not enough: its subscriptions deliver their queued
 // events first, and nothing reads them anymore.
 func (m *Model) Detach() {
+	m.stopConversationSubscription()
 	m.widgets.close()
 	if m.unsubscribe != nil {
 		m.unsubscribe()
