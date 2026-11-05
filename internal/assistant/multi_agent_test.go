@@ -14,6 +14,43 @@ import (
 
 const multiAgentRunID = "12345678-1234-1234-1234-123456789abc"
 
+func TestMultiAgentStreamResponseGuard(t *testing.T) {
+	for _, test := range []struct {
+		name, ack, conversationID string
+		redirect, wantError       bool
+	}{
+		{name: "missing", wantError: true},
+		{name: "wrong", ack: "wrong", wantError: true},
+		{name: "accepted", ack: "expected"},
+		{name: "continuation missing", conversationID: multiAgentRunID, wantError: true},
+		{name: "continuation accepted", conversationID: multiAgentRunID, ack: "expected"},
+		{name: "redirect", ack: "expected", redirect: true, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if test.redirect && r.URL.Path != "/redirected" {
+					http.Redirect(w, r, "/redirected", http.StatusTemporaryRedirect)
+					return
+				}
+				if r.URL.Path == "/redirected" {
+					t.Error("guarded request followed redirect")
+				}
+				w.Header().Set("X-Request-Accepted", test.ack)
+				w.Header().Set(multiAgentRunIDHeader, multiAgentRunID)
+				w.Header().Set(multiAgentRootIDHeader, "root")
+				writeSSEEvent(t, w, fmt.Sprintf(`{"run_id":%q,"agent_id":"root","sequence":1,"type":"content.fragment_received","event":{"fragment":"answer"}}`, multiAgentRunID))
+				writeSSEEvent(t, w, fmt.Sprintf(`{"run_id":%q,"agent_id":"root","sequence":2,"type":"run.terminal","event":{"outcome":"completed"}}`, multiAgentRunID))
+			})
+			c.RequiredStreamHeaderName, c.RequiredStreamHeaderValue = "X-Request-Accepted", "expected"
+			called := false
+			err := NewMultiAgentClient(c).Stream(context.Background(), "hi", SendOptions{ConversationID: test.conversationID}, func(AssistantResponse) error { called = true; return nil })
+			if (err != nil) != test.wantError || called == test.wantError {
+				t.Fatalf("error = %v, callback called = %v", err, called)
+			}
+		})
+	}
+}
+
 func TestMultiAgentClientRequiresRootIdentity(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(multiAgentRunIDHeader, multiAgentRunID)

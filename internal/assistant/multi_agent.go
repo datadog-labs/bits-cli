@@ -209,12 +209,9 @@ func (c *MultiAgentClient) start(ctx context.Context, prompt string, opts SendOp
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.streamClient().Do(req)
+	resp, err := c.openStream(req)
 	if err != nil {
 		return nil, err
-	}
-	if resp.StatusCode >= 400 {
-		return nil, c.responseError(ctx, req, resp, path)
 	}
 	runID := resp.Header.Get(multiAgentRunIDHeader)
 	if runID == "" {
@@ -704,22 +701,6 @@ func (c *MultiAgentClient) cancelRun(ctx context.Context, runID string) error {
 	}
 	_ = resp.Body.Close()
 	return nil
-}
-
-func (c *MultiAgentClient) responseError(
-	ctx context.Context,
-	req *http.Request,
-	resp *http.Response,
-	path string,
-) error {
-	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-	_ = resp.Body.Close()
-	apiErr := httpError(snippet, resp.StatusCode, req.Method, path)
-	var rejectErr error
-	if resp.StatusCode == http.StatusUnauthorized {
-		rejectErr = c.rejectAccessToken(ctx, req)
-	}
-	return errors.Join(apiErr, rejectErr)
 }
 
 func (c *MultiAgentClient) finish(run *multiAgentRun) {
