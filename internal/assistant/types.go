@@ -364,9 +364,10 @@ const ApprovalRequestTool = "approval_request"
 
 const (
 	// ContentWidgetDef carries a Datadog dashboard widget definition (in the
-	// WidgetDef field) that the UI renders as a rich visualization. The
-	// definition is a query spec + styling; it contains no data. It is decoded
-	// generically into a map for now; running the widget's queries is out of scope.
+	// WidgetDef field): a query spec + styling, no data. It is every chart the
+	// agent produces, live and in restored history alike. The definition holds
+	// its own title, and the backend pins a fixed millisecond window in its
+	// "time". History restores its numbers as floats.
 	ContentWidgetDef = "widget_def"
 	// ContentDashboard is a whole generated dashboard (title + widgets).
 	ContentDashboard = "dashboard"
@@ -378,7 +379,7 @@ const (
 
 	// --- conversation-history / persistence only (not the live POST stream) ---
 
-	ContentWidget   = "widget"    // persisted/rendered form of a widget (tile_def + timeframe)
+	ContentWidget   = "widget"    // legacy tile (tile_def + timeframe); no backend writes it today
 	ContentUserStop = "user_stop" // marker persisted when a turn was interrupted
 
 	// --- background-task follow streams (/subscribe, subtask stream) ---
@@ -443,7 +444,9 @@ type ToolPayload struct {
 	Detail *MarkdownPayload
 }
 
-// WidgetPayload carries fields for the widget_def and widget content types.
+// WidgetPayload carries fields for the widget_def and widget content types. A
+// widget_def has only WidgetDef, which holds its own title; Title, TileDef and
+// Timeframe belong to the legacy widget type.
 type WidgetPayload struct {
 	Title     string
 	WidgetDef *WidgetDefinition
@@ -559,7 +562,7 @@ func AssistantMessage(messageID string, content Content) Message {
 	return Message{Role: "assistant", MessageID: messageID, Content: content}
 }
 
-// Timeframe is the time window attached to a persisted widget content block.
+// Timeframe is the time window of a legacy widget content block.
 type Timeframe struct {
 	Start  int64 `json:"start"` // start timestamp in milliseconds
 	End    int64 `json:"end"`   // end timestamp in milliseconds

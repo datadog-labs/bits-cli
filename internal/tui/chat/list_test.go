@@ -12,6 +12,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/filediff"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
+	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
@@ -48,6 +49,7 @@ func disclosableToolBlock(key string) agent.Block {
 // listWithTool returns a sized list holding one tool block with output.
 func listWithTool(status agent.ToolStatus) *List {
 	list := NewList()
+	list.SetRunning(true)
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(80)
 	list.SetHeight(8)
@@ -280,6 +282,7 @@ func TestReasoningExpandsToItsThinkingText(t *testing.T) {
 
 func TestReasoningGroupStaysActiveWhileMemberStreams(t *testing.T) {
 	list := NewList()
+	list.SetRunning(true)
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(80)
 	list.SetHeight(8)
@@ -451,6 +454,7 @@ func TestInspectionGroupRowsStayWithinWidth(t *testing.T) {
 
 func TestInspectionSpinnerAnimationKeepsHeaderWidth(t *testing.T) {
 	list := NewList()
+	list.SetRunning(true)
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(80)
 	list.SetHeight(5)
@@ -1106,6 +1110,7 @@ func TestToolGroupsKeepReasoningAndChildDisclosure(t *testing.T) {
 	} {
 		t.Run(family.name, func(t *testing.T) {
 			list := NewList()
+			list.SetRunning(true)
 			list.SetStyles(DefaultStyles(true))
 			list.SetWidth(100)
 			list.SetHeight(80)
@@ -1207,5 +1212,79 @@ func TestServerGroupingBoundaries(t *testing.T) {
 				t.Fatalf("got %d items, want %d", len(view), want)
 			}
 		})
+	}
+}
+
+// A widget's operations outlive its turn, so its spinner must run while no
+// run is active. Like an accordion, its whole block takes clicks and hovers,
+// and nothing is written to the terminal as a hyperlink.
+func TestWidgetViewAnimatesAfterTurnAndIsClickable(t *testing.T) {
+	id := agent.BlockID{Key: "w"}
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(60)
+	list.SetHeight(20)
+	list.SetItems([]agent.Block{{ID: id, Kind: assistant.KindWidget, Complete: true, Widget: &assistant.WidgetPayload{Title: "CPU"}}})
+	list.SetRunning(false)
+
+	view := WidgetView{Image: graphics.Image{Columns: 40, Rows: 8}, Loading: "Rendering", Action: WidgetOpen}
+	list.SetWidgetView(id, view)
+	list.SetRunning(true)
+	if !list.HasAnimated() || list.Working() {
+		t.Fatal("a loading widget must animate without counting as the agent's work")
+	}
+	list.SetRunning(false)
+	if !list.HasAnimated() {
+		t.Fatal("loading widget did not animate after the turn")
+	}
+	view.Loading = ""
+	list.SetWidgetView(id, view)
+	if list.HasAnimated() {
+		t.Fatal("idle widget kept animating")
+	}
+
+	clickable := func() int {
+		n := 0
+		for y := range 20 {
+			for x := range 60 {
+				if hit, ok := list.LinkAt(x, y); ok && hit.Action == WidgetOpen {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	if got, want := clickable(), (1+8)*60; got != want {
+		t.Fatalf("%d clickable cells, want the block's rows: %d", got, want)
+	}
+	idle := list.Render()
+	if strings.Contains(idle, "\x1b]8;") {
+		t.Fatal("a widget action was written as a terminal hyperlink")
+	}
+	list.SetPointer(50, 4)
+	if list.Render() == idle {
+		t.Fatal("hovering the widget did not highlight it")
+	}
+	// The highlight repaints backgrounds only: image cells keep their marks.
+	view.Image.ID = 0xB10001
+	list.SetWidgetView(id, view)
+	list.SetPointer(0, 20)
+	plain := list.Render()
+	list.SetPointer(50, 4)
+	trimmed := func(s string) string {
+		lines := strings.Split(ansi.Strip(s), "\n")
+		for i := range lines {
+			lines[i] = strings.TrimRight(lines[i], " ")
+		}
+		return strings.Join(lines, "\n")
+	}
+	if hovered := list.Render(); trimmed(hovered) != trimmed(plain) || strings.Count(hovered, "38;2;177;0;1") != strings.Count(plain, "38;2;177;0;1") {
+		t.Fatal("hovering changed the image's placeholder cells")
+	}
+
+	// Views belong to the transcript they were set for.
+	list.ReplaceTranscript(list.items, nil, nil)
+	if clickable() != 0 {
+		t.Fatal("a replaced transcript kept its widget views")
 	}
 }

@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/binary"
 	"hash/fnv"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -49,6 +50,13 @@ type List struct {
 	// cache entries include it in their identity, while settled entries ignore it.
 	frame int
 
+	// running is whether a run is active. Without one, a block left running by
+	// an ended or restored turn is stale, not progressing.
+	running bool
+
+	// widgets overrides how widget blocks render; see WidgetView.
+	widgets map[agent.BlockID]WidgetView
+
 	cache    map[agent.BlockID]listLineEntry
 	renderer blockRenderer
 
@@ -76,7 +84,10 @@ type Surface struct {
 
 // LinkHit identifies a hyperlink a block's rendered markdown shows.
 type LinkHit struct {
+	// Exactly one of URL and Action is set: Action on a widget, URL on a
+	// markdown link.
 	URL     string
+	Action  WidgetAction
 	BlockID agent.BlockID
 	Rev     uint64
 	Row     int
@@ -247,6 +258,7 @@ func headerRevision(header string) uint64 {
 // block IDs and revisions from the previous conversation.
 func (l *List) Reset() {
 	l.items = nil
+	clear(l.widgets)
 	l.notices = nil
 	l.view = buildPresentation(l.header, nil)
 	l.offsetIdx = 0
@@ -437,11 +449,34 @@ type hoverFill struct {
 func (l *List) hoverFillRows() (hoverFill, bool) {
 	idx, line, ok := l.accordionAtRow(l.pointerY)
 	if !ok {
+		idx, line, ok = l.widgetAtRow(l.pointerY)
+	}
+	if !ok {
 		return hoverFill{}, false
 	}
 	header := l.pointerY - line
 	end := header + len(l.entry(idx).lines)
 	return hoverFill{header: header, start: max(header, 0), end: min(end, l.height)}, true
+}
+
+// widgetAtRow maps a viewport row to a clickable widget item, which hovers
+// like an accordion.
+func (l *List) widgetAtRow(y int) (idx, line int, ok bool) {
+	idx, line, ok = l.itemAtRow(y)
+	if !ok || l.view[idx].kind != itemBlock {
+		return 0, 0, false
+	}
+	v, has := l.widgets[l.view[idx].id]
+	return idx, line, has && v.Action != WidgetNone
+}
+
+// ClearWidgetViews drops every widget view, so blocks render as before and
+// take no clicks; the caller's widgets are gone.
+func (l *List) ClearWidgetViews() {
+	for id := range l.widgets {
+		delete(l.cache, id)
+	}
+	clear(l.widgets)
 }
 
 // itemAtRow maps a viewport row to a rendered presentation item. Gaps and
@@ -476,9 +511,13 @@ func (l *List) LinkAt(x, y int) (LinkHit, bool) {
 	if item.kind != itemBlock || item.start < 0 {
 		return LinkHit{}, false
 	}
+	hit := LinkHit{BlockID: item.id, Rev: item.rev, Row: row}
+	if v, ok := l.widgets[item.id]; ok {
+		hit.Action = v.Action
+		return hit, hit.Action != WidgetNone
+	}
 	// Only the markdown renderer emits hyperlinks: every other renderer
 	// escapes what it shows, so a cell's link is one a block's markdown had.
-	hit := LinkHit{BlockID: item.id, Rev: item.rev, Row: row}
 
 	buf := uv.NewScreenBuffer(l.width, l.height)
 	buf.Method = ansi.GraphemeWidth
@@ -573,6 +612,9 @@ func (l *List) renderPresentationItem(it presentationItem, c renderContext) stri
 	case itemTool:
 		return renderPresentedTool(l.items[it.start].Tool, it.presentations[0], c)
 	case itemBlock:
+		if v, ok := l.widgets[it.id]; ok {
+			return renderWidgetView(l.items[it.start], v, c)
+		}
 	}
 	return l.renderer.RenderBlock(l.items[it.start], c.width, c.sty, c.frame)
 }
@@ -580,12 +622,20 @@ func (l *List) renderPresentationItem(it presentationItem, c renderContext) stri
 // itemAnimated reports whether rendering depends on the frame counter. Waiting
 // for approval is deliberately static because no work is progressing.
 func (l *List) itemAnimated(it presentationItem) bool {
-	if it.kind == itemNotice || it.kind == itemHeader {
+	if it.kind == itemNotice || it.kind == itemHeader || !l.sty.Motion {
 		return false
 	}
-	// WithoutMotion replaces the shared spinner with static fallbacks, so
-	// running blocks no longer justify a repaint clock.
-	if l.sty.StatusSpinner.Len() == 0 {
+	// A widget's own operations progress after the turn that produced it.
+	if v, ok := l.widgets[it.id]; ok && it.kind == itemBlock {
+		return v.animated()
+	}
+	return l.itemWorking(it)
+}
+
+// itemWorking reports whether the agent's own work progresses in the item: a
+// running tool or unfinished reasoning, during a run.
+func (l *List) itemWorking(it presentationItem) bool {
+	if !l.running || it.start < 0 {
 		return false
 	}
 	for i := it.start; i < it.end; i++ {
@@ -595,6 +645,12 @@ func (l *List) itemAnimated(it presentationItem) bool {
 		}
 	}
 	return false
+}
+
+// Working reports whether the agent's own work is progressing, as opposed to
+// a widget loading on its own.
+func (l *List) Working() bool {
+	return slices.ContainsFunc(l.view, l.itemWorking)
 }
 
 // HasAnimated reports whether any block currently needs the frame counter to
@@ -608,6 +664,25 @@ func (l *List) HasAnimated() bool {
 	}
 	return false
 }
+
+// SetWidgetView replaces how a widget block renders, and reports whether the
+// view changed. Views are presentation state owned by the caller; Reset drops
+// them with the conversation.
+func (l *List) SetWidgetView(id agent.BlockID, v WidgetView) bool {
+	if old, ok := l.widgets[id]; ok && old == v {
+		return false
+	}
+	if l.widgets == nil {
+		l.widgets = make(map[agent.BlockID]WidgetView)
+	}
+	l.widgets[id] = v
+	delete(l.cache, id)
+	return true
+}
+
+// SetRunning reports whether a run is active, so the list alone decides
+// whether the transcript animates.
+func (l *List) SetRunning(running bool) { l.running = running }
 
 // SetFrame sets the animation step used by in-flight indicators. Cache entries
 // invalidate lazily: animated entries compare frames, settled entries do not.
@@ -1041,5 +1116,30 @@ func presentationRevision(blocks []agent.Block, start, end int) uint64 {
 func (l *List) ReplaceTranscript(blocks []agent.Block, tasks []agent.Task, notices []NoticeItem) {
 	l.invalidateAll()
 	clear(l.toggled)
+	clear(l.widgets)
 	l.SetTranscript(blocks, tasks, notices)
+}
+
+// Widgets returns every widget block, and which of them intersect the
+// viewport, found in one walk of the visible items.
+func (l *List) Widgets() (blocks []agent.Block, visible map[agent.BlockID]bool) {
+	for _, b := range l.items {
+		if b.Kind == assistant.KindWidget {
+			blocks = append(blocks, b)
+		}
+	}
+	if len(blocks) == 0 {
+		return nil, nil
+	}
+	l.settle()
+	visible = make(map[agent.BlockID]bool)
+	row := -l.offsetLine
+	for idx := l.offsetIdx; idx < len(l.view) && row < l.height; idx++ {
+		height := len(l.entry(idx).lines)
+		if item := l.view[idx]; row+height > 0 && item.kind == itemBlock && item.start >= 0 && l.items[item.start].Kind == assistant.KindWidget {
+			visible[item.id] = true
+		}
+		row += height + l.gapAfter(idx)
+	}
+	return blocks, visible
 }

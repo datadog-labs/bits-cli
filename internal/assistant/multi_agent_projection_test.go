@@ -24,8 +24,8 @@ func TestMultiAgentProjectionPreservesTranscriptPayloads(t *testing.T) {
 			{"tool.call_requested", `{"tool_call_id":"question","tool_name":"ask_user_question","tool_input":"{}","is_client_side":true}`},
 			{"client_tool.batch_ready", `{"generation":1,"tool_call_ids":["question"]}`},
 			{"tool.call_completed", `{"tool_call_id":"question","tool_name":"ask_user_question","status":"success","display_content":"Answered"}`},
-			{"content.widget_generated", `{"widget_type":"first","widget_content":{"title":"first"}}`},
-			{"content.widget_generated", `{"widget_type":"second","widget_content":{"title":"second"}}`},
+			{"content.widget_generated", `{"widget_type":"timeseries","widget_content":{"type":"timeseries","title":"first"}}`},
+			{"content.widget_generated", `{"widget_type":"toplist","widget_content":{"type":"toplist","title":"second"}}`},
 			{"content.dashboard_generated", `{"dashboard_content":{"title":"first"}}`},
 			{"content.dashboard_generated", `{"dashboard_content":{"title":"second"}}`},
 			{"content.fragment_received", `{"fragment":"after"}`},
@@ -55,7 +55,7 @@ func TestMultiAgentProjectionPreservesTranscriptPayloads(t *testing.T) {
 			t.Errorf("local result changed: %+v", block.Tool)
 		}
 		if block.Widget != nil {
-			widgets = append(widgets, block.Widget.Title)
+			widgets = append(widgets, fmt.Sprint((*block.Widget.WidgetDef)["title"]))
 		}
 		if block.Dashboard != nil {
 			dashboards = append(dashboards, block.Dashboard.Title)

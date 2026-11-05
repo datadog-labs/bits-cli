@@ -587,14 +587,14 @@ func (c *MultiAgentClient) handleEvent(
 		}}
 		return false, emit(usageMessage)
 	case "content.widget_generated":
+		// widget_type repeats the definition's type; its title is inside.
 		var event struct {
-			WidgetType    string           `json:"widget_type"`
 			WidgetContent WidgetDefinition `json:"widget_content"`
 		}
 		if err := json.Unmarshal(envelope.Event, &event); err != nil {
 			return false, err
 		}
-		content := Content{Type: ContentWidgetDef, Widget: &WidgetPayload{Title: event.WidgetType, WidgetDef: &event.WidgetContent}}
+		content := Content{Type: ContentWidgetDef, Widget: &WidgetPayload{WidgetDef: &event.WidgetContent}}
 		return false, emit(message(content))
 	case "content.dashboard_generated":
 		var event struct {

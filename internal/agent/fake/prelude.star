@@ -16,7 +16,7 @@ def kitchen():
     call("exec_command", {"cmd": "echo hello"})
     call("approval_request", {"tool_name": "create_monitor", "tool_args": {"name": "p95"}, "approval_message": "Create monitor p95?"})
     call([("does_not_exist", {}), ("read_file", "{not json")])
-    raw({"type": "widget_def", "title": "p95 latency", "widget_def": {}})
+    raw({"type": "widget_def", "title": "CPU usage", "widget_def": {"type": "timeseries", "title": "CPU usage", "requests": [{"q": "avg:system.cpu.user{*}"}]}})
     raw({"type": "dashboard", "title": "Checkout", "widgets": []})
     raw({"type": "background_task_update", "content": "Investigation 50% done", "event_type": "progress", "task_id": "task-1"})
     raw({"type": "thinking", "content": "", "redacted": True})

@@ -5,7 +5,10 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"runtime"
+	"slices"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/libexec"
@@ -34,6 +37,21 @@ type localClient struct {
 	renderers   chan viewer
 	interactive chan viewer
 	closeOnce   sync.Once
+}
+
+// Supported reports whether this system can run the ddviz helper. Without it,
+// widgets fall back to SandboxURL links.
+func Supported() bool {
+	// ddviz is built for macOS only; an exec failure covers the rest.
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	binary, err := libexec.Binary("ddviz")
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(binary)
+	return err == nil
 }
 
 // New creates a lazy local ddviz client. Unsupported systems and missing helpers
@@ -75,6 +93,9 @@ func newLocal(start launchFunc, concurrency int) *localClient {
 	return client
 }
 
+// transientStart are exec errors from a system short of resources.
+var transientStart = []error{syscall.EAGAIN, syscall.ENOMEM, syscall.ETXTBSY, syscall.EMFILE, syscall.ENFILE}
+
 func failure(err error) Status {
 	if errors.Is(err, context.Canceled) {
 		return Status{Phase: Canceled}
@@ -84,13 +105,14 @@ func failure(err error) Status {
 	}
 	var start *startError
 	if errors.As(err, &start) {
-		if errors.Is(start.err, os.ErrNotExist) {
-			return Status{Phase: Unavailable, Reason: "The visualization helper is not installed."}
+		switch {
+		case errors.Is(start.err, os.ErrNotExist) || errors.Is(start.err, syscall.ENOEXEC):
+			// Missing, or not executable on this system.
+			return Status{Phase: Unavailable, Reason: "The visualization helper cannot run on this system."}
+		case slices.ContainsFunc(transientStart, func(e error) bool { return errors.Is(start.err, e) }):
+			return Status{Phase: Failed, Reason: "The visualization helper could not start.", Retry: RetryAllowed}
 		}
-		if errors.Is(start.err, os.ErrPermission) {
-			return Status{Phase: Failed, Reason: "Permission denied starting the visualization helper.", Retry: RetryNotUseful}
-		}
-		return Status{Phase: Failed, Reason: "The visualization helper could not start. Check its installation and platform compatibility.", Retry: RetryNotUseful}
+		return Status{Phase: Failed, Reason: "The visualization helper could not start. Check its installation.", Retry: RetryNotUseful}
 	}
 	return Status{Phase: Failed, Reason: "Visualization could not be loaded.", Retry: RetryAllowed}
 }

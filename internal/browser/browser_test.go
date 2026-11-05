@@ -69,6 +69,9 @@ func TestSettingsURLUsesAuthoritativeSiteMapping(t *testing.T) {
 			if got != test.want {
 				t.Fatalf("SettingsURL() = %q, want %q", got, test.want)
 			}
+			if origin, err := WebOrigin(test.site); err != nil || origin+"/ask/settings" != test.want {
+				t.Fatalf("WebOrigin() = %q, %v", origin, err)
+			}
 		})
 	}
 }

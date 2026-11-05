@@ -90,11 +90,18 @@ type Chat struct {
 	StatusSweepDim color.Color
 	StatusSweepHot color.Color
 
+	// Motion is false in reduced-motion themes. Animated chat indicators check
+	// it instead of inferring motion from their frame data.
+	Motion bool
+
 	// StatusSpinner is the shared glyph cycle shown in place of the static dot
 	// while work is progressing (tools, thinking, or inspection groups). It is
 	// deliberately not used for a tool awaiting approval, which is blocked
 	// rather than busy.
 	StatusSpinner Spinner
+
+	// WidgetBox fills an inline widget's image area until its pixels arrive.
+	WidgetBox lipgloss.Style
 
 	Meta lipgloss.Style
 

@@ -145,7 +145,7 @@ func renderReasoningGroup(blocks []agent.Block, c renderContext) string {
 	for _, block := range blocks {
 		if !block.Complete && state != agent.ToolRunning {
 			state = agent.ToolRunning
-			label = "Reasoning" + activityEllipsis(c.frame, c.sty.StatusSpinner.Len() > 0)
+			label = "Reasoning" + activityEllipsis(c.frame, c.sty.Motion)
 		}
 		if block.Thinking != nil {
 			if text := strings.TrimSpace(escape.Multiline(block.Thinking.Content)); text != "" {
@@ -164,8 +164,8 @@ func renderReasoningGroup(blocks []agent.Block, c renderContext) string {
 // renderWidget summarizes a widget.
 func renderWidget(it agent.Block, width int, sty Styles) string {
 	label := "widget"
-	if it.Widget != nil && it.Widget.Title != "" {
-		label = "widget: " + escape.Inline(it.Widget.Title)
+	if title := widgetTitle(it); title != "" {
+		label = "widget: " + title
 	}
 	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
 }

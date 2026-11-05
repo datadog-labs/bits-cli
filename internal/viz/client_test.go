@@ -3,10 +3,12 @@ package viz
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -161,14 +163,21 @@ func TestUnavailableAndInvalidWidget(t *testing.T) {
 		return nil, nil
 	})
 	defer func() { _ = c.Close() }()
-	c.launch = func(context.Context, context.Context, bool) (viewer, error) {
-		return nil, &startError{err: os.ErrNotExist}
-	}
-	if r := c.Render(context.Background(), request(t)); r.Status.Phase != Unavailable {
-		t.Fatal(r)
-	}
-	if r := c.Open(context.Background(), request(t)); r.Phase != Unavailable {
-		t.Fatal(r)
+	for err, want := range map[error]Status{
+		os.ErrNotExist:               {Phase: Unavailable},
+		syscall.ENOEXEC:              {Phase: Unavailable}, // built for another system
+		os.ErrPermission:             {Phase: Failed, Retry: RetryNotUseful},
+		syscall.EAGAIN:               {Phase: Failed, Retry: RetryAllowed},   // transient
+		errors.New("broken install"): {Phase: Failed, Retry: RetryNotUseful}, // no known cause
+	} {
+		c.launch = func(context.Context, context.Context, bool) (viewer, error) {
+			return nil, &startError{err: err}
+		}
+		for _, got := range []Status{c.Render(context.Background(), request(t)).Status, c.Open(context.Background(), request(t))} {
+			if got.Phase != want.Phase || got.Retry != want.Retry {
+				t.Fatal(err, got)
+			}
+		}
 	}
 
 	if r := c.Render(context.Background(), Request{}); r.Status.Phase != Failed || r.Status.Retry != RetryNotUseful {

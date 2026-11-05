@@ -30,7 +30,29 @@ Reusable scripts for tests and manual TUI previews live together in
 The runner bundles these scripts; a file with the same name in the working
 directory takes precedence. Full paths below the working directory also work.
 The files cover approvals, command wrapping, links, notices, disclosure, and
-questions; each script lists its entry points at the top.
+questions.
+
+For visualizations, run `BITS_FAKE_BACKEND=1` with a built ddviz helper and
+load `widgets.star`. Only assistant messages are faked: rendering still requires
+a stored Bits login with Datadog MCP visualization access and macOS 13+.
+
+```text
+load("widgets.star", "gallery"); gallery()
+load("widgets.star", "timing"); timing(1700000000000, 1700003600000)
+load("widgets.star", "burst"); burst()
+load("widgets.star", "revision"); revision()
+load("widgets.star", "failures"); failures()
+```
+
+Replace the timing example with a historical interval within your account's
+metric retention, in Unix milliseconds. Check its axis in both the preview and
+interactive pane. The gallery exercises scrolling, resizing, and reopening;
+the burst exercises queued previews and conversation changes. `revision()`
+replaces a widget after two seconds (`delay="10s"` gives more time to open it).
+Failures include invalid definitions and a legacy tile without a definition;
+they do not simulate retryable MCP failures. Missing CPU metrics can produce
+empty charts. Other terminals can exercise the interactive action without an
+inline preview.
 
 | Built-in | Emits |
 | --- | --- |

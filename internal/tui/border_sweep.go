@@ -16,8 +16,8 @@ func (m *Model) animationsVisible() bool {
 	return m.mode == ModeChat && !m.frame.tooSmall && !m.frame.replaced
 }
 
-func (m *Model) toolAnimationWanted() bool {
-	return m.animationsVisible() && m.op.run != 0 && m.list.HasAnimated()
+func (m *Model) transcriptAnimationWanted() bool {
+	return m.animationsVisible() && m.list.HasAnimated()
 }
 
 // borderSweepWanted distinguishes active work from a wait on the user. If a
@@ -30,5 +30,5 @@ func (m *Model) borderSweepWanted() bool {
 	if m.chatPhase != chat.PhaseWaiting && m.chatPhase != chat.PhaseStreaming {
 		return false
 	}
-	return m.prompt() == nil || m.list.HasAnimated()
+	return m.prompt() == nil || m.list.Working()
 }

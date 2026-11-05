@@ -17,11 +17,12 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	conversationview "github.com/datadog-labs/bits-cli/internal/tui/conversations"
 	"github.com/datadog-labs/bits-cli/internal/tui/editor"
+	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
 	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
-	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 	statusview "github.com/datadog-labs/bits-cli/internal/tui/status"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 	"github.com/datadog-labs/bits-cli/internal/update"
+	"github.com/datadog-labs/bits-cli/internal/viz"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -135,6 +136,9 @@ type EntitySearcher interface {
 }
 
 type Config struct {
+	// Visualization renders widgets; nil where ddviz cannot run, which leaves
+	// widgets as links to the web app.
+	Visualization  viz.Client
 	Tools          *agent.ToolSet
 	ToolUI         *tools.UI
 	Version        string
@@ -276,9 +280,11 @@ type Model struct {
 	// the environment (see chatMouseMode()).
 	chatMouseMode tea.MouseMode
 
-	// splashReady is set once the terminal has answered the Kitty graphics
-	// probe and the logo's pixels have been transmitted.
-	splashReady bool
+	widgets widgets
+
+	// graphics is whether the terminal paints Kitty images, from its answer to
+	// the probe and any image it rejected.
+	graphics graphics.Support
 
 	// resume is the startup conversation offer shown under the splash panel.
 	resume resume
@@ -301,6 +307,7 @@ func New(engine *agent.Engine, configs ...Config) *Model {
 // before any operation starts, so the pump started by initChat misses none.
 func (m *Model) attach(engine *agent.Engine) {
 	m.engine = engine
+	m.widgets.origin, _ = browser.WebOrigin(engine.Site())
 	m.state = engine.State()
 	m.events, m.unsubscribe = engine.Subscribe()
 }
@@ -309,6 +316,7 @@ func (m *Model) attach(engine *agent.Engine) {
 // Closing the engine is not enough: its subscriptions deliver their queued
 // events first, and nothing reads them anymore.
 func (m *Model) Detach() {
+	m.widgets.close()
 	if m.unsubscribe != nil {
 		m.unsubscribe()
 	}
@@ -332,6 +340,7 @@ func NewWithLogin(ctx context.Context, loginModel *loginui.Model, factory Engine
 
 func (m *Model) configure(configs []Config) {
 	if len(configs) > 0 {
+		m.widgets.client = configs[0].Visualization
 		m.tools = configs[0].Tools
 		m.toolUI = configs[0].ToolUI
 		m.workspace = configs[0].Workspace
@@ -435,9 +444,19 @@ func (m *Model) Init() tea.Cmd {
 			return tea.Quit
 		}
 		// Probe during login so the logo is ready at the handoff to chat.
-		return tea.Batch(m.loginModel.Init(), splash.Query())
+		return tea.Batch(m.loginModel.Init(), m.queryGraphics())
 	}
-	return tea.Batch(m.initChat(), splash.Query())
+	return tea.Batch(m.initChat(), m.queryGraphics())
+}
+
+// queryGraphics probes the terminal. One that must not be asked is known
+// unsupported at once, so Unknown always means an answer is on its way.
+func (m *Model) queryGraphics() tea.Cmd {
+	probe := graphics.Query()
+	if probe == nil {
+		m.graphics = graphics.Unsupported
+	}
+	return probe
 }
 
 // initChat focuses the editor, starts the engine event pump and, when
