@@ -357,7 +357,7 @@ func TestClientSkillReadFailureFailsTurnLikeBackendError(t *testing.T) {
 		if event.Err != nil {
 			failure = event.Err
 		}
-		m.applyEvent(event)
+		m.applyEvent(event, true)
 	}
 	if failure == nil || m.chatPhase != chat.PhaseError {
 		t.Fatalf("failure = %v, phase = %v", failure, m.chatPhase)

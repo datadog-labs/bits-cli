@@ -433,7 +433,7 @@ func TestUpRestoresThePreviousPromptWithItsChips(t *testing.T) {
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	first := <-backend.requests
 	for event := range agent.Follow(m.events, m.op.run) {
-		m.applyEvent(event)
+		m.applyEvent(event, true)
 	}
 	_ = m.endOperation()
 

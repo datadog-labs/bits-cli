@@ -319,10 +319,8 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = msg.ev.State
 				m.syncTranscript()
 			}
-		case m.op.run != 0 && msg.ev.Run == m.op.run:
+		case (m.op.run != 0 && msg.ev.Run == m.op.run) || m.backgroundRuns[msg.ev.Run] != nil:
 			cmd = m.applyRunEvent(msg.ev)
-		case m.backgroundRuns[msg.ev.Run] != nil:
-			cmd = m.applyBackgroundEvent(msg.ev)
 		}
 		return m, tea.Batch(cmd, waitEvent(m.events))
 
@@ -654,41 +652,30 @@ func (m *Model) inComposer(msg tea.MouseMsg) (image.Point, bool) {
 	return p.Sub(m.frame.composer.Min), true
 }
 
-// applyRunEvent folds an event of the operation's run, and ends the operation
-// after the run's terminal event.
+// applyRunEvent folds an admitted foreground or background event. Only the
+// foreground run may release the operation and start its queued work.
 func (m *Model) applyRunEvent(ev agent.Event) tea.Cmd {
-	cmd := m.applyEvent(ev)
+	foreground := ev.Run == m.op.run
+	cmd := m.applyEvent(ev, foreground)
+	if ev.Kind == agent.EventState {
+		m.syncTranscript()
+	}
 	m.syncStatus()
-	if ev.Kind == agent.EventState {
-		m.syncTranscript()
-	}
-	if ev.Kind == agent.EventBackground {
-		if m.backgroundRuns == nil {
-			m.backgroundRuns = make(map[agent.RunID]context.CancelFunc)
+	if foreground {
+		if ev.Kind == agent.EventBackground {
+			if m.backgroundRuns == nil {
+				m.backgroundRuns = make(map[agent.RunID]context.CancelFunc)
+			}
+			m.backgroundRuns[ev.Run] = m.op.cancel
+			m.op.cancel = nil
+			cmd = tea.Batch(cmd, m.endOperation())
+		} else if ev.Terminal() {
+			cmd = tea.Batch(cmd, m.endOperation())
 		}
-		m.backgroundRuns[ev.Run] = m.op.cancel
-		m.op.cancel = nil
-		cmd = tea.Batch(cmd, m.endOperation())
-		m.syncApprovals(m.state.PendingApprovals())
 	} else if ev.Terminal() {
-		cmd = tea.Batch(cmd, m.endOperation())
-	}
-	return cmd
-}
-
-// Background output updates the conversation without ending a newer operation.
-func (m *Model) applyBackgroundEvent(ev agent.Event) tea.Cmd {
-	phase := m.chatPhase
-	cmd := m.applyEvent(ev)
-	m.chatPhase = phase
-	if ev.Kind == agent.EventState {
-		m.syncTranscript()
-	}
-	if ev.Terminal() {
 		m.backgroundRuns[ev.Run]()
 		delete(m.backgroundRuns, ev.Run)
 	}
-	m.syncStatus()
 	return cmd
 }
 
@@ -1065,7 +1052,7 @@ func (m *Model) after(next followUp) {
 // applyEvent folds one engine event into the block snapshot / status. The switch
 // is exhaustive over agent.EventKind. It returns a command for side effects (an
 // error posts a local transcript message); nil otherwise.
-func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
+func (m *Model) applyEvent(ev agent.Event, foreground bool) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
 	case agent.EventState:
@@ -1074,25 +1061,29 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 		}
 		m.state = ev.State
 		m.syncApprovals(m.state.PendingApprovals())
-		if ev.State.HasStreamingContent() {
+		if foreground && ev.State.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}
 	case agent.EventUsage, agent.EventConversation:
 		// The state carries both; these report a backend send.
 	case agent.EventDone, agent.EventBackground:
-		m.chatPhase = chat.PhaseIdle
+		if foreground {
+			m.chatPhase = chat.PhaseIdle
+		}
 	case agent.EventCanceled:
 		// endOperation settles the chat phase and resyncs the transcript.
 	case agent.EventError:
 		// A failure during restore is benign: drop to idle with a notice so the
 		// user can still type. A failure mid-turn is the turn's error state.
-		if m.op.kind == opRestore {
+		if foreground && m.op.kind == opRestore {
 			m.chatPhase = chat.PhaseIdle
 			if ev.Err != nil {
 				return m.postNotice(noticeForError("restore failed", ev.Err))
 			}
 		} else {
-			m.chatPhase = chat.PhaseError
+			if foreground {
+				m.chatPhase = chat.PhaseError
+			}
 			if ev.Err != nil {
 				return m.postNotice(noticeForError("", ev.Err))
 			}

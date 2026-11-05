@@ -216,17 +216,11 @@ func (m *Model) stopTools() {
 	if m.shown != nil {
 		id := m.shown.callID()
 		if m.engine.StopToolsFor(id) == nil {
-			for _, block := range m.state.Blocks {
-				if block.ToolCallID() == id && block.Run == m.op.run {
-					m.op.stop = max(m.op.stop, stopTools)
-				}
-			}
 			m.reshow()
 		}
 		return
 	}
 	if m.engine.StopTools() == nil {
-		m.op.stop = max(m.op.stop, stopTools)
 		m.dropToolUIs()
 	} else {
 		m.cancelOperation()

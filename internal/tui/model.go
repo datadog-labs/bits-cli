@@ -61,14 +61,12 @@ const (
 	opLogout         // credential deletion; the session quits once it succeeds
 )
 
-// stopLevel only rises within an operation: stopping its tools never undoes a
-// full cancel.
+// stopLevel records whether the operation context has been canceled.
 type stopLevel uint8
 
 const (
-	stopNone  stopLevel = iota
-	stopTools           // the engine stops client tools; the turn continues
-	stopAll             // the operation's context is cancelled
+	stopNone stopLevel = iota
+	stopAll            // the operation's context is cancelled
 )
 
 // followUp runs once the operation ends. It only rises, so a queued logout

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"testing/synctest"
 
@@ -51,14 +52,25 @@ func TestBackgroundTurnStateAndTerminalPreserveNewOperation(t *testing.T) {
 			currentContext, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			m.begin(opTurn, 2, nil, cancel)
-			m.chatPhase = chat.PhaseStreaming
+			m.chatPhase = chat.PhaseWaiting
 			generation := m.op.gen
 			pending := awaitingCall("child-approval")
 			pending.Run = 1
-			state := agent.State{Version: m.state.Version + 1, ConversationID: "conversation", Blocks: []agent.Block{pending}}
+			state := agent.State{
+				Version: m.state.Version + 1, ConversationID: "conversation",
+				Blocks: []agent.Block{pending, {
+					ID:  agent.BlockID{Key: "child-text", Kind: assistant.KindText},
+					Run: 1, Kind: assistant.KindText,
+					Markdown: &assistant.MarkdownPayload{Content: "child output"},
+				}},
+			}
 			m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventState, Run: 1, State: state}})
 			if m.state.Version != state.Version || m.state.ConversationID != state.ConversationID || waitingApprovals(m) != 1 {
 				t.Fatalf("background snapshot was not applied: %+v", m.state)
+			}
+			m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventBackground, Run: 1}})
+			if m.op.run != 2 || m.op.gen != generation || currentContext.Err() != nil || oldContext.Err() != nil || m.chatPhase != chat.PhaseWaiting {
+				t.Fatal("background state or repeated completion changed foreground ownership")
 			}
 			event := agent.Event{Kind: terminal, Run: 1}
 			if terminal == agent.EventError {
@@ -68,8 +80,11 @@ func TestBackgroundTurnStateAndTerminalPreserveNewOperation(t *testing.T) {
 			if m.op.run != 2 || !m.op.busy() || m.op.gen != generation || currentContext.Err() != nil {
 				t.Fatalf("background terminal changed foreground operation: %+v; context = %v", m.op, currentContext.Err())
 			}
-			if m.chatPhase != chat.PhaseStreaming {
+			if m.chatPhase != chat.PhaseWaiting {
 				t.Fatalf("background terminal changed foreground phase to %v", m.chatPhase)
+			}
+			if terminal == agent.EventError && !strings.Contains(latestNotice(m).Text, "child stream failed") {
+				t.Fatal("background error notice is missing")
 			}
 			if oldContext.Err() == nil || m.backgroundRuns[1] != nil {
 				t.Fatal("background terminal retained its context or run")
@@ -288,5 +303,53 @@ func TestBackgroundTurnEscapeCancelsAfterForegroundEnds(t *testing.T) {
 	}
 	if m.backgroundRuns[1] == nil {
 		t.Fatal("canceled background run must remain registered until its terminal event")
+	}
+}
+
+func TestBeginFailureEndsOperation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		kind   opKind
+		phase  chat.Phase
+		notice string
+	}{
+		{"turn", opTurn, chat.PhaseError, "startup failed"},
+		{"restore", opRestore, chat.PhaseIdle, "restore failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModelWithSpy(t)
+			defer m.engine.Close()
+			defer m.Detach()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			m.chatPhase = chat.PhaseWaiting
+			m.begin(tc.kind, 0, errors.New("startup failed"), cancel)
+			if ctx.Err() == nil || m.op.busy() || m.op.run != 0 || m.op.gen != 1 {
+				t.Fatalf("failed startup retained operation: %+v; context=%v", m.op, ctx.Err())
+			}
+			if m.chatPhase != tc.phase || !strings.Contains(latestNotice(m).Text, tc.notice) {
+				t.Fatalf("failed startup phase=%v notice=%+v", m.chatPhase, latestNotice(m))
+			}
+		})
+	}
+}
+
+func TestBackgroundErrorDuringRestoreKeepsNormalNotice(t *testing.T) {
+	m, oldContext := backgroundTurnModel(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.begin(opRestore, 2, nil, cancel)
+	m.chatPhase = chat.PhaseWaiting
+	generation := m.op.gen
+	m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventError, Run: 1, Err: errors.New("child stream failed")}})
+	n := latestNotice(m)
+	if !strings.Contains(n.Text, "child stream failed") || strings.Contains(n.Text, "restore failed") {
+		t.Fatalf("background error notice = %+v", n)
+	}
+	if m.op.kind != opRestore || m.op.run != 2 || m.op.gen != generation || ctx.Err() != nil || m.chatPhase != chat.PhaseWaiting {
+		t.Fatalf("background error changed restore: %+v; phase=%v context=%v", m.op, m.chatPhase, ctx.Err())
+	}
+	if oldContext.Err() == nil || m.backgroundRuns[1] != nil {
+		t.Fatal("background failure retained its context or registration")
 	}
 }
