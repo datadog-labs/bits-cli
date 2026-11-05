@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
@@ -373,5 +375,270 @@ func TestBackgroundTurnSessionGrantCoversAllRuns(t *testing.T) {
 				t.Errorf("same-key tool %s still awaiting approval after session grant", b.ToolCallID())
 			}
 		}
+	})
+}
+
+// mixedBackend selects the regular request-round transport for the newer turn.
+type mixedBackend struct {
+	*backgroundBackend
+	send func(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error)
+}
+
+func (b *mixedBackend) CanStream(message string, _ assistant.SendOptions) bool {
+	return message == "old"
+}
+
+func (b *mixedBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+	return b.send(ctx, message, opts, emit)
+}
+
+func TestBackgroundStreamOverlapsRegularToolRound(t *testing.T) {
+	for _, backgroundFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("background_first_%t", backgroundFirst), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				old := newBackgroundStream()
+				regularResults := make(chan []assistant.ClientToolResponse, 1)
+				childResults := make(chan []assistant.ClientToolResponse, 1)
+				finishRegular := make(chan struct{})
+				backend := &mixedBackend{backgroundBackend: &backgroundBackend{streams: map[string]*backgroundStream{"old": old}}}
+				backend.submit = func(_ context.Context, results []assistant.ClientToolResponse) error {
+					childResults <- results
+					return nil
+				}
+				backend.send = func(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+					if results, ok := message.([]assistant.ClientToolResponse); ok {
+						regularResults <- results
+						<-finishRegular
+						return "conversation", emit(backgroundAnswer("regular-answer", "regular final", false))
+					}
+					for _, id := range []string{"first", "second"} {
+						if err := emit(duplexCall(id, "write")); err != nil {
+							return "conversation", err
+						}
+					}
+					return "conversation", nil
+				}
+				tools, err := NewToolSet(Tool{
+					Definition: assistant.ClientTool{Name: "write"},
+					Approval: func(call ToolCall) (ApprovalRequirement, bool) {
+						return ApprovalRequirement{Key: ApprovalKey{Tool: "write", Resource: call.ID}}, true
+					},
+					Handler: func(_ context.Context, call ToolCall) (ToolResult, error) { return ToolResult{Output: call.ID}, nil },
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				engine := New(backend, Config{ConversationID: "conversation"})
+				defer engine.Close()
+				events, unsubscribe := engine.Subscribe()
+				defer unsubscribe()
+				first, err := engine.StartTurn(context.Background(), TurnInput{Message: "old", Tools: tools})
+				if err != nil {
+					t.Fatal(err)
+				}
+				old.responses <- backgroundAnswer("initial", "initial answer", true)
+				backgroundEvent(t, events, first, EventBackground)
+				second, err := engine.StartTurn(context.Background(), TurnInput{Message: "regular", Tools: tools})
+				if err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+				old.responses <- duplexCall("child", "write")
+				old.responses <- backgroundAnswer("followup", "child followup", false)
+				synctest.Wait()
+				if len(engine.State().PendingApprovals()) != 3 {
+					t.Fatal("both transports must expose their pending approvals")
+				}
+				for _, id := range []string{"child", "second", "first"} {
+					if err := engine.Decide(id, ApprovalAllowOnce); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if got := <-childResults; len(got) != 1 || got[0].ToolCallID != "child" {
+					t.Fatalf("child results: %+v", got)
+				}
+				if got := <-regularResults; len(got) != 2 || got[0].ToolCallID != "first" || got[1].ToolCallID != "second" {
+					t.Fatalf("regular results lost wire order: %+v", got)
+				}
+				finishOld := func() { old.finish <- nil; backgroundEvent(t, events, first, EventDone) }
+				finishNew := func() { close(finishRegular); backgroundEvent(t, events, second, EventDone) }
+				if backgroundFirst {
+					finishOld()
+					if !engine.OperationActive() {
+						t.Fatal("background completion released regular foreground")
+					}
+					finishNew()
+				} else {
+					finishNew()
+					finishOld()
+				}
+				if engine.OperationActive() {
+					t.Fatal("completed foreground still holds admission")
+				}
+				found := make(map[string]bool)
+				for _, block := range engine.State().Blocks {
+					owner := map[string]RunID{"followup": first, "regular-answer": second}[block.MessageID]
+					if owner != 0 {
+						found[block.MessageID] = true
+						if block.Run != owner || !block.Complete {
+							t.Fatalf("wrong block ownership or completion: %+v", block)
+						}
+					}
+				}
+				if len(found) != 2 {
+					t.Fatalf("missing response blocks: %v", found)
+				}
+			})
+		})
+	}
+}
+
+func TestForegroundCleanupKeepsAdmissionButRejectsCommands(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		old := newBackgroundStream()
+		started, joining, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		submitted := make(chan []assistant.ClientToolResponse, 1)
+		backend := &mixedBackend{backgroundBackend: &backgroundBackend{streams: map[string]*backgroundStream{"old": old}}}
+		backend.submit = func(_ context.Context, results []assistant.ClientToolResponse) error {
+			submitted <- results
+			return nil
+		}
+		backend.send = func(ctx context.Context, _ any, _ assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
+			close(started)
+			<-ctx.Done()
+			close(joining)
+			<-release
+			return "late-conversation", ctx.Err()
+		}
+		tools, err := NewToolSet(Tool{
+			Definition: assistant.ClientTool{Name: "write"},
+			Approval: func(call ToolCall) (ApprovalRequirement, bool) {
+				return ApprovalRequirement{Key: ApprovalKey{Tool: "write", Resource: call.ID}}, true
+			},
+			Handler: func(_ context.Context, call ToolCall) (ToolResult, error) { return ToolResult{Output: call.ID}, nil },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		engine := New(backend, Config{})
+		defer engine.Close()
+		events, unsubscribe := engine.Subscribe()
+		defer unsubscribe()
+		first, err := engine.StartTurn(context.Background(), TurnInput{Message: "old", Tools: tools})
+		if err != nil {
+			t.Fatal(err)
+		}
+		old.responses <- backgroundAnswer("initial", "initial", true)
+		backgroundEvent(t, events, first, EventBackground)
+		old.responses <- duplexCall("child", "write")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		second, err := engine.StartTurn(ctx, TurnInput{Message: "regular"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-started
+		cancel()
+		<-joining
+		synctest.Wait()
+		_ = engine.State()
+		if err := engine.StopTools(); !errors.Is(err, ErrStale) {
+			t.Fatalf("joining foreground accepted stop: %v", err)
+		}
+		if err := engine.Decide("child", ApprovalAllowOnce); err != nil {
+			t.Fatal(err)
+		}
+		if got := <-submitted; got[0].ToolCallID != "child" {
+			t.Fatalf("background decision misrouted: %+v", got)
+		}
+		if _, err := engine.StartTurn(context.Background(), TurnInput{Message: "blocked"}); !errors.Is(err, ErrOperationActive) {
+			t.Fatalf("new turn during cleanup: %v", err)
+		}
+		if err := engine.NewConversation(); !errors.Is(err, ErrOperationActive) {
+			t.Fatalf("new conversation during cleanup: %v", err)
+		}
+		close(release)
+		var final State
+		for event := range Follow(events, second) {
+			if event.Kind == EventState {
+				final = event.State
+			}
+			if event.Terminal() && event.Kind != EventCanceled {
+				t.Fatalf("terminal: %+v", event)
+			}
+		}
+		if final.ConversationID != "late-conversation" {
+			t.Fatalf("late conversation absent from terminal state: %+v", final)
+		}
+		old.finish <- nil
+		backgroundEvent(t, events, first, EventDone)
+		if err := engine.NewConversation(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestCancellationDuringPreparationNeverRegistersTurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		preparing, release := make(chan struct{}), make(chan struct{})
+		backend := &scriptBackend{}
+		engine := New(backend, Config{UserContext: func(context.Context) string { close(preparing); <-release; return "context" }})
+		defer engine.Close()
+		events, unsubscribe := engine.Subscribe()
+		defer unsubscribe()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		run, err := engine.StartTurn(ctx, TurnInput{Message: "cancel during preparation"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-preparing
+		cancel()
+		close(release)
+		backgroundEvent(t, events, run, EventCanceled)
+		if len(backend.sent) != 0 || engine.OperationActive() {
+			t.Fatal("cancelled preparation sent a request or retained admission")
+		}
+		if err := engine.StopTools(); !errors.Is(err, ErrStale) {
+			t.Fatalf("cancelled preparation registered a turn: %v", err)
+		}
+		if err := engine.NewConversation(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestForegroundTransportCleanupIsBounded(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started, release := make(chan struct{}), make(chan struct{})
+		backend := &mixedBackend{backgroundBackend: &backgroundBackend{}}
+		backend.send = func(ctx context.Context, _ any, _ assistant.SendOptions, _ func(assistant.AssistantResponse) error) (string, error) {
+			close(started)
+			<-ctx.Done()
+			<-release
+			return "", ctx.Err()
+		}
+		engine := New(backend, Config{})
+		defer engine.Close()
+		events, unsubscribe := engine.Subscribe()
+		defer unsubscribe()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		run, err := engine.StartTurn(ctx, TurnInput{Message: "regular"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-started
+		start := time.Now()
+		cancel()
+		backgroundEvent(t, events, run, EventCanceled)
+		if elapsed := time.Since(start); elapsed != 30*time.Second {
+			t.Fatalf("transport cleanup took %s, want 30s", elapsed)
+		}
+		if engine.OperationActive() {
+			t.Fatal("timed out cleanup retained admission")
+		}
+		engine.Close()
+		close(release)
 	})
 }

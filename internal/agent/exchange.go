@@ -36,13 +36,13 @@ type exchange interface {
 // exchangeEvent is one backend fact, applied field by field. Only execute
 // makes a client call run: content alone, whatever its type, never does.
 type exchangeEvent struct {
+	rootTurnCompleted bool
 	// round starts this backend send, 1-based. Every send is announced
 	// before it is made, so a turn cancelled earlier stays outside any round.
-	rootTurnCompleted bool
-	round             int
-	conversation      string // server-assigned conversation ID
-	message           *assistant.Message
-	execute           []ToolCall // a batch, dispatched at once
+	round        int
+	conversation string // server-assigned conversation ID
+	message      *assistant.Message
+	execute      []ToolCall // a batch, dispatched at once
 	// err fails the turn at once, before run returns: the exchange cannot
 	// continue, so its running calls must stop rather than await transport
 	// cleanup.
