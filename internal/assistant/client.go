@@ -2,7 +2,7 @@
 // Assistant HTTP API. It targets the same API the Datadog UI uses when you
 // chat with Bits, and is intended to drive a remote agent loop.
 //
-// The main endpoint (POST /api/v2/assistant) returns a stream of
+// The conversation POST endpoints return a stream of
 // newline-delimited JSON, where each line is a complete AssistantResponse.
 package assistant
 
@@ -477,7 +477,11 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 		Attributes: attrs,
 	}}
 
-	return c.stream(ctx, http.MethodPost, "/api/v2/assistant", reqBody, opts.ConversationID, fn)
+	path := "/api/v2/assistant/conversation"
+	if opts.ConversationID != "" {
+		path += "/" + url.PathEscape(opts.ConversationID)
+	}
+	return c.stream(ctx, http.MethodPost, path, reqBody, opts.ConversationID, fn)
 }
 
 // SubscribeOptions selects what a /subscribe stream carries.
@@ -487,7 +491,7 @@ type SubscribeOptions struct {
 	TaskID string
 }
 
-// Subscribe observes a conversation through GET .../subscribe: the server
+// Subscribe observes a conversation through POST .../subscribe: the server
 // replays the persisted messages, sends one ContentReplayComplete marker, then
 // live messages until it closes the stream (after 120s without one, or at the
 // end of the task with TaskID). Each attachment replays everything again: a
@@ -496,10 +500,10 @@ type SubscribeOptions struct {
 // stream with that error.
 func (c *Client) Subscribe(ctx context.Context, conversationID string, opts SubscribeOptions, fn func(Message) error) error {
 	path := "/api/v2/assistant/conversation/" + url.PathEscape(conversationID) + "/subscribe"
-	if opts.TaskID != "" {
-		path += "?" + url.Values{"subtask_id": {opts.TaskID}}.Encode()
-	}
-	_, err := c.stream(ctx, http.MethodGet, path, nil, conversationID, func(ar AssistantResponse) error {
+	body := struct {
+		TaskID string `json:"subtask_id,omitempty"`
+	}{TaskID: opts.TaskID}
+	_, err := c.stream(ctx, http.MethodPost, path, body, conversationID, func(ar AssistantResponse) error {
 		return fn(ar.Data.Attributes.StructuredMessage)
 	})
 	return err
@@ -520,6 +524,7 @@ func (c *Client) stream(ctx context.Context, method, path string, body any, conv
 	if err != nil {
 		return conversationID, err
 	}
+	req.Header.Set("Accept", "text/event-stream")
 	streamClient := c.streamClient()
 	if c.RequiredStreamHeaderName != "" {
 		// An acknowledgment from a redirected origin cannot attest to the
