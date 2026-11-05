@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,13 +16,26 @@ import (
 )
 
 func TestMultiAgentOverlappingHTTPStreamsRouteChildTools(t *testing.T) {
+	for _, cancelRuns := range []bool{false, true} {
+		name := "two final answers"
+		if cancelRuns {
+			name = "independent cancellation"
+		}
+		t.Run(name, func(t *testing.T) { testOverlappingHTTPStreams(t, cancelRuns) })
+	}
+}
+
+func testOverlappingHTTPStreams(t *testing.T, cancelRuns bool) {
 	const conversation = "12345678-1234-1234-1234-123456789abc"
 	secondStarted, finishSecond := make(chan struct{}), make(chan struct{})
+	cancelled := make(chan string, 2)
+	finishFirst := make(chan struct{})
 	answers := map[string]chan struct{}{"run-one": make(chan struct{}), "run-two": make(chan struct{})}
 	var mu sync.Mutex
 	results := map[string]string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/cancel") {
+			cancelled <- r.URL.Path
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -29,6 +43,7 @@ func TestMultiAgentOverlappingHTTPStreamsRouteChildTools(t *testing.T) {
 			var body struct {
 				Results []struct {
 					RunID      string `json:"run_id"`
+					AgentID    string `json:"agent_id"`
 					ToolCallID string `json:"tool_call_id"`
 					Output     string `json:"output"`
 				} `json:"results"`
@@ -39,7 +54,7 @@ func TestMultiAgentOverlappingHTTPStreamsRouteChildTools(t *testing.T) {
 				return
 			}
 			result := body.Results[0]
-			if r.URL.Path != "/api/unstable/assistant/multi-agent/runs/"+result.RunID+"/tool-results" || result.ToolCallID != "same-wire-id" {
+			if r.URL.Path != "/api/unstable/assistant/multi-agent/runs/"+result.RunID+"/tool-results" || result.ToolCallID != "same-wire-id" || result.AgentID != "child" {
 				t.Errorf("misrouted result: %s %+v", r.URL.Path, result)
 				w.WriteHeader(400)
 				return
@@ -91,6 +106,9 @@ func TestMultiAgentOverlappingHTTPStreamsRouteChildTools(t *testing.T) {
 		if !wait(answers[id]) {
 			return
 		}
+		if id == "run-one" && !wait(finishFirst) {
+			return
+		}
 		if id == "run-two" && !wait(finishSecond) {
 			return
 		}
@@ -110,25 +128,62 @@ func TestMultiAgentOverlappingHTTPStreamsRouteChildTools(t *testing.T) {
 	defer cancel()
 	events, unsubscribe := engine.Subscribe()
 	defer unsubscribe()
-	first, err := engine.StartTurn(ctx, TurnInput{Message: "first", Tools: tools})
+	firstCtx, cancelFirst := context.WithCancel(ctx)
+	defer cancelFirst()
+	secondCtx, cancelSecond := context.WithCancel(ctx)
+	defer cancelSecond()
+	first, err := engine.StartTurn(firstCtx, TurnInput{Message: "first", Tools: tools})
 	if err != nil {
 		t.Fatal(err)
 	}
 	backgroundEvent(t, events, first, EventBackground)
-	second, err := engine.StartTurn(ctx, TurnInput{Message: "second", Tools: tools})
+	second, err := engine.StartTurn(secondCtx, TurnInput{Message: "second", Tools: tools})
 	if err != nil {
 		t.Fatal(err)
 	}
-	backgroundEvent(t, events, first, EventDone)
+	for _, id := range []string{"run-one", "run-two"} {
+		select {
+		case <-answers[id]:
+		case <-ctx.Done():
+			t.Fatal("missing tool result", id)
+		}
+	}
+	if cancelRuns {
+		cancelFirst()
+		if got := backgroundEvent(t, events, first, EventCanceled); !errors.Is(got.Err, context.Canceled) {
+			t.Fatalf("first cancellation = %v", got.Err)
+		}
+		if path := <-cancelled; path != "/api/unstable/assistant/multi-agent/runs/run-one/cancel" {
+			t.Fatalf("first cancellation path = %s", path)
+		}
+		select {
+		case path := <-cancelled:
+			t.Fatalf("canceling first also canceled %s", path)
+		default:
+		}
+	} else {
+		close(finishFirst)
+		backgroundEvent(t, events, first, EventDone)
+	}
 	if !engine.OperationActive() {
 		t.Fatal("first run ended second operation")
 	}
-	close(finishSecond)
-	backgroundEvent(t, events, second, EventDone)
+	if cancelRuns {
+		cancelSecond()
+		if got := backgroundEvent(t, events, second, EventCanceled); !errors.Is(got.Err, context.Canceled) {
+			t.Fatalf("second cancellation = %v", got.Err)
+		}
+		if path := <-cancelled; path != "/api/unstable/assistant/multi-agent/runs/run-two/cancel" {
+			t.Fatalf("second cancellation path = %s", path)
+		}
+	} else {
+		close(finishSecond)
+		backgroundEvent(t, events, second, EventDone)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	for _, id := range []string{"run-one", "run-two"} {
-		if !strings.Contains(results[id], id) {
+		if results[id] != "multi-agent:"+id+":child:1:same-wire-id" {
 			t.Errorf("result not scoped to %s: %q", id, results[id])
 		}
 	}
@@ -138,7 +193,11 @@ func TestMultiAgentOverlappingHTTPStreamsRouteChildTools(t *testing.T) {
 			texts[block.Markdown.Content] = true
 		}
 	}
-	for _, text := range []string{"run-one initial", "run-one final", "run-two initial", "run-two final"} {
+	expected := []string{"run-one initial", "run-two initial"}
+	if !cancelRuns {
+		expected = append(expected, "run-one final", "run-two final")
+	}
+	for _, text := range expected {
 		if !texts[text] {
 			t.Errorf("missing %q in %v", text, texts)
 		}

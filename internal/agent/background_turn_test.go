@@ -47,6 +47,35 @@ func (b *backgroundBackend) Stream(ctx context.Context, message string, _ assist
 	}
 }
 
+// backgroundFixture owns only setup; tests control stream ordering explicitly.
+type backgroundFixture struct {
+	*Engine
+	backend *backgroundBackend
+	events  <-chan Event
+}
+
+func newBackgroundFixture(t *testing.T, names ...string) *backgroundFixture {
+	t.Helper()
+	backend := &backgroundBackend{streams: make(map[string]*backgroundStream)}
+	for _, name := range names {
+		backend.streams[name] = newBackgroundStream()
+	}
+	engine := New(backend, Config{})
+	events, unsubscribe := engine.Subscribe()
+	t.Cleanup(engine.Close)
+	t.Cleanup(unsubscribe)
+	return &backgroundFixture{engine, backend, events}
+}
+
+func (f *backgroundFixture) start(t *testing.T, ctx context.Context, name string, tools *ToolSet) RunID {
+	t.Helper()
+	run, err := f.StartTurn(ctx, TurnInput{Message: name, Tools: tools})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
 func backgroundAnswer(id, text string, completed bool) assistant.AssistantResponse {
 	var response assistant.AssistantResponse
 	response.Data.Attributes.StructuredMessage = textMsg(id, text)
@@ -69,39 +98,38 @@ func backgroundEvent(t *testing.T, events <-chan Event, run RunID, kind EventKin
 }
 
 func TestBackgroundCompletionPreservesForegroundOperation(t *testing.T) {
-	for _, failure := range []error{nil, errors.New("background failed")} {
+	for _, failure := range []error{nil, errors.New("background failed"), context.Canceled} {
 		name := "success"
 		if failure != nil {
-			name = "failure"
+			name = failure.Error()
 		}
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				old, current := newBackgroundStream(), newBackgroundStream()
-				backend := &backgroundBackend{streams: map[string]*backgroundStream{"old": old, "current": current}}
-				engine := New(backend, Config{})
-				defer engine.Close()
-				events, unsubscribe := engine.Subscribe()
-				defer unsubscribe()
-				oldRun, err := engine.StartTurn(context.Background(), TurnInput{Message: "old"})
-				if err != nil {
-					t.Fatal(err)
-				}
+				f := newBackgroundFixture(t, "old", "current")
+				engine, events := f.Engine, f.events
+				old, current := f.backend.streams["old"], f.backend.streams["current"]
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				oldRun := f.start(t, ctx, "old", nil)
 				old.responses <- backgroundAnswer("old-answer", "first answer", true)
 				backgroundEvent(t, events, oldRun, EventBackground)
 				if engine.OperationActive() {
 					t.Fatal("root completion kept the operation active")
 				}
-				currentRun, err := engine.StartTurn(context.Background(), TurnInput{Message: "current"})
-				if err != nil {
-					t.Fatal(err)
-				}
+				currentRun := f.start(t, context.Background(), "current", nil)
 				current.responses <- backgroundAnswer("current-answer", "still streaming", false)
 				synctest.Wait()
 				old.responses <- backgroundAnswer("child-answer", "child finished", false)
-				old.finish <- failure
+				synctest.Wait()
 				terminal := EventDone
-				if failure != nil {
-					terminal = EventError
+				if errors.Is(failure, context.Canceled) {
+					cancel()
+					terminal = EventCanceled
+				} else {
+					old.finish <- failure
+					if failure != nil {
+						terminal = EventError
+					}
 				}
 				got := backgroundEvent(t, events, oldRun, terminal)
 				if !errors.Is(got.Err, failure) {
@@ -109,6 +137,12 @@ func TestBackgroundCompletionPreservesForegroundOperation(t *testing.T) {
 				}
 				if !engine.OperationActive() {
 					t.Fatal("background terminal released foreground operation")
+				}
+				<-old.stopped
+				select {
+				case <-current.stopped:
+					t.Fatal("background terminal stopped foreground stream")
+				default:
 				}
 				foundCurrent, foundChild := false, false
 				for _, block := range engine.State().Blocks {
@@ -143,14 +177,15 @@ func TestBackgroundApprovalsAndToolResultsStayWithTheirRun(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				old, current := newBackgroundStream(), newBackgroundStream()
+				f := newBackgroundFixture(t, "old", "current")
+				old, current := f.backend.streams["old"], f.backend.streams["current"]
 				type contextKey struct{}
 				type submission struct {
 					owner  string
 					result assistant.ClientToolResponse
 				}
 				submitted := make(chan submission, 2)
-				backend := &backgroundBackend{streams: map[string]*backgroundStream{"old": old, "current": current}}
+				backend := f.backend
 				backend.submit = func(ctx context.Context, results []assistant.ClientToolResponse) error {
 					for _, result := range results {
 						submitted <- submission{ctx.Value(contextKey{}).(string), result}
@@ -167,20 +202,11 @@ func TestBackgroundApprovalsAndToolResultsStayWithTheirRun(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				engine := New(backend, Config{})
-				defer engine.Close()
-				events, unsubscribe := engine.Subscribe()
-				defer unsubscribe()
-				oldRun, err := engine.StartTurn(context.WithValue(context.Background(), contextKey{}, "old"), TurnInput{Message: "old", Tools: tools})
-				if err != nil {
-					t.Fatal(err)
-				}
+				engine, events := f.Engine, f.events
+				oldRun := f.start(t, context.WithValue(context.Background(), contextKey{}, "old"), "old", tools)
 				old.responses <- backgroundAnswer("root", "children running", true)
 				backgroundEvent(t, events, oldRun, EventBackground)
-				currentRun, err := engine.StartTurn(context.WithValue(context.Background(), contextKey{}, "current"), TurnInput{Message: "current", Tools: tools})
-				if err != nil {
-					t.Fatal(err)
-				}
+				currentRun := f.start(t, context.WithValue(context.Background(), contextKey{}, "current"), "current", tools)
 				old.responses <- duplexCall("old-tool", "write")
 				current.responses <- duplexCall("current-tool", "write")
 				synctest.Wait()
@@ -219,18 +245,13 @@ func TestBackgroundConversationResetAndCloseCancelRuns(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				old, current := newBackgroundStream(), newBackgroundStream()
+				f := newBackgroundFixture(t, "old", "current")
+				engine, events := f.Engine, f.events
+				old, current := f.backend.streams["old"], f.backend.streams["current"]
 				late := backgroundAnswer("late-old-answer", "stale response", false)
 				late.Data.Attributes.ConversationID = "old-conversation"
 				old.late = &late
-				engine := New(&backgroundBackend{streams: map[string]*backgroundStream{"old": old, "current": current}}, Config{})
-				defer engine.Close()
-				events, unsubscribe := engine.Subscribe()
-				defer unsubscribe()
-				run, err := engine.StartTurn(context.Background(), TurnInput{Message: "old"})
-				if err != nil {
-					t.Fatal(err)
-				}
+				run := f.start(t, context.Background(), "old", nil)
 				old.responses <- backgroundAnswer("old-answer", "first answer", true)
 				backgroundEvent(t, events, run, EventBackground)
 				if reset {
@@ -243,9 +264,7 @@ func TestBackgroundConversationResetAndCloseCancelRuns(t *testing.T) {
 						t.Fatalf("old run repopulated reset conversation: %+v", state)
 					}
 				}
-				if _, err := engine.StartTurn(context.Background(), TurnInput{Message: "current"}); err != nil {
-					t.Fatal(err)
-				}
+				f.start(t, context.Background(), "current", nil)
 				synctest.Wait()
 				engine.Close()
 				<-old.stopped
@@ -256,42 +275,6 @@ func TestBackgroundConversationResetAndCloseCancelRuns(t *testing.T) {
 			})
 		})
 	}
-}
-
-func TestBackgroundParentCancellationPreservesForeground(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		old, current := newBackgroundStream(), newBackgroundStream()
-		engine := New(&backgroundBackend{streams: map[string]*backgroundStream{"old": old, "current": current}}, Config{})
-		defer engine.Close()
-		events, unsubscribe := engine.Subscribe()
-		defer unsubscribe()
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		oldRun, err := engine.StartTurn(ctx, TurnInput{Message: "old"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		old.responses <- backgroundAnswer("old-answer", "first answer", true)
-		backgroundEvent(t, events, oldRun, EventBackground)
-		currentRun, err := engine.StartTurn(context.Background(), TurnInput{Message: "current"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		current.responses <- backgroundAnswer("current-answer", "still streaming", false)
-		cancel()
-		backgroundEvent(t, events, oldRun, EventCanceled)
-		<-old.stopped
-		if !engine.OperationActive() {
-			t.Fatal("canceling background released foreground operation")
-		}
-		select {
-		case <-current.stopped:
-			t.Fatal("canceling background stopped foreground stream")
-		default:
-		}
-		current.finish <- nil
-		backgroundEvent(t, events, currentRun, EventDone)
-	})
 }
 
 func TestBackgroundStopWaitsForCleanupAfterConversationReset(t *testing.T) {
@@ -342,27 +325,20 @@ func TestBackgroundStopWaitsForCleanupAfterConversationReset(t *testing.T) {
 
 func TestBackgroundTurnSessionGrantCoversAllRuns(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		old, current := newBackgroundStream(), newBackgroundStream()
+		f := newBackgroundFixture(t, "old", "current")
+		old, current := f.backend.streams["old"], f.backend.streams["current"]
 		tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "write"}, Approval: func(call ToolCall) (ApprovalRequirement, bool) {
 			return ApprovalRequirement{Key: ApprovalKey{Tool: "write", Resource: "same-resource"}}, true
 		}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil }})
 		if err != nil {
 			t.Fatal(err)
 		}
-		e := New(&backgroundBackend{duplexBackend: duplexBackend{submit: func(context.Context, []assistant.ClientToolResponse) error { return nil }}, streams: map[string]*backgroundStream{"old": old, "current": current}}, Config{})
-		defer e.Close()
-		events, unsub := e.Subscribe()
-		defer unsub()
-		r, err := e.StartTurn(context.Background(), TurnInput{Message: "old", Tools: tools})
-		if err != nil {
-			t.Fatal(err)
-		}
+		f.backend.submit = func(context.Context, []assistant.ClientToolResponse) error { return nil }
+		e, events := f.Engine, f.events
+		r := f.start(t, context.Background(), "old", tools)
 		old.responses <- backgroundAnswer("answer", "done", true)
 		backgroundEvent(t, events, r, EventBackground)
-		_, err = e.StartTurn(context.Background(), TurnInput{Message: "current", Tools: tools})
-		if err != nil {
-			t.Fatal(err)
-		}
+		f.start(t, context.Background(), "current", tools)
 		old.responses <- duplexCall("old-tool", "write")
 		current.responses <- duplexCall("current-tool", "write")
 		synctest.Wait()

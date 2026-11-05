@@ -16,7 +16,11 @@ import (
 
 func backgroundTurnModel(t *testing.T) (*Model, context.Context) {
 	t.Helper()
-	m := newModelWithSpy(t)
+	return prepareBackgroundTurnModel(t, newModelWithSpy(t))
+}
+
+func prepareBackgroundTurnModel(t *testing.T, m *Model) (*Model, context.Context) {
+	t.Helper()
 	t.Cleanup(m.engine.Close)
 	t.Cleanup(m.Detach)
 	m.mode = ModeChat
@@ -148,15 +152,7 @@ func TestBackgroundTurnConversationReplacementClearsApprovals(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			backend := newResumeBackend()
 			engine := agent.New(backend, agent.Config{})
-			defer engine.Close()
-			m := New(engine)
-			defer m.Detach()
-			m.mode = ModeChat
-			m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			m.begin(opTurn, 1, nil, cancel)
-			m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventBackground, Run: 1}})
+			m, ctx := prepareBackgroundTurnModel(t, New(engine))
 			pending := awaitingCall("old-child")
 			pending.Run = 1
 			stale := agent.Event{Kind: agent.EventState, Run: 1, State: agent.State{Version: m.state.Version + 1, Blocks: []agent.Block{pending}}}

@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -72,99 +71,6 @@ func TestMultiAgentRootTurnCompletionKeepsStreamOpen(t *testing.T) {
 	}
 	if len(ids) != 2 || ids[0] == ids[1] {
 		t.Fatalf("root response IDs = %v", ids)
-	}
-}
-
-func TestMultiAgentClientsSharingTransportKeepRunsIndependent(t *testing.T) {
-	posted := make(chan multiAgentToolResultsRequest, 2)
-	cancelled := make(chan string, 2)
-	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/tool-results") {
-			var body multiAgentToolResultsRequest
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Error(err)
-			}
-			posted <- body
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/cancel") {
-			cancelled <- r.URL.Path
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		var body multiAgentStartRequest
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-			return
-		}
-		runID := body.Prompt
-		w.Header().Set(multiAgentRunIDHeader, runID)
-		w.Header().Set(multiAgentRootIDHeader, "root")
-		writeSSEEvent(t, w, fmt.Sprintf(`{"run_id":%q,"agent_id":"child","sequence":1,"type":"tool.call_requested","event":{"tool_call_id":"same-call","tool_name":"read_file","tool_input":"{}"}}`, runID))
-		writeSSEEvent(t, w, fmt.Sprintf(`{"run_id":%q,"agent_id":"child","sequence":2,"type":"client_tool.batch_ready","event":{"generation":1,"tool_call_ids":["same-call"]}}`, runID))
-		<-r.Context().Done()
-	})
-	ready := make(chan struct{}, 2)
-	done := make(chan error, 2)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	clients := []*MultiAgentClient{NewMultiAgentClient(c), NewMultiAgentClient(c)}
-	for i, client := range clients {
-		go func(i int, client *MultiAgentClient) {
-			done <- client.Stream(ctx, fmt.Sprintf("run-%d", i), SendOptions{}, func(response AssistantResponse) error {
-				message := response.Data.Attributes.StructuredMessage
-				if message.Content.Type != ContentClientToolCall {
-					return nil
-				}
-				err := client.SubmitToolResults(ctx, []ClientToolResponse{{ToolCallID: message.Content.Tool.ToolCallID, Status: ToolStatusSuccess, Metadata: ClientToolMetadata{Output: fmt.Sprintf("output-%d", i)}}})
-				ready <- struct{}{}
-				return err
-			})
-		}(i, client)
-	}
-	for range clients {
-		select {
-		case <-ready:
-		case <-ctx.Done():
-			t.Fatal("runs did not both submit tools")
-		}
-	}
-	seen := map[string]bool{}
-	for range clients {
-		select {
-		case body := <-posted:
-			if len(body.Results) != 1 {
-				t.Fatalf("results = %+v", body)
-			}
-			result := body.Results[0]
-			if result.Output != "output-"+strings.TrimPrefix(result.RunID, "run-") || result.AgentID != "child" || result.ToolCallID != "same-call" {
-				t.Fatalf("misrouted result = %+v", result)
-			}
-			seen[result.RunID] = true
-		case <-ctx.Done():
-			t.Fatal("missing tool results")
-		}
-	}
-	if len(seen) != 2 {
-		t.Fatalf("run IDs = %v", seen)
-	}
-	cancel()
-	for range clients {
-		if err := <-done; !errors.Is(err, context.Canceled) {
-			t.Errorf("stream error = %v", err)
-		}
-	}
-	for range clients {
-		select {
-		case path := <-cancelled:
-			delete(seen, strings.TrimSuffix(strings.TrimPrefix(path, multiAgentRunsPath+"/"), "/cancel"))
-		default:
-			t.Fatal("missing cancellation")
-		}
-	}
-	if len(seen) != 0 {
-		t.Fatalf("uncancelled runs = %v", seen)
 	}
 }
 
