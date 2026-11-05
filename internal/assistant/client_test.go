@@ -1007,3 +1007,29 @@ func TestSendDecodeErrorCapsRawLine(t *testing.T) {
 		t.Fatalf("error length = %d, want the raw quote capped", len(err.Error()))
 	}
 }
+
+func TestCurrentOrganizationID(t *testing.T) {
+	for _, test := range []struct {
+		name, body string
+		want       int64
+		wantError  bool
+	}{
+		{name: "active organization", body: `{"org":{"id":2},"orgs":[3,4]}`, want: 2},
+		{name: "other organization", body: `{"org":{"id":3},"orgs":[2,4]}`, want: 3},
+		{name: "missing organization", body: `{}`},
+		{name: "invalid response", body: `not json`, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v1/legacy_current_user" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				_, _ = fmt.Fprint(w, test.body)
+			})
+			got, err := c.CurrentOrganizationID(context.Background())
+			if got != test.want || (err != nil) != test.wantError {
+				t.Fatalf("organization = %d, error = %v; want %d, error = %v", got, err, test.want, test.wantError)
+			}
+		})
+	}
+}

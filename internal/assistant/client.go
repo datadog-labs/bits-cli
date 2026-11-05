@@ -633,6 +633,25 @@ func (c *Client) ConversationHistory(ctx context.Context, in ConversationHistory
 	return &out, nil
 }
 
+// CurrentOrganizationID returns the numeric ID of the authenticated organization.
+// The v2 current-user document exposes only UUIDs and public IDs.
+func (c *Client) CurrentOrganizationID(ctx context.Context) (int64, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/api/v1/legacy_current_user", nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var document struct {
+		Org struct {
+			ID int64 `json:"id"`
+		} `json:"org"`
+	}
+	if err := decodeJSONBody(&document, resp.Body, maxResponseBodyBytes); err != nil {
+		return 0, fmt.Errorf("decode current organization: %w", err)
+	}
+	return document.Org.ID, nil
+}
+
 // CurrentUser fetches the authenticated Datadog user and their active
 // organization from the JSON:API current-user document.
 func (c *Client) CurrentUser(ctx context.Context) (CurrentUser, error) {
