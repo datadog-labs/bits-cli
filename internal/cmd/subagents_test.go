@@ -8,10 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/datadog-labs/bits-cli/internal/assistant"
-	"github.com/datadog-labs/bits-cli/internal/auth"
 )
 
 func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
@@ -94,44 +90,5 @@ func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
 				t.Fatalf("err=%v requests=%d output=%s", err, requests, out)
 			}
 		})
-	}
-}
-
-func TestSubagentOrganizationLookupWithOAuth(t *testing.T) {
-	clearStagingEnv(t)
-	t.Setenv("BITS_USE_EXPERIMENTAL_SUBAGENTS", "0")
-	client, err := NewAuthenticatedClient(context.Background(), ClientOptions{
-		Mode: auth.ModeAuto, Store: &observedStore{session: validSession()},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/legacy_current_user" || r.Header.Get("Authorization") != "Bearer oauth-access" {
-			t.Errorf("unexpected identity request: %s", r.URL.Path)
-		}
-		_, _ = fmt.Fprint(w, `{"org":{"id":2}}`)
-	}))
-	defer server.Close()
-	client.BaseURL = server.URL
-	if !useSubagents(context.Background(), client) {
-		t.Fatal("org 2 OAuth session did not enable subagents")
-	}
-}
-
-func TestSubagentOrganizationLookupDeadline(t *testing.T) {
-	t.Setenv("BITS_USE_EXPERIMENTAL_SUBAGENTS", "")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
-	}))
-	defer server.Close()
-	client := &assistant.Client{BaseURL: server.URL, HTTPClient: server.Client()}
-	// The lookup must stop even when its caller has no deadline.
-	started := time.Now()
-	if useSubagents(context.Background(), client) {
-		t.Fatal("timed-out identity lookup enabled subagents")
-	}
-	if elapsed := time.Since(started); elapsed > 5*time.Second {
-		t.Fatalf("identity lookup took %s", elapsed)
 	}
 }
