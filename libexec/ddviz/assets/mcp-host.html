@@ -58,6 +58,7 @@
       const PROTOCOL_VERSION = '2026-01-26';
 
       const DEBUG = {{DEBUG}};
+      const HEADLESS = {{HEADLESS}};
       // Bidirectional transport (stdio) gates host capabilities that need a
       // reply path back to the iframe. Unidirectional (hooks) leaves them off.
       const BIDIRECTIONAL = {{BIDIRECTIONAL}};
@@ -181,11 +182,13 @@
               userAgent: navigator.userAgent,
               safeAreaInsets: {
                 top: 0,
-                left: 16,
-                right: 16,
+                left: HEADLESS ? 0 : 16,
+                right: HEADLESS ? 0 : 16,
                 bottom: 0
               },
               platform: 'desktop',
+              ...(HEADLESS ? { 'datadog/presentation': { hideChrome: true } } : {}),
+              ...(HEADLESS ? { styles: { variables: { '--color-background-primary': 'transparent' } } } : {}),
           };
       }
 
