@@ -1,19 +1,34 @@
 package styles
 
 import (
+	"runtime"
+
 	"charm.land/bubbles/v2/textinput"
 	glamouransi "charm.land/glamour/v2/ansi"
 	glamourstyles "charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 )
 
-// inputRule draws the input block's top and bottom edges with one-eighth block
-// glyphs. Box-drawing "─" sits mid-cell, so it reads as a separate rule row
-// floating on the transcript background; these glyphs ink only the outer eighth
-// of the row and leave the rest to the border background (the input surface).
-// The row is therefore both the block's edge and its vertical breathing room —
-// it replaces the padding it used to have instead of adding height.
-var inputRule = lipgloss.Border{Top: "▔", Bottom: "▁"}
+// inputRule draws the composer edges. The default uses eighth-block glyphs so
+// the ink sits at the edge of each row. Windows uses wider half-block glyphs
+// aligned to the respective edges.
+var (
+	terminalGlyphs = glyphsForOS(runtime.GOOS)
+	inputRule      = terminalGlyphs.inputRule
+)
+
+type glyphSet struct {
+	inputRule           lipgloss.Border
+	expanded, collapsed string
+}
+
+func glyphsForOS(goos string) glyphSet {
+	if goos == "windows" {
+		// Some Windows console fonts lack the eighth-block and triangle glyphs.
+		return glyphSet{lipgloss.Border{Top: "▀", Bottom: "▄"}, "v", ">"}
+	}
+	return glyphSet{lipgloss.Border{Top: "▔", Bottom: "▁"}, "▼", "▶"}
+}
 
 // build turns semantic palette roles into the concrete styles components use.
 func build(isDark bool, p palette) Theme {
@@ -113,8 +128,8 @@ func build(isDark bool, p palette) Theme {
 	// always drawn as a fixed fill, rather than blending into the row until
 	// hovered.
 	accordion := Accordion{
-		Expanded:  "▼",
-		Collapsed: "▶",
+		Expanded:  terminalGlyphs.expanded,
+		Collapsed: terminalGlyphs.collapsed,
 		Resting: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(p.textSecondary)).
 			Background(lipgloss.Color(p.accordionBackground)).
