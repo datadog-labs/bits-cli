@@ -43,7 +43,7 @@ var (
 	// but could not be secured in the OS credential store.
 	ErrSessionNotDurable = errors.New("OAuth session could not be persisted")
 	// ErrSessionReplaced means another process replaced the active login with a
-	// session whose routing cannot be adopted by the current Assistant client.
+	// session that cannot be adopted by the current Assistant client.
 	ErrSessionReplaced = errors.New("OAuth session changed")
 	// ErrSessionUnlock means the durable transaction completed but releasing the
 	// cross-process lock reported an error. Callers must not roll back or revoke
@@ -58,6 +58,8 @@ var (
 // Session is the durable subset of an OAuth token plus the routing information
 // needed to refresh it and call the Assistant API.
 type Session struct {
+	// LoginID identifies an interactive login and stays unchanged across refreshes.
+	LoginID      string    `json:"login_id,omitempty"`
 	Site         string    `json:"site"`
 	WebOrigin    string    `json:"web_origin,omitempty"`
 	ClientID     string    `json:"client_id"`
@@ -105,7 +107,8 @@ func (s Session) validate() error {
 }
 
 func sameSession(a, b Session) bool {
-	return a.Site == b.Site &&
+	return a.LoginID == b.LoginID &&
+		a.Site == b.Site &&
 		a.ClientID == b.ClientID &&
 		a.AccessToken == b.AccessToken &&
 		a.TokenType == b.TokenType &&

@@ -317,7 +317,7 @@ func TestStoreWorksThroughSessionLock(t *testing.T) {
 	}
 }
 
-func TestSessionWebOriginJSON(t *testing.T) {
+func TestSessionLoginMetadataJSON(t *testing.T) {
 	for _, origin := range []string{"", "https://demo.datadoghq.com"} {
 		session := expiredSession()
 		session.WebOrigin = origin
@@ -329,7 +329,7 @@ func TestSessionWebOriginJSON(t *testing.T) {
 		if err := json.Unmarshal(data, &decoded); err != nil {
 			t.Fatal(err)
 		}
-		if decoded.WebOrigin != origin || decoded.Site != session.Site {
+		if decoded.WebOrigin != origin || decoded.LoginID != session.LoginID || decoded.Site != session.Site {
 			t.Fatalf("decoded = %+v", decoded)
 		}
 	}
@@ -337,7 +337,7 @@ func TestSessionWebOriginJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"site":"https://api.datadoghq.com","client_id":"client","access_token":"access"}`), &old); err != nil {
 		t.Fatal(err)
 	}
-	if old.WebOrigin != "" {
+	if old.WebOrigin != "" || old.LoginID != "" {
 		t.Fatalf("old origin = %q", old.WebOrigin)
 	}
 }

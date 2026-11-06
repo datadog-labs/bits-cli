@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
@@ -171,6 +172,7 @@ waiting:
 		return Session{}, sanitizedOAuthError("exchange Datadog OAuth code", err)
 	}
 	session := sessionFromToken(cfg, token)
+	session.LoginID = rand.Text()
 	var previous Session
 	var hadPrevious, saveCommitted bool
 	lockCtx, lockCancel := context.WithTimeout(ctx, sessionLockTimeout)
