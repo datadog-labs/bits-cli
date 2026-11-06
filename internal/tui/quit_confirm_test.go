@@ -43,7 +43,7 @@ func TestCtrlCWithDraftClearsAndStaysOpen(t *testing.T) {
 func TestCtrlCOnEmptyPromptNeedsSecondPress(t *testing.T) {
 	m := newSizedChatModel(t)
 
-	_, _ = m.Update(ctrlC) // returns the expiry tick; do not run it
+	_, _ = m.Update(ctrlC)
 	if !m.quitConfirm.armed {
 		t.Fatal("first ctrl+c on an empty prompt did not arm exit")
 	}
@@ -79,9 +79,9 @@ func TestCtrlCStaleExpiryKeepsNewerWindow(t *testing.T) {
 
 	_, _ = m.Update(ctrlC)
 	stale := m.quitConfirm.token
-	_, _ = m.Update(tea.KeyPressMsg{Code: 'x'}) // disarm
+	_, _ = m.Update(tea.KeyPressMsg{Code: 'x'})
 	m.editor.Reset()
-	_, _ = m.Update(ctrlC) // re-arm with a newer token
+	_, _ = m.Update(ctrlC)
 	_, _ = m.Update(quitConfirmExpiredMsg{token: stale})
 	if !m.quitConfirm.armed {
 		t.Fatal("a stale expiry cut the newer exit window short")
@@ -108,8 +108,8 @@ func TestCtrlCDoesNotInterruptRunningTurn(t *testing.T) {
 	m.op = operation{kind: opTurn, run: 1, cancel: func() { cancelled = true }}
 	m.editor.SetValue("queued thought")
 
-	_, _ = m.Update(ctrlC) // clears the draft
-	_, _ = m.Update(ctrlC) // arms exit
+	_, _ = m.Update(ctrlC)
+	_, _ = m.Update(ctrlC)
 	if cancelled || !m.op.busy() {
 		t.Fatal("ctrl+c interrupted the running turn")
 	}

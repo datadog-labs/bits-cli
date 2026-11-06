@@ -226,8 +226,7 @@ func (m *Model) chatOverlay(base, popup string, x int) string {
 func (m *Model) chatViewBase(transcript string) string {
 	gap := slices.Repeat([]string{""}, m.frame.composerGap.Dy())
 	if m.frame.replaced {
-		// The footer row stays, blank unless an exit is pending, so the prompt
-		// sits where the composer did.
+		// The footer row stays so the prompt sits where the composer did.
 		transcript = lipgloss.NewStyle().Faint(true).Render(transcript)
 		footer := ""
 		if m.quitConfirm.armed {

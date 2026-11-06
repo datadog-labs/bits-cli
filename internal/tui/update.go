@@ -174,9 +174,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, ok := m.widgets.images.Handle(msg); ok {
 		return m, cmd
 	}
-	// ctrl+c wins over every chat surface and skips reconciliation. In chat it
-	// clears the draft or confirms exit (see handleChatCtrlC); elsewhere it
-	// quits. Login handles its own ctrl+c.
+	// ctrl+c wins over every chat surface and skips reconciliation (we are
+	// tearing down). Login handles its own ctrl+c.
 	if key, ok := msg.(tea.KeyPressMsg); ok && m.mode != ModeLogin {
 		if key.String() == "ctrl+c" {
 			if m.mode == ModeChat || m.mode == ModeTermInit {
@@ -184,7 +183,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.quit()
 		}
-		// Any other key abandons a pending exit.
 		m.quitConfirm.armed = false
 	}
 
