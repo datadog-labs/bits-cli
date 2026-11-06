@@ -263,6 +263,8 @@ const maxTurns = 150
 // other goroutines and reports back to the actor. Commands such as Decide and
 // SetPermissionsMode apply on the actor before returning.
 type Engine struct {
+	activityReplay         *ActivityReplay
+	forkSource             *assistant.ForkedFrom
 	backend                Backend
 	opts                   assistant.SendOptions
 	runtimeStatus          RuntimeStatus
@@ -454,6 +456,7 @@ func (e *Engine) claim() (RunID, error) {
 		return 0, ErrClosed
 	}
 	e.busy = true
+	e.activityReplay = nil
 	e.workers.Add(1)
 	e.lastRun++
 	e.transcript.run = e.lastRun
@@ -821,6 +824,8 @@ func (e *Engine) NewConversation() error {
 		}
 		e.opts.ConversationID = ""
 		e.fork = ForkBoundary{}
+		e.forkSource = nil
+		e.activityReplay = nil
 		e.opts.MessageHistory = nil
 		e.resetContext()
 		e.transcript = NewTranscript()
