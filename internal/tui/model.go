@@ -159,6 +159,7 @@ type Model struct {
 	tools                  *agent.ToolSet
 	openURL                func(context.Context, string) error
 	editor                 *editor.Editor
+	quitConfirm            quitConfirm
 	picker                 *conversationview.Model
 	status                 statusview.Model
 	workspace              *workspace.Workspace

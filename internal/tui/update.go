@@ -178,10 +178,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, ok := m.widgets.images.Handle(msg); ok {
 		return m, cmd
 	}
-	// Global quit wins over every chat surface and skips reconciliation (we are
+	// ctrl+c wins over every chat surface and skips reconciliation (we are
 	// tearing down). Login handles its own ctrl+c.
-	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" && m.mode != ModeLogin {
-		return m.quit()
+	if key, ok := msg.(tea.KeyPressMsg); ok && m.mode != ModeLogin {
+		if key.String() != "ctrl+c" {
+			m.quitConfirm.armed = false
+		} else if (m.mode != ModeChat && m.mode != ModeTermInit) || (m.quitConfirm.armed && !m.composerHasDraft()) {
+			return m.quit()
+		}
 	}
 
 	var cmd tea.Cmd
@@ -202,6 +206,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// colors are off, ultraviolet drops Fg and Bg but keeps attributes.
 		m.monochrome = msg.Profile == colorprofile.NoTTY || msg.Profile == colorprofile.ASCII
 		m.graphics.ObserveColorProfile(msg.Profile)
+	case quitConfirmExpiredMsg:
+		m.expireQuitConfirm(msg)
 	case recentConversationsMsg:
 		// A failed background read the user never asked for stays silent.
 		if msg.result.Err == nil {
@@ -211,6 +217,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case m.mode == ModeLogin:
 			cmd = m.updateLogin(msg)
+		case isCtrlC(msg):
+			cmd = m.clearDraftOrArmQuit()
 		case m.frame.tooSmall && isUserInput(msg):
 			// Only a resize hint is visible, so input must not drive a hidden
 			// surface. System and engine messages still flow.
@@ -227,6 +235,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	loadSkillMenu := m.syncClientSkills()
 	m.relayout()
 	return m, tea.Batch(cmd, loadSkillMenu, m.syncWidgets(), m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
+}
+
+func isCtrlC(msg tea.Msg) bool {
+	key, ok := msg.(tea.KeyPressMsg)
+	return ok && key.String() == "ctrl+c"
 }
 
 func isUserInput(msg tea.Msg) bool {
@@ -878,7 +891,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// any text or attachment it falls through to the editor, which deletes
 		// the character under the cursor. While an operation runs it is ignored,
 		// so a stray press cannot drop a streaming turn: esc interrupts it and
-		// ctrl+c still quits.
+		// a confirmed ctrl+c still quits.
 		if m.editor.Value() == "" && len(m.editor.Attachments()) == 0 {
 			if m.op.busy() {
 				return m, nil
