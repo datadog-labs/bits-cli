@@ -136,8 +136,7 @@ type EntitySearcher interface {
 }
 
 type Config struct {
-	// Visualization renders widgets; nil where ddviz cannot run, which leaves
-	// widgets as links to the web app.
+	// Visualization renders widgets; nil leaves them as links to the web app.
 	Visualization  viz.Client
 	Tools          *agent.ToolSet
 	ToolUI         *tools.UI

@@ -40,7 +40,7 @@ type localClient struct {
 }
 
 // Supported reports whether this system can run the ddviz helper. Without it,
-// widgets fall back to SandboxURL links.
+// widgets fall back to Datadog snapshots (NewRemote).
 func Supported() bool {
 	// ddviz is built for macOS only; an exec failure covers the rest.
 	if runtime.GOOS != "darwin" {
@@ -232,6 +232,8 @@ func (c *localClient) Open(ctx context.Context, request Request) Status {
 	_, status := c.perform(ctx, request, false)
 	return status
 }
+
+func (c *localClient) Interactive() bool { return true }
 
 func (c *localClient) Close() error {
 	c.closeOnce.Do(func() {
