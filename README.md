@@ -147,8 +147,9 @@ exit codes, and authentication details.
 
 ## Experimental subagents
 
-With `BITS_USE_EXPERIMENTAL_SUBAGENTS=1`, a main-agent answer can finish while its
-subagents continue working. When the server signals that the main turn is done,
+Subagents are enabled automatically for org 2, or with
+`BITS_USE_EXPERIMENTAL_SUBAGENTS=1` for other organizations. A main-agent answer
+can finish while its subagents continue working. When the server signals that the main turn is done,
 you can send another message; child tool requests and later answers continue in
 the same conversation. Each active run keeps its own connection and tool results.
 

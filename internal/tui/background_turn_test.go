@@ -300,6 +300,14 @@ func TestBackgroundTurnEscapeCancelsAfterForegroundEnds(t *testing.T) {
 	if m.backgroundRuns[1] == nil {
 		t.Fatal("canceled background run must remain registered until its terminal event")
 	}
+	if m.exitCard.open {
+		t.Fatal("Escape must cancel background work before offering to exit")
+	}
+	m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventCanceled, Run: 1}})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if !m.exitCard.open {
+		t.Fatal("Escape must offer to exit once all runs have ended")
+	}
 }
 
 func TestBeginFailureEndsOperation(t *testing.T) {
