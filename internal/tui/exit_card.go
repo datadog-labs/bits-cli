@@ -2,6 +2,7 @@ package tui
 
 import (
 	"image"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -187,4 +188,12 @@ func (m *Model) exitCardOverlay(base string) string {
 		lipgloss.NewLayer(base),
 		lipgloss.NewLayer(card).X(x).Y(y).Z(1),
 	).Render()
+}
+
+func isExitWord(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "exit", "quit", ":q":
+		return true
+	}
+	return false
 }

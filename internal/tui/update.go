@@ -375,9 +375,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.postNotice(notice(chat.NoticeInfo, nil, "%s: %s", msg.success, msg.url))
 	}
 
-	if m.focus() == focusPrompt {
+	if f := m.focus(); f == focusPrompt || (f == focusExitCard && m.prompt() != nil) {
 		// Paste, cursor blink, and the like belong to the prompt, never to the
-		// inert editor below it.
+		// inert editor below it, even while the exit card covers the prompt.
 		cmd, _ := m.updatePrompt(msg)
 		return m, cmd
 	}
@@ -922,6 +922,10 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(raw)
 	attachments := m.editor.Attachments()
 	if text == "" && len(attachments) == 0 {
+		return m, nil
+	}
+	if len(attachments) == 0 && isExitWord(raw) {
+		m.openExitCard()
 		return m, nil
 	}
 	if text == "" {

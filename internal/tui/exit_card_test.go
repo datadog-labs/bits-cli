@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/editor"
 )
 
@@ -822,4 +823,145 @@ func TestExitCardSuppressesHandWhileOpen(t *testing.T) {
 			t.Fatal("the hand showed over the control while the card was open")
 		}
 	})
+}
+
+func TestIsExitWord(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"exit":          true,
+		"  QUIT  ":      true,
+		":q":            true,
+		"Exit":          true,
+		":Q":            true,
+		"exit the loop": false,
+		"quit?":         false,
+		":q!":           false,
+		":wq":           false,
+		"how do I exit": false,
+		"/exit":         false,
+		"exits":         false,
+		"":              false,
+	} {
+		if got := isExitWord(raw); got != want {
+			t.Errorf("isExitWord(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+func TestSubmitExitWordOpensCardWithoutSending(t *testing.T) {
+	for _, word := range []string{"exit", "QUIT", " :q "} {
+		t.Run(word, func(t *testing.T) {
+			m := newExitCardModel(t, 120, 40)
+			setConversationInput(m, word)
+			m.Update(exitCardKey("", tea.KeyEnter))
+
+			if !m.exitCard.open {
+				t.Fatal("the card did not open")
+			}
+			if got := m.editor.Value(); got != word {
+				t.Fatalf("editor = %q, want the draft kept as %q", got, word)
+			}
+			if m.op.busy() {
+				t.Fatalf("a turn started: op %+v", m.op)
+			}
+		})
+	}
+}
+
+func TestSubmitExitWordWithAttachmentSends(t *testing.T) {
+	backend := newCancellableConversationBackend()
+	m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	t.Cleanup(func() {
+		m.cancelOperation()
+		drainConversationRemote(t, m)
+	})
+	setConversationInput(m, "exit")
+	m.editor.AddAttachment(editor.Attachment{Type: "service", ID: "a", Label: "a"})
+
+	_, _ = m.submit()
+
+	if m.exitCard.open {
+		t.Fatal("the card opened for a message with an attachment")
+	}
+	if !m.op.busy() {
+		t.Fatal("no turn started")
+	}
+}
+
+func TestSlashExitStillQuitsImmediately(t *testing.T) {
+	for _, command := range []string{"/exit", "/quit"} {
+		t.Run(command, func(t *testing.T) {
+			m := newExitCardModel(t, 120, 40)
+			setConversationInput(m, command)
+			_, cmd := m.Update(exitCardKey("", tea.KeyEnter))
+
+			if m.exitCard.open {
+				t.Fatal("the card opened")
+			}
+			if !quitsIn(cmd) {
+				t.Fatal("the command did not quit")
+			}
+		})
+	}
+}
+
+func TestSubmitExitWordDuringTurnOpensCard(t *testing.T) {
+	m := startBlockedTurn(t)
+	t.Cleanup(m.cancelOperation)
+	run := m.op.run
+	setConversationInput(m, "quit")
+
+	m.Update(exitCardKey("", tea.KeyEnter))
+
+	if !m.exitCard.open {
+		t.Fatal("the card did not open mid-turn")
+	}
+	if m.op.run != run || m.op.stop != stopNone {
+		t.Fatalf("the turn was disturbed: op %+v", m.op)
+	}
+}
+
+func TestPromptArrivingBehindCardWaits(t *testing.T) {
+	m := startApprovalTurn(t)
+	m.openExitCard()
+
+	awaitPendingApproval(t, m)
+
+	if m.focus() != focusExitCard {
+		t.Fatalf("focus = %v, want the card to keep it", m.focus())
+	}
+	pressEsc(m)
+	if m.exitCard.open || m.focus() != focusPrompt {
+		t.Fatalf("after esc: card open %v, focus %v, want the prompt", m.exitCard.open, m.focus())
+	}
+	if m.op.stop != stopNone {
+		t.Fatalf("esc cancelled the turn: op %+v", m.op)
+	}
+}
+
+type recordingToolPrompt struct {
+	chat.ToolPrompt
+	updates []tea.Msg
+}
+
+func (p *recordingToolPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
+	p.updates = append(p.updates, msg)
+	return p.ToolPrompt.Update(msg)
+}
+
+type promptNudgeMsg struct{}
+
+func TestNonInputMessagesReachAPromptBehindTheCard(t *testing.T) {
+	m, _ := startQuestions(t, agent.ModeSkipPermissions, questionInput, 1)
+	waitQuestions(t, m)
+	ask := m.shown.(*toolAsk)
+	recorder := &recordingToolPrompt{ToolPrompt: ask.form}
+	ask.form = recorder
+	m.openExitCard()
+
+	m.Update(promptNudgeMsg{})
+
+	if !slices.Contains(recorder.updates, tea.Msg(promptNudgeMsg{})) {
+		t.Fatalf("the prompt behind the card missed the message: %v", recorder.updates)
+	}
 }
