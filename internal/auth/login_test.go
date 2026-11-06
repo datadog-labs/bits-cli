@@ -151,7 +151,7 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 				if callbackErr != nil || callbackURL.Hostname() != "127.0.0.1" || callbackURL.Port() == "" || callbackURL.Port() == "0" {
 					t.Fatalf("dynamic redirect URI = %q, parse error = %v", redirectURI, callbackErr)
 				}
-				callback := redirectURI + "?code=auth-code&domain=datadoghq.com&state=" + url.QueryEscape(query.Get("state"))
+				callback := redirectURI + "?code=auth-code&domain=datadoghq.com&site=https%3A%2F%2Fdemo.datadoghq.com&state=" + url.QueryEscape(query.Get("state"))
 				if mode == "pasted-url" {
 					// Invalid input and stale login state must be retryable.
 					callbacks <- "not a URL"
@@ -204,6 +204,9 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 			}
 			if store.saves != 1 || store.session.AccessToken != "access" {
 				t.Errorf("stored session = %#v, saves = %d", store.session, store.saves)
+			}
+			if session.WebOrigin != "https://demo.datadoghq.com" {
+				t.Fatalf("origin = %q", session.WebOrigin)
 			}
 			if !strings.Contains(output.String(), "Datadog OAuth callback domain: datadoghq.com") {
 				t.Errorf("output did not report callback domain: %q", output.String())

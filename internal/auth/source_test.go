@@ -150,15 +150,57 @@ func TestSourceKeepsRefreshTokenWhenResponseOmitsReplacement(t *testing.T) {
 	defer server.Close()
 
 	initial := expiredSession()
+	initial.WebOrigin = "https://demo.datadoghq.com"
 	store := newMemoryStore(initial)
-	source := testSource(t, initial, store, server.URL, server.Client())
+	source, err := NewSource(initial, store, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.config.TokenURL = server.URL
 
 	token, err := source.AccessToken(context.Background())
 	if err != nil || token != "new-access" {
 		t.Fatalf("AccessToken = %q, %v", token, err)
 	}
+	if source.WebOrigin() != initial.WebOrigin || store.session.WebOrigin != initial.WebOrigin {
+		t.Fatal("refresh lost org origin")
+	}
 	if requests.Load() != 1 || store.session.RefreshToken != initial.RefreshToken {
 		t.Fatalf("requests = %d, stored refresh token = %q", requests.Load(), store.session.RefreshToken)
+	}
+}
+
+func TestSourceRefreshPreservesAdoptedWebOrigin(t *testing.T) {
+	for _, tt := range []struct{ name, initial, replacement string }{
+		{"new org", "https://first.datadoghq.com", "https://second.datadoghq.com"},
+		{"first org-aware login", "", "https://second.datadoghq.com"},
+		{"older binary refresh", "https://first.datadoghq.com", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := refreshServer(t, &requests)
+			defer server.Close()
+			initial := expiredSession()
+			initial.WebOrigin = tt.initial
+			store := newMemoryStore(initial)
+			source, err := NewSource(initial, store, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.config.TokenURL = server.URL
+			replacement := initial
+			replacement.AccessToken = "replacement-access"
+			replacement.WebOrigin = tt.replacement
+			if err := store.Save(replacement); err != nil {
+				t.Fatal(err)
+			}
+			if token, err := source.AccessToken(context.Background()); err != nil || token != "new-access" {
+				t.Fatalf("AccessToken = %q, %v", token, err)
+			}
+			if requests.Load() != 1 || store.session.WebOrigin != tt.replacement {
+				t.Fatalf("requests = %d, origin = %q, want %q", requests.Load(), store.session.WebOrigin, tt.replacement)
+			}
+		})
 	}
 }
 

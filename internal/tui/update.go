@@ -405,7 +405,7 @@ func (m *Model) openConversationInBrowser() tea.Cmd {
 	if m.engine == nil {
 		return m.postNotice(notice(chat.NoticeError, nil, "This conversation has no Datadog web site."))
 	}
-	target, err := browser.ConversationURL(m.engine.Site(), m.state.ConversationID)
+	target, err := browser.ConversationURL(m.engine.WebOrigin(), m.state.ConversationID)
 	if err != nil {
 		return m.postNotice(notice(chat.NoticeError, err, "Could not build a web link for this conversation."))
 	}
@@ -416,7 +416,7 @@ func (m *Model) openSettingsInBrowser() tea.Cmd {
 	if m.engine == nil {
 		return m.postNotice(notice(chat.NoticeError, nil, "Assistant settings have no Datadog web site."))
 	}
-	target, err := browser.SettingsURL(m.engine.Site())
+	target, err := browser.SettingsURL(m.engine.WebOrigin())
 	if err != nil {
 		return m.postNotice(notice(chat.NoticeError, err, "Could not build a web link for Assistant settings."))
 	}

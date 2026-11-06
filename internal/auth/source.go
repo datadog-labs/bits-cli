@@ -39,6 +39,7 @@ func NewSource(session Session, store CredentialStore, httpClient *http.Client) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSiteConfiguration, err)
 	}
+	cfg.WebOrigin = session.WebOrigin
 	if store == nil {
 		return nil, fmt.Errorf("OAuth credential store is required")
 	}
@@ -55,6 +56,11 @@ func NewSource(session Session, store CredentialStore, httpClient *http.Client) 
 // Site is the Assistant base URL associated with this login.
 func (s *Source) Site() string {
 	return s.config.AssistantBase
+}
+
+// WebOrigin is the org web origin captured during login.
+func (s *Source) WebOrigin() string {
+	return s.config.WebOrigin
 }
 
 // AccessToken implements assistant.AccessTokenSource.
@@ -118,6 +124,8 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 		}
 		before := s.session
 		s.session = sessionFromToken(s.config, refreshed)
+		// Another process may have supplied a newer org origin with its login.
+		s.session.WebOrigin = before.WebOrigin
 		s.dirty = true
 		s.persistBase = before
 		persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), sessionPersistTimeout)

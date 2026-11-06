@@ -330,3 +330,30 @@ func TestNewAuthenticatedClientMissingStagingConfigFailsClosed(t *testing.T) {
 		t.Fatalf("OAuth store operations = load %d, save %d, delete %d", store.loads, store.saves, store.deletes)
 	}
 }
+
+func TestAuthenticatedClientWebOrigin(t *testing.T) {
+	clearStagingEnv(t)
+	for _, tt := range []struct {
+		name         string
+		mode         auth.Mode
+		origin, want string
+	}{
+		{"OAuth org", auth.ModeAuto, "https://demo.datadoghq.com", "https://demo.datadoghq.com"},
+		{"old OAuth", auth.ModeAuto, "", "https://app.datadoghq.com"},
+		{"API key", auth.ModeAPIKey, "https://demo.datadoghq.com", "https://us3.datadoghq.com"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			session := validSession()
+			session.WebOrigin = tt.origin
+			client, err := NewAuthenticatedClient(context.Background(), ClientOptions{
+				Mode: tt.mode, Store: &observedStore{session: session}, APIKey: "api", AppKey: "app", APISite: "https://api.us3.datadoghq.com",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := client.BackendStatus().WebOrigin; got != tt.want {
+				t.Fatalf("origin = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

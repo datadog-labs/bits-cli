@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -313,5 +314,30 @@ func TestStoreWorksThroughSessionLock(t *testing.T) {
 	}
 	if _, err := store.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
+	}
+}
+
+func TestSessionWebOriginJSON(t *testing.T) {
+	for _, origin := range []string{"", "https://demo.datadoghq.com"} {
+		session := expiredSession()
+		session.WebOrigin = origin
+		data, err := json.Marshal(session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded Session
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.WebOrigin != origin || decoded.Site != session.Site {
+			t.Fatalf("decoded = %+v", decoded)
+		}
+	}
+	var old Session
+	if err := json.Unmarshal([]byte(`{"site":"https://api.datadoghq.com","client_id":"client","access_token":"access"}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if old.WebOrigin != "" {
+		t.Fatalf("old origin = %q", old.WebOrigin)
 	}
 }

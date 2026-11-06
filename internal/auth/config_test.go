@@ -55,7 +55,7 @@ func TestConfigForSite_StagingEnvironment(t *testing.T) {
 	wantStr(t, "AssistantBase", cfg.AssistantBase, "https://api.staging.test")
 	wantStr(t, "RedirectURI", cfg.RedirectURI, "http://127.0.0.1:0/oauth/callback")
 
-	cfg, err = cfg.WithCallbackDomain("staging.test")
+	cfg, err = cfg.WithCallbackDomain("staging.test", "")
 	if err != nil {
 		t.Fatalf("WithCallbackDomain: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestConfigForSite_PreservesCustomerLoginDomain(t *testing.T) {
 		t.Errorf("AuthorizeURL = %q", cfg.AuthorizeURL)
 	}
 
-	cfg, err = cfg.WithCallbackDomain("us3.datadoghq.com")
+	cfg, err = cfg.WithCallbackDomain("us3.datadoghq.com", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestStagingRejectsSpoofAndUnconfiguredHosts(t *testing.T) {
 			if _, err := NormalizeAPISite(host); err == nil {
 				t.Errorf("NormalizeAPISite(%q) succeeded", host)
 			}
-			if _, err := cfg.WithCallbackDomain(host); err == nil {
+			if _, err := cfg.WithCallbackDomain(host, ""); err == nil {
 				t.Errorf("WithCallbackDomain(%q) succeeded", host)
 			}
 		})
@@ -282,10 +282,10 @@ func TestConfigForSite_StagingEnvChangeAfterConfigDoesNotRetargetCallback(t *tes
 	t.Setenv(site.EnvStagingDomain, "other.test")
 	t.Setenv(site.EnvStagingClientID, "other-client")
 
-	if _, err := cfg.WithCallbackDomain("other.test"); err == nil {
+	if _, err := cfg.WithCallbackDomain("other.test", ""); err == nil {
 		t.Fatal("WithCallbackDomain accepted the retargeted environment's domain")
 	}
-	retargeted, err := cfg.WithCallbackDomain("staging.test")
+	retargeted, err := cfg.WithCallbackDomain("staging.test", "")
 	if err != nil {
 		t.Fatalf("WithCallbackDomain with the captured domain: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestWithCallbackDomain_StagingRejectsOtherDomains(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := cfg.WithCallbackDomain(test.callback); err == nil {
+			if _, err := cfg.WithCallbackDomain(test.callback, ""); err == nil {
 				t.Fatalf("WithCallbackDomain(%q) succeeded", test.callback)
 			}
 		})
@@ -362,7 +362,7 @@ func TestConfigForSite_AcceptsGovDomainWithExplicitClient(t *testing.T) {
 		t.Errorf("AuthorizeURL = %q", cfg.AuthorizeURL)
 	}
 
-	cfg, err = cfg.WithCallbackDomain("ddog-gov.com")
+	cfg, err = cfg.WithCallbackDomain("ddog-gov.com", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestWithCallbackDomain_UnknownRegionWorksByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := initial.WithCallbackDomain("  XY9.DATADOGHQ.COM  ")
+	cfg, err := initial.WithCallbackDomain("  XY9.DATADOGHQ.COM  ", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestWithCallbackDomain_AllowsCommercialFamilyChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err = cfg.WithCallbackDomain("datadoghq.eu")
+	cfg, err = cfg.WithCallbackDomain("datadoghq.eu", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ func TestWithCallbackDomain_RejectsDifferentEnvironment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := cfg.WithCallbackDomain(test.callback); err == nil {
+			if _, err := cfg.WithCallbackDomain(test.callback, ""); err == nil {
 				t.Fatalf("WithCallbackDomain(%q) succeeded", test.callback)
 			}
 		})
@@ -447,7 +447,7 @@ func TestWithCallbackDomain_RejectsMissingAndNonDatadogHosts(t *testing.T) {
 		"evil.example",
 	} {
 		t.Run(domain, func(t *testing.T) {
-			if _, err := cfg.WithCallbackDomain(domain); err == nil {
+			if _, err := cfg.WithCallbackDomain(domain, ""); err == nil {
 				t.Fatalf("WithCallbackDomain(%q) succeeded", domain)
 			}
 		})
@@ -504,7 +504,7 @@ func TestStagingSessionIdentityIsCanonicalAPIDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err = cfg.WithCallbackDomain("staging.test")
+	cfg, err = cfg.WithCallbackDomain("staging.test", "")
 	if err != nil {
 		t.Fatalf("WithCallbackDomain: %v", err)
 	}
@@ -603,5 +603,52 @@ func TestStagingConfigCannotOverlapBuiltInDomainFamilies(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestWithCallbackDomainWebOrigin(t *testing.T) {
+	t.Setenv("BITS_STAGING_SITE", "https://login.staging.test")
+	t.Setenv("BITS_STAGING_DOMAIN", "staging.test")
+	for _, tt := range []struct {
+		domain, origin string
+		valid          bool
+	}{
+		{"datadoghq.com", "https://demo.datadoghq.com", true},
+		{"us3.datadoghq.com", "https://acme.us3.datadoghq.com", true},
+		{"staging.test", "https://acme.staging.test", true},
+		{"datadoghq.com", "", false},
+		{"datadoghq.com", "https://evil.example", false},
+		{"datadoghq.com", "http://demo.datadoghq.com", false},
+		{"datadoghq.com", "https://demo.datadoghq.com/", false},
+		{"datadoghq.com", "https://demo.datadoghq.com/path", false},
+		{"datadoghq.com", "https://demo.datadoghq.com:443", false},
+		{"datadoghq.com", "https://demo.datadoghq.eu", false},
+		{"us3.datadoghq.com", "https://demo.us5.datadoghq.com", false},
+		{"staging.test", "https://demo.datadoghq.com", false},
+		{"datadoghq.com", "https://user@demo.datadoghq.com", false},
+		{"datadoghq.com", "https://demo.datadoghq.com?x=y", false},
+		{"datadoghq.com", "https://demo.datadoghq.com?", false},
+		{"datadoghq.com", "https://demo.datadoghq.com#fragment", false},
+		{"datadoghq.com", "https://demo.datadoghq.com#", false},
+		{"datadoghq.com", "https://evildatadoghq.com", false},
+	} {
+		t.Run(tt.domain+"/"+tt.origin, func(t *testing.T) {
+			initial := "https://api." + tt.domain
+			cfg, err := ConfigForSite(initial, "client")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err = cfg.WithCallbackDomain(tt.domain, tt.origin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ""
+			if tt.valid {
+				want = tt.origin
+			}
+			if cfg.WebOrigin != want {
+				t.Fatalf("origin = %q, want %q", cfg.WebOrigin, want)
+			}
+		})
 	}
 }

@@ -59,6 +59,7 @@ var (
 // needed to refresh it and call the Assistant API.
 type Session struct {
 	Site         string    `json:"site"`
+	WebOrigin    string    `json:"web_origin,omitempty"`
 	ClientID     string    `json:"client_id"`
 	AccessToken  string    `json:"access_token"`
 	TokenType    string    `json:"token_type"`
@@ -75,6 +76,7 @@ func sessionFromToken(cfg SiteConfig, token *oauth2.Token) Session {
 	}
 	return Session{
 		Site:         cfg.Site,
+		WebOrigin:    cfg.WebOrigin,
 		ClientID:     cfg.ClientID,
 		AccessToken:  token.AccessToken,
 		TokenType:    token.TokenType,

@@ -62,6 +62,7 @@ var ErrSiteConfiguration = errors.New("stored OAuth session does not match the c
 // environment-configured staging site; nil means a built-in destination.
 type SiteConfig struct {
 	Site          string
+	WebOrigin     string
 	Domain        string
 	ClientID      string
 	AuthorizeURL  string
@@ -175,7 +176,7 @@ func ConfigForSite(rawSite, clientIDOverride string) (SiteConfig, error) {
 // on the state-validated OAuth callback. Validation uses the trust snapshot
 // captured when this configuration was built, so a mid-flow environment
 // change cannot retarget the callback.
-func (c SiteConfig) WithCallbackDomain(raw string) (SiteConfig, error) {
+func (c SiteConfig) WithCallbackDomain(raw, rawSite string) (SiteConfig, error) {
 	domain, err := normalizeCallbackDomain(raw, c.staging)
 	if err != nil {
 		return SiteConfig{}, err
@@ -196,6 +197,13 @@ func (c SiteConfig) WithCallbackDomain(raw string) (SiteConfig, error) {
 	apiBase := "https://api." + domain
 	c.Site = apiBase
 	c.Domain = domain
+	c.WebOrigin = ""
+	// The optional org origin must stay within the callback's regional domain.
+	if u, err := url.Parse(rawSite); err == nil && u.Scheme == "https" && u.Hostname() != "" &&
+		u.Host == u.Hostname() && u.User == nil && u.Path == "" && u.RawQuery == "" &&
+		!u.ForceQuery && u.Fragment == "" && !strings.Contains(rawSite, "#") && hasDomainSuffix(u.Hostname(), c.Domain) {
+		c.WebOrigin = rawSite
+	}
 	c.TokenURL = apiBase + "/api/v2/oauth2/token"
 	c.RevokeURL = apiBase + "/oauth2/v1/revoke"
 	c.AssistantBase = apiBase

@@ -12,6 +12,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/browser"
 	"github.com/datadog-labs/bits-cli/internal/tools"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
@@ -169,6 +170,9 @@ func NewAuthenticatedClient(ctx context.Context, opts ClientOptions) (*assistant
 	if err != nil {
 		return nil, err
 	}
+	if client.WebOrigin == "" {
+		client.WebOrigin, _ = browser.WebOrigin(client.BaseURL)
+	}
 	client.CustomHeaders = custom
 	client.RequiredStreamHeaderName = requiredName
 	client.RequiredStreamHeaderValue = requiredValue
@@ -214,7 +218,12 @@ func newClientForMode(ctx context.Context, opts ClientOptions) (*assistant.Clien
 		if _, err = source.AccessToken(ctx); err != nil {
 			return nil, classifyOAuthError(err)
 		}
-		return assistant.NewOAuthClient(source.Site(), source)
+		client, err := assistant.NewOAuthClient(source.Site(), source)
+		if err != nil {
+			return nil, err
+		}
+		client.WebOrigin = source.WebOrigin()
+		return client, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported authentication mode %q", opts.Mode)

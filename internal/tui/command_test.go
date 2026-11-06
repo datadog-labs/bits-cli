@@ -198,7 +198,7 @@ func TestSettingsIsRegisteredAndAllowedDuringTurn(t *testing.T) {
 
 func TestSubmitSettingsOpensAssistantSettingsWithoutSending(t *testing.T) {
 	var opened string
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.us3.datadoghq.com"}, agent.Config{}), Config{
+	m := New(agent.New(&spyBackend{t: t, webOrigin: "https://acme.us3.datadoghq.com"}, agent.Config{}), Config{
 		OpenURL: func(_ context.Context, target string) error {
 			opened = target
 			return nil
@@ -213,7 +213,7 @@ func TestSubmitSettingsOpensAssistantSettingsWithoutSending(t *testing.T) {
 	}
 	msg := cmd()
 	_, _ = m.Update(msg)
-	want := "https://us3.datadoghq.com/ask/settings"
+	want := "https://acme.us3.datadoghq.com/ask/settings"
 	if opened != want {
 		t.Fatalf("opened URL = %q, want %q", opened, want)
 	}
@@ -227,7 +227,7 @@ func TestSubmitSettingsOpensAssistantSettingsWithoutSending(t *testing.T) {
 
 func TestSubmitSettingsUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
 	launched := false
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.ddog-gov.com"}, agent.Config{}), Config{
+	m := New(agent.New(&spyBackend{t: t, webOrigin: ""}, agent.Config{}), Config{
 		OpenURL: func(context.Context, string) error {
 			launched = true
 			return nil
@@ -247,7 +247,7 @@ func TestSubmitSettingsUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
 
 func TestSubmitSettingsLauncherFailureProvidesManualURL(t *testing.T) {
 	launchErr := errors.New("no graphical browser is available")
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, agent.Config{}), Config{
+	m := New(agent.New(&spyBackend{t: t, webOrigin: "https://demo.datadoghq.com"}, agent.Config{}), Config{
 		OpenURL: func(context.Context, string) error { return launchErr },
 	})
 	m.editor.Focus()
@@ -259,7 +259,7 @@ func TestSubmitSettingsLauncherFailureProvidesManualURL(t *testing.T) {
 	if latestNotice(m).Level != chat.NoticeError || !errors.Is(latestNotice(m).Err, launchErr) {
 		t.Fatalf("launcher-failure notice = %#v", latestNotice(m))
 	}
-	for _, want := range []string{"Could not open a browser", "https://app.datadoghq.com/ask/settings"} {
+	for _, want := range []string{"Could not open a browser", "https://demo.datadoghq.com/ask/settings"} {
 		if !strings.Contains(latestNotice(m).Text, want) {
 			t.Fatalf("launcher-failure notice %q does not contain %q", latestNotice(m).Text, want)
 		}
@@ -267,7 +267,7 @@ func TestSubmitSettingsLauncherFailureProvidesManualURL(t *testing.T) {
 }
 
 func TestSubmitSettingsDuringActiveTurnDoesNotCancel(t *testing.T) {
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, agent.Config{}), Config{
+	m := New(agent.New(&spyBackend{t: t, webOrigin: "https://demo.datadoghq.com"}, agent.Config{}), Config{
 		OpenURL: func(context.Context, string) error { return nil },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -298,7 +298,7 @@ func TestSubmitModelIsUnknown(t *testing.T) {
 
 func TestSubmitWebOpensCurrentConversationWithoutSending(t *testing.T) {
 	var opened string
-	backend := &spyBackend{t: t, site: "https://api.us3.datadoghq.com"}
+	backend := &spyBackend{t: t, webOrigin: "https://acme.us3.datadoghq.com"}
 	m := New(agent.New(backend, agent.Config{ConversationID: "conversation-1"}), Config{
 		OpenURL: func(_ context.Context, target string) error {
 			opened = target
@@ -314,7 +314,7 @@ func TestSubmitWebOpensCurrentConversationWithoutSending(t *testing.T) {
 	}
 	msg := cmd()
 	_, _ = m.Update(msg)
-	want := "https://us3.datadoghq.com/ask/conversation-1"
+	want := "https://acme.us3.datadoghq.com/ask/conversation-1"
 	if opened != want {
 		t.Fatalf("opened URL = %q, want %q", opened, want)
 	}
@@ -331,7 +331,7 @@ func TestSubmitWebOpensCurrentConversationWithoutSending(t *testing.T) {
 
 func TestSubmitWebWithoutConversationDoesNotLaunchOrSend(t *testing.T) {
 	launched := false
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, agent.Config{}), Config{
+	m := New(agent.New(&spyBackend{t: t, webOrigin: "https://demo.datadoghq.com"}, agent.Config{}), Config{
 		OpenURL: func(context.Context, string) error {
 			launched = true
 			return nil
@@ -351,7 +351,7 @@ func TestSubmitWebWithoutConversationDoesNotLaunchOrSend(t *testing.T) {
 
 func TestSubmitWebUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
 	launched := false
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.ddog-gov.com"}, agent.Config{ConversationID: "conversation-1"}), Config{
+	m := New(agent.New(&spyBackend{t: t, webOrigin: ""}, agent.Config{ConversationID: "conversation-1"}), Config{
 		OpenURL: func(context.Context, string) error {
 			launched = true
 			return nil
@@ -371,7 +371,7 @@ func TestSubmitWebUnsupportedSiteDoesNotLaunchOrSend(t *testing.T) {
 
 func TestSubmitWebLauncherFailureProvidesManualURL(t *testing.T) {
 	launchErr := errors.New("no graphical browser is available")
-	m := New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, agent.Config{ConversationID: "conversation-1"}), Config{
+	m := New(agent.New(&spyBackend{t: t, webOrigin: "https://demo.datadoghq.com"}, agent.Config{ConversationID: "conversation-1"}), Config{
 		OpenURL: func(context.Context, string) error { return launchErr },
 	})
 	m.editor.Focus()
@@ -383,7 +383,7 @@ func TestSubmitWebLauncherFailureProvidesManualURL(t *testing.T) {
 	if latestNotice(m).Level != chat.NoticeError || !errors.Is(latestNotice(m).Err, launchErr) {
 		t.Fatalf("launcher-failure notice = %#v", latestNotice(m))
 	}
-	for _, want := range []string{"Could not open a browser", "https://app.datadoghq.com/ask/conversation-1"} {
+	for _, want := range []string{"Could not open a browser", "https://demo.datadoghq.com/ask/conversation-1"} {
 		if !strings.Contains(latestNotice(m).Text, want) {
 			t.Fatalf("launcher-failure notice %q does not contain %q", latestNotice(m).Text, want)
 		}
@@ -391,7 +391,7 @@ func TestSubmitWebLauncherFailureProvidesManualURL(t *testing.T) {
 }
 
 func TestSubmitWebDuringActiveTurnDoesNotCancel(t *testing.T) {
-	backend := &spyBackend{t: t, site: "https://api.datadoghq.com"}
+	backend := &spyBackend{t: t, webOrigin: "https://demo.datadoghq.com"}
 	m := New(agent.New(backend, agent.Config{ConversationID: "conversation-1"}), Config{
 		OpenURL: func(context.Context, string) error { return nil },
 	})
