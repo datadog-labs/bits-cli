@@ -87,6 +87,7 @@ func TestWriteLoginErrorRendersEscapedHTMLPage(t *testing.T) {
 }
 
 func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
+	loginIDs := make(map[string]bool)
 	for _, mode := range []string{"http", "pasted-url", "closed-input"} {
 		t.Run(mode, func(t *testing.T) {
 			callbacks := make(chan string, 3)
@@ -151,7 +152,7 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 				if callbackErr != nil || callbackURL.Hostname() != "127.0.0.1" || callbackURL.Port() == "" || callbackURL.Port() == "0" {
 					t.Fatalf("dynamic redirect URI = %q, parse error = %v", redirectURI, callbackErr)
 				}
-				callback := redirectURI + "?code=auth-code&domain=datadoghq.com&state=" + url.QueryEscape(query.Get("state"))
+				callback := redirectURI + "?code=auth-code&domain=datadoghq.com&site=https%3A%2F%2Fdemo.datadoghq.com&state=" + url.QueryEscape(query.Get("state"))
 				if mode == "pasted-url" {
 					// Invalid input and stale login state must be retryable.
 					callbacks <- "not a URL"
@@ -204,6 +205,13 @@ func TestLoginCompletesPKCEExchangeAndStoresSession(t *testing.T) {
 			}
 			if store.saves != 1 || store.session.AccessToken != "access" {
 				t.Errorf("stored session = %#v, saves = %d", store.session, store.saves)
+			}
+			if session.LoginID == "" || loginIDs[session.LoginID] || store.session.LoginID != session.LoginID {
+				t.Fatal("login ID must be new and persisted")
+			}
+			loginIDs[session.LoginID] = true
+			if session.WebOrigin != "https://demo.datadoghq.com" {
+				t.Fatalf("origin = %q", session.WebOrigin)
 			}
 			if !strings.Contains(output.String(), "Datadog OAuth callback domain: datadoghq.com") {
 				t.Errorf("output did not report callback domain: %q", output.String())
@@ -353,7 +361,8 @@ func TestLoginRevokesUnpersistedGrant(t *testing.T) {
 func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
 	noStagingEnv(t)
 	previous := Session{
-		Site: "https://api.datadoghq.com", ClientID: "client", AccessToken: "old-access",
+		LoginID: "previous-login",
+		Site:    "https://api.datadoghq.com", ClientID: "client", AccessToken: "old-access",
 		RefreshToken: "old-refresh", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour),
 	}
 	store := newMemoryStore(previous)
@@ -390,6 +399,9 @@ func TestReplacementLoginCommitsThenRevokesPreviousGrant(t *testing.T) {
 	}, LoginOptions{Store: store, HTTPClient: client, OpenURL: callbackOpenURL(t)})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if store.session.LoginID == "" || store.session.LoginID == previous.LoginID {
+		t.Fatal("replacement login reused the previous login ID")
 	}
 	if revokedToken != "old-refresh" || store.session.RefreshToken != "new-refresh" {
 		t.Fatalf("revoked = %q, stored = %#v", revokedToken, store.session)

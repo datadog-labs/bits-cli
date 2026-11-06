@@ -20,6 +20,7 @@ const (
 // Bits processes cannot consume or overwrite the same rotating token lineage.
 type Source struct {
 	gate         chan struct{}
+	loginID      string // Pinned even when the current token is invalidated.
 	config       SiteConfig
 	store        CredentialStore
 	httpClient   *http.Client
@@ -39,6 +40,7 @@ func NewSource(session Session, store CredentialStore, httpClient *http.Client) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSiteConfiguration, err)
 	}
+	cfg.WebOrigin = session.WebOrigin
 	if store == nil {
 		return nil, fmt.Errorf("OAuth credential store is required")
 	}
@@ -46,6 +48,7 @@ func NewSource(session Session, store CredentialStore, httpClient *http.Client) 
 	return &Source{
 		gate:       make(chan struct{}, 1),
 		config:     cfg,
+		loginID:    session.LoginID,
 		store:      store,
 		httpClient: httpClient,
 		session:    session,
@@ -55,6 +58,11 @@ func NewSource(session Session, store CredentialStore, httpClient *http.Client) 
 // Site is the Assistant base URL associated with this login.
 func (s *Source) Site() string {
 	return s.config.AssistantBase
+}
+
+// WebOrigin is the org web origin captured during login.
+func (s *Source) WebOrigin() string {
+	return s.config.WebOrigin
 }
 
 // AccessToken implements assistant.AccessTokenSource.
@@ -118,6 +126,9 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 		}
 		before := s.session
 		s.session = sessionFromToken(s.config, refreshed)
+		s.session.LoginID = before.LoginID
+		// Preserve metadata from the latest adopted token generation.
+		s.session.WebOrigin = before.WebOrigin
 		s.dirty = true
 		s.persistBase = before
 		persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), sessionPersistTimeout)
@@ -183,7 +194,11 @@ func (s *Source) adopt(session Session) error {
 	if err := session.validate(); err != nil {
 		return err
 	}
-	if session.Site != s.config.Site || session.ClientID != s.config.ClientID {
+	if session.Site != s.config.Site || session.ClientID != s.config.ClientID || session.LoginID != s.loginID {
+		return fmt.Errorf("%w; restart Bits to use the new login", ErrSessionReplaced)
+	}
+	// Legacy sessions cannot distinguish another process's refresh from a login.
+	if s.loginID == "" && !sameSession(session, s.session) {
 		return fmt.Errorf("%w; restart Bits to use the new login", ErrSessionReplaced)
 	}
 	s.session = session
@@ -252,6 +267,9 @@ func (s *Source) RejectAccessToken(ctx context.Context, rejected string) error {
 		if durable.AccessToken != rejected {
 			return nil
 		}
+		if err := s.adopt(durable); err != nil {
+			return err
+		}
 		stale := durable
 		stale.Expiry = time.Now().Add(-time.Minute)
 		if err := saveWithRetry(ctx, s.store, stale); err != nil {
@@ -260,7 +278,8 @@ func (s *Source) RejectAccessToken(ctx context.Context, rejected string) error {
 			s.persistBase = durable
 			return fmt.Errorf("%w: %w", ErrSessionNotDurable, err)
 		}
-		return s.adopt(stale)
+		s.session = stale
+		return nil
 	})
 }
 

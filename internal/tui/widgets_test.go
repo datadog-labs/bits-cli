@@ -50,7 +50,7 @@ var timeseries = assistant.WidgetDefinition{"type": "timeseries", "title": "CPU"
 // opened records URLs sent to the browser.
 func widgetModel(t *testing.T, client viz.Client, support graphics.Support, def assistant.WidgetDefinition) (m *Model, id agent.BlockID, cmd tea.Cmd, opened *[]string) {
 	opened = new([]string)
-	m = New(agent.New(&spyBackend{t: t, site: "https://api.datadoghq.com"}, agent.Config{}), Config{
+	m = New(agent.New(&spyBackend{t: t, webOrigin: "https://demo.datadoghq.com"}, agent.Config{}), Config{
 		Visualization: client,
 		OpenURL:       func(_ context.Context, u string) error { *opened = append(*opened, u); return nil },
 	})
@@ -288,7 +288,7 @@ func TestWidgetOpenFallsBackToWeb(t *testing.T) {
 			defer m.Detach()
 			runWidgetTasks(m, render)
 			runWidgetTasks(m, clickWidget(t, m, chat.WidgetOpen))
-			if len(*opened) != 1 || !strings.Contains((*opened)[0], "/dataviz/sandbox?") {
+			if len(*opened) != 1 || !strings.HasPrefix((*opened)[0], "https://demo.datadoghq.com/dataviz/sandbox?") {
 				t.Fatalf("opened %q", *opened)
 			}
 			if actions := widgetActions(m); len(actions) != 1 || actions[0] != chat.WidgetWeb {
@@ -321,7 +321,7 @@ func TestLargeWidgetLinkOpens(t *testing.T) {
 	def := assistant.WidgetDefinition{"type": "note", "content": hex.EncodeToString(random)}
 	m, _, _, opened := widgetModel(t, nil, graphics.Unsupported, def)
 	runWidgetTasks(m, clickWidget(t, m, chat.WidgetWeb))
-	if len(*opened) != 1 || !strings.Contains((*opened)[0], "/dataviz/sandbox?") || len((*opened)[0]) <= 8<<10 {
+	if len(*opened) != 1 || !strings.HasPrefix((*opened)[0], "https://demo.datadoghq.com/dataviz/sandbox?") || len((*opened)[0]) <= 8<<10 {
 		t.Fatalf("opened %d URLs", len(*opened))
 	}
 }

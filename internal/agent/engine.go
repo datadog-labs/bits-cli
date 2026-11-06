@@ -528,10 +528,10 @@ func Follow(events <-chan Event, run RunID) iter.Seq[Event] {
 	}
 }
 
-// Site returns the Assistant API site of the active backend. Backends without
+// WebOrigin returns the web origin of the active backend. Backends without
 // a web counterpart, such as the demo backend, return an empty string.
-func (e *Engine) Site() string {
-	return e.runtimeStatus.Backend.Site
+func (e *Engine) WebOrigin() string {
+	return e.runtimeStatus.Backend.WebOrigin
 }
 
 // SearchEntities forwards autocomplete queries when the backend supports the

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
@@ -120,7 +121,7 @@ func login(ctx context.Context, cfg SiteConfig, opts LoginOptions) (Session, err
 	}
 	pastedURLs := opts.CallbackURLs
 
-	var code, callbackDomain string
+	var code, callbackDomain, callbackSite string
 waiting:
 	for {
 		select {
@@ -134,7 +135,7 @@ waiting:
 				return Session{}, result.err
 			}
 			code = result.code
-			callbackDomain = result.domain
+			callbackDomain, callbackSite = result.domain, result.site
 			break waiting
 		case raw, ok := <-pastedURLs:
 			if !ok {
@@ -153,11 +154,11 @@ waiting:
 			if result.err != nil {
 				return Session{}, result.err
 			}
-			code, callbackDomain = result.code, result.domain
+			code, callbackDomain, callbackSite = result.code, result.domain, result.site
 			break waiting
 		}
 	}
-	cfg, err = cfg.WithCallbackDomain(callbackDomain)
+	cfg, err = cfg.WithCallbackDomain(callbackDomain, callbackSite)
 	if err != nil {
 		return Session{}, err
 	}
@@ -171,6 +172,7 @@ waiting:
 		return Session{}, sanitizedOAuthError("exchange Datadog OAuth code", err)
 	}
 	session := sessionFromToken(cfg, token)
+	session.LoginID = rand.Text()
 	var previous Session
 	var hadPrevious, saveCommitted bool
 	lockCtx, lockCancel := context.WithTimeout(ctx, sessionLockTimeout)
@@ -237,6 +239,7 @@ waiting:
 type callbackResult struct {
 	code   string
 	domain string
+	site   string
 	err    error
 }
 
@@ -271,7 +274,7 @@ func validateCallbackQuery(query url.Values, wantState string) (callbackResult, 
 	if query.Get("code") == "" {
 		return callbackResult{}, errCallbackCode
 	}
-	return callbackResult{code: query.Get("code"), domain: strings.TrimSpace(query.Get("domain"))}, nil
+	return callbackResult{code: query.Get("code"), domain: strings.TrimSpace(query.Get("domain")), site: query.Get("site")}, nil
 }
 
 type callbackListener struct {

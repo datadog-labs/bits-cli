@@ -64,6 +64,19 @@ bits --auth api-key --site https://api.datadoghq.com
 This uses the keys for the current invocation without changing your saved OAuth
 session. Plain `bits` uses OAuth even when those environment variables are set.
 
+Running Bits instances share token refreshes for the same OAuth login. Running
+`bits login` again replaces that login, even when you choose the same account
+and org. Restart existing instances to use the replacement; they stop using
+credentials at their next check rather than switch a running conversation to a
+new login. Requests already in flight may finish or fail with their original
+credentials.
+
+Older saved logins remain usable, but cannot distinguish another process's
+refresh from a replacement login. An external credential change requires a
+restart until you run `bits login` with a current version. If an older binary
+refreshes a new login and drops its login identifier, current instances also
+require a restart.
+
 For an Assistant endpoint that acknowledges a request policy in a streaming
 response header, set `BITS_REQUIRED_RESPONSE_HEADER=Name=value`. Bits checks
 the exact header value before delivering streamed output and rejects redirects

@@ -69,7 +69,11 @@ func runLogin(ctx context.Context, opts LoginOptions, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stderr, "Logged in to %s.\n", session.Site)
+	origin := session.WebOrigin
+	if origin == "" {
+		origin = session.Site
+	}
+	_, err = fmt.Fprintf(stderr, "Logged in to %s.\n", origin)
 	return err
 }
 

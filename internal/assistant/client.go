@@ -64,6 +64,7 @@ type accessTokenRejector interface {
 // Client talks to the Bits AI assistant API over HTTP.
 type Client struct {
 	BaseURL     string
+	WebOrigin   string
 	APIKey      string
 	AppKey      string
 	TokenSource AccessTokenSource
@@ -104,6 +105,7 @@ type Client struct {
 // render. It intentionally cannot carry tokens, API keys, or user identity.
 type BackendStatus struct {
 	Site                string
+	WebOrigin           string
 	AuthenticationMode  string
 	AuthenticationState string
 	// HasCredentials means a successful request proves these credentials.
@@ -131,6 +133,7 @@ func (c *Client) BackendStatus() BackendStatus {
 	}
 	return BackendStatus{
 		Site:                c.BaseURL,
+		WebOrigin:           c.WebOrigin,
 		AuthenticationMode:  mode,
 		AuthenticationState: "configured, not verified",
 		HasCredentials:      true,

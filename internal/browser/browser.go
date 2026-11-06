@@ -18,33 +18,23 @@ import (
 const openTimeout = 10 * time.Second
 
 // ConversationURL returns the dedicated Bits web page for a conversation on
-// the Datadog site serving the Assistant API. The explicit mapping is the
-// supported-site boundary; guessing by hostname risks opening another region.
-func ConversationURL(apiSite, conversationID string) (string, error) {
+// the resolved Datadog web origin.
+func ConversationURL(origin, conversationID string) (string, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return "", errors.New("conversation ID is empty")
 	}
 
-	webHost, err := webHostForAssistantSite(apiSite)
-	if err != nil {
-		return "", err
+	if origin == "" {
+		return "", errors.New("web origin is empty")
 	}
-	target := &url.URL{
-		Scheme:  "https",
-		Host:    webHost,
-		Path:    "/ask/" + conversationID,
-		RawPath: "/ask/" + url.PathEscape(conversationID),
-	}
-	return target.String(), nil
+	return origin + "/ask/" + url.PathEscape(conversationID), nil
 }
 
-// SettingsURL returns the Assistant settings page on the Datadog site serving
-// the Assistant API.
-func SettingsURL(apiSite string) (string, error) {
-	origin, err := WebOrigin(apiSite)
-	if err != nil {
-		return "", err
+// SettingsURL returns the Assistant settings page on the resolved web origin.
+func SettingsURL(origin string) (string, error) {
+	if origin == "" {
+		return "", errors.New("web origin is empty")
 	}
 	return origin + "/ask/settings", nil
 }

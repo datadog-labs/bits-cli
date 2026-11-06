@@ -94,6 +94,7 @@ func (s *memoryStore) WithSessionLock(ctx context.Context, fn func() error) erro
 
 func expiredSession() Session {
 	return Session{
+		LoginID:      "login-1",
 		Site:         "https://api.datadoghq.com",
 		ClientID:     "client",
 		AccessToken:  "old-access",
@@ -121,7 +122,8 @@ func refreshServer(t *testing.T, requests *atomic.Int32) *httptest.Server {
 func testSource(t *testing.T, session Session, store CredentialStore, tokenURL string, client *http.Client) *Source {
 	t.Helper()
 	return &Source{
-		gate: make(chan struct{}, 1),
+		gate:    make(chan struct{}, 1),
+		loginID: session.LoginID,
 		config: SiteConfig{
 			Site:        "https://api.datadoghq.com",
 			ClientID:    "client",
@@ -150,12 +152,23 @@ func TestSourceKeepsRefreshTokenWhenResponseOmitsReplacement(t *testing.T) {
 	defer server.Close()
 
 	initial := expiredSession()
+	initial.WebOrigin = "https://demo.datadoghq.com"
 	store := newMemoryStore(initial)
-	source := testSource(t, initial, store, server.URL, server.Client())
+	source, err := NewSource(initial, store, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.config.TokenURL = server.URL
 
 	token, err := source.AccessToken(context.Background())
 	if err != nil || token != "new-access" {
 		t.Fatalf("AccessToken = %q, %v", token, err)
+	}
+	if store.session.LoginID != initial.LoginID {
+		t.Fatal("refresh lost login ID")
+	}
+	if source.WebOrigin() != initial.WebOrigin || store.session.WebOrigin != initial.WebOrigin {
+		t.Fatal("refresh lost org origin")
 	}
 	if requests.Load() != 1 || store.session.RefreshToken != initial.RefreshToken {
 		t.Fatalf("requests = %d, stored refresh token = %q", requests.Load(), store.session.RefreshToken)
@@ -195,7 +208,7 @@ func TestIndependentSourcesRefreshOnceAndAdoptDurableRotation(t *testing.T) {
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("refresh requests = %d, want 1", got)
 	}
-	if store.saves != 1 || store.session.RefreshToken != "new-refresh" {
+	if store.saves != 1 || store.session.RefreshToken != "new-refresh" || store.session.LoginID != initial.LoginID {
 		t.Fatalf("stored session = %#v, saves = %d", store.session, store.saves)
 	}
 }
@@ -306,7 +319,7 @@ func TestDirtySourceNeverOverwritesReplacementOrDeletion(t *testing.T) {
 	replacement.RefreshToken = "replacement-refresh"
 	replacement.Expiry = time.Now().Add(time.Hour)
 
-	t.Run("adopts replacement", func(t *testing.T) {
+	t.Run("adopts newer rotation", func(t *testing.T) {
 		store := newMemoryStore(replacement)
 		source := testSource(t, rotated, store, "", cleanupClient)
 		source.dirty = true
@@ -520,13 +533,14 @@ func TestSourceInvalidGrantDeletesSessionAndRequiresLogin(t *testing.T) {
 	}
 
 	replacement := initial
+	replacement.LoginID = "replacement-login"
 	replacement.AccessToken = "replacement-access"
 	replacement.RefreshToken = "replacement-refresh"
 	replacement.Expiry = time.Now().Add(time.Hour)
 	if err := store.Save(replacement); err != nil {
 		t.Fatal(err)
 	}
-	if token, adoptErr := source.AccessToken(context.Background()); adoptErr != nil || token != "replacement-access" {
+	if token, adoptErr := source.AccessToken(context.Background()); !errors.Is(adoptErr, ErrSessionReplaced) || token != "" {
 		t.Fatalf("same-route replacement = %q, %v", token, adoptErr)
 	}
 }
@@ -587,5 +601,105 @@ func TestSourceCompletesInFlightRotationAfterCallerCancellation(t *testing.T) {
 	}
 	if store.session.RefreshToken != "late-refresh" {
 		t.Fatalf("rotated session was not persisted: %#v", store.session)
+	}
+}
+
+func TestSourceRejectsReplacementLogin(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		initialID     string
+		replacementID string
+		changeToken   bool
+	}{
+		{"new login", "login-1", "login-2", true},
+		{"new login with unchanged tokens", "login-1", "login-2", false},
+		{"older binary drops ID", "login-1", "", true},
+		{"legacy replacement", "", "", true},
+		{"legacy to new login", "", "login-2", true},
+	} {
+		for _, dirty := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dirty=%t", tt.name, dirty), func(t *testing.T) {
+				var requests atomic.Int32
+				server := refreshServer(t, &requests)
+				defer server.Close()
+				initial := expiredSession()
+				initial.LoginID = tt.initialID
+				initial.WebOrigin = "https://first.datadoghq.com"
+				store := newMemoryStore(initial)
+				source, err := NewSource(initial, store, server.Client())
+				if err != nil {
+					t.Fatal(err)
+				}
+				source.config.TokenURL = server.URL
+				if dirty {
+					source.dirty = true
+					source.persistBase = initial
+					source.session.AccessToken = "pending-access"
+					source.session.RefreshToken = "pending-refresh"
+				}
+				replacement := initial
+				replacement.LoginID = tt.replacementID
+				if tt.changeToken {
+					replacement.AccessToken = "replacement-access"
+				}
+				// The same org must also require a restart for a fresh login.
+				store.session = replacement
+				for range 2 {
+					if token, err := source.AccessToken(context.Background()); !errors.Is(err, ErrSessionReplaced) || token != "" {
+						t.Fatalf("AccessToken = %q, %v; want session replaced", token, err)
+					}
+				}
+				if requests.Load() != 0 || store.saves != 0 || store.deletes != 0 || !sameSession(store.session, replacement) {
+					t.Fatal("replacement login was refreshed or mutated")
+				}
+			})
+		}
+	}
+}
+
+func TestLegacySourceRefresh(t *testing.T) {
+	var requests atomic.Int32
+	server := refreshServer(t, &requests)
+	defer server.Close()
+	initial := expiredSession()
+	initial.LoginID = ""
+	store := newMemoryStore(initial)
+	source := testSource(t, initial, store, server.URL, server.Client())
+	other := testSource(t, initial, store, server.URL, server.Client())
+	for range 2 {
+		if token, err := source.AccessToken(context.Background()); err != nil || token != "new-access" {
+			t.Fatalf("AccessToken = %q, %v", token, err)
+		}
+	}
+	if requests.Load() != 1 || store.session.LoginID != "" {
+		t.Fatal("unexpected legacy refresh")
+	}
+	if _, err := other.AccessToken(context.Background()); !errors.Is(err, ErrSessionReplaced) {
+		t.Fatalf("external legacy rotation = %v, want session replaced", err)
+	}
+	restarted, err := NewSource(store.session, store, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token, err := restarted.AccessToken(context.Background()); err != nil || token != "new-access" {
+		t.Fatalf("after restart = %q, %v", token, err)
+	}
+	if err := source.RejectAccessToken(context.Background(), "new-access"); err != nil {
+		t.Fatalf("reject legacy access token: %v", err)
+	}
+}
+
+func TestRejectAccessTokenDoesNotMutateReplacementLogin(t *testing.T) {
+	initial := expiredSession()
+	store := newMemoryStore(initial)
+	source := testSource(t, initial, store, "", http.DefaultClient)
+	replacement := initial
+	replacement.LoginID = "replacement-login"
+	store.session = replacement
+	if err := source.RejectAccessToken(context.Background(), initial.AccessToken); !errors.Is(err, ErrSessionReplaced) {
+		t.Fatalf("RejectAccessToken = %v, want session replaced", err)
+	}
+	if store.saves != 0 || !sameSession(store.session, replacement) {
+		t.Fatal("replacement login was mutated")
 	}
 }

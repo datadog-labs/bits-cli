@@ -307,7 +307,7 @@ func New(engine *agent.Engine, configs ...Config) *Model {
 // before any operation starts, so the pump started by initChat misses none.
 func (m *Model) attach(engine *agent.Engine) {
 	m.engine = engine
-	m.widgets.origin, _ = browser.WebOrigin(engine.Site())
+	m.widgets.origin = engine.WebOrigin()
 	m.state = engine.State()
 	m.events, m.unsubscribe = engine.Subscribe()
 }
