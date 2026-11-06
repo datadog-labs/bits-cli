@@ -80,7 +80,7 @@ require a restart.
 For an Assistant endpoint that acknowledges a request policy in a streaming
 response header, set `BITS_REQUIRED_RESPONSE_HEADER=Name=value`. Bits checks
 the exact header value before delivering streamed output and rejects redirects
-for these requests. Leave it unset when no acknowledgment is required.
+for these requests, including multi-agent starts and conversation continuations. Leave it unset when no acknowledgment is required.
 
 ### Staging
 
@@ -179,13 +179,21 @@ By contributing to Bits CLI, you agree that your contributions will be licensed 
 
 ## Multi-agent Assistant transport
 
-The regular Assistant endpoint remains the default. Opt into experimental
-subagents with `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits`, or with
+Experimental subagents are enabled automatically for numeric organization ID 2,
+regardless of `BITS_USE_EXPERIMENTAL_SUBAGENTS`. Bits checks the authenticated
+organization at startup with a three-second timeout unless the environment
+variable already enables subagents. If the lookup fails, it keeps the regular
+endpoint. The lookup uses `/api/v1/legacy_current_user`, which requires
+first-party access for OAuth; credentials without access to this endpoint must
+use the environment opt-in below.
+
+For other organizations, the regular Assistant endpoint remains the default.
+Opt into experimental subagents with `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits`, or with
 `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits run --prompt '…' --delivery adeep`.
 Only `1` enables it; unset, empty, or other values keep the regular endpoint.
 The setting is not persisted.
 
-With the environment variable enabled, eligible turns use multi-agent run
+When subagents are enabled, eligible turns use multi-agent run
 endpoints with the `cli` profile. The server must support these endpoints and enable
 `command-assistant-multi-agent-runs` for the organization. Each turn creates a new
 run while keeping the conversation ID; history and conversation management use

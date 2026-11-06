@@ -508,6 +508,49 @@ func (c *Client) Subscribe(ctx context.Context, conversationID string, opts Subs
 	return err
 }
 
+// openStream applies the response policy before exposing a streaming body.
+// The caller owns the body on success; rejected responses are closed here.
+func (c *Client) openStream(req *http.Request) (*http.Response, error) {
+	streamClient := c.streamClient()
+	if c.RequiredStreamHeaderName != "" {
+		// An acknowledgment from a redirected origin cannot attest to the
+		// original server's behavior. Keep the original client unchanged.
+		guardedClient := *streamClient
+		guardedClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return fmt.Errorf("redirect is not allowed for a stream requiring a response header")
+		}
+		streamClient = &guardedClient
+	}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		return nil, c.responseError(req.Context(), req, resp, req.URL.EscapedPath())
+	}
+	if c.RequiredStreamHeaderName != "" && resp.Header.Get(c.RequiredStreamHeaderName) != c.RequiredStreamHeaderValue {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("assistant response is missing required header %q", c.RequiredStreamHeaderName)
+	}
+	return resp, nil
+}
+
+func (c *Client) responseError(
+	ctx context.Context,
+	req *http.Request,
+	resp *http.Response,
+	path string,
+) error {
+	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	_ = resp.Body.Close()
+	apiErr := httpError(snippet, resp.StatusCode, req.Method, path)
+	var rejectErr error
+	if resp.StatusCode == http.StatusUnauthorized {
+		rejectErr = c.rejectAccessToken(ctx, req)
+	}
+	return errors.Join(apiErr, rejectErr)
+}
+
 // stream issues a streaming request and hands every non-keepalive line to fn.
 // It returns the last conversation id the stream reported, or conversationID.
 func (c *Client) stream(ctx context.Context, method, path string, body any, conversationID string, fn func(AssistantResponse) error) (string, error) {
@@ -523,34 +566,11 @@ func (c *Client) stream(ctx context.Context, method, path string, body any, conv
 	if err != nil {
 		return conversationID, err
 	}
-	streamClient := c.streamClient()
-	if c.RequiredStreamHeaderName != "" {
-		// An acknowledgment from a redirected origin cannot attest to the
-		// original server's behavior. Keep the original client unchanged.
-		guardedClient := *streamClient
-		guardedClient.CheckRedirect = func(*http.Request, []*http.Request) error {
-			return fmt.Errorf("redirect is not allowed for a stream requiring a response header")
-		}
-		streamClient = &guardedClient
-	}
-	resp, err := streamClient.Do(req)
+	resp, err := c.openStream(req)
 	if err != nil {
 		return conversationID, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 400 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		_ = resp.Body.Close()
-		apiErr := httpError(snippet, resp.StatusCode, method, path)
-		var rejectErr error
-		if resp.StatusCode == http.StatusUnauthorized {
-			rejectErr = c.rejectAccessToken(ctx, req)
-		}
-		return conversationID, errors.Join(apiErr, rejectErr)
-	}
-	if c.RequiredStreamHeaderName != "" && resp.Header.Get(c.RequiredStreamHeaderName) != c.RequiredStreamHeaderValue {
-		return conversationID, fmt.Errorf("assistant response is missing required header %q", c.RequiredStreamHeaderName)
-	}
 
 	// Start the idle budget after authentication and response headers. A lock
 	// wait or token refresh has its own timeout and must not consume the stream's
@@ -634,6 +654,25 @@ func (c *Client) ConversationHistory(ctx context.Context, in ConversationHistory
 		return nil, fmt.Errorf("decode history: %w", err)
 	}
 	return &out, nil
+}
+
+// CurrentOrganizationID returns the numeric ID of the authenticated organization.
+// The v2 current-user document exposes only UUIDs and public IDs.
+func (c *Client) CurrentOrganizationID(ctx context.Context) (int64, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/api/v1/legacy_current_user", nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var document struct {
+		Org struct {
+			ID int64 `json:"id"`
+		} `json:"org"`
+	}
+	if err := decodeJSONBody(&document, resp.Body, maxResponseBodyBytes); err != nil {
+		return 0, fmt.Errorf("decode current organization: %w", err)
+	}
+	return document.Org.ID, nil
 }
 
 // CurrentUser fetches the authenticated Datadog user and their active

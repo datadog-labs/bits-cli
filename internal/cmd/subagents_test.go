@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestSubagentEnvironmentSelectsEndpoint(t *testing.T) {
+func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
 	clearStagingEnv(t)
 	t.Chdir(t.TempDir())
 	t.Setenv("BITS_FAKE_BACKEND", "")
@@ -20,10 +20,17 @@ func TestSubagentEnvironmentSelectsEndpoint(t *testing.T) {
 	original := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = original })
 	for _, test := range []struct {
-		name  string
-		value string
-		path  string
+		name         string
+		value        string
+		orgID        int
+		lookupStatus int
+		path         string
 	}{
+		{name: "org 2 default", orgID: 2, path: "/api/unstable/assistant/multi-agent/runs"},
+		{name: "org 2 ignores disable", orgID: 2, value: "0", path: "/api/unstable/assistant/multi-agent/runs"},
+		{name: "org 2 ignores other value", orgID: 2, value: "true", path: "/api/unstable/assistant/multi-agent/runs"},
+		{name: "other org", orgID: 3, path: "/api/v2/assistant"},
+		{name: "lookup unavailable", lookupStatus: http.StatusServiceUnavailable, path: "/api/v2/assistant"},
 		{name: "default", path: "/api/v2/assistant"},
 		{name: "enabled", value: "1", path: "/api/unstable/assistant/multi-agent/runs"},
 		{name: "explicitly disabled", value: "0", path: "/api/v2/assistant"},
@@ -32,7 +39,17 @@ func TestSubagentEnvironmentSelectsEndpoint(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("BITS_USE_EXPERIMENTAL_SUBAGENTS", test.value)
 			requests := 0
+			identityRequests := 0
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/legacy_current_user" {
+					identityRequests++
+					if test.lookupStatus != 0 {
+						w.WriteHeader(test.lookupStatus)
+						return
+					}
+					_, _ = fmt.Fprintf(w, `{"org":{"id":%d}}`, test.orgID)
+					return
+				}
 				requests++
 				if r.URL.Path != test.path {
 					t.Errorf("endpoint=%s, want %s", r.URL.Path, test.path)
@@ -62,6 +79,13 @@ func TestSubagentEnvironmentSelectsEndpoint(t *testing.T) {
 			http.DefaultTransport = transport
 			args := []string{"run", "--prompt", "question", "--delivery", "adeep", "--auth", "api-key", "--site", "api.datadoghq.com"}
 			out, _, err := executeForTest(t, args)
+			wantIdentityRequests := 1
+			if test.value == "1" {
+				wantIdentityRequests = 0
+			}
+			if test.lookupStatus == 0 && identityRequests != wantIdentityRequests {
+				t.Fatalf("identity requests = %d, want %d", identityRequests, wantIdentityRequests)
+			}
 			if err != nil || requests != 1 || !strings.Contains(out, `"response":"answer"`) {
 				t.Fatalf("err=%v requests=%d output=%s", err, requests, out)
 			}
