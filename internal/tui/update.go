@@ -174,10 +174,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, ok := m.widgets.images.Handle(msg); ok {
 		return m, cmd
 	}
-	// Global quit wins over every chat surface and skips reconciliation (we are
-	// tearing down). Login handles its own ctrl+c.
-	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" && m.mode != ModeLogin {
-		return m.quit()
+	// ctrl+c wins over every chat surface and skips reconciliation. In chat it
+	// clears the draft or confirms exit (see handleChatCtrlC); elsewhere it
+	// quits. Login handles its own ctrl+c.
+	if key, ok := msg.(tea.KeyPressMsg); ok && m.mode != ModeLogin {
+		if key.String() == "ctrl+c" {
+			if m.mode == ModeChat || m.mode == ModeTermInit {
+				return m.handleChatCtrlC()
+			}
+			return m.quit()
+		}
+		// Any other key abandons a pending exit.
+		m.quitConfirm.armed = false
 	}
 
 	var cmd tea.Cmd
@@ -198,6 +206,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// colors are off, ultraviolet drops Fg and Bg but keeps attributes.
 		m.monochrome = msg.Profile == colorprofile.NoTTY || msg.Profile == colorprofile.ASCII
 		m.graphics.ObserveColorProfile(msg.Profile)
+	case quitConfirmExpiredMsg:
+		m.expireQuitConfirm(msg)
 	case recentConversationsMsg:
 		// A failed background read the user never asked for stays silent.
 		if msg.result.Err == nil {
@@ -868,7 +878,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// any text or attachment it falls through to the editor, which deletes
 		// the character under the cursor. While an operation runs it is ignored,
 		// so a stray press cannot drop a streaming turn: esc interrupts it and
-		// ctrl+c still quits.
+		// a confirmed ctrl+c still quits.
 		if m.editor.Value() == "" && len(m.editor.Attachments()) == 0 {
 			if m.op.busy() {
 				return m, nil

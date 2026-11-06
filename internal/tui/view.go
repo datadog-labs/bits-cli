@@ -103,7 +103,7 @@ type frame struct {
 	// tooSmall means the chat cannot be usably rendered, so View replaces the
 	// whole screen with a resize hint. The UI is then invisible and Update drops
 	// user input: nothing — a shown prompt, the composer, transcript
-	// scrolling — can be driven blind. Only ctrl+c still works.
+	// scrolling — can be driven blind. Only ctrl+c (pressed twice) still works.
 	tooSmall bool
 }
 
@@ -226,9 +226,14 @@ func (m *Model) chatOverlay(base, popup string, x int) string {
 func (m *Model) chatViewBase(transcript string) string {
 	gap := slices.Repeat([]string{""}, m.frame.composerGap.Dy())
 	if m.frame.replaced {
-		// The footer row stays, blank, so the prompt sits where the composer did.
+		// The footer row stays, blank unless an exit is pending, so the prompt
+		// sits where the composer did.
 		transcript = lipgloss.NewStyle().Faint(true).Render(transcript)
-		return strings.Join(slices.Concat([]string{transcript}, gap, []string{m.frame.promptView, ""}), "\n")
+		footer := ""
+		if m.quitConfirm.armed {
+			footer = m.chatFooter()
+		}
+		return strings.Join(slices.Concat([]string{transcript}, gap, []string{m.frame.promptView, footer}), "\n")
 	}
 	sections := []string{transcript}
 	if m.frame.promptView != "" {
@@ -323,6 +328,9 @@ func (m *Model) chatFooter() string {
 	width := max(1, m.list.Width())
 	indent := min(m.editor.ContentOffset(), max(0, width-1))
 	text := chatFooterText(m.workspaceDisplayPath, m.state.Usage, max(1, width-indent))
+	if m.quitConfirm.armed {
+		text = ansi.Truncate(quitConfirmHint, max(1, width-indent), "…")
+	}
 	if text == "" {
 		return ""
 	}
