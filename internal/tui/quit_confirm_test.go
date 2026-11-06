@@ -117,3 +117,34 @@ func TestCtrlCDoesNotInterruptRunningTurn(t *testing.T) {
 		t.Fatal("ctrl+c during a turn did not arm exit")
 	}
 }
+
+func TestCtrlCClearingDraftRebuildsLayout(t *testing.T) {
+	m := newSizedChatModel(t)
+	empty := m.frame.transcript.Dy()
+	m.Update(tea.PasteMsg{Content: "one\ntwo\nthree\nfour"})
+	if m.frame.transcript.Dy() >= empty {
+		t.Fatalf("multiline draft did not shrink the transcript: %d >= %d", m.frame.transcript.Dy(), empty)
+	}
+
+	_, _ = m.Update(ctrlC)
+	if m.frame.transcript.Dy() != empty {
+		t.Fatalf("transcript height = %d after clearing, want %d", m.frame.transcript.Dy(), empty)
+	}
+}
+
+func TestCtrlCHintShownWhenTerminalTooSmall(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.Update(tea.WindowSizeMsg{Width: 30, Height: 3})
+	if !m.frame.tooSmall {
+		t.Fatal("expected the resize view")
+	}
+
+	_, _ = m.Update(ctrlC)
+	if content := m.View().Content; !strings.Contains(content, quitConfirmHint) {
+		t.Fatalf("resize view = %q, want exit hint", content)
+	}
+	_, cmd := m.Update(ctrlC)
+	if !isQuitCmd(cmd) {
+		t.Fatal("second ctrl+c in the resize view did not quit")
+	}
+}

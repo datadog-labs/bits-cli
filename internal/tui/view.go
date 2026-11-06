@@ -62,7 +62,11 @@ func (m *Model) View() tea.View {
 	case ModeChat, ModePermissions:
 		if m.frame.tooSmall {
 			v.MouseMode = tea.MouseModeNone
-			message := ansi.Truncate("Resize terminal to use Bits", max(1, m.width), "")
+			message := "Resize terminal to use Bits"
+			if m.quitConfirm.armed {
+				message = quitConfirmHint
+			}
+			message = ansi.Truncate(message, max(1, m.width), "")
 			v.Content = lipgloss.Place(max(1, m.width), max(1, m.height), lipgloss.Center, lipgloss.Center, message)
 			break
 		}

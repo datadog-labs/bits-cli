@@ -177,13 +177,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ctrl+c wins over every chat surface and skips reconciliation (we are
 	// tearing down). Login handles its own ctrl+c.
 	if key, ok := msg.(tea.KeyPressMsg); ok && m.mode != ModeLogin {
-		if key.String() == "ctrl+c" {
-			if m.mode == ModeChat || m.mode == ModeTermInit {
-				return m.handleChatCtrlC()
-			}
+		if key.String() != "ctrl+c" {
+			m.quitConfirm.armed = false
+		} else if (m.mode != ModeChat && m.mode != ModeTermInit) || (m.quitConfirm.armed && !m.composerHasDraft()) {
 			return m.quit()
 		}
-		m.quitConfirm.armed = false
 	}
 
 	var cmd tea.Cmd
@@ -215,6 +213,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case m.mode == ModeLogin:
 			cmd = m.updateLogin(msg)
+		case isCtrlC(msg):
+			cmd = m.clearDraftOrArmQuit()
 		case m.frame.tooSmall && isUserInput(msg):
 			// Only a resize hint is visible, so input must not drive a hidden
 			// surface. System and engine messages still flow.
@@ -229,6 +229,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	loadSkillMenu := m.syncClientSkills()
 	m.relayout()
 	return m, tea.Batch(cmd, loadSkillMenu, m.syncWidgets(), m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
+}
+
+func isCtrlC(msg tea.Msg) bool {
+	key, ok := msg.(tea.KeyPressMsg)
+	return ok && key.String() == "ctrl+c"
 }
 
 func isUserInput(msg tea.Msg) bool {

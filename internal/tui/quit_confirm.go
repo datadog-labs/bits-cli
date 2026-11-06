@@ -17,19 +17,15 @@ type quitConfirm struct {
 	token uint64
 }
 
-func (m *Model) handleChatCtrlC() (tea.Model, tea.Cmd) {
+func (m *Model) clearDraftOrArmQuit() tea.Cmd {
 	if m.composerHasDraft() {
-		m.quitConfirm.armed = false
 		m.editor.Reset()
-		return m, m.stopCompletionSearches()
-	}
-	if m.quitConfirm.armed {
-		return m.quit()
+		return m.stopCompletionSearches()
 	}
 	m.quitConfirm.armed = true
 	m.quitConfirm.token++
 	token := m.quitConfirm.token
-	return m, tea.Tick(quitConfirmWindow, func(time.Time) tea.Msg {
+	return tea.Tick(quitConfirmWindow, func(time.Time) tea.Msg {
 		return quitConfirmExpiredMsg{token: token}
 	})
 }
