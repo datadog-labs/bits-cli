@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -1036,7 +1037,7 @@ func TestSend_RoutesPromptsAndToolResponsesWithSubscription(t *testing.T) {
 		}
 		writeStream(t, w, textLine(conversationID, "response"))
 	})
-	if err := c.Subscribe(context.Background(), conversationID, SubscribeOptions{}, func(Message) error { return nil }); err != nil {
+	if err := c.SubscribeConversation(context.Background(), conversationID, nil); !errors.Is(err, io.EOF) {
 		t.Fatal(err)
 	}
 	for _, message := range []any{"prompt", map[string]any{"type": "client_tool_response", "id": "tool-1", "content": "done"}} {

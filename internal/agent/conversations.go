@@ -35,6 +35,7 @@ type ConversationListResult struct {
 type Conversation struct {
 	id           string
 	fork         ForkBoundary
+	forkSource   *assistant.ForkedFrom
 	transcript   *Transcript
 	tasks        []*task
 	continuation []assistant.Content
@@ -131,6 +132,8 @@ func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversa
 func (e *Engine) installConversation(conversation *Conversation) {
 	e.opts.ConversationID = conversation.id
 	e.fork = conversation.fork
+	e.forkSource = conversation.forkSource
+	e.activityReplay = nil
 	e.opts.MessageHistory = nil
 	e.resetContext()
 	e.transcript = conversation.transcript
@@ -263,9 +266,7 @@ type ForkBoundary struct {
 	SourceTitle string
 }
 
-// conversationFromHistory folds the copied prefix separately so subsequent
-// results cannot mutate it or pull new task output above the fork boundary.
-func conversationFromHistory(source *assistant.ForkedFrom, messages []assistant.Message) *Conversation {
+func historyForkSplit(source *assistant.ForkedFrom, messages []assistant.Message) int {
 	split := 0
 	if source != nil && source.ForkMessageID != "" && ValidConversationID(source.ConversationID) {
 		for i, message := range messages {
@@ -275,8 +276,19 @@ func conversationFromHistory(source *assistant.ForkedFrom, messages []assistant.
 			}
 		}
 	}
-	transcript, tasks := historyTasks(messages[split:])
-	conversation := &Conversation{transcript: transcript, tasks: tasks, continuation: continuationFromHistory(messages[split:])}
+	return split
+}
+
+// conversationFromHistory folds the copied prefix separately so subsequent
+// results cannot mutate it or pull new task output above the fork boundary.
+func conversationFromHistory(source *assistant.ForkedFrom, messages []assistant.Message) *Conversation {
+	return conversationFromSnapshot(source, messages, false)
+}
+
+func conversationFromSnapshot(source *assistant.ForkedFrom, messages []assistant.Message, active bool) *Conversation {
+	split := historyForkSplit(source, messages)
+	transcript, tasks := foldHistoryTasks(messages[split:], active)
+	conversation := &Conversation{forkSource: source, transcript: transcript, tasks: tasks, continuation: continuationFromHistory(messages[split:])}
 	if split == 0 {
 		return conversation
 	}

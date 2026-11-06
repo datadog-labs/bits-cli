@@ -481,12 +481,18 @@ type CompactionPayload struct {
 	Summary       string
 }
 
+type ReplayCompletePayload struct {
+	ReplayKind string `json:"replay_kind"`
+}
+
 // Content is a polymorphic message body: Type is always set, and exactly one
 // matching payload pointer is non-nil (all nil for types this client does not
 // model). It mirrors the server's AssistantContent discriminated union, so
 // distinct variants — text and a widget, say — never coexist on one Content.
 type Content struct {
 	Type string `json:"type"`
+
+	ReplayComplete *ReplayCompletePayload // replay_complete
 
 	Markdown   *MarkdownPayload   // markdown_fragment
 	Thinking   *ThinkingPayload   // thinking
@@ -679,6 +685,12 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 			_ = json.Unmarshal(a.Metadata, &pp.TaskMetadata)
 		}
 		c.Progress = pp
+	case ContentReplayComplete:
+		var v ReplayCompletePayload
+		if err := json.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		c.ReplayComplete = &v
 	case ContentTurnStatus:
 		c.TurnStatus = &TurnStatusPayload{Status: a.Status}
 	case ContentProviderCompaction:
