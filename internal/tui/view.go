@@ -52,6 +52,7 @@ func chatMouseMode() tea.MouseMode {
 // are now declared on the returned view.
 func (m *Model) View() tea.View {
 	m.follow.area = image.Rectangle{}
+	m.exitCard.quit, m.exitCard.keep, m.exitCard.dismiss = image.Rectangle{}, image.Rectangle{}, image.Rectangle{}
 	if m.mode == ModeLogin && m.loginModel != nil {
 		return m.loginModel.View()
 	}
@@ -196,6 +197,8 @@ func (m *Model) chatView() string {
 	case m.mode == ModePermissions:
 		// Spans the terminal inside its margin, so it does not track the composer.
 		return m.chatOverlay(base, m.permissionsView(), m.styles.Permissions.HorizontalMargin)
+	case m.focus() == focusExitCard:
+		return m.exitCardOverlay(base)
 	case m.focus() == focusEditor:
 		return m.chatOverlay(base, m.editor.MenuView(), m.editor.ContentOffset())
 	default:

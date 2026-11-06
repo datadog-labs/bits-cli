@@ -94,6 +94,7 @@ type focus int
 
 const (
 	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
+	focusExitCard                 // the "Exit Bits?" confirmation card
 	focusPrompt                   // a tool approval or a tool's UI is shown (see prompt)
 	focusPicker                   // the /resume conversation picker
 	focusStatus                   // the local /status document
@@ -112,6 +113,9 @@ func (m *Model) focus() focus {
 	case ModePermissions:
 		return focusPermissions
 	case ModeChat, ModeTermInit:
+		if m.mode == ModeChat && m.exitCard.open {
+			return focusExitCard
+		}
 		if m.prompt() != nil {
 			return focusPrompt
 		}
@@ -147,7 +151,7 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // stopped, which covers every quit path.
 func (m *Model) reconcilePointerShape() tea.Cmd {
 	hand := false
-	if m.mode == ModeChat && !m.frame.tooSmall {
+	if m.mode == ModeChat && !m.frame.tooSmall && m.focus() != focusExitCard {
 		hand = m.list.Hovered() || m.follow.hover || (m.focus() == focusEditor && m.editor.ChipHovered())
 		if !hand && !m.frame.replaced && !m.editor.MenuOpen() {
 			if hit, ok := m.list.HoveredLink(); ok && m.clickableLink(hit) {
@@ -210,6 +214,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.frame.tooSmall && isUserInput(msg):
 			// Only a resize hint is visible, so input must not drive a hidden
 			// surface. System and engine messages still flow.
+		case m.mode == ModeChat && m.exitCard.open && isUserInput(msg):
+			cmd = m.updateExitCard(msg)
 		default:
 			_, cmd = m.dispatch(msg)
 		}
@@ -859,6 +865,10 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.editor.ChipsFocused() {
 			return m, m.editor.Update(msg)
 		}
+		if m.mode == ModeChat && !m.cancellable() && !m.op.loggingOut() {
+			m.openExitCard()
+			return m, nil
+		}
 		m.cancelOperation() // interrupt the running turn
 		return m, nil
 	case "enter":
@@ -985,11 +995,17 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	return m.begin(opTurn, run, err, cancel)
 }
 
+// cancellable reports whether an operation is running that cancelOperation
+// has not already stopped.
+func (m *Model) cancellable() bool {
+	return (m.op.run != 0 || m.op.kind == opFork) && m.op.stop != stopAll
+}
+
 // cancelOperation cancels a running turn, restore, or fork once and drops its tool
 // UIs; its approvals go when the operation closes. Logout is never
 // interrupted this way.
 func (m *Model) cancelOperation() {
-	if (m.op.run == 0 && m.op.kind != opFork) || m.op.stop == stopAll {
+	if !m.cancellable() {
 		return
 	}
 	m.op.stop = stopAll

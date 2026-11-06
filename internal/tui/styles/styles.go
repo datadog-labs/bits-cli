@@ -178,6 +178,17 @@ type Approval struct {
 	Disclaimer lipgloss.Style
 }
 
+// ExitCard styles the centered "Exit Bits?" confirmation card.
+type ExitCard struct {
+	Panel    Panel
+	Body     lipgloss.Style
+	Action   lipgloss.Style
+	Selected lipgloss.Style
+	// Text stands in for unstyled cells when the screen behind the card is
+	// faded.
+	Text color.Color
+}
+
 // Accordion styles the disclosure control that expands and collapses a
 // transcript block's detail rows.
 type Accordion struct {
@@ -245,6 +256,7 @@ type Theme struct {
 	Feedback    Feedback
 	Panel       Panel
 	Approval    Approval
+	ExitCard    ExitCard
 	Permissions Panel
 	Accordion   Accordion
 	Selector    Selector

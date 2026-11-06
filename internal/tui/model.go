@@ -262,6 +262,7 @@ type Model struct {
 	// auto-scroll state while the model supplies rendered pane frames.
 	selection selection
 	follow    followControl
+	exitCard  exitCard
 
 	// pendingAccordionToggle is the block a mouse-down landed on inside an
 	// accordion zone: any row an expandable block renders, collapsed preview
@@ -431,6 +432,7 @@ func (m *Model) setMode(mode Mode) {
 	if m.mode == ModeChat && mode != ModeChat {
 		m.selection.clear()
 		m.follow = followControl{}
+		m.closeExitCard()
 	}
 	m.mode = mode
 }
