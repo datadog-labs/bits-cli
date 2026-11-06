@@ -19,6 +19,7 @@ type quitConfirm struct {
 
 func (m *Model) clearDraftOrArmQuit() tea.Cmd {
 	if m.composerHasDraft() {
+		m.quitConfirm.armed = false
 		m.editor.Reset()
 		return m.stopCompletionSearches()
 	}

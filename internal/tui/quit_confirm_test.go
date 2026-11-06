@@ -148,3 +148,18 @@ func TestCtrlCHintShownWhenTerminalTooSmall(t *testing.T) {
 		t.Fatal("second ctrl+c in the resize view did not quit")
 	}
 }
+
+func TestCtrlCClearingPastedDraftDisarms(t *testing.T) {
+	m := newSizedChatModel(t)
+
+	_, _ = m.Update(ctrlC)
+	_, _ = m.Update(tea.PasteMsg{Content: "pasted"})
+	_, _ = m.Update(ctrlC)
+	if m.quitConfirm.armed {
+		t.Fatal("clearing a pasted draft left exit armed")
+	}
+	_, cmd := m.Update(ctrlC)
+	if isQuitCmd(cmd) {
+		t.Fatal("ctrl+c after clearing a pasted draft quit without a fresh confirmation")
+	}
+}
