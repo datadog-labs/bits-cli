@@ -139,6 +139,8 @@ func (e *Engine) installConversation(conversation *Conversation) {
 	e.transcript = conversation.transcript
 	e.usage = nil
 	e.continuation = conversation.continuation
+	e.recoveryResults = nil
+	e.recoveryCalls = nil
 	e.setTasks(conversation.tasks)
 }
 

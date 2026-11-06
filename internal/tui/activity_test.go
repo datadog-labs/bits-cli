@@ -274,6 +274,65 @@ func TestDisconnectedActivityBlocksAndSchedulesBoundedRetry(t *testing.T) {
 	}
 }
 
+func TestReadyReplayResumesPendingToolForLocallyOwnedTurn(t *testing.T) {
+	backend := &recoveredUIBackend{messages: make(chan any, 1)}
+	engine := agent.New(backend, agent.Config{ConversationID: "conversation-1"})
+	runs := 0
+	tools, err := agent.NewToolSet(agent.Tool{
+		Definition: assistant.ClientTool{Name: "calculate"},
+		Handler: func(context.Context, agent.ToolCall) (agent.ToolResult, error) {
+			runs++
+			return agent.ToolResult{Output: "42"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(engine, Config{Tools: tools})
+	m.activityConversationID = "conversation-1"
+	m.activityEvents = make(chan agent.ActivityUpdate)
+	m.activityGeneration = 1
+	m.activityState = activityConnecting
+	m.activityReplay = agent.NewActivityReplay()
+	m.localTurnOwned = true
+	m.localTurnRecoverable = true
+	m.localTurnInput = agent.TurnInput{Tools: tools}
+
+	call := assistant.ToolCallContent("call-1", "calculate", `{}`)
+	call.Type = assistant.ContentClientToolCall
+	observed := assistant.AssistantMessage("tool-call", call)
+	backend.interruptedCall = &observed
+	events, stop := engine.Subscribe()
+	defer stop()
+	run, err := engine.StartTurn(context.Background(), agent.TurnInput{Message: "calculate", Tools: tools})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event := range agent.Follow(events, run) {
+		if event.Terminal() && event.Kind != agent.EventError {
+			t.Fatalf("expected interrupted local turn: %+v", event)
+		}
+	}
+	_ = m.applyActivityUpdate(activityUpdateMsg{generation: 1, update: agent.ActivityUpdate{
+		Activity: assistant.ConversationActivity{
+			Kind:    assistant.ConversationActivityMessage,
+			Message: assistant.AssistantMessage("tool-call", call),
+		},
+	}})
+	_ = m.applyActivityUpdate(activityUpdateMsg{generation: 1, update: agent.ActivityUpdate{
+		Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityReady, Active: true},
+	}})
+	if m.op.run == 0 || m.chatPhase != chat.PhaseWaiting {
+		t.Fatalf("recovery did not start: events=%v phase=%v", m.op.run != 0, m.chatPhase)
+	}
+	drainConversationRemote(t, m)
+	message := <-backend.messages
+	responses, ok := message.([]assistant.ClientToolResponse)
+	if !ok || len(responses) != 1 || responses[0].ToolCallID != "call-1" || runs != 1 {
+		t.Fatalf("message=%T %+v runs=%d", message, message, runs)
+	}
+}
+
 func TestReadyReplayRendersContinuingLocallyOwnedTurn(t *testing.T) {
 	const conversationID = "conversation-1"
 	m := New(agent.New(&spyBackend{t: t}, agent.Config{ConversationID: conversationID}))

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -46,6 +47,78 @@ func TestActivitySnapshotRejectsStaleConversationAndActiveOperation(t *testing.T
 	collect(events)
 }
 
+func TestActivityRecoveryResendsExecutedToolWithoutRunningAgain(t *testing.T) {
+	call := clientCallMsg("write-1", "write", `{}`)
+	backend := &scriptBackend{convID: testConversationID, rounds: [][]assistant.Message{{call}, nil, {assistant.AssistantMessage("answer", assistant.TextContent("continued"))}}, failOn: 2, err: errors.New("response POST disconnected")}
+	e := New(backend, Config{ConversationID: testConversationID})
+	defer e.Close()
+	runs := 0
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "write"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { runs++; return ToolResult{Output: "written"}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := collect(turnEvents(e, context.Background(), TurnInput{Message: "write", Tools: tools}))
+	if first[len(first)-1].Kind != EventError || runs != 1 {
+		t.Fatalf("first=%+v runs=%d", first, runs)
+	}
+	if _, err := e.SyncConversationTranscript(testConversationID, NewActivityReplay([]assistant.Message{call}...), true); err != nil {
+		t.Fatal(err)
+	}
+	events, stop := e.Subscribe()
+	defer stop()
+	run, err := e.ResumeToolTurn(context.Background(), ToolRecoveryInput{ConversationID: testConversationID, Calls: []assistant.Content{call.Content}, Tools: tools})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var end Event
+	for ev := range Follow(events, run) {
+		end = ev
+	}
+	if end.Kind != EventDone || runs != 1 {
+		t.Fatalf("end=%+v runs=%d", end, runs)
+	}
+	original := backend.sent[1].([]assistant.ClientToolResponse)
+	retried := backend.sent[2].([]assistant.ClientToolResponse)
+	if len(retried) != 1 || retried[0].Metadata.Output != original[0].Metadata.Output {
+		t.Fatalf("retry=%+v original=%+v", retried, original)
+	}
+	if slices.ContainsFunc(e.State().Blocks, func(b Block) bool { return b.Role == assistant.RoleUser }) {
+		t.Fatal("recovery appended an extra user message")
+	}
+}
+
+func TestActivityRecoveryExecutesUnansweredCall(t *testing.T) {
+	call := clientCallMsg("call", "read", `{}`)
+	backend := &scriptBackend{convID: testConversationID, rounds: [][]assistant.Message{{call}}, err: errors.New("stream dropped after call")}
+	e := New(backend, Config{ConversationID: testConversationID})
+	defer e.Close()
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "42"}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := collect(turnEvents(e, context.Background(), TurnInput{Message: "read", Tools: tools}))
+	if first[len(first)-1].Kind != EventError {
+		t.Fatal("expected interrupted turn")
+	}
+	if _, err := e.SyncConversationTranscript(testConversationID, NewActivityReplay([]assistant.Message{call}...), true); err != nil {
+		t.Fatal(err)
+	}
+	events, stop := e.Subscribe()
+	defer stop()
+	run, err := e.ResumeToolTurn(context.Background(), ToolRecoveryInput{ConversationID: testConversationID, Calls: []assistant.Content{call.Content}, Tools: tools})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ev := range Follow(events, run) {
+		if ev.Kind == EventError {
+			t.Fatal(ev.Err)
+		}
+	}
+	if got := backend.sent[1].([]assistant.ClientToolResponse); len(got) != 1 || got[0].Metadata.Output != "42" {
+		t.Fatalf("response=%+v", got)
+	}
+}
+
 func TestActivityReplayKeepsForkBoundaryAndHistoricalTasks(t *testing.T) {
 	const target = "87654321-4321-4321-4321-210987654321"
 	messages := startTaskMsgs("start", testTaskID)
@@ -69,6 +142,9 @@ func TestActivityReplayKeepsForkBoundaryAndHistoricalTasks(t *testing.T) {
 	}
 	if state.Fork != before.Fork || len(state.Tasks) != 1 || state.Tasks[0].Status != TaskHistorical {
 		t.Fatalf("fork=%+v tasks=%+v", state.Fork, state.Tasks)
+	}
+	if calls := e.PendingActivityTools(replay); len(calls) != 0 {
+		t.Fatalf("copied calls became recoverable: %+v", calls)
 	}
 	if len(b.attached()) != 0 {
 		t.Fatal("subscribed to a copied task")
@@ -147,5 +223,29 @@ func TestEngineCloseStopsUnreadActivitySubscription(t *testing.T) {
 	updates := e.SubscribeActivity(context.Background(), testConversationID)
 	e.Close()
 	for range updates {
+	}
+}
+
+func TestActivityRecoveryRejectsRemoteOrChangedCalls(t *testing.T) {
+	call := clientCallMsg("local", "write", `{"path":"original"}`)
+	b := &scriptBackend{convID: testConversationID, rounds: [][]assistant.Message{{call}}, err: errors.New("disconnected")}
+	e := New(b, Config{ConversationID: testConversationID})
+	defer e.Close()
+	collect(turnEvents(e, context.Background(), TurnInput{Message: "write"}))
+	for _, foreign := range []assistant.Message{
+		clientCallMsg("remote", "write", `{}`),
+		clientCallMsg("local", "write", `{"path":"changed"}`),
+	} {
+		replay := NewActivityReplay(foreign)
+		if calls := e.PendingActivityTools(replay); len(calls) != 0 {
+			t.Fatal("subscription authorized a call not received on the local request")
+		}
+		_, err := e.ResumeToolTurn(context.Background(), ToolRecoveryInput{ConversationID: testConversationID, Calls: []assistant.Content{foreign.Content}})
+		if !errors.Is(err, ErrNoPendingTools) {
+			t.Fatalf("foreign recovery = %v", err)
+		}
+	}
+	if len(b.sent) != 1 {
+		t.Fatal("foreign recovery sent a request")
 	}
 }

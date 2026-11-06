@@ -210,6 +210,7 @@ type Model struct {
 	activityTurnActive     bool
 	localTurnOwned         bool
 	localTurnRecoverable   bool
+	localTurnInput         agent.TurnInput
 
 	// /logout stops active work before deleting credentials, then discards the
 	// authenticated engine.
