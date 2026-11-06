@@ -1133,3 +1133,21 @@ func textEntries(texts ...string) []HistoryEntry {
 	}
 	return entries
 }
+
+func TestPromptMarkerOnlyOnFirstRow(t *testing.T) {
+	theme := styles.Default(true)
+	e := New()
+	e.SetInputStyles(theme.Input)
+	e.SetWidth(24)
+	e.ta.SetValue("one two three four five six\nseven")
+
+	rows := strings.Split(ansi.Strip(e.ta.View()), "\n")
+	if len(rows) < 3 {
+		t.Fatalf("rendered %d rows, want at least 3:\n%s", len(rows), strings.Join(rows, "\n"))
+	}
+	for i, row := range rows {
+		if got, want := strings.HasPrefix(row, theme.Input.Prompt), i == 0; got != want {
+			t.Fatalf("row %d has marker = %v, want %v:\n%s", i, got, want, strings.Join(rows, "\n"))
+		}
+	}
+}

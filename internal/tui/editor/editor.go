@@ -96,7 +96,14 @@ type menu struct {
 func New() *Editor {
 	defaultStyles := styles.Default(true)
 	ta := textarea.New()
-	ta.Prompt = defaultStyles.Input.Prompt
+	marker := defaultStyles.Input.Prompt
+	blank := strings.Repeat(" ", defaultStyles.Input.PromptWidth())
+	ta.SetPromptFunc(defaultStyles.Input.PromptWidth(), func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return marker
+		}
+		return blank
+	})
 	ta.Placeholder = "Ask Bits…"
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
