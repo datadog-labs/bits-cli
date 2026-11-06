@@ -60,7 +60,8 @@ func clickAccordionZone(m *Model, x, y int) {
 func accordionRow(t *testing.T, m *Model) int {
 	t.Helper()
 	for i, line := range strings.Split(m.list.Document(), "\n") {
-		if plain := ansi.Strip(line); strings.ContainsAny(plain, "▼▶") {
+		if plain := ansi.Strip(line); strings.Contains(plain, " "+m.styles.Accordion.Expanded+" ") ||
+			strings.Contains(plain, " "+m.styles.Accordion.Collapsed+" ") {
 			return i
 		}
 	}
@@ -232,7 +233,8 @@ func scrollableAccordionTestModel(t *testing.T) *Model {
 func visibleAccordionRow(t *testing.T, m *Model) int {
 	t.Helper()
 	for i, line := range strings.Split(m.list.Render(), "\n") {
-		if plain := ansi.Strip(line); strings.ContainsAny(plain, "▼▶") {
+		if plain := ansi.Strip(line); strings.Contains(plain, " "+m.styles.Accordion.Expanded+" ") ||
+			strings.Contains(plain, " "+m.styles.Accordion.Collapsed+" ") {
 			return i
 		}
 	}

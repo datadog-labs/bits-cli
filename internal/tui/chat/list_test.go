@@ -177,7 +177,7 @@ func TestInspectionGroupingKeepsChildrenAndStopsAtText(t *testing.T) {
 		t.Fatalf("presentation item count = %d, want 6", got)
 	}
 	plain := ansi.Strip(list.Render())
-	for _, want := range []string{sty.StatusSpinner.Frame(0) + " Files · 3 calls · 1 running", "Read a.go", "Reading b.go", "between", "▶ Search ToolBlock in internal"} {
+	for _, want := range []string{sty.StatusSpinner.Frame(0) + " Files · 3 calls · 1 running", "Read a.go", "Reading b.go", "between", sty.Accordion.Collapsed + " Search ToolBlock in internal"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("group rendering missing %q:\n%s", want, plain)
 		}
@@ -197,7 +197,7 @@ func TestSingletonInspectionRendersAsTool(t *testing.T) {
 		hidden string
 	}{
 		{name: "running", status: agent.ToolRunning, want: "Listing .", hidden: "inspecting"},
-		{name: "settled", status: agent.ToolSuccess, want: "▶ List .", hidden: "inspected"},
+		{name: "settled", status: agent.ToolSuccess, want: "List .", hidden: "inspected"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			list := NewList()
@@ -207,8 +207,12 @@ func TestSingletonInspectionRendersAsTool(t *testing.T) {
 			list.SetItems([]agent.Block{inspectBlock("1", "list_files", `{"path":""}`, test.status, "listing")})
 
 			plain := ansi.Strip(list.Render())
-			if !strings.Contains(plain, test.want) {
-				t.Fatalf("singleton inspection rendering = %q, want %q", plain, test.want)
+			want := test.want
+			if test.status == agent.ToolSuccess {
+				want = list.sty.Accordion.Collapsed + " " + want
+			}
+			if !strings.Contains(plain, want) {
+				t.Fatalf("singleton inspection rendering = %q, want %q", plain, want)
 			}
 			if strings.Contains(plain, test.hidden) || strings.Contains(plain, "└") {
 				t.Fatalf("singleton inspection retained grouped rendering: %q", plain)
@@ -264,7 +268,7 @@ func TestReasoningExpandsToItsThinkingText(t *testing.T) {
 	})
 
 	compact := ansi.Strip(strings.Join(list.renderItem(0), "\n"))
-	if !strings.Contains(compact, "▶ Reasoning") || strings.Contains(compact, "idea") {
+	if !strings.Contains(compact, list.sty.Accordion.Collapsed+" Reasoning") || strings.Contains(compact, "idea") {
 		t.Fatalf("reasoning did not start collapsed on its header:\n%s", compact)
 	}
 	if _, ok := list.AccordionAt(0); !ok {
@@ -273,7 +277,7 @@ func TestReasoningExpandsToItsThinkingText(t *testing.T) {
 
 	list.ToggleDisclosure(list.view[0].id)
 	expanded := ansi.Strip(strings.Join(list.renderItem(0), "\n"))
-	for _, want := range []string{"▼ Reasoning", "first idea", "second idea"} {
+	for _, want := range []string{list.sty.Accordion.Expanded + " Reasoning", "first idea", "second idea"} {
 		if !strings.Contains(expanded, want) {
 			t.Fatalf("expanded reasoning missing %q:\n%s", want, expanded)
 		}
@@ -641,12 +645,12 @@ func TestEveryToolExpandsToItsOutput(t *testing.T) {
 			list.SetItems(list.items)
 			id := list.view[0].id
 
-			if got := ansi.Strip(strings.Join(list.renderItem(0), "\n")); !strings.Contains(got, "▶") || strings.Contains(got, "\n") {
+			if got := ansi.Strip(strings.Join(list.renderItem(0), "\n")); !strings.Contains(got, list.sty.Accordion.Collapsed) || strings.Contains(got, "\n") {
 				t.Fatalf("tool did not start collapsed on its header:\n%s", got)
 			}
 			list.ToggleDisclosure(id)
 			got := list.renderItem(0)
-			for _, want := range append([]string{"▼"}, strings.Split(tc.want, "\n")...) {
+			for _, want := range append([]string{list.sty.Accordion.Expanded}, strings.Split(tc.want, "\n")...) {
 				if !strings.Contains(ansi.Strip(strings.Join(got, "\n")), want) {
 					t.Fatalf("expanded view missing %q:\n%s", want, ansi.Strip(strings.Join(got, "\n")))
 				}
@@ -938,7 +942,8 @@ func TestHoverFollowsTheTailPinBeforeRender(t *testing.T) {
 	list.SetItems(blocks[:3])
 	chevronRow := func() int {
 		for i, line := range strings.Split(list.Render(), "\n") {
-			if strings.ContainsAny(ansi.Strip(line), "▼▶") {
+			if strings.Contains(ansi.Strip(line), " "+list.sty.Accordion.Collapsed+" ") ||
+				strings.Contains(ansi.Strip(line), " "+list.sty.Accordion.Expanded+" ") {
 				return i
 			}
 		}
