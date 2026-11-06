@@ -1160,6 +1160,7 @@ enum WebViewBridge {
       values: [
         ("FRAME_SRC", config.frameSrc),
         ("DEBUG", config.debug ? "true" : "false"),
+        ("HEADLESS", config.headless ? "true" : "false"),
         ("CSP_FRAME_SRC", config.cspFrameSrc),
         ("TRUSTED_DOMAIN_SUFFIXES", jsonArray(config.trustedDomainSuffixes)),
         ("CSP_NONCE", config.cspNonce),

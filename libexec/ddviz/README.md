@@ -14,6 +14,11 @@ libexec/ddviz/build.sh build/ddviz    # build/ddviz/{ddviz,assets/}
 
 Swift build state is kept in `build/.cache/ddviz/<arch>/`.
 
+Headless snapshots (`DDVIZ_HEADLESS=1`) tell the hosted app to hide its widget
+controls, use zero side insets, and render a transparent background over the
+terminal's inline image band. The interactive panel keeps its controls and
+16-pixel side insets.
+
 ## Origin
 
 Ported from [DataDog/datadog-client-plugin](https://github.com/DataDog/datadog-client-plugin)
