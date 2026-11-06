@@ -103,8 +103,12 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 	if err != nil {
 		return nil, err
 	}
+	widgets, err := newChatWidgets(opts, store)
+	if err != nil {
+		return nil, err
+	}
 	config := tui.Config{
-		Visualization: newChatWidgets(opts, store),
+		Visualization: widgets,
 		Tools:         toolSet,
 		ToolUI:        toolUI,
 		Version:       version.Build(),

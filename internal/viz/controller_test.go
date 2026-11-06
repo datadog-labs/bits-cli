@@ -17,6 +17,8 @@ func (c controllerClient) Render(ctx context.Context, request Request) RenderRes
 	return c.render(ctx, request)
 }
 
+func (c controllerClient) Interactive() bool { return true }
+
 func (c controllerClient) Open(ctx context.Context, request Request) Status {
 	return c.open(ctx, request)
 }

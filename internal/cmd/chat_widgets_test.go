@@ -21,3 +21,11 @@ func TestWidgetsFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestVizRenderer(t *testing.T) {
+	for value, want := range map[string]string{"": "auto", "AUTO": "auto", " snapshot ": "snapshot", "Off": "off", "none": ""} {
+		if got, err := vizRenderer(value); got != want || (err != nil) != (want == "") {
+			t.Errorf("%q: %q, %v; want %q", value, got, err, want)
+		}
+	}
+}
