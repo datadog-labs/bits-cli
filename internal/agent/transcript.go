@@ -24,8 +24,7 @@ type Transcript struct {
 	accumulator   *strings.Builder // pointer-owned: Builder must not be copied after use
 	userSeq       int              // monotonic id source for local user messages
 	// openStream tracks the currently streaming (incomplete) text/reasoning
-	openStream BlockID
-	hasOpen    bool
+	openStreams map[RunID]BlockID
 	// run is the run changing the transcript, stamped on what it changes; 0
 	// outside any run.
 	run RunID
@@ -44,6 +43,7 @@ type toolInputPreview struct {
 func NewTranscript() *Transcript {
 	return &Transcript{
 		index:         map[BlockID]int{},
+		openStreams:   make(map[RunID]BlockID),
 		inputPreviews: map[string]*toolInputPreview{},
 	}
 }
@@ -451,39 +451,37 @@ func (t *Transcript) appendPassthrough(msg assistant.Message, kind assistant.Con
 //
 // Assistant API does not forward thinking start/complete events.
 func (t *Transcript) closePrior(b Block) {
-	if t.hasOpen && t.openStream != b.ID {
-		priorID := t.openStream
-		if i, ok := t.index[priorID]; ok && !t.blocks[i].Complete {
-			t.blocks[i].Complete = true
-			t.revise(i)
-		}
-		t.releaseAccumulator(priorID)
-		t.hasOpen = false
+	if priorID, ok := t.openStreams[t.run]; ok && priorID != b.ID {
+		t.FinalizeRun(t.run)
 	}
 	if !b.Complete {
-		t.openStream = b.ID
-		t.hasOpen = true
+		t.openStreams[t.run] = b.ID
 	}
 }
 
-// FinalizeAll marks every still-open block complete; called at turn end as the
-// backstop for the last open block (typically the answer text, which has no
-// status glyph). Mid-turn blocks are already closed incrementally by
-// closePrior, so this normally only touches that trailing block. It reports
-// whether the transcript changed.
-func (t *Transcript) FinalizeAll() bool {
-	finalized := false
-	if t.hasOpen {
-		id := t.openStream
-		if i, ok := t.index[id]; ok && !t.blocks[i].Complete {
-			t.blocks[i].Complete = true
-			t.revise(i)
-			finalized = true
-		}
-		t.releaseAccumulator(id)
+// FinalizeRun closes only this run's trailing text or reasoning block.
+func (t *Transcript) FinalizeRun(run RunID) bool {
+	id, ok := t.openStreams[run]
+	if !ok {
+		return false
 	}
-	t.hasOpen = false
-	return finalized
+	delete(t.openStreams, run)
+	t.releaseAccumulator(id)
+	if i, ok := t.index[id]; ok && !t.blocks[i].Complete {
+		t.blocks[i].Complete = true
+		t.blocks[i].Rev++
+		return true
+	}
+	return false
+}
+
+// FinalizeAll closes every open text or reasoning block, such as after history load.
+func (t *Transcript) FinalizeAll() bool {
+	changed := false
+	for run := range t.openStreams {
+		changed = t.FinalizeRun(run) || changed
+	}
+	return changed
 }
 
 func (t *Transcript) accumulatorFor(id BlockID, existing string) *strings.Builder {

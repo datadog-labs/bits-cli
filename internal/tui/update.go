@@ -238,6 +238,9 @@ func isUserInput(msg tea.Msg) bool {
 }
 
 func (m *Model) quit() (tea.Model, tea.Cmd) {
+	for _, cancel := range m.backgroundRuns {
+		cancel()
+	}
 	// /resume may own a live list/history request that must be cancelled before
 	// the application exits.
 	if m.focus() == focusPicker {
@@ -316,9 +319,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = msg.ev.State
 				m.syncTranscript()
 			}
-		case m.op.run != 0 && msg.ev.Run == m.op.run:
-			// Every run is an operation this model started, so other runs'
-			// events are ignored.
+		case (m.op.run != 0 && msg.ev.Run == m.op.run) || m.backgroundRuns[msg.ev.Run] != nil:
 			cmd = m.applyRunEvent(msg.ev)
 		}
 		return m, tea.Batch(cmd, waitEvent(m.events))
@@ -651,16 +652,29 @@ func (m *Model) inComposer(msg tea.MouseMsg) (image.Point, bool) {
 	return p.Sub(m.frame.composer.Min), true
 }
 
-// applyRunEvent folds an event of the operation's run, and ends the operation
-// after the run's terminal event.
+// applyRunEvent folds an admitted foreground or background event. Only the
+// foreground run may release the operation and start its queued work.
 func (m *Model) applyRunEvent(ev agent.Event) tea.Cmd {
-	cmd := m.applyEvent(ev)
-	m.syncStatus()
+	foreground := ev.Run == m.op.run
+	cmd := m.applyEvent(ev, foreground)
 	if ev.Kind == agent.EventState {
 		m.syncTranscript()
 	}
-	if ev.Terminal() {
-		cmd = tea.Batch(cmd, m.endOperation())
+	m.syncStatus()
+	if foreground {
+		if ev.Kind == agent.EventBackground {
+			if m.backgroundRuns == nil {
+				m.backgroundRuns = make(map[agent.RunID]context.CancelFunc)
+			}
+			m.backgroundRuns[ev.Run] = m.op.cancel
+			m.op.cancel = nil
+			cmd = tea.Batch(cmd, m.endOperation())
+		} else if ev.Terminal() {
+			cmd = tea.Batch(cmd, m.endOperation())
+		}
+	} else if ev.Terminal() {
+		m.backgroundRuns[ev.Run]()
+		delete(m.backgroundRuns, ev.Run)
 	}
 	return cmd
 }
@@ -677,7 +691,12 @@ func (m *Model) endOperation() tea.Cmd {
 	if done.stop != stopAll && done.cancel != nil {
 		done.cancel() // release the turn/restore context
 	}
-	m.clearAsks()
+	if len(m.backgroundRuns) == 0 {
+		m.clearAsks()
+	} else {
+		m.reshow()
+	}
+	m.syncApprovals(m.state.PendingApprovals())
 
 	m.syncStatus()
 	switch {
@@ -865,11 +884,17 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.editor.ChipsFocused() {
 			return m, m.editor.Update(msg)
 		}
-		if m.mode == ModeChat && !m.cancellable() && !m.op.loggingOut() {
+		if m.mode == ModeChat && !m.cancellable() && !m.op.loggingOut() && len(m.backgroundRuns) == 0 {
 			m.openExitCard()
 			return m, nil
 		}
-		m.cancelOperation() // interrupt the running turn
+		if m.op.busy() {
+			m.cancelOperation()
+		} else {
+			for _, cancel := range m.backgroundRuns {
+				cancel()
+			}
+		}
 		return m, nil
 	case "enter":
 		return m.submit()
@@ -1014,7 +1039,7 @@ func (m *Model) cancelOperation() {
 	}
 	m.op.stop = stopAll
 	m.op.cancel()
-	m.dropToolUIs()
+	m.reshow()
 }
 
 // after queues next for when the running operation ends, and cancels the
@@ -1027,33 +1052,38 @@ func (m *Model) after(next followUp) {
 // applyEvent folds one engine event into the block snapshot / status. The switch
 // is exhaustive over agent.EventKind. It returns a command for side effects (an
 // error posts a local transcript message); nil otherwise.
-func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
+func (m *Model) applyEvent(ev agent.Event, foreground bool) tea.Cmd {
 	m.observeEvent(ev)
 	switch ev.Kind {
 	case agent.EventState:
-		if ev.State.Version > m.state.Version {
-			m.state = ev.State
+		if ev.State.Version <= m.state.Version {
+			return nil
 		}
-		m.syncApprovals(ev.State.PendingApprovals())
-		if ev.State.HasStreamingContent() {
+		m.state = ev.State
+		m.syncApprovals(m.state.PendingApprovals())
+		if foreground && ev.State.HasStreamingContent() {
 			m.chatPhase = chat.PhaseStreaming
 		}
 	case agent.EventUsage, agent.EventConversation:
 		// The state carries both; these report a backend send.
-	case agent.EventDone:
-		m.chatPhase = chat.PhaseIdle
+	case agent.EventDone, agent.EventBackground:
+		if foreground {
+			m.chatPhase = chat.PhaseIdle
+		}
 	case agent.EventCanceled:
 		// endOperation settles the chat phase and resyncs the transcript.
 	case agent.EventError:
 		// A failure during restore is benign: drop to idle with a notice so the
 		// user can still type. A failure mid-turn is the turn's error state.
-		if m.op.kind == opRestore {
+		if foreground && m.op.kind == opRestore {
 			m.chatPhase = chat.PhaseIdle
 			if ev.Err != nil {
 				return m.postNotice(noticeForError("restore failed", ev.Err))
 			}
 		} else {
-			m.chatPhase = chat.PhaseError
+			if foreground {
+				m.chatPhase = chat.PhaseError
+			}
 			if ev.Err != nil {
 				return m.postNotice(noticeForError("", ev.Err))
 			}

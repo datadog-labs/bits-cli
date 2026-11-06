@@ -38,7 +38,7 @@ func TestADroppedImageIsRetriedFromItsFileAndRecalledAsSent(t *testing.T) {
 	submit := func() {
 		_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 		for event := range agent.Follow(m.events, m.op.run) {
-			m.applyEvent(event)
+			m.applyEvent(event, true)
 		}
 		_ = m.endOperation()
 	}

@@ -199,7 +199,7 @@ endpoints with the `cli` profile. The server must support these endpoints and en
 run while keeping the conversation ID; history and conversation management use
 the existing APIs. Child answers stay out of the final root answer, and local
 tools from different agents can run concurrently, subject to the same permission
-checks and a limit of 16 executions.
+checks and a limit of 16 concurrent executions per run.
 
 Turns using `--reasoning`, explicit raw history, or payloads exceeding the bounded
 run API's limits use the regular Assistant endpoint, including its tool-result

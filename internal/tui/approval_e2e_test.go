@@ -541,11 +541,18 @@ func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 		_, _ = model.Update(runConversationCmd(t, waitEvent(model.events)))
 	}
 
+	canceled := false
+	cancel := model.op.cancel
+	model.op.cancel = func() { canceled = true; cancel() }
 	_, _ = model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
-	if model.op.stop != stopTools {
-		t.Fatalf("stop = %d, want the tool round stopped", model.op.stop)
+	if canceled {
+		t.Fatal("stopping tools canceled the turn context")
 	}
 	drainConversationRemote(t, model)
+	if backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError {
+		t.Fatalf("stopped tools did not continue the turn with an error result: %+v", backend.responses)
+	}
+
 	if waitingApprovals(model) > 0 || model.focus() != focusEditor {
 		t.Fatal("the approval outlived the stopped tool round")
 	}
