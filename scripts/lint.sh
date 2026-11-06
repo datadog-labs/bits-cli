@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# lint.sh - install a pinned golangci-lint, lint every module, check the
-# shell scripts with shellcheck, and check LICENSE-3rdparty.csv for drift.
+# lint.sh - install a pinned golangci-lint, lint Go code,
+# check shell scripts with shellcheck, and check LICENSE-3rdparty.csv for drift.
 #
 # The shell script checks are skipped when shellcheck is not installed,
 # unless --require-shellcheck is passed, as CI does.
@@ -14,21 +14,31 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 require_shellcheck=false
-case "${1:-}" in
-    "") ;;
-    --require-shellcheck) require_shellcheck=true ;;
-    *)
-        printf 'usage: %s [--require-shellcheck]\n' "$0" >&2
-        exit 1
-        ;;
-esac
+for option in "$@"; do
+    case "$option" in
+        --require-shellcheck) require_shellcheck=true ;;
+        *)
+            printf 'usage: %s [--require-shellcheck]\n' "$0" >&2
+            exit 1
+            ;;
+    esac
+done
 if [[ "$require_shellcheck" == true ]] && ! command -v shellcheck >/dev/null 2>&1; then
     printf 'lint: shellcheck is required but not installed.\n' >&2
     exit 1
 fi
 
+LINTER_BIN="$(go env GOPATH)/bin/golangci-lint"
+if [[ "$(go env GOOS)" == windows ]]; then
+    LINTER_BIN+=.exe
+fi
 if command -v golangci-lint >/dev/null 2>&1; then
     GOLANGCI_LINT="$(command -v golangci-lint)"
+elif [[ -x "$LINTER_BIN" ]]; then
+    GOLANGCI_LINT="$LINTER_BIN"
+fi
+
+if [[ -n "${GOLANGCI_LINT:-}" ]]; then
     GOLANGCI_LINT_INSTALLED_VERSION="$("$GOLANGCI_LINT" version --short 2>/dev/null || true)"
     if [[ -z "$GOLANGCI_LINT_INSTALLED_VERSION" ]]; then
         printf 'lint: could not determine the version of pre-installed golangci-lint at %s.\n' "$GOLANGCI_LINT" >&2
@@ -43,7 +53,7 @@ if command -v golangci-lint >/dev/null 2>&1; then
     fi
 else
     go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
-    GOLANGCI_LINT="$(go env GOPATH)/bin/golangci-lint"
+    GOLANGCI_LINT="$LINTER_BIN"
 fi
 
 cd "$SRC_DIR"
