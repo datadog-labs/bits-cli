@@ -40,6 +40,13 @@ func TestForkSwitchesInPlace(t *testing.T) {
 	m.setMode(ModeChat)
 	defer m.Detach()
 	list := m.list
+	m.activityEvents = make(chan agent.ActivityUpdate)
+	m.activityGeneration = 1
+	m.activityConversationID = forkSourceID
+	m.activityState = activityIdle
+	m.activitySnapshotReady = true
+	canceled := false
+	m.activityCancel = func() { canceled = true }
 	_, cmd := m.dispatchCommand("branch", "")
 	if cmd == nil || m.mode != ModeChat || !m.op.busy() {
 		t.Fatalf("fork did not start in place: cmd=%v mode=%v op=%+v notices=%+v", cmd != nil, m.mode, m.op, m.notices)
@@ -48,6 +55,13 @@ func TestForkSwitchesInPlace(t *testing.T) {
 	m.editor.Update(tea.PasteMsg{Content: "next draft"})
 	msg := cmd().(forkResultMsg)
 	m.applyForkResult(msg)
+	if !canceled || m.activityConversationID != resumeConversationID || m.activityGeneration == 1 {
+		t.Fatal("fork did not replace the foreground subscription")
+	}
+	_ = m.applyActivityUpdate(activityUpdateMsg{generation: 1, update: agent.ActivityUpdate{Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityStarted}}})
+	if m.activityState == activityRemoteTurn {
+		t.Fatal("old conversation activity affected the fork")
+	}
 	if m.state.ConversationID != resumeConversationID || m.list != list || m.op.busy() || m.editor.Value() != "next draft" {
 		t.Fatalf("fork state id=%s list=%v busy=%v draft=%q notices=%+v", m.state.ConversationID, m.list == list, m.op.busy(), m.editor.Value(), m.notices)
 	}

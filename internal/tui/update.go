@@ -242,6 +242,7 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.op.cancel != nil {
 		m.op.cancel()
 	}
+	m.stopConversationSubscription()
 	m.stopEntitySearch()
 	closeFileSearch := m.stopFileSearch()
 	if closeFileSearch == nil {
@@ -315,8 +316,22 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// events are ignored.
 			cmd = m.applyRunEvent(msg.ev)
 		}
+		if m.engine != nil && !m.op.loggingOut() && m.state.ConversationID != "" && m.state.ConversationID != m.activityConversationID && m.op.kind != opRestore {
+			cmd = tea.Batch(cmd, m.startConversationSubscription(m.state.ConversationID))
+		}
 		return m, tea.Batch(cmd, waitEvent(m.events))
 
+	case activityUpdateMsg:
+		cmd := m.applyActivityUpdate(msg)
+		m.syncStatus()
+		m.syncTranscript()
+		return m, cmd
+	case activityClosedMsg:
+		cmd := m.handleActivityClosed(msg)
+		m.syncStatus()
+		return m, cmd
+	case activityRetryMsg:
+		return m, m.retryConversationSubscription(msg)
 	case logoutResultMsg:
 		return m.applyLogoutResult(msg)
 
@@ -672,7 +687,9 @@ func (m *Model) endOperation() tea.Cmd {
 		done.cancel() // release the turn/restore context
 	}
 	m.clearAsks()
-
+	if m.localTurnOwned && (!m.localTurnRecoverable || done.stop != stopNone || done.then != thenNothing) {
+		m.clearLocalTurnOwnership()
+	}
 	m.syncStatus()
 	switch {
 	case done.then == thenLogout:
@@ -680,7 +697,10 @@ func (m *Model) endOperation() tea.Cmd {
 	case done.then == thenNewConversation:
 		return m.startNewConversation()
 	case done.kind == opRestore && done.stop != stopAll:
-		return m.resumePendingTools()
+		return tea.Batch(m.startConversationSubscription(m.state.ConversationID), m.resumePendingTools())
+	case done.kind == opTurn:
+		// Refresh the transcript after a local request completes or fails.
+		return m.startConversationSubscription(m.state.ConversationID)
 	}
 	return nil
 }
@@ -870,7 +890,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// so a stray press cannot drop a streaming turn: esc interrupts it and
 		// ctrl+c still quits.
 		if m.editor.Value() == "" && len(m.editor.Attachments()) == 0 {
-			if m.op.busy() {
+			if m.op.busy() || m.activityBlocksSubmission() {
 				return m, nil
 			}
 			return m.quit()
@@ -937,18 +957,27 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Unknown client skill: %s", escape.Inline(skillInvocation.Name)))
 		}
 	}
+	if m.activityBlocksSubmission() {
+		return m, nil
+	}
+	if !m.syncActivityTranscript() {
+		return m, nil
+	}
 	turnContext := contextFromAttachments(attachments)
 	m.editor.Reset()
 	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	run, err := m.engine.StartTurn(ctx, agent.TurnInput{
+	in := agent.TurnInput{
 		Message: text,
 		Skill:   skillInvocation,
 		Tools:   m.tools,
 		Context: turnContext,
 		OnDeny:  agent.DenyContinue,
-	})
+	}
+	m.localTurnOwned = true
+	m.localTurnRecoverable = false
+	run, err := m.engine.StartTurn(ctx, in)
 	m.chatPhase = chat.PhaseWaiting
 	failed := m.begin(opTurn, run, err, cancel)
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
@@ -979,6 +1008,8 @@ func (m *Model) resumePendingTools() tea.Cmd {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	m.localTurnOwned = true
+	m.localTurnRecoverable = false
 	run, err := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
 	m.chatPhase = chat.PhaseWaiting
 	m.list.ScrollToBottom()
@@ -1022,6 +1053,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 		// The state carries both; these report a backend send.
 	case agent.EventDone:
 		m.chatPhase = chat.PhaseIdle
+		m.clearLocalTurnOwnership()
 	case agent.EventCanceled:
 		// endOperation settles the chat phase and resyncs the transcript.
 	case agent.EventError:
@@ -1034,6 +1066,11 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 			}
 		} else {
 			m.chatPhase = chat.PhaseError
+			if m.localTurnOwned && ev.BackendFailure && m.state.ConversationID != "" {
+				m.localTurnRecoverable = true
+			} else {
+				m.clearLocalTurnOwnership()
+			}
 			if ev.Err != nil {
 				return m.postNotice(noticeForError("", ev.Err))
 			}

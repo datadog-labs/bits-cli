@@ -24,7 +24,7 @@ func (m *Model) startFork(argument string) tea.Cmd {
 	if argument != "" {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Usage: /fork (or /branch)"))
 	}
-	if m.op.busy() || m.conversationTask.running() || m.picker != nil {
+	if m.op.busy() || m.activityBlocksSubmission() || m.conversationTask.running() || m.picker != nil {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Wait for the current operation to finish before forking."))
 	}
 	sourceID := m.state.ConversationID
@@ -69,6 +69,8 @@ func (m *Model) applyForkResult(msg forkResultMsg) tea.Cmd {
 	if err == nil && m.op.stop != stopAll && m.op.then == thenNothing {
 		err = m.engine.InstallConversation(msg.ctx, msg.conversation)
 		if err == nil {
+			m.stopConversationSubscription()
+			m.clearLocalTurnOwnership()
 			m.state = m.engine.State()
 			m.conversationEpoch++
 			m.selection.clear()
@@ -80,6 +82,9 @@ func (m *Model) applyForkResult(msg forkResultMsg) tea.Cmd {
 	}
 	// Finish queued resets before publishing the outcome of the remote mutation.
 	cmd := m.endOperation()
+	if err == nil {
+		cmd = tea.Batch(cmd, m.startConversationSubscription(m.state.ConversationID))
+	}
 	if err != nil {
 		if msg.targetID != "" {
 			m.postNotice(conversationErrorNotice("could not load fork", err))

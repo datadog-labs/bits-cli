@@ -303,6 +303,10 @@ func (m *Model) promptPlaceholder() string {
 		return "Logging out…"
 	case m.op.then == thenNewConversation:
 		return "Starting a new conversation…"
+	case m.activityState == activityDisconnected:
+		return "Reconnecting…"
+	case m.activityState == activityRemoteTurn:
+		return "Working on it…"
 	}
 	if m.op.kind == opFork {
 		return "Forking…"
