@@ -13,6 +13,7 @@ import (
 // Request borrows Definition read-only, including its nested maps and slices.
 type Request struct {
 	Definition assistant.WidgetDefinition
+	Dark       bool // for snapshots, matching the terminal; ddviz follows macOS
 }
 
 func (r Request) valid() bool {
@@ -62,6 +63,8 @@ type Client interface {
 	Render(context.Context, Request) RenderResult
 	// Open succeeds when presentation is requested, without waiting for panel closure.
 	Open(context.Context, Request) Status
+	// Interactive reports, before any operation, whether Open can present a panel.
+	Interactive() bool
 	Close() error
 }
 

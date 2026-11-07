@@ -27,6 +27,7 @@ type widgetTestClient struct {
 	open           viz.Status // zero opens successfully
 	renders, opens int
 	closed         bool
+	remote         bool // previews only, like Datadog snapshots
 }
 
 func (c *widgetTestClient) Render(context.Context, viz.Request) viz.RenderResult {
@@ -41,6 +42,8 @@ func (c *widgetTestClient) Open(context.Context, viz.Request) viz.Status {
 	}
 	return c.open
 }
+
+func (c *widgetTestClient) Interactive() bool { return !c.remote }
 
 func (c *widgetTestClient) Close() error { c.closed = true; return nil }
 
@@ -110,6 +113,10 @@ func TestWidgetModes(t *testing.T) {
 		"link":   {action: chat.WidgetWeb},
 		"pane":   {client: &widgetTestClient{}, support: graphics.Unsupported, action: chat.WidgetOpen},
 		"inline": {client: &widgetTestClient{}, support: graphics.Supported, action: chat.WidgetOpen, box: true, renders: true, animate: true},
+		// Datadog snapshots: a preview with a web link, never the panel.
+		"remote link":          {client: &widgetTestClient{remote: true}, support: graphics.Unsupported, action: chat.WidgetWeb},
+		"remote inline":        {client: &widgetTestClient{remote: true}, support: graphics.Supported, action: chat.WidgetWeb, box: true, renders: true, animate: true},
+		"remote probe pending": {client: &widgetTestClient{remote: true}, support: graphics.Unknown, action: chat.WidgetWeb, box: true, renders: true, animate: true},
 		// The box is reserved before the terminal answers the probe.
 		"probe pending": {client: &widgetTestClient{}, support: graphics.Unknown, action: chat.WidgetOpen, box: true, renders: true, animate: true},
 	} {
@@ -348,4 +355,20 @@ func runWidgetTasks(m *Model, cmd tea.Cmd) string {
 	case tea.QuitMsg:
 	}
 	return raw.String()
+}
+
+// A Datadog snapshot draws inline and leaves the web sandbox as the action.
+func TestRemoteWidgetPreview(t *testing.T) {
+	result := rendered(t)
+	result.Image, _ = viz.NewSnapshot(result.Image.PNG(), viz.Availability{})
+	client := &widgetTestClient{remote: true, render: result}
+	m, _, render, _ := widgetModel(t, client, graphics.Supported, timeseries)
+	defer m.Detach()
+	if raw := runWidgetTasks(m, render); !strings.Contains(raw, "a=T") {
+		t.Fatal("snapshot not transmitted")
+	}
+	m.Update(struct{}{})
+	if actions := widgetActions(m); len(actions) != 1 || actions[0] != chat.WidgetWeb || client.opens != 0 {
+		t.Fatalf("actions = %v, opens = %d", actions, client.opens)
+	}
 }

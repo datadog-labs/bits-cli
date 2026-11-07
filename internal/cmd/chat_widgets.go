@@ -3,6 +3,9 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/datadog-labs/bits-cli/internal/auth"
@@ -12,25 +15,42 @@ import (
 )
 
 // chatWidgets is the chat's widget client: wiring, not a command. It
-// authenticates and connects to Datadog MCP on the first operation, on an
-// operation worker rather than the TUI event loop, with the chat's own
-// credentials. It owns both the viewer client and the MCP connection.
+// authenticates on the first operation, on an operation worker rather than the
+// TUI event loop, with the chat's own credentials. It then renders with ddviz
+// through Datadog MCP, or with Datadog snapshots where ddviz cannot run, and
+// owns that client and any MCP connection.
 type chatWidgets struct {
 	mu     sync.Mutex
 	opts   ChatOptions
 	store  auth.CredentialStore
+	local  bool // ddviz runs here; otherwise Datadog renders snapshots
 	client viz.Client
-	mcp    *datadogmcp.Client
+	mcp    *datadogmcp.Client // nil for snapshots
 	closed bool
 }
 
-// newChatWidgets returns nil where ddviz cannot run, so the TUI shows widgets
-// as links without trying.
-func newChatWidgets(opts ChatOptions, store auth.CredentialStore) viz.Client {
-	if !viz.Supported() {
-		return nil
+// EnvViz selects the widget renderer: auto (the default) prefers ddviz, which
+// also opens the interactive panel; snapshot always uses Datadog snapshots;
+// off shows widgets as links.
+const EnvViz = "BITS_VIZ"
+
+func newChatWidgets(opts ChatOptions, store auth.CredentialStore) (viz.Client, error) {
+	renderer, err := vizRenderer(os.Getenv(EnvViz))
+	if err != nil || renderer == "off" {
+		return nil, err
 	}
-	return &chatWidgets{opts: opts, store: store}
+	return &chatWidgets{opts: opts, store: store, local: renderer == "auto" && viz.Supported()}, nil
+}
+
+func vizRenderer(value string) (string, error) {
+	switch renderer := strings.ToLower(strings.TrimSpace(value)); renderer {
+	case "", "auto":
+		return "auto", nil
+	case "snapshot", "off":
+		return renderer, nil
+	default:
+		return "", fmt.Errorf("%s: unknown renderer %q; use auto, snapshot, or off", EnvViz, value)
+	}
 }
 
 // errUnsupportedSite marks a site that serves no visualizations: a reason to
@@ -49,6 +69,10 @@ func (c *chatWidgets) get(ctx context.Context) (viz.Client, error) {
 	api, err := NewAuthenticatedClient(ctx, clientOptions(c.opts, c.store))
 	if err != nil {
 		return nil, err
+	}
+	if !c.local {
+		c.client = viz.NewRemote(api)
+		return c.client, nil
 	}
 	mcp, err := datadogmcp.New(api)
 	if err != nil {
@@ -86,6 +110,8 @@ func (c *chatWidgets) Open(ctx context.Context, r viz.Request) viz.Status {
 	return client.Open(ctx, r)
 }
 
+func (c *chatWidgets) Interactive() bool { return c.local }
+
 func (c *chatWidgets) Close() error {
 	c.mu.Lock()
 	c.closed = true
@@ -93,6 +119,9 @@ func (c *chatWidgets) Close() error {
 	c.mu.Unlock()
 	if client == nil {
 		return nil
+	}
+	if mcp == nil {
+		return client.Close()
 	}
 	return errors.Join(client.Close(), mcp.Close())
 }
