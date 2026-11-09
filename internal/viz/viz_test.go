@@ -40,6 +40,6 @@ func TestSnapshotOwnsItsBytes(t *testing.T) {
 func request(t *testing.T) Request {
 	t.Helper()
 	return Request{
-		Definition: assistant.WidgetDefinition{"type": "timeseries"},
+		Definition: assistant.WidgetDefinition{Type: "timeseries"},
 	}
 }

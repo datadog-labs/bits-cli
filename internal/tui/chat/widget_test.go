@@ -83,7 +83,7 @@ func TestWidgetBadgeCentersOverImage(t *testing.T) {
 	}
 
 	// The backend puts the title inside the definition, not beside it.
-	def := assistant.WidgetDefinition{"type": "timeseries", "title": "CPU from the definition"}
+	def := assistant.WidgetDefinition{Type: "timeseries", Title: "CPU from the definition"}
 	inside := agent.Block{Kind: assistant.KindWidget, Widget: &assistant.WidgetPayload{WidgetDef: &def}}
 	if got := ansi.Strip(renderWidgetView(inside, WidgetView{}, renderContext{width: 80, sty: sty})); !strings.Contains(got, "CPU from the definition") {
 		t.Fatalf("title not read from the definition: %q", got)

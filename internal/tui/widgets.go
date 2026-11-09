@@ -18,9 +18,9 @@ import (
 type widgetMode uint8
 
 const (
-	widgetLink   widgetMode = iota // no ddviz: a link to the web sandbox
-	widgetPane                     // ddviz without terminal images: open the panel
-	widgetInline                   // ddviz and terminal images: an inline preview
+	widgetLink   widgetMode = iota // no renderer, or nothing it can show: a link to the web sandbox
+	widgetPane                     // a panel without terminal images: open the panel
+	widgetInline                   // terminal images: an inline preview, and the panel if any
 )
 
 const (
@@ -37,6 +37,8 @@ const (
 func (m *Model) widgetMode() widgetMode {
 	switch {
 	case m.widgets.client == nil || m.widgets.unavailable:
+		return widgetLink
+	case m.graphics == graphics.Unsupported && !m.widgets.client.Interactive():
 		return widgetLink
 	case m.graphics == graphics.Unsupported:
 		return widgetPane
@@ -55,7 +57,7 @@ func (m *Model) syncWidgets() tea.Cmd {
 		// Nobody sees the transcript: start nothing, keep what exists.
 		return nil
 	}
-	return m.widgets.sync(m.list, m.widgetMode(), m.conversationEpoch)
+	return m.widgets.sync(m.list, m.widgetMode(), m.styles.IsDark, m.conversationEpoch)
 }
 
 // quitWith frees the images this session stored in the terminal, then runs
@@ -77,9 +79,9 @@ func (m *Model) quitWith(quit tea.Cmd) tea.Cmd {
 // widgets owns widget operations and stored images for the transcript.
 type widgets struct {
 	images      graphics.Queue
-	client      viz.Client // nil when ddviz is not supported here
+	client      viz.Client // nil: links only
 	origin      string     // web app origin for sandbox links, "" if unknown
-	unavailable bool       // ddviz turned out not to run; links for the session
+	unavailable bool       // the renderer turned out not to run; links for the session
 	closed      bool       // quitting: nothing starts again
 	entries     map[agent.BlockID]*widgetEntry
 	epoch       uint64
@@ -99,7 +101,7 @@ type widgetEntry struct {
 // sync reconciles every widget block with its operations and view, so heights
 // never change on scroll and finished work stops its spinner. Only visible
 // blocks start renders and send pixels.
-func (w *widgets) sync(list *chat.List, mode widgetMode, epoch uint64) tea.Cmd {
+func (w *widgets) sync(list *chat.List, mode widgetMode, dark bool, epoch uint64) tea.Cmd {
 	if w.closed {
 		return nil
 	}
@@ -122,7 +124,7 @@ func (w *widgets) sync(list *chat.List, mode widgetMode, epoch uint64) tea.Cmd {
 			cmds = append(cmds, cmd)
 			var view chat.WidgetView // a legacy tile: its title, nothing to act on
 			if e != nil {
-				view, cmd = w.view(e, mode, visible[block.ID], list.Width())
+				view, cmd = w.view(e, mode, dark, visible[block.ID], list.Width())
 				cmds = append(cmds, cmd)
 			}
 			resized = list.SetWidgetView(block.ID, view) || resized
@@ -139,7 +141,7 @@ func (w *widgets) sync(list *chat.List, mode widgetMode, epoch uint64) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (w *widgets) view(e *widgetEntry, mode widgetMode, visible bool, width int) (chat.WidgetView, tea.Cmd) {
+func (w *widgets) view(e *widgetEntry, mode widgetMode, dark bool, visible bool, width int) (chat.WidgetView, tea.Cmd) {
 	var view chat.WidgetView
 	fallback := chat.WidgetNone
 	if w.origin != "" {
@@ -150,7 +152,8 @@ func (w *widgets) view(e *widgetEntry, mode widgetMode, visible bool, width int)
 		return view, nil
 	}
 	if e.controller == nil {
-		e.controller = viz.NewController(w.client, viz.Request{Definition: e.def})
+		// The theme is fixed per revision; the terminal reports it at startup.
+		e.controller = viz.NewController(w.client, viz.Request{Definition: e.def, Dark: dark})
 	}
 	var cmd tea.Cmd
 	state := e.controller.State()
@@ -165,7 +168,7 @@ func (w *widgets) view(e *widgetEntry, mode widgetMode, visible bool, width int)
 		view.Loading = "Opening"
 	case retry:
 		view.Action = chat.WidgetRetry
-	case state.CanOpen():
+	case state.CanOpen() && w.client.Interactive(): // a snapshot-only client never opens
 		view.Action = chat.WidgetOpen
 	default:
 		view.Action = fallback

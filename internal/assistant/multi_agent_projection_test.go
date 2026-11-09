@@ -55,7 +55,7 @@ func TestMultiAgentProjectionPreservesTranscriptPayloads(t *testing.T) {
 			t.Errorf("local result changed: %+v", block.Tool)
 		}
 		if block.Widget != nil {
-			widgets = append(widgets, fmt.Sprint((*block.Widget.WidgetDef)["title"]))
+			widgets = append(widgets, block.Widget.WidgetDef.Title)
 		}
 		if block.Dashboard != nil {
 			dashboards = append(dashboards, block.Dashboard.Title)

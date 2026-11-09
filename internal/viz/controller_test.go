@@ -2,6 +2,7 @@ package viz
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -17,6 +18,8 @@ func (c controllerClient) Render(ctx context.Context, request Request) RenderRes
 	return c.render(ctx, request)
 }
 
+func (c controllerClient) Interactive() bool { return true }
+
 func (c controllerClient) Open(ctx context.Context, request Request) Status {
 	return c.open(ctx, request)
 }
@@ -24,7 +27,7 @@ func (c controllerClient) Open(ctx context.Context, request Request) Status {
 func (controllerClient) Close() error { return nil }
 
 func TestControllerIndependentOperationsAndRetry(t *testing.T) {
-	definition := assistant.WidgetDefinition{"type": "timeseries", "reflect": map[string]any{"live_span": "1h"}}
+	definition := assistant.WidgetDefinition{Type: "timeseries", Fields: map[string]json.RawMessage{"reflect": json.RawMessage(`{"live_span":"1h"}`)}}
 	var requests []Request
 	attempts := 0
 	client := controllerClient{
