@@ -17,7 +17,6 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/browser"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	conversationview "github.com/datadog-labs/bits-cli/internal/tui/conversations"
-	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 	"github.com/datadog-labs/bits-cli/internal/viz"
@@ -152,7 +151,7 @@ func (m *Model) reconcileFocus() tea.Cmd {
 func (m *Model) reconcilePointerShape() tea.Cmd {
 	hand := false
 	if m.mode == ModeChat && !m.frame.tooSmall && m.focus() != focusExitCard {
-		hand = m.list.Hovered() || m.follow.hover || (m.focus() == focusEditor && m.editor.ChipHovered())
+		hand = m.list.Hovered() || m.follow.hover || m.editor.QueueHovered() || (m.focus() == focusEditor && m.editor.ChipHovered())
 		if !hand && !m.frame.replaced && !m.editor.MenuOpen() {
 			if hit, ok := m.list.HoveredLink(); ok && m.clickableLink(hit) {
 				hand = true
@@ -619,10 +618,33 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		} else {
 			m.editor.SetPointer(-1, -1)
 		}
+		if p := pointAt(msg); p.In(m.frame.queue) {
+			p = p.Sub(m.frame.queue.Min)
+			m.editor.SetQueuePointer(p.X, p.Y)
+		} else {
+			m.editor.SetQueuePointer(-1, -1)
+		}
 		m.moveLinkClick(msg)
 		return m.extendSelection(msg)
 	case tea.MouseReleaseMsg:
 		return m.finishLinkClick(msg)
+	}
+	if m.frame.at(pointAt(msg)) == regionQueue {
+		p := pointAt(msg).Sub(m.frame.queue.Min)
+		switch msg := msg.(type) {
+		case tea.MouseClickMsg:
+			if msg.Button == tea.MouseLeft && m.editor.ClickQueue(p.X, p.Y) {
+				return nil
+			}
+		case tea.MouseWheelMsg:
+			if msg.Button == tea.MouseWheelUp {
+				m.editor.ScrollQueue(-1)
+			}
+			if msg.Button == tea.MouseWheelDown {
+				m.editor.ScrollQueue(1)
+			}
+			return nil
+		}
 	}
 	if m.frame.at(pointAt(msg)) == regionPrompt {
 		if cmd, used := m.updatePrompt(m.frame.inPrompt(msg)); used {
@@ -814,6 +836,10 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.syncCompletionSearches())
 	}
 
+	if m.editor.ControlKey(msg.String()) {
+		return m, nil
+	}
+
 	// The offers are only visible with an empty composer, so these keys have no
 	// competing meaning: submit() already no-ops on empty input.
 	if m.showUpgrade() {
@@ -847,9 +873,6 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
-		if m.editor.ChipsFocused() {
-			return m, m.editor.Update(msg)
-		}
 		if m.mode == ModeChat && !m.cancellable() && !m.op.loggingOut() {
 			m.openExitCard()
 			return m, nil
@@ -903,67 +926,6 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
 	return cmd
 }
 
-// submit routes slash commands through their active-operation policy, or starts a
-// turn for ordinary input unless a turn is already running or history is still
-// loading. The user block is added by the engine (it owns the transcript), so
-// it arrives as the turn's first event.
-func (m *Model) submit() (tea.Model, tea.Cmd) {
-	raw := m.editor.Value()
-	text := strings.TrimSpace(raw)
-	attachments := m.editor.Attachments()
-	if text == "" && len(attachments) == 0 {
-		return m, nil
-	}
-	if len(attachments) == 0 && isExitWord(raw) {
-		m.openExitCard()
-		return m, nil
-	}
-	if text == "" {
-		text = " "
-	}
-
-	var skillInvocation *agent.SkillInvocation
-	if name, arguments, ok := parseClientSkillInvocation(raw); ok {
-		skillInvocation = &agent.SkillInvocation{Name: name, Arguments: arguments}
-		text = raw
-	} else if name, argument, ok := parseCommand(raw); ok {
-		m.editor.Reset()
-		m.stopEntitySearch()
-		return m.dispatchCommand(name, argument)
-	}
-	if m.op.busy() {
-		return m, nil
-	}
-	// Once the menu has loaded, an unknown name keeps the draft for correction.
-	// Otherwise the engine resolves the name and fails the turn if it is unknown.
-	if skillInvocation != nil && m.skillMenu.skills != nil {
-		if _, known := m.skillMenu.skills[skillInvocation.Name]; !known {
-			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Unknown client skill: %s", escape.Inline(skillInvocation.Name)))
-		}
-	}
-	turnContext := contextFromAttachments(attachments)
-	m.editor.Reset()
-	closeFileSearch := m.stopCompletionSearches()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	if !m.begin(opTurn, cancel) {
-		return m, closeFileSearch
-	}
-	run, err := m.engine.StartTurn(ctx, agent.TurnInput{
-		Message: text,
-		Skill:   skillInvocation,
-		Tools:   m.tools,
-		Context: turnContext,
-		OnDeny:  agent.DenyContinue,
-	})
-	m.chatPhase = chat.PhaseWaiting
-	failed := m.watchRun(run, err)
-	// Submitting always jumps to the tail and re-engages auto-follow, so the
-	// user sees their message and the incoming reply even if they had scrolled up.
-	m.list.ScrollToBottom()
-	return m, tea.Batch(closeFileSearch, failed)
-}
-
 func (m *Model) resumePendingTools() tea.Cmd {
 	if m.engine == nil || m.op.busy() {
 		return nil
@@ -1001,6 +963,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	case agent.EventUsage, agent.EventConversation:
 		// The state carries both; these report a backend send.
 	case agent.EventDone:
+		m.op.completed = true
 		m.chatPhase = chat.PhaseIdle
 	case agent.EventCanceled:
 		// endOperation settles the chat phase and resyncs the transcript.
@@ -1061,8 +1024,14 @@ func (m *Model) relayout() {
 		return
 	}
 	m.reshow()
+	m.syncQueue()
 	m.editor.SetPlaceholder(m.promptPlaceholder())
+	previousQueue := m.frame.queue
 	m.frame = m.layout()
+	if m.frame.queue != previousQueue {
+		m.editor.SetQueuePointer(-1, -1)
+		m.frame = m.layout()
+	}
 	m.editor.SetMenuHeight(m.frame.inputTop())
 	m.list.SetHeight(m.frame.transcript.Dy())
 	m.list.SetHeader(m.headerView())

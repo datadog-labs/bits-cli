@@ -305,6 +305,12 @@ func newShell() *Model {
 		chatMouseMode:     chatMouseMode(),
 	}
 	m.editor.SetHistorySource(func() []editor.HistoryEntry { return historyEntries(m.state.UserPrompts()) })
+	m.editor.SetQueueRemover(func(id uint64) {
+		if m.engine != nil {
+			_ = m.engine.Unqueue(agent.QueueID(id)) // ErrStale: already sent
+			m.state = m.engine.State()              // the event that publishes it follows
+		}
+	})
 	m.editor.SetCommands(commandCompletionSpecs())
 	m.applyStyles(m.styles)
 	return m

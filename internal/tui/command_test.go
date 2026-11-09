@@ -69,8 +69,7 @@ func TestEnterOnLeadingCommandCompletionDispatchesImmediately(t *testing.T) {
 }
 
 func TestSlashCompletionDoesNotOpenMidPrompt(t *testing.T) {
-	m := newModelWithSpy(t)
-	m.op = operation{kind: opTurn, run: 1}
+	m, _ := newModelInTurn(t, nil)
 	m.chatPhase = chat.PhaseStreaming
 	m.editor.Update(tea.PasteMsg{Content: "explain /new"})
 	if m.editor.MenuOpen() {
@@ -81,8 +80,8 @@ func TestSlashCompletionDoesNotOpenMidPrompt(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("mid-prompt slash should remain ordinary input while a turn is active")
 	}
-	if got := m.editor.Value(); got != "explain /new" {
-		t.Fatalf("editor value = %q, want ordinary input to remain pending", got)
+	if q := m.state.Queued; len(q) != 1 || q[0].Message != "explain /new" || m.editor.Value() != "" {
+		t.Fatalf("ordinary slash text was not queued: %+v", q)
 	}
 }
 
@@ -572,18 +571,17 @@ func TestSubmitQuitWhenIdleQuitsWithoutBackendCall(t *testing.T) {
 	}
 }
 
-func TestSubmitOrdinaryInputDuringActiveTurnRemainsPending(t *testing.T) {
-	m := newModelWithSpy(t)
-	m.op = operation{kind: opTurn, run: 1}
+func TestSubmitOrdinaryInputDuringActiveTurnQueues(t *testing.T) {
+	m, _ := newModelInTurn(t, nil)
 	m.chatPhase = chat.PhaseStreaming
-	m.editor.Update(tea.PasteMsg{Content: "send this later"})
+	setConversationInput(m, "send this later")
 
 	_, cmd := m.submit()
 	if cmd != nil {
 		t.Fatal("ordinary input during an active turn returned a command")
 	}
-	if got := m.editor.Value(); got != "send this later" {
-		t.Fatalf("editor value = %q, want busy input to remain pending", got)
+	if q := m.state.Queued; len(q) != 1 || q[0].Message != "send this later" || m.editor.Value() != "" {
+		t.Fatalf("queued prompt = %+v, draft = %q", q, m.editor.Value())
 	}
 }
 

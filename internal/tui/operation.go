@@ -19,6 +19,9 @@ type operation struct {
 	cancel context.CancelFunc
 	stop   stopLevel
 	then   followUp
+	// completed means the shown turn ended successfully. Prompts queued after
+	// its end was emitted, before it was read, are then sent here.
+	completed bool
 }
 
 type opKind uint8
@@ -190,6 +193,8 @@ func (m *Model) endOperation() tea.Cmd {
 		return m.startNewConversation()
 	case done.kind == opRestore && done.stop != stopAll:
 		return m.resumePendingTools()
+	case done.kind == opTurn && done.completed && done.stop == stopNone && len(m.state.Queued) > 0:
+		return m.startTurn(m.engine.SendQueued, agent.TurnInput{})
 	}
 	return nil
 }
