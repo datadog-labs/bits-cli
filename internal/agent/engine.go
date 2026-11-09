@@ -88,6 +88,8 @@ type State struct {
 	// Tasks are the background tasks the conversation started, in start
 	// order. Their blocks are apart from Blocks.
 	Tasks []Task
+	// Queued are the prompts waiting to be sent, in submission order.
+	Queued []QueuedPrompt
 }
 
 // HasStreamingContent reports whether an assistant text or reasoning block is
@@ -273,12 +275,17 @@ type Engine struct {
 	// delivery is the context the current conversation is known to carry.
 	delivery contextDelivery
 	gate     permissionGate
-	busy     bool   // an operation holds the engine
-	turn     *turn  // the turn whose exchange is running, if any
-	lastRun  RunID  // the most recently claimed run
-	version  uint64 // the last published state version
-	subs     map[*outbox]struct{}
-	usage    *assistant.Usage // the conversation's latest, if a turn reported it
+	busy     bool  // an operation holds the engine
+	turn     *turn // the turn whose exchange is running, if any
+	lastRun  RunID // the most recently claimed run
+	turnRun  RunID // the claimed run if it is a turn, which sends the queue
+	// queue holds the conversation's prompts waiting for a turn to send
+	// them: the running turn once it completes, or else SendQueued.
+	queue      []QueuedPrompt
+	lastQueued QueueID
+	version    uint64 // the last published state version
+	subs       map[*outbox]struct{}
+	usage      *assistant.Usage // the conversation's latest, if a turn reported it
 	// tasks are the conversation's background tasks. Their observers are
 	// workers too, stopped when the conversation changes.
 	tasks []*task
@@ -476,6 +483,7 @@ func (e *Engine) work(ctx context.Context, fn func(context.Context)) {
 // release ends the operation, after its terminal event.
 func (e *Engine) release() {
 	e.busy = false
+	e.turnRun = 0
 	e.transcript.run = 0
 }
 
@@ -572,9 +580,9 @@ func (e *Engine) StartTurn(ctx context.Context, in TurnInput) (RunID, error) {
 // startTurn claims the engine for a user turn or, with resume, for answering
 // the restored calls.
 func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) (RunID, error) {
-	var resumed []ToolCall
 	var run RunID
 	err := e.idle(func() (err error) {
+		var resumed []ToolCall
 		if resume {
 			if !e.canResumeTools(in.Tools) {
 				return ErrNoPendingTools
@@ -583,13 +591,21 @@ func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) (RunI
 				resumed = append(resumed, toolCallOf(content))
 			}
 		}
-		e.continuation = nil
-		run, err = e.claim()
+		run, err = e.launch(ctx, in, resumed)
 		return err
 	})
+	return run, err
+}
+
+// launch claims the idle engine for a turn and starts it. A new turn
+// abandons the calls left to resume.
+func (e *Engine) launch(ctx context.Context, in TurnInput, resumed []ToolCall) (RunID, error) {
+	e.continuation = nil
+	run, err := e.claim()
 	if err != nil {
 		return 0, err
 	}
+	e.turnRun = run
 	e.work(ctx, func(ctx context.Context) { e.run(ctx, run, in, resumed) })
 	return run, nil
 }
@@ -638,10 +654,25 @@ func (e *Engine) command(fn func(*turn) error) error {
 	return err
 }
 
-// run prepares a claimed turn off the actor, where it may block on files and
-// the environment, then drives it on the actor until it ends.
+// run drives a claimed turn, then one more for each request the queue sends,
+// until a turn ends without sending it.
 func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []ToolCall) {
-	t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, run: run}
+	round := 0
+	for {
+		t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, run: run, base: round, round: round}
+		next, more := e.segment(ctx, t, in, resumed)
+		if !more {
+			return
+		}
+		in, resumed, round = next, nil, t.round
+	}
+}
+
+// segment prepares one turn off the actor, where it may block on files and
+// the environment, then drives it on the actor until it ends. A turn that
+// completes returns the queue's next request instead of ending the run.
+func (e *Engine) segment(ctx context.Context, t *turn, in TurnInput, resumed []ToolCall) (next TurnInput, more bool) {
+	run := t.run
 	sentContext, imageNotices, err := prepareImageContext(ctx, in.Context)
 	if err != nil {
 		// Keep file references in the failed prompt so history can retry them.
@@ -689,15 +720,23 @@ func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []Too
 			t.ex = e.newExchange(request, resumed)
 			err = t.drive()
 		}
-		t.finish(err)
+		end := t.conclude(err)
+		if end.Kind == EventDone && !t.stopRequested {
+			if next, more = e.dequeue(in); more {
+				return
+			}
+		}
+		e.emit(run, end)
+		e.release()
 	})
+	return next, more
 }
 
-// finish publishes how the turn ended, its terminal event last, and releases
-// the engine. A turn that failed before its exchange started reports the error
-// alone. A cancelled turn settles every open block, publishes the final
-// snapshot, and ends with EventCanceled unless it had already failed.
-func (t *turn) finish(err error) {
+// conclude publishes the turn's final state and returns its terminal event.
+// A turn that failed before its exchange started reports the error alone. A
+// cancelled turn settles every open block, publishes the final snapshot, and
+// ends with EventCanceled unless it had already failed.
+func (t *turn) conclude(err error) Event {
 	e := t.e
 	// The turn's last state shows the tasks it started.
 	e.discoverTasks()
@@ -729,8 +768,7 @@ func (t *turn) finish(err error) {
 		e.settleUnfinishedTools(t.tools, t.run, true)
 		t.publish()
 	}
-	e.emit(t.run, end)
-	e.release()
+	return end
 }
 
 // newExchange uses a duplex stream when the backend supports this user request;
@@ -778,7 +816,7 @@ func (e *Engine) publish() {
 func (e *Engine) state() State {
 	return State{
 		Version: e.version, ConversationID: e.opts.ConversationID, Blocks: slices.Clone(e.transcript.Blocks()),
-		Usage: e.usage, Tasks: e.taskViews(), Fork: e.fork,
+		Usage: e.usage, Tasks: e.taskViews(), Fork: e.fork, Queued: slices.Clone(e.queue),
 	}
 }
 
@@ -826,6 +864,7 @@ func (e *Engine) NewConversation() error {
 		e.transcript = NewTranscript()
 		e.usage = nil
 		e.continuation = nil
+		e.queue = nil
 		clear(e.gate.grants)
 		e.setTasks(nil)
 		e.publish()
@@ -957,6 +996,7 @@ type turn struct {
 	onDeny       DenyPolicy
 	run          RunID
 	round        int
+	base         int           // rounds the run's earlier turns used
 	calls        []*clientCall // the current round's calls, in wire order
 	byID         map[string]*clientCall
 	results      chan toolDone
@@ -1087,11 +1127,11 @@ func (t *turn) apply(event exchangeEvent) error {
 	if event.err != nil {
 		return event.err
 	}
-	if event.round > t.round {
+	if round := t.base + event.round; round > t.round {
 		// A new round starts afresh: its calls may reuse the IDs of answered
 		// ones, and an earlier denial no longer excuses a handler failure. A
 		// stop spans the rounds that drain it.
-		t.round = event.round
+		t.round = round
 		t.calls = slices.DeleteFunc(t.calls, resolved)
 		maps.DeleteFunc(t.byID, func(_ string, c *clientCall) bool { return resolved(c) })
 		t.denied = false
