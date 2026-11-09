@@ -39,12 +39,12 @@ func (b *blockingSnapshots) RenderSnapshot(ctx context.Context, _ assistant.Snap
 	return nil, ctx.Err()
 }
 
-var timeseriesDef = assistant.WidgetDefinition{"type": "timeseries"}
+var timeseriesDef = assistant.WidgetDefinition{Type: "timeseries"}
 
 func TestRemoteRender(t *testing.T) {
 	api := &fakeSnapshots{}
 	c := NewRemote(api)
-	def := assistant.WidgetDefinition{"type": "timeseries", "time": map[string]any{"from": 1000.0, "to": 5000.0}}
+	def := assistant.WidgetDefinition{Type: "timeseries", Time: &assistant.WidgetTime{Type: "fixed", From: 1000, To: 5000}}
 	if r := c.Render(context.Background(), Request{Definition: def, Dark: true}); r.Status.Phase != Succeeded || r.Image.Interactive().Available {
 		t.Fatalf("result = %+v", r)
 	}

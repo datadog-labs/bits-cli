@@ -10,15 +10,14 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
-// Request borrows Definition read-only, including its nested maps and slices.
+// Request borrows Definition read-only, including its raw widget fields.
 type Request struct {
 	Definition assistant.WidgetDefinition
 	Dark       bool // for snapshots, matching the terminal; ddviz follows macOS
 }
 
 func (r Request) valid() bool {
-	kind, _ := r.Definition["type"].(string)
-	return kind != ""
+	return r.Definition.Valid()
 }
 
 // Phase includes transient controller states and terminal client outcomes.

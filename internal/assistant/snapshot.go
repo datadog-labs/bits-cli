@@ -52,7 +52,7 @@ type snapshotRequestAttributes struct {
 
 type snapshotConfig struct {
 	Theme    string `json:"theme"`
-	TZOffset int    `json:"timezone_offset_minutes"` // positive west of UTC, as in JavaScript
+	TZOffset *int   `json:"timezone_offset_minutes,omitempty"` // positive west of UTC, as in JavaScript
 }
 
 // RenderSnapshot renders a widget with Datadog's snapshot service and returns
@@ -91,6 +91,13 @@ func (c *Client) createSnapshot(ctx context.Context, o SnapshotOptions) (string,
 		theme = "dark"
 	}
 	_, offset := o.End.Zone()
+	// The snapshot API currently rejects offsets below -12 hours, including
+	// valid UTC+13 and UTC+14 zones. Omit those offsets so rendering can proceed.
+	tzOffset := -offset / 60
+	var acceptedOffset *int
+	if tzOffset >= -12*60 && tzOffset <= 14*60 {
+		acceptedOffset = &tzOffset
+	}
 	req := snapshotRequest{Data: snapshotRequestData{
 		Type: "create_snapshot",
 		Attributes: snapshotRequestAttributes{
@@ -101,7 +108,7 @@ func (c *Client) createSnapshot(ctx context.Context, o SnapshotOptions) (string,
 			Height:        o.Height,
 			Authenticated: true,
 			TTL:           "30d", // the shortest retention offered
-			Config:        snapshotConfig{Theme: theme, TZOffset: -offset / 60},
+			Config:        snapshotConfig{Theme: theme, TZOffset: acceptedOffset},
 		},
 	}}
 	resp, err := c.do(ctx, http.MethodPost, "/api/v2/snapshot", req)

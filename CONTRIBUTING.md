@@ -114,12 +114,23 @@ those commands. When unset, shell commands inherit the normal environment.
 Tests that contact Datadog are opt-in:
 
 - `BITS_OAUTH_E2E=1` reuses your stored OAuth login.
-- `BITS_VIZ_E2E=1` renders a CPU chart through Datadog MCP and ddviz. Requires
-  macOS 13+, a built helper, and a stored Bits login with visualization access.
+- `BITS_VIZ_E2E=1` renders CPU charts through Datadog MCP and ddviz, and through
+  the Datadog snapshot API. The ddviz test requires macOS 13+ and a built helper;
+  both tests require a stored Bits login with the corresponding access.
 - `BITS_ASSISTANT_E2E=1` requires `DD_API_KEY`, `DD_APP_KEY`, and an explicit
   `BITS_E2E_SITE` naming the Datadog API site.
 
 For noninteractive runs, see the [ADEEP delivery documentation](internal/headless/adeep/README.md).
+
+## Widget previews
+
+`BITS_VIZ=auto` is the default. It uses ddviz for interactive previews when the
+macOS helper is available, and Datadog snapshots otherwise. Snapshot previews
+require a Datadog site and login that support the snapshot API. Set
+`BITS_VIZ=snapshot` to use snapshots on any system, or `BITS_VIZ=off` to show
+web sandbox links only. Terminal image support is required for inline previews;
+without it, snapshot-only widgets appear as links. When a widget has no usable
+fixed or live time range, snapshots and links default to the last hour.
 
 ## Development workflow
 

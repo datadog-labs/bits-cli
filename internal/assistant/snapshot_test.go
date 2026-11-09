@@ -32,7 +32,7 @@ func snapshotServer(t *testing.T, viewURL string, view http.HandlerFunc) (*Clien
 	return c, posts
 }
 
-var testSnapshot = SnapshotOptions{Definition: WidgetDefinition{"type": "timeseries"}, Start: time.UnixMilli(1000), End: time.UnixMilli(2000), Dark: true}
+var testSnapshot = SnapshotOptions{Definition: WidgetDefinition{Type: "timeseries"}, Start: time.UnixMilli(1000), End: time.UnixMilli(2000), Dark: true}
 
 // The view is fetched from the API host, whatever host the response names,
 // through the pending document to a PNG.
@@ -52,6 +52,29 @@ func TestRenderSnapshot(t *testing.T) {
 	})
 	if data, err := c.RenderSnapshot(context.Background(), testSnapshot); err != nil || string(data) != "png" || *posts != 1 {
 		t.Fatalf("RenderSnapshot = %q, %v after %d posts", data, err, *posts)
+	}
+
+	// UTC+13 is valid locally but outside the snapshot API's accepted offset range.
+	offsetClient := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Data struct {
+				Attributes struct {
+					Config map[string]json.RawMessage `json:"additional_config"`
+				} `json:"attributes"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := body.Data.Attributes.Config["timezone_offset_minutes"]; ok {
+			t.Error("sent an offset rejected by the snapshot API")
+		}
+		_, _ = io.WriteString(w, `{"data":{"attributes":{"url":"`+testView+`"}}}`)
+	})
+	o := testSnapshot
+	o.End = o.End.In(time.FixedZone("UTC+13", 13*60*60))
+	if _, err := offsetClient.createSnapshot(context.Background(), o); err != nil {
+		t.Fatal(err)
 	}
 }
 

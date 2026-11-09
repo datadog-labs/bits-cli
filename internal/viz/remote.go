@@ -54,12 +54,12 @@ func (c *remoteClient) Render(ctx context.Context, r Request) RenderResult {
 		return RenderResult{Status: failure(ctx.Err())}
 	}
 	// The budget starts with the slot, so queued previews do not time out.
-	ctx, cancelTimeout := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancelTimeout()
 
 	end := time.Now()
 	start := end.Add(-time.Hour)
-	if from, to, ok := widgetRange(r.Definition["time"], end); ok {
+	if from, to, ok := r.Definition.TimeRange(end); ok {
 		start, end = time.UnixMilli(from), time.UnixMilli(to)
 	}
 	data, err := c.api.RenderSnapshot(ctx, assistant.SnapshotOptions{

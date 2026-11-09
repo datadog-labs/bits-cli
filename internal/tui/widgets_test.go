@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
@@ -47,7 +48,7 @@ func (c *widgetTestClient) Interactive() bool { return !c.remote }
 
 func (c *widgetTestClient) Close() error { c.closed = true; return nil }
 
-var timeseries = assistant.WidgetDefinition{"type": "timeseries", "title": "CPU"}
+var timeseries = assistant.WidgetDefinition{Type: "timeseries", Title: "CPU"}
 
 // widgetModel shows one widget block; cmd holds any operation it started, and
 // opened records URLs sent to the browser.
@@ -206,7 +207,7 @@ func TestWidgetLifecycle(t *testing.T) {
 	if m.widgets.entries[id] != original {
 		t.Fatal("a revision with the same definition replaced the entry")
 	}
-	m.state.Blocks[0].Widget = &assistant.WidgetPayload{WidgetDef: &assistant.WidgetDefinition{"type": "toplist", "title": "CPU"}}
+	m.state.Blocks[0].Widget = &assistant.WidgetPayload{WidgetDef: &assistant.WidgetDefinition{Type: "toplist", Title: "CPU"}}
 	m.state.Blocks[0].Rev++
 	m.syncTranscript()
 	m.Update(struct{}{})
@@ -249,7 +250,7 @@ func TestWidgetInlineImage(t *testing.T) {
 	if _, cmd := m.Update(tea.WindowSizeMsg{Width: 60, Height: 40}); !strings.Contains(runWidgetTasks(m, cmd), "a=p") {
 		t.Fatal("a resized preview was not placed again without its pixels")
 	}
-	m.state.Blocks[0].Widget = &assistant.WidgetPayload{WidgetDef: &assistant.WidgetDefinition{"type": "toplist", "title": "CPU"}}
+	m.state.Blocks[0].Widget = &assistant.WidgetPayload{WidgetDef: &assistant.WidgetDefinition{Type: "toplist", Title: "CPU"}}
 	m.state.Blocks[0].Rev++
 	m.syncTranscript()
 	old := m.widgets.entries[id].image.ID
@@ -325,7 +326,7 @@ func TestLegacyWidgetShowsOnlyItsTitle(t *testing.T) {
 func TestLargeWidgetLinkOpens(t *testing.T) {
 	random := make([]byte, 12<<10)
 	_, _ = rand.Read(random)
-	def := assistant.WidgetDefinition{"type": "note", "content": hex.EncodeToString(random)}
+	def := assistant.WidgetDefinition{Type: "note", Fields: map[string]json.RawMessage{"content": json.RawMessage(fmt.Sprintf("%q", hex.EncodeToString(random)))}}
 	m, _, _, opened := widgetModel(t, nil, graphics.Unsupported, def)
 	runWidgetTasks(m, clickWidget(t, m, chat.WidgetWeb))
 	if len(*opened) != 1 || !strings.HasPrefix((*opened)[0], "https://demo.datadoghq.com/dataviz/sandbox?") || len((*opened)[0]) <= 8<<10 {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -183,11 +184,14 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 }
 
 func (c *localClient) fetchWidget(ctx context.Context, request Request) (*mcp.CallToolResult, Status) {
+	args := map[string]any{"widget_definition": request.Definition}
+	if from, to, ok := request.Definition.TimeRangeSeconds(time.Now()); ok {
+		args["from_ts"] = strconv.FormatInt(from, 10)
+		args["to_ts"] = strconv.FormatInt(to, 10)
+	}
 	result, err := c.mcp.CallTool(ctx, &mcp.CallToolParams{
-		Name: "get_widget",
-		Arguments: map[string]any{
-			"widget_definition": request.Definition,
-		},
+		Name:      "get_widget",
+		Arguments: args,
 	})
 	if err != nil {
 		return nil, failure(err)
