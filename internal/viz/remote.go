@@ -59,7 +59,7 @@ func (c *remoteClient) Render(ctx context.Context, r Request) RenderResult {
 
 	end := time.Now()
 	start := end.Add(-time.Hour)
-	if from, to, ok := fixedRange(r.Definition["time"]); ok {
+	if from, to, ok := widgetRange(r.Definition["time"], end); ok {
 		start, end = time.UnixMilli(from), time.UnixMilli(to)
 	}
 	data, err := c.api.RenderSnapshot(ctx, assistant.SnapshotOptions{
