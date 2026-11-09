@@ -48,8 +48,8 @@ func widgetTitle(it agent.Block) string {
 		return ""
 	}
 	if def := it.Widget.WidgetDef; def != nil {
-		if title, _ := (*def)["title"].(string); title != "" {
-			return escape.SingleLine(title)
+		if def.Title != "" {
+			return escape.SingleLine(def.Title)
 		}
 	}
 	return escape.SingleLine(it.Widget.Title)

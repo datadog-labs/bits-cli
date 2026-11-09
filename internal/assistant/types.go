@@ -3,6 +3,9 @@ package assistant
 import (
 	"encoding/base64"
 	"encoding/json"
+	"math"
+	"strconv"
+	"time"
 )
 
 // Role is the message author. The wire form is the string Message.Role
@@ -395,10 +398,266 @@ const (
 	ContentProviderCompaction = "provider_compaction"
 )
 
-// WidgetDefinition is a Datadog dashboard widget definition (the widget_def
-// payload). It is decoded generically for now; used via a pointer so callers can
-// distinguish absent (nil) from an empty object.
-type WidgetDefinition map[string]any
+// WidgetDefinition is a Datadog dashboard widget definition. Its common fields
+// are typed; Fields preserves widget-specific fields for rendering and MCP.
+// A pointer distinguishes an absent definition from an empty object.
+type WidgetDefinition struct {
+	Type   string
+	Title  string
+	Time   *WidgetTime
+	Fields map[string]json.RawMessage
+}
+
+// WidgetTime describes the backend's fixed, live, calendar-aligned, and legacy
+// time forms. Fields preserves options such as hide_incomplete_cost_data.
+type WidgetTime struct {
+	Type     string
+	From     float64
+	To       float64
+	Value    float64
+	Unit     string
+	Offset   float64
+	LiveSpan string
+	Fields   map[string]json.RawMessage
+}
+
+func (d *WidgetDefinition) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	var known struct {
+		Type  string      `json:"type"`
+		Title string      `json:"title"`
+		Time  *WidgetTime `json:"time"`
+	}
+	if err := json.Unmarshal(data, &known); err != nil {
+		return err
+	}
+	delete(fields, "type")
+	delete(fields, "title")
+	delete(fields, "time")
+	*d = WidgetDefinition{Type: known.Type, Title: known.Title, Time: known.Time, Fields: fields}
+	return nil
+}
+
+func (d WidgetDefinition) MarshalJSON() ([]byte, error) {
+	fields := make(map[string]json.RawMessage, len(d.Fields)+3)
+	for name, raw := range d.Fields {
+		fields[name] = raw
+	}
+	known, err := json.Marshal(struct {
+		Type  string      `json:"type,omitempty"`
+		Title string      `json:"title,omitempty"`
+		Time  *WidgetTime `json:"time,omitempty"`
+	}{d.Type, d.Title, d.Time})
+	if err != nil {
+		return nil, err
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(known, &values); err != nil {
+		return nil, err
+	}
+	for name, raw := range values {
+		fields[name] = raw
+	}
+	return json.Marshal(fields)
+}
+
+func (t *WidgetTime) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	var known struct {
+		Type     string  `json:"type"`
+		From     float64 `json:"from"`
+		To       float64 `json:"to"`
+		Value    float64 `json:"value"`
+		Unit     string  `json:"unit"`
+		Offset   float64 `json:"offset"`
+		LiveSpan string  `json:"live_span"`
+	}
+	if err := json.Unmarshal(data, &known); err != nil {
+		return err
+	}
+	for _, name := range []string{"type", "from", "to", "value", "unit", "offset", "live_span"} {
+		delete(fields, name)
+	}
+	*t = WidgetTime{
+		Type: known.Type, From: known.From, To: known.To, Value: known.Value,
+		Unit: known.Unit, Offset: known.Offset, LiveSpan: known.LiveSpan, Fields: fields,
+	}
+	return nil
+}
+
+func (t WidgetTime) MarshalJSON() ([]byte, error) {
+	fields := make(map[string]json.RawMessage, len(t.Fields)+7)
+	for name, raw := range t.Fields {
+		fields[name] = raw
+	}
+	known := struct {
+		Type     string   `json:"type,omitempty"`
+		From     *float64 `json:"from,omitempty"`
+		To       *float64 `json:"to,omitempty"`
+		Value    *float64 `json:"value,omitempty"`
+		Unit     string   `json:"unit,omitempty"`
+		Offset   *float64 `json:"offset,omitempty"`
+		LiveSpan string   `json:"live_span,omitempty"`
+	}{Type: t.Type, Unit: t.Unit, LiveSpan: t.LiveSpan}
+	switch t.Type {
+	case "fixed":
+		known.From, known.To = &t.From, &t.To
+	case "live":
+		known.Value = &t.Value
+	case "daily", "weekly", "monthly", "yearly":
+		known.Offset = &t.Offset
+	}
+	raw, err := json.Marshal(known)
+	if err != nil {
+		return nil, err
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, err
+	}
+	for name, value := range values {
+		fields[name] = value
+	}
+	return json.Marshal(fields)
+}
+
+// Valid reports whether the definition names a widget type. The complete
+// widget-specific schema is validated by Datadog when the widget is rendered.
+func (d WidgetDefinition) Valid() bool { return d.Type != "" }
+
+// TimeRange resolves fixed and rolling live widget times to Unix milliseconds.
+// Calendar-aligned and unknown times have no simple duration; callers use their
+// own default when ok is false.
+func (d WidgetDefinition) TimeRange(now time.Time) (from, to int64, ok bool) {
+	if d.Time == nil {
+		return 0, 0, false
+	}
+	t := d.Time
+	if from, to, ok := fixedWidgetRange(t); ok {
+		return from, to, true
+	}
+	span, months, ok := liveWidgetSpan(t)
+	if !ok {
+		return 0, 0, false
+	}
+	end := now.UnixMilli()
+	if months != 0 {
+		return subtractWidgetMonths(now, months).UnixMilli(), end, true
+	}
+	return end - span.Milliseconds(), end, true
+}
+
+// TimeRangeSeconds expands the millisecond window to whole Unix seconds for
+// MCP's from_ts and to_ts arguments, which do not accept milliseconds.
+func (d WidgetDefinition) TimeRangeSeconds(now time.Time) (from, to int64, ok bool) {
+	fromMS, toMS, ok := d.TimeRange(now)
+	if !ok {
+		return 0, 0, false
+	}
+	end := toMS / 1000
+	if toMS%1000 != 0 {
+		end++
+	}
+	return fromMS / 1000, end, true
+}
+
+func fixedWidgetRange(t *WidgetTime) (from, to int64, ok bool) {
+	if t.Type != "fixed" {
+		return 0, 0, false
+	}
+	f, e := t.From, t.To
+	if f < 0 || f >= e || e > 1<<53 || f != math.Trunc(f) || e != math.Trunc(e) {
+		return 0, 0, false
+	}
+	return int64(f), int64(e), true
+}
+
+// Years use the web UI's 365-day approximation; months use calendar dates.
+func liveWidgetSpan(t *WidgetTime) (span time.Duration, months int, ok bool) {
+	if t.LiveSpan != "" {
+		return legacyWidgetSpan(t.LiveSpan)
+	}
+	if t.Type != "live" {
+		return 0, 0, false
+	}
+	return widgetSpan(t.Value, t.Unit)
+}
+
+func legacyWidgetSpan(s string) (span time.Duration, months int, ok bool) {
+	digits := 0
+	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
+		digits++
+	}
+	value, err := strconv.Atoi(s[:digits])
+	if err != nil {
+		return 0, 0, false
+	}
+	var unit string
+	switch s[digits:] {
+	case "m":
+		unit = "minute"
+	case "h":
+		unit = "hour"
+	case "d":
+		unit = "day"
+	case "w":
+		unit = "week"
+	case "mo":
+		unit = "month"
+	case "y":
+		unit = "year"
+	default:
+		return 0, 0, false
+	}
+	return widgetSpan(float64(value), unit)
+}
+
+func widgetSpan(value float64, unit string) (span time.Duration, months int, ok bool) {
+	if value <= 0 || value != math.Trunc(value) {
+		return 0, 0, false
+	}
+	day := 24 * time.Hour
+	var per time.Duration
+	switch unit {
+	case "minute":
+		per = time.Minute
+	case "hour":
+		per = time.Hour
+	case "day":
+		per = day
+	case "week":
+		per = 7 * day
+	case "month":
+		per = 30 * day
+	case "year":
+		per = 365 * day
+	default:
+		return 0, 0, false
+	}
+	if value > float64(math.MaxInt64/int64(per)) {
+		return 0, 0, false
+	}
+	if unit == "month" {
+		return 0, int(value), true
+	}
+	return time.Duration(value) * per, 0, true
+}
+
+// subtractWidgetMonths clamps the day to the target month's last day, matching
+// the web time selector (March 31 minus one month becomes February 28 or 29).
+func subtractWidgetMonths(now time.Time, months int) time.Time {
+	year, month, day := now.Date()
+	target := time.Date(year, month, 1, 12, 0, 0, 0, now.Location()).AddDate(0, -months, 0)
+	lastDay := time.Date(target.Year(), target.Month()+1, 0, 12, 0, 0, 0, now.Location()).Day()
+	hour, minute, second := now.Clock()
+	return time.Date(target.Year(), target.Month(), min(day, lastDay), hour, minute, second, now.Nanosecond(), now.Location())
+}
 
 // MarkdownPayload carries the text fragment of a markdown_fragment content.
 type MarkdownPayload struct {

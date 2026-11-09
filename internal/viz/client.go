@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -40,7 +41,7 @@ type localClient struct {
 }
 
 // Supported reports whether this system can run the ddviz helper. Without it,
-// widgets fall back to SandboxURL links.
+// widgets fall back to Datadog snapshots (NewRemote).
 func Supported() bool {
 	// ddviz is built for macOS only; an exec failure covers the rest.
 	if runtime.GOOS != "darwin" {
@@ -183,11 +184,14 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 }
 
 func (c *localClient) fetchWidget(ctx context.Context, request Request) (*mcp.CallToolResult, Status) {
+	args := map[string]any{"widget_definition": request.Definition}
+	if from, to, ok := request.Definition.TimeRangeSeconds(time.Now()); ok {
+		args["from_ts"] = strconv.FormatInt(from, 10)
+		args["to_ts"] = strconv.FormatInt(to, 10)
+	}
 	result, err := c.mcp.CallTool(ctx, &mcp.CallToolParams{
-		Name: "get_widget",
-		Arguments: map[string]any{
-			"widget_definition": request.Definition,
-		},
+		Name:      "get_widget",
+		Arguments: args,
 	})
 	if err != nil {
 		return nil, failure(err)
@@ -232,6 +236,8 @@ func (c *localClient) Open(ctx context.Context, request Request) Status {
 	_, status := c.perform(ctx, request, false)
 	return status
 }
+
+func (c *localClient) Interactive() bool { return true }
 
 func (c *localClient) Close() error {
 	c.closeOnce.Do(func() {

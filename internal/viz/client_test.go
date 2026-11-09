@@ -1,9 +1,11 @@
 package viz
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"image/png"
 	"os"
 	"runtime"
 	"sync"
@@ -363,19 +365,7 @@ func TestLive(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("ddviz requires macOS")
 	}
-	store := auth.DefaultStore()
-	session, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	source, err := auth.NewSource(session, store, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	api, err := assistant.NewOAuthClient(source.Site(), source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	api := widgetE2EAPI(t)
 	client, err := datadogmcp.New(api)
 	if err != nil {
 		t.Fatal(err)
@@ -384,8 +374,8 @@ func TestLive(t *testing.T) {
 	c := New(Config{MCP: client, FrameURL: api.BaseURL + "/api/unstable/dataviz-mcp-ui", Version: version.Build()})
 	defer func() { _ = c.Close() }()
 	definition := assistant.WidgetDefinition{
-		"type":     "timeseries",
-		"requests": []any{map[string]any{"q": "avg:system.cpu.user{*}", "display_type": "line"}},
+		Type:   "timeseries",
+		Fields: map[string]json.RawMessage{"requests": json.RawMessage(`[{"q":"avg:system.cpu.user{*}","display_type":"line"}]`)},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -399,14 +389,72 @@ func TestLive(t *testing.T) {
 	t.Logf("captured %dx%d PNG (%d bytes) through authenticated MCP", result.Image.Width(), result.Image.Height(), len(result.Image.PNG()))
 }
 
+func TestSnapshotLive(t *testing.T) {
+	if os.Getenv("BITS_VIZ_E2E") != "1" {
+		t.Skip("set BITS_VIZ_E2E=1 with a Bits login that has snapshot access")
+	}
+	api := widgetE2EAPI(t)
+	c := NewRemote(api)
+	defer func() { _ = c.Close() }()
+	definition := assistant.WidgetDefinition{
+		Type:   "timeseries",
+		Fields: map[string]json.RawMessage{"requests": json.RawMessage(`[{"q":"avg:system.cpu.user{*}","display_type":"line"}]`)},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	result := c.Render(ctx, Request{Definition: definition})
+	if result.Status.Phase != Succeeded {
+		t.Fatalf("snapshot render: %+v", result.Status)
+	}
+	if result.Image == nil || len(result.Image.PNG()) == 0 {
+		t.Fatal("missing snapshot image")
+	}
+	decoded, err := png.Decode(bytes.NewReader(result.Image.PNG()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, g, b, a := decoded.At(0, 0).RGBA()
+	dark := c.Render(ctx, Request{Definition: definition, Dark: true})
+	if dark.Status.Phase != Succeeded || dark.Image == nil {
+		t.Fatalf("dark snapshot render: %+v", dark.Status)
+	}
+	darkImage, err := png.Decode(bytes.NewReader(dark.Image.PNG()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	darkR, darkG, darkB, darkA := darkImage.At(0, 0).RGBA()
+	if darkR >= r || darkG >= g || darkB >= b || darkA != a {
+		t.Fatalf("dark theme did not darken background: light=%d,%d,%d,%d dark=%d,%d,%d,%d", r>>8, g>>8, b>>8, a>>8, darkR>>8, darkG>>8, darkB>>8, darkA>>8)
+	}
+	t.Logf("captured %dx%d PNG (%d bytes) through Datadog snapshots", result.Image.Width(), result.Image.Height(), len(result.Image.PNG()))
+}
+
+func widgetE2EAPI(t *testing.T) *assistant.Client {
+	t.Helper()
+	store := auth.DefaultStore()
+	session, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := auth.NewSource(session, store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, err := assistant.NewOAuthClient(source.Site(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return api
+}
+
 func TestFetchWidgetPreservesDefinition(t *testing.T) {
-	timing := map[string]any{"type": "fixed", "from": 1700000000000, "to": 1700003600000, "hide_incomplete_cost_data": true}
-	definition := assistant.WidgetDefinition{"type": "timeseries", "time": timing}
+	timing := &assistant.WidgetTime{Type: "fixed", From: 1700000000000, To: 1700003600000, Fields: map[string]json.RawMessage{"hide_incomplete_cost_data": json.RawMessage(`true`)}}
+	definition := assistant.WidgetDefinition{Type: "timeseries", Time: timing}
 	request := Request{Definition: definition}
 	client := testClient(nil)
 	defer func() { _ = client.Close() }()
 	client.mcp = toolFunc(func(_ context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
-		expected, err := json.Marshal(map[string]any{"widget_definition": definition})
+		expected, err := json.Marshal(map[string]any{"widget_definition": definition, "from_ts": "1700000000", "to_ts": "1700003600"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -418,7 +466,7 @@ func TestFetchWidgetPreservesDefinition(t *testing.T) {
 	if _, status := client.fetchWidget(context.Background(), request); status.Phase != Succeeded {
 		t.Fatal(status)
 	}
-	if len(timing) != 4 || definition["time"].(map[string]any)["type"] != "fixed" {
+	if definition.Time != timing || timing.Type != "fixed" || string(timing.Fields["hide_incomplete_cost_data"]) != "true" {
 		t.Fatal("fetch modified the borrowed definition")
 	}
 }
