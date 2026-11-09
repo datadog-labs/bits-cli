@@ -183,7 +183,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok && m.mode != ModeLogin {
 		if key.String() != "ctrl+c" {
 			m.quitConfirm.armed = false
-		} else if (m.mode != ModeChat && m.mode != ModeTermInit) || (m.quitConfirm.armed && !m.composerHasDraft()) {
+		} else if (m.mode != ModeChat && m.mode != ModeTermInit) || m.exitCard.open || (m.quitConfirm.armed && !m.composerHasDraft()) {
 			return m.quit()
 		}
 	}
