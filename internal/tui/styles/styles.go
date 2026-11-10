@@ -202,16 +202,13 @@ type Accordion struct {
 	// the chevron its box.
 	Resting lipgloss.Style
 
-	// HoverBackground is painted across the whole header row, not just the
-	// control's own cells, when that row is hovered. The caller (chat.List)
-	// repaints an already-rendered line's background cell-by-cell rather than
-	// wrapping it in a lipgloss style, since the line's own foreground colors
-	// must survive the repaint.
+	// HoverBackground is how a hovered header row looks over the page
+	// background. Rows with their own background, such as diff lines, are
+	// shifted by the same amount (see components.ShadeRow).
 	HoverBackground color.Color
 
-	// DetailHoverBackground paints a block's rows below its header (compact
-	// preview or full disclosure) while any row of it is hovered. Softer than HoverBackground so the header
-	// stays distinct from its content.
+	// DetailHoverBackground is the same for the rows below the header. It is
+	// softer, so the header stands out from its content.
 	DetailHoverBackground color.Color
 }
 

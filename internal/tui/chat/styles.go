@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"image/color"
+
 	"charm.land/lipgloss/v2"
 
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
@@ -8,8 +10,10 @@ import (
 
 // Styles holds the chat-specific styles the renderers use.
 type Styles struct {
-	Input     styles.Input
-	Accordion styles.Accordion
+	// Background is the page color. Hover colors are defined against it.
+	Background color.Color
+	Input      styles.Input
+	Accordion  styles.Accordion
 	styles.Chat
 }
 
@@ -33,5 +37,5 @@ func DefaultStyles(isDark bool) Styles {
 
 // StylesFor selects the chat portion of an already-built shared theme.
 func StylesFor(theme styles.Theme) Styles {
-	return Styles{Input: theme.Input, Accordion: theme.Accordion, Chat: theme.Chat}
+	return Styles{Background: theme.Background, Input: theme.Input, Accordion: theme.Accordion, Chat: theme.Chat}
 }
