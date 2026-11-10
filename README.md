@@ -45,6 +45,8 @@ server. Type `@` to find services, monitors, incidents, and dashboards.
 - `/resume` selects a saved conversation.
 - `/fork` (or `/branch`) copies the saved conversation and continues in the copy.
   It leaves the original conversation and your working directory unchanged.
+- `/rename [title]` renames the current conversation. Without a title, Bits
+  asks for one.
 - `/web` opens the current conversation in Datadog.
 
 You can also resume by ID:

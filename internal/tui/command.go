@@ -30,6 +30,7 @@ const (
 	commandNew
 	commandResume
 	commandFork
+	commandRename
 	commandStatus
 	commandCopy
 	commandWeb
@@ -49,6 +50,7 @@ type commandDefinition struct {
 
 var commandDefinitions = []commandDefinition{
 	{id: commandFork, name: "fork", aliases: []string{"branch"}, activeTurnPolicy: commandRejectedDuringTurn, description: "fork this conversation and continue in the copy"},
+	{id: commandRename, name: "rename", activeTurnPolicy: commandRejectedDuringTurn, description: "rename this conversation"},
 	{
 		id:               commandNew,
 		name:             "new",
@@ -137,7 +139,7 @@ func lookupCommand(name string) (commandDefinition, bool) {
 }
 
 // parseCommand recognizes a submitted slash command. It returns the command
-// name (lowercased, no leading "/") and its lowercased argument remainder
+// name (lowercased, no leading "/") and its argument remainder, with case kept
 // when the input is a single leading "/token" at the beginning of the
 // prompt. A bare "/", a "/ word" form, or leading whitespace before the
 // slash is not a command, so it falls through to a normal agent turn.
@@ -155,7 +157,7 @@ func parseCommand(input string) (string, string, bool) {
 	}
 	argument := ""
 	if len(fields) > 1 {
-		argument = strings.ToLower(strings.Join(fields[1:], " "))
+		argument = strings.Join(fields[1:], " ")
 	}
 	return name, argument, true
 }
@@ -217,6 +219,8 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 		return m.quit()
 	case commandFork:
 		return m, m.startFork(argument)
+	case commandRename:
+		return m, m.startRename(argument)
 	case commandResume:
 		return m, tea.Batch(m.stopCompletionSearches(), m.openConversationPicker())
 	case commandStatus:
@@ -230,7 +234,7 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 	case commandLogout:
 		return m, m.startLogout()
 	case commandPermissions:
-		return m, tea.Batch(m.stopCompletionSearches(), m.switchPermissions(argument))
+		return m, tea.Batch(m.stopCompletionSearches(), m.switchPermissions(strings.ToLower(argument)))
 	case commandUpdate:
 		return m.requestUpgrade()
 	default:

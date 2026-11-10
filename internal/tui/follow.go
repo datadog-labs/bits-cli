@@ -23,7 +23,7 @@ type followControl struct {
 }
 
 func (m *Model) followTarget() (string, image.Rectangle) {
-	if m.mode != ModeChat || m.frame.tooSmall || m.shown != nil ||
+	if m.mode != ModeChat || m.frame.tooSmall || m.prompt() != nil ||
 		m.editor.MenuOpen() ||
 		m.selection.selecting() || m.selection.selected() ||
 		m.list.Height() <= 0 || m.list.Following() || m.list.AtBottom() {

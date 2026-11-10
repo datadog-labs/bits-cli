@@ -26,12 +26,13 @@ func TestParseCommand(t *testing.T) {
 		{in: "/exit", wantName: "exit", wantOk: true},
 		{in: "/Quit", wantName: "quit", wantOk: true},
 		{in: "/QUIT", wantName: "quit", wantOk: true},
-		{in: "/quit now", wantName: "quit", wantArg: "now", wantOk: true}, // only /permissions consumes its argument
+		{in: "/quit now", wantName: "quit", wantArg: "now", wantOk: true}, // only some commands consume their argument
 		{in: "/permissions", wantName: "permissions", wantOk: true},
 		{in: "/permissions skip-permissions", wantName: "permissions", wantArg: "skip-permissions", wantOk: true},
-		{in: "/Permissions MANUAL", wantName: "permissions", wantArg: "manual", wantOk: true},
+		{in: "/Permissions MANUAL", wantName: "permissions", wantArg: "MANUAL", wantOk: true},
 		{in: "/permissions   manual", wantName: "permissions", wantArg: "manual", wantOk: true},
-		{in: "/Permissions   SKIP-PERMISSIONS extra", wantName: "permissions", wantArg: "skip-permissions extra", wantOk: true},
+		{in: "/Permissions   SKIP-PERMISSIONS extra", wantName: "permissions", wantArg: "SKIP-PERMISSIONS extra", wantOk: true},
+		{in: "/rename  Prod  Outage ", wantName: "rename", wantArg: "Prod Outage", wantOk: true},
 		{in: "/permissions manual now extra", wantName: "permissions", wantArg: "manual now extra", wantOk: true},
 		{in: "hello", wantOk: false},
 		{in: "", wantOk: false},

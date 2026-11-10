@@ -255,6 +255,23 @@ func (e *Engine) ForkConversation(ctx context.Context, sourceID string) (*assist
 	return summary, ctx.Err()
 }
 
+// ConversationRenameBackend is the optional capability to retitle saved conversations.
+type ConversationRenameBackend interface {
+	RenameConversation(context.Context, assistant.RenameConversationInput) error
+}
+
+// RenameConversation sets the title of a saved conversation.
+func (e *Engine) RenameConversation(ctx context.Context, conversationID, title string) error {
+	if !ValidConversationID(conversationID) {
+		return ErrInvalidConversationID
+	}
+	backend, ok := e.backend.(ConversationRenameBackend)
+	if !ok {
+		return errors.New("backend does not support renaming conversations")
+	}
+	return backend.RenameConversation(ctx, assistant.RenameConversationInput{ConversationID: conversationID, Title: title})
+}
+
 // ForkBoundary anchors server provenance to the CLI's folded transcript.
 // A zero After means there is no known boundary to display.
 type ForkBoundary struct {

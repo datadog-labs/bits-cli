@@ -342,6 +342,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case conversationListResultMsg:
 		return m, m.applyConversationListResult(msg)
 
+	case renameResultMsg:
+		return m, m.applyRenameResult(msg)
+
 	case forkResultMsg:
 		return m, m.applyForkResult(msg)
 
@@ -916,10 +919,15 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // handlePromptKey gives a key to the shown prompt; the inert editor never
-// sees it. ctrl+x stops the tool round the prompt belongs to.
+// sees it. ctrl+x stops the tool round the prompt belongs to, or dismisses a
+// command prompt.
 func (m *Model) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
 	if msg.String() == "ctrl+x" {
-		m.stopTools()
+		if m.shown == nil {
+			m.commandPrompt = nil // a command prompt has no tools to stop
+		} else {
+			m.stopTools()
+		}
 		return nil
 	}
 	cmd, _ := m.updatePrompt(msg)

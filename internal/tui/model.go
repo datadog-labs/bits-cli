@@ -201,10 +201,13 @@ type Model struct {
 	loggedOut bool
 
 	// Tool calls waiting on the user, by source, and the one shown (see ask).
-	toolUI           *tools.UI
-	approvals        map[string]*approvalAsk // mirrors the transcript, by call ID
-	toolUIs          []*toolAsk              // requests from the tools.UI channel
-	shown            ask
+	toolUI    *tools.UI
+	approvals map[string]*approvalAsk // mirrors the transcript, by call ID
+	toolUIs   []*toolAsk              // requests from the tools.UI channel
+	shown     ask
+	// The prompt a slash command opened, shown when no ask is.
+	commandPrompt *commandPrompt
+
 	permissionsPanel *components.Panel
 	// The picker shows the options, or the full-access confirmation; the
 	// cursor is the row on the page shown (on the confirmation, 0 is Yes).
@@ -417,6 +420,9 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	}
 	for _, t := range m.toolUIs {
 		t.form.SetStyles(theme)
+	}
+	if m.commandPrompt != nil {
+		m.commandPrompt.form.SetStyles(theme)
 	}
 	m.permissionsPanel.SetStyles(theme.Permissions)
 	if m.picker != nil {
