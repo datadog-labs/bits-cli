@@ -149,6 +149,7 @@ func (o *operation) finish() operation {
 // begin admits every exclusive operation through the same gate.
 func (m *Model) begin(kind opKind, cancel context.CancelFunc) bool {
 	if m.op.claim(kind, cancel) {
+		m.terminal.outcome = ""
 		return true
 	}
 	if cancel != nil {

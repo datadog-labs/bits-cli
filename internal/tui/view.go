@@ -54,7 +54,7 @@ func (m *Model) View() tea.View {
 	m.follow.area = image.Rectangle{}
 	m.exitCard.quit, m.exitCard.keep, m.exitCard.dismiss = image.Rectangle{}, image.Rectangle{}, image.Rectangle{}
 	if m.mode == ModeLogin && m.loginModel != nil {
-		return m.loginModel.View()
+		return m.terminalView(m.loginModel.View())
 	}
 	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion, BackgroundColor: m.styles.Background}
 	switch m.mode {
@@ -85,7 +85,7 @@ func (m *Model) View() tea.View {
 	case ModeStatus:
 		v.Content = m.status.View()
 	}
-	return v
+	return m.terminalView(v)
 }
 
 // frame is the chat layout built once per update and shared by drawing and hit-testing.

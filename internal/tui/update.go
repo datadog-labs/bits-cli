@@ -175,6 +175,7 @@ func (m *Model) reconcilePointerShape() tea.Cmd {
 // follows from state — geometry, animations, editor focus, pointer shape — in
 // one place, so no handler has to remember to relayout.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.updateTerminal(msg)
 	if cmd, ok := m.widgets.images.Handle(msg); ok {
 		return m, cmd
 	}
@@ -190,6 +191,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
+	case tea.FocusMsg, tea.BlurMsg, terminalTickMsg:
+		// Terminal events are handled above, including during login.
 	case viz.Completion:
 		if page := m.widgets.apply(msg); page != "" {
 			cmd = m.openBrowser(page, "")
@@ -226,12 +229,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if m.mode == ModeLogin {
-		return m, cmd
+		return m, tea.Batch(cmd, m.syncTerminalStatus())
 	}
 
 	loadSkillMenu := m.syncClientSkills()
 	m.relayout()
-	return m, tea.Batch(cmd, loadSkillMenu, m.syncWidgets(), m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape())
+	return m, tea.Batch(cmd, loadSkillMenu, m.syncWidgets(), m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape(), m.syncTerminalStatus())
 }
 
 func isCtrlC(msg tea.Msg) bool {
@@ -662,7 +665,7 @@ func (m *Model) inComposer(msg tea.MouseMsg) (image.Point, bool) {
 // applyRunEvent folds an event of the operation's run, and ends the operation
 // after the run's terminal event.
 func (m *Model) applyRunEvent(ev agent.Event) tea.Cmd {
-	cmd := m.applyEvent(ev)
+	cmd := tea.Batch(m.observeTerminalOutcome(ev), m.applyEvent(ev))
 	m.syncStatus()
 	if ev.Kind == agent.EventState {
 		m.syncTranscript()
