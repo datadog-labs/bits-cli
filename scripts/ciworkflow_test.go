@@ -196,7 +196,7 @@ func TestReleaseWorkflowGating(t *testing.T) {
 	if tag := wf.Jobs["ci"].With["tag"]; tag != "${{ inputs.tag }}" {
 		t.Errorf("release ci job builds tag %v, want ${{ inputs.tag }}", tag)
 	}
-	for job, needs := range map[string][]string{"ci": {"check"}, "publish": {"ci"}} {
+	for job, needs := range map[string][]string{"ci": {"check"}, "publish": {"ci"}, "homebrew": {"publish"}} {
 		for _, need := range needs {
 			if !slices.Contains(wf.Jobs[job].Needs, need) {
 				t.Errorf("%s must need %s, got %v", job, need, wf.Jobs[job].Needs)
@@ -204,15 +204,27 @@ func TestReleaseWorkflowGating(t *testing.T) {
 		}
 	}
 	// The GITHUB_TOKEN never gets write access to the repository: the
-	// release and its tag are created with a dd-octo-sts token.
+	// release, its tag, and the tap pull request use dd-octo-sts tokens.
+	wantPermissions := map[string]map[string]string{
+		"publish":  {"contents": "read", "id-token": "write", "attestations": "write"},
+		"homebrew": {"contents": "read", "id-token": "write", "attestations": "read"},
+	}
 	for name, job := range wf.Jobs {
-		if name != "publish" && job.Permissions != nil {
-			t.Errorf("only the publish job may set permissions; %s sets %v", name, job.Permissions)
+		want, ok := wantPermissions[name]
+		if !ok {
+			if job.Permissions != nil {
+				t.Errorf("only the publish and homebrew jobs may set permissions; %s sets %v", name, job.Permissions)
+			}
+			continue
+		}
+		if !maps.Equal(job.Permissions, want) {
+			t.Errorf("%s permissions = %v, want %v", name, job.Permissions, want)
 		}
 	}
-	want := map[string]string{"contents": "read", "id-token": "write", "attestations": "write"}
-	if got := wf.Jobs["publish"].Permissions; !maps.Equal(got, want) {
-		t.Errorf("publish permissions = %v, want %v", got, want)
+	for name := range wantPermissions {
+		if _, ok := wf.Jobs[name]; !ok {
+			t.Errorf("release.yml has no %s job", name)
+		}
 	}
 }
 
