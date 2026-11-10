@@ -318,6 +318,9 @@ func (m *Model) promptPlaceholder() string {
 	if m.op.kind == opFork {
 		return "Forking…"
 	}
+	if m.op.kind == opRename {
+		return "Renaming…"
+	}
 	switch m.chatPhase {
 	case chat.PhaseLoading:
 		return "Loading…"

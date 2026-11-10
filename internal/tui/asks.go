@@ -196,10 +196,11 @@ func (m *Model) compareAsks(a, b ask) int {
 }
 
 // updatePrompt applies msg to the shown prompt, then delivers its answer;
-// once delivered, the next ask is shown.
+// once delivered, the next ask is shown. Without an ask, msg goes to the
+// command prompt.
 func (m *Model) updatePrompt(msg tea.Msg) (tea.Cmd, bool) {
 	if m.shown == nil {
-		return nil, false
+		return m.updateCommandPrompt(msg)
 	}
 	cmd, used := m.shown.prompt().Update(msg)
 	if followUp, delivered := m.shown.deliver(); delivered {

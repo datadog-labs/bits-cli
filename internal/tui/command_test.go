@@ -26,12 +26,13 @@ func TestParseCommand(t *testing.T) {
 		{in: "/exit", wantName: "exit", wantOk: true},
 		{in: "/Quit", wantName: "quit", wantOk: true},
 		{in: "/QUIT", wantName: "quit", wantOk: true},
-		{in: "/quit now", wantName: "quit", wantArg: "now", wantOk: true}, // only /permissions consumes its argument
+		{in: "/quit now", wantName: "quit", wantArg: "now", wantOk: true}, // only some commands consume their argument
 		{in: "/permissions", wantName: "permissions", wantOk: true},
 		{in: "/permissions skip-permissions", wantName: "permissions", wantArg: "skip-permissions", wantOk: true},
-		{in: "/Permissions MANUAL", wantName: "permissions", wantArg: "manual", wantOk: true},
+		{in: "/Permissions MANUAL", wantName: "permissions", wantArg: "MANUAL", wantOk: true},
 		{in: "/permissions   manual", wantName: "permissions", wantArg: "manual", wantOk: true},
-		{in: "/Permissions   SKIP-PERMISSIONS extra", wantName: "permissions", wantArg: "skip-permissions extra", wantOk: true},
+		{in: "/Permissions   SKIP-PERMISSIONS extra", wantName: "permissions", wantArg: "SKIP-PERMISSIONS extra", wantOk: true},
+		{in: "/rename  Prod  Outage ", wantName: "rename", wantArg: "Prod Outage", wantOk: true},
 		{in: "/permissions manual now extra", wantName: "permissions", wantArg: "manual now extra", wantOk: true},
 		{in: "hello", wantOk: false},
 		{in: "", wantOk: false},
@@ -94,7 +95,7 @@ func TestLookupCommandResolvesExitAlias(t *testing.T) {
 	if !ok {
 		t.Fatal("/exit alias was not registered")
 	}
-	if exit.id != quit.id || exit.activeTurnPolicy != commandCancelsTurn {
+	if exit.id != quit.id || exit.activeOperationPolicy != commandCancelsOperation {
 		t.Fatalf("/exit resolved to %#v, want /quit with cancel policy", exit)
 	}
 }
@@ -128,21 +129,21 @@ func TestLookupCommandResolvesClearAsExactNewAlias(t *testing.T) {
 	if !ok {
 		t.Fatal("/clear alias was not registered")
 	}
-	if clearCommand.id != newCommand.id || clearCommand.activeTurnPolicy != newCommand.activeTurnPolicy {
+	if clearCommand.id != newCommand.id || clearCommand.activeOperationPolicy != newCommand.activeOperationPolicy {
 		t.Fatalf("/clear resolved to %#v, want the /new implementation %#v", clearCommand, newCommand)
 	}
 }
 
 func TestResumeIsRegisteredWithRejectActivePolicy(t *testing.T) {
 	resume, ok := lookupCommand("resume")
-	if !ok || resume.id != commandResume || resume.activeTurnPolicy != commandRejectedDuringTurn {
+	if !ok || resume.id != commandResume || resume.activeOperationPolicy != commandRejectedDuringOperation {
 		t.Fatalf("resume definition = %#v, registered=%v", resume, ok)
 	}
 }
 
 func TestStatusIsRegisteredWithAllowActivePolicy(t *testing.T) {
 	status, ok := lookupCommand("status")
-	if !ok || status.id != commandStatus || status.activeTurnPolicy != commandAllowedDuringTurn {
+	if !ok || status.id != commandStatus || status.activeOperationPolicy != commandAllowedDuringOperation {
 		t.Fatalf("status definition = %#v, registered=%v", status, ok)
 	}
 }
@@ -184,14 +185,14 @@ func TestFileCompletionRemainsEditorOwned(t *testing.T) {
 
 func TestWebIsRegisteredAndAllowedDuringTurn(t *testing.T) {
 	web, ok := lookupCommand("web")
-	if !ok || web.id != commandWeb || web.activeTurnPolicy != commandAllowedDuringTurn {
+	if !ok || web.id != commandWeb || web.activeOperationPolicy != commandAllowedDuringOperation {
 		t.Fatalf("web definition = %#v, registered=%v", web, ok)
 	}
 }
 
 func TestSettingsIsRegisteredAndAllowedDuringTurn(t *testing.T) {
 	settings, ok := lookupCommand("settings")
-	if !ok || settings.id != commandSettings || settings.activeTurnPolicy != commandAllowedDuringTurn {
+	if !ok || settings.id != commandSettings || settings.activeOperationPolicy != commandAllowedDuringOperation {
 		t.Fatalf("settings definition = %#v, registered=%v", settings, ok)
 	}
 }
@@ -710,8 +711,8 @@ func TestCopyCommandRejectsStreamingResponse(t *testing.T) {
 	if latestNotice(m).Empty() {
 		t.Fatal("streaming /copy should show a rejection notice")
 	}
-	if !strings.Contains(latestNotice(m).Text, "Wait for the assistant response to finish") {
-		t.Fatalf("notice = %q, want active-turn rejection", latestNotice(m).Text)
+	if !strings.Contains(latestNotice(m).Text, "Wait for the current operation to finish") {
+		t.Fatalf("notice = %q, want active-operation rejection", latestNotice(m).Text)
 	}
 }
 

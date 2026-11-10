@@ -214,6 +214,21 @@ func (f *Fake) UserConversations(ctx context.Context) (*assistant.UserConversati
 	return &r, nil
 }
 
+// RenameConversation sets a conversation's title.
+func (f *Fake) RenameConversation(ctx context.Context, in assistant.RenameConversationInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.convs[in.ConversationID]
+	if !ok {
+		return &assistant.APIError{StatusCode: http.StatusNotFound, Title: "Not Found", Input: in}
+	}
+	c.title = in.Title
+	return nil
+}
+
 // CurrentUser returns a fixed demo identity.
 func (*Fake) CurrentUser(ctx context.Context) (assistant.CurrentUser, error) {
 	if err := ctx.Err(); err != nil {

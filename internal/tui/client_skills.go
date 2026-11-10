@@ -35,7 +35,7 @@ type skillMenu struct {
 // syncClientSkills observes conversation identity and loads the menu once per
 // conversation.
 func (m *Model) syncClientSkills() tea.Cmd {
-	if m.engine == nil || m.op.kind == opRestore {
+	if m.engine == nil || m.op.kind == opRestore || m.op.loggingOut() || m.loggedOut {
 		return nil
 	}
 	if m.skillMenu.started && m.skillMenu.engine == m.engine && m.skillMenu.epoch == m.conversationEpoch {

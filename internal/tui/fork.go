@@ -32,7 +32,9 @@ func (m *Model) startFork(argument string) tea.Cmd {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Start a conversation before using /fork."))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	m.begin(opFork, 0, nil, cancel)
+	if !m.begin(opFork, cancel) {
+		return nil
+	}
 	m.chatPhase = chat.PhaseLoading
 	generation := m.op.gen
 	engine := m.engine
@@ -59,14 +61,14 @@ func (m *Model) startFork(argument string) tea.Cmd {
 }
 
 func (m *Model) applyForkResult(msg forkResultMsg) tea.Cmd {
-	if m.op.kind != opFork || msg.generation != m.op.gen {
+	if !m.op.matches(opFork, msg.generation) {
 		return nil
 	}
 	err := msg.err
 	if err == nil {
 		err = msg.ctx.Err()
 	}
-	if err == nil && m.op.stop != stopAll && m.op.then == thenNothing {
+	if err == nil && !m.op.interrupted() {
 		err = m.engine.InstallConversation(msg.ctx, msg.conversation)
 		if err == nil {
 			m.state = m.engine.State()

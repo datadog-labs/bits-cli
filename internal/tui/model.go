@@ -38,90 +38,6 @@ const (
 	ModePermissions
 )
 
-// operation is the one exclusive session operation: a turn (resumed client
-// tools included), a history restore, a fork, or logout. Anything that asks "can I
-// start something?" or "what happens when it ends?" reads it; chatPhase only
-// drives what the chat displays.
-type operation struct {
-	kind   opKind
-	gen    uint64      // stamps the operation's messages; never reset, so stale ones drop
-	run    agent.RunID // the engine run, while one streams; zero otherwise
-	cancel context.CancelFunc
-	stop   stopLevel
-	then   followUp
-}
-
-type opKind uint8
-
-const (
-	opIdle    opKind = iota
-	opTurn           // a user turn or resumed client tools
-	opFork           // create and load a conversation copy in place
-	opRestore        // conversation history loading at startup
-	opLogout         // credential deletion; the session quits once it succeeds
-)
-
-// stopLevel only rises within an operation: stopping its tools never undoes a
-// full cancel.
-type stopLevel uint8
-
-const (
-	stopNone  stopLevel = iota
-	stopTools           // the engine stops client tools; the turn continues
-	stopAll             // the operation's context is cancelled
-)
-
-// followUp runs once the operation ends. It only rises, so a queued logout
-// wins over a queued new conversation.
-type followUp uint8
-
-const (
-	thenNothing followUp = iota
-	thenNewConversation
-	thenLogout
-)
-
-func (o operation) busy() bool { return o.kind != opIdle }
-
-func (o operation) loggingOut() bool { return o.kind == opLogout || o.then == thenLogout }
-
-// task is one cancellable request whose results carry its generation.
-// Starting or stopping advances the generation, so a result from an earlier
-// request drops.
-type task struct {
-	gen    uint64
-	cancel context.CancelFunc
-}
-
-// start stops any running request and returns the next one's context and
-// generation. A zero timeout means no deadline.
-func (t *task) start(parent context.Context, timeout time.Duration) (context.Context, uint64) {
-	t.stop()
-	var ctx context.Context
-	if timeout > 0 {
-		ctx, t.cancel = context.WithTimeout(parent, timeout)
-	} else {
-		ctx, t.cancel = context.WithCancel(parent)
-	}
-	return ctx, t.gen
-}
-
-// stop cancels the running request and invalidates its results.
-func (t *task) stop() {
-	t.gen++
-	t.done()
-}
-
-// done releases a finished request's context; its results stay current.
-func (t *task) done() {
-	if t.cancel != nil {
-		t.cancel()
-		t.cancel = nil
-	}
-}
-
-func (t *task) running() bool { return t.cancel != nil }
-
 // EngineFactory constructs the authenticated chat engine after startup login
 // has persisted a session.
 type EngineFactory func(context.Context) (*agent.Engine, error)
@@ -201,10 +117,13 @@ type Model struct {
 	loggedOut bool
 
 	// Tool calls waiting on the user, by source, and the one shown (see ask).
-	toolUI           *tools.UI
-	approvals        map[string]*approvalAsk // mirrors the transcript, by call ID
-	toolUIs          []*toolAsk              // requests from the tools.UI channel
-	shown            ask
+	toolUI    *tools.UI
+	approvals map[string]*approvalAsk // mirrors the transcript, by call ID
+	toolUIs   []*toolAsk              // requests from the tools.UI channel
+	shown     ask
+	// The prompt a slash command opened, shown when no ask is.
+	commandPrompt *commandPrompt
+
 	permissionsPanel *components.Panel
 	// The picker shows the options, or the full-access confirmation; the
 	// cursor is the row on the page shown (on the confirmation, 0 is Yes).
@@ -218,8 +137,9 @@ type Model struct {
 
 	// /resume operations are cancellable and generation-stamped. A late result
 	// from a cancelled list/load can never mutate the current conversation.
-	conversationTask     task
-	conversationSwitchID string
+	conversationTask        task
+	recentConversationsTask task
+	conversationSwitchID    string
 
 	// Turn status, surfaced in the editor and local status view.
 	chatPhase chat.Phase
@@ -317,6 +237,10 @@ func (m *Model) attach(engine *agent.Engine) {
 // Closing the engine is not enough: its subscriptions deliver their queued
 // events first, and nothing reads them anymore.
 func (m *Model) Detach() {
+	m.op.cancelOnce()
+	if closeFiles := m.stopBackgroundTasks(); closeFiles != nil {
+		_ = closeFiles()
+	}
 	m.widgets.close()
 	if m.unsubscribe != nil {
 		m.unsubscribe()
@@ -418,6 +342,9 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	for _, t := range m.toolUIs {
 		t.form.SetStyles(theme)
 	}
+	if m.commandPrompt != nil {
+		m.commandPrompt.form.SetStyles(theme)
+	}
 	m.permissionsPanel.SetStyles(theme.Permissions)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
@@ -477,7 +404,9 @@ func (m *Model) initChat() tea.Cmd {
 	}
 	m.chatPhase = chat.PhaseLoading
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
-	run, err := m.engine.Restore(ctx)
-	commands = append(commands, m.begin(opRestore, run, err, cancel))
+	if m.begin(opRestore, cancel) {
+		run, err := m.engine.Restore(ctx)
+		commands = append(commands, m.watchRun(run, err))
+	}
 	return tea.Batch(commands...)
 }
