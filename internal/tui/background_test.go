@@ -42,7 +42,7 @@ func TestViewsPaintTheThemeBackground(t *testing.T) {
 			if cmd == nil {
 				t.Fatal("login completion produced no command")
 			}
-			if _, initCmd := root.Update(cmd()); initCmd == nil {
+			if _, initCmd := root.Update(startupEngineResult(t, cmd)); initCmd == nil {
 				t.Fatal("engine result did not initialize chat")
 			}
 			if root.mode != ModeChat {

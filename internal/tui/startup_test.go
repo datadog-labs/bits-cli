@@ -21,6 +21,18 @@ import (
 	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
 )
 
+// Login commands may also contain terminal status reports and a progress tick.
+func startupEngineResult(t *testing.T, cmd tea.Cmd) engineReadyMsg {
+	t.Helper()
+	for _, msg := range flattenMsgs(t, cmd) {
+		if ready, ok := msg.(engineReadyMsg); ok {
+			return ready
+		}
+	}
+	t.Fatal("login command produced no engine result")
+	return engineReadyMsg{}
+}
+
 func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
 	loginModel := loginui.New(context.Background(), nil)
 	factoryCalls := 0
@@ -40,7 +52,7 @@ func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
 	if model != root || cmd == nil || factoryCalls != 0 {
 		t.Fatalf("completion model=%p root=%p cmd=%v calls=%d", model, root, cmd != nil, factoryCalls)
 	}
-	model, initCmd := root.Update(cmd())
+	model, initCmd := root.Update(startupEngineResult(t, cmd))
 	if model != root || initCmd == nil {
 		t.Fatal("engine result did not retain root and initialize chat")
 	}
@@ -179,7 +191,7 @@ func TestStartupHandoffTinyTerminalShowsBoundedResizePrompt(t *testing.T) {
 			})
 			_, _ = root.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
 			_, factory := root.Update(loginui.CompletedMsg{})
-			_, _ = root.Update(factory())
+			_, _ = root.Update(startupEngineResult(t, factory))
 			view := root.View().Content
 			if !strings.Contains(ansi.Strip(view), "Resize") {
 				t.Fatalf("view = %q, want resize prompt", ansi.Strip(view))
@@ -208,7 +220,7 @@ func TestStartupLoginCompletionIsSingleFlight(t *testing.T) {
 	if first == nil || duplicate != nil {
 		t.Fatalf("first=%v duplicate=%v", first != nil, duplicate != nil)
 	}
-	_, _ = root.Update(first())
+	_, _ = root.Update(startupEngineResult(t, first))
 	if factoryCalls != 1 || root.mode != ModeChat {
 		t.Fatalf("factory calls=%d mode=%v", factoryCalls, root.mode)
 	}
@@ -220,7 +232,7 @@ func TestStartupLoginFactoryErrorQuitsWithStoredError(t *testing.T) {
 		return nil, want
 	})
 	_, cmd := root.Update(loginui.CompletedMsg{})
-	_, quit := root.Update(cmd())
+	_, quit := root.Update(startupEngineResult(t, cmd))
 	if !errors.Is(root.StartupError(), want) {
 		t.Fatalf("startup error = %v", root.StartupError())
 	}
@@ -242,15 +254,15 @@ func TestControlCAfterCompletedLoginInvalidatesPendingFactory(t *testing.T) {
 		return nil, ctx.Err()
 	})
 	_, loginCmd := root.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	for _, child := range loginCmd().(tea.BatchMsg) {
-		_, _ = root.Update(child())
+	for _, msg := range flattenMsgs(t, loginCmd) {
+		_, _ = root.Update(msg)
 	}
 	if !loginModel.Completed() {
 		t.Fatal("test login did not reach persisted completion")
 	}
 	_, factoryCmd := root.Update(loginui.CompletedMsg{})
 	factoryResult := make(chan tea.Msg, 1)
-	go func() { factoryResult <- factoryCmd() }()
+	go func() { factoryResult <- startupEngineResult(t, factoryCmd) }()
 	<-factoryStarted
 
 	_, quit := root.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
@@ -289,7 +301,7 @@ func TestStartupLoginInitializesConversationRestore(t *testing.T) {
 		return agent.New(fake.New(), agent.Config{ConversationID: "conversation-1"}), nil
 	})
 	_, cmd := root.Update(loginui.CompletedMsg{})
-	_, initCmd := root.Update(cmd())
+	_, initCmd := root.Update(startupEngineResult(t, cmd))
 	if initCmd == nil || root.mode != ModeChat || root.chatPhase != chat.PhaseLoading {
 		t.Fatalf("init=%v mode=%v phase=%v", initCmd != nil, root.mode, root.chatPhase)
 	}

@@ -196,6 +196,7 @@ type Model struct {
 	// pointerIsHand is the OS pointer shape last written to the terminal, so
 	// reconcilePointerShape only emits an OSC 22 sequence on a real change.
 	pointerIsHand bool
+	terminal      terminalStatus
 
 	// chatMouseMode is the chat surface's mouse tracking, resolved once from
 	// the environment (see chatMouseMode()).
@@ -289,6 +290,7 @@ func (m *Model) configure(configs []Config) {
 func newShell() *Model {
 	theme := styles.Default(true)
 	m := &Model{
+		terminal:          terminalStatus{focused: true},
 		editor:            editor.New(),
 		list:              chat.NewList(),
 		animActivity:      newAnimationTimeline(activityAnimInterval),

@@ -45,10 +45,9 @@ func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer)
 	stopWatchingJobControl := watchJobControlStops(ctx, program)
 	model, err := program.Run()
 	stopWatchingJobControl()
-	// The chat may leave an OSC 22 hand pointer over a clickable row. Reset it
-	// once the program has stopped, so every exit path (ctrl+c, /quit, /logout,
-	// errors) is covered. Terminals without OSC 22 ignore it.
-	_, _ = fmt.Fprint(stdout, ansi.SetPointerShape("default"))
+	// Reset terminal state after the renderer stops, covering every exit path
+	// (ctrl+c, /quit, /logout, errors). Unsupported OSCs are ignored.
+	_, _ = fmt.Fprint(stdout, ansi.SetPointerShape("default"), ansi.ResetProgressBar, ansi.ClearProgramStatus)
 	if err != nil {
 		return err
 	}
