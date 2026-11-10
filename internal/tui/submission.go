@@ -93,6 +93,7 @@ func (m *Model) startTurn(start func(context.Context, agent.TurnInput) (agent.Ru
 	m.localTurnOwned = true
 	m.localTurnRecoverable = false
 	m.activityLocalTurn = localTurnSent
+	m.localTurnInput = in
 	run, err := start(ctx, in)
 	m.chatPhase = chat.PhaseWaiting
 	failed := m.watchRun(run, err)

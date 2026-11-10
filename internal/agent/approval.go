@@ -190,6 +190,17 @@ func cancelledResult() ToolResult {
 	}
 }
 
+// interruptedResult answers a call whose handler was cut off before it
+// reported a result.
+func interruptedResult() ToolResult {
+	return ToolResult{
+		Title:     "Interrupted",
+		Output:    "tool execution was interrupted before it completed",
+		IsError:   true,
+		Cancelled: true,
+	}
+}
+
 // permissionGate is the actor's permission state: the mode and the session
 // grants. The approval policy only declares a call's gate; the mode decides
 // what it means.

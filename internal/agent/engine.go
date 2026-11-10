@@ -265,6 +265,9 @@ const maxTurns = 150
 // other goroutines and reports back to the actor. Commands such as Decide and
 // SetPermissionsMode apply on the actor before returning.
 type Engine struct {
+	recoveryResults        map[string]recoveredResult
+	recoveryCalls          map[string]ToolCall
+	recoveryStarted        map[string]ToolCall // calls whose handler this process launched
 	activityReplay         *ActivityReplay
 	forkSource             *assistant.ForkedFrom
 	backend                Backend
@@ -604,6 +607,9 @@ func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) (RunI
 // abandons the calls left to resume.
 func (e *Engine) launch(ctx context.Context, in TurnInput, resumed []ToolCall) (RunID, error) {
 	e.continuation = nil
+	e.recoveryResults = make(map[string]recoveredResult)
+	e.recoveryCalls = make(map[string]ToolCall)
+	e.recoveryStarted = make(map[string]ToolCall)
 	run, err := e.claim()
 	if err != nil {
 		return 0, err
@@ -684,6 +690,16 @@ func (e *Engine) segment(ctx context.Context, t *turn, in TurnInput, resumed []T
 	var opts assistant.SendOptions
 	var delivery contextDelivery
 	e.do(func() {
+		t.recovered = make(map[string]recoveredResult)
+		for _, call := range resumed {
+			if e.recoveryCalls == nil {
+				e.recoveryCalls = make(map[string]ToolCall)
+			}
+			e.recoveryCalls[call.ID] = call
+			if cached, ok := e.recoveryResults[call.ID]; ok && cached.call == call {
+				t.recovered[call.ID] = cached
+			}
+		}
 		// The turn answers restored calls: they are its own, even if it is
 		// cancelled before it changes them.
 		for _, call := range resumed {
@@ -770,6 +786,10 @@ func (t *turn) conclude(err error) Event {
 		e.transcript.FinalizeAll()
 		e.settleUnfinishedTools(t.tools, t.run, true)
 		t.publish()
+	}
+	if end.Kind == EventDone {
+		// The server accepted every response; nothing is left to recover.
+		e.recoveryResults, e.recoveryCalls, e.recoveryStarted = nil, nil, nil
 	}
 	return end
 }
@@ -870,6 +890,9 @@ func (e *Engine) NewConversation() error {
 		e.usage = nil
 		e.continuation = nil
 		e.queue = nil
+		e.recoveryResults = nil
+		e.recoveryCalls = nil
+		e.recoveryStarted = nil
 		clear(e.gate.grants)
 		e.setTasks(nil)
 		e.publish()
@@ -988,10 +1011,11 @@ const maxConcurrentTools = 16
 // turn owns one turn's state. Only the actor changes it; the exchange and
 // handler goroutines report back through channels.
 type turn struct {
-	e      *Engine
-	parent context.Context // the caller's; its cancellation ends the turn as canceled
-	ctx    context.Context // scopes the exchange and every handler
-	cancel context.CancelFunc
+	recovered map[string]recoveredResult
+	e         *Engine
+	parent    context.Context // the caller's; its cancellation ends the turn as canceled
+	ctx       context.Context // scopes the exchange and every handler
+	cancel    context.CancelFunc
 	// handlers parents every handler context; a stop cancels it.
 	handlers     context.Context
 	stopHandlers context.CancelFunc
@@ -1151,6 +1175,14 @@ func (t *turn) apply(event exchangeEvent) error {
 		}
 	}
 	if event.message != nil {
+		_, rounds := t.ex.(*roundsExchange)
+		if rounds && event.message.Content.Type == assistant.ContentClientToolCall {
+			call := toolCallOf(event.message.Content)
+			if t.e.recoveryCalls == nil {
+				t.e.recoveryCalls = make(map[string]ToolCall)
+			}
+			t.e.recoveryCalls[call.ID] = call
+		}
 		t.acknowledge()
 		if !t.stopRequested {
 			t.fold(*event.message)
@@ -1206,6 +1238,11 @@ func (t *turn) acknowledge() {
 // or launched. Once a stop is requested nothing new starts. The approval
 // policy runs here, once; the mode only decides what the declared gate means.
 func (t *turn) dispatch(c *clientCall) {
+	if cached, ok := t.recovered[c.call.ID]; ok && cached.call == c.call {
+		delete(t.recovered, c.call.ID)
+		t.resolve(c, cached.result)
+		return
+	}
 	if t.stopRequested {
 		t.resolve(c, cancelledResult())
 		return
@@ -1281,6 +1318,10 @@ func (t *turn) start(c *clientCall, wasParked bool) {
 			t.publish()
 		}
 	}
+	if t.e.recoveryStarted == nil {
+		t.e.recoveryStarted = make(map[string]ToolCall)
+	}
+	t.e.recoveryStarted[c.call.ID] = c.call
 	toolCtx, cancel := context.WithCancel(t.handlers)
 	c.status = callRunning
 	c.cancel = cancel
@@ -1360,6 +1401,12 @@ func (t *turn) resolve(c *clientCall, result ToolResult) {
 func (t *turn) settle(c *clientCall, result ToolResult) {
 	c.status = callResolved
 	c.response = toolResponse(c.call, result)
+	if !result.Cancelled {
+		if t.e.recoveryResults == nil {
+			t.e.recoveryResults = make(map[string]recoveredResult)
+		}
+		t.e.recoveryResults[c.call.ID] = recoveredResult{call: c.call, result: result}
+	}
 }
 
 func (t *turn) publishResult(c *clientCall, result ToolResult) {

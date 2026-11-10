@@ -140,6 +140,9 @@ func (e *Engine) installConversation(conversation *Conversation) {
 	e.usage = nil
 	e.continuation = conversation.continuation
 	e.queue = nil
+	e.recoveryResults = nil
+	e.recoveryCalls = nil
+	e.recoveryStarted = nil
 	e.setTasks(conversation.tasks)
 }
 

@@ -968,7 +968,8 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	m.localTurnOwned = true
 	m.localTurnRecoverable = false
 	m.activityLocalTurn = localTurnSent
-	run, err := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
+	m.localTurnInput = agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue}
+	run, err := m.engine.ResumePendingTools(ctx, m.localTurnInput)
 	m.chatPhase = chat.PhaseWaiting
 	m.list.ScrollToBottom()
 	return m.watchRun(run, err)
