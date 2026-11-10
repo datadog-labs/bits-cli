@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 # Propose a verified release in a draft PR to datadog-labs/homebrew-pack.
 # With --dry-run, preview the formula, destination, and PR without remote writes.
+# With --output DIR, write the verified formula and PR body to DIR and stop: the
+# release workflow commits them to the tap itself, as signed API commits.
 
 require "digest"
 require "erb"
@@ -42,8 +44,14 @@ end
 def main(args)
   dry_run = args.first == "--dry-run"
   args.shift if dry_run
-  unless args.length == 1 && args.first.match?(/\Av(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z/)
-    abort "usage: #{$PROGRAM_NAME} [--dry-run] v<major>.<minor>.<patch>"
+  output_dir = nil
+  if !dry_run && args.first == "--output"
+    args.shift
+    output_dir = args.shift
+  end
+  unless args.length == 1 && args.first.match?(/\Av(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z/) &&
+         (output_dir.nil? || !output_dir.empty?)
+    abort "usage: #{$PROGRAM_NAME} [--dry-run | --output DIR] v<major>.<minor>.<patch>"
   end
   tag = args.first
   version = tag.delete_prefix("v")
@@ -65,6 +73,14 @@ def main(args)
     warn "Verified the #{tag} archives."
     formula = render("bits.rb", values)
     body = render("pull-request.md", { "tag" => tag })
+    if output_dir
+      Dir.mkdir(output_dir) unless Dir.exist?(output_dir)
+      File.write(File.join(output_dir, "bits.rb"), formula)
+      File.write(File.join(output_dir, "pull-request.md"), body)
+      run(RbConfig.ruby, "-c", File.join(output_dir, "bits.rb"))
+      warn "Wrote the #{tag} formula and PR body to #{output_dir}."
+      return
+    end
 
     tap_dir = File.join(work_dir, "homebrew-pack")
     # Clone full history so pushing to a stale fork never sends a shallow boundary.
