@@ -165,20 +165,20 @@ func (m *Model) welcomeOfferHeight() int {
 	return m.frame.transcript.Dy() - m.splashPanelHeight() - 1
 }
 
-// showResume gates the offer on the welcome conditions, a non-empty fetch, and
-// room for at least one row. A pending update offer takes its place.
+// showResume gates the offer on the welcome conditions, a running or non-empty
+// fetch, and room for at least one row. A pending update offer takes its place.
 func (m *Model) showResume() bool {
-	if m.resume.empty() || m.showUpgrade() || !m.welcomeIdle() {
+	if m.resume.rows() == 0 || m.showUpgrade() || !m.welcomeIdle() {
 		return false
 	}
 	return m.resumeVisibleRows() > 0
 }
 
 // resumeVisibleRows is how many conversations fit below the panel, at most
-// resumeRows, and 0 when not even one fits.
+// resumeMaxRows, and 0 when not even one fits.
 func (m *Model) resumeVisibleRows() int {
 	available := m.welcomeOfferHeight()
-	for rows := min(resumeRows, len(m.resume.conversations)); rows > 0; rows-- {
+	for rows := min(resumeMaxRows, m.resume.rows()); rows > 0; rows-- {
 		if resumeBlockHeight(rows) <= available {
 			return rows
 		}

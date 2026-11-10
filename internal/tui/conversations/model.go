@@ -456,14 +456,18 @@ func (m Model) compactMessage() string {
 	}
 }
 
-// loadingLabel shares the compact layout's copy and the theme's activity glyph.
-func (m Model) loadingLabel() string {
-	glyph := m.theme.Chat.StatusSpinner.Frame(m.frame)
+// LoadingLabel is the activity glyph and message the conversation views show
+// while a read is in flight.
+func LoadingLabel(theme styles.Theme, frame int, message string) string {
+	glyph := theme.Chat.StatusSpinner.Frame(frame)
 	if glyph == "" {
 		glyph = "·"
 	}
-	return m.theme.Feedback.Progress.Render(glyph + " " + m.compactMessage())
+	return theme.Feedback.Progress.Render(glyph + " " + message)
 }
+
+// loadingLabel shares the compact layout's copy.
+func (m Model) loadingLabel() string { return LoadingLabel(m.theme, m.frame, m.compactMessage()) }
 
 func (m Model) panelBody(width, height int) string {
 	m.resizeBody(width, height)

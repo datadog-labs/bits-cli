@@ -67,7 +67,7 @@ func TestSameHostRedirectKeepsAPIKeyHeaders(t *testing.T) {
 		_, _ = w.Write([]byte(conversationsBody))
 	})
 
-	if _, err := apiKeyClient(t, srv.URL).UserConversations(context.Background()); err != nil {
+	if _, err := apiKeyClient(t, srv.URL).UserConversations(context.Background(), UserConversationsInput{}); err != nil {
 		t.Fatalf("same-host redirect failed: %v", err)
 	}
 	mu.Lock()
@@ -128,7 +128,7 @@ func TestCrossHostRedirectDropsAPIKeyHeaders(t *testing.T) {
 	target, headers := captureServer(t)
 	origin := redirectServer(t, target.URL+"/final")
 
-	if _, err := apiKeyClient(t, origin.URL).UserConversations(context.Background()); err != nil {
+	if _, err := apiKeyClient(t, origin.URL).UserConversations(context.Background(), UserConversationsInput{}); err != nil {
 		t.Fatalf("cross-host redirect failed: %v", err)
 	}
 	got := headers()
@@ -143,7 +143,7 @@ func TestCrossHostRedirectDropsAPIKeyHeadersOnFallbackClient(t *testing.T) {
 	origin := redirectServer(t, target.URL+"/final")
 
 	c := &Client{BaseURL: origin.URL, APIKey: "api", AppKey: "app"}
-	if _, err := c.UserConversations(context.Background()); err != nil {
+	if _, err := c.UserConversations(context.Background(), UserConversationsInput{}); err != nil {
 		t.Fatalf("cross-host redirect failed: %v", err)
 	}
 	got := headers()
@@ -191,7 +191,7 @@ func TestRedirectAuthorizationBehaviorUnchanged(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := c.UserConversations(context.Background()); err != nil {
+		if _, err := c.UserConversations(context.Background(), UserConversationsInput{}); err != nil {
 			t.Fatalf("cross-host redirect failed: %v", err)
 		}
 		got := headers()
@@ -211,7 +211,7 @@ func TestRedirectAuthorizationBehaviorUnchanged(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := c.UserConversations(context.Background()); err != nil {
+		if _, err := c.UserConversations(context.Background(), UserConversationsInput{}); err != nil {
 			t.Fatalf("cross-domain redirect failed: %v", err)
 		}
 		got := headers()
@@ -230,7 +230,7 @@ func TestRedirectLimitStillApplies(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := apiKeyClient(t, srv.URL).UserConversations(context.Background())
+	_, err := apiKeyClient(t, srv.URL).UserConversations(context.Background(), UserConversationsInput{})
 	if err == nil || !strings.Contains(err.Error(), "stopped after 10 redirects") {
 		t.Fatalf("redirect loop error = %v, want the 10-redirect limit", err)
 	}

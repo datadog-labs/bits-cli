@@ -20,6 +20,12 @@ import (
 // fixedNow keeps relative timestamps deterministic.
 func fixedNow() time.Time { return time.Unix(1_700_000_000, 0) }
 
+// settleResume finishes the offer's pending read with an empty list, as the
+// fetch command would; tests never run it.
+func settleResume(m *Model) {
+	m.Update(recentConversationsMsg{generation: m.resume.task.gen})
+}
+
 func resumeFixture(count int) *resume {
 	summaries := make([]assistant.ConversationSummary, count)
 	for i := range summaries {
@@ -44,7 +50,7 @@ func TestResumeBlockHeightMatchesItsFormula(t *testing.T) {
 	theme := styles.Default(true)
 	for _, count := range []int{1, 4, 32} {
 		r := resumeFixture(count)
-		for visible := 1; visible <= resumeRows; visible++ {
+		for visible := 1; visible <= resumeMaxRows; visible++ {
 			if visible > count {
 				continue
 			}
@@ -60,7 +66,7 @@ func TestResumeBlockNeverExceedsItsWidth(t *testing.T) {
 	theme := styles.Default(true)
 	r := resumeFixture(32)
 	for width := minimumChatWidth; width <= 200; width++ {
-		for i, line := range strings.Split(r.view(theme, width, resumeRows), "\n") {
+		for i, line := range strings.Split(r.view(theme, width, resumeMaxRows), "\n") {
 			if got := ansi.StringWidth(line); got > width {
 				t.Fatalf("width=%d line %d measures %d columns", width, i, got)
 			}
@@ -71,21 +77,22 @@ func TestResumeBlockNeverExceedsItsWidth(t *testing.T) {
 // Selection clamps rather than wrapping, and the window follows it.
 func TestResumeSelectionClampsAndScrolls(t *testing.T) {
 	r := resumeFixture(32)
-	r.move(-1, resumeRows)
+	r.move(-1, resumeMaxRows)
 	if r.selected != 0 || r.top != 0 {
 		t.Fatalf("up from the first row moved to selected=%d top=%d", r.selected, r.top)
 	}
-	for range 10 {
-		r.move(1, resumeRows)
+	const steps = resumeMaxRows + 4
+	for range steps {
+		r.move(1, resumeMaxRows)
 	}
-	if r.selected != 10 {
-		t.Fatalf("selected = %d, want 10", r.selected)
+	if r.selected != steps {
+		t.Fatalf("selected = %d, want %d", r.selected, steps)
 	}
-	if r.top != 10-resumeRows+1 {
+	if r.top != steps-resumeMaxRows+1 {
 		t.Fatalf("top = %d, want the window to follow the selection", r.top)
 	}
 	for range 100 {
-		r.move(1, resumeRows)
+		r.move(1, resumeMaxRows)
 	}
 	if r.selected != 31 {
 		t.Fatalf("selected = %d, want the last row", r.selected)
@@ -95,18 +102,18 @@ func TestResumeSelectionClampsAndScrolls(t *testing.T) {
 func TestResumeIndicatorCountsRemainingRows(t *testing.T) {
 	theme := styles.Default(true)
 	r := resumeFixture(32)
-	if got := r.view(theme, 80, resumeRows); !strings.Contains(got, "28 more below") {
+	if got, want := r.view(theme, 80, resumeMaxRows), fmt.Sprintf("%d more below", 32-resumeMaxRows); !strings.Contains(got, want) {
 		t.Fatalf("missing the below indicator:\n%s", got)
 	}
 	for range 31 {
-		r.move(1, resumeRows)
+		r.move(1, resumeMaxRows)
 	}
-	out := r.view(theme, 80, resumeRows)
+	out := r.view(theme, 80, resumeMaxRows)
 	if !strings.Contains(out, "more above") {
 		t.Fatalf("missing the above indicator when scrolled to the end:\n%s", out)
 	}
 	// Height must not change between the two, or the reservation breaks.
-	if lipgloss.Height(out) != resumeBlockHeight(resumeRows) {
+	if lipgloss.Height(out) != resumeBlockHeight(resumeMaxRows) {
 		t.Fatalf("scrolled block is %d rows", lipgloss.Height(out))
 	}
 }
@@ -135,11 +142,11 @@ func TestResumeViewSurvivesAGrowingWindow(t *testing.T) {
 	for range 40 {
 		r.move(1, 1)
 	}
-	out := r.view(theme, 80, resumeRows)
-	if got := lipgloss.Height(out); got != resumeBlockHeight(resumeRows) {
-		t.Fatalf("grown window rendered %d rows, want %d", got, resumeBlockHeight(resumeRows))
+	out := r.view(theme, 80, resumeMaxRows)
+	if got := lipgloss.Height(out); got != resumeBlockHeight(resumeMaxRows) {
+		t.Fatalf("grown window rendered %d rows, want %d", got, resumeBlockHeight(resumeMaxRows))
 	}
-	if want := "28 more above"; !strings.Contains(ansi.Strip(out), want) {
+	if want := fmt.Sprintf("%d more above", 32-resumeMaxRows); !strings.Contains(ansi.Strip(out), want) {
 		t.Fatalf("indicator does not report %q after the window grew:\n%s", want, ansi.Strip(out))
 	}
 	if strings.Contains(ansi.Strip(out), "more below") {
@@ -167,7 +174,7 @@ func TestResumeSelectionStaysInsideTheRenderedWindow(t *testing.T) {
 	theme := styles.Default(true)
 	r := resumeFixture(32)
 	for range 3 {
-		r.move(1, resumeRows)
+		r.move(1, resumeMaxRows)
 	}
 	if r.selected != 3 {
 		t.Fatalf("selected = %d, want 3", r.selected)
@@ -202,7 +209,7 @@ func TestResumeSelectedIDTracksSelection(t *testing.T) {
 	if !ok || id != r.conversations[0].ConversationID {
 		t.Fatalf("selectedID = (%q, %v)", id, ok)
 	}
-	r.move(1, resumeRows)
+	r.move(1, resumeMaxRows)
 	if id, _ := r.selectedID(); id != r.conversations[1].ConversationID {
 		t.Fatalf("selectedID did not follow the selection: %q", id)
 	}
@@ -215,7 +222,7 @@ func TestResumeSelectedIDTracksSelection(t *testing.T) {
 func TestResumeResetReturnsToTheFirstRow(t *testing.T) {
 	r := resumeFixture(32)
 	for range 10 {
-		r.move(1, resumeRows)
+		r.move(1, resumeMaxRows)
 	}
 	r.reset()
 	if r.selected != 0 || r.top != 0 {
@@ -230,7 +237,7 @@ func TestResumeResetReturnsToTheFirstRow(t *testing.T) {
 func TestResumeViewIsEmptyWithoutConversations(t *testing.T) {
 	theme := styles.Default(true)
 	r := &resume{now: fixedNow}
-	if got := r.view(theme, 80, resumeRows); got != "" {
+	if got := r.view(theme, 80, resumeMaxRows); got != "" {
 		t.Fatalf("view() = %q, want empty string for no conversations", got)
 	}
 }
@@ -305,7 +312,7 @@ func TestArrowKeysRecallPromptsOutsideTheOffer(t *testing.T) {
 // Enter resumes the selected conversation rather than submitting.
 func TestEnterResumesTheSelectedConversation(t *testing.T) {
 	m := resumeKeyModel(t)
-	m.resume.move(1, resumeRows)
+	m.resume.move(1, resumeMaxRows)
 	want, _ := m.resume.selectedID()
 	_, cmd := m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
@@ -346,8 +353,8 @@ func TestNewConversationBringsTheOfferBack(t *testing.T) {
 	setConversationInput(m, "/new")
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	if !strings.Contains(m.list.Render(), resumeTitle) {
-		t.Fatalf("the offer did not return after /new:\n%s", m.list.Render())
+	if !m.resume.loading() || !strings.Contains(m.list.Render(), resumeLoading) {
+		t.Fatalf("/new did not reload the offer:\n%s", m.list.Render())
 	}
 }
 

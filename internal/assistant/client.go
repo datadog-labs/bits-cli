@@ -732,9 +732,13 @@ func (c *Client) CurrentUser(ctx context.Context) (CurrentUser, error) {
 	return out, nil
 }
 
-// UserConversations lists all conversations for the current user.
-func (c *Client) UserConversations(ctx context.Context) (*UserConversationsResponse, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/api/v2/assistant/user-conversations", nil)
+// UserConversations lists the current user's conversations, newest first.
+func (c *Client) UserConversations(ctx context.Context, in UserConversationsInput) (*UserConversationsResponse, error) {
+	path := "/api/v2/assistant/user-conversations"
+	if in.PageSize > 0 {
+		path += "?" + url.Values{"page_size": {strconv.Itoa(in.PageSize)}}.Encode()
+	}
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}

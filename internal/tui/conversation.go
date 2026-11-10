@@ -85,7 +85,8 @@ func (m *Model) startConversationList() tea.Cmd {
 	ctx, generation := m.conversationTask.start(context.Background(), historyLoadTimeout)
 	engine := m.engine
 	return func() tea.Msg {
-		return conversationListResultMsg{generation: generation, result: engine.ListConversations(ctx)}
+		// No limit: the picker filters locally, so a page would hide older matches.
+		return conversationListResultMsg{generation: generation, result: engine.ListConversations(ctx, 0)}
 	}
 }
 

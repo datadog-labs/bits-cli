@@ -17,10 +17,8 @@ var (
 )
 
 // ConversationListBackend is the optional Assistant API list capability.
-// The current API returns the complete list in one response; it has no paging
-// request or response fields.
 type ConversationListBackend interface {
-	UserConversations(ctx context.Context) (*assistant.UserConversationsResponse, error)
+	UserConversations(ctx context.Context, in assistant.UserConversationsInput) (*assistant.UserConversationsResponse, error)
 }
 
 type ConversationListResult struct {
@@ -41,13 +39,15 @@ type Conversation struct {
 }
 
 // ListConversations reads and validates summaries without taking the engine's
-// operation gate. The returned slice does not alias backend storage.
-func (e *Engine) ListConversations(ctx context.Context) ConversationListResult {
+// operation gate. A positive limit asks for only the newest limit
+// conversations; zero asks for the backend's default. The returned slice does
+// not alias backend storage.
+func (e *Engine) ListConversations(ctx context.Context, limit int) ConversationListResult {
 	backend, ok := e.backend.(ConversationListBackend)
 	if !ok {
 		return ConversationListResult{Err: ErrConversationListUnsupported}
 	}
-	response, err := backend.UserConversations(ctx)
+	response, err := backend.UserConversations(ctx, assistant.UserConversationsInput{PageSize: limit})
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}

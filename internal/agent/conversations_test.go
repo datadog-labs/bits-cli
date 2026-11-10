@@ -26,7 +26,7 @@ type historyBackend struct {
 	history func(context.Context, assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error)
 }
 
-func (b *historyBackend) UserConversations(context.Context) (*assistant.UserConversationsResponse, error) {
+func (b *historyBackend) UserConversations(context.Context, assistant.UserConversationsInput) (*assistant.UserConversationsResponse, error) {
 	return b.list, nil
 }
 
@@ -51,7 +51,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 	response.Data.Type = "user-conversations-response"
 	response.Data.Attributes.Conversations = []assistant.ConversationSummary{{ID: testConversationID, ConversationID: testConversationID, Title: "One"}}
 	e := New(&historyBackend{list: response}, Config{})
-	result := e.ListConversations(context.Background())
+	result := e.ListConversations(context.Background(), 0)
 	if result.Err != nil || len(result.Conversations) != 1 {
 		t.Fatalf("result = %+v", result)
 	}
@@ -64,7 +64,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 	}
 
 	unsupportedEngine := New(&scriptBackend{}, Config{})
-	unsupported := unsupportedEngine.ListConversations(context.Background())
+	unsupported := unsupportedEngine.ListConversations(context.Background(), 0)
 	if !errors.Is(unsupported.Err, ErrConversationListUnsupported) {
 		t.Fatalf("unsupported error = %v", unsupported.Err)
 	}
@@ -73,7 +73,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 	}
 
 	malformed := New(&historyBackend{}, Config{})
-	if got := malformed.ListConversations(context.Background()).Err; !errors.Is(got, ErrMalformedConversationList) {
+	if got := malformed.ListConversations(context.Background(), 0).Err; !errors.Is(got, ErrMalformedConversationList) {
 		t.Fatalf("nil response error = %v", got)
 	}
 	if malformed.OperationActive() {
@@ -86,7 +86,7 @@ func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
 		{ID: testConversationID, ConversationID: testConversationID, Title: "valid"},
 	}
 	malformed = New(&historyBackend{list: badIDs}, Config{})
-	result = malformed.ListConversations(context.Background())
+	result = malformed.ListConversations(context.Background(), 0)
 	if result.Err != nil || result.Omitted != 1 || len(result.Conversations) != 1 || result.Conversations[0].ConversationID != testConversationID {
 		t.Fatalf("partially malformed result = %+v", result)
 	}
@@ -235,7 +235,7 @@ func TestListConversationsIgnoresTheOperationGate(t *testing.T) {
 
 	hold(t, e)
 
-	result := e.ListConversations(context.Background())
+	result := e.ListConversations(context.Background(), 0)
 	if result.Err != nil {
 		t.Fatalf("read failed while the gate was held: %v", result.Err)
 	}
@@ -346,7 +346,7 @@ func TestE2E_NewConversationResetLifecycle(t *testing.T) {
 			t.Fatalf("%s conversation %q has empty history", label, id)
 		}
 	}
-	listed, err := client.UserConversations(ctx)
+	listed, err := client.UserConversations(ctx, assistant.UserConversationsInput{})
 	if err != nil {
 		t.Fatalf("list conversations: %v", err)
 	}

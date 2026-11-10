@@ -102,7 +102,7 @@ func (t *task) running() bool { return t.cancel != nil }
 func (m *Model) stopBackgroundTasks() tea.Cmd {
 	m.startupTask.stop()
 	m.conversationTask.stop()
-	m.recentConversationsTask.stop()
+	m.resume.task.stop()
 	m.skillMenu.task.stop()
 	m.statusTask.stop()
 	m.stopEntitySearch()

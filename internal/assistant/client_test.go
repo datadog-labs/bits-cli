@@ -142,7 +142,7 @@ func TestDo_FallsBackToRawBodyWhenNotJSONAPI(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = fmt.Fprint(w, "upstream exploded")
 	})
-	_, err := c.UserConversations(context.Background())
+	_, err := c.UserConversations(context.Background(), UserConversationsInput{})
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected *APIError, got %v", err)
@@ -155,6 +155,23 @@ func TestDo_FallsBackToRawBodyWhenNotJSONAPI(t *testing.T) {
 	}
 	if !errors.Is(err, ErrServer) {
 		t.Errorf("502 should unwrap to ErrServer")
+	}
+}
+
+// Without a page size the request stays bare, so the server keeps its default.
+func TestUserConversationsSendsPageSizeOnlyWhenSet(t *testing.T) {
+	for in, want := range map[UserConversationsInput]string{{}: "", {PageSize: 16}: "page_size=16"} {
+		var got string
+		c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+			got = r.URL.RawQuery
+			_, _ = fmt.Fprint(w, conversationsBody)
+		})
+		if _, err := c.UserConversations(context.Background(), in); err != nil {
+			t.Fatalf("%+v: %v", in, err)
+		}
+		if got != want {
+			t.Errorf("%+v: query = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -647,7 +664,7 @@ func TestDo_RetriesTransientStatusThenSucceeds(t *testing.T) {
 	})
 	c.MaxRetries = 2
 	c.RetryBaseDelay = time.Millisecond
-	if _, err := c.UserConversations(context.Background()); err != nil {
+	if _, err := c.UserConversations(context.Background(), UserConversationsInput{}); err != nil {
 		t.Fatalf("UserConversations: %v", err)
 	}
 	if got := n.Load(); got != 3 {
@@ -663,7 +680,7 @@ func TestDo_ExhaustsRetriesThenReturnsError(t *testing.T) {
 	})
 	c.MaxRetries = 2
 	c.RetryBaseDelay = time.Millisecond
-	_, err := c.UserConversations(context.Background())
+	_, err := c.UserConversations(context.Background(), UserConversationsInput{})
 	if !errors.Is(err, ErrServer) {
 		t.Fatalf("want ErrServer, got %v", err)
 	}

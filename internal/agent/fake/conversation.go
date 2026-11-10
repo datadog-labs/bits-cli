@@ -191,8 +191,8 @@ func (f *Fake) ConversationHistory(ctx context.Context, in assistant.Conversatio
 }
 
 // UserConversations lists conversations with at least one message, newest
-// first.
-func (f *Fake) UserConversations(ctx context.Context) (*assistant.UserConversationsResponse, error) {
+// first, keeping the first in.PageSize when it is set.
+func (f *Fake) UserConversations(ctx context.Context, in assistant.UserConversationsInput) (*assistant.UserConversationsResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -211,6 +211,9 @@ func (f *Fake) UserConversations(ctx context.Context) (*assistant.UserConversati
 	slices.SortFunc(r.Data.Attributes.Conversations, func(a, b assistant.ConversationSummary) int {
 		return cmp.Or(cmp.Compare(b.UpdatedAt, a.UpdatedAt), strings.Compare(b.ID, a.ID))
 	})
+	if convs := r.Data.Attributes.Conversations; in.PageSize > 0 && len(convs) > in.PageSize {
+		r.Data.Attributes.Conversations = convs[:in.PageSize]
+	}
 	return &r, nil
 }
 

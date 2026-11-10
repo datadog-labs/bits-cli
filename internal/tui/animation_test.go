@@ -181,6 +181,7 @@ func TestPendingNewClearsStaleRunningBlockAndDisarms(t *testing.T) {
 	m.syncAnimations()
 
 	m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventDone, Run: m.op.run}})
+	settleResume(m)
 	if m.animClock.armed || m.animActivity.active || m.animBorderSweep.active {
 		t.Fatal("pending /new left animations active")
 	}
@@ -203,6 +204,7 @@ func TestIdleNewAfterClosedStaleTurnRemainsDisarmed(t *testing.T) {
 	// dispatchCommand is normally reached from Update; run the centralized
 	// reconciliation that Update performs after dispatch.
 	m.Update(struct{}{})
+	settleResume(m)
 	if m.animClock.armed || m.list.HasAnimated() {
 		t.Fatal("idle /new re-armed animation from stale transcript state")
 	}
@@ -317,6 +319,7 @@ func TestAnimationFrameReachesTheList(t *testing.T) {
 func TestPickerLoadingUsesSharedClockAndStopsOnClose(t *testing.T) {
 	m := New(agent.New(newResumeBackend(), agent.Config{}))
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	settleResume(m)
 	m.openConversationPicker()
 	if cmd := m.syncAnimations(); cmd == nil || !m.animClock.armed || m.animBorderSweep.active {
 		t.Fatal("picker did not start just the shared activity clock")

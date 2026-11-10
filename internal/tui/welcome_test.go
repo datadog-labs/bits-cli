@@ -401,11 +401,11 @@ func TestHeaderNeverExceedsTerminalWidth(t *testing.T) {
 // the panel off at launch. Rows degrade, then the offer drops entirely. The
 // test only proves that ladder happened if both ends of it are observed.
 func TestResumeRowsDegradeUntilTheHeaderFits(t *testing.T) {
-	m := welcomeModel(120, 40)
+	m := welcomeModel(120, 60)
 	m.resume = *resumeFixture(32)
-	previous := resumeRows + 1
-	minRows, maxRows := resumeRows, 0
-	for height := 40; height >= 1; height-- {
+	previous := resumeMaxRows + 1
+	minRows, maxRows := resumeMaxRows, 0
+	for height := 60; height >= 1; height-- {
 		m.height = height
 		m.relayout()
 		rows := 0
@@ -422,9 +422,9 @@ func TestResumeRowsDegradeUntilTheHeaderFits(t *testing.T) {
 		minRows, maxRows = min(minRows, rows), max(maxRows, rows)
 		previous = rows
 	}
-	if minRows != 0 || maxRows != resumeRows {
+	if minRows != 0 || maxRows != resumeMaxRows {
 		t.Fatalf("rows ranged [%d, %d] across the shrink, want [0, %d]: the degradation ladder never ran",
-			minRows, maxRows, resumeRows)
+			minRows, maxRows, resumeMaxRows)
 	}
 }
 
@@ -488,24 +488,42 @@ func TestChatViewRendersTheHeaderOnlyThroughTheTranscript(t *testing.T) {
 // that never received the message, so the failed case also asserts the offer
 // stayed empty.
 func TestRecentConversationsResultDrivesTheOffer(t *testing.T) {
+	populated := agent.ConversationListResult{Conversations: resumeFixture(4).conversations}
 	for _, test := range []struct {
 		name   string
-		result agent.ConversationListResult
-		want   bool
+		result *agent.ConversationListResult // nil leaves the read running
+		stale  bool
+		rows   int
 	}{
-		{"populated", agent.ConversationListResult{Conversations: resumeFixture(4).conversations}, true},
-		{"empty", agent.ConversationListResult{}, false},
-		{"failed", agent.ConversationListResult{Err: errors.New("offline")}, false},
+		{"loading", nil, false, 1},
+		{"populated", &populated, false, 4},
+		{"stale", &populated, true, 1},
+		{"empty", &agent.ConversationListResult{}, false, 0},
+		{"failed", &agent.ConversationListResult{Err: errors.New("offline")}, false, 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := welcomeModel(120, 40)
 			m.mode = ModeChat
-			m.Update(recentConversationsMsg{result: test.result})
-			if got := m.showResume(); got != test.want {
-				t.Fatalf("showResume = %v, want %v", got, test.want)
+			m.engine = agent.New(fake.New(), agent.Config{})
+			t.Cleanup(m.engine.Close)
+			t.Cleanup(m.Detach)
+			m.syncResume()
+			if test.result != nil {
+				generation := m.resume.task.gen
+				if test.stale {
+					generation--
+				}
+				m.Update(recentConversationsMsg{generation: generation, result: *test.result})
 			}
-			if test.name == "failed" && !m.resume.empty() {
-				t.Fatal("a failed fetch must not populate the offer")
+			if got := m.resume.rows(); got != test.rows {
+				t.Fatalf("rows = %d, want %d", got, test.rows)
+			}
+			if got := m.showResume(); got != (test.rows > 0) {
+				t.Fatalf("showResume = %v, want %v", got, test.rows > 0)
+			}
+			view := m.resume.view(m.styles, 120, m.resumeVisibleRows())
+			if loading := strings.Contains(view, resumeLoading); loading != m.resume.loading() {
+				t.Fatalf("loading row shown = %v, read running = %v:\n%s", loading, m.resume.loading(), view)
 			}
 		})
 	}
