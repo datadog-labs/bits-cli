@@ -71,6 +71,8 @@ func (m *Model) applyForkResult(msg forkResultMsg) tea.Cmd {
 	if err == nil && !m.op.interrupted() {
 		err = m.engine.InstallConversation(msg.ctx, msg.conversation)
 		if err == nil {
+			m.stopConversationSubscription()
+			m.clearLocalTurnOwnership()
 			m.state = m.engine.State()
 			m.conversationEpoch++
 			m.selection.clear()
@@ -82,6 +84,9 @@ func (m *Model) applyForkResult(msg forkResultMsg) tea.Cmd {
 	}
 	// Finish queued resets before publishing the outcome of the remote mutation.
 	cmd := m.endOperation()
+	if err == nil {
+		cmd = tea.Batch(cmd, m.startConversationSubscription(m.state.ConversationID))
+	}
 	if err != nil {
 		if msg.targetID != "" {
 			m.postNotice(conversationErrorNotice("could not load fork", err))

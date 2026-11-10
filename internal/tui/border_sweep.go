@@ -29,10 +29,14 @@ func (m *Model) resumeAnimationWanted() bool {
 // shown prompt coexists with a running tool, work is still progressing and
 // the sweep remains active.
 func (m *Model) borderSweepWanted() bool {
-	if !m.animationsVisible() || !m.styles.Input.SweepMotion || m.op.run == 0 {
+	if !m.animationsVisible() || !m.styles.Input.SweepMotion {
 		return false
 	}
-	if m.chatPhase != chat.PhaseWaiting && m.chatPhase != chat.PhaseStreaming {
+	activityBusy := m.activityState == activityRemoteTurn || m.activityState == activityDisconnected
+	if m.op.run == 0 && !activityBusy {
+		return false
+	}
+	if !activityBusy && m.chatPhase != chat.PhaseWaiting && m.chatPhase != chat.PhaseStreaming {
 		return false
 	}
 	return m.prompt() == nil || m.list.Working()
