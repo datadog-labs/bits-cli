@@ -29,13 +29,19 @@ func (m *Model) startLogout() tea.Cmd {
 		return closeFileSearch
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), logoutTimeout)
-	m.begin(opLogout, 0, nil, cancel)
+	if !m.begin(opLogout, cancel) {
+		return closeFileSearch
+	}
+	closeBackground := m.stopBackgroundTasks()
 	generation := m.op.gen
 	m.editor.CloseMenu()
 	logout := m.logout
 	return func() tea.Msg {
 		if closeFileSearch != nil {
 			_ = closeFileSearch()
+		}
+		if closeBackground != nil {
+			_ = closeBackground()
 		}
 		_, _, err := logout(ctx)
 		return logoutResultMsg{
@@ -46,12 +52,14 @@ func (m *Model) startLogout() tea.Cmd {
 }
 
 func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
-	if m.op.kind != opLogout || msg.generation != m.op.gen {
+	if !m.op.matches(opLogout, msg.generation) {
 		return m, nil
 	}
-	m.op.cancel()
-	m.op = operation{gen: m.op.gen}
+	m.endOperation()
 	if msg.err != nil {
+		// A canceled discovery may not have produced a menu. Reconcile it again
+		// only when logout fails and the authenticated session remains usable.
+		m.skillMenu.started = false
 		m.postNotice(noticeForError("could not log out", msg.err))
 		m.list.ScrollToBottom()
 		return m, nil

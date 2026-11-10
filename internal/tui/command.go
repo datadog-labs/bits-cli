@@ -12,15 +12,15 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/editor"
 )
 
-// activeTurnPolicy declares how a command behaves while a turn or history
-// restore is active. Keeping this policy beside command metadata lets submit
+// activeOperationPolicy declares how a command behaves while an exclusive
+// session operation is active. Keeping this beside command metadata lets submit
 // route commands before applying the ordinary-message busy guard.
-type activeTurnPolicy uint8
+type activeOperationPolicy uint8
 
 const (
-	commandAllowedDuringTurn activeTurnPolicy = iota + 1
-	commandRejectedDuringTurn
-	commandCancelsTurn
+	commandAllowedDuringOperation activeOperationPolicy = iota + 1
+	commandRejectedDuringOperation
+	commandCancelsOperation
 )
 
 type commandID uint8
@@ -41,78 +41,78 @@ const (
 )
 
 type commandDefinition struct {
-	id               commandID
-	name             string
-	aliases          []string
-	activeTurnPolicy activeTurnPolicy
-	description      string
+	id                    commandID
+	name                  string
+	aliases               []string
+	activeOperationPolicy activeOperationPolicy
+	description           string
 }
 
 var commandDefinitions = []commandDefinition{
-	{id: commandFork, name: "fork", aliases: []string{"branch"}, activeTurnPolicy: commandRejectedDuringTurn, description: "fork this conversation and continue in the copy"},
-	{id: commandRename, name: "rename", activeTurnPolicy: commandRejectedDuringTurn, description: "rename this conversation"},
+	{id: commandFork, name: "fork", aliases: []string{"branch"}, activeOperationPolicy: commandRejectedDuringOperation, description: "fork this conversation and continue in the copy"},
+	{id: commandRename, name: "rename", activeOperationPolicy: commandRejectedDuringOperation, description: "rename this conversation"},
 	{
-		id:               commandNew,
-		name:             "new",
-		aliases:          []string{"clear"},
-		activeTurnPolicy: commandCancelsTurn,
-		description:      "start a new conversation",
+		id:                    commandNew,
+		name:                  "new",
+		aliases:               []string{"clear"},
+		activeOperationPolicy: commandCancelsOperation,
+		description:           "start a new conversation",
 	},
 	{
-		id:               commandQuit,
-		name:             "quit",
-		aliases:          []string{"exit"},
-		activeTurnPolicy: commandCancelsTurn,
-		description:      "exit bits",
+		id:                    commandQuit,
+		name:                  "quit",
+		aliases:               []string{"exit"},
+		activeOperationPolicy: commandCancelsOperation,
+		description:           "exit bits",
 	},
 	{
-		id:               commandResume,
-		name:             "resume",
-		activeTurnPolicy: commandRejectedDuringTurn,
-		description:      "resume a conversation",
+		id:                    commandResume,
+		name:                  "resume",
+		activeOperationPolicy: commandRejectedDuringOperation,
+		description:           "resume a conversation",
 	},
 	{
-		id:               commandStatus,
-		name:             "status",
-		activeTurnPolicy: commandAllowedDuringTurn,
-		description:      "show session status",
+		id:                    commandStatus,
+		name:                  "status",
+		activeOperationPolicy: commandAllowedDuringOperation,
+		description:           "show session status",
 	},
 	{
-		id:               commandCopy,
-		name:             "copy",
-		activeTurnPolicy: commandRejectedDuringTurn,
-		description:      "copy the latest assistant response",
+		id:                    commandCopy,
+		name:                  "copy",
+		activeOperationPolicy: commandRejectedDuringOperation,
+		description:           "copy the latest assistant response",
 	},
 	{
-		id:               commandWeb,
-		name:             "web",
-		activeTurnPolicy: commandAllowedDuringTurn,
-		description:      "open this conversation in Datadog",
+		id:                    commandWeb,
+		name:                  "web",
+		activeOperationPolicy: commandAllowedDuringOperation,
+		description:           "open this conversation in Datadog",
 	},
 	{
-		id:               commandSettings,
-		name:             "settings",
-		activeTurnPolicy: commandAllowedDuringTurn,
-		description:      "open assistant settings",
+		id:                    commandSettings,
+		name:                  "settings",
+		activeOperationPolicy: commandAllowedDuringOperation,
+		description:           "open assistant settings",
 	},
 	{
-		id:               commandLogout,
-		name:             "logout",
-		activeTurnPolicy: commandCancelsTurn,
-		description:      "sign out from your Datadog account",
+		id:                    commandLogout,
+		name:                  "logout",
+		activeOperationPolicy: commandCancelsOperation,
+		description:           "sign out from your Datadog account",
 	},
 	{
-		id:               commandPermissions,
-		name:             "permissions",
-		activeTurnPolicy: commandAllowedDuringTurn,
-		description:      "choose what Bits is allowed to do",
+		id:                    commandPermissions,
+		name:                  "permissions",
+		activeOperationPolicy: commandAllowedDuringOperation,
+		description:           "choose what Bits is allowed to do",
 	},
 	{
-		id:               commandUpdate,
-		name:             "update",
-		aliases:          []string{"upgrade"},
-		activeTurnPolicy: commandCancelsTurn,
-		description:      "exit and update bits",
+		id:                    commandUpdate,
+		name:                  "update",
+		aliases:               []string{"upgrade"},
+		activeOperationPolicy: commandCancelsOperation,
+		description:           "exit and update bits",
 	},
 }
 
@@ -188,13 +188,13 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 	}
 
 	if m.op.busy() {
-		switch definition.activeTurnPolicy {
-		case commandRejectedDuringTurn:
+		switch definition.activeOperationPolicy {
+		case commandRejectedDuringOperation:
 			if definition.id == commandCopy {
-				return m, m.postNotice(notice(chat.NoticeWarn, nil, "Wait for the assistant response to finish before using /copy."))
+				return m, m.postNotice(notice(chat.NoticeWarn, nil, "Wait for the current operation to finish before using /copy."))
 			}
-			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active turn: /%s", name))
-		case commandCancelsTurn:
+			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active operation: /%s", name))
+		case commandCancelsOperation:
 			switch definition.id {
 			case commandNew:
 				return m, m.requestNewConversation()
@@ -205,10 +205,10 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 			default:
 				panic("unhandled command cancellation policy")
 			}
-		case commandAllowedDuringTurn:
-			// Continue to the handler without disturbing the active turn.
+		case commandAllowedDuringOperation:
+			// Continue without disturbing the active operation.
 		default:
-			panic("invalid active-turn command policy")
+			panic("invalid active-operation command policy")
 		}
 	}
 

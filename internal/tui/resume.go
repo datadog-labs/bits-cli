@@ -169,20 +169,32 @@ func offerHint(theme styles.Theme, width int, label string) string {
 		strings.Repeat("─", left) + label + strings.Repeat("─", remaining-left))
 }
 
-type recentConversationsMsg struct{ result agent.ConversationListResult }
+type recentConversationsMsg struct {
+	generation uint64
+	result     agent.ConversationListResult
+}
 
 // fetchRecentConversations reads the offer without claiming engine state, so it
-// cannot fail the user's first turn with ErrOperationActive. The context and the
-// engine call both live inside the returned closure so the read's lifetime (and
-// the deadline it starts) begins only when Bubble Tea actually runs the command.
+// cannot fail the user's first turn with ErrOperationActive. Its background
+// lifetime lets shutdown cancel the read and invalidate any late result.
 func (m *Model) fetchRecentConversations() tea.Cmd {
 	if m.engine == nil {
 		return nil
 	}
+	ctx, generation := m.recentConversationsTask.start(context.Background(), historyLoadTimeout)
 	engine := m.engine
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
-		defer cancel()
-		return recentConversationsMsg{result: engine.ListConversations(ctx)}
+		return recentConversationsMsg{generation: generation, result: engine.ListConversations(ctx)}
+	}
+}
+
+func (m *Model) applyRecentConversations(msg recentConversationsMsg) {
+	if msg.generation != m.recentConversationsTask.gen {
+		return
+	}
+	m.recentConversationsTask.done()
+	// A failed background read the user never asked for stays silent.
+	if msg.result.Err == nil {
+		m.resume.setConversations(msg.result.Conversations)
 	}
 }

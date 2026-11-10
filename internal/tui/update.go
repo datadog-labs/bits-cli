@@ -209,10 +209,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case quitConfirmExpiredMsg:
 		m.expireQuitConfirm(msg)
 	case recentConversationsMsg:
-		// A failed background read the user never asked for stays silent.
-		if msg.result.Err == nil {
-			m.resume.setConversations(msg.result.Conversations)
-		}
+		m.applyRecentConversations(msg)
 	default:
 		switch {
 		case m.mode == ModeLogin:
@@ -256,13 +253,8 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 	if m.focus() == focusPicker {
 		m.closeConversationPicker()
 	}
-	m.skillMenu.task.stop()
-	m.statusTask.stop()
-	if m.op.cancel != nil {
-		m.op.cancel()
-	}
-	m.stopEntitySearch()
-	closeFileSearch := m.stopFileSearch()
+	m.op.cancelOnce()
+	closeFileSearch := m.stopBackgroundTasks()
 	if closeFileSearch == nil {
 		return m, m.quitWith(tea.Quit)
 	}
@@ -681,32 +673,6 @@ func (m *Model) applyRunEvent(ev agent.Event) tea.Cmd {
 	return cmd
 }
 
-// endOperation ends an exclusive operation after its terminal result, then
-// runs what was queued behind it.
-func (m *Model) endOperation() tea.Cmd {
-	done := m.op
-	m.op = operation{gen: done.gen}
-	// The run published its final state before its terminal event.
-	if m.chatPhase != chat.PhaseError {
-		m.chatPhase = chat.PhaseIdle
-	}
-	if done.stop != stopAll && done.cancel != nil {
-		done.cancel() // release the turn/restore context
-	}
-	m.clearAsks()
-
-	m.syncStatus()
-	switch {
-	case done.then == thenLogout:
-		return m.startLogout()
-	case done.then == thenNewConversation:
-		return m.startNewConversation()
-	case done.kind == opRestore && done.stop != stopAll:
-		return m.resumePendingTools()
-	}
-	return nil
-}
-
 func (m *Model) updateLogin(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -934,7 +900,7 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
 	return cmd
 }
 
-// submit routes slash commands through their active-turn policy, or starts a
+// submit routes slash commands through their active-operation policy, or starts a
 // turn for ordinary input unless a turn is already running or history is still
 // loading. The user block is added by the engine (it owns the transcript), so
 // it arrives as the turn's first event.
@@ -977,6 +943,9 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	closeFileSearch := m.stopCompletionSearches()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	if !m.begin(opTurn, cancel) {
+		return m, closeFileSearch
+	}
 	run, err := m.engine.StartTurn(ctx, agent.TurnInput{
 		Message: text,
 		Skill:   skillInvocation,
@@ -985,26 +954,15 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		OnDeny:  agent.DenyContinue,
 	})
 	m.chatPhase = chat.PhaseWaiting
-	failed := m.begin(opTurn, run, err, cancel)
+	failed := m.watchRun(run, err)
 	// Submitting always jumps to the tail and re-engages auto-follow, so the
 	// user sees their message and the incoming reply even if they had scrolled up.
 	m.list.ScrollToBottom()
 	return m, tea.Batch(closeFileSearch, failed)
 }
 
-// begin starts an exclusive operation, streaming the engine run if any. Its
-// generation drops any late message from an earlier one. An engine operation
-// that failed to start ends at once with its error.
-func (m *Model) begin(kind opKind, run agent.RunID, err error, cancel context.CancelFunc) tea.Cmd {
-	m.op = operation{kind: kind, gen: m.op.gen + 1, run: run, cancel: cancel}
-	if err != nil {
-		return m.applyRunEvent(agent.Event{Kind: agent.EventError, Err: err})
-	}
-	return nil
-}
-
 func (m *Model) resumePendingTools() tea.Cmd {
-	if m.engine == nil {
+	if m.engine == nil || m.op.busy() {
 		return nil
 	}
 	m.engine.SettleRestoredTools(m.tools)
@@ -1014,35 +972,13 @@ func (m *Model) resumePendingTools() tea.Cmd {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	if !m.begin(opTurn, cancel) {
+		return nil
+	}
 	run, err := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
 	m.chatPhase = chat.PhaseWaiting
 	m.list.ScrollToBottom()
-	return m.begin(opTurn, run, err, cancel)
-}
-
-// cancellable reports whether an operation is running that cancelOperation
-// has not already stopped.
-func (m *Model) cancellable() bool {
-	return (m.op.run != 0 || m.op.kind == opFork) && m.op.stop != stopAll
-}
-
-// cancelOperation cancels a running turn, restore, or fork once and drops its tool
-// UIs; its approvals go when the operation closes. Logout is never
-// interrupted this way.
-func (m *Model) cancelOperation() {
-	if !m.cancellable() {
-		return
-	}
-	m.op.stop = stopAll
-	m.op.cancel()
-	m.dropToolUIs()
-}
-
-// after queues next for when the running operation ends, and cancels the
-// operation so that happens soon.
-func (m *Model) after(next followUp) {
-	m.op.then = max(m.op.then, next)
-	m.cancelOperation()
+	return m.watchRun(run, err)
 }
 
 // applyEvent folds one engine event into the block snapshot / status. The switch

@@ -20,8 +20,10 @@ const maxTitleLength = 200
 const renameTimeout = 30 * time.Second
 
 type renameResultMsg struct {
-	title string
-	err   error
+	generation uint64
+	epoch      uint64
+	title      string
+	err        error
 }
 
 // startRename renames the current conversation to argument, or asks for a
@@ -36,7 +38,11 @@ func (m *Model) startRename(argument string) tea.Cmd {
 	}
 	form := components.NewTextPrompt("Rename conversation", "", maxTitleLength)
 	form.SetPlaceholder("New title")
+	epoch := m.conversationEpoch
 	m.openCommandPrompt(form, func(title string) tea.Cmd {
+		if epoch != m.conversationEpoch {
+			return nil
+		}
 		return m.rename(conversationID, title)
 	})
 	return nil
@@ -48,17 +54,40 @@ func (m *Model) rename(conversationID, title string) tea.Cmd {
 	if n := utf8.RuneCountInString(title); n == 0 || n > maxTitleLength {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Conversation titles must be 1 to %d characters.", maxTitleLength))
 	}
+	if conversationID != m.state.ConversationID {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), renameTimeout)
+	if !m.begin(opRename, cancel) {
+		return nil
+	}
+	generation, epoch := m.op.gen, m.conversationEpoch
 	engine := m.engine
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), renameTimeout)
-		defer cancel()
-		return renameResultMsg{title: title, err: engine.RenameConversation(ctx, conversationID, title)}
+		// Cancellation may precede execution of this queued command.
+		err := ctx.Err()
+		if err == nil {
+			err = engine.RenameConversation(ctx, conversationID, title)
+		}
+		return renameResultMsg{generation: generation, epoch: epoch, title: title, err: err}
 	}
 }
 
 func (m *Model) applyRenameResult(msg renameResultMsg) tea.Cmd {
-	if msg.err != nil {
-		return m.postNotice(noticeForError("could not rename conversation", msg.err))
+	if !m.op.matches(opRename, msg.generation) {
+		return nil
 	}
-	return m.postNotice(notice(chat.NoticeInfo, nil, "Renamed conversation to “%s”.", escape.SingleLine(msg.title)))
+	interrupted := m.op.interrupted()
+	cmd := m.endOperation()
+	// Completion may have performed a queued reset. Bookkeeping must finish
+	// even when the result no longer belongs in the visible transcript.
+	if interrupted || msg.epoch != m.conversationEpoch {
+		return cmd
+	}
+	if msg.err != nil {
+		m.postNotice(noticeForError("could not rename conversation", msg.err))
+	} else {
+		m.postNotice(notice(chat.NoticeInfo, nil, "Renamed conversation to “%s”.", escape.SingleLine(msg.title)))
+	}
+	return cmd
 }

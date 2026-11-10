@@ -28,6 +28,9 @@ func (m *Model) requestNewConversation() tea.Cmd {
 // client, and process-wide configuration intact; resetting the editor only
 // ends any history browsing.
 func (m *Model) startNewConversation() tea.Cmd {
+	if m.op.busy() {
+		return m.requestNewConversation()
+	}
 	if err := m.engine.NewConversation(); err != nil {
 		m.postNotice(noticeForError("could not start a new conversation", err))
 		m.list.ScrollToBottom()
@@ -38,6 +41,9 @@ func (m *Model) startNewConversation() tea.Cmd {
 	// This makes any delayed Bubble Tea message from the prior domain harmless.
 	m.op.gen++
 	m.conversationEpoch++
+	m.conversationTask.stop()
+	m.picker = nil
+	m.conversationSwitchID = ""
 	m.selection.clear()
 	m.state = m.engine.State()
 	m.list.Reset()
@@ -132,6 +138,11 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	// Install before changing the visible state; a failed or expired load
 	// leaves both the engine and the UI on the old conversation.
 	err := msg.err
+	// Loading is replaceable background work; installing changes the session.
+	// The check and installation both run synchronously on the Update thread.
+	if err == nil && m.op.busy() {
+		err = agent.ErrOperationActive
+	}
 	if err == nil {
 		err = m.engine.InstallConversation(msg.ctx, msg.conversation)
 	}
@@ -203,6 +214,9 @@ func conversationErrorNotice(operation string, err error) chat.Notice {
 // offer. It drives the switch through the /resume picker so the existing
 // loading, error and retry paths apply unchanged.
 func (m *Model) resumeSelectedConversation(conversationID string) tea.Cmd {
+	if m.op.busy() {
+		return m.postNotice(notice(chat.NoticeWarn, nil, "Wait for the current operation to finish before resuming."))
+	}
 	picker := conversationview.New(m.width, m.height, m.styles)
 	for _, summary := range m.resume.conversations {
 		if summary.ConversationID == conversationID {

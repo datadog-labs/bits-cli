@@ -17,10 +17,14 @@ type tuiRenameBackend struct {
 	*resumeBackend
 	titles []string
 	err    error
+	rename func(context.Context) error
 }
 
-func (b *tuiRenameBackend) RenameConversation(_ context.Context, in assistant.RenameConversationInput) error {
+func (b *tuiRenameBackend) RenameConversation(ctx context.Context, in assistant.RenameConversationInput) error {
 	b.titles = append(b.titles, in.Title)
+	if b.rename != nil {
+		return b.rename(ctx)
+	}
 	return b.err
 }
 
@@ -152,5 +156,100 @@ func TestRenameFailureNotice(t *testing.T) {
 	applyRename(t, m, cmd)
 	if n := lastNotice(m); n.Level != chat.NoticeError || !strings.Contains(n.Text, "Couldn't rename conversation") {
 		t.Fatalf("notice = %+v", n)
+	}
+}
+
+func TestRenameSerializesThroughCancellationAndCompletion(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	b := &tuiRenameBackend{resumeBackend: newResumeBackend(), rename: func(ctx context.Context) error {
+		close(started)
+		<-release // Even a slow cancellation must keep the operation occupied.
+		return ctx.Err()
+	}}
+	m := newRenameModel(t, b, forkSourceID)
+	m.chatPhase = chat.PhaseError
+	cmd := m.startRename("First")
+	generation := m.op.gen
+	if !m.op.busy() {
+		t.Fatal("rename was not reserved before command execution")
+	}
+	for _, name := range []string{"rename", "fork", "resume"} {
+		if _, next := m.dispatchCommand(name, "Second"); next != nil || m.op.gen != generation {
+			t.Fatalf("/%s overlapped the pending rename", name)
+		}
+	}
+	setConversationInput(m, "next question")
+	if _, next := m.submit(); next != nil || m.editor.Value() != "next question" {
+		t.Fatal("turn started or draft was lost during rename")
+	}
+	results := make(chan tea.Msg, 1)
+	go func() { results <- cmd() }()
+	waitSignal(t, started)
+	m.cancelOperation()
+	m.cancelOperation()
+	if next := m.startRename("Second"); next != nil || m.op.gen != generation {
+		t.Fatal("cancellation released admission before completion")
+	}
+	close(release)
+	msg := (<-results).(renameResultMsg)
+	m.applyRenameResult(msg)
+	if m.op.busy() || m.chatPhase != chat.PhaseError || len(b.titles) != 1 {
+		t.Fatal("rename completion did not preserve independent chat state")
+	}
+	// A duplicate completion must not end a newer operation.
+	b.rename = nil
+	next := m.startRename("Second")
+	m.applyRenameResult(msg)
+	if !m.op.busy() || m.op.gen == generation {
+		t.Fatal("old rename completion released the newer operation")
+	}
+	applyRename(t, m, next)
+}
+
+func TestRenameCompletionRespectsConversationAndFollowUps(t *testing.T) {
+	for _, action := range []string{"new", "logout", "epoch"} {
+		t.Run(action, func(t *testing.T) {
+			b := &tuiRenameBackend{resumeBackend: newResumeBackend()}
+			m := newRenameModel(t, b, forkSourceID)
+			// The server has answered, but Update has not seen the completion yet.
+			msg := m.startRename("Old title")().(renameResultMsg)
+			switch action {
+			case "new":
+				m.dispatchCommand("new", "")
+			case "logout":
+				m.logout = func(context.Context) (bool, error, error) { return true, nil, nil }
+				m.dispatchCommand("logout", "")
+			case "epoch":
+				m.conversationEpoch++
+			}
+			follow := m.applyRenameResult(msg)
+			for _, n := range m.notices {
+				if strings.Contains(n.Notice.Text, "Renamed conversation") {
+					t.Fatal("rename outcome leaked past its owning conversation or cancellation")
+				}
+			}
+			if action == "logout" {
+				if follow == nil || m.op.kind != opLogout {
+					t.Fatal("rename did not drain into logout")
+				}
+				m.applyLogoutResult(follow().(logoutResultMsg))
+				if !m.loggedOut {
+					t.Fatal("deferred logout did not complete")
+				}
+			} else if m.op.busy() || (action == "new" && m.state.ConversationID != "") {
+				t.Fatal("stale UI ownership prevented operation cleanup or reset")
+			}
+		})
+	}
+}
+
+func TestCanceledQueuedRenameDoesNotReachBackend(t *testing.T) {
+	b := &tuiRenameBackend{resumeBackend: newResumeBackend()}
+	m := newRenameModel(t, b, forkSourceID)
+	cmd := m.startRename("Title")
+	m.requestNewConversation()
+	applyRename(t, m, cmd)
+	if len(b.titles) != 0 || m.op.busy() || m.state.ConversationID != "" {
+		t.Fatal("queued rename executed after cancellation or failed to drain")
 	}
 }

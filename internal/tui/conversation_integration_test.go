@@ -441,3 +441,75 @@ func hasTextBlock(blocks []agent.Block, text string) bool {
 	}
 	return false
 }
+
+func TestResumeInstallationRespectsExclusiveOperation(t *testing.T) {
+	b := &tuiRenameBackend{resumeBackend: newResumeBackend()}
+	m := newRenameModel(t, b, forkSourceID)
+	rename := m.startRename("Title")
+	b.lists <- resumeListReply{response: summaries(assistant.ConversationSummary{ConversationID: resumeConversationID})}
+	m.applyConversationListResult(runResumeCmd(t, m.openConversationPicker()).(conversationListResultMsg))
+	b.histories <- resumeHistoryReply{response: history()}
+	msg := runResumeCmd(t, m.startConversationSwitch(resumeConversationID)).(conversationSwitchResultMsg)
+	m.applyConversationSwitchResult(msg)
+	if m.state.ConversationID != forkSourceID || m.engine.State().ConversationID != forkSourceID || m.picker.State() != conversationview.StateError {
+		t.Fatal("resume installed a conversation during an exclusive operation")
+	}
+	applyRename(t, m, rename)
+	b.histories <- resumeHistoryReply{response: history()}
+	m.applyConversationSwitchResult(runResumeCmd(t, m.retryConversationOperation()).(conversationSwitchResultMsg))
+	if m.state.ConversationID != resumeConversationID || m.picker != nil {
+		t.Fatal("resume did not recover after the exclusive operation finished")
+	}
+}
+
+func TestRecentConversationFetchStopsWithAuthenticatedWork(t *testing.T) {
+	for _, action := range []string{"quit", "logout", "detach"} {
+		t.Run(action, func(t *testing.T) {
+			b := &tuiRenameBackend{resumeBackend: newResumeBackend()}
+			m := newRenameModel(t, b, forkSourceID)
+			cmd := m.fetchRecentConversations()
+			switch action {
+			case "quit":
+				m.quit()
+			case "logout":
+				m.logout = func(context.Context) (bool, error, error) { return true, nil, nil }
+				_, logout := m.dispatchCommand("logout", "")
+				m.applyLogoutResult(logout().(logoutResultMsg))
+			case "detach":
+				m.Detach()
+			}
+			msg := runConversationCmd(t, cmd).(recentConversationsMsg)
+			if !errors.Is(msg.result.Err, context.Canceled) || m.recentConversationsTask.running() {
+				t.Fatal("startup conversation fetch survived shutdown")
+			}
+			// Even a successful response already in flight must be ignored.
+			msg.result = agent.ConversationListResult{Conversations: []assistant.ConversationSummary{{ConversationID: resumeConversationID}}}
+			m.Update(msg)
+			if !m.resume.empty() {
+				t.Fatal("late startup fetch repopulated the offer after shutdown")
+			}
+			if m.skillMenu.task.running() {
+				t.Fatal("reconciliation restarted skill discovery after shutdown")
+			}
+		})
+	}
+}
+
+func TestFailedLogoutRestartsCanceledSkillDiscovery(t *testing.T) {
+	b := &tuiRenameBackend{resumeBackend: newResumeBackend()}
+	m := newRenameModel(t, b, forkSourceID)
+	if !m.skillMenu.task.running() {
+		t.Fatal("fixture did not start skill discovery")
+	}
+	m.logout = func(context.Context) (bool, error, error) {
+		return false, nil, errors.New("could not delete credentials")
+	}
+	_, cmd := m.dispatchCommand("logout", "")
+	if m.skillMenu.task.running() {
+		t.Fatal("logout did not stop skill discovery")
+	}
+	m.Update(cmd().(logoutResultMsg))
+	if m.loggedOut || m.op.busy() || !m.skillMenu.task.running() {
+		t.Fatal("failed logout did not restore background discovery")
+	}
+}
