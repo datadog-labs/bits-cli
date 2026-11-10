@@ -24,7 +24,7 @@ func (m *Model) startFork(argument string) tea.Cmd {
 	if argument != "" {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Usage: /fork (or /branch)"))
 	}
-	if m.op.busy() || m.conversationTask.running() || m.picker != nil {
+	if m.op.busy() || m.activityBlocksSubmission() || m.conversationTask.running() || m.picker != nil {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Wait for the current operation to finish before forking."))
 	}
 	sourceID := m.state.ConversationID

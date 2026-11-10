@@ -347,6 +347,10 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case activityRetryMsg:
 		return m, m.retryConversationSubscription(msg)
+	case activityReadyTimeoutMsg:
+		cmd := m.handleActivityReadyTimeout(msg)
+		m.syncStatus()
+		return m, cmd
 	case logoutResultMsg:
 		return m.applyLogoutResult(msg)
 
@@ -909,7 +913,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// so a stray press cannot drop a streaming turn: esc interrupts it and
 		// a confirmed ctrl+c still quits.
 		if m.editor.Value() == "" && len(m.editor.Attachments()) == 0 {
-			if m.op.busy() {
+			if m.op.busy() || m.activityBlocksSubmission() {
 				return m, nil
 			}
 			return m.quit()

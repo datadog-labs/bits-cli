@@ -131,6 +131,7 @@ type Model struct {
 	activityNeedsSync      bool
 	activitySnapshotReady  bool
 	activityTurnActive     bool
+	activityGateOpenFor    string
 	localTurnOwned         bool
 	localTurnRecoverable   bool
 
