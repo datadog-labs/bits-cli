@@ -1,7 +1,8 @@
 # Publishes a GitHub release of main, triggered by scripts/release.sh, with
 # the archives CI built and tested for the tag. The GITHUB_TOKEN stays
 # read-only: the publish job creates the release and its tag with a
-# dd-octo-sts token, once CI passed.
+# dd-octo-sts token, once CI passed. The homebrew job then proposes the
+# release to the datadog-labs/homebrew-pack tap in a pull request.
 
 name: Release
 
@@ -90,3 +91,95 @@ jobs:
           GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
           TAG: ${{ inputs.tag }}
         run: ./scripts/publish.sh "$TAG"
+
+  homebrew:
+    name: Homebrew pull request
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: read
+    env:
+      TAG: ${{ inputs.tag }}
+      TAP: datadog-labs/homebrew-pack
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Render verified formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/homebrew.rb --output "$RUNNER_TEMP/homebrew" "$TAG"
+      - name: Get tap token
+        id: octo-sts
+        uses: DataDog/dd-octo-sts-action@c85802a58e202b7e764b5441e4378c76043c8108 # v1.0.5
+        with:
+          scope: datadog-labs/homebrew-pack
+          policy: bits-cli.release
+      - name: Check out tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: datadog-labs/homebrew-pack
+          path: homebrew-pack
+          token: ${{ steps.octo-sts.outputs.token }}
+          persist-credentials: false
+      - name: Stage formula
+        id: stage
+        working-directory: homebrew-pack
+        env:
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/homebrew/bits.rb" Formula/bits.rb
+          git add Formula/bits.rb
+          if git diff --cached --quiet; then
+            echo "The tap formula already installs bits $TAG."
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch="update/bits-${TAG#v}"
+          # An existing branch, from a re-run, is replaced by one commit on main.
+          if gh api "repos/$TAP/branches/$branch" --silent 2>/dev/null; then
+            create_branch=false
+          else
+            create_branch=true
+          fi
+          {
+            echo "changed=true"
+            echo "branch=$branch"
+            echo "create_branch=$create_branch"
+            echo "head_sha=$(git rev-parse HEAD)"
+          } >>"$GITHUB_OUTPUT"
+      # The tap requires signed commits, which commit-headless makes through the API.
+      - name: Push signed commit
+        if: steps.stage.outputs.changed == 'true'
+        uses: DataDog/commit-headless@d6afabfd690ea1dbdd7d368acbefd71304928699 # action/v3.4.1
+        with:
+          command: commit
+          token: ${{ steps.octo-sts.outputs.token }}
+          target: datadog-labs/homebrew-pack
+          working-directory: homebrew-pack
+          branch: ${{ steps.stage.outputs.branch }}
+          create-branch: ${{ steps.stage.outputs.create_branch }}
+          force: ${{ steps.stage.outputs.create_branch == 'false' }}
+          head-sha: ${{ steps.stage.outputs.head_sha }}
+          message: Update bits to ${{ inputs.tag }}
+      - name: Open pull request
+        if: steps.stage.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
+          BRANCH: ${{ steps.stage.outputs.branch }}
+        run: |
+          set -euo pipefail
+          title="Update bits to $TAG"
+          body="$RUNNER_TEMP/homebrew/pull-request.md"
+          url="$(gh pr list --repo "$TAP" --head "$BRANCH" --state open --json url --jq '.[0].url // empty')"
+          if [[ -n "$url" ]]; then
+            gh pr edit "$url" --title "$title" --body-file "$body"
+          else
+            url="$(gh pr create --repo "$TAP" --base main --head "$BRANCH" --title "$title" --body-file "$body")"
+          fi
+          echo "$url" | tee -a "$GITHUB_STEP_SUMMARY"
