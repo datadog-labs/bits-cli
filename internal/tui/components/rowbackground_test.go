@@ -33,3 +33,17 @@ func TestPaintRowBackgroundFillsBeyondContentWidth(t *testing.T) {
 		t.Fatalf("painted row width = %d, want 10", got)
 	}
 }
+
+func TestShadeRowShiftsBackgroundsByShadeOffset(t *testing.T) {
+	canvas, shade := lipgloss.Color("#101010"), lipgloss.Color("#202020")
+	line := lipgloss.NewStyle().Background(lipgloss.Color("#0A2F10")).Render("+") + "x"
+
+	painted := ShadeRow(line, 2, canvas, shade)
+
+	if !strings.Contains(painted, "26;63;32") { // #1A3F20: #0A2F10 lifted by #101010
+		t.Fatalf("styled cell lost its own background: %q", painted)
+	}
+	if !strings.Contains(painted, "32;32;32") { // plain cell sits on canvas, so it becomes shade
+		t.Fatalf("plain cell missing the shade: %q", painted)
+	}
+}

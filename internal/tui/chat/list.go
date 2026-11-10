@@ -868,7 +868,7 @@ func (l *List) renderSurface(withPosition bool) Surface {
 			if row == fill.header {
 				bg = l.sty.Accordion.HoverBackground
 			}
-			lines[row] = components.PaintRowBackground(lines[row], l.width, bg)
+			lines[row] = components.ShadeRow(lines[row], l.width, l.sty.Background, bg)
 		}
 	}
 	top := 0
