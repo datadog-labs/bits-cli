@@ -26,9 +26,7 @@ import (
 // for an image's.
 const ProbeID = 31
 
-// Support is what the terminal is known to paint. It starts Unknown, becomes
-// Supported when the probe answers, and Unsupported when the probe fails or
-// the canary image is rejected. Unsupported is final.
+// Support is what the terminal is known to paint. Unsupported is final.
 type Support uint8
 
 const (
@@ -37,41 +35,78 @@ const (
 	Unsupported
 )
 
-// Query probes for placeholder support, or returns nil on a terminal that must
-// not be asked. A device attributes request follows in the same write: every
-// terminal answers it, and in order, so its reply settles a probe that was
-// silently ignored. Nothing needs to time out.
-func Query() tea.Cmd {
-	if !paintsPlaceholders() {
+// Detection combines protocol reachability with a terminal identity known to
+// paint Unicode placeholders. Its zero value is ready to query.
+type Detection struct {
+	Support
+	queried, probeOK bool
+	force, fallback  bool
+	terminal         string
+}
+
+// Query asks for graphics reachability and XTVERSION in one write, followed by
+// DA1. Its reply settles both ignored queries without a timeout. BITS_GRAPHICS
+// defaults to auto; on bypasses identity checks, and off skips the queries.
+// Multiplexers stay disabled even with on.
+func (d *Detection) Query() tea.Cmd {
+	if d.queried || d.Support != Unknown {
 		return nil
 	}
+	d.queried = true
+	mode := os.Getenv("BITS_GRAPHICS")
+	if mode == "off" || multiplexed() {
+		d.Support = Unsupported
+		return nil
+	}
+	d.force = mode == "on"
+	d.fallback = paintsPlaceholders()
 	return tea.Raw(ansi.KittyGraphics(
 		[]byte("AAAA"),
 		"i="+strconv.Itoa(ProbeID), "s=1", "v=1", "a=q", "t=d", "f=24",
-	) + ansi.RequestPrimaryDeviceAttributes)
+	) + ansi.RequestNameVersion + ansi.RequestPrimaryDeviceAttributes)
 }
 
-// Observe applies a terminal reply and reports whether it confirmed support.
+// Observe records a graphics reply. An OK probe still needs an identity check
+// at DA1: a terminal can answer OK without painting placeholders.
 // Only the probe and the canary, an image every session stores, speak for the
 // terminal: another image's error is that image's own problem.
-func (s *Support) Observe(event uv.KittyGraphicsEvent, canary int) bool {
+func (d *Detection) Observe(event uv.KittyGraphicsEvent, canary int) {
 	ok := string(event.Payload) == "OK"
 	switch id := event.Options.ID; {
 	case !ok && (id == ProbeID || id == canary):
-		*s = Unsupported
-	case ok && id == ProbeID && *s == Unknown:
-		*s = Supported
-		return true
+		d.Support = Unsupported
+	case ok && id == ProbeID && d.Support == Unknown:
+		d.probeOK = true
 	}
-	return false
 }
 
-// ObserveDeviceAttributes settles a probe the terminal ignored: it would have
-// answered before the device attributes it was asked for next.
-func (s *Support) ObserveDeviceAttributes() {
-	if *s == Unknown {
-		*s = Unsupported
+// ObserveTerminalVersion records XTVERSION, which takes precedence over
+// inherited environment markers. A multiplexer identity also vetoes on.
+func (d *Detection) ObserveTerminalVersion(version string) {
+	d.terminal = version
+	switch terminalName(version) {
+	case "tmux", "screen", "zellij":
+		d.Support = Unsupported
 	}
+}
+
+// ObserveDeviceAttributes settles the probe and identity queries, and reports
+// whether images should now be transmitted. Replies to both queries precede
+// DA1; absent XTVERSION, only the environment can identify the renderer.
+func (d *Detection) ObserveDeviceAttributes() bool {
+	if d.Support != Unknown {
+		return false
+	}
+	paints := d.fallback
+	if d.terminal != "" {
+		paints = knownPlaceholderTerminal(d.terminal)
+	}
+	if d.probeOK && (d.force || paints) {
+		d.Support = Supported
+		return true
+	}
+	d.Support = Unsupported
+	return false
 }
 
 // ObserveColorProfile rules out a terminal not driven in truecolor:
@@ -83,23 +118,18 @@ func (s *Support) ObserveColorProfile(p colorprofile.Profile) {
 	}
 }
 
-// paintsPlaceholders reports whether the terminal is known to paint Unicode
-// placeholders, the one capability in the protocol with no query of its own.
-// Answering the graphics query does not imply it: iTerm2 answers, then ignores
-// the U key and draws the placeholder rune as an unknown glyph. The reply
-// proves only that the protocol is reachable.
+// paintsPlaceholders is the fallback when XTVERSION is ignored. Answering a=q
+// does not imply placeholder support: partial implementations can ignore U=1
+// and draw U+10EEEE as an unknown glyph.
 func paintsPlaceholders() bool {
 	term := os.Getenv("TERM")
-	// A multiplexer does not forward placements, yet the outer terminal may
-	// still answer the query.
-	if os.Getenv("TMUX") != "" || os.Getenv("STY") != "" ||
-		strings.HasPrefix(term, "screen") || strings.HasPrefix(term, "tmux") {
+	if multiplexed() {
 		return false
 	}
 	switch {
 	case strings.Contains(term, "kitty"):
 		return true
-	case term == "xterm-ghostty", strings.EqualFold(os.Getenv("TERM_PROGRAM"), "ghostty"):
+	case term == "xterm-ghostty", knownPlaceholderTerminal(os.Getenv("TERM_PROGRAM")):
 		return true
 	}
 	// Both terminals export their marker to whatever they launch, so a terminal
@@ -108,6 +138,41 @@ func paintsPlaceholders() bool {
 		return false
 	}
 	return os.Getenv("KITTY_WINDOW_ID") != "" || os.Getenv("GHOSTTY_RESOURCES_DIR") != ""
+}
+
+func multiplexed() bool {
+	term := os.Getenv("TERM")
+	// A multiplexer does not forward placements, yet the outer terminal may
+	// still answer the query.
+	if os.Getenv("TMUX") != "" || os.Getenv("STY") != "" || os.Getenv("ZELLIJ") != "" ||
+		os.Getenv("ZELLIJ_SESSION_NAME") != "" || strings.HasPrefix(term, "screen") ||
+		strings.HasPrefix(term, "tmux") || strings.HasPrefix(term, "zellij") {
+		return true
+	}
+	switch terminalName(os.Getenv("TERM_PROGRAM")) {
+	case "tmux", "screen", "zellij":
+		return true
+	}
+	return false
+}
+
+// XTVERSION uses both name(version) and name version forms. Match the name
+// exactly so an unrelated terminal cannot qualify by including "kitty".
+func terminalName(version string) string {
+	fields := strings.Fields(strings.ToLower(version))
+	if len(fields) == 0 {
+		return ""
+	}
+	name, _, _ := strings.Cut(fields[0], "(")
+	return name
+}
+
+func knownPlaceholderTerminal(version string) bool {
+	switch terminalName(version) {
+	case "kitty", "ghostty", "rex":
+		return true
+	}
+	return false
 }
 
 // Image is a virtual placement: ID names the stored pixels, scaled to a grid

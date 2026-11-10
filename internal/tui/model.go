@@ -206,7 +206,7 @@ type Model struct {
 
 	// graphics is whether the terminal paints Kitty images, from its answer to
 	// the probe and any image it rejected.
-	graphics graphics.Support
+	graphics graphics.Detection
 
 	// resume is the startup conversation offer shown under the splash panel.
 	resume resume
@@ -383,11 +383,7 @@ func (m *Model) Init() tea.Cmd {
 // queryGraphics probes the terminal. One that must not be asked is known
 // unsupported at once, so Unknown always means an answer is on its way.
 func (m *Model) queryGraphics() tea.Cmd {
-	probe := graphics.Query()
-	if probe == nil {
-		m.graphics = graphics.Unsupported
-	}
-	return probe
+	return m.graphics.Query()
 }
 
 // initChat focuses the editor, starts the engine event pump and, when

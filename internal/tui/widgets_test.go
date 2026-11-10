@@ -59,7 +59,7 @@ func widgetModel(t *testing.T, client viz.Client, support graphics.Support, def 
 		OpenURL:       func(_ context.Context, u string) error { *opened = append(*opened, u); return nil },
 	})
 	m.mode = ModeChat
-	m.graphics = support
+	m.graphics.Support = support
 	id = agent.BlockID{Key: "widget"}
 	m.state.Blocks = []agent.Block{{ID: id, Kind: assistant.KindWidget, Complete: true, Widget: &assistant.WidgetPayload{WidgetDef: &def}}}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
