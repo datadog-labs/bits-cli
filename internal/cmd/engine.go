@@ -36,6 +36,10 @@ const EnvExecExcludeEnv = "BITS_EXEC_EXCLUDE_ENV"
 // is delivered. It uses the same name=value syntax as EnvCustomHeaders.
 const EnvRequiredResponseHeader = "BITS_REQUIRED_RESPONSE_HEADER"
 
+// EnvProfile overrides the assistant profile, for development: the server
+// sends some content, such as MCP apps, to the web_ui profile only.
+const EnvProfile = "BITS_PROFILE"
+
 // ErrLoginRequired marks an OAuth state that an interactive caller may replace
 // by starting login. Noninteractive callers should surface the wrapped error
 // with guidance to run `bits login`.
@@ -58,6 +62,7 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 	config := agent.Config{
 		ConversationID: opts.ConversationID, PermissionsMode: opts.PermissionsMode,
 		Model: opts.Model, InferenceMode: opts.InferenceMode,
+		Profile: assistant.Profile(os.Getenv(EnvProfile)),
 	}
 	if workspace != nil {
 		config.ProjectInstructions = env.NewInstructions(workspace.Path())
