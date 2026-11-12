@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -133,13 +134,14 @@ func TestConversationMarkdown(t *testing.T) {
 			ok:     true,
 		},
 		{
-			name: "charts",
+			name: "apps",
 			blocks: []agent.Block{
-				{Role: assistant.RoleAssistant, Kind: assistant.KindWidget, Widget: &assistant.WidgetPayload{WidgetDef: &assistant.WidgetDefinition{Title: "CPU"}}},
-				{Role: assistant.RoleAssistant, Kind: assistant.KindWidget, Widget: &assistant.WidgetPayload{Title: "Legacy"}},
-				{Role: assistant.RoleAssistant, Kind: assistant.KindWidget, Widget: &assistant.WidgetPayload{WidgetDef: &assistant.WidgetDefinition{Title: " "}}},
+				exportApp(`{"structuredContent":{"widget_definition":{"type":"timeseries","title":"CPU"}}}`),
+				exportApp(`{"structuredContent":{"widget_definition":{"type":"timeseries","title":" "}}}`),
+				exportApp(`{"_meta":{"datadog/show_ui":{"view_spec":{"view":{"name":"incident_detail"}}}}}`),
+				exportApp(""), // saved, not yet restored
 			},
-			want: "**Bits:** _[Chart: CPU]_\n\n**Bits:** _[Chart: Legacy]_\n\n**Bits:** _[Chart]_",
+			want: "**Bits:** _[Chart: CPU]_\n\n**Bits:** _[Chart]_\n\n**Bits:** _[View: Incident detail]_\n\n**Bits:** _[View]_",
 			ok:   true,
 		},
 		{
@@ -248,4 +250,12 @@ func TestExportNewAndResumedConversationMatch(t *testing.T) {
 	if got != want || strings.Count(got, "**Bits:** alpha") != 1 {
 		t.Fatalf("resumed export = %q, want %q", got, want)
 	}
+}
+
+func exportApp(result string) agent.Block {
+	app := &assistant.AppPayload{ResourceURI: "ui://apps/dataviz"}
+	if result != "" {
+		app.Result = json.RawMessage(result)
+	}
+	return agent.Block{Role: assistant.RoleAssistant, Kind: assistant.KindApp, App: app}
 }

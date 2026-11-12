@@ -42,20 +42,6 @@ type WidgetView struct {
 // animated reports whether the view depends on the frame counter.
 func (v WidgetView) animated() bool { return v.Loading != "" }
 
-// widgetTitle reads the title a widget_def carries inside its definition,
-// then the legacy payload's, or "" when there is none.
-func widgetTitle(it agent.Block) string {
-	if it.Widget == nil {
-		return ""
-	}
-	if def := it.Widget.WidgetDef; def != nil {
-		if def.Title != "" {
-			return escape.SingleLine(def.Title)
-		}
-	}
-	return escape.SingleLine(it.Widget.Title)
-}
-
 func renderWidgetView(v WidgetView, c renderContext) string {
 	width := max(1, c.width)
 	lines := []string{widgetHeader(v, width, c)}

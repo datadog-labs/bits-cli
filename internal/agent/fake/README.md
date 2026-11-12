@@ -39,13 +39,14 @@ notices, disclosure, tool grouping, questions, code execution
 (`load("tasks.star", "investigation"); investigation()`), and injected memories
 (`load("memories.star", "injected"); injected()`).
 
-For visualizations, run `BITS_FAKE_BACKEND=1` with a built ddviz helper and
-load `widgets.star`. Only assistant messages are faked: rendering still requires
-a stored Bits login with Datadog MCP visualization access and macOS 13+.
+For visualizations, run `BITS_FAKE_BACKEND=1 BITS_VIZ=snapshot` and load
+`widgets.star`. Only assistant messages are faked: rendering still requires a
+stored Bits login with snapshot access. The fake opens no relay session, so
+ddviz cannot load data for these apps.
 
 ```text
 load("widgets.star", "gallery"); gallery()
-load("widgets.star", "timing"); timing(1700000000000, 1700003600000)
+load("widgets.star", "timing"); timing(1700000000, 1700003600)
 load("widgets.star", "burst"); burst()
 load("widgets.star", "revision"); revision()
 load("widgets.star", "failures"); failures()

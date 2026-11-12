@@ -161,8 +161,6 @@ func (t *Transcript) fold(msg assistant.Message) (Block, bool) {
 		return t.appendReasoning(msg)
 	case assistant.KindToolCall, assistant.KindToolResult:
 		return t.upsertTool(msg)
-	case assistant.KindWidget:
-		return t.appendPassthrough(msg, kind, func(b *Block) { b.Widget = msg.Content.Widget })
 	case assistant.KindDashboard:
 		return t.appendPassthrough(msg, kind, func(b *Block) { b.Dashboard = msg.Content.Dashboard })
 	case assistant.KindApp:

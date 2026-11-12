@@ -202,7 +202,7 @@ func TestKitchen(t *testing.T) {
 		}
 	}
 	for _, kind := range []assistant.ContentKind{
-		assistant.KindText, assistant.KindReasoning, assistant.KindToolCall, assistant.KindWidget,
+		assistant.KindText, assistant.KindReasoning, assistant.KindToolCall, assistant.KindApp,
 		assistant.KindDashboard, assistant.KindProgress, assistant.KindMemory,
 	} {
 		if !kinds[kind] {
