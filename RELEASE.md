@@ -13,7 +13,8 @@ This triggers `.github/workflows/release.yml` on `main`, which:
    packages the release archives and SBOMs (see CONTRIBUTING.md);
 3. attests the provenance of these archives and publishes them as a GitHub release of
    the `main` commit with `./scripts/publish.sh`, which also creates the tag;
-4. opens a pull request that updates the [Homebrew](#homebrew) formula.
+4. opens a pull request that updates the [Homebrew](#homebrew) formula and merges
+   once approved.
 
 Tags are protected, so they are only created by the workflow, with a
 dd-octo-sts token scoped by `.github/chainguard/self.release.sts.yaml`.
@@ -70,8 +71,8 @@ Release platforms are listed in `scripts/platforms.sh`.
 
 The `bits` formula of the [datadog-labs/homebrew-pack](https://github.com/datadog-labs/homebrew-pack)
 tap is rendered from `.github/homebrew/bits.rb.erb`. After each release, the release
-workflow's homebrew job opens the tap pull request "Update bits to v1.2.3" for
-`@datadog-labs/graphing-bits-cli` to merge. It runs
+workflow's homebrew job opens the tap pull request "Update bits to v1.2.3" and
+enables auto-merge, so it merges once a tap reviewer approves it. It runs
 `./scripts/homebrew.rb --output DIR v1.2.3` to verify the release and render the
 formula, then commits it as a signed API commit with a dd-octo-sts token scoped by
 the tap's `.github/chainguard/bits-cli.release.sts.yaml`. Re-running the job
