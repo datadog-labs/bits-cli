@@ -381,6 +381,12 @@ const (
 	// to the agent's context before it ran. History replays it with the same
 	// message id.
 	ContentMemoryContext = "memory_context"
+	// ContentApp is a live Datadog MCP App: a tool result, such as show_ui's,
+	// for the app at its resource URI. It is never persisted: history keeps a
+	// ContentAppSaved in its place, under the same message id, only when the
+	// app is restorable.
+	ContentApp      = "mcp_app"
+	ContentAppSaved = "mcp_app_saved"
 
 	// --- Provisional POST events for tools with stream_input enabled ---
 
@@ -730,6 +736,20 @@ type DashboardPayload struct {
 	TemplateVariables json.RawMessage
 }
 
+// AppPayload carries fields for the mcp_app and mcp_app_saved content types.
+// A saved app has no Result until RestoreApp runs its tool again.
+type AppPayload struct {
+	ToolCallID  string
+	ToolName    string
+	ToolInput   json.RawMessage // nil when saved
+	ResourceURI string
+	Result      json.RawMessage // the MCP CallToolResult; nil when saved
+	// RelayHandle lets the app call tools through CallAppTool for an hour. It
+	// is "" when saved, or when the server could not open a relay session.
+	RelayHandle string
+	Restorable  bool // the server saved the app, so RestoreApp can reopen it
+}
+
 // ProgressPayload carries fields for the background_task_update content type;
 // Content holds the human-readable body.
 type ProgressPayload struct {
@@ -772,6 +792,7 @@ type Content struct {
 	Tool       *ToolPayload          // tool_call, client_tool_call, tool_call_started, tool_call_input_delta, tool_response, client_tool_response
 	Widget     *WidgetPayload        // widget_def, widget
 	Dashboard  *DashboardPayload     // dashboard
+	App        *AppPayload           // mcp_app, mcp_app_saved
 	Progress   *ProgressPayload      // background_task_update
 	Memory     *MemoryContextPayload // memory_context
 	Stop       *StopPayload          // user_stop
@@ -884,6 +905,11 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 		LayoutType        string            `json:"layout_type"`
 		ReflowType        string            `json:"reflow_type"`
 		TemplateVariables json.RawMessage   `json:"template_variables"`
+		ToolInput         json.RawMessage   `json:"tool_input"`
+		ToolResult        json.RawMessage   `json:"tool_result"`
+		ResourceURI       string            `json:"resource_uri"`
+		RelayHandle       string            `json:"relay_handle"`
+		Restoration       *struct{}         `json:"restoration"`
 		EventType         string            `json:"event_type"`
 		TaskID            string            `json:"task_id"`
 		Sequence          int               `json:"sequence"`
@@ -949,6 +975,18 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 			ReflowType:        a.ReflowType,
 			TemplateVariables: a.TemplateVariables,
 		}
+	case ContentApp:
+		c.App = &AppPayload{
+			ToolCallID:  a.ToolCallID,
+			ToolName:    a.ToolName,
+			ToolInput:   a.ToolInput,
+			ResourceURI: a.ResourceURI,
+			Result:      a.ToolResult,
+			RelayHandle: a.RelayHandle,
+			Restorable:  a.Restoration != nil,
+		}
+	case ContentAppSaved:
+		c.App = &AppPayload{ToolCallID: a.ToolCallID, ToolName: a.ToolName, ResourceURI: a.ResourceURI, Restorable: true}
 	case ContentBackgroundTaskUpdate:
 		pp := &ProgressPayload{
 			Content:   jsonString(a.Content),
@@ -998,6 +1036,7 @@ const (
 	KindToolResult                    // tool_response / client_tool_response
 	KindWidget                        // widget_def / widget: rich viz, render or summarize
 	KindDashboard                     // dashboard: whole dashboard, summarize
+	KindApp                           // mcp_app / mcp_app_saved: a Datadog MCP App
 	KindProgress                      // background_task_update: async task progress/final
 	KindMemory                        // memory_context: memories added to the agent's context
 	KindTurnMarker                    // turn_status, replay_complete: stream markers (not seen on POST)
@@ -1022,6 +1061,8 @@ func (c *Content) Kind() ContentKind {
 		return KindWidget
 	case ContentDashboard:
 		return KindDashboard
+	case ContentApp, ContentAppSaved:
+		return KindApp
 	case ContentBackgroundTaskUpdate:
 		return KindProgress
 	case ContentMemoryContext:
@@ -1054,6 +1095,8 @@ func (k ContentKind) String() string {
 		return "widget"
 	case KindDashboard:
 		return "dashboard"
+	case KindApp:
+		return "app"
 	case KindProgress:
 		return "progress"
 	case KindMemory:

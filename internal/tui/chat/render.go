@@ -72,7 +72,7 @@ func (r *blockRenderer) RenderBlock(it agent.Block, width int, sty Styles, frame
 		return r.renderProgress(it, width, sty)
 	case assistant.KindMemory:
 		return renderMemoryGroup(it, renderContext{width: width, sty: sty, frame: frame})
-	case assistant.KindTurnMarker, assistant.KindStop,
+	case assistant.KindApp, assistant.KindTurnMarker, assistant.KindStop,
 		assistant.KindInternal, assistant.KindUnknown:
 		return fallback(it, width, sty)
 	}

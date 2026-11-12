@@ -165,6 +165,8 @@ func (t *Transcript) fold(msg assistant.Message) (Block, bool) {
 		return t.appendPassthrough(msg, kind, func(b *Block) { b.Widget = msg.Content.Widget })
 	case assistant.KindDashboard:
 		return t.appendPassthrough(msg, kind, func(b *Block) { b.Dashboard = msg.Content.Dashboard })
+	case assistant.KindApp:
+		return t.appendPassthrough(msg, kind, func(b *Block) { b.App = msg.Content.App })
 	case assistant.KindProgress:
 		return t.appendPassthrough(msg, kind, func(b *Block) { b.Progress = msg.Content.Progress })
 	case assistant.KindMemory:
