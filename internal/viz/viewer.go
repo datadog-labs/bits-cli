@@ -15,25 +15,24 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
-// MCPClient supplies authenticated MCP tool results.
-// It must support concurrent calls and honor cancellation. Ownership stays with
-// the caller; credentials must never be passed through the viewer environment.
-type MCPClient interface {
-	CallTool(context.Context, *mcp.CallToolParams) (*mcp.CallToolResult, error)
-}
+// toolCaller answers the frame's tool calls with MCP CallToolResults. It must
+// support concurrent calls and honor cancellation. Credentials stay with it,
+// never in the viewer environment.
+type toolCaller func(ctx context.Context, name string, arguments json.RawMessage) (json.RawMessage, error)
 
 type viewer interface {
-	present(*mcp.CallToolResult) error
+	present(app assistant.AppPayload) error
 	snapshot(context.Context) ([]byte, error)
 	show() error
 	close()
 	exited() bool
 }
 
-type launchFunc func(context.Context, context.Context, bool) (viewer, error)
+// launchFunc starts a viewer whose frame calls tools while it initializes.
+type launchFunc func(lifetime, startup context.Context, headless bool, tools toolCaller) (viewer, error)
 
 type wireMessage struct {
 	JSONRPC string          `json:"jsonrpc,omitempty"`
@@ -56,6 +55,7 @@ type process struct {
 	kill        func() error
 	done, ready chan struct{}
 	replies     chan wireMessage
+	tools       toolCaller
 	busy        atomic.Int64
 	activity    atomic.Int64
 	failed      atomic.Bool
@@ -69,11 +69,11 @@ func (e *startError) Error() string { return e.err.Error() }
 
 func (e *startError) Unwrap() error { return e.err }
 
-func launch(lifetime, startup context.Context, binary string, config Config, headless bool) (viewer, error) {
-	return launchArgs(lifetime, startup, binary, nil, config, headless)
+func launch(lifetime, startup context.Context, binary string, config Config, headless bool, tools toolCaller) (viewer, error) {
+	return launchArgs(lifetime, startup, binary, nil, config, headless, tools)
 }
 
-func launchArgs(lifetime, startup context.Context, binary string, args []string, config Config, headless bool) (viewer, error) {
+func launchArgs(lifetime, startup context.Context, binary string, args []string, config Config, headless bool, tools toolCaller) (viewer, error) {
 	ctx, cancel := context.WithCancel(lifetime)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = viewerEnv(config, headless)
@@ -107,9 +107,10 @@ func launchArgs(lifetime, startup context.Context, binary string, args []string,
 		done:    make(chan struct{}),
 		ready:   make(chan struct{}),
 		replies: make(chan wireMessage, 1),
+		tools:   tools,
 	}
 	p.activity.Store(time.Now().UnixNano())
-	go p.readMessages(ctx, output, cmd, config.MCP)
+	go p.readMessages(ctx, output, cmd)
 	if err := p.waitReady(startup); err != nil {
 		p.close()
 		return nil, err
@@ -140,7 +141,7 @@ func viewerEnv(config Config, headless bool) []string {
 	return env
 }
 
-func (p *process) readMessages(ctx context.Context, output io.Reader, cmd *exec.Cmd, client MCPClient) {
+func (p *process) readMessages(ctx context.Context, output io.Reader, cmd *exec.Cmd) {
 	defer close(p.done)
 	defer p.cancel()
 	scanner := bufio.NewScanner(output)
@@ -179,7 +180,7 @@ func (p *process) readMessages(ctx context.Context, output io.Reader, cmd *exec.
 				p.busy.Add(-1)
 				p.activity.Store(time.Now().UnixNano())
 			}()
-			p.callback(ctx, client, msg)
+			p.callback(ctx, msg)
 		}()
 	}
 	p.cancel()
@@ -216,38 +217,27 @@ func (p *process) write(value any) error {
 	return err
 }
 
-func (p *process) callback(ctx context.Context, client MCPClient, msg wireMessage) {
+func (p *process) callback(ctx context.Context, msg wireMessage) {
 	response := wireMessage{JSONRPC: "2.0", ID: msg.ID}
 	var err error
 	switch msg.Method {
 	case "ui/update-model-context":
 		response.Result = json.RawMessage(`{}`)
 	case "tools/call":
-		var args struct {
+		var call struct {
 			Name      string          `json:"name"`
 			Arguments json.RawMessage `json:"arguments"`
 		}
-		err = json.Unmarshal(msg.Params, &args)
-		if err == nil {
-			switch args.Name {
-			case "_dd_gff", "_dd_guc", "_dd_wfd", "get_widget", "get_widget_v2":
-				callCtx, cancel := context.WithTimeout(ctx, time.Minute)
-				var result *mcp.CallToolResult
-				result, err = client.CallTool(callCtx, &mcp.CallToolParams{Name: args.Name, Arguments: args.Arguments})
-				if err == nil {
-					if result == nil {
-						err = errors.New("missing MCP result")
-					} else {
-						if result.IsError {
-							p.failed.Store(true)
-						}
-						response.Result, err = json.Marshal(result)
-					}
-				}
-				cancel()
-			default:
-				err = errors.New("unsupported visualization tool")
-			}
+		if err = json.Unmarshal(msg.Params, &call); err == nil {
+			callCtx, cancel := context.WithTimeout(ctx, time.Minute)
+			response.Result, err = p.tools(callCtx, call.Name, call.Arguments)
+			cancel()
+		}
+		var result struct {
+			IsError bool `json:"isError"`
+		}
+		if err == nil && json.Unmarshal(response.Result, &result) == nil && result.IsError {
+			p.failed.Store(true)
 		}
 	default:
 		err = errors.New("unsupported visualization method")
@@ -263,14 +253,41 @@ func (p *process) callback(ctx context.Context, client MCPClient, msg wireMessag
 	_ = p.write(response)
 }
 
-func (p *process) present(result *mcp.CallToolResult) error {
+func (p *process) present(app assistant.AppPayload) error {
 	p.failed.Store(false)
 	p.activity.Store(time.Now().UnixNano())
-	return p.write(map[string]any{
-		"jsonrpc": "2.0",
-		"method":  "ui/notifications/tool-result",
-		"params":  result,
-	})
+	// Like other MCP Apps hosts, name the tool and send its input before its
+	// result: apps label their loading state and telemetry with them.
+	type tool struct {
+		Name        string            `json:"name"`
+		InputSchema map[string]string `json:"inputSchema"`
+	}
+	type toolInfo struct {
+		ID   string `json:"id,omitempty"`
+		Tool tool   `json:"tool"`
+	}
+	hostContext, err := json.Marshal(struct {
+		ToolInfo toolInfo `json:"toolInfo"`
+	}{toolInfo{app.ToolCallID, tool{app.ToolName, map[string]string{"type": "object"}}}})
+	if err != nil {
+		return err
+	}
+	input, err := json.Marshal(struct {
+		Arguments json.RawMessage `json:"arguments,omitempty"`
+	}{app.ToolInput})
+	if err != nil {
+		return err
+	}
+	for _, msg := range []wireMessage{
+		{JSONRPC: "2.0", Method: "ui/notifications/host-context-changed", Params: hostContext},
+		{JSONRPC: "2.0", Method: "ui/notifications/tool-input", Params: input},
+		{JSONRPC: "2.0", Method: "ui/notifications/tool-result", Params: app.Result},
+	} {
+		if err := p.write(msg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *process) show() error { return p.write(map[string]string{"command": "show"}) }

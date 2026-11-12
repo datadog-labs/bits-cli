@@ -22,6 +22,21 @@ func TestWidgetsFailure(t *testing.T) {
 	}
 }
 
+func TestFrameURL(t *testing.T) {
+	for base, want := range map[string]string{
+		"https://api.datadoghq.com":            "https://api.datadoghq.com/api/unstable/dataviz-mcp-ui",
+		"https://api.datadoghq.com/v1?q=1#top": "https://api.datadoghq.com/api/unstable/dataviz-mcp-ui",
+		"https://api.example.org":              "",
+		"http://api.datadoghq.com":             "",
+		"https://user@api.datadoghq.com":       "",
+	} {
+		got, err := frameURL(base)
+		if got != want || (want == "") != errors.Is(err, errUnsupportedSite) {
+			t.Errorf("%s: %q, %v; want %q", base, got, err, want)
+		}
+	}
+}
+
 func TestVizRenderer(t *testing.T) {
 	for value, want := range map[string]string{"": "auto", "AUTO": "auto", " snapshot ": "snapshot", "Off": "off", "none": ""} {
 		if got, err := vizRenderer(value); got != want || (err != nil) != (want == "") {

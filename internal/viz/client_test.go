@@ -8,6 +8,8 @@ import (
 	"image/png"
 	"os"
 	"runtime"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -16,35 +18,42 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
-	"github.com/datadog-labs/bits-cli/internal/datadogmcp"
 	"github.com/datadog-labs/bits-cli/internal/version"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type toolFunc func(context.Context, string, json.RawMessage) (json.RawMessage, error)
+// fakeAPI restores apps with restore and relays tool calls to call.
+type fakeAPI struct {
+	restore func(conversationID, messageID string) (assistant.AppPayload, error)
+	call    func(ctx context.Context, handle, name string, arguments json.RawMessage) (json.RawMessage, error)
+}
 
-func (f toolFunc) CallTool(ctx context.Context, params *mcp.CallToolParams) (*mcp.CallToolResult, error) {
-	args, err := json.Marshal(params.Arguments)
-	if err != nil {
-		return nil, err
+func (f fakeAPI) RestoreApp(_ context.Context, conversationID, messageID string) (assistant.AppPayload, error) {
+	if f.restore == nil {
+		return assistant.AppPayload{}, errors.New("unexpected restore")
 	}
-	raw, err := f(ctx, params.Name, args)
-	if err != nil {
-		return nil, err
+	return f.restore(conversationID, messageID)
+}
+
+func (f fakeAPI) CallAppTool(ctx context.Context, handle, name string, arguments json.RawMessage) (json.RawMessage, error) {
+	if f.call == nil {
+		return json.RawMessage(`{}`), nil
 	}
-	var result mcp.CallToolResult
-	err = json.Unmarshal(raw, &result)
-	return &result, err
+	return f.call(ctx, handle, name, arguments)
 }
 
 type fakeViewer struct {
 	closes     atomic.Int32
 	dead       atomic.Bool
 	snapshotFn func(context.Context) ([]byte, error)
+	presented  assistant.AppPayload
+	tools      toolCaller
 }
 
-func (f *fakeViewer) present(*mcp.CallToolResult) error { return nil }
-func (f *fakeViewer) show() error                       { return nil }
+func (f *fakeViewer) present(app assistant.AppPayload) error {
+	f.presented = app
+	return nil
+}
+func (f *fakeViewer) show() error { return nil }
 func (f *fakeViewer) snapshot(ctx context.Context) ([]byte, error) {
 	if f.snapshotFn != nil {
 		return f.snapshotFn(ctx)
@@ -59,16 +68,14 @@ func testClient(start launchFunc) *localClient {
 
 func testClientConcurrency(start launchFunc, concurrency int) *localClient {
 	c := newLocal(start, concurrency)
-	c.mcp = toolFunc(func(context.Context, string, json.RawMessage) (json.RawMessage, error) {
-		return json.RawMessage(`{"structuredContent":{"widget":{}}}`), nil
-	})
+	c.api = fakeAPI{}
 	return c
 }
 
 func TestClientReuseAndSeparatePanel(t *testing.T) {
 	var modes []bool
 	var launched []*fakeViewer
-	c := testClient(func(_, _ context.Context, headless bool) (viewer, error) {
+	c := testClient(func(_, _ context.Context, headless bool, _ toolCaller) (viewer, error) {
 		modes = append(modes, headless)
 		v := &fakeViewer{}
 		launched = append(launched, v)
@@ -82,18 +89,28 @@ func TestClientReuseAndSeparatePanel(t *testing.T) {
 			t.Fatalf("%+v", r)
 		}
 	}
-	if r := c.Open(context.Background(), w); r.Phase != Succeeded {
+	if r := c.Open(context.Background(), w); r.Status.Phase != Succeeded {
 		t.Fatal(r)
 	}
 	if len(modes) != 2 || !modes[0] || modes[1] {
 		t.Fatal(modes)
 	}
 	launched[1].dead.Store(true) // The user quit the interactive helper.
-	if r := c.Open(context.Background(), w); r.Phase != Succeeded {
+	if r := c.Open(context.Background(), w); r.Status.Phase != Succeeded {
 		t.Fatal(r)
 	}
 	if len(modes) != 3 || modes[2] || launched[1].closes.Load() != 1 {
 		t.Fatalf("exited interactive viewer was reused: modes=%v closes=%d", modes, launched[1].closes.Load())
+	}
+	w.App.RelayHandle = "another-session"
+	if r := c.Render(context.Background(), w); r.Status.Phase != Succeeded {
+		t.Fatal(r)
+	}
+	if r := c.Open(context.Background(), w); r.Status.Phase != Succeeded {
+		t.Fatal(r)
+	}
+	if len(modes) != 5 || !modes[3] || modes[4] || launched[0].closes.Load() != 1 || launched[2].closes.Load() != 1 {
+		t.Fatalf("viewers survived a relay session change: modes=%v", modes)
 	}
 }
 
@@ -105,7 +122,7 @@ func TestCancellationRetiresViewerAndQueueIsCancellable(t *testing.T) {
 		return nil, ctx.Err()
 	}}
 	var launches int
-	c := testClient(func(context.Context, context.Context, bool) (viewer, error) {
+	c := testClient(func(context.Context, context.Context, bool, toolCaller) (viewer, error) {
 		launches++
 		if launches == 1 {
 			return first, nil
@@ -114,7 +131,7 @@ func TestCancellationRetiresViewerAndQueueIsCancellable(t *testing.T) {
 	})
 	defer func() { _ = c.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
-	result := make(chan RenderResult, 1)
+	result := make(chan Result, 1)
 	w := request(t)
 	go func() { result <- c.Render(ctx, w) }()
 	<-entered
@@ -137,7 +154,7 @@ func TestCancellationRetiresViewerAndQueueIsCancellable(t *testing.T) {
 
 func TestCloseCancelsActiveWork(t *testing.T) {
 	entered := make(chan struct{})
-	c := testClient(func(context.Context, context.Context, bool) (viewer, error) {
+	c := testClient(func(context.Context, context.Context, bool, toolCaller) (viewer, error) {
 		return &fakeViewer{snapshotFn: func(ctx context.Context) ([]byte, error) {
 			close(entered)
 			<-ctx.Done()
@@ -160,7 +177,7 @@ func TestCloseCancelsActiveWork(t *testing.T) {
 }
 
 func TestUnavailableAndInvalidWidget(t *testing.T) {
-	c := testClient(func(context.Context, context.Context, bool) (viewer, error) {
+	c := testClient(func(context.Context, context.Context, bool, toolCaller) (viewer, error) {
 		t.Fatal("unexpected launch")
 		return nil, nil
 	})
@@ -172,10 +189,10 @@ func TestUnavailableAndInvalidWidget(t *testing.T) {
 		syscall.EAGAIN:               {Phase: Failed, Retry: RetryAllowed},   // transient
 		errors.New("broken install"): {Phase: Failed, Retry: RetryNotUseful}, // no known cause
 	} {
-		c.launch = func(context.Context, context.Context, bool) (viewer, error) {
+		c.launch = func(context.Context, context.Context, bool, toolCaller) (viewer, error) {
 			return nil, &startError{err: err}
 		}
-		for _, got := range []Status{c.Render(context.Background(), request(t)).Status, c.Open(context.Background(), request(t))} {
+		for _, got := range []Status{c.Render(context.Background(), request(t)).Status, c.Open(context.Background(), request(t)).Status} {
 			if got.Phase != want.Phase || got.Retry != want.Retry {
 				t.Fatal(err, got)
 			}
@@ -194,7 +211,7 @@ func TestRendererPoolConcurrencyAndInteractiveIsolation(t *testing.T) {
 	entered := make(chan struct{}, 3)
 	release := make(chan struct{})
 	var renders, opens atomic.Int32
-	client := testClientConcurrency(func(_, _ context.Context, headless bool) (viewer, error) {
+	client := testClientConcurrency(func(_, _ context.Context, headless bool, _ toolCaller) (viewer, error) {
 		if !headless {
 			opens.Add(1)
 			return &fakeViewer{}, nil
@@ -212,7 +229,7 @@ func TestRendererPoolConcurrencyAndInteractiveIsolation(t *testing.T) {
 	}, 0)
 	defer func() { _ = client.Close() }()
 	widget := request(t)
-	results := make(chan RenderResult, 3)
+	results := make(chan Result, 3)
 	for range 2 {
 		go func() { results <- client.Render(ctx, widget) }()
 	}
@@ -231,7 +248,7 @@ func TestRendererPoolConcurrencyAndInteractiveIsolation(t *testing.T) {
 		t.Fatalf("queued request: %+v", result.Status)
 	}
 	// The interactive viewer has its own slot even when all renderers are busy.
-	if status := client.Open(ctx, widget); status.Phase != Succeeded {
+	if status := client.Open(ctx, widget); status.Status.Phase != Succeeded {
 		t.Fatal(status)
 	}
 	if renders.Load() != 2 || opens.Load() != 1 {
@@ -247,7 +264,7 @@ func TestRendererPoolConcurrencyAndInteractiveIsolation(t *testing.T) {
 	if result := client.Render(ctx, widget); result.Status.Phase != Succeeded {
 		t.Fatal(result.Status)
 	}
-	if status := client.Open(ctx, widget); status.Phase != Succeeded {
+	if status := client.Open(ctx, widget); status.Status.Phase != Succeeded {
 		t.Fatal(status)
 	}
 	if renders.Load() != 2 || opens.Load() != 1 {
@@ -260,7 +277,7 @@ func TestCloseDrainsRendererPool(t *testing.T) {
 	defer cancel()
 	entered := make(chan struct{}, 2)
 	viewers := make(chan *fakeViewer, 2)
-	client := testClientConcurrency(func(_, _ context.Context, _ bool) (viewer, error) {
+	client := testClientConcurrency(func(_, _ context.Context, _ bool, _ toolCaller) (viewer, error) {
 		viewer := &fakeViewer{snapshotFn: func(ctx context.Context) ([]byte, error) {
 			entered <- struct{}{}
 			<-ctx.Done()
@@ -271,7 +288,7 @@ func TestCloseDrainsRendererPool(t *testing.T) {
 	}, 2)
 	defer func() { _ = client.Close() }()
 	widget := request(t)
-	results := make(chan RenderResult, 3)
+	results := make(chan Result, 3)
 	for range 2 {
 		go func() { results <- client.Render(ctx, widget) }()
 	}
@@ -305,7 +322,7 @@ func TestCancelRetiresOnlyItsRenderer(t *testing.T) {
 	release := make(chan struct{})
 	viewers := make(chan *fakeViewer, 3)
 	var launches atomic.Int32
-	client := testClientConcurrency(func(_, _ context.Context, _ bool) (viewer, error) {
+	client := testClientConcurrency(func(_, _ context.Context, _ bool, _ toolCaller) (viewer, error) {
 		launches.Add(1)
 		viewer := &fakeViewer{snapshotFn: func(ctx context.Context) ([]byte, error) {
 			entered <- struct{}{}
@@ -323,7 +340,7 @@ func TestCancelRetiresOnlyItsRenderer(t *testing.T) {
 	widget := request(t)
 	firstContext, cancelFirst := context.WithCancel(ctx)
 	defer cancelFirst()
-	results := make(chan RenderResult, 2)
+	results := make(chan Result, 2)
 	go func() { results <- client.Render(firstContext, widget) }()
 	select {
 	case <-entered:
@@ -358,35 +375,34 @@ func TestCancelRetiresOnlyItsRenderer(t *testing.T) {
 	}
 }
 
+// TestLive restores a saved app, named as conversation/message in
+// BITS_VIZ_E2E_APP, and snapshots it through its relay session.
 func TestLive(t *testing.T) {
-	if os.Getenv("BITS_VIZ_E2E") != "1" {
-		t.Skip("set BITS_VIZ_E2E=1 with a Bits login and built ddviz helper")
+	saved := os.Getenv("BITS_VIZ_E2E_APP")
+	if os.Getenv("BITS_VIZ_E2E") != "1" || saved == "" {
+		t.Skip("set BITS_VIZ_E2E=1 and BITS_VIZ_E2E_APP=conversation/message with a Bits login and built ddviz helper")
 	}
 	if runtime.GOOS != "darwin" {
 		t.Skip("ddviz requires macOS")
 	}
+	conversation, message, ok := strings.Cut(saved, "/")
+	if !ok {
+		t.Fatal("BITS_VIZ_E2E_APP must be conversation/message")
+	}
 	api := widgetE2EAPI(t)
-	client, err := datadogmcp.New(api)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = client.Close() }()
-	c := New(Config{MCP: client, FrameURL: api.BaseURL + "/api/unstable/dataviz-mcp-ui", Version: version.Build()})
+	c := New(Config{API: api, FrameURL: api.BaseURL + "/api/unstable/dataviz-mcp-ui", Version: version.Build()})
 	defer func() { _ = c.Close() }()
-	definition := assistant.WidgetDefinition{
-		Type:   "timeseries",
-		Fields: map[string]json.RawMessage{"requests": json.RawMessage(`[{"q":"avg:system.cpu.user{*}","display_type":"line"}]`)},
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	result := c.Render(ctx, Request{Definition: definition})
+	request := Request{App: assistant.AppPayload{ResourceURI: DatavizURI, Restorable: true}, ConversationID: conversation, MessageID: message}
+	result := c.Render(ctx, request)
 	if result.Status.Phase != Succeeded {
 		t.Fatalf("live render: %+v", result.Status)
 	}
-	if result.Image == nil || len(result.Image.PNG()) == 0 {
-		t.Fatal("missing image")
+	if result.Image == nil || len(result.Image.PNG()) == 0 || result.App == nil {
+		t.Fatal("missing image or restored app")
 	}
-	t.Logf("captured %dx%d PNG (%d bytes) through authenticated MCP", result.Image.Width(), result.Image.Height(), len(result.Image.PNG()))
+	t.Logf("captured %dx%d PNG (%d bytes) through the app relay", result.Image.Width(), result.Image.Height(), len(result.Image.PNG()))
 }
 
 func TestSnapshotLive(t *testing.T) {
@@ -396,13 +412,10 @@ func TestSnapshotLive(t *testing.T) {
 	api := widgetE2EAPI(t)
 	c := NewRemote(api)
 	defer func() { _ = c.Close() }()
-	definition := assistant.WidgetDefinition{
-		Type:   "timeseries",
-		Fields: map[string]json.RawMessage{"requests": json.RawMessage(`[{"q":"avg:system.cpu.user{*}","display_type":"line"}]`)},
-	}
+	app := chartApp(`{"type":"timeseries","requests":[{"q":"avg:system.cpu.user{*}","display_type":"line"}]}`, 0, 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	result := c.Render(ctx, Request{Definition: definition})
+	result := c.Render(ctx, Request{App: app})
 	if result.Status.Phase != Succeeded {
 		t.Fatalf("snapshot render: %+v", result.Status)
 	}
@@ -414,7 +427,7 @@ func TestSnapshotLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, g, b, a := decoded.At(0, 0).RGBA()
-	dark := c.Render(ctx, Request{Definition: definition, Dark: true})
+	dark := c.Render(ctx, Request{App: app, Dark: true})
 	if dark.Status.Phase != Succeeded || dark.Image == nil {
 		t.Fatalf("dark snapshot render: %+v", dark.Status)
 	}
@@ -447,26 +460,113 @@ func widgetE2EAPI(t *testing.T) *assistant.Client {
 	return api
 }
 
-func TestFetchWidgetPreservesDefinition(t *testing.T) {
-	timing := &assistant.WidgetTime{Type: "fixed", From: 1700000000000, To: 1700003600000, Fields: map[string]json.RawMessage{"hide_incomplete_cost_data": json.RawMessage(`true`)}}
-	definition := assistant.WidgetDefinition{Type: "timeseries", Time: timing}
-	request := Request{Definition: definition}
-	client := testClient(nil)
-	defer func() { _ = client.Close() }()
-	client.mcp = toolFunc(func(_ context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
-		expected, err := json.Marshal(map[string]any{"widget_definition": definition, "from_ts": "1700000000", "to_ts": "1700003600"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if name != "get_widget" || string(args) != string(expected) {
-			t.Fatalf("unexpected call: %s %s", name, args)
-		}
-		return json.RawMessage(`{"structuredContent":{}}`), nil
+// A saved app is restored before it takes a viewer. Its frame calls tools
+// through the restored relay session, from launch on, and the client returns
+// the restored app for reuse.
+func TestRestoresSavedAppAndRelaysToolCalls(t *testing.T) {
+	restored := assistant.AppPayload{ResourceURI: DatavizURI, Result: json.RawMessage(`{"structuredContent":{}}`), RelayHandle: "fresh", Restorable: true}
+	var viewers []*fakeViewer
+	c := testClient(func(_, _ context.Context, _ bool, tools toolCaller) (viewer, error) {
+		v := &fakeViewer{tools: tools}
+		viewers = append(viewers, v)
+		return v, nil
 	})
-	if _, status := client.fetchWidget(context.Background(), request); status.Phase != Succeeded {
-		t.Fatal(status)
+	defer func() { _ = c.Close() }()
+	var handles []string
+	c.api = fakeAPI{
+		restore: func(conversationID, messageID string) (assistant.AppPayload, error) {
+			if conversationID != "conv" || messageID != "msg" {
+				t.Fatalf("restored %s/%s", conversationID, messageID)
+			}
+			return restored, nil
+		},
+		call: func(_ context.Context, handle, name string, _ json.RawMessage) (json.RawMessage, error) {
+			handles = append(handles, handle+":"+name)
+			return json.RawMessage(`{}`), nil
+		},
 	}
-	if definition.Time != timing || timing.Type != "fixed" || string(timing.Fields["hide_incomplete_cost_data"]) != "true" {
-		t.Fatal("fetch modified the borrowed definition")
+	saved := Request{App: assistant.AppPayload{ResourceURI: DatavizURI, Restorable: true}, ConversationID: "conv", MessageID: "msg"}
+	result := c.Render(context.Background(), saved)
+	if result.Status.Phase != Succeeded || result.App == nil || result.App.RelayHandle != "fresh" {
+		t.Fatalf("result = %+v", result)
+	}
+	if string(viewers[0].presented.Result) != string(restored.Result) {
+		t.Fatalf("presented %s", viewers[0].presented.Result)
+	}
+	if _, err := viewers[0].tools(context.Background(), "_dd_gff", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(handles, []string{"fresh:_dd_gff"}) {
+		t.Fatalf("relayed %v", handles)
+	}
+
+	c.api = fakeAPI{restore: func(string, string) (assistant.AppPayload, error) {
+		return assistant.AppPayload{}, &assistant.APIError{StatusCode: 410, Detail: "Original application call is unavailable"}
+	}}
+	if s := c.Render(context.Background(), saved).Status; s.Phase != Failed || s.Retry != RetryNotUseful || s.Reason != "Original application call is unavailable" {
+		t.Fatalf("refused restore = %+v", s)
+	}
+}
+
+// An expired relay session fails the panel's callbacks after Open succeeded,
+// so the next Open restores the app for a new session, as the first does for
+// a live app sent without one.
+func TestExpiredRelayRestoresOnNextOpen(t *testing.T) {
+	var viewers []*fakeViewer
+	c := testClient(func(_, _ context.Context, _ bool, tools toolCaller) (viewer, error) {
+		v := &fakeViewer{tools: tools}
+		viewers = append(viewers, v)
+		return v, nil
+	})
+	defer func() { _ = c.Close() }()
+	fresh := assistant.AppPayload{ResourceURI: DatavizURI, Result: json.RawMessage(`{"structuredContent":{}}`), RelayHandle: "fresh", Restorable: true}
+	restores := 0
+	c.api = fakeAPI{
+		restore: func(string, string) (assistant.AppPayload, error) {
+			restores++
+			return fresh, nil
+		},
+		call: func(_ context.Context, handle, _ string, _ json.RawMessage) (json.RawMessage, error) {
+			if handle == "old" {
+				return nil, assistant.ErrGone
+			}
+			return json.RawMessage(`{}`), nil
+		},
+	}
+	live := Request{
+		App:            assistant.AppPayload{ResourceURI: DatavizURI, Result: json.RawMessage(`{}`), RelayHandle: "old", Restorable: true},
+		ConversationID: "conv", MessageID: "msg",
+	}
+	unrelayed := live
+	unrelayed.App.RelayHandle = ""
+	if result := c.Open(context.Background(), unrelayed); result.Status.Phase != Succeeded || result.App == nil || result.App.RelayHandle != "fresh" || restores != 1 {
+		t.Fatalf("open without relay = %+v, restores = %d", result, restores)
+	}
+	if result := c.Open(context.Background(), live); result.Status.Phase != Succeeded || result.App != nil {
+		t.Fatalf("first open = %+v", result)
+	}
+	if _, err := viewers[1].tools(context.Background(), "_dd_gff", nil); !errors.Is(err, assistant.ErrGone) {
+		t.Fatalf("callback err = %v", err)
+	}
+	result := c.Open(context.Background(), live)
+	if result.Status.Phase != Succeeded || result.App == nil || result.App.RelayHandle != "fresh" || restores != 2 {
+		t.Fatalf("reopen = %+v, restores = %d", result, restores)
+	}
+}
+
+// A live app with no relay session it could restore cannot load its data, so
+// it fails without a retry and without taking a viewer.
+func TestUnrelayedAppIsNotShown(t *testing.T) {
+	c := testClient(func(_, _ context.Context, _ bool, _ toolCaller) (viewer, error) {
+		t.Fatal("launched a viewer")
+		return nil, nil
+	})
+	defer func() { _ = c.Close() }()
+	app := Request{App: assistant.AppPayload{ResourceURI: DatavizURI, Result: json.RawMessage(`{}`)}}
+	if r := c.Render(context.Background(), app); r.Status != notShown {
+		t.Fatalf("render = %+v", r.Status)
+	}
+	if r := c.Open(context.Background(), app); r.Status != notShown {
+		t.Fatalf("open = %+v", r.Status)
 	}
 }

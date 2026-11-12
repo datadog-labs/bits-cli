@@ -2,24 +2,30 @@ package viz
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
 	"runtime"
 	"slices"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/libexec"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// API reopens saved apps and relays their tool calls; *assistant.Client
+// implements it. The server decides which tools an app may call.
+type API interface {
+	RestoreApp(ctx context.Context, conversationID, messageID string) (assistant.AppPayload, error)
+	CallAppTool(ctx context.Context, relayHandle, name string, arguments json.RawMessage) (json.RawMessage, error)
+}
+
 // Config binds a client to one account/site. Recreate it on account changes.
-// MCP owns authentication and authorization of read-only MCP tools.
 type Config struct {
-	MCP      MCPClient
+	API      API
 	FrameURL string
 	Version  string
 	Debug    bool
@@ -34,14 +40,24 @@ type localClient struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	launch      launchFunc
-	mcp         MCPClient
-	renderers   chan viewer
-	interactive chan viewer
+	api         API
+	renderers   chan viewerSession
+	interactive chan viewerSession
 	closeOnce   sync.Once
+	// expired holds relay handles the server reported gone. Their callbacks
+	// fail after Open succeeds, so the next operation must restore instead.
+	expired sync.Map
+}
+
+// A frame can keep calling tools after presentation, so its relay session
+// cannot change while the viewer is alive.
+type viewerSession struct {
+	viewer
+	relayHandle string
 }
 
 // Supported reports whether this system can run the ddviz helper. Without it,
-// widgets fall back to Datadog snapshots (NewRemote).
+// charts fall back to Datadog snapshots (NewRemote).
 func Supported() bool {
 	// ddviz is built for macOS only; an exec failure covers the rest.
 	if runtime.GOOS != "darwin" {
@@ -59,17 +75,17 @@ func Supported() bool {
 // are reported through operation outcomes. No process starts here.
 func New(config Config) Client {
 	c := newLocal(nil, config.RenderConcurrency)
-	c.mcp = config.MCP
-	c.launch = func(lifetime, startup context.Context, headless bool) (viewer, error) {
+	c.api = config.API
+	c.launch = func(lifetime, startup context.Context, headless bool, tools toolCaller) (viewer, error) {
 		u, err := url.Parse(config.FrameURL)
-		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || config.MCP == nil {
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || config.API == nil {
 			return nil, errors.New("visualizations require authenticated tool access and an HTTPS frame URL")
 		}
 		binary, err := libexec.Binary("ddviz")
 		if err != nil {
 			return nil, err
 		}
-		return launch(lifetime, startup, binary, config, headless)
+		return launch(lifetime, startup, binary, config, headless, tools)
 	}
 	return c
 }
@@ -83,14 +99,14 @@ func newLocal(start launchFunc, concurrency int) *localClient {
 		ctx:         ctx,
 		cancel:      cancel,
 		launch:      start,
-		renderers:   make(chan viewer, concurrency),
-		interactive: make(chan viewer, 1),
+		renderers:   make(chan viewerSession, concurrency),
+		interactive: make(chan viewerSession, 1),
 	}
-	// A nil viewer represents an available slot that has not started a process.
+	// An empty session represents an available slot with no process.
 	for range concurrency {
-		client.renderers <- nil
+		client.renderers <- viewerSession{}
 	}
-	client.interactive <- nil
+	client.interactive <- viewerSession{}
 	return client
 }
 
@@ -118,12 +134,9 @@ func failure(err error) Status {
 	return Status{Phase: Failed, Reason: "Visualization could not be loaded.", Retry: RetryAllowed}
 }
 
-func (c *localClient) perform(ctx context.Context, request Request, headless bool) (*Snapshot, Status) {
+func (c *localClient) perform(ctx context.Context, request Request, headless bool) Result {
 	if c.ctx.Err() != nil {
-		return nil, Status{Phase: Canceled}
-	}
-	if !request.valid() {
-		return nil, Status{Phase: Failed, Reason: "Request is invalid.", Retry: RetryNotUseful}
+		return Result{Status: Status{Phase: Canceled}}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -131,33 +144,49 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 	stop := context.AfterFunc(c.ctx, cancel)
 	defer stop()
 
+	// An app without a live relay session fails its tool calls: restore it for
+	// a new one.
+	if _, gone := c.expired.Load(request.App.RelayHandle); request.App.Restorable && (gone || request.App.RelayHandle == "") {
+		request.App.Result, request.App.RelayHandle = nil, ""
+	}
+	// Nothing could serve its tool calls: a retry would fail the same way.
+	if request.App.RelayHandle == "" && !request.App.Restorable {
+		return Result{Status: notShown}
+	}
+	// Restore before taking a viewer, which the restore would leave idle.
+	app, restored, status := load(ctx, c.api, request)
+	if status.Phase != Succeeded {
+		return Result{Status: status}
+	}
+	tools := c.relay(app.RelayHandle)
+
 	pool := c.renderers
 	if !headless {
 		pool = c.interactive
 	}
 
-	var current viewer
+	var current viewerSession
 	select {
 	case current = <-pool:
 	case <-ctx.Done():
-		return nil, failure(ctx.Err())
+		return Result{Status: failure(ctx.Err()), App: restored}
 	}
 	defer func() { pool <- current }()
 
 	if err := ctx.Err(); err != nil {
-		return nil, failure(err)
+		return Result{Status: failure(err), App: restored}
 	}
 
-	if current != nil && current.exited() {
+	if current.viewer != nil && (current.relayHandle != app.RelayHandle || current.exited()) {
 		current.close()
-		current = nil
+		current = viewerSession{}
 	}
-	if current == nil {
-		started, err := c.launch(c.ctx, ctx, headless)
+	if current.viewer == nil {
+		started, err := c.launch(c.ctx, ctx, headless, tools)
 		if err != nil {
-			return nil, failure(err)
+			return Result{Status: failure(err), App: restored}
 		}
-		current = started
+		current = viewerSession{viewer: started, relayHandle: app.RelayHandle}
 	}
 
 	// Closing an active viewer on cancellation prevents late chart callbacks from
@@ -167,47 +196,37 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 		current.close()
 		close(finished)
 	})
-	result, status := c.present(ctx, current, request, headless)
+	image, status := present(ctx, current, app, headless)
 	if !stopClose() {
 		<-finished
-		current = nil
+		current = viewerSession{}
 	} else if status.Phase != Succeeded {
 		current.close()
-		current = nil
+		current = viewerSession{}
 	}
 
 	if err := ctx.Err(); err != nil {
-		return nil, failure(err)
+		return Result{Status: failure(err), App: restored}
 	}
-
-	return result, status
+	return Result{Status: status, Image: image, App: restored}
 }
 
-func (c *localClient) fetchWidget(ctx context.Context, request Request) (*mcp.CallToolResult, Status) {
-	args := map[string]any{"widget_definition": request.Definition}
-	if from, to, ok := request.Definition.TimeRangeSeconds(time.Now()); ok {
-		args["from_ts"] = strconv.FormatInt(from, 10)
-		args["to_ts"] = strconv.FormatInt(to, 10)
+// relay sends an app's tool calls through its relay session.
+func (c *localClient) relay(handle string) toolCaller {
+	return func(ctx context.Context, name string, arguments json.RawMessage) (json.RawMessage, error) {
+		if handle == "" {
+			return nil, errors.New("the app has no relay session")
+		}
+		result, err := c.api.CallAppTool(ctx, handle, name, arguments)
+		if errors.Is(err, assistant.ErrGone) {
+			c.expired.Store(handle, struct{}{})
+		}
+		return result, err
 	}
-	result, err := c.mcp.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "get_widget",
-		Arguments: args,
-	})
-	if err != nil {
-		return nil, failure(err)
-	}
-	if result == nil || result.IsError || result.StructuredContent == nil {
-		return nil, Status{Phase: Failed, Reason: "Datadog did not return a renderable widget.", Retry: RetryNotUseful}
-	}
-	return result, Status{Phase: Succeeded}
 }
 
-func (c *localClient) present(ctx context.Context, viewer viewer, request Request, headless bool) (*Snapshot, Status) {
-	result, status := c.fetchWidget(ctx, request)
-	if status.Phase != Succeeded {
-		return nil, status
-	}
-	if err := viewer.present(result); err != nil {
+func present(ctx context.Context, viewer viewer, app assistant.AppPayload, headless bool) (*Snapshot, Status) {
+	if err := viewer.present(app); err != nil {
 		return nil, failure(err)
 	}
 	if !headless {
@@ -227,14 +246,12 @@ func (c *localClient) present(ctx context.Context, viewer viewer, request Reques
 	return image, Status{Phase: Succeeded}
 }
 
-func (c *localClient) Render(ctx context.Context, request Request) RenderResult {
-	image, status := c.perform(ctx, request, true)
-	return RenderResult{Status: status, Image: image}
+func (c *localClient) Render(ctx context.Context, request Request) Result {
+	return c.perform(ctx, request, true)
 }
 
-func (c *localClient) Open(ctx context.Context, request Request) Status {
-	_, status := c.perform(ctx, request, false)
-	return status
+func (c *localClient) Open(ctx context.Context, request Request) Result {
+	return c.perform(ctx, request, false)
 }
 
 func (c *localClient) Interactive() bool { return true }
@@ -244,9 +261,9 @@ func (c *localClient) Close() error {
 		c.cancel()
 		// Drain every slot, including active operations as they return their viewers.
 		// Never close the channels: queued callers leave through context cancellation.
-		for _, pool := range []chan viewer{c.renderers, c.interactive} {
+		for _, pool := range []chan viewerSession{c.renderers, c.interactive} {
 			for range cap(pool) {
-				if current := <-pool; current != nil {
+				if current := <-pool; current.viewer != nil {
 					current.close()
 				}
 			}

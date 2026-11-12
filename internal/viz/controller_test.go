@@ -4,54 +4,55 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 type controllerClient struct {
-	render func(context.Context, Request) RenderResult
-	open   func(context.Context, Request) Status
+	render func(context.Context, Request) Result
+	open   func(context.Context, Request) Result
 }
 
-func (c controllerClient) Render(ctx context.Context, request Request) RenderResult {
+func (c controllerClient) Render(ctx context.Context, request Request) Result {
 	return c.render(ctx, request)
 }
 
 func (c controllerClient) Interactive() bool { return true }
 
-func (c controllerClient) Open(ctx context.Context, request Request) Status {
+func (c controllerClient) Open(ctx context.Context, request Request) Result {
 	return c.open(ctx, request)
 }
 
 func (controllerClient) Close() error { return nil }
 
 func TestControllerIndependentOperationsAndRetry(t *testing.T) {
-	definition := assistant.WidgetDefinition{Type: "timeseries", Fields: map[string]json.RawMessage{"reflect": json.RawMessage(`{"live_span":"1h"}`)}}
+	app := request(t).App
 	var requests []Request
 	attempts := 0
 	client := controllerClient{
-		render: func(_ context.Context, request Request) RenderResult {
+		render: func(_ context.Context, request Request) Result {
 			requests = append(requests, request)
 			attempts++
 			if attempts == 1 {
-				return RenderResult{Status: Status{Phase: Failed, Retry: RetryAllowed}}
+				return Result{Status: Status{Phase: Failed, Retry: RetryAllowed}}
 			}
 			image, err := NewSnapshot(imageBytes(), Availability{Available: true})
 			if err != nil {
 				t.Fatal(err)
 			}
-			return RenderResult{Status: Status{Phase: Succeeded}, Image: image}
+			return Result{Status: Status{Phase: Succeeded}, Image: image}
 		},
-		open: func(ctx context.Context, request Request) Status {
+		open: func(ctx context.Context, request Request) Result {
 			if err := ctx.Err(); err != nil {
 				t.Fatalf("render canceled open: %v", err)
 			}
 			requests = append(requests, request)
-			return Status{Phase: Succeeded}
+			return Result{Status: Status{Phase: Succeeded}}
 		},
 	}
-	chart := NewController(client, Request{Definition: definition})
+	chart := NewController(client, Request{App: app})
 	defer chart.Close()
 	open := chart.Open(context.Background()) // No preview is required.
 	render := chart.Render(context.Background())
@@ -79,8 +80,8 @@ func TestControllerIndependentOperationsAndRetry(t *testing.T) {
 		t.Fatal("opening discarded the snapshot")
 	}
 	for _, request := range requests {
-		if !reflect.DeepEqual(request.Definition, definition) {
-			t.Fatal("operation changed the definition")
+		if !reflect.DeepEqual(request.App, app) {
+			t.Fatal("operation changed the app")
 		}
 	}
 	late := chart.Open(context.Background())()
@@ -88,10 +89,36 @@ func TestControllerIndependentOperationsAndRetry(t *testing.T) {
 	if chart.Apply(late) || chart.State().CanOpen() || chart.State().CanRender() || chart.Open(context.Background()) != nil {
 		t.Fatal("closed controller accepted work")
 	}
-	other := NewController(client, Request{Definition: definition})
+	other := NewController(client, Request{App: app})
 	defer other.Close()
 	if other.Apply(late) {
 		t.Fatal("new revision accepted old completion")
+	}
+}
+
+// Later operations, retries included, reuse the app an operation restored,
+// whatever its outcome: the client decides when to restore again.
+func TestControllerReusesRestoredApp(t *testing.T) {
+	live := assistant.AppPayload{ResourceURI: DatavizURI, Result: json.RawMessage(`{}`), RelayHandle: "old", Restorable: true}
+	restored := assistant.AppPayload{ResourceURI: DatavizURI, Result: json.RawMessage(`{}`), RelayHandle: "new", Restorable: true}
+	var handles []string
+	client := controllerClient{
+		render: func(_ context.Context, request Request) Result {
+			handles = append(handles, request.App.RelayHandle)
+			return Result{Status: Status{Phase: Failed, Retry: RetryAllowed}, App: &restored}
+		},
+		open: func(_ context.Context, request Request) Result {
+			handles = append(handles, request.App.RelayHandle)
+			return Result{Status: Status{Phase: Succeeded}}
+		},
+	}
+	c := NewController(client, Request{App: live, ConversationID: "conv", MessageID: "msg"})
+	defer c.Close()
+	c.Apply(c.Render(context.Background())())
+	c.Apply(c.Render(context.Background())()) // a retry
+	c.Apply(c.Open(context.Background())())
+	if !slices.Equal(handles, []string{"old", "new", "new"}) || c.App().RelayHandle != "new" {
+		t.Fatalf("handles = %v, app = %+v", handles, c.App())
 	}
 }
 

@@ -1424,7 +1424,7 @@ func TestWidgetViewAnimatesAfterTurnAndIsClickable(t *testing.T) {
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(60)
 	list.SetHeight(20)
-	list.SetItems([]agent.Block{{ID: id, Kind: assistant.KindWidget, Complete: true, Widget: &assistant.WidgetPayload{Title: "CPU"}}})
+	list.SetItems([]agent.Block{{ID: id, Kind: assistant.KindApp, Complete: true, App: &assistant.AppPayload{}}})
 	list.SetRunning(false)
 
 	view := WidgetView{Image: graphics.Image{Columns: 40, Rows: 8}, Loading: "Rendering", Action: WidgetOpen}

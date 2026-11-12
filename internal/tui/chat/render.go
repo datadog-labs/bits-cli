@@ -72,7 +72,9 @@ func (r *blockRenderer) RenderBlock(it agent.Block, width int, sty Styles, frame
 		return r.renderProgress(it, width, sty)
 	case assistant.KindMemory:
 		return renderMemoryGroup(it, renderContext{width: width, sty: sty, frame: frame})
-	case assistant.KindApp, assistant.KindTurnMarker, assistant.KindStop,
+	case assistant.KindApp:
+		return renderApp(it, width, sty)
+	case assistant.KindTurnMarker, assistant.KindStop,
 		assistant.KindInternal, assistant.KindUnknown:
 		return fallback(it, width, sty)
 	}
@@ -161,6 +163,17 @@ func renderWidget(it agent.Block, width int, sty Styles) string {
 	label := "widget"
 	if title := widgetTitle(it); title != "" {
 		label = "widget: " + title
+	}
+	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
+}
+
+// renderApp summarizes an app until the widgets component gives it a view.
+func renderApp(it agent.Block, width int, sty Styles) string {
+	label := "view"
+	if it.App != nil {
+		if title := it.App.Summary().Title; title != "" {
+			label = "view: " + escape.Inline(title)
+		}
 	}
 	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
 }

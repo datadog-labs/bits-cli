@@ -210,3 +210,45 @@ func TestContentDecodesApps(t *testing.T) {
 		})
 	}
 }
+
+func TestAppSummary(t *testing.T) {
+	chart := func(window string) string {
+		return `{"structuredContent":{"widget_definition":{"type":"timeseries","title":"CPU"}` + window + `}}`
+	}
+	for _, tt := range []struct {
+		name, result string
+		title        string
+		chart        bool
+		start, end   int64 // Unix seconds; zero for no window
+	}{
+		{name: "chart", result: chart(`,"from_ts":10,"to_ts":20`), title: "CPU", chart: true, start: 10, end: 20},
+		{name: "chart without window", result: chart(``), title: "CPU", chart: true},
+		{name: "chart with inverted window", result: chart(`,"from_ts":20,"to_ts":10`), title: "CPU", chart: true},
+		{name: "show_ui view", result: `{"_meta":{"datadog/show_ui":{"view_spec":{"view":{"name":"incident_detail","version":1}}}}}`, title: "Incident detail"},
+		{name: "chart from any source tool", result: `{"structuredContent":{"source_tool":"renamed","widget_definition":{"type":"timeseries"}}}`, chart: true},
+		{name: "other payload", result: `{"structuredContent":{"incident_id":"1"}}`},
+		{name: "invalid widget", result: `{"structuredContent":{"widget_definition":{}}}`},
+		{name: "saved"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			app := AppPayload{Result: json.RawMessage(tt.result)}
+			if tt.result == "" {
+				app.Result = nil
+			}
+			got := app.Summary()
+			if got.Title != tt.title || (got.Chart != nil) != tt.chart {
+				t.Fatalf("summary = %+v", got)
+			}
+			if got.Chart == nil {
+				return
+			}
+			var start, end int64
+			if !got.Chart.End.IsZero() {
+				start, end = got.Chart.Start.Unix(), got.Chart.End.Unix()
+			}
+			if start != tt.start || end != tt.end || got.Chart.Definition.Type != "timeseries" {
+				t.Fatalf("chart = %+v", got.Chart)
+			}
+		})
+	}
+}
