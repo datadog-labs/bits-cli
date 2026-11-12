@@ -3,6 +3,7 @@ package assistant
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,5 +166,47 @@ func TestWidgetDefinitionTimeRange(t *testing.T) {
 		if !ok || from != wantStart || to != monthEnd.UnixMilli() {
 			t.Fatalf("month-end range = %d..%d, %v", from, to, ok)
 		}
+	}
+}
+
+func TestContentDecodesApps(t *testing.T) {
+	handle := `"` + strings.Repeat("h", 43) + `"`
+	saved := `{"type":"mcp_app_saved","version":1,"tool_call_id":"c1","tool_name":"show_ui","input_digest":"d","server_identity":"s","resource_uri":"ui://apps/dataviz","resource_handle":"dataviz-mcp-ui@prototype"}`
+	for _, tt := range []struct {
+		name, input string
+		want        AppPayload
+	}{
+		{
+			name:  "live with relay and restoration",
+			input: `{"type":"mcp_app","tool_call_id":"c1","tool_name":"show_ui","tool_input":{"data_tool_name":"get_widget"},"resource_uri":"ui://apps/dataviz","resource_handle":"dataviz-mcp-ui@prototype","relay_handle":` + handle + `,"tool_result":{"content":[]},"restoration":` + saved + `}`,
+			want: AppPayload{
+				ToolCallID: "c1", ToolName: "show_ui", ToolInput: json.RawMessage(`{"data_tool_name":"get_widget"}`),
+				ResourceURI: "ui://apps/dataviz", Result: json.RawMessage(`{"content":[]}`),
+				RelayHandle: strings.Repeat("h", 43), Restorable: true,
+			},
+		},
+		{
+			name:  "live without relay or restoration",
+			input: `{"type":"mcp_app","tool_call_id":"c1","tool_name":"get_widget","tool_input":{},"resource_uri":"ui://apps/dataviz","relay_handle":null,"tool_result":{},"restoration":null}`,
+			want:  AppPayload{ToolCallID: "c1", ToolName: "get_widget", ToolInput: json.RawMessage(`{}`), ResourceURI: "ui://apps/dataviz", Result: json.RawMessage(`{}`)},
+		},
+		{
+			name:  "saved",
+			input: saved,
+			want:  AppPayload{ToolCallID: "c1", ToolName: "show_ui", ResourceURI: "ui://apps/dataviz", Restorable: true},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var c Content
+			if err := json.Unmarshal([]byte(tt.input), &c); err != nil {
+				t.Fatal(err)
+			}
+			if c.Kind() != KindApp || c.App == nil {
+				t.Fatalf("content = %+v", c)
+			}
+			if !reflect.DeepEqual(*c.App, tt.want) {
+				t.Fatalf("app = %+v, want %+v", *c.App, tt.want)
+			}
+		})
 	}
 }

@@ -126,6 +126,7 @@ type Block struct {
 	Tool      *ToolBlock                      // KindToolCall/KindToolResult: merged call+result
 	Widget    *assistant.WidgetPayload        // KindWidget
 	Dashboard *assistant.DashboardPayload     // KindDashboard
+	App       *assistant.AppPayload           // KindApp
 	Progress  *assistant.ProgressPayload      // KindProgress
 	Memory    *assistant.MemoryContextPayload // KindMemory
 
