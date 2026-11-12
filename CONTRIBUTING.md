@@ -4,7 +4,7 @@ Thanks for your interest in contributing to Bits CLI! This document covers the b
 
 ## Prerequisites
 
-- Go 1.27.3 or later
+- Go 1.27.4 or later
 - On macOS, the Xcode command line tools (`xcode-select --install`) to build
   the [ddviz](libexec/ddviz/README.md) helper
 
