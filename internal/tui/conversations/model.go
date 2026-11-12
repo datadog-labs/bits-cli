@@ -456,14 +456,18 @@ func (m Model) compactMessage() string {
 	}
 }
 
-// loadingLabel shares the compact layout's copy and the theme's activity glyph.
-func (m Model) loadingLabel() string {
-	glyph := m.theme.Chat.StatusSpinner.Frame(m.frame)
+// LoadingLabel is the activity glyph and message the conversation views show
+// while a read is in flight.
+func LoadingLabel(theme styles.Theme, frame int, message string) string {
+	glyph := theme.Chat.StatusSpinner.Frame(frame)
 	if glyph == "" {
 		glyph = "·"
 	}
-	return m.theme.Feedback.Progress.Render(glyph + " " + m.compactMessage())
+	return theme.Feedback.Progress.Render(glyph + " " + message)
 }
+
+// loadingLabel shares the compact layout's copy.
+func (m Model) loadingLabel() string { return LoadingLabel(m.theme, m.frame, m.compactMessage()) }
 
 func (m Model) panelBody(width, height int) string {
 	m.resizeBody(width, height)
@@ -549,32 +553,32 @@ func (m Model) overflowHint() string {
 	return fmt.Sprintf("↓ %d more below", hiddenBelow)
 }
 
+// WindowBounds returns a slice boundary containing the selection, shifting
+// start only when the selection would be hidden. It permits a partial final
+// page; callers that fill their window can bound start by total-rows first.
+// Derive it when rendering as well as navigating so a resize cannot leave an
+// off-screen selection or an end beyond the list.
+func WindowBounds(total, selected, start, rows int) (int, int) {
+	if total <= 0 || rows <= 0 {
+		return 0, 0
+	}
+	selected = min(max(selected, 0), total-1)
+	rows = min(rows, total)
+	start = max(0, min(max(start, selected-rows+1), selected))
+	return start, min(total, start+rows)
+}
+
 func (m Model) visibleWindow() ([]list.Item, int, int) {
 	items := m.list.VisibleItems()
 	if len(items) == 0 {
 		return nil, 0, 0
 	}
-	rows := min(max(1, m.list.Height()), len(items))
-	start := max(0, min(m.windowStart, len(items)-1))
-	end := min(len(items), start+rows)
+	start, end := WindowBounds(len(items), m.list.Index(), m.windowStart, max(1, m.list.Height()))
 	return items[start:end], start, end
 }
 
 func (m *Model) syncWindowToSelection() {
-	items := len(m.list.VisibleItems())
-	if items == 0 {
-		m.windowStart = 0
-		return
-	}
-	rows := min(max(1, m.list.Height()), items)
-	selected := max(0, min(m.list.Index(), items-1))
-	start := max(0, min(m.windowStart, items-1))
-	if selected < start {
-		start = selected
-	} else if selected >= start+rows {
-		start = selected - rows + 1
-	}
-	m.windowStart = max(0, min(start, items-1))
+	m.windowStart, _ = WindowBounds(len(m.list.VisibleItems()), m.list.Index(), m.windowStart, max(1, m.list.Height()))
 }
 
 func (m *Model) fillVisibleWindow() {

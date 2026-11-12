@@ -43,7 +43,7 @@ func TestConversationRoundTrip(t *testing.T) {
 	blocks, _ := runTurn(t, engine, `r = call("read_file", {"path": "go.mod"}); say(r.output)`, set, agent.DenyContinue, nil)
 	id := engine.State().ConversationID
 
-	list := engine.ListConversations(ctx)
+	list := engine.ListConversations(ctx, 0)
 	if list.Err != nil || len(list.Conversations) != 1 || list.Conversations[0].ConversationID != id {
 		t.Fatalf("list = %+v, want only %s", list, id)
 	}
@@ -92,7 +92,7 @@ call("echo", {})
 say(id)`
 	blocks, _ := runTurn(t, agent.New(f, agent.Config{PermissionsMode: agent.ModeSkipPermissions}), script, set, agent.DenyContinue, nil)
 	id := texts(blocks)[0]
-	list, err := f.UserConversations(ctx)
+	list, err := f.UserConversations(ctx, assistant.UserConversationsInput{})
 	if err != nil || len(list.Data.Attributes.Conversations) != 2 || !slices.ContainsFunc(list.Data.Attributes.Conversations, func(c assistant.ConversationSummary) bool {
 		return c.ConversationID == id && c.Title == "Pending echo"
 	}) {

@@ -76,9 +76,15 @@ func (b *resumeBackend) Send(context.Context, any, assistant.SendOptions, func(a
 	return "", errors.New("unexpected Send")
 }
 
-func (b *resumeBackend) UserConversations(ctx context.Context) (*assistant.UserConversationsResponse, error) {
+func (b *resumeBackend) UserConversations(ctx context.Context, in assistant.UserConversationsInput) (*assistant.UserConversationsResponse, error) {
 	select {
 	case reply := <-b.lists:
+		if reply.response != nil && in.PageSize > 0 {
+			response := *reply.response
+			conversations := response.Data.Attributes.Conversations
+			response.Data.Attributes.Conversations = conversations[:min(len(conversations), in.PageSize)]
+			return &response, reply.err
+		}
 		return reply.response, reply.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -463,35 +469,96 @@ func TestResumeInstallationRespectsExclusiveOperation(t *testing.T) {
 }
 
 func TestRecentConversationFetchStopsWithAuthenticatedWork(t *testing.T) {
-	for _, action := range []string{"quit", "logout", "detach"} {
-		t.Run(action, func(t *testing.T) {
-			b := &tuiRenameBackend{resumeBackend: newResumeBackend()}
-			m := newRenameModel(t, b, forkSourceID)
-			cmd := m.fetchRecentConversations()
-			switch action {
-			case "quit":
-				m.quit()
-			case "logout":
-				m.logout = func(context.Context) (bool, error, error) { return true, nil, nil }
-				_, logout := m.dispatchCommand("logout", "")
-				m.applyLogoutResult(logout().(logoutResultMsg))
-			case "detach":
-				m.Detach()
-			}
-			msg := runConversationCmd(t, cmd).(recentConversationsMsg)
-			if !errors.Is(msg.result.Err, context.Canceled) || m.recentConversationsTask.running() {
-				t.Fatal("startup conversation fetch survived shutdown")
-			}
-			// Even a successful response already in flight must be ignored.
-			msg.result = agent.ConversationListResult{Conversations: []assistant.ConversationSummary{{ConversationID: resumeConversationID}}}
-			m.Update(msg)
-			if !m.resume.empty() {
-				t.Fatal("late startup fetch repopulated the offer after shutdown")
-			}
-			if m.skillMenu.task.running() {
-				t.Fatal("reconciliation restarted skill discovery after shutdown")
+	for _, conversationID := range []string{"", forkSourceID} {
+		t.Run("conversation="+conversationID, func(t *testing.T) {
+			for _, action := range []string{"quit", "logout", "detach"} {
+				t.Run(action, func(t *testing.T) {
+					b := &tuiRenameBackend{resumeBackend: newResumeBackend()}
+					m := newRenameModel(t, b, conversationID)
+					cmd := m.fetchRecentConversations()
+					switch action {
+					case "quit":
+						m.quit()
+					case "logout":
+						m.logout = func(context.Context) (bool, error, error) { return true, nil, nil }
+						_, logout := m.dispatchCommand("logout", "")
+						m.applyLogoutResult(logout().(logoutResultMsg))
+					case "detach":
+						m.Detach()
+					}
+					msg := runConversationCmd(t, cmd).(recentConversationsMsg)
+					if !errors.Is(msg.result.Err, context.Canceled) || m.resume.task.running() {
+						t.Fatal("startup conversation fetch survived shutdown")
+					}
+					// Even a successful response already in flight must be ignored.
+					msg.result = agent.ConversationListResult{Conversations: []assistant.ConversationSummary{{ConversationID: resumeConversationID}}}
+					m.Update(msg)
+					if !m.resume.empty() {
+						t.Fatal("late startup fetch repopulated the offer after shutdown")
+					}
+					if m.skillMenu.task.running() {
+						t.Fatal("reconciliation restarted skill discovery after shutdown")
+					}
+					if m.resume.loading() {
+						t.Fatal("reconciliation restarted the offer after shutdown")
+					}
+				})
 			}
 		})
+	}
+}
+
+func TestNewConversationReplacesPendingOfferRead(t *testing.T) {
+	b := &tuiRenameBackend{resumeBackend: newResumeBackend()}
+	m := newRenameModel(t, b, "")
+	old := m.fetchRecentConversations()
+	oldGeneration := m.resume.task.gen
+	setConversationInput(m, "/new")
+	_, load := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.resume.loading() || m.resume.task.gen == oldGeneration {
+		t.Fatal("/new did not replace the pending offer read")
+	}
+	msg := runConversationCmd(t, old).(recentConversationsMsg)
+	if !errors.Is(msg.result.Err, context.Canceled) {
+		t.Fatalf("superseded read error = %v", msg.result.Err)
+	}
+	// A successful response queued before cancellation must also be ignored.
+	msg.result = agent.ConversationListResult{Conversations: resumeFixture(1).conversations}
+	m.Update(msg)
+	if !m.resume.loading() || !m.resume.empty() {
+		t.Fatal("the superseded result changed the new offer")
+	}
+	// Exercise the actual request: a backend that honors page_size must still
+	// return older conversations, beyond the offer's visible row limit.
+	want := resumeFixture(32).conversations
+	b.lists <- resumeListReply{response: summaries(want...)}
+	for _, result := range flattenMsgs(t, load) {
+		if result, ok := result.(recentConversationsMsg); ok {
+			m.Update(result)
+		}
+	}
+	if m.resume.loading() || len(m.resume.conversations) != len(want) {
+		t.Fatalf("the new offer loaded %d conversations, want %d", len(m.resume.conversations), len(want))
+	}
+}
+
+func TestFailedLogoutRestartsCanceledOfferRead(t *testing.T) {
+	b := &tuiRenameBackend{resumeBackend: newResumeBackend()}
+	m := newRenameModel(t, b, "")
+	if !m.resume.loading() {
+		t.Fatal("fixture did not start the offer read")
+	}
+	oldGeneration := m.resume.task.gen
+	m.logout = func(context.Context) (bool, error, error) {
+		return false, nil, errors.New("could not delete credentials")
+	}
+	_, cmd := m.dispatchCommand("logout", "")
+	if m.resume.loading() {
+		t.Fatal("logout did not stop the offer read")
+	}
+	m.Update(cmd().(logoutResultMsg))
+	if m.loggedOut || m.op.busy() || !m.resume.loading() || m.resume.task.gen == oldGeneration {
+		t.Fatal("failed logout did not restart the offer read")
 	}
 }
 

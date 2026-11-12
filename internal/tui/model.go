@@ -137,9 +137,8 @@ type Model struct {
 
 	// /resume operations are cancellable and generation-stamped. A late result
 	// from a cancelled list/load can never mutate the current conversation.
-	conversationTask        task
-	recentConversationsTask task
-	conversationSwitchID    string
+	conversationTask     task
+	conversationSwitchID string
 
 	// Turn status, surfaced in the editor and local status view.
 	chatPhase chat.Phase
@@ -408,7 +407,7 @@ func (m *Model) initChat() tea.Cmd {
 	commands = append(commands, waitEvent(m.events))
 	if m.engine.State().ConversationID == "" {
 		// Fetch the startup offer only when there is no history to restore.
-		return tea.Batch(append(commands, m.fetchRecentConversations(), m.syncClientSkills())...)
+		return tea.Batch(append(commands, m.syncResume(), m.syncClientSkills())...)
 	}
 	m.chatPhase = chat.PhaseLoading
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)

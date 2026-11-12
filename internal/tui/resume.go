@@ -15,12 +15,14 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
-// resumeRows is how many conversations the offer shows at full height.
-const resumeRows = 4
+// resumeMaxRows caps the visible offer, not the list of conversations that can
+// be browsed. Shorter terminals show fewer rows.
+const resumeMaxRows = 12
 
 const (
 	resumeTitle     = "Resume from a recent conversation with Bits?"
 	resumeHint      = " ↑/↓ browse · start typing for a new conversation "
+	resumeLoading   = "Loading conversations…"
 	resumeColumnGap = 2
 
 	// Narrower than this a title truncates to noise, so the row shows only its
@@ -32,8 +34,8 @@ const (
 // blank row, the rows separated by blanks, the scroll indicator, and the hint.
 func resumeBlockHeight(rows int) int { return 2*rows + 3 }
 
-// resume is the startup conversation offer. It owns the selection and a scroll
-// hint; visibility is the caller's decision.
+// resume is the startup conversation offer. It owns its list read, the
+// selection and a scroll hint; visibility is the caller's decision.
 type resume struct {
 	conversations []assistant.ConversationSummary
 
@@ -41,6 +43,13 @@ type resume struct {
 
 	// top is a hint that window() refines, never the rendered window itself.
 	top int
+
+	// task is the list read; while it runs the offer shows a loading row.
+	task task
+	// epoch is the conversation the list was read for, once started is set.
+	epoch   uint64
+	started bool
+	frame   int // activity frame for the loading row
 
 	now func() time.Time
 }
@@ -56,6 +65,17 @@ func (r *resume) setConversations(summaries []assistant.ConversationSummary) {
 func (r *resume) reset() { r.selected, r.top = 0, 0 }
 
 func (r *resume) empty() bool { return len(r.conversations) == 0 }
+
+func (r *resume) loading() bool { return r.task.running() }
+
+// rows is how many rows the block has to show: one loading row while the
+// read runs, the conversations otherwise.
+func (r *resume) rows() int {
+	if r.loading() {
+		return 1
+	}
+	return len(r.conversations)
+}
 
 // move walks the selection by delta, clamping at both ends, and slides the
 // scroll hint so the selection stays inside the window.
@@ -74,8 +94,11 @@ func (r *resume) move(delta, visible int) {
 // goes stale in both directions — a grown window reads past the end of the
 // slice, a shrunken one leaves the selection off-screen.
 func (r *resume) window(visible int) int {
-	top := min(max(r.top, r.selected-visible+1), r.selected)
-	return min(max(top, 0), max(0, len(r.conversations)-visible))
+	// The offer fills the window even at the end; the picker's explicit pages
+	// can instead leave a partial final page.
+	top := min(r.top, max(0, len(r.conversations)-visible))
+	start, _ := conversations.WindowBounds(len(r.conversations), r.selected, top, visible)
+	return start
 }
 
 func (r *resume) selectedID() (string, bool) {
@@ -86,27 +109,31 @@ func (r *resume) selectedID() (string, bool) {
 }
 
 // view renders exactly resumeBlockHeight(visible) rows, none wider than
-// width, or "" when there are no conversations to offer.
+// width, or "" when there is nothing to show.
 func (r *resume) view(theme styles.Theme, width, visible int) string {
-	if r.empty() {
+	if r.rows() == 0 {
 		return ""
 	}
-	visible = min(max(visible, 1), len(r.conversations))
-	top := r.window(visible)
 	lines := []string{
 		ansi.Truncate(theme.Text.Primary.Bold(true).Render(resumeTitle), width, "…"),
 		"",
 	}
-	for i := top; i < top+visible; i++ {
-		if i > top {
-			lines = append(lines, "")
+	if r.loading() {
+		// The same row the /resume picker shows, and a blank indicator.
+		label := conversations.LoadingLabel(theme, r.frame, resumeLoading)
+		lines = append(lines, ansi.Truncate(theme.Selector.Marker+label, width, "…"), "")
+	} else {
+		visible = min(max(visible, 1), len(r.conversations))
+		top := r.window(visible)
+		for i := top; i < top+visible; i++ {
+			if i > top {
+				lines = append(lines, "")
+			}
+			lines = append(lines, r.row(theme, width, i))
 		}
-		lines = append(lines, r.row(theme, width, i))
+		lines = append(lines, r.indicator(theme, width, visible))
 	}
-	return strings.Join(append(lines,
-		r.indicator(theme, width, visible),
-		offerHint(theme, width, resumeHint),
-	), "\n")
+	return strings.Join(append(lines, offerHint(theme, width, resumeHint)), "\n")
 }
 
 func (r *resume) row(theme styles.Theme, width, index int) string {
@@ -174,26 +201,44 @@ type recentConversationsMsg struct {
 	result     agent.ConversationListResult
 }
 
-// fetchRecentConversations reads the offer without claiming engine state, so it
-// cannot fail the user's first turn with ErrOperationActive. Its background
-// lifetime lets shutdown cancel the read and invalidate any late result.
+// syncResume reloads the offer once per conversation, as soon as a new one is
+// empty and idle: at startup and after /new, never over a restored transcript.
+func (m *Model) syncResume() tea.Cmd {
+	if m.engine == nil || m.op.busy() || m.state.ConversationID != "" || len(m.state.Blocks) != 0 {
+		return nil
+	}
+	if m.resume.started && m.resume.epoch == m.conversationEpoch {
+		return nil
+	}
+	m.resume.epoch, m.resume.started = m.conversationEpoch, true
+	return m.fetchRecentConversations()
+}
+
+// fetchRecentConversations clears the offer and reloads it, as /resume does
+// each time it opens. The read does not claim engine state, so it cannot fail
+// the user's first turn with ErrOperationActive; a newer read or a stop drops
+// its result.
 func (m *Model) fetchRecentConversations() tea.Cmd {
 	if m.engine == nil {
 		return nil
 	}
-	ctx, generation := m.recentConversationsTask.start(context.Background(), historyLoadTimeout)
+	m.resume.setConversations(nil)
+	ctx, generation := m.resume.task.start(context.Background(), historyLoadTimeout)
 	engine := m.engine
 	return func() tea.Msg {
-		return recentConversationsMsg{generation: generation, result: engine.ListConversations(ctx)}
+		// Match /resume's list: the visible row budget must not hide older
+		// conversations from navigation.
+		return recentConversationsMsg{generation: generation, result: engine.ListConversations(ctx, 0)}
 	}
 }
 
+// applyRecentConversations installs the current read's result. A failed
+// background read the user never asked for stays silent and hides the offer.
 func (m *Model) applyRecentConversations(msg recentConversationsMsg) {
-	if msg.generation != m.recentConversationsTask.gen {
+	if msg.generation != m.resume.task.gen {
 		return
 	}
-	m.recentConversationsTask.done()
-	// A failed background read the user never asked for stays silent.
+	m.resume.task.done()
 	if msg.result.Err == nil {
 		m.resume.setConversations(msg.result.Conversations)
 	}

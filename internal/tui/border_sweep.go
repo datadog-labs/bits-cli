@@ -20,6 +20,11 @@ func (m *Model) transcriptAnimationWanted() bool {
 	return m.animationsVisible() && m.list.HasAnimated()
 }
 
+// resumeAnimationWanted spins the offer's loading row, like the picker's.
+func (m *Model) resumeAnimationWanted() bool {
+	return m.animationsVisible() && m.styles.Chat.Motion && m.resume.loading() && m.showResume()
+}
+
 // borderSweepWanted distinguishes active work from a wait on the user. If a
 // shown prompt coexists with a running tool, work is still progressing and
 // the sweep remains active.

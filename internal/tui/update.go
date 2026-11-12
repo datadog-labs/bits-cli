@@ -231,9 +231,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.syncTerminalStatus())
 	}
 
-	loadSkillMenu := m.syncClientSkills()
+	loadSkillMenu, loadOffer := m.syncClientSkills(), m.syncResume()
 	m.relayout()
-	return m, tea.Batch(cmd, loadSkillMenu, m.syncWidgets(), m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape(), m.syncTerminalStatus())
+	return m, tea.Batch(cmd, loadSkillMenu, loadOffer, m.syncWidgets(), m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape(), m.syncTerminalStatus())
 }
 
 func isCtrlC(msg tea.Msg) bool {

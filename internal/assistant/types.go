@@ -1120,6 +1120,13 @@ type SkillsListResponse struct {
 	} `json:"data"`
 }
 
+// UserConversationsInput is the input to Client.UserConversations.
+type UserConversationsInput struct {
+	// PageSize asks for only the newest PageSize conversations; the API accepts
+	// 1 to 100. Zero leaves the server default, which may be the full list.
+	PageSize int
+}
+
 // ConversationHistoryInput is the input to Client.ConversationHistory.
 type ConversationHistoryInput struct {
 	ConversationID string

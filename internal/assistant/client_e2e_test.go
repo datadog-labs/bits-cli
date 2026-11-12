@@ -181,7 +181,7 @@ func TestE2E_ConversationLifecycle(t *testing.T) {
 	}
 
 	// Deterministic: the conversation appears in the user's list.
-	convs, err := c.UserConversations(ctx)
+	convs, err := c.UserConversations(ctx, UserConversationsInput{})
 	if err != nil {
 		t.Fatalf("UserConversations: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestE2E_ResumeConversationLifecycle(t *testing.T) {
 		_ = c.DeleteConversation(context.Background(), DeleteConversationInput{ConversationID: convID})
 	}()
 
-	listed, err := c.UserConversations(ctx)
+	listed, err := c.UserConversations(ctx, UserConversationsInput{})
 	if err != nil {
 		t.Fatalf("UserConversations: %v", err)
 	}

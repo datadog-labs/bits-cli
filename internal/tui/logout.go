@@ -60,6 +60,9 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 		// A canceled discovery may not have produced a menu. Reconcile it again
 		// only when logout fails and the authenticated session remains usable.
 		m.skillMenu.started = false
+		if m.resume.empty() {
+			m.resume.started = false // Retry an offer read canceled by logout.
+		}
 		m.postNotice(noticeForError("could not log out", msg.err))
 		m.list.ScrollToBottom()
 		return m, nil

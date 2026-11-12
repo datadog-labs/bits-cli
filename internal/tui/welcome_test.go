@@ -15,6 +15,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
@@ -401,30 +402,47 @@ func TestHeaderNeverExceedsTerminalWidth(t *testing.T) {
 // the panel off at launch. Rows degrade, then the offer drops entirely. The
 // test only proves that ladder happened if both ends of it are observed.
 func TestResumeRowsDegradeUntilTheHeaderFits(t *testing.T) {
-	m := welcomeModel(120, 40)
-	m.resume = *resumeFixture(32)
-	previous := resumeRows + 1
-	minRows, maxRows := resumeRows, 0
-	for height := 40; height >= 1; height-- {
-		m.height = height
-		m.relayout()
-		rows := 0
-		if m.showResume() {
-			rows = m.resumeVisibleRows()
-		}
-		if rows > previous {
-			t.Fatalf("height=%d: rows grew from %d to %d as the terminal shrank", height, previous, rows)
-		}
-		if rows > 0 && lipgloss.Height(m.headerView()) > m.frame.transcript.Dy() {
-			t.Fatalf("height=%d: header %d rows exceeds the %d-row viewport",
-				height, lipgloss.Height(m.headerView()), m.frame.transcript.Dy())
-		}
-		minRows, maxRows = min(minRows, rows), max(maxRows, rows)
-		previous = rows
-	}
-	if minRows != 0 || maxRows != resumeRows {
-		t.Fatalf("rows ranged [%d, %d] across the shrink, want [0, %d]: the degradation ladder never ran",
-			minRows, maxRows, resumeRows)
+	for name, notices := range map[string][]string{
+		"startup": nil,
+		"new":     {"Started a new conversation."},
+		"wrapped": {strings.Repeat("A notice that wraps. ", 10), "Another notice."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := welcomeModel(120, 60)
+			m.resume = *resumeFixture(32)
+			for _, text := range notices {
+				m.postNotice(notice(chat.NoticeInfo, nil, "%s", text))
+			}
+			previous := resumeMaxRows + 1
+			minRows, maxRows := resumeMaxRows, 0
+			for height := 60; height >= 1; height-- {
+				m.height = height
+				m.relayout()
+				rows := 0
+				if m.showResume() {
+					rows = m.resumeVisibleRows()
+				}
+				if rows > previous {
+					t.Fatalf("height=%d: rows grew from %d to %d as the terminal shrank", height, previous, rows)
+				}
+				if rows > 0 {
+					// Document includes a trailing item gap; following the tail
+					// pins the last content row, without reserving that gap.
+					if got := lipgloss.Height(strings.TrimRight(m.list.Document(), "\n")); got > m.frame.transcript.Dy() {
+						t.Fatalf("height=%d: header and notices occupy %d rows in a %d-row viewport", height, got, m.frame.transcript.Dy())
+					}
+					if got := m.list.VisibleSurface().Top; got != 0 {
+						t.Fatalf("height=%d: follow mode clipped %d rows off the welcome panel", height, got)
+					}
+				}
+				minRows, maxRows = min(minRows, rows), max(maxRows, rows)
+				previous = rows
+			}
+			if minRows != 0 || maxRows != resumeMaxRows {
+				t.Fatalf("rows ranged [%d, %d] across the shrink, want [0, %d]: the degradation ladder never ran",
+					minRows, maxRows, resumeMaxRows)
+			}
+		})
 	}
 }
 
@@ -488,24 +506,42 @@ func TestChatViewRendersTheHeaderOnlyThroughTheTranscript(t *testing.T) {
 // that never received the message, so the failed case also asserts the offer
 // stayed empty.
 func TestRecentConversationsResultDrivesTheOffer(t *testing.T) {
+	populated := agent.ConversationListResult{Conversations: resumeFixture(4).conversations}
 	for _, test := range []struct {
 		name   string
-		result agent.ConversationListResult
-		want   bool
+		result *agent.ConversationListResult // nil leaves the read running
+		stale  bool
+		rows   int
 	}{
-		{"populated", agent.ConversationListResult{Conversations: resumeFixture(4).conversations}, true},
-		{"empty", agent.ConversationListResult{}, false},
-		{"failed", agent.ConversationListResult{Err: errors.New("offline")}, false},
+		{"loading", nil, false, 1},
+		{"populated", &populated, false, 4},
+		{"stale", &populated, true, 1},
+		{"empty", &agent.ConversationListResult{}, false, 0},
+		{"failed", &agent.ConversationListResult{Err: errors.New("offline")}, false, 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := welcomeModel(120, 40)
 			m.mode = ModeChat
-			m.Update(recentConversationsMsg{result: test.result})
-			if got := m.showResume(); got != test.want {
-				t.Fatalf("showResume = %v, want %v", got, test.want)
+			m.engine = agent.New(fake.New(), agent.Config{})
+			t.Cleanup(m.engine.Close)
+			t.Cleanup(m.Detach)
+			m.syncResume()
+			if test.result != nil {
+				generation := m.resume.task.gen
+				if test.stale {
+					generation--
+				}
+				m.Update(recentConversationsMsg{generation: generation, result: *test.result})
 			}
-			if test.name == "failed" && !m.resume.empty() {
-				t.Fatal("a failed fetch must not populate the offer")
+			if got := m.resume.rows(); got != test.rows {
+				t.Fatalf("rows = %d, want %d", got, test.rows)
+			}
+			if got := m.showResume(); got != (test.rows > 0) {
+				t.Fatalf("showResume = %v, want %v", got, test.rows > 0)
+			}
+			view := m.resume.view(m.styles, 120, m.resumeVisibleRows())
+			if loading := strings.Contains(view, resumeLoading); loading != m.resume.loading() {
+				t.Fatalf("loading row shown = %v, read running = %v:\n%s", loading, m.resume.loading(), view)
 			}
 		})
 	}
@@ -703,6 +739,27 @@ func TestUpgradeOfferVisibility(t *testing.T) {
 	if !m.showUpgrade() {
 		t.Fatal("clearing the draft did not bring the offer back")
 	}
+
+	// Both offers must reserve notices using the same budget. Exercise the
+	// boundary at which a fixed-height update offer gives way to resume rows.
+	m.postNotice(notice(chat.NoticeInfo, nil, "%s", strings.Repeat("A notice that wraps. ", 10)))
+	shown, hidden := false, false
+	for height := 40; height >= 1; height-- {
+		m.height = height
+		m.relayout()
+		if !m.showUpgrade() {
+			hidden = true
+			continue
+		}
+		shown = true
+		if got := lipgloss.Height(strings.TrimRight(m.list.Document(), "\n")); got > m.frame.transcript.Dy() || m.list.VisibleSurface().Top != 0 {
+			t.Fatalf("height=%d: update offer and notices overflow the viewport: document=%d viewport=%d", height, got, m.frame.transcript.Dy())
+		}
+	}
+	if !shown || !hidden {
+		t.Fatal("did not cross the update offer's visibility boundary")
+	}
+	m.height = 40
 
 	m.upgrade = newUpgradePrompt(&update.Offer{Current: "v1.2.3"})
 	m.relayout()
