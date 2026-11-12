@@ -64,8 +64,6 @@ func (r *blockRenderer) RenderBlock(it agent.Block, width int, sty Styles, frame
 		return renderReasoning(it, width, sty, frame)
 	case assistant.KindToolCall, assistant.KindToolResult:
 		return renderTool(it, width, sty, frame)
-	case assistant.KindWidget:
-		return renderWidget(it, width, sty)
 	case assistant.KindDashboard:
 		return renderDashboard(it, width, sty)
 	case assistant.KindProgress:
@@ -156,15 +154,6 @@ func renderReasoningGroup(blocks []agent.Block, c renderContext) string {
 	}
 	rows := wrappedRows(strings.Join(parts, "\n\n"), max(1, c.width-4))
 	return header + "\n" + renderRows(rows, c.width, c.sty.ToolDetail, c.sty)
-}
-
-// renderWidget summarizes a widget.
-func renderWidget(it agent.Block, width int, sty Styles) string {
-	label := "widget"
-	if title := widgetTitle(it); title != "" {
-		label = "widget: " + title
-	}
-	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
 }
 
 // renderApp summarizes an app until the widgets component gives it a view.

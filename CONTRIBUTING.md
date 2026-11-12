@@ -114,9 +114,10 @@ those commands. When unset, shell commands inherit the normal environment.
 Tests that contact Datadog are opt-in:
 
 - `BITS_OAUTH_E2E=1` reuses your stored OAuth login.
-- `BITS_VIZ_E2E=1` renders CPU charts through Datadog MCP and ddviz, and through
-  the Datadog snapshot API. The ddviz test requires macOS 13+ and a built helper;
-  both tests require a stored Bits login with the corresponding access.
+- `BITS_VIZ_E2E=1` renders a CPU chart through the Datadog snapshot API. With
+  `BITS_VIZ_E2E_APP=conversation/message` naming a saved app, it also restores
+  that app and renders it through ddviz, which requires macOS 13+ and a built
+  helper. Both tests require a stored Bits login with the corresponding access.
 - `BITS_ASSISTANT_E2E=1` requires `DD_API_KEY`, `DD_APP_KEY`, and an explicit
   `BITS_E2E_SITE` naming the Datadog API site.
 
@@ -124,13 +125,22 @@ For noninteractive runs, see the [ADEEP delivery documentation](internal/headles
 
 ## Widget previews
 
+Bits shows the Datadog views the assistant attaches to its answers, such as
+charts, incident cards, and monitor lists. The assistant sends these MCP apps
+only to the `web_ui` profile for now. To try them, run with the development
+override `BITS_PROFILE=web_ui`; your organization also needs the assistant's
+MCP app feature.
+
 `BITS_VIZ=auto` is the default. It uses ddviz for interactive previews when the
-macOS helper is available, and Datadog snapshots otherwise. Snapshot previews
-require a Datadog site and login that support the snapshot API. Set
-`BITS_VIZ=snapshot` to use snapshots on any system, or `BITS_VIZ=off` to show
-web sandbox links only. Terminal image support is required for inline previews;
-without it, snapshot-only widgets appear as links. When a widget has no usable
-fixed or live time range, snapshots and links default to the last hour.
+macOS helper is available, and Datadog snapshots otherwise. Snapshots preview
+charts only; other views show their title. Snapshot previews require a
+Datadog site and login that support the snapshot API. Set `BITS_VIZ=snapshot`
+to use snapshots on any system, or `BITS_VIZ=off` to show charts as web
+sandbox links only; with it, views reopened from history have no link, as
+nothing restores them. Terminal image support is required for inline previews;
+without it, snapshot-only charts appear as links. When a chart has no time
+range, snapshots and links default to the last hour. Views reopened from
+history are restored by the assistant, which runs their tool again.
 
 `BITS_GRAPHICS=auto` (the default) detects inline images, including the startup logo.
 Use `BITS_GRAPHICS=on bits` to bypass terminal identity checks, or

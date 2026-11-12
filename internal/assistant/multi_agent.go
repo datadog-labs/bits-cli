@@ -406,7 +406,7 @@ func (c *MultiAgentClient) handleEvent(
 	}
 	message := func(content Content) Message {
 		messageID := run.messageIDs[envelope.AgentID]
-		if content.Type == ContentWidgetDef || content.Type == ContentDashboard {
+		if content.Type == ContentDashboard {
 			// Standalone payloads must not replace siblings from the same model response.
 			messageID = fmt.Sprintf("%s:%s:%d", run.id, envelope.AgentID, envelope.Sequence)
 		} else if messageID == "" {
@@ -593,16 +593,6 @@ func (c *MultiAgentClient) handleEvent(
 			TimeToFirstChunkMs: event.TimeToFirstChunkMs,
 		}}
 		return false, emit(usageMessage)
-	case "content.widget_generated":
-		// widget_type repeats the definition's type; its title is inside.
-		var event struct {
-			WidgetContent WidgetDefinition `json:"widget_content"`
-		}
-		if err := json.Unmarshal(envelope.Event, &event); err != nil {
-			return false, err
-		}
-		content := Content{Type: ContentWidgetDef, Widget: &WidgetPayload{WidgetDef: &event.WidgetContent}}
-		return false, emit(message(content))
 	case "content.dashboard_generated":
 		var event struct {
 			DashboardURL     string          `json:"dashboard_url"`
