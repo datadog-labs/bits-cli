@@ -90,10 +90,12 @@ func (m *Model) View() tea.View {
 
 // frame is the chat layout built once per update and shared by drawing and hit-testing.
 //
-// Rows stack as transcript, prompt, gap, composer, and footer. A replacing
+// Rows stack as transcript, queue, prompt, gap, composer, and footer. A replacing
 // prompt occupies the composer slot and dims the transcript.
 type frame struct {
 	transcript  image.Rectangle
+	queue       image.Rectangle
+	queueView   string
 	prompt      image.Rectangle
 	composerGap image.Rectangle
 	composer    image.Rectangle
@@ -118,6 +120,7 @@ type region uint8
 const (
 	regionTranscript region = iota
 	regionPrompt
+	regionQueue
 	regionComposer
 	regionChrome // the gap and footer around the composer
 )
@@ -128,6 +131,8 @@ func (f frame) at(p image.Point) region {
 	switch {
 	case p.In(f.prompt):
 		return regionPrompt
+	case p.In(f.queue):
+		return regionQueue
 	case p.In(f.transcript):
 		return regionTranscript
 	case p.In(f.composer):
@@ -140,6 +145,9 @@ func (f frame) at(p image.Point) region {
 // inputTop is the first row of what fills the input slot: the composer, or a
 // prompt replacing it. Popups float just above it.
 func (f frame) inputTop() int {
+	if !f.queue.Empty() {
+		return f.queue.Min.Y
+	}
 	if f.replaced {
 		return f.prompt.Min.Y
 	}
@@ -175,7 +183,16 @@ func (m *Model) layout() frame {
 	if f.replaced {
 		f.composerGap = take(chatComposerGapHeight)
 	}
-	f.transcript = image.Rect(0, 0, m.width, max(1, y))
+	// Give the queue only spare rows, always retaining transcript space. Its
+	// own cap and overflow control keep the lower pane bounded.
+	const minimumTranscriptRows = 1
+	spareRows := max(0, y-minimumTranscriptRows)
+	queueRows := spareRows / 2
+	f.queueView = m.editor.QueueView(queueRows)
+	if f.queueView != "" {
+		f.queue = take(lipgloss.Height(f.queueView))
+	}
+	f.transcript = image.Rect(0, 0, m.width, max(minimumTranscriptRows, y))
 
 	switch {
 	case m.mode != ModeChat && m.mode != ModePermissions:
@@ -232,6 +249,10 @@ func (m *Model) chatOverlay(base, popup string, x int) string {
 // space as the normal chat view.
 func (m *Model) chatViewBase(transcript string) string {
 	gap := slices.Repeat([]string{""}, m.frame.composerGap.Dy())
+	queue := []string{}
+	if m.frame.queueView != "" {
+		queue = append(queue, m.frame.queueView)
+	}
 	if m.frame.replaced {
 		// The footer row stays so the prompt sits where the composer did.
 		transcript = lipgloss.NewStyle().Faint(true).Render(transcript)
@@ -239,9 +260,9 @@ func (m *Model) chatViewBase(transcript string) string {
 		if m.quitConfirm.armed {
 			footer = m.chatFooter()
 		}
-		return strings.Join(slices.Concat([]string{transcript}, gap, []string{m.frame.promptView, footer}), "\n")
+		return strings.Join(slices.Concat([]string{transcript}, queue, gap, []string{m.frame.promptView, footer}), "\n")
 	}
-	sections := []string{transcript}
+	sections := append([]string{transcript}, queue...)
 	if m.frame.promptView != "" {
 		sections = append(sections, m.frame.promptView)
 	}
@@ -324,8 +345,6 @@ func (m *Model) promptPlaceholder() string {
 	switch m.chatPhase {
 	case chat.PhaseLoading:
 		return "Loading…"
-	case chat.PhaseWaiting, chat.PhaseStreaming:
-		return "Working on it…"
 	default:
 		return "Ask Bits…"
 	}

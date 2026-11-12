@@ -143,11 +143,12 @@ func TestClientSkillBuiltinCollisionsAndBusyGuard(t *testing.T) {
 	if !strings.Contains(m.editor.MenuView(), "␛[2J") {
 		t.Fatal("skill description controls were not escaped")
 	}
-	m.op = operation{kind: opTurn, run: 1}
-	m.editor.SetValue("/skill:review Keep CASE")
-	_, cmd := m.submit()
-	if cmd != nil || m.editor.Value() != "/skill:review Keep CASE" {
-		t.Fatal("busy skill invocation should remain in composer")
+	busy, _ := newModelInTurn(t, nil)
+	busy.skillMenu.skills = m.skillMenu.skills
+	busy.editor.SetValue("/skill:review Keep CASE")
+	_, cmd := busy.submit()
+	if q := busy.state.Queued; cmd != nil || len(q) != 1 || q[0].Message != "/skill:review Keep CASE" || q[0].Skill == nil || q[0].Skill.Name != "review" || busy.editor.Value() != "" {
+		t.Fatalf("busy skill invocation should be queued with original arguments: %+v", q)
 	}
 }
 

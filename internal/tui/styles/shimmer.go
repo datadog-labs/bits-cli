@@ -97,6 +97,7 @@ func (sp shimmerPalette) shimmer(text string) Shimmer {
 func (t Theme) WithoutMotion() Theme {
 	t.Input.SweepMotion = false
 	t.Chat.Motion = false
+	t.Input.Spinner = t.Input.Spinner.withoutMotion()
 	t.Chat.StatusRunningLabel = t.Chat.StatusRunningLabel.withoutMotion()
 	t.Chat.StatusAwaitingLabel = t.Chat.StatusAwaitingLabel.withoutMotion()
 	t.Chat.StatusSpinner = t.Chat.StatusSpinner.withoutMotion()

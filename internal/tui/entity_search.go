@@ -281,14 +281,20 @@ func contextFromAttachments(attachments []editor.Attachment) *assistant.Assistan
 func historyEntries(prompts []agent.UserPrompt) []editor.HistoryEntry {
 	entries := make([]editor.HistoryEntry, len(prompts))
 	for i, prompt := range prompts {
-		entries[i].Text = prompt.Text
-		for _, entity := range prompt.Context {
-			entries[i].Attachments = append(entries[i].Attachments, editor.Attachment{
-				Type:  string(entity.Type),
-				ID:    entity.ID,
-				Label: entity.Label,
-			})
-		}
+		entries[i] = editorPrompt(prompt.Text, prompt.Context)
 	}
 	return entries
+}
+
+// editorPrompt shows a sent or queued message as the editor drafts it. Blank
+// text, which an attachment-only message carries, shows empty.
+func editorPrompt(text string, context []assistant.ContextEntity) editor.HistoryEntry {
+	p := editor.HistoryEntry{Text: text}
+	if strings.TrimSpace(text) == "" {
+		p.Text = ""
+	}
+	for _, entity := range context {
+		p.Attachments = append(p.Attachments, editor.Attachment{Type: string(entity.Type), ID: entity.ID, Label: entity.Label})
+	}
+	return p
 }

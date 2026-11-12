@@ -34,6 +34,8 @@ type Input struct {
 	SweepDim    color.Color
 	SweepHot    color.Color
 	SweepMotion bool
+	// Spinner shares the tool activity glyphs with queued prompts.
+	Spinner Spinner
 
 	// Chip styles the attachment chips shown above the prompt, both in the
 	// composer and in submitted user blocks.

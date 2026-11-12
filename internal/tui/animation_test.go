@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -332,5 +333,29 @@ func TestPickerLoadingUsesSharedClockAndStopsOnClose(t *testing.T) {
 	t.Cleanup(func() { m.closeConversationPicker() })
 	if cmd := m.syncAnimations(); cmd != nil || m.animClock.armed {
 		t.Fatal("reduced-motion picker started an animation")
+	}
+}
+
+func TestQueueSpinnerSharesActivityClockWithoutTools(t *testing.T) {
+	m := newShell()
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.op = operation{kind: opTurn, run: 1}
+	m.chatPhase = chat.PhaseWaiting
+	start := time.Unix(100, 0)
+	m.syncAnimationsAt(start)
+	m.state.Queued = []agent.QueuedPrompt{{ID: 1, Message: "later"}}
+	m.syncQueue()
+	if cmd := m.syncAnimationsAt(start); cmd != nil {
+		t.Fatal("queue started a second repaint chain")
+	}
+	m.advanceAnimations(animationTickMsg{generation: m.animClock.generation, at: start.Add(100 * time.Millisecond)})
+	if !m.animActivity.active || !strings.Contains(m.editor.QueueView(11), m.styles.Chat.StatusSpinner.Frame(2)) {
+		t.Fatal("queue did not share the tool spinner's frame and cadence")
+	}
+	m.state.Queued = nil
+	m.syncQueue()
+	m.syncAnimationsAt(start.Add(100 * time.Millisecond))
+	if m.animActivity.active || !m.animBorderSweep.active {
+		t.Fatal("empty queue did not release its activity timeline")
 	}
 }

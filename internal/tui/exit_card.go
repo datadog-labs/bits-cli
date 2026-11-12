@@ -47,6 +47,7 @@ func (m *Model) openExitCard() {
 	m.selection.clear()
 	m.list.SetPointer(-1, -1)
 	m.editor.SetPointer(-1, -1)
+	m.editor.SetQueuePointer(-1, -1)
 	m.follow.hover = false
 	m.follow.pressed = image.Rectangle{}
 	m.exitCard = exitCard{open: true, selected: exitQuit}
