@@ -654,7 +654,7 @@ func (l *List) renderPresentationItem(it presentationItem, c renderContext) stri
 		return l.renderer.renderMemory(l.items[it.start].Memory.Memories[it.memory], c)
 	case itemBlock:
 		if v, ok := l.widgets[it.id]; ok {
-			return renderWidgetView(l.items[it.start], v, c)
+			return renderWidgetView(v, c)
 		}
 	}
 	return l.renderer.RenderBlock(l.items[it.start], c.width, c.sty, c.frame)
@@ -1254,11 +1254,11 @@ func (l *List) ReplaceTranscript(blocks []agent.Block, tasks []agent.Task, notic
 	l.SetTranscript(blocks, tasks, notices)
 }
 
-// Widgets returns every widget block, and which of them intersect the
+// Widgets returns every app block, and which of them intersect the
 // viewport, found in one walk of the visible items.
 func (l *List) Widgets() (blocks []agent.Block, visible map[agent.BlockID]bool) {
 	for _, b := range l.items {
-		if b.Kind == assistant.KindWidget {
+		if b.Kind == assistant.KindApp {
 			blocks = append(blocks, b)
 		}
 	}
@@ -1270,7 +1270,7 @@ func (l *List) Widgets() (blocks []agent.Block, visible map[agent.BlockID]bool) 
 	row := -l.offsetLine
 	for idx := l.offsetIdx; idx < len(l.view) && row < l.height; idx++ {
 		height := len(l.entry(idx).lines)
-		if item := l.view[idx]; row+height > 0 && item.kind == itemBlock && item.start >= 0 && l.items[item.start].Kind == assistant.KindWidget {
+		if item := l.view[idx]; row+height > 0 && item.kind == itemBlock && item.start >= 0 && l.items[item.start].Kind == assistant.KindApp {
 			visible[item.id] = true
 		}
 		row += height + l.gapAfter(idx)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -761,6 +762,56 @@ type AppPayload struct {
 	// is "" when saved, or when the server could not open a relay session.
 	RelayHandle string
 	Restorable  bool // the server saved the app, so RestoreApp can reopen it
+}
+
+// Chart is the single widget a chart result renders, over its window. The
+// window is zero when the result has none.
+type Chart struct {
+	Definition WidgetDefinition
+	Start, End time.Time
+}
+
+// AppSummary is what a client can show of an app without hosting it.
+type AppSummary struct {
+	Title string
+	Chart *Chart // nil unless the result renders one widget
+}
+
+// Summary reads the app's result: the chart its widget definition describes,
+// or the name of the show_ui view. It is empty for a saved app.
+func (a *AppPayload) Summary() AppSummary {
+	var result struct {
+		Meta struct {
+			ShowUI struct {
+				ViewSpec struct {
+					View struct {
+						Name string `json:"name"`
+					} `json:"view"`
+				} `json:"view_spec"`
+			} `json:"datadog/show_ui"`
+		} `json:"_meta"`
+		StructuredContent struct {
+			Definition *WidgetDefinition `json:"widget_definition"`
+			From       int64             `json:"from_ts"` // Unix seconds
+			To         int64             `json:"to_ts"`
+		} `json:"structuredContent"`
+	}
+	if len(a.Result) == 0 || json.Unmarshal(a.Result, &result) != nil {
+		return AppSummary{}
+	}
+	if s := result.StructuredContent; s.Definition != nil && s.Definition.Valid() {
+		chart := &Chart{Definition: *s.Definition}
+		if s.From > 0 && s.To > s.From {
+			chart.Start, chart.End = time.Unix(s.From, 0), time.Unix(s.To, 0)
+		}
+		return AppSummary{Title: s.Definition.Title, Chart: chart}
+	}
+	// NOTE: results carry no display title, so a view's registry name stands in.
+	name := strings.ReplaceAll(result.Meta.ShowUI.ViewSpec.View.Name, "_", " ")
+	if name == "" {
+		return AppSummary{}
+	}
+	return AppSummary{Title: strings.ToUpper(name[:1]) + name[1:]}
 }
 
 // ProgressPayload carries fields for the background_task_update content type;

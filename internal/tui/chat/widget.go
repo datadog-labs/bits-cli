@@ -27,9 +27,10 @@ const (
 // action links did.
 var widgetIcons = map[WidgetAction]string{WidgetOpen: " ⧉", WidgetWeb: " ↗"}
 
-// WidgetView is what the transcript draws for a widget block. The tui decides
-// it from capabilities and operation state; the list only renders it.
+// WidgetView is what the transcript draws for an app block. The tui decides
+// it from the app, capabilities and operation state; the list only renders it.
 type WidgetView struct {
+	Title string
 	// Image reserves a full-width band Rows tall when Rows > 0, and paints the
 	// picture, Columns wide and centered, once ID > 0.
 	Image   graphics.Image
@@ -55,9 +56,9 @@ func widgetTitle(it agent.Block) string {
 	return escape.SingleLine(it.Widget.Title)
 }
 
-func renderWidgetView(it agent.Block, v WidgetView, c renderContext) string {
+func renderWidgetView(v WidgetView, c renderContext) string {
 	width := max(1, c.width)
-	lines := []string{widgetHeader(it, v, width, c)}
+	lines := []string{widgetHeader(v, width, c)}
 	box, badged := widgetBox(v, width, c)
 	lines = append(lines, box...)
 	if v.Loading != "" && !badged {
@@ -75,7 +76,7 @@ const widgetTitlePad = "  "
 
 // widgetHeader is the title row: padded, on the band's surface across the
 // full width, so title and image read as one card.
-func widgetHeader(it agent.Block, v WidgetView, width int, c renderContext) string {
+func widgetHeader(v WidgetView, width int, c renderContext) string {
 	title := c.sty.ToolName.Background(c.sty.WidgetBox.GetBackground())
 	if v.Action != WidgetNone {
 		title = title.Foreground(c.sty.MarkdownLink)
@@ -83,7 +84,7 @@ func widgetHeader(it agent.Block, v WidgetView, width int, c renderContext) stri
 	icon := widgetIcons[v.Action]
 	room := max(1, width-len(widgetTitlePad)-lipgloss.Width(icon))
 	head := c.sty.WidgetBox.Render(widgetTitlePad) +
-		ansi.Truncate(title.Render(cmp.Or(widgetTitle(it), "Widget")), room, "…") + title.Render(icon)
+		ansi.Truncate(title.Render(cmp.Or(escape.SingleLine(v.Title), "Datadog view")), room, "…") + title.Render(icon)
 	if fill := width - lipgloss.Width(head); fill > 0 {
 		head += c.sty.WidgetBox.Render(strings.Repeat(" ", fill))
 	}

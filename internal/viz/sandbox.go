@@ -8,16 +8,15 @@ import (
 	"errors"
 	"net/url"
 	"strconv"
-	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
-// SandboxURL links to the Datadog web sandbox rendering def, in the format the
-// web app builds itself: a gzipped, unpadded base64url definition and the
-// widget's millisecond range. The sandbox ignores the definition's own time,
-// and without a range shows the last hour, so live spans are resolved here.
-func SandboxURL(origin string, def assistant.WidgetDefinition) (string, error) {
+// SandboxURL links to the Datadog web sandbox rendering chart, in the format
+// the web app builds itself: a gzipped, unpadded base64url definition and the
+// chart's millisecond range. The sandbox ignores the definition's own time,
+// and without a range shows the last hour.
+func SandboxURL(origin string, chart assistant.Chart) (string, error) {
 	u, err := url.Parse(origin)
 	if err != nil {
 		return "", err
@@ -25,7 +24,7 @@ func SandboxURL(origin string, def assistant.WidgetDefinition) (string, error) {
 	if u.Scheme == "" || u.Host == "" {
 		return "", errors.New("sandbox origin needs a scheme and host")
 	}
-	raw, err := json.Marshal(def)
+	raw, err := json.Marshal(chart.Definition)
 	if err != nil {
 		return "", err
 	}
@@ -39,9 +38,9 @@ func SandboxURL(origin string, def assistant.WidgetDefinition) (string, error) {
 	}
 	query := url.Values{}
 	query.Set("widgetDef", base64.RawURLEncoding.EncodeToString(zipped.Bytes()))
-	if from, to, ok := def.TimeRange(time.Now()); ok {
-		query.Set("start", strconv.FormatInt(from, 10))
-		query.Set("end", strconv.FormatInt(to, 10))
+	if !chart.End.IsZero() {
+		query.Set("start", strconv.FormatInt(chart.Start.UnixMilli(), 10))
+		query.Set("end", strconv.FormatInt(chart.End.UnixMilli(), 10))
 	}
 	u.Path = "/dataviz/sandbox"
 	u.RawQuery = query.Encode()
