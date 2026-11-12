@@ -132,6 +132,13 @@ web sandbox links only. Terminal image support is required for inline previews;
 without it, snapshot-only widgets appear as links. When a widget has no usable
 fixed or live time range, snapshots and links default to the last hour.
 
+`BITS_GRAPHICS=auto` (the default) detects inline images, including the startup logo.
+Use `BITS_GRAPHICS=on bits` to bypass terminal identity checks, or
+`BITS_GRAPHICS=off bits` to disable images and probes. Graphics still require
+truecolor and a successful protocol probe; tmux, screen, and Zellij remain
+disabled. Values are case-sensitive; unset, empty, or invalid values use `auto`.
+The setting is read at startup and is not persisted.
+
 ## Development workflow
 
 1. Create a branch for your change.

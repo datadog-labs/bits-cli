@@ -9,9 +9,17 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/ansi/kitty"
 )
+
+func terminalEnv(t *testing.T, env map[string]string) {
+	t.Helper()
+	for _, key := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "TMUX", "STY", "ZELLIJ", "ZELLIJ_SESSION_NAME", "BITS_GRAPHICS"} {
+		t.Setenv(key, env[key])
+	}
+}
 
 // Answering the graphics query does not imply placeholder support, so real
 // terminal environments are pinned here. Every case is a terminal someone runs.
@@ -20,6 +28,8 @@ func TestPaintsPlaceholders(t *testing.T) {
 		env  map[string]string
 		want bool
 	}{
+		"rex":              {env: map[string]string{"TERM": "xterm-256color", "TERM_PROGRAM": "rex"}, want: true},
+		"kitty via prog":   {env: map[string]string{"TERM": "xterm-256color", "TERM_PROGRAM": "kitty"}, want: true},
 		"kitty":            {env: map[string]string{"TERM": "xterm-kitty"}, want: true},
 		"kitty via id":     {env: map[string]string{"TERM": "xterm-256color", "KITTY_WINDOW_ID": "1"}, want: true},
 		"ghostty":          {env: map[string]string{"TERM": "xterm-ghostty"}, want: true},
@@ -28,6 +38,9 @@ func TestPaintsPlaceholders(t *testing.T) {
 		// the resource path is the only signal.
 		"cmux": {env: map[string]string{"TERM": "xterm-256color", "GHOSTTY_RESOURCES_DIR": "/Applications/cmux.app/Contents/Resources/ghostty"}, want: true},
 
+		"wezterm":        {env: map[string]string{"TERM": "xterm-256color", "TERM_PROGRAM": "WezTerm"}, want: false},
+		"konsole":        {env: map[string]string{"TERM": "xterm-256color", "TERM_PROGRAM": "Konsole"}, want: false},
+		"zellij":         {env: map[string]string{"TERM": "xterm-kitty", "ZELLIJ": "0"}, want: false},
 		"iterm2":         {env: map[string]string{"TERM": "xterm-256color", "TERM_PROGRAM": "iTerm.app"}, want: false},
 		"terminal.app":   {env: map[string]string{"TERM": "xterm-256color", "TERM_PROGRAM": "Apple_Terminal"}, want: false},
 		"bare xterm":     {env: map[string]string{"TERM": "xterm-256color"}, want: false},
@@ -60,9 +73,7 @@ func TestPaintsPlaceholders(t *testing.T) {
 		}, want: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			for _, key := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "TMUX", "STY"} {
-				t.Setenv(key, tc.env[key])
-			}
+			terminalEnv(t, tc.env)
 			if got := paintsPlaceholders(); got != tc.want {
 				t.Errorf("paintsPlaceholders() = %v, want %v", got, tc.want)
 			}
@@ -70,25 +81,109 @@ func TestPaintsPlaceholders(t *testing.T) {
 	}
 }
 
-// Query's outcome must come from the pinned environment, never from whichever
-// terminal happens to be running the tests.
-func TestQueryFollowsTerminalCapability(t *testing.T) {
+// An unknown environment must still be probed: XTVERSION may identify the
+// terminal across SSH, where terminal-specific environment markers are lost.
+func TestQuery(t *testing.T) {
 	for name, tc := range map[string]struct {
-		env   map[string]string
-		probe bool
+		env  map[string]string
+		skip bool
 	}{
-		"kitty":  {env: map[string]string{"TERM": "xterm-kitty"}, probe: true},
-		"iterm2": {env: map[string]string{"TERM": "xterm-256color", "TERM_PROGRAM": "iTerm.app"}},
-		"ci":     {env: map[string]string{"TERM": "dumb"}},
+		"unknown environment":        {},
+		"kitty":                      {env: map[string]string{"TERM": "xterm-kitty"}},
+		"rex":                        {env: map[string]string{"TERM_PROGRAM": "rex"}},
+		"iterm2":                     {env: map[string]string{"TERM_PROGRAM": "iTerm.app"}},
+		"auto":                       {env: map[string]string{"BITS_GRAPHICS": "auto"}},
+		"on":                         {env: map[string]string{"BITS_GRAPHICS": "on"}},
+		"off":                        {env: map[string]string{"BITS_GRAPHICS": "off", "TERM": "xterm-kitty"}, skip: true},
+		"invalid falls back to auto": {env: map[string]string{"BITS_GRAPHICS": "yes"}},
+		"tmux":                       {env: map[string]string{"TMUX": "/tmp/tmux", "BITS_GRAPHICS": "on"}, skip: true},
+		"screen":                     {env: map[string]string{"STY": "1234.tty", "BITS_GRAPHICS": "on"}, skip: true},
+		"zellij":                     {env: map[string]string{"ZELLIJ": "0", "BITS_GRAPHICS": "on"}, skip: true},
+		"zellij session":             {env: map[string]string{"ZELLIJ_SESSION_NAME": "work", "BITS_GRAPHICS": "on"}, skip: true},
+		"tmux term":                  {env: map[string]string{"TERM": "tmux-256color", "BITS_GRAPHICS": "on"}, skip: true},
+		"screen term":                {env: map[string]string{"TERM": "screen.xterm-kitty", "BITS_GRAPHICS": "on"}, skip: true},
+		"zellij term":                {env: map[string]string{"TERM": "zellij", "BITS_GRAPHICS": "on"}, skip: true},
+		"zellij program":             {env: map[string]string{"TERM_PROGRAM": "zellij", "BITS_GRAPHICS": "on"}, skip: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			// TMUX and STY included: a run inside a multiplexer would otherwise
-			// inherit them and suppress the probe.
-			for _, key := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "TMUX", "STY"} {
-				t.Setenv(key, tc.env[key])
+			terminalEnv(t, tc.env)
+			var d Detection
+			cmd := d.Query()
+			if (cmd == nil) != tc.skip {
+				t.Fatalf("Query() = %v, skip = %v", cmd, tc.skip)
 			}
-			if probed := Query() != nil; probed != tc.probe {
-				t.Errorf("Query() probed = %v, want %v", probed, tc.probe)
+			if tc.skip {
+				if d.Support != Unsupported {
+					t.Fatal("skipped probe did not settle support")
+				}
+			} else {
+				want := ansi.KittyGraphics([]byte("AAAA"), "i=31", "s=1", "v=1", "a=q", "t=d", "f=24") + ansi.RequestNameVersion + ansi.RequestPrimaryDeviceAttributes
+				if got := cmd().(tea.RawMsg).Msg; got != want {
+					t.Fatalf("query order = %q, want %q", got, want)
+				}
+			}
+			if d.Query() != nil {
+				t.Fatal("repeated query sent another probe")
+			}
+		})
+	}
+}
+
+func TestDetection(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env     map[string]string
+		version string
+		reply   string
+		want    Support
+	}{
+		"rex over ssh":                        {version: "rex 0.0.1793981048-g01d6c4", reply: "OK", want: Supported},
+		"kitty":                               {version: "kitty(0.46.2)", reply: "OK", want: Supported},
+		"ghostty":                             {version: "ghostty 1.3.1", reply: "OK", want: Supported},
+		"case insensitive":                    {version: "Ghostty(1.3.1)", reply: "OK", want: Supported},
+		"iterm2":                              {version: "iTerm2 3.6.9", reply: "OK", want: Unsupported},
+		"wezterm":                             {version: "WezTerm 20240203-110809-5046fc22", reply: "OK", want: Unsupported},
+		"konsole":                             {version: "Konsole 26.08.0", reply: "OK", want: Unsupported},
+		"foot":                                {version: "foot(1.25.0)", reply: "OK", want: Unsupported},
+		"unknown":                             {version: "future-terminal(1)", reply: "OK", want: Unsupported},
+		"name must match":                     {version: "not-kitty(1)", reply: "OK", want: Unsupported},
+		"no identity":                         {reply: "OK", want: Unsupported},
+		"ignored protocol":                    {version: "rex 1", want: Unsupported},
+		"rejected protocol":                   {version: "kitty(0.46.2)", reply: "EINVAL:bad key", want: Unsupported},
+		"rex env fallback":                    {env: map[string]string{"TERM_PROGRAM": "rex"}, reply: "OK", want: Supported},
+		"kitty env fallback":                  {env: map[string]string{"TERM": "xterm-kitty"}, reply: "OK", want: Supported},
+		"cmux env fallback":                   {env: map[string]string{"GHOSTTY_RESOURCES_DIR": "/ghostty"}, reply: "OK", want: Supported},
+		"identity overrides inherited marker": {env: map[string]string{"GHOSTTY_RESOURCES_DIR": "/ghostty"}, version: "iTerm2 3.6.9", reply: "OK", want: Unsupported},
+		"identity overrides term":             {env: map[string]string{"TERM": "xterm-kitty"}, version: "WezTerm 1", reply: "OK", want: Unsupported},
+		"identity overrides program":          {env: map[string]string{"TERM_PROGRAM": "iTerm.app"}, version: "rex 1", reply: "OK", want: Supported},
+		"on bypasses identity":                {env: map[string]string{"BITS_GRAPHICS": "on"}, version: "future-terminal(1)", reply: "OK", want: Supported},
+		"on without identity":                 {env: map[string]string{"BITS_GRAPHICS": "on"}, reply: "OK", want: Supported},
+		"on still needs protocol":             {env: map[string]string{"BITS_GRAPHICS": "on"}, version: "rex 1", want: Unsupported},
+		"on still respects errors":            {env: map[string]string{"BITS_GRAPHICS": "on"}, reply: "EINVAL:bad key", want: Unsupported},
+		"off is final":                        {env: map[string]string{"BITS_GRAPHICS": "off"}, version: "rex 1", reply: "OK", want: Unsupported},
+		"invalid means auto":                  {env: map[string]string{"BITS_GRAPHICS": "yes"}, reply: "OK", want: Unsupported},
+		"tmux identity vetoes on":             {env: map[string]string{"BITS_GRAPHICS": "on"}, version: "tmux 3.6", reply: "OK", want: Unsupported},
+		"screen identity vetoes on":           {env: map[string]string{"BITS_GRAPHICS": "on"}, version: "screen(5.0)", reply: "OK", want: Unsupported},
+		"zellij identity vetoes on":           {env: map[string]string{"BITS_GRAPHICS": "on"}, version: "Zellij 0.43", reply: "OK", want: Unsupported},
+	} {
+		t.Run(name, func(t *testing.T) {
+			terminalEnv(t, tc.env)
+			var d Detection
+			d.Query()
+			if tc.reply != "" {
+				d.Observe(uv.KittyGraphicsEvent{Options: kitty.Options{ID: ProbeID}, Payload: []byte(tc.reply)}, 42)
+			}
+			d.ObserveTerminalVersion(tc.version)
+			if d.Support == Supported {
+				t.Fatal("images enabled before DA1 settled identity")
+			}
+			if enabled := d.ObserveDeviceAttributes(); enabled != (tc.want == Supported) {
+				t.Errorf("transmit = %v, want support %v", enabled, tc.want)
+			}
+			if d.Support != tc.want {
+				t.Errorf("support = %v, want %v", d.Support, tc.want)
+			}
+			if d.ObserveDeviceAttributes() {
+				t.Fatal("duplicate DA1 retransmitted images")
 			}
 		})
 	}

@@ -57,6 +57,9 @@ bits --conversation YOUR_CONVERSATION_ID
 
 Run `bits --help` for CLI commands, or type `/` in chat to find chat commands.
 
+See [widget previews](CONTRIBUTING.md#widget-previews) for inline image
+requirements and the `BITS_GRAPHICS=auto|on|off` override.
+
 ## Permissions
 
 By default, interactive Bits asks before reading files, editing files, or running

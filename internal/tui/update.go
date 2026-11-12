@@ -197,12 +197,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = m.openBrowser(page, "")
 		}
 	case uv.PrimaryDeviceAttributesEvent:
-		m.graphics.ObserveDeviceAttributes()
-	case uv.KittyGraphicsEvent:
-		// The probe answer can arrive in any mode, login included.
-		if !m.widgets.closed && m.graphics.Observe(msg, splash.ImageID) {
+		if m.graphics.ObserveDeviceAttributes() && !m.widgets.closed {
 			cmd = m.widgets.images.Enqueue(splash.Transmit())
 		}
+	case tea.TerminalVersionMsg:
+		m.graphics.ObserveTerminalVersion(msg.Name)
+	case uv.KittyGraphicsEvent:
+		// Replies can arrive in any mode, login included.
+		m.graphics.Observe(msg, splash.ImageID)
 	case tea.ColorProfileMsg:
 		// Arrives in any mode. Selection is the only paint that needs it: when
 		// colors are off, ultraviolet drops Fg and Bg but keeps attributes.

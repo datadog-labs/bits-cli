@@ -38,9 +38,9 @@ func (m *Model) widgetMode() widgetMode {
 	switch {
 	case m.widgets.client == nil || m.widgets.unavailable:
 		return widgetLink
-	case m.graphics == graphics.Unsupported && !m.widgets.client.Interactive():
+	case m.graphics.Support == graphics.Unsupported && !m.widgets.client.Interactive():
 		return widgetLink
-	case m.graphics == graphics.Unsupported:
+	case m.graphics.Support == graphics.Unsupported:
 		return widgetPane
 	default:
 		return widgetInline
@@ -69,7 +69,7 @@ func (m *Model) quitWith(quit tea.Cmd) tea.Cmd {
 		m.list.ClearWidgetViews()
 	}
 	images := m.widgets.release()
-	if m.graphics == graphics.Supported {
+	if m.graphics.Support == graphics.Supported {
 		images = append(images, graphics.Image{ID: splash.ImageID})
 	}
 	deleteCmd := m.widgets.images.Enqueue(graphics.Delete(images...))

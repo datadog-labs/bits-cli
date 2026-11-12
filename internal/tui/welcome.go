@@ -58,7 +58,7 @@ func (m *Model) welcomeContentWidth() int {
 // welcomeLogo returns the image once the terminal answers the graphics probe,
 // the wordmark otherwise. Both are splash.Rows tall.
 func (m *Model) welcomeLogo() string {
-	if m.graphics == graphics.Supported {
+	if m.graphics.Support == graphics.Supported {
 		return splash.Placeholder()
 	}
 	return m.styles.Logo.Render(splash.Wordmark())

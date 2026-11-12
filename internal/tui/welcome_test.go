@@ -272,11 +272,42 @@ func graphicsReply(id int, payload string) uv.KittyGraphicsEvent {
 	return uv.KittyGraphicsEvent{Options: kitty.Options{ID: id}, Payload: []byte(payload)}
 }
 
-func supportFor(ready bool) graphics.Support {
+func supportFor(ready bool) graphics.Detection {
 	if ready {
-		return graphics.Supported
+		return graphics.Detection{Support: graphics.Supported}
 	}
-	return graphics.Unknown
+	return graphics.Detection{}
+}
+
+func TestGraphicsStartupOverride(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env     map[string]string
+		profile colorprofile.Profile
+		want    graphics.Support
+	}{
+		"rex auto":            {env: map[string]string{"TERM_PROGRAM": "rex"}, profile: colorprofile.TrueColor, want: graphics.Supported},
+		"on unknown terminal": {env: map[string]string{"BITS_GRAPHICS": "on"}, profile: colorprofile.TrueColor, want: graphics.Supported},
+		"off rex":             {env: map[string]string{"BITS_GRAPHICS": "off", "TERM_PROGRAM": "rex"}, profile: colorprofile.TrueColor, want: graphics.Unsupported},
+		"on below truecolor":  {env: map[string]string{"BITS_GRAPHICS": "on"}, profile: colorprofile.ANSI256, want: graphics.Unsupported},
+		"on in tmux":          {env: map[string]string{"BITS_GRAPHICS": "on", "TMUX": "/tmp/tmux"}, profile: colorprofile.TrueColor, want: graphics.Unsupported},
+		"on in screen":        {env: map[string]string{"BITS_GRAPHICS": "on", "STY": "1234.tty"}, profile: colorprofile.TrueColor, want: graphics.Unsupported},
+		"on in zellij":        {env: map[string]string{"BITS_GRAPHICS": "on", "ZELLIJ": "0"}, profile: colorprofile.TrueColor, want: graphics.Unsupported},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, key := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "TMUX", "STY", "ZELLIJ", "ZELLIJ_SESSION_NAME", "BITS_GRAPHICS"} {
+				t.Setenv(key, tc.env[key])
+			}
+			m := welcomeModel(100, 40)
+			m.mode = ModeLogin // Detection also runs before the login/chat handoff.
+			m.queryGraphics()
+			m.Update(tea.ColorProfileMsg{Profile: tc.profile})
+			m.Update(graphicsReply(graphics.ProbeID, "OK"))
+			_, cmd := m.Update(uv.PrimaryDeviceAttributesEvent{62})
+			if m.graphics.Support != tc.want || (cmd != nil) != (tc.want == graphics.Supported) {
+				t.Fatalf("support = %v, transmit = %v, want %v", m.graphics.Support, cmd != nil, tc.want)
+			}
+		})
+	}
 }
 
 // The handler is where a regression would silently disable the image path or
@@ -285,11 +316,28 @@ func supportFor(ready bool) graphics.Support {
 func TestGraphicsReplyDrivesLogoForm(t *testing.T) {
 	for name, tc := range map[string]struct {
 		before, want graphics.Support
+		prior        []tea.Msg
 		event        tea.Msg
 		wantTrans    bool
 	}{
-		"probe ok enables the image": {
-			event: graphicsReply(graphics.ProbeID, "OK"), want: graphics.Supported, wantTrans: true,
+		"probe ok waits for identity and DA1": {
+			event: graphicsReply(graphics.ProbeID, "OK"), want: graphics.Unknown,
+		},
+		"rex identity enables the image at DA1": {
+			prior: []tea.Msg{graphicsReply(graphics.ProbeID, "OK"), tea.TerminalVersionMsg{Name: "rex 0.0.1793981048-g01d6c4"}},
+			event: uv.PrimaryDeviceAttributesEvent{62, 22}, want: graphics.Supported, wantTrans: true,
+		},
+		"identity before the probe also works": {
+			prior: []tea.Msg{tea.TerminalVersionMsg{Name: "ghostty 1.3.1"}, graphicsReply(graphics.ProbeID, "OK")},
+			event: uv.PrimaryDeviceAttributesEvent{62}, want: graphics.Supported, wantTrans: true,
+		},
+		"partial kitty implementation stays text": {
+			prior: []tea.Msg{graphicsReply(graphics.ProbeID, "OK"), tea.TerminalVersionMsg{Name: "iTerm2 3.6.9"}},
+			event: uv.PrimaryDeviceAttributesEvent{62}, want: graphics.Unsupported,
+		},
+		"no identity stays text": {
+			prior: []tea.Msg{graphicsReply(graphics.ProbeID, "OK")},
+			event: uv.PrimaryDeviceAttributesEvent{62}, want: graphics.Unsupported,
 		},
 		"probe error keeps the wordmark": {
 			event: graphicsReply(graphics.ProbeID, "EINVAL:bad key"), want: graphics.Unsupported,
@@ -317,7 +365,17 @@ func TestGraphicsReplyDrivesLogoForm(t *testing.T) {
 			before: graphics.Supported, event: uv.PrimaryDeviceAttributesEvent{62}, want: graphics.Supported,
 		},
 		"unsupported is final": {
-			before: graphics.Unsupported, event: graphicsReply(graphics.ProbeID, "OK"), want: graphics.Unsupported,
+			before: graphics.Unsupported,
+			prior:  []tea.Msg{graphicsReply(graphics.ProbeID, "OK"), tea.TerminalVersionMsg{Name: "rex 1"}},
+			event:  uv.PrimaryDeviceAttributesEvent{62}, want: graphics.Unsupported,
+		},
+		"a late probe cannot revive an ignored one": {
+			prior: []tea.Msg{uv.PrimaryDeviceAttributesEvent{62}, tea.TerminalVersionMsg{Name: "rex 1"}},
+			event: graphicsReply(graphics.ProbeID, "OK"), want: graphics.Unsupported,
+		},
+		"truecolor cannot revive a rejected profile": {
+			prior: []tea.Msg{tea.ColorProfileMsg{Profile: colorprofile.ANSI256}, graphicsReply(graphics.ProbeID, "OK"), tea.TerminalVersionMsg{Name: "rex 1"}},
+			event: tea.ColorProfileMsg{Profile: colorprofile.TrueColor}, want: graphics.Unsupported,
 		},
 		// Placeholders resolve through an exact 24-bit foreground.
 		"a 256-color profile rules images out": {
@@ -328,13 +386,22 @@ func TestGraphicsReplyDrivesLogoForm(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			for _, key := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "TMUX", "STY", "ZELLIJ", "ZELLIJ_SESSION_NAME", "BITS_GRAPHICS"} {
+				t.Setenv(key, "")
+			}
 			m := welcomeModel(100, 40)
 			m.mode = ModeChat
-			m.graphics = tc.before
+			m.queryGraphics()
+			m.graphics.Support = tc.before
+			for _, event := range tc.prior {
+				if _, cmd := m.Update(event); cmd != nil {
+					t.Fatal("transmitted before DA1 settled detection")
+				}
+			}
 
 			_, cmd := m.Update(tc.event)
 
-			if m.graphics != tc.want {
+			if m.graphics.Support != tc.want {
 				t.Errorf("graphics = %v, want %v", m.graphics, tc.want)
 			}
 			if got := cmd != nil; got != tc.wantTrans {
@@ -554,10 +621,10 @@ func TestWelcomeVisibilityUnchangedByTheProbe(t *testing.T) {
 		m := welcomeModel(width, 40)
 		m.mode = ModeChat
 
-		m.graphics = graphics.Unknown
+		m.graphics.Support = graphics.Unknown
 		before := m.showSplashPanel()
 		reserved := m.splashPanelHeight()
-		m.graphics = graphics.Supported
+		m.graphics.Support = graphics.Supported
 		after := m.showSplashPanel()
 		if after != before {
 			t.Fatalf("width=%d: visibility changed from %v to %v when the probe landed",
