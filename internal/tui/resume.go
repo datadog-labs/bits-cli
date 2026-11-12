@@ -15,8 +15,8 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
-// resumeMaxRows caps the offer: past this the list stops being a glance and
-// /resume is the better tool.
+// resumeMaxRows caps the visible offer, not the list of conversations that can
+// be browsed. Shorter terminals show fewer rows.
 const resumeMaxRows = 12
 
 const (
@@ -94,8 +94,11 @@ func (r *resume) move(delta, visible int) {
 // goes stale in both directions — a grown window reads past the end of the
 // slice, a shrunken one leaves the selection off-screen.
 func (r *resume) window(visible int) int {
-	top := min(max(r.top, r.selected-visible+1), r.selected)
-	return min(max(top, 0), max(0, len(r.conversations)-visible))
+	// The offer fills the window even at the end; the picker's explicit pages
+	// can instead leave a partial final page.
+	top := min(r.top, max(0, len(r.conversations)-visible))
+	start, _ := conversations.WindowBounds(len(r.conversations), r.selected, top, visible)
+	return start
 }
 
 func (r *resume) selectedID() (string, bool) {
@@ -223,7 +226,9 @@ func (m *Model) fetchRecentConversations() tea.Cmd {
 	ctx, generation := m.resume.task.start(context.Background(), historyLoadTimeout)
 	engine := m.engine
 	return func() tea.Msg {
-		return recentConversationsMsg{generation: generation, result: engine.ListConversations(ctx, resumeMaxRows)}
+		// Match /resume's list: the visible row budget must not hide older
+		// conversations from navigation.
+		return recentConversationsMsg{generation: generation, result: engine.ListConversations(ctx, 0)}
 	}
 }
 

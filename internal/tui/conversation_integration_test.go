@@ -76,9 +76,15 @@ func (b *resumeBackend) Send(context.Context, any, assistant.SendOptions, func(a
 	return "", errors.New("unexpected Send")
 }
 
-func (b *resumeBackend) UserConversations(ctx context.Context, _ assistant.UserConversationsInput) (*assistant.UserConversationsResponse, error) {
+func (b *resumeBackend) UserConversations(ctx context.Context, in assistant.UserConversationsInput) (*assistant.UserConversationsResponse, error) {
 	select {
 	case reply := <-b.lists:
+		if reply.response != nil && in.PageSize > 0 {
+			response := *reply.response
+			conversations := response.Data.Attributes.Conversations
+			response.Data.Attributes.Conversations = conversations[:min(len(conversations), in.PageSize)]
+			return &response, reply.err
+		}
 		return reply.response, reply.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -508,7 +514,7 @@ func TestNewConversationReplacesPendingOfferRead(t *testing.T) {
 	old := m.fetchRecentConversations()
 	oldGeneration := m.resume.task.gen
 	setConversationInput(m, "/new")
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, load := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.resume.loading() || m.resume.task.gen == oldGeneration {
 		t.Fatal("/new did not replace the pending offer read")
 	}
@@ -522,9 +528,17 @@ func TestNewConversationReplacesPendingOfferRead(t *testing.T) {
 	if !m.resume.loading() || !m.resume.empty() {
 		t.Fatal("the superseded result changed the new offer")
 	}
-	m.Update(recentConversationsMsg{generation: m.resume.task.gen, result: msg.result})
-	if m.resume.loading() || m.resume.empty() {
-		t.Fatal("the current result did not populate the new offer")
+	// Exercise the actual request: a backend that honors page_size must still
+	// return older conversations, beyond the offer's visible row limit.
+	want := resumeFixture(32).conversations
+	b.lists <- resumeListReply{response: summaries(want...)}
+	for _, result := range flattenMsgs(t, load) {
+		if result, ok := result.(recentConversationsMsg); ok {
+			m.Update(result)
+		}
+	}
+	if m.resume.loading() || len(m.resume.conversations) != len(want) {
+		t.Fatalf("the new offer loaded %d conversations, want %d", len(m.resume.conversations), len(want))
 	}
 }
 

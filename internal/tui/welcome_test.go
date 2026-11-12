@@ -15,6 +15,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
@@ -401,30 +402,47 @@ func TestHeaderNeverExceedsTerminalWidth(t *testing.T) {
 // the panel off at launch. Rows degrade, then the offer drops entirely. The
 // test only proves that ladder happened if both ends of it are observed.
 func TestResumeRowsDegradeUntilTheHeaderFits(t *testing.T) {
-	m := welcomeModel(120, 60)
-	m.resume = *resumeFixture(32)
-	previous := resumeMaxRows + 1
-	minRows, maxRows := resumeMaxRows, 0
-	for height := 60; height >= 1; height-- {
-		m.height = height
-		m.relayout()
-		rows := 0
-		if m.showResume() {
-			rows = m.resumeVisibleRows()
-		}
-		if rows > previous {
-			t.Fatalf("height=%d: rows grew from %d to %d as the terminal shrank", height, previous, rows)
-		}
-		if rows > 0 && lipgloss.Height(m.headerView()) > m.frame.transcript.Dy() {
-			t.Fatalf("height=%d: header %d rows exceeds the %d-row viewport",
-				height, lipgloss.Height(m.headerView()), m.frame.transcript.Dy())
-		}
-		minRows, maxRows = min(minRows, rows), max(maxRows, rows)
-		previous = rows
-	}
-	if minRows != 0 || maxRows != resumeMaxRows {
-		t.Fatalf("rows ranged [%d, %d] across the shrink, want [0, %d]: the degradation ladder never ran",
-			minRows, maxRows, resumeMaxRows)
+	for name, notices := range map[string][]string{
+		"startup": nil,
+		"new":     {"Started a new conversation."},
+		"wrapped": {strings.Repeat("A notice that wraps. ", 10), "Another notice."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := welcomeModel(120, 60)
+			m.resume = *resumeFixture(32)
+			for _, text := range notices {
+				m.postNotice(notice(chat.NoticeInfo, nil, "%s", text))
+			}
+			previous := resumeMaxRows + 1
+			minRows, maxRows := resumeMaxRows, 0
+			for height := 60; height >= 1; height-- {
+				m.height = height
+				m.relayout()
+				rows := 0
+				if m.showResume() {
+					rows = m.resumeVisibleRows()
+				}
+				if rows > previous {
+					t.Fatalf("height=%d: rows grew from %d to %d as the terminal shrank", height, previous, rows)
+				}
+				if rows > 0 {
+					// Document includes a trailing item gap; following the tail
+					// pins the last content row, without reserving that gap.
+					if got := lipgloss.Height(strings.TrimRight(m.list.Document(), "\n")); got > m.frame.transcript.Dy() {
+						t.Fatalf("height=%d: header and notices occupy %d rows in a %d-row viewport", height, got, m.frame.transcript.Dy())
+					}
+					if got := m.list.VisibleSurface().Top; got != 0 {
+						t.Fatalf("height=%d: follow mode clipped %d rows off the welcome panel", height, got)
+					}
+				}
+				minRows, maxRows = min(minRows, rows), max(maxRows, rows)
+				previous = rows
+			}
+			if minRows != 0 || maxRows != resumeMaxRows {
+				t.Fatalf("rows ranged [%d, %d] across the shrink, want [0, %d]: the degradation ladder never ran",
+					minRows, maxRows, resumeMaxRows)
+			}
+		})
 	}
 }
 
@@ -721,6 +739,27 @@ func TestUpgradeOfferVisibility(t *testing.T) {
 	if !m.showUpgrade() {
 		t.Fatal("clearing the draft did not bring the offer back")
 	}
+
+	// Both offers must reserve notices using the same budget. Exercise the
+	// boundary at which a fixed-height update offer gives way to resume rows.
+	m.postNotice(notice(chat.NoticeInfo, nil, "%s", strings.Repeat("A notice that wraps. ", 10)))
+	shown, hidden := false, false
+	for height := 40; height >= 1; height-- {
+		m.height = height
+		m.relayout()
+		if !m.showUpgrade() {
+			hidden = true
+			continue
+		}
+		shown = true
+		if got := lipgloss.Height(strings.TrimRight(m.list.Document(), "\n")); got > m.frame.transcript.Dy() || m.list.VisibleSurface().Top != 0 {
+			t.Fatalf("height=%d: update offer and notices overflow the viewport: document=%d viewport=%d", height, got, m.frame.transcript.Dy())
+		}
+	}
+	if !shown || !hidden {
+		t.Fatal("did not cross the update offer's visibility boundary")
+	}
+	m.height = 40
 
 	m.upgrade = newUpgradePrompt(&update.Offer{Current: "v1.2.3"})
 	m.relayout()

@@ -889,6 +889,20 @@ func (l *List) HeaderRows() int {
 	return len(l.renderItem(0)) + max(l.gapAfter(0), 0)
 }
 
+// NoticeRows measures rendered notices and the gap before each, including the
+// first notice's separation from a header. Welcome offers reserve this space
+// before sizing their rows. Use the presentation so omitted notices, wrapping,
+// and spacing agree with the transcript.
+func (l *List) NoticeRows() int {
+	rows := 0
+	for idx, item := range l.view {
+		if item.kind == itemNotice {
+			rows += l.itemHeight(idx) + l.gapAfter(idx-1)
+		}
+	}
+	return rows
+}
+
 // Document renders the complete transcript without viewport fill rows or
 // changing the current scroll position.
 func (l *List) Document() string {

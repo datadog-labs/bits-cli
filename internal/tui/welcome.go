@@ -160,9 +160,10 @@ func (m *Model) welcomeIdle() bool {
 	return m.showSplashPanel()
 }
 
-// welcomeOfferHeight is the room for an offer below the panel and its gap.
+// welcomeOfferHeight reserves the panel, its gap, and transcript notices before
+// sizing either welcome offer. Otherwise following the tail clips the panel.
 func (m *Model) welcomeOfferHeight() int {
-	return m.frame.transcript.Dy() - m.splashPanelHeight() - 1
+	return m.frame.transcript.Dy() - m.splashPanelHeight() - 1 - m.list.NoticeRows()
 }
 
 // showResume gates the offer on the welcome conditions, a running or non-empty

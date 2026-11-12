@@ -356,6 +356,23 @@ func TestNewConversationBringsTheOfferBack(t *testing.T) {
 	if !m.resume.loading() || !strings.Contains(m.list.Render(), resumeLoading) {
 		t.Fatalf("/new did not reload the offer:\n%s", m.list.Render())
 	}
+
+	// More results than fit must remain browsable, and the reset notice must
+	// fit alongside the header without follow mode clipping the welcome panel.
+	want := resumeFixture(32).conversations
+	m.Update(recentConversationsMsg{generation: m.resume.task.gen, result: agent.ConversationListResult{Conversations: want}})
+	for range resumeMaxRows + 1 {
+		m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	if id, ok := m.resume.selectedID(); !ok || id != want[resumeMaxRows+1].ConversationID {
+		t.Fatalf("could not browse beyond the first twelve conversations: selected %q", id)
+	}
+	if got := lipgloss.Height(strings.TrimRight(m.list.Document(), "\n")); got > m.frame.transcript.Dy() {
+		t.Fatalf("header and reset notice occupy %d rows in a %d-row viewport", got, m.frame.transcript.Dy())
+	}
+	if surface := m.list.VisibleSurface(); surface.Top != 0 || !strings.Contains(ansi.Strip(surface.Content), "Started a new conversation.") {
+		t.Fatalf("follow mode clipped the welcome panel or reset notice: top=%d\n%s", surface.Top, ansi.Strip(surface.Content))
+	}
 }
 
 // The focused row's timestamp takes the title's accent, so the whole row reads
