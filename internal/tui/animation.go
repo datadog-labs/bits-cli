@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
@@ -92,12 +93,20 @@ func (m *Model) syncAnimations() tea.Cmd {
 }
 
 func (m *Model) syncAnimationsAt(now time.Time) tea.Cmd {
-	m.list.SetRunning(m.op.run != 0)
+	var storage [8]agent.RunID
+	runs := storage[:0]
+	if m.op.run != 0 {
+		runs = append(runs, m.op.run)
+	}
+	for run := range m.backgroundRuns {
+		runs = append(runs, run)
+	}
+	m.list.SetActiveRuns(runs...)
 	var wantActivity, wantSweep bool
 	switch m.mode {
 	case ModeChat:
 		wantSweep = m.borderSweepWanted()
-		wantActivity = m.transcriptAnimationWanted() || m.resumeAnimationWanted() || (wantSweep && m.editor.QueueLen() > 0)
+		wantActivity = m.transcriptAnimationWanted() || m.resumeAnimationWanted() || (wantSweep && m.editor.QueueLen() > 0) || (m.animationsVisible() && m.chatStyles.Motion && len(m.backgroundRuns) > 0 && !m.quitConfirm.armed)
 	case ModeConversations:
 		wantActivity = m.picker != nil && m.picker.Animating()
 	default:

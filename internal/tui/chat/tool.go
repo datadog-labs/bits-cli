@@ -583,7 +583,7 @@ func renderToolGroupHeader(blocks []agent.Block, presentations []toolPresentatio
 			title = "Analyzing"
 		}
 	}
-	return renderActivityHeader(state, title, suffix, c)
+	return RenderActivityHeader(state, title, suffix, c.width, c.sty, c.frame)
 }
 
 func renderServerTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
@@ -1188,37 +1188,6 @@ func lifecycleSuffix(state agent.ToolStatus) string {
 	}
 }
 
-func statusGlyph(state agent.ToolStatus, sty Styles, frame int) (string, lipgloss.Style) {
-	switch state {
-	case agent.ToolRunning:
-		glyph := sty.StatusSpinner.Frame(frame)
-		if glyph == "" {
-			glyph = "•"
-		}
-		return glyph, sty.StatusRunning
-	case agent.ToolAwaitingApproval:
-		return "•", sty.StatusRunning
-	case agent.ToolSuccess:
-		return "✓", sty.StatusSuccess
-	case agent.ToolError:
-		return "✗", sty.StatusError
-	default:
-		return "•", sty.Meta
-	}
-}
-
-// renderActivityHeader renders the shared compact header used by thinking and
-// grouped inspection activity. Keeping the state-to-glyph mapping here makes
-// every progressing row use the same spinner and static fallbacks.
-func renderActivityHeader(state agent.ToolStatus, label, suffix string, c renderContext) string {
-	glyph, glyphStyle := statusGlyph(state, c.sty, c.frame)
-	header := glyphStyle.UnsetBackground().Render(glyph+" ") + c.sty.ToolName.Render(label)
-	if suffix != "" {
-		header += c.sty.ToolDetail.Render(suffix)
-	}
-	return ansi.Truncate(header, max(1, c.width), "…")
-}
-
 func renderSpans(spans []summarySpan, sty Styles) string {
 	var b strings.Builder
 	for _, span := range spans {
@@ -1276,7 +1245,7 @@ func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, c renderCont
 	if tool.Status == agent.ToolCancelled {
 		label = "questions cancelled"
 	}
-	header := renderActivityHeader(state, label, "", c)
+	header := RenderActivityHeader(state, label, "", c.width, c.sty, c.frame)
 	input, err := spec.ParseQuestions(tool.Input)
 	if err != nil {
 		return header + "\n" + textwrap.WrapProseText(c.width, escape.Multiline(tool.Output), c.sty.ToolError)

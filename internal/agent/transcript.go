@@ -18,14 +18,11 @@ const maxToolInputPreviewBytes = 256 << 10
 // of a conversation: it folds streamed wire messages into blocks. Not safe for
 // concurrent use; the engine serializes access.
 type Transcript struct {
-	blocks        []Block
-	index         map[BlockID]int // id -> position in blocks
-	accumulatorID BlockID
-	accumulator   *strings.Builder // pointer-owned: Builder must not be copied after use
-	userSeq       int              // monotonic id source for local user messages
-	// openStream tracks the currently streaming (incomplete) text/reasoning
-	openStream BlockID
-	hasOpen    bool
+	blocks  []Block
+	index   map[BlockID]int // id -> position in blocks
+	userSeq int             // monotonic id source for local user messages
+	// openStreams owns each run's incomplete block and text accumulator.
+	openStreams map[RunID]*transcriptStream
 	// run is the run changing the transcript, stamped on what it changes; 0
 	// outside any run.
 	run RunID
@@ -33,6 +30,12 @@ type Transcript struct {
 	// multiple calls can be interleaved. Builders are transcript-owned and are
 	// never published through a Block snapshot.
 	inputPreviews map[string]*toolInputPreview
+}
+
+// Builders are pointer-owned and never copied or published in snapshots.
+type transcriptStream struct {
+	id          BlockID
+	accumulator strings.Builder
 }
 
 type toolInputPreview struct {
@@ -44,6 +47,7 @@ type toolInputPreview struct {
 func NewTranscript() *Transcript {
 	return &Transcript{
 		index:         map[BlockID]int{},
+		openStreams:   make(map[RunID]*transcriptStream),
 		inputPreviews: map[string]*toolInputPreview{},
 	}
 }
@@ -451,59 +455,47 @@ func (t *Transcript) appendPassthrough(msg assistant.Message, kind assistant.Con
 //
 // Assistant API does not forward thinking start/complete events.
 func (t *Transcript) closePrior(b Block) {
-	if t.hasOpen && t.openStream != b.ID {
-		priorID := t.openStream
-		if i, ok := t.index[priorID]; ok && !t.blocks[i].Complete {
-			t.blocks[i].Complete = true
-			t.revise(i)
-		}
-		t.releaseAccumulator(priorID)
-		t.hasOpen = false
+	if stream := t.openStreams[t.run]; stream != nil && stream.id != b.ID {
+		t.FinalizeRun(t.run)
 	}
-	if !b.Complete {
-		t.openStream = b.ID
-		t.hasOpen = true
+	if !b.Complete && t.openStreams[t.run] == nil {
+		t.openStreams[t.run] = &transcriptStream{id: b.ID}
 	}
 }
 
-// FinalizeAll marks every still-open block complete; called at turn end as the
-// backstop for the last open block (typically the answer text, which has no
-// status glyph). Mid-turn blocks are already closed incrementally by
-// closePrior, so this normally only touches that trailing block. It reports
-// whether the transcript changed.
-func (t *Transcript) FinalizeAll() bool {
-	finalized := false
-	if t.hasOpen {
-		id := t.openStream
-		if i, ok := t.index[id]; ok && !t.blocks[i].Complete {
-			t.blocks[i].Complete = true
-			t.revise(i)
-			finalized = true
-		}
-		t.releaseAccumulator(id)
+// FinalizeRun closes only this run's trailing text or reasoning block.
+func (t *Transcript) FinalizeRun(run RunID) bool {
+	stream := t.openStreams[run]
+	if stream == nil {
+		return false
 	}
-	t.hasOpen = false
-	return finalized
+	delete(t.openStreams, run)
+	if i, ok := t.index[stream.id]; ok && !t.blocks[i].Complete {
+		t.blocks[i].Complete = true
+		t.blocks[i].Rev++
+		return true
+	}
+	return false
+}
+
+// FinalizeAll closes every open text or reasoning block, such as after history load.
+func (t *Transcript) FinalizeAll() bool {
+	changed := false
+	for run := range t.openStreams {
+		changed = t.FinalizeRun(run) || changed
+	}
+	return changed
 }
 
 func (t *Transcript) accumulatorFor(id BlockID, existing string) *strings.Builder {
-	if t.accumulator != nil && t.accumulatorID == id {
-		return t.accumulator
+	stream := t.openStreams[t.run]
+	if stream == nil || stream.id != id {
+		t.FinalizeRun(t.run)
+		stream = &transcriptStream{id: id}
+		stream.accumulator.WriteString(existing)
+		t.openStreams[t.run] = stream
 	}
-	acc := &strings.Builder{}
-	if existing != "" {
-		_, _ = acc.WriteString(existing)
-	}
-	t.accumulatorID = id
-	t.accumulator = acc
-	return acc
-}
-
-func (t *Transcript) releaseAccumulator(id BlockID) {
-	if t.accumulator != nil && t.accumulatorID == id {
-		t.accumulatorID = BlockID{}
-		t.accumulator = nil
-	}
+	return &stream.accumulator
 }
 
 // adopt records that the current run takes over the tool call id, which it

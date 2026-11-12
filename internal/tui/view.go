@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
@@ -355,9 +356,25 @@ func (m *Model) promptPlaceholder() string {
 func (m *Model) chatFooter() string {
 	width := max(1, m.list.Width())
 	indent := min(m.editor.ContentOffset(), max(0, width-1))
-	text := chatFooterText(m.workspaceDisplayPath, m.state.Usage, max(1, width-indent))
+	available := max(1, width-indent)
+	if len(m.backgroundRuns) > 0 && !m.quitConfirm.armed {
+		label := strconv.Itoa(len(m.backgroundRuns)) + " background run"
+		if len(m.backgroundRuns) != 1 {
+			label += "s"
+		}
+		activity := chat.RenderActivityHeader(agent.ToolRunning, label, "", available, m.chatStyles, m.animActivity.frame)
+		remaining := available - ansi.StringWidth(activity) - 3
+		if remaining >= 12 {
+			metadata := chatFooterText(m.workspaceDisplayPath, m.state.Usage, remaining)
+			if metadata != "" {
+				activity += m.styles.Text.Secondary.Render(" · " + metadata)
+			}
+		}
+		return strings.Repeat(" ", indent) + ansi.Truncate(activity, available, "…")
+	}
+	text := chatFooterText(m.workspaceDisplayPath, m.state.Usage, available)
 	if m.quitConfirm.armed {
-		text = ansi.Truncate(quitConfirmHint, max(1, width-indent), "…")
+		text = ansi.Truncate(quitConfirmHint, available, "…")
 	}
 	if text == "" {
 		return ""

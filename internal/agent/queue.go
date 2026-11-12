@@ -30,6 +30,8 @@ type QueuedPrompt struct {
 // a DenyStop denial), or queued after the turn ended. Queued prompts run
 // with the tools, policy and context of the run that sends them. Queue
 // fails with ErrOperationActive while an operation other than a turn runs.
+// A duplex root that emits EventBackground releases admission before its run
+// ends; callers use SendQueued to start queued prompts in a new run then.
 func (e *Engine) Queue(in TurnInput) error {
 	err := ErrClosed
 	e.do(func() {

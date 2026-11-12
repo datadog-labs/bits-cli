@@ -16,6 +16,7 @@ import (
 func animToolBlock(status agent.ToolStatus) agent.Block {
 	return agent.Block{
 		ID:   agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"},
+		Run:  1,
 		Kind: assistant.KindToolResult,
 		Tool: &agent.ToolBlock{Name: "search_logs", Status: status},
 	}
@@ -28,6 +29,7 @@ func animModel(status agent.ToolStatus) *Model {
 func animModelWithBlock(block agent.Block) *Model {
 	m := newShell()
 	m.mode = ModeChat
+	block.Run = 1
 	m.state.Blocks = []agent.Block{block}
 	m.op = operation{kind: opTurn, run: 1}
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})

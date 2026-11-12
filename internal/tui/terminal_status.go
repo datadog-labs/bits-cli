@@ -102,7 +102,7 @@ func (m *Model) syncTerminalStatus() tea.Cmd {
 }
 
 func (m *Model) observeTerminalOutcome(ev agent.Event) tea.Cmd {
-	if m.op.kind != opTurn || !ev.Terminal() {
+	if m.op.kind != opTurn || (!ev.Terminal() && ev.Kind != agent.EventBackground) {
 		return nil
 	}
 	switch {
@@ -110,7 +110,7 @@ func (m *Model) observeTerminalOutcome(ev agent.Event) tea.Cmd {
 		m.terminal.outcome = ""
 	case ev.Kind == agent.EventError:
 		m.terminal.outcome = ansi.ProgramStateError
-	case ev.Kind == agent.EventDone:
+	case ev.Kind == agent.EventDone || ev.Kind == agent.EventBackground:
 		m.terminal.outcome = ansi.ProgramStateDone
 		if !m.terminal.focused {
 			return tea.Raw(ansi.Notify("Bits finished"))

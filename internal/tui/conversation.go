@@ -45,6 +45,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	m.picker = nil
 	m.conversationSwitchID = ""
 	m.selection.clear()
+	m.clearBackgroundRuns()
 	m.state = m.engine.State()
 	m.list.Reset()
 	m.chatPhase = chat.PhaseIdle
@@ -152,6 +153,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 		m.picker.SetError(n.Text, err)
 		return m.postNotice(n)
 	}
+	m.clearBackgroundRuns()
 	m.state = m.engine.State()
 	m.conversationEpoch++
 	m.chatPhase = chat.PhaseIdle

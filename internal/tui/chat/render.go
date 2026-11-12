@@ -130,7 +130,7 @@ func renderReasoningGroup(blocks []agent.Block, c renderContext) string {
 			}
 		}
 	}
-	header := renderActivityHeader(state, label, "", c)
+	header := RenderActivityHeader(state, label, "", c.width, c.sty, c.frame)
 	if c.disclosure == compactView || len(parts) == 0 {
 		return header
 	}

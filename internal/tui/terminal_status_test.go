@@ -50,6 +50,7 @@ func TestTerminalOutcomesAndNotifications(t *testing.T) {
 		notify  bool
 	}{
 		{"focused completion", opTurn, agent.EventDone, false, ansi.ProgramStateDone, false},
+		{"root completion", opTurn, agent.EventBackground, true, ansi.ProgramStateDone, true},
 		{"background completion", opTurn, agent.EventDone, true, ansi.ProgramStateDone, true},
 		{"cancelled", opTurn, agent.EventCanceled, true, ansi.ProgramStateIdle, false},
 		{"error", opTurn, agent.EventError, true, ansi.ProgramStateError, false},
