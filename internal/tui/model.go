@@ -95,6 +95,8 @@ type Model struct {
 
 	statusTask     task
 	statusIdentity string
+	// currentUser is the login the welcome panel names; zero until fetched.
+	currentUser assistant.CurrentUser
 
 	// Startup login stays inside this root model so Bubble Tea owns the
 	// alternate screen continuously while switching from login to chat.
@@ -400,7 +402,7 @@ func (m *Model) initChat() tea.Cmd {
 	if m.engine == nil {
 		return tea.Batch(commands...)
 	}
-	commands = append(commands, waitEvent(m.events))
+	commands = append(commands, waitEvent(m.events), m.fetchCurrentUser())
 	if m.engine.State().ConversationID == "" {
 		// Fetch the startup offer only when there is no history to restore.
 		return tea.Batch(append(commands, m.syncResume(), m.syncClientSkills())...)

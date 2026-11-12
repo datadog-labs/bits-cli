@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"net/url"
 	"strings"
 
@@ -9,6 +10,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/site"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
@@ -101,8 +104,9 @@ func (m *Model) welcomeFacts(width int) string {
 	lines := []string{ansi.Truncate(name, width, "…")}
 
 	for _, value := range []string{
-		hostnameOf(runtime.Backend.Site),
-		modelAndAuth(runtime.Model, authenticationLabel(runtime.Backend.AuthenticationMode)),
+		joinFacts(firstNonEmpty(m.currentUser.Name, m.currentUser.Handle, m.currentUser.Email),
+			strings.TrimSpace(m.currentUser.Organization), webHostOf(runtime.Backend.Site)),
+		joinFacts(runtime.Model, authenticationLabel(runtime.Backend.AuthenticationMode)),
 		m.workspaceDisplayPath,
 	} {
 		if value == "" {
@@ -116,31 +120,55 @@ func (m *Model) welcomeFacts(width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// hostnameOf reduces a base URL to its host, passing through what will not parse.
-func hostnameOf(site string) string {
-	parsed, err := url.Parse(site)
+// webHostOf names the Datadog web app for an API base URL, as users know it
+// from the browser. A host outside the catalog stays as configured, and what
+// will not parse passes through.
+func webHostOf(apiSite string) string {
+	parsed, err := url.Parse(apiSite)
 	if err != nil || parsed.Hostname() == "" {
-		return site
+		return apiSite
+	}
+	if web, ok := site.WebHostForAssistantHost(parsed.Hostname()); ok {
+		return web
 	}
 	return parsed.Hostname()
 }
 
-func modelAndAuth(model, authentication string) string {
-	switch {
-	case model == "":
-		return authentication
-	case authentication == "":
-		return model
-	default:
-		return model + " · " + authentication
+// joinFacts shares one row between related facts, skipping unknown ones, so
+// facts arriving late never change the panel's height.
+func joinFacts(values ...string) string {
+	var known []string
+	for _, value := range values {
+		if value != "" {
+			known = append(known, value)
+		}
+	}
+	return strings.Join(known, " · ")
+}
+
+type currentUserMsg struct{ user assistant.CurrentUser }
+
+// fetchCurrentUser names the login and org for the welcome panel. A failure
+// stays silent: the panel only loses the names, and /status explains why.
+func (m *Model) fetchCurrentUser() tea.Cmd {
+	engine := m.engine
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)
+		defer cancel()
+		identity, err := engine.CurrentUser(ctx)
+		if err != nil {
+			return nil
+		}
+		return currentUserMsg{user: identity}
 	}
 }
 
-// authenticationLabel matches the Bits CLI's wording; unknown modes pass through.
+// authenticationLabel names only a mode the user chose: OAuth is the default,
+// so naming it on every launch says nothing. Unknown modes pass through.
 func authenticationLabel(mode string) string {
 	switch mode {
 	case "oauth":
-		return "OAuth"
+		return ""
 	case "api-key":
 		return "API key auth"
 	default:
