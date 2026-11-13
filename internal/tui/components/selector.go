@@ -23,6 +23,7 @@ type Selector struct {
 	compactDetail    bool
 	alignDetailRight bool
 	fillWidth        bool
+	maxLabelWidth    int
 }
 
 // SelectionWindow describes the visible slice of a selector.
@@ -54,6 +55,8 @@ func (s *Selector) SetAlignDetailRight(align bool) { s.alignDetailRight = align 
 // style. Popup callers use this to prevent the underlying view from showing
 // through between or after styled spans.
 func (s *Selector) SetFillWidth(fill bool) { s.fillWidth = fill }
+
+func (s *Selector) SetMaxLabelWidth(cells int) { s.maxLabelWidth = max(0, cells) }
 
 // SetIndex selects index, clamped to the available rows.
 func (s *Selector) SetIndex(index int) {
@@ -112,6 +115,9 @@ func (s *Selector) ViewWindow(width, rows int) (string, SelectionWindow) {
 	labelWidth := 0
 	for _, choice := range s.choices {
 		labelWidth = max(labelWidth, ansi.StringWidth(choice.Label))
+	}
+	if s.maxLabelWidth > 0 {
+		labelWidth = min(labelWidth, max(1, min(s.maxLabelWidth, width/3)))
 	}
 	markerWidth := max(ansi.StringWidth(s.styles.Marker), ansi.StringWidth(s.styles.SelectedMarker))
 	gap := max(0, s.styles.ColumnGap)
