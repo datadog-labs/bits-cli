@@ -39,6 +39,8 @@ func (m *Model) startNewConversation() tea.Cmd {
 
 	// A reset is a new event identity domain even though active work was drained.
 	// This makes any delayed Bubble Tea message from the prior domain harmless.
+	m.stopConversationSubscription()
+	m.clearLocalTurnOwnership()
 	m.op.gen++
 	m.conversationEpoch++
 	m.conversationTask.stop()
@@ -152,6 +154,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 		m.picker.SetError(n.Text, err)
 		return m.postNotice(n)
 	}
+	m.clearLocalTurnOwnership()
 	m.state = m.engine.State()
 	m.conversationEpoch++
 	m.chatPhase = chat.PhaseIdle
@@ -160,7 +163,7 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 	m.syncTranscript()
 	m.list.ScrollToBottom()
 	m.dropConversationPicker()
-	return m.resumePendingTools() // Update reconciles focus and animations after the mode change.
+	return tea.Batch(m.startConversationSubscription(m.state.ConversationID), m.resumePendingTools()) // Update reconciles focus and animations after the mode change.
 }
 
 func (m *Model) retryConversationOperation() tea.Cmd {

@@ -258,6 +258,7 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 		m.closeConversationPicker()
 	}
 	m.op.cancelOnce()
+	m.stopConversationSubscription()
 	closeFileSearch := m.stopBackgroundTasks()
 	if closeFileSearch == nil {
 		return m, m.quitWith(tea.Quit)
@@ -330,8 +331,22 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// events are ignored.
 			cmd = m.applyRunEvent(msg.ev)
 		}
+		if m.engine != nil && !m.op.loggingOut() && m.state.ConversationID != "" && m.state.ConversationID != m.activityConversationID && m.op.kind != opRestore {
+			cmd = tea.Batch(cmd, m.startConversationSubscription(m.state.ConversationID))
+		}
 		return m, tea.Batch(cmd, waitEvent(m.events))
 
+	case activityUpdateMsg:
+		cmd := m.applyActivityUpdate(msg)
+		m.syncStatus()
+		m.syncTranscript()
+		return m, cmd
+	case activityClosedMsg:
+		cmd := m.handleActivityClosed(msg)
+		m.syncStatus()
+		return m, cmd
+	case activityRetryMsg:
+		return m, m.retryConversationSubscription(msg)
 	case logoutResultMsg:
 		return m.applyLogoutResult(msg)
 
@@ -946,6 +961,9 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	if !m.begin(opTurn, cancel) {
 		return nil
 	}
+	m.localTurnOwned = true
+	m.localTurnRecoverable = false
+	m.activityLocalTurn = localTurnSent
 	run, err := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
 	m.chatPhase = chat.PhaseWaiting
 	m.list.ScrollToBottom()
@@ -971,6 +989,7 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 	case agent.EventDone:
 		m.op.completed = true
 		m.chatPhase = chat.PhaseIdle
+		m.clearLocalTurnOwnership()
 	case agent.EventCanceled:
 		// endOperation settles the chat phase and resyncs the transcript.
 	case agent.EventError:
@@ -983,6 +1002,11 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 			}
 		} else {
 			m.chatPhase = chat.PhaseError
+			if m.localTurnOwned && ev.BackendFailure && m.state.ConversationID != "" {
+				m.localTurnRecoverable = true
+			} else {
+				m.clearLocalTurnOwnership()
+			}
 			if ev.Err != nil {
 				return m.postNotice(noticeForError("", ev.Err))
 			}

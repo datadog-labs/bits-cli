@@ -58,11 +58,15 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Unknown client skill: %s", escape.Inline(skillInvocation.Name)))
 		}
 	}
+	startsNow := !m.op.busy() && len(m.state.Queued) == 0
+	if startsNow && !m.syncActivityTranscript() {
+		return m, m.postNotice(notice(chat.NoticeWarn, nil, "Couldn't refresh the conversation. Try again."))
+	}
 	in := agent.TurnInput{Message: text, Skill: skillInvocation, Context: contextFromAttachments(attachments)}
 	m.editor.Reset()
 	closeFileSearch := m.stopCompletionSearches()
 	// Behind a turn, or a queue still waiting, the prompt joins the queue.
-	if m.op.busy() || len(m.state.Queued) > 0 {
+	if !startsNow {
 		if err := m.engine.Queue(in); err != nil {
 			return m, tea.Batch(closeFileSearch, m.postNotice(noticeForError("", err)))
 		}
@@ -79,6 +83,10 @@ func (m *Model) startTurn(start func(context.Context, agent.TurnInput) (agent.Ru
 	if !m.begin(opTurn, cancel) {
 		return nil
 	}
+	// Queued prompts are local turns too: this TUI owns their outcome.
+	m.localTurnOwned = true
+	m.localTurnRecoverable = false
+	m.activityLocalTurn = localTurnSent
 	run, err := start(ctx, in)
 	m.chatPhase = chat.PhaseWaiting
 	failed := m.watchRun(run, err)

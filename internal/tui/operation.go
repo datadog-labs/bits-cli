@@ -184,6 +184,9 @@ func (m *Model) endOperation() tea.Cmd {
 	if done.kind == opTurn || done.kind == opRestore {
 		m.clearAsks()
 	}
+	if m.localTurnOwned && (!m.localTurnRecoverable || done.stop != stopNone || done.then != thenNothing) {
+		m.clearLocalTurnOwnership()
+	}
 
 	m.syncStatus()
 	switch {
@@ -192,9 +195,17 @@ func (m *Model) endOperation() tea.Cmd {
 	case done.then == thenNewConversation:
 		return m.startNewConversation()
 	case done.kind == opRestore && done.stop != stopAll:
-		return m.resumePendingTools()
+		return tea.Batch(m.startConversationSubscription(m.state.ConversationID), m.resumePendingTools())
 	case done.kind == opTurn && done.completed && done.stop == stopNone && len(m.state.Queued) > 0:
-		return m.startTurn(m.engine.SendQueued, agent.TurnInput{})
+		var attach tea.Cmd
+		if !m.activityAttached() {
+			attach = m.startConversationSubscription(m.state.ConversationID)
+		}
+		return tea.Batch(attach, m.startTurn(m.engine.SendQueued, agent.TurnInput{}))
+	case done.kind == opTurn && (m.localTurnRecoverable || !m.activityAttached()):
+		// Reattach after a failed local request so its outcome comes from a
+		// fresh replay. A healthy attachment already carries a completed turn.
+		return m.startConversationSubscription(m.state.ConversationID)
 	}
 	return nil
 }

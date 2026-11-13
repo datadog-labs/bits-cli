@@ -32,6 +32,7 @@ func (m *Model) startLogout() tea.Cmd {
 	if !m.begin(opLogout, cancel) {
 		return closeFileSearch
 	}
+	m.stopConversationSubscription()
 	closeBackground := m.stopBackgroundTasks()
 	generation := m.op.gen
 	m.editor.CloseMenu()
@@ -65,7 +66,7 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 		}
 		m.postNotice(noticeForError("could not log out", msg.err))
 		m.list.ScrollToBottom()
-		return m, nil
+		return m, m.startConversationSubscription(m.state.ConversationID)
 	}
 
 	// Discard authenticated collaborators and invalidate queued search results.
@@ -74,6 +75,8 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 	m.editor.SetCommands(commandCompletionSpecs())
 	closeFileSearch := m.stopCompletionSearches()
 	m.entitySearcher = nil
+	m.stopConversationSubscription()
+	m.clearLocalTurnOwnership()
 	m.engine = nil
 	m.state.ConversationID = ""
 	m.clearAsks()
