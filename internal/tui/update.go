@@ -183,7 +183,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok && m.mode != ModeLogin {
 		if key.String() != "ctrl+c" {
 			m.quitConfirm.armed = false
-		} else if (m.mode != ModeChat && m.mode != ModeTermInit) || m.exitCard.open || (m.quitConfirm.armed && !m.composerHasDraft()) {
+		} else if m.ctrlCQuits() {
 			return m.quit()
 		}
 	}
@@ -219,7 +219,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.mode == ModeLogin:
 			cmd = m.updateLogin(msg)
 		case isCtrlC(msg):
-			cmd = m.clearDraftOrArmQuit()
+			cmd = m.handleCtrlC()
 		case m.frame.tooSmall && isUserInput(msg):
 			// Only a resize hint is visible, so input must not drive a hidden
 			// surface. System and engine messages still flow.
@@ -891,8 +891,8 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Shell convention: ctrl+d on an empty prompt is EOF and quits. With
 		// any text or attachment it falls through to the editor, which deletes
 		// the character under the cursor. While an operation runs it is ignored,
-		// so a stray press cannot drop a streaming turn: esc interrupts it and
-		// a confirmed ctrl+c still quits.
+		// so a stray press cannot drop a streaming turn: esc or ctrl+c
+		// interrupts it.
 		if m.editor.Value() == "" && len(m.editor.Attachments()) == 0 {
 			if m.op.busy() {
 				return m, nil
