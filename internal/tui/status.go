@@ -225,7 +225,7 @@ func (m *Model) observeEvent(event agent.Event) {
 		if event.Round > 0 { // the backend answered
 			m.markConnected()
 		}
-	case agent.EventUsage, agent.EventConversation, agent.EventDone:
+	case agent.EventUsage, agent.EventConversation, agent.EventDone, agent.EventBackground:
 		m.markConnected()
 	case agent.EventCanceled:
 	case agent.EventError:

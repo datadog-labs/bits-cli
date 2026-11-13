@@ -50,9 +50,8 @@ type List struct {
 	// cache entries include it in their identity, while settled entries ignore it.
 	frame int
 
-	// running is whether a run is active. Without one, a block left running by
-	// an ended or restored turn is stale, not progressing.
-	running bool
+	// activeRuns excludes stale work left by ended or restored turns.
+	activeRuns map[agent.RunID]struct{}
 
 	// widgets overrides how widget blocks render; see WidgetView.
 	widgets map[agent.BlockID]WidgetView
@@ -635,11 +634,14 @@ func (l *List) itemAnimated(it presentationItem) bool {
 // itemWorking reports whether the agent's own work progresses in the item: a
 // running tool or unfinished reasoning, during a run.
 func (l *List) itemWorking(it presentationItem) bool {
-	if !l.running || it.start < 0 {
+	if it.start < 0 {
 		return false
 	}
 	for i := it.start; i < it.end; i++ {
 		block := l.items[i]
+		if _, active := l.activeRuns[block.Run]; !active {
+			continue
+		}
 		if statusOf(block.Tool) == agent.ToolRunning || (block.Kind == assistant.KindReasoning && !block.Complete) {
 			return true
 		}
@@ -680,9 +682,17 @@ func (l *List) SetWidgetView(id agent.BlockID, v WidgetView) bool {
 	return true
 }
 
-// SetRunning reports whether a run is active, so the list alone decides
-// whether the transcript animates.
-func (l *List) SetRunning(running bool) { l.running = running }
+// SetActiveRuns identifies the runs whose unfinished blocks may animate.
+// Reusing the map keeps animation ticks from allocating membership state.
+func (l *List) SetActiveRuns(runs ...agent.RunID) {
+	if l.activeRuns == nil && len(runs) > 0 {
+		l.activeRuns = make(map[agent.RunID]struct{}, len(runs))
+	}
+	clear(l.activeRuns)
+	for _, run := range runs {
+		l.activeRuns[run] = struct{}{}
+	}
+}
 
 // SetFrame sets the animation step used by in-flight indicators. Cache entries
 // invalidate lazily: animated entries compare frames, settled entries do not.

@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
@@ -17,47 +19,84 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/headless"
 )
 
+type multiAgentStreamTransport struct{ body io.ReadCloser }
+
+func (s multiAgentStreamTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{
+		"X-Assistant-Multi-Agent-Run-Id":        {"review-run"},
+		"X-Assistant-Conversation-Id":           {"review-conversation"},
+		"X-Assistant-Multi-Agent-Root-Agent-Id": {"opaque-root-id"},
+		"Content-Type":                          {"text/event-stream"},
+	}, Body: s.body}, nil
+}
+
 func TestMultiAgentFinalAnswerUsesServerDeclaredRoot(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Assistant-Multi-Agent-Run-ID", "review-run")
-		w.Header().Set("X-Assistant-Conversation-ID", "review-conversation")
-		w.Header().Set("X-Assistant-Multi-Agent-Root-Agent-ID", "opaque-root-id")
-		w.Header().Set("Content-Type", "text/event-stream")
-		for i, item := range []struct{ agent, typ, event string }{
-			{"child-1", "content.fragment_received", `{"fragment":"Tentative child answer: broken database."}`},
-			{"opaque-root-id", "content.fragment_received", `{"fragment":"Verified final answer: database is healthy."}`},
-			{"", "run.terminal", `{"outcome":"completed"}`},
-		} {
-			_, _ = fmt.Fprintf(w, "data: {\"conversation_id\":\"review-conversation\",\"run_id\":\"review-run\",\"agent_id\":%q,\"sequence\":%d,\"type\":%q,\"event\":%s}\n\n", item.agent, i+1, item.typ, item.event)
-		}
-	}))
-	defer server.Close()
-	backend := assistant.NewMultiAgentClient(&assistant.Client{BaseURL: server.URL, HTTPClient: server.Client()})
-	engine := agent.New(backend, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
-	tools, err := agent.NewToolSet()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: tools}, runOptions(), &out); err != nil {
-		t.Fatal(err)
-	}
-	finished := false
-	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
-		var record map[string]any
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
+	synctest.Test(t, func(t *testing.T) {
+		reader, writer := io.Pipe()
+		defer func() { _ = reader.Close() }()
+		defer func() { _ = writer.Close() }()
+		backend := assistant.NewMultiAgentClient(&assistant.Client{BaseURL: "https://assistant.test", HTTPClient: &http.Client{Transport: multiAgentStreamTransport{reader}}})
+		engine := agent.New(backend, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
+		defer engine.Close()
+		tools, err := agent.NewToolSet()
+		if err != nil {
 			t.Fatal(err)
 		}
-		if record["type"] == "run.finished" {
-			finished = true
-			if record["response"] != "Verified final answer: database is healthy." {
-				t.Fatalf("final answer includes child output: %q", record["response"])
+		var out bytes.Buffer
+		done := make(chan error, 1)
+		go func() {
+			done <- runEngineTurn(context.Background(), engine, agent.TurnInput{Tools: tools}, runOptions(), &out)
+		}()
+		sequence := 0
+		send := func(agentID, kind, event string) {
+			sequence++
+			if _, err := fmt.Fprintf(writer, "data: {\"conversation_id\":\"review-conversation\",\"run_id\":\"review-run\",\"agent_id\":%q,\"sequence\":%d,\"type\":%q,\"event\":%s}\n\n", agentID, sequence, kind, event); err != nil {
+				t.Fatal(err)
 			}
 		}
-	}
-	if !finished {
-		t.Fatal("missing run.finished record")
-	}
+		send("child-1", "content.fragment_received", `{"fragment":"Tentative child answer: broken database."}`)
+		send("opaque-root-id", "content.fragment_received", `{"fragment":"Initial root answer."}`)
+		send("opaque-root-id", "assistant.turn_completed", `{}`)
+		synctest.Wait()
+		if strings.Contains(out.String(), `"type":"run.finished"`) {
+			t.Fatal("delivery finished at root marker")
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("headless run returned at root marker: %v", err)
+		default:
+		}
+		// The stream stays held at the marker until all consumers are blocked.
+		send("opaque-root-id", "model.response_started", `{}`)
+		send("opaque-root-id", "content.fragment_received", `{"fragment":"Verified final answer: database is healthy."}`)
+		send("child-1", "content.fragment_received", `{"fragment":" Child follow-up must remain excluded."}`)
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("headless run returned before terminal: %v", err)
+		default:
+		}
+		send("", "run.terminal", `{"outcome":"completed"}`)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		finished := 0
+		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+			var record map[string]any
+			if err := json.Unmarshal([]byte(line), &record); err != nil {
+				t.Fatal(err)
+			}
+			if record["type"] == "run.finished" {
+				finished++
+				if record["response"] != "Initial root answer.\n\nVerified final answer: database is healthy." {
+					t.Fatalf("final root answer = %q", record["response"])
+				}
+			}
+		}
+		if finished != 1 {
+			t.Fatalf("run.finished records = %d, want 1", finished)
+		}
+	})
 }
 
 func TestMultiAgentSiblingToolsOverlapAcrossHTTPBatches(t *testing.T) {

@@ -434,7 +434,7 @@ func TestCloseCancelsAndAwaitsTheOperation(t *testing.T) {
 			if len(evs) == 0 || evs[len(evs)-1].Kind != EventCanceled || !errors.Is(evs[len(evs)-1].Err, context.Canceled) {
 				t.Fatalf("closed operation events = %+v, want EventCanceled last", evs)
 			}
-			if got := collect(sub); !reflect.DeepEqual(superseded(got), superseded(evs)) {
+			if got := collect(sub); !reflect.DeepEqual(coalesced(got), coalesced(evs)) {
 				t.Fatalf("subscription after Close = %+v, want the operation's events %+v", got, evs)
 			}
 			if late, _ := e.Subscribe(); len(collect(late)) != 0 {

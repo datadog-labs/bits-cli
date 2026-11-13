@@ -71,6 +71,7 @@ func (m *Model) applyForkResult(msg forkResultMsg) tea.Cmd {
 	if err == nil && !m.op.interrupted() {
 		err = m.engine.InstallConversation(msg.ctx, msg.conversation)
 		if err == nil {
+			m.clearBackgroundRuns()
 			m.state = m.engine.State()
 			m.conversationEpoch++
 			m.selection.clear()

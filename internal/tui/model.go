@@ -67,6 +67,7 @@ type Config struct {
 // Model is the root Bubble Tea model. All state lives here and is mutated only
 // on the tea thread; engine and entity-search work return typed messages.
 type Model struct {
+	backgroundRuns map[agent.RunID]context.CancelFunc
 	// Collaborators the model drives.
 	engine                 *agent.Engine
 	events                 <-chan agent.Event // the engine subscription, pumped for the model's lifetime
@@ -244,6 +245,7 @@ func (m *Model) Detach() {
 		_ = closeFiles()
 	}
 	m.widgets.close()
+	m.clearBackgroundRuns()
 	if m.unsubscribe != nil {
 		m.unsubscribe()
 	}
@@ -414,4 +416,13 @@ func (m *Model) initChat() tea.Cmd {
 		commands = append(commands, m.watchRun(run, err))
 	}
 	return tea.Batch(commands...)
+}
+
+// clearBackgroundRuns releases the old conversation's streams and prompts.
+func (m *Model) clearBackgroundRuns() {
+	for _, cancel := range m.backgroundRuns {
+		cancel()
+	}
+	clear(m.backgroundRuns)
+	m.clearAsks()
 }

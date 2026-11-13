@@ -534,6 +534,8 @@ func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
+	t.Cleanup(model.engine.Close)
+	t.Cleanup(model.Detach)
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	setConversationInput(model, "Run the action")
 	_, _ = model.submit()
@@ -541,11 +543,28 @@ func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 		_, _ = model.Update(runConversationCmd(t, waitEvent(model.events)))
 	}
 
+	if err := model.engine.Queue(agent.TurnInput{Message: "later"}); err != nil {
+		t.Fatal(err)
+	}
+	model.state = model.engine.State()
+	canceled := false
+	cancel := model.op.cancel
+	model.op.cancel = func() { canceled = true; cancel() }
 	_, _ = model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	if canceled {
+		t.Fatal("stopping tools canceled the turn context")
+	}
 	if model.op.stop != stopTools {
-		t.Fatalf("stop = %d, want the tool round stopped", model.op.stop)
+		t.Fatal("stopping foreground tools must pause queued prompts")
 	}
 	drainConversationRemote(t, model)
+	if model.op.busy() || len(model.state.Queued) != 1 || model.state.Queued[0].Message != "later" {
+		t.Fatal("stopping foreground tools restarted queued work")
+	}
+	if backend.calls != 2 || len(backend.responses) != 1 || backend.responses[0].Status != assistant.ToolStatusError {
+		t.Fatalf("stopped tools did not continue the turn with an error result: %+v", backend.responses)
+	}
+
 	if waitingApprovals(model) > 0 || model.focus() != focusEditor {
 		t.Fatal("the approval outlived the stopped tool round")
 	}

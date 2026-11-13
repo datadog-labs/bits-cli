@@ -182,7 +182,12 @@ func (m *Model) endOperation() tea.Cmd {
 		}
 	}
 	if done.kind == opTurn || done.kind == opRestore {
-		m.clearAsks()
+		if len(m.backgroundRuns) == 0 {
+			m.clearAsks()
+		} else {
+			m.reshow()
+		}
+		m.syncApprovals(m.state.PendingApprovals())
 	}
 
 	m.syncStatus()
@@ -213,7 +218,7 @@ func (m *Model) cancelOperation() {
 	}
 	m.op.cancelOnce()
 	if m.op.kind == opTurn || m.op.kind == opRestore {
-		m.dropToolUIs()
+		m.reshow()
 	}
 }
 

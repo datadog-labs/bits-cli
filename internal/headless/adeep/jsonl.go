@@ -207,6 +207,8 @@ func (d *Delivery) Consume(ev agent.Event) error {
 		}
 		d.conversationID = ev.ConvID
 		return d.write(conversationUpdatedRecord{envelope: env(typeConversationUpdated, ev.Round), ConversationID: ev.ConvID})
+	case agent.EventBackground:
+		// The root released its turn; headless delivery still waits for the entire run.
 	case agent.EventDone, agent.EventError, agent.EventCanceled:
 		// Finish owns the sole terminal record.
 	}

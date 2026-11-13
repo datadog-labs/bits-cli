@@ -36,12 +36,19 @@ func (m *Model) startLogout() tea.Cmd {
 	generation := m.op.gen
 	m.editor.CloseMenu()
 	logout := m.logout
+	engine := m.engine
+	m.clearBackgroundRuns()
 	return func() tea.Msg {
 		if closeFileSearch != nil {
 			_ = closeFileSearch()
 		}
 		if closeBackground != nil {
 			_ = closeBackground()
+		}
+		if engine != nil {
+			if err := engine.StopBackground(ctx); err != nil {
+				return logoutResultMsg{generation: generation, err: err}
+			}
 		}
 		_, _, err := logout(ctx)
 		return logoutResultMsg{
@@ -62,6 +69,9 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 		m.skillMenu.started = false
 		if m.resume.empty() {
 			m.resume.started = false // Retry an offer read canceled by logout.
+		}
+		if m.engine != nil {
+			m.state = m.engine.State()
 		}
 		m.postNotice(noticeForError("could not log out", msg.err))
 		m.list.ScrollToBottom()

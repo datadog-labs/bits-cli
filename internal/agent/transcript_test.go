@@ -417,7 +417,7 @@ func TestFinalizeAllReleasesStreamingAccumulator(t *testing.T) {
 
 	tr.FinalizeAll()
 
-	if tr.accumulator != nil {
+	if len(tr.openStreams) != 0 {
 		t.Fatal("FinalizeAll retained the completed stream accumulator")
 	}
 	if got := tr.Blocks()[0]; !got.Complete {
@@ -468,5 +468,48 @@ func TestToolNamespaceMergesByPresence(t *testing.T) {
 	tool := tr.Blocks()[0].Tool
 	if tool.Namespace == nil || *tool.Namespace != "" {
 		t.Fatalf("explicit empty namespace did not clear identity: %+v", tool)
+	}
+}
+
+func TestInterleavedTextKeepsSnapshotsAndFinalizesByRun(t *testing.T) {
+	tr := NewTranscript()
+	var snapshots []Block
+	for i := range 100 {
+		for run := RunID(1); run <= 2; run++ {
+			tr.run = run
+			id := "first"
+			if run == 2 {
+				id = "second"
+			}
+			block, _ := tr.AppendMessage(assistant.AssistantMessage(id, assistant.TextContent("x")))
+			if i == 0 {
+				snapshots = append(snapshots, block)
+			}
+		}
+	}
+	for _, b := range snapshots {
+		if b.Markdown.Content != "x" {
+			t.Fatal("later fragments mutated retained snapshot")
+		}
+	}
+	if !tr.FinalizeRun(1) || len(tr.openStreams) != 1 {
+		t.Fatal("finalizing first run did not release exactly its stream")
+	}
+	if !tr.blocks[0].Complete || tr.blocks[1].Complete {
+		t.Fatal("finalization affected wrong run")
+	}
+	for _, b := range tr.blocks {
+		if b.Markdown.Content != strings.Repeat("x", 100) {
+			t.Fatal("interleaved content lost")
+		}
+	}
+	tr.run = 2
+	tr.AppendMessage(assistant.AssistantMessage("second", assistant.TextContent("y")))
+	if tr.blocks[1].Markdown.Content != strings.Repeat("x", 100)+"y" {
+		t.Fatal("surviving stream lost content")
+	}
+	tr.FinalizeAll()
+	if len(tr.openStreams) != 0 {
+		t.Fatal("completed transcript retained streams")
 	}
 }
