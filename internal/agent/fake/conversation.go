@@ -253,3 +253,21 @@ func truncateRunes(s string, n int) string {
 	}
 	return string([]rune(s)[:n])
 }
+
+// ListSkills returns a fixed catalog
+func (*Fake) ListSkills(ctx context.Context) ([]assistant.Skill, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return []assistant.Skill{
+		{Name: "coding", Source: "assistant", Description: "Write and review code."},
+		{Name: "code-search", Source: "datadog_mcp", Description: "Search code across repositories."},
+		{Name: "skills-library/clear-writing", Source: "skills_library", Description: "Rewrite text so it is short and plain."},
+		{Name: "skills-library/incident-retro", Source: "skills_library", Description: "Draft an incident retrospective from a timeline."},
+		{Name: "skills-library/slo-review", Source: "skills_library", Description: "Review SLO targets and burn rates."},
+		{Name: "skills-library/dashboard-polish", Source: "skills_library", Description: "Tidy dashboard layouts and titles."},
+		{Name: "skills-library/monitor-tuning-for-noisy-high-cardinality-alerts", Source: "skills_library", Description: "Reduce alert noise on high-cardinality monitors."},
+		{Name: "skills-library/onboarding-guide", Source: "skills_library", Description: "Explain a service to a new teammate with kubernetes context."},
+		{Name: "skills-library/log-pipeline-audit", Source: "skills_library", Description: "Find unused or expensive log processors."},
+	}, nil
+}

@@ -18,10 +18,11 @@ type QueueID uint64
 
 // QueuedPrompt is a TurnInput's message waiting for the running turn to end.
 type QueuedPrompt struct {
-	ID      QueueID
-	Message string
-	Skill   *SkillInvocation
-	Context *assistant.AssistantContext
+	ID             QueueID
+	Message        string
+	Skill          *SkillInvocation
+	Context        *assistant.AssistantContext
+	SkillOverrides []assistant.SkillOverride
 }
 
 // Queue adds in's prompt to the queue. A running turn sends the queue, in
@@ -37,7 +38,7 @@ func (e *Engine) Queue(in TurnInput) error {
 			return
 		}
 		e.lastQueued++
-		e.queue = append(e.queue, QueuedPrompt{ID: e.lastQueued, Message: in.Message, Skill: in.Skill, Context: in.Context})
+		e.queue = append(e.queue, QueuedPrompt{ID: e.lastQueued, Message: in.Message, Skill: in.Skill, Context: in.Context, SkillOverrides: in.SkillOverrides})
 		e.emit(e.turnRun, Event{Kind: EventState, State: e.state()})
 		err = nil
 	})
@@ -82,13 +83,14 @@ func (e *Engine) Unqueue(id QueueID) error {
 // dequeue removes the prompts the next request sends and returns in with
 // their message: the queued prompts up to the first skill invocation, which
 // is sent alone because a turn carries one skill, and up to MaxImages images.
+// A prompt with skill overrides is sent alone so they apply to it only.
 func (e *Engine) dequeue(in TurnInput) (TurnInput, bool) {
 	if len(e.queue) == 0 {
 		return in, false
 	}
 	first := e.queue[0]
-	in.Message, in.Skill, in.Context = first.Message, first.Skill, first.Context
-	if first.Skill != nil || len(e.queue) == 1 {
+	in.Message, in.Skill, in.Context, in.SkillOverrides = first.Message, first.Skill, first.Context, first.SkillOverrides
+	if sentAlone(first) || len(e.queue) == 1 {
 		e.queue = slices.Delete(e.queue, 0, 1)
 		return in, true
 	}
@@ -101,7 +103,7 @@ func (e *Engine) dequeue(in TurnInput) (TurnInput, bool) {
 	seen := make(map[identity]bool)
 	images, n := 0, 0
 	for _, q := range e.queue {
-		if q.Skill != nil {
+		if sentAlone(q) {
 			break
 		}
 		// Marking entities seen before the limit check is safe: a prompt
@@ -144,3 +146,5 @@ func (e *Engine) dequeue(in TurnInput) (TurnInput, bool) {
 	e.queue = slices.Delete(e.queue, 0, n)
 	return in, true
 }
+
+func sentAlone(q QueuedPrompt) bool { return q.Skill != nil || len(q.SkillOverrides) > 0 }

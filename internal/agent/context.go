@@ -61,6 +61,9 @@ func (e *Engine) sendOptions(tools *ToolSet) assistant.SendOptions {
 func (e *Engine) prepare(ctx context.Context, in TurnInput, opts assistant.SendOptions, delivery contextDelivery, imageNotice string) (userRequest, error) {
 	req := userRequest{message: in.Message, opts: opts}
 	resumed := req.opts.ConversationID != ""
+	if len(in.SkillOverrides) > 0 {
+		req.opts.SkillOverrides = mergeSkillOverrides(opts.SkillOverrides, in.SkillOverrides)
+	}
 	if e.userContext != nil {
 		rendered := e.userContext(ctx)
 		if sent := delivery.userContext; sent == nil || *sent != rendered {
