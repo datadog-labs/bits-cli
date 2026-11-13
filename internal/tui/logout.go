@@ -75,6 +75,7 @@ func (m *Model) applyLogoutResult(msg logoutResultMsg) (tea.Model, tea.Cmd) {
 	closeFileSearch := m.stopCompletionSearches()
 	m.entitySearcher = nil
 	m.engine = nil
+	m.resetSkillsLibrary()
 	m.state.ConversationID = ""
 	m.clearAsks()
 	m.loggedOut = true

@@ -38,6 +38,7 @@ const (
 	commandLogout
 	commandPermissions
 	commandUpdate
+	commandSkillsLibrary
 )
 
 type commandDefinition struct {
@@ -106,6 +107,12 @@ var commandDefinitions = []commandDefinition{
 		name:                  "permissions",
 		activeOperationPolicy: commandAllowedDuringOperation,
 		description:           "choose what Bits is allowed to do",
+	},
+	{
+		id:                    commandSkillsLibrary,
+		name:                  skillsLibraryCommand,
+		activeOperationPolicy: commandAllowedDuringOperation,
+		description:           "browse the bits Skills Library",
 	},
 	{
 		id:                    commandUpdate,
@@ -221,6 +228,8 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 		return m, m.startFork(argument)
 	case commandRename:
 		return m, m.startRename(argument)
+	case commandSkillsLibrary:
+		return m, m.openSkillsLibrary()
 	case commandResume:
 		return m, tea.Batch(m.stopCompletionSearches(), m.openConversationPicker())
 	case commandStatus:

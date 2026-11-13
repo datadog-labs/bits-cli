@@ -104,6 +104,7 @@ func (m *Model) stopBackgroundTasks() tea.Cmd {
 	m.conversationTask.stop()
 	m.resume.task.stop()
 	m.skillMenu.task.stop()
+	m.skillsLibrary.task.stop()
 	m.statusTask.stop()
 	m.stopEntitySearch()
 	return m.stopFileSearch()

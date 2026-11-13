@@ -7,9 +7,10 @@ import "strings"
 type CandidateKind string
 
 const (
-	CandidateFile    CandidateKind = "file"
-	CandidateEntity  CandidateKind = "datadog_entity"
-	CandidateCommand CandidateKind = "command"
+	CandidateFile            CandidateKind = "file"
+	CandidateEntity          CandidateKind = "datadog_entity"
+	CandidateCommand         CandidateKind = "command"
+	CandidateCommandArgument CandidateKind = "command_argument"
 )
 
 // Attachment preserves the canonical identity selected from remote search.
@@ -90,4 +91,24 @@ func commandMatches(name string, aliases []string, q string) bool {
 		}
 	}
 	return false
+}
+
+// commandPicker completes "/<command> <query>" or "/<command>:<query>".
+type commandPicker struct {
+	command string
+	items   []Candidate
+	status  string
+}
+
+const pickerLabelWidth = 36
+
+func (p commandPicker) matches(query string) []Candidate {
+	query = strings.ToLower(query)
+	out := make([]Candidate, 0, len(p.items))
+	for _, item := range p.items {
+		if strings.Contains(strings.ToLower(item.ID), query) || strings.Contains(strings.ToLower(item.Detail), query) {
+			out = append(out, item)
+		}
+	}
+	return out
 }
