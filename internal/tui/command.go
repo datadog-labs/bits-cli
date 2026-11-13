@@ -88,7 +88,7 @@ var commandDefinitions = []commandDefinition{
 		id:                    commandExport,
 		name:                  "export",
 		activeOperationPolicy: commandRejectedDuringOperation,
-		description:           "copy the whole conversation as Markdown",
+		description:           "copy the whole conversation as markdown",
 	},
 	{
 		id:                    commandWeb,
