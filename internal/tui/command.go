@@ -33,6 +33,7 @@ const (
 	commandRename
 	commandStatus
 	commandCopy
+	commandExport
 	commandWeb
 	commandSettings
 	commandLogout
@@ -82,6 +83,12 @@ var commandDefinitions = []commandDefinition{
 		name:                  "copy",
 		activeOperationPolicy: commandRejectedDuringOperation,
 		description:           "copy the latest assistant response",
+	},
+	{
+		id:                    commandExport,
+		name:                  "export",
+		activeOperationPolicy: commandRejectedDuringOperation,
+		description:           "copy the whole conversation as Markdown",
 	},
 	{
 		id:                    commandWeb,
@@ -190,8 +197,8 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 	if m.op.busy() {
 		switch definition.activeOperationPolicy {
 		case commandRejectedDuringOperation:
-			if definition.id == commandCopy {
-				return m, m.postNotice(notice(chat.NoticeWarn, nil, "Wait for the current operation to finish before using /copy."))
+			if definition.id == commandCopy || definition.id == commandExport {
+				return m, m.postNotice(notice(chat.NoticeWarn, nil, "Wait for the current operation to finish before using /%s.", definition.name))
 			}
 			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Command unavailable during an active operation: /%s", name))
 		case commandCancelsOperation:
@@ -227,6 +234,8 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.stopCompletionSearches(), m.openStatus())
 	case commandCopy:
 		return m, m.copyLatestAssistantResponse()
+	case commandExport:
+		return m, m.exportConversation()
 	case commandWeb:
 		return m, tea.Batch(m.stopCompletionSearches(), m.openConversationInBrowser())
 	case commandSettings:

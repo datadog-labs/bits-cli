@@ -168,6 +168,9 @@ type ContextEntity struct {
 	Type  EntityType `json:"type"`
 	ID    string     `json:"id"`
 	Label string     `json:"label,omitempty"`
+	// URL is the entity's web page, when the sender knew it. The web UI sends
+	// it with some entities; the server ignores it for prompt-building.
+	URL string `json:"url,omitempty"`
 	// Definition is the entity's definition object. Optional; the server
 	// normally fetches details itself, so it can be left nil.
 	Definition map[string]any `json:"definition,omitempty"`

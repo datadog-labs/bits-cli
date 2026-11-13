@@ -48,6 +48,9 @@ server. Type `@` to find services, monitors, incidents, and dashboards.
 - `/rename [title]` renames the current conversation. Without a title, Bits
   asks for one.
 - `/web` opens the current conversation in Datadog.
+- `/export` copies the whole conversation to your clipboard as Markdown, in
+  the same format as "Copy as Markdown" in Bits on the web. Thinking and tool
+  calls are left out.
 
 You can also resume by ID:
 
