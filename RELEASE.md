@@ -1,5 +1,18 @@
 # Releasing Bits
 
+## Weekly release
+
+Every Wednesday at 10:00 Europe/Paris, a scheduled workflow proposes the next
+patch release when `main` has new commits since the latest release. A maintainer
+approves or skips it. Approving dispatches the release workflow with the next
+patch tag, the same as `./scripts/release.sh` below, and then asks the maintainer
+to approve the [Homebrew](#homebrew) pull request.
+
+To release a patch outside the schedule, maintainers can run the scheduled
+workflow by hand. For a minor or major version, use `./scripts/release.sh`.
+
+## Release workflow
+
 Releases are cut from `main` by the release workflow. Start one with:
 
 ```sh
