@@ -10,6 +10,10 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/text"
 )
 
 func exportText(role assistant.Role, content string) agent.Block {
@@ -42,6 +46,83 @@ func TestConversationMarkdown(t *testing.T) {
 				exportText(assistant.RoleAssistant, ""),
 			},
 			want: "**You:** show **me**\n\n**Bits:**\n\n" + code + "\n\n**Bits:**\n\n" + table + "\n\n**You:** thanks",
+			ok:   true,
+		},
+		{
+			name: "block-level bodies get the label on its own line",
+			blocks: []agent.Block{
+				exportText(assistant.RoleAssistant, code),
+				exportText(assistant.RoleUser, "# Title\ntext"),
+				exportText(assistant.RoleAssistant, table),
+				exportText(assistant.RoleAssistant, "- one\n- two"),
+				exportText(assistant.RoleAssistant, "#hashtag and 3.5 is not a list"),
+				exportText(assistant.RoleUser, "plain *text*"),
+			},
+			link: "https://app.datadoghq.com/ask/c1",
+			want: "**Bits:**\n\n" + code +
+				"\n\n**You:**\n\n# Title\ntext" +
+				"\n\n**Bits:**\n\n" + table +
+				"\n\n**Bits:**\n\n- one\n- two" +
+				"\n\n**Bits:** #hashtag and 3.5 is not a list" +
+				"\n\n**You:** plain *text*" +
+				"\n\n> _🟪 Conversation from Bits AI ([link](https://app.datadoghq.com/ask/c1))_",
+			ok: true,
+		},
+		{
+			name: "second-line block constructs",
+			blocks: []agent.Block{
+				exportText(assistant.RoleAssistant, "Title\n==="),
+				exportText(assistant.RoleAssistant, "Title\ncontinued\n==="),
+				exportText(assistant.RoleAssistant, "Title\n---"),
+				exportText(assistant.RoleAssistant, "a | b\n--- | ---\n1 | 2"),
+				exportText(assistant.RoleAssistant, "~~~\nraw ```\n~~~"),
+				exportText(assistant.RoleUser, "after"),
+				exportText(assistant.RoleAssistant, "one\ntwo"),
+			},
+			link: "https://app.datadoghq.com/ask/c1",
+			want: "**Bits:**\n\nTitle\n===" +
+				"\n\n**Bits:**\n\nTitle\ncontinued\n===" +
+				"\n\n**Bits:**\n\nTitle\n---" +
+				"\n\n**Bits:**\n\na | b\n--- | ---\n1 | 2" +
+				"\n\n**Bits:**\n\n~~~\nraw ```\n~~~" +
+				"\n\n**You:** after" +
+				"\n\n**Bits:** one\ntwo" +
+				"\n\n> _🟪 Conversation from Bits AI ([link](https://app.datadoghq.com/ask/c1))_",
+			ok: true,
+		},
+		{
+			name: "inline look-alikes stay on the label line",
+			blocks: []agent.Block{
+				exportText(assistant.RoleAssistant, "```x``` inline"),
+				exportText(assistant.RoleAssistant, "**x**"),
+				exportText(assistant.RoleAssistant, "-1"),
+				exportText(assistant.RoleAssistant, "1234567890. x"),
+			},
+			want: "**Bits:** ```x``` inline\n\n**Bits:** **x**\n\n**Bits:** -1\n\n**Bits:** 1234567890. x",
+			ok:   true,
+		},
+		{
+			name: "breaks, items, and indented fences are blocks",
+			blocks: []agent.Block{
+				exportText(assistant.RoleAssistant, "***"),
+				exportText(assistant.RoleAssistant, "* * *"),
+				exportText(assistant.RoleAssistant, "1. item"),
+				exportText(assistant.RoleAssistant, "````\n```\n````"),
+				exportText(assistant.RoleAssistant, "x\n\n   ~~~\ncode\n   ~~~"),
+			},
+			link: "https://app.datadoghq.com/ask/c1",
+			want: "**Bits:**\n\n***\n\n**Bits:**\n\n* * *\n\n**Bits:**\n\n1. item" +
+				"\n\n**Bits:**\n\n````\n```\n````\n\n**Bits:** x\n\n   ~~~\ncode\n   ~~~" +
+				"\n\n> _🟪 Conversation from Bits AI ([link](https://app.datadoghq.com/ask/c1))_",
+			ok: true,
+		},
+		{
+			name: "indentation before the first line is trimmed",
+			blocks: []agent.Block{
+				exportText(assistant.RoleAssistant, "   ~~~\ncode\n~~~"),
+				exportText(assistant.RoleAssistant, "    indented code"),
+			},
+			want: "**Bits:**\n\n~~~\ncode\n~~~\n\n**Bits:** indented code",
 			ok:   true,
 		},
 		{
@@ -89,13 +170,8 @@ func TestConversationMarkdown(t *testing.T) {
 			if ok != tc.ok || got != tc.want {
 				t.Fatalf("got (%q, %v), want (%q, %v)", got, ok, tc.want, tc.ok)
 			}
-			if fences := strings.Count(got, "```"); fences%2 != 0 {
-				t.Fatalf("unbalanced code fences in %q", got)
-			}
-			for _, line := range strings.Split(got, "\n") {
-				if strings.HasPrefix(line, "**") && strings.Contains(line, ":** ```") {
-					t.Fatalf("fence hidden behind a label: %q", line)
-				}
+			if ok {
+				assertExportStructure(t, got, tc.link != "")
 			}
 		})
 	}
@@ -155,5 +231,29 @@ func TestExportNewAndResumedConversationMatch(t *testing.T) {
 	got, _ := conversationMarkdown(resumed.state.Blocks, "", "")
 	if got != want || strings.Count(got, "**Bits:** alpha") != 1 {
 		t.Fatalf("resumed export = %q, want %q", got, want)
+	}
+}
+
+// assertExportStructure parses the export as the TUI renderer does and checks
+// that every speaker label is its own top-level paragraph start and the footer
+// is the last top-level block, so no body swallowed a label or the footer.
+func assertExportStructure(t *testing.T, markdown string, footer bool) {
+	t.Helper()
+	source := []byte(markdown)
+	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(source))
+	labels := 0
+	for node := doc.FirstChild(); node != nil; node = node.NextSibling() {
+		if node.Kind() != ast.KindParagraph {
+			continue
+		}
+		if strong, isStrong := node.FirstChild().(*ast.Emphasis); isStrong && strong.Level == 2 {
+			labels++
+		}
+	}
+	if want := strings.Count(markdown, ":**"); labels != want {
+		t.Fatalf("%d of %d speaker labels start a top-level paragraph in %q", labels, want, markdown)
+	}
+	if footer && doc.LastChild().Kind() != ast.KindBlockquote {
+		t.Fatalf("footer is not the last top-level block in %q", markdown)
 	}
 }

@@ -1,11 +1,14 @@
 package tui
 
 import (
-	"regexp"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/text"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -120,17 +123,15 @@ func relatedLinks(entities []assistant.ContextEntity) string {
 	return "_Related: " + strings.Join(links, ", ") + "_"
 }
 
-// blockStart matches a first line that Markdown reads as a block only at the
-// start of a line: a code fence, heading, table, quote, list item, or
-// thematic break.
-var blockStart = regexp.MustCompile(`^(` + "```" + `|~~~|#{1,6}(\s|$)|\||>|[-*+](\s|$)|\d{1,9}[.)](\s|$)|(\*\s*){3,}$|(-\s*){3,}$|(_\s*){3,}$)`)
+var exportMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM, extension.DefinitionList))
 
 // withSpeaker prefixes a turn with its speaker on the same line, as the web UI
-// does. A body opening with a block construct would stop being one behind
-// the label, so the label then gets its own paragraph.
+// does, when the body opens with a paragraph. Any other opening block (code
+// fence, heading, table, list, quote, break) would stop being one behind the
+// label, so the label then gets its own paragraph.
 func withSpeaker(label, body string) string {
-	firstLine, _, _ := strings.Cut(body, "\n")
-	if blockStart.MatchString(firstLine) {
+	first := exportMarkdown.Parser().Parse(text.NewReader([]byte(body))).FirstChild()
+	if first != nil && first.Kind() != ast.KindParagraph {
 		return "**" + label + ":**\n\n" + body
 	}
 	return "**" + label + ":** " + body
