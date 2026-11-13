@@ -91,7 +91,8 @@ type Model struct {
 	entitySearchCache      map[string]entitySearchCacheEntry
 	entitySearchCacheOrder []string
 
-	skillMenu skillMenu
+	skillMenu     skillMenu
+	skillsLibrary skillsLibrary
 
 	statusTask     task
 	statusIdentity string
@@ -313,6 +314,7 @@ func newShell() *Model {
 		}
 	})
 	m.editor.SetCommands(commandCompletionSpecs())
+	m.pushSkillsLibrary()
 	m.applyStyles(m.styles)
 	return m
 }

@@ -38,10 +38,21 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	}
 
 	var skillInvocation *agent.SkillInvocation
-	if name, arguments, ok := parseClientSkillInvocation(raw); ok {
+	library, libraryArguments, libraryInvocation := parseSkillsLibraryInvocation(raw)
+	if libraryInvocation && library == "" {
+		return m, m.openSkillsLibrary()
+	}
+	if libraryInvocation {
+		// Resolved after the busy guard below.
+	} else if name, arguments, ok := parseClientSkillInvocation(raw); ok {
 		skillInvocation = &agent.SkillInvocation{Name: name, Arguments: arguments}
 		text = raw
+	} else if short, arguments, ok := m.skillsLibrary.sentInvocation(raw); ok {
+		library, libraryArguments, libraryInvocation = short, arguments, true
 	} else if name, argument, ok := parseCommand(raw); ok {
+		if definition, known := lookupCommand(name); known && definition.id == commandSkillsLibrary {
+			return m, m.openSkillsLibrary()
+		}
 		m.editor.Reset()
 		m.stopEntitySearch()
 		return m.dispatchCommand(name, argument)
@@ -58,7 +69,15 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Unknown client skill: %s", escape.Inline(skillInvocation.Name)))
 		}
 	}
-	in := agent.TurnInput{Message: text, Skill: skillInvocation, Context: contextFromAttachments(attachments)}
+	in := agent.TurnInput{Message: text, Skill: skillInvocation}
+	if libraryInvocation {
+		resolved, feedback, ok := m.skillsLibraryTurn(library, libraryArguments)
+		if !ok {
+			return m, feedback
+		}
+		in = resolved
+	}
+	in.Context = contextFromAttachments(attachments)
 	m.editor.Reset()
 	closeFileSearch := m.stopCompletionSearches()
 	// Behind a turn, or a queue still waiting, the prompt joins the queue.
