@@ -2,7 +2,8 @@
 # the archives CI built and tested for the tag. The GITHUB_TOKEN stays
 # read-only: the publish job creates the release and its tag with a
 # dd-octo-sts token, once CI passed. The homebrew job then proposes the
-# release to the datadog-labs/homebrew-pack tap in a pull request.
+# release to the datadog-labs/homebrew-pack tap in a pull request that merges
+# itself once approved.
 
 name: Release
 
@@ -182,4 +183,6 @@ jobs:
           else
             url="$(gh pr create --repo "$TAP" --base main --head "$BRANCH" --title "$title" --body-file "$body")"
           fi
+          # The tap still requires a reviewer's approval; auto-merge only saves the extra click.
+          gh pr merge "$url" --auto --squash
           echo "$url" | tee -a "$GITHUB_STEP_SUMMARY"
