@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -119,12 +120,43 @@ func TestWelcomeFactsDroppedWhenTooNarrow(t *testing.T) {
 	}
 }
 
-// The organization would cost a CurrentUser request, so it is never shown.
-func TestWelcomeFactsOmitOrganization(t *testing.T) {
-	m := welcomeModel(100, 40)
-	m.statusIdentity = "Some User / Datadog HQ"
-	if facts := m.welcomeFacts(60); strings.Contains(facts, "Datadog HQ") {
-		t.Errorf("facts leaked the organization: %q", facts)
+// The login shares existing rows so a late answer never moves the panel; a
+// failed lookup leaves those rows alone.
+func TestWelcomeFactsShowCurrentUser(t *testing.T) {
+	for name, tc := range map[string]struct {
+		identity assistant.CurrentUser
+		err      error
+		want     []string
+	}{
+		"names": {
+			identity: assistant.CurrentUser{Name: "Ada", Handle: "ada@example.com", Organization: "Datadog HQ", OrganizationID: "abc"},
+			want:     []string{"Ada · Datadog HQ · us3.datadoghq.com"},
+		},
+		"fallbacks": {
+			identity: assistant.CurrentUser{Email: "ada@example.com", OrganizationID: "abc"},
+			want:     []string{"ada@example.com · us3.datadoghq.com"},
+		},
+		"error": {err: assistant.ErrForbidden, want: []string{"us3.datadoghq.com"}},
+	} {
+		m := welcomeModel(100, 40)
+		m.engine = agent.New(&statusIdentityResultBackend{
+			localStatusBackend: &localStatusBackend{t: t},
+			identity:           tc.identity,
+			err:                tc.err,
+		}, agent.Config{})
+		before := len(strings.Split(m.welcomeFacts(60), "\n"))
+		if msg := m.fetchCurrentUser()(); msg != nil {
+			m.Update(msg)
+		}
+		lines := strings.Split(ansi.Strip(m.welcomeFacts(60)), "\n")
+		for _, want := range tc.want {
+			if !slices.Contains(lines, want) {
+				t.Errorf("%s: facts %q lack the row %q", name, lines, want)
+			}
+		}
+		if after := len(lines); after != before {
+			t.Errorf("%s: facts grew from %d to %d rows", name, before, after)
+		}
 	}
 }
 
@@ -218,22 +250,24 @@ func columnText(rows []string, logoWidth int) []string {
 	return out
 }
 
-func TestHostnameOf(t *testing.T) {
+func TestWebHostOf(t *testing.T) {
 	for site, want := range map[string]string{
-		"https://api.datadoghq.com":       "api.datadoghq.com",
-		"https://api.datadoghq.eu/api/v2": "api.datadoghq.eu",
+		"https://api.datadoghq.com":       "app.datadoghq.com",
+		"https://api.datadoghq.eu/api/v2": "app.datadoghq.eu",
+		"https://api.us3.datadoghq.com":   "us3.datadoghq.com",
+		"https://assistant.example.com":   "assistant.example.com",
 		"":                                "",
 		"not a url":                       "not a url",
 	} {
-		if got := hostnameOf(site); got != want {
-			t.Errorf("hostnameOf(%q) = %q, want %q", site, got, want)
+		if got := webHostOf(site); got != want {
+			t.Errorf("webHostOf(%q) = %q, want %q", site, got, want)
 		}
 	}
 }
 
 func TestAuthenticationLabel(t *testing.T) {
 	for mode, want := range map[string]string{
-		"oauth":               "OAuth",
+		"oauth":               "",
 		"api-key":             "API key auth",
 		"none (fake backend)": "none (fake backend)",
 	} {
@@ -243,15 +277,15 @@ func TestAuthenticationLabel(t *testing.T) {
 	}
 }
 
-func TestModelAndAuthJoinsKnownValues(t *testing.T) {
-	if got := modelAndAuth("claude-opus", "OAuth"); got != "claude-opus · OAuth" {
+func TestJoinFactsJoinsKnownValues(t *testing.T) {
+	if got := joinFacts("claude-opus", "OAuth"); got != "claude-opus · OAuth" {
 		t.Errorf("both values: got %q", got)
 	}
-	if got := modelAndAuth("", "OAuth"); got != "OAuth" {
-		t.Errorf("model absent: got %q", got)
+	if got := joinFacts("", "OAuth"); got != "OAuth" {
+		t.Errorf("first absent: got %q", got)
 	}
-	if got := modelAndAuth("claude-opus", ""); got != "claude-opus" {
-		t.Errorf("auth absent: got %q", got)
+	if got := joinFacts("claude-opus", ""); got != "claude-opus" {
+		t.Errorf("second absent: got %q", got)
 	}
 }
 

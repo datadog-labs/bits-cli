@@ -364,6 +364,10 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyStatusIdentity(msg)
 		return m, nil
 
+	case currentUserMsg:
+		m.currentUser = msg.user
+		return m, nil
+
 	case statusClosedMsg:
 		if msg.generation == m.statusTask.gen {
 			m.closeStatus()
