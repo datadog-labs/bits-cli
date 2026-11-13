@@ -203,11 +203,11 @@ func (m *Model) endOperation() tea.Cmd {
 		}
 		return tea.Batch(attach, m.startTurn(m.engine.SendQueued, agent.TurnInput{}))
 	case done.kind == opTurn && (m.localTurnRecoverable || !m.activityAttached()):
-		// Reattach after a failed local request so its outcome comes from a
-		// fresh replay. A healthy attachment already carries a completed turn.
+		// Recover only from a fresh replay after a failed local request. A
+		// healthy attachment already carries a completed turn.
 		return m.startConversationSubscription(m.state.ConversationID)
 	}
-	return nil
+	return m.maybeResumeLocalTurn()
 }
 
 // cancellable reports whether an operation is running that cancelOperation

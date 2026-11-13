@@ -347,10 +347,6 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case activityRetryMsg:
 		return m, m.retryConversationSubscription(msg)
-	case activityReadyTimeoutMsg:
-		cmd := m.handleActivityReadyTimeout(msg)
-		m.syncStatus()
-		return m, cmd
 	case logoutResultMsg:
 		return m.applyLogoutResult(msg)
 
@@ -968,7 +964,8 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	m.localTurnOwned = true
 	m.localTurnRecoverable = false
 	m.activityLocalTurn = localTurnSent
-	run, err := m.engine.ResumePendingTools(ctx, agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue})
+	m.localTurnInput = agent.TurnInput{Tools: m.tools, OnDeny: agent.DenyContinue}
+	run, err := m.engine.ResumePendingTools(ctx, m.localTurnInput)
 	m.chatPhase = chat.PhaseWaiting
 	m.list.ScrollToBottom()
 	return m.watchRun(run, err)
@@ -994,6 +991,9 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 		m.op.completed = true
 		m.chatPhase = chat.PhaseIdle
 		m.clearLocalTurnOwnership()
+		// The turn the stream reported active was this one; its ended marker
+		// may still be in flight and must not hold the next prompt.
+		m.activityTurnActive = false
 	case agent.EventCanceled:
 		// endOperation settles the chat phase and resyncs the transcript.
 	case agent.EventError:
