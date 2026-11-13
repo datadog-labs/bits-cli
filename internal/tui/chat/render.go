@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
@@ -105,12 +106,16 @@ func renderReasoning(it agent.Block, width int, sty Styles, frame int) string {
 // hasReasoningText reports whether a reasoning group has text to expand. It
 // skips escaping to stay cheap, since List asks on every layout pass.
 func hasReasoningText(blocks []agent.Block) bool {
-	for _, block := range blocks {
-		if block.Thinking != nil && strings.TrimSpace(block.Thinking.Content) != "" {
-			return true
-		}
+	return slices.ContainsFunc(blocks, func(block agent.Block) bool { return reasoningText(block) != "" })
+}
+
+// reasoningText is the thinking a block can show. Redacted thinking has none:
+// history stores a "[redacted]" placeholder in its content.
+func reasoningText(block agent.Block) string {
+	if block.Thinking == nil || block.Thinking.Redacted {
+		return ""
 	}
-	return false
+	return strings.TrimSpace(escape.Multiline(block.Thinking.Content))
 }
 
 // renderReasoningGroup renders adjacent thinking blocks as one activity row.
@@ -124,10 +129,8 @@ func renderReasoningGroup(blocks []agent.Block, c renderContext) string {
 			state = agent.ToolRunning
 			label = "Reasoning" + activityEllipsis(c.frame, c.sty.Motion)
 		}
-		if block.Thinking != nil {
-			if text := strings.TrimSpace(escape.Multiline(block.Thinking.Content)); text != "" {
-				parts = append(parts, text)
-			}
+		if text := reasoningText(block); text != "" {
+			parts = append(parts, text)
 		}
 	}
 	header := renderActivityHeader(state, label, "", c)

@@ -684,6 +684,7 @@ func TestNothingToExpandDrawsNoGutter(t *testing.T) {
 	}{
 		{"question tool", question},
 		{"reasoning without text", reasoning},
+		{"redacted reasoning", agent.Block{ID: reasoning.ID, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "[redacted]", Redacted: true}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			list := NewList()
