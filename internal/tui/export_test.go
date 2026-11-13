@@ -41,7 +41,7 @@ func TestConversationMarkdown(t *testing.T) {
 				exportText(assistant.RoleUser, "thanks"),
 				exportText(assistant.RoleAssistant, ""),
 			},
-			want: "**You:** show **me**\n\n**Bits:** " + code + "\n\n**Bits:** " + table + "\n\n**You:** thanks",
+			want: "**You:** show **me**\n\n**Bits:**\n\n" + code + "\n\n**Bits:**\n\n" + table + "\n\n**You:** thanks",
 			ok:   true,
 		},
 		{
@@ -88,6 +88,14 @@ func TestConversationMarkdown(t *testing.T) {
 			got, ok := conversationMarkdown(tc.blocks, tc.user, tc.link)
 			if ok != tc.ok || got != tc.want {
 				t.Fatalf("got (%q, %v), want (%q, %v)", got, ok, tc.want, tc.ok)
+			}
+			if fences := strings.Count(got, "```"); fences%2 != 0 {
+				t.Fatalf("unbalanced code fences in %q", got)
+			}
+			for _, line := range strings.Split(got, "\n") {
+				if strings.HasPrefix(line, "**") && strings.Contains(line, ":** ```") {
+					t.Fatalf("fence hidden behind a label: %q", line)
+				}
 			}
 		})
 	}

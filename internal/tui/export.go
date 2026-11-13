@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -63,7 +64,7 @@ func exportTurn(block agent.Block, userLabel string) string {
 		if body == "" {
 			return ""
 		}
-		turn := "**" + userLabel + ":** " + body
+		turn := withSpeaker(userLabel, body)
 		if related := relatedLinks(block.Context); related != "" {
 			turn += "\n" + related
 		}
@@ -75,10 +76,10 @@ func exportTurn(block agent.Block, userLabel string) string {
 				return ""
 			}
 			if body := strings.TrimSpace(ansi.Strip(block.Markdown.Content)); body != "" {
-				return "**Bits:** " + body
+				return withSpeaker("Bits", body)
 			}
 		case assistant.KindWidget:
-			return "**Bits:** " + chartPlaceholder(block.Widget)
+			return withSpeaker("Bits", chartPlaceholder(block.Widget))
 		case assistant.KindUnknown, assistant.KindReasoning, assistant.KindToolCall, assistant.KindToolResult,
 			assistant.KindDashboard, assistant.KindProgress, assistant.KindTurnMarker, assistant.KindStop, assistant.KindInternal:
 		}
@@ -117,4 +118,20 @@ func relatedLinks(entities []assistant.ContextEntity) string {
 		return ""
 	}
 	return "_Related: " + strings.Join(links, ", ") + "_"
+}
+
+// blockStart matches a first line that Markdown reads as a block only at the
+// start of a line: a code fence, heading, table, quote, list item, or
+// thematic break.
+var blockStart = regexp.MustCompile(`^(` + "```" + `|~~~|#{1,6}(\s|$)|\||>|[-*+](\s|$)|\d{1,9}[.)](\s|$)|(\*\s*){3,}$|(-\s*){3,}$|(_\s*){3,}$)`)
+
+// withSpeaker prefixes a turn with its speaker on the same line, as the web UI
+// does. A body opening with a block construct would stop being one behind
+// the label, so the label then gets its own paragraph.
+func withSpeaker(label, body string) string {
+	firstLine, _, _ := strings.Cut(body, "\n")
+	if blockStart.MatchString(firstLine) {
+		return "**" + label + ":**\n\n" + body
+	}
+	return "**" + label + ":** " + body
 }
