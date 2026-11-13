@@ -41,7 +41,7 @@ func TestMultiAgentUsesRegularAPIForUnsupportedTurns(t *testing.T) {
 			requests := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
-				if r.URL.Path != "/api/v2/assistant" {
+				if r.URL.Path != "/api/v2/assistant/conversation" {
 					t.Errorf("path=%s, want regular API", r.URL.Path)
 					w.WriteHeader(500)
 					return

@@ -312,9 +312,16 @@ func TestSend_RequiredResponseHeaderRejectsRedirect(t *testing.T) {
 func TestSubscribe_StreamsTaskReplayMarkerAndLive(t *testing.T) {
 	const id = "0b6f1a52-2f2c-4c43-9a3e-1d2b3c4d5e6f"
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v2/assistant/conversation/"+id+"/subscribe" ||
-			r.URL.Query().Get("subtask_id") != "assistant-task.1" {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v2/assistant/conversation/"+id+"/subscribe" ||
+			r.URL.RawQuery != "" {
 			t.Errorf("request = %s %s", r.Method, r.URL)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode subscription body: %v", err)
+		}
+		if body["subtask_id"] != "assistant-task.1" {
+			t.Fatalf("POST subscription body = %v, want subtask_id filter", body)
 		}
 		writeStream(t, w, textLine(id, "replayed"), keepaliveLine(id),
 			`{"data":{"type":"assistant-response","attributes":{"structured_message":{"role":"assistant","message_id":"replay_complete","content":{"type":"replay_complete","replay_kind":"full"}}}}}`+"\n\n",
@@ -1048,5 +1055,39 @@ func TestCurrentOrganizationID(t *testing.T) {
 				t.Fatalf("organization = %d, error = %v; want %d, error = %v", got, err, test.want, test.wantError)
 			}
 		})
+	}
+}
+
+func TestSend_RoutesPromptsAndToolResponsesWithSubscription(t *testing.T) {
+	const conversationID = "11111111-1111-4111-8111-111111111111"
+	basePath := "/api/v2/assistant/conversation/" + conversationID
+	var paths []string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.Method != http.MethodPost || r.Header.Get("Accept") != "text/event-stream" {
+			t.Errorf("stream request = %s, accept=%q", r.Method, r.Header.Get("Accept"))
+		}
+		if r.URL.Path == basePath {
+			var request Request
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode request: %v", err)
+				return
+			}
+			if request.Data.Attributes.ConversationID != conversationID {
+				t.Errorf("body conversation id = %q", request.Data.Attributes.ConversationID)
+			}
+		}
+		writeStream(t, w, textLine(conversationID, "response"))
+	})
+	if err := c.Subscribe(context.Background(), conversationID, SubscribeOptions{}, func(Message) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []any{"prompt", map[string]any{"type": "client_tool_response", "id": "tool-1", "content": "done"}} {
+		if _, err := c.Send(context.Background(), message, SendOptions{ConversationID: conversationID}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := []string{basePath + "/subscribe", basePath, basePath}; !slices.Equal(paths, want) {
+		t.Fatalf("subscription/prompt/tool routes = %v, want %v", paths, want)
 	}
 }
