@@ -221,8 +221,6 @@ func (p *process) callback(ctx context.Context, msg wireMessage) {
 	response := wireMessage{JSONRPC: "2.0", ID: msg.ID}
 	var err error
 	switch msg.Method {
-	case "ui/update-model-context":
-		response.Result = json.RawMessage(`{}`)
 	case "tools/call":
 		var call struct {
 			Name      string          `json:"name"`

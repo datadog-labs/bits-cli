@@ -31,4 +31,5 @@ When bringing over upstream changes, keep these adaptations:
 - Template placeholders are filled in, and the version comes from `DDVIZ_VERSION`.
 - Trusted production `DDVIZ_FRAME_SRC` overrides work without debug mode.
 - The host allows 30 seconds for initialization.
-- The `message.text` capability is omitted until composer integration exists.
+- The `message.text` and `updateModelContext` capabilities are omitted until
+  composer and model-context integration exist.

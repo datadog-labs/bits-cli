@@ -205,8 +205,8 @@ struct Config {
   }
 
   /// Whether the IPC transport can deliver responses back to the iframe.
-  /// Gates host capabilities that require a reply path (`serverTools`,
-  /// `updateModelContext`); stdio supports it, hooks is unidirectional.
+  /// Gates host capabilities that require a reply path (`serverTools`);
+  /// stdio supports it, hooks is unidirectional.
   var bidirectional: Bool { ipcMode == .stdio }
 
   /// Path for the UDS socket. Only meaningful for hooks-based adapters.
