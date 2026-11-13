@@ -170,8 +170,24 @@ func TestConversationMarkdown(t *testing.T) {
 			if ok != tc.ok || got != tc.want {
 				t.Fatalf("got (%q, %v), want (%q, %v)", got, ok, tc.want, tc.ok)
 			}
-			if ok {
-				assertExportStructure(t, got, tc.link != "")
+			if !ok {
+				return
+			}
+			// Parse as the renderer does: every speaker label must start a
+			// top-level paragraph and the footer must be the last block, so
+			// no body swallowed a label, a later turn, or the footer.
+			doc := goldmark.New(goldmark.WithExtensions(extension.GFM, extension.DefinitionList)).Parser().Parse(text.NewReader([]byte(got)))
+			labels := 0
+			for node := doc.FirstChild(); node != nil; node = node.NextSibling() {
+				if strong, isStrong := node.FirstChild().(*ast.Emphasis); node.Kind() == ast.KindParagraph && isStrong && strong.Level == 2 {
+					labels++
+				}
+			}
+			if want := strings.Count(got, ":**"); labels != want {
+				t.Fatalf("%d of %d speaker labels start a top-level paragraph in %q", labels, want, got)
+			}
+			if tc.link != "" && doc.LastChild().Kind() != ast.KindBlockquote {
+				t.Fatalf("footer is not the last top-level block in %q", got)
 			}
 		})
 	}
@@ -231,29 +247,5 @@ func TestExportNewAndResumedConversationMatch(t *testing.T) {
 	got, _ := conversationMarkdown(resumed.state.Blocks, "", "")
 	if got != want || strings.Count(got, "**Bits:** alpha") != 1 {
 		t.Fatalf("resumed export = %q, want %q", got, want)
-	}
-}
-
-// assertExportStructure parses the export as the TUI renderer does and checks
-// that every speaker label is its own top-level paragraph start and the footer
-// is the last top-level block, so no body swallowed a label or the footer.
-func assertExportStructure(t *testing.T, markdown string, footer bool) {
-	t.Helper()
-	source := []byte(markdown)
-	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(source))
-	labels := 0
-	for node := doc.FirstChild(); node != nil; node = node.NextSibling() {
-		if node.Kind() != ast.KindParagraph {
-			continue
-		}
-		if strong, isStrong := node.FirstChild().(*ast.Emphasis); isStrong && strong.Level == 2 {
-			labels++
-		}
-	}
-	if want := strings.Count(markdown, ":**"); labels != want {
-		t.Fatalf("%d of %d speaker labels start a top-level paragraph in %q", labels, want, markdown)
-	}
-	if footer && doc.LastChild().Kind() != ast.KindBlockquote {
-		t.Fatalf("footer is not the last top-level block in %q", markdown)
 	}
 }
