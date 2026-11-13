@@ -103,7 +103,15 @@ func (x *roundsExchange) run(ctx context.Context, emit func(exchangeEvent) bool)
 // send streams one request and returns the client calls it paused on.
 func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.SendOptions, emit func(exchangeEvent) bool) ([]ToolCall, error) {
 	var calls []ToolCall
+	conversationEmitted := false
 	id, err := x.backend.Send(ctx, message, *opts, func(response assistant.AssistantResponse) error {
+		if id := response.Data.Attributes.ConversationID; id != "" && id != opts.ConversationID {
+			opts.ConversationID = id
+			conversationEmitted = true
+			if !emit(exchangeEvent{conversation: id}) {
+				return ctx.Err()
+			}
+		}
 		msg := response.Data.Attributes.StructuredMessage
 		if msg.Content.Type == assistant.ContentClientToolCall {
 			calls = append(calls, toolCallOf(msg.Content))
@@ -117,7 +125,7 @@ func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.
 	// cancellation. Report it so every surface has a resumable handle.
 	if id != "" {
 		opts.ConversationID = id
-		if !emit(exchangeEvent{conversation: id}) && err == nil {
+		if !conversationEmitted && !emit(exchangeEvent{conversation: id}) && err == nil {
 			err = ctx.Err()
 		}
 	}

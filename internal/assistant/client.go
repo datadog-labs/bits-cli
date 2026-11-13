@@ -643,7 +643,7 @@ func (c *Client) stream(ctx context.Context, method, path string, body any, conv
 // message_id, and a debug line carries a prompt, so both are distinguishable
 // without re-parsing the raw line.
 func isKeepalive(ar AssistantResponse) bool {
-	return ar.Data.Attributes.StructuredMessage.MessageID == "" &&
+	return ar.Data.Attributes.StructuredMessage.MessageID == "" && ar.Data.Attributes.StructuredMessage.Content.Type == "" &&
 		ar.Data.Attributes.Prompt == ""
 }
 

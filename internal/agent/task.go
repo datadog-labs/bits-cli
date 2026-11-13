@@ -112,13 +112,19 @@ func startedTasks(tasks []*task, blocks []Block) []*task {
 // task, the rest into the returned transcript. A task whose final update is
 // persisted is done; one whose start call is missing is kept, unnamed.
 func historyTasks(messages []assistant.Message) (*Transcript, []*task) {
+	return foldHistoryTasks(messages, false)
+}
+
+func foldHistoryTasks(messages []assistant.Message, active bool) (*Transcript, []*task) {
 	transcript := NewTranscript()
 	for _, msg := range messages {
 		if taskIDOf(msg) == "" {
 			transcript.AppendMessage(msg)
 		}
 	}
-	transcript.FinalizeAll()
+	if !active {
+		transcript.FinalizeAll()
+	}
 	tasks := startedTasks(nil, transcript.Blocks())
 	for _, msg := range messages {
 		id := taskIDOf(msg)

@@ -167,8 +167,8 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 
 	records := parseDelivery(t, out.String())
 	want := []string{
-		"run.started:0", "round.started:1",
-		"tool.call:1", "tool.result:1", "tool.call:1", "usage:1", "conversation.updated:1", "tool.result:1",
+		"run.started:0", "round.started:1", "conversation.updated:1",
+		"tool.call:1", "tool.result:1", "tool.call:1", "usage:1", "tool.result:1",
 		"round.finished:1", "round.started:2", "usage:2", "conversation.updated:2",
 		"round.finished:2", "run.finished:0",
 	}
@@ -176,9 +176,9 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 		t.Fatalf("records = %v, want %v", got, want)
 	}
 	for i, want := range map[int]map[string]any{
-		2: {"id": "srv-1", "name": "search_logs", "side": "server", "arguments": `{"query":"errors"}`},
-		3: {"id": "srv-1", "status": "success", "result": "3 hits"},
-		4: {"id": "cli-1", "name": "get_local_time", "side": "client", "arguments": "{}"},
+		3: {"id": "srv-1", "name": "search_logs", "side": "server", "arguments": `{"query":"errors"}`},
+		4: {"id": "srv-1", "status": "success", "result": "3 hits"},
+		5: {"id": "cli-1", "name": "get_local_time", "side": "client", "arguments": "{}"},
 		7: {"id": "cli-1", "status": "success", "result": `{"timestamp":"2026-09-01T12:00:00Z"}`},
 	} {
 		tool := toolOf(t, records[i])
@@ -188,7 +188,7 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 			}
 		}
 	}
-	usage, _ := records[5]["usage"].(map[string]any)
+	usage, _ := records[6]["usage"].(map[string]any)
 	if usage["tokens_used"] != float64(100) || usage["input_tokens"] != float64(30) || usage["output_tokens"] != float64(70) {
 		t.Fatalf("usage = %v", usage)
 	}
