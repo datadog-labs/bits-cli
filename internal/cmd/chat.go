@@ -113,6 +113,7 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		Version:       version.Build(),
 		Workspace:     workspace,
 		Upgrade:       upgrade,
+		InitialPrompt: opts.InitialPrompt,
 		Logout: func(logoutCtx context.Context) (bool, error, error) {
 			return auth.Logout(logoutCtx, store, nil)
 		},

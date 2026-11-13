@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/editor"
 )
@@ -238,5 +240,86 @@ func TestRenameKeepsPausedPromptsAndTurnAdmission(t *testing.T) {
 	applyRename(t, m, rename)
 	if m.op.busy() || !m.editor.QueuePaused() || m.editor.QueueLen() != 1 || len(m.state.UserPrompts()) != 0 {
 		t.Fatal("rename completion sent or dropped the paused queue")
+	}
+}
+
+// The startup prompt is sent verbatim, after any history, and only when the
+// restore it waits for ends unless interrupted; a stopped restore parks it.
+func TestInitialPrompt(t *testing.T) {
+	const prompt = `say("initial reply")`
+	const earlier = `say("earlier reply")`
+	logout := func(err error) LogoutFunc {
+		return func(context.Context) (bool, error, error) { return true, nil, err }
+	}
+	cases := []struct {
+		name       string
+		prompt     string
+		restore    bool
+		logout     LogoutFunc
+		interrupt  func(*Model)
+		wantSent   []string
+		wantQueued []string
+	}{
+		{name: "fresh chat sends a slash command as text", prompt: "/resume", wantSent: []string{"/resume"}},
+		{name: "restore sends it after the history", prompt: prompt, restore: true, wantSent: []string{prompt}},
+		{
+			name: "stopped restore parks it", prompt: prompt, restore: true,
+			interrupt: (*Model).cancelOperation, wantQueued: []string{prompt},
+		},
+		{
+			name: "logout never sends it", prompt: prompt, restore: true, logout: logout(nil),
+			interrupt: func(m *Model) { m.dispatchCommand("logout", "") }, wantQueued: []string{prompt},
+		},
+		{
+			name: "failed logout parks it", prompt: prompt, restore: true, logout: logout(context.DeadlineExceeded),
+			interrupt: func(m *Model) { m.dispatchCommand("logout", "") }, wantQueued: []string{prompt},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := fake.New()
+			config := agent.Config{}
+			if tc.restore {
+				id, err := f.PushConversation(t.Context(), "Earlier", earlier)
+				if err != nil {
+					t.Fatal(err)
+				}
+				config.ConversationID = id
+			}
+			m := New(agent.New(f, config), Config{InitialPrompt: tc.prompt, Logout: tc.logout})
+			_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+			_ = m.initChat()
+			m.editor.SetValue("draft")
+			if tc.interrupt != nil {
+				tc.interrupt(m)
+			}
+			// Drain the runs; a queued logout starts with the last one's end.
+			var last tea.Cmd
+			for m.op.run != 0 {
+				_, last = m.Update(runConversationCmd(t, waitEvent(m.events)))
+			}
+			if m.op.kind == opLogout {
+				for _, msg := range flattenMsgs(t, last) {
+					if result, ok := msg.(logoutResultMsg); ok {
+						_, _ = m.Update(result)
+					}
+				}
+			}
+			if m.op.busy() {
+				t.Fatalf("operation %v still running", m.op.kind)
+			}
+			var queued []string
+			for _, q := range m.state.Queued {
+				queued = append(queued, q.Message)
+			}
+			// The history may load before a stop lands, and always precedes the prompt.
+			got := slices.DeleteFunc(userTexts(m), func(text string) bool { return text == earlier })
+			if !slices.Equal(got, tc.wantSent) || !slices.Equal(queued, tc.wantQueued) {
+				t.Fatalf("sent = %q, queued = %q; want %q, %q", got, queued, tc.wantSent, tc.wantQueued)
+			}
+			if m.picker != nil || m.editor.Value() != "draft" {
+				t.Fatalf("picker open = %t, editor = %q; want no command run and the draft kept", m.picker != nil, m.editor.Value())
+			}
+		})
 	}
 }

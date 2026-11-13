@@ -186,17 +186,26 @@ func (m *Model) endOperation() tea.Cmd {
 	}
 
 	m.syncStatus()
+	var notice tea.Cmd
+	if done.kind == opRestore {
+		notice = m.queueInitialPrompt()
+	}
 	switch {
 	case done.then == thenLogout:
 		return m.startLogout()
 	case done.then == thenNewConversation:
 		return m.startNewConversation()
 	case done.kind == opRestore && done.stop != stopAll:
-		return m.resumePendingTools()
+		cmd := tea.Batch(notice, m.resumePendingTools())
+		// A resumed turn drains the queue when it completes.
+		if done.completed && !m.op.busy() && len(m.state.Queued) > 0 {
+			cmd = tea.Batch(cmd, m.startTurn(m.engine.SendQueued, agent.TurnInput{}))
+		}
+		return cmd
 	case done.kind == opTurn && done.completed && done.stop == stopNone && len(m.state.Queued) > 0:
 		return m.startTurn(m.engine.SendQueued, agent.TurnInput{})
 	}
-	return nil
+	return notice
 }
 
 // cancellable reports whether an operation is running that cancelOperation

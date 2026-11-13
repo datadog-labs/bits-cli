@@ -25,6 +25,7 @@ type ChatOptions struct {
 	Site            string
 	PermissionsMode agent.PermissionsMode
 	NoUpdateCheck   bool
+	InitialPrompt   string
 }
 
 // Execute builds a fresh command tree for args and runs it with ctx, writing
@@ -49,18 +50,17 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 	opts := ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual}
 	var authMode string
 	var permissionsMode string
-	// Keep root.Args nil so Cobra can identify unknown commands, suggest close
-	// matches, and reject unknown help topics during command discovery. The
-	// RunE check handles arguments after a -- terminator.
 	root := &cobra.Command{
-		Use:           "bits",
+		Use:           "bits [prompt]",
 		Short:         "Datadog Assistant in your terminal",
+		Example:       `  bits "why is checkout latency up?"`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       version.Build(),
+		Args:          promptArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			if err := cobra.NoArgs(command, args); err != nil {
-				return err
+			if len(args) == 1 {
+				opts.InitialPrompt = args[0]
 			}
 			mode, err := parseAuthenticationMode(authMode)
 			if err != nil {
@@ -102,6 +102,15 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 	)
 	root.AddCommand(newRunCommand(invoked, stdout), newLoginCommand(invoked, stderr), newLogoutCommand(invoked, stderr), newUpdateCommand(invoked, stdout, stderr))
 	return root
+}
+
+// promptArgs accepts one quoted prompt. Setting Args turns off Cobra's
+// unknown-command check, so a lone unknown word is a prompt.
+func promptArgs(_ *cobra.Command, args []string) error {
+	if len(args) > 1 {
+		return fmt.Errorf("bits takes a single prompt; quote it: bits %q", strings.Join(args, " "))
+	}
+	return nil
 }
 
 func validateSiteSelection(mode auth.Mode, site string, siteChanged bool) error {
