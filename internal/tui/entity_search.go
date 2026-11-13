@@ -189,6 +189,7 @@ func entityCandidates(response assistant.SearchEntitiesResponse) []editor.Candid
 			Type:               string(entity.EntityType),
 			ID:                 entity.EntityID,
 			Label:              label,
+			URL:                entity.URL,
 			CandidateID:        entity.CandidateID,
 			SearchFlowID:       response.SearchFlowID,
 			Rank:               entity.Rank,
@@ -268,6 +269,7 @@ func contextFromAttachments(attachments []editor.Attachment) *assistant.Assistan
 			Type:  assistant.EntityType(attachment.Type),
 			ID:    attachment.ID,
 			Label: attachment.Label,
+			URL:   attachment.URL,
 		})
 	}
 	if len(entities) == 0 {
@@ -294,7 +296,7 @@ func editorPrompt(text string, context []assistant.ContextEntity) editor.History
 		p.Text = ""
 	}
 	for _, entity := range context {
-		p.Attachments = append(p.Attachments, editor.Attachment{Type: string(entity.Type), ID: entity.ID, Label: entity.Label})
+		p.Attachments = append(p.Attachments, editor.Attachment{Type: string(entity.Type), ID: entity.ID, Label: entity.Label, URL: entity.URL})
 	}
 	return p
 }
