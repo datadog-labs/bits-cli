@@ -46,8 +46,8 @@ func TestWireReplayCompletionPublishesIdleTranscriptWithoutSubmitting(t *testing
 	if !errors.Is(err, io.EOF) {
 		t.Fatal(err)
 	}
-	if !m.activitySnapshotReady || m.activityNeedsSync {
-		t.Fatalf("ready=%v sync=%v", m.activitySnapshotReady, m.activityNeedsSync)
+	if !m.activitySnapshotReady || m.activityNeedsSync || m.activityBlocksSubmission() {
+		t.Fatalf("ready=%v sync=%v blocked=%v", m.activitySnapshotReady, m.activityNeedsSync, m.activityBlocksSubmission())
 	}
 	if len(m.state.Blocks) != 2 || m.state.Blocks[1].Markdown.Content != "new web answer" || len(m.engine.State().Blocks) != 2 {
 		t.Fatalf("replayed transcript was not published: %+v", m.state.Blocks)
@@ -104,6 +104,58 @@ func (b *recoveredUIBackend) Send(_ context.Context, message any, _ assistant.Se
 	return "conversation-1", emit(response)
 }
 
+func TestRemoteActivityBlocksPromptAndPreservesDraft(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.state.ConversationID = "conversation-1"
+	m.activityState = activityRemoteTurn
+	m.editor.Update(tea.PasteMsg{Content: "keep this draft"})
+
+	_, cmd := m.submit()
+	if cmd != nil {
+		t.Fatal("blocked submission should behave like a busy local turn")
+	}
+	if got := m.editor.Value(); got != "keep this draft" {
+		t.Fatalf("draft = %q, want preserved", got)
+	}
+	if m.op.run != 0 {
+		t.Fatal("blocked submission started a local turn")
+	}
+}
+
+func TestActivityMarkersAndReadySnapshotControlPromptGate(t *testing.T) {
+	m := &Model{
+		state:              agent.State{ConversationID: "conversation-1"},
+		activityEvents:     make(chan agent.ActivityUpdate),
+		activityGeneration: 4,
+		activityState:      activityConnecting,
+	}
+
+	_ = m.applyActivityUpdate(activityUpdateMsg{generation: 4, update: agent.ActivityUpdate{
+		Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityReady, Active: false},
+	}})
+	if m.activityBlocksSubmission() {
+		t.Fatal("authoritative idle snapshot left submission blocked")
+	}
+	_ = m.applyActivityUpdate(activityUpdateMsg{generation: 4, update: agent.ActivityUpdate{
+		Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityStarted},
+	}})
+	if !m.activityBlocksSubmission() {
+		t.Fatal("remote started marker did not block submission")
+	}
+	_ = m.applyActivityUpdate(activityUpdateMsg{generation: 4, update: agent.ActivityUpdate{
+		Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityEnded},
+	}})
+	if m.activityBlocksSubmission() {
+		t.Fatal("ended marker did not restore submission")
+	}
+	_ = m.applyActivityUpdate(activityUpdateMsg{generation: 4, update: agent.ActivityUpdate{
+		Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityReady, Active: true},
+	}})
+	if !m.activityBlocksSubmission() {
+		t.Fatal("mid-turn ready snapshot did not restore remote pending state")
+	}
+}
+
 func TestReadyActivityClearsReconnectStateForQuietConversation(t *testing.T) {
 	m := &Model{
 		state:              agent.State{ConversationID: "conversation-1"},
@@ -116,8 +168,11 @@ func TestReadyActivityClearsReconnectStateForQuietConversation(t *testing.T) {
 	_ = m.applyActivityUpdate(activityUpdateMsg{generation: 4, update: agent.ActivityUpdate{
 		Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityReady},
 	}})
-	if m.activityState != activityIdle {
-		t.Fatalf("connected state = %v, want idle", m.activityState)
+	if m.activityState != activityIdle || m.activityBlocksSubmission() {
+		t.Fatalf("connected state = %v blocked=%v, want idle and enabled", m.activityState, m.activityBlocksSubmission())
+	}
+	if got := m.promptPlaceholder(); got != "Ask Bits…" {
+		t.Fatalf("placeholder = %q, want quiet connected state", got)
 	}
 }
 
@@ -146,8 +201,8 @@ func TestReconnectPreservesLocallyOwnedActiveTurn(t *testing.T) {
 
 	_ = m.connectConversationSubscription("conversation-1")
 	defer m.stopConversationSubscription()
-	if !m.activityTurnActive {
-		t.Fatal("local reconnect cleared the locally owned active turn")
+	if !m.activityTurnActive || !m.activityBlocksSubmission() {
+		t.Fatalf("local reconnect active=%v blocked=%v, want preserved and blocked", m.activityTurnActive, m.activityBlocksSubmission())
 	}
 }
 
@@ -162,8 +217,11 @@ func TestReadyActivityEnablesResumedIdleConversation(t *testing.T) {
 	_ = m.applyActivityUpdate(activityUpdateMsg{generation: 4, update: agent.ActivityUpdate{
 		Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityReady},
 	}})
-	if m.activityState != activityIdle {
-		t.Fatalf("resumed connected state = %v, want idle", m.activityState)
+	if m.activityState != activityIdle || m.activityBlocksSubmission() {
+		t.Fatalf("resumed connected state = %v blocked=%v, want idle and enabled", m.activityState, m.activityBlocksSubmission())
+	}
+	if got := m.promptPlaceholder(); got != "Ask Bits…" {
+		t.Fatalf("placeholder = %q, want no visible checking state", got)
 	}
 }
 
@@ -205,6 +263,23 @@ func TestStaleActivityEventCannotChangeCurrentConversation(t *testing.T) {
 	}
 }
 
+func TestDisconnectedActivityBlocksAndSchedulesBoundedRetry(t *testing.T) {
+	m := &Model{
+		state:                  agent.State{ConversationID: "conversation-1"},
+		activityConversationID: "conversation-1",
+		activityEvents:         make(chan agent.ActivityUpdate),
+		activityGeneration:     2,
+		activityState:          activityRemoteTurn,
+	}
+	cmd := m.handleActivityDisconnect(2, errors.New("dropped"))
+	if cmd == nil || m.activityState != activityDisconnected || !m.activityBlocksSubmission() {
+		t.Fatalf("disconnect state = %v blocked=%v cmd=%v", m.activityState, m.activityBlocksSubmission(), cmd != nil)
+	}
+	if got := m.promptPlaceholder(); got != "Reconnecting…" {
+		t.Fatalf("placeholder = %q, want reconnecting state", got)
+	}
+}
+
 func TestReadyReplayRendersContinuingLocallyOwnedTurn(t *testing.T) {
 	const conversationID = "conversation-1"
 	m := New(agent.New(&spyBackend{t: t}, agent.Config{ConversationID: conversationID}))
@@ -227,11 +302,15 @@ func TestReadyReplayRendersContinuingLocallyOwnedTurn(t *testing.T) {
 		m.state.Blocks[0].Markdown == nil || m.state.Blocks[0].Markdown.Content != "continued after reconnect" {
 		t.Fatalf("reconnected turn state=%v blocks=%+v", m.activityState, m.state.Blocks)
 	}
+	if !m.activityBlocksSubmission() || m.promptPlaceholder() != "Working on it…" {
+		t.Fatalf("continuing turn blocked=%v placeholder=%q", m.activityBlocksSubmission(), m.promptPlaceholder())
+	}
+
 	_ = m.applyActivityUpdate(activityUpdateMsg{generation: 1, update: agent.ActivityUpdate{
 		Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityEnded},
 	}})
-	if m.localTurnOwned {
-		t.Fatal("ended turn kept local ownership")
+	if m.activityBlocksSubmission() || m.localTurnOwned {
+		t.Fatalf("ended turn blocked=%v locallyOwned=%v", m.activityBlocksSubmission(), m.localTurnOwned)
 	}
 	if got := m.engine.State().Blocks; len(got) != 1 || got[0].Markdown == nil || got[0].Markdown.Content != "continued after reconnect" {
 		t.Fatalf("engine transcript = %+v", got)
@@ -305,12 +384,12 @@ func TestRemoteActivityStartsAndStopsLoadingAnimation(t *testing.T) {
 	m.activityState = activityIdle
 	m.activitySnapshotReady = true
 	_, _ = m.Update(activityUpdateMsg{generation: 1, update: agent.ActivityUpdate{Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityStarted}}})
-	if !m.animBorderSweep.active {
-		t.Fatal("remote turn did not animate")
+	if !m.activityBlocksSubmission() || !m.animBorderSweep.active {
+		t.Fatal("remote turn did not disable submission and animate")
 	}
 	_, _ = m.Update(activityUpdateMsg{generation: 1, update: agent.ActivityUpdate{Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityEnded}}})
-	if m.animBorderSweep.active {
-		t.Fatal("ended remote turn left the animation running")
+	if m.activityBlocksSubmission() || m.animBorderSweep.active {
+		t.Fatal("ended remote turn left submission disabled or animation running")
 	}
 }
 
@@ -364,6 +443,24 @@ func TestHistoricalEndMarkerDoesNotAuthorizeToolRecoveryBeforeReplayComplete(t *
 	}
 }
 
+func TestReplayMarkersCannotEnableSubmissionBeforeReady(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.state.ConversationID = "one"
+	m.activityEvents = make(chan agent.ActivityUpdate)
+	m.activityGeneration = 1
+	m.activityState = activityConnecting
+	m.activityReplay = agent.NewActivityReplay()
+	for _, kind := range []assistant.ConversationActivityKind{assistant.ConversationActivityStarted, assistant.ConversationActivityEnded} {
+		_ = m.applyActivityUpdate(activityUpdateMsg{generation: 1, update: agent.ActivityUpdate{Activity: assistant.ConversationActivity{Kind: kind}}})
+		if !m.activityBlocksSubmission() {
+			t.Fatal("historical marker enabled submission before replay completed")
+		}
+	}
+	if strings.Contains(m.promptPlaceholder(), "Checking") {
+		t.Fatal("initial subscription displayed a checking state")
+	}
+}
+
 func TestHealthySubscriptionExpiryReconnectsQuietly(t *testing.T) {
 	m := newModelWithSpy(t)
 	m.state.ConversationID = "one"
@@ -373,8 +470,11 @@ func TestHealthySubscriptionExpiryReconnectsQuietly(t *testing.T) {
 	m.activityState = activityIdle
 	m.activitySnapshotReady = true
 	cmd := m.handleActivityDisconnect(1, io.EOF)
-	if cmd == nil || m.activityState != activityConnecting {
-		t.Fatal("normal idle expiry was treated as a connection failure")
+	if cmd == nil || m.activityState != activityConnecting || m.promptPlaceholder() == "Reconnecting…" {
+		t.Fatal("normal idle expiry was displayed as a connection failure")
+	}
+	if !m.activityBlocksSubmission() {
+		t.Fatal("submission enabled while the new attachment is unsynchronized")
 	}
 }
 
@@ -408,8 +508,8 @@ func TestRefusedActivityDoesNotReconnectForever(t *testing.T) {
 	m.activityReplay = agent.NewActivityReplay(assistant.AssistantMessage("partial", assistant.TextContent("incomplete replay")))
 	m.activityNeedsSync = true
 	m.handleActivityDisconnect(1, &assistant.APIError{StatusCode: http.StatusForbidden})
-	if m.activityState != activityUnavailable {
-		t.Fatal("refused subscription kept reconnecting")
+	if m.activityState != activityUnavailable || m.activityBlocksSubmission() {
+		t.Fatal("refused subscription kept submission blocked")
 	}
 	if m.activityNeedsSync || m.activityReplay != nil {
 		t.Fatal("refused subscription retained an incomplete replay for the next prompt")
@@ -538,5 +638,81 @@ func TestUnfinishedReplayDoesNotReplaceTranscript(t *testing.T) {
 	}
 	if got := len(engine.State().Blocks); got != 2 || !m.activityNeedsSync {
 		t.Fatalf("unfinished replay was applied: blocks=%d", got)
+	}
+}
+
+func TestCtrlDDoesNotQuitDuringRemoteTurn(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.state.ConversationID = "one"
+	m.activityState = activityRemoteTurn
+	_, cmd := m.handleEditorKey(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatal("ctrl+d quit during a remote foreground turn")
+	}
+}
+
+func TestActivityGateFailsOpenAfterRepeatedReconnectFailures(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.state.ConversationID = "one"
+	m.activityConversationID = "one"
+	m.activityGeneration = 1
+	for i := range activityGateRetries {
+		m.activityEvents = make(chan agent.ActivityUpdate)
+		m.handleActivityDisconnect(m.activityGeneration, errors.New("dial failed"))
+		if i < activityGateRetries-1 && !m.activityBlocksSubmission() {
+			t.Fatalf("gate opened after %d failures", i+1)
+		}
+	}
+	if m.activityBlocksSubmission() {
+		t.Fatal("prompts stayed held after repeated reconnect failures")
+	}
+	if len(m.notices) != 1 {
+		t.Fatalf("notices = %d, want one explanation", len(m.notices))
+	}
+	m.activityEvents = make(chan agent.ActivityUpdate)
+	m.handleActivityDisconnect(m.activityGeneration, errors.New("dial failed"))
+	if len(m.notices) != 1 {
+		t.Fatal("open gate was announced twice")
+	}
+	m.activityEvents = make(chan agent.ActivityUpdate)
+	m.activityReplay = agent.NewActivityReplay()
+	_ = m.applyActivityUpdate(activityUpdateMsg{generation: m.activityGeneration, update: agent.ActivityUpdate{Activity: assistant.ConversationActivity{Kind: assistant.ConversationActivityReady}}})
+	if m.activityGateOpenFor != "" {
+		t.Fatal("ready attachment did not close the fail-open gate")
+	}
+}
+
+func TestActivityGateFailsOpenWhenReplayNeverCompletes(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.state.ConversationID = "one"
+	m.activityConversationID = "one"
+	m.activityEvents = make(chan agent.ActivityUpdate)
+	m.activityGeneration = 2
+	m.activityState = activityConnecting
+	if !m.activityBlocksSubmission() {
+		t.Fatal("unready attachment did not hold prompts")
+	}
+	m.handleActivityReadyTimeout(activityReadyTimeoutMsg{generation: 1})
+	if !m.activityBlocksSubmission() {
+		t.Fatal("stale timeout opened the gate")
+	}
+	m.handleActivityReadyTimeout(activityReadyTimeoutMsg{generation: 2})
+	if m.activityBlocksSubmission() {
+		t.Fatal("prompts stayed held after the ready timeout")
+	}
+	m.activityState = activityRemoteTurn
+	if !m.activityBlocksSubmission() {
+		t.Fatal("open gate admitted a prompt during a confirmed remote turn")
+	}
+}
+
+func TestBlockedSubmissionExplainsWhy(t *testing.T) {
+	m := newModelWithSpy(t)
+	m.state.ConversationID = "one"
+	m.activityState = activityRemoteTurn
+	m.editor.SetValue("hello")
+	m.submit()
+	if len(m.notices) != 1 || m.editor.Value() != "hello" {
+		t.Fatalf("notices=%d draft=%q", len(m.notices), m.editor.Value())
 	}
 }

@@ -25,6 +25,9 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	attachments := m.editor.Attachments()
 	if text == "" && len(attachments) == 0 {
 		if m.editor.QueuePaused() && !m.op.busy() {
+			if m.activityBlocksSubmission() {
+				return m, m.activityBlockedNotice()
+			}
 			return m, m.startTurn(m.engine.SendQueued, agent.TurnInput{})
 		}
 		return m, nil
@@ -59,6 +62,9 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		}
 	}
 	startsNow := !m.op.busy() && len(m.state.Queued) == 0
+	if startsNow && m.activityBlocksSubmission() {
+		return m, m.activityBlockedNotice()
+	}
 	if startsNow && !m.syncActivityTranscript() {
 		return m, m.postNotice(notice(chat.NoticeWarn, nil, "Couldn't refresh the conversation. Try again."))
 	}

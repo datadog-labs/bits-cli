@@ -42,6 +42,16 @@ type activityUpdateMsg struct {
 
 type activityClosedMsg struct{ generation uint64 }
 
+// activityReadyTimeoutMsg fires when an attachment has not finished replay.
+type activityReadyTimeoutMsg struct{ generation uint64 }
+
+const (
+	// activityReadyTimeout and activityGateRetries bound how long prompts wait
+	// for a subscription that cannot attach. After either, prompts fail open.
+	activityReadyTimeout = 10 * time.Second
+	activityGateRetries  = 3
+)
+
 type activityRetryMsg struct {
 	generation     uint64
 	conversationID string
@@ -91,7 +101,29 @@ func (m *Model) connectConversationSubscription(conversationID string) tea.Cmd {
 		m.activityTurnActive = false
 	}
 	m.activityEvents = m.engine.SubscribeActivity(ctx, conversationID)
-	return waitActivity(generation, m.activityEvents)
+	return tea.Batch(waitActivity(generation, m.activityEvents), tea.Tick(activityReadyTimeout, func(time.Time) tea.Msg {
+		return activityReadyTimeoutMsg{generation: generation}
+	}))
+}
+
+// handleActivityReadyTimeout stops holding prompts for an attachment that
+// has not become ready.
+func (m *Model) handleActivityReadyTimeout(msg activityReadyTimeoutMsg) tea.Cmd {
+	if msg.generation != m.activityGeneration || m.activitySnapshotReady || m.activityConversationID == "" {
+		return nil
+	}
+	return m.openActivityGate()
+}
+
+// openActivityGate lets prompts through while the subscription cannot attach.
+// A ready attachment closes it again.
+func (m *Model) openActivityGate() tea.Cmd {
+	id := m.activityConversationID
+	if id == "" || m.activityGateOpenFor == id {
+		return nil
+	}
+	m.activityGateOpenFor = id
+	return m.postNotice(notice(chat.NoticeWarn, nil, "Live conversation updates are unavailable. Prompts are no longer held while reconnecting."))
 }
 
 func (m *Model) stopConversationSubscription() {
@@ -131,6 +163,7 @@ func (m *Model) applyActivityUpdate(msg activityUpdateMsg) tea.Cmd {
 	switch msg.update.Activity.Kind {
 	case assistant.ConversationActivityReady:
 		m.activitySnapshotReady = true
+		m.activityGateOpenFor = ""
 		m.activityTurnActive = msg.update.Activity.Active
 		if msg.update.Activity.Active && m.activityLocalTurn == localTurnSent {
 			// Prompts are held during confirmed remote turns, so an active
@@ -258,11 +291,15 @@ func (m *Model) handleActivityDisconnect(generation uint64, err error) tea.Cmd {
 		}
 	}
 	m.activityRetry++
+	var opened tea.Cmd
+	if m.activityRetry >= activityGateRetries {
+		opened = m.openActivityGate()
+	}
 	delay := 250 * time.Millisecond * time.Duration(1<<min(m.activityRetry-1, 4))
 	conversationID := m.activityConversationID
-	return tea.Tick(delay, func(time.Time) tea.Msg {
+	return tea.Batch(opened, tea.Tick(delay, func(time.Time) tea.Msg {
 		return activityRetryMsg{generation: generation, conversationID: conversationID}
-	})
+	}))
 }
 
 // activityUnavailableStatus reports responses that retrying will not fix.
@@ -297,4 +334,34 @@ func (m *Model) ownsLocalTurn() bool {
 // takes ownership again.
 func (m *Model) subscriptionRendersTurn() bool {
 	return !m.ownsLocalTurn() || (m.localTurnRecoverable && m.op.run == 0)
+}
+
+// activityBlockedNotice explains why a prompt was held.
+func (m *Model) activityBlockedNotice() tea.Cmd {
+	if m.activityState == activityRemoteTurn || m.activityTurnActive {
+		return m.postNotice(notice(chat.NoticeWarn, nil, "Another turn is in progress in this conversation. Wait for it to finish."))
+	}
+	return m.postNotice(notice(chat.NoticeWarn, nil, "Syncing the conversation. Try again in a moment."))
+}
+
+func (m *Model) activityBlocksSubmission() bool {
+	if m.state.ConversationID == "" {
+		return false
+	}
+	if m.activityGateOpenFor == m.state.ConversationID {
+		// Fail open: hold prompts only for a turn the server confirmed.
+		return m.activityState == activityRemoteTurn
+	}
+	if m.activityEvents != nil && !m.activitySnapshotReady {
+		return true
+	}
+	if m.localTurnOwned && m.activityTurnActive {
+		return true
+	}
+	switch m.activityState {
+	case activityNone, activityIdle, activityUnavailable:
+		return false
+	default:
+		return true
+	}
 }
