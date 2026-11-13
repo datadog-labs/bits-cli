@@ -988,25 +988,31 @@ func buildPresentationWithNotices(header string, blocks []agent.Block, notices [
 
 func appendBlockPresentations(items []presentationItem, blocks []agent.Block, from, to int) []presentationItem {
 	for i := from; i < to; {
-		if blocks[i].Kind == assistant.KindReasoning {
-			j := i + 1
-			for j < to && blocks[j].Kind == assistant.KindReasoning {
-				j++
-			}
-			items = append(items, newPresentationItem(blocks, itemReasoning, i, j, nil))
-			i = j
+		start := i
+		for i < to && blocks[i].Kind == assistant.KindReasoning {
+			i++
+		}
+		p, isTool := toolPresentation{}, false
+		if i < to {
+			p, isTool = presentationOfBlock(blocks[i])
+		}
+		var group *toolGroup
+		if isTool {
+			group = p.group(blocks[i].Tool)
+		}
+		// Reasoning opens the group of the call it leads to, so a burst of
+		// thinking and calls is one group; otherwise it stands alone.
+		if i > start && group == nil {
+			items = append(items, newPresentationItem(blocks, itemReasoning, start, i, nil))
 			continue
 		}
-
-		p, isTool := presentationOfBlock(blocks[i])
 		if !isTool {
 			items = append(items, newPresentationItem(blocks, itemBlock, i, i+1, nil))
 			i++
 			continue
 		}
 
-		presentations := []toolPresentation{p}
-		group := p.group(blocks[i].Tool)
+		presentations := append(make([]toolPresentation, i-start, i-start+1), p)
 		j := i + 1
 		for group != nil && j < to {
 			if blocks[j].Kind == assistant.KindReasoning {
@@ -1030,15 +1036,15 @@ func appendBlockPresentations(items []presentationItem, blocks []agent.Block, fr
 			presentations = append(presentations, next)
 			j++
 		}
-		if j == i+1 {
-			items = append(items, newPresentationItem(blocks, itemTool, i, j, presentations))
+		if j == start+1 {
+			items = append(items, newPresentationItem(blocks, itemTool, start, j, presentations))
 		} else {
-			header := newPresentationItem(blocks, itemToolGroup, i, j, presentations)
+			header := newPresentationItem(blocks, itemToolGroup, start, j, presentations)
 			header.group = group
 			items = append(items, header)
-			for k := i; k < j; {
+			for k := start; k < j; {
 				end, kind := k+1, itemTool
-				childPresentations := presentations[k-i : k-i+1]
+				childPresentations := presentations[k-start : k-start+1]
 				if blocks[k].Kind == assistant.KindReasoning {
 					kind, childPresentations = itemReasoning, nil
 					for end < j && blocks[end].Kind == assistant.KindReasoning {

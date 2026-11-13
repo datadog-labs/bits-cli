@@ -2,6 +2,7 @@ package chat
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -225,7 +226,8 @@ func TestReasoningStacksWithToolPresentation(t *testing.T) {
 	list := NewList()
 	list.SetItems([]agent.Block{
 		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}},
-		inspectBlock("read", "read_file", `{"path":"README.md"}`, agent.ToolSuccess, "contents"),
+		// An ungrouped call: a groupable one would put the reasoning in its group.
+		disclosableToolBlock("run"),
 		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "answer", Kind: assistant.KindText}, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "answer"}},
 	})
 
@@ -1216,6 +1218,34 @@ func TestServerGroupingBoundaries(t *testing.T) {
 			}
 			if len(view) != want {
 				t.Fatalf("got %d items, want %d", len(view), want)
+			}
+		})
+	}
+}
+
+func TestLeadingReasoningJoinsTheGroupOfItsCall(t *testing.T) {
+	reasoning := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}}
+	server := func(status agent.ToolStatus) agent.Block {
+		return agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: "call"}, Kind: assistant.KindToolCall, Tool: &agent.ToolBlock{Name: "search_datadog_logs", Input: `{}`, Status: status}}
+	}
+	answer := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "answer", Kind: assistant.KindText}, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "answer"}}
+	for _, tc := range []struct {
+		name string
+		next agent.Block
+		want []itemKind
+	}{
+		{"groupable call", server(agent.ToolRunning), []itemKind{itemToolGroup, itemReasoning, itemTool}},
+		{"call awaiting approval", server(agent.ToolAwaitingApproval), []itemKind{itemReasoning, itemTool}},
+		{"ungrouped call", disclosableToolBlock("run"), []itemKind{itemReasoning, itemTool}},
+		{"answer", answer, []itemKind{itemReasoning, itemBlock}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []itemKind
+			for _, it := range buildPresentation("", []agent.Block{reasoning, tc.next}) {
+				got = append(got, it.kind)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("kinds = %v, want %v", got, tc.want)
 			}
 		})
 	}
