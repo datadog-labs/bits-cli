@@ -12,8 +12,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 )
 
-// exportConversation copies the loaded transcript as Markdown in the format of
-// the Bits web UI "Copy as Markdown" action. It reads only local state.
+// exportConversation copies the loaded transcript as Markdown.
 func (m *Model) exportConversation() tea.Cmd {
 	link := ""
 	if m.engine != nil && strings.TrimSpace(m.state.ConversationID) != "" {
