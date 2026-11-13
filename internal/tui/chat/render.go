@@ -36,6 +36,7 @@ type renderContext struct {
 	sty        Styles
 	frame      int
 	disclosure disclosure
+	live       bool // see presentationItem.live
 }
 
 // RenderBlock renders a block without a trailing newline.
@@ -133,7 +134,13 @@ func renderReasoningGroup(blocks []agent.Block, c renderContext) string {
 			parts = append(parts, text)
 		}
 	}
-	header := renderActivityHeader(state, label, "", c)
+	note := ""
+	if c.live && len(parts) > 0 {
+		// The newest thinking is the model's intent: a note on the work it
+		// leads to, so it takes the detail style rather than a tool name's.
+		label, note = "", collapseWS(parts[len(parts)-1])
+	}
+	header := renderActivityHeader(state, label, note, c)
 	if c.disclosure == compactView || len(parts) == 0 {
 		return header
 	}

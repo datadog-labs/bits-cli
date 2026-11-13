@@ -35,14 +35,18 @@ const (
 // under one header.
 type toolGroup struct {
 	name string
+	// closed groups show only their work in progress until opened: running
+	// calls and the live reasoning. Open groups always show every child.
+	closed bool
 }
 
 var (
-	inspectionGroup = &toolGroup{name: "Files"}
-	editGroup       = &toolGroup{name: "Edits"}
+	inspectionGroup = &toolGroup{name: "Files", closed: true}
+	// Edits stay open: their diffs are what the user most needs to review.
+	editGroup = &toolGroup{name: "Edits"}
 	// skillGroup is neutral: skill loads join whichever group surrounds them.
-	skillGroup  = &toolGroup{name: "Skills"}
-	serverGroup = &toolGroup{name: "Tools"}
+	skillGroup  = &toolGroup{name: "Skills", closed: true}
+	serverGroup = &toolGroup{name: "Tools", closed: true}
 )
 
 // toolPresentation is derived solely for rendering. The source ToolBlock stays
@@ -511,7 +515,7 @@ func approvalSubject(tool *agent.ToolBlock) *agent.ToolBlock {
 }
 
 // renderToolGroupHeader counts tool calls, while reasoning only contributes
-// to the running state. Children always remain visible beneath this header.
+// to the running state. List decides which children show beneath it.
 func renderToolGroupHeader(group *toolGroup, blocks []agent.Block, presentations []toolPresentation, c renderContext) string {
 	counts := make(map[agent.ToolStatus]int)
 	files := make(map[string]struct{})

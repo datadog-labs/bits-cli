@@ -104,6 +104,9 @@ type presentationItem struct {
 	group         *toolGroup // itemToolGroup only
 	notice        *NoticeItem
 	indent        int // group children retain their normal rendering and disclosure
+	// live marks the run's newest reasoning: it shows its text as the model's
+	// intent, and stays visible in a closed group.
+	live bool
 }
 
 // itemKind is the shape of a presentation item, decided once when the
@@ -142,6 +145,7 @@ type listLineEntry struct {
 	animated   bool
 	frame      int
 	disclosure disclosure
+	live       bool
 	lines      []string
 }
 
@@ -193,15 +197,21 @@ func (l *List) SetItems(items []agent.Block) {
 // and with session-only UI messages, without changing the source blocks or
 // their backend-facing transcript.
 func (l *List) SetTranscript(blocks []agent.Block, tasks []agent.Task, notices []NoticeItem) {
-	items := agent.BlocksWithTasks(blocks, tasks)
+	l.items = agent.BlocksWithTasks(blocks, tasks)
+	l.notices = notices
+	l.relayout()
+}
+
+// relayout rebuilds the view and keeps a scrolled viewport on the item it
+// showed. Besides the transcript, the view depends on the run state and on
+// which groups are open.
+func (l *List) relayout() {
 	var anchor agent.BlockID
 	anchored := !l.follow && l.offsetIdx < len(l.view)
 	if anchored {
 		anchor = l.view[l.offsetIdx].id
 	}
-	l.items = items
-	l.notices = notices
-	l.view = buildPresentationWithNotices(l.header, items, notices)
+	l.view = l.present()
 	// A new group header can shift a previously visible call down one item.
 	if anchored {
 		for i, it := range l.view {
@@ -229,7 +239,7 @@ func (l *List) SetHeader(header string) {
 	}
 	had, has := l.header != "", header != ""
 	l.header = header
-	l.view = buildPresentationWithNotices(l.header, l.items, l.notices)
+	l.view = l.present()
 	switch {
 	case had == has:
 	case has:
@@ -373,7 +383,9 @@ func (l *List) expandable(it presentationItem) bool {
 		return !it.presentations[0].renderSpec.static
 	case itemReasoning:
 		return hasReasoningText(l.items[it.start:it.end])
-	case itemBlock, itemNotice, itemToolGroup, itemHeader:
+	case itemToolGroup:
+		return it.group.closed
+	case itemBlock, itemNotice, itemHeader:
 	}
 	return false
 }
@@ -383,6 +395,7 @@ func (l *List) expanded(id agent.BlockID) bool { return l.expandAll != l.toggled
 // ToggleDisclosure flips one block between its compact and full view.
 func (l *List) ToggleDisclosure(id agent.BlockID) {
 	l.toggled[id] = !l.toggled[id]
+	l.relayout() // a group's children appear or disappear
 	l.anchorOffset()
 }
 
@@ -391,6 +404,7 @@ func (l *List) ToggleDisclosure(id agent.BlockID) {
 func (l *List) ToggleAllDisclosure() {
 	l.expandAll = !l.expandAll
 	clear(l.toggled)
+	l.relayout()
 	l.anchorOffset()
 }
 
@@ -557,11 +571,11 @@ func (l *List) entry(idx int) listLineEntry {
 		d = fullView
 	}
 	if e, ok := l.cache[it.id]; ok &&
-		e.rev == it.rev && e.width == width && e.indent == indent && e.animated == animated && e.disclosure == d &&
+		e.rev == it.rev && e.width == width && e.indent == indent && e.animated == animated && e.disclosure == d && e.live == it.live &&
 		(!animated || e.frame == l.frame) {
 		return e
 	}
-	content := l.renderPresentationItem(it, renderContext{width: width, sty: l.sty, frame: l.frame, disclosure: d})
+	content := l.renderPresentationItem(it, renderContext{width: width, sty: l.sty, frame: l.frame, disclosure: d, live: it.live})
 	e := listLineEntry{
 		rev:        it.rev,
 		width:      width,
@@ -569,6 +583,7 @@ func (l *List) entry(idx int) listLineEntry {
 		animated:   animated,
 		frame:      l.frame,
 		disclosure: d,
+		live:       it.live,
 		lines:      strings.Split(content, "\n"),
 	}
 	if gutter > 0 {
@@ -683,7 +698,14 @@ func (l *List) SetWidgetView(id agent.BlockID, v WidgetView) bool {
 
 // SetRunning reports whether a run is active, so the list alone decides
 // whether the transcript animates.
-func (l *List) SetRunning(running bool) { l.running = running }
+func (l *List) SetRunning(running bool) {
+	// Called after every message; only a change affects the view.
+	if l.running == running {
+		return
+	}
+	l.running = running
+	l.relayout()
+}
 
 // SetFrame sets the animation step used by in-flight indicators. Cache entries
 // invalidate lazily: animated entries compare frames, settled entries do not.
@@ -936,6 +958,52 @@ func (l *List) ScrollByChanged(lines int) bool {
 	idx, line, follow := l.offsetIdx, l.offsetLine, l.follow
 	l.ScrollBy(lines)
 	return idx != l.offsetIdx || line != l.offsetLine || follow != l.follow
+}
+
+// present is the view: the transcript's presentation, less the children of
+// closed groups that are no longer working.
+func (l *List) present() []presentationItem {
+	items := buildPresentationWithNotices(l.header, l.items, l.notices)
+	if live := l.liveReasoning(items); live >= 0 {
+		items[live].live = true
+	}
+	view := items[:0]
+	closed := false
+	for _, it := range items {
+		if it.kind == itemToolGroup {
+			closed = it.group.closed && !l.expanded(it.id)
+		}
+		// Children follow their header, so closed only ever applies to them.
+		if it.indent > 0 && closed && !it.live && !l.itemWorking(it) {
+			continue
+		}
+		view = append(view, it)
+	}
+	return view
+}
+
+// liveReasoning returns the index of the run's newest reasoning, or -1 when
+// it has no text to show. Any block after it, such as the answer, means the
+// model moved on; calls do not, since they are the work it leads to.
+func (l *List) liveReasoning(items []presentationItem) int {
+	if !l.running {
+		return -1
+	}
+	live := -1
+	for i, it := range items {
+		switch it.kind {
+		case itemReasoning:
+			live = i
+		case itemBlock:
+			live = -1
+		case itemTool, itemToolGroup, itemNotice, itemHeader:
+		}
+	}
+	// Redacted thinking has no text; an older note would be stale.
+	if live >= 0 && !hasReasoningText(l.items[items[live].start:items[live].end]) {
+		return -1
+	}
+	return live
 }
 
 func buildPresentation(header string, blocks []agent.Block) []presentationItem {
