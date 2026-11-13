@@ -127,11 +127,11 @@ type Model struct {
 	activityConversationID string
 	activityState          conversationActivityState
 	activityRetry          int
+	activityNotFound       int // consecutive 404s from /subscribe
 	activityReplay         *agent.ActivityReplay
 	activityNeedsSync      bool
 	activitySnapshotReady  bool
 	activityTurnActive     bool
-	activityGateOpenFor    string
 	localTurnOwned         bool
 	localTurnRecoverable   bool
 	localTurnInput         agent.TurnInput

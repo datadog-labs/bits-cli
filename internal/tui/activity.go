@@ -42,14 +42,14 @@ type activityUpdateMsg struct {
 
 type activityClosedMsg struct{ generation uint64 }
 
-// activityReadyTimeoutMsg fires when an attachment has not finished replay.
-type activityReadyTimeoutMsg struct{ generation uint64 }
-
 const (
-	// activityReadyTimeout and activityGateRetries bound how long prompts wait
-	// for a subscription that cannot attach. After either, prompts fail open.
-	activityReadyTimeout = 10 * time.Second
-	activityGateRetries  = 3
+	// activityNotFoundRetries bounds consecutive 404s. A new conversation can
+	// briefly 404 before every container sees it; a persistent 404 means it
+	// is gone.
+	activityNotFoundRetries = 5
+	// activityStaleTurnRetries bounds how long a turn marker from a lost
+	// attachment keeps holding prompts while reconnects fail.
+	activityStaleTurnRetries = 3
 )
 
 type activityRetryMsg struct {
@@ -101,29 +101,7 @@ func (m *Model) connectConversationSubscription(conversationID string) tea.Cmd {
 		m.activityTurnActive = false
 	}
 	m.activityEvents = m.engine.SubscribeActivity(ctx, conversationID)
-	return tea.Batch(waitActivity(generation, m.activityEvents), tea.Tick(activityReadyTimeout, func(time.Time) tea.Msg {
-		return activityReadyTimeoutMsg{generation: generation}
-	}))
-}
-
-// handleActivityReadyTimeout stops holding prompts for an attachment that
-// has not become ready.
-func (m *Model) handleActivityReadyTimeout(msg activityReadyTimeoutMsg) tea.Cmd {
-	if msg.generation != m.activityGeneration || m.activitySnapshotReady || m.activityConversationID == "" {
-		return nil
-	}
-	return m.openActivityGate()
-}
-
-// openActivityGate lets prompts through while the subscription cannot attach.
-// A ready attachment closes it again.
-func (m *Model) openActivityGate() tea.Cmd {
-	id := m.activityConversationID
-	if id == "" || m.activityGateOpenFor == id {
-		return nil
-	}
-	m.activityGateOpenFor = id
-	return m.postNotice(notice(chat.NoticeWarn, nil, "Live conversation updates are unavailable. Prompts are no longer held while reconnecting."))
+	return waitActivity(generation, m.activityEvents)
 }
 
 func (m *Model) stopConversationSubscription() {
@@ -136,6 +114,7 @@ func (m *Model) stopConversationSubscription() {
 	m.activityConversationID = ""
 	m.activityState = activityNone
 	m.activityRetry = 0
+	m.activityNotFound = 0
 	m.activityReplay = nil
 	m.activityNeedsSync = false
 	m.activitySnapshotReady = false
@@ -164,7 +143,7 @@ func (m *Model) applyActivityUpdate(msg activityUpdateMsg) tea.Cmd {
 	switch msg.update.Activity.Kind {
 	case assistant.ConversationActivityReady:
 		m.activitySnapshotReady = true
-		m.activityGateOpenFor = ""
+		m.activityNotFound = 0
 		m.activityTurnActive = msg.update.Activity.Active
 		if msg.update.Activity.Active && m.activityLocalTurn == localTurnSent {
 			// Prompts are held during confirmed remote turns, so an active
@@ -190,8 +169,11 @@ func (m *Model) applyActivityUpdate(msg activityUpdateMsg) tea.Cmd {
 		}
 		recovery = m.maybeResumeLocalTurn()
 	case assistant.ConversationActivityStarted:
+		if !m.activitySnapshotReady {
+			break
+		}
 		m.activityTurnActive = true
-		if m.activitySnapshotReady && m.activityLocalTurn == localTurnSent {
+		if m.activityLocalTurn == localTurnSent {
 			m.activityLocalTurn = localTurnObserved
 		}
 		if m.subscriptionRendersTurn() {
@@ -199,9 +181,12 @@ func (m *Model) applyActivityUpdate(msg activityUpdateMsg) tea.Cmd {
 			m.publishActivityTranscript()
 		}
 	case assistant.ConversationActivityEnded:
+		if !m.activitySnapshotReady {
+			break
+		}
 		m.activityTurnActive = false
 		// Every message of the local turn precedes its live end marker.
-		if m.activitySnapshotReady && m.activityLocalTurn == localTurnObserved {
+		if m.activityLocalTurn == localTurnObserved {
 			m.activityLocalTurn = localTurnCaughtUp
 		}
 		wasRemote := m.activityState == activityRemoteTurn
@@ -209,7 +194,7 @@ func (m *Model) applyActivityUpdate(msg activityUpdateMsg) tea.Cmd {
 		if wasRemote && m.subscriptionRendersTurn() {
 			m.publishActivityTranscript()
 		}
-		if m.activitySnapshotReady && m.op.run == 0 {
+		if m.op.run == 0 {
 			m.clearLocalTurnOwnership()
 		}
 	case assistant.ConversationActivityMessage:
@@ -236,6 +221,7 @@ func (m *Model) publishActivityTranscript() {
 	if err != nil {
 		return
 	}
+	m.reanchorActivityNotices(snapshot.Blocks)
 	m.state = snapshot
 	m.activityNeedsSync = false
 	m.syncApprovals(nil)
@@ -253,6 +239,7 @@ func (m *Model) syncActivityTranscript() bool {
 		return false
 	}
 	m.activityNeedsSync = false
+	m.reanchorActivityNotices(snapshot.Blocks)
 	m.state = snapshot
 	return true
 }
@@ -273,6 +260,7 @@ func (m *Model) maybeResumeLocalTurn() tea.Cmd {
 	if err != nil {
 		return nil
 	}
+	m.reanchorActivityNotices(snapshot.Blocks)
 	m.state = snapshot
 	m.activityNeedsSync = false
 	m.localTurnRecoverable = false
@@ -311,17 +299,22 @@ func (m *Model) handleActivityDisconnect(generation uint64, err error) tea.Cmd {
 		return nil
 	}
 	var apiErr *assistant.APIError
-	if errors.As(err, &apiErr) && activityUnavailableStatus(apiErr.StatusCode) {
-		m.activityState = activityUnavailable
-		m.activityReplay = nil
-		m.activityNeedsSync = false
-		m.clearLocalTurnOwnership()
-		return m.postNotice(noticeForError("conversation activity unavailable", err))
+	notFound := errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
+	if notFound {
+		m.activityNotFound++
+		if m.activityNotFound >= activityNotFoundRetries {
+			return m.markActivityUnavailable(notice(chat.NoticeWarn, apiErr, "Live updates are unavailable for this conversation."))
+		}
+	} else {
+		m.activityNotFound = 0
+	}
+	if apiErr != nil && activityUnavailableStatus(apiErr.StatusCode) {
+		return m.markActivityUnavailable(noticeForError("conversation activity unavailable", err))
 	}
 	m.activityState = activityDisconnected
 	// Servers close idle streams, sometimes without a clean EOF. Reattach
 	// quietly unless a failed local turn is waiting for a fresh replay.
-	quiet := m.activitySnapshotReady || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+	quiet := notFound || m.activitySnapshotReady || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 	if quiet && !m.localTurnRecoverable {
 		m.activityState = activityConnecting
 		if m.activitySnapshotReady {
@@ -329,21 +322,31 @@ func (m *Model) handleActivityDisconnect(generation uint64, err error) tea.Cmd {
 		}
 	}
 	m.activityRetry++
-	var opened tea.Cmd
-	if m.activityRetry >= activityGateRetries {
-		opened = m.openActivityGate()
+	if m.activityRetry >= activityStaleTurnRetries {
+		// A marker from a lost attachment no longer proves a turn is running.
+		m.activityTurnActive = false
 	}
 	delay := 250 * time.Millisecond * time.Duration(1<<min(m.activityRetry-1, 4))
 	conversationID := m.activityConversationID
-	return tea.Batch(opened, tea.Tick(delay, func(time.Time) tea.Msg {
+	return tea.Tick(delay, func(time.Time) tea.Msg {
 		return activityRetryMsg{generation: generation, conversationID: conversationID}
-	}))
+	})
+}
+
+// markActivityUnavailable stops following the conversation for good.
+func (m *Model) markActivityUnavailable(n chat.Notice) tea.Cmd {
+	m.activityState = activityUnavailable
+	m.activityTurnActive = false
+	m.activityReplay = nil
+	m.activityNeedsSync = false
+	m.clearLocalTurnOwnership()
+	return m.postNotice(n)
 }
 
 // activityUnavailableStatus reports responses that retrying will not fix.
 func activityUnavailableStatus(code int) bool {
 	switch code {
-	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound,
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden,
 		http.StatusMethodNotAllowed, http.StatusNotImplemented:
 		return true
 	}
@@ -374,32 +377,11 @@ func (m *Model) subscriptionRendersTurn() bool {
 	return !m.ownsLocalTurn() || (m.localTurnRecoverable && m.op.run == 0)
 }
 
-// activityBlockedNotice explains why a prompt was held.
 func (m *Model) activityBlockedNotice() tea.Cmd {
-	if m.activityState == activityRemoteTurn || m.activityTurnActive {
-		return m.postNotice(notice(chat.NoticeWarn, nil, "Another turn is in progress in this conversation. Wait for it to finish."))
-	}
-	return m.postNotice(notice(chat.NoticeWarn, nil, "Syncing the conversation. Try again in a moment."))
+	return m.postNotice(notice(chat.NoticeWarn, nil, "Another turn is in progress in this conversation. Wait for it to finish."))
 }
 
 func (m *Model) activityBlocksSubmission() bool {
-	if m.state.ConversationID == "" {
-		return false
-	}
-	if m.activityGateOpenFor == m.state.ConversationID {
-		// Fail open: hold prompts only for a turn the server confirmed.
-		return m.activityState == activityRemoteTurn
-	}
-	if m.activityEvents != nil && !m.activitySnapshotReady {
-		return true
-	}
-	if m.localTurnOwned && m.activityTurnActive {
-		return true
-	}
-	switch m.activityState {
-	case activityNone, activityIdle, activityUnavailable:
-		return false
-	default:
-		return true
-	}
+	return m.state.ConversationID != "" &&
+		(m.activityState == activityRemoteTurn || m.activityTurnActive)
 }
