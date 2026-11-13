@@ -101,6 +101,7 @@ type presentationItem struct {
 	kind          itemKind
 	start, end    int
 	presentations []toolPresentation
+	group         *toolGroup // itemToolGroup only
 	notice        *NoticeItem
 	indent        int // group children retain their normal rendering and disclosure
 }
@@ -608,7 +609,7 @@ func (l *List) renderPresentationItem(it presentationItem, c renderContext) stri
 	case itemReasoning:
 		return renderReasoningGroup(l.items[it.start:it.end], c)
 	case itemToolGroup:
-		return renderToolGroupHeader(l.items[it.start:it.end], it.presentations, c)
+		return renderToolGroupHeader(it.group, l.items[it.start:it.end], it.presentations, c)
 	case itemTool:
 		return renderPresentedTool(l.items[it.start].Tool, it.presentations[0], c)
 	case itemBlock:
@@ -1007,7 +1008,7 @@ func appendBlockPresentations(items []presentationItem, blocks []agent.Block, fr
 		presentations := []toolPresentation{p}
 		group := p.group(blocks[i].Tool)
 		j := i + 1
-		for group != "" && j < to {
+		for group != nil && j < to {
 			if blocks[j].Kind == assistant.KindReasoning {
 				presentations = append(presentations, toolPresentation{})
 				j++
@@ -1018,12 +1019,12 @@ func appendBlockPresentations(items []presentationItem, blocks []agent.Block, fr
 				break
 			}
 			nextGroup := next.group(blocks[j].Tool)
-			if nextGroup == "" || (nextGroup != group && nextGroup != skillGroupKey && group != skillGroupKey) {
+			if nextGroup == nil || (nextGroup != group && nextGroup != skillGroup && group != skillGroup) {
 				break
 			}
 			// Skill loads are neutral: leading loads adopt the first tool family,
 			// while loads inside a group do not split or change that family.
-			if group == skillGroupKey {
+			if group == skillGroup {
 				group = nextGroup
 			}
 			presentations = append(presentations, next)
@@ -1032,7 +1033,9 @@ func appendBlockPresentations(items []presentationItem, blocks []agent.Block, fr
 		if j == i+1 {
 			items = append(items, newPresentationItem(blocks, itemTool, i, j, presentations))
 		} else {
-			items = append(items, newPresentationItem(blocks, itemToolGroup, i, j, presentations))
+			header := newPresentationItem(blocks, itemToolGroup, i, j, presentations)
+			header.group = group
+			items = append(items, header)
 			for k := i; k < j; {
 				end, kind := k+1, itemTool
 				childPresentations := presentations[k-i : k-i+1]
