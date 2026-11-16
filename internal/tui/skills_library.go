@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode"
@@ -41,8 +42,6 @@ type skillsLibrary struct {
 	loading bool
 	task    task
 	active  bool
-	// pending is a draft to submit again once the catalog loads.
-	pending string
 }
 
 func (l *skillsLibrary) lookup(short string) (skillsLibraryEntry, bool) {
@@ -90,9 +89,9 @@ func (m *Model) loadSkillsLibrary() tea.Cmd {
 	}
 }
 
-func (m *Model) applySkillsLibrary(msg skillsLibraryResultMsg) tea.Cmd {
+func (m *Model) applySkillsLibrary(msg skillsLibraryResultMsg) {
 	if msg.generation != m.skillsLibrary.task.gen {
-		return nil
+		return
 	}
 	m.skillsLibrary.task.done()
 	m.skillsLibrary.loading = false
@@ -119,13 +118,6 @@ func (m *Model) applySkillsLibrary(msg skillsLibraryResultMsg) tea.Cmd {
 		m.skillsLibrary.entries, m.skillsLibrary.hidden = entries, hidden
 	}
 	m.pushSkillsLibrary()
-	pending := m.skillsLibrary.pending
-	m.skillsLibrary.pending = ""
-	if pending == "" || pending != m.editor.Value() {
-		return nil
-	}
-	_, cmd := m.submit()
-	return cmd
 }
 
 func (m *Model) pushSkillsLibrary() {
@@ -200,20 +192,36 @@ func (l *skillsLibrary) sentInvocation(raw string) (short, arguments string, ok 
 	return "", "", false
 }
 
-// awaitSkillsLibrary holds an unknown "/<name>" draft until the catalog first
-// loads, then submits it again: after a restart, history recalls library
-// invocations in their sent form before the picker has ever opened.
+// awaitSkillsLibrary keeps an unknown "/<name>" draft while the catalog is
+// missing: after a restart, history recalls library invocations in their sent
+// form before any load. The user sends it again once the catalog is in.
 func (m *Model) awaitSkillsLibrary() (tea.Cmd, bool) {
 	lib := &m.skillsLibrary
-	if m.engine == nil || m.searchesBlocked() || (lib.engine == m.engine && (lib.entries != nil || lib.err != nil)) {
+	if m.engine == nil || m.searchesBlocked() {
 		return nil, false
 	}
-	var load tea.Cmd
-	if lib.engine != m.engine || !lib.loading {
-		load = m.loadSkillsLibrary()
+	if lib.engine == m.engine && (lib.entries != nil || errors.Is(lib.err, agent.ErrSkillsUnsupported)) {
+		return nil, false
 	}
-	lib.pending = m.editor.Value()
-	return load, true
+	if lib.engine != m.engine {
+		m.resetSkillsLibrary()
+	}
+	return m.catalogMissing(), true
+}
+
+// catalogMissing reports a catalog that is loading or failed to load, and
+// starts a load when none is running.
+func (m *Model) catalogMissing() tea.Cmd {
+	lib := &m.skillsLibrary
+	if lib.loading {
+		return m.postNotice(notice(chat.NoticeInfo, nil, "Skills Library is still loading. Try again in a moment."))
+	}
+	err := lib.err
+	load := m.loadSkillsLibrary()
+	if err != nil {
+		return tea.Batch(load, m.postNotice(notice(chat.NoticeWarn, err, "Could not load the Skills Library. Local skills still work with /skill:<name>.")))
+	}
+	return tea.Batch(load, m.postNotice(notice(chat.NoticeInfo, nil, "Skills Library is still loading. Try again in a moment.")))
 }
 
 // The override enables the skill for this turn: the web uses per-user
@@ -228,16 +236,8 @@ func (m *Model) skillsLibraryTurn(name, arguments string) (agent.TurnInput, tea.
 			SkillOverrides: []assistant.SkillOverride{{Name: entry.canonical, Source: assistant.SkillSourceSkillsLibrary, Enabled: true}},
 		}, nil, true
 	}
-	switch {
-	case lib.entries == nil && lib.err != nil && !lib.loading:
-		err := lib.err
-		return agent.TurnInput{}, tea.Batch(m.loadSkillsLibrary(), m.postNotice(notice(chat.NoticeWarn, err, "Could not load the Skills Library. Local skills still work with /skill:<name>."))), false
-	case lib.entries == nil:
-		var load tea.Cmd
-		if !lib.loading {
-			load = m.loadSkillsLibrary()
-		}
-		return agent.TurnInput{}, tea.Batch(load, m.postNotice(notice(chat.NoticeInfo, nil, "Skills Library is still loading. Try again in a moment."))), false
+	if lib.entries == nil {
+		return agent.TurnInput{}, m.catalogMissing(), false
 	}
 	return agent.TurnInput{}, m.postNotice(notice(chat.NoticeWarn, nil, "Skills Library skill not found: %s. Type /skills-library to refresh suggestions.", escape.Inline(name))), false
 }

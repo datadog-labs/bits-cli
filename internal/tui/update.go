@@ -280,7 +280,8 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.applyClientSkills(msg)
 
 	case skillsLibraryResultMsg:
-		return m, m.applySkillsLibrary(msg)
+		m.applySkillsLibrary(msg)
+		return m, nil
 
 	case toolUIOpenedMsg:
 		m.openToolUI(msg.request)

@@ -319,18 +319,52 @@ func TestSkillsLibraryHistoryReplay(t *testing.T) {
 }
 
 // After a restart, history recalls "/<name>" before the catalog has loaded.
+// The draft waits for the user to send it again; nothing starts on its own.
 func TestSkillsLibraryRecallBeforeCatalogLoads(t *testing.T) {
-	backend := &libraryBackend{}
-	m := newLibraryModel(t, backend)
-	m.editor.SetValue("/clear-writing fix it")
-	_, cmd := m.submit()
-	if m.op.run != 0 || m.editor.Value() != "/clear-writing fix it" {
-		t.Fatalf("before load: run %d, value %q", m.op.run, m.editor.Value())
-	}
-	runLibraryLoad(t, m, cmd)
-	followRun(t, m)
 	want := assistant.SkillOverride{Name: "skills-library/clear-writing", Source: assistant.SkillSourceSkillsLibrary, Enabled: true}
-	if backend.message != "/clear-writing fix it" || !slices.Contains(backend.opts.SkillOverrides, want) {
-		t.Fatalf("message = %q, overrides = %+v", backend.message, backend.opts.SkillOverrides)
+	for _, tc := range []struct {
+		name       string
+		err        error
+		turnActive bool
+		notice     string
+	}{
+		{name: "load succeeds", notice: "still loading"},
+		{name: "load fails", err: errors.New("offline"), notice: "Could not load the Skills Library"},
+		{name: "turn canceled while loading", turnActive: true, notice: "still loading"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &libraryBackend{err: tc.err}
+			if tc.err == nil {
+				backend.skills = testLibrarySkills
+			}
+			m := newLibraryModel(t, backend)
+			cancel := func() {}
+			if tc.turnActive {
+				_, cancel = context.WithCancel(t.Context())
+				m.op = operation{kind: opTurn, run: 1, cancel: cancel}
+			}
+			m.editor.SetValue("/clear-writing fix it")
+			_, cmd := m.submit()
+			cancel()
+			if tc.turnActive {
+				_ = m.endOperation()
+			}
+			runLibraryLoad(t, m, cmd)
+			if backend.message != nil || m.op.run != 0 || m.editor.Value() != "/clear-writing fix it" {
+				t.Fatalf("after load: sent %v, run %d, value %q", backend.message, m.op.run, m.editor.Value())
+			}
+
+			_, _ = m.submit()
+			if tc.err != nil {
+				if m.op.run != 0 || m.editor.Value() != "/clear-writing fix it" || !strings.Contains(lastNotice(m).Text, tc.notice) {
+					t.Fatalf("failed load: run %d, value %q, notice %q", m.op.run, m.editor.Value(), lastNotice(m).Text)
+				}
+				return
+			}
+			followRun(t, m)
+			if backend.message != "/clear-writing fix it" || !slices.Contains(backend.opts.SkillOverrides, want) {
+				t.Fatalf("message = %q, overrides = %+v", backend.message, backend.opts.SkillOverrides)
+			}
+		})
 	}
 }
