@@ -47,6 +47,7 @@ type multiAgentRun struct {
 	messageIDs         map[string]string
 	requestedTools     map[multiAgentToolKey]multiAgentToolRequested
 	pendingTools       map[string]multiAgentToolCorrelation
+	clientTools        map[string]string // tool name of each call handed to the client, by local id
 	toolsMu            sync.Mutex
 	toolIDs            map[multiAgentToolKey]string
 	unbatchedToolIDs   map[multiAgentToolKey]string
@@ -509,6 +510,10 @@ func (c *MultiAgentClient) handleEvent(
 			}
 			run.toolsMu.Unlock()
 			run.toolIDs[key] = localToolCallID
+			if run.clientTools == nil {
+				run.clientTools = make(map[string]string)
+			}
+			run.clientTools[localToolCallID] = request.ToolName
 			tool := request
 			input, err := adaptMultiAgentToolInput(tool.ToolName, tool.ToolInput, toolCallID, localToolCallID)
 			if err != nil {
@@ -555,6 +560,11 @@ func (c *MultiAgentClient) handleEvent(
 		}
 		// Display content is presentation only; keep the full locally recorded output.
 		content := ToolResultContent(localToolCallID, event.ToolName, ToolStatus(event.Status), "")
+		// An approval gate shares its server call's id; only the name tells
+		// the approved server call's completion from a client tool's.
+		if name, ok := run.clientTools[localToolCallID]; ok && name == event.ToolName {
+			content.Type = ContentClientToolResponse
+		}
 		content.Tool.Title = event.DisplayTitle
 		if event.DisplayContent != "" {
 			content.Tool.Detail = &MarkdownPayload{Content: event.DisplayContent}

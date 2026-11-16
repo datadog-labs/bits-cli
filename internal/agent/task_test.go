@@ -76,6 +76,25 @@ func startTaskMsgs(callID, taskID string) []assistant.Message {
 	}
 }
 
+// gatedStartTaskMsgs starts taskID as the server does after an approval: the
+// approval_request gate and its answer share the start call's id.
+func gatedStartTaskMsgs(callID, taskID string) []assistant.Message {
+	start := startTaskMsgs(callID, taskID)
+	gate := clientCallMsg(callID, assistant.ApprovalRequestTool, `{"tool_name":"startBackgroundTask"}`)
+	gate.MessageID = callID + "-gate"
+	answer := assistant.AssistantMessage(callID+"-answer", assistant.Content{
+		Type: assistant.ContentClientToolResponse,
+		Tool: &assistant.ToolPayload{
+			ToolCallID: callID,
+			Status:     string(assistant.ToolStatusSuccess),
+			Metadata:   &assistant.ToolMetadata{Name: assistant.ApprovalRequestTool},
+		},
+	})
+	result := start[1]
+	result.Content.Tool.Metadata.Input = start[0].Content.Tool.Metadata.Input
+	return []assistant.Message{start[0], gate, answer, result}
+}
+
 func updateMsg(messageID, kind, content string) assistant.Message {
 	msg := assistant.AssistantMessage(messageID, assistant.Content{
 		Type:     assistant.ContentBackgroundTaskUpdate,
@@ -272,7 +291,7 @@ func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
 	doneUpdate.Content.Progress.TaskID, doneUpdate.BackgroundTaskID = doneID, nil
 	history := slices.Concat(
 		startTaskMsgs("call-0", doneID), []assistant.Message{doneUpdate},
-		startTaskMsgs("call-1", testTaskID), []assistant.Message{updateMsg("u1", "progress", "persisted")},
+		gatedStartTaskMsgs("call-1", testTaskID), []assistant.Message{updateMsg("u1", "progress", "persisted")},
 	)
 	backend := &taskBackend{attachments: [][]assistant.Message{{
 		updateMsg("u1", "progress", "persisted"), replayComplete, updateMsg("u2", "final", "new result"), taskEnded,
@@ -286,6 +305,9 @@ func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
 	defer unsubscribe()
 
 	collect(restoreEvents(e, context.Background()))
+	if n := len(e.State().Tasks); n != 2 {
+		t.Fatalf("restored %d tasks, want 2", n)
+	}
 	tasks := waitTasks(t, events, func(tasks []Task) bool { return len(tasks) == 2 && tasks[1].Status == TaskDone })
 
 	if tasks[0].ID != doneID || tasks[0].CallID != "call-0" || tasks[0].Status != TaskDone {
@@ -293,6 +315,9 @@ func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
 	}
 	if got := progressTexts(tasks[0].Blocks); !slices.Equal(got, []string{"old result"}) {
 		t.Errorf("finished task updates = %q", got)
+	}
+	if tasks[1].CallID != "call-1" || tasks[1].Name != "Why 500s" {
+		t.Errorf("approved task = %+v, want started by call-1", tasks[1])
 	}
 	if got := progressTexts(tasks[1].Blocks); !slices.Equal(got, []string{"persisted", "new result"}) {
 		t.Errorf("observed task updates = %q", got)
