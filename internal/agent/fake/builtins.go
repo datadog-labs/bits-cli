@@ -111,7 +111,7 @@ func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 	if !r.live() {
 		return starlark.None, nil
 	}
-	style := toolEmit{stream: stream, namespace: ns, breakInput: breakInput, at: at}
+	style := toolEmit{stream: stream, namespace: ns, title: title, breakInput: breakInput, at: at}
 	for i := range specs {
 		specs[i].id = r.out.nextID()
 		if err := r.emitToolCall(specs[i], style); err != nil {
@@ -205,6 +205,7 @@ type toolEmit struct {
 	client     bool           // client_tool_call rather than a server tool_call
 	stream     bool           // allow provisional input for this call
 	namespace  string         // server tools only
+	title      string         // server tools only; the server titles calls as well as results
 	breakInput string         // breakpoint while streaming the input
 	at         starlark.Value // where break_input stops; None is halfway
 }
@@ -240,6 +241,7 @@ func (r *run) emitToolCall(s spec, style toolEmit) error {
 	if style.namespace != "" {
 		content.Tool.Metadata.Namespace = &style.namespace
 	}
+	content.Tool.Title = style.title
 	return emitErr(r.out.emit(assistant.AssistantMessage(s.id, content)))
 }
 
