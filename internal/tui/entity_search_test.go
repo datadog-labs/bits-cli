@@ -354,6 +354,7 @@ func TestSelectedEntityContextIsSentOnceAndClearedAfterSubmit(t *testing.T) {
 			Entities: []assistant.SearchEntity{{
 				CandidateID: "candidate-1", EntityID: "checkout-api",
 				EntityType: "service", Name: "checkout-api",
+				URL: "https://app.datadoghq.com/services/checkout-api",
 			}},
 		},
 	})
@@ -368,7 +369,7 @@ func TestSelectedEntityContextIsSentOnceAndClearedAfterSubmit(t *testing.T) {
 		t.Fatalf("first request context = %#v", first.Context)
 	}
 	entity := first.Context.Entities[0]
-	if entity.Type != "service" || entity.ID != "checkout-api" || entity.Label != "checkout-api" {
+	if entity.Type != "service" || entity.ID != "checkout-api" || entity.Label != "checkout-api" || entity.URL != "https://app.datadoghq.com/services/checkout-api" {
 		t.Fatalf("first request entity = %#v", entity)
 	}
 	if len(m.editor.Attachments()) != 0 {
@@ -426,6 +427,7 @@ func TestUpRestoresThePreviousPromptWithItsChips(t *testing.T) {
 		response: assistant.SearchEntitiesResponse{Entities: []assistant.SearchEntity{{
 			CandidateID: "candidate-1", EntityID: "checkout-api",
 			EntityType: "service", Name: "checkout-api",
+			URL: "https://app.datadoghq.com/services/checkout-api",
 		}}},
 	})
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -436,9 +438,13 @@ func TestUpRestoresThePreviousPromptWithItsChips(t *testing.T) {
 		m.applyEvent(event)
 	}
 	_ = m.endOperation()
+	exported, _ := conversationMarkdown(m.state.Blocks, "", "")
+	if !strings.HasPrefix(exported, "**You:** @checkout-api inspect\n_Related: [checkout-api](https://app.datadoghq.com/services/checkout-api)_") {
+		t.Fatalf("export = %q, want the chip's Related link", exported)
+	}
 
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyUp})
-	if got := m.editor.Attachments(); len(got) != 1 || got[0].ID != "checkout-api" {
+	if got := m.editor.Attachments(); len(got) != 1 || got[0].ID != "checkout-api" || got[0].URL != "https://app.datadoghq.com/services/checkout-api" {
 		t.Fatalf("recalled chips = %#v", got)
 	}
 	_, _ = m.handleEditorKey(tea.KeyPressMsg{Code: tea.KeyEnter})

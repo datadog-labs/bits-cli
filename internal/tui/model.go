@@ -62,6 +62,8 @@ type Config struct {
 	OpenURL        func(context.Context, string) error
 	Logout         LogoutFunc
 	Upgrade        *update.Offer // nil when this installation cannot update itself
+	// InitialPrompt is sent verbatim as the first message once chat is ready.
+	InitialPrompt string
 }
 
 // Model is the root Bubble Tea model. All state lives here and is mutated only
@@ -215,6 +217,11 @@ type Model struct {
 
 	// version is injected so the TUI stays independent of the command layer.
 	version string
+
+	// initialPrompt is sent as plain text, never as a command. A restore
+	// clears the engine queue, so the prompt joins it only once the restore
+	// ends, and an interrupted restore leaves it there, paused.
+	initialPrompt string
 }
 
 // New builds the root model for the given engine. When the engine is bound to a
@@ -280,6 +287,7 @@ func (m *Model) configure(configs []Config) {
 		m.logout = configs[0].Logout
 		m.version = configs[0].Version
 		m.upgrade = newUpgradePrompt(configs[0].Upgrade)
+		m.initialPrompt = configs[0].InitialPrompt
 	}
 	if m.entitySearcher == nil && m.engine != nil {
 		m.entitySearcher = m.engine
@@ -407,7 +415,7 @@ func (m *Model) initChat() tea.Cmd {
 	commands = append(commands, waitEvent(m.events), m.fetchCurrentUser())
 	if m.engine.State().ConversationID == "" {
 		// Fetch the startup offer only when there is no history to restore.
-		return tea.Batch(append(commands, m.syncResume(), m.syncClientSkills())...)
+		return tea.Batch(append(commands, m.syncResume(), m.syncClientSkills(), m.sendInitialPrompt())...)
 	}
 	m.chatPhase = chat.PhaseLoading
 	ctx, cancel := context.WithTimeout(context.Background(), historyLoadTimeout)

@@ -20,6 +20,7 @@ type Attachment struct {
 	Type               string
 	ID                 string
 	Label              string
+	URL                string
 	CandidateID        string
 	SearchFlowID       string
 	Rank               int

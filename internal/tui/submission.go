@@ -107,6 +107,31 @@ func (m *Model) startTurn(start func(context.Context, agent.TurnInput) (agent.Ru
 	return failed
 }
 
+// sendInitialPrompt starts a fresh chat's first turn with the startup prompt.
+func (m *Model) sendInitialPrompt() tea.Cmd {
+	if m.initialPrompt == "" {
+		return nil
+	}
+	in := agent.TurnInput{Message: m.initialPrompt}
+	m.initialPrompt = ""
+	return m.startTurn(m.engine.StartTurn, in)
+}
+
+// queueInitialPrompt hands the startup prompt to the engine queue once a
+// restore has ended.
+func (m *Model) queueInitialPrompt() tea.Cmd {
+	if m.initialPrompt == "" || m.engine == nil {
+		return nil
+	}
+	in := agent.TurnInput{Message: m.initialPrompt}
+	m.initialPrompt = ""
+	if err := m.engine.Queue(in); err != nil {
+		return m.postNotice(noticeForError("", err))
+	}
+	m.state = m.engine.State() // the event that publishes it follows
+	return nil
+}
+
 // syncQueue mirrors the engine's queue into the editor. Only a turn drains
 // prompts; other exclusive operations leave them waiting for Enter.
 func (m *Model) syncQueue() {

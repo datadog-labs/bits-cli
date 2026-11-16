@@ -30,6 +30,7 @@ Open your project and launch Bits:
 ```sh
 cd your-project
 bits
+bits "why is checkout latency up?"   # start with a first message
 ```
 
 On first launch, choose your Datadog site and sign in through your browser.
@@ -48,6 +49,7 @@ server. Type `@` to find services, monitors, incidents, and dashboards.
 - `/rename [title]` renames the current conversation. Without a title, Bits
   asks for one.
 - `/web` opens the current conversation in Datadog.
+- `/export` copies the whole conversation to your clipboard as Markdown
 - `/skills-library` opens the Skills Library.
 
 You can also resume by ID:
