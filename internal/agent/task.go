@@ -35,7 +35,6 @@ type Task struct {
 	ID      string
 	Name    string
 	AgentID string // the server agent running it, such as "investigation"
-	CallID  string // the startBackgroundTask call that started it, if known
 	// StartedAt is when its start call succeeded, zero if unknown.
 	StartedAt time.Time
 	Status    TaskStatus
@@ -46,6 +45,10 @@ type Task struct {
 	// outcome if any. They are folded apart from the conversation, whose turns
 	// own their range of blocks, and a reconnection replaces them whole.
 	Blocks []Block
+	// After holds, for each of Blocks, the conversation block it follows: the
+	// newest one when it arrived, or the one before it in history. Live
+	// messages carry no time, so arrival is the server's order.
+	After []BlockID
 }
 
 // task is the actor's state for one background task.
@@ -73,11 +76,29 @@ func taskOf(b Block) (*task, bool) {
 	var input spec.StartBackgroundTaskInput
 	_ = json.Unmarshal([]byte(b.Tool.Input), &input)
 	t := newTask(output.TaskID)
-	t.Name, t.AgentID, t.CallID = input.Task.TaskName, input.Task.AgentID, b.ToolCallID()
+	t.Name, t.AgentID = input.Task.TaskName, input.Task.AgentID
 	if b.CreatedAt > 0 {
 		t.StartedAt = time.UnixMilli(b.CreatedAt)
 	}
 	return t, true
+}
+
+// place puts the blocks of t that have no place yet after the conversation
+// block last. A replay keeps the places of the blocks it replaces, since it
+// replays them in the same order.
+func (t *task) place(last BlockID) {
+	for range len(t.transcript.Blocks()) - len(t.After) {
+		t.After = append(t.After, last)
+	}
+}
+
+// lastBlockID is the ID of the newest block in tr, zero if it has none.
+func lastBlockID(tr *Transcript) BlockID {
+	blocks := tr.Blocks()
+	if len(blocks) == 0 {
+		return BlockID{}
+	}
+	return blocks[len(blocks)-1].ID
 }
 
 // taskIDOf returns the task a wire message belongs to, if any.
@@ -115,18 +136,22 @@ func startedTasks(tasks []*task, blocks []Block) []*task {
 }
 
 // historyTasks folds a conversation's messages: each task's messages into the
-// task, the rest into the returned transcript. A task whose final update is
-// persisted is done; one whose start call is missing is kept, unnamed.
+// task, after the conversation block before them, the rest into the returned
+// transcript. A task whose final update is persisted is done; one whose start
+// call is missing is kept, unnamed.
 func historyTasks(messages []assistant.Message) (*Transcript, []*task) {
 	transcript := NewTranscript()
-	for _, msg := range messages {
+	after := make([]BlockID, len(messages))
+	for i, msg := range messages {
 		if taskIDOf(msg) == "" {
 			transcript.AppendMessage(msg)
+		} else {
+			after[i] = lastBlockID(transcript)
 		}
 	}
 	transcript.FinalizeAll()
 	tasks := startedTasks(nil, transcript.Blocks())
-	for _, msg := range messages {
+	for i, msg := range messages {
 		id := taskIDOf(msg)
 		if id == "" {
 			continue
@@ -137,6 +162,7 @@ func historyTasks(messages []assistant.Message) (*Transcript, []*task) {
 			tasks = append(tasks, t)
 		}
 		t.transcript.AppendMessage(msg)
+		t.place(after[i])
 		if isFinalUpdate(msg) {
 			t.Status = TaskDone
 		}
@@ -153,6 +179,7 @@ func (e *Engine) taskViews() []Task {
 	for _, t := range e.tasks {
 		view := t.Task
 		view.Blocks = slices.Clone(t.transcript.Blocks())
+		view.After = slices.Clone(t.After)
 		tasks = append(tasks, view)
 	}
 	return tasks
@@ -294,36 +321,45 @@ func (e *Engine) observe(ctx context.Context, backend TaskBackend, conversation 
 }
 
 // updateTask applies change to t on the actor and publishes the state if t
-// changed and still belongs to the conversation.
+// changed and still belongs to the conversation. New blocks follow the newest
+// conversation block, even mid-turn: the server appended them there.
 func (e *Engine) updateTask(t *task, change func() bool) {
 	e.do(func() {
 		if change() && slices.Contains(e.tasks, t) {
+			t.place(lastBlockID(e.transcript))
 			e.publish()
 		}
 	})
 }
 
-// BlocksWithTasks shows each background task's blocks right after the call that
-// started it, so a task reads the same live and restored however the
-// conversation went on. A task whose call is not shown goes last.
+// BlocksWithTasks merges the conversation's blocks with its tasks' in the
+// order the server appended them: each task block right after the
+// conversation block it follows. One whose conversation block is not shown
+// goes last.
+//
+// NOTE: tasks' blocks that follow the same conversation block show task by
+// task, not interleaved as they arrived.
 func BlocksWithTasks(blocks []Block, tasks []Task) []Block {
 	if len(tasks) == 0 {
 		return blocks
 	}
-	out := make([]Block, 0, len(blocks))
-	placed := make([]bool, len(tasks))
-	for _, b := range blocks {
-		out = append(out, b)
-		for i, task := range tasks {
-			if task.CallID != "" && task.CallID == b.ToolCallID() {
-				out = append(out, task.Blocks...)
-				placed[i] = true
-			}
+	following := make(map[BlockID][]Block)
+	for _, task := range tasks {
+		for i, b := range task.Blocks {
+			following[task.After[i]] = append(following[task.After[i]], b)
 		}
 	}
-	for i, task := range tasks {
-		if !placed[i] {
-			out = append(out, task.Blocks...)
+	out := make([]Block, 0, len(blocks))
+	for _, b := range blocks {
+		out = append(out, b)
+		out = append(out, following[b.ID]...)
+		delete(following, b.ID)
+	}
+	for _, task := range tasks {
+		for i, b := range task.Blocks {
+			if _, unshown := following[task.After[i]]; unshown {
+				out = append(out, b)
+			}
 		}
 	}
 	return out
