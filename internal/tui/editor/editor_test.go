@@ -2,6 +2,7 @@ package editor
 
 import (
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1150,5 +1151,114 @@ func TestPromptMarkerOnlyOnFirstRow(t *testing.T) {
 		if got, want := strings.HasPrefix(row, theme.Input.Prompt), i == 0; got != want {
 			t.Fatalf("row %d has marker = %v, want %v:\n%s", i, got, want, strings.Join(rows, "\n"))
 		}
+	}
+}
+
+func pickerTestEditor(t *testing.T) *Editor {
+	t.Helper()
+	e := New()
+	e.SetCommands(append(slices.Clone(testCommands), CommandSpec{Name: "skills-library", Detail: "browse the Skills Library"}))
+	items := make([]Candidate, 0, 12)
+	for _, name := range []string{"clear-writing", "slo-review", "onboarding", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9"} {
+		detail := "about " + name
+		if name == "onboarding" {
+			detail = "explain kubernetes"
+		}
+		items = append(items, Candidate{Kind: CandidateCommandArgument, ID: name, Label: name, Detail: detail, Insert: "/skills-library:" + name})
+	}
+	e.SetCommandPicker("skills-library", items, "")
+	return e
+}
+
+func setEditorText(e *Editor, value string) {
+	e.ta.SetValue(value)
+	e.ta.SetCursorColumn(len([]rune(value)))
+	e.recompute()
+}
+
+func menuIDs(e *Editor) []string {
+	ids := make([]string, 0, len(e.menu.items))
+	for _, item := range e.menu.items {
+		ids = append(ids, item.ID)
+	}
+	return ids
+}
+
+func TestCommandPickerFiltersBothForms(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  []string
+	}{
+		{value: "/skills-library ", want: nil}, // every row
+		{value: "/skills-library:", want: nil},
+		{value: "/skills-library slo", want: []string{"slo-review"}},
+		{value: "/skills-library:slo", want: []string{"slo-review"}},
+		{value: "/skills-library KUBER", want: []string{"onboarding"}},
+		{value: "/skills-library:kuber", want: []string{"onboarding"}},
+		{value: "/skills-library zzz", want: []string{}},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			e := pickerTestEditor(t)
+			setEditorText(e, tc.value)
+			if !e.CommandPickerActive() || !e.MenuOpen() {
+				t.Fatal("picker did not open")
+			}
+			got := menuIDs(e)
+			if tc.want == nil {
+				if len(got) != 12 {
+					t.Fatalf("rows = %d, want all 12 uncapped", len(got))
+				}
+				return
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("rows = %v, want %v", got, tc.want)
+			}
+			if len(tc.want) == 0 && e.menu.status != "No matches" {
+				t.Fatalf("status = %q", e.menu.status)
+			}
+			if _, ok := e.SelectedCommand(); ok {
+				t.Fatal("picker row reported as a command")
+			}
+		})
+	}
+}
+
+func TestCommandPickerAcceptAndEscape(t *testing.T) {
+	for _, value := range []string{"/skills-library clear", "/skills-library:cle"} {
+		e := pickerTestEditor(t)
+		setEditorText(e, value)
+		e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if got := e.Value(); got != "/skills-library:clear-writing " {
+			t.Fatalf("%q accepted as %q", value, got)
+		}
+		if e.MenuOpen() || e.CommandPickerActive() {
+			t.Fatalf("%q: menu still open after accept", value)
+		}
+	}
+
+	e := pickerTestEditor(t)
+	setEditorText(e, "/skills-library draft")
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if e.MenuOpen() || e.Value() != "/skills-library draft" {
+		t.Fatalf("Esc: open=%v value=%q", e.MenuOpen(), e.Value())
+	}
+	e.ReopenCompletion()
+	if !e.MenuOpen() {
+		t.Fatal("ReopenCompletion did not reopen the picker")
+	}
+}
+
+func TestBareSkillsLibraryWordShowsOneCommandRow(t *testing.T) {
+	e := pickerTestEditor(t)
+	setEditorText(e, "/skills-library")
+	if e.CommandPickerActive() {
+		t.Fatal("picker opened before the separator")
+	}
+	if name, ok := e.SelectedCommand(); !ok || name != "skills-library" || len(e.menu.items) != 1 {
+		t.Fatalf("SelectedCommand = %q, %v; rows %v", name, ok, menuIDs(e))
+	}
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if e.Value() != "/skills-library " || !e.CommandPickerActive() || len(e.menu.items) != 12 {
+		t.Fatalf("value %q, picker %v, rows %d", e.Value(), e.CommandPickerActive(), len(e.menu.items))
 	}
 }

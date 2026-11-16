@@ -57,6 +57,7 @@ type Editor struct {
 	remoteState       RemoteState
 	completedMentions []trackedMention
 	dismissedValue    string
+	picker            commandPicker
 	history           history
 	queue             promptQueue
 	queueUI           queuePresentation
@@ -85,6 +86,45 @@ type Editor struct {
 func (e *Editor) SetCommands(commands []CommandSpec) {
 	e.commandSpecs = append([]CommandSpec(nil), commands...)
 	e.recompute()
+}
+
+func (e *Editor) SetCommandPicker(command string, items []Candidate, status string) {
+	e.picker = commandPicker{command: command, items: append([]Candidate(nil), items...), status: status}
+	e.recompute()
+}
+
+func (e *Editor) CommandPickerActive() bool {
+	if e.dismissedValue != "" && e.ta.Value() == e.dismissedValue {
+		return false
+	}
+	_, _, ok := e.pickerSpan()
+	return ok
+}
+
+// ReopenCompletion clears an Escape dismissal.
+func (e *Editor) ReopenCompletion() {
+	e.dismissedValue = ""
+	e.recompute()
+}
+
+// The replaced span always starts at column 0.
+func (e *Editor) pickerSpan() (end int, query string, ok bool) {
+	if e.picker.command == "" || e.ta.Line() != 0 {
+		return 0, "", false
+	}
+	line, _, _ := strings.Cut(e.ta.Value(), "\n")
+	runes := []rune(line)
+	col := min(max(e.ta.Column(), 0), len(runes))
+	start, end := wordBounds(runes, col)
+	colon := []rune("/" + e.picker.command + ":")
+	if start == 0 && end >= len(colon) && string(runes[:len(colon)]) == string(colon) {
+		return end, string(runes[len(colon):end]), true
+	}
+	space := []rune("/" + e.picker.command + " ")
+	if col >= len(space) && string(runes[:len(space)]) == string(space) {
+		return end, strings.TrimLeft(string(runes[len(space):col]), " "), true
+	}
+	return 0, "", false
 }
 
 // menu is the completion popup state rendered below the textarea.
@@ -347,8 +387,9 @@ func (e *Editor) SelectedCommand() (string, bool) {
 	if !e.menu.open || len(e.menu.items) == 0 || e.menu.selector == nil || !e.commandTriggerActive(e.ta.Word()) {
 		return "", false
 	}
-	insert := e.menu.items[e.menu.selector.Index()].Insert
-	if !strings.HasPrefix(insert, "/") {
+	item := e.menu.items[e.menu.selector.Index()]
+	insert := item.Insert
+	if item.Kind == CandidateCommandArgument || !strings.HasPrefix(insert, "/") {
 		return "", false
 	}
 	return strings.TrimPrefix(insert, "/"), true
@@ -592,6 +633,16 @@ func (e *Editor) recompute() {
 		e.closeMenu()
 		return
 	}
+	if _, query, ok := e.pickerSpan(); ok {
+		items := e.picker.matches(query)
+		status := e.picker.status
+		if status == "" && len(items) == 0 {
+			status = "No matches"
+		}
+		e.setMenu(items, status)
+		e.menu.selector.SetMaxLabelWidth(pickerLabelWidth)
+		return
+	}
 	word := e.ta.Word()
 	if strings.HasPrefix(word, "/") {
 		if !e.commandTriggerActive(word) {
@@ -737,7 +788,16 @@ func (e *Editor) acceptCandidate(trailingSpace bool) {
 		lineStart += len([]rune(lines[i])) + 1
 	}
 	start, end := wordBounds(runes, col)
-	if candidate.Kind != CandidateCommand {
+	switch candidate.Kind {
+	case CandidateCommandArgument:
+		pickerEnd, _, ok := e.pickerSpan()
+		if !ok {
+			e.closeMenu()
+			return
+		}
+		start, end = 0, pickerEnd
+	case CandidateCommand:
+	case CandidateFile, CandidateEntity:
 		if span, ok := e.activeEntitySpan(); ok {
 			start = span.start
 			end = span.replacementEnd
@@ -760,13 +820,17 @@ func (e *Editor) acceptCandidate(trailingSpace bool) {
 		e.ta.SetCursorColumn(start + len(repl))
 	}
 	mention := trackedMention{text: insert, start: lineStart + start, end: lineStart + start + len([]rune(insert))}
-	if candidate.Kind != CandidateCommand {
+	if candidate.Kind != CandidateCommand && candidate.Kind != CandidateCommandArgument {
 		e.completedMentions = append(e.completedMentions, mention)
 	}
 	if candidate.Attachment != nil {
 		e.AddAttachment(*candidate.Attachment)
 	}
 	e.closeMenu()
+	if candidate.Kind == CandidateCommand && e.CommandPickerActive() {
+		// Completing a picker's command moves straight into its argument.
+		e.recompute()
+	}
 }
 
 func (e *Editor) closeMenu() { e.menu = menu{} }

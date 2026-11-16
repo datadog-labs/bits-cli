@@ -135,3 +135,35 @@ func TestSelectorViewWindowKeepsSelectionVisible(t *testing.T) {
 		t.Fatalf("window view = %q", plain)
 	}
 }
+
+func TestSelectorMaxLabelWidthCapsLabelColumn(t *testing.T) {
+	long := strings.Repeat("n", 50)
+	sty := styles.Default(true).Selector
+	sty.Marker, sty.SelectedMarker, sty.ColumnGap = "", "", 2
+	for _, tc := range []struct {
+		name      string
+		cap       int
+		width     int
+		wantLabel int
+	}{
+		{name: "third of width", cap: 36, width: 60, wantLabel: 20},
+		{name: "fixed cap", cap: 36, width: 150, wantLabel: 36},
+		{name: "unset", cap: 0, width: 150, wantLabel: 50},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selector := NewSelector([]Choice{{Label: long, Detail: "description"}}, sty)
+			selector.SetMaxLabelWidth(tc.cap)
+			line := ansi.Strip(selector.View(tc.width))
+			label, _, _ := strings.Cut(line, "  ")
+			if got := ansi.StringWidth(label); got != tc.wantLabel {
+				t.Fatalf("label width = %d, want %d: %q", got, tc.wantLabel, line)
+			}
+			if tc.cap > 0 && !strings.HasSuffix(label, "…") {
+				t.Fatalf("label not ellipsized: %q", label)
+			}
+			if !strings.Contains(line, "description") {
+				t.Fatalf("detail missing: %q", line)
+			}
+		})
+	}
+}

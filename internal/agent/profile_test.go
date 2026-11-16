@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -66,3 +68,49 @@ func TestNewPreservesExplicitSkillOverrides(t *testing.T) {
 		}
 	}
 }
+
+func TestTurnSkillOverridesApplyToOneTurn(t *testing.T) {
+	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
+	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := New(backend, Config{PermissionsMode: ModeSkipPermissions})
+	library := assistant.SkillOverride{Name: "skills-library/clear-writing", Source: assistant.SkillSourceSkillsLibrary, Enabled: true}
+	coding := assistant.SkillOverride{Name: "coding", Source: assistant.SkillSourceAssistant, Enabled: true}
+	drain(t, engine, TurnInput{Message: "first", Tools: tools, SkillOverrides: []assistant.SkillOverride{library, coding}})
+	drain(t, engine, TurnInput{Message: "second", Tools: tools})
+	if len(backend.opts) != 3 {
+		t.Fatalf("requests = %d, want 3", len(backend.opts))
+	}
+	for i, opts := range backend.opts {
+		turn := i < 2 // the first turn includes its tool-result continuation
+		if got := slices.Contains(opts.SkillOverrides, library); got != turn {
+			t.Errorf("request %d library override = %v, want %v", i, got, turn)
+		}
+		if got := slices.Contains(opts.SkillOverrides, coding); got != turn {
+			t.Errorf("request %d coding enabled = %v, want %v", i, got, turn)
+		}
+		if turn && slices.Contains(opts.SkillOverrides, assistant.SkillOverride{Name: "coding", Source: assistant.SkillSourceAssistant}) {
+			t.Errorf("request %d kept the replaced default", i)
+		}
+	}
+}
+
+func TestServerSkills(t *testing.T) {
+	if _, err := New(&scriptBackend{}, Config{}).ServerSkills(t.Context()); !errors.Is(err, ErrSkillsUnsupported) {
+		t.Fatalf("err = %v, want ErrSkillsUnsupported", err)
+	}
+	want := []assistant.Skill{{Name: "skills-library/clear-writing", Source: "skills_library"}}
+	skills, err := New(&skillsBackend{skills: want}, Config{}).ServerSkills(t.Context())
+	if err != nil || !slices.Equal(skills, want) {
+		t.Fatalf("skills = %v, err = %v", skills, err)
+	}
+}
+
+type skillsBackend struct {
+	scriptBackend
+	skills []assistant.Skill
+}
+
+func (b *skillsBackend) ListSkills(context.Context) ([]assistant.Skill, error) { return b.skills, nil }

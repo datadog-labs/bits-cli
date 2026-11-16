@@ -24,6 +24,7 @@ var (
 	ErrMaxTurns               = errors.New("exceeded max turns")
 	ErrHistoryUnsupported     = errors.New("backend does not support loading conversation history")
 	ErrCurrentUserUnsupported = errors.New("backend does not support loading the current user")
+	ErrSkillsUnsupported      = errors.New("backend does not support listing skills")
 	ErrOperationActive        = errors.New("another conversation operation is active")
 	ErrNoPendingTools         = errors.New("no resumable client tools")
 	ErrClosed                 = errors.New("engine is closed")
@@ -50,6 +51,10 @@ type HistoryBackend interface {
 // surfaces. Backends without an authenticated Datadog principal may omit it.
 type CurrentUserBackend interface {
 	CurrentUser(context.Context) (assistant.CurrentUser, error)
+}
+
+type SkillsBackend interface {
+	ListSkills(context.Context) ([]assistant.Skill, error)
 }
 
 // EventKind discriminates the events the engine streams for an operation.
@@ -352,7 +357,7 @@ func New(b Backend, config Config) *Engine {
 		InferenceMode:             config.InferenceMode,
 		Profile:                   config.Profile,
 		Referrer:                  config.Referrer,
-		SkillOverrides:            mergeSkillOverrides(config.SkillOverrides),
+		SkillOverrides:            mergeSkillOverrides(defaultSkillOverrides, config.SkillOverrides),
 		ExperimentalToolOverrides: config.ExperimentalToolOverrides,
 		EnableDebugMode:           config.EnableDebugMode,
 		DebugTag:                  config.DebugTag,
@@ -566,6 +571,8 @@ type TurnInput struct {
 	Context *assistant.AssistantContext
 	// OnDeny is the turn's policy after a denial is answered on the wire.
 	OnDeny DenyPolicy
+	// SkillOverrides apply to this turn only.
+	SkillOverrides []assistant.SkillOverride
 }
 
 // StartTurn starts one user turn and its client-tool round trips, and returns
@@ -835,6 +842,14 @@ func (e *Engine) CurrentUser(ctx context.Context) (assistant.CurrentUser, error)
 		return assistant.CurrentUser{}, ErrCurrentUserUnsupported
 	}
 	return backend.CurrentUser(ctx)
+}
+
+func (e *Engine) ServerSkills(ctx context.Context) ([]assistant.Skill, error) {
+	backend, ok := e.backend.(SkillsBackend)
+	if !ok {
+		return nil, ErrSkillsUnsupported
+	}
+	return backend.ListSkills(ctx)
 }
 
 // PreviousConversationID reports the most recent non-empty conversation that

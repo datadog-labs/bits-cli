@@ -21,20 +21,20 @@ var defaultSkillOverrides = []assistant.SkillOverride{
 	{Name: "update-cloudcraft-diagram", Source: assistant.SkillSourceAssistant, Enabled: false}, // Requires the currently open Cloudcraft diagram page.
 }
 
-// mergeSkillOverrides adds defaults for skills the caller has not configured.
-// Explicit entries take precedence by name and source; the input is not mutated.
-func mergeSkillOverrides(explicit []assistant.SkillOverride) []assistant.SkillOverride {
-	overrides := append([]assistant.SkillOverride(nil), explicit...)
-	configured := make(map[skillKey]struct{}, len(overrides))
-	for _, override := range overrides {
-		configured[skillKey{name: override.Name, source: override.Source}] = struct{}{}
-	}
-	for _, override := range defaultSkillOverrides {
-		key := skillKey{name: override.Name, source: override.Source}
-		if _, ok := configured[key]; ok {
-			continue
+// Later layers win by name and source; inputs are not mutated.
+func mergeSkillOverrides(layers ...[]assistant.SkillOverride) []assistant.SkillOverride {
+	var overrides []assistant.SkillOverride
+	index := make(map[skillKey]int)
+	for _, layer := range layers {
+		for _, override := range layer {
+			key := skillKey{name: override.Name, source: override.Source}
+			if i, ok := index[key]; ok {
+				overrides[i] = override
+				continue
+			}
+			index[key] = len(overrides)
+			overrides = append(overrides, override)
 		}
-		overrides = append(overrides, override)
 	}
 	return overrides
 }

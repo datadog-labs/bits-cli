@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -165,6 +166,9 @@ func TestDequeueBatchesUpToSkillsAndTheImageLimit(t *testing.T) {
 	}
 	skill := QueuedPrompt{Message: "/review x", Skill: &SkillInvocation{Name: "review", Arguments: "x"}}
 	service := assistant.ContextEntity{Type: "service", ID: "web"}
+	override := []assistant.SkillOverride{{Name: "skills-library/clear-writing", Source: assistant.SkillSourceSkillsLibrary, Enabled: true}}
+	library := QueuedPrompt{Message: "/clear-writing x", SkillOverrides: override}
+	stale := TurnInput{SkillOverrides: []assistant.SkillOverride{{Name: "stale", Enabled: true}}}
 
 	e := New(&scriptBackend{}, Config{})
 	defer e.Close()
@@ -176,8 +180,10 @@ func TestDequeueBatchesUpToSkillsAndTheImageLimit(t *testing.T) {
 			with("b", image("1"), image("4"), image("5")),
 			skill,
 			with("c"),
+			library,
+			with("d"),
 		}
-		for in, ok := e.dequeue(TurnInput{}); ok; in, ok = e.dequeue(TurnInput{}) {
+		for in, ok := e.dequeue(stale); ok; in, ok = e.dequeue(stale) {
 			batches = append(batches, in)
 		}
 	})
@@ -186,6 +192,8 @@ func TestDequeueBatchesUpToSkillsAndTheImageLimit(t *testing.T) {
 		{Message: "b", Context: &assistant.AssistantContext{Entities: []assistant.ContextEntity{image("1"), image("4"), image("5")}}},
 		{Message: skill.Message, Skill: skill.Skill},
 		{Message: "c"},
+		{Message: library.Message, SkillOverrides: override},
+		{Message: "d"},
 	}
 	if !reflect.DeepEqual(batches, want) {
 		t.Fatalf("batches = %+v\nwant %+v", batches, want)
@@ -243,5 +251,52 @@ func TestQueueAfterToolRoundsAndStop(t *testing.T) {
 			t.Fatalf("stop=%v: queued %q, want %q", stop, got, wantQueued)
 		}
 		e.Close()
+	}
+}
+
+// Overrides queued with a prompt reach its request and only its request,
+// whether the running turn drains the queue or SendQueued sends it.
+func TestQueuedSkillOverridesReachTheirRequest(t *testing.T) {
+	override := assistant.SkillOverride{Name: "skills-library/clear-writing", Source: assistant.SkillSourceSkillsLibrary, Enabled: true}
+	for _, drain := range []bool{true, false} {
+		backend := &scriptBackend{convID: "c", started: make(chan struct{}), hold: make(chan struct{})}
+		e := New(backend, Config{})
+		events, unsubscribe := e.Subscribe()
+		ctx, cancel := context.WithCancel(t.Context())
+		run, err := e.StartTurn(ctx, TurnInput{Message: "one"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-backend.started
+		for _, in := range []TurnInput{
+			{Message: "/clear-writing x", SkillOverrides: []assistant.SkillOverride{override}},
+			{Message: "plain"},
+		} {
+			if err := e.Queue(in); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if drain {
+			close(backend.hold)
+		} else {
+			cancel() // the queue waits for SendQueued
+		}
+		for range Follow(events, run) {
+		}
+		if !drain {
+			close(backend.hold)
+			if run, err = e.SendQueued(t.Context(), TurnInput{}); err != nil {
+				t.Fatal(err)
+			}
+			for range Follow(events, run) {
+			}
+		}
+		unsubscribe()
+		e.Close()
+		cancel()
+		sent := backend.opts[len(backend.opts)-2:]
+		if !slices.Contains(sent[0].SkillOverrides, override) || slices.Contains(sent[1].SkillOverrides, override) {
+			t.Fatalf("drain=%v: overrides = %+v then %+v", drain, sent[0].SkillOverrides, sent[1].SkillOverrides)
+		}
 	}
 }

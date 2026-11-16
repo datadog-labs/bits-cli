@@ -279,6 +279,10 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clientSkillsResultMsg:
 		return m, m.applyClientSkills(msg)
 
+	case skillsLibraryResultMsg:
+		m.applySkillsLibrary(msg)
+		return m, nil
+
 	case toolUIOpenedMsg:
 		m.openToolUI(msg.request)
 		return m, waitToolUI(m.toolUI)
@@ -827,7 +831,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "enter" {
 			if name, selected := m.editor.SelectedCommand(); selected {
-				if _, registered := lookupCommand(name); registered {
+				if _, registered := lookupCommand(name); registered && name != skillsLibraryCommand {
 					m.editor.Reset()
 					m.stopEntitySearch()
 					return m.dispatchCommand(name, "")

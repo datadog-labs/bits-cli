@@ -50,6 +50,7 @@ server. Type `@` to find services, monitors, incidents, and dashboards.
   asks for one.
 - `/web` opens the current conversation in Datadog.
 - `/export` copies the whole conversation to your clipboard as Markdown
+- `/skills-library` opens the Skills Library.
 
 You can also resume by ID:
 
