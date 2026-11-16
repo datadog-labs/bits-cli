@@ -36,6 +36,7 @@ type exchange interface {
 // exchangeEvent is one backend fact, applied field by field. Only execute
 // makes a client call run: content alone, whatever its type, never does.
 type exchangeEvent struct {
+	rootTurnCompleted bool
 	// round starts this backend send, 1-based. Every send is announced
 	// before it is made, so a turn cancelled earlier stays outside any round.
 	round        int
@@ -198,7 +199,7 @@ func (x *streamExchange) run(ctx context.Context, emit func(exchangeEvent) bool)
 	}
 	err := x.backend.Stream(ctx, x.message, x.opts, func(response assistant.AssistantResponse) error {
 		msg := response.Data.Attributes.StructuredMessage
-		ev := exchangeEvent{message: &msg}
+		ev := exchangeEvent{message: &msg, rootTurnCompleted: response.RootTurnCompleted}
 		if id := response.Data.Attributes.ConversationID; id != "" && id != conversation {
 			conversation, ev.conversation = id, id
 		}

@@ -261,20 +261,6 @@ func collect(ch <-chan Event) []Event {
 	return evs
 }
 
-// superseded keeps the last of each run of events that supersede each other,
-// as a slow consumer's subscription may deliver them.
-func superseded(evs []Event) []Event {
-	var kept []Event
-	for _, ev := range evs {
-		if n := len(kept); n > 0 && ev.supersedes(kept[n-1]) {
-			kept[n-1] = ev
-			continue
-		}
-		kept = append(kept, ev)
-	}
-	return kept
-}
-
 func TestEngineInfersMissingClientIdentityForRegisteredStreamedTool(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -349,7 +335,7 @@ func TestSnapshotDerivesTranscriptViewState(t *testing.T) {
 	e.transcript.AppendMessage(assistant.AssistantMessage("text", assistant.TextContent("partial")))
 
 	snapshot := e.state()
-	if !snapshot.HasStreamingContent() {
+	if !snapshot.HasStreamingContent(snapshot.Blocks[0].Run) {
 		t.Fatal("HasStreamingContent() = false, want true for open assistant text")
 	}
 	pending := snapshot.PendingApprovals()
@@ -398,15 +384,12 @@ func TestSnapshotUserPrompts(t *testing.T) {
 // coalesced returns evs as a consumer that read none of them yet receives
 // them, so sequences do not depend on how fast the test reads.
 func coalesced(evs []Event) []Event {
-	var out []Event
+	o := &outbox{}
+	o.ready.L = &o.mu
 	for _, ev := range evs {
-		if n := len(out); n > 0 && ev.supersedes(out[n-1]) {
-			out[n-1] = ev
-		} else {
-			out = append(out, ev)
-		}
+		o.push(ev)
 	}
-	return out
+	return o.queue
 }
 
 func kinds(evs []Event) []EventKind {

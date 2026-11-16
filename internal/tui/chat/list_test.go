@@ -49,7 +49,7 @@ func disclosableToolBlock(key string) agent.Block {
 // listWithTool returns a sized list holding one tool block with output.
 func listWithTool(status agent.ToolStatus) *List {
 	list := NewList()
-	list.SetRunning(true)
+	list.SetActiveRuns(0)
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(80)
 	list.SetHeight(8)
@@ -286,7 +286,7 @@ func TestReasoningExpandsToItsThinkingText(t *testing.T) {
 
 func TestReasoningGroupStaysActiveWhileMemberStreams(t *testing.T) {
 	list := NewList()
-	list.SetRunning(true)
+	list.SetActiveRuns(0)
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(80)
 	list.SetHeight(8)
@@ -458,7 +458,7 @@ func TestInspectionGroupRowsStayWithinWidth(t *testing.T) {
 
 func TestInspectionSpinnerAnimationKeepsHeaderWidth(t *testing.T) {
 	list := NewList()
-	list.SetRunning(true)
+	list.SetActiveRuns(0)
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(80)
 	list.SetHeight(5)
@@ -1115,7 +1115,7 @@ func TestToolGroupsKeepReasoningAndChildDisclosure(t *testing.T) {
 	} {
 		t.Run(family.name, func(t *testing.T) {
 			list := NewList()
-			list.SetRunning(true)
+			list.SetActiveRuns(0)
 			list.SetStyles(DefaultStyles(true))
 			list.SetWidth(100)
 			list.SetHeight(80)
@@ -1230,15 +1230,15 @@ func TestWidgetViewAnimatesAfterTurnAndIsClickable(t *testing.T) {
 	list.SetWidth(60)
 	list.SetHeight(20)
 	list.SetItems([]agent.Block{{ID: id, Kind: assistant.KindWidget, Complete: true, Widget: &assistant.WidgetPayload{Title: "CPU"}}})
-	list.SetRunning(false)
+	list.SetActiveRuns()
 
 	view := WidgetView{Image: graphics.Image{Columns: 40, Rows: 8}, Loading: "Rendering", Action: WidgetOpen}
 	list.SetWidgetView(id, view)
-	list.SetRunning(true)
+	list.SetActiveRuns(0)
 	if !list.HasAnimated() || list.Working() {
 		t.Fatal("a loading widget must animate without counting as the agent's work")
 	}
-	list.SetRunning(false)
+	list.SetActiveRuns()
 	if !list.HasAnimated() {
 		t.Fatal("loading widget did not animate after the turn")
 	}

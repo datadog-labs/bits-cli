@@ -32,3 +32,27 @@ func BenchmarkTranscriptStreaming(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkTranscriptInterleavedStreaming(b *testing.B) {
+	for _, fragments := range []int{800, 3200} {
+		b.Run("fragments_"+strconv.Itoa(fragments), func(b *testing.B) {
+			messages := []assistant.Message{
+				assistant.AssistantMessage("first", assistant.TextContent("stream ")),
+				assistant.AssistantMessage("second", assistant.TextContent("stream ")),
+			}
+			b.ReportAllocs()
+			for range b.N {
+				tr := NewTranscript()
+				for i := range fragments {
+					tr.run = RunID(i%2 + 1)
+					tr.AppendMessage(messages[i%2])
+				}
+				tr.FinalizeAll()
+				benchmarkTranscriptContent = tr.Blocks()[0].Markdown.Content
+			}
+			if len(benchmarkTranscriptContent) != fragments/2*len("stream ") {
+				b.Fatal("lost interleaved content")
+			}
+		})
+	}
+}
