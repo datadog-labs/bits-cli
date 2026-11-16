@@ -58,7 +58,7 @@ inline preview.
 | --- | --- |
 | `say(text)`, `think(text)` | streamed answer text or reasoning |
 | `random(seed=None, size=None)` | a pseudo-random answer, at least `size` Markdown bytes |
-| `tool(name, input, out=, err=, ns=, title=, detail=, stream=)` or `tool([(name, input, out), …])` | server tool calls, then their results |
+| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, delay=)` or `tool([(name, input, out), …])` | server tool calls, then their results; `delay="3s"` keeps the calls running that long |
 | `call(name, input, stream=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
 | `raw(content, results=, id=)` | any other wire content, through the real decoder |
 | `fail(status)`, `fail("net")`, `fail("timeout")` | a backend failure after the output so far |
