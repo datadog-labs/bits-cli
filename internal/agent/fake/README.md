@@ -22,6 +22,7 @@ a, b = call([("list_files", {"path": "."}), ("grep_files", {"pattern": "TODO"})]
 g = call("approval_request", {"tool_name": "delete_dashboard", "tool_args": {}}); say("deleted" if g.ok else "kept")
 load("questions.star", "ask_user_question"); ask_user_question()
 load("disclosure.star", "all"); all()
+load("grouping.star", "investigation"); investigation()
 ```
 
 Reusable scripts for tests and manual TUI previews live together in
@@ -29,8 +30,8 @@ Reusable scripts for tests and manual TUI previews live together in
 `load("notices.star", "rate_limit"); rate_limit()` from any working directory.
 The runner bundles these scripts; a file with the same name in the working
 directory takes precedence. Full paths below the working directory also work.
-The files cover approvals, command wrapping, links, notices, disclosure, and
-questions.
+The files cover approvals, command wrapping, links, notices, disclosure,
+tool grouping, and questions.
 
 For visualizations, run `BITS_FAKE_BACKEND=1` with a built ddviz helper and
 load `widgets.star`. Only assistant messages are faked: rendering still requires
@@ -58,7 +59,7 @@ inline preview.
 | --- | --- |
 | `say(text)`, `think(text)` | streamed answer text or reasoning |
 | `random(seed=None, size=None)` | a pseudo-random answer, at least `size` Markdown bytes |
-| `tool(name, input, out=, err=, ns=, title=, detail=, stream=)` or `tool([(name, input, out), …])` | server tool calls, then their results |
+| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, delay=)` or `tool([(name, input, out), …])` | server tool calls, then their results; `delay="3s"` keeps the calls running that long |
 | `call(name, input, stream=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
 | `raw(content, results=, id=)` | any other wire content, through the real decoder |
 | `fail(status)`, `fail("net")`, `fail("timeout")` | a backend failure after the output so far |

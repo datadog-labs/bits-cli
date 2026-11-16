@@ -121,7 +121,11 @@ func summarize(msg assistant.Message) (key, head, body string) {
 		if ns := c.Tool.Metadata.Namespace; ns != nil {
 			name = *ns + "." + name
 		}
-		return "", c.Type + ":" + name + " " + c.Tool.Metadata.Input, ""
+		s := c.Type + ":" + name + " " + c.Tool.Metadata.Input
+		if c.Tool.Title != "" {
+			s += " title=" + c.Tool.Title
+		}
+		return "", s, ""
 	case c.Tool != nil:
 		s := c.Type + ":" + c.Tool.Status + " " + c.Tool.Metadata.Output
 		if c.Tool.Title != "" {
@@ -179,7 +183,11 @@ func TestBuiltinsEmit(t *testing.T) {
 		},
 		{
 			name: "tool with extras", message: `tool("search", {"q": "p95"}, out="3", err=True, ns="dd", title="T", detail="D")`,
-			want: []string{`tool_call:dd.search {"q":"p95"}`, "tool_response:error 3 title=T detail=D", "usage"},
+			want: []string{`tool_call:dd.search {"q":"p95"} title=T`, "tool_response:error 3 title=T detail=D", "usage"},
+		},
+		{
+			name: "delayed tool results", message: `tool([("a", {}, "1"), ("b", None)], out="x", delay="1ms")`,
+			want: []string{"tool_call:a {}", "tool_call:b {}", "tool_response:success 1", "tool_response:success x", "usage"},
 		},
 		{
 			name: "tool list emits calls then results", message: `tool([("a", {}, "1"), ("b", None)], out="x")`,
@@ -556,6 +564,7 @@ func TestScriptErrors(t *testing.T) {
 		{name: "at without break input", script: `call("x", {}, at=END)`, answer: "at needs break_input"},
 		{name: "at text not in input", script: `call([("a", {"k": "yes"}), ("b", {})], break_input="x", at="yes")`, answer: `at: "yes" is not in the input of b`},
 		{name: "at of the wrong type", script: `call("x", {}, break_input="x", at=3)`, answer: "at must be START, END, or text"},
+		{name: "bad tool delay", script: `tool("a", {}, delay="soon")`, answer: "delay"},
 		{name: "cyclic tool input", script: "x = []; x.append({\"self\": x}); call(\"x\", x)", answer: "cycle in JSON structure"},
 		{name: "runtime", script: `say(1 + "a")`},
 		{name: "step limit", script: `for i in range(100000000): pass`},

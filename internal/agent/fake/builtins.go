@@ -81,13 +81,21 @@ func (r *run) text(typ, s string) error {
 func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var first, input starlark.Value
 	var at starlark.Value = starlark.None
-	var out, ns, title, detail, breakInput, breakBefore string
+	var out, ns, title, detail, breakInput, breakBefore, delay string
 	isErr, stream := false, false
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"name_or_calls", &first, "input?", &input, "out?", &out, "err?", &isErr,
 		"ns?", &ns, "title?", &title, "detail?", &detail, "stream?", &stream,
-		"break_input?", &breakInput, "at?", &at, "break_before_results?", &breakBefore); err != nil {
+		"break_input?", &breakInput, "at?", &at, "break_before_results?", &breakBefore, "delay?", &delay); err != nil {
 		return nil, err
+	}
+	// delay holds the results back, so the calls are seen running.
+	var running time.Duration
+	if delay != "" {
+		var err error
+		if running, err = time.ParseDuration(delay); err != nil {
+			return nil, fmt.Errorf("%s: delay: %w", b.Name(), err)
+		}
 	}
 	specs, _, err := unpackSpecs(thread, first, input, out)
 	if err != nil {
@@ -103,7 +111,7 @@ func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 	if !r.live() {
 		return starlark.None, nil
 	}
-	style := toolEmit{stream: stream, namespace: ns, breakInput: breakInput, at: at}
+	style := toolEmit{stream: stream, namespace: ns, title: title, breakInput: breakInput, at: at}
 	for i := range specs {
 		specs[i].id = r.out.nextID()
 		if err := r.emitToolCall(specs[i], style); err != nil {
@@ -111,6 +119,9 @@ func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 		}
 	}
 	if err := r.stopAt(breakBefore); err != nil {
+		return nil, err
+	}
+	if err := r.wait(running); err != nil {
 		return nil, err
 	}
 	status := assistant.ToolStatusSuccess
@@ -194,6 +205,7 @@ type toolEmit struct {
 	client     bool           // client_tool_call rather than a server tool_call
 	stream     bool           // allow provisional input for this call
 	namespace  string         // server tools only
+	title      string         // server tools only; the server titles calls as well as results
 	breakInput string         // breakpoint while streaming the input
 	at         starlark.Value // where break_input stops; None is halfway
 }
@@ -229,6 +241,7 @@ func (r *run) emitToolCall(s spec, style toolEmit) error {
 	if style.namespace != "" {
 		content.Tool.Metadata.Namespace = &style.namespace
 	}
+	content.Tool.Title = style.title
 	return emitErr(r.out.emit(assistant.AssistantMessage(s.id, content)))
 }
 
@@ -411,13 +424,21 @@ func builtinSleep(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tu
 	if !r.live() {
 		return starlark.None, nil
 	}
-	t := time.NewTimer(duration)
+	if err := r.wait(duration); err != nil {
+		return nil, err
+	}
+	return starlark.None, nil
+}
+
+// wait stalls the stream for d, or until the turn is cancelled.
+func (r *run) wait(d time.Duration) error {
+	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-r.out.ctx.Done():
-		return nil, &abort{r.out.ctx.Err()}
+		return &abort{r.out.ctx.Err()}
 	case <-t.C:
-		return starlark.None, nil
+		return nil
 	}
 }
 
@@ -455,7 +476,7 @@ const helpText = "## Fake backend scripts\n\n" +
 	"| `say(text)` | streamed answer text |\n" +
 	"| `think(text)` | streamed reasoning |\n" +
 	"| `random(seed=None, size=None)` | a pseudo-random answer; `size` requests at least that many Markdown bytes |\n" +
-	"| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_input=, at=, break_before_results=)` or `tool([(name, input, out), ...])` | server tool calls, then results |\n" +
+	"| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_input=, at=, break_before_results=, delay=)` or `tool([(name, input, out), ...])` | server tool calls, then results (`delay=\"3s\"` holds them back) |\n" +
 	"| `call(name, input, stream=, break_input=, at=)` or `call([(name, input), ...])` | one round of client tool calls; returns results (`ok`, `status`, `title`, `output`) |\n" +
 	"| `raw(content, results=, id=)` | any other wire content |\n" +
 	"| `fail(429)`, `fail(\"net\")`, `fail(\"timeout\")` | a backend failure |\n" +

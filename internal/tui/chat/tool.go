@@ -29,10 +29,24 @@ const (
 	execCommandMaxLines   = 10
 	execOutputMaxLines    = 5
 	collapsedDiffLines    = 15
-	inspectionGroupKey    = "Files"
-	editGroupKey          = "Edits"
-	skillGroupKey         = "Skills"
-	serverGroupKey        = "Tools"
+)
+
+// toolGroup joins adjacent compatible calls, and the reasoning between them,
+// under one header.
+type toolGroup struct {
+	name string
+	// closed groups show only their work in progress until opened: running
+	// calls and the live reasoning. Open groups always show every child.
+	closed bool
+}
+
+var (
+	inspectionGroup = &toolGroup{name: "Files", closed: true}
+	// Edits stay open: their diffs are what the user most needs to review.
+	editGroup = &toolGroup{name: "Edits"}
+	// skillGroup is neutral: skill loads join whichever group surrounds them.
+	skillGroup  = &toolGroup{name: "Skills", closed: true}
+	serverGroup = &toolGroup{name: "Tools", closed: true}
 )
 
 // toolPresentation is derived solely for rendering. The source ToolBlock stays
@@ -48,15 +62,15 @@ type toolPresentation struct {
 	renderSpec *toolRenderSpec
 }
 
-// group returns the key that merges this call with adjacent calls sharing it,
-// or "" when it stands alone. Local inspections require decodable input;
-// server tools can group while their arguments are still streaming.
-func (p toolPresentation) group(tool *agent.ToolBlock) string {
+// group returns the group this call joins, or nil when it stands alone. Local
+// inspections require decodable input; server tools can group while their
+// arguments are still streaming.
+func (p toolPresentation) group(tool *agent.ToolBlock) *toolGroup {
 	if tool.Status == agent.ToolAwaitingApproval || tool.Approval != nil {
-		return ""
+		return nil
 	}
 	if !p.validInput {
-		return ""
+		return nil
 	}
 	return p.renderSpec.group
 }
@@ -96,8 +110,8 @@ type toolRenderSpec struct {
 	spacing  itemSpacing
 	action   toolAction
 	// group joins compatible calls and intervening reasoning under one
-	// header; "" keeps each call on its own.
-	group string
+	// header; nil keeps each call on its own.
+	group *toolGroup
 	// static marks a renderer that ignores disclosure, so List offers no
 	// disclosure control.
 	static   bool
@@ -123,24 +137,24 @@ func NewToolPrompt(call agent.ToolCall) (ToolPrompt, bool) {
 }
 
 var (
-	serverToolRenderSpec       = &toolRenderSpec{render: renderServerTool, group: serverGroupKey}
+	serverToolRenderSpec       = &toolRenderSpec{render: renderServerTool, group: serverGroup}
 	questionToolRenderSpec     = &toolRenderSpec{render: renderQuestionsTool, spacing: itemSpacing{before: 1, after: 1}, static: true, interact: newQuestionPrompt}
 	simpleToolRenderSpec       = &toolRenderSpec{render: renderSimpleTool}
 	spawnAgentRenderSpec       = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Start subagent", active: "Starting subagent", success: "Started subagent", failure: "Subagent start failed"}}
 	sendAgentMessageRenderSpec = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Send message", active: "Sending message", success: "Sent message", failure: "Message failed"}}
 	waitForAgentsRenderSpec    = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Wait for", active: "Waiting for", success: "Waited for", failure: "Wait failed"}}
-	readToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Read", active: "Reading"}, group: inspectionGroupKey}
-	listToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "List", active: "Listing"}, group: inspectionGroupKey}
-	grepToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Search", active: "Searching"}, group: inspectionGroupKey}
+	readToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Read", active: "Reading"}, group: inspectionGroup}
+	listToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "List", active: "Listing"}, group: inspectionGroup}
+	grepToolRenderSpec         = &toolRenderSpec{render: renderSimpleTool, action: toolAction{base: "Search", active: "Searching"}, group: inspectionGroup}
 	writeToolRenderSpec        = &toolRenderSpec{
 		render:  renderChangeTool,
-		group:   editGroupKey,
+		group:   editGroup,
 		spacing: itemSpacing{before: 1, after: 1},
 		action:  toolAction{base: "Write", active: "Writing", success: "Wrote", failure: "Write failed"},
 	}
 	editToolRenderSpec = &toolRenderSpec{
 		render:  renderChangeTool,
-		group:   editGroupKey,
+		group:   editGroup,
 		spacing: itemSpacing{before: 1, after: 1},
 		action:  toolAction{base: "Edit", active: "Editing", success: "Edited", failure: "Edit failed"},
 	}
@@ -152,7 +166,7 @@ var (
 	}
 	skillToolRenderSpec = &toolRenderSpec{
 		render: renderSimpleTool,
-		group:  skillGroupKey,
+		group:  skillGroup,
 		action: toolAction{base: "Load", active: "Loading", success: "Loaded", failure: "Load failed"},
 	}
 	startBackgroundTaskRenderSpec = &toolRenderSpec{
@@ -501,9 +515,8 @@ func approvalSubject(tool *agent.ToolBlock) *agent.ToolBlock {
 }
 
 // renderToolGroupHeader counts tool calls, while reasoning only contributes
-// to the running state. Children always remain visible beneath this header.
-func renderToolGroupHeader(blocks []agent.Block, presentations []toolPresentation, c renderContext) string {
-	family := presentations[0].group(blocks[0].Tool)
+// to the running state. List decides which children show beneath it.
+func renderToolGroupHeader(group *toolGroup, blocks []agent.Block, presentations []toolPresentation, c renderContext) string {
 	counts := make(map[agent.ToolStatus]int)
 	files := make(map[string]struct{})
 	calls, changes, skills := 0, 0, 0
@@ -516,13 +529,10 @@ func renderToolGroupHeader(blocks []agent.Block, presentations []toolPresentatio
 		calls++
 		counts[statusOf(block.Tool)]++
 		p := presentations[i]
-		if group := p.group(block.Tool); group != skillGroupKey {
-			family = group
-		}
 		if p.identity == spec.ServerSkill {
 			skills++
 		}
-		if p.renderSpec.group == editGroupKey {
+		if p.renderSpec.group == editGroup {
 			changes++
 			if p.argument != "" {
 				files[p.argument] = struct{}{}
@@ -543,7 +553,7 @@ func renderToolGroupHeader(blocks []agent.Block, presentations []toolPresentatio
 		noun = "call"
 	}
 	suffix := fmt.Sprintf(" · %d %s", calls, noun)
-	if family == editGroupKey {
+	if group == editGroup {
 		operations, paths := "changes", "files"
 		if changes == 1 {
 			operations = "change"
@@ -576,8 +586,8 @@ func renderToolGroupHeader(blocks []agent.Block, presentations []toolPresentatio
 	if reasoning {
 		suffix += " · reasoning"
 	}
-	title := family
-	if family == serverGroupKey {
+	title := group.name
+	if group == serverGroup {
 		title = "Analyzed"
 		if state == agent.ToolRunning {
 			title = "Analyzing"

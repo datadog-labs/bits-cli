@@ -2,6 +2,7 @@ package chat
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,6 +45,16 @@ func disclosableToolBlock(key string) agent.Block {
 	// Generic client tools isolate disclosure tests from server grouping.
 	block.Tool.IsClientSide = true
 	return block
+}
+
+// openGroups opens every closed tool group, as a click on its header does, for
+// tests about the calls inside it.
+func openGroups(l *List) {
+	for _, it := range buildPresentationWithNotices(l.header, l.items, l.notices) {
+		if it.kind == itemToolGroup && it.group.closed && !l.expanded(it.id) {
+			l.ToggleDisclosure(it.id)
+		}
+	}
 }
 
 // listWithTool returns a sized list holding one tool block with output.
@@ -173,11 +184,12 @@ func TestInspectionGroupingKeepsChildrenAndStopsAtText(t *testing.T) {
 	list.SetWidth(100)
 	list.SetHeight(20)
 	list.SetItems(blocks)
+	openGroups(list)
 	if got := len(list.view); got != 6 {
 		t.Fatalf("presentation item count = %d, want 6", got)
 	}
 	plain := ansi.Strip(list.Render())
-	for _, want := range []string{sty.StatusSpinner.Frame(0) + " Files · 3 calls · 1 running", "Read a.go", "Reading b.go", "between", sty.Accordion.Collapsed + " Search ToolBlock in internal"} {
+	for _, want := range []string{sty.StatusSpinner.Frame(0) + "  " + sty.Accordion.Expanded + " Files · 3 calls · 1 running", "Read a.go", "Reading b.go", "between", sty.Accordion.Collapsed + " Search ToolBlock in internal"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("group rendering missing %q:\n%s", want, plain)
 		}
@@ -225,7 +237,8 @@ func TestReasoningStacksWithToolPresentation(t *testing.T) {
 	list := NewList()
 	list.SetItems([]agent.Block{
 		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}},
-		inspectBlock("read", "read_file", `{"path":"README.md"}`, agent.ToolSuccess, "contents"),
+		// An ungrouped call: a groupable one would put the reasoning in its group.
+		disclosableToolBlock("run"),
 		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "answer", Kind: assistant.KindText}, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "answer"}},
 	})
 
@@ -295,8 +308,9 @@ func TestReasoningGroupStaysActiveWhileMemberStreams(t *testing.T) {
 		{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking-2", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: false, Thinking: &assistant.ThinkingPayload{Content: "second"}},
 	})
 
+	// The newest thinking is the run's live intent, so it labels the row.
 	plain := ansi.Strip(list.Render())
-	if !strings.Contains(plain, "Reasoning.") || strings.Contains(plain, "✓ Reasoning") {
+	if !strings.Contains(plain, list.sty.StatusSpinner.Frame(0)) || !strings.Contains(plain, "second") || strings.Contains(plain, "✓") {
 		t.Fatalf("active reasoning group = %q", plain)
 	}
 	if !list.HasAnimated() {
@@ -360,18 +374,18 @@ func TestToolMarginsCollapseAcrossAdjacentItems(t *testing.T) {
 	}
 }
 
-// Failed calls remain visible beneath their shared group header.
+// Failed calls show their outcome beneath an opened group header.
 func TestInspectionGroupRowsCarryTheirOwnOutcome(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		header string
 		blocks []agent.Block
 	}{
-		{"mixed", "✗ Files · 2 calls · 1 failed", []agent.Block{
+		{"mixed", "Files · 2 calls · 1 failed", []agent.Block{
 			inspectBlock("1", "read_file", `{"path":"README.md"}`, agent.ToolSuccess, "readme body"),
 			inspectBlock("2", "read_file", `{"path":"missing.md"}`, agent.ToolError, "open missing.md: no such file"),
 		}},
-		{"all failed", "✗ Files · 2 calls · 2 failed", []agent.Block{
+		{"all failed", "Files · 2 calls · 2 failed", []agent.Block{
 			inspectBlock("1", "read_file", `{"path":"one"}`, agent.ToolError, "first error\nwith detail"),
 			inspectBlock("2", "read_file", `{"path":"two"}`, agent.ToolError, "second error"),
 		}},
@@ -382,9 +396,11 @@ func TestInspectionGroupRowsCarryTheirOwnOutcome(t *testing.T) {
 			list.SetWidth(80)
 			list.SetHeight(12)
 			list.SetItems(tc.blocks)
+			openGroups(list)
 			plain := ansi.Strip(list.Render())
-			if !strings.Contains(plain, tc.header) {
-				t.Fatalf("group header is not %q:\n%s", tc.header, plain)
+			// The open-row glyph differs by OS, so it comes from the styles.
+			if header := "✗  " + list.sty.Accordion.Expanded + " " + tc.header; !strings.Contains(plain, header) {
+				t.Fatalf("group header is not %q:\n%s", header, plain)
 			}
 			for _, block := range tc.blocks {
 				if block.Tool.Status != agent.ToolError {
@@ -409,6 +425,7 @@ func TestInspectionGroupRowsCarryTheirOwnOutcome(t *testing.T) {
 			inspectBlock("3", "read_file", `{"path":"c.go"}`, agent.ToolError, strings.Repeat("very long error ", 10)),
 			inspectBlock("4", "read_file", `{"path":"d.go"}`, agent.ToolError, ""),
 		})
+		openGroups(list)
 		lines := strings.Split(strings.TrimRight(list.Document(), "\n"), "\n")
 		plain := ansi.Strip(strings.Join(lines, "\n"))
 		for _, want := range []string{"Read a.go · denied", "Read b.go · stopped", "very long error", "failed"} {
@@ -435,6 +452,7 @@ func TestInspectionGroupCacheInvalidatesWhenMemberIsAdded(t *testing.T) {
 	}
 
 	list.SetItems([]agent.Block{first, second})
+	openGroups(list)
 	if got := ansi.Strip(list.Render()); !strings.Contains(got, "Read one") || !strings.Contains(got, "Read two") {
 		t.Fatalf("group cache retained stale members: %q", got)
 	}
@@ -684,6 +702,7 @@ func TestNothingToExpandDrawsNoGutter(t *testing.T) {
 	}{
 		{"question tool", question},
 		{"reasoning without text", reasoning},
+		{"redacted reasoning", agent.Block{ID: reasoning.ID, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "[redacted]", Redacted: true}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			list := NewList()
@@ -1077,6 +1096,7 @@ func TestServerStackKeepsIndependentDisclosureOnCompletion(t *testing.T) {
 	second.Tool.Title = "Fetched metric"
 	second.Tool.IsClientSide = false
 	list.SetItems([]agent.Block{first, second})
+	openGroups(list)
 	if len(list.view) != 3 || list.gapAfter(0) != 0 {
 		t.Fatal("server calls should stack tightly under a shared header")
 	}
@@ -1108,10 +1128,11 @@ func TestToolGroupsKeepReasoningAndChildDisclosure(t *testing.T) {
 		name          string
 		first, second spec.Identity
 		input         string
+		closed        bool
 	}{
-		{"Analyzing", spec.Identity{Name: "search_datadog_dashboards"}, spec.Identity{Name: "fetch_one"}, `{}`},
-		{"Files", spec.ClientReadFile, spec.ClientReadFile, `{"path":"a.go"}`},
-		{"Edits", spec.ClientEditFile, spec.ClientWriteFile, `{"path":"a.go"}`},
+		{"Analyzing", spec.Identity{Name: "search_datadog_dashboards"}, spec.Identity{Name: "fetch_one"}, `{}`, true},
+		{"Files", spec.ClientReadFile, spec.ClientReadFile, `{"path":"a.go"}`, true},
+		{"Edits", spec.ClientEditFile, spec.ClientWriteFile, `{"path":"a.go"}`, false},
 	} {
 		t.Run(family.name, func(t *testing.T) {
 			list := NewList()
@@ -1131,14 +1152,16 @@ func TestToolGroupsKeepReasoningAndChildDisclosure(t *testing.T) {
 			leading.ID.Key = "leading-skill"
 			blocks := []agent.Block{leading, first, reasoning, skill, second}
 			list.SetItems(blocks)
+			if _, ok := list.AccordionAt(0); ok != family.closed {
+				t.Fatalf("group header collapsible = %v, want %v", ok, family.closed)
+			}
+			openGroups(list)
 			if len(list.view) != 6 || list.view[0].kind != itemToolGroup || !list.expanded(first.ID) {
 				t.Fatal("group lost its children or existing disclosure")
 			}
-			if _, ok := list.AccordionAt(0); ok {
-				t.Fatal("group header must not be collapsible")
-			}
 			got := ansi.Strip(list.Document())
-			for _, want := range []string{family.name, "Reasoning", "first output", "Loaded skill logs"} {
+			// The unfinished reasoning is the run's live intent, so its text labels it.
+			for _, want := range []string{family.name, "working it out", "first output", "Loaded skill logs"} {
 				if !strings.Contains(got, want) {
 					t.Fatalf("missing %q:\n%s", want, got)
 				}
@@ -1168,8 +1191,9 @@ func TestToolGroupsKeepReasoningAndChildDisclosure(t *testing.T) {
 				t.Fatalf("reasoning did not expand:\n%s", got)
 			}
 			list.ToggleAllDisclosure()
-			if len(list.view) != 6 {
-				t.Fatal("collapsing details must not hide group children")
+			// Collapsing everything closes groups too; the live reasoning stays.
+			if want := map[bool]int{false: 6, true: 2}[family.closed]; len(list.view) != want {
+				t.Fatalf("collapsed view has %d items, want %d", len(list.view), want)
 			}
 			for _, width := range []int{1, 8, 40} {
 				list.SetWidth(width)
@@ -1177,6 +1201,94 @@ func TestToolGroupsKeepReasoningAndChildDisclosure(t *testing.T) {
 					if ansi.StringWidth(row) > width {
 						t.Fatalf("row exceeds %d cells: %q", width, row)
 					}
+				}
+			}
+		})
+	}
+}
+
+// A closed group shows only its work in progress: running calls and the run's
+// newest reasoning, which carries the model's intent as its label.
+func TestClosedGroupShowsWorkInProgress(t *testing.T) {
+	thinking := func(key, text string, redacted bool) agent.Block {
+		return agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: key, Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: text, Redacted: redacted}}
+	}
+	server := func(key, title string, status agent.ToolStatus) agent.Block {
+		return agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: key}, Kind: assistant.KindToolCall, Tool: &agent.ToolBlock{Name: "search_datadog_" + key, Input: `{}`, Title: title, Status: status}}
+	}
+	edit := func(key string, status agent.ToolStatus) agent.Block {
+		return agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: key}, Kind: assistant.KindToolCall, Tool: &agent.ToolBlock{Name: spec.EditFile, IsClientSide: true, Input: `{"path":"` + key + `.go"}`, Status: status}}
+	}
+	answer := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "answer", Kind: assistant.KindText}, Role: assistant.RoleAssistant, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "the answer"}}
+	burst := []agent.Block{
+		thinking("t1", "Let me search the logs.", false),
+		server("logs", "Searched logs", agent.ToolSuccess),
+		thinking("t2", "Errors spike at 07:02.\nNext I will check monitors.", false),
+		server("monitors", "Searching monitors", agent.ToolRunning),
+	}
+	for _, tc := range []struct {
+		name         string
+		blocks       []agent.Block
+		running      bool
+		act          func(*List)
+		want, hidden []string
+	}{
+		{
+			name: "running", blocks: burst, running: true,
+			want:   []string{"Analyzing · 2 calls · 1 running", "Errors spike at 07:02. Next I will check monitors.", "Searching monitors"},
+			hidden: []string{"Let me search the logs.", "Searched logs", "Reasoning"},
+		},
+		{
+			name: "run ended", blocks: burst, running: true, act: func(l *List) { l.SetRunning(false) },
+			want:   []string{"Analyzing · 2 calls"},
+			hidden: []string{"Errors spike", "Reasoning", "Searching monitors"},
+		},
+		// A row that stays visible must not keep the intent from its cached render.
+		{
+			name: "run ended before an ungrouped call", blocks: []agent.Block{thinking("t1", "Let me run the tests.", false), disclosableToolBlock("run")}, running: true, act: func(l *List) { l.SetRunning(false) },
+			want:   []string{"Reasoning"},
+			hidden: []string{"Let me run the tests."},
+		},
+		{
+			name: "opened", blocks: burst, running: true, act: openGroups,
+			want:   []string{"Reasoning", "Searched logs", "Errors spike at 07:02. Next I will check monitors.", "Searching monitors"},
+			hidden: []string{"Let me search the logs."},
+		},
+		{
+			name: "answer after reasoning", blocks: append(slices.Clone(burst[:3]), answer), running: true,
+			want:   []string{"Analyzed · 1 call", "the answer"},
+			hidden: []string{"Errors spike", "Reasoning"},
+		},
+		{
+			name: "redacted newest reasoning", blocks: []agent.Block{burst[0], burst[1], thinking("t2", "[redacted]", true), burst[3]}, running: true,
+			want:   []string{"Searching monitors"},
+			hidden: []string{"Let me search the logs.", "[redacted]", "Reasoning"},
+		},
+		{
+			name: "edits stay open", blocks: []agent.Block{edit("a", agent.ToolSuccess), thinking("t1", "Now the test.", false), edit("b", agent.ToolRunning)}, running: true,
+			want: []string{"Edits · 2 changes across 2 files", "Edited a.go", "Now the test.", "Editing b.go"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			list := NewList()
+			list.SetStyles(DefaultStyles(true))
+			list.SetWidth(100)
+			list.SetHeight(40)
+			list.SetRunning(tc.running)
+			list.SetItems(tc.blocks)
+			_ = list.Document() // fill the render cache before acting
+			if tc.act != nil {
+				tc.act(list)
+			}
+			got := ansi.Strip(list.Document())
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("missing %q:\n%s", want, got)
+				}
+			}
+			for _, hidden := range tc.hidden {
+				if strings.Contains(got, hidden) {
+					t.Errorf("shows %q:\n%s", hidden, got)
 				}
 			}
 		})
@@ -1215,6 +1327,34 @@ func TestServerGroupingBoundaries(t *testing.T) {
 			}
 			if len(view) != want {
 				t.Fatalf("got %d items, want %d", len(view), want)
+			}
+		})
+	}
+}
+
+func TestLeadingReasoningJoinsTheGroupOfItsCall(t *testing.T) {
+	reasoning := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}}
+	server := func(status agent.ToolStatus) agent.Block {
+		return agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: "call"}, Kind: assistant.KindToolCall, Tool: &agent.ToolBlock{Name: "search_datadog_logs", Input: `{}`, Status: status}}
+	}
+	answer := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "answer", Kind: assistant.KindText}, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "answer"}}
+	for _, tc := range []struct {
+		name string
+		next agent.Block
+		want []itemKind
+	}{
+		{"groupable call", server(agent.ToolRunning), []itemKind{itemToolGroup, itemReasoning, itemTool}},
+		{"call awaiting approval", server(agent.ToolAwaitingApproval), []itemKind{itemReasoning, itemTool}},
+		{"ungrouped call", disclosableToolBlock("run"), []itemKind{itemReasoning, itemTool}},
+		{"answer", answer, []itemKind{itemReasoning, itemBlock}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []itemKind
+			for _, it := range buildPresentation("", []agent.Block{reasoning, tc.next}) {
+				got = append(got, it.kind)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("kinds = %v, want %v", got, tc.want)
 			}
 		})
 	}
