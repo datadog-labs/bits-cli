@@ -509,13 +509,24 @@ func ApprovalOf(tool *agent.ToolBlock, sty Styles) ToolApproval {
 }
 
 // approvalSubject returns the server call an approval_request tool gates, in
-// the request's state, or tool itself.
+// the request's state and with its result, or tool itself.
 func approvalSubject(tool *agent.ToolBlock) *agent.ToolBlock {
 	gated, ok := tool.GatedCall()
 	if !ok {
 		return tool
 	}
-	return &agent.ToolBlock{Name: gated.Name, Input: gated.Input, HasFinalInput: true, Status: tool.Status, Approval: tool.Approval}
+	subject := &agent.ToolBlock{
+		Name: gated.Name, Input: gated.Input, HasFinalInput: true,
+		Status: tool.Status, Approval: tool.Approval,
+		Title: tool.Title, Detail: tool.Detail, Output: tool.Output,
+	}
+	if tool.Status == agent.ToolSuccess {
+		// A request succeeds once approved, before the server runs the call:
+		// until the call's own result replaces the request, it has not begun,
+		// and the approval's result says nothing about it.
+		subject.Status, subject.Title, subject.Detail, subject.Output = agent.ToolUnknown, "", "", ""
+	}
+	return subject
 }
 
 // renderToolGroupHeader counts tool calls, while reasoning only contributes

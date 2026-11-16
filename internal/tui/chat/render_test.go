@@ -453,11 +453,18 @@ func TestBackgroundTaskApprovalAndCallPresentTheTask(t *testing.T) {
 	}
 	// The gate's row is the call it gates, not yet begun, and stays so once
 	// the decision drops the prompt.
-	denied := gate(spec.StartBackgroundTask)
-	denied.Status, denied.Approval = agent.ToolDenied, nil
+	decided := func(status agent.ToolStatus, title, output string) *agent.ToolBlock {
+		tool := gate(spec.StartBackgroundTask)
+		tool.Status, tool.Approval, tool.Title, tool.Output = status, nil, title, output
+		return tool
+	}
 	for tool, want := range map[*agent.ToolBlock]string{
 		gate(spec.StartBackgroundTask): "Start background task Why 500s · awaiting approval",
-		denied:                         "Start background task Why 500s · denied",
+		decided(agent.ToolDenied, "Permission denied", "the user denied this action"): "Start background task Why 500s · denied",
+		// Approved is not started: the server has yet to run the call.
+		decided(agent.ToolSuccess, "Approved", "the write was approved"): "• Start background task Why 500s",
+		// A rejected request keeps its reason.
+		decided(agent.ToolError, "Invalid approval request", "the server approval request was invalid"): "the server approval request was invalid",
 	} {
 		row := agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"}, Kind: assistant.KindToolCall, Tool: tool}
 		if got := ansi.Strip(RenderBlock(row, 120, DefaultStyles(true), 0)); !strings.Contains(got, want) {
