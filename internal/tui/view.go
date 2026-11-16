@@ -90,8 +90,9 @@ func (m *Model) View() tea.View {
 
 // frame is the chat layout built once per update and shared by drawing and hit-testing.
 //
-// Rows stack as transcript, queue, prompt, gap, composer, and footer. A replacing
-// prompt occupies the composer slot and dims the transcript.
+// Rows stack as transcript, queue, prompt, gap, composer, tray, and footer. A
+// replacing prompt occupies the composer slot and dims the transcript.
+// The tray shows while background work runs, in every mode.
 type frame struct {
 	transcript  image.Rectangle
 	queue       image.Rectangle
@@ -99,6 +100,8 @@ type frame struct {
 	prompt      image.Rectangle
 	composerGap image.Rectangle
 	composer    image.Rectangle
+	tray        image.Rectangle
+	trayView    string
 	footer      image.Rectangle
 
 	// promptView is the shown prompt as its one Layout of the update drew it.
@@ -122,7 +125,7 @@ const (
 	regionPrompt
 	regionQueue
 	regionComposer
-	regionChrome // the gap and footer around the composer
+	regionChrome // the gap, tray, and footer around the composer
 )
 
 // at reports which region of the frame contains p. The prompt comes first,
@@ -154,38 +157,54 @@ func (f frame) inputTop() int {
 	return f.composer.Min.Y
 }
 
-// layout stacks the chat bottom-up and lays out the shown prompt.
+// layout sizes the chat's surfaces in order of priority, then stacks them
+// bottom-up. The tray sits below the composer but ranks below the prompt: it
+// keeps one row while a prompt is sized and takes what the prompt leaves.
 func (m *Model) layout() frame {
 	var f frame
+	p, answerable := m.prompt(), true
+	f.replaced = p != nil && p.Placement() == components.ReplacesInput
+	tasks := taskLines(m.state.Tasks)
+	// Every surface leaves the transcript at least a row.
+	const minimumTranscriptRows = 1
+
+	free := m.height - chatFooterHeight - chatComposerGapHeight
+	if !f.replaced {
+		free -= m.editor.Height()
+	}
+	if p != nil {
+		slot := components.Slot{Width: m.width, Height: promptRows(free - min(1, len(tasks))), Waiting: len(m.waitingAsks())}
+		if f.promptView, answerable = p.Layout(slot); f.promptView != "" {
+			free -= lipgloss.Height(f.promptView)
+		}
+	}
+	// The tray keeps its summary line while the transcript keeps its row; a
+	// prompt was sized around both.
+	if free > minimumTranscriptRows {
+		f.trayView = m.trayView(tasks, max(1, free-trayTranscriptRows))
+	}
+
 	y := m.height
 	take := func(rows int) image.Rectangle {
 		y -= rows
 		return image.Rect(0, y, m.width, y+rows)
 	}
-
 	f.footer = take(chatFooterHeight)
-	p, answerable := m.prompt(), true
-	f.replaced = p != nil && p.Placement() == components.ReplacesInput
+	if f.trayView != "" {
+		f.tray = take(lipgloss.Height(f.trayView))
+	}
 	if !f.replaced {
 		f.composer = take(m.editor.Height())
 		f.composerGap = take(chatComposerGapHeight)
 	}
-	if p != nil {
-		free := y
-		if f.replaced {
-			free -= chatComposerGapHeight // the gap stays above the prompt
-		}
-		slot := components.Slot{Width: m.width, Height: promptRows(free), Waiting: len(m.waitingAsks())}
-		if f.promptView, answerable = p.Layout(slot); f.promptView != "" {
-			f.prompt = take(lipgloss.Height(f.promptView))
-		}
+	if f.promptView != "" {
+		f.prompt = take(lipgloss.Height(f.promptView))
 	}
 	if f.replaced {
 		f.composerGap = take(chatComposerGapHeight)
 	}
 	// Give the queue only spare rows, always retaining transcript space. Its
 	// own cap and overflow control keep the lower pane bounded.
-	const minimumTranscriptRows = 1
 	spareRows := max(0, y-minimumTranscriptRows)
 	queueRows := spareRows / 2
 	f.queueView = m.editor.QueueView(queueRows)
@@ -253,6 +272,10 @@ func (m *Model) chatViewBase(transcript string) string {
 	if m.frame.queueView != "" {
 		queue = append(queue, m.frame.queueView)
 	}
+	tray := []string{}
+	if m.frame.trayView != "" {
+		tray = append(tray, m.frame.trayView)
+	}
 	if m.frame.replaced {
 		// The footer row stays so the prompt sits where the composer did.
 		transcript = lipgloss.NewStyle().Faint(true).Render(transcript)
@@ -260,15 +283,28 @@ func (m *Model) chatViewBase(transcript string) string {
 		if m.quitConfirm.armed {
 			footer = m.chatFooter()
 		}
-		return strings.Join(slices.Concat([]string{transcript}, queue, gap, []string{m.frame.promptView, footer}), "\n")
+		return strings.Join(slices.Concat([]string{transcript}, queue, gap, []string{m.frame.promptView}, tray, []string{footer}), "\n")
 	}
 	sections := append([]string{transcript}, queue...)
 	if m.frame.promptView != "" {
 		sections = append(sections, m.frame.promptView)
 	}
 	sections = append(sections, gap...)
-	sections = append(sections, m.editor.View(), m.chatFooter())
+	sections = append(sections, m.editor.View())
+	sections = append(sections, tray...)
+	sections = append(sections, m.chatFooter())
 	return strings.Join(sections, "\n")
+}
+
+// trayView renders the tray in at most rows rows, aligned with the footer.
+func (m *Model) trayView(lines []trayLine, rows int) string {
+	width, indent := m.lowerPaneText()
+	view := m.tray.view(lines, max(1, width-indent), rows, m.styles)
+	if view == "" {
+		return ""
+	}
+	pad := strings.Repeat(" ", indent)
+	return pad + strings.ReplaceAll(view, "\n", "\n"+pad)
 }
 
 // visibleSelectionFrame returns the current terminal-sized chat surface in the
@@ -350,11 +386,17 @@ func (m *Model) promptPlaceholder() string {
 	}
 }
 
+// lowerPaneText is the width of the rows under the composer and the indent
+// that aligns their text with typed input.
+func (m *Model) lowerPaneText() (width, indent int) {
+	width = max(1, m.list.Width())
+	return width, min(m.editor.ContentOffset(), max(0, width-1))
+}
+
 // chatFooter renders low-attention workspace and context usage metadata below
 // the editor.
 func (m *Model) chatFooter() string {
-	width := max(1, m.list.Width())
-	indent := min(m.editor.ContentOffset(), max(0, width-1))
+	width, indent := m.lowerPaneText()
 	text := chatFooterText(m.workspaceDisplayPath, m.state.Usage, max(1, width-indent))
 	if m.quitConfirm.armed {
 		text = ansi.Truncate(quitConfirmHint, max(1, width-indent), "…")

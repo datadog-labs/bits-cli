@@ -308,7 +308,7 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 		p.validInput = true
 	case spec.ServerStartBackgroundTask:
 		if in, ok := backgroundTaskInput(input); ok {
-			p.argument, p.validInput = escape.Inline(cmp.Or(in.Task.TaskName, backgroundAgentName(in.Task.AgentID))), true
+			p.argument, p.validInput = escape.Inline(cmp.Or(in.Task.TaskName, BackgroundAgentName(in.Task.AgentID))), true
 		}
 	case spec.ClientHandoff:
 		var in struct {
@@ -887,7 +887,8 @@ func backgroundTaskInput(input string) (spec.StartBackgroundTaskInput, bool) {
 	return in, decodeObject(input, &in) && strings.TrimSpace(in.Task.AgentID) != ""
 }
 
-func backgroundAgentName(agentID string) string {
+// BackgroundAgentName names the server agent a background task runs on.
+func BackgroundAgentName(agentID string) string {
 	if agentID == "investigation" {
 		return "Bits Investigation"
 	}
