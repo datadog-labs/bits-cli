@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -55,7 +56,7 @@ func TestCommandUsageErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"loign"}, `unknown command "loign"`},
+		{[]string{"fix", "the", "tests"}, `quote it: bits "fix the tests"`},
 		{[]string{"--unknown"}, "unknown flag: --unknown"},
 		{[]string{"login", "--auth", "api-key"}, "unknown flag: --auth"},
 		{[]string{"--auth", "oauth"}, "invalid authentication mode"},
@@ -84,5 +85,31 @@ func TestCommandUsageErrors(t *testing.T) {
 				t.Fatalf("usage output = %q, stderr = %q", out, stderr)
 			}
 		})
+	}
+}
+
+// Root args are one prompt, even a word close to a subcommand.
+func TestRootPromptArgs(t *testing.T) {
+	cases := []struct {
+		args    []string
+		wantErr bool
+	}{
+		{[]string{"fix the tests"}, false},
+		{[]string{"hello"}, false},
+		{[]string{"logn"}, false},
+		{[]string{"--auth", "api-key", "--", "a", "b"}, true},
+	}
+	for _, tc := range cases {
+		root := newRootCommand(new(bool), io.Discard, io.Discard)
+		command, args, err := root.Find(tc.args)
+		if err == nil {
+			err = command.ParseFlags(args)
+		}
+		if err == nil {
+			err = command.ValidateArgs(command.Flags().Args())
+		}
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%q: err = %v, want error %t", tc.args, err, tc.wantErr)
+		}
 	}
 }
