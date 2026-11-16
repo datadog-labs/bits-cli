@@ -297,11 +297,9 @@ func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 
 	id := BlockIDOf(msg)
 	tc := ToolBlockOf(msg.Content.Tool)
-	// A client_tool_call is client-side regardless of the wire is_client_side
-	// field, which only tool_call_started populates. Deriving here also covers
-	// replayed history (restore), which never passes through the engine fold.
-	if msg.Content.Type == assistant.ContentClientToolCall {
-		tc.IsClientSide = true
+	clientSide, sided := toolSide(msg)
+	if sided {
+		tc.IsClientSide = clientSide
 	}
 	if i, ok := t.index[id]; ok {
 		// Merge into a copy of the current aggregate, then swap the pointer, so
@@ -337,7 +335,9 @@ func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 				merged.Status = tc.Status
 			}
 		}
-		merged.IsClientSide = merged.IsClientSide || tc.IsClientSide
+		if sided {
+			merged.IsClientSide = clientSide
+		}
 		if msg.Content.Type == assistant.ContentToolCallStarted {
 			// A repeated started event resets no already-received input; it only
 			// refreshes the identifying metadata.
@@ -396,8 +396,30 @@ func hasFinalToolInput(msg assistant.Message) bool {
 	switch msg.Content.Type {
 	case assistant.ContentToolCall, assistant.ContentClientToolCall:
 		return true
+	case assistant.ContentToolResponse, assistant.ContentClientToolResponse:
+		// A result repeats its call's input, if any.
+		return msg.Content.Tool.Metadata.Input != ""
 	default:
 		return false
+	}
+}
+
+// toolSide reports whether msg says its call runs on the client, if it says.
+// The latest call or result decides, since an approval_request gate shares its
+// server call's id: the gate's messages are client-side, then the server's
+// result makes the block the server call again. Only tool_call_started carries
+// the wire is_client_side field; the other types imply it, which also covers
+// replayed history, which never passes through the engine fold.
+func toolSide(msg assistant.Message) (clientSide, ok bool) {
+	switch msg.Content.Type {
+	case assistant.ContentToolCall, assistant.ContentToolResponse:
+		return false, true
+	case assistant.ContentClientToolCall, assistant.ContentClientToolResponse:
+		return true, true
+	case assistant.ContentToolCallStarted:
+		return msg.Content.Tool.IsClientSide, msg.Content.Tool.HasClientSide
+	default:
+		return false, false
 	}
 }
 

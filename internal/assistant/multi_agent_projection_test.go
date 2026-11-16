@@ -51,7 +51,7 @@ func TestMultiAgentProjectionPreservesTranscriptPayloads(t *testing.T) {
 	var widgets, dashboards []string
 	var text string
 	for _, block := range transcript.Blocks() {
-		if block.Tool != nil && (block.Tool.Output != localOutput || block.Tool.Detail != "Answered") {
+		if block.Tool != nil && (block.Tool.Output != localOutput || block.Tool.Detail != "Answered" || !block.Tool.IsClientSide) {
 			t.Errorf("local result changed: %+v", block.Tool)
 		}
 		if block.Widget != nil {

@@ -176,6 +176,7 @@ func TestMultiAgentServerToolApprovalCorrelation(t *testing.T) {
 			}
 			backend := &MultiAgentClient{}
 			var ids []string
+			var completion string
 			sequence := 0
 			event := func(typ, payload string) {
 				t.Helper()
@@ -183,6 +184,9 @@ func TestMultiAgentServerToolApprovalCorrelation(t *testing.T) {
 				_, err := backend.handleEvent(run, multiAgentEnvelope{AgentID: "root", Sequence: sequence, Type: typ, Event: json.RawMessage(payload)}, func(response AssistantResponse) error {
 					if tool := response.Data.Attributes.StructuredMessage.Content.Tool; tool != nil {
 						ids = append(ids, tool.ToolCallID)
+					}
+					if typ == "tool.call_completed" {
+						completion = response.Data.Attributes.StructuredMessage.Content.Type
 					}
 					return nil
 				})
@@ -202,6 +206,9 @@ func TestMultiAgentServerToolApprovalCorrelation(t *testing.T) {
 				if id != ids[0] {
 					t.Fatalf("server call, approval and completion must share one local identity: %v", ids)
 				}
+			}
+			if completion != ContentToolResponse {
+				t.Fatalf("approved server call completed as %q, want %q", completion, ContentToolResponse)
 			}
 			if correlation := run.pendingTools[ids[0]]; correlation.wireToolCallID != "write" || correlation.generation != 1 {
 				t.Fatalf("approval correlation = %+v", correlation)
