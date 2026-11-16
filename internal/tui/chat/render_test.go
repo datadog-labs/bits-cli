@@ -138,7 +138,7 @@ func TestLocalInspectionActionsUseLifecycleVerbsForValidAndPartialInput(t *testi
 		{name: "Reading valid path", tool: spec.ReadFile, input: `{"path":"README.md"}`, status: agent.ToolRunning, want: "Reading README.md"},
 		{name: "Listing valid path", tool: spec.ListFiles, input: `{"path":""}`, status: agent.ToolRunning, want: "Listing ."},
 		{name: "Searching valid pattern", tool: spec.GrepFiles, input: `{"pattern":"TODO","path":"internal"}`, status: agent.ToolRunning, want: "Searching TODO in internal"},
-		{name: "Searching awaiting approval", tool: spec.GrepFiles, input: `{"pattern":"TODO","path":"internal"}`, status: agent.ToolAwaitingApproval, want: "Searching TODO in internal · awaiting approval"},
+		{name: "Search awaiting approval", tool: spec.GrepFiles, input: `{"pattern":"TODO","path":"internal"}`, status: agent.ToolAwaitingApproval, want: "Search TODO in internal · awaiting approval"},
 		{name: "Reading partial input", tool: spec.ReadFile, input: `{"path":"READ`, partial: true, status: agent.ToolRunning, want: "Reading"},
 		{name: "Listing malformed settled input", tool: spec.ListFiles, input: `{"path":`, status: agent.ToolSuccess, want: "✓ List"},
 		{name: "Searching malformed error input", tool: spec.GrepFiles, input: `{"pattern":`, status: agent.ToolError, want: "✗ Search", output: true},
@@ -435,7 +435,8 @@ func TestBackgroundTaskApprovalAndCallPresentTheTask(t *testing.T) {
 	gate := func(name string) *agent.ToolBlock {
 		return &agent.ToolBlock{
 			Name: assistant.ApprovalRequestTool, IsClientSide: true, Status: agent.ToolAwaitingApproval,
-			Approval: &agent.ApprovalPrompt{Title: "Start it?", Detail: "tool: " + name, Gated: &agent.ToolCall{ID: "call-1", Name: name, Input: args}},
+			Input:    fmt.Sprintf(`{"tool_name":%q,"tool_args":%s,"tool_call_id":"call-1"}`, name, args),
+			Approval: &agent.ApprovalPrompt{Title: "Start it?", Detail: "tool: " + name},
 		}
 	}
 	sty := DefaultStyles(true)
@@ -449,6 +450,19 @@ func TestBackgroundTaskApprovalAndCallPresentTheTask(t *testing.T) {
 	}
 	if other := ApprovalOf(gate("deleteMonitor"), sty); other.Title != "" || other.Render != nil {
 		t.Fatalf("another gated tool has the background task approval: %+v", other)
+	}
+	// The gate's row is the call it gates, not yet begun, and stays so once
+	// the decision drops the prompt.
+	denied := gate(spec.StartBackgroundTask)
+	denied.Status, denied.Approval = agent.ToolDenied, nil
+	for tool, want := range map[*agent.ToolBlock]string{
+		gate(spec.StartBackgroundTask): "Start background task Why 500s · awaiting approval",
+		denied:                         "Start background task Why 500s · denied",
+	} {
+		row := agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: "call-1"}, Kind: assistant.KindToolCall, Tool: tool}
+		if got := ansi.Strip(RenderBlock(row, 120, DefaultStyles(true), 0)); !strings.Contains(got, want) {
+			t.Errorf("gate row = %q, want %q", got, want)
+		}
 	}
 
 	call := agent.Block{

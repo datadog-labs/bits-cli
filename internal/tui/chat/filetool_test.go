@@ -234,7 +234,7 @@ func TestRenderUnavailableChangeShowsReasonWhileAwaitingApproval(t *testing.T) {
 	block.Tool.Status = agent.ToolAwaitingApproval
 
 	got := ansi.Strip(RenderBlock(block, 80, DefaultStyles(true), 0))
-	for _, want := range []string{"Writing binary.dat · awaiting approval", "binary file preview is unavailable"} {
+	for _, want := range []string{"Write binary.dat · awaiting approval", "binary file preview is unavailable"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("awaiting unavailable change missing %q: %q", want, got)
 		}
