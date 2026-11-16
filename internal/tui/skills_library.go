@@ -41,6 +41,8 @@ type skillsLibrary struct {
 	loading bool
 	task    task
 	active  bool
+	// pending is a draft to submit again once the catalog loads.
+	pending string
 }
 
 func (l *skillsLibrary) lookup(short string) (skillsLibraryEntry, bool) {
@@ -88,9 +90,9 @@ func (m *Model) loadSkillsLibrary() tea.Cmd {
 	}
 }
 
-func (m *Model) applySkillsLibrary(msg skillsLibraryResultMsg) {
+func (m *Model) applySkillsLibrary(msg skillsLibraryResultMsg) tea.Cmd {
 	if msg.generation != m.skillsLibrary.task.gen {
-		return
+		return nil
 	}
 	m.skillsLibrary.task.done()
 	m.skillsLibrary.loading = false
@@ -117,6 +119,13 @@ func (m *Model) applySkillsLibrary(msg skillsLibraryResultMsg) {
 		m.skillsLibrary.entries, m.skillsLibrary.hidden = entries, hidden
 	}
 	m.pushSkillsLibrary()
+	pending := m.skillsLibrary.pending
+	m.skillsLibrary.pending = ""
+	if pending == "" || pending != m.editor.Value() {
+		return nil
+	}
+	_, cmd := m.submit()
+	return cmd
 }
 
 func (m *Model) pushSkillsLibrary() {
@@ -189,6 +198,22 @@ func (l *skillsLibrary) sentInvocation(raw string) (short, arguments string, ok 
 		}
 	}
 	return "", "", false
+}
+
+// awaitSkillsLibrary holds an unknown "/<name>" draft until the catalog first
+// loads, then submits it again: after a restart, history recalls library
+// invocations in their sent form before the picker has ever opened.
+func (m *Model) awaitSkillsLibrary() (tea.Cmd, bool) {
+	lib := &m.skillsLibrary
+	if m.engine == nil || m.searchesBlocked() || (lib.engine == m.engine && (lib.entries != nil || lib.err != nil)) {
+		return nil, false
+	}
+	var load tea.Cmd
+	if lib.engine != m.engine || !lib.loading {
+		load = m.loadSkillsLibrary()
+	}
+	lib.pending = m.editor.Value()
+	return load, true
 }
 
 // The override enables the skill for this turn: the web uses per-user

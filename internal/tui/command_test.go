@@ -290,7 +290,9 @@ func TestSubmitModelIsUnknown(t *testing.T) {
 	m := newModelWithSpy(t)
 	m.editor.Update(tea.PasteMsg{Content: "/model"})
 
-	_, _ = m.submit()
+	// The draft waits for the Skills Library, which this backend lacks.
+	_, cmd := m.submit()
+	runLibraryLoad(t, m, cmd)
 	if latestNotice(m).Level != chat.NoticeError || !strings.Contains(latestNotice(m).Text, "Unknown command: /model") {
 		t.Fatalf("model command result: notice=%#v", latestNotice(m))
 	}
@@ -611,7 +613,8 @@ func TestSubmitUnknownCommandDuringActiveTurnDoesNotCancel(t *testing.T) {
 	m.op = operation{kind: opTurn, run: 1, cancel: cancel}
 	m.editor.Update(tea.PasteMsg{Content: "/nope"})
 
-	_, _ = m.submit()
+	_, cmd := m.submit()
+	runLibraryLoad(t, m, cmd)
 	if latestNotice(m).Empty() {
 		t.Fatal("expected an unknown-command notice")
 	}

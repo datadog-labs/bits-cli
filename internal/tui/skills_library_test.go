@@ -317,3 +317,20 @@ func TestSkillsLibraryHistoryReplay(t *testing.T) {
 		})
 	}
 }
+
+// After a restart, history recalls "/<name>" before the catalog has loaded.
+func TestSkillsLibraryRecallBeforeCatalogLoads(t *testing.T) {
+	backend := &libraryBackend{}
+	m := newLibraryModel(t, backend)
+	m.editor.SetValue("/clear-writing fix it")
+	_, cmd := m.submit()
+	if m.op.run != 0 || m.editor.Value() != "/clear-writing fix it" {
+		t.Fatalf("before load: run %d, value %q", m.op.run, m.editor.Value())
+	}
+	runLibraryLoad(t, m, cmd)
+	followRun(t, m)
+	want := assistant.SkillOverride{Name: "skills-library/clear-writing", Source: assistant.SkillSourceSkillsLibrary, Enabled: true}
+	if backend.message != "/clear-writing fix it" || !slices.Contains(backend.opts.SkillOverrides, want) {
+		t.Fatalf("message = %q, overrides = %+v", backend.message, backend.opts.SkillOverrides)
+	}
+}

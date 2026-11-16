@@ -52,6 +52,10 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	} else if name, argument, ok := parseCommand(raw); ok {
 		if definition, known := lookupCommand(name); known && definition.id == commandSkillsLibrary {
 			return m, m.openSkillsLibrary()
+		} else if !known {
+			if wait, ok := m.awaitSkillsLibrary(); ok {
+				return m, wait
+			}
 		}
 		m.editor.Reset()
 		m.stopEntitySearch()
