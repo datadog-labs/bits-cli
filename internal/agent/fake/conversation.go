@@ -30,19 +30,20 @@ type conversation struct {
 	messages []assistant.Message
 	turns    int         // user turns started, which index the next turn
 	turn     *scriptTurn // the latest turn; nil before the first
+	tasks    []*fakeTask // background tasks its turns started
 }
 
 // scriptTurn is everything needed to re-execute a turn: its source, or the
 // function push_conversation() received, its index in the conversation
 // (random()'s default seed), the tool responses received for each round so
-// far, the conversations it pushed, the turn's replay-stable file snapshot,
+// far, the ids its built-ins returned, the turn's replay-stable file snapshot,
 // and where its breakpoints look for continue files.
 type scriptTurn struct {
 	src         string
 	fn          starlark.Callable
 	index       int
 	results     [][]assistant.ClientToolResponse
-	pushed      []string
+	ids         []string
 	snapshot    *sourceSnapshot
 	continueDir string
 }
@@ -124,17 +125,17 @@ func (f *Fake) resumeTurn(c *conversation, rs []assistant.ClientToolResponse) (s
 	c.turn.results = append(c.turn.results, rs)
 	turn := *c.turn
 	turn.results = slices.Clone(turn.results)
-	turn.pushed = slices.Clone(turn.pushed)
+	turn.ids = slices.Clone(turn.ids)
 	return turn, true
 }
 
-// rememberPush records a conversation pushed by c's current turn, so a
-// replayed round returns its id instead of pushing it again.
-func (f *Fake) rememberPush(c *conversation, id string) {
+// rememberID records an id that push_conversation() or task() returned in
+// c's current turn, so a replayed round returns it instead of acting again.
+func (f *Fake) rememberID(c *conversation, id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if c.turn != nil {
-		c.turn.pushed = append(c.turn.pushed, id)
+		c.turn.ids = append(c.turn.ids, id)
 	}
 }
 
@@ -145,9 +146,14 @@ func (f *Fake) record(c *conversation, msg assistant.Message) {
 	f.appendLocked(c, msg)
 }
 
+// appendLocked persists msg with its time, as history does even for a message
+// streamed without one.
 func (f *Fake) appendLocked(c *conversation, msg assistant.Message) {
-	c.messages = append(c.messages, msg)
 	c.updated = time.Now().UnixMilli()
+	if msg.CreatedAt == 0 {
+		msg.CreatedAt = c.updated
+	}
+	c.messages = append(c.messages, msg)
 }
 
 // toolResponseMessage is the persisted form of a client tool response, which
@@ -186,7 +192,7 @@ func (f *Fake) ConversationHistory(ctx context.Context, in assistant.Conversatio
 	r.Data.ID = "fake-history-" + strconv.FormatInt(f.seq.Add(1), 10)
 	r.Data.Type = "conversation-history-response"
 	r.Data.Attributes.Title = c.title
-	r.Data.Attributes.Messages = slices.Clone(c.messages)
+	r.Data.Attributes.Messages = append(slices.Clone(c.messages), taskHistoryLocked(c, time.Now())...)
 	return &r, nil
 }
 

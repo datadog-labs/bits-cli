@@ -52,15 +52,27 @@ type run struct {
 	randoms     int                              // random() invocations so far, replayed or live
 	moduleDepth int                              // nested module initialization depth
 	continueDir string                           // where breakpoints look for continue files
-	fake        *Fake                            // where push_conversation() records
+	fake        *Fake                            // where push_conversation() and task() record
 	conv        *conversation                    // the conversation running this turn
-	pushed      []string                         // conversations pushed by earlier runs of this turn
-	pushes      int                              // push_conversation() invocations so far, replayed or live
+	ids         []string                         // ids push_conversation() and task() returned in earlier runs of this turn
+	idCalls     int                              // push_conversation() and task() invocations so far, replayed or live
 }
 
 // live reports whether execution has passed every answered round. Built-ins
 // emit only when live; before that they replay silently.
 func (r *run) live() bool { return r.round == len(r.results) }
+
+// replayedID returns the id the current push_conversation() or task()
+// invocation returned in an earlier run of this turn. Starlark is
+// deterministic, so invocations come in the same order on every run.
+func (r *run) replayedID() (string, bool) {
+	i := r.idCalls
+	r.idCalls++
+	if i < len(r.ids) {
+		return r.ids[i], true
+	}
+	return "", false
+}
 
 // sideEffectError keeps module initialization declarative. Functions defined
 // by a module run later on the caller's thread and are allowed to emit.
@@ -79,7 +91,7 @@ func (r *run) sideEffectError(name string) error {
 func (f *Fake) runScript(c *conversation, out *emitter, opts assistant.SendOptions, turn scriptTurn) error {
 	r := &run{
 		out: out, opts: opts, results: turn.results, turn: turn.index, continueDir: turn.continueDir,
-		fake: f, conv: c, pushed: turn.pushed,
+		fake: f, conv: c, ids: turn.ids,
 	}
 	loader := newModuleLoader(out.ctx, turn.snapshot, r)
 	thread := &starlark.Thread{Name: "fake", Print: func(*starlark.Thread, string) {}}

@@ -204,3 +204,39 @@ func TestKitchen(t *testing.T) {
 		}
 	}
 }
+
+// TestTaskScript follows a scripted investigation to its final update, live
+// and once restored from history.
+func TestTaskScript(t *testing.T) {
+	f := &Fake{ScriptRoot: "testdata"}
+	engine := agent.New(f, agent.Config{})
+	t.Cleanup(engine.Close)
+	events, unsubscribe := engine.Subscribe()
+	t.Cleanup(unsubscribe)
+	allow := func(agent.Block) agent.ApprovalDecision { return agent.ApprovalAllowOnce }
+	runTurn(t, engine, `load("tasks.star", "investigation"); investigation(every="0s")`, workspaceTools(t), agent.DenyContinue, allow)
+
+	var live agent.Task
+	for ev := range events {
+		if tasks := ev.State.Tasks; len(tasks) == 1 && tasks[0].Status == agent.TaskDone {
+			live = tasks[0]
+			break
+		}
+	}
+	if live.Name != "Investigate ad-server error rate on GET /ads" || live.AgentID != "investigation" || live.StartedAt.IsZero() {
+		t.Errorf("task = %+v", live)
+	}
+	if n := len(live.Blocks); n != 7 {
+		t.Errorf("task posted %d updates, want 7", n)
+	}
+
+	restored := agent.New(f, agent.Config{ConversationID: engine.State().ConversationID})
+	t.Cleanup(restored.Close)
+	for range follow(t, restored, func() (agent.RunID, error) { return restored.Restore(context.Background()) }) {
+	}
+	tasks := restored.State().Tasks
+	// History times its messages, so the restored task knows when it started.
+	if len(tasks) != 1 || tasks[0].Status != agent.TaskDone || len(tasks[0].Blocks) != len(live.Blocks) || tasks[0].StartedAt.IsZero() {
+		t.Fatalf("restored tasks = %+v, want the finished task", tasks)
+	}
+}

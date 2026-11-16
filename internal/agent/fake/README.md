@@ -31,7 +31,8 @@ Reusable scripts for tests and manual TUI previews live together in
 The runner bundles these scripts; a file with the same name in the working
 directory takes precedence. Full paths below the working directory also work.
 The files cover approvals, command wrapping, links, notices, disclosure,
-tool grouping, and questions.
+tool grouping, questions, and background tasks (`load("tasks.star",
+"investigation"); investigation()`).
 
 For visualizations, run `BITS_FAKE_BACKEND=1` with a built ddviz helper and
 load `widgets.star`. Only assistant messages are faked: rendering still requires
@@ -62,6 +63,7 @@ inline preview.
 | `tool(name, input, out=, err=, ns=, title=, detail=, stream=, delay=)` or `tool([(name, input, out), …])` | server tool calls, then their results; `delay="3s"` keeps the calls running that long |
 | `call(name, input, stream=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
 | `raw(content, results=, id=)` | any other wire content, through the real decoder |
+| `task(name, updates, agent=, every=, status=)` | a started background task, then one update every `every` (`2s`) and a final one with `status` (`succeeded`); returns its id |
 | `fail(status)`, `fail("net")`, `fail("timeout")` | a backend failure after the output so far |
 | `sleep("2s")` | a stall |
 | `breakpoint(name)` | nothing; stops until continued ([Breakpoints](#breakpoints)) |

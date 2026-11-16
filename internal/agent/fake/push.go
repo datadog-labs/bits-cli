@@ -86,15 +86,13 @@ func builtinPushConversation(thread *starlark.Thread, b *starlark.Builtin, args 
 	if err := r.sideEffectError(b.Name()); err != nil {
 		return nil, err
 	}
-	i := r.pushes
-	r.pushes++
-	if i < len(r.pushed) {
-		return starlark.String(r.pushed[i]), nil
+	if id, ok := r.replayedID(); ok {
+		return starlark.String(id), nil
 	}
 	id, err := r.fake.pushConversation(r.out.ctx, title, turns)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", b.Name(), err)
 	}
-	r.fake.rememberPush(r.conv, id)
+	r.fake.rememberID(r.conv, id)
 	return starlark.String(id), nil
 }
