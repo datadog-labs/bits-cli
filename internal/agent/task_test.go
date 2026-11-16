@@ -143,11 +143,16 @@ func TestTurnStartedTaskIsObservedUntilItsFinalUpdateAndEnd(t *testing.T) {
 	}}}
 	e, events := newTaskEngine(t, backend)
 
+	before := time.Now()
 	collect(turnEvents(e, context.Background(), TurnInput{Message: "investigate"}))
 	task := waitTasks(t, events, taskEnds)[0]
 
-	if task.ID != testTaskID || task.Name != "Why 500s" || task.CallID != "call-1" {
+	if task.ID != testTaskID || task.Name != "Why 500s" || task.AgentID != "investigation" || task.CallID != "call-1" {
 		t.Errorf("task identity = %+v", task)
+	}
+	// Live messages carry no time: the task started when its call was seen.
+	if task.StartedAt.Before(before) || task.StartedAt.After(time.Now()) {
+		t.Errorf("task started at %v, want when its call succeeded", task.StartedAt)
 	}
 	if task.Status != TaskDone || task.Err != nil {
 		t.Errorf("task = %+v, want done", task)
@@ -289,9 +294,12 @@ func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
 	const doneID = "assistant-task.0"
 	doneUpdate := updateMsg("d1", "final", "old result")
 	doneUpdate.Content.Progress.TaskID, doneUpdate.BackgroundTaskID = doneID, nil
+	started := time.UnixMilli(1_794_821_702_250)
+	approved := gatedStartTaskMsgs("call-1", testTaskID)
+	approved[0].CreatedAt = started.UnixMilli()
 	history := slices.Concat(
 		startTaskMsgs("call-0", doneID), []assistant.Message{doneUpdate},
-		gatedStartTaskMsgs("call-1", testTaskID), []assistant.Message{updateMsg("u1", "progress", "persisted")},
+		approved, []assistant.Message{updateMsg("u1", "progress", "persisted")},
 	)
 	backend := &taskBackend{attachments: [][]assistant.Message{{
 		updateMsg("u1", "progress", "persisted"), replayComplete, updateMsg("u2", "final", "new result"), taskEnded,
@@ -316,7 +324,8 @@ func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
 	if got := progressTexts(tasks[0].Blocks); !slices.Equal(got, []string{"old result"}) {
 		t.Errorf("finished task updates = %q", got)
 	}
-	if tasks[1].CallID != "call-1" || tasks[1].Name != "Why 500s" {
+	if tasks[1].CallID != "call-1" || tasks[1].Name != "Why 500s" || tasks[1].AgentID != "investigation" ||
+		!tasks[1].StartedAt.Equal(started) {
 		t.Errorf("approved task = %+v, want started by call-1", tasks[1])
 	}
 	if got := progressTexts(tasks[1].Blocks); !slices.Equal(got, []string{"persisted", "new result"}) {

@@ -32,10 +32,13 @@ const (
 // into the conversation after the turn ended. It belongs to no run: the client
 // observes it but can neither steer nor cancel it.
 type Task struct {
-	ID     string
-	Name   string
-	CallID string // the startBackgroundTask call that started it, if known
-	Status TaskStatus
+	ID      string
+	Name    string
+	AgentID string // the server agent running it, such as "investigation"
+	CallID  string // the startBackgroundTask call that started it, if known
+	// StartedAt is when its start call succeeded, zero if unknown.
+	StartedAt time.Time
+	Status    TaskStatus
 	// Err is why the last observation failed: the engine retries while the
 	// task is running, and gives up once it failed.
 	Err error
@@ -70,7 +73,10 @@ func taskOf(b Block) (*task, bool) {
 	var input spec.StartBackgroundTaskInput
 	_ = json.Unmarshal([]byte(b.Tool.Input), &input)
 	t := newTask(output.TaskID)
-	t.Name, t.CallID = input.Task.TaskName, b.ToolCallID()
+	t.Name, t.AgentID, t.CallID = input.Task.TaskName, input.Task.AgentID, b.ToolCallID()
+	if b.CreatedAt > 0 {
+		t.StartedAt = time.UnixMilli(b.CreatedAt)
+	}
 	return t, true
 }
 
@@ -185,6 +191,13 @@ func (e *Engine) addTasks(tasks []*task) {
 func (e *Engine) discoverTasks() {
 	n := len(e.tasks)
 	if tasks := startedTasks(e.tasks, e.transcript.Blocks()); len(tasks) > n {
+		for _, t := range tasks[n:] {
+			// A live message carries no time, so a task started when its call
+			// is seen to succeed.
+			if t.StartedAt.IsZero() {
+				t.StartedAt = time.Now()
+			}
+		}
 		e.tasks = tasks[:n:n]
 		e.addTasks(tasks[n:])
 	}
