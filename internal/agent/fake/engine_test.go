@@ -143,34 +143,44 @@ func TestServerGateWithClientCall(t *testing.T) {
 	})
 }
 
-// TestDisclosureScript runs the disclosure QA script against the real tools,
-// so schema drift fails here rather than during manual QA.
-func TestDisclosureScript(t *testing.T) {
-	engine := agent.New(&Fake{ScriptRoot: "testdata"}, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
-	script := `load("disclosure.star", "all"); all()`
+// TestQAScripts runs the bundled QA scripts against the real tools, so schema
+// drift fails here rather than during manual QA.
+func TestQAScripts(t *testing.T) {
+	windows := "False"
 	if runtime.GOOS == "windows" {
-		script = `load("disclosure.star", "all"); all(windows=True)`
+		windows = "True"
 	}
-	blocks, _ := runTurn(t, engine, script, workspaceTools(t), agent.DenyContinue, nil)
-	var calls int
-	for _, block := range blocks {
-		if block.Kind == assistant.KindText && strings.Contains(block.Markdown.Content, "fake script error") {
-			t.Fatalf("script failed:\n%s", block.Markdown.Content)
-		}
-		if block.Tool == nil || !block.Tool.IsClientSide {
-			continue
-		}
-		calls++
-		want := agent.ToolSuccess
-		if strings.Contains(block.Tool.Input, "missing.txt") || strings.Contains(block.Tool.Input, "does-not-exist") {
-			want = agent.ToolError
-		}
-		if block.Tool.Status != want {
-			t.Errorf("%s %s status = %v, want %v: %s", block.Tool.Name, block.Tool.Input, block.Tool.Status, want, block.Tool.Output)
-		}
-	}
-	if calls != 14 {
-		t.Errorf("disclosure script ran %d client calls, want 14", calls)
+	for _, tc := range []struct {
+		script string
+		calls  int
+	}{
+		{`load("disclosure.star", "all"); all(windows=` + windows + `)`, 14},
+		{`load("grouping.star", "investigation"); investigation(delay="1ms", windows=` + windows + `)`, 6},
+	} {
+		t.Run(tc.script, func(t *testing.T) {
+			engine := agent.New(&Fake{ScriptRoot: "testdata"}, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
+			blocks, _ := runTurn(t, engine, tc.script, workspaceTools(t), agent.DenyContinue, nil)
+			var calls int
+			for _, block := range blocks {
+				if block.Kind == assistant.KindText && strings.Contains(block.Markdown.Content, "fake script error") {
+					t.Fatalf("script failed:\n%s", block.Markdown.Content)
+				}
+				if block.Tool == nil || !block.Tool.IsClientSide {
+					continue
+				}
+				calls++
+				want := agent.ToolSuccess
+				if strings.Contains(block.Tool.Input, "missing.txt") || strings.Contains(block.Tool.Input, "does-not-exist") {
+					want = agent.ToolError
+				}
+				if block.Tool.Status != want {
+					t.Errorf("%s %s status = %v, want %v: %s", block.Tool.Name, block.Tool.Input, block.Tool.Status, want, block.Tool.Output)
+				}
+			}
+			if calls != tc.calls {
+				t.Errorf("ran %d client calls, want %d", calls, tc.calls)
+			}
+		})
 	}
 }
 
