@@ -91,8 +91,13 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 			backend := fake.New()
 			config.UserContext = env.UserContext(workspace, "")
 			// The fake also takes a script for --conversation: it becomes the
-			// first turn of a conversation an earlier session left behind.
-			if script := config.ConversationID; script != "" && !agent.ValidConversationID(script) {
+			// first turn of a conversation an earlier session left behind. An id
+			// opens an empty one, so scripts can show that real conversation's
+			// saved apps.
+			switch script := config.ConversationID; {
+			case agent.ValidConversationID(script):
+				backend.AdoptConversation(script)
+			case script != "":
 				id, err := backend.PushConversation(ctx, "", script)
 				if err != nil {
 					return nil, fmt.Errorf("fake --conversation script: %w", err)

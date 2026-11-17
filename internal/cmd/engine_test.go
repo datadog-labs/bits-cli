@@ -258,6 +258,9 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 			if strings.Contains(conversation, id) != (got == id) || !agent.ValidConversationID(got) {
 				t.Fatalf("conversation ID = %q", got)
 			}
+			if _, err := engine.LoadConversation(context.Background(), got); err != nil {
+				t.Fatalf("load %q: %v", got, err)
+			}
 		}
 	})
 
