@@ -10,9 +10,13 @@ Sign in with `bits login`, then run one assistant turn:
 bits run --prompt "Summarize this conversation" --conversation YOUR_CONVERSATION_ID --delivery adeep
 ```
 
-Omit `--conversation` to start a new conversation. `--prompt` is required and
-literal; positional and stdin prompts are not supported. The command requires
-a working login and never opens an interactive login flow. For API-key
+Omit `--conversation` to start a new conversation, or pass `--last` to continue
+the conversation last open in interactive chat in the current Git worktree (or
+directory). With none, it exits with status `1` before the turn starts.
+
+`--prompt` is required and literal; positional and stdin prompts are not
+supported. The command requires a working login and never opens an interactive
+login flow. For API-key
 authentication, see [Contributing](../../../CONTRIBUTING.md#authentication-for-development).
 
 Actions requiring approval are denied by default (`--permissions deny`). Pass

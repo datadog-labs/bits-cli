@@ -19,6 +19,7 @@ import (
 type ChatOptions struct {
 	SkillPaths      []string
 	ConversationID  string
+	Last            bool // resume the conversation last open in the workspace
 	Model           string
 	InferenceMode   string
 	AuthMode        auth.Mode
@@ -100,8 +101,16 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 		"",
 		"resume an existing conversation by ID",
 	)
+	addLastFlag(root, &opts.Last)
 	root.AddCommand(newRunCommand(invoked, stdout), newLoginCommand(invoked, stderr), newLogoutCommand(invoked, stderr), newUpdateCommand(invoked, stdout, stderr))
 	return root
+}
+
+// addLastFlag registers --last, which picks the conversation --conversation
+// would otherwise name.
+func addLastFlag(command *cobra.Command, last *bool) {
+	command.Flags().BoolVar(last, "last", false, "resume the conversation last open in this Git worktree or directory")
+	command.MarkFlagsMutuallyExclusive("conversation", "last")
 }
 
 // promptArgs accepts one quoted prompt. Setting Args turns off Cobra's

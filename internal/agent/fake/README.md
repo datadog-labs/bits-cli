@@ -11,7 +11,8 @@ BITS_FAKE_BACKEND=1 bits run --delivery adeep --prompt 'say("hi")'
 ```
 
 Conversations live in memory for the process: `/resume` works within a
-session, but an id from a previous run is not found.
+session, but an id from a previous run is not found, so `--last` never finds
+one to resume.
 
 ## Scripts
 
