@@ -355,6 +355,13 @@ func TestQueueSpinnerSharesActivityClockWithoutTools(t *testing.T) {
 	if !m.animActivity.active || !strings.Contains(m.editor.QueueView(11), m.styles.Chat.StatusSpinner.Frame(2)) {
 		t.Fatal("queue did not share the tool spinner's frame and cadence")
 	}
+	// Waiting on an approval stills the sweep, not the pending prompt.
+	m.syncApprovals([]agent.Block{awaitingCall("a")})
+	m.syncAnimationsAt(start.Add(100 * time.Millisecond))
+	if m.animBorderSweep.active || !m.animActivity.active {
+		t.Fatal("an approval stopped the queue spinner or kept the sweep")
+	}
+	m.syncApprovals(nil)
 	m.state.Queued = nil
 	m.syncQueue()
 	m.syncAnimationsAt(start.Add(100 * time.Millisecond))

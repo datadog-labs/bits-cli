@@ -210,12 +210,11 @@ func renderQueuedPrompt(p HistoryEntry, width, budget int, sty styles.Input, hig
 }
 
 // queueMarker uses exactly the same spinner and timeline as tool activity.
-// Waiting on the user and reduced-motion themes retain a static marker.
 func (e *Editor) queueMarker() string {
 	if e.QueuePaused() {
 		return "Ⅱ "
 	}
-	if e.working && e.inputStyle.SweepMotion {
+	if e.QueueAnimating() {
 		if glyph := e.inputStyle.Spinner.Frame(e.activityFrame); glyph != "" {
 			return glyph + " "
 		}
