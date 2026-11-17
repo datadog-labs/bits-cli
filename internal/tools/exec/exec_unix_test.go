@@ -21,8 +21,8 @@ import (
 func TestExecServiceUnixSuccessAndInheritedEnvironment(t *testing.T) {
 	t.Setenv("BITS_EXEC_TEST_VALUE", "inherited-value")
 	dir := t.TempDir()
-	service := newUnixTestExecService(time.Second, 4096)
-	outcome := service.Run(context.Background(), ExecRequest{
+	service := newUnixTestExecService(4096)
+	outcome := service.run(context.Background(), ExecRequest{
 		Command: `printf 'stdout:%s' "$BITS_EXEC_TEST_VALUE"; printf 'stderr' >&2; if read ignored; then exit 9; fi`,
 		CWD:     dir,
 	})
@@ -42,8 +42,8 @@ func TestExecServiceUnixSuccessAndInheritedEnvironment(t *testing.T) {
 }
 
 func TestExecServiceUnixNonZeroExit(t *testing.T) {
-	service := newUnixTestExecService(time.Second, 4096)
-	outcome := service.Run(context.Background(), ExecRequest{Command: "exit 7", CWD: t.TempDir()})
+	service := newUnixTestExecService(4096)
+	outcome := service.run(context.Background(), ExecRequest{Command: "exit 7", CWD: t.TempDir()})
 	if outcome.Status != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
 		t.Fatalf("outcome = %+v, want exit status 7", outcome)
 	}
@@ -53,8 +53,8 @@ func TestExecServiceUnixNonZeroExit(t *testing.T) {
 }
 
 func TestExecServiceUnixNaturalSignalExit(t *testing.T) {
-	service := newUnixTestExecService(time.Second, 4096)
-	outcome := service.Run(context.Background(), ExecRequest{
+	service := newUnixTestExecService(4096)
+	outcome := service.run(context.Background(), ExecRequest{
 		Command: "kill -TERM $$",
 		CWD:     t.TempDir(),
 	})
@@ -73,9 +73,9 @@ func TestExecServiceUnixNaturalSignalExit(t *testing.T) {
 }
 
 func TestExecServiceUnixLaunchFailure(t *testing.T) {
-	service := newUnixTestExecService(time.Second, 4096)
+	service := newUnixTestExecService(4096)
 	missing := filepath.Join(t.TempDir(), "missing")
-	outcome := service.Run(context.Background(), ExecRequest{Command: "true", CWD: missing})
+	outcome := service.run(context.Background(), ExecRequest{Command: "true", CWD: missing})
 	if outcome.Status != ExecLaunchFailed || outcome.Err == nil {
 		t.Fatalf("outcome = %+v, want launch failure for missing cwd", outcome)
 	}
@@ -92,7 +92,7 @@ func TestExecServiceUnixIgnoresShellEnvironment(t *testing.T) {
 	if selected == "" || selected == os.Getenv("SHELL") {
 		t.Fatalf("default shell = %q, want an available account shell", selected)
 	}
-	outcome := NewExecService(selected).Run(context.Background(), ExecRequest{
+	outcome := NewExecService(selected).run(context.Background(), ExecRequest{
 		Command: "printf selected",
 		CWD:     t.TempDir(),
 	})
@@ -103,7 +103,7 @@ func TestExecServiceUnixIgnoresShellEnvironment(t *testing.T) {
 
 func TestExecServiceUnixUsesRequestedShell(t *testing.T) {
 	service := NewExecService("")
-	outcome := service.Run(context.Background(), ExecRequest{
+	outcome := service.run(context.Background(), ExecRequest{
 		Command: `printf '%s' "$BASH_VERSION"`,
 		CWD:     t.TempDir(),
 		Shell:   "bash",
@@ -112,7 +112,7 @@ func TestExecServiceUnixUsesRequestedShell(t *testing.T) {
 		t.Fatalf("outcome = %+v, want Bash output", outcome)
 	}
 	for _, shell := range []string{"fish", filepath.Join(t.TempDir(), "bash")} {
-		outcome := service.Run(context.Background(), ExecRequest{Command: "true", CWD: t.TempDir(), Shell: shell})
+		outcome := service.run(context.Background(), ExecRequest{Command: "true", CWD: t.TempDir(), Shell: shell})
 		if outcome.Status != ExecLaunchFailed {
 			t.Fatalf("shell %q outcome = %+v, want launch failure", shell, outcome)
 		}
@@ -132,7 +132,7 @@ func TestExecServiceUnixResolvesRelativeShellBeforeChangingDirectory(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	outcome := NewExecService("").Run(context.Background(), ExecRequest{
+	outcome := NewExecService("").run(context.Background(), ExecRequest{
 		Command: "ignored", CWD: t.TempDir(), Shell: relativeShell,
 	})
 	if outcome.Status != ExecSucceeded || outcome.Output.Stdout != "selected" {
@@ -155,13 +155,13 @@ func TestDirectExecLauncherExcludesOnlySelectedNames(t *testing.T) {
 	t.Setenv("PRIVATE_TOKEN", "hidden")
 	t.Setenv("VISIBLE_KEY", "visible")
 	t.Setenv("BITS_EXEC_EXCLUDE_ENV", "PRIVATE_TOKEN")
-	service := newUnixTestExecService(5*time.Second, execOutputLimit)
+	service := newUnixTestExecService(execOutputLimit)
 	request := ExecRequest{Command: "printf '%s|%s|%s' \"$PRIVATE_TOKEN\" \"$VISIBLE_KEY\" \"$BITS_EXEC_EXCLUDE_ENV\"", CWD: t.TempDir()}
-	if got := service.Run(context.Background(), request); got.Status != ExecSucceeded || got.Output.Stdout != "hidden|visible|PRIVATE_TOKEN" {
+	if got := service.run(context.Background(), request); got.Status != ExecSucceeded || got.Output.Stdout != "hidden|visible|PRIVATE_TOKEN" {
 		t.Fatalf("default environment = %+v", got)
 	}
 	protected := NewExecService("/bin/sh", "PRIVATE_TOKEN", "BITS_EXEC_EXCLUDE_ENV")
-	if got := protected.Run(context.Background(), request); got.Status != ExecSucceeded || got.Output.Stdout != "|visible|" {
+	if got := protected.run(context.Background(), request); got.Status != ExecSucceeded || got.Output.Stdout != "|visible|" {
 		t.Fatalf("selected environment exclusion = %+v", got)
 	}
 }
@@ -177,7 +177,7 @@ func TestDirectExecLauncherPreservesLogicalWorkingDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PRIVATE_TOKEN", "hidden")
-	outcome := NewExecService("/bin/sh", "PRIVATE_TOKEN").Run(context.Background(), ExecRequest{
+	outcome := NewExecService("/bin/sh", "PRIVATE_TOKEN").run(context.Background(), ExecRequest{
 		Command: "printf '%s\\n' \"$PWD\"; cd ..; printf '%s\\n' \"$PWD\"",
 		CWD:     linkedDirectory,
 	})
@@ -194,20 +194,18 @@ func TestDirectExecLauncherUsesLoginCommandFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := newExecService(newDirectExecLauncher(), execServiceConfig{
-		// This test exercises argument construction, not timeout behavior. Leave
-		// enough room for slow or heavily loaded local machines to start a shell.
-		concurrency: 1, timeout: 5 * time.Second, outputLimit: 4096,
+		concurrency: 1, outputLimit: 4096,
 		defaultShellPath: shell,
 	})
-	outcome := service.Run(context.Background(), ExecRequest{Command: "printf command", CWD: dir})
+	outcome := service.run(context.Background(), ExecRequest{Command: "printf command", CWD: dir})
 	if outcome.Status != ExecSucceeded || outcome.Output.Stdout != "-lc|printf command" {
 		t.Fatalf("outcome = %+v, want -lc and command string", outcome)
 	}
 }
 
 func TestExecServiceUnixReportsOutputIncompleteAfterForcedPipeClosure(t *testing.T) {
-	service := newUnixTestExecService(time.Second, 4096)
-	outcome := service.Run(context.Background(), ExecRequest{
+	service := newUnixTestExecService(4096)
+	outcome := service.run(context.Background(), ExecRequest{
 		// The direct shell exits successfully while its background child keeps
 		// stdout open. Cmd.Wait closes that lingering pipe after WaitDelay, so
 		// the late output cannot be reported or counted.
@@ -226,10 +224,11 @@ func TestExecServiceUnixReportsOutputIncompleteAfterForcedPipeClosure(t *testing
 }
 
 func TestExecServiceUnixTimeoutTerminatesProcessGroup(t *testing.T) {
-	service := newUnixTestExecService(40*time.Millisecond, 4096)
-	outcome := service.Run(context.Background(), ExecRequest{
+	service := newUnixTestExecService(4096)
+	outcome := service.run(context.Background(), ExecRequest{
 		Command: "trap '' TERM; sleep 2",
 		CWD:     t.TempDir(),
+		Timeout: 40 * time.Millisecond,
 	})
 
 	if outcome.Status != ExecTimedOut || !errors.Is(outcome.Err, context.DeadlineExceeded) {
@@ -248,11 +247,11 @@ func TestExecServiceUnixTimeoutTerminatesProcessGroup(t *testing.T) {
 
 func TestExecServiceUnixCallerCancellation(t *testing.T) {
 	dir := t.TempDir()
-	service := newUnixTestExecService(5*time.Second, 4096)
+	service := newUnixTestExecService(4096)
 	ctx, cancel := context.WithCancel(context.Background())
 	outcomes := make(chan ExecOutcome, 1)
 	go func() {
-		outcomes <- service.Run(ctx, ExecRequest{
+		outcomes <- service.run(ctx, ExecRequest{
 			Command: "touch started; sleep 2",
 			CWD:     dir,
 		})
@@ -281,11 +280,11 @@ func TestExecServiceUnixCallerCancellation(t *testing.T) {
 
 func TestExecServiceUnixCancellationKillsSurvivingGroupDescendant(t *testing.T) {
 	dir := t.TempDir()
-	service := newUnixTestExecService(5*time.Second, 4096)
+	service := newUnixTestExecService(4096)
 	ctx, cancel := context.WithCancel(context.Background())
 	outcomes := make(chan ExecOutcome, 1)
 	go func() {
-		outcomes <- service.Run(ctx, ExecRequest{
+		outcomes <- service.run(ctx, ExecRequest{
 			// The direct shell uses the default TERM action. Its background
 			// child ignores TERM and redirects all descriptors away from the
 			// captured pipes, so direct-child Wait can finish during grace.
@@ -345,8 +344,8 @@ func TestExecServiceUnixCancellationKillsSurvivingGroupDescendant(t *testing.T) 
 }
 
 func TestExecServiceUnixReapsDirectChild(t *testing.T) {
-	service := newUnixTestExecService(time.Second, 4096)
-	outcome := service.Run(context.Background(), ExecRequest{
+	service := newUnixTestExecService(4096)
+	outcome := service.run(context.Background(), ExecRequest{
 		Command: `printf '%s' $$`,
 		CWD:     t.TempDir(),
 	})
@@ -362,10 +361,9 @@ func TestExecServiceUnixReapsDirectChild(t *testing.T) {
 	}
 }
 
-func newUnixTestExecService(timeout time.Duration, outputLimit int) *ExecService {
+func newUnixTestExecService(outputLimit int) *ExecService {
 	return newExecService(newDirectExecLauncher(), execServiceConfig{
 		concurrency:      execConcurrencyLimit,
-		timeout:          timeout,
 		outputLimit:      outputLimit,
 		defaultShellPath: "/bin/sh",
 	})
@@ -407,7 +405,7 @@ func TestBoundedExecOutputNormalizesInvalidUTF8(t *testing.T) {
 	_, _ = stdout.Write([]byte{'o', 'k', 0xff})
 	_, _ = stderr.Write([]byte{0xfe, '!'})
 
-	output := boundedExecOutput(stdout, stderr)
+	output := readExecOutput(stdout, stderr, new([2]int64), true)
 	if output.Stdout != "ok\uFFFD" || output.Stderr != "\uFFFD!" {
 		t.Fatalf("output = %+v, want invalid bytes replaced", output)
 	}
@@ -415,12 +413,12 @@ func TestBoundedExecOutputNormalizesInvalidUTF8(t *testing.T) {
 
 func TestExecServiceUnixCommandRunsInNewSession(t *testing.T) {
 	dir := t.TempDir()
-	service := newUnixTestExecService(5*time.Second, 4096)
+	service := newUnixTestExecService(4096)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	outcomes := make(chan ExecOutcome, 1)
 	go func() {
-		outcomes <- service.Run(ctx, ExecRequest{
+		outcomes <- service.run(ctx, ExecRequest{
 			Command: `echo $$ > shell.pid; sleep 2`,
 			CWD:     dir,
 		})
@@ -455,5 +453,23 @@ func TestExecServiceUnixCommandRunsInNewSession(t *testing.T) {
 	cancel()
 	if outcome := <-outcomes; outcome.Status != ExecCancelled {
 		t.Fatalf("outcome = %+v, want cancellation", outcome)
+	}
+}
+
+// Invalid bytes are replaced, and a character split after them still waits for
+// the bytes that complete it.
+func TestHeadTailBufferHoldsUTF8AfterInvalidBytes(t *testing.T) {
+	b := newHeadTailBuffer(64)
+	var cursor int64
+	for _, read := range []struct{ write, want string }{
+		{write: "\xff\xc3", want: "�"},
+		{write: "\xa9", want: "é"},
+	} {
+		_, _ = b.Write([]byte(read.write))
+		var got string
+		got, _, cursor = b.since(cursor, false)
+		if got != read.want {
+			t.Fatalf("read after %q = %q, want %q", read.write, got, read.want)
+		}
 	}
 }

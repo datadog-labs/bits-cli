@@ -28,7 +28,7 @@ type recordingExecRunner struct {
 	outcome  exectool.ExecOutcome
 }
 
-func (r *recordingExecRunner) Run(_ context.Context, request exectool.ExecRequest) exectool.ExecOutcome {
+func (r *recordingExecRunner) Start(_ context.Context, request exectool.ExecRequest, _ time.Duration) exectool.ExecOutcome {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.requests = append(r.requests, request)
@@ -106,13 +106,13 @@ func TestExecCommandResolvesWorkdirAtTheHandlerBoundary(t *testing.T) {
 		wantTimeout time.Duration
 		wantShell   string
 	}{
-		{name: "default", input: `{"cmd":"pwd"}`, want: turnCWD},
-		{name: "empty defaults", input: `{"cmd":"pwd","workdir":""}`, want: turnCWD},
-		{name: "relative", input: `{"cmd":"pwd","workdir":"child/../target"}`, want: filepath.Join(turnCWD, "target")},
-		{name: "absolute", input: `{"cmd":"pwd","workdir":` + mustJSONString(t, abs) + `}`, want: abs},
-		{name: "outside workspace", input: `{"cmd":"pwd","workdir":"../outside"}`, want: filepath.Clean(filepath.Join(turnCWD, "../outside"))},
+		{name: "default", input: `{"cmd":"pwd"}`, want: turnCWD, wantTimeout: 10 * time.Second},
+		{name: "empty defaults", input: `{"cmd":"pwd","workdir":""}`, want: turnCWD, wantTimeout: 10 * time.Second},
+		{name: "relative", input: `{"cmd":"pwd","workdir":"child/../target"}`, want: filepath.Join(turnCWD, "target"), wantTimeout: 10 * time.Second},
+		{name: "absolute", input: `{"cmd":"pwd","workdir":` + mustJSONString(t, abs) + `}`, want: abs, wantTimeout: 10 * time.Second},
+		{name: "outside workspace", input: `{"cmd":"pwd","workdir":"../outside"}`, want: filepath.Clean(filepath.Join(turnCWD, "../outside")), wantTimeout: 10 * time.Second},
 		{name: "custom timeout", input: `{"cmd":"pwd","timeout_ms":2500}`, want: turnCWD, wantTimeout: 2500 * time.Millisecond},
-		{name: "custom shell", input: `{"cmd":"pwd","shell":"/bin/bash"}`, want: turnCWD, wantShell: "/bin/bash"},
+		{name: "custom shell", input: `{"cmd":"pwd","shell":"/bin/bash"}`, want: turnCWD, wantTimeout: 10 * time.Second, wantShell: "/bin/bash"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

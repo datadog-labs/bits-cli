@@ -1,15 +1,23 @@
-// Package exec provides bounded, one-shot local command execution for agent
-// tools. It does not define or register a model-facing client tool.
+// Package exec provides bounded local command execution for agent tools.
+// Commands may outlive the call that started them. It does not define or
+// register a model-facing client tool.
 package exec
 
 import (
+	"cmp"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
@@ -17,18 +25,14 @@ import (
 
 const (
 	execConcurrencyLimit = 4
-	execTimeout          = time.Duration(spec.ExecDefaultTimeoutMS) * time.Millisecond
-	// MaxTimeout bounds a caller-selected execution deadline. It prevents a
-	// single unsandboxed command from holding one of the shared permits forever.
-	MaxTimeout         = time.Duration(spec.ExecMaxTimeoutMS) * time.Millisecond
-	execOutputLimit    = 64 << 10
-	execTerminateGrace = 100 * time.Millisecond
+	execOutputLimit      = 64 << 10
+	execTerminateGrace   = 100 * time.Millisecond
 )
 
-// ExecStatus identifies why a one-shot command stopped. It aliases the
-// wire-contract type in package spec so the execution service and any importer
-// (tool handler, renderers) share a single terminal-status vocabulary. Output
-// truncation is orthogonal to this reason and is reported by ExecOutput.
+// ExecStatus identifies whether a command still runs, or why it stopped. It
+// aliases the wire-contract type in package spec so the execution service and
+// any importer (tool handler, renderers) share a single vocabulary. Output
+// truncation is orthogonal to it and is reported by ExecOutput.
 type ExecStatus = spec.ExecStatus
 
 const (
@@ -37,6 +41,7 @@ const (
 	ExecLaunchFailed = spec.ExecLaunchFailed
 	ExecTimedOut     = spec.ExecTimedOut
 	ExecCancelled    = spec.ExecCancelled
+	ExecRunning      = spec.ExecRunning
 )
 
 // ExecEnvironmentStrategy describes how a command receives its environment.
@@ -55,7 +60,7 @@ type ExecRequest struct {
 	Command string
 	CWD     string
 	Shell   string
-	// Timeout overrides the service default when non-zero.
+	// Timeout bounds the command's runtime when non-zero.
 	Timeout time.Duration
 }
 
@@ -86,12 +91,18 @@ type ExecOutput struct {
 	Incomplete bool
 }
 
-// ExecOutcome is the complete terminal result of a one-shot execution. Err is
-// populated for launch, timeout, and cancellation failures. ExitCode is set
-// only when the operating system reported a numeric exit status; Signal is set
-// when Unix reported signal termination.
+// ExecOutcome is what a caller observes of a command: its output since the
+// previous observation and its status. A running command has an ID and no
+// exit details. Err is populated for launch, timeout, and cancellation
+// failures. ExitCode is set only when the operating system reported a numeric
+// exit status; Signal is set when Unix reported signal termination.
 type ExecOutcome struct {
-	Status   ExecStatus
+	Status ExecStatus
+	// ID names a command still running in the background.
+	ID string
+	// Command is the command line, set when observing a command by ID: the
+	// caller then knows the command only by its ID.
+	Command  string
 	ExitCode *int
 	Signal   string
 	Elapsed  time.Duration
@@ -99,15 +110,43 @@ type ExecOutcome struct {
 	Err      error
 }
 
-// ExecService owns admission control and one-shot process lifecycle. A service
-// must be shared by all exec_command handlers belonging to one Bits engine for
-// its four-command limit to cover that engine.
+// ErrUnknownCommand reports an ID that names no command: it never ran in the
+// background, or its final outcome was already observed.
+var ErrUnknownCommand = errors.New("unknown command")
+
+// ExecService owns admission control and the lifecycle of every command it
+// starts. A service must be shared by all exec tool handlers of one Bits
+// process for its concurrency limit to cover that process.
 type ExecService struct {
 	launcher         execLauncher
 	permits          chan struct{}
-	timeout          time.Duration
 	outputLimit      int
 	defaultShellPath string
+
+	// life ends when Close starts, stopping every command.
+	life     context.Context
+	endLife  context.CancelFunc
+	mu       sync.Mutex
+	running  sync.WaitGroup          // supervisors; Add only under mu while life lasts
+	commands map[string]*execCommand // commands that ran past their yield
+	// ended counts commands that ended. Clock readings can tie, notably on
+	// Windows, so it orders them instead.
+	ended atomic.Uint64
+}
+
+// execCommand is one launched command. Its supervisor sets outcome, without
+// output, and endOrder before closing done.
+type execCommand struct {
+	command        string
+	stdout, stderr *headTailBuffer
+	startedAt      time.Time
+	stop           context.CancelCauseFunc
+	done           chan struct{}
+	outcome        ExecOutcome
+	endOrder       uint64 // ExecService.ended when this command ended
+
+	mu     sync.Mutex // serializes observations, which advance cursor
+	cursor [2]int64
 }
 
 // NewExecService constructs the direct execution service with the default shell
@@ -116,7 +155,6 @@ type ExecService struct {
 func NewExecService(defaultShellPath string, excludedEnv ...string) *ExecService {
 	return newExecService(newDirectExecLauncher(excludedEnv...), execServiceConfig{
 		concurrency:      execConcurrencyLimit,
-		timeout:          execTimeout,
 		outputLimit:      execOutputLimit,
 		defaultShellPath: defaultShellPath,
 	})
@@ -124,114 +162,372 @@ func NewExecService(defaultShellPath string, excludedEnv ...string) *ExecService
 
 type execServiceConfig struct {
 	concurrency      int
-	timeout          time.Duration
 	outputLimit      int
 	defaultShellPath string
 }
 
 func newExecService(launcher execLauncher, config execServiceConfig) *ExecService {
-	return &ExecService{
+	s := &ExecService{
 		launcher:         launcher,
 		permits:          make(chan struct{}, config.concurrency),
-		timeout:          config.timeout,
 		outputLimit:      config.outputLimit,
 		defaultShellPath: config.defaultShellPath,
+		commands:         make(map[string]*execCommand),
 	}
+	s.life, s.endLife = context.WithCancel(context.Background())
+	return s
 }
 
-// Run executes request once and returns one terminal outcome. The fixed
-// execution deadline begins after admission, so time spent waiting for another
-// command does not consume the command's runtime budget.
-func (s *ExecService) Run(ctx context.Context, request ExecRequest) ExecOutcome {
+// Start launches request and waits until it ends, ctx ends, or yield elapses.
+// A command still running at the yield keeps running in the background under
+// the returned ID until it ends, its timeout elapses, Stop, or Close. A
+// command whose timeout fits within what admission left of the yield never
+// runs in the background.
+// If ctx ends first the command is stopped, since its caller would never learn
+// its ID. Admission waits for another command to end at most the yield, so a
+// caller can always stop the commands holding the permits.
+func (s *ExecService) Start(ctx context.Context, request ExecRequest, yield time.Duration) ExecOutcome {
 	calledAt := time.Now()
 	plan, err := s.resolve(request)
 	if err != nil {
-		return ExecOutcome{
-			Status:  ExecLaunchFailed,
-			Elapsed: time.Since(calledAt),
-			Err:     err,
-		}
+		return ExecOutcome{Status: ExecLaunchFailed, Elapsed: time.Since(calledAt), Err: err}
 	}
-
-	if err := s.acquire(ctx); err != nil {
-		return ExecOutcome{
-			Status:  statusForContext(err),
-			Elapsed: time.Since(calledAt),
-			Err:     err,
-		}
+	timer := time.NewTimer(yield)
+	defer timer.Stop()
+	yielded := timer.C
+	if err := s.acquire(ctx, yielded); err != nil {
+		return ExecOutcome{Status: admissionStatus(ctx, err), Elapsed: time.Since(calledAt), Err: err}
 	}
-	defer s.release()
-
-	startedAt := time.Now()
-	runCtx, cancel := context.WithTimeout(ctx, plan.Timeout)
-	defer cancel()
-	if err := runCtx.Err(); err != nil {
-		return ExecOutcome{
-			Status:  statusForContext(err),
-			Elapsed: time.Since(startedAt),
-			Err:     err,
-		}
-	}
-
-	stdoutLimit, stderrLimit := splitOutputLimit(plan.OutputLimit)
-	stdout := newHeadTailBuffer(stdoutLimit)
-	stderr := newHeadTailBuffer(stderrLimit)
-	process, err := s.launcher.Start(plan, stdout, stderr)
+	c, err := s.launch(plan)
 	if err != nil {
-		return ExecOutcome{
-			Status:  ExecLaunchFailed,
-			Elapsed: time.Since(startedAt),
-			Err:     err,
+		s.release()
+		status := ExecLaunchFailed
+		if errors.Is(err, errExecServiceClosed) {
+			status = ExecCancelled
 		}
+		return ExecOutcome{Status: status, Elapsed: time.Since(calledAt), Err: err}
 	}
-
-	waited := make(chan execProcessResult, 1)
-	go func() {
-		waited <- process.Wait()
-	}()
-
-	var result execProcessResult
-	var terminalErr error
-	var status ExecStatus
+	// Admission spent part of the yield; the call still returns within it.
+	if plan.Timeout != 0 && plan.Timeout <= yield-time.Since(calledAt) {
+		yielded = nil
+	}
 	select {
-	case result = <-waited:
-		status = statusForProcess(result)
-	case <-runCtx.Done():
-		// Prefer a process result that raced with context completion over
-		// reporting a cancellation for a command that already finished.
+	case <-c.done:
+	case <-yielded:
+		// Prefer the outcome of a command that ended as the yield elapsed,
+		// and never hand an ID to a caller that is gone.
 		select {
-		case result = <-waited:
-			status = statusForProcess(result)
+		case <-c.done:
 		default:
-			terminalErr = runCtx.Err()
-			status = statusForContext(terminalErr)
-			result = terminateAndWait(process, waited)
+			outcome, err := s.register(ctx, c)
+			if err == nil {
+				return outcome
+			}
+			c.stop(err)
+			<-c.done
 		}
+	case <-ctx.Done():
+		c.stop(ctx.Err())
+		<-c.done
 	}
-
-	output := boundedExecOutput(stdout, stderr)
-	output.Incomplete = result.outputIncomplete
-	return ExecOutcome{
-		Status:   status,
-		ExitCode: cloneInt(result.exitCode),
-		Signal:   result.signal,
-		Elapsed:  time.Since(startedAt),
-		Output:   output,
-		Err:      terminalErr,
-	}
+	outcome, _ := c.observe("") // every path above waited for done
+	return outcome
 }
 
-func (s *ExecService) acquire(ctx context.Context) error {
+// Wait waits up to wait for command id to end and returns its output since
+// the previous observation. Once it reports the final outcome, id is unknown.
+// Ending ctx abandons the wait, not the command.
+func (s *ExecService) Wait(ctx context.Context, id string, wait time.Duration) (ExecOutcome, error) {
+	c, err := s.lookup(id)
+	if err != nil {
+		return ExecOutcome{}, err
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-c.done:
+	case <-timer.C:
+	case <-ctx.Done():
+		return ExecOutcome{}, ctx.Err()
+	}
+	return s.observe(id, c)
+}
+
+// Stop stops command id, waits for it to be reaped, and returns its final
+// outcome. A command that ended first reports how it ended.
+func (s *ExecService) Stop(ctx context.Context, id string) (ExecOutcome, error) {
+	c, err := s.lookup(id)
+	if err != nil {
+		return ExecOutcome{}, err
+	}
+	c.stop(context.Canceled)
+	select {
+	case <-c.done:
+	case <-ctx.Done():
+		return ExecOutcome{}, ctx.Err()
+	}
+	return s.observe(id, c)
+}
+
+// Close stops every command and waits until all are reaped. Later commands
+// are not started.
+func (s *ExecService) Close() {
+	s.mu.Lock()
+	s.endLife()
+	s.mu.Unlock()
+	s.running.Wait()
+}
+
+var errExecServiceClosed = errors.New("exec service is closed")
+
+// acquire takes a permit, waiting until ctx ends, the service closes, or
+// yielded fires.
+func (s *ExecService) acquire(ctx context.Context, yielded <-chan time.Time) error {
+	if err := cmp.Or(ctx.Err(), s.closedErr()); err != nil {
+		return err
+	}
+	// A free permit wins over an already elapsed yield.
 	select {
 	case s.permits <- struct{}{}:
 		return nil
+	default:
+	}
+	select {
+	case s.permits <- struct{}{}:
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-s.life.Done():
+		return errExecServiceClosed
+	case <-yielded:
+		return s.busyErr()
+	}
+	// A permit freed as the caller left may win the select; never launch for
+	// a caller that is gone.
+	if err := ctx.Err(); err != nil {
+		s.release()
+		return err
+	}
+	return nil
+}
+
+// admissionStatus classifies why a command was not admitted.
+func admissionStatus(ctx context.Context, err error) ExecStatus {
+	switch {
+	case ctx.Err() != nil:
+		return statusForContext(ctx.Err())
+	case errors.Is(err, errExecServiceClosed):
+		return ExecCancelled
+	default:
+		return ExecLaunchFailed
 	}
 }
 
 func (s *ExecService) release() {
 	<-s.permits
+}
+
+func (s *ExecService) closedErr() error {
+	if s.life.Err() != nil {
+		return errExecServiceClosed
+	}
+	return nil
+}
+
+func (s *ExecService) busyErr() error {
+	s.mu.Lock()
+	ids := make([]string, 0, len(s.commands))
+	for id, c := range s.commands {
+		select {
+		case <-c.done:
+		default:
+			ids = append(ids, id)
+		}
+	}
+	s.mu.Unlock()
+	if len(ids) == 0 {
+		return fmt.Errorf("%d commands are already running; retry once one ends", cap(s.permits))
+	}
+	slices.Sort(ids)
+	return fmt.Errorf("%d commands are already running; wait for or stop one of %s", cap(s.permits), strings.Join(ids, ", "))
+}
+
+// launch starts plan under a supervisor that owns it until it is reaped.
+func (s *ExecService) launch(plan ExecPlan) (*execCommand, error) {
+	s.mu.Lock()
+	if err := s.closedErr(); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	// Close waits for this command from here on; its context ends with life.
+	s.running.Add(1)
+	s.mu.Unlock()
+	stdoutLimit, stderrLimit := splitOutputLimit(plan.OutputLimit)
+	ctx, stop := context.WithCancelCause(s.life)
+	c := &execCommand{
+		command:   plan.Command,
+		stdout:    newHeadTailBuffer(stdoutLimit),
+		stderr:    newHeadTailBuffer(stderrLimit),
+		startedAt: time.Now(),
+		stop:      stop,
+		done:      make(chan struct{}),
+	}
+	process, err := s.launcher.Start(plan, c.stdout, c.stderr)
+	if err != nil {
+		stop(nil)
+		s.running.Done()
+		return nil, err
+	}
+	go s.supervise(ctx, c, process, plan.Timeout)
+	return c, nil
+}
+
+// supervise waits for the process to exit or for its context to end, which
+// a timeout, Stop, an abandoned Start, or Close causes. A process result that
+// races with the context wins: the command did finish.
+func (s *ExecService) supervise(ctx context.Context, c *execCommand, process execProcess, timeout time.Duration) {
+	defer s.running.Done()
+	defer c.stop(nil)
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	waited := make(chan execProcessResult, 1)
+	go func() {
+		waited <- process.Wait()
+	}()
+	var result execProcessResult
+	var err error
+	select {
+	case result = <-waited:
+	case <-ctx.Done():
+		select {
+		case result = <-waited:
+		default:
+			err = context.Cause(ctx)
+			result = terminateAndWait(process, waited)
+		}
+	}
+	status := statusForProcess(result)
+	if err != nil {
+		status = statusForContext(err)
+	}
+	c.outcome = ExecOutcome{
+		Status:   status,
+		ExitCode: cloneInt(result.exitCode),
+		Signal:   result.signal,
+		Elapsed:  time.Since(c.startedAt),
+		Output:   ExecOutput{Incomplete: result.outputIncomplete},
+		Err:      err,
+	}
+	c.endOrder = s.ended.Add(1)
+	s.release()
+	close(c.done)
+}
+
+// maxFinishedCommands bounds background commands that ended without anyone
+// observing their final outcome, each keeping its output buffers. Those that
+// ended first are forgotten first.
+const maxFinishedCommands = 16
+
+// register makes c reachable by a new ID and returns its running outcome,
+// or its final one if it ended meanwhile. It fails once ctx ended, checked
+// under the lock StopAll takes: a caller cancelled before StopAll cannot add
+// a command that StopAll missed.
+func (s *ExecService) register(ctx context.Context, c *execCommand) (ExecOutcome, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return ExecOutcome{}, err
+	}
+	s.pruneFinished()
+	id := newCommandID()
+	for s.commands[id] != nil {
+		id = newCommandID()
+	}
+	s.commands[id] = c
+	return s.observeLocked(id, c), nil
+}
+
+// pruneFinished forgets the oldest unobserved finished commands beyond the
+// bound. The caller holds mu.
+func (s *ExecService) pruneFinished() {
+	var finished []string
+	for id, c := range s.commands {
+		select {
+		case <-c.done:
+			finished = append(finished, id)
+		default:
+		}
+	}
+	slices.SortFunc(finished, func(a, b string) int {
+		return cmp.Compare(s.commands[a].endOrder, s.commands[b].endOrder)
+	})
+	for _, id := range finished[:max(0, len(finished)-maxFinishedCommands+1)] {
+		delete(s.commands, id)
+	}
+}
+
+func (s *ExecService) lookup(id string) (*execCommand, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.commands[id]
+	if c == nil {
+		return nil, fmt.Errorf("%w %q", ErrUnknownCommand, id)
+	}
+	return c, nil
+}
+
+// observe returns c's output since the last observation and forgets id once
+// it reports the final outcome, which exactly one observer receives.
+func (s *ExecService) observe(id string, c *execCommand) (ExecOutcome, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.commands[id] != c {
+		return ExecOutcome{}, fmt.Errorf("%w %q", ErrUnknownCommand, id)
+	}
+	outcome := s.observeLocked(id, c)
+	outcome.Command = c.command
+	return outcome, nil
+}
+
+// observeLocked observes c, registered as id. The caller holds mu.
+func (s *ExecService) observeLocked(id string, c *execCommand) ExecOutcome {
+	outcome, final := c.observe(id)
+	if final {
+		delete(s.commands, id)
+	}
+	return outcome
+}
+
+// observe returns the command's output past its cursor, with its final
+// outcome once it ended or as running under id.
+func (c *execCommand) observe(id string) (ExecOutcome, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	select {
+	case <-c.done:
+		outcome := c.outcome
+		incomplete := outcome.Output.Incomplete
+		outcome.Output = readExecOutput(c.stdout, c.stderr, &c.cursor, true)
+		outcome.Output.Incomplete = incomplete
+		return outcome, true
+	default:
+		return ExecOutcome{
+			Status:  ExecRunning,
+			ID:      id,
+			Elapsed: time.Since(c.startedAt),
+			Output:  readExecOutput(c.stdout, c.stderr, &c.cursor, false),
+		}, false
+	}
+}
+
+// newCommandID returns "cmd_" and 48 random bits: unguessable enough that one
+// conversation cannot stumble on another's command.
+func newCommandID() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never returns an error
+	return "cmd_" + hex.EncodeToString(b[:])
 }
 
 func (s *ExecService) resolve(request ExecRequest) (ExecPlan, error) {
@@ -272,19 +568,15 @@ func (s *ExecService) resolve(request ExecRequest) (ExecPlan, error) {
 	if shell == "" {
 		return ExecPlan{}, errors.New("no shell is available")
 	}
-	timeout := s.timeout
-	if request.Timeout != 0 {
-		if request.Timeout < time.Millisecond || request.Timeout > MaxTimeout {
-			return ExecPlan{}, fmt.Errorf("exec timeout %s must be between %s and %s", request.Timeout, time.Millisecond, MaxTimeout)
-		}
-		timeout = request.Timeout
+	if request.Timeout != 0 && request.Timeout < time.Millisecond {
+		return ExecPlan{}, fmt.Errorf("exec timeout %s must be at least %s", request.Timeout, time.Millisecond)
 	}
 	return ExecPlan{
 		Command:     request.Command,
 		CWD:         cwd,
 		Shell:       shell,
 		Environment: ExecEnvironmentInherit,
-		Timeout:     timeout,
+		Timeout:     request.Timeout,
 		OutputLimit: s.outputLimit,
 	}, nil
 }

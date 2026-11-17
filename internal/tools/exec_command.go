@@ -17,7 +17,7 @@ import (
 const execCommandDescription = "Runs a command in a non-interactive shell and returns its stdout, stderr, and exit status."
 
 type execRunner interface {
-	Run(context.Context, exectool.ExecRequest) exectool.ExecOutcome
+	Start(context.Context, exectool.ExecRequest, time.Duration) exectool.ExecOutcome
 }
 
 func newExecCommandTool(turnCWD string, runner execRunner) agent.Tool {
@@ -95,7 +95,11 @@ func execCommandHandler(turnCWD string, runner execRunner) agent.ToolHandler {
 				IsError: true,
 			}, nil
 		}
-		outcome := runner.Run(ctx, resolvedExecCommandRequest(args, cwd))
+		request := resolvedExecCommandRequest(args, cwd)
+		if request.Timeout == 0 {
+			request.Timeout = time.Duration(spec.ExecDefaultTimeoutMS) * time.Millisecond
+		}
+		outcome := runner.Start(ctx, request, request.Timeout)
 		output := marshalExecCommandResult(outcome)
 		return agent.ToolResult{
 			Title:     execResultTitle(outcome),

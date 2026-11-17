@@ -91,3 +91,10 @@ func signalExecProcessGroup(pid int, signal syscall.Signal) error {
 
 // Unix command output follows the UTF-8 text contract.
 func decodeExecOutput(bytes []byte) string { return execOutputText(bytes) }
+
+// decodeLegacyOutput replaces invalid UTF-8: Unix has no legacy code page.
+func decodeLegacyOutput(bytes []byte) string { return execOutputText(bytes) }
+
+// incompleteLegacySuffix holds a split UTF-8 character: Unix keeps decoding
+// UTF-8 after invalid bytes, which it replaces.
+func incompleteLegacySuffix(bytes []byte) int { return incompleteUTF8Suffix(bytes) }

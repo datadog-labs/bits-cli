@@ -2,12 +2,15 @@ package exec
 
 import (
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
 // headTailBuffer retains the beginning and end of one byte stream while
-// continuing to consume all writes. One instance has a single writer.
+// continuing to consume all writes. One instance has a single writer; reads
+// may run while the command still writes.
 type headTailBuffer struct {
+	mu        sync.Mutex
 	head      []byte
 	tail      []byte
 	tailStart int
@@ -31,6 +34,8 @@ func newHeadTailBuffer(limit int) *headTailBuffer {
 }
 
 func (b *headTailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.observeUTF8(p)
 	written := len(p)
 	b.total += int64(written)
@@ -75,25 +80,56 @@ func (b *headTailBuffer) copyIntoTail(start int, p []byte) {
 	copy(b.tail, p[first:])
 }
 
-func (b *headTailBuffer) snapshot(limit int) []byte {
-	if limit <= 0 || b.total == 0 {
-		return nil
+// since returns the retained text written at or after offset, how many of
+// those bytes were not retained, and the offset the next read starts from.
+// The head and tail never overlap: the tail holds the latest bytes past the
+// head. Until the stream is final, a trailing incomplete UTF-8 sequence is
+// left for the next read so a character split across writes is not mangled.
+func (b *headTailBuffer) since(offset int64, final bool) (text string, omitted int64, next int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	headLen := int64(len(b.head))
+	tailStart := b.total - int64(b.tailLen)
+	var data []byte
+	if offset < headLen {
+		data = append(data, b.head[offset:]...)
 	}
-	if int64(limit) >= b.total {
-		result := make([]byte, 0, int(b.total))
-		result = append(result, b.head...)
-		return b.appendTail(result, b.tailLen)
+	if gapStart := max(offset, headLen); gapStart < tailStart {
+		omitted = tailStart - gapStart
 	}
+	data = b.appendTail(data, int(b.total-max(offset, tailStart, headLen)))
+	next = b.total
+	// Hold a character split across writes for the read that completes it.
+	if !final {
+		held := incompleteUTF8Suffix(data)
+		if b.invalidUTF8 {
+			held = incompleteLegacySuffix(data)
+		}
+		data, next = data[:len(data)-held], next-int64(held)
+	}
+	return b.outputText(data), omitted, next
+}
 
-	headLen := limit - limit/2
-	tailLen := limit / 2
-	result := make([]byte, 0, limit)
-	result = append(result, b.head[:min(headLen, len(b.head))]...)
-	return b.appendTail(result, min(tailLen, b.tailLen))
+// incompleteUTF8Suffix is the length of a trailing UTF-8 sequence that more
+// bytes could still complete.
+func incompleteUTF8Suffix(data []byte) int {
+	for n := 1; n <= min(len(data), utf8.UTFMax-1); n++ {
+		c := data[len(data)-n]
+		if c < utf8.RuneSelf {
+			return 0
+		}
+		if utf8.RuneStart(c) {
+			if utf8.FullRune(data[len(data)-n:]) {
+				return 0
+			}
+			return n
+		}
+	}
+	return 0
 }
 
 func (b *headTailBuffer) appendTail(dst []byte, count int) []byte {
-	if count == 0 {
+	if count <= 0 {
 		return dst
 	}
 	start := (b.tailStart + b.tailLen - count) % len(b.tail)
@@ -105,18 +141,13 @@ func (b *headTailBuffer) appendTail(dst []byte, count int) []byte {
 	return dst
 }
 
-func boundedExecOutput(stdout, stderr *headTailBuffer) ExecOutput {
-	stdoutBytes := stdout.snapshot(stdout.limit())
-	stderrBytes := stderr.snapshot(stderr.limit())
-	stdoutOmitted := stdout.total - int64(len(stdoutBytes))
-	stderrOmitted := stderr.total - int64(len(stderrBytes))
-	return ExecOutput{
-		Stdout:             stdout.outputText(stdoutBytes),
-		Stderr:             stderr.outputText(stderrBytes),
-		StdoutOmittedBytes: stdoutOmitted,
-		StderrOmittedBytes: stderrOmitted,
-		Truncated:          stdoutOmitted != 0 || stderrOmitted != 0,
-	}
+// readExecOutput returns both streams' output past cursor and advances it.
+func readExecOutput(stdout, stderr *headTailBuffer, cursor *[2]int64, final bool) ExecOutput {
+	var output ExecOutput
+	output.Stdout, output.StdoutOmittedBytes, cursor[0] = stdout.since(cursor[0], final)
+	output.Stderr, output.StderrOmittedBytes, cursor[1] = stderr.since(cursor[1], final)
+	output.Truncated = output.StdoutOmittedBytes != 0 || output.StderrOmittedBytes != 0
+	return output
 }
 
 // execOutputText defines the runner's text boundary. Command streams may carry
@@ -124,10 +155,6 @@ func boundedExecOutput(stdout, stderr *headTailBuffer) ExecOutput {
 // made visible as replacement characters before JSON serialization.
 func execOutputText(bytes []byte) string {
 	return strings.ToValidUTF8(string(bytes), "\uFFFD")
-}
-
-func (b *headTailBuffer) limit() int {
-	return cap(b.head) + len(b.tail)
 }
 
 // splitOutputLimit gives each stream a fixed share so concurrent collection
@@ -142,11 +169,20 @@ func splitOutputLimit(limit int) (int, int) {
 	return limit - stderr, stderr
 }
 
+// outputText decodes a read with the encoding decided once for the stream:
+// UTF-8 until its first invalid byte, the legacy code page from then on, even
+// for a read that alone is valid UTF-8.
+// NOTE: reads are not revisited, so text read as UTF-8 before that byte stays
+// as read; and Windows holds no split 4-byte GB18030 character across reads.
 func (b *headTailBuffer) outputText(bytes []byte) string {
-	if b.invalidUTF8 || len(b.partialUTF8) != 0 {
+	switch {
+	case b.invalidUTF8:
+		return decodeLegacyOutput(bytes)
+	case len(b.partialUTF8) != 0:
 		return decodeExecOutput(bytes)
+	default:
+		return execOutputText(bytes)
 	}
-	return execOutputText(bytes)
 }
 
 func (b *headTailBuffer) observeUTF8(p []byte) {

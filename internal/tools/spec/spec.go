@@ -115,8 +115,8 @@ type ExecCommandInput struct {
 	TimeoutMS *int64 `json:"timeout_ms"`
 }
 
-// ExecStatus identifies why a one-shot command stopped. Output
-// truncation is orthogonal to this reason and is reported separately.
+// ExecStatus identifies whether a command still runs, or why it stopped.
+// Output truncation is orthogonal to it and is reported separately.
 type ExecStatus string
 
 const (
@@ -125,6 +125,7 @@ const (
 	ExecLaunchFailed ExecStatus = "launch_failure"
 	ExecTimedOut     ExecStatus = "timeout"
 	ExecCancelled    ExecStatus = "cancellation"
+	ExecRunning      ExecStatus = "running"
 )
 
 // ExecCommandOutput is the JSON result an exec_command tool call returns. Fields
