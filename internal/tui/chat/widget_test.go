@@ -105,3 +105,18 @@ func TestAppWithoutViewShowsItsTitle(t *testing.T) {
 		})
 	}
 }
+
+// Status lines under the card line up with its title.
+func TestWidgetStatusLinesAlignWithTitle(t *testing.T) {
+	for name, view := range map[string]WidgetView{
+		"note":    {Title: "CPU", Note: "Invalid query"},
+		"loading": {Title: "CPU", Loading: "Opening"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lines := strings.Split(ansi.Strip(renderWidgetView(view, renderContext{width: 60, sty: DefaultStyles(true)})), "\n")
+			if last := lines[len(lines)-1]; !strings.HasPrefix(last, widgetTitlePad) || last[len(widgetTitlePad)] == ' ' {
+				t.Fatalf("status line %q is not aligned with the title", last)
+			}
+		})
+	}
+}

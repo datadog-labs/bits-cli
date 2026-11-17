@@ -49,15 +49,16 @@ func renderWidgetView(v WidgetView, c renderContext) string {
 	lines = append(lines, box...)
 	if v.Loading != "" && !badged {
 		glyph, style := statusGlyph(agent.ToolRunning, c.sty, c.frame)
-		lines = append(lines, ansi.Truncate(style.UnsetBackground().Render(glyph)+" "+c.sty.Meta.Render(v.Loading), width, "…"))
+		lines = append(lines, ansi.Truncate(widgetTitlePad+style.UnsetBackground().Render(glyph)+" "+c.sty.Meta.Render(v.Loading), width, "…"))
 	}
 	if v.Note != "" {
-		lines = append(lines, ansi.Truncate(c.sty.Meta.Render(escape.SingleLine(v.Note)), width, "…"))
+		lines = append(lines, ansi.Truncate(widgetTitlePad+c.sty.Meta.Render(escape.SingleLine(v.Note)), width, "…"))
 	}
 	return strings.Join(lines, "\n")
 }
 
-// widgetTitlePad indents the title like the markdown around it.
+// widgetTitlePad indents the title, and the lines under it, like the
+// markdown around them.
 const widgetTitlePad = "  "
 
 // widgetHeader is the title row: padded, on the band's surface across the
