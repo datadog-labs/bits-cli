@@ -3,6 +3,7 @@ package conversations
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestPickerLoadingEmptyErrorRetryAndCancel(t *testing.T) {
 	if _, ok := cmd().(CancelledMsg); !ok {
 		t.Fatalf("loading escape emitted %T", cmd())
 	}
-	m.SetConversations(nil)
+	m.SetConversations(nil, nil)
 	if m.State() != StateEmpty || !strings.Contains(m.View(), "No conversations") {
 		t.Fatalf("empty picker = %v %q", m.State(), m.View())
 	}
@@ -53,7 +54,7 @@ func TestPickerDistinguishesHistoryLoadingAndSanitizesErrors(t *testing.T) {
 	m.SetConversations([]assistant.ConversationSummary{
 		{ConversationID: "one", Title: "Alpha"},
 		{ConversationID: "two", Title: "Alpine"},
-	})
+	}, nil)
 	m, _ = m.Update(pickerKey('a', "a"))
 	m, _ = m.Update(pickerKey(tea.KeyDown, ""))
 	before := strings.Index(ansi.Strip(m.View()), "Alpine")
@@ -78,7 +79,7 @@ func TestPickerDistinguishesHistoryLoadingAndSanitizesErrors(t *testing.T) {
 
 func TestPickerShowsSearchBarAndMalformedRecordWarning(t *testing.T) {
 	m := New(60, 16)
-	m.SetConversations([]assistant.ConversationSummary{{ConversationID: "one", Title: "One"}})
+	m.SetConversations([]assistant.ConversationSummary{{ConversationID: "one", Title: "One"}}, nil)
 	m.SetWarning("1 malformed conversation record omitted")
 	view := escape.SingleLine(m.View())
 	if !strings.Contains(view, "⌕") || !strings.Contains(view, "1 malformed conversation") {
@@ -128,7 +129,7 @@ func TestPickerHeaderAndOverflowTrackSelection(t *testing.T) {
 			Title:          "Conversation " + string(rune('A'+i)),
 		}
 	}
-	m.SetConversations(summaries)
+	m.SetConversations(summaries, nil)
 
 	view := escape.SingleLine(m.View())
 	if !strings.Contains(view, "Resume a session (1 of 10)") || !strings.Contains(view, "↓ 4 more below") {
@@ -189,7 +190,7 @@ func TestPickerPageKeysStillRouteToConversationList(t *testing.T) {
 			Title:          "Conversation " + string(rune('A'+i)),
 		}
 	}
-	m.SetConversations(summaries)
+	m.SetConversations(summaries, nil)
 
 	m, _ = m.Update(pickerKey(tea.KeyRight, ""))
 	if m.list.Paginator.Page != 1 || m.list.Index() != m.list.Paginator.PerPage {
@@ -234,7 +235,7 @@ func TestPickerFillsVisibleWindowAfterHeightIncrease(t *testing.T) {
 			Title:          fmt.Sprintf("Conversation %d", i+1),
 		}
 	}
-	m.SetConversations(summaries)
+	m.SetConversations(summaries, nil)
 	for range 9 {
 		m, _ = m.Update(pickerKey(tea.KeyDown, ""))
 	}
@@ -260,7 +261,7 @@ func TestPickerIsBoundedAtResponsiveWidthsAndWithUnicode(t *testing.T) {
 				m.SetConversations([]assistant.ConversationSummary{
 					{ConversationID: "one", Title: "調査 🔎 this conversation title is deliberately long"},
 					{ConversationID: "two", Title: "Résumé café"},
-				})
+				}, nil)
 				view := m.View()
 				if got := lipgloss.Width(view); got > width {
 					t.Fatalf("view width = %d, want <= %d", got, width)
@@ -309,7 +310,7 @@ func TestPickerRemainsUsableWithoutColor(t *testing.T) {
 	m.SetConversations([]assistant.ConversationSummary{
 		{ConversationID: "one", Title: "Selected conversation"},
 		{ConversationID: "two", Title: "Another conversation"},
-	})
+	}, nil)
 	view := m.View()
 	plain := ansi.Strip(view)
 	if !strings.Contains(plain, "› Selected conversation") || !strings.Contains(plain, "  Another conversation") {
@@ -322,7 +323,7 @@ func TestPickerRemainsUsableWithoutColor(t *testing.T) {
 
 func TestPickerHidesPageHelpWithoutPaginationAndExplainsNoMatches(t *testing.T) {
 	m := New(120, 18)
-	m.SetConversations([]assistant.ConversationSummary{{ConversationID: "one", Title: "Alpha"}})
+	m.SetConversations([]assistant.ConversationSummary{{ConversationID: "one", Title: "Alpha"}}, nil)
 	if view := escape.SingleLine(m.View()); strings.Contains(view, "←/→ page") {
 		t.Fatalf("single-page picker advertised pagination: %q", m.View())
 	}
@@ -345,7 +346,7 @@ func TestSearchUsesCaseInsensitiveSubstringAndPreservesNewestFirstOrder(t *testi
 		{ConversationID: "unrelated", UpdatedAt: 300, Title: "Create a new ordered Datadog dashboard for: POST /api/unstable/interpolate-widget service:morpheus-widget-toolkit"},
 		{ConversationID: "older", UpdatedAt: 100, Title: "SELECT COALESCE(attempt_method, success_method)"},
 		{ConversationID: "newer", UpdatedAt: 200, Title: "Notes about coalesce usage"},
-	})
+	}, nil)
 
 	for _, r := range "coalesce" {
 		m, _ = m.Update(pickerKey(r, string(r)))
@@ -371,7 +372,7 @@ func TestPickerSortsFiltersAndDropsMalformedIDs(t *testing.T) {
 		{ID: "json-api-only", UpdatedAt: 30, Title: "Malformed"},
 		{ConversationID: "   ", UpdatedAt: 40},
 	}
-	m.SetConversations(input)
+	m.SetConversations(input, nil)
 	items := m.list.Items()
 	if len(items) != 3 {
 		t.Fatalf("items = %d, want 3 valid canonical ids", len(items))
@@ -400,7 +401,7 @@ func TestPersistentSearchTypingSelectionAndEscape(t *testing.T) {
 	m.SetConversations([]assistant.ConversationSummary{
 		{ConversationID: "one", Title: "Alpha"},
 		{ConversationID: "two", Title: "Beta"},
-	})
+	}, nil)
 	for _, r := range "beta" {
 		m, _ = m.Update(pickerKey(r, string(r)))
 	}
@@ -436,7 +437,7 @@ func TestSearchPersistsAcrossLoadingAndArrowsNavigateResults(t *testing.T) {
 		{ConversationID: "one", Title: "Alpha"},
 		{ConversationID: "two", Title: "Alpine"},
 		{ConversationID: "three", Title: "Beta"},
-	})
+	}, nil)
 	if m.Query() != "al" || len(m.list.VisibleItems()) != 2 {
 		t.Fatalf("post-load search: query=%q visible=%d", m.Query(), len(m.list.VisibleItems()))
 	}
@@ -453,7 +454,7 @@ func TestPastingIntoSearchFiltersImmediately(t *testing.T) {
 	m.SetConversations([]assistant.ConversationSummary{
 		{ConversationID: "one", Title: "Alpha"},
 		{ConversationID: "two", Title: "Beta"},
-	})
+	}, nil)
 	m, _ = m.Update(tea.PasteMsg{Content: "beta"})
 	visible := m.list.VisibleItems()
 	if m.Query() != "beta" || len(visible) != 1 || visible[0].(conversationItem).summary.ConversationID != "two" {
@@ -466,7 +467,7 @@ func TestPickerSanitizesTitlesBeforeRendering(t *testing.T) {
 	m.SetConversations([]assistant.ConversationSummary{{
 		ConversationID: "12345678-1234-1234-1234-123456781234",
 		Title:          "\x1b[31mDanger\x1b[0m\nnext\a",
-	}})
+	}}, nil)
 	title := m.list.Items()[0].(conversationItem).Title()
 	if title != "Danger next" || strings.ContainsAny(title, "\x1b\a\n") {
 		t.Fatalf("sanitized title = %q", title)
@@ -526,7 +527,7 @@ func TestConversationRowsUseSelectorTextRoles(t *testing.T) {
 	m.SetConversations([]assistant.ConversationSummary{
 		{ConversationID: "one", Title: "Selected", UpdatedAt: now.Add(-time.Hour).UnixMilli()},
 		{ConversationID: "two", Title: "Normal", UpdatedAt: now.Add(-48 * time.Hour).UnixMilli()},
-	})
+	}, nil)
 
 	view := m.conversationListView(60)
 	if !strings.Contains(view, theme.Selector.Selected.Render("› Selected")) ||
@@ -539,22 +540,51 @@ func TestConversationRowsUseSelectorTextRoles(t *testing.T) {
 	}
 }
 
+// Conversations last open in this workspace lead, in that order, so the first
+// row is the one `bits --last` resumes; the rest follow newest first.
 func TestOrderedSortsNewestFirstAndDropsUnidentifiedRecords(t *testing.T) {
 	const hour = int64(3_600_000)
-	got := Ordered([]assistant.ConversationSummary{
+	summaries := []assistant.ConversationSummary{
 		{ConversationID: "older", UpdatedAt: 5 * hour},
 		{ConversationID: "  ", UpdatedAt: 99 * hour},
 		{ConversationID: "newest", UpdatedAt: 9 * hour},
 		{ConversationID: "b-tie", UpdatedAt: 7 * hour},
 		{ConversationID: "", UpdatedAt: 98 * hour},
 		{ConversationID: "a-tie", UpdatedAt: 7 * hour},
-	})
-	want := []string{"newest", "a-tie", "b-tie", "older"}
-	ids := make([]string, len(got))
-	for i := range got {
-		ids[i] = got[i].ConversationID
 	}
-	if strings.Join(ids, ",") != strings.Join(want, ",") {
-		t.Fatalf("Ordered returned %v, want %v", ids, want)
+	for _, tc := range []struct {
+		here []string
+		want []string
+	}{
+		{nil, []string{"newest", "a-tie", "b-tie", "older"}},
+		{[]string{"older", "gone", "b-tie"}, []string{"older", "b-tie", "newest", "a-tie"}},
+	} {
+		got := Ordered(summaries, tc.here)
+		ids := make([]string, len(got))
+		for i := range got {
+			ids[i] = got[i].ConversationID
+		}
+		if !slices.Equal(ids, tc.want) {
+			t.Errorf("Ordered(here %q) = %v, want %v", tc.here, ids, tc.want)
+		}
+	}
+}
+
+// Only a conversation last open here says so, in full beside its update time
+// even when titles fill the row.
+func TestPickerMarksConversationsOpenedHere(t *testing.T) {
+	m := New(80, 24)
+	m.now = func() time.Time { return time.UnixMilli(10 * 3_600_000) }
+	long := strings.Repeat(" and more", 10)
+	m.SetConversations([]assistant.ConversationSummary{
+		{ConversationID: "here", Title: "Here" + long, UpdatedAt: 3_600_000},
+		{ConversationID: "elsewhere", Title: "Elsewhere" + long, UpdatedAt: 9 * 3_600_000},
+	}, []string{"here"})
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "here · 9 hours ago") || strings.Contains(view, "here · 1 hour ago") {
+		t.Fatalf("view does not mark only the conversation opened here:\n%s", view)
+	}
+	if first := strings.Index(view, "Here"); first < 0 || first > strings.Index(view, "Elsewhere") {
+		t.Fatalf("the conversation opened here does not lead:\n%s", view)
 	}
 }

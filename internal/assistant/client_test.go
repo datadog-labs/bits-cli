@@ -159,8 +159,13 @@ func TestDo_FallsBackToRawBodyWhenNotJSONAPI(t *testing.T) {
 }
 
 // Without a page size the request stays bare, so the server keeps its default.
+// The opaque token is escaped, since cursors may contain any character.
 func TestUserConversationsSendsPageSizeOnlyWhenSet(t *testing.T) {
-	for in, want := range map[UserConversationsInput]string{{}: "", {PageSize: 16}: "page_size=16"} {
+	for in, want := range map[UserConversationsInput]string{
+		{}:                                     "",
+		{PageSize: 16}:                         "page_size=16",
+		{PageSize: 100, PageToken: "a+/b=c&d"}: "page_size=100&page_token=a%2B%2Fb%3Dc%26d",
+	} {
 		var got string
 		c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 			got = r.URL.RawQuery

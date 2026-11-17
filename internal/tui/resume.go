@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,6 +39,7 @@ func resumeBlockHeight(rows int) int { return 2*rows + 3 }
 // selection and a scroll hint; visibility is the caller's decision.
 type resume struct {
 	conversations []assistant.ConversationSummary
+	here          []string // last open in this workspace; see conversations.Ordered
 
 	selected int
 
@@ -57,8 +59,9 @@ type resume struct {
 // setConversations replaces the offer, returning to the first row. It applies
 // the same normalisation as the full picker, so "recent" means the same thing
 // in both places whatever order the backend answered in.
-func (r *resume) setConversations(summaries []assistant.ConversationSummary) {
-	r.conversations = conversations.Ordered(summaries)
+func (r *resume) setConversations(summaries []assistant.ConversationSummary, here []string) {
+	r.conversations = conversations.Ordered(summaries, here)
+	r.here = here
 	r.reset()
 }
 
@@ -139,7 +142,7 @@ func (r *resume) view(theme styles.Theme, width, visible int) string {
 func (r *resume) row(theme styles.Theme, width, index int) string {
 	summary := r.conversations[index]
 	return offerRow(theme, width, index == r.selected, conversations.SafeTitle(summary),
-		conversations.RelativeUpdatedAt(summary.UpdatedAt, r.now()))
+		conversations.Detail(summary.UpdatedAt, slices.Contains(r.here, summary.ConversationID), r.now()))
 }
 
 // offerRow is a marker and title on the left with aside flushed right, padded
@@ -199,6 +202,7 @@ func offerHint(theme styles.Theme, width int, label string) string {
 type recentConversationsMsg struct {
 	generation uint64
 	result     agent.ConversationListResult
+	here       openedHere
 }
 
 // syncResume reloads the offer once per conversation, as soon as a new one is
@@ -222,24 +226,28 @@ func (m *Model) fetchRecentConversations() tea.Cmd {
 	if m.engine == nil {
 		return nil
 	}
-	m.resume.setConversations(nil)
+	m.resume.setConversations(nil, nil)
 	ctx, generation := m.resume.task.start(context.Background(), historyLoadTimeout)
-	engine := m.engine
+	engine, read := m.engine, m.workspaceConversations
 	return func() tea.Msg {
 		// Match /resume's list: the visible row budget must not hide older
 		// conversations from navigation.
-		return recentConversationsMsg{generation: generation, result: engine.ListConversations(ctx, 0)}
+		return recentConversationsMsg{
+			generation: generation, result: engine.ListConversations(ctx, 0), here: readOpenedHere(read),
+		}
 	}
 }
 
 // applyRecentConversations installs the current read's result. A failed
-// background read the user never asked for stays silent and hides the offer.
+// background read the user never asked for stays silent: a failed list hides
+// the offer, and failing to read this workspace's conversations leaves the
+// rows unmarked, newest first.
 func (m *Model) applyRecentConversations(msg recentConversationsMsg) {
 	if msg.generation != m.resume.task.gen {
 		return
 	}
 	m.resume.task.done()
 	if msg.result.Err == nil {
-		m.resume.setConversations(msg.result.Conversations)
+		m.resume.setConversations(msg.result.Conversations, msg.here.ids)
 	}
 }

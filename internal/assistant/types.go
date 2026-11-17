@@ -1082,6 +1082,8 @@ type UserConversationsResponse struct {
 		Type       string `json:"type"`
 		Attributes struct {
 			Conversations []ConversationSummary `json:"conversations"`
+			// NextPageToken continues a paginated list; empty when it is complete.
+			NextPageToken string `json:"next_page_token"`
 		} `json:"attributes"`
 	} `json:"data"`
 }
@@ -1126,6 +1128,9 @@ type UserConversationsInput struct {
 	// PageSize asks for only the newest PageSize conversations; the API accepts
 	// 1 to 100. Zero leaves the server default, which may be the full list.
 	PageSize int
+	// PageToken continues from a previous page's NextPageToken. The API
+	// accepts it only with PageSize.
+	PageToken string
 }
 
 // ConversationHistoryInput is the input to Client.ConversationHistory.

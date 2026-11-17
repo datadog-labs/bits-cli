@@ -94,6 +94,7 @@ func TestStartupExplicitAPIKeyModeDoesNotFallThroughToFakeBackend(t *testing.T) 
 		ChatOptions{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com", PermissionsMode: agent.ModeManual},
 		stubCredentialStore{session: validOAuthSession()},
 		testWorkspace(t),
+		testConversations(t, t.TempDir()),
 		nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "DD_API_KEY and DD_APP_KEY must both be set") {
@@ -109,6 +110,7 @@ func TestStartupMissingOAuthSelectsInteractiveLogin(t *testing.T) {
 		ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 		stubCredentialStore{err: auth.ErrNoSession},
 		testWorkspace(t),
+		testConversations(t, t.TempDir()),
 		nil,
 	)
 	if err != nil {
@@ -129,6 +131,7 @@ func TestStartupCredentialStoreFailureDoesNotSelectLogin(t *testing.T) {
 		ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 		stubCredentialStore{err: storeErr},
 		testWorkspace(t),
+		testConversations(t, t.TempDir()),
 		nil,
 	)
 	if !errors.Is(err, storeErr) {
@@ -162,6 +165,7 @@ func TestStartupStagingConfigFailureDoesNotEnterLoginPicker(t *testing.T) {
 				ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 				store,
 				workspace,
+				testConversations(t, t.TempDir()),
 				nil,
 			)
 			if err == nil {
@@ -199,6 +203,7 @@ func TestStartupStoredOAuthEntersChatWithConversation(t *testing.T) {
 		ChatOptions{AuthMode: auth.ModeAuto, ConversationID: "conversation-1", PermissionsMode: agent.ModeManual},
 		stubCredentialStore{session: validOAuthSession()},
 		testWorkspace(t),
+		testConversations(t, t.TempDir()),
 		nil,
 	)
 	if err != nil {
@@ -235,5 +240,23 @@ func TestPrintResumeHintOnlyForValidConversationID(t *testing.T) {
 		if out.Len() != 0 {
 			t.Fatalf("%s: hint = %q, want no output", name, out.String())
 		}
+	}
+}
+
+// Interactive --last with nothing recorded in the workspace fails at once,
+// before offering a login that could not help.
+func TestStartupLastWithoutRecordsFailsBeforeLogin(t *testing.T) {
+	clearStagingEnv(t)
+	t.Setenv("BITS_FAKE_BACKEND", "")
+	model, err := startupModelWithStore(
+		context.Background(),
+		ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual, Last: true},
+		stubCredentialStore{err: auth.ErrNoSession},
+		testWorkspace(t),
+		testConversations(t, t.TempDir()),
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "no conversation to resume") || model != nil {
+		t.Fatalf("startup = %v, %v; want the missing conversation before login", model, err)
 	}
 }

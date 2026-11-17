@@ -60,6 +60,22 @@ func (m *Model) startNewConversation() tea.Cmd {
 type conversationListResultMsg struct {
 	generation uint64
 	result     agent.ConversationListResult
+	here       openedHere
+}
+
+// openedHere are the conversations last open in this workspace,
+// read with each list so the two agree, or the error reading them.
+type openedHere struct {
+	ids []string
+	err error
+}
+
+func readOpenedHere(read func() ([]string, error)) openedHere {
+	if read == nil {
+		return openedHere{}
+	}
+	ids, err := read()
+	return openedHere{ids: ids, err: err}
 }
 
 type conversationSwitchResultMsg struct {
@@ -83,10 +99,12 @@ func (m *Model) startConversationList() tea.Cmd {
 	m.picker.SetLoading(conversationview.OperationList)
 	m.conversationSwitchID = ""
 	ctx, generation := m.conversationTask.start(context.Background(), historyLoadTimeout)
-	engine := m.engine
+	engine, read := m.engine, m.workspaceConversations
 	return func() tea.Msg {
 		// No limit: the picker filters locally, so a page would hide older matches.
-		return conversationListResultMsg{generation: generation, result: engine.ListConversations(ctx, 0)}
+		return conversationListResultMsg{
+			generation: generation, result: engine.ListConversations(ctx, 0), here: readOpenedHere(read),
+		}
 	}
 }
 
@@ -100,9 +118,16 @@ func (m *Model) applyConversationListResult(msg conversationListResultMsg) tea.C
 		m.picker.SetError(n.Text, msg.result.Err)
 		return nil
 	}
-	cmd := m.picker.SetConversations(msg.result.Conversations)
+	cmd := m.picker.SetConversations(msg.result.Conversations, msg.here.ids)
+	var warnings []string
 	if msg.result.Omitted > 0 {
-		m.picker.SetWarning(fmt.Sprintf("%d malformed conversation records omitted", msg.result.Omitted))
+		warnings = append(warnings, fmt.Sprintf("%d malformed conversation records omitted", msg.result.Omitted))
+	}
+	if msg.here.err != nil {
+		warnings = append(warnings, "conversations opened here are not marked: "+msg.here.err.Error())
+	}
+	if len(warnings) > 0 {
+		m.picker.SetWarning(strings.Join(warnings, "; "))
 	}
 	return cmd
 }
@@ -221,7 +246,7 @@ func (m *Model) resumeSelectedConversation(conversationID string) tea.Cmd {
 	picker := conversationview.New(m.width, m.height, m.styles)
 	for _, summary := range m.resume.conversations {
 		if summary.ConversationID == conversationID {
-			picker.SetConversations([]assistant.ConversationSummary{summary})
+			picker.SetConversations([]assistant.ConversationSummary{summary}, m.resume.here)
 			break
 		}
 	}

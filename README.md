@@ -52,10 +52,12 @@ server. Type `@` to find services, monitors, incidents, and dashboards.
 - `/export` copies the whole conversation to your clipboard as Markdown
 - `/skills-library` opens the Skills Library.
 
-You can also resume by ID:
+You can also resume by ID, or the conversation you last had open in this Git
+worktree (or directory):
 
 ```sh
 bits --conversation YOUR_CONVERSATION_ID
+bits --last
 ```
 
 Run `bits --help` for CLI commands, or type `/` in chat to find chat commands.

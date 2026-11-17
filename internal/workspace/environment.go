@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,7 +78,7 @@ func (w *Workspace) Repository(parent context.Context) Repository {
 }
 
 func (w *Workspace) repository(ctx context.Context) Repository {
-	root, err := git(ctx, w.path, "rev-parse", "--show-toplevel")
+	root, err := toplevel(ctx, w.path)
 	if err != nil {
 		return Repository{State: repositoryStateForRootError(err, ctx.Err())}
 	}
@@ -107,6 +108,19 @@ func repositoryStateForRootError(err, contextError error) RepositoryState {
 		return RepositoryAbsent
 	}
 	return RepositoryUnavailable
+}
+
+// toplevel is the worktree-root query every inspection starts with. Its error
+// carries Git's own message, which an exit status alone does not.
+func toplevel(ctx context.Context, directory string) (string, error) {
+	root, err := git(ctx, directory, "rev-parse", "--show-toplevel")
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		if message := bytes.TrimSpace(exitError.Stderr); len(message) > 0 {
+			err = fmt.Errorf("%w: %s", err, message)
+		}
+	}
+	return root, err
 }
 
 func git(ctx context.Context, directory string, args ...string) (string, error) {
@@ -155,6 +169,28 @@ func isConflictStatus(x, y byte) bool {
 	default:
 		return false
 	}
+}
+
+// Root returns the directory the workspace belongs to, with symlinks resolved:
+// the root of its Git worktree, so every subdirectory shares it, or the
+// workspace itself outside Git or without Git installed. A repository Git
+// cannot inspect is an error rather than a guess, so callers never key one
+// workspace two ways.
+func (w *Workspace) Root(parent context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, snapshotTimeout)
+	defer cancel()
+	root, err := toplevel(ctx, w.path)
+	if err != nil {
+		if repositoryStateForRootError(err, ctx.Err()) != RepositoryAbsent && !errors.Is(err, exec.ErrNotFound) {
+			return "", fmt.Errorf("find the Git worktree of %s: %w", w.displayPath, err)
+		}
+		root = w.path
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace %s: %w", w.displayPath, err)
+	}
+	return resolved, nil
 }
 
 // RepositoryLayout describes filesystem boundaries without inspecting working-tree state.

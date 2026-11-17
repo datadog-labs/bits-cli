@@ -4,6 +4,7 @@ package conversations
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -47,12 +48,13 @@ type (
 
 type conversationItem struct {
 	summary assistant.ConversationSummary
+	here    bool
 	now     func() time.Time
 }
 
 func (i conversationItem) Title() string { return SafeTitle(i.summary) }
 func (i conversationItem) Description() string {
-	return RelativeUpdatedAt(i.summary.UpdatedAt, i.now())
+	return Detail(i.summary.UpdatedAt, i.here, i.now())
 }
 func (i conversationItem) FilterValue() string { return SafeTitle(i.summary) }
 
@@ -141,14 +143,25 @@ func (m *Model) SetLoading(operation Operation) {
 // substitute for malformed data.
 // The picker and the startup resume offer both call it, so neither can drift
 // on what "recent" means.
-func Ordered(summaries []assistant.ConversationSummary) []assistant.ConversationSummary {
+//
+// The conversations last open in this workspace, here, most recent first, lead
+// in that order, as `bits --last` picks among them.
+func Ordered(summaries []assistant.ConversationSummary, here []string) []assistant.ConversationSummary {
 	ordered := make([]assistant.ConversationSummary, 0, len(summaries))
 	for _, summary := range summaries {
 		if strings.TrimSpace(summary.ConversationID) != "" {
 			ordered = append(ordered, summary)
 		}
 	}
+	rank := make(map[string]int, len(here))
+	for i, id := range here {
+		rank[id] = i + 1 // zero, the missing value, ranks after every workspace conversation
+	}
 	sort.SliceStable(ordered, func(i, j int) bool {
+		ri, rj := rank[ordered[i].ConversationID], rank[ordered[j].ConversationID]
+		if ri != rj {
+			return ri != 0 && (rj == 0 || ri < rj)
+		}
 		if ordered[i].UpdatedAt != ordered[j].UpdatedAt {
 			return ordered[i].UpdatedAt > ordered[j].UpdatedAt
 		}
@@ -157,12 +170,13 @@ func Ordered(summaries []assistant.ConversationSummary) []assistant.Conversation
 	return ordered
 }
 
-// SetConversations replaces the picker's rows with the normalised list.
-func (m *Model) SetConversations(summaries []assistant.ConversationSummary) tea.Cmd {
-	ordered := Ordered(summaries)
+// SetConversations replaces the picker's rows with the normalised list; here
+// are the conversations last open in this workspace (see Ordered).
+func (m *Model) SetConversations(summaries []assistant.ConversationSummary, here []string) tea.Cmd {
+	ordered := Ordered(summaries, here)
 	items := make([]list.Item, len(ordered))
 	for i := range ordered {
-		items[i] = conversationItem{summary: ordered[i], now: m.now}
+		items[i] = conversationItem{summary: ordered[i], here: slices.Contains(here, ordered[i].ConversationID), now: m.now}
 	}
 	m.err = nil
 	m.search.Focus()
@@ -253,6 +267,16 @@ func runeSliceIndex(haystack, needle []rune) int {
 		}
 	}
 	return -1
+}
+
+// Detail is a row's aside: when it was last updated, and whether it was last
+// open in this workspace.
+func Detail(updatedAt int64, here bool, now time.Time) string {
+	updated := RelativeUpdatedAt(updatedAt, now)
+	if here {
+		return "here · " + updated
+	}
+	return updated
 }
 
 // RelativeUpdatedAt renders updatedAt relative to now for display.

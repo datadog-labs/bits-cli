@@ -24,6 +24,8 @@ type ConversationListBackend interface {
 type ConversationListResult struct {
 	Conversations []assistant.ConversationSummary
 	Omitted       int
+	// NextPageToken continues a paginated list; empty when it is complete.
+	NextPageToken string
 	Err           error
 }
 
@@ -47,7 +49,14 @@ func (e *Engine) ListConversations(ctx context.Context, limit int) ConversationL
 	if !ok {
 		return ConversationListResult{Err: ErrConversationListUnsupported}
 	}
-	response, err := backend.UserConversations(ctx, assistant.UserConversationsInput{PageSize: limit})
+	return ListConversations(ctx, backend, assistant.UserConversationsInput{PageSize: limit})
+}
+
+// ListConversations reads and validates one page of summaries for a caller
+// that has a backend but no engine yet, such as one choosing the conversation
+// to start in.
+func ListConversations(ctx context.Context, backend ConversationListBackend, in assistant.UserConversationsInput) ConversationListResult {
+	response, err := backend.UserConversations(ctx, in)
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}
@@ -71,7 +80,9 @@ func (e *Engine) ListConversations(ctx context.Context, limit int) ConversationL
 		}
 		conversations = append(conversations, summary)
 	}
-	return ConversationListResult{Conversations: conversations, Omitted: omitted}
+	return ConversationListResult{
+		Conversations: conversations, Omitted: omitted, NextPageToken: response.Data.Attributes.NextPageToken,
+	}
 }
 
 // LoadConversation fetches and folds history without claiming engine state.
@@ -123,6 +134,7 @@ func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversa
 	return e.idle(func() error {
 		e.installConversation(conversation)
 		e.publish()
+		e.emit(0, Event{Kind: EventConversation, ConvID: conversation.id})
 		return nil
 	})
 }

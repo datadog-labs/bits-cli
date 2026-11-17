@@ -95,6 +95,7 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 	flags.StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
 	flags.StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
 	flags.StringVar(&opts.ConversationID, "conversation", "", "resume an existing conversation by ID")
+	addLastFlag(command, &opts.Last)
 	return command
 }
 
@@ -171,7 +172,11 @@ func runRunWithStore(ctx context.Context, opts RunOptions, store auth.Credential
 	if err != nil {
 		return err
 	}
-	engine, err := newEngine(ctx, opts.ChatOptions, workspace, store)
+	start, err := newWorkspaceConversations(workspace).start(opts.ChatOptions)
+	if err != nil {
+		return err
+	}
+	engine, err := newEngine(ctx, opts.ChatOptions, workspace, store, start)
 	if err != nil {
 		return err
 	}

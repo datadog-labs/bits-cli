@@ -64,6 +64,9 @@ type Config struct {
 	Upgrade        *update.Offer // nil when this installation cannot update itself
 	// InitialPrompt is sent verbatim as the first message once chat is ready.
 	InitialPrompt string
+	// WorkspaceConversations reads the conversations last open in this
+	// workspace, most recent first; lists of conversations lead with them.
+	WorkspaceConversations func() ([]string, error)
 }
 
 // Model is the root Bubble Tea model. All state lives here and is mutated only
@@ -81,6 +84,7 @@ type Model struct {
 	status                 statusview.Model
 	workspace              *workspace.Workspace
 	workspaceDisplayPath   string
+	workspaceConversations func() ([]string, error) // nil reads none
 	fileSearchSession      *workspace.FileSearchSession
 	fileSearchQuery        string
 	fileSearchGeneration   uint64
@@ -288,6 +292,7 @@ func (m *Model) configure(configs []Config) {
 		m.version = configs[0].Version
 		m.upgrade = newUpgradePrompt(configs[0].Upgrade)
 		m.initialPrompt = configs[0].InitialPrompt
+		m.workspaceConversations = configs[0].WorkspaceConversations
 	}
 	if m.entitySearcher == nil && m.engine != nil {
 		m.entitySearcher = m.engine

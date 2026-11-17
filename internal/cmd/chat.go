@@ -24,7 +24,7 @@ func printLoggedOut(w io.Writer) error {
 	return err
 }
 
-func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer) error {
+func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer) (err error) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	checker := update.New()
@@ -33,7 +33,17 @@ func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer)
 		return err
 	}
 	defer func() { _ = workspace.Close() }()
-	root, err := startupModel(ctx, opts, workspace, checker.Offer(ctx, !opts.NoUpdateCheck))
+	conversations := newWorkspaceConversations(workspace)
+	// Every exit closes the engines, which ends their recording, and waits for
+	// it: a failed record must not pass silently.
+	defer func() {
+		cancel()
+		if recordErr := conversations.wait(); recordErr != nil {
+			_, printErr := fmt.Fprintf(stderr, "warning: bits --last may not find this conversation: %v\n", recordErr)
+			err = errors.Join(err, printErr)
+		}
+	}()
+	root, err := startupModel(ctx, opts, workspace, conversations, checker.Offer(ctx, !opts.NoUpdateCheck))
 	if err != nil {
 		return err
 	}
@@ -71,7 +81,7 @@ func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer)
 	}
 	// On a clean exit with an active conversation, surface how to get back to it.
 	// The conversation id is the server-side handle the Assistant API restores via
-	// --conversation; there is no local session store yet.
+	// --conversation.
 	if err := printResumeHint(stdout, m.ConversationID()); err != nil {
 		return err
 	}
@@ -87,11 +97,11 @@ func printResumeHint(w io.Writer, conversationID string) error {
 	return err
 }
 
-func startupModel(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, upgrade *update.Offer) (*tui.Model, error) {
-	return startupModelWithStore(ctx, opts, auth.DefaultStore(), workspace, upgrade)
+func startupModel(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, conversations *workspaceConversations, upgrade *update.Offer) (*tui.Model, error) {
+	return startupModelWithStore(ctx, opts, auth.DefaultStore(), workspace, conversations, upgrade)
 }
 
-func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace, upgrade *update.Offer) (*tui.Model, error) {
+func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace, conversations *workspaceConversations, upgrade *update.Offer) (*tui.Model, error) {
 	toolUI := tools.NewUI()
 	clientTools, err := configuredClientTools(workspace)
 	if err != nil {
@@ -106,14 +116,19 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 	if err != nil {
 		return nil, err
 	}
+	start, err := conversations.start(opts)
+	if err != nil {
+		return nil, err
+	}
 	config := tui.Config{
-		Visualization: widgets,
-		Tools:         toolSet,
-		ToolUI:        toolUI,
-		Version:       version.Build(),
-		Workspace:     workspace,
-		Upgrade:       upgrade,
-		InitialPrompt: opts.InitialPrompt,
+		Visualization:          widgets,
+		Tools:                  toolSet,
+		ToolUI:                 toolUI,
+		Version:                version.Build(),
+		Workspace:              workspace,
+		Upgrade:                upgrade,
+		InitialPrompt:          opts.InitialPrompt,
+		WorkspaceConversations: conversations.recent,
 		Logout: func(logoutCtx context.Context) (bool, error, error) {
 			return auth.Logout(logoutCtx, store, nil)
 		},
@@ -123,10 +138,11 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 	bound := func(engine *agent.Engine, err error) (*agent.Engine, error) {
 		if err == nil {
 			context.AfterFunc(ctx, engine.Close)
+			conversations.follow(engine)
 		}
 		return engine, err
 	}
-	engine, err := bound(newEngine(ctx, opts, workspace, store))
+	engine, err := bound(newEngine(ctx, opts, workspace, store, start))
 	if err == nil {
 		return tui.New(engine, config), nil
 	}
@@ -151,6 +167,6 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		return loginErr
 	})
 	return tui.NewWithLogin(ctx, loginModel, func(factoryCtx context.Context) (*agent.Engine, error) {
-		return bound(newEngine(factoryCtx, opts, workspace, store))
+		return bound(newEngine(factoryCtx, opts, workspace, store, start))
 	}, config), nil
 }
