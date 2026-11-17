@@ -3,7 +3,7 @@
 
 Only assistant messages are faked. Charts render as Datadog snapshots of the
 get_widget payload inside each app's result. The fake opens no relay session,
-so ddviz cannot load data for these apps; use the real backend for ddviz.
+so ddviz cannot load data for these apps. saved() can: see its comment.
 CPU metrics depend on the account; an empty chart is not necessarily a failure.
 
 Payloads match the backend's mcp_app content: the title lives inside the
@@ -33,6 +33,21 @@ def _chart(definition, id="", from_s=0, to_s=0):
         payload["from_ts"] = from_s
         payload["to_ts"] = to_s
     _app({"content": [{"type": "text", "text": definition.get("title", "")}], "structuredContent": payload}, id=id)
+
+def saved(message):
+    """A real app the assistant saved, at message in the conversation given by
+    --conversation. Opening it restores it from Datadog, with a live relay
+    session, so ddviz loads its real data:
+      BITS_FAKE_BACKEND=1 bits --conversation CONVERSATION_ID
+      load("widgets.star", "saved"); saved("MESSAGE_ID")
+    """
+    raw({
+        "type": "mcp_app_saved",
+        "tool_call_id": "call-saved",
+        "tool_name": "show_ui",
+        "resource_uri": "ui://apps/dataviz",
+        "resource_handle": "dataviz-mcp-ui@prototype",
+    }, id=message)
 
 def gallery():
     say("## Widget gallery\nResize, then scroll away and back. Previews should be retained. The incident card has no snapshot preview: it shows its title only.")

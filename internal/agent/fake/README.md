@@ -43,6 +43,20 @@ For visualizations, run `BITS_FAKE_BACKEND=1 BITS_VIZ=snapshot` and load
 stored Bits login with snapshot access. The fake opens no relay session, so
 ddviz cannot load data for these apps.
 
+To see a real app in ddviz, pass a real conversation to `--conversation`: the
+fake opens it empty, and `saved()` shows the app saved at one of its messages.
+Opening the app restores it from Datadog with a live relay session, so its
+tool calls and data are real. The ids come from a conversation where the
+assistant answered with an app (`BITS_PROFILE=web_ui`).
+
+```sh
+BITS_FAKE_BACKEND=1 bits --conversation CONVERSATION_ID
+```
+
+```text
+load("widgets.star", "saved"); saved("MESSAGE_ID")
+```
+
 ```text
 load("widgets.star", "gallery"); gallery()
 load("widgets.star", "timing"); timing(1700000000, 1700003600)
@@ -142,6 +156,8 @@ the only turn of the conversation that opens:
 ```sh
 BITS_FAKE_BACKEND=1 bits --conversation 'load("questions.star", "ask_user_question"); ask_user_question()'
 ```
+
+An id opens an empty conversation under it instead, as `saved()` needs.
 
 In a session, `push_conversation` takes functions as the turns, in order,
 and returns the id to open with `/resume`:
