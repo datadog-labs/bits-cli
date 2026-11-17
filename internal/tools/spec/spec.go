@@ -9,13 +9,19 @@ const (
 	WriteFile   = "write_file"
 	EditFile    = "edit_file"
 	ExecCommand = "exec_command"
+	WaitCommand = "wait_command"
+	StopCommand = "stop_command"
 
 	// Remote tools.
 	Skill               = "Skill"
 	StartBackgroundTask = "startBackgroundTask"
 
-	ExecDefaultTimeoutMS int64 = 10_000
-	ExecMaxTimeoutMS     int64 = 10 * 60 * 1_000
+	// ExecDefaultYieldMS is how long exec_command waits before answering
+	// with a running command. ExecMaxWaitMS bounds every such wait to half
+	// of the 600 s deadline the backend gives a whole multi-agent run.
+	ExecDefaultYieldMS int64 = 10_000
+	ExecDefaultWaitMS  int64 = 30_000
+	ExecMaxWaitMS      int64 = 5 * 60 * 1_000
 )
 
 // Identity is the complete identity needed for exact tool classification.
@@ -39,6 +45,8 @@ var (
 	ClientWriteFile           = Identity{ClientSide: true, Name: WriteFile}
 	ClientEditFile            = Identity{ClientSide: true, Name: EditFile}
 	ClientExecCommand         = Identity{ClientSide: true, Name: ExecCommand}
+	ClientWaitCommand         = Identity{ClientSide: true, Name: WaitCommand}
+	ClientStopCommand         = Identity{ClientSide: true, Name: StopCommand}
 )
 
 // PathInput is the minimal path-bearing projection shared by local tools. It
@@ -113,6 +121,18 @@ type ExecCommandInput struct {
 	Shell     string `json:"shell"`
 	Workdir   string `json:"workdir"`
 	TimeoutMS *int64 `json:"timeout_ms"`
+	YieldMS   *int64 `json:"yield_ms"`
+}
+
+// WaitCommandInput waits on a command exec_command left running.
+type WaitCommandInput struct {
+	CommandID string `json:"command_id"`
+	WaitMS    *int64 `json:"wait_ms"`
+}
+
+// StopCommandInput stops a command exec_command left running.
+type StopCommandInput struct {
+	CommandID string `json:"command_id"`
 }
 
 // ExecStatus identifies whether a command still runs, or why it stopped.
@@ -128,12 +148,16 @@ const (
 	ExecRunning      ExecStatus = "running"
 )
 
-// ExecCommandOutput is the JSON result an exec_command tool call returns. Fields
-// mirror the terminal outcome of the execution: Status is always set, ExitCode
-// and Signal are populated only when the operating system reported them, and
-// the omitted-byte counts are non-zero exactly when Truncated is true.
+// ExecCommandOutput is the JSON result of exec_command, wait_command, and
+// stop_command. Status is always set; CommandID names a command still
+// running; ExitCode and Signal are populated only when the operating system
+// reported them. Streams hold output since the previous result for the same
+// command; wait_command and stop_command name that command in Command. The
+// omitted-byte counts are non-zero exactly when Truncated is true.
 type ExecCommandOutput struct {
 	Status             ExecStatus `json:"status"`
+	CommandID          string     `json:"command_id,omitempty"`
+	Command            string     `json:"command,omitempty"`
 	ExitCode           *int       `json:"exit_code,omitempty"`
 	Signal             string     `json:"signal,omitempty"`
 	DurationMS         int64      `json:"duration_ms"`

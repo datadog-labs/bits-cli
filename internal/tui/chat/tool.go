@@ -164,6 +164,16 @@ var (
 		spacing:  itemSpacing{before: 1, after: 1},
 		action:   toolAction{base: "Run", success: "Ran", failure: "Run failed"},
 	}
+	waitCommandRenderSpec = &toolRenderSpec{
+		render:  renderCommandControlTool,
+		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "Wait for command", active: "Waiting for command", success: "Waited for", failure: "Wait failed"},
+	}
+	stopCommandRenderSpec = &toolRenderSpec{
+		render:  renderCommandControlTool,
+		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "Stop command", active: "Stopping command", success: "Stopped", failure: "Stop failed"},
+	}
 	skillToolRenderSpec = &toolRenderSpec{
 		render: renderSimpleTool,
 		group:  skillGroup,
@@ -268,11 +278,15 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 				in.Workdir = "."
 			}
 			p.argument, p.context = escape.Multiline(in.Cmd), escape.SingleLine(in.Workdir)
-			if in.TimeoutMS != nil && *in.TimeoutMS > 0 && *in.TimeoutMS <= spec.ExecMaxTimeoutMS {
+			if in.TimeoutMS != nil && *in.TimeoutMS > 0 {
 				p.timeout = (time.Duration(*in.TimeoutMS) * time.Millisecond).String()
 			}
 			p.validInput = true
 		}
+	case spec.ClientWaitCommand, spec.ClientStopCommand:
+		// The id means nothing to the user: the row names the command once
+		// the result does.
+		p.validInput = true
 	case spec.ServerSpawnAgent:
 		var in struct {
 			Prompt string `json:"prompt"`
@@ -343,6 +357,10 @@ func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 		return editToolRenderSpec
 	case spec.ClientExecCommand:
 		return execToolRenderSpec
+	case spec.ClientWaitCommand:
+		return waitCommandRenderSpec
+	case spec.ClientStopCommand:
+		return stopCommandRenderSpec
 	case spec.ServerSpawnAgent:
 		return spawnAgentRenderSpec
 	case spec.ServerSendAgentMessage:
@@ -841,13 +859,48 @@ func formatName(format filediff.TextFormat) string {
 }
 
 func renderExecTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
+	return renderExecResult(tool, c, func(result *spec.ExecCommandOutput, suffix []summarySpan) string {
+		if result != nil && result.Status == spec.ExecRunning {
+			// The call answered while the command kept running: it started,
+			// it has not run to completion.
+			started := *p.renderSpec
+			started.action.success = "Started"
+			p.renderSpec = &started
+		}
+		return renderExecInvocation(tool, p, suffix, c)
+	})
+}
+
+// renderCommandControlTool shows a wait or stop: the command it targets, once
+// the result names it, then what it printed since the previous result.
+func renderCommandControlTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
+	return renderExecResult(tool, c, func(result *spec.ExecCommandOutput, suffix []summarySpan) string {
+		if result != nil {
+			command, _, _ := strings.Cut(result.Command, "\n")
+			p.argument = escape.Inline(command)
+			// The wait or stop itself worked: a failure is the command's,
+			// which the error glyph and the suffix already show.
+			observed := *p.renderSpec
+			observed.action.failure = observed.action.success
+			p.renderSpec = &observed
+		}
+		return renderToolHeader(tool, p.summary(tool), suffix, c)
+	})
+}
+
+// renderExecResult renders a command tool's header, built from its decoded
+// result if any, followed by the command output.
+func renderExecResult(tool *agent.ToolBlock, c renderContext, renderHeader func(*spec.ExecCommandOutput, []summarySpan) string) string {
 	var result spec.ExecCommandOutput
 	decoded := json.Unmarshal([]byte(tool.Output), &result) == nil
 	var suffix []summarySpan
+	var header string
 	if decoded {
 		suffix = execSuffix(result)
+		header = renderHeader(&result, suffix)
+	} else {
+		header = renderHeader(nil, nil)
 	}
-	header := renderExecInvocation(tool, p, suffix, c)
 	state := statusOf(tool)
 	if tool.Output == "" {
 		return header
@@ -971,9 +1024,9 @@ func execResultIsTerminal(status spec.ExecStatus) bool {
 	switch status {
 	case spec.ExecSucceeded, spec.ExecNonZeroExit, spec.ExecLaunchFailed, spec.ExecTimedOut, spec.ExecCancelled:
 		return true
-	default:
-		return false
+	case spec.ExecRunning:
 	}
+	return false
 }
 
 func renderNoOutput(width int, sty Styles) string {
@@ -1056,6 +1109,8 @@ func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [
 func execSuffix(result spec.ExecCommandOutput) []summarySpan {
 	var text string
 	switch result.Status {
+	case spec.ExecRunning:
+		text = " · running"
 	case spec.ExecTimedOut:
 		text = " · timed out"
 	case spec.ExecLaunchFailed:

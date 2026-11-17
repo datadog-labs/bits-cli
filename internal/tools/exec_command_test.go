@@ -25,14 +25,24 @@ import (
 type recordingExecRunner struct {
 	mu       sync.Mutex
 	requests []exectool.ExecRequest
+	yields   []time.Duration
 	outcome  exectool.ExecOutcome
 }
 
-func (r *recordingExecRunner) Start(_ context.Context, request exectool.ExecRequest, _ time.Duration) exectool.ExecOutcome {
+func (r *recordingExecRunner) Start(_ context.Context, request exectool.ExecRequest, yield time.Duration) exectool.ExecOutcome {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.requests = append(r.requests, request)
+	r.yields = append(r.yields, yield)
 	return r.outcome
+}
+
+func (r *recordingExecRunner) Wait(context.Context, string, time.Duration) (exectool.ExecOutcome, error) {
+	return r.outcome, nil
+}
+
+func (r *recordingExecRunner) Stop(context.Context, string) (exectool.ExecOutcome, error) {
+	return r.outcome, nil
 }
 
 func (r *recordingExecRunner) requestCount() int {
@@ -60,7 +70,7 @@ func TestExecCommandDefinitionIsStrictAndTruthful(t *testing.T) {
 		t.Fatal(err)
 	}
 	schema := string(encoded)
-	for _, want := range []string{`"required":["cmd"]`, `"additionalProperties":false`, `"shell"`, `"workdir"`, `"timeout_ms"`, `"minimum":1`, `"maximum":600000`} {
+	for _, want := range []string{`"required":["cmd"]`, `"additionalProperties":false`, `"shell"`, `"workdir"`, `"timeout_ms"`, `"minimum":1`, `"yield_ms"`, `"maximum":300000`} {
 		if !strings.Contains(schema, want) {
 			t.Errorf("schema %s does not contain %s", schema, want)
 		}
@@ -78,7 +88,8 @@ func TestExecCommandHandlerValidatesInput(t *testing.T) {
 		`{}`,
 		`{"cmd":""}`,
 		`{"cmd":"true","timeout_ms":0}`,
-		`{"cmd":"true","timeout_ms":600001}`,
+		`{"cmd":"true","yield_ms":-1}`,
+		`{"cmd":"true","yield_ms":300001}`,
 	}
 	for _, input := range tests {
 		result, err := tool.Handler(context.Background(), agent.ToolCall{Name: spec.ExecCommand, Input: input})
@@ -106,13 +117,13 @@ func TestExecCommandResolvesWorkdirAtTheHandlerBoundary(t *testing.T) {
 		wantTimeout time.Duration
 		wantShell   string
 	}{
-		{name: "default", input: `{"cmd":"pwd"}`, want: turnCWD, wantTimeout: 10 * time.Second},
-		{name: "empty defaults", input: `{"cmd":"pwd","workdir":""}`, want: turnCWD, wantTimeout: 10 * time.Second},
-		{name: "relative", input: `{"cmd":"pwd","workdir":"child/../target"}`, want: filepath.Join(turnCWD, "target"), wantTimeout: 10 * time.Second},
-		{name: "absolute", input: `{"cmd":"pwd","workdir":` + mustJSONString(t, abs) + `}`, want: abs, wantTimeout: 10 * time.Second},
-		{name: "outside workspace", input: `{"cmd":"pwd","workdir":"../outside"}`, want: filepath.Clean(filepath.Join(turnCWD, "../outside")), wantTimeout: 10 * time.Second},
+		{name: "default", input: `{"cmd":"pwd"}`, want: turnCWD},
+		{name: "empty defaults", input: `{"cmd":"pwd","workdir":""}`, want: turnCWD},
+		{name: "relative", input: `{"cmd":"pwd","workdir":"child/../target"}`, want: filepath.Join(turnCWD, "target")},
+		{name: "absolute", input: `{"cmd":"pwd","workdir":` + mustJSONString(t, abs) + `}`, want: abs},
+		{name: "outside workspace", input: `{"cmd":"pwd","workdir":"../outside"}`, want: filepath.Clean(filepath.Join(turnCWD, "../outside"))},
 		{name: "custom timeout", input: `{"cmd":"pwd","timeout_ms":2500}`, want: turnCWD, wantTimeout: 2500 * time.Millisecond},
-		{name: "custom shell", input: `{"cmd":"pwd","shell":"/bin/bash"}`, want: turnCWD, wantTimeout: 10 * time.Second, wantShell: "/bin/bash"},
+		{name: "custom shell", input: `{"cmd":"pwd","shell":"/bin/bash"}`, want: turnCWD, wantShell: "/bin/bash"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -129,6 +140,39 @@ func TestExecCommandResolvesWorkdirAtTheHandlerBoundary(t *testing.T) {
 				t.Fatalf("request = %+v, want command pwd and cwd %q", request, test.want)
 			}
 		})
+	}
+}
+
+// The yield decides when the call answers, never what runs: it reaches the
+// runner but not the approval key.
+func TestExecCommandYieldIsNotPartOfTheLaunch(t *testing.T) {
+	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Status: exectool.ExecRunning, ID: "cmd_1"}}
+	tool := newExecCommandTool(t.TempDir(), runner)
+	key := func(input string) agent.ApprovalKey {
+		requirement, _ := tool.Approval(agent.ToolCall{Input: input})
+		return requirement.Key
+	}
+	for _, test := range []struct {
+		input string
+		want  time.Duration
+	}{
+		{input: `{"cmd":"make"}`, want: 10 * time.Second},
+		{input: `{"cmd":"make","yield_ms":0}`, want: 0},
+		{input: `{"cmd":"make","yield_ms":2500}`, want: 2500 * time.Millisecond},
+	} {
+		result, err := tool.Handler(context.Background(), agent.ToolCall{Name: spec.ExecCommand, Input: test.input})
+		if err != nil || result.IsError || !strings.Contains(result.Output, `"command_id":"cmd_1"`) {
+			t.Fatalf("Handler(%s) = %+v, %v; want a running result with its id", test.input, result, err)
+		}
+		runner.mu.Lock()
+		got := runner.yields[len(runner.yields)-1]
+		runner.mu.Unlock()
+		if got != test.want {
+			t.Errorf("Handler(%s) yield = %s, want %s", test.input, got, test.want)
+		}
+		if key(test.input) != key(`{"cmd":"make"}`) {
+			t.Errorf("approval key for %s differs from the same command without a yield", test.input)
+		}
 	}
 }
 
@@ -166,6 +210,11 @@ func TestExecCommandApprovalShowsFinalCommandAndEffectiveWorkdir(t *testing.T) {
 		if !strings.Contains(requirement.Prompt.Detail, want) {
 			t.Errorf("approval detail does not contain %q: %s", want, requirement.Prompt.Detail)
 		}
+	}
+	// Without a timeout the command may keep running after the call answers;
+	// the prompt must say what is being approved.
+	if unbounded, _ := tool.Approval(agent.ToolCall{Input: `{"cmd":"go test ./..."}`}); !strings.Contains(unbounded.Prompt.Detail, "no time limit") {
+		t.Errorf("approval detail without a timeout = %q, want it to say there is no time limit", unbounded.Prompt.Detail)
 	}
 	if strings.Contains(requirement.Prompt.Detail, "go test ./...") {
 		t.Fatalf("approval detail duplicates command input: %s", requirement.Prompt.Detail)
@@ -521,7 +570,7 @@ func TestNewClientToolsAdvertisesExecCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = workspace.Close() })
-	clientTools := NewClientTools(workspace)
+	clientTools := NewClientTools(workspace, exectool.NewExecService(workspace.DefaultShellPath()))
 	var found int
 	for _, tool := range clientTools {
 		if tool.Definition.Name == spec.ExecCommand {
@@ -595,5 +644,58 @@ func TestExecCommandEndToEndWorkdirsAndFailures(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A command left running is collected by wait_command and ended by
+// stop_command, after which its id is unknown.
+func TestExecCommandBackgroundEndToEnd(t *testing.T) {
+	turnCWD := t.TempDir()
+	ws, err := workspace.Open(turnCWD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ws.Close() })
+	commands := exectool.NewExecService(ws.DefaultShellPath())
+	t.Cleanup(commands.Close)
+	execTool, waitTool, stopTool := newExecCommandTool(turnCWD, commands), newWaitCommandTool(commands), newStopCommandTool(commands)
+	// brief ends once the test creates "release", so it is still running at
+	// a 0 ms yield however slow the machine is.
+	brief, long := "while [ ! -e release ]; do sleep 0.01; done; echo done", "sleep 30"
+	if runtime.GOOS == "windows" {
+		brief, long = "while (-not (Test-Path release)) { Start-Sleep -Milliseconds 10 }; 'done'", "Start-Sleep -Seconds 30"
+	}
+	call := func(tool agent.Tool, input string) (agent.ToolResult, spec.ExecCommandOutput) {
+		t.Helper()
+		result, err := tool.Handler(context.Background(), agent.ToolCall{Input: input})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output spec.ExecCommandOutput
+		if err := json.Unmarshal([]byte(result.Output), &output); err != nil && !result.IsError {
+			t.Fatalf("result is not JSON: %v\n%s", err, result.Output)
+		}
+		return result, output
+	}
+
+	_, started := call(execTool, `{"cmd":`+mustJSONString(t, brief)+`,"yield_ms":0}`)
+	if started.Status != exectool.ExecRunning || started.CommandID == "" {
+		t.Fatalf("exec_command = %+v, want running with a command_id", started)
+	}
+	if err := os.WriteFile(filepath.Join(turnCWD, "release"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waited, exited := call(waitTool, `{"command_id":"`+started.CommandID+`","wait_ms":300000}`)
+	if waited.IsError || exited.Status != exectool.ExecSucceeded || strings.TrimSpace(exited.Stdout) != "done" || exited.Command != brief {
+		t.Fatalf("wait_command = %+v, want the exit and its output", exited)
+	}
+
+	_, running := call(execTool, `{"cmd":`+mustJSONString(t, long)+`,"yield_ms":0}`)
+	stopped, final := call(stopTool, `{"command_id":"`+running.CommandID+`"}`)
+	if stopped.IsError || stopped.Cancelled || final.Status != exectool.ExecCancelled {
+		t.Fatalf("stop_command = %+v, %+v; want a successful stop", stopped, final)
+	}
+	if unknown, _ := call(waitTool, `{"command_id":"`+running.CommandID+`","wait_ms":0}`); !unknown.IsError || !strings.Contains(unknown.Output, "unknown command") {
+		t.Fatalf("wait_command after the final result = %+v, want unknown command", unknown)
 	}
 }

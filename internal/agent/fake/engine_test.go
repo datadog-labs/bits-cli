@@ -13,6 +13,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tools"
+	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
@@ -35,7 +36,7 @@ func workspaceTools(t *testing.T) *agent.ToolSet {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ws.Close() })
-	set, err := agent.NewToolSet(tools.NewClientTools(ws)...)
+	set, err := agent.NewToolSet(tools.NewClientTools(ws, exectool.NewExecService(ws.DefaultShellPath()))...)
 	if err != nil {
 		t.Fatal(err)
 	}

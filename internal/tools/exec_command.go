@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -14,10 +15,21 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
-const execCommandDescription = "Runs a command in a non-interactive shell and returns its stdout, stderr, and exit status."
+const (
+	execCommandDescription = "Runs a command in a non-interactive shell and returns its stdout, stderr, and exit status. " +
+		"A command still running after yield_ms keeps running in the background: the result then has its output so far and a command_id " +
+		"for wait_command and stop_command. It runs until it exits, timeout_ms elapses, or stop_command ends it; " +
+		"Bits also stops it when Bits exits or the conversation changes. " +
+		"Run servers and other long-lived processes directly, never with & or nohup: Bits supervises the command it starts, not processes it leaves behind."
+	waitCommandDescription = "Waits up to wait_ms for a command exec_command left running to exit. " +
+		"Returns its output since the previous result and, once it exited, its exit status. Prefer long waits to frequent polling."
+	stopCommandDescription = "Stops a command exec_command left running and returns its remaining output and final status."
+)
 
 type execRunner interface {
 	Start(context.Context, exectool.ExecRequest, time.Duration) exectool.ExecOutcome
+	Wait(context.Context, string, time.Duration) (exectool.ExecOutcome, error)
+	Stop(context.Context, string) (exectool.ExecOutcome, error)
 }
 
 func newExecCommandTool(turnCWD string, runner execRunner) agent.Tool {
@@ -44,8 +56,13 @@ func newExecCommandTool(turnCWD string, runner execRunner) agent.Tool {
 					"timeout_ms": map[string]any{
 						"type":        "integer",
 						"minimum":     1,
-						"maximum":     spec.ExecMaxTimeoutMS,
-						"description": "Maximum command runtime.",
+						"description": "Maximum command runtime, after which it is stopped. Omit for no limit.",
+					},
+					"yield_ms": map[string]any{
+						"type":        "integer",
+						"minimum":     0,
+						"maximum":     spec.ExecMaxWaitMS,
+						"description": fmt.Sprintf("How long to wait before returning while the command keeps running; not a timeout. Defaults to %d; 0 returns once it starts.", spec.ExecDefaultYieldMS),
 					},
 				},
 				"required":             []string{"cmd"},
@@ -55,6 +72,85 @@ func newExecCommandTool(turnCWD string, runner execRunner) agent.Tool {
 		Approval: execCommandApproval(turnCWD),
 		Handler:  execCommandHandler(turnCWD, runner),
 	}
+}
+
+// Waiting on or stopping a command needs no approval: launching it already
+// authorized sharing its output, and stopping only takes authority away.
+func newWaitCommandTool(runner execRunner) agent.Tool {
+	return agent.Tool{
+		Definition: assistant.ClientTool{
+			Name:        spec.WaitCommand,
+			Description: waitCommandDescription,
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command_id": commandIDSchema,
+					"wait_ms": map[string]any{
+						"type":        "integer",
+						"minimum":     0,
+						"maximum":     spec.ExecMaxWaitMS,
+						"description": fmt.Sprintf("Longest time to wait for the exit. Defaults to %d.", spec.ExecDefaultWaitMS),
+					},
+				},
+				"required":             []string{"command_id"},
+				"additionalProperties": false,
+			},
+		},
+		Handler: func(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
+			var args spec.WaitCommandInput
+			if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+				return invalidExecControlResult(err), nil
+			}
+			wait := spec.ExecDefaultWaitMS
+			if args.WaitMS != nil {
+				wait = *args.WaitMS
+			}
+			if wait < 0 || wait > spec.ExecMaxWaitMS {
+				return invalidExecControlResult(fmt.Errorf("wait_ms must be between 0 and %d", spec.ExecMaxWaitMS)), nil
+			}
+			outcome, err := runner.Wait(ctx, args.CommandID, time.Duration(wait)*time.Millisecond)
+			if err != nil {
+				return execControlFailure(err)
+			}
+			return execObservedResult(outcome), nil
+		},
+	}
+}
+
+func newStopCommandTool(runner execRunner) agent.Tool {
+	return agent.Tool{
+		Definition: assistant.ClientTool{
+			Name:        spec.StopCommand,
+			Description: stopCommandDescription,
+			InputSchema: map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{"command_id": commandIDSchema},
+				"required":             []string{"command_id"},
+				"additionalProperties": false,
+			},
+		},
+		Handler: func(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
+			var args spec.StopCommandInput
+			if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+				return invalidExecControlResult(err), nil
+			}
+			outcome, err := runner.Stop(ctx, args.CommandID)
+			if err != nil {
+				return execControlFailure(err)
+			}
+			result := execObservedResult(outcome)
+			if outcome.Status == exectool.ExecCancelled {
+				result.Title = "Command stopped"
+			}
+			return result, nil
+		},
+	}
+}
+
+var commandIDSchema = map[string]any{
+	"type":        "string",
+	"minLength":   1,
+	"description": "The command_id exec_command returned.",
 }
 
 func execCommandApproval(turnCWD string) agent.ApprovalPolicy {
@@ -95,19 +191,52 @@ func execCommandHandler(turnCWD string, runner execRunner) agent.ToolHandler {
 				IsError: true,
 			}, nil
 		}
-		request := resolvedExecCommandRequest(args, cwd)
-		if request.Timeout == 0 {
-			request.Timeout = time.Duration(spec.ExecDefaultTimeoutMS) * time.Millisecond
+		yield := spec.ExecDefaultYieldMS
+		if args.YieldMS != nil {
+			yield = *args.YieldMS
 		}
-		outcome := runner.Start(ctx, request, request.Timeout)
-		output := marshalExecCommandResult(outcome)
-		return agent.ToolResult{
-			Title:     execResultTitle(outcome),
-			Output:    output,
-			IsError:   outcome.Status != exectool.ExecSucceeded,
-			Cancelled: outcome.Status == exectool.ExecCancelled,
-		}, nil
+		outcome := runner.Start(ctx, resolvedExecCommandRequest(args, cwd), time.Duration(yield)*time.Millisecond)
+		return execCommandResult(outcome), nil
 	}
+}
+
+// execCommandResult reports outcome as the tool result. A running command is
+// not an error: it is answering early by request.
+func execCommandResult(outcome exectool.ExecOutcome) agent.ToolResult {
+	return agent.ToolResult{
+		Title:     execResultTitle(outcome),
+		Output:    marshalExecCommandResult(outcome),
+		IsError:   outcome.Status != exectool.ExecSucceeded && outcome.Status != exectool.ExecRunning,
+		Cancelled: outcome.Status == exectool.ExecCancelled,
+	}
+}
+
+// execObservedResult reports what a wait or stop observed. A stopped command
+// is not the call's failure: someone meant to stop it, and the output says
+// who.
+func execObservedResult(outcome exectool.ExecOutcome) agent.ToolResult {
+	result := execCommandResult(outcome)
+	if outcome.Status == exectool.ExecCancelled {
+		result.IsError, result.Cancelled = false, false
+	}
+	return result
+}
+
+// execControlFailure reports a wait or stop that could not observe its
+// command. The call's own cancellation propagates as for any handler.
+func execControlFailure(err error) (agent.ToolResult, error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return agent.ToolResult{}, err
+	}
+	return agent.ToolResult{
+		Title:   "Unknown command",
+		Output:  err.Error() + ": no such command is running. Bits stops its commands when it exits or the conversation changes, and returns a command's final result once.",
+		IsError: true,
+	}, nil
+}
+
+func invalidExecControlResult(err error) agent.ToolResult {
+	return agent.ToolResult{Title: "Invalid command id", Output: "invalid input: " + err.Error(), IsError: true}
 }
 
 func parseExecCommandArgs(input, turnCWD string) (spec.ExecCommandInput, string, error) {
@@ -118,8 +247,11 @@ func parseExecCommandArgs(input, turnCWD string) (spec.ExecCommandInput, string,
 	if args.Cmd == "" {
 		return spec.ExecCommandInput{}, "", fmt.Errorf("cmd must not be empty")
 	}
-	if args.TimeoutMS != nil && (*args.TimeoutMS < 1 || *args.TimeoutMS > spec.ExecMaxTimeoutMS) {
-		return spec.ExecCommandInput{}, "", fmt.Errorf("timeout_ms must be between 1 and %d", spec.ExecMaxTimeoutMS)
+	if args.TimeoutMS != nil && *args.TimeoutMS < 1 {
+		return spec.ExecCommandInput{}, "", fmt.Errorf("timeout_ms must be at least 1")
+	}
+	if args.YieldMS != nil && (*args.YieldMS < 0 || *args.YieldMS > spec.ExecMaxWaitMS) {
+		return spec.ExecCommandInput{}, "", fmt.Errorf("yield_ms must be between 0 and %d", spec.ExecMaxWaitMS)
 	}
 	workdir := args.Workdir
 	if workdir == "" {
@@ -130,6 +262,8 @@ func parseExecCommandArgs(input, turnCWD string) (spec.ExecCommandInput, string,
 	return args, filepath.Clean(workdir), nil
 }
 
+// execCommandApprovalKey covers what runs, not when the call answers: the
+// yield is deliberately absent from the request it digests.
 func execCommandApprovalKey(args spec.ExecCommandInput, cwd string) agent.ApprovalKey {
 	// JSON encoding makes the tuple framing unambiguous even when either value
 	// contains control characters. The digest keeps arbitrary commands out of
@@ -150,9 +284,11 @@ func resolvedExecCommandRequest(args spec.ExecCommandInput, cwd string) exectool
 	return request
 }
 
+// execTimeoutApprovalDetail states the runtime being approved: without a
+// timeout, a command may keep running after its call answers.
 func execTimeoutApprovalDetail(args spec.ExecCommandInput) string {
 	if args.TimeoutMS == nil {
-		return ""
+		return " · no time limit"
 	}
 	return " · timeout: " + (time.Duration(*args.TimeoutMS) * time.Millisecond).String()
 }
@@ -169,14 +305,17 @@ func execResultTitle(outcome exectool.ExecOutcome) string {
 		return "Command timed out"
 	case exectool.ExecCancelled:
 		return "Command cancelled"
-	default:
-		return "Command finished"
+	case exectool.ExecRunning:
+		return "Command running"
 	}
+	return "Command finished"
 }
 
 func marshalExecCommandResult(outcome exectool.ExecOutcome) string {
 	result := spec.ExecCommandOutput{
 		Status:             outcome.Status,
+		CommandID:          outcome.ID,
+		Command:            outcome.Command,
 		ExitCode:           outcome.ExitCode,
 		Signal:             outcome.Signal,
 		DurationMS:         outcome.Elapsed.Milliseconds(),

@@ -24,7 +24,9 @@ import (
 )
 
 const (
-	execConcurrencyLimit = 4
+	// execConcurrencyLimit bounds running commands, including those left in
+	// the background, which hold their permit until they end.
+	execConcurrencyLimit = 8
 	execOutputLimit      = 64 << 10
 	execTerminateGrace   = 100 * time.Millisecond
 )

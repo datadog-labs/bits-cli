@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -216,6 +217,58 @@ func TestExecCommandDecodesEnvelopeAndBoundsOutput(t *testing.T) {
 		if !strings.Contains(full, row) {
 			t.Errorf("expanded exec view is missing %s:\n%s", row, full)
 		}
+	}
+}
+
+// A command left running reads as started, and waits and stops name the
+// command they target and what it printed since.
+func TestCommandToolsRenderBackgroundCommands(t *testing.T) {
+	for _, test := range []struct {
+		name, tool, input, output string
+		status                    agent.ToolStatus
+		want                      []string
+	}{
+		{
+			name: "started", tool: spec.ExecCommand, input: `{"cmd":"make build"}`,
+			output: `{"status":"running","command_id":"cmd_4f1a09c2b7e3","stdout":"[1/40] compile"}`,
+			want:   []string{"Started make build in . · running", "[1/40] compile"},
+		},
+		{
+			name: "waited, still running", tool: spec.WaitCommand, input: `{"command_id":"cmd_4f1a09c2b7e3"}`,
+			output: `{"status":"running","command_id":"cmd_4f1a09c2b7e3","command":"make build","stdout":"[20/40] compile"}`,
+			want:   []string{"Waited for make build · running", "[20/40] compile"},
+		},
+		{
+			name: "waited for the exit", tool: spec.WaitCommand, input: `{"command_id":"cmd_4f1a09c2b7e3"}`,
+			output: `{"status":"nonzero_exit","exit_code":2,"command":"make build\nmake test","stderr":"error: undefined"}`,
+			status: agent.ToolError,
+			want:   []string{"✗", "Waited for make build · exit 2", "error: undefined"},
+		},
+		{
+			name: "stopped", tool: spec.StopCommand, input: `{"command_id":"cmd_4f1a09c2b7e3"}`,
+			output: `{"status":"cancellation","command":"npm run dev"}`,
+			want:   []string{"Stopped npm run dev"},
+		},
+		{
+			name: "waiting", tool: spec.WaitCommand, input: `{"command_id":"cmd_4f1a09c2b7e3"}`,
+			want: []string{"Waiting for command"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			status := cmp.Or(test.status, agent.ToolSuccess)
+			if test.output == "" {
+				status = agent.ToolRunning
+			}
+			block := agent.Block{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{
+				Name: test.tool, Input: test.input, Output: test.output, Status: status, IsClientSide: true,
+			}}
+			plain := ansi.Strip(RenderBlock(block, 100, DefaultStyles(true), 0))
+			for _, want := range test.want {
+				if !strings.Contains(plain, want) {
+					t.Errorf("rendering missing %q:\n%s", want, plain)
+				}
+			}
+		})
 	}
 }
 

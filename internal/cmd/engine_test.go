@@ -79,12 +79,12 @@ func TestConfiguredClientToolsReadsExecExclusionList(t *testing.T) {
 	}
 	defer func() { _ = ws.Close() }()
 	t.Setenv(EnvExecExcludeEnv, "PRIVATE_TOKEN, SESSION_KEY")
-	if _, err := configuredClientTools(ws); err != nil {
+	if _, err := newExecService(ws); err != nil {
 		t.Fatalf("valid exclusion list: %v", err)
 	}
 	for _, raw := range []string{"PRIVATE_TOKEN,", "PRIVATE_TOKEN=secret", "1INVALID"} {
 		t.Setenv(EnvExecExcludeEnv, raw)
-		if _, err := configuredClientTools(ws); err == nil || !strings.Contains(err.Error(), EnvExecExcludeEnv) {
+		if _, err := newExecService(ws); err == nil || !strings.Contains(err.Error(), EnvExecExcludeEnv) {
 			t.Fatalf("invalid exclusion list %q: %v", raw, err)
 		}
 	}

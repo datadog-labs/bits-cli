@@ -13,6 +13,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/site"
+	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -93,7 +94,7 @@ func TestStartupExplicitAPIKeyModeDoesNotFallThroughToFakeBackend(t *testing.T) 
 		context.Background(),
 		ChatOptions{AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com", PermissionsMode: agent.ModeManual},
 		stubCredentialStore{session: validOAuthSession()},
-		testWorkspace(t),
+		testWorkspace(t), exectool.NewExecService(""),
 		nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "DD_API_KEY and DD_APP_KEY must both be set") {
@@ -108,7 +109,7 @@ func TestStartupMissingOAuthSelectsInteractiveLogin(t *testing.T) {
 		context.Background(),
 		ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 		stubCredentialStore{err: auth.ErrNoSession},
-		testWorkspace(t),
+		testWorkspace(t), exectool.NewExecService(""),
 		nil,
 	)
 	if err != nil {
@@ -128,7 +129,7 @@ func TestStartupCredentialStoreFailureDoesNotSelectLogin(t *testing.T) {
 		context.Background(),
 		ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 		stubCredentialStore{err: storeErr},
-		testWorkspace(t),
+		testWorkspace(t), exectool.NewExecService(""),
 		nil,
 	)
 	if !errors.Is(err, storeErr) {
@@ -161,7 +162,7 @@ func TestStartupStagingConfigFailureDoesNotEnterLoginPicker(t *testing.T) {
 				context.Background(),
 				ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual},
 				store,
-				workspace,
+				workspace, exectool.NewExecService(""),
 				nil,
 			)
 			if err == nil {
@@ -198,7 +199,7 @@ func TestStartupStoredOAuthEntersChatWithConversation(t *testing.T) {
 		context.Background(),
 		ChatOptions{AuthMode: auth.ModeAuto, ConversationID: "conversation-1", PermissionsMode: agent.ModeManual},
 		stubCredentialStore{session: validOAuthSession()},
-		testWorkspace(t),
+		testWorkspace(t), exectool.NewExecService(""),
 		nil,
 	)
 	if err != nil {

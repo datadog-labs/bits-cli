@@ -7,6 +7,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
@@ -48,7 +49,7 @@ func TestHeadlessUnexpectedQuestionReturnsUnsupported(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ws.Close() })
-	set, err := agent.NewToolSet(NewClientTools(ws)...)
+	set, err := agent.NewToolSet(NewClientTools(ws, exectool.NewExecService(ws.DefaultShellPath()))...)
 	if err != nil {
 		t.Fatal(err)
 	}

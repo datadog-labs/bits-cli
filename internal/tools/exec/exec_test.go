@@ -223,7 +223,7 @@ func TestExecServiceAdmissionLimitAndQueueCancellation(t *testing.T) {
 		select {
 		case <-started:
 		case <-time.After(time.Second):
-			t.Fatal("four commands were not admitted")
+			t.Fatal("the permitted commands were not admitted")
 		}
 	}
 
@@ -232,7 +232,7 @@ func TestExecServiceAdmissionLimitAndQueueCancellation(t *testing.T) {
 	go func() {
 		queued <- service.run(ctx, ExecRequest{Command: "queued", CWD: cwd})
 	}()
-	// The four start notifications prove all permits are occupied. The fifth
+	// The start notifications prove all permits are occupied. The fifth
 	// call therefore cannot reach the launcher before cancellation.
 	cancel()
 	outcome := <-queued

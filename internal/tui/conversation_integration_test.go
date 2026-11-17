@@ -13,6 +13,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tools"
+	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	conversationview "github.com/datadog-labs/bits-cli/internal/tui/conversations"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
@@ -385,7 +386,7 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ws.Close() })
-	toolSet, err := agent.NewToolSet(tools.NewClientTools(ws)...)
+	toolSet, err := agent.NewToolSet(tools.NewClientTools(ws, exectool.NewExecService(ws.DefaultShellPath()))...)
 	if err != nil {
 		t.Fatal(err)
 	}
