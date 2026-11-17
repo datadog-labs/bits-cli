@@ -191,7 +191,8 @@ func (f *Fake) ConversationHistory(ctx context.Context, in assistant.Conversatio
 }
 
 // UserConversations lists conversations with at least one message, newest
-// first, keeping the first in.PageSize when it is set.
+// first. With in.PageSize it returns one page, continued by the offset it
+// hands out as the next page token.
 func (f *Fake) UserConversations(ctx context.Context, in assistant.UserConversationsInput) (*assistant.UserConversationsResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -211,8 +212,22 @@ func (f *Fake) UserConversations(ctx context.Context, in assistant.UserConversat
 	slices.SortFunc(r.Data.Attributes.Conversations, func(a, b assistant.ConversationSummary) int {
 		return cmp.Or(cmp.Compare(b.UpdatedAt, a.UpdatedAt), strings.Compare(b.ID, a.ID))
 	})
-	if convs := r.Data.Attributes.Conversations; in.PageSize > 0 && len(convs) > in.PageSize {
-		r.Data.Attributes.Conversations = convs[:in.PageSize]
+	if in.PageSize == 0 {
+		return &r, nil
+	}
+	start := 0
+	if in.PageToken != "" {
+		offset, err := strconv.Atoi(in.PageToken)
+		if err != nil || offset < 0 {
+			return nil, &assistant.APIError{StatusCode: http.StatusBadRequest, Title: "Invalid conversation pagination"}
+		}
+		start = offset
+	}
+	convs := r.Data.Attributes.Conversations
+	end := min(start+in.PageSize, len(convs))
+	r.Data.Attributes.Conversations = convs[min(start, end):end]
+	if end < len(convs) {
+		r.Data.Attributes.NextPageToken = strconv.Itoa(end)
 	}
 	return &r, nil
 }
