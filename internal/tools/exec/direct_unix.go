@@ -36,6 +36,7 @@ func (launcher directExecLauncher) Start(plan ExecPlan, stdout, stderr io.Writer
 	// A new session has no controlling terminal, so descendants cannot take
 	// the foreground from the TUI.
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	stopWithParent(command.SysProcAttr)
 	command.WaitDelay = execPipeWaitDelay
 	if err := command.Start(); err != nil {
 		return nil, err
