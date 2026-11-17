@@ -18,11 +18,12 @@ const testTaskID = "assistant-task.1"
 
 // taskBackend serves conversations and task streams: attachment i replays
 // attachments[i] then ends with errs[i], if set; past the last attachment,
-// Subscribe waits for cancellation.
+// Subscribe streams live until cancelled.
 type taskBackend struct {
 	historyBackend
 	attachments [][]assistant.Message
 	errs        []error
+	live        chan assistant.Message
 
 	mu    sync.Mutex
 	calls []string    // "conversation/task" per attachment
@@ -35,9 +36,15 @@ func (b *taskBackend) Subscribe(ctx context.Context, conversation string, opts a
 	b.calls = append(b.calls, conversation+"/"+opts.TaskID)
 	b.at = append(b.at, time.Now())
 	b.mu.Unlock()
-	if n >= len(b.attachments) {
-		<-ctx.Done()
-		return ctx.Err()
+	for n >= len(b.attachments) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case msg := <-b.live:
+			if err := fn(msg); err != nil {
+				return err
+			}
+		}
 	}
 	for _, msg := range b.attachments[n] {
 		if err := fn(msg); err != nil {
@@ -143,11 +150,16 @@ func TestTurnStartedTaskIsObservedUntilItsFinalUpdateAndEnd(t *testing.T) {
 	}}}
 	e, events := newTaskEngine(t, backend)
 
+	before := time.Now()
 	collect(turnEvents(e, context.Background(), TurnInput{Message: "investigate"}))
 	task := waitTasks(t, events, taskEnds)[0]
 
-	if task.ID != testTaskID || task.Name != "Why 500s" || task.CallID != "call-1" {
+	if task.ID != testTaskID || task.Name != "Why 500s" || task.AgentID != "investigation" {
 		t.Errorf("task identity = %+v", task)
+	}
+	// Live messages carry no time: the task started when its call was seen.
+	if task.StartedAt.Before(before) || task.StartedAt.After(time.Now()) {
+		t.Errorf("task started at %v, want when its call succeeded", task.StartedAt)
 	}
 	if task.Status != TaskDone || task.Err != nil {
 		t.Errorf("task = %+v, want done", task)
@@ -161,6 +173,43 @@ func TestTurnStartedTaskIsObservedUntilItsFinalUpdateAndEnd(t *testing.T) {
 	if blocks := e.State().Blocks; slices.ContainsFunc(blocks, func(b Block) bool { return b.Progress != nil }) {
 		t.Error("task updates leaked into the conversation transcript")
 	}
+}
+
+// An update follows the conversation block that was newest when it arrived,
+// as the server appended it: after a later turn, before the next one.
+func TestTaskUpdateFollowsTheConversationBlockItArrivedAfter(t *testing.T) {
+	backend := &taskBackend{live: make(chan assistant.Message)}
+	e, events := newTaskEngine(t, backend)
+	backend.rounds = append(backend.rounds, []assistant.Message{textMsg("a2", "still running")}, []assistant.Message{textMsg("a3", "found it")})
+
+	collect(turnEvents(e, context.Background(), TurnInput{Message: "investigate"}))
+	backend.live <- replayComplete
+	collect(turnEvents(e, context.Background(), TurnInput{Message: "are you there?"}))
+	backend.live <- updateMsg("u1", "progress", "looking")
+	waitTasks(t, events, func(tasks []Task) bool { return len(tasks) == 1 && len(tasks[0].Blocks) == 1 })
+	collect(turnEvents(e, context.Background(), TurnInput{Message: "and now?"}))
+
+	state := e.State()
+	got := texts(BlocksWithTasks(state.Blocks, state.Tasks))
+	if want := []string{"investigate", "call-1", "are you there?", "still running", "looking", "and now?", "found it"}; !slices.Equal(got, want) {
+		t.Errorf("blocks = %q, want %q", got, want)
+	}
+}
+
+// texts names blocks by their text, or a tool call by its id.
+func texts(blocks []Block) []string {
+	var out []string
+	for _, b := range blocks {
+		switch {
+		case b.Markdown != nil:
+			out = append(out, b.Markdown.Content)
+		case b.Progress != nil:
+			out = append(out, b.Progress.Content)
+		case b.Tool != nil:
+			out = append(out, b.ToolCallID())
+		}
+	}
+	return out
 }
 
 // Each complete replay replaces what was shown, even when its message ids
@@ -289,9 +338,12 @@ func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
 	const doneID = "assistant-task.0"
 	doneUpdate := updateMsg("d1", "final", "old result")
 	doneUpdate.Content.Progress.TaskID, doneUpdate.BackgroundTaskID = doneID, nil
+	started := time.UnixMilli(1_794_821_702_250)
+	approved := gatedStartTaskMsgs("call-1", testTaskID)
+	approved[0].CreatedAt = started.UnixMilli()
 	history := slices.Concat(
 		startTaskMsgs("call-0", doneID), []assistant.Message{doneUpdate},
-		gatedStartTaskMsgs("call-1", testTaskID), []assistant.Message{updateMsg("u1", "progress", "persisted")},
+		approved, []assistant.Message{textMsg("a1", "meanwhile"), updateMsg("u1", "progress", "persisted")},
 	)
 	backend := &taskBackend{attachments: [][]assistant.Message{{
 		updateMsg("u1", "progress", "persisted"), replayComplete, updateMsg("u2", "final", "new result"), taskEnded,
@@ -310,22 +362,25 @@ func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
 	}
 	tasks := waitTasks(t, events, func(tasks []Task) bool { return len(tasks) == 2 && tasks[1].Status == TaskDone })
 
-	if tasks[0].ID != doneID || tasks[0].CallID != "call-0" || tasks[0].Status != TaskDone {
+	if tasks[0].ID != doneID || tasks[0].Status != TaskDone {
 		t.Errorf("finished task = %+v, want done", tasks[0])
 	}
 	if got := progressTexts(tasks[0].Blocks); !slices.Equal(got, []string{"old result"}) {
 		t.Errorf("finished task updates = %q", got)
 	}
-	if tasks[1].CallID != "call-1" || tasks[1].Name != "Why 500s" {
+	if tasks[1].Name != "Why 500s" || tasks[1].AgentID != "investigation" ||
+		!tasks[1].StartedAt.Equal(started) {
 		t.Errorf("approved task = %+v, want started by call-1", tasks[1])
 	}
-	if got := progressTexts(tasks[1].Blocks); !slices.Equal(got, []string{"persisted", "new result"}) {
-		t.Errorf("observed task updates = %q", got)
+	// History places persisted updates; the live one follows the newest block.
+	got := texts(BlocksWithTasks(e.State().Blocks, tasks))
+	if want := []string{"call-0", "old result", "call-1", "meanwhile", "persisted", "new result"}; !slices.Equal(got, want) {
+		t.Errorf("blocks = %q, want %q", got, want)
 	}
 	if got := backend.attached(); !slices.Equal(got, []string{testConversationID + "/" + testTaskID}) {
 		t.Errorf("attachments = %q, want only the unfinished task", got)
 	}
-	if blocks := e.State().Blocks; len(blocks) != 2 || slices.ContainsFunc(blocks, func(b Block) bool { return b.Progress != nil }) {
-		t.Errorf("conversation transcript = %+v, want the two start calls and no task update", blocks)
+	if blocks := e.State().Blocks; slices.ContainsFunc(blocks, func(b Block) bool { return b.Progress != nil }) {
+		t.Errorf("conversation transcript = %+v, want no task update", blocks)
 	}
 }

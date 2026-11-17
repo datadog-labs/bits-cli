@@ -42,9 +42,9 @@ func TestLocalNoticesStayBetweenAgentBlocks(t *testing.T) {
 	}
 }
 
-// A task's blocks show right after the call that started it, whatever came
-// next; a task whose call is not shown goes last.
-func TestTasksFollowTheCallThatStartedThem(t *testing.T) {
+// A task's blocks show after the conversation block each follows; one whose
+// conversation block is not shown goes last.
+func TestTaskBlocksFollowTheirConversationBlocks(t *testing.T) {
 	l := NewList()
 	l.SetWidth(60)
 	l.SetHeight(20)
@@ -58,13 +58,18 @@ func TestTasksFollowTheCallThatStartedThem(t *testing.T) {
 			Kind: assistant.KindProgress, Complete: true, Progress: &assistant.ProgressPayload{Content: content},
 		}
 	}
+	meanwhile := textBlock("b", "MEANWHILE")
+	gone := agent.BlockID{Scope: agent.ScopeMessage, Key: "gone"}
 	l.SetTranscript(
-		[]agent.Block{textBlock("a", "LAUNCHING"), start, textBlock("b", "MEANWHILE")},
-		[]agent.Task{{CallID: "gone", Blocks: []agent.Block{update("u2", "ORPHAN")}}, {CallID: "call-1", Blocks: []agent.Block{update("u1", "GATHERING")}}},
+		[]agent.Block{textBlock("a", "LAUNCHING"), start, meanwhile, textBlock("c", "LATER")},
+		[]agent.Task{
+			{Blocks: []agent.Block{update("u3", "ORPHAN")}, After: []agent.BlockID{gone}},
+			{Blocks: []agent.Block{update("u1", "GATHERING"), update("u2", "FOUND")}, After: []agent.BlockID{start.ID, meanwhile.ID}},
+		},
 		nil,
 	)
 	doc := ansi.Strip(l.Document())
-	order := []string{"LAUNCHING", "GATHERING", "MEANWHILE", "ORPHAN"}
+	order := []string{"LAUNCHING", "GATHERING", "MEANWHILE", "FOUND", "LATER", "ORPHAN"}
 	for i := 1; i < len(order); i++ {
 		if !strings.Contains(doc, order[i-1]) || strings.Index(doc, order[i]) <= strings.Index(doc, order[i-1]) {
 			t.Fatalf("blocks are not in order %q:\n%s", order, doc)

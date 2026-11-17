@@ -29,6 +29,7 @@ var (
 	_ agent.ConversationListBackend = (*Fake)(nil)
 	_ agent.CurrentUserBackend      = (*Fake)(nil)
 	_ agent.SkillsBackend           = (*Fake)(nil)
+	_ agent.TaskBackend             = (*Fake)(nil)
 )
 
 // Fake implements agent.Backend and its optional capabilities offline.

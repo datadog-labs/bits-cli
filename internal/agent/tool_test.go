@@ -562,7 +562,11 @@ func TestToolSetApprovalReportsDeclaredGates(t *testing.T) {
 	if !needs || requirement.Key != (ApprovalKey{Tool: assistant.ApprovalRequestTool, Resource: "delete_dashboard"}) || requirement.Prompt.Title != `Allow the assistant to perform the "delete_dashboard" action?` || requirement.Prompt.Detail != "tool: delete_dashboard" {
 		t.Fatalf("Approval(approval_request) = (%+v, %v), want the server gate", requirement, needs)
 	}
-	if gated := requirement.Prompt.Gated; gated == nil || *gated != (ToolCall{ID: "gate-1", Name: "delete_dashboard", Input: `{"dashboard_id":"abc"}`}) {
+	gate := &ToolBlock{
+		Name: assistant.ApprovalRequestTool, IsClientSide: true,
+		Input: `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1"}`,
+	}
+	if gated, ok := gate.GatedCall(); !ok || gated != (ToolCall{ID: "gate-1", Name: "delete_dashboard", Input: `{"dashboard_id":"abc"}`}) {
 		t.Fatalf("gated call = %+v, want the server call the request gates", gated)
 	}
 }

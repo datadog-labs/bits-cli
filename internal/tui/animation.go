@@ -97,13 +97,15 @@ func (m *Model) syncAnimationsAt(now time.Time) tea.Cmd {
 	switch m.mode {
 	case ModeChat:
 		wantSweep = m.borderSweepWanted()
-		wantActivity = m.transcriptAnimationWanted() || m.resumeAnimationWanted() || (wantSweep && m.editor.QueueLen() > 0)
+		wantActivity = m.transcriptAnimationWanted() || m.resumeAnimationWanted() || (wantSweep && m.editor.QueueLen() > 0) ||
+			m.trayAnimationWanted()
 	case ModeConversations:
 		wantActivity = m.picker != nil && m.picker.Animating()
 	default:
 		// Other screens do not use the shared animation clock.
 	}
 
+	m.tray.now = now
 	if m.animActivity.Sync(wantActivity, now) {
 		m.setActivityFrame(0)
 	}
@@ -130,6 +132,7 @@ func (m *Model) advanceAnimations(msg animationTickMsg) tea.Cmd {
 		return nil
 	}
 
+	m.tray.now = msg.at
 	if frame, changed := m.animActivity.Advance(msg.at); changed {
 		m.setActivityFrame(frame)
 	}
@@ -146,6 +149,7 @@ func (m *Model) setActivityFrame(frame int) {
 	m.list.SetFrame(frame)
 	m.editor.SetActivityFrame(frame)
 	m.resume.frame = frame
+	m.tray.frame = frame
 	if m.picker != nil {
 		m.picker.SetFrame(frame)
 	}

@@ -31,6 +31,13 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 		m.syncQueue()
 	}
 	toolUI := func(m *Model) { m.openToolUI(questionRequest(t, "question")) }
+	tasks := func(n int) func(*Model) {
+		return func(m *Model) {
+			for range n {
+				m.state.Tasks = append(m.state.Tasks, agent.Task{Name: "Investigate errors", Status: agent.TaskRunning})
+			}
+		}
+	}
 	for _, tc := range []struct {
 		name          string
 		width, height int
@@ -52,6 +59,13 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 		{"approval squeezed by a draft", 80, 17, []func(*Model){approval, draft}, true},
 		{"tool UI hides a tall draft", 80, 20, []func(*Model){toolUI, draft}, false},
 		{"small tool UI", 30, 10, []func(*Model){toolUI}, true},
+		{"running task", 80, 24, []func(*Model){tasks(1)}, false},
+		{"tasks past the cap", 80, 24, []func(*Model){tasks(5)}, false},
+		{"tasks on a short screen", 40, 12, []func(*Model){tasks(5)}, false},
+		{"task under an approval", 80, 12, []func(*Model){tasks(1), approval}, false},
+		{"tasks under an approval on a short screen", 80, 14, []func(*Model){tasks(5), approval}, false},
+		{"task under a draft that fills the screen", 80, 13, []func(*Model){tasks(1), draft}, false},
+		{"task under a replacing tool UI", 80, 24, []func(*Model){tasks(2), toolUI}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newShell()
@@ -68,7 +82,7 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 				return
 			}
 
-			rects := slices.DeleteFunc([]image.Rectangle{f.transcript, f.queue, f.prompt, f.composerGap, f.composer, f.footer}, image.Rectangle.Empty)
+			rects := slices.DeleteFunc([]image.Rectangle{f.transcript, f.queue, f.prompt, f.composerGap, f.composer, f.tray, f.footer}, image.Rectangle.Empty)
 			slices.SortFunc(rects, func(a, b image.Rectangle) int { return a.Min.Y - b.Min.Y })
 			for i, r := range rects {
 				if (i == 0 && r != f.transcript) || (i > 0 && r.Min.Y != rects[i-1].Max.Y) || r.Dx() != tc.width {
@@ -85,6 +99,22 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 			firstRow := func(s string) string { return strings.SplitN(ansi.Strip(s), "\n", 2)[0] }
 			if m.prompt() != nil && (f.prompt.Empty() || view[f.prompt.Min.Y] != firstRow(f.promptView)) {
 				t.Fatalf("prompt %v: view row = %q, want the prompt's first row", f.prompt, view[f.prompt.Min.Y])
+			}
+			if want := len(m.state.Tasks); want > 0 {
+				// Full, unless full would leave the transcript too short; none
+				// when only the transcript's own row is left.
+				rows, room := min(want, trayLineCap+1), f.transcript.Dy()+f.tray.Dy()
+				switch {
+				case room <= 1:
+					rows = 0
+				case room-rows < trayTranscriptRows:
+					rows = 1
+				}
+				if f.tray.Dy() != rows || (rows > 0 && (f.tray.Max.Y != f.footer.Min.Y || view[f.tray.Min.Y] != firstRow(f.trayView))) {
+					t.Fatalf("tray %v over footer %v: %d rows, want %d; first row %q", f.tray, f.footer, f.tray.Dy(), rows, view[f.tray.Min.Y])
+				}
+			} else if !f.tray.Empty() {
+				t.Fatalf("tray %v shows with nothing running", f.tray)
 			}
 			if f.replaced {
 				// The prompt takes the composer's place, under the gap, over a blank footer.

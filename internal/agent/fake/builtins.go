@@ -128,6 +128,11 @@ func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 	if isErr {
 		status = assistant.ToolStatusError
 	}
+	return starlark.None, r.emitToolResults(specs, status, title, detail)
+}
+
+// emitToolResults emits the server results of calls already emitted.
+func (r *run) emitToolResults(specs []spec, status assistant.ToolStatus, title, detail string) error {
 	for _, s := range specs {
 		content := assistant.ToolResultContent(s.id, "", status, s.out)
 		content.Tool.Title = title
@@ -135,10 +140,10 @@ func builtinTool(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 			content.Tool.Detail = &assistant.MarkdownPayload{Content: detail}
 		}
 		if err := r.out.emit(assistant.AssistantMessage(s.id, content)); err != nil {
-			return nil, emitErr(err)
+			return emitErr(err)
 		}
 	}
-	return starlark.None, nil
+	return nil
 }
 
 // builtinCall emits one round of client tool calls and ends the Send. On
@@ -479,6 +484,7 @@ const helpText = "## Fake backend scripts\n\n" +
 	"| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_input=, at=, break_before_results=, delay=)` or `tool([(name, input, out), ...])` | server tool calls, then results (`delay=\"3s\"` holds them back) |\n" +
 	"| `call(name, input, stream=, break_input=, at=)` or `call([(name, input), ...])` | one round of client tool calls; returns results (`ok`, `status`, `title`, `output`) |\n" +
 	"| `raw(content, results=, id=)` | any other wire content |\n" +
+	"| `task(name, updates, agent=, every=, status=)` | a started background task, then its updates every `every`; returns its id |\n" +
 	"| `fail(429)`, `fail(\"net\")`, `fail(\"timeout\")` | a backend failure |\n" +
 	"| `sleep(\"2s\")` | a stall |\n" +
 	"| `breakpoint(name)` | stops until its continue file appears (see below) |\n" +

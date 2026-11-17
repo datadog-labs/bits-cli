@@ -197,13 +197,14 @@ const (
 func (a toolAction) label(state agent.ToolStatus) string {
 	var label string
 	switch state {
-	case agent.ToolRunning, agent.ToolAwaitingApproval:
+	case agent.ToolRunning:
 		label = a.active
 	case agent.ToolSuccess:
 		label = a.success
 	case agent.ToolError:
 		label = a.failure
-	case agent.ToolUnknown, agent.ToolDenied, agent.ToolCancelled:
+	case agent.ToolUnknown, agent.ToolAwaitingApproval, agent.ToolDenied, agent.ToolCancelled:
+		// A call awaiting approval has not begun.
 		label = a.base
 	}
 	if label == "" {
@@ -220,11 +221,13 @@ func statusOf(tool *agent.ToolBlock) agent.ToolStatus {
 }
 
 // classifyTool uses the complete wire identity. In particular, server tools
-// with names matching local tools deliberately remain generic.
+// with names matching local tools deliberately remain generic. An
+// approval_request presents the call it gates.
 //
 // TODO: Presentation input decoding is repeated when the transcript view
 // rebuilds.
 func classifyTool(tool *agent.ToolBlock) toolPresentation {
+	tool = approvalSubject(tool)
 	if tool == nil {
 		return toolPresentation{renderSpec: simpleToolRenderSpec}
 	}
@@ -308,7 +311,7 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 		p.validInput = true
 	case spec.ServerStartBackgroundTask:
 		if in, ok := backgroundTaskInput(input); ok {
-			p.argument, p.validInput = escape.Inline(cmp.Or(in.Task.TaskName, backgroundAgentName(in.Task.AgentID))), true
+			p.argument, p.validInput = escape.Inline(cmp.Or(in.Task.TaskName, BackgroundAgentName(in.Task.AgentID))), true
 		}
 	case spec.ClientHandoff:
 		var in struct {
@@ -473,8 +476,9 @@ func renderTool(it agent.Block, width int, sty Styles, frame int) string {
 	return renderPresentedTool(it.Tool, classifyTool(it.Tool), renderContext{width: width, sty: sty, frame: frame})
 }
 
+// renderPresentedTool renders the call tool presents, as classifyTool did.
 func renderPresentedTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
-	return p.renderSpec.render(tool, p, c)
+	return p.renderSpec.render(approvalSubject(tool), p, c)
 }
 
 // ToolApproval is a tool's own design for its approval prompt. The caller
@@ -504,14 +508,25 @@ func ApprovalOf(tool *agent.ToolBlock, sty Styles) ToolApproval {
 	return approval
 }
 
-// approvalSubject returns the server call tool's approval prompt gates, as a
-// tool block awaiting approval, or tool itself.
+// approvalSubject returns the server call an approval_request tool gates, in
+// the request's state and with its result, or tool itself.
 func approvalSubject(tool *agent.ToolBlock) *agent.ToolBlock {
-	if tool == nil || tool.Approval == nil || tool.Approval.Gated == nil {
+	gated, ok := tool.GatedCall()
+	if !ok {
 		return tool
 	}
-	gated := tool.Approval.Gated
-	return &agent.ToolBlock{Name: gated.Name, Input: gated.Input, HasFinalInput: true, Status: tool.Status, Approval: tool.Approval}
+	subject := &agent.ToolBlock{
+		Name: gated.Name, Input: gated.Input, HasFinalInput: true,
+		Status: tool.Status, Approval: tool.Approval,
+		Title: tool.Title, Detail: tool.Detail, Output: tool.Output,
+	}
+	if tool.Status == agent.ToolSuccess {
+		// A request succeeds once approved, before the server runs the call:
+		// until the call's own result replaces the request, it has not begun,
+		// and the approval's result says nothing about it.
+		subject.Status, subject.Title, subject.Detail, subject.Output = agent.ToolUnknown, "", "", ""
+	}
+	return subject
 }
 
 // renderToolGroupHeader counts tool calls, while reasoning only contributes
@@ -887,7 +902,8 @@ func backgroundTaskInput(input string) (spec.StartBackgroundTaskInput, bool) {
 	return in, decodeObject(input, &in) && strings.TrimSpace(in.Task.AgentID) != ""
 }
 
-func backgroundAgentName(agentID string) string {
+// BackgroundAgentName names the server agent a background task runs on.
+func BackgroundAgentName(agentID string) string {
 	if agentID == "investigation" {
 		return "Bits Investigation"
 	}

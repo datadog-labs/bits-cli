@@ -67,10 +67,6 @@ type ApprovalKey struct {
 type ApprovalPrompt struct {
 	Title  string
 	Detail string
-	// Gated is the server call an approval_request asks to approve, which a
-	// surface can present instead of the request itself; nil for a call that
-	// is approved for itself.
-	Gated *ToolCall
 }
 
 type ApprovalRequirement struct {
@@ -88,8 +84,19 @@ type serverGateInput struct {
 }
 
 func parseServerGateInput(call ToolCall) (serverGateInput, error) {
+	input, err := decodeServerGateInput(call.Input)
+	if err != nil {
+		return serverGateInput{}, err
+	}
+	if input.ToolCallID != call.ID {
+		return serverGateInput{}, fmt.Errorf("approval request tool_call_id %q does not match outer call id %q", input.ToolCallID, call.ID)
+	}
+	return input, nil
+}
+
+func decodeServerGateInput(raw string) (serverGateInput, error) {
 	var input serverGateInput
-	if err := json.Unmarshal([]byte(call.Input), &input); err != nil {
+	if err := json.Unmarshal([]byte(raw), &input); err != nil {
 		return serverGateInput{}, fmt.Errorf("decode approval request: %w", err)
 	}
 	if input.ToolName == "" {
@@ -100,9 +107,6 @@ func parseServerGateInput(call ToolCall) (serverGateInput, error) {
 	}
 	if input.ToolCallID == "" {
 		return serverGateInput{}, fmt.Errorf("approval request has no tool_call_id")
-	}
-	if input.ToolCallID != call.ID {
-		return serverGateInput{}, fmt.Errorf("approval request tool_call_id %q does not match outer call id %q", input.ToolCallID, call.ID)
 	}
 	return input, nil
 }
@@ -116,19 +120,28 @@ func serverGateApprovalRequirement(call ToolCall) (ApprovalRequirement, bool) {
 	if title == "" {
 		title = fmt.Sprintf("Allow the assistant to perform the %q action?", input.ToolName)
 	}
-	detail := "tool: " + input.ToolName
+	return ApprovalRequirement{
+		Key:    ApprovalKey{Tool: assistant.ApprovalRequestTool, Resource: input.ToolName},
+		Prompt: ApprovalPrompt{Title: title, Detail: "tool: " + input.ToolName},
+	}, true
+}
+
+// GatedCall is the server call an approval_request asks to approve, which a
+// surface can present instead of the request itself, before and after the
+// user decides. It is false for any other call.
+func (t *ToolBlock) GatedCall() (ToolCall, bool) {
+	if t == nil || !t.IsClientSide || t.Name != assistant.ApprovalRequestTool {
+		return ToolCall{}, false
+	}
+	input, err := decodeServerGateInput(t.Input)
+	if err != nil {
+		return ToolCall{}, false
+	}
 	args, err := json.Marshal(input.ToolArgs)
 	if err != nil {
-		return ApprovalRequirement{}, false
+		return ToolCall{}, false
 	}
-	return ApprovalRequirement{
-		Key: ApprovalKey{Tool: assistant.ApprovalRequestTool, Resource: input.ToolName},
-		Prompt: ApprovalPrompt{
-			Title:  title,
-			Detail: detail,
-			Gated:  &ToolCall{ID: input.ToolCallID, Name: input.ToolName, Input: string(args)},
-		},
-	}, true
+	return ToolCall{ID: input.ToolCallID, Name: input.ToolName, Input: string(args)}, true
 }
 
 func approvalDeniedResult(call ToolCall) ToolResult {

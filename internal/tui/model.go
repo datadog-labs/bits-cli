@@ -214,6 +214,8 @@ type Model struct {
 
 	// resume is the startup conversation offer shown under the splash panel.
 	resume resume
+	// tray lists the background work running apart from the turn.
+	tray tray
 
 	// version is injected so the TUI stays independent of the command layer.
 	version string

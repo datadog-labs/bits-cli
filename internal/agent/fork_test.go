@@ -133,7 +133,8 @@ func TestForkHistorySeparatesCopiedWork(t *testing.T) {
 			if boundary < 0 {
 				t.Fatal("missing boundary")
 			}
-			if blocks[boundary].MessageID != "answer" {
+			// The copied task update came last, so the marker follows it.
+			if blocks[boundary].MessageID != "progress" {
 				t.Fatal("boundary ignores displayed copied task order")
 			}
 			if len(conversation.continuation) != 0 {
