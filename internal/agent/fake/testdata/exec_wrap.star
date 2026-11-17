@@ -1,12 +1,23 @@
-"""exec_command wrapping scenarios for BITS_FAKE_BACKEND=1. Start with `BITS_FAKE_BACKEND=1 go run .`.
+"""exec_command scenarios for BITS_FAKE_BACKEND=1: wrapping, and commands left
+running in the background. Start with `BITS_FAKE_BACKEND=1 go run .`.
 
-Run everything from the Starlark console:
+Run every wrapping scenario from the Starlark console:
   load("exec_wrap.star", "all"); all()
 
 or one group / one case:
   load("exec_wrap.star", "realistic"); realistic()
   load("exec_wrap.star", "corners"); corners()
   load("exec_wrap.star", "hyphens"); hyphens()
+
+Background commands (pass windows=True on Windows):
+  load("exec_wrap.star", "background"); background()
+  load("exec_wrap.star", "failures"); failures()
+  load("exec_wrap.star", "left_running"); left_running()
+
+What to check for background commands: a command still running at its yield
+shows as "Started … · running" with its output so far; wait and stop rows name
+the command and show only what it printed since. After left_running(), the
+footer counts the command until /stop or /new stops it.
 
 What to check:
 - Collapsed: each command is one header line (plus at most 9 │ rows for
@@ -159,6 +170,44 @@ def corners():
     indentation()
     operators()
     short()
+
+# ---------------------------------------------------------------------------
+# Commands left running in the background (yield_ms, wait_command, stop_command).
+
+def command_id(result):
+    # Fails the script when the command did not outlive its yield.
+    return result.output.split("\"command_id\":\"")[1].split("\"")[0]
+
+def progress(windows=False):
+    # A build that outlives its yield: its first lines come back at once, the
+    # wait returns the rest and the exit.
+    steps = "1..3 | ForEach-Object { \"step $_\"; Start-Sleep -Milliseconds 200 }" if windows else "for i in 1 2 3; do echo step $i; sleep 0.2; done"
+    started = run(steps, yield_ms = 0)
+    call("wait_command", {"command_id": command_id(started), "wait_ms": 30000})
+
+def server(windows=False):
+    # A server keeps running while other work happens, then is stopped.
+    serve = "'listening'; Start-Sleep -Seconds 30" if windows else "echo listening; sleep 30"
+    started = run(serve, yield_ms = 300)
+    run("'ping'" if windows else "echo ping")
+    call("stop_command", {"command_id": command_id(started)})
+
+def failures(windows=False):
+    # A command that fails and one that times out after their yield: the wait
+    # rows show ✗ with the exit code and the timeout.
+    fails = "Start-Sleep -Milliseconds 300; exit 3" if windows else "sleep 0.3; exit 3"
+    call("wait_command", {"command_id": command_id(run(fails, yield_ms = 0))})
+    slow = "Start-Sleep -Seconds 30" if windows else "sleep 30"
+    call("wait_command", {"command_id": command_id(run(slow, yield_ms = 0, timeout_ms = 500))})
+
+def left_running(windows=False):
+    # Leaves a command running past the turn for the footer, /stop, and /new.
+    run("Start-Sleep -Seconds 300" if windows else "sleep 300", yield_ms = 0)
+    say("Left a command running: the footer counts it until /stop or /new.")
+
+def background(windows=False):
+    progress(windows = windows)
+    server(windows = windows)
 
 # ---------------------------------------------------------------------------
 

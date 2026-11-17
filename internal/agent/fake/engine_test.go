@@ -36,7 +36,9 @@ func workspaceTools(t *testing.T) *agent.ToolSet {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ws.Close() })
-	set, err := agent.NewToolSet(tools.NewClientTools(ws, exectool.NewExecService(ws.DefaultShellPath()))...)
+	commands := exectool.NewExecService(ws.DefaultShellPath())
+	t.Cleanup(commands.Close)
+	set, err := agent.NewToolSet(tools.NewClientTools(ws, commands)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +159,7 @@ func TestQAScripts(t *testing.T) {
 	}{
 		{`load("disclosure.star", "all"); all(windows=` + windows + `)`, 14},
 		{`load("grouping.star", "investigation"); investigation(delay="1ms", windows=` + windows + `)`, 6},
+		{`load("exec_wrap.star", "background"); background(windows=` + windows + `)`, 5},
 	} {
 		t.Run(tc.script, func(t *testing.T) {
 			engine := agent.New(&Fake{ScriptRoot: "testdata"}, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
