@@ -146,6 +146,9 @@ func TestLoadAndInstallConversation(t *testing.T) {
 		ev.State.ConversationID != testConversationID || !reflect.DeepEqual(ev.State.Blocks, blocks) {
 		t.Fatalf("install published %+v, want the installed conversation outside any run", ev)
 	}
+	if ev := <-events; ev.Kind != EventConversation || ev.Run != 0 || ev.ConvID != testConversationID {
+		t.Fatalf("install then sent %+v, want its id confirmed", ev)
+	}
 	history := e.opts.MessageHistory
 	if history != nil {
 		t.Fatalf("install retained stale injected message history: %s", history)

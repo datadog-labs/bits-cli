@@ -134,6 +134,7 @@ func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversa
 	return e.idle(func() error {
 		e.installConversation(conversation)
 		e.publish()
+		e.emit(0, Event{Kind: EventConversation, ConvID: conversation.id})
 		return nil
 	})
 }

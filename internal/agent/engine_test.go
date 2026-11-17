@@ -837,8 +837,8 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
 	evs := collect(restoreEvents(e, context.Background()))
-	if !slices.Equal(kinds(evs), []EventKind{EventState, EventDone}) {
-		t.Fatalf("events = %v, want one EventState, then EventDone", kinds(evs))
+	if !slices.Equal(kinds(evs), []EventKind{EventState, EventConversation, EventDone}) {
+		t.Fatalf("events = %v, want one EventState, the confirmed id, then EventDone", kinds(evs))
 	}
 	blocks := evs[0].State.Blocks
 	if len(blocks) != 3 || blocks[0].Kind != assistant.KindText || blocks[1].Kind != assistant.KindText || blocks[2].Kind != assistant.KindUnknown {
@@ -856,15 +856,16 @@ func TestRestoreUnsupportedBackendErrors(t *testing.T) {
 }
 
 // An empty history folds to no blocks, but the restore still publishes the
-// conversation it installed.
+// conversation it installed, and confirms its id as the server returned it.
 func TestRestoreEmptyPublishesItsConversation(t *testing.T) {
 	resp := &assistant.ConversationHistoryResponse{}
 	resp.Data.Type = "conversation-history-response"
 	e := New(&historyBackend{resp: resp}, Config{ConversationID: testConversationID})
 
 	evs := collect(restoreEvents(e, context.Background()))
-	if !slices.Equal(kinds(evs), []EventKind{EventState, EventDone}) || evs[0].State.ConversationID != testConversationID || len(evs[0].State.Blocks) != 0 {
-		t.Fatalf("events = %+v, want the empty conversation's state, then EventDone", evs)
+	if !slices.Equal(kinds(evs), []EventKind{EventState, EventConversation, EventDone}) ||
+		evs[0].State.ConversationID != testConversationID || len(evs[0].State.Blocks) != 0 || evs[1].ConvID != testConversationID {
+		t.Fatalf("events = %+v, want the empty conversation's state and id, then EventDone", evs)
 	}
 }
 

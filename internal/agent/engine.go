@@ -65,7 +65,7 @@ type EventKind int
 const (
 	EventState        EventKind = iota // the conversation's state; read State
 	EventUsage                         // token usage update; read Usage
-	EventConversation                  // server-assigned/confirmed conversation id
+	EventConversation                  // server-assigned/confirmed conversation id: by a turn, or by loading its history
 	EventDone                          // the operation completed (a turn: with no pending tool calls)
 	EventError                         // the operation failed; read Err
 	EventCanceled                      // the operation's context ended; Err is its error
@@ -952,6 +952,7 @@ func (e *Engine) Restore(ctx context.Context) (RunID, error) {
 				if id != "" {
 					e.installConversation(conversation)
 					e.emit(run, Event{Kind: EventState, State: e.state()})
+					e.emit(run, Event{Kind: EventConversation, ConvID: id})
 				}
 				e.emit(run, Event{Kind: EventDone})
 			}
