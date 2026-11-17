@@ -131,8 +131,9 @@ func (s *Selector) ViewWindow(width, rows int) (string, SelectionWindow) {
 	}
 	if hasDetail && width-markerWidth-gap >= 8 {
 		// Reserve cells for type and metadata so one long label cannot erase
-		// the detail column for every row.
-		reservedDetail := min(maxDetailWidth, min(16, max(4, width/3)))
+		// the detail column for every row. 24 fits a conversation's
+		// "here · 59 minutes ago".
+		reservedDetail := min(maxDetailWidth, min(24, max(4, width/3)))
 		labelWidth = min(labelWidth, max(1, width-markerWidth-gap-reservedDetail))
 	}
 

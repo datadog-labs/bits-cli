@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -40,7 +41,7 @@ func resumeFixture(count int) *resume {
 		}
 	}
 	r := &resume{now: fixedNow}
-	r.setConversations(summaries)
+	r.setConversations(summaries, nil)
 	return r
 }
 
@@ -195,7 +196,7 @@ func TestResumeSortsConversationsNewestFirst(t *testing.T) {
 		summaries[6], summaries[1], summaries[4], summaries[3],
 	}
 	r := &resume{now: fixedNow}
-	r.setConversations(shuffled)
+	r.setConversations(shuffled, nil)
 	for i := range r.conversations {
 		if got, want := r.conversations[i].ConversationID, summaries[i].ConversationID; got != want {
 			t.Fatalf("row %d is %q, want %q: the offer is not sorted newest first", i, got, want)
@@ -431,4 +432,55 @@ func TestUnfocusedRowTitleUsesSecondaryText(t *testing.T) {
 func sgrFor(style lipgloss.Style) string {
 	rendered := style.Render("x")
 	return strings.SplitN(rendered, "x", 2)[0]
+}
+
+// offerModel is a chat whose engine owns n conversations, newest first.
+func offerModel(t *testing.T, n int) (*Model, []string) {
+	t.Helper()
+	backend := fake.New()
+	backend.Delay = 0
+	for range n {
+		if _, err := backend.PushConversation(t.Context(), "", `say("earlier")`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := welcomeModel(120, 40)
+	m.engine = agent.New(backend, agent.Config{})
+	t.Cleanup(m.engine.Close)
+	result := m.engine.ListConversations(t.Context(), 0)
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	ids := make([]string, len(result.Conversations))
+	for i, c := range conversations.Ordered(result.Conversations, nil) {
+		ids[i] = c.ConversationID
+	}
+	return m, ids
+}
+
+// The offer reads this workspace's conversations along with the list: the one
+// `bits --last` would resume leads and says so. A failed read leaves the rows
+// newest first and unmarked, as silent as a failed list.
+func TestOfferLeadsWithConversationsOpenedHere(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		m, ids := offerModel(t, 3)
+		oldest := ids[len(ids)-1]
+		m.workspaceConversations = func() ([]string, error) {
+			if failed {
+				return nil, errors.New("unreadable")
+			}
+			return []string{oldest}, nil
+		}
+		m.Update(m.syncResume()())
+		if len(m.resume.conversations) != len(ids) {
+			t.Fatalf("failed=%t: offer has %d rows, want %d", failed, len(m.resume.conversations), len(ids))
+		}
+		first, row := m.resume.conversations[0].ConversationID, ansi.Strip(m.resume.row(styles.Default(true), 80, 0))
+		if !failed && (first != oldest || !strings.Contains(row, "here · ")) {
+			t.Fatalf("first row = %s %q, want %s marked here", first, row, oldest)
+		}
+		if failed && (first != ids[0] || strings.Contains(row, "here")) {
+			t.Fatalf("after a failed read, first row = %s %q, want %s unmarked", first, row, ids[0])
+		}
+	}
 }

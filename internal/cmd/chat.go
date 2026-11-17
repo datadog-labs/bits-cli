@@ -121,13 +121,14 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		return nil, err
 	}
 	config := tui.Config{
-		Visualization: widgets,
-		Tools:         toolSet,
-		ToolUI:        toolUI,
-		Version:       version.Build(),
-		Workspace:     workspace,
-		Upgrade:       upgrade,
-		InitialPrompt: opts.InitialPrompt,
+		Visualization:          widgets,
+		Tools:                  toolSet,
+		ToolUI:                 toolUI,
+		Version:                version.Build(),
+		Workspace:              workspace,
+		Upgrade:                upgrade,
+		InitialPrompt:          opts.InitialPrompt,
+		WorkspaceConversations: conversations.recent,
 		Logout: func(logoutCtx context.Context) (bool, error, error) {
 			return auth.Logout(logoutCtx, store, nil)
 		},

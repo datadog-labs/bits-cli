@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -578,5 +579,23 @@ func TestFailedLogoutRestartsCanceledSkillDiscovery(t *testing.T) {
 	m.Update(cmd().(logoutResultMsg))
 	if m.loggedOut || m.op.busy() || !m.skillMenu.task.running() {
 		t.Fatal("failed logout did not restore background discovery")
+	}
+}
+
+// /resume still lists every conversation when this workspace's records cannot
+// be read, and says why none is marked.
+func TestPickerWarnsWhenOpenedHereIsUnreadable(t *testing.T) {
+	backend := newResumeBackend()
+	m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
+	m.workspaceConversations = func() ([]string, error) { return nil, errors.New("history unreadable") }
+
+	backend.lists <- resumeListReply{response: summaries(
+		assistant.ConversationSummary{ConversationID: "11111111-1111-4111-8111-111111111111", Title: "Alpha", UpdatedAt: 2},
+	)}
+	_, _ = m.Update(runResumeCmd(t, m.openConversationPicker()))
+	view := ansi.Strip(m.picker.View())
+	if m.picker.State() != conversationview.StateReady || !strings.Contains(view, "Alpha") || !strings.Contains(view, "not marked: history unreadable") {
+		t.Fatalf("picker state %v, view:\n%s", m.picker.State(), view)
 	}
 }
