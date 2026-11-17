@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -131,6 +132,60 @@ exit 128
 	if snapshot.Repository.State != RepositoryAbsent {
 		t.Fatalf("repository state = %v, want absent under a localized parent environment", snapshot.Repository.State)
 	}
+}
+
+// Root is where the user works, not the directory they started in: a
+// subdirectory or a symlinked spelling shares it, a linked worktree does not.
+func TestRoot(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(base, "repo")
+	sub := filepath.Join(repo, "internal", "pkg")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "init", "-q")
+	runGit(t, repo, "-c", "user.name=Bits Test", "-c", "user.email=bits@example.com", "commit", "-q", "--allow-empty", "-m", "initial")
+	worktree := filepath.Join(base, "worktree")
+	runGit(t, repo, "worktree", "add", "-q", worktree)
+	plain := filepath.Join(base, "plain")
+	if err := os.Mkdir(plain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(sub, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ dir, want string }{
+		{repo, repo}, {sub, repo}, {link, repo}, {worktree, worktree}, {plain, plain},
+	} {
+		if got, err := openSnapshotTestWorkspace(t, tc.dir).Root(context.Background()); err != nil || got != tc.want {
+			t.Errorf("Root of %s = %q, %v; want %q", tc.dir, got, err, tc.want)
+		}
+	}
+
+	t.Run("without git", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		if got, err := openSnapshotTestWorkspace(t, sub).Root(context.Background()); err != nil || got != sub {
+			t.Fatalf("Root = %q, %v; want the directory itself", got, err)
+		}
+	})
+	t.Run("git fails", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("the stand-in git is a shell script")
+		}
+		bin := t.TempDir()
+		script := "#!/bin/sh\necho 'fatal: detected dubious ownership' >&2\nexit 128\n"
+		if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", bin)
+		if got, err := openSnapshotTestWorkspace(t, sub).Root(context.Background()); err == nil || !strings.Contains(err.Error(), "dubious ownership") {
+			t.Fatalf("Root = %q, %v; want Git's own error rather than a guess", got, err)
+		}
+	})
 }
 
 func openSnapshotTestWorkspace(t *testing.T, path string) *Workspace {
