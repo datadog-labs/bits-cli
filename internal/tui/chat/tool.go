@@ -60,6 +60,11 @@ type toolPresentation struct {
 	validInput bool
 	// renderSpec is never nil: unknown tools use their client or server fallback.
 	renderSpec *toolRenderSpec
+	// action is renderSpec's verbs, adjusted to what a command tool's result
+	// says happened.
+	action toolAction
+	// result is a command tool's decoded result, nil until it has one.
+	result *spec.ExecCommandOutput
 }
 
 // group returns the group this call joins, or nil when it stands alone. Local
@@ -245,6 +250,7 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 	input := toolInput(tool)
 	id := spec.Identity{ClientSide: tool.IsClientSide, Namespace: toolNamespace(tool), Name: tool.Name}
 	p := toolPresentation{identity: id, name: qualified, renderSpec: toolRenderSpecFor(id)}
+	p.action = p.renderSpec.action
 
 	switch id {
 	case spec.ClientReadFile, spec.ClientWriteFile, spec.ClientEditFile:
@@ -283,10 +289,24 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			}
 			p.validInput = true
 		}
+		p.result = decodeExecResult(tool)
+		if p.result != nil && p.result.Status == spec.ExecRunning {
+			// The call answered while the command kept running: it started,
+			// it has not run to completion.
+			p.action.success = "Started"
+		}
 	case spec.ClientWaitCommand, spec.ClientStopCommand:
 		// The id means nothing to the user: the row names the command once
 		// the result does.
 		p.validInput = true
+		p.result = decodeExecResult(tool)
+		if p.result != nil {
+			command, _, _ := strings.Cut(p.result.Command, "\n")
+			p.argument = escape.Inline(command)
+			// The wait or stop itself worked: a failure is the command's,
+			// which the error glyph and the suffix already show.
+			p.action.failure = p.action.success
+		}
 	case spec.ServerSpawnAgent:
 		var in struct {
 			Prompt string `json:"prompt"`
@@ -473,7 +493,7 @@ func (p toolPresentation) execMeta() []summarySpan {
 }
 
 func (p toolPresentation) actionLabel(state agent.ToolStatus) string {
-	return p.renderSpec.action.label(state)
+	return p.action.label(state)
 }
 
 func actionArgument(action, argument string) []summarySpan {
@@ -859,48 +879,27 @@ func formatName(format filediff.TextFormat) string {
 }
 
 func renderExecTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
-	return renderExecResult(tool, c, func(result *spec.ExecCommandOutput, suffix []summarySpan) string {
-		if result != nil && result.Status == spec.ExecRunning {
-			// The call answered while the command kept running: it started,
-			// it has not run to completion.
-			started := *p.renderSpec
-			started.action.success = "Started"
-			p.renderSpec = &started
-		}
-		return renderExecInvocation(tool, p, suffix, c)
-	})
+	return renderExecBody(tool, p.result, renderExecInvocation(tool, p, execSuffix(p.result), c), c)
 }
 
 // renderCommandControlTool shows a wait or stop: the command it targets, once
 // the result names it, then what it printed since the previous result.
 func renderCommandControlTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
-	return renderExecResult(tool, c, func(result *spec.ExecCommandOutput, suffix []summarySpan) string {
-		if result != nil {
-			command, _, _ := strings.Cut(result.Command, "\n")
-			p.argument = escape.Inline(command)
-			// The wait or stop itself worked: a failure is the command's,
-			// which the error glyph and the suffix already show.
-			observed := *p.renderSpec
-			observed.action.failure = observed.action.success
-			p.renderSpec = &observed
-		}
-		return renderToolHeader(tool, p.summary(tool), suffix, c)
-	})
+	return renderExecBody(tool, p.result, renderToolHeader(tool, p.summary(tool), execSuffix(p.result), c), c)
 }
 
-// renderExecResult renders a command tool's header, built from its decoded
-// result if any, followed by the command output.
-func renderExecResult(tool *agent.ToolBlock, c renderContext, renderHeader func(*spec.ExecCommandOutput, []summarySpan) string) string {
+// decodeExecResult returns a command tool's result, nil until it has a
+// decodable one.
+func decodeExecResult(tool *agent.ToolBlock) *spec.ExecCommandOutput {
 	var result spec.ExecCommandOutput
-	decoded := json.Unmarshal([]byte(tool.Output), &result) == nil
-	var suffix []summarySpan
-	var header string
-	if decoded {
-		suffix = execSuffix(result)
-		header = renderHeader(&result, suffix)
-	} else {
-		header = renderHeader(nil, nil)
+	if json.Unmarshal([]byte(tool.Output), &result) != nil {
+		return nil
 	}
+	return &result
+}
+
+// renderExecBody follows a command tool's header with the command output.
+func renderExecBody(tool *agent.ToolBlock, result *spec.ExecCommandOutput, header string, c renderContext) string {
 	state := statusOf(tool)
 	if tool.Output == "" {
 		return header
@@ -909,7 +908,7 @@ func renderExecResult(tool *agent.ToolBlock, c renderContext, renderHeader func(
 	case agent.ToolRunning, agent.ToolAwaitingApproval, agent.ToolDenied:
 		return header
 	case agent.ToolCancelled:
-		if decoded && execResultIsTerminal(result.Status) && len(execRows(result, max(1, c.width-4), compactView)) == 0 {
+		if result != nil && execResultIsTerminal(result.Status) && len(execRows(*result, max(1, c.width-4), compactView)) == 0 {
 			return header + "\n" + renderNoOutput(c.width, c.sty)
 		}
 		return header
@@ -919,10 +918,10 @@ func renderExecResult(tool *agent.ToolBlock, c renderContext, renderHeader func(
 	if state == agent.ToolError {
 		style = c.sty.ToolError
 	}
-	if !decoded {
+	if result == nil {
 		return header + "\n" + renderPreview(tool.Output, execOutputMaxLines, style, true, c)
 	}
-	rows := execRows(result, max(1, c.width-4), c.disclosure)
+	rows := execRows(*result, max(1, c.width-4), c.disclosure)
 	if len(rows) == 0 {
 		if !execResultIsTerminal(result.Status) {
 			return header
@@ -1106,7 +1105,10 @@ func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [
 	return strings.Join(out, "\n")
 }
 
-func execSuffix(result spec.ExecCommandOutput) []summarySpan {
+func execSuffix(result *spec.ExecCommandOutput) []summarySpan {
+	if result == nil {
+		return nil
+	}
 	var text string
 	switch result.Status {
 	case spec.ExecRunning:

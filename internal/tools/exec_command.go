@@ -101,14 +101,11 @@ func newWaitCommandTool(runner execRunner) agent.Tool {
 			if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 				return invalidExecControlResult(err), nil
 			}
-			wait := spec.ExecDefaultWaitMS
-			if args.WaitMS != nil {
-				wait = *args.WaitMS
+			wait, err := execWaitDuration("wait_ms", args.WaitMS, spec.ExecDefaultWaitMS)
+			if err != nil {
+				return invalidExecControlResult(err), nil
 			}
-			if wait < 0 || wait > spec.ExecMaxWaitMS {
-				return invalidExecControlResult(fmt.Errorf("wait_ms must be between 0 and %d", spec.ExecMaxWaitMS)), nil
-			}
-			outcome, err := runner.Wait(ctx, args.CommandID, time.Duration(wait)*time.Millisecond)
+			outcome, err := runner.Wait(ctx, args.CommandID, wait)
 			if err != nil {
 				return execControlFailure(err)
 			}
@@ -191,11 +188,11 @@ func execCommandHandler(turnCWD string, runner execRunner) agent.ToolHandler {
 				IsError: true,
 			}, nil
 		}
-		yield := spec.ExecDefaultYieldMS
-		if args.YieldMS != nil {
-			yield = *args.YieldMS
+		yield, err := execWaitDuration("yield_ms", args.YieldMS, spec.ExecDefaultYieldMS)
+		if err != nil {
+			return invalidExecControlResult(err), nil
 		}
-		outcome := runner.Start(ctx, resolvedExecCommandRequest(args, cwd), time.Duration(yield)*time.Millisecond)
+		outcome := runner.Start(ctx, resolvedExecCommandRequest(args, cwd), yield)
 		return execCommandResult(outcome), nil
 	}
 }
@@ -223,20 +220,34 @@ func execObservedResult(outcome exectool.ExecOutcome) agent.ToolResult {
 }
 
 // execControlFailure reports a wait or stop that could not observe its
-// command. The call's own cancellation propagates as for any handler.
+// command. Any other error, such as the call's own cancellation, propagates
+// as for any handler.
 func execControlFailure(err error) (agent.ToolResult, error) {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if !errors.Is(err, exectool.ErrUnknownCommand) {
 		return agent.ToolResult{}, err
 	}
 	return agent.ToolResult{
-		Title:   "Unknown command",
-		Output:  err.Error() + ": no such command is running. Bits stops its commands when it exits or the conversation changes, and returns a command's final result once.",
+		Title: "Unknown command",
+		Output: err.Error() + ": no such command is running. " +
+			"Bits stops its commands when it exits or the conversation changes, and returns a command's final result once.",
 		IsError: true,
 	}, nil
 }
 
 func invalidExecControlResult(err error) agent.ToolResult {
-	return agent.ToolResult{Title: "Invalid command id", Output: "invalid input: " + err.Error(), IsError: true}
+	return agent.ToolResult{Title: "Invalid input", Output: "invalid input: " + err.Error(), IsError: true}
+}
+
+// execWaitDuration reads one of the bounded waits, yield_ms or wait_ms.
+func execWaitDuration(name string, ms *int64, fallback int64) (time.Duration, error) {
+	value := fallback
+	if ms != nil {
+		value = *ms
+	}
+	if value < 0 || value > spec.ExecMaxWaitMS {
+		return 0, fmt.Errorf("%s must be between 0 and %d", name, spec.ExecMaxWaitMS)
+	}
+	return time.Duration(value) * time.Millisecond, nil
 }
 
 func parseExecCommandArgs(input, turnCWD string) (spec.ExecCommandInput, string, error) {
@@ -250,8 +261,8 @@ func parseExecCommandArgs(input, turnCWD string) (spec.ExecCommandInput, string,
 	if args.TimeoutMS != nil && *args.TimeoutMS < 1 {
 		return spec.ExecCommandInput{}, "", fmt.Errorf("timeout_ms must be at least 1")
 	}
-	if args.YieldMS != nil && (*args.YieldMS < 0 || *args.YieldMS > spec.ExecMaxWaitMS) {
-		return spec.ExecCommandInput{}, "", fmt.Errorf("yield_ms must be between 0 and %d", spec.ExecMaxWaitMS)
+	if _, err := execWaitDuration("yield_ms", args.YieldMS, spec.ExecDefaultYieldMS); err != nil {
+		return spec.ExecCommandInput{}, "", err
 	}
 	workdir := args.Workdir
 	if workdir == "" {

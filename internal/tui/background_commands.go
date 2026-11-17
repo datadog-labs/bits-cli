@@ -19,19 +19,15 @@ type Commands interface {
 type backgroundCommands struct {
 	source  Commands // nil when commands cannot run
 	running int
-	// waiting holds the one wait on source's changes: chat restarts after a
-	// login must not add another.
-	waiting bool
 }
 
 type backgroundCommandsChangedMsg struct{}
 
-// wait delivers the next change, unless a wait is already pending.
+// wait delivers the next change.
 func (b *backgroundCommands) wait() tea.Cmd {
-	if b.source == nil || b.waiting {
+	if b.source == nil {
 		return nil
 	}
-	b.waiting = true
 	changed := b.source.Changed()
 	return func() tea.Msg {
 		<-changed
@@ -41,7 +37,6 @@ func (b *backgroundCommands) wait() tea.Cmd {
 
 // update records the current count and waits for the next change.
 func (b *backgroundCommands) update() tea.Cmd {
-	b.waiting = false
 	b.running = b.source.Running()
 	return b.wait()
 }

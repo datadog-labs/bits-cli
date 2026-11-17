@@ -587,13 +587,11 @@ func TestExecServiceForgetsOldestUnobservedFinishedCommands(t *testing.T) {
 	for range maxFinishedCommands {
 		ids = append(ids, service.Start(context.Background(), ExecRequest{Command: "run", CWD: t.TempDir()}, 0).ID)
 	}
+	<-service.Changed() // the registrations
 	// Finish them in launch order, each after the previous one ended.
-	for i, p := range processes {
-		service.mu.Lock()
-		c := service.commands[ids[i]]
-		service.mu.Unlock()
+	for _, p := range processes {
 		p.finish("")
-		<-c.done
+		<-service.Changed()
 	}
 	newest := service.Start(context.Background(), ExecRequest{Command: "run", CWD: t.TempDir()}, 0)
 	if _, err := service.Wait(context.Background(), ids[0], 0); !errors.Is(err, ErrUnknownCommand) {

@@ -56,18 +56,3 @@ func TestBackgroundCommandsShowAndStop(t *testing.T) {
 		})
 	}
 }
-
-// Chat restarts after a login; it must not add a second wait on the one
-// change channel.
-func TestBackgroundCommandsWaitOnce(t *testing.T) {
-	b := backgroundCommands{source: &fakeCommands{changed: make(chan struct{}, 1)}}
-	if b.wait() == nil {
-		t.Fatal("first wait = nil, want a wait")
-	}
-	if b.wait() != nil {
-		t.Fatal("second wait started while one is pending")
-	}
-	if b.update() == nil {
-		t.Fatal("update did not wait for the next change")
-	}
-}

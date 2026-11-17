@@ -1,4 +1,5 @@
-// Package exec provides bounded local command execution for agent tools.
+// Package exec provides local command execution for agent tools, with
+// bounded output.
 // Commands may outlive the call that started them. It does not define or
 // register a model-facing client tool.
 package exec
@@ -100,10 +101,10 @@ type ExecOutput struct {
 // exit status; Signal is set when Unix reported signal termination.
 type ExecOutcome struct {
 	Status ExecStatus
-	// ID names a command still running in the background.
-	ID string
-	// Command is the command line, set when observing a command by ID: the
-	// caller then knows the command only by its ID.
+	// ID names the command Start left running in the background. Later
+	// observations by ID name it by Command instead: their caller knows
+	// only the ID, and so do its readers, such as the transcript.
+	ID       string
 	Command  string
 	ExitCode *int
 	Signal   string
@@ -235,7 +236,7 @@ func (s *ExecService) Start(ctx context.Context, request ExecRequest, yield time
 		c.stop(ctx.Err())
 		<-c.done
 	}
-	outcome, _ := c.observe("") // every path above waited for done
+	outcome, _ := c.observe() // every path above waited for done
 	return outcome
 }
 
@@ -499,7 +500,11 @@ func (s *ExecService) register(ctx context.Context, c *execCommand) (ExecOutcome
 	}
 	s.commands[id] = c
 	s.notifyChanged()
-	return s.observeLocked(id, c), nil
+	outcome := s.observeLocked(id, c)
+	if outcome.Status == ExecRunning {
+		outcome.ID = id
+	}
+	return outcome, nil
 }
 
 // pruneFinished forgets the oldest unobserved finished commands beyond the
@@ -546,7 +551,7 @@ func (s *ExecService) observe(id string, c *execCommand) (ExecOutcome, error) {
 
 // observeLocked observes c, registered as id. The caller holds mu.
 func (s *ExecService) observeLocked(id string, c *execCommand) ExecOutcome {
-	outcome, final := c.observe(id)
+	outcome, final := c.observe()
 	if final {
 		delete(s.commands, id)
 	}
@@ -554,8 +559,8 @@ func (s *ExecService) observeLocked(id string, c *execCommand) ExecOutcome {
 }
 
 // observe returns the command's output past its cursor, with its final
-// outcome once it ended or as running under id.
-func (c *execCommand) observe(id string) (ExecOutcome, bool) {
+// outcome once it ended.
+func (c *execCommand) observe() (ExecOutcome, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	select {
@@ -568,7 +573,6 @@ func (c *execCommand) observe(id string) (ExecOutcome, bool) {
 	default:
 		return ExecOutcome{
 			Status:  ExecRunning,
-			ID:      id,
 			Elapsed: time.Since(c.startedAt),
 			Output:  readExecOutput(c.stdout, c.stderr, &c.cursor, false),
 		}, false

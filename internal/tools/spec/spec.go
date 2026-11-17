@@ -149,11 +149,12 @@ const (
 )
 
 // ExecCommandOutput is the JSON result of exec_command, wait_command, and
-// stop_command. Status is always set; CommandID names a command still
-// running; ExitCode and Signal are populated only when the operating system
-// reported them. Streams hold output since the previous result for the same
-// command; wait_command and stop_command name that command in Command. The
-// omitted-byte counts are non-zero exactly when Truncated is true.
+// stop_command. Status is always set. CommandID names the command
+// exec_command left running; wait_command and stop_command results name it by
+// Command instead, for the model and the transcript, which know only the id.
+// ExitCode and Signal are populated only when the operating system reported
+// them. Streams hold output since the previous result for the same command,
+// and the omitted-byte counts are non-zero exactly when Truncated is true.
 type ExecCommandOutput struct {
 	Status             ExecStatus `json:"status"`
 	CommandID          string     `json:"command_id,omitempty"`
