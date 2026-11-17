@@ -32,7 +32,7 @@ func snapshotServer(t *testing.T, viewURL string, view http.HandlerFunc) (*Clien
 	return c, posts
 }
 
-var testSnapshot = SnapshotOptions{Definition: WidgetDefinition{Type: "timeseries"}, Start: time.UnixMilli(1000), End: time.UnixMilli(2000), Dark: true}
+var testSnapshot = SnapshotOptions{Definition: json.RawMessage(`{"type":"timeseries"}`), Start: time.UnixMilli(1000), End: time.UnixMilli(2000), Dark: true}
 
 // The view is fetched from the API host, whatever host the response names,
 // through the pending document to a PNG.

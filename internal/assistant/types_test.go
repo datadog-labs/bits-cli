@@ -7,31 +7,6 @@ import (
 	"testing"
 )
 
-func TestWidgetDefinitionRoundTrip(t *testing.T) {
-	input := []byte(`{"type":"timeseries","title":"CPU","requests":[{"q":"avg:cpu{*}"}],"time":{"type":"fixed","from":1700000000000,"to":1700003600000,"hide_incomplete_cost_data":true}}`)
-	var def WidgetDefinition
-	if err := json.Unmarshal(input, &def); err != nil {
-		t.Fatal(err)
-	}
-	if !def.Valid() || def.Type != "timeseries" || def.Title != "CPU" || len(def.Fields) != 2 {
-		t.Fatalf("decoded widget = %+v", def)
-	}
-	encoded, err := json.Marshal(def)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var before, after map[string]any
-	if err := json.Unmarshal(input, &before); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(encoded, &after); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, after) {
-		t.Fatalf("widget changed in transit: %s", encoded)
-	}
-}
-
 func TestContentDecodesApps(t *testing.T) {
 	handle := `"` + strings.Repeat("h", 43) + `"`
 	saved := `{"type":"mcp_app_saved","version":1,"tool_call_id":"c1","tool_name":"show_ui","input_digest":"d","server_identity":"s","resource_uri":"ui://apps/dataviz","resource_handle":"dataviz-mcp-ui@prototype"}`
@@ -109,7 +84,7 @@ func TestAppSummary(t *testing.T) {
 			if !got.Chart.End.IsZero() {
 				start, end = got.Chart.Start.Unix(), got.Chart.End.Unix()
 			}
-			if start != tt.start || end != tt.end || got.Chart.Definition.Type != "timeseries" {
+			if start != tt.start || end != tt.end || !strings.Contains(string(got.Chart.Definition), `"type":"timeseries"`) {
 				t.Fatalf("chart = %+v", got.Chart)
 			}
 		})

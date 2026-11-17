@@ -54,7 +54,7 @@ func TestRemoteRender(t *testing.T) {
 	if r := c.Render(context.Background(), Request{App: app, Dark: true}); r.Status.Phase != Succeeded || r.Image.Interactive().Available {
 		t.Fatalf("result = %+v", r)
 	}
-	if api.got.Start.Unix() != 1 || api.got.End.Unix() != 5 || !api.got.Dark || api.got.Definition.Title != "CPU" {
+	if api.got.Start.Unix() != 1 || api.got.End.Unix() != 5 || !api.got.Dark || string(api.got.Definition) != `{"type":"timeseries","title":"CPU"}` {
 		t.Fatalf("options = %+v", api.got)
 	}
 	if r := c.Render(context.Background(), Request{App: timeseries}); r.Status.Phase != Succeeded || api.got.End.Sub(api.got.Start) != time.Hour {

@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/url"
 	"strings"
 	"testing"
@@ -23,7 +24,7 @@ func TestSandboxURL(t *testing.T) {
 		"no window": {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			chart := assistant.Chart{Definition: assistant.WidgetDefinition{Type: "timeseries", Fields: map[string]json.RawMessage{"requests": json.RawMessage(`[{"q":"avg:cpu{*}"}]`)}}}
+			chart := assistant.Chart{Definition: json.RawMessage(`{"type":"timeseries","requests":[{"q":"avg:cpu{*}"}]}`)}
 			if tc.window[1] > 0 {
 				chart.Start, chart.End = time.Unix(tc.window[0], 0), time.Unix(tc.window[1], 0)
 			}
@@ -54,8 +55,8 @@ func TestSandboxURL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var got assistant.WidgetDefinition
-			if err := json.NewDecoder(r).Decode(&got); err != nil || got.Type != "timeseries" {
+			got, err := io.ReadAll(r)
+			if err != nil || string(got) != string(chart.Definition) {
 				t.Fatalf("decoded = %v, %v", got, err)
 			}
 		})
