@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"net/url"
 	"strconv"
@@ -24,13 +23,9 @@ func SandboxURL(origin string, chart assistant.Chart) (string, error) {
 	if u.Scheme == "" || u.Host == "" {
 		return "", errors.New("sandbox origin needs a scheme and host")
 	}
-	raw, err := json.Marshal(chart.Definition)
-	if err != nil {
-		return "", err
-	}
 	var zipped bytes.Buffer
 	w := gzip.NewWriter(&zipped)
-	if _, err := w.Write(raw); err != nil {
+	if _, err := w.Write(chart.Definition); err != nil {
 		return "", err
 	}
 	if err := w.Close(); err != nil {

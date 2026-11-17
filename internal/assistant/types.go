@@ -416,59 +416,6 @@ const (
 	ContentProviderCompaction = "provider_compaction"
 )
 
-// WidgetDefinition is a Datadog dashboard widget definition. Its common fields
-// are typed; Fields preserves widget-specific fields for rendering and MCP.
-// A pointer distinguishes an absent definition from an empty object.
-type WidgetDefinition struct {
-	Type   string
-	Title  string
-	Fields map[string]json.RawMessage
-}
-
-func (d *WidgetDefinition) UnmarshalJSON(data []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	var known struct {
-		Type  string `json:"type"`
-		Title string `json:"title"`
-	}
-	if err := json.Unmarshal(data, &known); err != nil {
-		return err
-	}
-	delete(fields, "type")
-	delete(fields, "title")
-	*d = WidgetDefinition{Type: known.Type, Title: known.Title, Fields: fields}
-	return nil
-}
-
-func (d WidgetDefinition) MarshalJSON() ([]byte, error) {
-	fields := make(map[string]json.RawMessage, len(d.Fields)+2)
-	for name, raw := range d.Fields {
-		fields[name] = raw
-	}
-	known, err := json.Marshal(struct {
-		Type  string `json:"type,omitempty"`
-		Title string `json:"title,omitempty"`
-	}{d.Type, d.Title})
-	if err != nil {
-		return nil, err
-	}
-	var values map[string]json.RawMessage
-	if err := json.Unmarshal(known, &values); err != nil {
-		return nil, err
-	}
-	for name, raw := range values {
-		fields[name] = raw
-	}
-	return json.Marshal(fields)
-}
-
-// Valid reports whether the definition names a widget type. The complete
-// widget-specific schema is validated by Datadog when the widget is rendered.
-func (d WidgetDefinition) Valid() bool { return d.Type != "" }
-
 // MarkdownPayload carries the text fragment of a markdown_fragment content.
 type MarkdownPayload struct {
 	Content string
@@ -540,7 +487,7 @@ type AppPayload struct {
 // Chart is the single widget a chart result renders, over its window. The
 // window is zero when the result has none.
 type Chart struct {
-	Definition WidgetDefinition
+	Definition json.RawMessage // a Datadog dashboard widget definition
 	Start, End time.Time
 }
 
@@ -564,20 +511,25 @@ func (a *AppPayload) Summary() AppSummary {
 			} `json:"datadog/show_ui"`
 		} `json:"_meta"`
 		StructuredContent struct {
-			Definition *WidgetDefinition `json:"widget_definition"`
-			From       int64             `json:"from_ts"` // Unix seconds
-			To         int64             `json:"to_ts"`
+			Definition json.RawMessage `json:"widget_definition"`
+			From       int64           `json:"from_ts"` // Unix seconds
+			To         int64           `json:"to_ts"`
 		} `json:"structuredContent"`
 	}
 	if len(a.Result) == 0 || json.Unmarshal(a.Result, &result) != nil {
 		return AppSummary{}
 	}
-	if s := result.StructuredContent; s.Definition != nil && s.Definition.Valid() {
-		chart := &Chart{Definition: *s.Definition}
+	// Datadog validates the rest of the definition when it renders the widget.
+	var widget struct {
+		Type  string `json:"type"`
+		Title string `json:"title"`
+	}
+	if s := result.StructuredContent; json.Unmarshal(s.Definition, &widget) == nil && widget.Type != "" {
+		chart := &Chart{Definition: s.Definition}
 		if s.From > 0 && s.To > s.From {
 			chart.Start, chart.End = time.Unix(s.From, 0), time.Unix(s.To, 0)
 		}
-		return AppSummary{Title: s.Definition.Title, Chart: chart}
+		return AppSummary{Title: widget.Title, Chart: chart}
 	}
 	// NOTE: results carry no display title, so a view's registry name stands in.
 	name := strings.ReplaceAll(result.Meta.ShowUI.ViewSpec.View.Name, "_", " ")
