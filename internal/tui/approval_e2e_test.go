@@ -16,6 +16,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
+	"github.com/datadog-labs/bits-cli/internal/tui/editor"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
@@ -432,11 +433,6 @@ func TestToolApprovalComposerE2E(t *testing.T) {
 					t.Fatalf("approval view width = %d, want <= 80", width)
 				}
 			}
-			_, _ = model.handleKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
-			if model.editor.Value() != "" {
-				t.Fatal("approval input leaked into the editor")
-			}
-
 			_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 			drainConversationRemote(t, model)
 
@@ -627,6 +623,13 @@ func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
 					}
 				}
 			}
+
+			// Drafting puts its hint on the same row, at the same height.
+			model.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+			plain = ansi.Strip(model.frame.promptView)
+			if !strings.Contains(plain, draftingHint) || lipgloss.Height(model.frame.promptView) != unfocusedHeight {
+				t.Fatalf("drafting panel lacks its hint or changed height:\n%s", plain)
+			}
 		})
 	}
 }
@@ -756,6 +759,91 @@ func TestApprovalCompactFormKeepsFocusOnEveryChoice(t *testing.T) {
 				if approvalChoices[want].fullAccess() != strings.Contains(plain, "Full access") {
 					t.Fatalf("disclaimer shown = %v with %q focused:\n%s", !approvalChoices[want].fullAccess(), approvalChoices[want].compactLabel, plain)
 				}
+			}
+		})
+	}
+}
+
+// A user writing a message when the panel opens keeps writing it: their keys
+// go to the draft and their Enter sends it, never answering the prompt, until
+// tab picks a choice.
+func TestDraftingOverAnApproval(t *testing.T) {
+	typed := func(s string) []tea.Msg {
+		var keys []tea.Msg
+		for _, r := range s {
+			keys = append(keys, tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+		return keys
+	}
+	press := func(code rune, mod ...tea.KeyMod) []tea.Msg {
+		key := tea.KeyPressMsg{Code: code}
+		for _, m := range mod {
+			key.Mod |= m
+		}
+		return []tea.Msg{key}
+	}
+	enter, tab, esc, left := press(tea.KeyEnter), press(tea.KeyTab), press(tea.KeyEscape), press(tea.KeyLeft)
+	allow, deny := []agent.ApprovalDecision{agent.ApprovalAllowOnce}, []agent.ApprovalDecision{agent.ApprovalDeny}
+	tests := []struct {
+		name      string
+		draft     string // in the composer when the approval opens
+		attach    bool   // the draft also holds an attachment
+		keys      []tea.Msg
+		editor    string
+		queued    []string
+		decisions []agent.ApprovalDecision
+		menu      bool // the completion menu is open at the end
+		stopped   bool // the tools were stopped
+	}{
+		{name: "enter allows without a draft", keys: enter, decisions: allow},
+		{name: "typing continues the draft", draft: "fix the", keys: typed(" bug"), editor: "fix the bug"},
+		{name: "enter sends the draft", draft: "fix the", keys: enter, queued: []string{"fix the"}},
+		{name: "arrows move the draft's cursor", draft: "ab", keys: slices.Concat(left, typed("X")), editor: "aXb"},
+		{name: "typing starts a draft", keys: slices.Concat(typed("ok"), enter), queued: []string{"ok"}},
+		{name: "paste starts a draft", keys: []tea.Msg{tea.PasteMsg{Content: "ok"}}, editor: "ok"},
+		{name: "tab picks the first choice", draft: "fix the", keys: slices.Concat(tab, enter), editor: "fix the", decisions: allow},
+		{name: "shift+tab picks the last choice", draft: "fix the", keys: slices.Concat(press(tea.KeyTab, tea.ModShift), enter), editor: "fix the", decisions: deny},
+		{name: "typing after a pick drafts again", keys: slices.Concat(tab, typed("x"), enter), queued: []string{"x"}},
+		{name: "esc denies while drafting", draft: "fix the", keys: esc, editor: "fix the", decisions: deny},
+		{name: "ctrl+x stops the tools while drafting", draft: "fix the", attach: true, keys: press('x', tea.ModCtrl), editor: "fix the", stopped: true},
+		{name: "esc on a chip returns to the text", attach: true, keys: slices.Concat(press(tea.KeyBackspace), esc)},
+		{name: "the completion menu stays open", draft: "/sta", editor: "/sta", menu: true},
+		{name: "ctrl+x stops the tools over the menu", draft: "/sta", attach: true, keys: press('x', tea.ModCtrl), editor: "/sta", menu: true, stopped: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tools, err := agent.NewToolSet(newApprovalTool())
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := New(agent.New(&approvalBackend{t: t}, agent.Config{}), Config{Tools: tools})
+			m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+			setConversationInput(m, "Run the action")
+			_, _ = m.submit()
+			setConversationInput(m, tt.draft)
+			if tt.attach {
+				m.editor.AddAttachment(editor.Attachment{Type: "service", ID: "api", Label: "API"})
+			}
+			for waitingApprovals(m) == 0 {
+				m.Update(runConversationCmd(t, waitEvent(m.events)))
+			}
+			sent := stubDecisions(m, func(int) bool { return true })
+			for _, msg := range tt.keys {
+				m.View() // lays the panel out as the program does between keys
+				m.Update(msg)
+			}
+			var queued []string
+			for _, q := range m.engine.State().Queued {
+				queued = append(queued, q.Message)
+			}
+			if m.editor.Value() != tt.editor || !slices.Equal(queued, tt.queued) || !slices.Equal(*sent, tt.decisions) {
+				t.Fatalf("editor %q, queued %q, decisions %v; want %q, %q, %v", m.editor.Value(), queued, *sent, tt.editor, tt.queued, tt.decisions)
+			}
+			if m.editor.MenuOpen() != tt.menu || (m.op.stop == stopTools) != tt.stopped {
+				t.Fatalf("menu open = %t, stop = %v; want menu %t, stopped %t", m.editor.MenuOpen(), m.op.stop, tt.menu, tt.stopped)
+			}
+			if tt.attach && len(m.editor.Attachments()) != 1 {
+				t.Fatal("the attachment was removed")
 			}
 		})
 	}

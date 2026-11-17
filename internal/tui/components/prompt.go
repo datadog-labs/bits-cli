@@ -16,8 +16,7 @@ type Slot struct {
 type Placement uint8
 
 const (
-	// Docked shows the prompt next to the host's input, which stays visible
-	// but inert while the prompt owns the keyboard.
+	// Docked shows the prompt next to the host's input, which stays visible.
 	Docked Placement = iota
 	// ReplacesInput shows the prompt in place of the host's input, which
 	// hides, with the rest of the screen dimmed behind it.

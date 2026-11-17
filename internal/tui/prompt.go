@@ -13,9 +13,10 @@ import (
 const minimumPromptRows = 15
 
 // The chat shows one ask waiting on the user (see ask and reshow) through its
-// components.Prompt, which owns the keyboard while it shows. Its Placement
-// docks it above the composer, which stays visible but inert, or puts it in
-// the composer's place (see frame).
+// components.Prompt, which owns the keyboard while it shows, unless the user
+// drafts over it (see ask.drafting). Its Placement docks it above the
+// composer, which stays visible, or puts it in the composer's place (see
+// frame).
 
 // prompt returns the shown prompt, or nil. An ask shows over a command prompt.
 func (m *Model) prompt() components.Prompt {
