@@ -171,7 +171,7 @@ func runRunWithStore(ctx context.Context, opts RunOptions, store auth.Credential
 	if err != nil {
 		return err
 	}
-	engine, err := newEngine(ctx, opts.ChatOptions, workspace, store)
+	engine, err := newEngine(ctx, opts.ChatOptions, workspace, store, conversationByID(opts.ConversationID))
 	if err != nil {
 		return err
 	}

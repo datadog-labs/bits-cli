@@ -240,8 +240,8 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 		for _, conversation := range []string{id, `say("earlier")`} {
 			store := &observedStore{err: errors.New("must not load")}
 			engine, err := newEngine(context.Background(), ChatOptions{
-				AuthMode: auth.ModeAuto, ConversationID: conversation,
-			}, nil, store)
+				AuthMode: auth.ModeAuto,
+			}, nil, store, conversationByID(conversation))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -258,14 +258,14 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 	t.Run("API key takes precedence over fake", func(t *testing.T) {
 		_, err := newEngine(context.Background(), ChatOptions{
 			AuthMode: auth.ModeAPIKey, Site: "api.datadoghq.com",
-		}, nil, nil)
+		}, nil, nil, conversationByID(""))
 		if err == nil || !strings.Contains(err.Error(), "DD_API_KEY and DD_APP_KEY") {
 			t.Fatalf("error = %v", err)
 		}
 	})
 
 	t.Run("unsupported mode cannot select fake", func(t *testing.T) {
-		_, err := newEngine(context.Background(), ChatOptions{AuthMode: auth.Mode("future")}, nil, nil)
+		_, err := newEngine(context.Background(), ChatOptions{AuthMode: auth.Mode("future")}, nil, nil, conversationByID(""))
 		if err == nil || !strings.Contains(err.Error(), "unsupported authentication mode") {
 			t.Fatalf("error = %v", err)
 		}

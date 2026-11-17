@@ -126,7 +126,7 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		}
 		return engine, err
 	}
-	engine, err := bound(newEngine(ctx, opts, workspace, store))
+	engine, err := bound(newEngine(ctx, opts, workspace, store, conversationByID(opts.ConversationID)))
 	if err == nil {
 		return tui.New(engine, config), nil
 	}
@@ -151,6 +151,6 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		return loginErr
 	})
 	return tui.NewWithLogin(ctx, loginModel, func(factoryCtx context.Context) (*agent.Engine, error) {
-		return bound(newEngine(factoryCtx, opts, workspace, store))
+		return bound(newEngine(factoryCtx, opts, workspace, store, conversationByID(opts.ConversationID)))
 	}, config), nil
 }

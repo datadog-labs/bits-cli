@@ -50,13 +50,40 @@ type ClientOptions struct {
 	APISite string
 }
 
+// A conversationStart picks the conversation a new engine starts in, once its
+// backend is authenticated; "" starts a new one.
+type conversationStart func(context.Context, agent.Backend) (string, error)
+
+// conversationByID starts in the conversation --conversation names. The fake
+// backend also takes a script there: it becomes the first turn of a
+// conversation an earlier session left behind.
+func conversationByID(id string) conversationStart {
+	return func(ctx context.Context, backend agent.Backend) (string, error) {
+		fakeBackend, ok := backend.(*fake.Fake)
+		if !ok || id == "" || agent.ValidConversationID(id) {
+			return id, nil
+		}
+		pushed, err := fakeBackend.PushConversation(ctx, "", id)
+		if err != nil {
+			return "", fmt.Errorf("fake --conversation script: %w", err)
+		}
+		return pushed, nil
+	}
+}
+
 // newEngine constructs an engine backed by either the explicit fake backend or
-// an authenticated Assistant client. Explicit API-key mode takes precedence
-// over the fake backend so an invalid automation invocation cannot silently
-// become a demo session.
-func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, store auth.CredentialStore) (*agent.Engine, error) {
+// an authenticated Assistant client, in the conversation start picks.
+func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, store auth.CredentialStore, start conversationStart) (*agent.Engine, error) {
+	backend, err := newBackend(ctx, opts, store)
+	if err != nil {
+		return nil, err
+	}
+	conversationID, err := start(ctx, backend)
+	if err != nil {
+		return nil, err
+	}
 	config := agent.Config{
-		ConversationID: opts.ConversationID, PermissionsMode: opts.PermissionsMode,
+		ConversationID: conversationID, PermissionsMode: opts.PermissionsMode,
 		Model: opts.Model, InferenceMode: opts.InferenceMode,
 	}
 	if workspace != nil {
@@ -64,21 +91,17 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 		config.ClientSkills = env.NewSkills(workspace.Path(), opts.SkillPaths)
 		config.UserContext = env.UserContext(workspace)
 	}
+	return agent.New(backend, config), nil
+}
 
+// newBackend selects the explicit fake backend or an authenticated Assistant
+// client. Explicit API-key mode takes precedence over the fake backend so an
+// invalid automation invocation cannot silently become a demo session.
+func newBackend(ctx context.Context, opts ChatOptions, store auth.CredentialStore) (agent.Backend, error) {
 	switch opts.AuthMode {
 	case auth.ModeAuto:
 		if os.Getenv("BITS_FAKE_BACKEND") == "1" {
-			backend := fake.New()
-			// The fake also takes a script for --conversation: it becomes the
-			// first turn of a conversation an earlier session left behind.
-			if script := config.ConversationID; script != "" && !agent.ValidConversationID(script) {
-				id, err := backend.PushConversation(ctx, "", script)
-				if err != nil {
-					return nil, fmt.Errorf("fake --conversation script: %w", err)
-				}
-				config.ConversationID = id
-			}
-			return agent.New(backend, config), nil
+			return fake.New(), nil
 		}
 	case auth.ModeAPIKey:
 		// Continue below; API-key mode must validate its explicit credentials.
@@ -93,11 +116,10 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 		}
 		return nil, err
 	}
-	var backend agent.Backend = client
 	if useSubagents(ctx, client) {
-		backend = assistant.NewMultiAgentClient(client)
+		return assistant.NewMultiAgentClient(client), nil
 	}
-	return agent.New(backend, config), nil
+	return client, nil
 }
 
 func useSubagents(ctx context.Context, client *assistant.Client) bool {
