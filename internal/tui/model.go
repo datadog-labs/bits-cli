@@ -53,9 +53,12 @@ type EntitySearcher interface {
 
 type Config struct {
 	// Visualization renders widgets; nil leaves them as links to the web app.
-	Visualization  viz.Client
-	Tools          *agent.ToolSet
-	ToolUI         *tools.UI
+	Visualization viz.Client
+	Tools         *agent.ToolSet
+	ToolUI        *tools.UI
+	// Commands runs the commands the assistant leaves in the background; nil
+	// when it cannot run commands.
+	Commands       Commands
 	Version        string
 	Workspace      *workspace.Workspace
 	EntitySearcher EntitySearcher
@@ -122,10 +125,12 @@ type Model struct {
 	loggedOut bool
 
 	// Tool calls waiting on the user, by source, and the one shown (see ask).
-	toolUI    *tools.UI
-	approvals map[string]*approvalAsk // mirrors the transcript, by call ID
-	toolUIs   []*toolAsk              // requests from the tools.UI channel
-	shown     ask
+	toolUI *tools.UI
+	// Commands the assistant left running in the background.
+	backgroundCommands backgroundCommands
+	approvals          map[string]*approvalAsk // mirrors the transcript, by call ID
+	toolUIs            []*toolAsk              // requests from the tools.UI channel
+	shown              ask
 	// The prompt a slash command opened, shown when no ask is.
 	commandPrompt *commandPrompt
 
@@ -280,6 +285,7 @@ func (m *Model) configure(configs []Config) {
 		m.widgets.client = configs[0].Visualization
 		m.tools = configs[0].Tools
 		m.toolUI = configs[0].ToolUI
+		m.backgroundCommands.source = configs[0].Commands
 		m.workspace = configs[0].Workspace
 		if m.workspace != nil {
 			m.workspaceDisplayPath = m.workspace.DisplayPath()
@@ -410,7 +416,7 @@ func (m *Model) queryGraphics() tea.Cmd {
 // login handoff because Bubble Tea calls Init only on the original model.
 func (m *Model) initChat() tea.Cmd {
 	requestBG := func() tea.Msg { return tea.RequestBackgroundColor() }
-	commands := []tea.Cmd{m.editor.Focus(), requestBG, waitToolUI(m.toolUI)}
+	commands := []tea.Cmd{m.editor.Focus(), requestBG, waitToolUI(m.toolUI), m.backgroundCommands.wait()}
 	if m.engine == nil {
 		return tea.Batch(commands...)
 	}

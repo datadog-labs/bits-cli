@@ -127,10 +127,12 @@ type ExecService struct {
 
 	// life ends when Close starts, stopping every command.
 	life     context.Context
-	endLife  context.CancelFunc
+	endLife  context.CancelCauseFunc
 	mu       sync.Mutex
 	running  sync.WaitGroup          // supervisors; Add only under mu while life lasts
 	commands map[string]*execCommand // commands that ran past their yield
+	// changed signals its one consumer that Running may have changed.
+	changed chan struct{}
 	// ended counts commands that ended. Clock readings can tie, notably on
 	// Windows, so it orders them instead.
 	ended atomic.Uint64
@@ -175,8 +177,9 @@ func newExecService(launcher execLauncher, config execServiceConfig) *ExecServic
 		outputLimit:      config.outputLimit,
 		defaultShellPath: config.defaultShellPath,
 		commands:         make(map[string]*execCommand),
+		changed:          make(chan struct{}, 1),
 	}
-	s.life, s.endLife = context.WithCancel(context.Background())
+	s.life, s.endLife = context.WithCancelCause(context.Background())
 	return s
 }
 
@@ -262,7 +265,7 @@ func (s *ExecService) Stop(ctx context.Context, id string) (ExecOutcome, error) 
 	if err != nil {
 		return ExecOutcome{}, err
 	}
-	c.stop(context.Canceled)
+	c.stop(errStoppedByCaller)
 	select {
 	case <-c.done:
 	case <-ctx.Done():
@@ -275,12 +278,65 @@ func (s *ExecService) Stop(ctx context.Context, id string) (ExecOutcome, error) 
 // are not started.
 func (s *ExecService) Close() {
 	s.mu.Lock()
-	s.endLife()
+	s.endLife(errStoppedOnClose)
 	s.mu.Unlock()
 	s.running.Wait()
 }
 
+// Running counts the commands running in the background.
+func (s *ExecService) Running() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.runningLocked())
+}
+
+// Changed receives after Running may have changed. It has one consumer.
+func (s *ExecService) Changed() <-chan struct{} {
+	return s.changed
+}
+
+// StopAll asks every command running in the background to stop on the user's
+// behalf and returns how many it asked; their supervisors reap them.
+func (s *ExecService) StopAll() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	running := s.runningLocked()
+	for _, id := range running {
+		s.commands[id].stop(errStoppedByUser)
+	}
+	return len(running)
+}
+
+// runningLocked lists the IDs of commands running in the background. The
+// caller holds mu.
+func (s *ExecService) runningLocked() []string {
+	var ids []string
+	for id, c := range s.commands {
+		select {
+		case <-c.done:
+		default:
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func (s *ExecService) notifyChanged() {
+	select {
+	case s.changed <- struct{}{}:
+	default:
+	}
+}
+
 var errExecServiceClosed = errors.New("exec service is closed")
+
+// Why a command was stopped, as its outcome reports it: whoever reads it
+// should not mistake a deliberate stop for a crash.
+var (
+	errStoppedByCaller = errors.New("stopped on request")
+	errStoppedByUser   = errors.New("stopped by the user")
+	errStoppedOnClose  = errors.New("stopped because Bits is exiting")
+)
 
 // acquire takes a permit, waiting until ctx ends, the service closes, or
 // yielded fires.
@@ -337,14 +393,7 @@ func (s *ExecService) closedErr() error {
 
 func (s *ExecService) busyErr() error {
 	s.mu.Lock()
-	ids := make([]string, 0, len(s.commands))
-	for id, c := range s.commands {
-		select {
-		case <-c.done:
-		default:
-			ids = append(ids, id)
-		}
-	}
+	ids := s.runningLocked()
 	s.mu.Unlock()
 	if len(ids) == 0 {
 		return fmt.Errorf("%d commands are already running; retry once one ends", cap(s.permits))
@@ -425,6 +474,7 @@ func (s *ExecService) supervise(ctx context.Context, c *execCommand, process exe
 	c.endOrder = s.ended.Add(1)
 	s.release()
 	close(c.done)
+	s.notifyChanged()
 }
 
 // maxFinishedCommands bounds background commands that ended without anyone
@@ -448,6 +498,7 @@ func (s *ExecService) register(ctx context.Context, c *execCommand) (ExecOutcome
 		id = newCommandID()
 	}
 	s.commands[id] = c
+	s.notifyChanged()
 	return s.observeLocked(id, c), nil
 }
 

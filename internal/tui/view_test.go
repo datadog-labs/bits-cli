@@ -161,7 +161,7 @@ func TestChatFooterRendersBelowEditor(t *testing.T) {
 func TestChatFooterTextIsSafeAndWidthBounded(t *testing.T) {
 	usage := &assistant.Usage{TokensUsed: 330_000}
 	for _, width := range []int{1, 8, 24, 80} {
-		text := chatFooterText("/tmp/private\x1b[31m\nworkspace", usage, width)
+		text := chatFooterText("/tmp/private\x1b[31m\nworkspace", "", usage, width)
 		if strings.ContainsAny(text, "\x1b\n\r") {
 			t.Fatalf("width %d footer retained terminal controls: %q", width, text)
 		}
@@ -169,7 +169,7 @@ func TestChatFooterTextIsSafeAndWidthBounded(t *testing.T) {
 			t.Fatalf("width %d footer rendered %d cells: %q", width, got, text)
 		}
 	}
-	if got := chatFooterText("/tmp/workspace", usage, 24); !strings.HasSuffix(got, " · 330K used") {
+	if got := chatFooterText("/tmp/workspace", "", usage, 24); !strings.HasSuffix(got, " · 330K used") {
 		t.Fatalf("footer did not preserve usage suffix: %q", got)
 	}
 }

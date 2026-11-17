@@ -71,11 +71,14 @@ func (m *Model) applyForkResult(msg forkResultMsg) tea.Cmd {
 	if err == nil && !m.op.interrupted() {
 		err = m.engine.InstallConversation(msg.ctx, msg.conversation)
 		if err == nil {
+			stopped := m.enterConversation()
 			m.state = m.engine.State()
-			m.conversationEpoch++
 			m.selection.clear()
 			m.notices = nil
 			m.list.ReplaceTranscript(m.state.Blocks, m.state.Tasks, m.transcriptNotices())
+			if stopped > 0 {
+				m.postNotice(notice(chat.NoticeInfo, nil, "Opened the fork.%s", stoppedCommandsSuffix(stopped)))
+			}
 		}
 	} else if err == nil {
 		err = context.Canceled

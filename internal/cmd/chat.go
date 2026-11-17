@@ -113,6 +113,7 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		Visualization: widgets,
 		Tools:         toolSet,
 		ToolUI:        toolUI,
+		Commands:      commands,
 		Version:       version.Build(),
 		Workspace:     workspace,
 		Upgrade:       upgrade,

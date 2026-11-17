@@ -698,4 +698,13 @@ func TestExecCommandBackgroundEndToEnd(t *testing.T) {
 	if unknown, _ := call(waitTool, `{"command_id":"`+running.CommandID+`","wait_ms":0}`); !unknown.IsError || !strings.Contains(unknown.Output, "unknown command") {
 		t.Fatalf("wait_command after the final result = %+v, want unknown command", unknown)
 	}
+
+	// A wait on a command the user stopped observed it fine: the stop and
+	// who made it are in the output, not a failure of the wait.
+	_, other := call(execTool, `{"cmd":`+mustJSONString(t, long)+`,"yield_ms":0}`)
+	commands.StopAll()
+	observed, stoppedByUser := call(waitTool, `{"command_id":"`+other.CommandID+`","wait_ms":300000}`)
+	if observed.IsError || observed.Cancelled || stoppedByUser.Status != exectool.ExecCancelled || stoppedByUser.Error != "stopped by the user" {
+		t.Fatalf("wait_command on a stopped command = %+v, %+v; want a successful wait reporting the user's stop", observed, stoppedByUser)
+	}
 }

@@ -459,10 +459,10 @@ func TestExecServiceYieldsAndWaits(t *testing.T) {
 	}
 }
 
-// Stop and Close both end background commands with the full TERM-to-KILL
-// cleanup, and a closed service starts nothing.
+// Stop, StopAll, and Close all end background commands with the full
+// TERM-to-KILL cleanup, and a closed service starts nothing.
 func TestExecServiceStopsBackgroundCommands(t *testing.T) {
-	for _, stop := range []string{"stop", "close"} {
+	for _, stop := range []string{"stop", "stop all", "close"} {
 		t.Run(stop, func(t *testing.T) {
 			process := &controlledExecProcess{waitStarted: make(chan struct{}), done: make(chan execProcessResult, 1), ignoreTerminate: true}
 			launcher := &recordingExecLauncher{
@@ -473,12 +473,29 @@ func TestExecServiceStopsBackgroundCommands(t *testing.T) {
 			if started.Status != ExecRunning {
 				t.Fatalf("Start = %+v, want running", started)
 			}
-			if stop == "stop" {
+			switch stop {
+			case "stop":
 				outcome, err := service.Stop(context.Background(), started.ID)
-				if err != nil || outcome.Status != ExecCancelled || !errors.Is(outcome.Err, context.Canceled) {
-					t.Fatalf("Stop = %+v, %v; want cancellation", outcome, err)
+				if err != nil || outcome.Status != ExecCancelled || !errors.Is(outcome.Err, errStoppedByCaller) {
+					t.Fatalf("Stop = %+v, %v; want cancellation on request", outcome, err)
 				}
-			} else {
+			case "stop all":
+				<-service.Changed() // the registration
+				if got := service.Running(); got != 1 {
+					t.Fatalf("Running = %d, want 1", got)
+				}
+				if got := service.StopAll(); got != 1 {
+					t.Fatalf("StopAll = %d, want 1", got)
+				}
+				<-service.Changed() // the command ended
+				if got := service.Running(); got != 0 {
+					t.Fatalf("Running after StopAll = %d, want 0", got)
+				}
+				// The model reads why: a user's stop is not a crash.
+				if outcome, err := service.Wait(context.Background(), started.ID, 0); err != nil || !errors.Is(outcome.Err, errStoppedByUser) {
+					t.Fatalf("Wait after StopAll = %+v, %v; want stopped by the user", outcome, err)
+				}
+			default:
 				service.Close()
 				if outcome := service.run(context.Background(), ExecRequest{Command: "late", CWD: t.TempDir()}); outcome.Status != ExecCancelled {
 					t.Fatalf("Start after Close = %+v, want cancellation", outcome)
