@@ -80,7 +80,7 @@ func TestExecServiceWindowsPowerShellUnicodeOutput(t *testing.T) {
 					`[Console]::Error.Write([string][Console]::Error.Encoding.CodePage + '|café 日本語 😀'); exit 7`,
 				CWD: t.TempDir(),
 			})
-			if outcome.Reason != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
+			if outcome.Status != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
 				t.Fatalf("outcome = %+v, want exit 7", outcome)
 			}
 			if outcome.Output.Stdout != want || outcome.Output.Stderr != want {
@@ -140,7 +140,7 @@ func TestExecServiceWindowsLegacyOutput(t *testing.T) {
 	// The expected glyph is locale-dependent; the fixed code-page cases above
 	// independently verify the conversion, while this checks the live pipes.
 	want := decodeExecOutput([]byte("caf\x82"))
-	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != want || outcome.Output.Stderr != want {
+	if outcome.Status != ExecSucceeded || outcome.Output.Stdout != want || outcome.Output.Stderr != want {
 		t.Fatalf("outcome = %+v, want decoded output %q", outcome, want)
 	}
 }
@@ -155,7 +155,7 @@ func TestExecServiceWindowsPowerShellSuccess(t *testing.T) {
 		CWD:     dir,
 	})
 
-	if outcome.Reason != ExecSucceeded || outcome.ExitCode == nil || *outcome.ExitCode != 0 {
+	if outcome.Status != ExecSucceeded || outcome.ExitCode == nil || *outcome.ExitCode != 0 {
 		t.Fatalf("outcome = %+v, want success", outcome)
 	}
 	if outcome.Output.Stdout != "stdout:inherited-value" || outcome.Output.Stderr != "stderr" {
@@ -171,7 +171,7 @@ func TestExecServiceWindowsExcludesEnvironmentCaseInsensitively(t *testing.T) {
 		Command: `[Console]::Out.Write("$env:bits_exec_test_private_token|$env:BITS_EXEC_TEST_VISIBLE_KEY")`,
 		CWD:     t.TempDir(),
 	})
-	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != "|visible" {
+	if outcome.Status != ExecSucceeded || outcome.Output.Stdout != "|visible" {
 		t.Fatalf("excluded environment outcome = %+v", outcome)
 	}
 }
@@ -186,7 +186,7 @@ func TestExecServiceWindowsPowerShellWorkdirAndNonZeroExit(t *testing.T) {
 		Command: `[Console]::Out.Write((Get-Location).Path); exit 7`,
 		CWD:     dir,
 	})
-	if outcome.Reason != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
+	if outcome.Status != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
 		t.Fatalf("outcome = %+v, want exit status 7", outcome)
 	}
 	// PowerShell can expand an 8.3 path supplied through the temp directory.
@@ -209,7 +209,7 @@ func TestExecServiceWindowsPowerShellTimeoutKillsDirectProcess(t *testing.T) {
 		Command: "Start-Sleep -Seconds 30",
 		CWD:     t.TempDir(),
 	})
-	if outcome.Reason != ExecTimedOut || !errors.Is(outcome.Err, context.DeadlineExceeded) {
+	if outcome.Status != ExecTimedOut || !errors.Is(outcome.Err, context.DeadlineExceeded) {
 		t.Fatalf("outcome = %+v, want timeout", outcome)
 	}
 	if outcome.Elapsed > 5*time.Second {
@@ -274,7 +274,7 @@ func TestExecServiceWindowsResolvesRequestedBash(t *testing.T) {
 	}
 	t.Setenv("PATH", t.TempDir())
 	outcome := service.Run(t.Context(), ExecRequest{Command: "ignored", CWD: root, Shell: "bash"})
-	if outcome.Reason != ExecLaunchFailed || outcome.Err == nil || !strings.Contains(outcome.Err.Error(), "resolve exec shell") {
+	if outcome.Status != ExecLaunchFailed || outcome.Err == nil || !strings.Contains(outcome.Err.Error(), "resolve exec shell") {
 		t.Fatalf("missing Bash must fail resolution without falling back: %+v", outcome)
 	}
 }
@@ -289,7 +289,7 @@ func TestExecServiceWindowsBashEnvironmentAndExit(t *testing.T) {
 			`printf stderr >&2; if read -r ignored; then exit 9; fi; exit 7`,
 		CWD: t.TempDir(),
 	})
-	if outcome.Reason != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
+	if outcome.Status != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
 		t.Fatalf("outcome = %+v, want exit 7", outcome)
 	}
 	if outcome.Output.Stdout != "spaces 'quotes' $dollar|unset" || outcome.Output.Stderr != "stderr" {
@@ -375,7 +375,7 @@ func testExecJobProcessTree(t *testing.T, shell, command string) {
 			}
 			select {
 			case outcome := <-done:
-				if outcome.Reason != want {
+				if outcome.Status != want {
 					t.Fatalf("outcome = %+v, want %s", outcome, want)
 				}
 			case <-time.After(20 * time.Second):

@@ -97,7 +97,7 @@ func TestExecCommandHandlerValidatesInput(t *testing.T) {
 func TestExecCommandResolvesWorkdirAtTheHandlerBoundary(t *testing.T) {
 	turnCWD := t.TempDir()
 	abs := t.TempDir()
-	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Reason: exectool.ExecSucceeded}}
+	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Status: exectool.ExecSucceeded}}
 	tool := newExecCommandTool(turnCWD, runner)
 	tests := []struct {
 		name        string
@@ -180,12 +180,12 @@ func TestExecCommandTranslatesEveryTerminalOutcome(t *testing.T) {
 		wantError bool
 		cancelled bool
 	}{
-		{name: "success", outcome: exectool.ExecOutcome{Reason: exectool.ExecSucceeded, ExitCode: &exit0}},
-		{name: "non-zero", outcome: exectool.ExecOutcome{Reason: exectool.ExecNonZeroExit, ExitCode: &exit7}, wantError: true},
-		{name: "signal", outcome: exectool.ExecOutcome{Reason: exectool.ExecNonZeroExit, Signal: "terminated"}, wantError: true},
-		{name: "launch failure", outcome: exectool.ExecOutcome{Reason: exectool.ExecLaunchFailed, Err: errors.New("start failed")}, wantError: true},
-		{name: "timeout", outcome: exectool.ExecOutcome{Reason: exectool.ExecTimedOut, Err: context.DeadlineExceeded}, wantError: true},
-		{name: "cancellation", outcome: exectool.ExecOutcome{Reason: exectool.ExecCancelled, Err: context.Canceled}, wantError: true, cancelled: true},
+		{name: "success", outcome: exectool.ExecOutcome{Status: exectool.ExecSucceeded, ExitCode: &exit0}},
+		{name: "non-zero", outcome: exectool.ExecOutcome{Status: exectool.ExecNonZeroExit, ExitCode: &exit7}, wantError: true},
+		{name: "signal", outcome: exectool.ExecOutcome{Status: exectool.ExecNonZeroExit, Signal: "terminated"}, wantError: true},
+		{name: "launch failure", outcome: exectool.ExecOutcome{Status: exectool.ExecLaunchFailed, Err: errors.New("start failed")}, wantError: true},
+		{name: "timeout", outcome: exectool.ExecOutcome{Status: exectool.ExecTimedOut, Err: context.DeadlineExceeded}, wantError: true},
+		{name: "cancellation", outcome: exectool.ExecOutcome{Status: exectool.ExecCancelled, Err: context.Canceled}, wantError: true, cancelled: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -206,7 +206,7 @@ func TestExecCommandTranslatesEveryTerminalOutcome(t *testing.T) {
 			if err := json.Unmarshal([]byte(result.Output), &model); err != nil {
 				t.Fatalf("model output is invalid JSON: %v\n%s", err, result.Output)
 			}
-			if model.Status != test.outcome.Reason || model.DurationMS != 1500 || model.Stdout != "out" || model.Stderr != "err" {
+			if model.Status != test.outcome.Status || model.DurationMS != 1500 || model.Stdout != "out" || model.Stderr != "err" {
 				t.Fatalf("model result = %+v", model)
 			}
 			if !model.Truncated || !model.OutputIncomplete || model.StdoutOmittedBytes != 11 || model.StderrOmittedBytes != 12 {
@@ -224,7 +224,7 @@ func TestExecCommandTranslatesEveryTerminalOutcome(t *testing.T) {
 
 func TestExecCommandSerializesTerminalMetadataBeforeStreams(t *testing.T) {
 	output := marshalExecCommandResult(exectool.ExecOutcome{
-		Reason:  exectool.ExecSucceeded,
+		Status:  exectool.ExecSucceeded,
 		Elapsed: time.Second,
 		Output: exectool.ExecOutput{
 			Stdout: "first\nsecond", Stderr: "error", Truncated: true, Incomplete: true,
@@ -294,7 +294,7 @@ func (b *execApprovalBackend) Send(_ context.Context, message any, _ assistant.S
 }
 
 func TestExecCommandManualEngineDoesNotLaunchBeforeApproval(t *testing.T) {
-	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Reason: exectool.ExecSucceeded}}
+	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Status: exectool.ExecSucceeded}}
 	backend := &execApprovalBackend{
 		t:       t,
 		preview: `{"cmd":"touch speculative"}`,
@@ -344,7 +344,7 @@ func TestExecCommandManualEngineDoesNotLaunchBeforeApproval(t *testing.T) {
 }
 
 func TestExecCommandDenialNeverLaunches(t *testing.T) {
-	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Reason: exectool.ExecSucceeded}}
+	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Status: exectool.ExecSucceeded}}
 	backend := &execApprovalBackend{t: t, input: `{"cmd":"true"}`}
 	set, err := agent.NewToolSet(newExecCommandTool(t.TempDir(), runner))
 	if err != nil {
@@ -410,7 +410,7 @@ func (b *execSessionScopeBackend) Send(_ context.Context, message any, _ assista
 }
 
 func TestExecCommandSessionGrantIsScopedToExactLaunchTuple(t *testing.T) {
-	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Reason: exectool.ExecSucceeded}}
+	runner := &recordingExecRunner{outcome: exectool.ExecOutcome{Status: exectool.ExecSucceeded}}
 	backend := &execSessionScopeBackend{
 		t:      t,
 		inputs: []string{`{"cmd":"printf first"}`, `{"cmd":"printf second"}`},
@@ -557,7 +557,7 @@ func TestExecCommandEndToEndWorkdirsAndFailures(t *testing.T) {
 	tests := []struct {
 		name       string
 		input      string
-		wantStatus exectool.ExecTerminalReason
+		wantStatus exectool.ExecStatus
 		wantStdout string
 	}{
 		{name: "default", input: `{"cmd":` + commandJSON + `}`, wantStatus: exectool.ExecSucceeded, wantStdout: turnCWD},

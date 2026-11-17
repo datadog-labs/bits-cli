@@ -25,11 +25,11 @@ const (
 	execTerminateGrace = 100 * time.Millisecond
 )
 
-// ExecTerminalReason identifies why a one-shot command stopped. It aliases the
+// ExecStatus identifies why a one-shot command stopped. It aliases the
 // wire-contract type in package spec so the execution service and any importer
 // (tool handler, renderers) share a single terminal-status vocabulary. Output
 // truncation is orthogonal to this reason and is reported by ExecOutput.
-type ExecTerminalReason = spec.ExecTerminalReason
+type ExecStatus = spec.ExecStatus
 
 const (
 	ExecSucceeded    = spec.ExecSucceeded
@@ -91,7 +91,7 @@ type ExecOutput struct {
 // only when the operating system reported a numeric exit status; Signal is set
 // when Unix reported signal termination.
 type ExecOutcome struct {
-	Reason   ExecTerminalReason
+	Status   ExecStatus
 	ExitCode *int
 	Signal   string
 	Elapsed  time.Duration
@@ -147,7 +147,7 @@ func (s *ExecService) Run(ctx context.Context, request ExecRequest) ExecOutcome 
 	plan, err := s.resolve(request)
 	if err != nil {
 		return ExecOutcome{
-			Reason:  ExecLaunchFailed,
+			Status:  ExecLaunchFailed,
 			Elapsed: time.Since(calledAt),
 			Err:     err,
 		}
@@ -155,7 +155,7 @@ func (s *ExecService) Run(ctx context.Context, request ExecRequest) ExecOutcome 
 
 	if err := s.acquire(ctx); err != nil {
 		return ExecOutcome{
-			Reason:  reasonForContext(err),
+			Status:  statusForContext(err),
 			Elapsed: time.Since(calledAt),
 			Err:     err,
 		}
@@ -167,7 +167,7 @@ func (s *ExecService) Run(ctx context.Context, request ExecRequest) ExecOutcome 
 	defer cancel()
 	if err := runCtx.Err(); err != nil {
 		return ExecOutcome{
-			Reason:  reasonForContext(err),
+			Status:  statusForContext(err),
 			Elapsed: time.Since(startedAt),
 			Err:     err,
 		}
@@ -179,7 +179,7 @@ func (s *ExecService) Run(ctx context.Context, request ExecRequest) ExecOutcome 
 	process, err := s.launcher.Start(plan, stdout, stderr)
 	if err != nil {
 		return ExecOutcome{
-			Reason:  ExecLaunchFailed,
+			Status:  ExecLaunchFailed,
 			Elapsed: time.Since(startedAt),
 			Err:     err,
 		}
@@ -192,19 +192,19 @@ func (s *ExecService) Run(ctx context.Context, request ExecRequest) ExecOutcome 
 
 	var result execProcessResult
 	var terminalErr error
-	var reason ExecTerminalReason
+	var status ExecStatus
 	select {
 	case result = <-waited:
-		reason = reasonForProcess(result)
+		status = statusForProcess(result)
 	case <-runCtx.Done():
 		// Prefer a process result that raced with context completion over
 		// reporting a cancellation for a command that already finished.
 		select {
 		case result = <-waited:
-			reason = reasonForProcess(result)
+			status = statusForProcess(result)
 		default:
 			terminalErr = runCtx.Err()
-			reason = reasonForContext(terminalErr)
+			status = statusForContext(terminalErr)
 			result = terminateAndWait(process, waited)
 		}
 	}
@@ -212,7 +212,7 @@ func (s *ExecService) Run(ctx context.Context, request ExecRequest) ExecOutcome 
 	output := boundedExecOutput(stdout, stderr)
 	output.Incomplete = result.outputIncomplete
 	return ExecOutcome{
-		Reason:   reason,
+		Status:   status,
 		ExitCode: cloneInt(result.exitCode),
 		Signal:   result.signal,
 		Elapsed:  time.Since(startedAt),
@@ -310,14 +310,14 @@ func terminateAndWait(process execProcess, waited <-chan execProcessResult) exec
 	return result
 }
 
-func reasonForContext(err error) ExecTerminalReason {
+func statusForContext(err error) ExecStatus {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return ExecTimedOut
 	}
 	return ExecCancelled
 }
 
-func reasonForProcess(result execProcessResult) ExecTerminalReason {
+func statusForProcess(result execProcessResult) ExecStatus {
 	if result.exitCode != nil && *result.exitCode == 0 && result.signal == "" {
 		return ExecSucceeded
 	}

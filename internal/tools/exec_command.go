@@ -86,7 +86,7 @@ func execCommandHandler(turnCWD string, runner execRunner) agent.ToolHandler {
 		args, cwd, err := parseExecCommandArgs(call.Input, turnCWD)
 		if err != nil {
 			outcome := exectool.ExecOutcome{
-				Reason: exectool.ExecLaunchFailed,
+				Status: exectool.ExecLaunchFailed,
 				Err:    fmt.Errorf("invalid input: %w", err),
 			}
 			return agent.ToolResult{
@@ -100,8 +100,8 @@ func execCommandHandler(turnCWD string, runner execRunner) agent.ToolHandler {
 		return agent.ToolResult{
 			Title:     execResultTitle(outcome),
 			Output:    output,
-			IsError:   outcome.Reason != exectool.ExecSucceeded,
-			Cancelled: outcome.Reason == exectool.ExecCancelled,
+			IsError:   outcome.Status != exectool.ExecSucceeded,
+			Cancelled: outcome.Status == exectool.ExecCancelled,
 		}, nil
 	}
 }
@@ -154,7 +154,7 @@ func execTimeoutApprovalDetail(args spec.ExecCommandInput) string {
 }
 
 func execResultTitle(outcome exectool.ExecOutcome) string {
-	switch outcome.Reason {
+	switch outcome.Status {
 	case exectool.ExecSucceeded:
 		return "Command completed"
 	case exectool.ExecNonZeroExit:
@@ -172,7 +172,7 @@ func execResultTitle(outcome exectool.ExecOutcome) string {
 
 func marshalExecCommandResult(outcome exectool.ExecOutcome) string {
 	result := spec.ExecCommandOutput{
-		Status:             outcome.Reason,
+		Status:             outcome.Status,
 		ExitCode:           outcome.ExitCode,
 		Signal:             outcome.Signal,
 		DurationMS:         outcome.Elapsed.Milliseconds(),

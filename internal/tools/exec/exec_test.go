@@ -32,7 +32,7 @@ func TestExecServiceRejectsInvalidRequestBeforeLaunch(t *testing.T) {
 	}
 	for _, request := range tests {
 		outcome := service.Run(context.Background(), request)
-		if outcome.Reason != ExecLaunchFailed || outcome.Err == nil {
+		if outcome.Status != ExecLaunchFailed || outcome.Err == nil {
 			t.Errorf("Run(%+v) = %+v, want a typed launch failure", request, outcome)
 		}
 	}
@@ -69,7 +69,7 @@ func TestExecServiceResolvesFailuresBeforeAdmission(t *testing.T) {
 	}()
 	select {
 	case outcome := <-invalid:
-		if outcome.Reason != ExecLaunchFailed || outcome.Err == nil {
+		if outcome.Status != ExecLaunchFailed || outcome.Err == nil {
 			t.Errorf("invalid queued outcome = %+v, want launch failure", outcome)
 		}
 	case <-time.After(time.Second):
@@ -82,7 +82,7 @@ func TestExecServiceResolvesFailuresBeforeAdmission(t *testing.T) {
 	}
 
 	close(release)
-	if outcome := <-worker; outcome.Reason != ExecSucceeded {
+	if outcome := <-worker; outcome.Status != ExecSucceeded {
 		t.Fatalf("valid worker outcome = %+v, want success", outcome)
 	}
 }
@@ -98,7 +98,7 @@ func TestExecServiceShellResolutionPrecedesCancelledAdmission(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	outcome := service.Run(ctx, ExecRequest{Command: "true", CWD: t.TempDir()})
-	if outcome.Reason != ExecLaunchFailed || outcome.Err == nil {
+	if outcome.Status != ExecLaunchFailed || outcome.Err == nil {
 		t.Fatalf("outcome = %+v, want deterministic shell-resolution failure", outcome)
 	}
 	if got := launcher.starts.Load(); got != 0 {
@@ -117,7 +117,7 @@ func TestExecServiceReportsLauncherStartFailure(t *testing.T) {
 		Command: "true",
 		CWD:     t.TempDir(),
 	})
-	if outcome.Reason != ExecLaunchFailed || !errors.Is(outcome.Err, wantErr) {
+	if outcome.Status != ExecLaunchFailed || !errors.Is(outcome.Err, wantErr) {
 		t.Fatalf("outcome = %+v, want launcher start failure", outcome)
 	}
 }
@@ -155,7 +155,7 @@ func TestExecServiceResolvesPlanBeforeLaunch(t *testing.T) {
 	if got != want {
 		t.Fatalf("launcher plan = %+v, want %+v", got, want)
 	}
-	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != "out" || outcome.Output.Stderr != "err" {
+	if outcome.Status != ExecSucceeded || outcome.Output.Stdout != "out" || outcome.Output.Stderr != "err" {
 		t.Fatalf("outcome = %+v, want successful labeled output", outcome)
 	}
 }
@@ -174,7 +174,7 @@ func TestExecServiceUsesCallerTimeoutWithinBound(t *testing.T) {
 		CWD:     t.TempDir(),
 		Timeout: 2500 * time.Millisecond,
 	})
-	if outcome.Reason != ExecSucceeded {
+	if outcome.Status != ExecSucceeded {
 		t.Fatalf("outcome = %+v, want success", outcome)
 	}
 	if got.Timeout != 2500*time.Millisecond {
@@ -187,7 +187,7 @@ func TestExecServiceRejectsOutOfRangeCallerTimeout(t *testing.T) {
 	service := testExecService(launcher, time.Second, 1024)
 	for _, timeout := range []time.Duration{500 * time.Microsecond, MaxTimeout + time.Millisecond} {
 		outcome := service.Run(context.Background(), ExecRequest{Command: "true", CWD: t.TempDir(), Timeout: timeout})
-		if outcome.Reason != ExecLaunchFailed || outcome.Err == nil {
+		if outcome.Status != ExecLaunchFailed || outcome.Err == nil {
 			t.Errorf("Run(timeout=%s) = %+v, want launch failure", timeout, outcome)
 		}
 	}
@@ -214,8 +214,8 @@ func TestExecServiceAdmissionLimitAndQueueCancellation(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			outcome := service.Run(context.Background(), ExecRequest{Command: "run", CWD: cwd})
-			if outcome.Reason != ExecSucceeded {
-				t.Errorf("admitted outcome reason = %q, want success", outcome.Reason)
+			if outcome.Status != ExecSucceeded {
+				t.Errorf("admitted outcome status = %q, want success", outcome.Status)
 			}
 		}()
 	}
@@ -236,7 +236,7 @@ func TestExecServiceAdmissionLimitAndQueueCancellation(t *testing.T) {
 	// call therefore cannot reach the launcher before cancellation.
 	cancel()
 	outcome := <-queued
-	if outcome.Reason != ExecCancelled || !errors.Is(outcome.Err, context.Canceled) {
+	if outcome.Status != ExecCancelled || !errors.Is(outcome.Err, context.Canceled) {
 		t.Fatalf("queued outcome = %+v, want cancellation", outcome)
 	}
 	if got := launcher.starts.Load(); got != execConcurrencyLimit {
@@ -268,7 +268,7 @@ func TestExecServiceCancellationTerminatesAndReaps(t *testing.T) {
 	cancel()
 
 	outcome := <-outcomes
-	if outcome.Reason != ExecCancelled || !errors.Is(outcome.Err, context.Canceled) {
+	if outcome.Status != ExecCancelled || !errors.Is(outcome.Err, context.Canceled) {
 		t.Fatalf("outcome = %+v, want cancellation", outcome)
 	}
 	if !process.terminated.Load() || !process.killed.Load() {
@@ -293,7 +293,7 @@ func TestExecServiceTimeoutKillsAndReapsAfterGrace(t *testing.T) {
 	service := testExecService(launcher, 10*time.Millisecond, 1024)
 	outcome := service.Run(context.Background(), ExecRequest{Command: "run", CWD: t.TempDir()})
 
-	if outcome.Reason != ExecTimedOut || !errors.Is(outcome.Err, context.DeadlineExceeded) {
+	if outcome.Status != ExecTimedOut || !errors.Is(outcome.Err, context.DeadlineExceeded) {
 		t.Fatalf("outcome = %+v, want timeout", outcome)
 	}
 	if !process.terminated.Load() || !process.killed.Load() {
@@ -403,7 +403,7 @@ func TestExecServiceDrainsBothStreamsUnderPressure(t *testing.T) {
 	}
 	outcome := service.Run(context.Background(), ExecRequest{Command: command, CWD: t.TempDir(), Timeout: 10 * time.Second})
 
-	if outcome.Reason != ExecSucceeded {
+	if outcome.Status != ExecSucceeded {
 		t.Fatalf("outcome = %+v, want success", outcome)
 	}
 	if !outcome.Output.Truncated {

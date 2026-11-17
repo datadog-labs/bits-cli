@@ -27,7 +27,7 @@ func TestExecServiceUnixSuccessAndInheritedEnvironment(t *testing.T) {
 		CWD:     dir,
 	})
 
-	if outcome.Reason != ExecSucceeded || outcome.ExitCode == nil || *outcome.ExitCode != 0 {
+	if outcome.Status != ExecSucceeded || outcome.ExitCode == nil || *outcome.ExitCode != 0 {
 		t.Fatalf("outcome = %+v, want exit success", outcome)
 	}
 	if outcome.Signal != "" || outcome.Err != nil {
@@ -44,7 +44,7 @@ func TestExecServiceUnixSuccessAndInheritedEnvironment(t *testing.T) {
 func TestExecServiceUnixNonZeroExit(t *testing.T) {
 	service := newUnixTestExecService(time.Second, 4096)
 	outcome := service.Run(context.Background(), ExecRequest{Command: "exit 7", CWD: t.TempDir()})
-	if outcome.Reason != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
+	if outcome.Status != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
 		t.Fatalf("outcome = %+v, want exit status 7", outcome)
 	}
 	if outcome.Err != nil {
@@ -58,8 +58,8 @@ func TestExecServiceUnixNaturalSignalExit(t *testing.T) {
 		Command: "kill -TERM $$",
 		CWD:     t.TempDir(),
 	})
-	if outcome.Reason != ExecNonZeroExit {
-		t.Fatalf("reason = %q, want non-zero exit", outcome.Reason)
+	if outcome.Status != ExecNonZeroExit {
+		t.Fatalf("status = %q, want non-zero exit", outcome.Status)
 	}
 	if outcome.ExitCode != nil {
 		t.Fatalf("exit code = %d, want unavailable for signal exit", *outcome.ExitCode)
@@ -76,7 +76,7 @@ func TestExecServiceUnixLaunchFailure(t *testing.T) {
 	service := newUnixTestExecService(time.Second, 4096)
 	missing := filepath.Join(t.TempDir(), "missing")
 	outcome := service.Run(context.Background(), ExecRequest{Command: "true", CWD: missing})
-	if outcome.Reason != ExecLaunchFailed || outcome.Err == nil {
+	if outcome.Status != ExecLaunchFailed || outcome.Err == nil {
 		t.Fatalf("outcome = %+v, want launch failure for missing cwd", outcome)
 	}
 }
@@ -96,7 +96,7 @@ func TestExecServiceUnixIgnoresShellEnvironment(t *testing.T) {
 		Command: "printf selected",
 		CWD:     t.TempDir(),
 	})
-	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != "selected" {
+	if outcome.Status != ExecSucceeded || outcome.Output.Stdout != "selected" {
 		t.Fatalf("outcome = %+v, want account shell success", outcome)
 	}
 }
@@ -108,12 +108,12 @@ func TestExecServiceUnixUsesRequestedShell(t *testing.T) {
 		CWD:     t.TempDir(),
 		Shell:   "bash",
 	})
-	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout == "" {
+	if outcome.Status != ExecSucceeded || outcome.Output.Stdout == "" {
 		t.Fatalf("outcome = %+v, want Bash output", outcome)
 	}
 	for _, shell := range []string{"fish", filepath.Join(t.TempDir(), "bash")} {
 		outcome := service.Run(context.Background(), ExecRequest{Command: "true", CWD: t.TempDir(), Shell: shell})
-		if outcome.Reason != ExecLaunchFailed {
+		if outcome.Status != ExecLaunchFailed {
 			t.Fatalf("shell %q outcome = %+v, want launch failure", shell, outcome)
 		}
 	}
@@ -135,7 +135,7 @@ func TestExecServiceUnixResolvesRelativeShellBeforeChangingDirectory(t *testing.
 	outcome := NewExecService("").Run(context.Background(), ExecRequest{
 		Command: "ignored", CWD: t.TempDir(), Shell: relativeShell,
 	})
-	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != "selected" {
+	if outcome.Status != ExecSucceeded || outcome.Output.Stdout != "selected" {
 		t.Fatalf("relative shell outcome = %+v", outcome)
 	}
 }
@@ -157,11 +157,11 @@ func TestDirectExecLauncherExcludesOnlySelectedNames(t *testing.T) {
 	t.Setenv("BITS_EXEC_EXCLUDE_ENV", "PRIVATE_TOKEN")
 	service := newUnixTestExecService(5*time.Second, execOutputLimit)
 	request := ExecRequest{Command: "printf '%s|%s|%s' \"$PRIVATE_TOKEN\" \"$VISIBLE_KEY\" \"$BITS_EXEC_EXCLUDE_ENV\"", CWD: t.TempDir()}
-	if got := service.Run(context.Background(), request); got.Reason != ExecSucceeded || got.Output.Stdout != "hidden|visible|PRIVATE_TOKEN" {
+	if got := service.Run(context.Background(), request); got.Status != ExecSucceeded || got.Output.Stdout != "hidden|visible|PRIVATE_TOKEN" {
 		t.Fatalf("default environment = %+v", got)
 	}
 	protected := NewExecService("/bin/sh", "PRIVATE_TOKEN", "BITS_EXEC_EXCLUDE_ENV")
-	if got := protected.Run(context.Background(), request); got.Reason != ExecSucceeded || got.Output.Stdout != "|visible|" {
+	if got := protected.Run(context.Background(), request); got.Status != ExecSucceeded || got.Output.Stdout != "|visible|" {
 		t.Fatalf("selected environment exclusion = %+v", got)
 	}
 }
@@ -182,7 +182,7 @@ func TestDirectExecLauncherPreservesLogicalWorkingDirectory(t *testing.T) {
 		CWD:     linkedDirectory,
 	})
 	want := linkedDirectory + "\n" + root + "\n"
-	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != want {
+	if outcome.Status != ExecSucceeded || outcome.Output.Stdout != want {
 		t.Fatalf("logical working directory = %+v, want output %q", outcome, want)
 	}
 }
@@ -200,7 +200,7 @@ func TestDirectExecLauncherUsesLoginCommandFlags(t *testing.T) {
 		defaultShellPath: shell,
 	})
 	outcome := service.Run(context.Background(), ExecRequest{Command: "printf command", CWD: dir})
-	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != "-lc|printf command" {
+	if outcome.Status != ExecSucceeded || outcome.Output.Stdout != "-lc|printf command" {
 		t.Fatalf("outcome = %+v, want -lc and command string", outcome)
 	}
 }
@@ -214,7 +214,7 @@ func TestExecServiceUnixReportsOutputIncompleteAfterForcedPipeClosure(t *testing
 		Command: `(sleep 0.25; printf late) &`,
 		CWD:     t.TempDir(),
 	})
-	if outcome.Reason != ExecSucceeded || outcome.ExitCode == nil || *outcome.ExitCode != 0 {
+	if outcome.Status != ExecSucceeded || outcome.ExitCode == nil || *outcome.ExitCode != 0 {
 		t.Fatalf("outcome = %+v, want successful direct child", outcome)
 	}
 	if !outcome.Output.Incomplete {
@@ -232,7 +232,7 @@ func TestExecServiceUnixTimeoutTerminatesProcessGroup(t *testing.T) {
 		CWD:     t.TempDir(),
 	})
 
-	if outcome.Reason != ExecTimedOut || !errors.Is(outcome.Err, context.DeadlineExceeded) {
+	if outcome.Status != ExecTimedOut || !errors.Is(outcome.Err, context.DeadlineExceeded) {
 		t.Fatalf("outcome = %+v, want timeout", outcome)
 	}
 	if outcome.Signal == "" {
@@ -271,7 +271,7 @@ func TestExecServiceUnixCallerCancellation(t *testing.T) {
 	}
 	cancel()
 	outcome := <-outcomes
-	if outcome.Reason != ExecCancelled || !errors.Is(outcome.Err, context.Canceled) {
+	if outcome.Status != ExecCancelled || !errors.Is(outcome.Err, context.Canceled) {
 		t.Fatalf("outcome = %+v, want caller cancellation", outcome)
 	}
 	if outcome.Elapsed > time.Second {
@@ -322,7 +322,7 @@ func TestExecServiceUnixCancellationKillsSurvivingGroupDescendant(t *testing.T) 
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 		t.Fatal("cancelled command did not return")
 	}
-	if outcome.Reason != ExecCancelled || !errors.Is(outcome.Err, context.Canceled) {
+	if outcome.Status != ExecCancelled || !errors.Is(outcome.Err, context.Canceled) {
 		t.Fatalf("outcome = %+v, want caller cancellation", outcome)
 	}
 	before, err := os.Stat(markerPath)
@@ -350,7 +350,7 @@ func TestExecServiceUnixReapsDirectChild(t *testing.T) {
 		Command: `printf '%s' $$`,
 		CWD:     t.TempDir(),
 	})
-	if outcome.Reason != ExecSucceeded {
+	if outcome.Status != ExecSucceeded {
 		t.Fatalf("outcome = %+v, want success", outcome)
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(outcome.Output.Stdout))
@@ -453,7 +453,7 @@ func TestExecServiceUnixCommandRunsInNewSession(t *testing.T) {
 	}
 
 	cancel()
-	if outcome := <-outcomes; outcome.Reason != ExecCancelled {
+	if outcome := <-outcomes; outcome.Status != ExecCancelled {
 		t.Fatalf("outcome = %+v, want cancellation", outcome)
 	}
 }

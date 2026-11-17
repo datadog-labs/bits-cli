@@ -115,16 +115,16 @@ type ExecCommandInput struct {
 	TimeoutMS *int64 `json:"timeout_ms"`
 }
 
-// ExecTerminalReason identifies why a one-shot command stopped. Output
+// ExecStatus identifies why a one-shot command stopped. Output
 // truncation is orthogonal to this reason and is reported separately.
-type ExecTerminalReason string
+type ExecStatus string
 
 const (
-	ExecSucceeded    ExecTerminalReason = "success"
-	ExecNonZeroExit  ExecTerminalReason = "nonzero_exit"
-	ExecLaunchFailed ExecTerminalReason = "launch_failure"
-	ExecTimedOut     ExecTerminalReason = "timeout"
-	ExecCancelled    ExecTerminalReason = "cancellation"
+	ExecSucceeded    ExecStatus = "success"
+	ExecNonZeroExit  ExecStatus = "nonzero_exit"
+	ExecLaunchFailed ExecStatus = "launch_failure"
+	ExecTimedOut     ExecStatus = "timeout"
+	ExecCancelled    ExecStatus = "cancellation"
 )
 
 // ExecCommandOutput is the JSON result an exec_command tool call returns. Fields
@@ -132,15 +132,15 @@ const (
 // and Signal are populated only when the operating system reported them, and
 // the omitted-byte counts are non-zero exactly when Truncated is true.
 type ExecCommandOutput struct {
-	Status             ExecTerminalReason `json:"status"`
-	ExitCode           *int               `json:"exit_code,omitempty"`
-	Signal             string             `json:"signal,omitempty"`
-	DurationMS         int64              `json:"duration_ms"`
-	Truncated          bool               `json:"truncated"`
-	OutputIncomplete   bool               `json:"output_incomplete"`
-	StdoutOmittedBytes int64              `json:"stdout_omitted_bytes"`
-	StderrOmittedBytes int64              `json:"stderr_omitted_bytes"`
-	Error              string             `json:"error,omitempty"`
-	Stdout             string             `json:"stdout"`
-	Stderr             string             `json:"stderr"`
+	Status             ExecStatus `json:"status"`
+	ExitCode           *int       `json:"exit_code,omitempty"`
+	Signal             string     `json:"signal,omitempty"`
+	DurationMS         int64      `json:"duration_ms"`
+	Truncated          bool       `json:"truncated"`
+	OutputIncomplete   bool       `json:"output_incomplete"`
+	StdoutOmittedBytes int64      `json:"stdout_omitted_bytes"`
+	StderrOmittedBytes int64      `json:"stderr_omitted_bytes"`
+	Error              string     `json:"error,omitempty"`
+	Stdout             string     `json:"stdout"`
+	Stderr             string     `json:"stderr"`
 }

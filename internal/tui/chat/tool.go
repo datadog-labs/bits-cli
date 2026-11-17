@@ -967,7 +967,7 @@ func highlightShellCommand(command string, sty Styles) [][]textwrap.Segment {
 	return diffrender.Highlight("command.sh", command, sty.Diff.SyntaxDark, sty.ToolArgument)
 }
 
-func execResultIsTerminal(status spec.ExecTerminalReason) bool {
+func execResultIsTerminal(status spec.ExecStatus) bool {
 	switch status {
 	case spec.ExecSucceeded, spec.ExecNonZeroExit, spec.ExecLaunchFailed, spec.ExecTimedOut, spec.ExecCancelled:
 		return true
