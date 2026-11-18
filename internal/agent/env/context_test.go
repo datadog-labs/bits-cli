@@ -372,7 +372,12 @@ func TestRenderLocalEnvironment(t *testing.T) {
   </git>` + shell + `
   <platform>` + runtime.GOOS + "/" + runtime.GOARCH + `</platform>
 </local_environment>`
-	if got := renderLocalEnvironment(context.Background(), ws); got != want {
+	if got := renderLocalEnvironment(context.Background(), ws, ""); got != want {
+		t.Fatalf("rendered:\n%s\nwant:\n%s", got, want)
+	}
+	const origin = "https://acme.ap1.datadoghq.com"
+	want = strings.Replace(want, "</platform>", "</platform>\n  <datadog_app_url>"+origin+"</datadog_app_url>", 1)
+	if got := renderLocalEnvironment(context.Background(), ws, origin); got != want {
 		t.Fatalf("rendered:\n%s\nwant:\n%s", got, want)
 	}
 }

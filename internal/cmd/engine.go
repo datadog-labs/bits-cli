@@ -62,13 +62,13 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 	if workspace != nil {
 		config.ProjectInstructions = env.NewInstructions(workspace.Path())
 		config.ClientSkills = env.NewSkills(workspace.Path(), opts.SkillPaths)
-		config.UserContext = env.UserContext(workspace)
 	}
 
 	switch opts.AuthMode {
 	case auth.ModeAuto:
 		if os.Getenv("BITS_FAKE_BACKEND") == "1" {
 			backend := fake.New()
+			config.UserContext = env.UserContext(workspace, "")
 			// The fake also takes a script for --conversation: it becomes the
 			// first turn of a conversation an earlier session left behind.
 			if script := config.ConversationID; script != "" && !agent.ValidConversationID(script) {
@@ -93,6 +93,7 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 		}
 		return nil, err
 	}
+	config.UserContext = env.UserContext(workspace, client.WebOrigin)
 	var backend agent.Backend = client
 	if useSubagents(ctx, client) {
 		backend = assistant.NewMultiAgentClient(client)
