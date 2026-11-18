@@ -84,6 +84,7 @@ func (c approvalChoice) chip(style lipgloss.Style, compact bool) string {
 type approvalPrompt struct {
 	block    agent.Block
 	choices  components.ButtonRow   // selects among approvalChoices
+	dismiss  image.Rectangle        // where the last Layout showed "ESC x", if it did
 	window   components.Window      // the body rows the last layout showed
 	decision agent.ApprovalDecision // "" until the user decides
 	grant    approvalGrant          // the permissions change made with the decision
@@ -110,9 +111,21 @@ func (a *approvalPrompt) SetStyles(theme styles.Theme) {
 
 // Update moves the highlight, scrolls the body, or makes the decision. Text,
 // pastes, and while unfocused the composer's keys are left unused for the
-// composer. The wheel scrolls the body; clicks are left to text selection.
+// composer. The wheel scrolls the body. A click on a choice selects it and,
+// on the selected choice of a focused panel, answers with it; a click on
+// "ESC x" denies. Other clicks are left to text selection.
 func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 	switch msg := msg.(type) {
+	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft && image.Pt(msg.X, msg.Y).In(a.dismiss) {
+			a.decision = agent.ApprovalDeny
+			return nil, true
+		}
+		pressed, used := a.choices.Update(msg)
+		if pressed {
+			a.answer()
+		}
+		return nil, used
 	case tea.MouseWheelMsg:
 		switch msg.Button {
 		case tea.MouseWheelUp:
@@ -125,8 +138,7 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 	case tea.KeyPressMsg:
 		if pressed, used := a.choices.Update(msg); used {
 			if pressed {
-				choice := approvalChoices[a.choices.Selected]
-				a.decision, a.grant = choice.decision, choice.grant
+				a.answer()
 			}
 			return nil, true
 		}
@@ -143,6 +155,12 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	return nil, false
+}
+
+// answer decides with the selected choice.
+func (a *approvalPrompt) answer() {
+	choice := approvalChoices[a.choices.Selected]
+	a.decision, a.grant = choice.decision, choice.grant
 }
 
 func (a *approvalPrompt) scroll(rows int) { a.window = a.window.Scrolled(rows) }
@@ -213,6 +231,7 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 	// Centered by hand so the choices' offset is the one drawn, not a copy of
 	// lipgloss.PlaceHorizontal's rounding.
 	offset := image.Pt((width-lipgloss.Width(layout.View))/2, 0)
+	a.dismiss = layout.Dismiss.Add(offset)
 	// The panel may measure a form it then rejects, so the choices are
 	// committed only for the form that showed; the one-line fallback shows
 	// none.
