@@ -4,6 +4,7 @@ package components
 
 import (
 	"fmt"
+	"image"
 	"slices"
 	"strings"
 
@@ -37,6 +38,20 @@ type PanelContent struct {
 	CompactMessage string
 	CompactBody    func(width int) string
 	TinyMessage    string
+}
+
+// PanelLayout is a rendered panel and where its parts landed, in cells from
+// its top-left corner, so callers hit-test clicks without re-deriving the
+// frame.
+type PanelLayout struct {
+	View   string
+	Window Window // the visible slice of a scrollable body
+	// Body is where the shown form put its body, as wide as the width it laid
+	// the body out at. It is zero in the one-line fallback, which shows no
+	// controls.
+	Body image.Rectangle
+	// Dismiss is the dismiss label, empty when the shown form leaves it out.
+	Dismiss image.Rectangle
 }
 
 // Window describes the visible slice of a scrollable body.
@@ -77,34 +92,30 @@ func (p *Panel) View(width, height int, content PanelContent) string {
 // layout. It uses the same bounded full and compact states as View without
 // adding the surrounding centering space.
 func (p *Panel) Render(width, height int, content PanelContent) string {
-	rendered, _, _ := p.Layout(width, height, content)
-	return rendered
+	return p.Layout(width, height, content).View
 }
 
-// Layout also reports the visible body window and the width the shown form
-// laid its body out at, 0 when the one-line fallback showed no controls.
-func (p *Panel) Layout(width, height int, content PanelContent) (string, Window, int) {
+// Layout renders like Render and also reports where the parts landed.
+func (p *Panel) Layout(width, height int, content PanelContent) PanelLayout {
 	if width <= 0 || height <= 0 {
-		return "", Window{}, 0
+		return PanelLayout{}
 	}
-	if full, window, ok := p.fit(width, height, content); ok {
-		bodyWidth, _ := p.BodySize(width, height, false)
-		return full, window, bodyWidth
+	if full, ok := p.fit(width, height, content); ok {
+		return full
 	}
-	compact, bodyWidth := p.compact(width, height, content)
-	return compact, Window{}, bodyWidth
+	return p.compact(width, height, content)
 }
 
 // Fits reports whether Render shows the full layout rather than a compact
 // fallback, so a caller can disable controls the fallback hides.
 func (p *Panel) Fits(width, height int, content PanelContent) bool {
-	_, _, ok := p.fit(width, height, content)
+	_, ok := p.fit(width, height, content)
 	return ok
 }
 
-func (p *Panel) fit(width, height int, content PanelContent) (string, Window, bool) {
-	full, window := p.full(width, height, content)
-	return full, window, full != "" && lipgloss.Width(full) <= width && lipgloss.Height(full) <= height
+func (p *Panel) fit(width, height int, content PanelContent) (PanelLayout, bool) {
+	full := p.full(width, height, content)
+	return full, full.View != "" && lipgloss.Width(full.View) <= width && lipgloss.Height(full.View) <= height
 }
 
 // BodySize is the body area the full layout leaves at width×height, below a
@@ -124,33 +135,43 @@ func (p *Panel) BodySize(width, height int, footer bool) (int, int) {
 
 func (p *Panel) gapRows() int { return max(1, p.styles.SectionGap+1) }
 
-func (p *Panel) full(width, height int, content PanelContent) (string, Window) {
+func (p *Panel) full(width, height int, content PanelContent) PanelLayout {
 	hasFooter := content.FooterLeft != "" || content.FooterRight != ""
 	bodyWidth, bodyHeight := p.BodySize(width, height, hasFooter)
 	if bodyWidth < max(1, content.MinBodyWidth) {
-		return "", Window{}
+		return PanelLayout{}
 	}
 
-	var window Window
-	sections := []string{p.header(bodyWidth, content.Title, content.Dismiss)}
+	var layout PanelLayout
+	var body string
 	switch {
 	case content.ScrollableBody != nil:
 		if bodyHeight <= 0 {
-			return "", Window{}
+			return PanelLayout{}
 		}
-		var body string
-		body, window = p.scrollableBody(bodyWidth, bodyHeight, content)
-		sections = append(sections, body)
+		body, layout.Window = p.scrollableBody(bodyWidth, bodyHeight, content)
 	case content.Body != nil:
-		sections = append(sections, content.Body(bodyWidth, bodyHeight))
+		body = content.Body(bodyWidth, bodyHeight)
 	}
+	header, dismiss := p.header(bodyWidth, content.Title, content.Dismiss)
+	sections := []string{header, body}
 	if hasFooter {
 		sections = append(sections, p.footer(bodyWidth, content.FooterLeft, content.FooterRight))
 	}
 	sections = slices.DeleteFunc(sections, func(section string) bool { return section == "" })
 	gap := strings.Repeat("\n", p.gapRows())
-	framed := p.styles.Frame.Width(bodyWidth + p.styles.Frame.GetHorizontalFrameSize()).Render(strings.Join(sections, gap))
-	return framed, window
+	frame := p.styles.Frame
+	layout.View = frame.Width(bodyWidth + frame.GetHorizontalFrameSize()).Render(strings.Join(sections, gap))
+
+	origin := image.Pt(frame.GetBorderLeftSize()+frame.GetPaddingLeft(), frame.GetBorderTopSize()+frame.GetPaddingTop())
+	layout.Dismiss = dismiss.Add(origin)
+	// Sections join with gapRows newlines, which leave one blank row fewer.
+	bodyY := origin.Y + lipgloss.Height(header) + p.gapRows() - 1
+	layout.Body = image.Rect(origin.X, bodyY, origin.X+bodyWidth, bodyY)
+	if body != "" {
+		layout.Body.Max.Y += lipgloss.Height(body)
+	}
+	return layout
 }
 
 func (p *Panel) scrollableBody(width, height int, content PanelContent) (string, Window) {
@@ -209,22 +230,25 @@ func joinNonEmpty(parts ...string) string {
 	return strings.Join(nonEmpty, "\n")
 }
 
-func (p *Panel) header(width int, title, dismiss string) string {
+// header renders the title row and reports where the dismiss label landed in
+// it, empty when it does not fit.
+func (p *Panel) header(width int, title, dismiss string) (string, image.Rectangle) {
 	title = ansi.Truncate(title, width, "…")
 	if dismiss == "" {
-		return p.styles.Title.Render(title)
+		return p.styles.Title.Render(title), image.Rectangle{}
 	}
 	dismissWidth := ansi.StringWidth(dismiss)
 	if dismissWidth >= width {
-		return p.styles.Title.Render(title)
+		return p.styles.Title.Render(title), image.Rectangle{}
 	}
 	title = ansi.Truncate(title, max(1, width-dismissWidth-1), "…")
 	gap := max(1, width-ansi.StringWidth(title)-dismissWidth)
+	x := ansi.StringWidth(title) + gap
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		p.styles.Title.Render(title),
 		strings.Repeat(" ", gap),
 		p.styles.Dismiss.Render(dismiss),
-	)
+	), image.Rect(x, 0, x+dismissWidth, 1)
 }
 
 func (p *Panel) footer(width int, left, right string) string {
@@ -245,14 +269,15 @@ func (p *Panel) footer(width int, left, right string) string {
 }
 
 // compact renders the compact form, or the one-line fallback when even that
-// does not fit. It reports the compact body width, 0 for the fallback.
-func (p *Panel) compact(width, height int, content PanelContent) (string, int) {
+// does not fit.
+func (p *Panel) compact(width, height int, content PanelContent) PanelLayout {
 	tiny := content.TinyMessage
 	if tiny == "" {
 		tiny = content.CompactTitle
 	}
+	fallback := PanelLayout{View: p.styles.Compact.Render(ansi.Truncate(tiny, width, ""))}
 	if height < 3 || width < 20 {
-		return p.styles.Compact.Render(ansi.Truncate(tiny, width, "")), 0
+		return fallback
 	}
 
 	title := content.CompactTitle
@@ -270,9 +295,16 @@ func (p *Panel) compact(width, height int, content PanelContent) (string, int) {
 	if message == "" {
 		message = tiny
 	}
-	candidate := p.styles.Compact.Width(compactWidth).Render(title + "\n\n" + message)
-	if lipgloss.Width(candidate) <= width && lipgloss.Height(candidate) <= height {
-		return candidate, compactWidth
+	frame := p.styles.Compact
+	candidate := frame.Width(compactWidth).Render(title + "\n\n" + message)
+	if lipgloss.Width(candidate) > width || lipgloss.Height(candidate) > height {
+		return fallback
 	}
-	return p.styles.Compact.Render(ansi.Truncate(tiny, width, "")), 0
+	// The message ends the form; the title above it may wrap.
+	x := frame.GetBorderLeftSize() + frame.GetPaddingLeft()
+	bottom := lipgloss.Height(candidate) - frame.GetBorderBottomSize() - frame.GetPaddingBottom()
+	return PanelLayout{
+		View: candidate,
+		Body: image.Rect(x, bottom-lipgloss.Height(message), x+compactWidth, bottom),
+	}
 }
