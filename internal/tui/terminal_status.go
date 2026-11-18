@@ -76,6 +76,9 @@ func (m *Model) terminalView(view tea.View) tea.View {
 	if m.workspaceDisplayPath != "" {
 		view.WindowTitle += " | " + ansi.Truncate(escape.SingleLine(filepath.Base(m.workspaceDisplayPath)), 80, "…")
 	}
+	if m.state.Title != "" {
+		view.WindowTitle += " | " + ansi.Truncate(escape.SingleLine(m.state.Title), 80, "…")
+	}
 	if status.State == ansi.ProgramStateWorking {
 		// Value is ignored for indeterminate progress. Changing it once a
 		// second refreshes Ghostty's progress timeout through the renderer.
