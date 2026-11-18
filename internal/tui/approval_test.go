@@ -599,7 +599,7 @@ func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
 			for range approvalChoices {
 				model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 				plain := ansi.Strip(model.frame.promptView)
-				focused := approvalChoices[model.approvals[model.shown.callID()].panel.selected]
+				focused := approvalChoices[model.approvals[model.shown.callID()].panel.choices.Selected]
 				hasDisclaimer := strings.Contains(plain, "Full access skips")
 				if focused.fullAccess() != hasDisclaimer {
 					t.Fatalf("focused=%q fullAccess=%v disclaimer-shown=%v:\n%s", focused.label, focused.fullAccess(), hasDisclaimer, plain)
@@ -634,33 +634,27 @@ func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
 	}
 }
 
-// TestApprovalFocusCycleNeverLandsOnAHiddenChoice guards the safety bug the
-// plan calls out explicitly: at a narrow width "Allow for session" is
-// dropped from the row, so it must also leave the keyboard focus cycle.
-// Cycling past the end more times than there are visible choices must never
-// land the cursor on it.
-func TestApprovalFocusCycleNeverLandsOnAHiddenChoice(t *testing.T) {
-	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(newApprovalTool())
-	if err != nil {
-		t.Fatal(err)
-	}
-	model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
-	awaitApproval(t, model, approvalMinWidth)
-
-	panel := model.approvals[model.shown.callID()].panel
-	// Cycle past the end more times than there are visible choices at this
-	// width (3, per the geometry in approval.go): a cycle with no notion of
-	// visibility would eventually land on the hidden "Allow for session".
-	for range 20 {
-		_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
-		if !slices.Contains(panel.visible, panel.selected) {
-			t.Fatalf("focus landed on a hidden choice: selected=%d visible=%v", panel.selected, panel.visible)
+// At a narrow width "Allow for session" gives way; the keyboard must never
+// answer with it unseen.
+func TestApprovalNeverAnswersWithAHiddenChoice(t *testing.T) {
+	for presses := range approvalChoices {
+		tools, err := agent.NewToolSet(newApprovalTool())
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if panel.grant == grantSession {
-		t.Fatal("enter on a hidden choice granted a session-wide allow")
+		model := New(agent.New(&approvalBackend{t: t}, agent.Config{}), Config{Tools: tools})
+		awaitApproval(t, model, approvalMinWidth)
+		panel := model.approvals[model.shown.callID()].panel
+		if strings.Contains(model.frame.promptView, "Session") {
+			t.Fatal("fixture: Allow for session is drawn at this width")
+		}
+		for range presses {
+			model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+		}
+		model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if panel.decision == "" || panel.grant == grantSession {
+			t.Fatalf("enter after %d presses: decision %q, grant %d", presses, panel.decision, panel.grant)
+		}
 	}
 }
 
@@ -747,13 +741,15 @@ func TestApprovalCompactFormKeepsFocusOnEveryChoice(t *testing.T) {
 			model.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 
 			panel := model.approvals[model.shown.callID()].panel
-			if !slices.Equal(panel.visible, allChoiceIndices()) {
-				t.Fatalf("visible = %v, want every choice in the compact form", panel.visible)
+			for _, choice := range approvalChoices {
+				if plain := ansi.Strip(model.frame.promptView); !strings.Contains(plain, " "+choice.compactLabel+" ") {
+					t.Fatalf("the compact form hides %q:\n%s", choice.compactLabel, plain)
+				}
 			}
 			for want := 1; want < len(approvalChoices); want++ {
 				model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-				if panel.selected != want {
-					t.Fatalf("selected = %d, want %d after %d tabs", panel.selected, want, want)
+				if panel.choices.Selected != want {
+					t.Fatalf("selected = %d, want %d after %d tabs", panel.choices.Selected, want, want)
 				}
 				plain := ansi.Strip(model.frame.promptView)
 				if approvalChoices[want].fullAccess() != strings.Contains(plain, "Full access") {

@@ -23,6 +23,18 @@ func newExitCardModel(t *testing.T, width, height int) *Model {
 	return m
 }
 
+// labelAt returns the screen cell where label starts in the drawn view.
+func labelAt(t *testing.T, m *Model, label string) image.Point {
+	t.Helper()
+	for y, line := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+		if x := strings.Index(line, label); x >= 0 {
+			return image.Pt(ansi.StringWidth(line[:x]), y)
+		}
+	}
+	t.Fatalf("%q is not drawn", label)
+	return image.Point{}
+}
+
 // openCard opens the exit card and lays the frame out, as an update does.
 func openCard(m *Model) {
 	m.openExitCard()
@@ -88,13 +100,13 @@ func TestExitCardRendersCopy(t *testing.T) {
 func TestExitCardHighlightFollowsSelection(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
 	openCard(m)
-	m.exitCard.selected = exitKeepWorking
+	m.exitCard.buttons.Selected = int(exitKeepWorking)
 	m.relayout()
 	buf := drawnView(t, m)
 	fill := hexOf(m.styles.ExitCard.Selected.GetBackground())
-	at := func(r image.Rectangle) image.Point { return r.Min.Add(m.frame.popup.Min) }
-	quit := buf.Lines[at(m.exitCard.quit).Y][at(m.exitCard.quit).X]
-	keep := buf.Lines[at(m.exitCard.keep).Y][at(m.exitCard.keep).X]
+	quitAt, keepAt := labelAt(t, m, "Quit"), labelAt(t, m, "Keep working")
+	quit := buf.Lines[quitAt.Y][quitAt.X]
+	keep := buf.Lines[keepAt.Y][keepAt.X]
 	if hexOf(keep.Style.Bg) != fill || hexOf(quit.Style.Bg) == fill {
 		t.Fatalf("the highlight fill did not move to Keep working: quit bg %s, keep bg %s, fill %s",
 			hexOf(quit.Style.Bg), hexOf(keep.Style.Bg), fill)
@@ -110,25 +122,13 @@ func TestExitCardCentered(t *testing.T) {
 	}
 }
 
-func TestExitCardHitRects(t *testing.T) {
+func TestExitCardDismissRect(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
 	openCard(m)
-	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
-	cells := func(r image.Rectangle) string {
-		r = r.Add(m.frame.popup.Min)
-		return string([]rune(lines[r.Min.Y])[r.Min.X:r.Max.X])
-	}
-	for name, tc := range map[string]struct {
-		rect image.Rectangle
-		want string
-	}{
-		"quit":    {m.exitCard.quit, " Quit "},
-		"keep":    {m.exitCard.keep, " Keep working "},
-		"dismiss": {m.exitCard.dismiss, "ESC x"},
-	} {
-		if got := cells(tc.rect); got != tc.want {
-			t.Errorf("%s rect %v covers %q, want %q", name, tc.rect, got, tc.want)
-		}
+	r := m.exitCard.dismiss.Add(m.frame.popup.Min)
+	line := strings.Split(ansi.Strip(m.View().Content), "\n")[r.Min.Y]
+	if got := ansi.Cut(line, r.Min.X, r.Max.X); got != "ESC x" {
+		t.Errorf("dismiss rect %v covers %q, want %q", r, got, "ESC x")
 	}
 }
 
@@ -314,8 +314,8 @@ func TestExitCardTabThenEnterKeepsWorking(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
 	openCard(m)
 	m.Update(exitCardKey("", tea.KeyTab))
-	if m.exitCard.selected != exitKeepWorking {
-		t.Fatalf("selected = %v after tab, want Keep working", m.exitCard.selected)
+	if exitChoice(m.exitCard.buttons.Selected) != exitKeepWorking {
+		t.Fatalf("selected = %v after tab, want Keep working", m.exitCard.buttons.Selected)
 	}
 	_, cmd := m.Update(exitCardKey("", tea.KeyEnter))
 	if m.exitCard.open || quitsIn(cmd) {
@@ -336,12 +336,12 @@ func TestExitCardArrowsAndShiftTabMoveHighlight(t *testing.T) {
 			m := newExitCardModel(t, 120, 40)
 			openCard(m)
 			m.Update(tc.key)
-			if m.exitCard.selected != exitKeepWorking {
-				t.Fatalf("selected = %v, want Keep working", m.exitCard.selected)
+			if exitChoice(m.exitCard.buttons.Selected) != exitKeepWorking {
+				t.Fatalf("selected = %v, want Keep working", m.exitCard.buttons.Selected)
 			}
 			m.Update(tc.key)
-			if m.exitCard.selected != exitQuit {
-				t.Fatalf("selected = %v, want Quit after a second press", m.exitCard.selected)
+			if exitChoice(m.exitCard.buttons.Selected) != exitQuit {
+				t.Fatalf("selected = %v, want Quit after a second press", m.exitCard.buttons.Selected)
 			}
 		})
 	}
@@ -371,8 +371,8 @@ func TestExitCardSpaceTypesButTabToggles(t *testing.T) {
 
 	openCard(m)
 	m.Update(exitCardKey("", tea.KeyTab))
-	if !m.exitCard.open || m.exitCard.selected != exitKeepWorking || m.editor.Value() != "a " {
-		t.Fatalf("tab: open %v, selected %v, editor %q", m.exitCard.open, m.exitCard.selected, m.editor.Value())
+	if !m.exitCard.open || exitChoice(m.exitCard.buttons.Selected) != exitKeepWorking || m.editor.Value() != "a " {
+		t.Fatalf("tab: open %v, selected %v, editor %q", m.exitCard.open, m.exitCard.buttons.Selected, m.editor.Value())
 	}
 }
 
@@ -447,28 +447,32 @@ func TestExitCardClicks(t *testing.T) {
 			t.Fatal("fixture shows no jump-to-latest control")
 		}
 		openCard(m)
-		card := m.frame.popup.Min
-		if m.exitCard.quit.Empty() || m.frame.follow.Overlaps(image.Rect(0, card.Y+m.exitCard.dismiss.Min.Y, m.width, card.Y+m.exitCard.quit.Max.Y)) {
-			t.Fatalf("fixture card %+v overlaps the control %v", m.exitCard, m.frame.follow)
+		if m.frame.follow.Overlaps(m.frame.popup) {
+			t.Fatalf("fixture card %v overlaps the control %v", m.frame.popup, m.frame.follow)
 		}
 		return m
 	}
 
+	// Quit starts selected, so one click quits.
 	m := open()
-	_, cmd := m.Update(clickAt(m.exitCard.quit.Min.Add(m.frame.popup.Min)))
+	_, cmd := m.Update(clickAt(labelAt(t, m, "Quit")))
 	if !quitsIn(cmd) {
 		t.Fatal("click on Quit did not quit")
 	}
 
-	for name, pick := range map[string]func(*Model) image.Rectangle{
-		"keep":    func(m *Model) image.Rectangle { return m.exitCard.keep },
-		"dismiss": func(m *Model) image.Rectangle { return m.exitCard.dismiss },
-	} {
-		m := open()
-		_, cmd := m.Update(clickAt(pick(m).Min.Add(m.frame.popup.Min)))
-		if m.exitCard.open || quitsIn(cmd) {
-			t.Fatalf("click on %s: open %v, quit %v", name, m.exitCard.open, quitsIn(cmd))
-		}
+	// A first click on Keep working selects it; the next one presses it.
+	m = open()
+	keep := labelAt(t, m, "Keep working")
+	if _, cmd := m.Update(clickAt(keep)); !m.exitCard.open || quitsIn(cmd) || exitChoice(m.exitCard.buttons.Selected) != exitKeepWorking {
+		t.Fatalf("first click on Keep working: open %v, quit %v, selected %v", m.exitCard.open, quitsIn(cmd), m.exitCard.buttons.Selected)
+	}
+	if _, cmd := m.Update(clickAt(keep)); m.exitCard.open || quitsIn(cmd) {
+		t.Fatalf("second click on Keep working: open %v, quit %v", m.exitCard.open, quitsIn(cmd))
+	}
+
+	m = open()
+	if _, cmd := m.Update(clickAt(m.exitCard.dismiss.Min.Add(m.frame.popup.Min))); m.exitCard.open || quitsIn(cmd) {
+		t.Fatalf("click on ESC x: open %v, quit %v", m.exitCard.open, quitsIn(cmd))
 	}
 
 	m = open()
@@ -496,7 +500,7 @@ func TestExitCardIgnoresSecondaryClicks(t *testing.T) {
 	for _, button := range []tea.MouseButton{tea.MouseRight, tea.MouseMiddle} {
 		m := newExitCardModel(t, 120, 40)
 		openCard(m)
-		at := m.exitCard.quit.Min.Add(m.frame.popup.Min)
+		at := labelAt(t, m, "Quit")
 		_, cmd := m.Update(tea.MouseClickMsg(tea.Mouse{X: at.X, Y: at.Y, Button: button}))
 		if !m.exitCard.open || quitsIn(cmd) {
 			t.Fatalf("button %v on Quit: open %v, quit %v", button, m.exitCard.open, quitsIn(cmd))
@@ -531,7 +535,7 @@ func TestExitCardOpenClearsSelection(t *testing.T) {
 func TestExitCardLeavesNoPopupWhenNotDrawn(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
 	openCard(m)
-	if m.exitCard.quit.Empty() || m.frame.popup.Empty() {
+	if m.exitCard.dismiss.Empty() || m.frame.popup.Empty() {
 		t.Fatal("fixture laid out no card")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 6, Height: 4})

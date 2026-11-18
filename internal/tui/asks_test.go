@@ -82,9 +82,9 @@ func TestApprovalsDockOneAtATimeInTranscriptOrder(t *testing.T) {
 
 	m.syncApprovals([]agent.Block{b})
 	docked := m.prompt().(*approvalPrompt)
-	docked.selected = 2
+	docked.choices.Selected = 2
 	m.syncApprovals([]agent.Block{a, b, c})
-	if m.prompt() != docked || docked.selected != 2 {
+	if m.prompt() != docked || docked.choices.Selected != 2 {
 		t.Fatal("a later update replaced or reset the docked approval")
 	}
 	m.relayout()
@@ -94,8 +94,8 @@ func TestApprovalsDockOneAtATimeInTranscriptOrder(t *testing.T) {
 
 	m.syncApprovals([]agent.Block{a, c})
 	next := m.prompt().(*approvalPrompt)
-	if next.block.ToolCallID() != "a" || next.selected != 0 {
-		t.Fatalf("docked %q with selection %d, want a fresh prompt for the earliest call", next.block.ToolCallID(), next.selected)
+	if next.block.ToolCallID() != "a" || next.choices.Selected != 0 {
+		t.Fatalf("docked %q with selection %d, want a fresh prompt for the earliest call", next.block.ToolCallID(), next.choices.Selected)
 	}
 	m.syncApprovals(nil)
 	if m.prompt() != nil {
