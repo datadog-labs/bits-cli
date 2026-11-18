@@ -78,6 +78,11 @@ func (p *directExecProcess) Terminate() error {
 	return signalExecProcessGroup(p.command.Process.Pid, syscall.SIGTERM)
 }
 
+// Kill signals the whole group, so a process that leaves it, like a daemon
+// calling setsid, escapes.
+// NOTE: after a shell that exited on its own is reaped, its group keeps the
+// ID while a member lives; an empty group is gone unless a new process
+// reused the ID in between.
 func (p *directExecProcess) Kill() error {
 	return signalExecProcessGroup(p.command.Process.Pid, syscall.SIGKILL)
 }

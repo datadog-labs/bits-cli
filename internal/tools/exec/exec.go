@@ -460,6 +460,13 @@ func (s *ExecService) supervise(ctx context.Context, c *execCommand, process exe
 			result = terminateAndWait(process, waited)
 		}
 	}
+	if err == nil {
+		// A command ends with its shell: what it left behind, such as
+		// `server &`, would otherwise run untracked and outlive Bits. A
+		// stopped command's descendants instead got terminateAndWait's grace.
+		// Like there, nothing can act on a failure.
+		_ = process.Kill()
+	}
 	status := statusForProcess(result)
 	if err != nil {
 		status = statusForContext(err)

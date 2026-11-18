@@ -3,6 +3,7 @@
 package exec
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"os"
@@ -278,69 +279,48 @@ func TestExecServiceUnixCallerCancellation(t *testing.T) {
 	}
 }
 
-func TestExecServiceUnixCancellationKillsSurvivingGroupDescendant(t *testing.T) {
-	dir := t.TempDir()
-	service := newUnixTestExecService(4096)
-	ctx, cancel := context.WithCancel(context.Background())
-	outcomes := make(chan ExecOutcome, 1)
-	go func() {
-		outcomes <- service.run(ctx, ExecRequest{
-			// The direct shell uses the default TERM action. Its background
-			// child ignores TERM and redirects all descriptors away from the
-			// captured pipes, so direct-child Wait can finish during grace.
-			Command: `(trap '' TERM; while :; do printf x >> descendant.alive; sleep 0.02; done) </dev/null >/dev/null 2>&1 & printf '%s' "$!" > descendant.pid; wait`,
-			CWD:     dir,
+// A descendant left in the command's group stops with the command, whether
+// the caller cancels it or the shell exits on its own.
+func TestExecServiceUnixStopsSurvivingGroupDescendant(t *testing.T) {
+	// The background child ignores TERM and keeps none of the captured pipes,
+	// so direct-child Wait does not wait on it. It holds the watch from the
+	// fork on; the shell writes its pid and lets go.
+	const descendant = `exec 3>watch; (trap '' TERM; while :; do sleep 0.02; done) </dev/null >/dev/null 2>&1 & echo $! >&3; exec 3>&-; `
+	for _, test := range []struct {
+		name    string
+		command string
+		cancel  bool
+		want    ExecStatus
+	}{
+		{name: "cancellation", command: descendant + "wait", cancel: true, want: ExecCancelled},
+		{name: "shell exit", command: descendant, want: ExecSucceeded}, // like `server &`
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			watch := watchProcesses(t, dir)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			outcomes := make(chan ExecOutcome, 1)
+			go func() {
+				outcomes <- newUnixTestExecService(4096).run(ctx, ExecRequest{Command: test.command, CWD: dir})
+			}()
+			pid := watch.pid(t)
+			t.Cleanup(func() {
+				select {
+				case <-watch.closed: // exited: its pid may be reused
+				default:
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+				}
+			})
+			if test.cancel {
+				cancel()
+			}
+			if outcome := <-outcomes; outcome.Status != test.want {
+				t.Fatalf("outcome = %+v, want %s", outcome, test.want)
+			}
+			watch.exited(t)
 		})
-	}()
-
-	pidPath := filepath.Join(dir, "descendant.pid")
-	pid, err := waitForPIDFile(pidPath, time.Second)
-	if err != nil {
-		cancel()
-		<-outcomes
-		t.Fatal(err)
 	}
-	cleanupNeeded := true
-	t.Cleanup(func() {
-		if cleanupNeeded {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
-		}
-	})
-	markerPath := filepath.Join(dir, "descendant.alive")
-	if err := waitForNonEmptyFile(markerPath, time.Second); err != nil {
-		cancel()
-		<-outcomes
-		t.Fatal(err)
-	}
-
-	cancel()
-	var outcome ExecOutcome
-	select {
-	case outcome = <-outcomes:
-	case <-time.After(2 * time.Second):
-		_ = syscall.Kill(pid, syscall.SIGKILL)
-		t.Fatal("cancelled command did not return")
-	}
-	if outcome.Status != ExecCancelled || !errors.Is(outcome.Err, context.Canceled) {
-		t.Fatalf("outcome = %+v, want caller cancellation", outcome)
-	}
-	before, err := os.Stat(markerPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(250 * time.Millisecond)
-	after, err := os.Stat(markerPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.Size() != before.Size() {
-		t.Fatalf("descendant pid %d survived process-group cleanup: marker grew from %d to %d bytes",
-			pid, before.Size(), after.Size())
-	}
-	// The activity marker proves the process is no longer executing. Avoid
-	// signalling its numeric PID again after success, when it may be reaped
-	// and reused before test cleanup runs.
-	cleanupNeeded = false
 }
 
 func TestExecServiceUnixReapsDirectChild(t *testing.T) {
@@ -369,33 +349,68 @@ func newUnixTestExecService(outputLimit int) *ExecService {
 	})
 }
 
-func waitForPIDFile(path string, timeout time.Duration) (int, error) {
-	deadline := time.Now().Add(timeout)
-	for {
-		contents, err := os.ReadFile(path)
-		if err == nil {
-			if pid, parseErr := strconv.Atoi(strings.TrimSpace(string(contents))); parseErr == nil && pid > 0 {
-				return pid, nil
-			}
-		}
-		if time.Now().After(deadline) {
-			return 0, errors.New("descendant pid file was not populated")
-		}
-		time.Sleep(time.Millisecond)
-	}
+// processWatch follows the processes holding a FIFO a command opens with
+// `exec 3>watch`: each line written to fd 3 arrives in order, and closed
+// closes once every holder has exited, because a dying process's descriptors
+// close. Blocking reads replace polling for a pid or for a process to die.
+type processWatch struct {
+	lines  chan string
+	closed chan struct{}
 }
 
-func waitForNonEmptyFile(path string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		info, err := os.Stat(path)
-		if err == nil && info.Size() > 0 {
-			return nil
+func watchProcesses(t *testing.T, dir string) *processWatch {
+	t.Helper()
+	path := filepath.Join(dir, "watch")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w := &processWatch{lines: make(chan string, 4), closed: make(chan struct{})}
+	go func() {
+		defer close(w.closed)
+		f, err := os.Open(path) // blocks until the command opens it
+		if err != nil {
+			return
 		}
-		if time.Now().After(deadline) {
-			return errors.New("descendant activity marker was not populated")
+		defer func() { _ = f.Close() }()
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			w.lines <- scanner.Text()
 		}
-		time.Sleep(time.Millisecond)
+	}()
+	// A command that never opened the FIFO would leave the reader blocked.
+	t.Cleanup(func() {
+		if f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+			_ = f.Close()
+		}
+	})
+	return w
+}
+
+// pid reads the next line as a process ID.
+func (w *processWatch) pid(t *testing.T) int {
+	t.Helper()
+	select {
+	case line := <-w.lines:
+		pid, err := strconv.Atoi(line)
+		if err != nil {
+			t.Fatalf("watched line %q is not a pid", line)
+		}
+		return pid
+	case <-w.closed:
+		t.Fatal("watched processes exited before writing a pid")
+	case <-time.After(10 * time.Second):
+		t.Fatal("command did not write a pid")
+	}
+	return 0
+}
+
+// exited fails unless every watched process exits.
+func (w *processWatch) exited(t *testing.T) {
+	t.Helper()
+	select {
+	case <-w.closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a watched process is still running")
 	}
 }
 
@@ -416,18 +431,16 @@ func TestExecServiceUnixCommandRunsInNewSession(t *testing.T) {
 	service := newUnixTestExecService(4096)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	watch := watchProcesses(t, dir)
 	outcomes := make(chan ExecOutcome, 1)
 	go func() {
 		outcomes <- service.run(ctx, ExecRequest{
-			Command: `echo $$ > shell.pid; sleep 2`,
+			Command: `exec 3>watch; echo $$ >&3; exec 3>&-; sleep 2`,
 			CWD:     dir,
 		})
 	}()
 
-	pid, err := waitForPIDFile(filepath.Join(dir, "shell.pid"), time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pid := watch.pid(t)
 	sid, err := unix.Getsid(pid)
 	if err != nil {
 		t.Fatalf("getsid(%d): %v", pid, err)

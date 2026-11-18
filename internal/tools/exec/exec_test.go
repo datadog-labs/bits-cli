@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -357,6 +358,9 @@ type controlledExecProcess struct {
 	terminated      atomic.Bool
 	killed          atomic.Bool
 	waitReturned    atomic.Bool
+
+	mu                     sync.Mutex
+	terminatedAt, killedAt time.Time
 }
 
 func (p *controlledExecProcess) Wait() execProcessResult {
@@ -367,6 +371,9 @@ func (p *controlledExecProcess) Wait() execProcessResult {
 }
 
 func (p *controlledExecProcess) Terminate() error {
+	p.mu.Lock()
+	p.terminatedAt = time.Now()
+	p.mu.Unlock()
 	p.terminated.Store(true)
 	if !p.ignoreTerminate {
 		p.finish("terminated")
@@ -375,6 +382,9 @@ func (p *controlledExecProcess) Terminate() error {
 }
 
 func (p *controlledExecProcess) Kill() error {
+	p.mu.Lock()
+	p.killedAt = time.Now()
+	p.mu.Unlock()
 	p.killed.Store(true)
 	p.finish("killed")
 	return nil
@@ -567,6 +577,42 @@ func TestExecServiceYieldIncludesAdmission(t *testing.T) {
 	late := service.Start(context.Background(), ExecRequest{Command: "build", CWD: t.TempDir(), Timeout: yield}, yield)
 	if late.Status != ExecRunning || late.ID == "" {
 		t.Fatalf("late Start = %+v, want running at the yield", late)
+	}
+}
+
+// What a command leaves in its group is killed once it ends: at once when the
+// shell exits on its own, and only after the termination grace when it is
+// stopped, so descendants get to clean up.
+func TestExecServiceKillsLeftoversAfterTheGrace(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stopped=%t", stop), func(t *testing.T) {
+			// The shell exits on TERM, as most do.
+			process := &controlledExecProcess{waitStarted: make(chan struct{}), done: make(chan execProcessResult, 1)}
+			launcher := &recordingExecLauncher{
+				start: func(ExecPlan, io.Writer, io.Writer) (execProcess, error) { return process, nil },
+			}
+			service := testExecService(launcher, 1024)
+			defer service.Close()
+			started := service.Start(context.Background(), ExecRequest{Command: "run", CWD: t.TempDir()}, 0)
+			if stop {
+				if _, err := service.Stop(context.Background(), started.ID); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				process.finish("")
+				if _, err := service.Wait(context.Background(), started.ID, time.Hour); err != nil {
+					t.Fatal(err)
+				}
+			}
+			process.mu.Lock()
+			defer process.mu.Unlock()
+			if process.killedAt.IsZero() {
+				t.Fatal("leftovers were not killed")
+			}
+			if stop && process.killedAt.Sub(process.terminatedAt) < execTerminateGrace {
+				t.Fatalf("killed %s after TERM, before the %s grace", process.killedAt.Sub(process.terminatedAt), execTerminateGrace)
+			}
+		})
 	}
 }
 

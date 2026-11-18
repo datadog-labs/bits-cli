@@ -19,8 +19,7 @@ const (
 	execCommandDescription = "Runs a command in a non-interactive shell and returns its stdout, stderr, and exit status. " +
 		"A command still running after yield_ms keeps running in the background: the result then has its output so far and a command_id " +
 		"for wait_command and stop_command. It runs until it exits, timeout_ms elapses, or stop_command ends it; " +
-		"Bits also stops it when Bits exits or the conversation changes. " +
-		"Run servers and other long-lived processes directly, never with & or nohup: Bits supervises the command it starts, not processes it leaves behind."
+		"Bits also stops it when Bits exits or the conversation changes."
 	waitCommandDescription = "Waits up to wait_ms for a command exec_command left running to exit. " +
 		"Returns its output since the previous result and, once it exited, its exit status. Prefer long waits to frequent polling."
 	stopCommandDescription = "Stops a command exec_command left running and returns its remaining output and final status."
