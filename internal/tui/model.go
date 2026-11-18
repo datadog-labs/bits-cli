@@ -131,6 +131,10 @@ type Model struct {
 	approvals          map[string]*approvalAsk // mirrors the transcript, by call ID
 	toolUIs            []*toolAsk              // requests from the tools.UI channel
 	shown              ask
+	// drafting means the user writes a message over the docked shown ask,
+	// so the composer holds the keyboard. It resets whenever another ask
+	// shows.
+	drafting bool
 	// The prompt a slash command opened, shown when no ask is.
 	commandPrompt *commandPrompt
 

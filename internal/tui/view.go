@@ -188,7 +188,7 @@ func (m *Model) layout() frame {
 		free -= m.editor.Height()
 	}
 	if p != nil {
-		slot := components.Slot{Width: m.width, Height: promptRows(free - min(1, len(tasks))), Waiting: len(m.waitingAsks())}
+		slot := components.Slot{Width: m.width, Height: promptRows(free - min(1, len(tasks))), Waiting: len(m.waitingAsks()), Focused: !m.drafting}
 		if f.promptView, answerable = p.Layout(slot); f.promptView != "" {
 			free -= lipgloss.Height(f.promptView)
 		}
