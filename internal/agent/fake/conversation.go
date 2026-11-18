@@ -22,6 +22,11 @@ import (
 // titleRunes bounds a conversation title derived from its first message.
 const titleRunes = 60
 
+// generatedTitle stands in for the title the server generates after the
+// n-th conversation's first turn. Unlike a fallback title, it never matches
+// the prompt.
+func generatedTitle(n int) string { return "Fake generated title " + strconv.Itoa(n) }
+
 // conversation is one fake conversation. All fields are guarded by Fake.mu.
 type conversation struct {
 	id       string

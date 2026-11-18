@@ -63,6 +63,15 @@ func (e *emitter) text(typ, s string) error {
 	return nil
 }
 
+// title streams a title update, which carries no message.
+func (e *emitter) title(title string) error {
+	var ar assistant.AssistantResponse
+	ar.Data.Type = "assistant-response"
+	ar.Data.Attributes.ConversationID = e.convID
+	ar.Data.Attributes.ConversationTitle = title
+	return e.fn(ar)
+}
+
 func isSpaceByte(b byte) bool { return b == ' ' || b == '\t' || b == '\n' }
 
 // resp wraps one message in the response envelope the stream delivers.

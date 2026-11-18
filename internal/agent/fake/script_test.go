@@ -20,6 +20,9 @@ func send(t *testing.T, f *Fake, message any, opts assistant.SendOptions) ([]str
 	t.Helper()
 	var s summaries
 	_, err := f.Send(context.Background(), message, opts, func(ar assistant.AssistantResponse) error {
+		if ar.Data.Attributes.ConversationTitle != "" {
+			return nil // checked by TestConversationRoundTrip
+		}
 		s.add(ar.Data.Attributes.StructuredMessage)
 		return nil
 	})
@@ -56,6 +59,9 @@ func startSend(ctx context.Context, f *Fake, message any, opts assistant.SendOpt
 	b := &backgroundSend{changed: make(chan struct{}, 1), done: make(chan error, 1)}
 	go func() {
 		_, err := f.Send(ctx, message, opts, func(ar assistant.AssistantResponse) error {
+			if ar.Data.Attributes.ConversationTitle != "" {
+				return nil
+			}
 			b.mu.Lock()
 			b.out.add(ar.Data.Attributes.StructuredMessage)
 			b.mu.Unlock()
