@@ -25,6 +25,12 @@ type ask interface {
 	deliver() (tea.Cmd, bool)
 	// waiting reports whether the request still needs an answer.
 	waiting() bool
+	// drafting reports whether the user is writing a message instead, so the
+	// composer owns the keyboard and the prompt only the keys it still uses.
+	drafting() bool
+	// dock readies the ask as it shows; hasDraft says the composer holds a
+	// draft, which the user was writing.
+	dock(hasDraft bool)
 }
 
 // approvalAsk is one call the transcript lists as awaiting approval.
@@ -41,6 +47,15 @@ type approvalAsk struct {
 func (a *approvalAsk) callID() string            { return a.block.ToolCallID() }
 func (a *approvalAsk) prompt() components.Prompt { return a.panel }
 func (a *approvalAsk) waiting() bool             { return !a.answered && !a.settled }
+func (a *approvalAsk) drafting() bool            { return a.panel.drafting() }
+
+// dock opens drafting over a draft, so the Enter meant for the message cannot
+// answer.
+func (a *approvalAsk) dock(hasDraft bool) {
+	if hasDraft {
+		a.panel.draft()
+	}
+}
 
 func (a *approvalAsk) deliver() (tea.Cmd, bool) {
 	if a.answered || a.panel.decision == "" {
@@ -63,6 +78,8 @@ type toolAsk struct {
 func (t *toolAsk) callID() string            { return t.ui.Call.ID }
 func (t *toolAsk) prompt() components.Prompt { return t.form }
 func (t *toolAsk) waiting() bool             { return !t.done && t.ui.Context().Err() == nil }
+func (t *toolAsk) drafting() bool            { return false }
+func (t *toolAsk) dock(bool)                 {}
 
 func (t *toolAsk) deliver() (tea.Cmd, bool) {
 	answer, answered := t.form.Result()
@@ -95,7 +112,6 @@ func (m *Model) openToolUI(ui *tools.Request) {
 	}
 	form.SetStyles(m.styles)
 	m.toolUIs = append(m.toolUIs, &toolAsk{ui: ui, form: form})
-	m.editor.CloseMenu()
 	m.reshow()
 }
 
@@ -130,7 +146,6 @@ func (m *Model) syncApprovals(pending []agent.Block) {
 				return nil
 			},
 		}
-		m.editor.CloseMenu()
 	}
 	maps.DeleteFunc(m.approvals, func(id string, a *approvalAsk) bool {
 		a.settled = !listed[id]
@@ -155,7 +170,8 @@ func (m *Model) clearAsks() {
 	m.toolUIs, m.shown = nil, nil
 }
 
-// reshow keeps the current request or selects the earliest pending call.
+// reshow keeps the current request or docks the earliest pending call. A
+// docking ask that takes the keyboard closes the completion menu.
 // It also drops cancelled tool UIs.
 func (m *Model) reshow() {
 	m.toolUIs = slices.DeleteFunc(m.toolUIs, func(t *toolAsk) bool { return !t.waiting() })
@@ -163,8 +179,14 @@ func (m *Model) reshow() {
 		return
 	}
 	m.shown = nil
-	if waiting := m.waitingAsks(); len(waiting) > 0 {
-		m.shown = slices.MinFunc(waiting, m.compareAsks)
+	waiting := m.waitingAsks()
+	if len(waiting) == 0 {
+		return
+	}
+	m.shown = slices.MinFunc(waiting, m.compareAsks)
+	m.shown.dock(m.editor.Value() != "" || len(m.editor.Attachments()) > 0)
+	if !m.shown.drafting() {
+		m.editor.CloseMenu()
 	}
 }
 

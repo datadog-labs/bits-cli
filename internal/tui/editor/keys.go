@@ -11,6 +11,9 @@ const (
 	focusCount
 )
 
+// OnText reports whether keys go to the text rather than a chip or the queue.
+func (e *Editor) OnText() bool { return e.focus == focusText }
+
 // ControlKey gives editor controls precedence over the parent's Enter/Escape
 // actions. Completion routing runs first in the parent. Unhandled keys return
 // to the text, where normal editing and history bindings remain unchanged.

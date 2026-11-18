@@ -94,7 +94,7 @@ type focus int
 const (
 	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
 	focusExitCard                 // the "Exit Bits?" confirmation card
-	focusPrompt                   // a tool approval or a tool's UI is shown (see prompt)
+	focusPrompt                   // a tool approval or a tool's UI is shown (see prompt), unless the user drafts
 	focusPicker                   // the /resume conversation picker
 	focusStatus                   // the local /status document
 	focusPermissions              // the permissions picker
@@ -115,7 +115,7 @@ func (m *Model) focus() focus {
 		if m.mode == ModeChat && m.exitCard.open {
 			return focusExitCard
 		}
-		if m.prompt() != nil {
+		if m.prompt() != nil && (m.shown == nil || !m.shown.drafting()) {
 			return focusPrompt
 		}
 	}
@@ -396,10 +396,14 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if f := m.focus(); f == focusPrompt || (f == focusExitCard && m.prompt() != nil) {
-		// Paste, cursor blink, and the like belong to the prompt, never to the
-		// inert editor below it, even while the exit card covers the prompt.
-		cmd, _ := m.updatePrompt(msg)
-		return m, cmd
+		// Paste, cursor blink, and the like belong to the prompt, even while the
+		// exit card covers it, unless a paste starts a draft: the editor then
+		// takes the keyboard and the paste.
+		cmd, used := m.updatePrompt(msg)
+		if used || m.focus() != focusEditor {
+			return m, cmd
+		}
+		return m, tea.Batch(cmd, m.reconcileFocus(), m.updateEditorInput(msg))
 	}
 	if m.focus() == focusPicker {
 		return m, m.updateConversationPicker(msg)
@@ -410,18 +414,22 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.focus() == focusPermissions {
 		return m, nil
 	}
+	return m, m.updateEditorInput(msg)
+}
+
+// updateEditorInput gives the editor a paste, cursor blink, or other
+// editor-bound input. When the editor is not the focus it is blurred and
+// ignores these, showing no cursor.
+func (m *Model) updateEditorInput(msg tea.Msg) tea.Cmd {
 	if paste, ok := msg.(tea.PasteMsg); ok && m.focus() == focusEditor {
 		if handled, err := dropImages(m.editor, paste.Content); handled {
 			if err != nil {
-				return m, m.postNotice(noticeForError("", err))
+				return m.postNotice(noticeForError("", err))
 			}
-			return m, nil
+			return nil
 		}
 	}
-	// Paste, cursor blink, and other editor-bound input. When the editor is not
-	// the focus it is blurred and ignores these, showing no cursor.
-	cmd := m.editor.Update(msg)
-	return m, tea.Batch(cmd, m.syncCompletionSearches())
+	return tea.Batch(m.editor.Update(msg), m.syncCompletionSearches())
 }
 
 func (m *Model) openConversationInBrowser() tea.Cmd {
@@ -784,8 +792,9 @@ func (m *Model) stopStartup() {
 // handleKey routes a keypress to the surface that owns input. Global quit is
 // handled earlier in Update.
 //
-// Ctrl+O toggles tool blocks and Shift+PgUp/PgDn page chat from any chat focus.
-// PgUp/PgDn go to the focused prompt or transcript.
+// Ctrl+O toggles tool blocks and Shift+PgUp/PgDn page chat from any chat focus,
+// as Ctrl+X stops a shown prompt's tool round, or dismisses a command prompt,
+// even while the user drafts. PgUp/PgDn go to the focused prompt or transcript.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" && m.selection.active() {
 		m.selection.clear()
@@ -802,6 +811,15 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "shift+pgdown":
 			m.list.PageDown()
 			return m, nil
+		case "ctrl+x":
+			if m.shown != nil {
+				m.stopTools()
+				return m, nil
+			}
+			if m.commandPrompt != nil {
+				m.commandPrompt = nil // a command prompt has no tools to stop
+				return m, nil
+			}
 		}
 	}
 	switch m.focus() {
@@ -846,6 +864,17 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.syncCompletionSearches())
 	}
 
+	// A prompt the user drafts over keeps the keys it still uses while the
+	// text has the keys; a chip or the queue keeps its own.
+	if m.shown != nil && m.editor.OnText() {
+		return m, m.handlePromptKey(msg)
+	}
+	return m.editKey(msg)
+}
+
+// editKey handles a key for the composer itself: its controls, the offers,
+// submission, and editing.
+func (m *Model) editKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.editor.ControlKey(msg.String()) {
 		return m, nil
 	}
@@ -920,20 +949,18 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmd, m.syncCompletionSearches())
 }
 
-// handlePromptKey gives a key to the shown prompt; the inert editor never
-// sees it. ctrl+x stops the tool round the prompt belongs to, or dismisses a
-// command prompt.
+// handlePromptKey offers a key to the shown prompt first. A key it leaves
+// unused while the user drafts belongs to the editor, which then has the
+// keyboard.
 func (m *Model) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
-	if msg.String() == "ctrl+x" {
-		if m.shown == nil {
-			m.commandPrompt = nil // a command prompt has no tools to stop
-		} else {
-			m.stopTools()
-		}
-		return nil
+	cmd, used := m.updatePrompt(msg)
+	if used || m.focus() != focusEditor {
+		return cmd
 	}
-	cmd, _ := m.updatePrompt(msg)
-	return cmd
+
+	focusCmd := m.reconcileFocus()
+	_, editCmd := m.editKey(msg)
+	return tea.Batch(cmd, focusCmd, editCmd)
 }
 
 func (m *Model) resumePendingTools() tea.Cmd {

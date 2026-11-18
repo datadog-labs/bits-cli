@@ -97,7 +97,7 @@ func (m *Model) syncAnimationsAt(now time.Time) tea.Cmd {
 	switch m.mode {
 	case ModeChat:
 		wantSweep = m.borderSweepWanted()
-		wantActivity = m.transcriptAnimationWanted() || m.resumeAnimationWanted() || (wantSweep && m.editor.QueueLen() > 0) ||
+		wantActivity = m.transcriptAnimationWanted() || m.resumeAnimationWanted() || (m.animationsVisible() && m.editor.QueueAnimating()) ||
 			m.trayAnimationWanted()
 	case ModeConversations:
 		wantActivity = m.picker != nil && m.picker.Animating()

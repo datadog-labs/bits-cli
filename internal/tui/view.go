@@ -170,6 +170,8 @@ func (m *Model) layout() frame {
 
 	free := m.height - chatFooterHeight - chatComposerGapHeight
 	if !f.replaced {
+		// A docked prompt sizes around a composer that typing cannot grow.
+		m.editor.SetCompact(p != nil)
 		free -= m.editor.Height()
 	}
 	if p != nil {

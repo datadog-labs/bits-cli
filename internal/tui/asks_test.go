@@ -182,3 +182,40 @@ func TestAnsweredApprovalLeavesTheDock(t *testing.T) {
 		t.Fatalf("sent %v; the answered approval was asked again", *sent)
 	}
 }
+
+// An approval drafts only over a draft present when it docks: one created
+// beside a draft the user has cleared since opens on Allow.
+func TestApprovalDraftsOverTheDraftItDocksOver(t *testing.T) {
+	m := newShell()
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.editor.SetValue("fix the")
+	m.syncApprovals([]agent.Block{awaitingCall("a"), awaitingCall("b")})
+	sent := stubDecisions(m, func(int) bool { return true })
+	if m.focus() != focusEditor {
+		t.Fatal("the approval docked over a draft took the keyboard")
+	}
+	m.editor.SetValue("")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // answers a
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // b docked over an empty composer
+	if !slices.Equal(*sent, []agent.ApprovalDecision{agent.ApprovalAllowOnce, agent.ApprovalAllowOnce}) {
+		t.Fatalf("sent %v, want both allowed", *sent)
+	}
+}
+
+// A question takes the keyboard from a draft, so it closes the draft's
+// completion menu.
+func TestQuestionClosesTheCompletionMenu(t *testing.T) {
+	m := newShell()
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	for _, r := range "/sta" {
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if !m.editor.MenuOpen() {
+		t.Fatal("setup: typing a command did not open the menu")
+	}
+	m.openToolUI(questionRequest(t, "question"))
+	if dockedToolUI(m) == nil || m.editor.MenuOpen() {
+		t.Fatal("the docked question left the completion menu open")
+	}
+}

@@ -299,6 +299,20 @@ func (e *Editor) resizeTextarea() {
 	e.invalidateBody()
 }
 
+// SetCompact shows a single input row, scrolling longer drafts, so a draft
+// cannot grow into the rows a docked prompt needs.
+func (e *Editor) SetCompact(compact bool) {
+	rows := maxHeight
+	if compact {
+		rows = 1
+	}
+	if e.ta.MaxHeight == rows {
+		return
+	}
+	e.ta.MaxHeight = rows
+	e.resizeTextarea() // the textarea refits its height to the new cap
+}
+
 // SetPlaceholder sets the hint shown while the input is empty.
 func (e *Editor) SetPlaceholder(s string) {
 	if e.ta.Placeholder != s {

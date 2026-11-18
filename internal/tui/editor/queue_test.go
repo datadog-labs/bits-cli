@@ -103,7 +103,6 @@ func TestQueueStackKeepsOneTextRowWhileAnimating(t *testing.T) {
 	e.SetWidth(60)
 	long := HistoryEntry{Text: strings.Repeat("long prompt\n", 30), Attachments: []Attachment{{Type: "service", ID: "api", Label: "API"}}}
 	queue(e, false, long)
-	e.SetWorking(true)
 	e.SetActivityFrame(0)
 	first := ansi.Strip(e.QueueView(11))
 	if rows := strings.Split(first, "\n"); len(rows) != 5 || !strings.Contains(rows[1], "API") || !strings.Contains(rows[3], "…") {
