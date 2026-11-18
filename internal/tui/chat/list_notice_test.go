@@ -10,6 +10,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/browser"
 )
 
 func TestLocalNoticesStayBetweenAgentBlocks(t *testing.T) {
@@ -77,7 +78,8 @@ func TestTaskBlocksFollowTheirConversationBlocks(t *testing.T) {
 	}
 }
 
-// A link in a task update's markdown is a link, like one in assistant text.
+// A link in a task update's markdown is a link, like one in assistant text,
+// and an app route follows the web origin, even in blocks a render settled.
 func TestTaskUpdateLinksAreLinks(t *testing.T) {
 	l := NewList()
 	l.SetWidth(60)
@@ -85,20 +87,28 @@ func TestTaskUpdateLinksAreLinks(t *testing.T) {
 	update := agent.Block{
 		ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "u1", Kind: assistant.KindProgress}, Role: assistant.RoleAssistant,
 		Kind: assistant.KindProgress, Complete: true,
-		Progress: &assistant.ProgressPayload{Content: "I'm launching an **[investigation](https://app.datadoghq.com/inv/1)**"},
+		Progress: &assistant.ProgressPayload{Content: "I'm launching an **[investigation](/inv/1?tab=a#b)**\n\nStep one.\n\nStep two.\n\nStep three."},
 	}
 	l.SetTranscript([]agent.Block{update}, nil, nil)
-	for y := range 10 {
-		for x := range 60 {
-			if hit, ok := l.LinkAt(x, y); ok {
-				if hit.URL != "https://app.datadoghq.com/inv/1" || hit.BlockID != update.ID {
-					t.Fatalf("link = %+v", hit)
+	for _, tc := range []struct{ origin, want string }{
+		{"", "/inv/1?tab=a#b"},
+		{"https://acme.datadoghq.eu", "https://acme.datadoghq.eu/inv/1?tab=a#b"},
+	} {
+		l.SetLinks(browser.Links{Origin: tc.origin})
+		var hit LinkHit
+	scan:
+		for y := range 10 {
+			for x := range 60 {
+				if h, ok := l.LinkAt(x, y); ok {
+					hit = h
+					break scan
 				}
-				return
 			}
 		}
+		if hit.URL != tc.want || hit.BlockID != update.ID {
+			t.Fatalf("origin %q: link = %+v, want %q in:\n%s", tc.origin, hit, tc.want, ansi.Strip(l.Document()))
+		}
 	}
-	t.Fatalf("no link in the update:\n%s", ansi.Strip(l.Document()))
 }
 
 func TestNoticeRowsUseEditorBackground(t *testing.T) {

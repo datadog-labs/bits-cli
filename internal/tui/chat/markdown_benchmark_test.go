@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/datadog-labs/bits-cli/internal/browser"
 )
 
 var benchmarkMarkdown string
@@ -55,7 +57,7 @@ func BenchmarkMarkdownLinkedTable(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				var err error
-				benchmarkMarkdown, err = r.Render(src)
+				benchmarkMarkdown, err = r.Render(src, browser.Links{})
 				if err != nil {
 					b.Fatal(err)
 				}

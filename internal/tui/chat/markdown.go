@@ -18,6 +18,7 @@ import (
 	"charm.land/glamour/v2/ansi"
 	xansi "github.com/charmbracelet/x/ansi"
 
+	"github.com/datadog-labs/bits-cli/internal/browser"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
@@ -73,7 +74,7 @@ func (r *markdownRenderer) renderStreamed(src string) (string, error) {
 }
 
 func (r *markdownRenderer) renderDocument(src string) (string, error) {
-	out, err := r.term.Render(src)
+	out, err := r.term.Render(src, r.links)
 	if err != nil {
 		return "", err
 	}
@@ -163,11 +164,23 @@ func renderMarkdown(src string, width int, style ansi.StyleConfig) string {
 }
 
 type markdownRenderer struct {
+	links  browser.Links // resolves root-relative links
 	term   *markdownTerm
 	width  int
 	style  ansi.StyleConfig
 	ready  bool
 	prefix markdownPrefix
+}
+
+// SetLinks sets how root-relative links resolve and drops the prefix
+// rendered with the old setting, reporting whether it changed.
+func (r *markdownRenderer) SetLinks(links browser.Links) bool {
+	if links == r.links {
+		return false
+	}
+	r.links = links
+	r.prefix = markdownPrefix{}
+	return true
 }
 
 func (r *markdownRenderer) Render(src string, width int, style ansi.StyleConfig) string {
@@ -214,10 +227,10 @@ func newMarkdownTerm(width int, style ansi.StyleConfig) *markdownTerm {
 	return &markdownTerm{md: md, ansi: ar, options: options}
 }
 
-func (t *markdownTerm) Render(src string) (string, error) {
+func (t *markdownTerm) Render(src string, links browser.Links) (string, error) {
 	source := []byte(src)
 	doc := t.md.Parser().Parse(text.NewReader(source))
-	source, err := t.replaceLinks(doc, source)
+	source, err := t.replaceLinks(doc, source, links)
 	if err != nil {
 		return "", err
 	}
@@ -229,22 +242,22 @@ func (t *markdownTerm) Render(src string) (string, error) {
 }
 
 // Append rendered titles to source so existing node offsets stay valid.
-func (t *markdownTerm) replaceLinks(doc ast.Node, source []byte) ([]byte, error) {
-	var links []*ast.Link
+func (t *markdownTerm) replaceLinks(doc ast.Node, source []byte, links browser.Links) ([]byte, error) {
+	var nodes []*ast.Link
 	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		// Glamour reads these nodes as plain text, bypassing child rendering.
 		if entering && (n.Kind() == ast.KindImage || n.Kind() == astext.KindStrikethrough) {
 			return ast.WalkSkipChildren, nil
 		}
 		if l, ok := n.(*ast.Link); ok && entering {
-			links = append(links, l)
+			nodes = append(nodes, l)
 			return ast.WalkSkipChildren, nil
 		}
 		return ast.WalkContinue, nil
 	})
-	for _, l := range links {
+	for _, l := range nodes {
 		start := len(source)
-		title, err := t.title(l, source)
+		title, err := t.title(l, source, links)
 		if err != nil {
 			return nil, err
 		}
@@ -255,7 +268,7 @@ func (t *markdownTerm) replaceLinks(doc ast.Node, source []byte) ([]byte, error)
 	return source, nil
 }
 
-func (t *markdownTerm) title(l *ast.Link, source []byte) (string, error) {
+func (t *markdownTerm) title(l *ast.Link, source []byte, links browser.Links) (string, error) {
 	// Autolink titles must inherit the outer link's destination.
 	var autolinks []*ast.AutoLink
 	_ = ast.Walk(l, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -275,6 +288,10 @@ func (t *markdownTerm) title(l *ast.Link, source []byte) (string, error) {
 		return "", fmt.Errorf("unexpected Glamour link renderer: %T", element)
 	}
 	link.SkipHref = true
+	// The hyperlink must name the page itself: the terminal and native clicks
+	// both open it without the web app's origin.
+	// Goldmark keeps a destination's backslash escapes; the target has none.
+	link.URL = links.Resolve(string(util.UnescapePunctuations([]byte(link.URL))))
 	ctx := ansi.NewRenderContext(t.options)
 	// Recreate block styles so resets inside the title retain heading backgrounds.
 	var ancestors []ast.Node

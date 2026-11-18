@@ -12,6 +12,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/browser"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/escape"
 	"github.com/datadog-labs/bits-cli/internal/tui/textwrap"
@@ -165,6 +166,14 @@ func (l *List) SetWidth(w int) {
 	}
 	l.width = w
 	l.normalizeOffset()
+}
+
+// SetLinks sets how root-relative markdown links resolve and rerenders with
+// it.
+func (l *List) SetLinks(links browser.Links) {
+	if l.renderer.markdown.SetLinks(links) {
+		l.invalidateAll()
+	}
 }
 
 // SetHeight sets the visible height. It does not affect wrapping, so the cache

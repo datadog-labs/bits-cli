@@ -150,6 +150,42 @@ func TestConversationURLEncodesConversationID(t *testing.T) {
 	}
 }
 
+func TestLinksResolve(t *testing.T) {
+	links := Links{Origin: "https://acme.ap1.datadoghq.com", Workspace: "/Users/me/repo"}
+	for _, tc := range []struct {
+		links     Links
+		ref, want string
+	}{
+		{links, "/dashboard/abc?tile_focus=w%3A1#graph", "https://acme.ap1.datadoghq.com/dashboard/abc?tile_focus=w%3A1#graph"},
+		{links, "/", "https://acme.ap1.datadoghq.com/"},
+		{links, "/Users/me/repo/src/main%20v2.go#L10", "file:///Users/me/repo/src/main%20v2.go"},
+		{Links{Workspace: "/Users/me/My Repo"}, "/Users/me/My%20Repo/a.go", "file:///Users/me/My%20Repo/a.go"},
+		{links, "/logs?query=service%3A%2A#demo", "https://acme.ap1.datadoghq.com/logs?query=service%3A%2A#demo"},
+		{links, "/a%zz", "/a%zz"},
+		{links, "/Users/me/repo2/main.go", "https://acme.ap1.datadoghq.com/Users/me/repo2/main.go"},
+		{Links{Workspace: "/Users/me/repo"}, "/Users/me/repo/main.go", "file:///Users/me/repo/main.go"},
+		{Links{Workspace: "/Users/me/repo"}, "/logs", "/logs"},
+		{links, "https://app.datadoghq.com/logs", "https://app.datadoghq.com/logs"},
+		{links, "//evil.example/logs", "//evil.example/logs"},
+		{links, "src/main.go?plain=1#L3", "file:///Users/me/repo/src/main.go"},
+		{links, "./docs/a%20b.md", "file:///Users/me/repo/docs/a%20b.md"},
+		{links, "../../../etc/passwd", "../../../etc/passwd"},
+		{links, "/Users/me/repo/../../.ssh/config", "https://acme.ap1.datadoghq.com/Users/me/repo/../../.ssh/config"},
+		{links, "/Users/me/repo/./a/../b.go", "file:///Users/me/repo/b.go"},
+		{links, "..", ".."},
+		{Links{Origin: "https://acme.ap1.datadoghq.com"}, "src/main.go", "src/main.go"},
+		{Links{Workspace: `C:\repo`}, "src/main.go", "src/main.go"},
+		{links, "mailto:ops@example.com", "mailto:ops@example.com"},
+		{links, "?q=1", "?q=1"},
+		{links, "#section", "#section"},
+		{links, "file:///Users/me/repo/main.go", "file:///Users/me/repo/main.go"},
+	} {
+		if got := tc.links.Resolve(tc.ref); got != tc.want {
+			t.Errorf("%+v.Resolve(%q) = %q, want %q", tc.links, tc.ref, got, tc.want)
+		}
+	}
+}
+
 func TestLinksUseResolvedOrigin(t *testing.T) {
 	for _, origin := range []string{"https://demo.datadoghq.com", "https://acme.us3.datadoghq.com", "https://acme.staging.test"} {
 		got, err := ConversationURL(origin, "conversation-1")
