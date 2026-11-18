@@ -30,10 +30,23 @@ func TestRenameConversation(t *testing.T) {
 	if len(b.inputs) != 1 || b.inputs[0] != want {
 		t.Fatalf("inputs = %+v, want [%+v]", b.inputs, want)
 	}
+	if got := e.State().Title; got != "Prod outage" {
+		t.Fatalf("title = %q, want the new one", got)
+	}
+	const other = "87654321-4321-4321-4321-876543214321"
+	if err := e.RenameConversation(context.Background(), other, "Elsewhere"); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.State().Title; got != "Prod outage" {
+		t.Fatalf("title = %q after renaming another conversation", got)
+	}
 
 	b.err = errors.New("offline")
 	if err := e.RenameConversation(context.Background(), testConversationID, "x"); !errors.Is(err, b.err) {
 		t.Fatalf("err = %v, want the backend error", err)
+	}
+	if got := e.State().Title; got != "Prod outage" {
+		t.Fatalf("title = %q after a failed rename", got)
 	}
 }
 

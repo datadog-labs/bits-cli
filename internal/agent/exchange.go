@@ -40,6 +40,7 @@ type exchangeEvent struct {
 	// before it is made, so a turn cancelled earlier stays outside any round.
 	round        int
 	conversation string // server-assigned conversation ID
+	title        string // the conversation's newly saved title
 	message      *assistant.Message
 	execute      []ToolCall // a batch, dispatched at once
 	// err fails the turn at once, before run returns: the exchange cannot
@@ -104,11 +105,15 @@ func (x *roundsExchange) run(ctx context.Context, emit func(exchangeEvent) bool)
 func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.SendOptions, emit func(exchangeEvent) bool) ([]ToolCall, error) {
 	var calls []ToolCall
 	id, err := x.backend.Send(ctx, message, *opts, func(response assistant.AssistantResponse) error {
-		msg := response.Data.Attributes.StructuredMessage
-		if msg.Content.Type == assistant.ContentClientToolCall {
-			calls = append(calls, toolCallOf(msg.Content))
+		ev := exchangeEvent{title: response.Data.Attributes.ConversationTitle}
+		if ev.title == "" {
+			msg := response.Data.Attributes.StructuredMessage
+			if msg.Content.Type == assistant.ContentClientToolCall {
+				calls = append(calls, toolCallOf(msg.Content))
+			}
+			ev.message = &msg
 		}
-		if !emit(exchangeEvent{message: &msg}) {
+		if !emit(ev) {
 			return ctx.Err()
 		}
 		return nil

@@ -99,6 +99,7 @@ func TestLoadAndInstallConversation(t *testing.T) {
 	response := &assistant.ConversationHistoryResponse{}
 	response.Data.Type = "conversation-history-response"
 	response.Data.ID = "response-id-is-not-conversation-id"
+	response.Data.Attributes.Title = "Saved title"
 	response.Data.Attributes.Messages = []assistant.Message{
 		assistant.AssistantMessage("m1", assistant.TextContent("Hello")),
 		{Results: &assistant.Results{Usage: &assistant.Usage{TokensUsed: 42}}},
@@ -143,7 +144,7 @@ func TestLoadAndInstallConversation(t *testing.T) {
 		t.Fatal("install retained engine ownership")
 	}
 	if ev := <-events; ev.Kind != EventState || ev.Run != 0 || !reflect.DeepEqual(ev.State, e.State()) ||
-		ev.State.ConversationID != testConversationID || !reflect.DeepEqual(ev.State.Blocks, blocks) {
+		ev.State.ConversationID != testConversationID || ev.State.Title != "Saved title" || !reflect.DeepEqual(ev.State.Blocks, blocks) {
 		t.Fatalf("install published %+v, want the installed conversation outside any run", ev)
 	}
 	history := e.opts.MessageHistory

@@ -32,6 +32,7 @@ type ConversationListResult struct {
 // to the engine; a Conversation must only be installed once.
 type Conversation struct {
 	id           string
+	title        string
 	fork         ForkBoundary
 	transcript   *Transcript
 	tasks        []*task
@@ -108,6 +109,7 @@ func (e *Engine) LoadConversation(ctx context.Context, conversationID string) (*
 	}
 	conversation := conversationFromHistory(response.Data.Attributes.ForkedFrom, response.Data.Attributes.Messages)
 	conversation.id = conversationID
+	conversation.title = response.Data.Attributes.Title
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -130,6 +132,7 @@ func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversa
 // installConversation runs on the actor, while idle or restoring.
 func (e *Engine) installConversation(conversation *Conversation) {
 	e.opts.ConversationID = conversation.id
+	e.title = conversation.title
 	e.fork = conversation.fork
 	e.opts.MessageHistory = nil
 	e.resetContext()
@@ -261,7 +264,8 @@ type ConversationRenameBackend interface {
 	RenameConversation(context.Context, assistant.RenameConversationInput) error
 }
 
-// RenameConversation sets the title of a saved conversation.
+// RenameConversation sets the title of a saved conversation, and the state's
+// title when it is the current one.
 func (e *Engine) RenameConversation(ctx context.Context, conversationID, title string) error {
 	if !ValidConversationID(conversationID) {
 		return ErrInvalidConversationID
@@ -270,7 +274,16 @@ func (e *Engine) RenameConversation(ctx context.Context, conversationID, title s
 	if !ok {
 		return errors.New("backend does not support renaming conversations")
 	}
-	return backend.RenameConversation(ctx, assistant.RenameConversationInput{ConversationID: conversationID, Title: title})
+	if err := backend.RenameConversation(ctx, assistant.RenameConversationInput{ConversationID: conversationID, Title: title}); err != nil {
+		return err
+	}
+	e.do(func() {
+		if conversationID == e.opts.ConversationID && title != e.title {
+			e.title = title
+			e.publish()
+		}
+	})
+	return nil
 }
 
 // ForkBoundary anchors server provenance to the CLI's folded transcript.
