@@ -401,7 +401,7 @@ func TestPassthroughKindProducesBlock(t *testing.T) {
 	}
 }
 
-func TestTechnicalMarkersAreDroppedButUnknownContentIsRetained(t *testing.T) {
+func TestContentWithoutAViewIsDropped(t *testing.T) {
 	tr := NewTranscript()
 	technical := []assistant.Content{
 		{Type: assistant.ContentTurnStatus, TurnStatus: &assistant.TurnStatusPayload{Status: "ended"}},
@@ -409,20 +409,15 @@ func TestTechnicalMarkersAreDroppedButUnknownContentIsRetained(t *testing.T) {
 		{Type: assistant.ContentProviderCompaction, Compaction: &assistant.CompactionPayload{Summary: "private"}},
 		// A memory message without memories has nothing to show.
 		{Type: assistant.ContentMemoryContext, Memory: &assistant.MemoryContextPayload{}},
+		{Type: "future_content"},
+		{},
 	}
 	for i, content := range technical {
 		if block, ok := tr.AppendMessage(assistant.AssistantMessage("technical", content)); ok {
-			t.Fatalf("technical content %d produced block %+v", i, block)
+			t.Fatalf("content %d produced block %+v", i, block)
 		}
 	}
-	if block, ok := tr.AppendMessage(assistant.AssistantMessage("metadata", assistant.Content{})); ok {
-		t.Fatalf("metadata-only content produced block %+v", block)
-	}
-	unknown, ok := tr.AppendMessage(assistant.AssistantMessage("future", assistant.Content{Type: "future_content"}))
-	if !ok || unknown.Kind != assistant.KindUnknown {
-		t.Fatalf("unknown content = (%+v, %v), want safe fallback block", unknown, ok)
-	}
-	if blocks := tr.Blocks(); len(blocks) != 1 || blocks[0].Kind != assistant.KindUnknown {
+	if blocks := tr.Blocks(); len(blocks) != 0 {
 		t.Fatalf("transcript blocks = %+v", blocks)
 	}
 }

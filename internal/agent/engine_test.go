@@ -841,8 +841,8 @@ func TestRestoreEmitsSingleSnapshot(t *testing.T) {
 		t.Fatalf("events = %v, want one EventState, then EventDone", kinds(evs))
 	}
 	blocks := evs[0].State.Blocks
-	if len(blocks) != 3 || blocks[0].Kind != assistant.KindText || blocks[1].Kind != assistant.KindText || blocks[2].Kind != assistant.KindUnknown {
-		t.Fatalf("restored blocks = %+v, want text/text/unknown without technical markers", blocks)
+	if len(blocks) != 2 || blocks[0].Kind != assistant.KindText || blocks[1].Kind != assistant.KindText {
+		t.Fatalf("restored blocks = %+v, want text/text without markers or unknown content", blocks)
 	}
 }
 

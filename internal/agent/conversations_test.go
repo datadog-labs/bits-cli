@@ -122,13 +122,13 @@ func TestLoadAndInstallConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocks := conversation.transcript.Blocks()
-	if conversation.id != testConversationID || len(blocks) != 2 {
+	if conversation.id != testConversationID || len(blocks) != 1 {
 		t.Fatalf("loaded conversation = %+v", conversation)
 	}
 	if e.State().ConversationID != "old" || !reflect.DeepEqual(e.State().Blocks, before) {
 		t.Fatal("load mutated engine before installation")
 	}
-	if blocks[0].Markdown.Content != "Hello world" || blocks[1].Kind != assistant.KindUnknown {
+	if blocks[0].Markdown.Content != "Hello world" {
 		t.Fatalf("loaded blocks = %+v", blocks)
 	}
 	if e.OperationActive() {

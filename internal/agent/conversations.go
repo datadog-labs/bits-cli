@@ -223,8 +223,7 @@ func validateHistoryMessage(message assistant.Message) error {
 			return errors.New("internal content has no payload")
 		}
 	case assistant.KindUnknown:
-		// Future discriminators are retained as safe fallback labels. Their raw
-		// fields are intentionally unavailable to the renderer.
+		// Future discriminators are valid history; Transcript.fold drops them.
 	}
 	return nil
 }
