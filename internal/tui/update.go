@@ -87,7 +87,7 @@ func waitEvent(ch <-chan agent.Event) tea.Cmd {
 }
 
 // focus identifies which surface currently owns keyboard input. It is derived
-// from mode and turn state, never stored, so input routing and the editor's
+// from mode, turn state, and drafting, so input routing and the editor's
 // cursor cannot disagree about who is active.
 type focus int
 
@@ -115,7 +115,7 @@ func (m *Model) focus() focus {
 		if m.mode == ModeChat && m.exitCard.open {
 			return focusExitCard
 		}
-		if m.prompt() != nil && (m.shown == nil || !m.shown.drafting()) {
+		if m.prompt() != nil && !m.drafting {
 			return focusPrompt
 		}
 	}
@@ -400,6 +400,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// exit card covers it, unless a paste starts a draft: the editor then
 		// takes the keyboard and the paste.
 		cmd, used := m.updatePrompt(msg)
+		if _, paste := msg.(tea.PasteMsg); !used && paste {
+			m.draftOver()
+		}
 		if used || m.focus() != focusEditor {
 			return m, cmd
 		}
@@ -865,8 +868,12 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// A prompt the user drafts over keeps the keys it still uses while the
-	// text has the keys; a chip or the queue keeps its own.
+	// text has the keys; a chip or the queue keeps its own. Tab moves the
+	// keyboard back to the prompt.
 	if m.shown != nil && m.editor.OnText() {
+		if key := msg.String(); key == "tab" || key == "shift+tab" {
+			m.drafting = false
+		}
 		return m, m.handlePromptKey(msg)
 	}
 	return m.editKey(msg)
@@ -949,11 +956,14 @@ func (m *Model) editKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmd, m.syncCompletionSearches())
 }
 
-// handlePromptKey offers a key to the shown prompt first. A key it leaves
-// unused while the user drafts belongs to the editor, which then has the
-// keyboard.
+// handlePromptKey offers a key to the shown prompt first. Text it leaves
+// unused starts a draft over a docked prompt; a key it leaves unused while
+// the user drafts belongs to the editor.
 func (m *Model) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
 	cmd, used := m.updatePrompt(msg)
+	if !used && msg.Text != "" {
+		m.draftOver()
+	}
 	if used || m.focus() != focusEditor {
 		return cmd
 	}

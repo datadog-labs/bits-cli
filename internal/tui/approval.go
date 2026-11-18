@@ -29,9 +29,6 @@ const (
 	fullAccessDisclaimer = "Full access skips all approval requests. Use with caution."
 	// draftingHint replaces the disclaimer while the user writes a message.
 	draftingHint = "tab to choose"
-
-	// noChoice is the selection while the user drafts: nothing is highlighted.
-	noChoice = -1
 )
 
 // approvalGrant is the permissions change a choice makes before it answers
@@ -81,16 +78,15 @@ func (c approvalChoice) chip(style lipgloss.Style, compact bool) string {
 
 // approvalPrompt is the panel asking the user to allow one tool call. It owns
 // the highlighted action, the body scroll, and the decision; its approvalAsk
-// delivers that. A new prompt starts scrolled to the top, on the first action
-// unless the user is drafting.
+// delivers that. A new prompt starts scrolled to the top, on the first action.
 //
-// A user writing a message when the panel opens would otherwise answer it
-// with the Enter meant for the message. While they draft, nothing is
+// While the user drafts over it, the panel is not focused: nothing is
 // highlighted and the composer keeps the text keys, Enter included; the
-// prompt keeps tab, esc and paging. Tab picks a choice; typing drafts again.
+// prompt keeps tab, esc and paging, and tab picks a choice.
 type approvalPrompt struct {
 	block    agent.Block
-	selected int                    // index into approvalChoices, or noChoice
+	selected int                    // index into approvalChoices
+	focused  bool                   // whether the last Layout held the keyboard
 	visible  []int                  // choices the last Layout showed; empty until the first Layout
 	window   components.Window      // the body rows the last layout showed
 	decision agent.ApprovalDecision // "" until the user decides
@@ -116,18 +112,11 @@ func (a *approvalPrompt) SetStyles(theme styles.Theme) {
 	a.panel.SetStyles(theme.Approval.Panel)
 }
 
-func (a *approvalPrompt) drafting() bool { return a.selected == noChoice }
-func (a *approvalPrompt) draft()         { a.selected = noChoice }
-
-// Update moves the highlight, scrolls the body, or makes the decision. Typed
-// text and pastes start drafting and are left unused for the composer, as are
-// the composer's keys while drafting. The wheel scrolls the body; clicks are
-// left to text selection.
+// Update moves the highlight, scrolls the body, or makes the decision. Text,
+// pastes, and while unfocused the composer's keys are left unused for the
+// composer. The wheel scrolls the body; clicks are left to text selection.
 func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 	switch msg := msg.(type) {
-	case tea.PasteMsg:
-		a.draft()
-		return nil, false
 	case tea.MouseWheelMsg:
 		switch msg.Button {
 		case tea.MouseWheelUp:
@@ -140,12 +129,12 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "left":
-			if a.drafting() {
+			if !a.focused {
 				return nil, false // the composer's cursor
 			}
 			a.selected = a.cycle(-1)
 		case "right":
-			if a.drafting() {
+			if !a.focused {
 				return nil, false
 			}
 			a.selected = a.cycle(1)
@@ -160,15 +149,12 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 		case "esc":
 			a.decision = agent.ApprovalDeny
 		case "enter":
-			if a.drafting() {
+			if !a.focused {
 				return nil, false // sends the message
 			}
 			choice := approvalChoices[a.selected]
 			a.decision, a.grant = choice.decision, choice.grant
 		default:
-			if msg.Text != "" {
-				a.draft()
-			}
 			return nil, false
 		}
 		return nil, true
@@ -180,14 +166,14 @@ func (a *approvalPrompt) scroll(rows int) { a.window = a.window.Scrolled(rows) }
 
 // cycle moves the focus by delta among the choices the last Layout showed, so
 // the user can never focus and enter a control they cannot see. Before the
-// first Layout nothing has rendered yet, so every choice is in the cycle. From
-// drafting it lands on the first choice going forward, the last going back.
+// first Layout nothing has rendered yet, so every choice is in the cycle.
+// Unfocused, it lands on the first choice going forward, the last going back.
 func (a *approvalPrompt) cycle(delta int) int {
 	visible := a.visible
 	if len(visible) == 0 {
 		visible = allChoiceIndices()
 	}
-	if a.selected == noChoice {
+	if !a.focused {
 		if delta > 0 {
 			return visible[0]
 		}
@@ -203,6 +189,7 @@ func (a *approvalPrompt) cycle(delta int) int {
 // whole request fits; never in the one-line fallback. Layout keeps the body
 // window it showed, so scrolling clamps to what the last frame displayed.
 func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
+	a.focused = slot.Focused
 	width := slot.Width
 	block := a.block
 	prompt := block.Tool.Approval
@@ -293,7 +280,7 @@ func (a *approvalPrompt) fitChoices(width int) choiceRow {
 		}
 		row.visible = slices.DeleteFunc(row.visible, func(i int) bool { return i == drop })
 	}
-	if row.selected != noChoice && !slices.Contains(row.visible, row.selected) {
+	if !slices.Contains(row.visible, row.selected) {
 		row.selected = 0 // clamp toward Allow; a resize must never park the cursor on full access
 	}
 	return row
@@ -310,7 +297,7 @@ func (a *approvalPrompt) actions(width int) string {
 	// builder.go's approvalPanel).
 	disclaimer := ""
 	switch {
-	case choices.selected == noChoice:
+	case !a.focused:
 		disclaimer = a.theme.Approval.Detail.Render(ansi.Truncate(draftingHint, max(1, width), "…"))
 	case approvalChoices[choices.selected].fullAccess():
 		disclaimer = a.theme.Approval.Disclaimer.Render(ansi.Truncate(fullAccessDisclaimer, max(1, width), "…"))
@@ -324,7 +311,7 @@ func (a *approvalPrompt) renderChoiceRow(row choiceRow) string {
 	for n, i := range row.visible {
 		choice := approvalChoices[i]
 		style := sty.Action
-		if i == row.selected {
+		if a.focused && i == row.selected {
 			if choice.fullAccess() {
 				style = sty.FullAccess
 			} else {

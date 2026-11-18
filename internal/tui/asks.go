@@ -25,12 +25,6 @@ type ask interface {
 	deliver() (tea.Cmd, bool)
 	// waiting reports whether the request still needs an answer.
 	waiting() bool
-	// drafting reports whether the user is writing a message instead, so the
-	// composer owns the keyboard and the prompt only the keys it still uses.
-	drafting() bool
-	// dock readies the ask as it shows; hasDraft says the composer holds a
-	// draft, which the user was writing.
-	dock(hasDraft bool)
 }
 
 // approvalAsk is one call the transcript lists as awaiting approval.
@@ -47,15 +41,6 @@ type approvalAsk struct {
 func (a *approvalAsk) callID() string            { return a.block.ToolCallID() }
 func (a *approvalAsk) prompt() components.Prompt { return a.panel }
 func (a *approvalAsk) waiting() bool             { return !a.answered && !a.settled }
-func (a *approvalAsk) drafting() bool            { return a.panel.drafting() }
-
-// dock opens drafting over a draft, so the Enter meant for the message cannot
-// answer.
-func (a *approvalAsk) dock(hasDraft bool) {
-	if hasDraft {
-		a.panel.draft()
-	}
-}
 
 func (a *approvalAsk) deliver() (tea.Cmd, bool) {
 	if a.answered || a.panel.decision == "" {
@@ -78,8 +63,6 @@ type toolAsk struct {
 func (t *toolAsk) callID() string            { return t.ui.Call.ID }
 func (t *toolAsk) prompt() components.Prompt { return t.form }
 func (t *toolAsk) waiting() bool             { return !t.done && t.ui.Context().Err() == nil }
-func (t *toolAsk) drafting() bool            { return false }
-func (t *toolAsk) dock(bool)                 {}
 
 func (t *toolAsk) deliver() (tea.Cmd, bool) {
 	answer, answered := t.form.Result()
@@ -167,7 +150,7 @@ func (m *Model) dropToolUIs() {
 // clearAsks forgets every ask when the operation they belong to ends.
 func (m *Model) clearAsks() {
 	m.approvals = make(map[string]*approvalAsk)
-	m.toolUIs, m.shown = nil, nil
+	m.toolUIs, m.shown, m.drafting = nil, nil, false
 }
 
 // reshow keeps the current request or docks the earliest pending call. A
@@ -178,16 +161,31 @@ func (m *Model) reshow() {
 	if m.shown != nil && m.shown.waiting() {
 		return
 	}
-	m.shown = nil
+	// The next ask keeps the keyboard where the user left it. One that docks
+	// with none before it docks drafting over a draft, so the Enter meant for
+	// the message cannot answer it.
+	drafting := m.drafting
+	if m.shown == nil {
+		drafting = m.editor.Value() != "" || len(m.editor.Attachments()) > 0
+	}
+	m.shown, m.drafting = nil, false
 	waiting := m.waitingAsks()
 	if len(waiting) == 0 {
 		return
 	}
 	m.shown = slices.MinFunc(waiting, m.compareAsks)
-	m.shown.dock(m.editor.Value() != "" || len(m.editor.Attachments()) > 0)
-	if !m.shown.drafting() {
+	if drafting {
+		m.draftOver()
+	}
+	if !m.drafting {
 		m.editor.CloseMenu()
 	}
+}
+
+// draftOver hands the keyboard to the composer if the shown ask is docked,
+// so the user can write a message while it waits.
+func (m *Model) draftOver() {
+	m.drafting = m.shown != nil && m.shown.prompt().Placement() == components.Docked
 }
 
 // waitingAsks returns the asks that still need the user, in no order.

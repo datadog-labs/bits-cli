@@ -166,6 +166,7 @@ func TestAnsweredApprovalLeavesTheDock(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	pending := []agent.Block{awaitingCall("a")}
 	m.syncApprovals(pending)
+	m.relayout()
 	sent := stubDecisions(m, func(sent int) bool { return sent > 1 }) // the first attempt fails
 
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -189,17 +190,24 @@ func TestApprovalDraftsOverTheDraftItDocksOver(t *testing.T) {
 	m := newShell()
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.editor.SetValue("fix the")
-	m.syncApprovals([]agent.Block{awaitingCall("a"), awaitingCall("b")})
+	m.syncApprovals([]agent.Block{awaitingCall("a"), awaitingCall("b"), awaitingCall("c")})
 	sent := stubDecisions(m, func(int) bool { return true })
 	if m.focus() != focusEditor {
 		t.Fatal("the approval docked over a draft took the keyboard")
 	}
-	m.editor.SetValue("")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape}) // denies a while drafting
+	if m.focus() != focusEditor {
+		t.Fatal("the next approval took the keyboard from the draft")
+	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // answers a
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // b docked over an empty composer
-	if !slices.Equal(*sent, []agent.ApprovalDecision{agent.ApprovalAllowOnce, agent.ApprovalAllowOnce}) {
-		t.Fatalf("sent %v, want both allowed", *sent)
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // answers b from the panel
+	if m.focus() != focusPrompt {
+		t.Fatal("the next approval gave the keyboard back to the draft the user left")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // answers c
+	want := []agent.ApprovalDecision{agent.ApprovalDeny, agent.ApprovalAllowOnce, agent.ApprovalAllowOnce}
+	if !slices.Equal(*sent, want) || m.editor.Value() != "fix the" {
+		t.Fatalf("sent %v with %q in the composer, want %v over the draft", *sent, m.editor.Value(), want)
 	}
 }
 
