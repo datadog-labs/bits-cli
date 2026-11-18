@@ -191,19 +191,30 @@ func TestCompactTokenCount(t *testing.T) {
 func TestFrameAtClassifiesEveryRow(t *testing.T) {
 	f := frame{
 		transcript:  image.Rect(0, 0, 10, 5),
+		follow:      image.Rect(2, 3, 8, 5),
 		prompt:      image.Rect(0, 5, 10, 8),
+		popup:       image.Rect(5, 6, 10, 9),
 		composerGap: image.Rect(0, 8, 10, 9),
 		composer:    image.Rect(0, 9, 10, 11),
 		footer:      image.Rect(0, 11, 10, 12),
 	}
-	for y, want := range map[int]region{
-		0: regionTranscript, 4: regionTranscript,
-		5: regionPrompt, 7: regionPrompt,
-		8: regionChrome, 11: regionChrome,
-		9: regionComposer, 10: regionComposer,
+	for _, tt := range []struct {
+		at     image.Point
+		region region
+		local  image.Point
+	}{
+		{image.Pt(3, 0), regionTranscript, image.Pt(3, 0)},
+		{image.Pt(1, 4), regionTranscript, image.Pt(1, 4)},
+		{image.Pt(3, 4), regionFollow, image.Pt(1, 1)},
+		{image.Pt(3, 5), regionPrompt, image.Pt(3, 0)},
+		{image.Pt(3, 7), regionPrompt, image.Pt(3, 2)},
+		{image.Pt(6, 7), regionPopup, image.Pt(1, 1)}, // the popup covers the prompt
+		{image.Pt(3, 8), regionChrome, image.Pt(3, 8)},
+		{image.Pt(3, 9), regionComposer, image.Pt(3, 0)},
+		{image.Pt(3, 11), regionChrome, image.Pt(3, 11)},
 	} {
-		if got := f.at(image.Pt(3, y)); got != want {
-			t.Errorf("row %d = %v, want %v", y, got, want)
+		if region, local := f.at(tt.at); region != tt.region || local != tt.local {
+			t.Errorf("%v = %v at %v, want %v at %v", tt.at, region, local, tt.region, tt.local)
 		}
 	}
 }

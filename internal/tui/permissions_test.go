@@ -128,6 +128,7 @@ func TestPermissionsAppliesDuringActiveTurn(t *testing.T) {
 	m.op = operation{kind: opTurn, run: 1}
 	m.chatPhase = chat.PhaseStreaming
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
+	m.relayout()
 	if m.mode != ModePermissions || !m.permissionConfirm {
 		t.Fatal("full access did not require confirmation during the turn")
 	}
@@ -170,6 +171,7 @@ func TestPermissionsSwitchToSkipReleasesPendingApproval(t *testing.T) {
 	m, backend := newPermissionsModel(t, agent.ModeManual)
 	awaitApproval(t, m, 80)
 	_, _ = m.dispatchCommand("permissions", "skip-permissions")
+	m.relayout()
 	if m.mode != ModePermissions || !m.permissionConfirm || m.engine.PermissionsMode() != agent.ModeManual {
 		t.Fatal("skip-permissions switched before confirmation")
 	}
@@ -301,6 +303,7 @@ func TestPermissionsPickerOverlaysConversation(t *testing.T) {
 	m, _ := newPermissionsModel(t, agent.ModeManual)
 	setConversationInput(m, "draft message remains visible")
 	_, _ = m.dispatchCommand("permissions", "")
+	m.relayout()
 	popup := m.permissionsView()
 	if lipgloss.Width(popup) >= m.width || lipgloss.Height(popup) >= m.height {
 		t.Fatalf("picker fills the terminal: %d×%d in %d×%d", lipgloss.Width(popup), lipgloss.Height(popup), m.width, m.height)

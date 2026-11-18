@@ -272,7 +272,7 @@ func (m *Model) quit() (tea.Model, tea.Cmd) {
 // engine events, conversation results, notices) are handled directly; keyboard,
 // mouse, and editor-bound input are routed by focus().
 func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.handleFollowMouse(msg) {
+	if mouse, ok := msg.(tea.MouseMsg); ok && m.handleFollowMouse(mouse) {
 		return m, nil
 	}
 	switch msg := msg.(type) {
@@ -470,12 +470,12 @@ func (m *Model) openBrowser(target, success string) tea.Cmd {
 
 func (m *Model) beginSelection(msg tea.MouseClickMsg) tea.Cmd {
 	// A completion menu is an editor overlay, not part of the chat document.
-	// Close it before taking the frame so the click selects the underlying rows.
+	// Dismiss it before taking the frame so the click selects the underlying rows.
 	if m.editor.MenuOpen() {
-		m.editor.CloseMenu()
+		m.editor.DismissMenu()
 	}
 	scope := selectionScopeLower
-	if m.frame.at(image.Pt(msg.X, msg.Y)) == regionTranscript {
+	if over, _ := m.frame.at(image.Pt(msg.X, msg.Y)); over == regionTranscript {
 		scope = selectionScopeTranscript
 	}
 	m.selection.beginClick(m.visibleSelectionFrame(scope), scope, msg.X, msg.Y, m.hasPendingAccordionToggle, time.Now())
@@ -547,8 +547,8 @@ func webLink(raw string) bool {
 
 func (m *Model) beginLinkClick(msg tea.MouseClickMsg) {
 	m.pendingLink = nil
-	if msg.Mod != 0 || m.frame.replaced || m.editor.MenuOpen() ||
-		m.frame.at(image.Pt(msg.X, msg.Y)) != regionTranscript {
+	over, _ := m.frame.at(image.Pt(msg.X, msg.Y))
+	if msg.Mod != 0 || m.frame.replaced || m.editor.MenuOpen() || over != regionTranscript {
 		return
 	}
 	hit, ok := m.list.LinkAt(msg.X, msg.Y)
@@ -569,10 +569,10 @@ func (m *Model) finishLinkClick(msg tea.MouseReleaseMsg) tea.Cmd {
 	wasSelecting := m.selection.selecting()
 	hadSelection := m.selection.selected()
 	cmd := m.finishSelection(msg)
+	over, _ := m.frame.at(image.Pt(msg.X, msg.Y))
 	if p == nil || msg.Button != tea.MouseLeft || msg.Mod != 0 ||
 		!wasSelecting || p.dragged || hadSelection || m.selection.selected() ||
-		p.epoch != m.conversationEpoch || m.frame.replaced || m.editor.MenuOpen() ||
-		m.frame.at(image.Pt(msg.X, msg.Y)) != regionTranscript {
+		p.epoch != m.conversationEpoch || m.frame.replaced || m.editor.MenuOpen() || over != regionTranscript {
 		return cmd
 	}
 	hit, ok := m.list.LinkAt(msg.X, msg.Y)
@@ -628,17 +628,22 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		m.pendingLink = nil
 		return nil
 	}
+	over, at := m.frame.at(pointAt(msg))
+	composer := over == regionComposer && m.focus() == focusEditor
 	switch msg := msg.(type) {
 	case tea.MouseMotionMsg:
-		m.list.SetPointer(msg.X, msg.Y)
-		if p, ok := m.inComposer(msg); ok {
-			m.editor.SetPointer(p.X, p.Y)
+		if over == regionPopup {
+			m.list.SetPointer(-1, -1) // the menu covers the rows under it
+		} else {
+			m.list.SetPointer(msg.X, msg.Y)
+		}
+		if composer {
+			m.editor.SetPointer(at.X, at.Y)
 		} else {
 			m.editor.SetPointer(-1, -1)
 		}
-		if p := pointAt(msg); p.In(m.frame.queue) {
-			p = p.Sub(m.frame.queue.Min)
-			m.editor.SetQueuePointer(p.X, p.Y)
+		if over == regionQueue {
+			m.editor.SetQueuePointer(at.X, at.Y)
 		} else {
 			m.editor.SetQueuePointer(-1, -1)
 		}
@@ -647,11 +652,16 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	case tea.MouseReleaseMsg:
 		return m.finishLinkClick(msg)
 	}
-	if m.frame.at(pointAt(msg)) == regionQueue {
-		p := pointAt(msg).Sub(m.frame.queue.Min)
+	if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft && over == regionPopup {
+		// Only the completion menu floats over the chat here; a click
+		// dismisses it rather than reaching what it covers.
+		m.editor.DismissMenu()
+		return nil
+	}
+	if over == regionQueue {
 		switch msg := msg.(type) {
 		case tea.MouseClickMsg:
-			if msg.Button == tea.MouseLeft && m.editor.ClickQueue(p.X, p.Y) {
+			if msg.Button == tea.MouseLeft && m.editor.ClickQueue(at.X, at.Y) {
 				return nil
 			}
 		case tea.MouseWheelMsg:
@@ -664,8 +674,8 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			return nil
 		}
 	}
-	if m.frame.at(pointAt(msg)) == regionPrompt {
-		if cmd, used := m.updatePrompt(m.frame.inPrompt(msg)); used {
+	if over == regionPrompt {
+		if cmd, used := m.updatePrompt(atPoint(msg, at)); used {
 			return cmd
 		}
 	}
@@ -679,7 +689,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		default:
 		}
 	case tea.MouseClickMsg:
-		if p, ok := m.inComposer(msg); ok && msg.Button == tea.MouseLeft && m.editor.Click(p.X, p.Y) {
+		if composer && msg.Button == tea.MouseLeft && m.editor.Click(at.X, at.Y) {
 			return nil
 		}
 		if msg.Button == tea.MouseLeft {
@@ -690,16 +700,6 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 	}
 	return nil
-}
-
-// inComposer returns the editor-local cell of a pointer event over the
-// composer while the editor owns input.
-func (m *Model) inComposer(msg tea.MouseMsg) (image.Point, bool) {
-	p := pointAt(msg)
-	if m.focus() != focusEditor || m.frame.at(p) != regionComposer {
-		return image.Point{}, false
-	}
-	return p.Sub(m.frame.composer.Min), true
 }
 
 // applyRunEvent folds an event of the operation's run, and ends the operation
@@ -1072,6 +1072,12 @@ func (m *Model) relayout() {
 	m.editor.SetMenuHeight(m.frame.inputTop())
 	m.list.SetHeight(m.frame.transcript.Dy())
 	m.list.SetHeader(m.headerView())
+	// Floating surfaces depend on the menu and transcript heights just set.
+	m.frame.followLabel, m.frame.follow = m.followTarget()
+	if m.frame.follow.Empty() {
+		m.follow = followControl{}
+	}
+	m.frame.popupView, m.frame.popup = m.layoutPopup()
 }
 
 // syncTranscript rebuilds presentation metadata after m.state changes.
