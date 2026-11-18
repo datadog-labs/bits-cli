@@ -638,7 +638,11 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 	over, at := m.frame.at(pointAt(msg))
+	// The composer acts on a click only if it held the keyboard as drawn.
 	composer := over == regionComposer && m.focus() == focusEditor
+	if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
+		m.focusOn(over)
+	}
 	switch msg := msg.(type) {
 	case tea.MouseMotionMsg:
 		if over == regionPopup {
@@ -685,6 +689,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 	if over == regionPrompt {
 		if cmd, used := m.updatePrompt(atPoint(msg, at)); used {
+			if _, click := msg.(tea.MouseClickMsg); click {
+				m.selection.clear() // the click went to a control, not the text
+			}
 			return cmd
 		}
 	}
@@ -709,6 +716,20 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// focusOn moves the keyboard to the composer or the docked prompt the user
+// clicked. Like a click on an unfocused window, that click only moves the
+// focus: what it lands on acts on the next one.
+func (m *Model) focusOn(over region) {
+	if over == regionComposer {
+		m.draftOver()
+	}
+	if over == regionPrompt {
+		// The completion menu belongs to the composer it leaves.
+		m.drafting = false
+		m.editor.CloseMenu()
+	}
 }
 
 // applyRunEvent folds an event of the operation's run, and ends the operation
