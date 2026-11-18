@@ -201,7 +201,7 @@ func TestKitchen(t *testing.T) {
 	}
 	for _, kind := range []assistant.ContentKind{
 		assistant.KindText, assistant.KindReasoning, assistant.KindToolCall, assistant.KindWidget,
-		assistant.KindDashboard, assistant.KindProgress, assistant.KindUnknown,
+		assistant.KindDashboard, assistant.KindProgress, assistant.KindMemory, assistant.KindUnknown,
 	} {
 		if !kinds[kind] {
 			t.Errorf("kitchen produced no %s block", kind)

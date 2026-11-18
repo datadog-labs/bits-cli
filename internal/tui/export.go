@@ -84,7 +84,7 @@ func exportTurn(block agent.Block, userLabel string) string {
 		case assistant.KindWidget:
 			return withSpeaker("Bits", chartPlaceholder(block.Widget))
 		case assistant.KindUnknown, assistant.KindReasoning, assistant.KindToolCall, assistant.KindToolResult,
-			assistant.KindDashboard, assistant.KindProgress, assistant.KindTurnMarker, assistant.KindStop, assistant.KindInternal:
+			assistant.KindDashboard, assistant.KindProgress, assistant.KindMemory, assistant.KindTurnMarker, assistant.KindStop, assistant.KindInternal:
 		}
 	case assistant.RoleSystem:
 	}

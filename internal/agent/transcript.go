@@ -167,6 +167,11 @@ func (t *Transcript) fold(msg assistant.Message) (Block, bool) {
 		return t.appendPassthrough(msg, kind, func(b *Block) { b.Dashboard = msg.Content.Dashboard })
 	case assistant.KindProgress:
 		return t.appendPassthrough(msg, kind, func(b *Block) { b.Progress = msg.Content.Progress })
+	case assistant.KindMemory:
+		if msg.Content.Memory == nil || len(msg.Content.Memory.Memories) == 0 {
+			return Block{}, false
+		}
+		return t.appendPassthrough(msg, kind, func(b *Block) { b.Memory = msg.Content.Memory })
 	case assistant.KindTurnMarker, assistant.KindStop, assistant.KindInternal:
 		// Known history-only control metadata is not conversation content. Keep it
 		// out of both startup restore and /resume transcripts.

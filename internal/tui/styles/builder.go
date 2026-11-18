@@ -208,6 +208,7 @@ func build(isDark bool, p palette) Theme {
 		},
 		Chat: Chat{
 			Markdown:        markdown(isDark, p),
+			MarkdownNested:  nestedMarkdown(markdown(isDark, p)),
 			MarkdownHeading: lipgloss.Color(p.secondary),
 			MarkdownLink:    lipgloss.Color(p.link),
 			MarkdownCodeFg:  lipgloss.Color(p.codeText),
@@ -290,6 +291,11 @@ func chip(p palette) Chip {
 }
 
 // markdown adapts glamour's stock config to the palette.
+func nestedMarkdown(cfg glamouransi.StyleConfig) glamouransi.StyleConfig {
+	cfg.Document.Margin = new(uint(0))
+	return cfg
+}
+
 func markdown(isDark bool, p palette) glamouransi.StyleConfig {
 	cfg := glamourstyles.LightStyleConfig
 	if isDark {

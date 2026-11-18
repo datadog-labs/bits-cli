@@ -10,6 +10,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/browser"
 	"github.com/datadog-labs/bits-cli/internal/filediff"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
@@ -294,6 +295,53 @@ func TestReasoningExpandsToItsThinkingText(t *testing.T) {
 		if !strings.Contains(expanded, want) {
 			t.Fatalf("expanded reasoning missing %q:\n%s", want, expanded)
 		}
+	}
+}
+
+func TestMemoriesOpenToStepsAndEachStepToItsText(t *testing.T) {
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(80)
+	list.SetHeight(12)
+	list.SetLinks(browser.Links{Origin: "https://acme.datadoghq.eu"})
+	list.SetItems([]agent.Block{{
+		ID:   agent.BlockID{Scope: agent.ScopeMessage, Key: "memory-1", Kind: assistant.KindMemory},
+		Kind: assistant.KindMemory, Role: assistant.RoleAssistant, Complete: true,
+		Memory: &assistant.MemoryContextPayload{Memories: []assistant.RetrievedMemory{
+			{MemoryID: "m1", Title: "Checkout runbook", Preview: "Use the **primary** DB pool, see [runbook](/notebook/1)."},
+			{MemoryID: "m2", Title: "Oncall", Preview: "Page the payments team."},
+		}},
+	}})
+	view := func() string {
+		rows := make([]string, len(list.view))
+		for i := range list.view {
+			rows[i] = strings.Join(list.renderItem(i), "\n")
+		}
+		return ansi.Strip(strings.Join(rows, "\n"))
+	}
+
+	if got := view(); !strings.Contains(got, list.sty.Accordion.Collapsed+" 2 memories found") || strings.Contains(got, "runbook") {
+		t.Fatalf("memories did not start collapsed on their count:\n%s", got)
+	}
+
+	list.ToggleDisclosure(list.view[0].id)
+	steps := view()
+	for _, want := range []string{list.sty.Accordion.Collapsed + " Checkout runbook", list.sty.Accordion.Collapsed + " Oncall"} {
+		if !strings.Contains(steps, want) {
+			t.Fatalf("opened memories missing step %q:\n%s", want, steps)
+		}
+	}
+	if strings.Contains(steps, "pool") {
+		t.Fatalf("steps opened with their text:\n%s", steps)
+	}
+
+	list.ToggleDisclosure(list.view[1].id)
+	opened := view()
+	if !strings.Contains(opened, "Use the primary DB pool, see runbook.") || strings.Contains(opened, "**") || strings.Contains(opened, "payments") {
+		t.Fatalf("first step did not open alone to its markdown:\n%s", opened)
+	}
+	if raw := strings.Join(list.renderItem(1), "\n"); !strings.Contains(raw, "https://acme.datadoghq.eu/notebook/1") {
+		t.Fatalf("step link did not follow the web origin: %q", raw)
 	}
 }
 
@@ -1220,6 +1268,7 @@ func TestClosedGroupShowsWorkInProgress(t *testing.T) {
 		return agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: key}, Kind: assistant.KindToolCall, Tool: &agent.ToolBlock{Name: spec.EditFile, IsClientSide: true, Input: `{"path":"` + key + `.go"}`, Status: status}}
 	}
 	answer := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "answer", Kind: assistant.KindText}, Role: assistant.RoleAssistant, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: "the answer"}}
+	memory := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "memory", Kind: assistant.KindMemory}, Role: assistant.RoleAssistant, Kind: assistant.KindMemory, Complete: true, Memory: &assistant.MemoryContextPayload{Memories: []assistant.RetrievedMemory{{MemoryID: "m1", Title: "Runbook", Preview: "Use the primary pool."}}}}
 	burst := []agent.Block{
 		thinking("t1", "Let me search the logs.", false),
 		server("logs", "Searched logs", agent.ToolSuccess),
@@ -1258,6 +1307,12 @@ func TestClosedGroupShowsWorkInProgress(t *testing.T) {
 			name: "answer after reasoning", blocks: append(slices.Clone(burst[:3]), answer), running: true,
 			want:   []string{"Analyzed · 1 call", "the answer"},
 			hidden: []string{"Errors spike", "Reasoning"},
+		},
+		// The backend adds memories while the model works; the model has not moved on.
+		{
+			name: "memories after reasoning", blocks: []agent.Block{thinking("t1", "Checking the pool size.", false), memory}, running: true,
+			want:   []string{"Checking the pool size.", "1 memory found"},
+			hidden: []string{"Reasoning"},
 		},
 		{
 			name: "redacted newest reasoning", blocks: []agent.Block{burst[0], burst[1], thinking("t2", "[redacted]", true), burst[3]}, running: true,

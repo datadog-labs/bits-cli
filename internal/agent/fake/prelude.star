@@ -19,6 +19,7 @@ def kitchen():
     raw({"type": "widget_def", "title": "CPU usage", "widget_def": {"type": "timeseries", "title": "CPU usage", "requests": [{"q": "avg:system.cpu.user{*}"}]}})
     raw({"type": "dashboard", "title": "Checkout", "widgets": []})
     raw({"type": "background_task_update", "content": "Investigation 50% done", "event_type": "progress", "task_id": "task-1"})
+    raw({"type": "memory_context", "memories": [{"memory_id": "memory-1", "title": "Checkout runbook", "preview": "Use the primary database pool."}]})
     raw({"type": "thinking", "content": "", "redacted": True})
     raw({"type": "future_content_type"})
     say("## Summary\n\n| service | p95 |\n| --- | --- |\n| web | 42ms |\n\n```go\nfmt.Println(\"done\")\n```\n")

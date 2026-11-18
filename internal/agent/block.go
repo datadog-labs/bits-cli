@@ -121,12 +121,13 @@ type Block struct {
 	// restored history. It tells a run's changes apart wherever they sit.
 	Run RunID
 
-	Markdown  *assistant.MarkdownPayload  // KindText: assistant answer or user prompt
-	Thinking  *assistant.ThinkingPayload  // KindReasoning: model thinking
-	Tool      *ToolBlock                  // KindToolCall/KindToolResult: merged call+result
-	Widget    *assistant.WidgetPayload    // KindWidget
-	Dashboard *assistant.DashboardPayload // KindDashboard
-	Progress  *assistant.ProgressPayload  // KindProgress
+	Markdown  *assistant.MarkdownPayload      // KindText: assistant answer or user prompt
+	Thinking  *assistant.ThinkingPayload      // KindReasoning: model thinking
+	Tool      *ToolBlock                      // KindToolCall/KindToolResult: merged call+result
+	Widget    *assistant.WidgetPayload        // KindWidget
+	Dashboard *assistant.DashboardPayload     // KindDashboard
+	Progress  *assistant.ProgressPayload      // KindProgress
+	Memory    *assistant.MemoryContextPayload // KindMemory
 
 	// Context is the entities a user prompt was sent with, as sent: an image's
 	// ID is its whole data URL. The slice and all nested data, including

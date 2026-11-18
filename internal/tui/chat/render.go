@@ -1,8 +1,12 @@
 package chat
 
 import (
+	"cmp"
+	"fmt"
 	"slices"
 	"strings"
+
+	"charm.land/lipgloss/v2"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -47,6 +51,8 @@ func RenderBlock(it agent.Block, width int, sty Styles, frame int) string {
 
 type blockRenderer struct {
 	markdown markdownRenderer
+	// nested renders MarkdownNested; each renderer caches one style's setup.
+	nested markdownRenderer
 }
 
 // RenderBlock renders a block without a trailing newline.
@@ -64,6 +70,8 @@ func (r *blockRenderer) RenderBlock(it agent.Block, width int, sty Styles, frame
 		return renderDashboard(it, width, sty)
 	case assistant.KindProgress:
 		return r.renderProgress(it, width, sty)
+	case assistant.KindMemory:
+		return renderMemoryGroup(it, renderContext{width: width, sty: sty, frame: frame})
 	case assistant.KindTurnMarker, assistant.KindStop,
 		assistant.KindInternal, assistant.KindUnknown:
 		return fallback(it, width, sty)
@@ -164,6 +172,34 @@ func renderDashboard(it agent.Block, width int, sty Styles) string {
 		label = "dashboard: " + escape.Inline(it.Dashboard.Title)
 	}
 	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
+}
+
+// renderMemoryGroup renders the header of the memories added to the agent's
+// context. Its children are one renderMemory step per memory.
+func renderMemoryGroup(it agent.Block, c renderContext) string {
+	if it.Memory == nil {
+		return fallback(it, c.width, c.sty)
+	}
+	label := fmt.Sprintf("%d memories found", len(it.Memory.Memories))
+	if len(it.Memory.Memories) == 1 {
+		label = "1 memory found"
+	}
+	return renderActivityHeader(agent.ToolSuccess, label, "", c)
+}
+
+// renderMemory renders one memory as a step titled by the memory. Its full
+// view adds the memory's markdown as the model saw it.
+func (r *blockRenderer) renderMemory(memory assistant.RetrievedMemory, c renderContext) string {
+	header := renderActivityHeader(agent.ToolSuccess, cmp.Or(escape.Inline(memory.Title), "Untitled memory"), "", c)
+	if c.disclosure == compactView || !hasMemoryText(memory) {
+		return header
+	}
+	rows := strings.Split(r.nested.Render(memory.Preview, max(1, c.width-4), c.sty.MarkdownNested), "\n")
+	return header + "\n" + renderRows(rows, c.width, lipgloss.NewStyle(), c.sty)
+}
+
+func hasMemoryText(memory assistant.RetrievedMemory) bool {
+	return strings.TrimSpace(memory.Preview) != ""
 }
 
 // renderProgress renders a background task update, which is markdown, quoted

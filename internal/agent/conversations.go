@@ -206,6 +206,10 @@ func validateHistoryMessage(message assistant.Message) error {
 		if message.Content.Progress == nil {
 			return errors.New("progress content has no payload")
 		}
+	case assistant.KindMemory:
+		if message.Content.Memory == nil {
+			return errors.New("memory content has no payload")
+		}
 	case assistant.KindTurnMarker:
 		if message.Content.TurnStatus == nil {
 			return errors.New("turn marker has no payload")

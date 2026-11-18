@@ -375,6 +375,10 @@ const (
 	ContentWidgetDef = "widget_def"
 	// ContentDashboard is a whole generated dashboard (title + widgets).
 	ContentDashboard = "dashboard"
+	// ContentMemoryContext lists the Context Engine memories the backend added
+	// to the agent's context before it ran. History replays it with the same
+	// message id.
+	ContentMemoryContext = "memory_context"
 
 	// --- Provisional POST events for tools with stream_input enabled ---
 
@@ -734,6 +738,19 @@ type ProgressPayload struct {
 	TaskMetadata map[string]string
 }
 
+// MemoryContextPayload carries the memories of a memory_context content.
+type MemoryContextPayload struct {
+	Memories []RetrievedMemory
+}
+
+// RetrievedMemory is one memory added to the agent's context. Preview is the
+// memory text as the model saw it.
+type RetrievedMemory struct {
+	MemoryID string `json:"memory_id"`
+	Title    string `json:"title"`
+	Preview  string `json:"preview"`
+}
+
 // CompactionPayload carries fields for the provider_compaction content type.
 type CompactionPayload struct {
 	Provider      string
@@ -748,15 +765,16 @@ type CompactionPayload struct {
 type Content struct {
 	Type string `json:"type"`
 
-	Markdown   *MarkdownPayload   // markdown_fragment
-	Thinking   *ThinkingPayload   // thinking
-	Tool       *ToolPayload       // tool_call, client_tool_call, tool_call_started, tool_call_input_delta, tool_response, client_tool_response
-	Widget     *WidgetPayload     // widget_def, widget
-	Dashboard  *DashboardPayload  // dashboard
-	Progress   *ProgressPayload   // background_task_update
-	Stop       *StopPayload       // user_stop
-	TurnStatus *TurnStatusPayload // turn_status
-	Compaction *CompactionPayload // provider_compaction
+	Markdown   *MarkdownPayload      // markdown_fragment
+	Thinking   *ThinkingPayload      // thinking
+	Tool       *ToolPayload          // tool_call, client_tool_call, tool_call_started, tool_call_input_delta, tool_response, client_tool_response
+	Widget     *WidgetPayload        // widget_def, widget
+	Dashboard  *DashboardPayload     // dashboard
+	Progress   *ProgressPayload      // background_task_update
+	Memory     *MemoryContextPayload // memory_context
+	Stop       *StopPayload          // user_stop
+	TurnStatus *TurnStatusPayload    // turn_status
+	Compaction *CompactionPayload    // provider_compaction
 }
 
 // TextBody returns the human-readable text of the text-bearing variants
@@ -870,6 +888,7 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 		Provider          string            `json:"provider"`
 		VendorPayload     string            `json:"vendor_payload"`
 		Summary           string            `json:"summary"`
+		Memories          []RetrievedMemory `json:"memories"`
 	}
 	var a alias
 	if err := json.Unmarshal(data, &a); err != nil {
@@ -939,6 +958,8 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 			_ = json.Unmarshal(a.Metadata, &pp.TaskMetadata)
 		}
 		c.Progress = pp
+	case ContentMemoryContext:
+		c.Memory = &MemoryContextPayload{Memories: a.Memories}
 	case ContentTurnStatus:
 		c.TurnStatus = &TurnStatusPayload{Status: a.Status}
 	case ContentProviderCompaction:
@@ -976,6 +997,7 @@ const (
 	KindWidget                        // widget_def / widget: rich viz, render or summarize
 	KindDashboard                     // dashboard: whole dashboard, summarize
 	KindProgress                      // background_task_update: async task progress/final
+	KindMemory                        // memory_context: memories added to the agent's context
 	KindTurnMarker                    // turn_status, replay_complete: stream markers (not seen on POST)
 	KindStop                          // user_stop: interrupted-turn marker
 	KindInternal                      // provider_compaction: never client-visible
@@ -1000,6 +1022,8 @@ func (c *Content) Kind() ContentKind {
 		return KindDashboard
 	case ContentBackgroundTaskUpdate:
 		return KindProgress
+	case ContentMemoryContext:
+		return KindMemory
 	case ContentTurnStatus, ContentReplayComplete:
 		return KindTurnMarker
 	case ContentUserStop:
@@ -1030,6 +1054,8 @@ func (k ContentKind) String() string {
 		return "dashboard"
 	case KindProgress:
 		return "progress"
+	case KindMemory:
+		return "memory"
 	case KindTurnMarker:
 		return "turn"
 	case KindStop:
