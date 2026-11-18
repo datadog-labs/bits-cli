@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -14,6 +13,31 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
+
+// Git hooks and rebase --exec export repository paths that override cmd.Dir.
+// Isolate the whole package so Git called by production code is covered too.
+func TestMain(m *testing.M) {
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(strings.ToUpper(key), "GIT_") {
+			if err := os.Unsetenv(key); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+	}
+	for key, value := range map[string]string{
+		"GIT_CONFIG_GLOBAL":   os.DevNull,
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_TEMPLATE_DIR":    "",
+	} {
+		if err := os.Setenv(key, value); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	os.Exit(m.Run())
+}
 
 func TestUserBlocksKeepTheContextTheyWereSentWith(t *testing.T) {
 	engine := New(&scriptBackend{}, Config{})
@@ -41,22 +65,6 @@ func TestRestoredUserBlocksKeepTheirContext(t *testing.T) {
 	}
 	if !reflect.DeepEqual(block.Context, want) {
 		t.Fatalf("restored context = %+v, want %+v", block.Context, want)
-	}
-}
-
-func runInstructionsGit(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	// Test repositories must not inherit the developer or machine's hooks.
-	hooks := t.TempDir()
-	command := exec.Command("git", append([]string{
-		"-c", "core.hooksPath=" + hooks,
-		"-c", "commit.gpgsign=false",
-		"-c", "user.name=Bits Test",
-		"-c", "user.email=bits@example.com",
-	}, args...)...)
-	command.Dir = dir
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, output)
 	}
 }
 
@@ -146,13 +154,12 @@ func TestProjectInstructionsResumeUpdates(t *testing.T) {
 }
 
 func TestProjectInstructionsCascadingReplacement(t *testing.T) {
-	repo := t.TempDir()
-	runInstructionsGit(t, repo, "init", "-b", "main")
-	nested := filepath.Join(repo, "nested")
+	parent := t.TempDir()
+	nested := filepath.Join(parent, "nested")
 	if err := os.Mkdir(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeInstructionTestFile(t, repo, "AGENTS.md", "root instructions")
+	writeInstructionTestFile(t, parent, "AGENTS.md", "root instructions")
 	writeInstructionTestFile(t, nested, "AGENTS.md", "nested instructions")
 	engine := New(nil, Config{ProjectInstructions: env.NewInstructions(nested)})
 	deliverUserRequest(t, engine, "")

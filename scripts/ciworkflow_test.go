@@ -250,7 +250,7 @@ func command(t *testing.T, dir, name string, args ...string) *exec.Cmd {
 		}
 		cmd.Env = append(cmd.Env, kv)
 	}
-	cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TEMPLATE_DIR=")
 	return cmd
 }
 
