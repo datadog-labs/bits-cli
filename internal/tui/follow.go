@@ -14,10 +14,9 @@ import (
 // Its content row still floats over the transcript without changing layout.
 const followOverlayRows = 1
 
-// followControl owns the painted target and button gesture. The list owns
-// scroll position and auto-follow.
+// followControl owns the button gesture over the frame's follow target. The
+// list owns scroll position and auto-follow.
 type followControl struct {
-	area    image.Rectangle
 	pressed image.Rectangle
 	hover   bool
 }
@@ -51,11 +50,8 @@ func (m *Model) followTarget() (string, image.Rectangle) {
 // followOverlay floats the jump-to-latest control over the transcript and
 // composer gap, the same way the completion menu overlays the editor.
 func (m *Model) followOverlay(base string) string {
-	label, area := m.followTarget()
-	m.follow.area = area
+	area := m.frame.follow
 	if area.Empty() {
-		m.follow.pressed = image.Rectangle{}
-		m.follow.hover = false
 		return base
 	}
 	marker := m.styles.Input.Marker
@@ -70,28 +66,25 @@ func (m *Model) followOverlay(base string) string {
 	style = style.BorderForeground(borderColor)
 	return lipgloss.NewCompositor(
 		lipgloss.NewLayer(base),
-		lipgloss.NewLayer(style.Render(label)).X(area.Min.X).Y(area.Min.Y).Z(1),
+		lipgloss.NewLayer(style.Render(m.frame.followLabel)).X(area.Min.X).Y(area.Min.Y).Z(1),
 	).Render()
 }
 
-// Recheck eligibility: a menu can hide the control between a painted
-// frame and mouse release.
-func (m *Model) handleFollowMouse(msg tea.Msg) bool {
+// handleFollowMouse presses the control and jumps on a release over the same
+// target; the frame drops it whenever a menu or a prompt hides it.
+func (m *Model) handleFollowMouse(msg tea.MouseMsg) bool {
+	over, _ := m.frame.at(pointAt(msg))
+	area := m.frame.follow
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
-		if msg.Button != tea.MouseLeft {
-			return false
-		}
-		_, area := m.followTarget()
-		if area.Empty() || area != m.follow.area || !image.Pt(msg.X, msg.Y).In(area) {
+		if msg.Button != tea.MouseLeft || over != regionFollow {
 			return false
 		}
 		m.follow.pressed = area
 		m.selection.clear()
 		return true
 	case tea.MouseMotionMsg:
-		_, area := m.followTarget()
-		m.follow.hover = !area.Empty() && image.Pt(msg.X, msg.Y).In(area)
+		m.follow.hover = over == regionFollow
 		return m.follow.hover || !m.follow.pressed.Empty()
 	case tea.MouseReleaseMsg:
 		if msg.Button != tea.MouseLeft || m.follow.pressed.Empty() {
@@ -99,10 +92,8 @@ func (m *Model) handleFollowMouse(msg tea.Msg) bool {
 		}
 		pressed := m.follow.pressed
 		m.follow.pressed = image.Rectangle{}
-		_, area := m.followTarget()
-		if area == pressed && area == m.follow.area && image.Pt(msg.X, msg.Y).In(area) {
+		if area == pressed && over == regionFollow {
 			m.list.ScrollToBottom()
-			m.follow.area = image.Rectangle{}
 		}
 		return true
 	}

@@ -30,8 +30,8 @@ const (
 	exitKeepWorking
 )
 
-// exitCard is the "Exit Bits?" confirmation. The rectangles are screen cells,
-// recorded on each render and empty while the card shows its compact form.
+// exitCard is the "Exit Bits?" confirmation. The rectangles are cells of the
+// card, recorded on each layout and empty while it shows its compact form.
 type exitCard struct {
 	open     bool
 	selected exitChoice
@@ -79,8 +79,8 @@ func (m *Model) updateExitCard(msg tea.Msg) tea.Cmd {
 	case tea.PasteMsg:
 		return m.closeExitCardInto(msg)
 	case tea.MouseClickMsg:
-		if msg.Button == tea.MouseLeft {
-			return m.clickExitCard(pointAt(msg))
+		if over, at := m.frame.at(pointAt(msg)); msg.Button == tea.MouseLeft && over == regionPopup {
+			return m.clickExitCard(at)
 		}
 	}
 	return nil
@@ -136,14 +136,9 @@ func (m *Model) exitCardButtons() (quit, keep string) {
 	return quit, keep
 }
 
-// exitCardOverlay centers the card over base, faded toward the background. A
-// monochrome terminal cannot show the fade, so it keeps the frame as drawn.
-func (m *Model) exitCardOverlay(base string) string {
+// layoutExitCard centers the card and records where its controls landed.
+func (m *Model) layoutExitCard() (string, image.Rectangle) {
 	sty := m.styles.ExitCard
-	if !m.monochrome {
-		base = fade(base, m.width, m.height, sty.Text, m.styles.Background)
-	}
-
 	quit, keep := m.exitCardButtons()
 	buttons := quit + exitButtonGap + keep
 	content := components.PanelContent{
@@ -164,23 +159,18 @@ func (m *Model) exitCardOverlay(base string) string {
 	}
 	panel := components.NewPanel(sty.Panel)
 	layout := panel.Layout(m.width, m.height, content)
-	card := layout.View
-	cardWidth, cardHeight := lipgloss.Size(card)
-	origin := image.Pt((m.width-cardWidth)/2, (m.height-cardHeight)/2)
-
+	m.exitCard.quit, m.exitCard.keep, m.exitCard.dismiss = image.Rectangle{}, image.Rectangle{}, image.Rectangle{}
 	if panel.Fits(m.width, m.height, content) {
 		// The buttons are the body's last row.
-		quitX, buttonsY := origin.X+layout.Body.Min.X, origin.Y+layout.Body.Max.Y-1
+		quitX, buttonsY := layout.Body.Min.X, layout.Body.Max.Y-1
 		keepX := quitX + lipgloss.Width(quit) + lipgloss.Width(exitButtonGap)
 		m.exitCard.quit = image.Rect(quitX, buttonsY, quitX+lipgloss.Width(quit), buttonsY+1)
 		m.exitCard.keep = image.Rect(keepX, buttonsY, keepX+lipgloss.Width(keep), buttonsY+1)
-		m.exitCard.dismiss = layout.Dismiss.Add(origin)
+		m.exitCard.dismiss = layout.Dismiss
 	}
-
-	return lipgloss.NewCompositor(
-		lipgloss.NewLayer(base),
-		lipgloss.NewLayer(card).X(origin.X).Y(origin.Y).Z(1),
-	).Render()
+	width, height := lipgloss.Size(layout.View)
+	x, y := (m.width-width)/2, (m.height-height)/2
+	return layout.View, image.Rect(x, y, x+width, y+height)
 }
 
 func isExitWord(raw string) bool {

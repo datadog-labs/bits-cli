@@ -33,17 +33,19 @@ func followTestModel() *Model {
 
 func TestFollowControlReturnsToStreamingTailWithoutGrowingView(t *testing.T) {
 	m := followTestModel()
-	m.View()
-	if !m.follow.area.Empty() {
+	m.relayout()
+	if !m.frame.follow.Empty() {
 		t.Fatal("control shown at bottom")
 	}
 	m.list.ScrollBy(-4)
+	m.relayout()
 	top := m.list.VisibleSurface().Top
 	m.chatPhase = chat.PhaseStreaming
 	m.op = operation{kind: opTurn, run: 1}
 	m.state.Blocks[0].Markdown.Content += "\n\nnew output"
 	m.state.Blocks[0].Rev++
 	m.syncTranscript()
+	m.relayout()
 	view := m.View().Content
 	if m.list.VisibleSurface().Top != top || m.list.Following() {
 		t.Fatal("streaming moved the reading position")
@@ -55,17 +57,19 @@ func TestFollowControlReturnsToStreamingTailWithoutGrowingView(t *testing.T) {
 		m.resize(width, 16)
 		m.relayout()
 		view = m.View().Content
-		if m.follow.area.Empty() || lipgloss.Width(view) > width || lipgloss.Height(view) != m.height {
+		if m.frame.follow.Empty() || lipgloss.Width(view) > width || lipgloss.Height(view) != m.height {
 			t.Fatalf("width %d: missing target or incorrect view dimensions", width)
 		}
 	}
 	m.chatPhase = chat.PhaseIdle
+	m.relayout()
 	if idle := ansi.Strip(m.View().Content); !strings.Contains(idle, "↓ Jump to latest") || strings.Contains(idle, "New activity") {
 		t.Fatalf("completed response should keep a plain return control:\n%s", idle)
 	}
 	m.chatPhase = chat.PhaseStreaming
+	m.relayout()
 	view = m.View().Content
-	area := m.follow.area
+	area := m.frame.follow
 	if area.Max.Y != m.frame.composerGap.Max.Y {
 		t.Fatalf("control leaves an extra row below it: area=%v gap=%v", area, m.frame.composerGap)
 	}
@@ -87,7 +91,7 @@ func TestFollowControlReturnsToStreamingTailWithoutGrowingView(t *testing.T) {
 	m.state.Blocks[0].Rev++
 	m.syncTranscript()
 	m.View()
-	if !m.list.AtBottom() || !m.follow.area.Empty() {
+	if !m.list.AtBottom() || !m.frame.follow.Empty() {
 		t.Fatal("subsequent output was not followed or control stayed visible")
 	}
 }
@@ -97,8 +101,8 @@ func TestFollowControlCancelsReleaseAndYieldsToOtherSurfaces(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			m := followTestModel()
 			m.list.ScrollBy(-4)
-			m.View()
-			area := m.follow.area
+			m.relayout()
+			area := m.frame.follow
 			mouse := tea.Mouse{X: area.Min.X, Y: area.Min.Y, Button: tea.MouseLeft}
 			m.Update(tea.MouseClickMsg(mouse))
 			switch action {
@@ -112,7 +116,7 @@ func TestFollowControlCancelsReleaseAndYieldsToOtherSurfaces(t *testing.T) {
 			case "mode":
 				m.setMode(ModeStatus)
 			}
-			m.View()
+			m.relayout()
 			m.Update(tea.MouseReleaseMsg(mouse))
 			if m.list.Following() || !m.follow.pressed.Empty() {
 				t.Fatal("cancelled button gesture jumped or remained pressed")
@@ -139,9 +143,10 @@ func TestFollowControlBorderUsesItsOwnToken(t *testing.T) {
 			m.chatPhase = chat.PhaseStreaming
 			m.op = operation{kind: opTurn, run: 1}
 			m.list.ScrollBy(-4)
+			m.relayout()
 
 			resting := m.View().Content
-			if m.follow.area.Empty() {
+			if m.frame.follow.Empty() {
 				t.Fatal("control not shown")
 			}
 			if want := sgrForeground(t, theme.FollowBorder); !strings.Contains(resting, want) {

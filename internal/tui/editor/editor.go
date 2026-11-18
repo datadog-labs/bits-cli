@@ -394,6 +394,13 @@ func (e *Editor) MenuHasCandidates() bool { return len(e.menu.items) > 0 }
 // CloseMenu dismisses completion without changing the prompt.
 func (e *Editor) CloseMenu() { e.closeMenu() }
 
+// DismissMenu closes the completion menu as Escape does: it stays closed
+// until the prompt changes.
+func (e *Editor) DismissMenu() {
+	e.dismissCompletion()
+	e.closeMenu()
+}
+
 // SelectedCommand returns the currently selected leading slash-command
 // completion, without modifying the input. The parent uses it to dispatch a
 // registered command directly when Enter is pressed.
@@ -460,8 +467,7 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 			e.accept()
 			return nil
 		case "esc":
-			e.dismissCompletion()
-			e.closeMenu()
+			e.DismissMenu()
 			return nil
 		}
 	}
