@@ -7,6 +7,8 @@ import (
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/datadog-labs/bits-cli/internal/browser"
 )
 
 var streamedMarkdownCorpus = []string{
@@ -382,5 +384,22 @@ func TestMarkdownImageLabelWithLinkPreservesEntities(t *testing.T) {
 	}
 	if strings.Contains(out, "https://docs.example") {
 		t.Fatalf("image label acquired an embedded hyperlink: %q", out)
+	}
+}
+
+// The hyperlink of a root-relative link, inline or by reference, names the
+// page on the org's site or the workspace file, while the title stays as
+// written.
+func TestMarkdownLinksResolveRootRelative(t *testing.T) {
+	const origin = "https://acme.ap1.datadoghq.com"
+	r := markdownRenderer{links: browser.Links{Origin: origin, Workspace: "/ws"}}
+	out := r.Render("[tile](/dashboard/abc?tile_focus=w1#g), [main](/ws/a\\(b\\).go#L3) and [monitors][r].\n\n[r]: /monitors/", 80, markdownStyleConfig(true))
+	for _, url := range []string{origin + "/dashboard/abc?tile_focus=w1#g", "file:///ws/a%28b%29.go", origin + "/monitors/"} {
+		if !strings.Contains(out, ";"+url+"\a") {
+			t.Errorf("no hyperlink to %q: %q", url, out)
+		}
+	}
+	if plain := strings.TrimSpace(ansi.Strip(out)); plain != "tile, main and monitors." {
+		t.Errorf("titles = %q", plain)
 	}
 }

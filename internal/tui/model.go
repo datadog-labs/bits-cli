@@ -241,8 +241,22 @@ func New(engine *agent.Engine, configs ...Config) *Model {
 func (m *Model) attach(engine *agent.Engine) {
 	m.engine = engine
 	m.widgets.origin = engine.WebOrigin()
+	m.list.SetLinks(m.links())
 	m.state = engine.State()
 	m.events, m.unsubscribe = engine.Subscribe()
+}
+
+// links resolves transcript links: app routes on the engine's site, files in
+// the workspace.
+func (m *Model) links() browser.Links {
+	var links browser.Links
+	if m.engine != nil {
+		links.Origin = m.engine.WebOrigin()
+	}
+	if m.workspace != nil {
+		links.Workspace = m.workspace.Path()
+	}
+	return links
 }
 
 // Detach ends the model's engine subscription once the program has stopped.
@@ -284,6 +298,7 @@ func (m *Model) configure(configs []Config) {
 		if m.workspace != nil {
 			m.workspaceDisplayPath = m.workspace.DisplayPath()
 		}
+		m.list.SetLinks(m.links())
 		m.entitySearcher = configs[0].EntitySearcher
 		m.openURL = configs[0].OpenURL
 		m.logout = configs[0].Logout

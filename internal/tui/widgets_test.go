@@ -68,7 +68,8 @@ func widgetModel(t *testing.T, client viz.Client, support graphics.Support, def 
 	return m, id, cmd, opened
 }
 
-// clickWidget clicks the first cell offering action, as the user would.
+// clickWidget clicks the first cell offering action, as the user would;
+// WidgetNone clicks a markdown link.
 func clickWidget(t *testing.T, m *Model, action chat.WidgetAction) tea.Cmd {
 	t.Helper()
 	for y := range m.list.Height() {

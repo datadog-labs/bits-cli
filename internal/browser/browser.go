@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"path"
 	"runtime"
 	"strings"
 	"time"
@@ -37,6 +38,55 @@ func SettingsURL(origin string) (string, error) {
 		return "", errors.New("web origin is empty")
 	}
 	return origin + "/ask/settings", nil
+}
+
+// Links resolves the scheme-less links the Assistant writes, which name
+// either a Datadog app route or a workspace file, into links that open
+// outside a web page.
+type Links struct {
+	Origin    string // Datadog web origin, "" if unknown
+	Workspace string // absolute workspace path, "" if none
+}
+
+// Resolve returns ref as a file:// link when it names a path in the
+// workspace, where the agent works on files: relative to it, the form the
+// file tools take, or absolute. Any other root-relative ref is an app route
+// on the origin. Other refs, and refs that do not parse, are unchanged.
+// NOTE: an absolute path outside the workspace, such as /tmp/out.log, reads as
+// an app route; the model links such files as file:// URIs.
+func (l Links) Resolve(ref string) string {
+	u, err := url.Parse(ref)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.Path == "" {
+		return ref
+	}
+	// Only a Unix path is a file:// URL path as written.
+	ws := strings.TrimSuffix(l.Workspace, "/")
+	if !strings.HasPrefix(ws, "/") {
+		ws = ""
+	}
+	relative := !strings.HasPrefix(u.Path, "/")
+	if relative && ws == "" {
+		return ref
+	}
+	file := u.Path
+	if relative {
+		file = ws + "/" + file
+	}
+	// Cleaning first keeps ../ segments from leaving the workspace.
+	if file = path.Clean(file); ws != "" && strings.HasPrefix(file, ws+"/") {
+		// A file opens whole: terminals such as Rex reject a file:// link
+		// with a line anchor, and no editor reads one from it.
+		return (&url.URL{Scheme: "file", Path: file}).String()
+	}
+	if relative {
+		return ref
+	}
+	origin, err := url.Parse(l.Origin)
+	if err != nil || origin.Host == "" {
+		return ref
+	}
+	u.Scheme, u.Host = origin.Scheme, origin.Host
+	return u.String()
 }
 
 // WebOrigin returns the Datadog web app origin for the site serving the

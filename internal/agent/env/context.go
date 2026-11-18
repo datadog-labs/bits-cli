@@ -25,6 +25,9 @@ type localEnvironment struct {
 	Git      *localGit `xml:"git"`
 	Shell    string    `xml:"shell,omitempty"`
 	Platform string    `xml:"platform"`
+	// AppURL is the org's Datadog web origin, so links the model writes open
+	// on the user's site; it is empty when unknown.
+	AppURL string `xml:"datadog_app_url,omitempty"`
 }
 
 type localGit struct {
@@ -34,19 +37,20 @@ type localGit struct {
 
 // UserContext returns a renderer for the local environment, or nil without
 // a workspace. Each call observes current Git state without retaining delivery state.
-func UserContext(ws *workspace.Workspace) func(context.Context) string {
+func UserContext(ws *workspace.Workspace, appURL string) func(context.Context) string {
 	if ws == nil {
 		return nil
 	}
 	return func(ctx context.Context) string {
-		return renderLocalEnvironment(ctx, ws)
+		return renderLocalEnvironment(ctx, ws, appURL)
 	}
 }
 
-func renderLocalEnvironment(ctx context.Context, ws *workspace.Workspace) string {
+func renderLocalEnvironment(ctx context.Context, ws *workspace.Workspace, appURL string) string {
 	env := localEnvironment{
 		CWD:      ws.Path(),
 		Platform: runtime.GOOS + "/" + runtime.GOARCH,
+		AppURL:   appURL,
 	}
 	if shell := ws.DefaultShellPath(); shell != "" {
 		env.Shell = filepath.Base(shell)
