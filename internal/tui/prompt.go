@@ -70,16 +70,15 @@ func promptRows(free int) int {
 	return max(0, min(free-1, max(minimumPromptRows, free/2)))
 }
 
-// inPrompt moves a click or a wheel event into the prompt's coordinates; those
-// are the pointer events a prompt receives.
-func (f frame) inPrompt(msg tea.MouseMsg) tea.Msg {
-	origin := f.prompt.Min
+// atPoint moves a click or a wheel event to p, such as the cell of the
+// surface it landed on; those are the pointer events a surface receives.
+func atPoint(msg tea.MouseMsg, p image.Point) tea.Msg {
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
-		msg.X, msg.Y = msg.X-origin.X, msg.Y-origin.Y
+		msg.X, msg.Y = p.X, p.Y
 		return msg
 	case tea.MouseWheelMsg:
-		msg.X, msg.Y = msg.X-origin.X, msg.Y-origin.Y
+		msg.X, msg.Y = p.X, p.Y
 		return msg
 	}
 	return msg

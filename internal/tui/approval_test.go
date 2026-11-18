@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
 	"slices"
 	"strings"
 	"testing"
@@ -599,7 +600,7 @@ func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
 			for range approvalChoices {
 				model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 				plain := ansi.Strip(model.frame.promptView)
-				focused := approvalChoices[model.approvals[model.shown.callID()].panel.selected]
+				focused := approvalChoices[model.approvals[model.shown.callID()].panel.choices.Selected]
 				hasDisclaimer := strings.Contains(plain, "Full access skips")
 				if focused.fullAccess() != hasDisclaimer {
 					t.Fatalf("focused=%q fullAccess=%v disclaimer-shown=%v:\n%s", focused.label, focused.fullAccess(), hasDisclaimer, plain)
@@ -634,33 +635,27 @@ func TestApprovalFullAccessShowsDisclaimerOnlyWhenFocused(t *testing.T) {
 	}
 }
 
-// TestApprovalFocusCycleNeverLandsOnAHiddenChoice guards the safety bug the
-// plan calls out explicitly: at a narrow width "Allow for session" is
-// dropped from the row, so it must also leave the keyboard focus cycle.
-// Cycling past the end more times than there are visible choices must never
-// land the cursor on it.
-func TestApprovalFocusCycleNeverLandsOnAHiddenChoice(t *testing.T) {
-	backend := &approvalBackend{t: t}
-	tools, err := agent.NewToolSet(newApprovalTool())
-	if err != nil {
-		t.Fatal(err)
-	}
-	model := New(agent.New(backend, agent.Config{}), Config{Tools: tools})
-	awaitApproval(t, model, approvalMinWidth)
-
-	panel := model.approvals[model.shown.callID()].panel
-	// Cycle past the end more times than there are visible choices at this
-	// width (3, per the geometry in approval.go): a cycle with no notion of
-	// visibility would eventually land on the hidden "Allow for session".
-	for range 20 {
-		_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
-		if !slices.Contains(panel.visible, panel.selected) {
-			t.Fatalf("focus landed on a hidden choice: selected=%d visible=%v", panel.selected, panel.visible)
+// At a narrow width "Allow for session" gives way; the keyboard must never
+// answer with it unseen.
+func TestApprovalNeverAnswersWithAHiddenChoice(t *testing.T) {
+	for presses := range approvalChoices {
+		tools, err := agent.NewToolSet(newApprovalTool())
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	_, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if panel.grant == grantSession {
-		t.Fatal("enter on a hidden choice granted a session-wide allow")
+		model := New(agent.New(&approvalBackend{t: t}, agent.Config{}), Config{Tools: tools})
+		awaitApproval(t, model, approvalMinWidth)
+		panel := model.approvals[model.shown.callID()].panel
+		if strings.Contains(model.frame.promptView, "Session") {
+			t.Fatal("fixture: Allow for session is drawn at this width")
+		}
+		for range presses {
+			model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+		}
+		model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if panel.decision == "" || panel.grant == grantSession {
+			t.Fatalf("enter after %d presses: decision %q, grant %d", presses, panel.decision, panel.grant)
+		}
 	}
 }
 
@@ -747,13 +742,15 @@ func TestApprovalCompactFormKeepsFocusOnEveryChoice(t *testing.T) {
 			model.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 
 			panel := model.approvals[model.shown.callID()].panel
-			if !slices.Equal(panel.visible, allChoiceIndices()) {
-				t.Fatalf("visible = %v, want every choice in the compact form", panel.visible)
+			for _, choice := range approvalChoices {
+				if plain := ansi.Strip(model.frame.promptView); !strings.Contains(plain, " "+choice.compactLabel+" ") {
+					t.Fatalf("the compact form hides %q:\n%s", choice.compactLabel, plain)
+				}
 			}
 			for want := 1; want < len(approvalChoices); want++ {
 				model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-				if panel.selected != want {
-					t.Fatalf("selected = %d, want %d after %d tabs", panel.selected, want, want)
+				if panel.choices.Selected != want {
+					t.Fatalf("selected = %d, want %d after %d tabs", panel.choices.Selected, want, want)
 				}
 				plain := ansi.Strip(model.frame.promptView)
 				if approvalChoices[want].fullAccess() != strings.Contains(plain, "Full access") {
@@ -846,5 +843,125 @@ func TestDraftingOverAnApproval(t *testing.T) {
 				t.Fatal("the attachment was removed")
 			}
 		})
+	}
+}
+
+// tap presses and releases the left button at p, as a click does.
+func tap(m *Model, p image.Point) {
+	m.Update(clickAt(p))
+	m.Update(tea.MouseReleaseMsg(tea.Mouse{X: p.X, Y: p.Y, Button: tea.MouseLeft}))
+}
+
+// newClickApproval docks an approval at width×height and returns its panel.
+func newClickApproval(t *testing.T, width, height int) (*Model, *approvalPrompt) {
+	t.Helper()
+	tools, err := agent.NewToolSet(newApprovalTool())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(agent.New(&approvalBackend{t: t}, agent.Config{}), Config{Tools: tools})
+	awaitApproval(t, model, width)
+	model.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	return model, model.approvals[model.shown.callID()].panel
+}
+
+// TestApprovalClicks answers by clicking: a click on a choice selects it, one
+// on the selected choice answers, one on "ESC x" denies, and one elsewhere
+// leaves the request open. Allow starts selected.
+func TestApprovalClicks(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		width, height int
+		target        string
+		clicks        int
+		decision      agent.ApprovalDecision
+		grant         approvalGrant
+	}{
+		{name: "allow", width: 80, height: 24, target: " Allow ", clicks: 1, decision: agent.ApprovalAllowOnce},
+		{name: "full access", width: 80, height: 24, target: " Switch to full access ", clicks: 2, decision: agent.ApprovalAllowOnce, grant: grantFullAccess},
+		{name: "compact session", width: 40, height: 14, target: " Session ", clicks: 2, decision: agent.ApprovalAllowOnce, grant: grantSession},
+		{name: "dismiss", width: 80, height: 24, target: "ESC x", clicks: 1, decision: agent.ApprovalDeny},
+		{name: "body", width: 80, height: 24, target: "Run the test action?", clicks: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			model, panel := newClickApproval(t, tt.width, tt.height)
+			at := labelAt(t, model, tt.target)
+			for n := range tt.clicks {
+				if panel.decision != "" {
+					t.Fatalf("click %d of %d already decided %q", n+1, tt.clicks, panel.decision)
+				}
+				model.Update(clickAt(at))
+			}
+			if panel.decision != tt.decision || panel.grant != tt.grant {
+				t.Fatalf("decision %q, grant %d; want %q, %d", panel.decision, panel.grant, tt.decision, tt.grant)
+			}
+			if answered := waitingApprovals(model) == 0; answered != (tt.decision != "") {
+				t.Fatalf("answered = %v", answered)
+			}
+		})
+	}
+}
+
+// A click moves the keyboard between the composer and the panel, and only
+// moves it: whatever the click lands on acts on the next one.
+func TestApprovalClickMovesTheKeyboard(t *testing.T) {
+	model, panel := newClickApproval(t, 80, 24)
+	composer := model.frame.composer.Min.Add(image.Pt(4, 1))
+	model.Update(tea.MouseClickMsg(tea.Mouse{X: composer.X, Y: composer.Y, Button: tea.MouseRight}))
+	if model.focus() != focusPrompt {
+		t.Fatal("a right click on the composer took the keyboard")
+	}
+	tap(model, composer)
+	if model.focus() != focusEditor || !model.editor.Focused() {
+		t.Fatalf("a click on the composer left the keyboard with %v", model.focus())
+	}
+	model.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if got := model.editor.Value(); got != "x" {
+		t.Fatalf("typing after the click wrote %q to the composer", got)
+	}
+
+	// The completion menu floats over the panel: a click on it closes it and
+	// reaches nothing under it.
+	model.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	model.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	covered := model.frame.popup.Intersect(model.frame.prompt)
+	if !model.editor.MenuOpen() || covered.Empty() {
+		t.Fatalf("fixture: menu open %v covering %v of the panel", model.editor.MenuOpen(), covered)
+	}
+	tap(model, covered.Min)
+	model.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // the editor recomputes its menu
+	if model.editor.MenuOpen() || model.focus() != focusEditor || panel.decision != "" {
+		t.Fatalf("a click on the menu: open %v, focus %v, decision %q", model.editor.MenuOpen(), model.focus(), panel.decision)
+	}
+
+	// Allow starts selected, yet while the user drafts it takes two clicks.
+	allow := labelAt(t, model, " Allow ")
+	tap(model, allow)
+	if model.focus() != focusPrompt || panel.decision != "" {
+		t.Fatalf("the first click on Allow: focus %v, decision %q", model.focus(), panel.decision)
+	}
+	tap(model, allow)
+	if panel.decision != agent.ApprovalAllowOnce {
+		t.Fatalf("the second click on Allow decided %q", panel.decision)
+	}
+}
+
+// A click on the panel takes the keyboard from the composer, and with it the
+// completion menu and any text selection, which would otherwise stay open
+// unseen and keep blocking link clicks and popups.
+func TestApprovalClickLeavesNothingOfTheComposerBehind(t *testing.T) {
+	model, panel := newClickApproval(t, 80, 24)
+	tap(model, model.frame.composer.Min.Add(image.Pt(4, 1)))
+	for _, r := range "/fork" { // one candidate keeps the menu short, clear of the choices
+		model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	deny := labelAt(t, model, " Deny ")
+	if !model.editor.MenuOpen() || deny.In(model.frame.popup) {
+		t.Fatalf("fixture: menu open %v at %v, Deny at %v", model.editor.MenuOpen(), model.frame.popup, deny)
+	}
+	model.selection.begin(testSelectionFrame("abc", 3, 1), 0, 0)
+	tap(model, deny)
+	if model.editor.MenuOpen() || model.selection.active() || model.focus() != focusPrompt || panel.decision != "" {
+		t.Fatalf("menu open %v, selection %v, focus %v, decision %q", model.editor.MenuOpen(), model.selection.active(), model.focus(), panel.decision)
 	}
 }

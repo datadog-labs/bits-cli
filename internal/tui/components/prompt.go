@@ -6,10 +6,13 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
-// Slot gives a prompt its available size and queue length.
+// Slot gives a prompt its available size, queue length, and focus.
 type Slot struct {
 	Width, Height int
 	Waiting       int // requests waiting on the user, this one included
+	// Focused says the prompt holds the keyboard. A docked prompt does not
+	// while the user writes a message over it.
+	Focused bool
 }
 
 // Placement tells the host where to show a prompt.
