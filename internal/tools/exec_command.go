@@ -57,7 +57,7 @@ func newExecCommandTool(turnCWD string, runner execRunner) agent.Tool {
 						"type":        "integer",
 						"minimum":     0,
 						"maximum":     spec.ExecMaxWaitMS,
-						"description": fmt.Sprintf("Return after this long if still running, with a command_id. Defaults to %d.", spec.ExecDefaultYieldMS),
+						"description": fmt.Sprintf("Return after this many milliseconds, with a command_id if still running. Use 0 to start a background task. Defaults to %d.", spec.ExecDefaultYieldMS),
 					},
 				},
 				"required":             []string{"cmd"},
