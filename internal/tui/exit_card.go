@@ -6,7 +6,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
@@ -147,14 +146,11 @@ func (m *Model) exitCardOverlay(base string) string {
 
 	quit, keep := m.exitCardButtons()
 	buttons := quit + exitButtonGap + keep
-	bodyRows := 0
 	content := components.PanelContent{
 		Title:   exitCardTitle,
 		Dismiss: exitCardDismiss,
 		Body: func(width, _ int) string {
-			body := sty.Body.Width(width).Render(exitCardBody)
-			bodyRows = lipgloss.Height(body)
-			return body + "\n\n" + buttons
+			return sty.Body.Width(width).Render(exitCardBody) + "\n\n" + buttons
 		},
 		MinBodyWidth: lipgloss.Width(buttons),
 		CompactTitle: exitCardTitle,
@@ -167,27 +163,23 @@ func (m *Model) exitCardOverlay(base string) string {
 		},
 	}
 	panel := components.NewPanel(sty.Panel)
-	card, _, bodyWidth := panel.Layout(m.width, m.height, content)
+	layout := panel.Layout(m.width, m.height, content)
+	card := layout.View
 	cardWidth, cardHeight := lipgloss.Size(card)
-	x, y := (m.width-cardWidth)/2, (m.height-cardHeight)/2
+	origin := image.Pt((m.width-cardWidth)/2, (m.height-cardHeight)/2)
 
 	if panel.Fits(m.width, m.height, content) {
-		frame := sty.Panel.Frame
-		bodyX := x + frame.GetBorderLeftSize() + frame.GetPaddingLeft()
-		headerY := y + frame.GetBorderTopSize() + frame.GetPaddingTop()
-		// Rows between the header and the body mirror the panel's section gap.
-		buttonsY := headerY + 1 + max(0, sty.Panel.SectionGap) + bodyRows + 1
-		quitX := bodyX
+		// The buttons are the body's last row.
+		quitX, buttonsY := origin.X+layout.Body.Min.X, origin.Y+layout.Body.Max.Y-1
 		keepX := quitX + lipgloss.Width(quit) + lipgloss.Width(exitButtonGap)
-		dismissX := bodyX + bodyWidth - ansi.StringWidth(exitCardDismiss)
 		m.exitCard.quit = image.Rect(quitX, buttonsY, quitX+lipgloss.Width(quit), buttonsY+1)
 		m.exitCard.keep = image.Rect(keepX, buttonsY, keepX+lipgloss.Width(keep), buttonsY+1)
-		m.exitCard.dismiss = image.Rect(dismissX, headerY, dismissX+ansi.StringWidth(exitCardDismiss), headerY+1)
+		m.exitCard.dismiss = layout.Dismiss.Add(origin)
 	}
 
 	return lipgloss.NewCompositor(
 		lipgloss.NewLayer(base),
-		lipgloss.NewLayer(card).X(x).Y(y).Z(1),
+		lipgloss.NewLayer(card).X(origin.X).Y(origin.Y).Z(1),
 	).Render()
 }
 

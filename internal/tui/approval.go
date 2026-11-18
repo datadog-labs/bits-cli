@@ -257,15 +257,16 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 		},
 		TinyMessage: "Resize terminal to approve",
 	}
-	rendered, window, bodyWidth := a.panel.Layout(width, slot.Height, content)
-	a.window = window
+	layout := a.panel.Layout(width, slot.Height, content)
+	a.window = layout.Window
 	// The panel may measure a form it then rejects, so the choices are
 	// committed only for the width of the form that showed.
+	bodyWidth := layout.Body.Dx()
 	if bodyWidth > 0 {
 		row := a.fitChoices(bodyWidth)
 		a.visible, a.selected = row.visible, row.selected
 	}
-	return lipgloss.PlaceHorizontal(width, lipgloss.Center, rendered), bodyWidth > 0 && width >= approvalMinWidth
+	return lipgloss.PlaceHorizontal(width, lipgloss.Center, layout.View), bodyWidth > 0 && width >= approvalMinWidth
 }
 
 // choiceRow is the choice row that fits a width: the visible choices, the
