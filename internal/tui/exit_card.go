@@ -17,12 +17,12 @@ const (
 	exitCardBody    = "Your conversation is saved. You can pick up where you left off anytime."
 	exitQuitLabel   = "Quit"
 	exitKeepLabel   = "Keep working"
-	exitButtonGap   = "  "
 
 	exitCardCompactQuitHint = "enter quit · esc keep working"
 	exitCardCompactKeepHint = "enter/esc keep working"
 )
 
+// exitChoice indexes the card's buttons.
 type exitChoice int
 
 const (
@@ -30,13 +30,13 @@ const (
 	exitKeepWorking
 )
 
-// exitCard is the "Exit Bits?" confirmation. The rectangles are cells of the
-// card, recorded on each layout and empty while it shows its compact form.
+// exitCard is the "Exit Bits?" confirmation. Its buttons and dismiss label
+// are placed in the card's cells on each layout, and not at all while it
+// shows its compact form.
 type exitCard struct {
-	open     bool
-	selected exitChoice
-
-	quit, keep, dismiss image.Rectangle
+	open    bool
+	buttons components.ButtonRow
+	dismiss image.Rectangle
 }
 
 // openExitCard also drops pointer state: the card swallows motion and
@@ -49,7 +49,7 @@ func (m *Model) openExitCard() {
 	m.editor.SetQueuePointer(-1, -1)
 	m.follow.hover = false
 	m.follow.pressed = image.Rectangle{}
-	m.exitCard = exitCard{open: true, selected: exitQuit}
+	m.exitCard = exitCard{open: true}
 }
 
 func (m *Model) closeExitCard() {
@@ -64,51 +64,42 @@ func (m *Model) closeExitCard() {
 func (m *Model) updateExitCard(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "enter":
-			return m.activateExitChoice(m.exitCard.selected)
-		case "esc":
+		if msg.String() == "esc" {
 			m.closeExitCard()
-		case "left", "right", "tab", "shift+tab":
-			m.exitCard.selected = otherExitChoice(m.exitCard.selected)
-		default:
-			if msg.Text != "" {
-				return m.closeExitCardInto(msg)
-			}
+			return nil
+		}
+		pressed, used := m.exitCard.buttons.Update(msg)
+		if pressed {
+			return m.pressExitButton()
+		}
+		if !used && msg.Text != "" {
+			return m.closeExitCardInto(msg)
 		}
 	case tea.PasteMsg:
 		return m.closeExitCardInto(msg)
 	case tea.MouseClickMsg:
-		if over, at := m.frame.at(pointAt(msg)); msg.Button == tea.MouseLeft && over == regionPopup {
-			return m.clickExitCard(at)
+		over, at := m.frame.at(pointAt(msg))
+		if over != regionPopup || msg.Button != tea.MouseLeft {
+			return nil
+		}
+		if at.In(m.exitCard.dismiss) {
+			m.closeExitCard()
+			return nil
+		}
+		if pressed, _ := m.exitCard.buttons.Update(atPoint(msg, at)); pressed {
+			return m.pressExitButton()
 		}
 	}
 	return nil
 }
 
-func otherExitChoice(choice exitChoice) exitChoice {
-	if choice == exitQuit {
-		return exitKeepWorking
-	}
-	return exitQuit
-}
-
-func (m *Model) activateExitChoice(choice exitChoice) tea.Cmd {
-	if choice == exitQuit {
+// pressExitButton quits or keeps working, as the selected button says.
+func (m *Model) pressExitButton() tea.Cmd {
+	if exitChoice(m.exitCard.buttons.Selected) == exitQuit {
 		_, cmd := m.quit()
 		return cmd
 	}
 	m.closeExitCard()
-	return nil
-}
-
-func (m *Model) clickExitCard(at image.Point) tea.Cmd {
-	switch {
-	case at.In(m.exitCard.quit):
-		return m.activateExitChoice(exitQuit)
-	case at.In(m.exitCard.keep), at.In(m.exitCard.dismiss):
-		return m.activateExitChoice(exitKeepWorking)
-	}
 	return nil
 }
 
@@ -129,18 +120,14 @@ func exitButton(sty styles.ExitCard, label string, highlighted bool) string {
 	return sty.Action.Render(label)
 }
 
-func (m *Model) exitCardButtons() (quit, keep string) {
-	sty := m.styles.ExitCard
-	quit = exitButton(sty, exitQuitLabel, m.exitCard.selected == exitQuit)
-	keep = exitButton(sty, exitKeepLabel, m.exitCard.selected == exitKeepWorking)
-	return quit, keep
-}
-
 // layoutExitCard centers the card and records where its controls landed.
 func (m *Model) layoutExitCard() (string, image.Rectangle) {
 	sty := m.styles.ExitCard
-	quit, keep := m.exitCardButtons()
-	buttons := quit + exitButtonGap + keep
+	selected := exitChoice(m.exitCard.buttons.Selected)
+	buttons, rects := components.JoinButtons([]string{
+		exitQuit:        exitButton(sty, exitQuitLabel, selected == exitQuit),
+		exitKeepWorking: exitButton(sty, exitKeepLabel, selected == exitKeepWorking),
+	})
 	content := components.PanelContent{
 		Title:   exitCardTitle,
 		Dismiss: exitCardDismiss,
@@ -151,7 +138,7 @@ func (m *Model) layoutExitCard() (string, image.Rectangle) {
 		CompactTitle: exitCardTitle,
 		CompactBody: func(width int) string {
 			hint := exitCardCompactQuitHint
-			if m.exitCard.selected == exitKeepWorking {
+			if selected == exitKeepWorking {
 				hint = exitCardCompactKeepHint
 			}
 			return sty.Body.Width(width).Render(exitCardBody) + "\n\n" + sty.Panel.Help.Render(hint)
@@ -159,15 +146,18 @@ func (m *Model) layoutExitCard() (string, image.Rectangle) {
 	}
 	panel := components.NewPanel(sty.Panel)
 	layout := panel.Layout(m.width, m.height, content)
-	m.exitCard.quit, m.exitCard.keep, m.exitCard.dismiss = image.Rectangle{}, image.Rectangle{}, image.Rectangle{}
+	// The compact form shows a key hint instead: its buttons take keys only.
+	placed := []components.PlacedButton{{Index: int(exitQuit)}, {Index: int(exitKeepWorking)}}
+	m.exitCard.dismiss = image.Rectangle{}
 	if panel.Fits(m.width, m.height, content) {
 		// The buttons are the body's last row.
-		quitX, buttonsY := layout.Body.Min.X, layout.Body.Max.Y-1
-		keepX := quitX + lipgloss.Width(quit) + lipgloss.Width(exitButtonGap)
-		m.exitCard.quit = image.Rect(quitX, buttonsY, quitX+lipgloss.Width(quit), buttonsY+1)
-		m.exitCard.keep = image.Rect(keepX, buttonsY, keepX+lipgloss.Width(keep), buttonsY+1)
+		origin := image.Pt(layout.Body.Min.X, layout.Body.Max.Y-1)
+		for n := range placed {
+			placed[n].At = rects[n].Add(origin)
+		}
 		m.exitCard.dismiss = layout.Dismiss
 	}
+	m.exitCard.buttons.Place(placed, true)
 	width, height := lipgloss.Size(layout.View)
 	x, y := (m.width-width)/2, (m.height-height)/2
 	return layout.View, image.Rect(x, y, x+width, y+height)
