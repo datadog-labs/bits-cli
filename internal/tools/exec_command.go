@@ -16,13 +16,9 @@ import (
 )
 
 const (
-	execCommandDescription = "Runs a command in a non-interactive shell and returns its stdout, stderr, and exit status. " +
-		"A command still running after yield_ms keeps running in the background: the result then has its output so far and a command_id " +
-		"for wait_command and stop_command. It runs until it exits, timeout_ms elapses, or stop_command ends it; " +
-		"Bits also stops it when Bits exits or the conversation changes."
-	waitCommandDescription = "Waits up to wait_ms for a command exec_command left running to exit. " +
-		"Returns its output since the previous result and, once it exited, its exit status. Prefer long waits to frequent polling."
-	stopCommandDescription = "Stops a command exec_command left running and returns its remaining output and final status."
+	execCommandDescription = "Runs a shell command and returns its output and exit status."
+	waitCommandDescription = "Waits for a running command and returns its new output."
+	stopCommandDescription = "Stops a running command and returns its final output."
 )
 
 type execRunner interface {
@@ -42,26 +38,26 @@ func newExecCommandTool(turnCWD string, runner execRunner) agent.Tool {
 					"cmd": map[string]any{
 						"type":        "string",
 						"minLength":   1,
-						"description": "Command in the selected shell's syntax. Windows defaults to PowerShell; request shell bash for Bash syntax.",
+						"description": "Shell command.",
 					},
 					"shell": map[string]any{
 						"type":        "string",
-						"description": "Shell executable name on PATH or explicit path. Defaults to <shell>. Windows supports pwsh, powershell, and bash (when installed); Unix supports bash, zsh, and sh.",
+						"description": "Shell to run cmd with. Defaults to <shell>.",
 					},
 					"workdir": map[string]any{
 						"type":        "string",
-						"description": "Working directory. Defaults to <cwd>; relative paths resolve from it.",
+						"description": "Working directory. Defaults to <cwd>.",
 					},
 					"timeout_ms": map[string]any{
 						"type":        "integer",
 						"minimum":     1,
-						"description": "Maximum command runtime, after which it is stopped. Omit for no limit.",
+						"description": "Stop the command after this long. Defaults to no limit.",
 					},
 					"yield_ms": map[string]any{
 						"type":        "integer",
 						"minimum":     0,
 						"maximum":     spec.ExecMaxWaitMS,
-						"description": fmt.Sprintf("How long to wait before returning while the command keeps running; not a timeout. Defaults to %d; 0 returns once it starts.", spec.ExecDefaultYieldMS),
+						"description": fmt.Sprintf("Return after this long if still running, with a command_id. Defaults to %d.", spec.ExecDefaultYieldMS),
 					},
 				},
 				"required":             []string{"cmd"},
@@ -88,7 +84,7 @@ func newWaitCommandTool(runner execRunner) agent.Tool {
 						"type":        "integer",
 						"minimum":     0,
 						"maximum":     spec.ExecMaxWaitMS,
-						"description": fmt.Sprintf("Longest time to wait for the exit. Defaults to %d.", spec.ExecDefaultWaitMS),
+						"description": fmt.Sprintf("Return after this long if still running. Defaults to %d.", spec.ExecDefaultWaitMS),
 					},
 				},
 				"required":             []string{"command_id"},
@@ -146,7 +142,7 @@ func newStopCommandTool(runner execRunner) agent.Tool {
 var commandIDSchema = map[string]any{
 	"type":        "string",
 	"minLength":   1,
-	"description": "The command_id exec_command returned.",
+	"description": "From exec_command.",
 }
 
 func execCommandApproval(turnCWD string) agent.ApprovalPolicy {
