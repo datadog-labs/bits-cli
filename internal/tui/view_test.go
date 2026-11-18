@@ -56,7 +56,7 @@ func TestLayoutTilesTheScreen(t *testing.T) {
 		{"narrow chat", minimumChatWidth - 1, 24, nil, true},
 		{"short approval", 80, 10, []func(*Model){approval}, true},
 		{"narrow approval", approvalMinWidth - 1, 24, []func(*Model){approval}, true},
-		{"approval squeezed by a draft", 80, 17, []func(*Model){approval, draft}, true},
+		{"approval beside a tall draft", 80, 17, []func(*Model){approval, draft}, false},
 		{"tool UI hides a tall draft", 80, 20, []func(*Model){toolUI, draft}, false},
 		{"small tool UI", 30, 10, []func(*Model){toolUI}, true},
 		{"running task", 80, 24, []func(*Model){tasks(1)}, false},
