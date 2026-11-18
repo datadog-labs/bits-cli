@@ -1,6 +1,7 @@
 package env
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -12,6 +13,31 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
+
+// Git hooks and rebase --exec export repository paths that override cmd.Dir.
+// Isolate the whole package so Git called by production code is covered too.
+func TestMain(m *testing.M) {
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(strings.ToUpper(key), "GIT_") {
+			if err := os.Unsetenv(key); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+	}
+	for key, value := range map[string]string{
+		"GIT_CONFIG_GLOBAL":   os.DevNull,
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_TEMPLATE_DIR":    "",
+	} {
+		if err := os.Setenv(key, value); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	os.Exit(m.Run())
+}
 
 func TestInstructionsHierarchy(t *testing.T) {
 	repo := t.TempDir()
@@ -134,18 +160,51 @@ func TestInstructionsLimits(t *testing.T) {
 	}
 }
 
-func TestInstructionsLinkedWorktree(t *testing.T) {
-	repo := t.TempDir()
-	runInstructionsGit(t, repo, "init", "-b", "main")
-	writeInstructionTestFile(t, repo, "AGENTS.md", "main instruction")
-	runInstructionsGit(t, repo, "add", ".")
-	runInstructionsGit(t, repo, "-c", "user.name=Bits Test", "-c", "user.email=bits@example.com", "commit", "-m", "initial")
-	linked := filepath.Join(t.TempDir(), "linked")
-	runInstructionsGit(t, repo, "worktree", "add", "-b", "linked", linked)
-	writeInstructionTestFile(t, linked, "AGENTS.md", "linked instruction")
-	got := NewInstructions(linked).Snapshot(context.Background())
-	if !strings.Contains(got, "linked instruction") || strings.Contains(got, "main instruction") {
-		t.Fatalf("linked instructions = %q", got)
+func TestGitEnvironmentIsolation(t *testing.T) {
+	outside := t.TempDir()
+	gitDir := filepath.Join(outside, ".git")
+	runInstructionsGit(t, outside, "init", "-b", "main")
+	writeInstructionTestFile(t, outside, "outside.txt", "outside")
+	runInstructionsGit(t, outside, "add", "outside.txt")
+	runInstructionsGit(t, outside, "commit", "-m", "outside")
+	before := make(map[string][]byte)
+	for _, name := range []string{"HEAD", "index", "refs/heads/main"} {
+		data, err := os.ReadFile(filepath.Join(gitDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[name] = data
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reuse the case that needs repository discovery to hide the main checkout's instructions.
+	const testName = "TestNestedWorktreeInstructionShadowing"
+	const subtestName = "duplicate"
+	cmd := exec.CommandContext(t.Context(), executable, "-test.run=^"+testName+"$/^"+subtestName+"$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"GIT_DIR="+gitDir,
+		"GIT_WORK_TREE="+outside,
+		"GIT_INDEX_FILE="+filepath.Join(gitDir, "index"),
+	)
+	if output, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(output), "--- PASS: "+testName+"/"+subtestName+" (") {
+		t.Errorf("linked worktree test with inherited Git paths: %v\n%s", err, output)
+	}
+	for name, want := range before {
+		got, err := os.ReadFile(filepath.Join(gitDir, name))
+		if err != nil {
+			t.Errorf("read outside repository's %s: %v", name, err)
+			continue
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("outside repository's %s changed", name)
+		}
+	}
+	for _, name := range []string{"refs/heads/linked", "worktrees"} {
+		if _, err := os.Stat(filepath.Join(gitDir, name)); !os.IsNotExist(err) {
+			t.Errorf("expected no %s in outside repository, stat returned %v", name, err)
+		}
 	}
 }
 
@@ -294,7 +353,7 @@ func TestNestedWorktreeInstructionShadowing(t *testing.T) {
 				t.Fatal(err)
 			}
 			runInstructionsGit(t, main, "init", "-b", "main")
-			runInstructionsGit(t, main, "-c", "user.name=Bits Test", "-c", "user.email=bits@example.com", "commit", "--allow-empty", "-m", "initial")
+			runInstructionsGit(t, main, "commit", "--allow-empty", "-m", "initial")
 			linked := filepath.Join(main, "worktrees", "linked")
 			runInstructionsGit(t, main, "worktree", "add", "-b", "linked", linked)
 			writeInstructionTestFile(t, outer, "AGENTS.md", "outer content")

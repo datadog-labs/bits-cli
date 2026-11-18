@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -23,6 +24,31 @@ import (
 	statusview "github.com/datadog-labs/bits-cli/internal/tui/status"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
+
+// Git hooks and rebase --exec export repository paths that override cmd.Dir.
+// Isolate the whole package so Git called by production code is covered too.
+func TestMain(m *testing.M) {
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(strings.ToUpper(key), "GIT_") {
+			if err := os.Unsetenv(key); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+	}
+	for key, value := range map[string]string{
+		"GIT_CONFIG_GLOBAL":   os.DevNull,
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_TEMPLATE_DIR":    "",
+	} {
+		if err := os.Setenv(key, value); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	os.Exit(m.Run())
+}
 
 type localStatusBackend struct{ t *testing.T }
 
