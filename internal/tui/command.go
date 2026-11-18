@@ -40,6 +40,7 @@ const (
 	commandPermissions
 	commandUpdate
 	commandSkillsLibrary
+	commandStopCommands
 )
 
 type commandDefinition struct {
@@ -120,6 +121,12 @@ var commandDefinitions = []commandDefinition{
 		name:                  skillsLibraryCommand,
 		activeOperationPolicy: commandAllowedDuringOperation,
 		description:           "browse the bits Skills Library",
+	},
+	{
+		id:                    commandStopCommands,
+		name:                  "stop",
+		activeOperationPolicy: commandAllowedDuringOperation,
+		description:           "stop the commands running in the background",
 	},
 	{
 		id:                    commandUpdate,
@@ -255,6 +262,8 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.stopCompletionSearches(), m.switchPermissions(strings.ToLower(argument)))
 	case commandUpdate:
 		return m.requestUpgrade()
+	case commandStopCommands:
+		return m, m.postNotice(notice(chat.NoticeInfo, nil, "%s", stopCommandsNotice(m.backgroundCommands.stopAll())))
 	default:
 		panic("unhandled registered command")
 	}

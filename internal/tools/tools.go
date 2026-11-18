@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
@@ -43,11 +44,12 @@ func NewEditorTools(ws *workspace.Workspace) []agent.Tool {
 
 // NewClientTools returns every local tool available on the current platform.
 // The editor tools are available everywhere. Linux, macOS, and Windows
-// additionally get the deliberately unsandboxed, one-shot exec_command tool.
-// Optional names are omitted from that tool's child process environment.
-func NewClientTools(ws *workspace.Workspace, execExcludedEnv ...string) []agent.Tool {
+// additionally get the deliberately unsandboxed command tools, which run
+// commands on the given service; the caller closes it to stop those still
+// running.
+func NewClientTools(ws *workspace.Workspace, commands *exectool.ExecService) []agent.Tool {
 	clientTools := NewEditorTools(ws)
-	return append(clientTools, platformExecTools(ws, execExcludedEnv...)...)
+	return append(clientTools, platformExecTools(ws, commands)...)
 }
 
 // errorResult builds an error ToolResult with a formatted output message.

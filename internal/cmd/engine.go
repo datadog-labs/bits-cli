@@ -14,7 +14,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/browser"
-	"github.com/datadog-labs/bits-cli/internal/tools"
+	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -113,16 +113,18 @@ func useSubagents(ctx context.Context, client *assistant.Client) bool {
 	return err == nil && orgID == 2
 }
 
-func configuredClientTools(ws *workspace.Workspace) ([]agent.Tool, error) {
+// newExecService returns the service that runs every command of this
+// process. The caller closes it on exit to stop commands still running.
+func newExecService(ws *workspace.Workspace) (*exectool.ExecService, error) {
 	raw := os.Getenv(EnvExecExcludeEnv)
 	if raw == "" {
-		return tools.NewClientTools(ws), nil
+		return exectool.NewExecService(ws.DefaultShellPath()), nil
 	}
 	names, err := parseExecExcludedNames(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", EnvExecExcludeEnv, err)
 	}
-	return tools.NewClientTools(ws, append(names, EnvExecExcludeEnv)...), nil
+	return exectool.NewExecService(ws.DefaultShellPath(), append(names, EnvExecExcludeEnv)...), nil
 }
 
 func parseExecExcludedNames(raw string) ([]string, error) {

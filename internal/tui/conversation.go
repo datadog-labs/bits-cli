@@ -27,6 +27,14 @@ func (m *Model) requestNewConversation() tea.Cmd {
 // leaves the editor object (and its prompt-history source), styles, backend
 // client, and process-wide configuration intact; resetting the editor only
 // ends any history browsing.
+// enterConversation follows the engine onto another conversation: messages
+// about the previous one become stale, and the commands it left running in the
+// background stop. It returns how many it stopped.
+func (m *Model) enterConversation() int {
+	m.conversationEpoch++
+	return m.backgroundCommands.stopAll()
+}
+
 func (m *Model) startNewConversation() tea.Cmd {
 	if m.op.busy() {
 		return m.requestNewConversation()
@@ -40,7 +48,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	// A reset is a new event identity domain even though active work was drained.
 	// This makes any delayed Bubble Tea message from the prior domain harmless.
 	m.op.gen++
-	m.conversationEpoch++
+	stopped := m.enterConversation()
 	m.conversationTask.stop()
 	m.picker = nil
 	m.conversationSwitchID = ""
@@ -52,7 +60,7 @@ func (m *Model) startNewConversation() tea.Cmd {
 	closeFileSearch := m.stopCompletionSearches()
 	m.notices = nil
 	m.setMode(ModeChat)
-	m.postNotice(notice(chat.NoticeInfo, nil, "Started a new conversation."))
+	m.postNotice(notice(chat.NoticeInfo, nil, "Started a new conversation.%s", stoppedCommandsSuffix(stopped)))
 	m.list.ScrollToBottom()
 	return closeFileSearch // Update reconciles focus and animations after the mode change.
 }
@@ -152,12 +160,15 @@ func (m *Model) applyConversationSwitchResult(msg conversationSwitchResultMsg) t
 		m.picker.SetError(n.Text, err)
 		return m.postNotice(n)
 	}
+	stopped := m.enterConversation()
 	m.state = m.engine.State()
-	m.conversationEpoch++
 	m.chatPhase = chat.PhaseIdle
 	m.list.Reset()
 	m.notices = nil
 	m.syncTranscript()
+	if stopped > 0 {
+		m.postNotice(notice(chat.NoticeInfo, nil, "Resumed the conversation.%s", stoppedCommandsSuffix(stopped)))
+	}
 	m.list.ScrollToBottom()
 	m.dropConversationPicker()
 	return m.resumePendingTools() // Update reconciles focus and animations after the mode change.

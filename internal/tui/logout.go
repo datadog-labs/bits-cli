@@ -33,6 +33,7 @@ func (m *Model) startLogout() tea.Cmd {
 		return closeFileSearch
 	}
 	closeBackground := m.stopBackgroundTasks()
+	m.backgroundCommands.stopAll()
 	generation := m.op.gen
 	m.editor.CloseMenu()
 	logout := m.logout

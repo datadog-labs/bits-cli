@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -23,7 +24,7 @@ func TestClientToolsFitMultiAgentContract(t *testing.T) {
 			name = "interactive"
 		}
 		t.Run(name, func(t *testing.T) {
-			tools := NewClientTools(ws)
+			tools := NewClientTools(ws, exectool.NewExecService(ws.DefaultShellPath()))
 			if interactive {
 				tools = append(tools, NewAskUserQuestionTool(nil))
 			}

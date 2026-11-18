@@ -12,6 +12,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/tools"
+	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/tui"
 	loginui "github.com/datadog-labs/bits-cli/internal/tui/login"
 	"github.com/datadog-labs/bits-cli/internal/update"
@@ -33,7 +34,13 @@ func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer)
 		return err
 	}
 	defer func() { _ = workspace.Close() }()
-	root, err := startupModel(ctx, opts, workspace, checker.Offer(ctx, !opts.NoUpdateCheck))
+	commands, err := newExecService(workspace)
+	if err != nil {
+		return err
+	}
+	// Commands may outlive the turn that started them, never the chat.
+	defer commands.Close()
+	root, err := startupModel(ctx, opts, workspace, commands, checker.Offer(ctx, !opts.NoUpdateCheck))
 	if err != nil {
 		return err
 	}
@@ -87,17 +94,13 @@ func printResumeHint(w io.Writer, conversationID string) error {
 	return err
 }
 
-func startupModel(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, upgrade *update.Offer) (*tui.Model, error) {
-	return startupModelWithStore(ctx, opts, auth.DefaultStore(), workspace, upgrade)
+func startupModel(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, commands *exectool.ExecService, upgrade *update.Offer) (*tui.Model, error) {
+	return startupModelWithStore(ctx, opts, auth.DefaultStore(), workspace, commands, upgrade)
 }
 
-func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace, upgrade *update.Offer) (*tui.Model, error) {
+func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.CredentialStore, workspace *workspace.Workspace, commands *exectool.ExecService, upgrade *update.Offer) (*tui.Model, error) {
 	toolUI := tools.NewUI()
-	clientTools, err := configuredClientTools(workspace)
-	if err != nil {
-		return nil, err
-	}
-	clientTools = append(clientTools, tools.NewAskUserQuestionTool(toolUI), tools.NewHandoffTool())
+	clientTools := append(tools.NewClientTools(workspace, commands), tools.NewAskUserQuestionTool(toolUI), tools.NewHandoffTool())
 	toolSet, err := agent.NewToolSet(clientTools...)
 	if err != nil {
 		return nil, err
@@ -110,6 +113,7 @@ func startupModelWithStore(ctx context.Context, opts ChatOptions, store auth.Cre
 		Visualization: widgets,
 		Tools:         toolSet,
 		ToolUI:        toolUI,
+		Commands:      commands,
 		Version:       version.Build(),
 		Workspace:     workspace,
 		Upgrade:       upgrade,

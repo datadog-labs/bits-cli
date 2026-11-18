@@ -39,6 +39,8 @@ func TestForkSwitchesInPlace(t *testing.T) {
 	m := New(e)
 	m.setMode(ModeChat)
 	defer m.Detach()
+	commands := &fakeCommands{running: 1}
+	m.backgroundCommands.source = commands
 	list := m.list
 	_, cmd := m.dispatchCommand("branch", "")
 	if cmd == nil || m.mode != ModeChat || !m.op.busy() {
@@ -52,11 +54,16 @@ func TestForkSwitchesInPlace(t *testing.T) {
 		t.Fatalf("fork state id=%s list=%v busy=%v draft=%q notices=%+v", m.state.ConversationID, m.list == list, m.op.busy(), m.editor.Value(), m.notices)
 	}
 	notices := m.transcriptNotices()
-	if len(notices) != 1 || notices[0].Notice.Level != chat.NoticeFork || notices[0].After != m.state.Blocks[len(m.state.Blocks)-1].ID {
+	// The fork marker, then the notice of the commands the fork stopped.
+	if len(notices) != 2 || notices[0].Notice.Level != chat.NoticeFork || notices[0].After != m.state.Blocks[len(m.state.Blocks)-1].ID {
 		t.Fatalf("notices=%+v", m.notices)
 	}
 	if !strings.Contains(notices[0].Notice.Text, forkSourceID) {
 		t.Fatal("missing original identity")
+	}
+	// The source conversation's background commands do not follow the fork.
+	if commands.stopped != 1 || notices[1].Notice.Text != "Opened the fork. Stopped 1 background command." {
+		t.Fatalf("fork stopped %d commands, notices=%+v", commands.stopped, m.notices)
 	}
 }
 
@@ -68,9 +75,11 @@ func TestForkLoadFailureKeepsSourceAndCreatedID(t *testing.T) {
 	m := New(e)
 	m.setMode(ModeChat)
 	defer m.Detach()
+	commands := &fakeCommands{running: 1}
+	m.backgroundCommands.source = commands
 	_, cmd := m.dispatchCommand("fork", "")
 	m.applyForkResult(cmd().(forkResultMsg))
-	if m.state.ConversationID != forkSourceID || m.op.busy() || b.calls != 1 {
+	if m.state.ConversationID != forkSourceID || m.op.busy() || b.calls != 1 || commands.stopped != 0 {
 		t.Fatal("failure changed state")
 	}
 	if !strings.Contains(m.notices[len(m.notices)-1].Notice.Text, resumeConversationID) {

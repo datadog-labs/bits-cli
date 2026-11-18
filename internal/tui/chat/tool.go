@@ -60,6 +60,11 @@ type toolPresentation struct {
 	validInput bool
 	// renderSpec is never nil: unknown tools use their client or server fallback.
 	renderSpec *toolRenderSpec
+	// action is renderSpec's verbs, adjusted to what a command tool's result
+	// says happened.
+	action toolAction
+	// result is a command tool's decoded result, nil until it has one.
+	result *spec.ExecCommandOutput
 }
 
 // group returns the group this call joins, or nil when it stands alone. Local
@@ -164,6 +169,16 @@ var (
 		spacing:  itemSpacing{before: 1, after: 1},
 		action:   toolAction{base: "Run", success: "Ran", failure: "Run failed"},
 	}
+	waitCommandRenderSpec = &toolRenderSpec{
+		render:  renderCommandControlTool,
+		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "Wait for command", active: "Waiting for command", success: "Waited for", failure: "Wait failed"},
+	}
+	stopCommandRenderSpec = &toolRenderSpec{
+		render:  renderCommandControlTool,
+		spacing: itemSpacing{before: 1, after: 1},
+		action:  toolAction{base: "Stop command", active: "Stopping command", success: "Stopped", failure: "Stop failed"},
+	}
 	skillToolRenderSpec = &toolRenderSpec{
 		render: renderSimpleTool,
 		group:  skillGroup,
@@ -235,6 +250,7 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 	input := toolInput(tool)
 	id := spec.Identity{ClientSide: tool.IsClientSide, Namespace: toolNamespace(tool), Name: tool.Name}
 	p := toolPresentation{identity: id, name: qualified, renderSpec: toolRenderSpecFor(id)}
+	p.action = p.renderSpec.action
 
 	switch id {
 	case spec.ClientReadFile, spec.ClientWriteFile, spec.ClientEditFile:
@@ -268,10 +284,28 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 				in.Workdir = "."
 			}
 			p.argument, p.context = escape.Multiline(in.Cmd), escape.SingleLine(in.Workdir)
-			if in.TimeoutMS != nil && *in.TimeoutMS > 0 && *in.TimeoutMS <= spec.ExecMaxTimeoutMS {
+			if in.TimeoutMS != nil && *in.TimeoutMS > 0 {
 				p.timeout = (time.Duration(*in.TimeoutMS) * time.Millisecond).String()
 			}
 			p.validInput = true
+		}
+		p.result = decodeExecResult(tool)
+		if p.result != nil && p.result.Status == spec.ExecRunning {
+			// The call answered while the command kept running: it started,
+			// it has not run to completion.
+			p.action.success = "Started"
+		}
+	case spec.ClientWaitCommand, spec.ClientStopCommand:
+		// The id means nothing to the user: the row names the command once
+		// the result does.
+		p.validInput = true
+		p.result = decodeExecResult(tool)
+		if p.result != nil {
+			command, _, _ := strings.Cut(p.result.Command, "\n")
+			p.argument = escape.Inline(command)
+			// The wait or stop itself worked: a failure is the command's,
+			// which the error glyph and the suffix already show.
+			p.action.failure = p.action.success
 		}
 	case spec.ServerSpawnAgent:
 		var in struct {
@@ -343,6 +377,10 @@ func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 		return editToolRenderSpec
 	case spec.ClientExecCommand:
 		return execToolRenderSpec
+	case spec.ClientWaitCommand:
+		return waitCommandRenderSpec
+	case spec.ClientStopCommand:
+		return stopCommandRenderSpec
 	case spec.ServerSpawnAgent:
 		return spawnAgentRenderSpec
 	case spec.ServerSendAgentMessage:
@@ -455,7 +493,7 @@ func (p toolPresentation) execMeta() []summarySpan {
 }
 
 func (p toolPresentation) actionLabel(state agent.ToolStatus) string {
-	return p.renderSpec.action.label(state)
+	return p.action.label(state)
 }
 
 func actionArgument(action, argument string) []summarySpan {
@@ -841,13 +879,27 @@ func formatName(format filediff.TextFormat) string {
 }
 
 func renderExecTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
+	return renderExecBody(tool, p.result, renderExecInvocation(tool, p, execSuffix(p.result), c), c)
+}
+
+// renderCommandControlTool shows a wait or stop: the command it targets, once
+// the result names it, then what it printed since the previous result.
+func renderCommandControlTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
+	return renderExecBody(tool, p.result, renderToolHeader(tool, p.summary(tool), execSuffix(p.result), c), c)
+}
+
+// decodeExecResult returns a command tool's result, nil until it has a
+// decodable one.
+func decodeExecResult(tool *agent.ToolBlock) *spec.ExecCommandOutput {
 	var result spec.ExecCommandOutput
-	decoded := json.Unmarshal([]byte(tool.Output), &result) == nil
-	var suffix []summarySpan
-	if decoded {
-		suffix = execSuffix(result)
+	if json.Unmarshal([]byte(tool.Output), &result) != nil {
+		return nil
 	}
-	header := renderExecInvocation(tool, p, suffix, c)
+	return &result
+}
+
+// renderExecBody follows a command tool's header with the command output.
+func renderExecBody(tool *agent.ToolBlock, result *spec.ExecCommandOutput, header string, c renderContext) string {
 	state := statusOf(tool)
 	if tool.Output == "" {
 		return header
@@ -856,7 +908,7 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) 
 	case agent.ToolRunning, agent.ToolAwaitingApproval, agent.ToolDenied:
 		return header
 	case agent.ToolCancelled:
-		if decoded && execResultIsTerminal(result.Status) && len(execRows(result, max(1, c.width-4), compactView)) == 0 {
+		if result != nil && execResultIsTerminal(result.Status) && len(execRows(*result, max(1, c.width-4), compactView)) == 0 {
 			return header + "\n" + renderNoOutput(c.width, c.sty)
 		}
 		return header
@@ -866,10 +918,10 @@ func renderExecTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) 
 	if state == agent.ToolError {
 		style = c.sty.ToolError
 	}
-	if !decoded {
+	if result == nil {
 		return header + "\n" + renderPreview(tool.Output, execOutputMaxLines, style, true, c)
 	}
-	rows := execRows(result, max(1, c.width-4), c.disclosure)
+	rows := execRows(*result, max(1, c.width-4), c.disclosure)
 	if len(rows) == 0 {
 		if !execResultIsTerminal(result.Status) {
 			return header
@@ -967,13 +1019,13 @@ func highlightShellCommand(command string, sty Styles) [][]textwrap.Segment {
 	return diffrender.Highlight("command.sh", command, sty.Diff.SyntaxDark, sty.ToolArgument)
 }
 
-func execResultIsTerminal(status spec.ExecTerminalReason) bool {
+func execResultIsTerminal(status spec.ExecStatus) bool {
 	switch status {
 	case spec.ExecSucceeded, spec.ExecNonZeroExit, spec.ExecLaunchFailed, spec.ExecTimedOut, spec.ExecCancelled:
 		return true
-	default:
-		return false
+	case spec.ExecRunning:
 	}
+	return false
 }
 
 func renderNoOutput(width int, sty Styles) string {
@@ -1053,9 +1105,14 @@ func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [
 	return strings.Join(out, "\n")
 }
 
-func execSuffix(result spec.ExecCommandOutput) []summarySpan {
+func execSuffix(result *spec.ExecCommandOutput) []summarySpan {
+	if result == nil {
+		return nil
+	}
 	var text string
 	switch result.Status {
+	case spec.ExecRunning:
+		text = " · running"
 	case spec.ExecTimedOut:
 		text = " · timed out"
 	case spec.ExecLaunchFailed:

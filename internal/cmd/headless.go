@@ -16,6 +16,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/headless"
 	"github.com/datadog-labs/bits-cli/internal/headless/adeep"
 	"github.com/datadog-labs/bits-cli/internal/imageinput"
+	"github.com/datadog-labs/bits-cli/internal/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -163,11 +164,13 @@ func runRunWithStore(ctx context.Context, opts RunOptions, store auth.Credential
 		return err
 	}
 	defer func() { _ = workspace.Close() }()
-	clientTools, err := configuredClientTools(workspace)
+	commands, err := newExecService(workspace)
 	if err != nil {
 		return err
 	}
-	toolSet, err := agent.NewToolSet(clientTools...)
+	// The run is finished only once no command it started is left running.
+	defer commands.Close()
+	toolSet, err := agent.NewToolSet(tools.NewClientTools(workspace, commands)...)
 	if err != nil {
 		return err
 	}

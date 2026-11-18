@@ -9,13 +9,19 @@ const (
 	WriteFile   = "write_file"
 	EditFile    = "edit_file"
 	ExecCommand = "exec_command"
+	WaitCommand = "wait_command"
+	StopCommand = "stop_command"
 
 	// Remote tools.
 	Skill               = "Skill"
 	StartBackgroundTask = "startBackgroundTask"
 
-	ExecDefaultTimeoutMS int64 = 10_000
-	ExecMaxTimeoutMS     int64 = 10 * 60 * 1_000
+	// ExecDefaultYieldMS is how long exec_command waits before answering
+	// with a running command. ExecMaxWaitMS bounds every such wait to half
+	// of the 600 s deadline the backend gives a whole multi-agent run.
+	ExecDefaultYieldMS int64 = 10_000
+	ExecDefaultWaitMS  int64 = 30_000
+	ExecMaxWaitMS      int64 = 5 * 60 * 1_000
 )
 
 // Identity is the complete identity needed for exact tool classification.
@@ -39,6 +45,8 @@ var (
 	ClientWriteFile           = Identity{ClientSide: true, Name: WriteFile}
 	ClientEditFile            = Identity{ClientSide: true, Name: EditFile}
 	ClientExecCommand         = Identity{ClientSide: true, Name: ExecCommand}
+	ClientWaitCommand         = Identity{ClientSide: true, Name: WaitCommand}
+	ClientStopCommand         = Identity{ClientSide: true, Name: StopCommand}
 )
 
 // PathInput is the minimal path-bearing projection shared by local tools. It
@@ -113,34 +121,52 @@ type ExecCommandInput struct {
 	Shell     string `json:"shell"`
 	Workdir   string `json:"workdir"`
 	TimeoutMS *int64 `json:"timeout_ms"`
+	YieldMS   *int64 `json:"yield_ms"`
 }
 
-// ExecTerminalReason identifies why a one-shot command stopped. Output
-// truncation is orthogonal to this reason and is reported separately.
-type ExecTerminalReason string
+// WaitCommandInput waits on a command exec_command left running.
+type WaitCommandInput struct {
+	CommandID string `json:"command_id"`
+	WaitMS    *int64 `json:"wait_ms"`
+}
+
+// StopCommandInput stops a command exec_command left running.
+type StopCommandInput struct {
+	CommandID string `json:"command_id"`
+}
+
+// ExecStatus identifies whether a command still runs, or why it stopped.
+// Output truncation is orthogonal to it and is reported separately.
+type ExecStatus string
 
 const (
-	ExecSucceeded    ExecTerminalReason = "success"
-	ExecNonZeroExit  ExecTerminalReason = "nonzero_exit"
-	ExecLaunchFailed ExecTerminalReason = "launch_failure"
-	ExecTimedOut     ExecTerminalReason = "timeout"
-	ExecCancelled    ExecTerminalReason = "cancellation"
+	ExecSucceeded    ExecStatus = "success"
+	ExecNonZeroExit  ExecStatus = "nonzero_exit"
+	ExecLaunchFailed ExecStatus = "launch_failure"
+	ExecTimedOut     ExecStatus = "timeout"
+	ExecCancelled    ExecStatus = "cancellation"
+	ExecRunning      ExecStatus = "running"
 )
 
-// ExecCommandOutput is the JSON result an exec_command tool call returns. Fields
-// mirror the terminal outcome of the execution: Status is always set, ExitCode
-// and Signal are populated only when the operating system reported them, and
-// the omitted-byte counts are non-zero exactly when Truncated is true.
+// ExecCommandOutput is the JSON result of exec_command, wait_command, and
+// stop_command. Status is always set. CommandID names the command
+// exec_command left running; wait_command and stop_command results name it by
+// Command instead, for the model and the transcript, which know only the id.
+// ExitCode and Signal are populated only when the operating system reported
+// them. Streams hold output since the previous result for the same command,
+// and the omitted-byte counts are non-zero exactly when Truncated is true.
 type ExecCommandOutput struct {
-	Status             ExecTerminalReason `json:"status"`
-	ExitCode           *int               `json:"exit_code,omitempty"`
-	Signal             string             `json:"signal,omitempty"`
-	DurationMS         int64              `json:"duration_ms"`
-	Truncated          bool               `json:"truncated"`
-	OutputIncomplete   bool               `json:"output_incomplete"`
-	StdoutOmittedBytes int64              `json:"stdout_omitted_bytes"`
-	StderrOmittedBytes int64              `json:"stderr_omitted_bytes"`
-	Error              string             `json:"error,omitempty"`
-	Stdout             string             `json:"stdout"`
-	Stderr             string             `json:"stderr"`
+	Status             ExecStatus `json:"status"`
+	CommandID          string     `json:"command_id,omitempty"`
+	Command            string     `json:"command,omitempty"`
+	ExitCode           *int       `json:"exit_code,omitempty"`
+	Signal             string     `json:"signal,omitempty"`
+	DurationMS         int64      `json:"duration_ms"`
+	Truncated          bool       `json:"truncated"`
+	OutputIncomplete   bool       `json:"output_incomplete"`
+	StdoutOmittedBytes int64      `json:"stdout_omitted_bytes"`
+	StderrOmittedBytes int64      `json:"stderr_omitted_bytes"`
+	Error              string     `json:"error,omitempty"`
+	Stdout             string     `json:"stdout"`
+	Stderr             string     `json:"stderr"`
 }

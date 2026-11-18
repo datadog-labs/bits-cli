@@ -30,9 +30,9 @@ Reusable scripts for tests and manual TUI previews live together in
 `load("notices.star", "rate_limit"); rate_limit()` from any working directory.
 The runner bundles these scripts; a file with the same name in the working
 directory takes precedence. Full paths below the working directory also work.
-The files cover approvals, command wrapping, links, notices, disclosure,
-tool grouping, questions, and background tasks (`load("tasks.star",
-"investigation"); investigation()`).
+The files cover approvals, command wrapping and background commands, links,
+notices, disclosure, tool grouping, questions, and background tasks
+(`load("tasks.star", "investigation"); investigation()`).
 
 For visualizations, run `BITS_FAKE_BACKEND=1` with a built ddviz helper and
 load `widgets.star`. Only assistant messages are faked: rendering still requires

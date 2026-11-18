@@ -182,18 +182,61 @@ func resumeExecThread(pid int) error {
 // Programs choosing an unrelated code page or mixing encodings cannot be
 // identified reliably from an unlabelled byte stream.
 func decodeExecOutput(bytes []byte) string {
+	return windowsExecOutputText(bytes, legacyCodePage())
+}
+
+// decodeLegacyOutput decodes bytes of a stream already known not to be UTF-8.
+func decodeLegacyOutput(bytes []byte) string {
+	return windowsLegacyText(bytes, legacyCodePage())
+}
+
+func legacyCodePage() uint32 {
 	codePage, err := windows.GetConsoleOutputCP()
 	if err != nil || codePage == 65001 {
 		// CP_OEMCP asks Windows to use the system OEM code page when Bits has
 		// no legacy console code page (for example, headless execution).
 		codePage = 1
 	}
-	return windowsExecOutputText(bytes, codePage)
+	return codePage
+}
+
+// incompleteLegacySuffix is the length of a trailing legacy code-page
+// character that more bytes could still complete.
+func incompleteLegacySuffix(bytes []byte) int {
+	return windowsIncompleteSuffix(bytes, legacyCodePage())
+}
+
+// windowsIncompleteSuffix is 1 when bytes end in the lead byte of a
+// double-byte character (Shift-JIS, GBK, Big5, UHC), found by the trim that
+// makes them decode strictly.
+// NOTE: bytes invalid elsewhere fail both checks, so nothing is held; nor is
+// a split 4-byte GB18030 character, which Windows decodes leniently.
+func windowsIncompleteSuffix(bytes []byte, codePage uint32) int {
+	if len(bytes) == 0 || decodesStrictly(bytes, codePage) || !decodesStrictly(bytes[:len(bytes)-1], codePage) {
+		return 0
+	}
+	return 1
+}
+
+func decodesStrictly(bytes []byte, codePage uint32) bool {
+	if len(bytes) == 0 {
+		return true
+	}
+	const mbErrInvalidChars = 0x8
+	n, err := windows.MultiByteToWideChar(codePage, mbErrInvalidChars, &bytes[0], int32(len(bytes)), nil, 0)
+	return err == nil && n > 0
 }
 
 func windowsExecOutputText(bytes []byte, codePage uint32) string {
 	if utf8.Valid(bytes) {
 		return string(bytes)
+	}
+	return windowsLegacyText(bytes, codePage)
+}
+
+func windowsLegacyText(bytes []byte, codePage uint32) string {
+	if len(bytes) == 0 {
+		return ""
 	}
 	// At most one UTF-16 code unit is needed per source byte for Windows
 	// legacy code pages. The retained output is already bounded.

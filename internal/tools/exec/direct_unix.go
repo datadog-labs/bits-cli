@@ -36,6 +36,7 @@ func (launcher directExecLauncher) Start(plan ExecPlan, stdout, stderr io.Writer
 	// A new session has no controlling terminal, so descendants cannot take
 	// the foreground from the TUI.
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	stopWithParent(command.SysProcAttr)
 	command.WaitDelay = execPipeWaitDelay
 	if err := command.Start(); err != nil {
 		return nil, err
@@ -77,6 +78,11 @@ func (p *directExecProcess) Terminate() error {
 	return signalExecProcessGroup(p.command.Process.Pid, syscall.SIGTERM)
 }
 
+// Kill signals the whole group, so a process that leaves it, like a daemon
+// calling setsid, escapes.
+// NOTE: after a shell that exited on its own is reaped, its group keeps the
+// ID while a member lives; an empty group is gone unless a new process
+// reused the ID in between.
 func (p *directExecProcess) Kill() error {
 	return signalExecProcessGroup(p.command.Process.Pid, syscall.SIGKILL)
 }
@@ -91,3 +97,10 @@ func signalExecProcessGroup(pid int, signal syscall.Signal) error {
 
 // Unix command output follows the UTF-8 text contract.
 func decodeExecOutput(bytes []byte) string { return execOutputText(bytes) }
+
+// decodeLegacyOutput replaces invalid UTF-8: Unix has no legacy code page.
+func decodeLegacyOutput(bytes []byte) string { return execOutputText(bytes) }
+
+// incompleteLegacySuffix holds a split UTF-8 character: Unix keeps decoding
+// UTF-8 after invalid bytes, which it replaces.
+func incompleteLegacySuffix(bytes []byte) int { return incompleteUTF8Suffix(bytes) }

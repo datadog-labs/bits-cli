@@ -43,6 +43,26 @@ func TestShellEnvWithoutExcludedNamesWindows(t *testing.T) {
 	}
 }
 
+// Once a stream is legacy, a read that alone is valid UTF-8 still decodes
+// with the code page: GBK 漏 is c2 a9, which is also UTF-8 ©.
+func TestWindowsLegacyText(t *testing.T) {
+	if got := windowsLegacyText([]byte{0xc2, 0xa9}, 936); got != "漏" {
+		t.Fatalf("decoded = %q, want %q", got, "漏")
+	}
+	if got := windowsLegacyText(nil, 936); got != "" {
+		t.Fatalf("decoded empty = %q", got)
+	}
+	// A buffer keeps the decision: after an invalid byte, a later read of
+	// c2 a9 decodes with the console's legacy code page, never as UTF-8 ©.
+	b := newHeadTailBuffer(64)
+	_, _ = b.Write([]byte{0xff})
+	_, _, cursor := b.since(0, false)
+	_, _ = b.Write([]byte{0xc2, 0xa9})
+	if got, _, _ := b.since(cursor, false); got == "©" || got != decodeLegacyOutput([]byte{0xc2, 0xa9}) {
+		t.Fatalf("later read = %q, want it decoded with the legacy code page", got)
+	}
+}
+
 func TestWindowsExecOutputText(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -67,6 +87,26 @@ func TestWindowsExecOutputText(t *testing.T) {
 	}
 }
 
+// A read holds a legacy character split across writes until it completes.
+func TestWindowsIncompleteSuffix(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		bytes    []byte
+		codePage uint32
+		want     int
+	}{
+		{"complete Shift-JIS", []byte{0x93, 0xfa}, 932, 0},
+		{"split Shift-JIS", []byte{0x93, 0xfa, 0x96}, 932, 1},
+		{"single-byte code page", []byte("caf\x82"), 437, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := windowsIncompleteSuffix(test.bytes, test.codePage); got != test.want {
+				t.Fatalf("incomplete suffix = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 func TestExecServiceWindowsPowerShellUnicodeOutput(t *testing.T) {
 	for _, name := range []string{"powershell.exe", "pwsh.exe"} {
 		t.Run(name, func(t *testing.T) {
@@ -75,12 +115,12 @@ func TestExecServiceWindowsPowerShellUnicodeOutput(t *testing.T) {
 				t.Skipf("%s is not installed", name)
 			}
 			const want = "65001|café 日本語 😀"
-			outcome := NewExecService(shell).Run(t.Context(), ExecRequest{
+			outcome := NewExecService(shell).run(t.Context(), ExecRequest{
 				Command: `[Console]::Out.Write([string][Console]::Out.Encoding.CodePage + '|café 日本語 😀'); ` +
 					`[Console]::Error.Write([string][Console]::Error.Encoding.CodePage + '|café 日本語 😀'); exit 7`,
 				CWD: t.TempDir(),
 			})
-			if outcome.Reason != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
+			if outcome.Status != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
 				t.Fatalf("outcome = %+v, want exit 7", outcome)
 			}
 			if outcome.Output.Stdout != want || outcome.Output.Stderr != want {
@@ -131,7 +171,7 @@ if ([Console]::Out.Encoding.CodePage -ne 1252 -or [Console]::Error.Encoding.Code
 func TestExecServiceWindowsLegacyOutput(t *testing.T) {
 	// Write raw bytes to the inherited handles so PowerShell cannot transcode
 	// them first. This models native programs that keep using a legacy code page.
-	outcome := NewExecService(testPowerShell(t)).Run(t.Context(), ExecRequest{
+	outcome := NewExecService(testPowerShell(t)).run(t.Context(), ExecRequest{
 		Command: `$bytes = [byte[]](0x63, 0x61, 0x66, 0x82); ` +
 			`[Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length); ` +
 			`[Console]::OpenStandardError().Write($bytes, 0, $bytes.Length)`,
@@ -140,7 +180,7 @@ func TestExecServiceWindowsLegacyOutput(t *testing.T) {
 	// The expected glyph is locale-dependent; the fixed code-page cases above
 	// independently verify the conversion, while this checks the live pipes.
 	want := decodeExecOutput([]byte("caf\x82"))
-	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != want || outcome.Output.Stderr != want {
+	if outcome.Status != ExecSucceeded || outcome.Output.Stdout != want || outcome.Output.Stderr != want {
 		t.Fatalf("outcome = %+v, want decoded output %q", outcome, want)
 	}
 }
@@ -149,13 +189,13 @@ func TestExecServiceWindowsPowerShellSuccess(t *testing.T) {
 	shell := testPowerShell(t)
 	t.Setenv("BITS_EXEC_TEST_VALUE", "inherited-value")
 	dir := t.TempDir()
-	service := newWindowsTestExecService(shell, 5*time.Second)
-	outcome := service.Run(context.Background(), ExecRequest{
+	service := newWindowsTestExecService(shell)
+	outcome := service.run(context.Background(), ExecRequest{
 		Command: `[Console]::Out.Write("stdout:$env:BITS_EXEC_TEST_VALUE"); [Console]::Error.Write("stderr")`,
 		CWD:     dir,
 	})
 
-	if outcome.Reason != ExecSucceeded || outcome.ExitCode == nil || *outcome.ExitCode != 0 {
+	if outcome.Status != ExecSucceeded || outcome.ExitCode == nil || *outcome.ExitCode != 0 {
 		t.Fatalf("outcome = %+v, want success", outcome)
 	}
 	if outcome.Output.Stdout != "stdout:inherited-value" || outcome.Output.Stderr != "stderr" {
@@ -167,11 +207,11 @@ func TestExecServiceWindowsExcludesEnvironmentCaseInsensitively(t *testing.T) {
 	shell := testPowerShell(t)
 	t.Setenv("bits_exec_test_private_token", "hidden")
 	t.Setenv("BITS_EXEC_TEST_VISIBLE_KEY", "visible")
-	outcome := NewExecService(shell, "BITS_EXEC_TEST_PRIVATE_TOKEN").Run(context.Background(), ExecRequest{
+	outcome := NewExecService(shell, "BITS_EXEC_TEST_PRIVATE_TOKEN").run(context.Background(), ExecRequest{
 		Command: `[Console]::Out.Write("$env:bits_exec_test_private_token|$env:BITS_EXEC_TEST_VISIBLE_KEY")`,
 		CWD:     t.TempDir(),
 	})
-	if outcome.Reason != ExecSucceeded || outcome.Output.Stdout != "|visible" {
+	if outcome.Status != ExecSucceeded || outcome.Output.Stdout != "|visible" {
 		t.Fatalf("excluded environment outcome = %+v", outcome)
 	}
 }
@@ -182,11 +222,11 @@ func TestExecServiceWindowsPowerShellWorkdirAndNonZeroExit(t *testing.T) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	outcome := newWindowsTestExecService(shell, 5*time.Second).Run(context.Background(), ExecRequest{
+	outcome := newWindowsTestExecService(shell).run(context.Background(), ExecRequest{
 		Command: `[Console]::Out.Write((Get-Location).Path); exit 7`,
 		CWD:     dir,
 	})
-	if outcome.Reason != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
+	if outcome.Status != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
 		t.Fatalf("outcome = %+v, want exit status 7", outcome)
 	}
 	// PowerShell can expand an 8.3 path supplied through the temp directory.
@@ -205,11 +245,12 @@ func TestExecServiceWindowsPowerShellWorkdirAndNonZeroExit(t *testing.T) {
 
 func TestExecServiceWindowsPowerShellTimeoutKillsDirectProcess(t *testing.T) {
 	shell := testPowerShell(t)
-	outcome := newWindowsTestExecService(shell, 50*time.Millisecond).Run(context.Background(), ExecRequest{
+	outcome := newWindowsTestExecService(shell).run(context.Background(), ExecRequest{
 		Command: "Start-Sleep -Seconds 30",
 		CWD:     t.TempDir(),
+		Timeout: 50 * time.Millisecond,
 	})
-	if outcome.Reason != ExecTimedOut || !errors.Is(outcome.Err, context.DeadlineExceeded) {
+	if outcome.Status != ExecTimedOut || !errors.Is(outcome.Err, context.DeadlineExceeded) {
 		t.Fatalf("outcome = %+v, want timeout", outcome)
 	}
 	if outcome.Elapsed > 5*time.Second {
@@ -228,10 +269,9 @@ func testPowerShell(t *testing.T) string {
 	return ""
 }
 
-func newWindowsTestExecService(shell string, timeout time.Duration) *ExecService {
+func newWindowsTestExecService(shell string) *ExecService {
 	return newExecService(newDirectExecLauncher(), execServiceConfig{
 		concurrency:      1,
-		timeout:          timeout,
 		outputLimit:      4096,
 		defaultShellPath: shell,
 	})
@@ -273,8 +313,8 @@ func TestExecServiceWindowsResolvesRequestedBash(t *testing.T) {
 		t.Fatal("missing explicit Bash path was accepted")
 	}
 	t.Setenv("PATH", t.TempDir())
-	outcome := service.Run(t.Context(), ExecRequest{Command: "ignored", CWD: root, Shell: "bash"})
-	if outcome.Reason != ExecLaunchFailed || outcome.Err == nil || !strings.Contains(outcome.Err.Error(), "resolve exec shell") {
+	outcome := service.run(t.Context(), ExecRequest{Command: "ignored", CWD: root, Shell: "bash"})
+	if outcome.Status != ExecLaunchFailed || outcome.Err == nil || !strings.Contains(outcome.Err.Error(), "resolve exec shell") {
 		t.Fatalf("missing Bash must fail resolution without falling back: %+v", outcome)
 	}
 }
@@ -283,13 +323,13 @@ func TestExecServiceWindowsBashEnvironmentAndExit(t *testing.T) {
 	shell := testWindowsBash(t)
 	t.Setenv("BITS_EXEC_TEST_VALUE", "spaces 'quotes' $dollar")
 	t.Setenv("BITS_EXEC_TEST_PRIVATE", "hidden")
-	outcome := NewExecService(testPowerShell(t), "BITS_EXEC_TEST_PRIVATE").Run(t.Context(), ExecRequest{
+	outcome := NewExecService(testPowerShell(t), "BITS_EXEC_TEST_PRIVATE").run(t.Context(), ExecRequest{
 		Shell: shell,
 		Command: `printf '%s|%s' "$BITS_EXEC_TEST_VALUE" "${BITS_EXEC_TEST_PRIVATE-unset}"; ` +
 			`printf stderr >&2; if read -r ignored; then exit 9; fi; exit 7`,
 		CWD: t.TempDir(),
 	})
-	if outcome.Reason != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
+	if outcome.Status != ExecNonZeroExit || outcome.ExitCode == nil || *outcome.ExitCode != 7 {
 		t.Fatalf("outcome = %+v, want exit 7", outcome)
 	}
 	if outcome.Output.Stdout != "spaces 'quotes' $dollar|unset" || outcome.Output.Stderr != "stderr" {
@@ -332,9 +372,10 @@ func testExecJobProcessTree(t *testing.T, shell, command string) {
 			})
 			go func() {
 				defer close(finished)
-				done <- newWindowsTestExecService(shell, 15*time.Second).Run(ctx, ExecRequest{
+				done <- newWindowsTestExecService(shell).run(ctx, ExecRequest{
 					Command: command,
 					CWD:     dir,
+					Timeout: 15 * time.Second,
 				})
 			}()
 			// Hold process handles before cancellation so PID reuse cannot make
@@ -375,7 +416,7 @@ func testExecJobProcessTree(t *testing.T, shell, command string) {
 			}
 			select {
 			case outcome := <-done:
-				if outcome.Reason != want {
+				if outcome.Status != want {
 					t.Fatalf("outcome = %+v, want %s", outcome, want)
 				}
 			case <-time.After(20 * time.Second):

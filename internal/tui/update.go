@@ -287,6 +287,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openToolUI(msg.request)
 		return m, waitToolUI(m.toolUI)
 
+	case backgroundCommandsChangedMsg:
+		return m, m.backgroundCommands.update()
+
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 		return m, nil
