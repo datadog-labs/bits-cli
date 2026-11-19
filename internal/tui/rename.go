@@ -39,7 +39,7 @@ func (m *Model) startRename(argument string) tea.Cmd {
 	form := components.NewTextPrompt("Rename conversation", "", maxTitleLength)
 	form.SetPlaceholder("New title")
 	epoch := m.conversationEpoch
-	m.openCommandPrompt(form, func(title string) tea.Cmd {
+	openCommandPrompt(m, form, func(title string) tea.Cmd {
 		if epoch != m.conversationEpoch {
 			return nil
 		}
