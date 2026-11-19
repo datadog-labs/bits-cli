@@ -4,6 +4,7 @@ In the TUI, enter one of these prompts:
   load("notices.star", "rate_limit"); rate_limit()
   load("notices.star", "service_error"); service_error()
   load("notices.star", "network_error"); network_error()
+  load("notices.star", "turn_error"); turn_error()
 
 Then use /notacommand, /copy, and /new to see local command messages.
 """
@@ -19,3 +20,7 @@ def service_error():
 def network_error():
     say("Partial answer before the connection failed.")
     fail("net")
+
+def turn_error():
+    raw({"type": "markdown_fragment", "content": "Partial answer before the model hit its token rate limit."}, id="answer")
+    raw({"type": "markdown_fragment", "content": "Token rate limit exceeded. Please wait before sending more messages."}, id="answer", is_error=True)

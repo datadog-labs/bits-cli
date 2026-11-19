@@ -160,6 +160,12 @@ func TestRunOutcomeExitMapping(t *testing.T) {
 			want:    []string{`"status":"denied"`, `"outcome":"failed"`},
 		},
 		{
+			name:    "a server error message fails with the partial answer",
+			prompt:  `say("partial"); raw({"type": "markdown_fragment", "content": "Token rate limit exceeded."}, is_error=True)`,
+			wantErr: func(err error) bool { return err != nil && err.Error() == "Token rate limit exceeded." },
+			want:    []string{`"outcome":"failed"`, `"response":"partial"`, `"error":{"message":"Token rate limit exceeded."}`},
+		},
+		{
 			name:    "cancellation is a runtime failure",
 			prompt:  `say("never")`,
 			ctx:     canceled,

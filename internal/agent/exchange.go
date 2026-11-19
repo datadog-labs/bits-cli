@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -101,15 +102,24 @@ func (x *roundsExchange) run(ctx context.Context, emit func(exchangeEvent) bool)
 	return opts.ConversationID, ErrMaxTurns
 }
 
-// send streams one request and returns the client calls it paused on.
+// send streams one request and returns the client calls it paused on. A
+// message flagged as an error fails the round once the stream ends, so its
+// trailing usage and conversation ID still arrive and its calls never run.
 func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.SendOptions, emit func(exchangeEvent) bool) ([]ToolCall, error) {
 	var calls []ToolCall
+	var failure error
 	id, err := x.backend.Send(ctx, message, *opts, func(response assistant.AssistantResponse) error {
 		ev := exchangeEvent{title: response.Data.Attributes.ConversationTitle}
 		if ev.title == "" {
 			msg := response.Data.Attributes.StructuredMessage
 			if msg.Content.Type == assistant.ContentClientToolCall {
 				calls = append(calls, toolCallOf(msg.Content))
+			}
+			if err := msg.Err(); err != nil {
+				failure = cmp.Or(failure, err)
+				// The server reuses the answer's message ID, so its text would
+				// read as part of the answer; the turn's error reports it.
+				msg.Content = assistant.Content{}
 			}
 			ev.message = &msg
 		}
@@ -129,7 +139,8 @@ func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.
 	if err != nil {
 		return nil, backendError{err}
 	}
-	return calls, nil
+	// The backend answered, so the failure is the turn's, not the backend's.
+	return calls, failure
 }
 
 // collect hands out a round's calls and waits until every one is answered,
