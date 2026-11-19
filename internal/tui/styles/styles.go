@@ -66,7 +66,10 @@ func (s Input) ContentOffset() int {
 
 // Chat contains chat-specific styles derived from a Theme.
 type Chat struct {
-	Markdown        glamouransi.StyleConfig
+	Markdown glamouransi.StyleConfig
+	// MarkdownNested is Markdown without the document margin, for text set
+	// under a marker that already indents it.
+	MarkdownNested  glamouransi.StyleConfig
 	MarkdownHeading color.Color
 	MarkdownLink    color.Color
 	MarkdownCodeFg  color.Color

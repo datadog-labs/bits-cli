@@ -206,6 +206,10 @@ func validateHistoryMessage(message assistant.Message) error {
 		if message.Content.Progress == nil {
 			return errors.New("progress content has no payload")
 		}
+	case assistant.KindMemory:
+		if message.Content.Memory == nil {
+			return errors.New("memory content has no payload")
+		}
 	case assistant.KindTurnMarker:
 		if message.Content.TurnStatus == nil {
 			return errors.New("turn marker has no payload")
@@ -219,8 +223,7 @@ func validateHistoryMessage(message assistant.Message) error {
 			return errors.New("internal content has no payload")
 		}
 	case assistant.KindUnknown:
-		// Future discriminators are retained as safe fallback labels. Their raw
-		// fields are intentionally unavailable to the renderer.
+		// Future discriminators are valid history; Transcript.fold drops them.
 	}
 	return nil
 }

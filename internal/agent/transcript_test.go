@@ -385,28 +385,39 @@ func TestPassthroughKindProducesBlock(t *testing.T) {
 	if b.Kind != assistant.KindWidget || b.Widget == nil || b.Widget.Title != "CPU" {
 		t.Fatalf("widget block = %+v", b)
 	}
+
+	// History replays a live memory message under the same id: it must update
+	// the block rather than add a second one.
+	memory := func(title string) assistant.Message {
+		return assistant.AssistantMessage("m2", assistant.Content{Type: assistant.ContentMemoryContext, Memory: &assistant.MemoryContextPayload{Memories: []assistant.RetrievedMemory{{MemoryID: "a", Title: title}}}})
+	}
+	first, _ := tr.AppendMessage(memory("live"))
+	replayed, ok := tr.AppendMessage(memory("replayed"))
+	if !ok || replayed.ID != first.ID || replayed.Rev <= first.Rev || replayed.Memory.Memories[0].Title != "replayed" {
+		t.Fatalf("replayed memory = %+v, want an update of %+v", replayed, first)
+	}
+	if blocks := tr.Blocks(); len(blocks) != 2 {
+		t.Fatalf("transcript blocks = %d, want widget and one memory", len(blocks))
+	}
 }
 
-func TestTechnicalMarkersAreDroppedButUnknownContentIsRetained(t *testing.T) {
+func TestContentWithoutAViewIsDropped(t *testing.T) {
 	tr := NewTranscript()
 	technical := []assistant.Content{
 		{Type: assistant.ContentTurnStatus, TurnStatus: &assistant.TurnStatusPayload{Status: "ended"}},
 		{Type: assistant.ContentUserStop, Stop: &assistant.StopPayload{Content: "stopped"}},
 		{Type: assistant.ContentProviderCompaction, Compaction: &assistant.CompactionPayload{Summary: "private"}},
+		// A memory message without memories has nothing to show.
+		{Type: assistant.ContentMemoryContext, Memory: &assistant.MemoryContextPayload{}},
+		{Type: "future_content"},
+		{},
 	}
 	for i, content := range technical {
 		if block, ok := tr.AppendMessage(assistant.AssistantMessage("technical", content)); ok {
-			t.Fatalf("technical content %d produced block %+v", i, block)
+			t.Fatalf("content %d produced block %+v", i, block)
 		}
 	}
-	if block, ok := tr.AppendMessage(assistant.AssistantMessage("metadata", assistant.Content{})); ok {
-		t.Fatalf("metadata-only content produced block %+v", block)
-	}
-	unknown, ok := tr.AppendMessage(assistant.AssistantMessage("future", assistant.Content{Type: "future_content"}))
-	if !ok || unknown.Kind != assistant.KindUnknown {
-		t.Fatalf("unknown content = (%+v, %v), want safe fallback block", unknown, ok)
-	}
-	if blocks := tr.Blocks(); len(blocks) != 1 || blocks[0].Kind != assistant.KindUnknown {
+	if blocks := tr.Blocks(); len(blocks) != 0 {
 		t.Fatalf("transcript blocks = %+v", blocks)
 	}
 }

@@ -167,19 +167,16 @@ func (t *Transcript) fold(msg assistant.Message) (Block, bool) {
 		return t.appendPassthrough(msg, kind, func(b *Block) { b.Dashboard = msg.Content.Dashboard })
 	case assistant.KindProgress:
 		return t.appendPassthrough(msg, kind, func(b *Block) { b.Progress = msg.Content.Progress })
-	case assistant.KindTurnMarker, assistant.KindStop, assistant.KindInternal:
-		// Known history-only control metadata is not conversation content. Keep it
-		// out of both startup restore and /resume transcripts.
-		return Block{}, false
-	case assistant.KindUnknown:
-		if strings.TrimSpace(msg.Content.Type) == "" {
-			// History envelopes can contain metadata-only records with no content
-			// discriminator. They are not user-visible conversation content.
+	case assistant.KindMemory:
+		if msg.Content.Memory == nil || len(msg.Content.Memory.Memories) == 0 {
 			return Block{}, false
 		}
-		// Future content remains visible as a safe fallback label. Its provider
-		// payload is deliberately not rendered.
-		return t.appendPassthrough(msg, kind, func(*Block) {})
+		return t.appendPassthrough(msg, kind, func(b *Block) { b.Memory = msg.Content.Memory })
+	case assistant.KindTurnMarker, assistant.KindStop, assistant.KindInternal, assistant.KindUnknown:
+		// Control metadata, metadata-only history records, and content types
+		// this client does not know are not conversation content it can show. A
+		// bare label for a future type would only be noise until it is supported.
+		return Block{}, false
 	}
 	return Block{}, false
 }

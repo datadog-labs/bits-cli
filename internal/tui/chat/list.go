@@ -103,6 +103,7 @@ type presentationItem struct {
 	start, end    int
 	presentations []toolPresentation
 	group         *toolGroup // itemToolGroup only
+	memory        int        // itemMemory only: index into the block's memories
 	notice        *NoticeItem
 	indent        int // group children retain their normal rendering and disclosure
 	// live marks the run's newest reasoning: it shows its text as the model's
@@ -123,6 +124,10 @@ const (
 	itemReasoning
 	// itemToolGroup is a fixed header followed by ordinary indented children.
 	itemToolGroup
+	// itemMemories heads a memory block; each memory follows it as an
+	// indented itemMemory, shown once the header is opened.
+	itemMemories
+	itemMemory
 	// itemHeader is the synthetic header. Its start/end are headerSentinel:
 	// it has no backing block, and every reader of start must tolerate that.
 	itemHeader
@@ -171,7 +176,8 @@ func (l *List) SetWidth(w int) {
 // SetLinks sets how root-relative markdown links resolve and rerenders with
 // it.
 func (l *List) SetLinks(links browser.Links) {
-	if l.renderer.markdown.SetLinks(links) {
+	changed := l.renderer.markdown.SetLinks(links)
+	if l.renderer.nested.SetLinks(links) || changed {
 		l.invalidateAll()
 	}
 }
@@ -362,7 +368,7 @@ func (l *List) stacksTight(it presentationItem) bool {
 		return false
 	}
 	switch l.items[it.start].Kind {
-	case assistant.KindReasoning, assistant.KindToolCall, assistant.KindToolResult:
+	case assistant.KindReasoning, assistant.KindToolCall, assistant.KindToolResult, assistant.KindMemory:
 		return true
 	default:
 		return false
@@ -385,7 +391,7 @@ func (l *List) gutter(it presentationItem) int {
 
 // expandable reports whether an item has a full view to disclose. Every single
 // tool does, unless its renderer is static; a reasoning group does when it has
-// text. Group headers have no disclosure control.
+// text; memories open to their steps, and a step to its text. Tool group headers have no disclosure control.
 func (l *List) expandable(it presentationItem) bool {
 	switch it.kind {
 	case itemTool:
@@ -394,6 +400,10 @@ func (l *List) expandable(it presentationItem) bool {
 		return hasReasoningText(l.items[it.start:it.end])
 	case itemToolGroup:
 		return it.group.closed
+	case itemMemories:
+		return true
+	case itemMemory:
+		return hasMemoryText(l.items[it.start].Memory.Memories[it.memory])
 	case itemBlock, itemNotice, itemHeader:
 	}
 	return false
@@ -532,6 +542,8 @@ func (l *List) LinkAt(x, y int) (LinkHit, bool) {
 		return LinkHit{}, false
 	}
 	item := l.view[idx]
+	// NOTE: a memory step's markdown keeps its hyperlinks for the terminal,
+	// but a plain click toggles the step, as on every accordion row.
 	if item.kind != itemBlock || item.start < 0 {
 		return LinkHit{}, false
 	}
@@ -636,6 +648,10 @@ func (l *List) renderPresentationItem(it presentationItem, c renderContext) stri
 		return renderToolGroupHeader(it.group, l.items[it.start:it.end], it.presentations, c)
 	case itemTool:
 		return renderPresentedTool(l.items[it.start].Tool, it.presentations[0], c)
+	case itemMemories:
+		return renderMemoryGroup(l.items[it.start], c)
+	case itemMemory:
+		return l.renderer.renderMemory(l.items[it.start].Memory.Memories[it.memory], c)
 	case itemBlock:
 		if v, ok := l.widgets[it.id]; ok {
 			return renderWidgetView(l.items[it.start], v, c)
@@ -979,8 +995,12 @@ func (l *List) present() []presentationItem {
 	view := items[:0]
 	closed := false
 	for _, it := range items {
-		if it.kind == itemToolGroup {
+		switch it.kind {
+		case itemToolGroup:
 			closed = it.group.closed && !l.expanded(it.id)
+		case itemMemories:
+			closed = !l.expanded(it.id)
+		case itemBlock, itemNotice, itemTool, itemReasoning, itemMemory, itemHeader:
 		}
 		// Children follow their header, so closed only ever applies to them.
 		if it.indent > 0 && closed && !it.live && !l.itemWorking(it) {
@@ -1005,7 +1025,9 @@ func (l *List) liveReasoning(items []presentationItem) int {
 			live = i
 		case itemBlock:
 			live = -1
-		case itemTool, itemToolGroup, itemNotice, itemHeader:
+		case itemTool, itemToolGroup, itemNotice, itemHeader, itemMemories, itemMemory:
+			// The backend adds memories while the model works; they do not
+			// mean it moved on.
 		}
 	}
 	// Redacted thinking has no text; an older note would be stale.
@@ -1081,6 +1103,18 @@ func appendBlockPresentations(items []presentationItem, blocks []agent.Block, fr
 		// thinking and calls is one group; otherwise it stands alone.
 		if i > start && group == nil {
 			items = append(items, newPresentationItem(blocks, itemReasoning, start, i, nil))
+			continue
+		}
+		if !isTool && blocks[i].Kind == assistant.KindMemory {
+			header := newPresentationItem(blocks, itemMemories, i, i+1, nil)
+			items = append(items, header)
+			for k := range blocks[i].Memory.Memories {
+				child := newPresentationItem(blocks, itemMemory, i, i+1, nil)
+				child.id = agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00memory:" + header.id.String() + ":" + strconv.Itoa(k)}
+				child.memory, child.indent = k, 2
+				items = append(items, child)
+			}
+			i++
 			continue
 		}
 		if !isTool {
