@@ -95,7 +95,7 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 	flags.StringVar(&permissionsMode, "permissions", string(agent.ModeDeny), "permissions mode for gated actions: deny or skip-permissions")
 	flags.StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
 	flags.StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
-	flags.StringVar(&opts.ConversationID, "conversation", "", "resume an existing conversation by ID")
+	flags.StringVar(&opts.ConversationID, "conversation", "", "resume an existing conversation by ID or Datadog link")
 	return command
 }
 
