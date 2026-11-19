@@ -4,28 +4,31 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // The web sandbox decodes what its own builder encodes: gzip, unpadded
-// base64url, and the widget's millisecond window, or none for its default.
+// base64url, and the chart's millisecond window, or none for its default.
 func TestSandboxURL(t *testing.T) {
 	for name, tc := range map[string]struct {
-		time       *assistant.WidgetTime
+		window     [2]int64 // Unix seconds
 		start, end string
 	}{
-		"backend window": {time: &assistant.WidgetTime{Type: "fixed", From: 1700000000000, To: 1700003600000}, start: "1700000000000", end: "1700003600000"},
-		"no window":      {},
-		"inverted":       {time: &assistant.WidgetTime{Type: "fixed", From: 2000, To: 1000}},
-		"absurd":         {time: &assistant.WidgetTime{Type: "fixed", From: 1e20, To: 1e21}},
+		"window":    {window: [2]int64{1700000000, 1700003600}, start: "1700000000000", end: "1700003600000"},
+		"no window": {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			def := assistant.WidgetDefinition{Type: "timeseries", Time: tc.time, Fields: map[string]json.RawMessage{"requests": json.RawMessage(`[{"q":"avg:cpu{*}"}]`)}}
-			raw, err := SandboxURL("https://app.datadoghq.com", def)
+			chart := assistant.Chart{Definition: json.RawMessage(`{"type":"timeseries","requests":[{"q":"avg:cpu{*}"}]}`)}
+			if tc.window[1] > 0 {
+				chart.Start, chart.End = time.Unix(tc.window[0], 0), time.Unix(tc.window[1], 0)
+			}
+			raw, err := SandboxURL("https://app.datadoghq.com", chart)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -52,22 +55,13 @@ func TestSandboxURL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var got assistant.WidgetDefinition
-			if err := json.NewDecoder(r).Decode(&got); err != nil || got.Type != "timeseries" {
+			got, err := io.ReadAll(r)
+			if err != nil || string(got) != string(chart.Definition) {
 				t.Fatalf("decoded = %v, %v", got, err)
 			}
 		})
 	}
-	live, err := SandboxURL("https://app.datadoghq.com", assistant.WidgetDefinition{
-		Type: "timeseries", Time: &assistant.WidgetTime{Type: "live", Value: 1, Unit: "week"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if u, _ := url.Parse(live); u.Query().Get("start") == "" || u.Query().Get("end") == "" {
-		t.Fatalf("live span dropped its range: %s", live)
-	}
-	if _, err := SandboxURL("app.datadoghq.com", assistant.WidgetDefinition{}); err == nil {
+	if _, err := SandboxURL("app.datadoghq.com", assistant.Chart{}); err == nil {
 		t.Fatal("an origin without a scheme built a relative link")
 	}
 }

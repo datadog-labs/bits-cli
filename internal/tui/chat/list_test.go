@@ -1424,11 +1424,11 @@ func TestWidgetViewAnimatesAfterTurnAndIsClickable(t *testing.T) {
 	list.SetStyles(DefaultStyles(true))
 	list.SetWidth(60)
 	list.SetHeight(20)
-	list.SetItems([]agent.Block{{ID: id, Kind: assistant.KindWidget, Complete: true, Widget: &assistant.WidgetPayload{Title: "CPU"}}})
+	list.SetItems([]agent.Block{{ID: id, Kind: assistant.KindApp, Complete: true, App: &assistant.AppPayload{}}})
 	list.SetRunning(false)
 
 	view := WidgetView{Image: graphics.Image{Columns: 40, Rows: 8}, Loading: "Rendering", Action: WidgetOpen}
-	list.SetWidgetView(id, view)
+	list.SetWidgetViews(map[agent.BlockID]WidgetView{id: view})
 	list.SetRunning(true)
 	if !list.HasAnimated() || list.Working() {
 		t.Fatal("a loading widget must animate without counting as the agent's work")
@@ -1438,7 +1438,7 @@ func TestWidgetViewAnimatesAfterTurnAndIsClickable(t *testing.T) {
 		t.Fatal("loading widget did not animate after the turn")
 	}
 	view.Loading = ""
-	list.SetWidgetView(id, view)
+	list.SetWidgetViews(map[agent.BlockID]WidgetView{id: view})
 	if list.HasAnimated() {
 		t.Fatal("idle widget kept animating")
 	}
@@ -1467,7 +1467,7 @@ func TestWidgetViewAnimatesAfterTurnAndIsClickable(t *testing.T) {
 	}
 	// The highlight repaints backgrounds only: image cells keep their marks.
 	view.Image.ID = 0xB10001
-	list.SetWidgetView(id, view)
+	list.SetWidgetViews(map[agent.BlockID]WidgetView{id: view})
 	list.SetPointer(0, 20)
 	plain := list.Render()
 	list.SetPointer(50, 4)

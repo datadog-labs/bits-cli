@@ -23,6 +23,7 @@ var (
 	ErrForbidden    = errors.New("forbidden")    // 403: authenticated but not permitted
 	ErrNotFound     = errors.New("not found")    // 404: conversation/resource unknown
 	ErrConflict     = errors.New("conflict")     // 409: e.g. conversation id already in use
+	ErrGone         = errors.New("gone")         // 410: e.g. an expired app session
 	ErrRateLimited  = errors.New("rate limited") // 429: too many requests
 	ErrServer       = errors.New("server error") // 5xx: server-side failure (often retryable)
 	ErrBadRequest   = errors.New("bad request")  // 400/422: malformed request
@@ -86,6 +87,8 @@ func (e *APIError) Unwrap() error {
 		return ErrNotFound
 	case http.StatusConflict:
 		return ErrConflict
+	case http.StatusGone:
+		return ErrGone
 	case http.StatusTooManyRequests:
 		return ErrRateLimited
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:

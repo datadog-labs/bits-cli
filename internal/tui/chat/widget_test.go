@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -19,15 +20,14 @@ import (
 func TestWidgetBadgeCentersOverImage(t *testing.T) {
 	sty := DefaultStyles(true)
 	band := 80
-	block := agent.Block{Kind: assistant.KindWidget, Widget: &assistant.WidgetPayload{Title: "CPU"}}
 	img := graphics.Image{ID: 0xB10001, Columns: 40, Rows: 9}
 	left := (band - img.Columns) / 2
 	for name, view := range map[string]WidgetView{
-		"rendering": {Image: graphics.Image{Columns: img.Columns, Rows: img.Rows}, Loading: "Rendering"},
-		"opening":   {Image: img, Loading: "Opening"},
+		"rendering": {Title: "CPU", Image: graphics.Image{Columns: img.Columns, Rows: img.Rows}, Loading: "Rendering"},
+		"opening":   {Title: "CPU", Image: img, Loading: "Opening"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			lines := strings.Split(ansi.Strip(renderWidgetView(block, view, renderContext{width: 80, sty: sty})), "\n")
+			lines := strings.Split(ansi.Strip(renderWidgetView(view, renderContext{width: 80, sty: sty})), "\n")
 			box := lines[1 : 1+img.Rows]
 			for y, row := range box {
 				if w := ansi.StringWidth(row); w != 80 {
@@ -70,22 +70,53 @@ func TestWidgetBadgeCentersOverImage(t *testing.T) {
 	}
 
 	// Too narrow for the label: the spinner alone still shows progress.
-	narrow := renderWidgetView(block, WidgetView{Image: graphics.Image{Columns: 5, Rows: 3}, Loading: "Rendering"}, renderContext{width: 5, sty: sty})
+	narrow := renderWidgetView(WidgetView{Image: graphics.Image{Columns: 5, Rows: 3}, Loading: "Rendering"}, renderContext{width: 5, sty: sty})
 	if lines := strings.Split(ansi.Strip(narrow), "\n"); !strings.Contains(lines[2], sty.StatusSpinner.Frame(0)) {
 		t.Fatalf("narrow box lost its spinner:\n%s", ansi.Strip(narrow))
 	}
 
 	// A long title gives way before the action's icon does.
-	long := agent.Block{Kind: assistant.KindWidget, Widget: &assistant.WidgetPayload{Title: strings.Repeat("CPU ", 30)}}
-	title := strings.Split(ansi.Strip(renderWidgetView(long, WidgetView{Action: WidgetOpen}, renderContext{width: 40, sty: sty})), "\n")[0]
-	if !strings.HasSuffix(strings.TrimRight(title, " "), "…"+widgetIcons[WidgetOpen]) || ansi.StringWidth(title) > 40 {
+	title := strings.Split(ansi.Strip(renderWidgetView(WidgetView{Title: strings.Repeat("CPU ", 30), Action: WidgetOpen}, renderContext{width: 40, sty: sty})), "\n")[0]
+	if !strings.HasSuffix(strings.TrimRight(title, " "), "… ⧉") || ansi.StringWidth(title) > 40 {
 		t.Fatalf("title %q lost its icon or overflowed", title)
 	}
+}
 
-	// The backend puts the title inside the definition, not beside it.
-	def := assistant.WidgetDefinition{Type: "timeseries", Title: "CPU from the definition"}
-	inside := agent.Block{Kind: assistant.KindWidget, Widget: &assistant.WidgetPayload{WidgetDef: &def}}
-	if got := ansi.Strip(renderWidgetView(inside, WidgetView{}, renderContext{width: 80, sty: sty})); !strings.Contains(got, "CPU from the definition") {
-		t.Fatalf("title not read from the definition: %q", got)
+// Until the widgets component gives an app a view, as after a logout, the
+// transcript still names it.
+func TestAppWithoutViewShowsItsTitle(t *testing.T) {
+	result := json.RawMessage(`{"structuredContent":{"widget_definition":{"type":"timeseries","title":"CPU"}}}`)
+	for name, tc := range map[string]struct {
+		app  assistant.AppPayload
+		want string
+	}{
+		"titled": {assistant.AppPayload{Result: result}, "[view: CPU]"},
+		"saved":  {assistant.AppPayload{Restorable: true}, "[view]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			list := NewList()
+			list.SetStyles(DefaultStyles(true))
+			list.SetWidth(60)
+			list.SetHeight(10)
+			list.SetItems([]agent.Block{{ID: agent.BlockID{Key: "w"}, Kind: assistant.KindApp, Complete: true, App: &tc.app}})
+			if doc := ansi.Strip(list.Document()); !strings.Contains(doc, tc.want) {
+				t.Fatalf("document:\n%s", doc)
+			}
+		})
+	}
+}
+
+// Status lines under the card line up with its title.
+func TestWidgetStatusLinesAlignWithTitle(t *testing.T) {
+	for name, view := range map[string]WidgetView{
+		"note":    {Title: "CPU", Note: "Invalid query"},
+		"loading": {Title: "CPU", Loading: "Opening"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lines := strings.Split(ansi.Strip(renderWidgetView(view, renderContext{width: 60, sty: DefaultStyles(true)})), "\n")
+			if last := lines[len(lines)-1]; !strings.HasPrefix(last, widgetTitlePad) || last[len(widgetTitlePad)] == ' ' {
+				t.Fatalf("status line %q is not aligned with the title", last)
+			}
+		})
 	}
 }

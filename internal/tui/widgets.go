@@ -1,13 +1,16 @@
 package tui
 
 import (
+	"bytes"
+	"cmp"
 	"context"
-	"encoding/json"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/browser"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
@@ -57,7 +60,7 @@ func (m *Model) syncWidgets() tea.Cmd {
 		// Nobody sees the transcript: start nothing, keep what exists.
 		return nil
 	}
-	return m.widgets.sync(m.list, m.widgetMode(), m.styles.IsDark, m.conversationEpoch)
+	return m.widgets.sync(m.list, m.widgetMode(), m.styles.IsDark, m.conversationEpoch, m.state.ConversationID)
 }
 
 // quitWith frees the images this session stored in the terminal, then runs
@@ -76,7 +79,7 @@ func (m *Model) quitWith(quit tea.Cmd) tea.Cmd {
 	return tea.Batch(deleteCmd, m.widgets.images.DrainThen(quit))
 }
 
-// widgets owns widget operations and stored images for the transcript.
+// widgets owns app operations and stored images for the transcript.
 type widgets struct {
 	images      graphics.Queue
 	client      viz.Client // nil: links only
@@ -88,20 +91,21 @@ type widgets struct {
 	nextID      int
 }
 
-// widgetEntry is one widget revision: its operations and stored image.
+// widgetEntry is one app revision: its operations and stored image.
 type widgetEntry struct {
-	rev        int
-	raw        []byte                     // the definition as JSON, to spot real changes
-	def        assistant.WidgetDefinition // private copy; viz borrows it
-	controller *viz.Controller            // created on first use outside link mode
+	rev int
+	// request captures the first payload and theme for this block revision.
+	request    viz.Request
+	summary    assistant.ViewSummary // of the latest result; empty until there is one
+	controller *viz.Controller       // created on first use outside link mode
 	image      graphics.Image
 	snapshot   *viz.Snapshot // the one stored under image.ID
 }
 
-// sync reconciles every widget block with its operations and view, so heights
+// sync reconciles every app block with its operations and view, so heights
 // never change on scroll and finished work stops its spinner. Only visible
 // blocks start renders and send pixels.
-func (w *widgets) sync(list *chat.List, mode widgetMode, dark bool, epoch uint64) tea.Cmd {
+func (w *widgets) sync(list *chat.List, mode widgetMode, dark bool, epoch uint64, conversationID string) tea.Cmd {
 	if w.closed {
 		return nil
 	}
@@ -114,22 +118,19 @@ func (w *widgets) sync(list *chat.List, mode widgetMode, dark bool, epoch uint64
 	// A second pass catches a widget that a resized box moved into view.
 	for range 2 {
 		blocks, visible := list.Widgets()
-		resized := false
+		views := make(map[agent.BlockID]chat.WidgetView, len(blocks))
 		for _, block := range blocks {
-			if !block.Complete || block.Widget == nil {
+			if !block.Complete || (block.App == nil && block.Widget == nil) {
 				continue
 			}
 			live[block.ID] = true
-			e, cmd := w.entry(block)
+			e, cmd := w.entry(block, conversationID, dark)
 			cmds = append(cmds, cmd)
-			var view chat.WidgetView // a legacy tile: its title, nothing to act on
-			if e != nil {
-				view, cmd = w.view(e, mode, dark, visible[block.ID], list.Width())
-				cmds = append(cmds, cmd)
-			}
-			resized = list.SetWidgetView(block.ID, view) || resized
+			view, cmd := w.view(e, mode, visible[block.ID], list.Width())
+			cmds = append(cmds, cmd)
+			views[block.ID] = view
 		}
-		if !resized {
+		if !list.SetWidgetViews(views) {
 			break
 		}
 	}
@@ -141,43 +142,68 @@ func (w *widgets) sync(list *chat.List, mode widgetMode, dark bool, epoch uint64
 	return tea.Batch(cmds...)
 }
 
-func (w *widgets) view(e *widgetEntry, mode widgetMode, dark bool, visible bool, width int) (chat.WidgetView, tea.Cmd) {
-	var view chat.WidgetView
-	fallback := chat.WidgetNone
-	if w.origin != "" {
-		fallback = chat.WidgetWeb
+// webAction uses the single-chart contract or the saved app's conversation
+// identity. The app does not need to be restored to open its conversation.
+func (w *widgets) webAction(e *widgetEntry) chat.WidgetAction {
+	if w.origin == "" {
+		return chat.WidgetNone
 	}
-	if mode == widgetLink {
-		view.Action = fallback
-		return view, nil
+	if e.summary.Chart != nil && (e.request.LegacyWidget != nil || e.request.App.ResourceURI == viz.DatavizURI) {
+		return chat.WidgetWeb
 	}
-	if e.controller == nil {
-		// The theme is fixed per revision; the terminal reports it at startup.
-		e.controller = viz.NewController(w.client, viz.Request{Definition: e.def, Dark: dark})
+	if e.request.CanRestore() {
+		return chat.WidgetConversation
 	}
+	return chat.WidgetNone
+}
+
+func (w *widgets) view(e *widgetEntry, mode widgetMode, visible bool, width int) (chat.WidgetView, tea.Cmd) {
+	view := chat.WidgetView{Title: e.summary.Title}
+	request := e.request
+	var state viz.State
+	if e.controller != nil {
+		request.App = e.controller.App()
+		state = e.controller.State()
+	}
+	app := request.App
+	hasResult := len(app.Result) > 0
+	local := mode != widgetLink && w.client.Interactive()
+	supported := app.ResourceURI == viz.DatavizURI
+	canOpen := local && supported && (hasResult && app.RelayHandle != "" || request.CanRestore())
+	canSnapshot := !local && supported && (e.summary.Chart != nil || !hasResult && request.CanRestore())
+	if request.LegacyWidget != nil {
+		view.Title = cmp.Or(view.Title, "Widget")
+		canOpen = local && e.summary.Chart != nil
+		canSnapshot = !local && e.summary.Chart != nil
+	}
+	preview := mode == widgetInline && (canOpen || canSnapshot)
+
 	var cmd tea.Cmd
-	state := e.controller.State()
-	if mode == widgetInline && visible && state.Render.Phase == viz.Idle {
+	if (canOpen || preview) && e.controller == nil {
+		e.controller = viz.NewController(w.client, e.request)
+	}
+	if preview && visible && state.Render.Phase == viz.Idle {
 		cmd = widgetTask(e.controller.Render(context.Background()))
 		state = e.controller.State()
 	}
-
-	retry := mode == widgetInline && state.CanRender() && state.Render.Phase != viz.Idle
+	fallback := w.webAction(e)
+	view.Note = failureReason(state.Open)
 	switch {
 	case state.Open.Phase == viz.Loading:
 		view.Loading = "Opening"
-	case retry:
-		view.Action = chat.WidgetRetry
-	case state.CanOpen() && w.client.Interactive(): // a snapshot-only client never opens
+	case preview && state.Render.Phase != viz.Idle && state.CanRender():
+		view.Action, view.Link = chat.WidgetRetry, fallback
+	case canOpen && state.CanOpen():
 		view.Action = chat.WidgetOpen
 	default:
 		view.Action = fallback
 	}
-	view.Note = failureReason(state.Open)
-	if mode == widgetInline {
-		var draw tea.Cmd
-		view.Image, draw = e.place(state.Image, width, visible)
-		cmd = tea.Batch(cmd, w.images.Enqueue(draw))
+	if preview {
+		if state.Image != nil || state.Render.Phase == viz.Loading || state.Render.Phase == viz.Idle {
+			var draw tea.Cmd
+			view.Image, draw = e.place(state.Image, width, visible)
+			cmd = tea.Batch(cmd, w.images.Enqueue(draw))
+		}
 		if view.Loading == "" && state.Render.Phase == viz.Loading {
 			view.Loading = "Rendering"
 		}
@@ -185,40 +211,49 @@ func (w *widgets) view(e *widgetEntry, mode widgetMode, dark bool, visible bool,
 			view.Note = failureReason(state.Render)
 		}
 	}
+	view.Hidden = request.LegacyWidget == nil && view.Action == chat.WidgetNone && view.Link == chat.WidgetNone && view.Image.Rows == 0 && view.Loading == "" && view.Note == ""
 	return view, cmd
 }
 
-// entry returns the block's current entry, replacing one whose definition
-// changed, or nil when the block has nothing to display.
-func (w *widgets) entry(block agent.Block) (*widgetEntry, tea.Cmd) {
+// entry returns the block's current entry, replacing one whose view changed.
+func (w *widgets) entry(block agent.Block, conversationID string, dark bool) (*widgetEntry, tea.Cmd) {
 	e := w.entries[block.ID]
-	if e != nil && e.rev == block.Rev {
-		return e, nil
+	request := viz.Request{LegacyWidget: block.Widget, ConversationID: conversationID, MessageID: block.MessageID, Dark: dark}
+	if block.App != nil {
+		request.App = *block.App // revisions replace payloads without mutating them
 	}
-	if block.Widget.WidgetDef == nil {
-		return nil, w.remove(block.ID)
-	}
-	// Blocks are mutated in place as they stream: keep a private copy.
-	raw, err := json.Marshal(block.Widget.WidgetDef)
-	if err != nil {
-		return nil, w.remove(block.ID)
-	}
-	if e != nil && string(raw) == string(e.raw) {
-		e.rev = block.Rev // a revision that changed nothing to draw
+	// A newly assigned conversation ID lets an existing app be restored.
+	if e != nil && e.request.ConversationID == conversationID && (e.rev == block.Rev || sameView(e.request, request)) {
+		e.rev = block.Rev
 		return e, nil
 	}
 	cmd := w.remove(block.ID)
-	var def assistant.WidgetDefinition
-	if json.Unmarshal(raw, &def) != nil {
-		return nil, cmd
-	}
 	if w.entries == nil {
 		w.entries = make(map[agent.BlockID]*widgetEntry)
 	}
 	w.nextID++
-	e = &widgetEntry{rev: block.Rev, raw: raw, def: def, image: graphics.Image{ID: 0xB10000 + w.nextID}}
+	summary := request.App.Summary()
+	if block.Widget != nil {
+		summary = assistant.ViewSummary{Title: block.Widget.Title, Chart: block.Widget.Chart(time.Now())}
+	}
+	e = &widgetEntry{
+		rev:     block.Rev,
+		request: request,
+		summary: summary,
+		image:   graphics.Image{ID: 0xB10000 + w.nextID},
+	}
 	w.entries[block.ID] = e
 	return e, cmd
+}
+
+func sameView(left, right viz.Request) bool {
+	if a, b := left.LegacyWidget, right.LegacyWidget; a != nil || b != nil {
+		return a != nil && b != nil && a.Title == b.Title && bytes.Equal(a.Definition, b.Definition)
+	}
+	a, b := left.App, right.App
+	return a.ToolCallID == b.ToolCallID && a.ToolName == b.ToolName && a.ResourceURI == b.ResourceURI &&
+		a.RelayHandle == b.RelayHandle && a.Restorable == b.Restorable &&
+		bytes.Equal(a.ToolInput, b.ToolInput) && bytes.Equal(a.Result, b.Result)
 }
 
 // apply routes a completion to its controller. A helper that cannot run
@@ -236,39 +271,68 @@ func (w *widgets) apply(done viz.Completion) string {
 		if !e.controller.Apply(done) {
 			continue
 		}
+		// A restore replaces the app, saved or live, with a new result; a failed
+		// restore leaves none, and the last summary stands.
+		if app := e.controller.App(); len(app.Result) > 0 {
+			e.summary = app.Summary()
+		}
 		state := e.controller.State()
 		openFailed := opening && state.Open.Phase == viz.Unavailable
 		if state.Render.Phase == viz.Unavailable || openFailed {
 			w.unavailable = true
 		}
-		if openFailed && w.origin != "" {
-			link, _ := viz.SandboxURL(w.origin, e.def)
-			return link
+		if openFailed {
+			return w.webURL(e, w.webAction(e))
 		}
 		return ""
 	}
 	return ""
 }
 
-// click starts the operation behind a widget's action, or returns the web
-// page to open. That URL carries the whole definition, too long for a
-// hyperlink, so it is built only on click. The list reports actions only for
-// views sync keeps current.
+func (w *widgets) webURL(e *widgetEntry, action chat.WidgetAction) string {
+	var target string
+	var err error
+	switch action {
+	case chat.WidgetWeb:
+		chart := e.summary.Chart
+		if e.request.LegacyWidget != nil {
+			chart = e.request.LegacyWidget.Chart(time.Now())
+		}
+		if chart == nil {
+			return ""
+		}
+		target, err = viz.SandboxURL(w.origin, *chart)
+	case chat.WidgetConversation:
+		target, err = browser.ConversationURL(w.origin, e.request.ConversationID)
+	case chat.WidgetNone, chat.WidgetOpen, chat.WidgetRetry:
+		return ""
+	}
+	if err != nil {
+		return ""
+	}
+	return target
+}
+
+// click starts the operation or constructs the selected web destination.
 func (w *widgets) click(hit chat.LinkHit) (tea.Cmd, string) {
 	e := w.entries[hit.BlockID]
-	switch {
-	case e == nil:
+	if e == nil {
 		return nil, ""
-	case hit.Action == chat.WidgetWeb:
-		link, _ := viz.SandboxURL(w.origin, e.def)
-		return nil, link
-	case e.controller == nil:
-		return nil, ""
-	case hit.Action == chat.WidgetRetry:
-		return widgetTask(e.controller.Render(context.Background())), ""
-	default:
-		return widgetTask(e.controller.Open(context.Background())), ""
 	}
+	switch hit.Action {
+	case chat.WidgetWeb, chat.WidgetConversation:
+		return nil, w.webURL(e, hit.Action)
+	case chat.WidgetOpen, chat.WidgetRetry:
+		if e.controller == nil {
+			return nil, ""
+		}
+		if hit.Action == chat.WidgetRetry {
+			return widgetTask(e.controller.Render(context.Background())), ""
+		}
+		return widgetTask(e.controller.Open(context.Background())), ""
+	case chat.WidgetNone:
+	}
+	return nil, ""
 }
 
 // release drops every entry, canceling its work, and returns the images the

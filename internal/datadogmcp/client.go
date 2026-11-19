@@ -1,8 +1,11 @@
-// Package datadogmcp connects to Datadog MCP using existing Bits credentials.
+// Package datadogmcp connects legacy chart viewers to Datadog's read-only MCP
+// tools using Bits credentials. Remove this connection when legacy charts no
+// longer need a ddviz path.
 package datadogmcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -142,6 +145,18 @@ func (c *Client) CallTool(ctx context.Context, params *mcp.CallToolParams) (*mcp
 		c.retire(session)
 	}
 	return result, err
+}
+
+// CallToolJSON supplies the MCP result envelope used by ddviz.
+func (c *Client) CallToolJSON(ctx context.Context, name string, arguments json.RawMessage) (json.RawMessage, error) {
+	result, err := c.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: arguments})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, errors.New("missing MCP result")
+	}
+	return json.Marshal(result)
 }
 
 // The SDK closes the connection for these failures, but its Wait goroutine may

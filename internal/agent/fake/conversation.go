@@ -73,6 +73,11 @@ func (f *Fake) conversation(id string) *conversation {
 	return c
 }
 
+// AdoptConversation opens an empty conversation under an id from elsewhere:
+// a real conversation, whose saved apps a script can then emit for the real
+// assistant to restore.
+func (f *Fake) AdoptConversation(id string) { f.conversation(id) }
+
 // startTurn records the user's script and stores it for continuation. A
 // non-nil fn is run instead of text, which then only describes it. Context
 // entities are persisted on the user message, as the real backend does.

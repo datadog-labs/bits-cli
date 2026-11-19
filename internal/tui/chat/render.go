@@ -64,14 +64,14 @@ func (r *blockRenderer) RenderBlock(it agent.Block, width int, sty Styles, frame
 		return renderReasoning(it, width, sty, frame)
 	case assistant.KindToolCall, assistant.KindToolResult:
 		return renderTool(it, width, sty, frame)
-	case assistant.KindWidget:
-		return renderWidget(it, width, sty)
 	case assistant.KindDashboard:
 		return renderDashboard(it, width, sty)
 	case assistant.KindProgress:
 		return r.renderProgress(it, width, sty)
 	case assistant.KindMemory:
 		return renderMemoryGroup(it, renderContext{width: width, sty: sty, frame: frame})
+	case assistant.KindApp, assistant.KindWidget:
+		return renderView(it, width, sty)
 	case assistant.KindTurnMarker, assistant.KindStop,
 		assistant.KindInternal, assistant.KindUnknown:
 		return fallback(it, width, sty)
@@ -156,11 +156,18 @@ func renderReasoningGroup(blocks []agent.Block, c renderContext) string {
 	return header + "\n" + renderRows(rows, c.width, c.sty.ToolDetail, c.sty)
 }
 
-// renderWidget summarizes a widget.
-func renderWidget(it agent.Block, width int, sty Styles) string {
-	label := "widget"
-	if title := widgetTitle(it); title != "" {
-		label = "widget: " + title
+// renderView summarizes a visualization until the widgets component gives it a view.
+func renderView(it agent.Block, width int, sty Styles) string {
+	label := "view"
+	if it.Widget != nil {
+		label = "widget"
+		if it.Widget.Title != "" {
+			label += ": " + escape.SingleLine(it.Widget.Title)
+		}
+	} else if it.App != nil {
+		if title := it.App.Summary().Title; title != "" {
+			label = "view: " + escape.Inline(title)
+		}
 	}
 	return textwrap.WrapProseText(width, "["+label+"]", sty.Meta)
 }

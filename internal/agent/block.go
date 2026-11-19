@@ -124,8 +124,9 @@ type Block struct {
 	Markdown  *assistant.MarkdownPayload      // KindText: assistant answer or user prompt
 	Thinking  *assistant.ThinkingPayload      // KindReasoning: model thinking
 	Tool      *ToolBlock                      // KindToolCall/KindToolResult: merged call+result
-	Widget    *assistant.WidgetPayload        // KindWidget
 	Dashboard *assistant.DashboardPayload     // KindDashboard
+	Widget    *assistant.LegacyWidget         // KindWidget
+	App       *assistant.AppPayload           // KindApp
 	Progress  *assistant.ProgressPayload      // KindProgress
 	Memory    *assistant.MemoryContextPayload // KindMemory
 

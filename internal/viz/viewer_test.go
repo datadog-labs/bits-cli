@@ -9,11 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
 // This subprocess fixture exercises the real stdio transport on every platform.
@@ -25,6 +26,9 @@ func TestViewerHelper(t *testing.T) {
 		os.Exit(2)
 	}
 	fmt.Println(`{"jsonrpc":"2.0","id":"flags","method":"tools/call","params":{"name":"_dd_gff","arguments":{}}}`)
+	// The frame sees the presented app as notifications, in order.
+	var presented []string
+	lookupFailed := false
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		var msg wireMessage
@@ -37,12 +41,57 @@ func TestViewerHelper(t *testing.T) {
 			}
 			fmt.Println(`{"jsonrpc":"2.0","method":"ui/notifications/initialized"}`)
 		}
+		if msg.ID == nil && msg.Method != "" {
+			presented = append(presented, msg.Method+" "+string(msg.Params))
+		}
+		if msg.Method == "ui/notifications/tool-result" && string(msg.Params) == `{"pending":true}` {
+			fmt.Println(`{"jsonrpc":"2.0","id":"pending","method":"tools/call","params":{"name":"pending","arguments":{}}}`)
+		}
+		if msg.Method == "ui/notifications/tool-result" && os.Getenv("DDVIZ_HEADLESS") == "1" {
+			fmt.Println(`{"jsonrpc":"2.0","id":"lookup","method":"tools/call","params":{"name":"lookup","arguments":{}}}`)
+		}
+		if string(msg.ID) == `"lookup"` {
+			lookupFailed = msg.Error == nil && string(msg.Result) == lookupError
+		}
 		if msg.Method == "snapshot" {
-			data, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]string{"mimeType": "image/png", "data": base64.StdEncoding.EncodeToString(imageBytes())}})
+			reply := map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]string{"mimeType": "image/png", "data": base64.StdEncoding.EncodeToString(imageBytes())}}
+			if !lookupFailed {
+				reply = map[string]any{"jsonrpc": "2.0", "id": msg.ID, "error": map[string]any{"code": -32000, "message": "app did not receive the failed lookup"}}
+			} else if !slices.Equal(presented, presentedNotifications) && !slices.Equal(presented, legacyNotifications) {
+				reply = map[string]any{"jsonrpc": "2.0", "id": msg.ID, "error": map[string]any{"code": -32000, "message": fmt.Sprint(presented)}}
+			}
+			data, _ := json.Marshal(reply)
 			fmt.Println(string(data))
 		}
 	}
 	os.Exit(0)
+}
+
+const lookupError = `{"isError":true,"content":[{"type":"text","text":"lookup failed"}]}`
+
+func fixtureToolResult(name string) json.RawMessage {
+	if name == "lookup" {
+		return json.RawMessage(lookupError)
+	}
+	return json.RawMessage(`{}`)
+}
+
+// presentedApp is what the fixture expects to see, as presentedNotifications.
+var presentedApp = assistant.AppPayload{
+	ToolCallID: "call", ToolName: "show_ui", ToolInput: json.RawMessage(`{"q":1}`),
+	ResourceURI: DatavizURI, RelayHandle: "h", Result: json.RawMessage(`{"structuredContent":{}}`),
+}
+
+var presentedNotifications = []string{
+	`ui/notifications/host-context-changed {"toolInfo":{"id":"call","tool":{"name":"show_ui","inputSchema":{"type":"object"}}}}`,
+	`ui/notifications/tool-input {"arguments":{"q":1}}`,
+	`ui/notifications/tool-result {"structuredContent":{}}`,
+}
+
+var legacyNotifications = []string{
+	`ui/notifications/host-context-changed {"toolInfo":{"tool":{"name":"get_widget","inputSchema":{"type":"object"}}}}`,
+	`ui/notifications/tool-input {"arguments":{"widget_definition":{"type":"timeseries"}}}`,
+	`ui/notifications/tool-result {"structuredContent":{}}`,
 }
 
 func TestStdioEndToEnd(t *testing.T) {
@@ -51,27 +100,103 @@ func TestStdioEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	var callbacks atomic.Int32
-	tools := toolFunc(func(_ context.Context, name string, _ json.RawMessage) (json.RawMessage, error) {
-		if name == "_dd_gff" {
+	config := Config{Version: "bits-test-fixture"}
+	c := testClient(func(lifetime, startup context.Context, headless bool, tools toolCaller) (viewer, error) {
+		return launchArgs(lifetime, startup, executable, []string{"-test.run=^TestViewerHelper$"}, config, headless, tools)
+	})
+	// The fixture calls a tool before it initializes, as the frame does.
+	c.api = fakeAPI{call: func(_ context.Context, handle, name string, _ json.RawMessage) (json.RawMessage, error) {
+		if handle == "h" && name == "_dd_gff" {
 			callbacks.Add(1)
-			return json.RawMessage(`{}`), nil
 		}
-		return json.RawMessage(`{"structuredContent":{}}`), nil
-	})
-	config := Config{MCP: tools, Version: "bits-test-fixture"}
-	c := testClient(func(lifetime, startup context.Context, headless bool) (viewer, error) {
-		return launchArgs(lifetime, startup, executable, []string{"-test.run=^TestViewerHelper$"}, config, headless)
-	})
-	c.mcp = tools
+		return fixtureToolResult(name), nil
+	}}
 	defer func() { _ = c.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	result := c.Render(ctx, request(t))
+	r := Request{App: presentedApp}
+	result := c.Render(ctx, r)
 	if result.Status.Phase != Succeeded {
 		t.Fatal(result.Status)
 	}
 	if result.Image.Width() != 2 || result.Image.Height() != 3 || callbacks.Load() != 1 {
 		t.Fatalf("image=%+v callbacks=%d", result.Image, callbacks.Load())
+	}
+	// A legacy chart must offer a retry when its data call fails instead of
+	// treating the helper's captured error UI as a successful preview.
+	c.callLegacyTool = func(_ context.Context, name string, _ json.RawMessage) (json.RawMessage, error) {
+		if name == "get_widget" {
+			return json.RawMessage(`{"structuredContent":{}}`), nil
+		}
+		return fixtureToolResult(name), nil
+	}
+	legacy := legacyWidgetRequest(t, `{"type":"timeseries"}`)
+	got := c.Render(ctx, legacy)
+	if got.Status.Phase != Failed || got.Status.Retry != RetryAllowed || got.Image != nil {
+		t.Fatalf("legacy preview with failed callback = %+v", got)
+	}
+}
+
+func TestSwitchingAppsCancelsPendingViewerCallbacks(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var launches int
+	c := testClient(func(lifetime, startup context.Context, headless bool, tools toolCaller) (viewer, error) {
+		launches++
+		return launchArgs(lifetime, startup, executable, []string{"-test.run=^TestViewerHelper$"}, Config{Version: "bits-test-fixture"}, headless, tools)
+	})
+	defer func() { _ = c.Close() }()
+	calls := make(chan string, 3)
+	canceled := make(chan struct{})
+	c.api = fakeAPI{call: func(ctx context.Context, handle, name string, _ json.RawMessage) (json.RawMessage, error) {
+		calls <- handle + ":" + name
+		if name == "pending" {
+			<-ctx.Done()
+			close(canceled)
+			return nil, ctx.Err()
+		}
+		return json.RawMessage(`{}`), nil
+	}}
+	app := Request{App: presentedApp}
+	app.App.RelayHandle = "first"
+	app.App.Result = json.RawMessage(`{"pending":true}`)
+	if result := c.Open(ctx, app); result.Status.Phase != Succeeded {
+		t.Fatal(result.Status)
+	}
+	for _, want := range []string{"first:_dd_gff", "first:pending"} {
+		select {
+		case got := <-calls:
+			if got != want {
+				t.Fatalf("callback = %q, want %q", got, want)
+			}
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	app.App.RelayHandle = "second"
+	app.App.Result = presentedApp.Result
+	if result := c.Open(ctx, app); result.Status.Phase != Succeeded {
+		t.Fatal(result.Status)
+	}
+	if launches != 2 {
+		t.Fatal("reused another app's viewer")
+	}
+	select {
+	case <-canceled:
+	default:
+		t.Fatal("old viewer's callback survived the app switch")
+	}
+	select {
+	case got := <-calls:
+		if got != "second:_dd_gff" {
+			t.Fatalf("new viewer's callback = %q", got)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
 }
 
@@ -98,7 +223,7 @@ func TestExecLaunchFailures(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			_, err := launch(context.Background(), context.Background(), binary, Config{}, true)
+			_, err := launch(context.Background(), context.Background(), binary, Config{}, true, nil)
 			if err == nil {
 				t.Fatal("launch unexpectedly succeeded")
 			}
@@ -115,22 +240,22 @@ func TestViewerOutlivesStartupContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools := toolFunc(func(context.Context, string, json.RawMessage) (json.RawMessage, error) {
-		return json.RawMessage(`{}`), nil
+	tools := toolCaller(func(_ context.Context, name string, _ json.RawMessage) (json.RawMessage, error) {
+		return fixtureToolResult(name), nil
 	})
 	lifetime, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	startup, stopStartup := context.WithCancel(lifetime)
 	defer stopStartup()
 
-	viewer, err := launchArgs(lifetime, startup, executable, []string{"-test.run=^TestViewerHelper$"}, Config{MCP: tools, Version: "bits-test-fixture"}, true)
+	viewer, err := launchArgs(lifetime, startup, executable, []string{"-test.run=^TestViewerHelper$"}, Config{Version: "bits-test-fixture"}, true, tools)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer viewer.close()
 	stopStartup()
 
-	if err := viewer.present(&mcp.CallToolResult{StructuredContent: map[string]any{}}); err != nil {
+	if err := viewer.present(presentedApp); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := viewer.snapshot(lifetime); err != nil {

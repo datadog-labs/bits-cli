@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +15,7 @@ import (
 
 // SnapshotOptions describes one server-side widget rendering.
 type SnapshotOptions struct {
-	Definition    WidgetDefinition
+	Definition    json.RawMessage // a Datadog dashboard widget definition
 	Start, End    time.Time
 	Width, Height int // CSS pixels; the PNG is four times larger
 	Dark          bool
@@ -40,14 +41,14 @@ type snapshotRequestData struct {
 }
 
 type snapshotRequestAttributes struct {
-	Definition    WidgetDefinition `json:"widget_definition"`
-	Start         int64            `json:"start"` // Unix milliseconds
-	End           int64            `json:"end"`
-	Width         int              `json:"width"`
-	Height        int              `json:"height"`
-	Authenticated bool             `json:"is_authenticated"`
-	TTL           string           `json:"ttl"`
-	Config        snapshotConfig   `json:"additional_config"`
+	Definition    json.RawMessage `json:"widget_definition"`
+	Start         int64           `json:"start"` // Unix milliseconds
+	End           int64           `json:"end"`
+	Width         int             `json:"width"`
+	Height        int             `json:"height"`
+	Authenticated bool            `json:"is_authenticated"`
+	TTL           string          `json:"ttl"`
+	Config        snapshotConfig  `json:"additional_config"`
 }
 
 type snapshotConfig struct {
