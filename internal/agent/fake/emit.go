@@ -63,13 +63,13 @@ func (e *emitter) text(typ, s string) error {
 	return nil
 }
 
-// title streams a title update, which carries no message.
-func (e *emitter) title(title string) error {
+// titleResp is a title update, which carries no message.
+func titleResp(convID, title string) assistant.AssistantResponse {
 	var ar assistant.AssistantResponse
 	ar.Data.Type = "assistant-response"
-	ar.Data.Attributes.ConversationID = e.convID
+	ar.Data.Attributes.ConversationID = convID
 	ar.Data.Attributes.ConversationTitle = title
-	return e.fn(ar)
+	return ar
 }
 
 func isSpaceByte(b byte) bool { return b == ' ' || b == '\t' || b == '\n' }

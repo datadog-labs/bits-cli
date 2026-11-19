@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/datadog-labs/bits-cli/internal/textsafe"
@@ -32,6 +33,10 @@ var (
 // than Client.StreamIdleTimeout. It is raised locally, not by the server.
 var ErrStreamIdleTimeout = errors.New("assistant response stream went idle")
 
+// ErrStreamBroken reports that a stream failed after its response started: the
+// request was delivered, but the rest of its response was lost.
+var ErrStreamBroken = errors.New("assistant response stream broke")
+
 // APIError is a structured error from the assistant API. It is decoded from the
 // JSON:API error envelope ({"errors":[{status,title,detail,code}]}) that the
 // server uses for both regular HTTP error responses (non-streaming routes) and
@@ -49,6 +54,9 @@ type APIError struct {
 	Path   string
 	// Input is the request input that produced the error
 	Input any
+	// RetryAfter is how long the server asked the client to wait before
+	// trying again, if it said.
+	RetryAfter time.Duration
 }
 
 func withInput(err error, input any) error {
