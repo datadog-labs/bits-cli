@@ -6,12 +6,14 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 func TestMultiAgentApprovalInputUsesLocalCorrelation(t *testing.T) {
 	input := `{"tool_name":"write_dashboard","tool_args":{"title":"CPU"},"tool_call_id":"wire-1","approval_message":"Publish dashboard?","tool_activation_source":"builtin"}`
 	for _, localID := range []string{"multi-agent:root:1:wire-1", "multi-agent:child:2:wire-1"} {
-		got, err := adaptMultiAgentToolInput(ApprovalRequestTool, input, "wire-1", localID)
+		got, err := adaptMultiAgentToolInput(spec.ApprovalRequest, input, "wire-1", localID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -28,11 +30,11 @@ func TestMultiAgentApprovalInputUsesLocalCorrelation(t *testing.T) {
 		t.Fatalf("ordinary tool input = %q, %v", got, err)
 	}
 	for _, invalid := range []string{`{`, `null`, `[]`, `{}`} {
-		if _, err := adaptMultiAgentToolInput(ApprovalRequestTool, invalid, "wire", "local"); err == nil {
+		if _, err := adaptMultiAgentToolInput(spec.ApprovalRequest, invalid, "wire", "local"); err == nil {
 			t.Fatalf("invalid approval input accepted: %s", invalid)
 		}
 	}
-	if _, err := adaptMultiAgentToolInput(ApprovalRequestTool, input, "different-wire-id", "local"); err == nil {
+	if _, err := adaptMultiAgentToolInput(spec.ApprovalRequest, input, "different-wire-id", "local"); err == nil {
 		t.Fatal("approval with mismatched inner ID was accepted")
 	}
 }

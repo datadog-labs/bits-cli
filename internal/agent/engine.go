@@ -18,6 +18,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 var (
@@ -1230,7 +1231,7 @@ func (t *turn) dispatch(c *clientCall) {
 		t.resolve(c, cancelledResult())
 		return
 	}
-	if c.call.Name == assistant.ApprovalRequestTool {
+	if c.call.Name == spec.ApprovalRequest {
 		// The server write gate never runs a handler; it is answered locally.
 		if _, err := parseServerGateInput(c.call); err != nil {
 			t.deny(c, invalidServerGateResult())
@@ -1292,7 +1293,7 @@ func (t *turn) admit(c *clientCall, allowOnce bool) {
 // start begins c: the server gate is answered as approved; any other call
 // launches its handler, shown running if it waited for approval.
 func (t *turn) start(c *clientCall, wasParked bool) {
-	if c.call.Name == assistant.ApprovalRequestTool {
+	if c.call.Name == spec.ApprovalRequest {
 		t.resolve(c, approvedResult())
 		return
 	}

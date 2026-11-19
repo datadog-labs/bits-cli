@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 type ApprovalDecision string
@@ -76,37 +76,30 @@ type ApprovalRequirement struct {
 
 type ApprovalPolicy func(ToolCall) (ApprovalRequirement, bool)
 
-type serverGateInput struct {
-	ToolName        string         `json:"tool_name"`
-	ToolArgs        map[string]any `json:"tool_args"`
-	ToolCallID      string         `json:"tool_call_id"`
-	ApprovalMessage string         `json:"approval_message"`
-}
-
-func parseServerGateInput(call ToolCall) (serverGateInput, error) {
+func parseServerGateInput(call ToolCall) (spec.ApprovalRequestInput, error) {
 	input, err := decodeServerGateInput(call.Input)
 	if err != nil {
-		return serverGateInput{}, err
+		return spec.ApprovalRequestInput{}, err
 	}
 	if input.ToolCallID != call.ID {
-		return serverGateInput{}, fmt.Errorf("approval request tool_call_id %q does not match outer call id %q", input.ToolCallID, call.ID)
+		return spec.ApprovalRequestInput{}, fmt.Errorf("approval request tool_call_id %q does not match outer call id %q", input.ToolCallID, call.ID)
 	}
 	return input, nil
 }
 
-func decodeServerGateInput(raw string) (serverGateInput, error) {
-	var input serverGateInput
+func decodeServerGateInput(raw string) (spec.ApprovalRequestInput, error) {
+	var input spec.ApprovalRequestInput
 	if err := json.Unmarshal([]byte(raw), &input); err != nil {
-		return serverGateInput{}, fmt.Errorf("decode approval request: %w", err)
+		return spec.ApprovalRequestInput{}, fmt.Errorf("decode approval request: %w", err)
 	}
 	if input.ToolName == "" {
-		return serverGateInput{}, fmt.Errorf("approval request has no tool_name")
+		return spec.ApprovalRequestInput{}, fmt.Errorf("approval request has no tool_name")
 	}
 	if input.ToolArgs == nil {
-		return serverGateInput{}, fmt.Errorf("approval request has no tool_args object")
+		return spec.ApprovalRequestInput{}, fmt.Errorf("approval request has no tool_args object")
 	}
 	if input.ToolCallID == "" {
-		return serverGateInput{}, fmt.Errorf("approval request has no tool_call_id")
+		return spec.ApprovalRequestInput{}, fmt.Errorf("approval request has no tool_call_id")
 	}
 	return input, nil
 }
@@ -121,7 +114,7 @@ func serverGateApprovalRequirement(call ToolCall) (ApprovalRequirement, bool) {
 		title = fmt.Sprintf("Allow the assistant to perform the %q action?", input.ToolName)
 	}
 	return ApprovalRequirement{
-		Key:    ApprovalKey{Tool: assistant.ApprovalRequestTool, Resource: input.ToolName},
+		Key:    ApprovalKey{Tool: spec.ApprovalRequest, Resource: input.ToolName},
 		Prompt: ApprovalPrompt{Title: title, Detail: "tool: " + input.ToolName},
 	}, true
 }
@@ -130,7 +123,7 @@ func serverGateApprovalRequirement(call ToolCall) (ApprovalRequirement, bool) {
 // surface can present instead of the request itself, before and after the
 // user decides. It is false for any other call.
 func (t *ToolBlock) GatedCall() (ToolCall, bool) {
-	if t == nil || !t.IsClientSide || t.Name != assistant.ApprovalRequestTool {
+	if t == nil || !t.IsClientSide || t.Name != spec.ApprovalRequest {
 		return ToolCall{}, false
 	}
 	input, err := decodeServerGateInput(t.Input)
@@ -145,7 +138,7 @@ func (t *ToolBlock) GatedCall() (ToolCall, bool) {
 }
 
 func approvalDeniedResult(call ToolCall) ToolResult {
-	if call.Name == assistant.ApprovalRequestTool {
+	if call.Name == spec.ApprovalRequest {
 		return serverDeniedResult()
 	}
 	return deniedResult()

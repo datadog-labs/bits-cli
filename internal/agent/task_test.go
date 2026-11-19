@@ -87,14 +87,14 @@ func startTaskMsgs(callID, taskID string) []assistant.Message {
 // approval_request gate and its answer share the start call's id.
 func gatedStartTaskMsgs(callID, taskID string) []assistant.Message {
 	start := startTaskMsgs(callID, taskID)
-	gate := clientCallMsg(callID, assistant.ApprovalRequestTool, `{"tool_name":"startBackgroundTask"}`)
+	gate := clientCallMsg(callID, spec.ApprovalRequest, `{"tool_name":"startBackgroundTask"}`)
 	gate.MessageID = callID + "-gate"
 	answer := assistant.AssistantMessage(callID+"-answer", assistant.Content{
 		Type: assistant.ContentClientToolResponse,
 		Tool: &assistant.ToolPayload{
 			ToolCallID: callID,
 			Status:     string(assistant.ToolStatusSuccess),
-			Metadata:   &assistant.ToolMetadata{Name: assistant.ApprovalRequestTool},
+			Metadata:   &assistant.ToolMetadata{Name: spec.ApprovalRequest},
 		},
 	})
 	result := start[1]

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 // writeRounds asks for two writes, then one more in a follow-up round.
@@ -366,11 +367,11 @@ func TestSetPermissionsModeRejectsInvalidModes(t *testing.T) {
 // name would be silently intercepted by the engine.
 func TestNewToolSetRejectsApprovalRequestName(t *testing.T) {
 	set, err := NewToolSet(Tool{
-		Definition: assistant.ClientTool{Name: assistant.ApprovalRequestTool},
+		Definition: assistant.ClientTool{Name: spec.ApprovalRequest},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{}, nil },
 	})
 	if err == nil || set != nil {
-		t.Fatalf("NewToolSet(%q) = (%v, %v), want an error", assistant.ApprovalRequestTool, set, err)
+		t.Fatalf("NewToolSet(%q) = (%v, %v), want an error", spec.ApprovalRequest, set, err)
 	}
 	if !strings.Contains(err.Error(), "approval gate") {
 		t.Fatalf("error %q does not name the reserved gate", err)
@@ -556,14 +557,14 @@ func TestToolSetApprovalReportsDeclaredGates(t *testing.T) {
 	}
 	requirement, needs := set.Approval(ToolCall{
 		ID:    "gate-1",
-		Name:  assistant.ApprovalRequestTool,
+		Name:  spec.ApprovalRequest,
 		Input: `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1"}`,
 	})
-	if !needs || requirement.Key != (ApprovalKey{Tool: assistant.ApprovalRequestTool, Resource: "delete_dashboard"}) || requirement.Prompt.Title != `Allow the assistant to perform the "delete_dashboard" action?` || requirement.Prompt.Detail != "tool: delete_dashboard" {
+	if !needs || requirement.Key != (ApprovalKey{Tool: spec.ApprovalRequest, Resource: "delete_dashboard"}) || requirement.Prompt.Title != `Allow the assistant to perform the "delete_dashboard" action?` || requirement.Prompt.Detail != "tool: delete_dashboard" {
 		t.Fatalf("Approval(approval_request) = (%+v, %v), want the server gate", requirement, needs)
 	}
 	gate := &ToolBlock{
-		Name: assistant.ApprovalRequestTool, IsClientSide: true,
+		Name: spec.ApprovalRequest, IsClientSide: true,
 		Input: `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1"}`,
 	}
 	if gated, ok := gate.GatedCall(); !ok || gated != (ToolCall{ID: "gate-1", Name: "delete_dashboard", Input: `{"dashboard_id":"abc"}`}) {
@@ -617,7 +618,7 @@ func TestEngineManualModeLeavesUngatedToolsUnblocked(t *testing.T) {
 // approves the server gate on the wire, keeping the response order.
 func TestEngineSkipPermissionsSkipsApprovalGates(t *testing.T) {
 	rounds := toolRounds("read", "write")
-	rounds[0] = append(rounds[0], clientCallMsg("gate-1", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"gate-1"}`))
+	rounds[0] = append(rounds[0], clientCallMsg("gate-1", spec.ApprovalRequest, `{"tool_name":"delete_dashboard","tool_args":{},"tool_call_id":"gate-1"}`))
 	backend := &scriptBackend{rounds: rounds}
 	handler := func(_ context.Context, call ToolCall) (ToolResult, error) { return ToolResult{Output: call.Name}, nil }
 	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: handler},

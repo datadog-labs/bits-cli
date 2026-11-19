@@ -4,3 +4,7 @@ package spec
 const Handoff = "bits_cli_handoff"
 
 var ClientHandoff = Identity{ClientSide: true, Name: Handoff}
+
+type HandoffInput struct {
+	Reason string `json:"reason"`
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/headless"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 // roundsBackend streams one scripted round per Send.
@@ -209,7 +210,7 @@ func TestDeliveryToolRecords(t *testing.T) {
 	consume(t, delivery, transcript(1,
 		toolBlock("read-1", "read", "{}", agent.ToolSuccess, true),
 		toolBlock("write-1", "write", "{}", agent.ToolError, true),
-		toolBlock("gate-1", assistant.ApprovalRequestTool, "{}", agent.ToolDenied, true),
+		toolBlock("gate-1", spec.ApprovalRequest, "{}", agent.ToolDenied, true),
 		toolBlock("write-2", "write", "{}", agent.ToolCancelled, true),
 		toolBlock("pending-1", "search_logs", malformed, agent.ToolRunning, false),
 		toolBlock("pending-2", "search_logs", "", agent.ToolRunning, false),

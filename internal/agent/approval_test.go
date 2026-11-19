@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 const deleteGateInput = `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"gate-1","approval_message":"Delete it?"}`
@@ -19,7 +20,7 @@ var (
 )
 
 func gateMsg(id, input string) assistant.Message {
-	return clientCallMsg(id, assistant.ApprovalRequestTool, input)
+	return clientCallMsg(id, spec.ApprovalRequest, input)
 }
 
 // gateRounds streams first, then answers.
@@ -51,7 +52,7 @@ func decideGates(t *testing.T, decide func(id string) bool) func(Event) {
 	return func(event Event) {
 		for _, block := range event.State.PendingApprovals() {
 			id := block.ToolCallID()
-			if block.Tool.Name == assistant.ApprovalRequestTool && !decided[id] {
+			if block.Tool.Name == spec.ApprovalRequest && !decided[id] {
 				decided[id] = true
 				if !decide(id) {
 					t.Errorf("decision for %s was not applied", id)

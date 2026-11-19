@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 type duplexBackend struct {
@@ -435,7 +436,7 @@ func TestDuplexPermissionChangeReleasesParkedTools(t *testing.T) {
 						response := duplexCall(id, "write")
 						if serverGate {
 							tool := response.Data.Attributes.StructuredMessage.Content.Tool
-							tool.Metadata.Name = assistant.ApprovalRequestTool
+							tool.Metadata.Name = spec.ApprovalRequest
 							tool.Metadata.Input = fmt.Sprintf(`{"tool_name":"write_dashboard","tool_args":{},"tool_call_id":%q}`, id)
 						}
 						if err := emit(response); err != nil {

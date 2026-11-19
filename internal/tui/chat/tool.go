@@ -254,13 +254,11 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 
 	switch id {
 	case spec.ClientReadFile, spec.ClientWriteFile, spec.ClientEditFile:
-		var in spec.PathInput
-		if decodeObject(input, &in) && in.Path != "" {
+		if in, ok := decode[spec.PathInput](input); ok && in.Path != "" {
 			p.argument, p.validInput = escape.Inline(in.Path), true
 		}
 	case spec.ClientListFiles:
-		var in spec.ListFilesInput
-		if decodeObject(input, &in) {
+		if in, ok := decode[spec.ListFilesInput](input); ok {
 			if in.Path == "" {
 				in.Path = "."
 			}
@@ -270,14 +268,12 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			}
 		}
 	case spec.ClientGrepFiles:
-		var in spec.GrepFilesInput
-		if decodeObject(input, &in) && in.Pattern != "" {
+		if in, ok := decode[spec.GrepFilesInput](input); ok && in.Pattern != "" {
 			p.argument, p.context = escape.Inline(in.Pattern), escape.Inline(in.Path)
 			p.validInput = true
 		}
 	case spec.ClientExecCommand:
-		var in spec.ExecCommandInput
-		if decodeObject(input, &in) && in.Cmd != "" {
+		if in, ok := decode[spec.ExecCommandInput](input); ok && in.Cmd != "" {
 			// Preserve command line boundaries for the exec-specific renderer. The
 			// working directory remains compact metadata in the header.
 			if in.Workdir == "" {
@@ -308,29 +304,16 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			p.action.failure = p.action.success
 		}
 	case spec.ServerSpawnAgent:
-		var in struct {
-			Prompt string `json:"prompt"`
-		}
-		if decodeObject(input, &in) && in.Prompt != "" {
+		if in, ok := decode[spec.SpawnAgentInput](input); ok && in.Prompt != "" {
 			p.argument, p.validInput = escape.Inline(in.Prompt), true
 		}
 	case spec.ServerSendAgentMessage:
-		var in struct {
-			Message string `json:"message"`
-		}
-		if decodeObject(input, &in) && in.Message != "" {
+		if in, ok := decode[spec.SendAgentMessageInput](input); ok && in.Message != "" {
 			p.argument, p.validInput = escape.Inline(in.Message), true
 		}
 	case spec.ServerWaitForAgents:
-		var in struct {
-			AgentIDs []string `json:"agent_ids"`
-			Mode     string   `json:"mode"`
-		}
-		if decodeObject(input, &in) && len(in.AgentIDs) > 0 {
-			p.argument = fmt.Sprintf("%d subagents", len(in.AgentIDs))
-			if len(in.AgentIDs) == 1 {
-				p.argument = "1 subagent"
-			}
+		if in, ok := decode[spec.WaitForAgentsInput](input); ok && len(in.AgentIDs) > 0 {
+			p.argument = count(len(in.AgentIDs), "subagent", "subagents")
 			if in.Mode == "any" && len(in.AgentIDs) > 1 {
 				p.argument = "any of " + p.argument
 			}
@@ -338,8 +321,7 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 		}
 	case spec.ServerSkill:
 		p.argument = "skill"
-		var in spec.SkillInput
-		if decodeObject(input, &in) && in.SkillName != "" {
+		if in, ok := decode[spec.SkillInput](input); ok && in.SkillName != "" {
 			p.argument = "skill " + escape.Inline(in.SkillName)
 		}
 		p.validInput = true
@@ -348,10 +330,7 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 			p.argument, p.validInput = escape.Inline(cmp.Or(in.Task.TaskName, BackgroundAgentName(in.Task.AgentID))), true
 		}
 	case spec.ClientHandoff:
-		var in struct {
-			Reason string `json:"reason"`
-		}
-		if decodeObject(input, &in) && in.Reason != "" {
+		if in, ok := decode[spec.HandoffInput](input); ok && in.Reason != "" {
 			p.argument = "Reason: " + escape.Inline(in.Reason)
 		}
 		p.validInput = true
@@ -401,12 +380,13 @@ func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 	}
 }
 
-func decodeObject(input string, out any) bool {
-	input = strings.TrimSpace(input)
-	if !strings.HasPrefix(input, "{") {
-		return false
+// decode reads a JSON object payload; ok is false for anything else.
+func decode[T any](payload string) (v T, ok bool) {
+	payload = strings.TrimSpace(payload)
+	if !strings.HasPrefix(payload, "{") {
+		return v, false
 	}
-	return json.Unmarshal([]byte(input), out) == nil
+	return v, json.Unmarshal([]byte(payload), &v) == nil
 }
 
 func toolInput(tool *agent.ToolBlock) string {
@@ -601,26 +581,11 @@ func renderToolGroupHeader(group *toolGroup, blocks []agent.Block, presentations
 	case counts[agent.ToolSuccess] == calls:
 		state = agent.ToolSuccess
 	}
-	noun := "calls"
-	if calls == 1 {
-		noun = "call"
-	}
-	suffix := fmt.Sprintf(" · %d %s", calls, noun)
+	suffix := " · " + count(calls, "call", "calls")
 	if group == editGroup {
-		operations, paths := "changes", "files"
-		if changes == 1 {
-			operations = "change"
-		}
-		if len(files) == 1 {
-			paths = "file"
-		}
-		suffix = fmt.Sprintf(" · %d %s across %d %s", changes, operations, len(files), paths)
+		suffix = " · " + count(changes, "change", "changes") + " across " + count(len(files), "file", "files")
 		if skills > 0 {
-			noun := "skills"
-			if skills == 1 {
-				noun = "skill"
-			}
-			suffix += fmt.Sprintf(" · %d %s", skills, noun)
+			suffix += " · " + count(skills, "skill", "skills")
 		}
 	}
 	for _, outcome := range []struct {
@@ -666,7 +631,7 @@ func renderServerTool(tool *agent.ToolBlock, p toolPresentation, c renderContext
 		if strings.TrimSpace(reason) == "" {
 			reason = "Tool failed"
 		}
-		return header + "\n" + renderRows([]string{collapseWS(escape.Multiline(reason))}, c.width, c.sty.ToolError, c.sty)
+		return header + "\n" + renderReason(reason, c)
 	}
 	var sections []string
 	if detail := strings.TrimSpace(tool.Detail); detail != "" && detail != strings.TrimSpace(tool.Output) {
@@ -695,11 +660,7 @@ func renderServerTool(tool *agent.ToolBlock, p toolPresentation, c renderContext
 	} else if statusOf(tool) == agent.ToolSuccess || statusOf(tool) == agent.ToolError {
 		sections = append(sections, "Output:\n  (no output)")
 	}
-	style := c.sty.ToolDetail
-	if statusOf(tool) == agent.ToolError {
-		style = c.sty.ToolError
-	}
-	return header + "\n" + renderPreview(strings.Join(sections, "\n\n"), genericOutputMaxLines, style, false, c)
+	return header + "\n" + renderPreview(strings.Join(sections, "\n\n"), genericOutputMaxLines, detailStyle(statusOf(tool), c.sty), false, c)
 }
 
 func indentServerPayload(payload string) string {
@@ -758,7 +719,7 @@ func renderSimpleTool(tool *agent.ToolBlock, p toolPresentation, c renderContext
 			if reason == "" {
 				reason = "failed"
 			}
-			return header + "\n" + renderRows([]string{collapseWS(escape.Multiline(reason))}, c.width, c.sty.ToolError, c.sty)
+			return header + "\n" + renderReason(reason, c)
 		}
 		return header
 	}
@@ -782,11 +743,7 @@ func renderDetail(detail string, state agent.ToolStatus, limit int, c renderCont
 		}
 		return renderNoOutput(c.width, c.sty)
 	}
-	style := c.sty.ToolDetail
-	if state == agent.ToolError {
-		style = c.sty.ToolError
-	}
-	return renderPreview(detail, limit, style, false, c)
+	return renderPreview(detail, limit, detailStyle(state, c.sty), false, c)
 }
 
 // renderChangeTool shows the newest collapsedDiffLines of the diff in its
@@ -891,8 +848,8 @@ func renderCommandControlTool(tool *agent.ToolBlock, p toolPresentation, c rende
 // decodeExecResult returns a command tool's result, nil until it has a
 // decodable one.
 func decodeExecResult(tool *agent.ToolBlock) *spec.ExecCommandOutput {
-	var result spec.ExecCommandOutput
-	if json.Unmarshal([]byte(tool.Output), &result) != nil {
+	result, ok := decode[spec.ExecCommandOutput](tool.Output)
+	if !ok {
 		return nil
 	}
 	return &result
@@ -914,10 +871,7 @@ func renderExecBody(tool *agent.ToolBlock, result *spec.ExecCommandOutput, heade
 		return header
 	case agent.ToolUnknown, agent.ToolSuccess, agent.ToolError:
 	}
-	style := c.sty.ToolDetail
-	if state == agent.ToolError {
-		style = c.sty.ToolError
-	}
+	style := detailStyle(state, c.sty)
 	if result == nil {
 		return header + "\n" + renderPreview(tool.Output, execOutputMaxLines, style, true, c)
 	}
@@ -950,8 +904,8 @@ func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, st
 
 // backgroundTaskInput decodes a startBackgroundTask call's task.
 func backgroundTaskInput(input string) (spec.StartBackgroundTaskInput, bool) {
-	var in spec.StartBackgroundTaskInput
-	return in, decodeObject(input, &in) && strings.TrimSpace(in.Task.AgentID) != ""
+	in, ok := decode[spec.StartBackgroundTaskInput](input)
+	return in, ok && strings.TrimSpace(in.Task.AgentID) != ""
 }
 
 // BackgroundAgentName names the server agent a background task runs on.
@@ -1217,6 +1171,19 @@ func renderPreview(text string, limit int, style lipgloss.Style, middle bool, c 
 	return renderRows(rows, c.width, style, c.sty)
 }
 
+// renderReason shows why a call failed on one row of its compact view.
+func renderReason(reason string, c renderContext) string {
+	return renderRows([]string{collapseWS(escape.Multiline(reason))}, c.width, c.sty.ToolError, c.sty)
+}
+
+// detailStyle styles a call's detail rows by its outcome.
+func detailStyle(state agent.ToolStatus, sty Styles) lipgloss.Style {
+	if state == agent.ToolError {
+		return sty.ToolError
+	}
+	return sty.ToolDetail
+}
+
 func renderRows(rows []string, width int, style lipgloss.Style, sty Styles) string {
 	for i := range rows {
 		prefix := "    "
@@ -1347,6 +1314,14 @@ func activityEllipsis(frame int, motion bool) string {
 	return fmt.Sprintf("%-3s", strings.Repeat(".", dots))
 }
 
+// count is n with the noun for its number, as in "1 call" or "2 calls".
+func count(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
 // collapseWS joins whitespace runs.
 func collapseWS(s string) string { return strings.Join(strings.Fields(s), " ") }
 
@@ -1364,8 +1339,8 @@ func renderQuestionsTool(tool *agent.ToolBlock, _ toolPresentation, c renderCont
 	if err != nil {
 		return header + "\n" + textwrap.WrapProseText(c.width, escape.Multiline(tool.Output), c.sty.ToolError)
 	}
-	var result spec.AskUserQuestionOutput
-	if json.Unmarshal([]byte(tool.Output), &result) == nil && result.Success {
+	result, ok := decode[spec.AskUserQuestionOutput](tool.Output)
+	if ok && result.Success {
 		return header + "\n" + textwrap.WrapProseText(c.width, escape.Multiline(result.Message), c.sty.ToolDetail)
 	}
 	lines := []string{header}

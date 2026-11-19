@@ -63,7 +63,7 @@ func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendO
 	if b.calls == 1 {
 		content := assistant.ToolCallContent("tool-call", approvalToolName, `{}`)
 		if b.serverGate {
-			content = assistant.ToolCallContent("tool-call", assistant.ApprovalRequestTool, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"tool-call","approval_message":"Delete it?"}`)
+			content = assistant.ToolCallContent("tool-call", spec.ApprovalRequest, `{"tool_name":"delete_dashboard","tool_args":{"dashboard_id":"abc"},"tool_call_id":"tool-call","approval_message":"Delete it?"}`)
 		}
 		content.Type = assistant.ContentClientToolCall
 		var response assistant.AssistantResponse
