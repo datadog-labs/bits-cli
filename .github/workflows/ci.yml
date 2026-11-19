@@ -36,19 +36,33 @@ env:
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up Go
+        id: go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: Cache golangci-lint
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.go.outputs.go-bin-path }}/golangci-lint*
+          key: golangci-lint-${{ runner.os }}-${{ runner.arch }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles('scripts/lint.sh') }}
       - name: Lint
+        if: runner.os == 'Linux'
         run: ./scripts/lint.sh --require-shellcheck
+      - name: Lint
+        if: runner.os != 'Linux'
+        run: ./scripts/lint.sh
 
   # Each OS builds its release targets natively, tests against the built
   # helpers, and hands the install prefixes over to the package job.

@@ -48,9 +48,9 @@ Lint with the pinned golangci-lint configuration:
 ./scripts/lint.sh
 ```
 
-`./scripts/lint.sh` lints both modules, checks the shell scripts with
-shellcheck when it is installed (CI always does), and verifies that
-`LICENSE-3rdparty.csv` matches the dependency tree.
+This lints Go code for your host platform; CI runs it on Linux, macOS, and
+Windows. It also checks the licenses module, `LICENSE-3rdparty.csv`, and shell
+scripts when ShellCheck is installed.
 
 ## Authentication for development
 
