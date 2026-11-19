@@ -13,6 +13,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/browser"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/components"
+	"github.com/datadog-labs/bits-cli/internal/tui/conversations"
 )
 
 const shareTimeout = 30 * time.Second
@@ -67,7 +68,7 @@ func (m *Model) startShare(argument string) tea.Cmd {
 // NOTE: a share revoked elsewhere still reads as active, so its copied link
 // fails closed until the conversation is loaded again.
 func (m *Model) openSharePrompt(conversationID string) {
-	until, shared := activeShare(m.state.SharedUntil, time.Now())
+	until, shared := conversations.ActiveShare(m.state.SharedUntil, time.Now())
 	options := shareOptions
 	current := 0
 	if shared {
@@ -141,14 +142,6 @@ func (m *Model) copyShareLink(conversationID string, until time.Time) tea.Cmd {
 	)
 }
 
-// activeShare reports when a share that has not expired ends.
-func activeShare(until *time.Time, now time.Time) (time.Time, bool) {
-	if until == nil || !until.After(now) {
-		return time.Time{}, false
-	}
-	return *until, true
-}
-
 // statusSharing describes who can view the conversation, or "" before it is
 // saved.
 // NOTE: it reflects the last load or /share, so a change made on the web
@@ -158,7 +151,7 @@ func (m *Model) statusSharing() string {
 	if !agent.ValidConversationID(m.state.ConversationID) {
 		return ""
 	}
-	if until, ok := activeShare(m.state.SharedUntil, time.Now()); ok {
+	if until, ok := conversations.ActiveShare(m.state.SharedUntil, time.Now()); ok {
 		return "shared with your organization until " + shareDate(until)
 	}
 	return "private"

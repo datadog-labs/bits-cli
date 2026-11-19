@@ -61,6 +61,10 @@ func TestConversationRoundTrip(t *testing.T) {
 		t.Fatalf("share expires in %v, want 7 days", left)
 	}
 
+	if list := engine.ListConversations(ctx, 0); list.Err != nil || len(list.Conversations) != 1 || list.Conversations[0].SharedExpires == nil {
+		t.Fatalf("list = %+v, want the shared conversation", list)
+	}
+
 	restored := agent.New(f, agent.Config{})
 	conversation, err := restored.LoadConversation(ctx, id)
 	if err != nil {

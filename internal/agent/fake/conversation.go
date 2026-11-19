@@ -220,7 +220,7 @@ func (f *Fake) UserConversations(ctx context.Context, in assistant.UserConversat
 			continue
 		}
 		r.Data.Attributes.Conversations = append(r.Data.Attributes.Conversations, assistant.ConversationSummary{
-			ID: c.id, ConversationID: c.id, UpdatedAt: c.updated, Title: c.title,
+			ID: c.id, ConversationID: c.id, UpdatedAt: c.updated, Title: c.title, SharedExpires: c.sharedUntil,
 		})
 	}
 	slices.SortFunc(r.Data.Attributes.Conversations, func(a, b assistant.ConversationSummary) int {

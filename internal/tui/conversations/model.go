@@ -50,10 +50,8 @@ type conversationItem struct {
 	now     func() time.Time
 }
 
-func (i conversationItem) Title() string { return SafeTitle(i.summary) }
-func (i conversationItem) Description() string {
-	return RelativeUpdatedAt(i.summary.UpdatedAt, i.now())
-}
+func (i conversationItem) Title() string       { return SafeTitle(i.summary) }
+func (i conversationItem) Description() string { return Activity(i.summary, i.now()) }
 func (i conversationItem) FilterValue() string { return SafeTitle(i.summary) }
 
 type Model struct {
@@ -253,6 +251,29 @@ func runeSliceIndex(haystack, needle []rune) int {
 		}
 	}
 	return -1
+}
+
+// Activity is a conversation row's detail: whether the organization can view
+// it, first so a narrow row keeps it, then when it last changed.
+func Activity(summary assistant.ConversationSummary, now time.Time) string {
+	updated := RelativeUpdatedAt(summary.UpdatedAt, now)
+	if summary.SharedExpires == nil {
+		return updated
+	}
+	until := time.UnixMilli(*summary.SharedExpires)
+	if _, ok := ActiveShare(&until, now); !ok {
+		return updated
+	}
+	return "shared · " + updated
+}
+
+// ActiveShare reports when a share ends, unless it already expired, as on the
+// web. A nil until means the conversation is private.
+func ActiveShare(until *time.Time, now time.Time) (time.Time, bool) {
+	if until == nil || !until.After(now) {
+		return time.Time{}, false
+	}
+	return *until, true
 }
 
 // RelativeUpdatedAt renders updatedAt relative to now for display.
