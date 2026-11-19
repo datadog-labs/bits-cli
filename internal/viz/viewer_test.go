@@ -28,6 +28,7 @@ func TestViewerHelper(t *testing.T) {
 	fmt.Println(`{"jsonrpc":"2.0","id":"flags","method":"tools/call","params":{"name":"_dd_gff","arguments":{}}}`)
 	// The frame sees the presented app as notifications, in order.
 	var presented []string
+	lookupFailed := false
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		var msg wireMessage
@@ -46,9 +47,17 @@ func TestViewerHelper(t *testing.T) {
 		if msg.Method == "ui/notifications/tool-result" && string(msg.Params) == `{"pending":true}` {
 			fmt.Println(`{"jsonrpc":"2.0","id":"pending","method":"tools/call","params":{"name":"pending","arguments":{}}}`)
 		}
+		if msg.Method == "ui/notifications/tool-result" && os.Getenv("DDVIZ_HEADLESS") == "1" {
+			fmt.Println(`{"jsonrpc":"2.0","id":"lookup","method":"tools/call","params":{"name":"lookup","arguments":{}}}`)
+		}
+		if string(msg.ID) == `"lookup"` {
+			lookupFailed = msg.Error == nil && string(msg.Result) == lookupError
+		}
 		if msg.Method == "snapshot" {
 			reply := map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]string{"mimeType": "image/png", "data": base64.StdEncoding.EncodeToString(imageBytes())}}
-			if !slices.Equal(presented, presentedNotifications) {
+			if !lookupFailed {
+				reply = map[string]any{"jsonrpc": "2.0", "id": msg.ID, "error": map[string]any{"code": -32000, "message": "app did not receive the failed lookup"}}
+			} else if !slices.Equal(presented, presentedNotifications) {
 				reply = map[string]any{"jsonrpc": "2.0", "id": msg.ID, "error": map[string]any{"code": -32000, "message": fmt.Sprint(presented)}}
 			}
 			data, _ := json.Marshal(reply)
@@ -56,6 +65,15 @@ func TestViewerHelper(t *testing.T) {
 		}
 	}
 	os.Exit(0)
+}
+
+const lookupError = `{"isError":true,"content":[{"type":"text","text":"lookup failed"}]}`
+
+func fixtureToolResult(name string) json.RawMessage {
+	if name == "lookup" {
+		return json.RawMessage(lookupError)
+	}
+	return json.RawMessage(`{}`)
 }
 
 // presentedApp is what the fixture expects to see, as presentedNotifications.
@@ -85,7 +103,7 @@ func TestStdioEndToEnd(t *testing.T) {
 		if handle == "h" && name == "_dd_gff" {
 			callbacks.Add(1)
 		}
-		return json.RawMessage(`{}`), nil
+		return fixtureToolResult(name), nil
 	}}
 	defer func() { _ = c.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -204,8 +222,8 @@ func TestViewerOutlivesStartupContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools := toolCaller(func(context.Context, string, json.RawMessage) (json.RawMessage, error) {
-		return json.RawMessage(`{}`), nil
+	tools := toolCaller(func(_ context.Context, name string, _ json.RawMessage) (json.RawMessage, error) {
+		return fixtureToolResult(name), nil
 	})
 	lifetime, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
