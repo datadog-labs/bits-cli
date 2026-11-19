@@ -77,7 +77,7 @@ func TestWidgetBadgeCentersOverImage(t *testing.T) {
 
 	// A long title gives way before the action's icon does.
 	title := strings.Split(ansi.Strip(renderWidgetView(WidgetView{Title: strings.Repeat("CPU ", 30), Action: WidgetOpen}, renderContext{width: 40, sty: sty})), "\n")[0]
-	if !strings.HasSuffix(strings.TrimRight(title, " "), "…"+widgetIcons[WidgetOpen]) || ansi.StringWidth(title) > 40 {
+	if !strings.HasSuffix(strings.TrimRight(title, " "), "… ⧉") || ansi.StringWidth(title) > 40 {
 		t.Fatalf("title %q lost its icon or overflowed", title)
 	}
 }

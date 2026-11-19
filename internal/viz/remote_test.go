@@ -98,22 +98,3 @@ func TestRemoteClose(t *testing.T) {
 		t.Fatalf("render after Close = %+v", s)
 	}
 }
-
-// Without a panel, Open restores a saved app for the caller's web fallback,
-// which only charts have.
-func TestRemoteOpenRestores(t *testing.T) {
-	restored := chartApp(`{"type":"timeseries","title":"CPU"}`, 0, 0)
-	c := NewRemote(&fakeSnapshots{fakeAPI: fakeAPI{restore: func(string, string) (assistant.AppPayload, error) {
-		return restored, nil
-	}}})
-	defer func() { _ = c.Close() }()
-	saved := Request{App: assistant.AppPayload{ResourceURI: DatavizURI, Restorable: true}, ConversationID: "conv", MessageID: "msg"}
-	result := c.Open(context.Background(), saved)
-	if result.Status.Phase != Unavailable || result.App == nil || string(result.App.Result) != string(restored.Result) {
-		t.Fatalf("open = %+v", result)
-	}
-	// Only charts open on the web.
-	if result := c.Open(context.Background(), request(t)); result.Status != notShown || result.App != nil {
-		t.Fatalf("view open = %+v", result)
-	}
-}

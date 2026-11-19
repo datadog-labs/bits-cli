@@ -12,20 +12,26 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
 )
 
-// WidgetAction is what a click on a widget does. LinkAt reports it on every
-// row of the widget, the way an accordion takes clicks on its whole block.
+// WidgetAction is what a click on a widget or its separate web link does.
 type WidgetAction uint8
 
 const (
-	WidgetNone  WidgetAction = iota
-	WidgetOpen               // open the interactive panel
-	WidgetRetry              // retry a failed preview
-	WidgetWeb                // open the web sandbox
+	WidgetNone         WidgetAction = iota
+	WidgetOpen                      // open the interactive panel
+	WidgetRetry                     // retry a failed preview
+	WidgetWeb                       // open the web sandbox
+	WidgetConversation              // open the conversation in Datadog
 )
 
-// widgetIcons mark the title as a way out of the terminal, as the former
-// action links did.
-var widgetIcons = map[WidgetAction]string{WidgetOpen: " ⧉", WidgetWeb: " ↗"}
+// widgetSuffix shows the action attached to the title.
+var widgetSuffix = map[WidgetAction]string{
+	WidgetOpen:         " ⧉",
+	WidgetRetry:        " · Retry",
+	WidgetWeb:          " ↗",
+	WidgetConversation: " · " + conversationLinkLabel,
+}
+
+const conversationLinkLabel = "Open conversation ↗"
 
 // WidgetView is what the transcript draws for an app block. The tui decides
 // it from the app, capabilities and operation state; the list only renders it.
@@ -37,10 +43,19 @@ type WidgetView struct {
 	Loading string // spinner label: a badge over the box, or a line without one
 	Note    string // one muted line, such as a failure reason
 	Action  WidgetAction
+	Link    WidgetAction // a separately labeled link below the card
+	Hidden  bool
 }
 
 // animated reports whether the view depends on the frame counter.
 func (v WidgetView) animated() bool { return v.Loading != "" }
+
+func (v WidgetView) actionAt(row, height int) WidgetAction {
+	if v.Link != WidgetNone && row == height-1 {
+		return v.Link
+	}
+	return v.Action
+}
 
 func renderWidgetView(v WidgetView, c renderContext) string {
 	width := max(1, c.width)
@@ -53,6 +68,13 @@ func renderWidgetView(v WidgetView, c renderContext) string {
 	}
 	if v.Note != "" {
 		lines = append(lines, ansi.Truncate(widgetTitlePad+c.sty.Meta.Render(escape.SingleLine(v.Note)), width, "…"))
+	}
+	if v.Link != WidgetNone {
+		label := "Open chart in Datadog ↗"
+		if v.Link == WidgetConversation {
+			label = conversationLinkLabel
+		}
+		lines = append(lines, ansi.Truncate(widgetTitlePad+c.sty.ToolName.Foreground(c.sty.MarkdownLink).Render(label), width, "…"))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -68,10 +90,10 @@ func widgetHeader(v WidgetView, width int, c renderContext) string {
 	if v.Action != WidgetNone {
 		title = title.Foreground(c.sty.MarkdownLink)
 	}
-	icon := widgetIcons[v.Action]
-	room := max(1, width-len(widgetTitlePad)-lipgloss.Width(icon))
+	suffix := widgetSuffix[v.Action]
+	room := max(1, width-len(widgetTitlePad)-lipgloss.Width(suffix))
 	head := c.sty.WidgetBox.Render(widgetTitlePad) +
-		ansi.Truncate(title.Render(cmp.Or(escape.SingleLine(v.Title), "Datadog view")), room, "…") + title.Render(icon)
+		ansi.Truncate(title.Render(cmp.Or(escape.SingleLine(v.Title), "Datadog view")), room, "…") + title.Render(suffix)
 	if fill := width - lipgloss.Width(head); fill > 0 {
 		head += c.sty.WidgetBox.Render(strings.Repeat(" ", fill))
 	}

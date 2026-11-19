@@ -133,14 +133,17 @@ MCP app feature.
 
 `BITS_VIZ=auto` is the default. It uses ddviz for interactive previews when the
 macOS helper is available, and Datadog snapshots otherwise. Snapshots preview
-charts only; other views show their title. Snapshot previews require a
+charts only. Snapshot previews require a
 Datadog site and login that support the snapshot API. Set `BITS_VIZ=snapshot`
-to use snapshots on any system, or `BITS_VIZ=off` to show charts as web
-sandbox links only; with it, views reopened from history have no link, as
-nothing restores them. Terminal image support is required for inline previews;
-without it, snapshot-only charts appear as links. When a chart has no time
-range, snapshots and links default to the last hour. Views reopened from
-history are restored by the assistant, which runs their tool again.
+to use snapshots on any system, or `BITS_VIZ=off` to use browser links only.
+Without terminal image support, ddviz can still open a view in its own panel.
+When Bits can't show a view locally, known charts can open in the web sandbox
+and saved apps can open their conversation in Datadog. Bits omits a view when
+it has no supported renderer or destination.
+
+When a chart has no time range, snapshots and chart links default to the last
+hour. Previewing or opening a saved view in ddviz restores it by running its
+tool again. Opening the conversation link goes directly to the browser.
 
 `BITS_GRAPHICS=auto` (the default) detects inline images, including the startup logo.
 Use `BITS_GRAPHICS=on bits` to bypass terminal identity checks, or

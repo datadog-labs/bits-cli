@@ -103,28 +103,11 @@ func remoteFailure(err error) Status {
 	return failure(err)
 }
 
-// notShown is a view snapshots cannot preview and the web sandbox cannot open:
-// only charts have either.
+// notShown reports that a renderer cannot present the view.
 var notShown = Status{Phase: Failed, Reason: "This view can't be shown here.", Retry: RetryNotUseful}
 
-// Open has no panel to present. It restores a saved app, so the caller can
-// fall back to the web with its chart, and reports Unavailable.
-func (c *remoteClient) Open(ctx context.Context, r Request) Result {
-	ctx, done, ok := c.begin(ctx)
-	if !ok {
-		return Result{Status: Status{Phase: Canceled}}
-	}
-	defer done()
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	app, restored, status := load(ctx, c.api, r)
-	if status.Phase != Succeeded {
-		return Result{Status: status}
-	}
-	if app.Summary().Chart == nil {
-		return Result{Status: notShown, App: restored}
-	}
-	return Result{Status: Status{Phase: Unavailable}, App: restored}
+func (c *remoteClient) Open(context.Context, Request) Result {
+	return Result{Status: Status{Phase: Unavailable}}
 }
 
 func (c *remoteClient) Interactive() bool { return false }

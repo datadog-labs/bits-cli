@@ -26,8 +26,7 @@ import (
 
 type widgetTestClient struct {
 	render         viz.Result
-	open           viz.Status            // zero opens successfully
-	opened         *assistant.AppPayload // the app an Open restores
+	open           viz.Status // zero opens successfully
 	renders, opens int
 	last           viz.Request
 	closed         bool
@@ -44,9 +43,9 @@ func (c *widgetTestClient) Open(_ context.Context, r viz.Request) viz.Result {
 	c.opens++
 	c.last = r
 	if c.open.Phase == viz.Idle {
-		return viz.Result{Status: viz.Status{Phase: viz.Succeeded}, App: c.opened}
+		return viz.Result{Status: viz.Status{Phase: viz.Succeeded}}
 	}
-	return viz.Result{Status: c.open, App: c.opened}
+	return viz.Result{Status: c.open}
 }
 
 func (c *widgetTestClient) Interactive() bool { return !c.remote }
@@ -169,7 +168,7 @@ func TestWidgetModes(t *testing.T) {
 // worth retrying offers Retry with its reason.
 func TestWidgetCompletions(t *testing.T) {
 	client := &widgetTestClient{render: viz.Result{Status: viz.Status{Phase: viz.Failed, Reason: "Query failed.", Retry: viz.RetryAllowed}}}
-	m, _, render, _ := widgetModel(t, client, graphics.Supported, timeseries)
+	m, _, render, opened := widgetModel(t, client, graphics.Supported, timeseries)
 	defer m.Detach()
 
 	// The render finishes after streaming pushed the widget off screen: its
@@ -188,8 +187,12 @@ func TestWidgetCompletions(t *testing.T) {
 	m.state.Blocks = m.state.Blocks[:1]
 	m.syncTranscript()
 	m.Update(struct{}{})
-	if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, "Query failed.") || widgetActions(m)[0] != chat.WidgetRetry {
+	if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, "Query failed.") || !strings.Contains(doc, "Open chart in Datadog") || !slices.Equal(widgetActions(m), []chat.WidgetAction{chat.WidgetRetry, chat.WidgetWeb}) {
 		t.Fatalf("retryable failure not offered:\n%s", doc)
+	}
+	runWidgetTasks(m, clickWidget(t, m, chat.WidgetWeb))
+	if len(*opened) != 1 || !strings.HasPrefix((*opened)[0], "https://demo.datadoghq.com/dataviz/sandbox?") {
+		t.Fatalf("opened %q after a failed preview", *opened)
 	}
 	runWidgetTasks(m, clickWidget(t, m, chat.WidgetRetry))
 	if client.renders != 2 {
@@ -383,73 +386,99 @@ func TestRestoredAppTakesItsTitle(t *testing.T) {
 	}
 }
 
-// Without previews, a saved app's link restores it on click: a chart opens on
-// the web, and another view takes its title.
-func TestSavedAppLinkRestoresOnClick(t *testing.T) {
+func TestWidgetWithoutLocalPresentation(t *testing.T) {
+	saved := assistant.AppPayload{ResourceURI: viz.DatavizURI, Restorable: true}
+	savedIncident := incident
+	savedIncident.Restorable = true
+	withoutRelay := timeseries
+	withoutRelay.RelayHandle = ""
 	for _, tc := range []struct {
 		name     string
-		restored assistant.AppPayload
-		open     viz.Status
-		title    string
-		web      bool
+		app      assistant.AppPayload
+		client   viz.Client
+		support  graphics.Support
+		noOrigin bool
+		action   chat.WidgetAction
+		target   string
 	}{
-		{"chart", timeseries, viz.Status{Phase: viz.Unavailable}, "CPU", true},
-		{"view", incident, viz.Status{Phase: viz.Failed, Reason: "This view can't be shown here."}, "This view can't be shown here.", false},
+		{name: "saved app without renderer", app: saved, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/ask/conv"},
+		{name: "saved app with snapshots and no graphics", app: saved, client: &widgetTestClient{remote: true}, support: graphics.Unsupported, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/ask/conv"},
+		{name: "saved incident with snapshots", app: savedIncident, client: &widgetTestClient{remote: true}, support: graphics.Supported, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/ask/conv"},
+		{name: "unsaved incident with snapshots", app: incident, client: &widgetTestClient{remote: true}, support: graphics.Supported},
+		{name: "unsaved incident without relay", app: incident, client: &widgetTestClient{}},
+		{name: "saved app without web origin", app: saved, noOrigin: true},
+		{name: "relay-less chart uses the sandbox", app: withoutRelay, client: &widgetTestClient{}, action: chat.WidgetWeb, target: "https://demo.datadoghq.com/dataviz/sandbox?"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			client := &widgetTestClient{remote: true, open: tc.open, opened: &tc.restored}
-			saved := assistant.AppPayload{ResourceURI: viz.DatavizURI, Restorable: true}
-			m, _, cmd, opened := widgetModel(t, client, graphics.Unsupported, saved)
+			m, id, _, opened := widgetModel(t, tc.client, tc.support, tc.app)
 			defer m.Detach()
-			if cmd != nil || client.renders != 0 {
-				t.Fatalf("link mode started work: renders=%d", client.renders)
+			if tc.noOrigin {
+				m.widgets.origin = ""
+				m.Update(struct{}{})
 			}
-			runWidgetTasks(m, clickWidget(t, m, chat.WidgetWeb))
-			if client.opens != 1 || len(*opened) != map[bool]int{true: 1}[tc.web] {
-				t.Fatalf("opens=%d opened=%q", client.opens, *opened)
+			if m.widgets.entries[id].controller != nil {
+				t.Fatal("fallback started renderer work")
 			}
-			if client.last.ConversationID != "conv" || client.last.MessageID != "msg" {
-				t.Fatalf("restore keys = %q, %q", client.last.ConversationID, client.last.MessageID)
+			if tc.action == chat.WidgetNone {
+				m.list.SetHeader("")
+				if doc := ansi.Strip(m.list.Document()); doc != "" || len(widgetActions(m)) != 0 {
+					t.Fatalf("hidden view occupies space or takes clicks: %q", doc)
+				}
+				return
 			}
-			if tc.web && !strings.HasPrefix((*opened)[0], "https://demo.datadoghq.com/dataviz/sandbox?") {
-				t.Fatalf("opened %q", *opened)
+			if tc.action == chat.WidgetConversation {
+				title := tc.app.Summary().Title
+				if title == "" {
+					title = "Datadog view"
+				}
+				if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, title+" · Open conversation ↗") {
+					t.Fatalf("conversation action not on the title row: %q", doc)
+				}
 			}
-			m.Update(struct{}{})
-			if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, tc.title) {
-				t.Fatalf("restored view:\n%s", doc)
+			if actions := widgetActions(m); !slices.Equal(actions, []chat.WidgetAction{tc.action}) {
+				t.Fatalf("actions = %v, want %v", actions, tc.action)
 			}
-			if actions := widgetActions(m); tc.web != slices.Contains(actions, chat.WidgetWeb) {
-				t.Fatalf("actions = %v", actions)
+			runWidgetTasks(m, clickWidget(t, m, tc.action))
+			if len(*opened) != 1 || !strings.HasPrefix((*opened)[0], tc.target) {
+				t.Fatalf("opened %q, want %s", *opened, tc.target)
+			}
+			if client, ok := tc.client.(*widgetTestClient); ok && client.opens != 0 {
+				t.Fatal("web action restored the app")
 			}
 		})
 	}
 }
 
-// A saved app's preview restores it, so it offers no restoring link meanwhile:
-// a click would find snapshots unable to open and switch every widget to links.
-func TestSavedAppPreviewOffersNoLink(t *testing.T) {
-	client := &widgetTestClient{remote: true, render: rendered(t), open: viz.Status{Phase: viz.Unavailable}}
-	m, _, render, _ := widgetModel(t, client, graphics.Supported, assistant.AppPayload{ResourceURI: viz.DatavizURI, Restorable: true})
-	defer m.Detach()
-	if render == nil || slices.Contains(widgetActions(m), chat.WidgetWeb) {
-		t.Fatalf("rendering saved app offers %v", widgetActions(m))
-	}
-	runWidgetTasks(m, render)
-	if client.last.ConversationID != "conv" || client.last.MessageID != "msg" {
-		t.Fatalf("restore keys = %q, %q", client.last.ConversationID, client.last.MessageID)
-	}
-}
-
-// Snapshots preview charts only: another view shows its title, with nothing to
-// act on and no render that could only fail.
-func TestRemoteSkipsViewsWithoutPreview(t *testing.T) {
-	client := &widgetTestClient{remote: true, render: rendered(t)}
-	m, _, render, _ := widgetModel(t, client, graphics.Supported, incident)
-	defer m.Detach()
-	runWidgetTasks(m, render)
-	doc := ansi.Strip(m.list.Document())
-	if !strings.Contains(doc, "Incident detail") || client.renders != 0 || len(widgetActions(m)) != 0 {
-		t.Fatalf("renders = %d, view:\n%s", client.renders, doc)
+func TestSavedAppPreviewKeepsConversationUntilRestored(t *testing.T) {
+	chart := rendered(t)
+	chart.App = &timeseries
+	for _, tc := range []struct {
+		name   string
+		result viz.Result
+		title  string
+		action chat.WidgetAction
+	}{
+		{"chart", chart, "CPU", chat.WidgetWeb},
+		{"product card", viz.Result{App: &incident, Status: viz.Status{Phase: viz.Failed, Reason: "This view can't be shown here."}}, "Incident detail", chat.WidgetConversation},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &widgetTestClient{remote: true, render: tc.result}
+			m, _, render, _ := widgetModel(t, client, graphics.Supported, assistant.AppPayload{ResourceURI: viz.DatavizURI, Restorable: true})
+			defer m.Detach()
+			if render == nil || !slices.Equal(widgetActions(m), []chat.WidgetAction{chat.WidgetConversation}) {
+				t.Fatalf("rendering saved app offers %v", widgetActions(m))
+			}
+			runWidgetTasks(m, render)
+			if client.last.ConversationID != "conv" || client.last.MessageID != "msg" {
+				t.Fatalf("restore keys = %q, %q", client.last.ConversationID, client.last.MessageID)
+			}
+			if actions := widgetActions(m); !slices.Equal(actions, []chat.WidgetAction{tc.action}) {
+				t.Fatalf("restored view offers %v, want %v", actions, tc.action)
+			}
+			if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, tc.title) || strings.Contains(doc, "can't be shown") {
+				t.Fatalf("restored view:\n%s", doc)
+			}
+		})
 	}
 }
 

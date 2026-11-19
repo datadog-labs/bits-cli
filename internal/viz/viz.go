@@ -27,7 +27,12 @@ func (r Request) valid() bool {
 	if r.App.ResourceURI != DatavizURI {
 		return false
 	}
-	return len(r.App.Result) > 0 || r.App.Restorable && r.ConversationID != "" && r.MessageID != ""
+	return len(r.App.Result) > 0 || r.CanRestore()
+}
+
+// CanRestore reports whether the server saved the app and supplied its identity.
+func (r Request) CanRestore() bool {
+	return r.App.Restorable && r.ConversationID != "" && r.MessageID != ""
 }
 
 // Phase includes transient controller states and terminal client outcomes.
@@ -74,7 +79,7 @@ type Result struct {
 type Client interface {
 	Render(context.Context, Request) Result
 	// Open succeeds when presentation is requested, without waiting for panel
-	// closure. Without a panel it reports Unavailable, with the app it restored.
+	// closure. Preview-only clients report Unavailable.
 	Open(context.Context, Request) Result
 	// Interactive reports, before any operation, whether Open can present a panel.
 	Interactive() bool
