@@ -34,7 +34,8 @@ Reusable scripts for tests and manual TUI previews live together in
 The runner bundles these scripts; a file with the same name in the working
 directory takes precedence. Full paths below the working directory also work.
 The files cover approvals, command wrapping and background commands, links,
-notices, disclosure, tool grouping, questions, background tasks
+notices, disclosure, tool grouping, questions, code execution
+(`load("code_exec.star", "all"); all()`), background tasks
 (`load("tasks.star", "investigation"); investigation()`), and injected memories
 (`load("memories.star", "injected"); injected()`).
 
