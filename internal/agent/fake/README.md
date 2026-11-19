@@ -66,7 +66,7 @@ inline preview.
 | `random(seed=None, size=None)` | a pseudo-random answer, at least `size` Markdown bytes |
 | `tool(name, input, out=, err=, ns=, title=, detail=, stream=, delay=)` or `tool([(name, input, out), …])` | server tool calls, then their results; `delay="3s"` keeps the calls running that long |
 | `call(name, input, stream=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
-| `raw(content, results=, id=)` | any other wire content, through the real decoder |
+| `raw(content, results=, id=, is_error=)` | any other wire content, through the real decoder; `is_error=True` marks a turn error, as the server does for rate and context limits |
 | `task(name, updates, agent=, every=, status=)` | a started background task, then one update every `every` (`2s`) and a final one with `status` (`succeeded`); returns its id |
 | `fail(status)`, `fail("net")`, `fail("timeout")` | a backend failure after the output so far |
 | `sleep("2s")` | a stall |

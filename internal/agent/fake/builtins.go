@@ -346,7 +346,8 @@ func builtinRaw(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 	var content *starlark.Dict
 	var results starlark.Value = starlark.None
 	var id string
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "content", &content, "results?", &results, "id?", &id); err != nil {
+	var isError bool
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "content", &content, "results?", &results, "id?", &id, "is_error?", &isError); err != nil {
 		return nil, err
 	}
 	r := runOf(thread)
@@ -357,6 +358,7 @@ func builtinRaw(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 		return starlark.None, nil
 	}
 	msg := assistant.AssistantMessage(cmp.Or(id, r.out.nextID()), assistant.Content{})
+	msg.IsError = isError
 	if err := decodeInto(thread, content, &msg.Content); err != nil {
 		return nil, fmt.Errorf("%s: %w", b.Name(), err)
 	}
@@ -483,7 +485,7 @@ const helpText = "## Fake backend scripts\n\n" +
 	"| `random(seed=None, size=None)` | a pseudo-random answer; `size` requests at least that many Markdown bytes |\n" +
 	"| `tool(name, input, out=, err=, ns=, title=, detail=, stream=, break_input=, at=, break_before_results=, delay=)` or `tool([(name, input, out), ...])` | server tool calls, then results (`delay=\"3s\"` holds them back) |\n" +
 	"| `call(name, input, stream=, break_input=, at=)` or `call([(name, input), ...])` | one round of client tool calls; returns results (`ok`, `status`, `title`, `output`) |\n" +
-	"| `raw(content, results=, id=)` | any other wire content |\n" +
+	"| `raw(content, results=, id=, is_error=)` | any other wire content; `is_error=True` ends the turn with its text as the error |\n" +
 	"| `task(name, updates, agent=, every=, status=)` | a started background task, then its updates every `every`; returns its id |\n" +
 	"| `fail(429)`, `fail(\"net\")`, `fail(\"timeout\")` | a backend failure |\n" +
 	"| `sleep(\"2s\")` | a stall |\n" +

@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -951,5 +955,97 @@ func TestEngineCurrentUserRejectsUnsupportedBackend(t *testing.T) {
 	_, err := engine.CurrentUser(context.Background())
 	if !errors.Is(err, ErrCurrentUserUnsupported) {
 		t.Fatalf("current user error = %v, want ErrCurrentUserUnsupported", err)
+	}
+}
+
+// An is_error message on a successful stream fails the turn with its text,
+// keeps the answer streamed before it, and stops the turn's client calls. A
+// tool error or the word "error" in an answer is still a completed turn.
+func TestTurnFailsOnServerErrorMessage(t *testing.T) {
+	const (
+		answer    = `{"role":"assistant","message_id":"m1","content":{"type":"markdown_fragment","content":"partial"}}`
+		flagged   = `{"role":"assistant","message_id":"m1","is_error":true,"content":{"type":"markdown_fragment","content":"Token rate limit exceeded."}}`
+		usage     = `{"role":"assistant","message_id":"m1","content":{"type":"markdown_fragment","content":""},"results":{"usage":{"tokens_used":7}}}`
+		unflagged = `{"role":"assistant","message_id":"m1","is_error":false,"content":{"type":"markdown_fragment","content":"The error rate is 2%."}}`
+		toolCall  = `{"role":"assistant","message_id":"t1","content":{"type":"tool_call","tool_call_id":"t1","metadata":{"name":"search","input":"{}"}}}`
+		toolError = `{"role":"assistant","message_id":"t2","content":{"type":"tool_response","tool_call_id":"t1","status":"error","metadata":{"name":"search","output":"boom"}}}`
+		call      = `{"role":"assistant","message_id":"c1","content":{"type":"client_tool_call","tool_call_id":"c1","metadata":{"name":"clock","input":"{}"}}}`
+	)
+	for _, test := range []struct {
+		name     string
+		messages []string
+		wantErr  string // empty for a completed turn
+		want     []string
+	}{
+		{name: "error after partial answer", messages: []string{answer, flagged, usage}, wantErr: "Token rate limit exceeded.", want: []string{"partial"}},
+		{name: "error without text", messages: []string{strings.Replace(flagged, "Token rate limit exceeded.", "", 1)}, wantErr: "the assistant ended the turn with an error"},
+		{name: "error with a client call", messages: []string{call, flagged}, wantErr: "Token rate limit exceeded.", want: []string{"clock"}},
+		{name: "answer mentioning an error", messages: []string{unflagged}, want: []string{"The error rate is 2%."}},
+		{name: "tool error", messages: []string{toolCall, toolError, answer}, want: []string{"search", "partial"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.Header().Set("Content-Type", "text/event-stream")
+				for _, m := range test.messages {
+					if _, err := fmt.Fprintf(w, `{"data":{"type":"assistant-response","attributes":{"conversation_id":"conv","structured_message":%s}}}`+"\n\n", m); err != nil {
+						t.Error(err)
+					}
+				}
+			}))
+			defer server.Close()
+			ran := false
+			tools, err := NewToolSet(Tool{
+				Definition: assistant.ClientTool{Name: "clock"},
+				Handler: func(context.Context, ToolCall) (ToolResult, error) {
+					ran = true
+					return ToolResult{Output: "noon"}, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := New(&assistant.Client{BaseURL: server.URL, HTTPClient: server.Client()}, Config{PermissionsMode: ModeSkipPermissions})
+			defer e.Close()
+
+			events := drain(t, e, TurnInput{Message: "hi", Tools: tools})
+			end := events[len(events)-1]
+			if test.wantErr == "" {
+				if end.Kind != EventDone {
+					t.Fatalf("terminal event = %v (%v), want done", end.Kind, end.Err)
+				}
+			} else if end.Kind != EventError || end.Err == nil || end.Err.Error() != test.wantErr || end.BackendFailure {
+				t.Fatalf("terminal event = %+v, want a turn error %q", end, test.wantErr)
+			}
+			if slices.ContainsFunc(events[:len(events)-1], Event.Terminal) {
+				t.Fatalf("events = %v, want one terminal event", kinds(events))
+			}
+			if ran || requests != 1 {
+				t.Fatalf("tool ran = %v after %d requests, want one request and no local call", ran, requests)
+			}
+			state := e.State()
+			var got []string
+			for _, b := range state.Blocks[1:] {
+				switch {
+				case b.Markdown != nil:
+					got = append(got, b.Markdown.Content)
+				case b.Tool != nil:
+					got = append(got, b.Tool.Name)
+				}
+				if !b.Complete {
+					t.Errorf("block %s is still streaming", b.ID)
+				}
+			}
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("transcript = %q, want %q", got, test.want)
+			}
+			if state.ConversationID != "conv" {
+				t.Fatalf("conversation = %q, want conv", state.ConversationID)
+			}
+			if slices.Contains(test.messages, usage) && (state.Usage == nil || state.Usage.TokensUsed != 7) {
+				t.Fatalf("usage = %+v, want the usage that followed the error", state.Usage)
+			}
+		})
 	}
 }

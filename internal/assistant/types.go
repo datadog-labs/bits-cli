@@ -1,8 +1,10 @@
 package assistant
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math"
 	"strconv"
 	"time"
@@ -340,6 +342,22 @@ type Message struct {
 	BackgroundTaskID *string         `json:"background_task_id,omitempty"`
 	ContextEntities  json.RawMessage `json:"context_entities,omitempty"`
 	ContextResources json.RawMessage `json:"context_resources,omitempty"`
+	// IsError marks a live message whose text reports that the server ended
+	// the turn with an error, such as a rate or context limit. History does
+	// not carry it.
+	IsError bool `json:"is_error,omitempty"`
+}
+
+// Err returns the turn failure an IsError message reports, or nil.
+func (m Message) Err() error {
+	if !m.IsError {
+		return nil
+	}
+	var text string
+	if m.Content.Markdown != nil {
+		text = sanitizeServerText(m.Content.Markdown.Content)
+	}
+	return errors.New(cmp.Or(text, "the assistant ended the turn with an error"))
 }
 
 // Content type discriminators: the full AssistantContent union from the server
