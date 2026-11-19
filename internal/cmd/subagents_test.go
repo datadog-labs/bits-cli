@@ -27,7 +27,7 @@ func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
 		path         string
 	}{
 		{name: "org 2 default", orgID: 2, path: "/api/unstable/assistant/multi-agent/runs"},
-		{name: "org 2 ignores disable", orgID: 2, value: "0", path: "/api/unstable/assistant/multi-agent/runs"},
+		{name: "org 2 disabled", orgID: 2, value: "0", path: "/api/v2/assistant"},
 		{name: "org 2 ignores other value", orgID: 2, value: "true", path: "/api/unstable/assistant/multi-agent/runs"},
 		{name: "other org", orgID: 3, path: "/api/v2/assistant"},
 		{name: "lookup unavailable", lookupStatus: http.StatusServiceUnavailable, path: "/api/v2/assistant"},
@@ -80,7 +80,7 @@ func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
 			args := []string{"run", "--prompt", "question", "--delivery", "adeep", "--auth", "api-key", "--site", "api.datadoghq.com"}
 			out, _, err := executeForTest(t, args)
 			wantIdentityRequests := 1
-			if test.value == "1" {
+			if test.value == "1" || test.value == "0" {
 				wantIdentityRequests = 0
 			}
 			if test.lookupStatus == 0 && identityRequests != wantIdentityRequests {
