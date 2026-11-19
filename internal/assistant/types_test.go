@@ -49,7 +49,7 @@ func TestContentDecodesApps(t *testing.T) {
 	}
 }
 
-func TestAppSummary(t *testing.T) {
+func TestViewSummary(t *testing.T) {
 	chart := func(window string) string {
 		return `{"structuredContent":{"widget_definition":{"type":"timeseries","title":"CPU"}` + window + `}}`
 	}

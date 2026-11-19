@@ -57,7 +57,7 @@ func TestViewerHelper(t *testing.T) {
 			reply := map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]string{"mimeType": "image/png", "data": base64.StdEncoding.EncodeToString(imageBytes())}}
 			if !lookupFailed {
 				reply = map[string]any{"jsonrpc": "2.0", "id": msg.ID, "error": map[string]any{"code": -32000, "message": "app did not receive the failed lookup"}}
-			} else if !slices.Equal(presented, presentedNotifications) {
+			} else if !slices.Equal(presented, presentedNotifications) && !slices.Equal(presented, legacyNotifications) {
 				reply = map[string]any{"jsonrpc": "2.0", "id": msg.ID, "error": map[string]any{"code": -32000, "message": fmt.Sprint(presented)}}
 			}
 			data, _ := json.Marshal(reply)
@@ -79,12 +79,18 @@ func fixtureToolResult(name string) json.RawMessage {
 // presentedApp is what the fixture expects to see, as presentedNotifications.
 var presentedApp = assistant.AppPayload{
 	ToolCallID: "call", ToolName: "show_ui", ToolInput: json.RawMessage(`{"q":1}`),
-	ResourceURI: DatavizURI, Result: json.RawMessage(`{"structuredContent":{}}`),
+	ResourceURI: DatavizURI, RelayHandle: "h", Result: json.RawMessage(`{"structuredContent":{}}`),
 }
 
 var presentedNotifications = []string{
 	`ui/notifications/host-context-changed {"toolInfo":{"id":"call","tool":{"name":"show_ui","inputSchema":{"type":"object"}}}}`,
 	`ui/notifications/tool-input {"arguments":{"q":1}}`,
+	`ui/notifications/tool-result {"structuredContent":{}}`,
+}
+
+var legacyNotifications = []string{
+	`ui/notifications/host-context-changed {"toolInfo":{"tool":{"name":"get_widget","inputSchema":{"type":"object"}}}}`,
+	`ui/notifications/tool-input {"arguments":{"widget_definition":{"type":"timeseries"}}}`,
 	`ui/notifications/tool-result {"structuredContent":{}}`,
 }
 
@@ -109,13 +115,25 @@ func TestStdioEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	r := Request{App: presentedApp}
-	r.App.RelayHandle = "h"
 	result := c.Render(ctx, r)
 	if result.Status.Phase != Succeeded {
 		t.Fatal(result.Status)
 	}
 	if result.Image.Width() != 2 || result.Image.Height() != 3 || callbacks.Load() != 1 {
 		t.Fatalf("image=%+v callbacks=%d", result.Image, callbacks.Load())
+	}
+	// A legacy chart must offer a retry when its data call fails instead of
+	// treating the helper's captured error UI as a successful preview.
+	c.callLegacyTool = func(_ context.Context, name string, _ json.RawMessage) (json.RawMessage, error) {
+		if name == "get_widget" {
+			return json.RawMessage(`{"structuredContent":{}}`), nil
+		}
+		return fixtureToolResult(name), nil
+	}
+	legacy := legacyWidgetRequest(t, `{"type":"timeseries"}`)
+	got := c.Render(ctx, legacy)
+	if got.Status.Phase != Failed || got.Status.Retry != RetryAllowed || got.Image != nil {
+		t.Fatalf("legacy preview with failed callback = %+v", got)
 	}
 }
 

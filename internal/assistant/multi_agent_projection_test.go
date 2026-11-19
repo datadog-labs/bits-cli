@@ -26,6 +26,8 @@ func TestMultiAgentProjectionPreservesTranscriptPayloads(t *testing.T) {
 			{"tool.call_completed", `{"tool_call_id":"question","tool_name":"ask_user_question","status":"success","display_content":"Answered"}`},
 			{"content.dashboard_generated", `{"dashboard_content":{"title":"first"}}`},
 			{"content.dashboard_generated", `{"dashboard_content":{"title":"second"}}`},
+			{"content.widget_generated", `{"widget_type":"timeseries","widget_content":{"type":"timeseries","title":"CPU"}}`},
+			{"content.widget_generated", `{"widget_type":"toplist","widget_content":{"type":"toplist","title":"Errors"}}`},
 			{"content.fragment_received", `{"fragment":"after"}`},
 			{"run.terminal", `{"outcome":"completed"}`},
 		} {
@@ -46,7 +48,7 @@ func TestMultiAgentProjectionPreservesTranscriptPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var dashboards []string
+	var dashboards, widgets []string
 	var text string
 	for _, block := range transcript.Blocks() {
 		if block.Tool != nil && (block.Tool.Output != localOutput || block.Tool.Detail != "Answered" || !block.Tool.IsClientSide) {
@@ -55,12 +57,18 @@ func TestMultiAgentProjectionPreservesTranscriptPayloads(t *testing.T) {
 		if block.Dashboard != nil {
 			dashboards = append(dashboards, block.Dashboard.Title)
 		}
+		if block.Widget != nil {
+			widgets = append(widgets, block.Widget.Title)
+		}
 		if block.Markdown != nil {
 			text += block.Markdown.Content
 		}
 	}
 	if fmt.Sprint(dashboards) != "[first second]" {
 		t.Errorf("dashboards lost: %v", dashboards)
+	}
+	if fmt.Sprint(widgets) != "[CPU Errors]" {
+		t.Errorf("widgets lost: %v", widgets)
 	}
 	if text != "before after" {
 		t.Errorf("streamed text = %q", text)

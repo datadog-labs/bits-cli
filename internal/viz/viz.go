@@ -1,4 +1,4 @@
-// Package viz renders Datadog MCP apps without exposing viewer or auth details.
+// Package viz renders Datadog views without exposing viewer or auth details.
 package viz
 
 import (
@@ -15,9 +15,10 @@ import (
 // DatavizURI is the only app resource ddviz hosts.
 const DatavizURI = "ui://apps/dataviz"
 
-// Request borrows App read-only, including its raw result.
+// Request borrows one app or legacy widget read-only.
 type Request struct {
-	App assistant.AppPayload
+	App          assistant.AppPayload
+	LegacyWidget *assistant.LegacyWidget
 	// ConversationID and MessageID locate a saved app for RestoreApp.
 	ConversationID, MessageID string
 	Dark                      bool // for snapshots, matching the terminal; ddviz follows macOS

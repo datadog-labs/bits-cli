@@ -25,11 +25,13 @@ type API interface {
 
 // Config binds a client to one account/site. Recreate it on account changes.
 type Config struct {
-	API      API
-	FrameURL string
-	Version  string
-	Debug    bool
-	DataDir  string
+	API API
+	// CallLegacyTool serves the direct, read-only MCP route for legacy charts.
+	CallLegacyTool func(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	FrameURL       string
+	Version        string
+	Debug          bool
+	DataDir        string
 
 	// RenderConcurrency limits hidden viewers. Values <= 0 use two.
 	// Viewers start lazily; the interactive panel has its own single viewer.
@@ -37,13 +39,14 @@ type Config struct {
 }
 
 type localClient struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	launch      launchFunc
-	api         API
-	renderers   chan viewerSession
-	interactive chan viewerSession
-	closeOnce   sync.Once
+	ctx            context.Context
+	cancel         context.CancelFunc
+	launch         launchFunc
+	api            API
+	callLegacyTool toolCaller
+	renderers      chan viewerSession
+	interactive    chan viewerSession
+	closeOnce      sync.Once
 	// expired holds relay handles the server reported gone. Their callbacks
 	// fail after Open succeeds, so the next operation must restore instead.
 	expired sync.Map
@@ -53,7 +56,7 @@ type localClient struct {
 // cannot change while the viewer is alive.
 type viewerSession struct {
 	viewer
-	relayHandle string
+	relayHandle string // empty for the shared legacy MCP connection
 }
 
 // Supported reports whether this system can run the ddviz helper. Without it,
@@ -76,6 +79,7 @@ func Supported() bool {
 func New(config Config) Client {
 	c := newLocal(nil, config.RenderConcurrency)
 	c.api = config.API
+	c.callLegacyTool = config.CallLegacyTool
 	c.launch = func(lifetime, startup context.Context, headless bool, tools toolCaller) (viewer, error) {
 		u, err := url.Parse(config.FrameURL)
 		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || config.API == nil {
@@ -144,21 +148,18 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 	stop := context.AfterFunc(c.ctx, cancel)
 	defer stop()
 
-	// An app without a live relay session fails its tool calls: restore it for
-	// a new one.
-	if _, gone := c.expired.Load(request.App.RelayHandle); request.App.Restorable && (gone || request.App.RelayHandle == "") {
-		request.App.Result, request.App.RelayHandle = nil, ""
+	var app assistant.AppPayload
+	var restored *assistant.AppPayload
+	tools := c.callLegacyTool
+	if request.LegacyWidget == nil {
+		// Restore before taking a viewer, which the restore would leave idle.
+		var status Status
+		app, restored, status = c.loadForViewer(ctx, request)
+		if status.Phase != Succeeded {
+			return Result{Status: status, App: restored}
+		}
+		tools = c.relay(app.RelayHandle)
 	}
-	// Nothing could serve its tool calls: a retry would fail the same way.
-	if request.App.RelayHandle == "" && !request.App.Restorable {
-		return Result{Status: notShown}
-	}
-	// Restore before taking a viewer, which the restore would leave idle.
-	app, restored, status := load(ctx, c.api, request)
-	if status.Phase != Succeeded {
-		return Result{Status: status}
-	}
-	tools := c.relay(app.RelayHandle)
 
 	pool := c.renderers
 	if !headless {
@@ -175,6 +176,15 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 
 	if err := ctx.Err(); err != nil {
 		return Result{Status: failure(err), App: restored}
+	}
+
+	if request.LegacyWidget != nil {
+		// Keep direct fetches under the same concurrency limit as their previews.
+		var status Status
+		app, status = c.fetchLegacyWidget(ctx, request.LegacyWidget)
+		if status.Phase != Succeeded {
+			return Result{Status: status}
+		}
 	}
 
 	if current.viewer != nil && (current.relayHandle != app.RelayHandle || current.exited()) {
@@ -209,6 +219,22 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 		return Result{Status: failure(err), App: restored}
 	}
 	return Result{Status: status, Image: image, App: restored}
+}
+
+func (c *localClient) loadForViewer(ctx context.Context, request Request) (assistant.AppPayload, *assistant.AppPayload, Status) {
+	// An app without a live relay session fails its tool calls: restore it for
+	// a new one.
+	if _, gone := c.expired.Load(request.App.RelayHandle); request.App.Restorable && (gone || request.App.RelayHandle == "") {
+		request.App.Result, request.App.RelayHandle = nil, ""
+	}
+	if request.App.RelayHandle == "" && !request.App.Restorable {
+		return assistant.AppPayload{}, nil, notShown
+	}
+	app, restored, status := load(ctx, c.api, request)
+	if status.Phase == Succeeded && app.RelayHandle == "" {
+		return assistant.AppPayload{}, restored, notShown
+	}
+	return app, restored, status
 }
 
 // relay sends an app's tool calls through its relay session.

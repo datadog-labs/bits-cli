@@ -41,8 +41,8 @@ notices, disclosure, tool grouping, questions, code execution
 
 For visualizations, run `BITS_FAKE_BACKEND=1 BITS_VIZ=snapshot` and load
 `widgets.star`. Only assistant messages are faked: rendering still requires a
-stored Bits login with snapshot access. The fake opens no relay session, so
-ddviz cannot load data for these apps.
+stored Bits login with snapshot access. ddviz can render legacy charts with
+a Bits login that has read-only MCP access. The fake opens no app relay session.
 
 To see a real app in ddviz, pass a real conversation to `--conversation`: the
 fake opens it empty, and `saved()` shows the app saved at one of its messages.
@@ -67,8 +67,8 @@ load("widgets.star", "failures"); failures()
 ```
 
 Replace the timing example with a historical interval within your account's
-metric retention, in Unix milliseconds. Check its axis in both the preview and
-interactive pane. The gallery exercises scrolling, resizing, and reopening;
+metric retention, in Unix seconds. The fixture sends the same interval for an
+app and a legacy chart so their previews and links can be compared. The gallery exercises scrolling, resizing, and reopening;
 the burst exercises queued previews and conversation changes. `revision()`
 replaces a widget after two seconds (`delay="10s"` gives more time to open it).
 Failures include invalid definitions and a legacy tile without a definition;

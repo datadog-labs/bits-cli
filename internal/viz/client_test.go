@@ -18,6 +18,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/datadogmcp"
 	"github.com/datadog-labs/bits-cli/internal/version"
 )
 
@@ -373,6 +374,106 @@ func TestCancelRetiresOnlyItsRenderer(t *testing.T) {
 	if launches.Load() != 3 || second.closes.Load() != 0 {
 		t.Fatal("failed renderer was not replaced independently")
 	}
+}
+
+func TestLegacyAndRelayViewersKeepTheirCallbackRoutes(t *testing.T) {
+	const def = `{"type":"timeseries","title":"CPU","time":{"type":"fixed","from":1700000000123,"to":1700000030456}}`
+	legacy := legacyWidgetRequest(t, def)
+	var viewers []*fakeViewer
+	c := testClient(func(_, _ context.Context, _ bool, tools toolCaller) (viewer, error) {
+		v := &fakeViewer{tools: tools}
+		viewers = append(viewers, v)
+		return v, nil
+	})
+	defer func() {
+		if err := c.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	appCalls, legacyCalls := 0, 0
+	c.api = fakeAPI{
+		restore: func(string, string) (assistant.AppPayload, error) {
+			return assistant.AppPayload{}, &assistant.APIError{StatusCode: 403, Detail: "MCP apps are not enabled"}
+		},
+		call: func(_ context.Context, handle, name string, _ json.RawMessage) (json.RawMessage, error) {
+			if handle != "h" || name != "_dd_wfd" {
+				t.Fatalf("relayed %q via %q", name, handle)
+			}
+			appCalls++
+			return json.RawMessage(`{}`), nil
+		},
+	}
+	c.callLegacyTool = func(_ context.Context, name string, input json.RawMessage) (json.RawMessage, error) {
+		switch name {
+		case "get_widget":
+			want := `{"widget_definition":` + def + `,"from_ts":"1700000000","to_ts":"1700000031"}`
+			if string(input) != want {
+				t.Fatalf("get_widget input = %s, want %s", input, want)
+			}
+			return json.RawMessage(`{"structuredContent":{"widget_definition":` + def + `}}`), nil
+		case "_dd_wfd":
+			legacyCalls++
+			return json.RawMessage(`{}`), nil
+		default:
+			return nil, errors.New("unexpected legacy call " + name)
+		}
+	}
+	ctx := context.Background()
+	app := Request{App: assistant.AppPayload{ResourceURI: DatavizURI, Result: json.RawMessage(`{}`), RelayHandle: "h"}}
+	saved := Request{App: assistant.AppPayload{ResourceURI: DatavizURI, Restorable: true}, ConversationID: "conv", MessageID: "app"}
+	for i, req := range []Request{legacy, legacy, app, saved, legacy} {
+		result := c.Open(ctx, req)
+		if req.CanRestore() {
+			if status := result.Status; status.Phase != Failed || status.Retry != RetryNotUseful || status.Reason != "MCP apps are not enabled" {
+				t.Fatalf("restore with app gate off: %+v", status)
+			}
+			continue
+		}
+		if result.Status.Phase != Succeeded {
+			t.Fatalf("open %d: %+v", i, result.Status)
+		}
+		if _, err := viewers[len(viewers)-1].tools(ctx, "_dd_wfd", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(viewers) != 3 || viewers[0].closes.Load() != 1 || viewers[1].closes.Load() != 1 ||
+		viewers[0].presented.ToolName != "get_widget" || appCalls != 1 || legacyCalls != 3 {
+		t.Fatalf("viewers=%d, app callbacks=%d, legacy callbacks=%d", len(viewers), appCalls, legacyCalls)
+	}
+}
+
+func legacyWidgetRequest(t *testing.T, definition string) Request {
+	t.Helper()
+	var content assistant.Content
+	if err := json.Unmarshal([]byte(`{"type":"widget_def","widget_def":`+definition+`}`), &content); err != nil {
+		t.Fatal(err)
+	}
+	return Request{LegacyWidget: content.Widget}
+}
+
+func TestLegacyWidgetLive(t *testing.T) {
+	if os.Getenv("BITS_VIZ_E2E") != "1" || !Supported() {
+		t.Skip("set BITS_VIZ_E2E=1 with a Bits login and built ddviz helper")
+	}
+	api := widgetE2EAPI(t)
+	legacy, err := datadogmcp.New(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(Config{API: api, CallLegacyTool: legacy.CallToolJSON, FrameURL: api.BaseURL + "/api/unstable/dataviz-mcp-ui", Version: version.Build()})
+	defer func() {
+		if err := errors.Join(c.Close(), legacy.Close()); err != nil {
+			t.Error(err)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	request := legacyWidgetRequest(t, `{"type":"timeseries","title":"CPU","requests":[{"q":"avg:system.cpu.user{*}","display_type":"line"}],"time":{"type":"live","value":4,"unit":"hour"}}`)
+	result := c.Render(ctx, request)
+	if result.Status.Phase != Succeeded || result.Image == nil {
+		t.Fatalf("legacy ddviz render: %+v", result.Status)
+	}
+	t.Logf("captured %dx%d PNG (%d bytes) through direct MCP", result.Image.Width(), result.Image.Height(), len(result.Image.PNG()))
 }
 
 // TestLive restores a saved app, named as conversation/message in

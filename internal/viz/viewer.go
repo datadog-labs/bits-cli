@@ -49,16 +49,18 @@ type wireError struct {
 }
 
 type process struct {
-	input       io.WriteCloser
-	writeMu     sync.Mutex
-	cancel      context.CancelFunc
-	kill        func() error
-	done, ready chan struct{}
-	replies     chan wireMessage
-	tools       toolCaller
-	busy        atomic.Int64
-	activity    atomic.Int64
-	once        sync.Once
+	input        io.WriteCloser
+	writeMu      sync.Mutex
+	cancel       context.CancelFunc
+	kill         func() error
+	done, ready  chan struct{}
+	replies      chan wireMessage
+	tools        toolCaller
+	busy         atomic.Int64
+	activity     atomic.Int64
+	legacy       atomic.Bool
+	legacyFailed atomic.Bool
+	once         sync.Once
 }
 
 // startError preserves exec's failure for operation-level classification.
@@ -233,6 +235,14 @@ func (p *process) callback(ctx context.Context, msg wireMessage) {
 	default:
 		err = errors.New("unsupported visualization method")
 	}
+	if p.legacy.Load() {
+		var result struct {
+			IsError bool `json:"isError"`
+		}
+		if err != nil || (json.Unmarshal(response.Result, &result) == nil && result.IsError) {
+			p.legacyFailed.Store(true)
+		}
+	}
 	if err != nil {
 		response.Error = &wireError{-32000, "visualization tool request failed"}
 		response.Result = nil
@@ -244,6 +254,9 @@ func (p *process) callback(ctx context.Context, msg wireMessage) {
 }
 
 func (p *process) present(app assistant.AppPayload) error {
+	// A viewer is bound to either the legacy connection or a live relay.
+	p.legacy.Store(app.RelayHandle == "")
+	p.legacyFailed.Store(false)
 	p.activity.Store(time.Now().UnixNano())
 	// Like other MCP Apps hosts, name the tool and send its input before its
 	// result: apps label their loading state and telemetry with them.
@@ -294,8 +307,11 @@ func (p *process) snapshot(ctx context.Context) ([]byte, error) {
 		case <-ticker.C:
 		}
 	}
-	// The app handles callback errors and can still render when an optional
-	// lookup fails. Capture the UI it actually produced.
+	// Legacy charts report data callback failures so their preview can be retried.
+	// Relayed apps handle optional lookup errors and may still render a view.
+	if p.legacyFailed.Load() {
+		return nil, errors.New("visualization data request failed")
+	}
 	id := json.RawMessage(fmt.Sprintf(`"snapshot-%d"`, time.Now().UnixNano()))
 	if err := p.write(wireMessage{JSONRPC: "2.0", ID: id, Method: "snapshot"}); err != nil {
 		return nil, err

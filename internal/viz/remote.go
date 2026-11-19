@@ -63,18 +63,25 @@ func (c *remoteClient) Render(ctx context.Context, r Request) Result {
 	ctx, cancelTimeout := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancelTimeout()
 
-	app, restored, status := load(ctx, c.api, r)
-	if status.Phase != Succeeded {
-		return Result{Status: status}
+	now := time.Now()
+	var chart *assistant.Chart
+	var restored *assistant.AppPayload
+	if r.LegacyWidget != nil {
+		chart = r.LegacyWidget.Chart(now)
+	} else {
+		app, loaded, status := load(ctx, c.api, r)
+		if status.Phase != Succeeded {
+			return Result{Status: status}
+		}
+		chart, restored = app.Summary().Chart, loaded
 	}
-	chart := app.Summary().Chart
 	if chart == nil {
 		// Unavailable would mean snapshots cannot run here at all.
 		return Result{Status: notShown, App: restored}
 	}
 	start, end := chart.Start, chart.End
 	if end.IsZero() {
-		end = time.Now()
+		end = now
 		start = end.Add(-time.Hour)
 	}
 	data, err := c.api.RenderSnapshot(ctx, assistant.SnapshotOptions{

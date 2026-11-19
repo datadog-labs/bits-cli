@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -67,6 +68,11 @@ var (
 // widgetModel shows one app block; cmd holds any operation it started, and
 // opened records URLs sent to the browser.
 func widgetModel(t *testing.T, client viz.Client, support graphics.Support, app assistant.AppPayload) (m *Model, id agent.BlockID, cmd tea.Cmd, opened *[]string) {
+	block := agent.Block{Kind: assistant.KindApp, App: &app}
+	return widgetModelForBlock(t, client, support, block)
+}
+
+func widgetModelForBlock(t *testing.T, client viz.Client, support graphics.Support, block agent.Block) (m *Model, id agent.BlockID, cmd tea.Cmd, opened *[]string) {
 	opened = new([]string)
 	m = New(agent.New(&spyBackend{t: t, webOrigin: "https://demo.datadoghq.com"}, agent.Config{}), Config{
 		Visualization: client,
@@ -76,7 +82,8 @@ func widgetModel(t *testing.T, client viz.Client, support graphics.Support, app 
 	m.graphics.Support = support
 	m.state.ConversationID = "conv"
 	id = agent.BlockID{Key: "widget"}
-	m.state.Blocks = []agent.Block{{ID: id, Kind: assistant.KindApp, MessageID: "msg", Complete: true, App: &app}}
+	block.ID, block.MessageID, block.Complete = id, "msg", true
+	m.state.Blocks = []agent.Block{block}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	m.syncTranscript()
 	_, cmd = m.Update(struct{}{})
@@ -159,6 +166,60 @@ func TestWidgetModes(t *testing.T) {
 			// No run is active: a widget's spinner must not depend on one.
 			if m.animClock.armed != tc.animate {
 				t.Errorf("animating = %v, want %v", m.animClock.armed, tc.animate)
+			}
+		})
+	}
+}
+
+func TestLegacyWidgetPresentation(t *testing.T) {
+	var content assistant.Content
+	if err := json.Unmarshal([]byte(`{"type":"widget_def","widget_def":{"type":"timeseries","title":"Legacy CPU","time":{"type":"fixed","from":1700000000123.0,"to":1700000030456.0}}}`), &content); err != nil {
+		t.Fatal(err)
+	}
+	block := agent.Block{Kind: content.Kind(), Widget: content.Widget}
+	for _, tc := range []struct {
+		name    string
+		client  *widgetTestClient
+		support graphics.Support
+		action  chat.WidgetAction
+	}{
+		{"links", nil, graphics.Unsupported, chat.WidgetWeb},
+		{"snapshots without graphics", &widgetTestClient{remote: true}, graphics.Unsupported, chat.WidgetWeb},
+		{"ddviz without graphics", &widgetTestClient{}, graphics.Unsupported, chat.WidgetOpen},
+		{"inline snapshot", &widgetTestClient{remote: true, render: rendered(t)}, graphics.Supported, chat.WidgetWeb},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var client viz.Client
+			if tc.client != nil {
+				client = tc.client
+			}
+			m, _, render, opened := widgetModelForBlock(t, client, tc.support, block)
+			defer m.Detach()
+			if tc.support == graphics.Supported {
+				runWidgetTasks(m, render)
+				if tc.client.renders != 1 || tc.client.last.LegacyWidget == nil {
+					t.Fatalf("legacy preview request = %+v", tc.client.last)
+				}
+			}
+			if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, "Legacy CPU") || strings.Contains(doc, "[unknown]") {
+				t.Fatal(doc)
+			}
+			runWidgetTasks(m, clickWidget(t, m, tc.action))
+			if tc.action == chat.WidgetOpen {
+				if tc.client.opens != 1 || tc.client.last.LegacyWidget == nil {
+					t.Fatalf("legacy panel request = %+v", tc.client.last)
+				}
+				return
+			}
+			if len(*opened) != 1 {
+				t.Fatalf("opened %v", *opened)
+			}
+			u, err := url.Parse((*opened)[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if u.Path != "/dataviz/sandbox" || u.Query().Get("start") != "1700000000123" || u.Query().Get("end") != "1700000030456" {
+				t.Fatalf("sandbox = %s", u)
 			}
 		})
 	}
