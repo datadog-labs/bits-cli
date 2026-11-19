@@ -58,6 +58,8 @@ type toolPresentation struct {
 	context    string
 	timeout    string
 	validInput bool
+	// code is a code tool's script, escaped for display.
+	code string
 	// renderSpec is never nil: unknown tools use their client or server fallback.
 	renderSpec *toolRenderSpec
 	// action is renderSpec's verbs, adjusted to what a command tool's result
@@ -192,6 +194,18 @@ var (
 	handoffToolRenderSpec = &toolRenderSpec{
 		render: renderSimpleTool,
 		action: toolAction{base: "Continue in terminal", active: "Continuing in terminal", success: "Continued in terminal", failure: "Handoff failed"},
+	}
+	// Code tools read Datadog data like the other server tools, so they join
+	// their group: the answer matters more than the scripts behind it.
+	executeCodeRenderSpec = &toolRenderSpec{
+		render: renderCodeTool,
+		group:  serverGroup,
+		action: toolAction{base: "Run code", active: "Running code", success: "Ran code", failure: "Code failed"},
+	}
+	searchDatadogSDKRenderSpec = &toolRenderSpec{
+		render: renderCodeTool,
+		group:  serverGroup,
+		action: toolAction{base: "Search Datadog SDK", active: "Searching Datadog SDK", success: "Searched Datadog SDK", failure: "Datadog SDK search failed"},
 	}
 )
 
@@ -329,6 +343,15 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 		if in, ok := backgroundTaskInput(input); ok {
 			p.argument, p.validInput = escape.Inline(cmp.Or(in.Task.TaskName, BackgroundAgentName(in.Task.AgentID))), true
 		}
+	case spec.ServerExecuteCode, spec.ServerSearchDatadogSDK:
+		// The server's detail renders the script as Markdown on some
+		// endpoints only, so the input is the one source of the script.
+		if in, ok := decode[spec.CodeInput](input); ok {
+			p.code, p.argument = escape.Multiline(in.Code), escape.Inline(in.Telemetry.Intent)
+		}
+		// Like other server tools, a call joins its group while its input
+		// still streams.
+		p.validInput = true
 	case spec.ClientHandoff:
 		if in, ok := decode[spec.HandoffInput](input); ok && in.Reason != "" {
 			p.argument = "Reason: " + escape.Inline(in.Reason)
@@ -372,6 +395,10 @@ func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 		return startBackgroundTaskRenderSpec
 	case spec.ClientHandoff:
 		return handoffToolRenderSpec
+	case spec.ServerExecuteCode:
+		return executeCodeRenderSpec
+	case spec.ServerSearchDatadogSDK:
+		return searchDatadogSDKRenderSpec
 	default:
 		if !id.ClientSide {
 			return serverToolRenderSpec
@@ -452,6 +479,13 @@ func (p toolPresentation) summary(tool *agent.ToolBlock) []summarySpan {
 		return spans
 	case spec.ClientExecCommand:
 		return append(actionArgument(action, p.argument), p.execMeta()...)
+	case spec.ServerExecuteCode, spec.ServerSearchDatadogSDK:
+		// The intent the model gave reads as a caption, not an argument.
+		spans := []summarySpan{{text: action, kind: spanAction}}
+		if p.argument != "" {
+			spans = append(spans, summarySpan{text: " · ", kind: spanMuted}, summarySpan{text: p.argument, kind: spanArgument})
+		}
+		return spans
 	default:
 		if action != "" {
 			return actionArgument(action, p.argument)
@@ -902,6 +936,95 @@ func renderExecApproval(tool *agent.ToolBlock, p toolPresentation, width int, st
 	return strings.Join(rows, "\n")
 }
 
+// decodeCodeResult returns a code tool's result, nil until it has a decodable
+// one. A catalog search answers with the script's value alone.
+func decodeCodeResult(tool *agent.ToolBlock, id spec.Identity) *spec.ExecuteCodeOutput {
+	if id == spec.ServerSearchDatadogSDK {
+		if statusOf(tool) != agent.ToolSuccess || !json.Valid([]byte(tool.Output)) {
+			return nil
+		}
+		return &spec.ExecuteCodeOutput{Value: json.RawMessage(tool.Output)}
+	}
+	result, ok := decode[spec.ExecuteCodeOutput](tool.Output)
+	if !ok || result.Outcome == "" {
+		return nil
+	}
+	return &result
+}
+
+// renderCodeTool keeps a code tool to its header until expanded: the intent
+// says what the script does. The full view shows the script, then what it
+// logged and returned, or its error.
+func renderCodeTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {
+	result := decodeCodeResult(tool, p.identity)
+	rows := []string{renderToolHeader(tool, p.summary(tool), codeSuffix(result), c)}
+	if c.disclosure == compactView {
+		return rows[0]
+	}
+	if p.code != "" {
+		code := diffrender.Highlight("script.js", strings.TrimRight(p.code, "\n"), c.sty.Diff.SyntaxDark, c.sty.ToolArgument)
+		rows = append(rows, renderSourceBranch(code, 0, textwrap.Code, c)...)
+	}
+	if body := renderCodeOutput(tool, result, c); body != "" {
+		rows = append(rows, body)
+	}
+	return strings.Join(rows, "\n")
+}
+
+func renderCodeOutput(tool *agent.ToolBlock, result *spec.ExecuteCodeOutput, c renderContext) string {
+	state := statusOf(tool)
+	switch state {
+	case agent.ToolRunning, agent.ToolAwaitingApproval, agent.ToolDenied, agent.ToolCancelled:
+		return ""
+	case agent.ToolUnknown, agent.ToolSuccess, agent.ToolError:
+	}
+	if result == nil {
+		// NOTE: The multi-agent endpoint sends no result, and failures come
+		// as the backend's error text, so neither has rows to decode.
+		output := serverReadableOutput(tool.Output)
+		if strings.TrimSpace(output) == "" {
+			return ""
+		}
+		return renderDetail(output, state, 0, c)
+	}
+	rows := codeRows(*result, max(1, c.width-4))
+	if len(rows) == 0 {
+		return renderNoOutput(c.width, c.sty)
+	}
+	return renderRows(rows, c.width, detailStyle(state, c.sty), c.sty)
+}
+
+// codeRows lays out what a script logged, then its error or the value it
+// returned as indented JSON, then the server's caveats about it.
+func codeRows(result spec.ExecuteCodeOutput, bodyWidth int) []string {
+	var rows []string
+	for _, line := range result.Console {
+		rows = append(rows, wrappedRows(escape.Multiline(line), bodyWidth)...)
+	}
+	rows = append(rows, wrappedRows(escape.Multiline(result.Error), bodyWidth)...)
+	var value bytes.Buffer
+	if json.Indent(&value, result.Value, "", "  ") == nil {
+		rows = append(rows, textwrap.Wrap(textwrap.Options{Width: bodyWidth, Breakpoints: textwrap.Code, KeepIndent: true}, textwrap.Plain(escape.Multiline(value.String())))...)
+	}
+	if sampled := result.Diagnostics.Sampled; sampled != nil {
+		rows = append(rows, wrappedRows(escape.Multiline(sampled.Note), bodyWidth)...)
+	}
+	if result.Truncated {
+		rows = append(rows, "… console truncated")
+	}
+	return rows
+}
+
+// codeSuffix says when the script's API calls failed: its result may then be
+// partial without the value saying so.
+func codeSuffix(result *spec.ExecuteCodeOutput) []summarySpan {
+	if result == nil || result.Diagnostics.APICalls.Failed == 0 {
+		return nil
+	}
+	failed := count(int(result.Diagnostics.APICalls.Failed), "failed API call", "failed API calls")
+	return []summarySpan{{text: " · " + failed, kind: spanMuted}}
+}
+
 // backgroundTaskInput decodes a startBackgroundTask call's task.
 func backgroundTaskInput(input string) (spec.StartBackgroundTaskInput, bool) {
 	in, ok := decode[spec.StartBackgroundTaskInput](input)
@@ -1000,15 +1123,33 @@ func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []su
 	}
 	p.argument = textwrap.Render(lines[0]...)
 	header := renderToolHeader(tool, p.summary(tool), suffix, c)
-	if len(lines) == 1 {
-		return header
-	}
+	rows := renderSourceBranch(lines[1:], execCommandMaxLines-1, textwrap.Shell, c)
+	return strings.Join(append([]string{header}, rows...), "\n")
+}
 
-	rows := make([]string, 0, len(lines)-1)
-	for _, line := range lines[1:] {
+// renderSourceBranch lays out source lines behind a │ branch. The compact
+// view truncates each line and middle-clamps them to limit rows. The full view
+// shows every line wrapped, with soft-wrapped continuations indented further
+// to keep them distinct from real newlines.
+func renderSourceBranch(lines [][]textwrap.Segment, limit int, breakpoints string, c renderContext) []string {
+	if c.disclosure == fullView {
+		branch := textwrap.Options{
+			Width:       c.width,
+			FirstPrefix: c.sty.ToolDetail.Render("  │ "),
+			RestPrefix:  c.sty.ToolDetail.Render("  │   "),
+			Breakpoints: breakpoints,
+			KeepIndent:  true,
+		}
+		var rows []string
+		for _, line := range lines {
+			rows = append(rows, textwrap.Wrap(branch, line...)...)
+		}
+		return rows
+	}
+	rows := make([]string, 0, len(lines))
+	for _, line := range lines {
 		rows = append(rows, textwrap.Render(line...))
 	}
-	limit := execCommandMaxLines - 1
 	omissionRow := -1
 	if len(rows) > limit {
 		omissionRow = min(2, limit-1)
@@ -1023,15 +1164,14 @@ func renderExecInvocation(tool *agent.ToolBlock, p toolPresentation, suffix []su
 		body = ansi.Truncate(body, max(1, c.width-4), "…")
 		rows[i] = ansi.Truncate(prefix+body, max(1, c.width), "…")
 	}
-	return header + "\n" + strings.Join(rows, "\n")
+	return rows
 }
 
 // renderExecInvocationFull is the expanded invocation: every source line is
 // shown in full, wrapped instead of truncated. The first line wraps under the
 // command's first column, so expanding only adds rows below the compact
-// header; later lines wrap behind the │ branch, with soft-wrapped
-// continuations indented further to keep them distinct from real newlines.
-// Source indentation is kept on every row.
+// header; later lines wrap behind the │ branch. Source indentation is kept on
+// every row.
 func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [][]textwrap.Segment, suffix []summarySpan, c renderContext) string {
 	state := statusOf(tool)
 	action := p.actionLabel(state)
@@ -1046,16 +1186,7 @@ func renderExecInvocationFull(tool *agent.ToolBlock, p toolPresentation, lines [
 		Breakpoints: textwrap.Shell,
 		KeepIndent:  true,
 	}, slices.Concat(lines[0], spanSegments(meta, c.sty))...)
-	branch := textwrap.Options{
-		Width:       c.width,
-		FirstPrefix: c.sty.ToolDetail.Render("  │ "),
-		RestPrefix:  c.sty.ToolDetail.Render("  │   "),
-		Breakpoints: textwrap.Shell,
-		KeepIndent:  true,
-	}
-	for _, row := range lines[1:] {
-		out = append(out, textwrap.Wrap(branch, row...)...)
-	}
+	out = append(out, renderSourceBranch(lines[1:], 0, textwrap.Shell, c)...)
 	return strings.Join(out, "\n")
 }
 

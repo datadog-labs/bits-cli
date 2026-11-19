@@ -539,6 +539,7 @@ func TestToolRowsStayWithinWidth(t *testing.T) {
 		toolBlockOf(agent.ToolSuccess),
 		{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"a very long command with many arguments","workdir":"a/long/workdir"}`, Output: `{"status":"success","stdout":"a very long output line that must wrap safely","stderr":""}`, Status: agent.ToolSuccess, IsClientSide: true}},
 		{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{Name: spec.ExecCommand, Input: `{"cmd":"first line\nsecond very long command line with many arguments\nlast line"}`, Status: agent.ToolSuccess, IsClientSide: true}},
+		{Kind: assistant.KindToolResult, Tool: &agent.ToolBlock{Name: "execute_code", Input: `{"code":"const logs = await listLogs({ query: \"service:checkout\" });\nreturn logs;","telemetry":{"intent":"List checkout logs"}}`, Output: `{"outcome":"success","value":{"message":"a very long value that must wrap safely"},"console":["[log] a long console line"]}`, Status: agent.ToolSuccess}},
 	}
 	for _, width := range []int{12, 24} {
 		for _, block := range blocks {
@@ -846,5 +847,129 @@ func TestServerDisclosureDoesNotRepeatIdenticalDetail(t *testing.T) {
 	got = serverView(tool, 80, fullView)
 	if !strings.Contains(got, tool.Detail) || !strings.Contains(got, tool.Output) {
 		t.Fatalf("distinct detail and output must remain available:\n%s", got)
+	}
+}
+
+func TestCodeToolsShowScriptAndResult(t *testing.T) {
+	const input = `{"code":"const total = await count();\nconsole.log(total);\nreturn { total };","telemetry":{"intent":"Count errors"}}`
+	const result = `{"outcome":"success","success":true,"value":{"total":245},"console":["[log] 245"],"duration":"651ms","diagnostics":{"api_calls":{"total":1,"succeeded":1,"failed":0},"console_truncated":false}}`
+	long := `{"code":"` + strings.Repeat(`const line = 1;\n`, 20) + `return \"last line\";"}`
+	for _, tc := range []struct {
+		name       string
+		tool       agent.ToolBlock
+		disclosure disclosure
+		want       []string
+		absent     []string
+		maxRows    int
+	}{
+		{
+			name:    "collapsed",
+			tool:    agent.ToolBlock{Name: "execute_code", Input: input, Output: result, Status: agent.ToolSuccess},
+			want:    []string{"✓ Ran code · Count errors"},
+			maxRows: 1,
+		},
+		{
+			name:       "expanded",
+			tool:       agent.ToolBlock{Name: "execute_code", Input: input, Detail: "```javascript\nignored\n```", Output: result, Status: agent.ToolSuccess},
+			disclosure: fullView,
+			want:       []string{"│ const total = await count();", "│ return { total };", "└ [log] 245", `"total": 245`},
+			// The server's Markdown detail and the result envelope stay out.
+			absent: []string{"```", "ignored", `"outcome"`, "duration", "failed API"},
+		},
+		{
+			name:       "expanded long script",
+			tool:       agent.ToolBlock{Name: "execute_code", Input: long, Status: agent.ToolRunning},
+			disclosure: fullView,
+			want:       []string{"Running code", `│ return "last line";`},
+			absent:     []string{"… +"},
+			maxRows:    22,
+		},
+		{
+			name:    "collapsed failed api calls",
+			tool:    agent.ToolBlock{Name: "execute_code", Input: input, Output: `{"outcome":"partial","value":{"total":null},"diagnostics":{"api_calls":{"total":3,"succeeded":1,"failed":2}}}`, Status: agent.ToolSuccess},
+			want:    []string{"Ran code · Count errors · 2 failed API calls"},
+			maxRows: 1,
+		},
+		{
+			// The server sets both flags when it caps the console; the value
+			// is whole.
+			name:       "console truncation",
+			tool:       agent.ToolBlock{Name: "execute_code", Input: input, Output: `{"outcome":"success","value":{"total":1},"truncated":true,"diagnostics":{"console_truncated":true}}`, Status: agent.ToolSuccess},
+			disclosure: fullView,
+			want:       []string{`"total": 1`, "… console truncated"},
+			absent:     []string{"result truncated", "result and"},
+		},
+		{
+			name:       "sampled data",
+			tool:       agent.ToolBlock{Name: "execute_code", Input: input, Output: `{"outcome":"success","value":{"error_rate":0.4},"diagnostics":{"sampled":{"operations":["v2.SpansApi.aggregateSpans"],"note":"These operations read indexed spans only."}}}`, Status: agent.ToolSuccess},
+			disclosure: fullView,
+			want:       []string{`"error_rate": 0.4`, "These operations read indexed spans only."},
+			absent:     []string{"aggregateSpans"},
+		},
+		{
+			name:    "collapsed script error",
+			tool:    agent.ToolBlock{Name: "execute_code", Input: input, Output: `{"outcome":"failure","failure_code":"script_error","success":false,"error":"Error: boom"}`, Status: agent.ToolError},
+			want:    []string{"✗ Code failed · Count errors"},
+			maxRows: 1,
+		},
+		{
+			name:       "script error",
+			tool:       agent.ToolBlock{Name: "execute_code", Input: input, Output: `{"outcome":"failure","failure_code":"script_error","success":false,"error":"Error: boom\n    at script.js:1:7"}`, Status: agent.ToolError},
+			disclosure: fullView,
+			want:       []string{"└ Error: boom", "at script.js:1:7"},
+		},
+		{
+			name:       "backend error text",
+			tool:       agent.ToolBlock{Name: "execute_code", Input: input, Output: `{"description": "The tool raised an unknown error:\n''MCP server:datadog error''"}`, Status: agent.ToolError},
+			disclosure: fullView,
+			want:       []string{`└ {"description": "The tool raised an unknown error:`, "error''\"}"},
+		},
+		{
+			// The multi-agent endpoint answers with no result.
+			name:       "no result",
+			tool:       agent.ToolBlock{Name: "execute_code", Input: input, Detail: "Tool call failed.", Status: agent.ToolError},
+			disclosure: fullView,
+			want:       []string{"✗ Code failed · Count errors", "│ return { total };"},
+			absent:     []string{"(no output)", "Tool call failed."},
+		},
+		{
+			name:       "streaming input",
+			tool:       agent.ToolBlock{Name: "execute_code", Title: "Ran code", InputPartial: `{"code":"const total`, Status: agent.ToolRunning},
+			disclosure: fullView,
+			want:       []string{"Running code"},
+			absent:     []string{"│", "const total"},
+		},
+		{
+			name:       "catalog search",
+			tool:       agent.ToolBlock{Name: "search_datadog_sdk", Input: `{"code":"return sdk.operations.length;"}`, Output: "412", Status: agent.ToolSuccess},
+			disclosure: fullView,
+			want:       []string{"✓ Searched Datadog SDK", "│ return sdk.operations.length;", "└ 412"},
+		},
+		{
+			// A failed search answers with the backend's error text, which
+			// must not render as the script's value.
+			name:       "catalog search error",
+			tool:       agent.ToolBlock{Name: "search_datadog_sdk", Input: `{"code":"return catalog;"}`, Output: `{"description": "The tool raised an unknown error: 'Code is required'"}`, Status: agent.ToolError},
+			disclosure: fullView,
+			want:       []string{"Datadog SDK search failed", `└ {"description": "The tool raised an unknown error: 'Code is required'"}`},
+			absent:     []string{"└ {\n"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := serverView(&tc.tool, 80, tc.disclosure)
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("missing %q in:\n%s", want, got)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(got, absent) {
+					t.Errorf("unexpected %q in:\n%s", absent, got)
+				}
+			}
+			if rows := strings.Count(got, "\n") + 1; tc.maxRows > 0 && rows > tc.maxRows {
+				t.Errorf("rendered %d rows, want <= %d:\n%s", rows, tc.maxRows, got)
+			}
+		})
 	}
 }
