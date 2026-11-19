@@ -58,7 +58,6 @@ type process struct {
 	tools       toolCaller
 	busy        atomic.Int64
 	activity    atomic.Int64
-	failed      atomic.Bool
 	once        sync.Once
 }
 
@@ -231,17 +230,10 @@ func (p *process) callback(ctx context.Context, msg wireMessage) {
 			response.Result, err = p.tools(callCtx, call.Name, call.Arguments)
 			cancel()
 		}
-		var result struct {
-			IsError bool `json:"isError"`
-		}
-		if err == nil && json.Unmarshal(response.Result, &result) == nil && result.IsError {
-			p.failed.Store(true)
-		}
 	default:
 		err = errors.New("unsupported visualization method")
 	}
 	if err != nil {
-		p.failed.Store(true)
 		response.Error = &wireError{-32000, "visualization tool request failed"}
 		response.Result = nil
 	}
@@ -252,7 +244,6 @@ func (p *process) callback(ctx context.Context, msg wireMessage) {
 }
 
 func (p *process) present(app assistant.AppPayload) error {
-	p.failed.Store(false)
 	p.activity.Store(time.Now().UnixNano())
 	// Like other MCP Apps hosts, name the tool and send its input before its
 	// result: apps label their loading state and telemetry with them.
@@ -303,9 +294,8 @@ func (p *process) snapshot(ctx context.Context) ([]byte, error) {
 		case <-ticker.C:
 		}
 	}
-	if p.failed.Load() {
-		return nil, errors.New("visualization data request failed")
-	}
+	// The app handles callback errors and can still render when an optional
+	// lookup fails. Capture the UI it actually produced.
 	id := json.RawMessage(fmt.Sprintf(`"snapshot-%d"`, time.Now().UnixNano()))
 	if err := p.write(wireMessage{JSONRPC: "2.0", ID: id, Method: "snapshot"}); err != nil {
 		return nil, err
