@@ -29,38 +29,52 @@ func (m *Model) prompt() components.Prompt {
 	return nil
 }
 
-// commandPrompt asks for the text a slash command needs. It belongs to no tool
-// call: ending an operation leaves it open, and ctrl+x dismisses it.
+// commandPrompt asks for the answer a slash command needs. It belongs to no
+// tool call: ending an operation leaves it open, and ctrl+x dismisses it.
 type commandPrompt struct {
-	form   *components.TextPrompt
-	submit func(string) tea.Cmd
+	form components.Prompt
+	// answer reports whether the user answered or dismissed form and, unless
+	// they dismissed it, what to run with the answer.
+	answer func() (submit func() tea.Cmd, done bool)
+}
+
+// answeringPrompt is a prompt that reports its answer as a V.
+type answeringPrompt[V any] interface {
+	components.Prompt
+	Result() (value V, dismissed, done bool)
 }
 
 // openCommandPrompt shows form until the user answers it, then runs submit
 // with the answer unless they dismissed it.
-func (m *Model) openCommandPrompt(form *components.TextPrompt, submit func(string) tea.Cmd) {
+func openCommandPrompt[V any](m *Model, form answeringPrompt[V], submit func(V) tea.Cmd) {
 	form.SetStyles(m.styles)
-	m.commandPrompt = &commandPrompt{form: form, submit: submit}
+	m.commandPrompt = &commandPrompt{form: form, answer: func() (func() tea.Cmd, bool) {
+		value, dismissed, done := form.Result()
+		if !done || dismissed {
+			return nil, done
+		}
+		return func() tea.Cmd { return submit(value) }, true
+	}}
 	m.editor.CloseMenu()
 }
 
 // updateCommandPrompt applies msg to the command prompt and closes it once
-// answered.
+// answered, before submitting, so the answer may open another prompt.
 func (m *Model) updateCommandPrompt(msg tea.Msg) (tea.Cmd, bool) {
 	p := m.commandPrompt
 	if p == nil {
 		return nil, false
 	}
 	cmd, used := p.form.Update(msg)
-	value, dismissed, done := p.form.Result()
+	submit, done := p.answer()
 	if !done {
 		return cmd, used
 	}
 	m.commandPrompt = nil
-	if dismissed {
+	if submit == nil {
 		return cmd, used
 	}
-	return tea.Batch(cmd, p.submit(value)), used
+	return tea.Batch(cmd, submit()), used
 }
 
 // promptRows is the most rows a prompt may take out of the free rows above
