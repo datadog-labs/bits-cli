@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,6 +13,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
@@ -247,5 +251,79 @@ func TestExportNewAndResumedConversationMatch(t *testing.T) {
 	got, _ := conversationMarkdown(resumed.state.Blocks, "", "")
 	if got != want || strings.Count(got, "**Bits:** alpha") != 1 {
 		t.Fatalf("resumed export = %q, want %q", got, want)
+	}
+}
+
+// /copy and /export take the conversation as it shows, also an answer
+// another session's turn streamed in.
+func TestCopyAndExportIncludeAnotherSessionsAnswer(t *testing.T) {
+	f := fake.New()
+	id, err := f.PushConversation(context.Background(), "", `say("earlier")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(agent.New(f, agent.Config{ConversationID: id}))
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_ = m.initChat()
+	drainConversationRemote(t, m)
+	pumpUntilFree(t, m)
+	sent := make(chan error, 1)
+	go func() {
+		_, err := f.Send(context.Background(), `say("remote answer")`, assistant.SendOptions{ConversationID: id}, func(assistant.AssistantResponse) error { return nil })
+		sent <- err
+	}()
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	for !hasTextBlock(m.state.Blocks, "remote answer") || m.sendBlocked() {
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+	}
+	_, cmd := m.dispatchCommand("copy", "")
+	copied := tea.SetClipboard("remote answer")()
+	if !slices.Contains(flattenMsgs(t, cmd), copied) {
+		t.Fatalf("/copy = %v, want the other session's answer", flattenMsgs(t, cmd))
+	}
+	_, cmd = m.dispatchCommand("export", "")
+	exported := false
+	for _, msg := range flattenMsgs(t, cmd) {
+		exported = exported || strings.Contains(fmt.Sprint(msg), "remote answer")
+	}
+	if !exported {
+		t.Fatal("/export left out the other session's answer")
+	}
+}
+
+// A failure that reuses the answer's message ID shows apart from the answer,
+// once, live and after a replay; /copy and /export leave it out.
+func TestTurnErrorStaysApartFromTheAnswer(t *testing.T) {
+	f := fake.New()
+	id, err := f.PushConversation(context.Background(), "", `say("ready")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := New(agent.New(f, agent.Config{ConversationID: id}))
+	_, _ = live.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	setConversationInput(live, `load("notices.star", "turn_error"); turn_error()`)
+	_, _ = live.submit()
+	pumpUntilFree(t, live)
+	for !slices.ContainsFunc(live.state.Blocks, func(b agent.Block) bool { return b.Error }) {
+		_, _ = live.Update(runConversationCmd(t, waitEvent(live.events)))
+	}
+	resumed := New(agent.New(f, agent.Config{ConversationID: id}))
+	_, _ = resumed.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_ = resumed.initChat()
+	drainConversationRemote(t, resumed)
+	pumpUntilFree(t, resumed)
+	for name, m := range map[string]*Model{"live": live, "replayed": resumed} {
+		doc := ansi.Strip(m.list.Document())
+		if n := strings.Count(doc, "Token rate limit exceeded"); n != 1 {
+			t.Errorf("%s: failure shows %d times:\n%s", name, n, doc)
+		}
+		if text, ok := latestCopyableAssistantResponse(m.state.Blocks); !ok || text != "Partial answer before the model hit its token rate limit." {
+			t.Errorf("%s: /copy = %q", name, text)
+		}
+		if text, _ := conversationMarkdown(m.state.Blocks, "", ""); strings.Contains(text, "exceeded") {
+			t.Errorf("%s: /export holds the failure:\n%s", name, text)
+		}
 	}
 }

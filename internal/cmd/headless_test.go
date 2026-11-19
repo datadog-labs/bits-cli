@@ -196,7 +196,7 @@ func TestRunOutcomeExitMapping(t *testing.T) {
 				writer = out
 			}
 			mode := cmp.Or(tt.mode, agent.ModeSkipPermissions)
-			err := runEngineTurn(ctx, agent.New(&fake.Fake{}, agent.Config{PermissionsMode: mode}), agent.TurnInput{Tools: runToolSet(t)}, opts, writer)
+			err := runEngineTurn(ctx, agent.New(&fake.Fake{}, agent.Config{PermissionsMode: mode, SendOnly: true}), agent.TurnInput{Tools: runToolSet(t)}, opts, writer)
 			if !tt.wantErr(err) {
 				t.Fatalf("error = %v", err)
 			}

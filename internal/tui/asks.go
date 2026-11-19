@@ -122,7 +122,9 @@ func (m *Model) syncApprovals(pending []agent.Block) {
 				case grantNone:
 				case grantSession:
 					// A call no longer parked needs no grant; the decision follows.
-					_ = m.engine.GrantSessionFor(block.ToolCallID())
+					if err := m.engine.GrantSessionFor(block.ToolCallID()); err != nil && !errors.Is(err, agent.ErrStale) {
+						return m.postNotice(noticeForError("allow the tool for this session", err))
+					}
 				case grantFullAccess:
 					return m.setPermissionsMode(agent.ModeSkipPermissions)
 				}

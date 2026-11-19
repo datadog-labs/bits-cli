@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/agenttest"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
@@ -298,14 +299,15 @@ func mustJSONString(t *testing.T, value any) string {
 }
 
 type execApprovalBackend struct {
-	t         *testing.T
-	input     string
-	preview   string
-	responses []assistant.ClientToolResponse
-	calls     int
+	conversations agenttest.Conversations
+	t             *testing.T
+	input         string
+	preview       string
+	responses     []assistant.ClientToolResponse
+	calls         int
 }
 
-func (b *execApprovalBackend) Send(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+func (b *execApprovalBackend) post(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.t.Helper()
 	b.calls++
 	if b.calls == 1 {
@@ -429,13 +431,14 @@ func TestExecCommandDenialNeverLaunches(t *testing.T) {
 }
 
 type execSessionScopeBackend struct {
-	t       *testing.T
-	inputs  []string
-	batches [][]assistant.ClientToolResponse
-	calls   int
+	conversations agenttest.Conversations
+	t             *testing.T
+	inputs        []string
+	batches       [][]assistant.ClientToolResponse
+	calls         int
 }
 
-func (b *execSessionScopeBackend) Send(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+func (b *execSessionScopeBackend) post(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.t.Helper()
 	if b.calls > 0 {
 		responses, ok := message.([]assistant.ClientToolResponse)
@@ -707,4 +710,32 @@ func TestExecCommandBackgroundEndToEnd(t *testing.T) {
 	if observed.IsError || observed.Cancelled || stoppedByUser.Status != exectool.ExecCancelled || stoppedByUser.Error != "stopped by the user" {
 		t.Fatalf("wait_command on a stopped command = %+v, %+v; want a successful wait reporting the user's stop", observed, stoppedByUser)
 	}
+}
+
+func (b *execApprovalBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
+	return b.conversations.Send(ctx, message, opts, fn, func(emit func(assistant.AssistantResponse) error) (string, error) {
+		return b.post(ctx, message, opts, emit)
+	})
+}
+
+func (b *execApprovalBackend) Subscribe(ctx context.Context, id string, opts assistant.SubscribeOptions, fn func(assistant.Message) error) error {
+	if opts.TaskID != "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.conversations.Subscribe(ctx, id, fn)
+}
+
+func (b *execSessionScopeBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
+	return b.conversations.Send(ctx, message, opts, fn, func(emit func(assistant.AssistantResponse) error) (string, error) {
+		return b.post(ctx, message, opts, emit)
+	})
+}
+
+func (b *execSessionScopeBackend) Subscribe(ctx context.Context, id string, opts assistant.SubscribeOptions, fn func(assistant.Message) error) error {
+	if opts.TaskID != "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.conversations.Subscribe(ctx, id, fn)
 }

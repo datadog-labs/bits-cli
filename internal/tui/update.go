@@ -51,19 +51,40 @@ type (
 		generation uint64
 		err        error
 	}
+	stopResultMsg struct{ err error }
 )
+
+// stopTimeout bounds asking the server to stop a turn, retries included.
+const stopTimeout = 30 * time.Second
+
+// stopConversation asks the engine to stop the conversation's turn on the
+// server, reporting a stop it could not confirm.
+func (m *Model) stopConversation() tea.Cmd {
+	engine := m.engine
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		defer cancel()
+		return stopResultMsg{err: engine.StopConversation(ctx)}
+	}
+}
 
 // postNotice adds a session-only message at the current point in the agent
 // transcript. It never enters the engine's transcript or backend.
 func (m *Model) postNotice(n chat.Notice) tea.Cmd {
-	if n.Empty() {
-		return nil
-	}
-	m.nextNoticeID++
 	var after agent.BlockID
 	if blocks := m.state.Blocks; len(blocks) > 0 {
 		after = blocks[len(blocks)-1].ID
 	}
+	return m.postNoticeAfter(after, n)
+}
+
+// postNoticeAfter adds a session-only message right after the block after,
+// where it stays as the transcript grows or is replaced.
+func (m *Model) postNoticeAfter(after agent.BlockID, n chat.Notice) tea.Cmd {
+	if n.Empty() {
+		return nil
+	}
+	m.nextNoticeID++
 	m.notices = append(m.notices, chat.NoticeItem{ID: m.nextNoticeID, After: after, Notice: n})
 	if m.list != nil {
 		m.syncTranscript()
@@ -193,7 +214,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
-	case tea.FocusMsg, tea.BlurMsg, terminalTickMsg:
+	case tea.FocusMsg:
+		// Coming back to the terminal is a cue to retry a lost connection now.
+		m.reconnect()
+	case tea.BlurMsg, terminalTickMsg:
 		// Terminal events are handled above, including during login.
 	case viz.Completion:
 		if page := m.widgets.apply(msg); page != "" {
@@ -326,6 +350,16 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case selectionTickMsg:
 		return m, m.advanceSelectionScroll(msg)
 
+	case stopResultMsg:
+		switch {
+		case msg.err == nil:
+			return m, nil
+		case errors.Is(msg.err, agent.ErrNotTurnOwner):
+			return m, m.postNotice(notice(chat.NoticeWarn, msg.err, "Stopped locally. Only the session that started this turn can stop it."))
+		default:
+			return m, m.postNotice(notice(chat.NoticeWarn, msg.err, "Stopped locally. The stop wasn't confirmed."))
+		}
+
 	case engineEventMsg:
 		var cmd tea.Cmd
 		switch {
@@ -333,6 +367,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A change no run made, such as a command's.
 			if msg.ev.State.Version > m.state.Version {
 				m.state = msg.ev.State
+				m.syncApprovals(m.state.PendingApprovals())
 				m.syncTranscript()
 			}
 		case m.op.run != 0 && msg.ev.Run == m.op.run:
@@ -340,7 +375,11 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// events are ignored.
 			cmd = m.applyRunEvent(msg.ev)
 		}
-		return m, tea.Batch(cmd, waitEvent(m.events))
+		return m, tea.Batch(cmd, m.observeConnection(), waitEvent(m.events))
+
+	case reconnectingTickMsg:
+		m.syncTranscript()
+		return m, nil
 
 	case logoutResultMsg:
 		return m.applyLogoutResult(msg)
@@ -946,12 +985,20 @@ func (m *Model) editKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
+		if m.mode == ModeChat && !m.op.busy() && m.remoteTurn() {
+			return m, m.stopConversation()
+		}
 		if m.mode == ModeChat && !m.cancellable() && !m.op.loggingOut() {
 			m.openExitCard()
 			return m, nil
 		}
-		m.cancelOperation() // interrupt the running turn
-		return m, nil
+		// Esc stops the turn itself; other ways out only stop listening.
+		var stop tea.Cmd
+		if m.cancellable() && m.op.kind == opTurn {
+			stop = m.stopConversation()
+		}
+		m.cancelOperation()
+		return m, stop
 	case "enter":
 		return m.submit()
 	case "ctrl+d":
@@ -1006,6 +1053,7 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	}
 	m.engine.SettleRestoredTools(m.tools)
 	m.state = m.engine.State() // the event that publishes it follows
+	m.syncApprovals(m.state.PendingApprovals())
 	m.syncTranscript()
 	if m.tools == nil || !m.engine.CanResumeTools(m.tools) {
 		return nil
@@ -1051,9 +1099,16 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 			}
 		} else {
 			m.chatPhase = chat.PhaseError
-			if ev.Err != nil {
-				return m.postNotice(noticeForError("", ev.Err))
+			var n chat.Notice
+			switch {
+			case ev.Err != nil && !repeatsErrorMarker(m.state.Blocks, ev.Err):
+				n = noticeForError("", ev.Err)
 			}
+			cmd := m.postNotice(n)
+			if !n.Empty() && m.state.Unconfirmed {
+				m.conn.failed = m.nextNoticeID
+			}
+			return cmd
 		}
 	}
 	return nil
@@ -1120,4 +1175,5 @@ func (m *Model) relayout() {
 // syncTranscript rebuilds presentation metadata after m.state changes.
 func (m *Model) syncTranscript() {
 	m.list.SetTranscript(m.state.Blocks, m.state.Tasks, m.transcriptNotices())
+	m.list.SetStatus(m.connectionStatus(time.Now()))
 }

@@ -57,7 +57,7 @@ type ClientOptions struct {
 func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, store auth.CredentialStore) (*agent.Engine, error) {
 	config := agent.Config{
 		ConversationID: opts.ConversationID, PermissionsMode: opts.PermissionsMode,
-		Model: opts.Model, InferenceMode: opts.InferenceMode,
+		Model: opts.Model, InferenceMode: opts.InferenceMode, SendOnly: opts.SendOnly,
 	}
 	if workspace != nil {
 		config.ProjectInstructions = env.NewInstructions(workspace.Path())

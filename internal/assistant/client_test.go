@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -315,7 +316,7 @@ func TestSend_RequiredResponseHeaderRejectsRedirect(t *testing.T) {
 }
 
 func TestSubscribe_StreamsTaskReplayMarkerAndLive(t *testing.T) {
-	const id = "0b6f1a52-2f2c-4c43-9a3e-1d2b3c4d5e6f"
+	const id = "00000000-0000-4000-8000-000000000002"
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v2/assistant/conversation/"+id+"/subscribe" ||
 			r.URL.Query().Get("subtask_id") != "assistant-task.1" {
@@ -360,6 +361,56 @@ func TestSend_EmptyConversationIDCreatesOnFirstTurn(t *testing.T) {
 	}
 	if conversationID != "created-on-send" {
 		t.Fatalf("returned conversation id = %q, want server-assigned id", conversationID)
+	}
+}
+
+func TestSend_NamesTheConversationInPathAndBody(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000002"
+	for _, test := range []struct{ id, path string }{
+		{id: id, path: "/api/v2/assistant/conversation/" + id},
+		{path: "/api/v2/assistant/conversation"},
+	} {
+		var request Request
+		c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != test.path {
+				t.Errorf("request = %s %s, want POST %s", r.Method, r.URL.Path, test.path)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode request: %v", err)
+			}
+			writeStream(t, w, textLine(test.id, "hello"))
+		})
+		if _, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: test.id}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if request.Data.Attributes.ConversationID != test.id {
+			t.Errorf("body conversation id = %q, want %q", request.Data.Attributes.ConversationID, test.id)
+		}
+	}
+}
+
+func TestSend_DistinguishesFailureBeforeAndAfterResponse(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		handle func(http.ResponseWriter)
+		broken bool
+	}{
+		{name: "connection closed before response", handle: func(http.ResponseWriter) { panic(http.ErrAbortHandler) }},
+		{name: "body cut mid-stream", broken: true, handle: func(w http.ResponseWriter) {
+			if _, err := io.WriteString(w, textLine("c", "partial")); err != nil {
+				t.Error(err)
+			}
+			w.(http.Flusher).Flush()
+			panic(http.ErrAbortHandler)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := testClient(t, func(w http.ResponseWriter, _ *http.Request) { test.handle(w) })
+			_, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: "c"}, nil)
+			if err == nil || errors.Is(err, ErrStreamBroken) != test.broken {
+				t.Fatalf("err = %v, want broken = %v", err, test.broken)
+			}
+		})
 	}
 }
 
@@ -496,6 +547,30 @@ func TestSend_SurfacesInBandError(t *testing.T) {
 	}
 	if convID != "conv-1" {
 		t.Errorf("convID = %q, want conv-1", convID)
+	}
+}
+
+func TestSubscribe_SilenceTimeout(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		writeStream(t, w, textLine("c", "replayed")) // then go silent
+		<-r.Context().Done()
+	})
+	c.SubscribeSilenceTimeout = 50 * time.Millisecond
+	err := c.Subscribe(context.Background(), "c", SubscribeOptions{}, func(Message) error { return nil })
+	if !errors.Is(err, ErrStreamIdleTimeout) {
+		t.Fatalf("err = %v, want ErrStreamIdleTimeout", err)
+	}
+}
+
+func TestSubscribe_KeepsRetryAfter(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "45")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	err := c.Subscribe(context.Background(), "c", SubscribeOptions{}, func(Message) error { return nil })
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests || apiErr.RetryAfter != 45*time.Second {
+		t.Fatalf("err = %#v, want a 429 that asks for 45s", err)
 	}
 }
 

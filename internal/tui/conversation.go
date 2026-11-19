@@ -23,10 +23,6 @@ func (m *Model) requestNewConversation() tea.Cmd {
 	return m.stopCompletionSearches()
 }
 
-// startNewConversation resets only conversation-scoped state. It deliberately
-// leaves the editor object (and its prompt-history source), styles, backend
-// client, and process-wide configuration intact; resetting the editor only
-// ends any history browsing.
 // enterConversation follows the engine onto another conversation: messages
 // about the previous one become stale, and the commands it left running in the
 // background stop. It returns how many it stopped.
@@ -35,6 +31,10 @@ func (m *Model) enterConversation() int {
 	return m.backgroundCommands.stopAll()
 }
 
+// startNewConversation resets only conversation-scoped state. It deliberately
+// leaves the editor object (and its prompt-history source), styles, backend
+// client, and process-wide configuration intact; resetting the editor only
+// ends any history browsing.
 func (m *Model) startNewConversation() tea.Cmd {
 	if m.op.busy() {
 		return m.requestNewConversation()

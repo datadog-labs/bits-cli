@@ -25,6 +25,14 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	attachments := m.editor.Attachments()
 	if text == "" && len(attachments) == 0 {
 		if m.editor.QueuePaused() && !m.op.busy() {
+			m.state = m.engine.State()
+			if m.sendBlocked() {
+				// Sent once nothing holds it.
+				m.conn.remote = true
+				m.engine.Retry()
+				m.state = m.engine.State() // the event that publishes it follows
+				return m, m.observeConnection()
+			}
 			return m, m.startTurn(m.engine.SendQueued, agent.TurnInput{})
 		}
 		return m, nil
@@ -84,13 +92,17 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	in.Context = contextFromAttachments(attachments)
 	m.editor.Reset()
 	closeFileSearch := m.stopCompletionSearches()
-	// Behind a turn, or a queue still waiting, the prompt joins the queue.
-	if m.op.busy() || len(m.state.Queued) > 0 {
+	// Behind a turn, here or in another session, or a queue still waiting,
+	// the prompt joins the queue.
+	if m.op.busy() || m.sendBlocked() || len(m.state.Queued) > 0 {
+		// A prompt waiting on another session is sent once nothing holds it.
+		m.conn.remote = m.conn.remote || m.sendBlocked()
 		if err := m.engine.Queue(in); err != nil {
 			return m, tea.Batch(closeFileSearch, m.postNotice(noticeForError("", err)))
 		}
 		m.state = m.engine.State() // the event that publishes it follows
-		return m, closeFileSearch
+		// The turn it waits on may have ended already.
+		return m, tea.Batch(closeFileSearch, m.observeConnection())
 	}
 	return m, tea.Batch(closeFileSearch, m.startTurn(m.engine.StartTurn, in))
 }
@@ -143,7 +155,9 @@ func (m *Model) syncQueue() {
 	for i, q := range m.state.Queued {
 		items[i] = editor.QueuedPrompt{ID: uint64(q.ID), HistoryEntry: editorPrompt(q.Message, entities(q.Context))}
 	}
-	m.editor.SetQueue(items, m.op.kind != opTurn)
+	// Prompts waiting on the conversation move as they do behind a turn here;
+	// a prompt whose send failed waits for Enter.
+	m.editor.SetQueue(items, m.op.kind != opTurn && (!m.conversationBusy() || m.state.Unconfirmed))
 }
 
 func entities(context *assistant.AssistantContext) []assistant.ContextEntity {

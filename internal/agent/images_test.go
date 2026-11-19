@@ -38,7 +38,7 @@ func screenshotFile(t *testing.T) (file, sent assistant.ContextEntity) {
 }
 
 func TestImagesAreSentOnlyWithTheUserMessage(t *testing.T) {
-	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
+	backend := &scriptBackend{rounds: toolRounds("read")}
 	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil },

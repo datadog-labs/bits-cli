@@ -27,12 +27,14 @@ func (m *Model) resumeAnimationWanted() bool {
 
 // borderSweepWanted distinguishes active work from a wait on the user. If a
 // shown prompt coexists with a running tool, work is still progressing and
-// the sweep remains active.
+// the sweep remains active. A turn another session started looks like one
+// running here.
 func (m *Model) borderSweepWanted() bool {
-	if !m.animationsVisible() || !m.styles.Input.SweepMotion || m.op.run == 0 {
+	if !m.animationsVisible() || !m.styles.Input.SweepMotion {
 		return false
 	}
-	if m.chatPhase != chat.PhaseWaiting && m.chatPhase != chat.PhaseStreaming {
+	local := m.op.run != 0 && (m.chatPhase == chat.PhaseWaiting || m.chatPhase == chat.PhaseStreaming)
+	if !local && !m.conversationBusy() {
 		return false
 	}
 	return m.prompt() == nil || m.list.Working()

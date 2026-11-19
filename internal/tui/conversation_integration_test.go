@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/agenttest"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tools"
 	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
@@ -38,9 +39,12 @@ type resumeHistoryReply struct {
 // halfStreamedWriteBackend streams half of a write_file input on its first
 // Send and then waits for cancellation, never sending the final call. Later
 // Sends answer with plain text.
-type halfStreamedWriteBackend struct{ sends int }
+type halfStreamedWriteBackend struct {
+	sends         int
+	conversations agenttest.Conversations
+}
 
-func (b *halfStreamedWriteBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+func (b *halfStreamedWriteBackend) post(ctx context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.sends++
 	if b.sends > 1 {
 		return "conversation", emitMessages(emit, assistant.AssistantMessage("answer", assistant.TextContent("still alive")))
@@ -404,8 +408,11 @@ func TestCancelledTurnSettlesStreamedClientToolInTUI(t *testing.T) {
 		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
 	}
 
-	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	_, stop := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	drainConversationRemote(t, m)
+	// Esc also stops the turn on the server; once confirmed, its open tools
+	// are settled.
+	runStop(t, m, stop)
 
 	tool := findToolBlock(m.state.Blocks, "write_file")
 	if tool == nil || tool.Status != agent.ToolCancelled {
@@ -580,4 +587,47 @@ func TestFailedLogoutRestartsCanceledSkillDiscovery(t *testing.T) {
 	if m.loggedOut || m.op.busy() || !m.skillMenu.task.running() {
 		t.Fatal("failed logout did not restore background discovery")
 	}
+}
+
+func (b *halfStreamedWriteBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
+	return b.conversations.Send(ctx, message, opts, fn, func(emit func(assistant.AssistantResponse) error) (string, error) {
+		return b.post(ctx, message, opts, emit)
+	})
+}
+
+// Stop confirms a stop: the conversation's turn ends.
+func (b *halfStreamedWriteBackend) Stop(context.Context, string) error { return nil }
+
+func (b *halfStreamedWriteBackend) Subscribe(ctx context.Context, id string, opts assistant.SubscribeOptions, fn func(assistant.Message) error) error {
+	if opts.TaskID != "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.conversations.Subscribe(ctx, id, fn)
+}
+
+// runStop runs the stop request among cmd's commands and applies its result
+// and the state it published.
+func runStop(t *testing.T, m *Model, cmd tea.Cmd) {
+	t.Helper()
+	cmds := []tea.Cmd{cmd}
+	for len(cmds) > 0 {
+		c := cmds[0]
+		cmds = cmds[1:]
+		if c == nil {
+			continue
+		}
+		switch msg := runConversationCmd(t, c).(type) {
+		case tea.BatchMsg:
+			cmds = append(cmds, msg...)
+		case stopResultMsg:
+			_, _ = m.Update(msg)
+			// The settled state follows the stop's own publications.
+			for tool := findToolBlock(m.state.Blocks, "write_file"); tool == nil || !tool.Status.IsTerminal(); tool = findToolBlock(m.state.Blocks, "write_file") {
+				_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+			}
+			return
+		}
+	}
+	t.Fatal("Esc did not stop the turn")
 }
