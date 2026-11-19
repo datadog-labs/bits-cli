@@ -78,6 +78,9 @@ func TestE2E_CurrentUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentUser: %v", err)
 	}
+	if strings.TrimSpace(user.ID) == "" {
+		t.Fatal("CurrentUser returned no user ID")
+	}
 	if strings.TrimSpace(user.Name) == "" && strings.TrimSpace(user.Handle) == "" && strings.TrimSpace(user.Email) == "" {
 		t.Fatal("CurrentUser returned no user display field")
 	}
@@ -163,8 +166,12 @@ func TestE2E_ConversationLifecycle(t *testing.T) {
 	if len(hist.Data.Attributes.Messages) == 0 {
 		t.Fatal("conversation history has no messages")
 	}
-	if hist.Data.Attributes.OwnerUserUUID == "" {
-		t.Error("expected owner_user_uuid to be populated in history")
+	user, err := c.CurrentUser(ctx)
+	if err != nil {
+		t.Fatalf("CurrentUser: %v", err)
+	}
+	if owner := hist.Data.Attributes.OwnerUserUUID; owner == "" || owner != user.ID {
+		t.Errorf("owner_user_uuid = %q, want the current user %q", owner, user.ID)
 	}
 
 	// Deterministic: rename and read the title back.
