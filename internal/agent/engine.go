@@ -28,6 +28,7 @@ var (
 	ErrSkillsUnsupported      = errors.New("backend does not support listing skills")
 	ErrOperationActive        = errors.New("another conversation operation is active")
 	ErrNoPendingTools         = errors.New("no resumable client tools")
+	ErrReadOnlyConversation   = errors.New("conversation belongs to someone else")
 	ErrClosed                 = errors.New("engine is closed")
 	ErrStale                  = errors.New("no running turn has this call pending")
 )
@@ -94,9 +95,12 @@ type State struct {
 	// SharedUntil is when the organization stops seeing the conversation, or
 	// nil while it is private. A past time means the share expired.
 	SharedUntil *time.Time
-	Fork        ForkBoundary
-	Blocks      []Block
-	Usage       *assistant.Usage // nil until a turn reports it
+	// ReadOnly means the conversation belongs to someone else, who shared
+	// it: it takes no turns, though forking makes a copy that does.
+	ReadOnly bool
+	Fork     ForkBoundary
+	Blocks   []Block
+	Usage    *assistant.Usage // nil until a turn reports it
 	// Tasks are the background tasks the conversation started, in start
 	// order. Their blocks are apart from Blocks.
 	Tasks []Task
@@ -300,6 +304,7 @@ type Engine struct {
 	usage       *assistant.Usage // the conversation's latest, if a turn reported it
 	title       string
 	sharedUntil *time.Time
+	readOnly    bool
 	// tasks are the conversation's background tasks. Their observers are
 	// workers too, stopped when the conversation changes.
 	tasks []*task
@@ -616,6 +621,9 @@ func (e *Engine) startTurn(ctx context.Context, in TurnInput, resume bool) (RunI
 // launch claims the idle engine for a turn and starts it. A new turn
 // abandons the calls left to resume.
 func (e *Engine) launch(ctx context.Context, in TurnInput, resumed []ToolCall) (RunID, error) {
+	if e.readOnly {
+		return 0, ErrReadOnlyConversation
+	}
 	e.continuation = nil
 	run, err := e.claim()
 	if err != nil {
@@ -831,7 +839,7 @@ func (e *Engine) publish() {
 // retain: the engine keeps mutating its own transcript on later folds.
 func (e *Engine) state() State {
 	return State{
-		Version: e.version, ConversationID: e.opts.ConversationID, Title: e.title, SharedUntil: e.sharedUntil, Blocks: slices.Clone(e.transcript.Blocks()),
+		Version: e.version, ConversationID: e.opts.ConversationID, Title: e.title, SharedUntil: e.sharedUntil, ReadOnly: e.readOnly, Blocks: slices.Clone(e.transcript.Blocks()),
 		Usage: e.usage, Tasks: e.taskViews(), Fork: e.fork, Queued: slices.Clone(e.queue),
 	}
 }
@@ -889,6 +897,7 @@ func (e *Engine) NewConversation() error {
 		e.usage = nil
 		e.title = ""
 		e.sharedUntil = nil
+		e.readOnly = false
 		e.continuation = nil
 		e.queue = nil
 		clear(e.gate.grants)

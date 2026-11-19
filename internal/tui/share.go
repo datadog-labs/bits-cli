@@ -41,10 +41,17 @@ type shareResultMsg struct {
 
 // startShare runs /share: without an argument it asks who may view the
 // conversation; "off" makes it private; "<days>d" shares it for that long.
+// Only the owner may change sharing, so others can only copy an active link.
 func (m *Model) startShare(argument string) tea.Cmd {
 	conversationID := m.state.ConversationID
 	if !agent.ValidConversationID(conversationID) {
 		return m.postNotice(notice(chat.NoticeWarn, nil, "Start a conversation before using /share."))
+	}
+	if m.state.ReadOnly {
+		if until, ok := conversations.ActiveShare(m.state.SharedUntil, time.Now()); ok && argument == "" {
+			return m.copyShareLink(conversationID, until)
+		}
+		return m.postNotice(notice(chat.NoticeWarn, nil, "Only the conversation's owner can change its sharing."))
 	}
 	if argument == "" {
 		m.openSharePrompt(conversationID)

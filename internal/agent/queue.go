@@ -37,6 +37,10 @@ func (e *Engine) Queue(in TurnInput) error {
 		if err = ErrOperationActive; e.busy && e.turnRun == 0 {
 			return
 		}
+		// Nothing queued could be sent, and SendQueued would drop it.
+		if err = ErrReadOnlyConversation; e.readOnly {
+			return
+		}
 		e.lastQueued++
 		e.queue = append(e.queue, QueuedPrompt{ID: e.lastQueued, Message: in.Message, Skill: in.Skill, Context: in.Context, SkillOverrides: in.SkillOverrides})
 		e.emit(e.turnRun, Event{Kind: EventState, State: e.state()})

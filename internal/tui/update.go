@@ -986,6 +986,10 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	m.engine.SettleRestoredTools(m.tools)
 	m.state = m.engine.State() // the event that publishes it follows
 	m.syncTranscript()
+	// Another user's conversation runs no turn here, so say how to continue.
+	if m.state.ReadOnly {
+		return m.postNotice(noticeForError("", agent.ErrReadOnlyConversation))
+	}
 	if m.tools == nil || !m.engine.CanResumeTools(m.tools) {
 		return nil
 	}
