@@ -219,8 +219,9 @@ For other organizations, the regular Assistant endpoint remains the default.
 Opt into experimental subagents with `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits`, or with
 `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits run --prompt '…' --delivery adeep`.
 `BITS_USE_EXPERIMENTAL_SUBAGENTS=0` keeps the regular endpoint, even for
-organization 2. Unset, empty, or other values fall back to the organization check.
-The setting is not persisted.
+organization 2. Use it to see MCP apps, which the multi-agent endpoint does not
+stream. Unset, empty, or other values fall back to the organization check. The
+setting is not persisted.
 
 When subagents are enabled, eligible turns use multi-agent run
 endpoints with the `cli` profile. The server must support these endpoints and enable
