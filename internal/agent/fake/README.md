@@ -159,6 +159,42 @@ load("questions.star", "ask_user_question"); say(push_conversation(lambda: say("
   reaches are frozen when pushed.
 - A replayed round returns its earlier id instead of pushing again.
 
+## Turns that outlive the request, and network faults
+
+Like the real service, the fake runs a conversation's prompts one at a time,
+apart from the requests that sent them. Closing a send only stops listening;
+Esc sends a stop. A subscription replays the saved conversation and the turn
+in progress, marks the end of the replay, then follows it live; `New()`
+closes one that stays silent for two minutes.
+
+- `drop()` breaks every open stream; the turn carries on.
+- `offline("10s")` also fails every request for that long.
+- `restart()` loses the turn in progress and the queue without recording
+  that they ended, as a service restart would.
+- `send_from_elsewhere(script, after="2s")` queues a prompt as another
+  session would; `simultaneous=True` queues it just ahead of this session's
+  next prompt, as when two clients send at once.
+- `answer_from_elsewhere(after="1s")` answers the paused turns' client calls
+  as another session would.
+- `lose_turn_status("started")` makes the next turn marker with that status
+  (`"started"` or `"ended"`) reach no listener live; a replay still shows
+  it.
+- A turn that pauses on client tools ends; a prompt queued meanwhile runs
+  before the tool answers, which queue behind it.
+
+`connection.star` scripts each case:
+
+```text
+load("connection.star", "drop_mid_answer"); drop_mid_answer()
+load("connection.star", "drop_at_tool_pause"); drop_at_tool_pause()
+load("connection.star", "offline_send"); offline_send()
+load("connection.star", "restart_mid_turn"); restart_mid_turn()
+load("connection.star", "turn_elsewhere"); turn_elsewhere()
+load("connection.star", "queued_during_tool_pause"); queued_during_tool_pause()
+load("connection.star", "remote_tool_pause"); remote_tool_pause()
+load("connection.star", "simultaneous_send"); simultaneous_send()
+```
+
 ## Tests
 
 - `Fake{}` streams instantly; `New()` adds a 10 ms delay for interactive use.
