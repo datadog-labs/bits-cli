@@ -191,6 +191,12 @@ func TestNoticeForError(t *testing.T) {
 			wantText:  "This backend can't restore past conversations.",
 		},
 		{
+			name:      "a read-only conversation is a warning",
+			err:       agent.ErrReadOnlyConversation,
+			wantLevel: chat.NoticeWarn,
+			wantText:  "This conversation was shared with you, so it is read-only. Use /fork to continue in your own copy.",
+		},
+		{
 			name:      "max turns",
 			err:       agent.ErrMaxTurns,
 			wantLevel: chat.NoticeError,

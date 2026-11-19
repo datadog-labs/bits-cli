@@ -73,6 +73,10 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 			return m, m.postNotice(notice(chat.NoticeWarn, nil, "Unknown client skill: %s", escape.Inline(skillInvocation.Name)))
 		}
 	}
+	// The engine refuses the turn too; refusing here keeps the draft.
+	if m.state.ReadOnly {
+		return m, m.postNotice(noticeForError("", agent.ErrReadOnlyConversation))
+	}
 	in := agent.TurnInput{Message: text, Skill: skillInvocation}
 	if libraryInvocation {
 		resolved, feedback, ok := m.skillsLibraryTurn(library, libraryArguments)

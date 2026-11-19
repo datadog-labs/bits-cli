@@ -220,6 +220,80 @@ func TestShareConversation(t *testing.T) {
 	}
 }
 
+// identityBackend serves history and the current user, or fails with err.
+type identityBackend struct {
+	historyBackend
+	user assistant.CurrentUser
+	err  error
+}
+
+func (b *identityBackend) CurrentUser(ctx context.Context) (assistant.CurrentUser, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		return assistant.CurrentUser{}, errors.New("the owner lookup has no deadline of its own")
+	}
+	return b.user, b.err
+}
+
+func TestLoadConversationOwnership(t *testing.T) {
+	const me, coworker = "me-uuid", "coworker-uuid"
+	tests := []struct {
+		name         string
+		owner        string
+		noIdentity   bool
+		identityErr  error
+		wantReadOnly bool
+	}{
+		{name: "mine", owner: me},
+		{name: "shared with me", owner: coworker, wantReadOnly: true},
+		{name: "no owner named", owner: ""},
+		{name: "backend without identity", owner: coworker, noIdentity: true},
+		{name: "identity lookup fails", owner: coworker, identityErr: errors.New("forbidden")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := &assistant.ConversationHistoryResponse{}
+			response.Data.Type = "conversation-history-response"
+			response.Data.Attributes.OwnerUserUUID = tt.owner
+			var backend Backend = &identityBackend{historyBackend: historyBackend{resp: response}, user: assistant.CurrentUser{ID: me}, err: tt.identityErr}
+			if tt.noIdentity {
+				backend = &historyBackend{resp: response}
+			}
+			e := New(backend, Config{})
+			defer e.Close()
+
+			conversation, err := e.LoadConversation(context.Background(), testConversationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.InstallConversation(context.Background(), conversation); err != nil {
+				t.Fatal(err)
+			}
+			if got := e.State().ReadOnly; got != tt.wantReadOnly {
+				t.Fatalf("read-only = %v, want %v", got, tt.wantReadOnly)
+			}
+			if !tt.wantReadOnly {
+				return
+			}
+			if _, err := e.StartTurn(context.Background(), TurnInput{Message: "hi"}); !errors.Is(err, ErrReadOnlyConversation) {
+				t.Fatalf("StartTurn err = %v, want ErrReadOnlyConversation", err)
+			}
+			if err := e.Queue(TurnInput{Message: "later"}); !errors.Is(err, ErrReadOnlyConversation) {
+				t.Fatalf("Queue err = %v, want ErrReadOnlyConversation", err)
+			}
+			if e.OperationActive() || len(e.State().Queued) != 0 {
+				t.Fatal("a refused turn claimed the engine or queued a prompt")
+			}
+			// A new conversation is the user's own.
+			if err := e.NewConversation(); err != nil {
+				t.Fatal(err)
+			}
+			if e.State().ReadOnly {
+				t.Fatal("a new conversation stayed read-only")
+			}
+		})
+	}
+}
+
 func TestLoadConversationFailureAndCancellationPreserveState(t *testing.T) {
 	for _, cancelAfterLoad := range []bool{false, true} {
 		want := errors.New("gone")

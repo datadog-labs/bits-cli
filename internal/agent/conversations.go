@@ -10,6 +10,10 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
+// ownerLookupTimeout bounds the optional check of who owns a loaded
+// conversation.
+const ownerLookupTimeout = 5 * time.Second
+
 var (
 	ErrConversationListUnsupported = errors.New("backend does not support listing conversations")
 	ErrInvalidConversationID       = errors.New("conversation id is invalid")
@@ -35,6 +39,7 @@ type Conversation struct {
 	id           string
 	title        string
 	sharedUntil  *time.Time
+	readOnly     bool
 	fork         ForkBoundary
 	transcript   *Transcript
 	tasks        []*task
@@ -113,6 +118,18 @@ func (e *Engine) LoadConversation(ctx context.Context, conversationID string) (*
 	conversation.id = conversationID
 	conversation.title = response.Data.Attributes.Title
 	conversation.sharedUntil = unixMilli(response.Data.Attributes.SharedExpires)
+	if owner := response.Data.Attributes.OwnerUserUUID; owner != "" {
+		// The identity is a convenience: credentials may read the history but
+		// not the profile, and the server refuses other people's turns anyway.
+		// So a conversation whose owner is unknown opens writable, and a slow
+		// lookup must not spend the deadline the history load shares.
+		identityCtx, cancel := context.WithTimeout(ctx, ownerLookupTimeout)
+		user, err := e.CurrentUser(identityCtx)
+		cancel()
+		if err == nil {
+			conversation.readOnly = owner != user.ID
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -137,6 +154,7 @@ func (e *Engine) installConversation(conversation *Conversation) {
 	e.opts.ConversationID = conversation.id
 	e.title = conversation.title
 	e.sharedUntil = conversation.sharedUntil
+	e.readOnly = conversation.readOnly
 	e.fork = conversation.fork
 	e.opts.MessageHistory = nil
 	e.resetContext()
