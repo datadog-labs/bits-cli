@@ -102,8 +102,11 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 }
 
 func useSubagents(ctx context.Context, client *assistant.Client) bool {
-	if os.Getenv("BITS_USE_EXPERIMENTAL_SUBAGENTS") == "1" {
+	switch os.Getenv("BITS_USE_EXPERIMENTAL_SUBAGENTS") {
+	case "1":
 		return true
+	case "0":
+		return false
 	}
 	// Bound the optional identity lookup so an unavailable profile service
 	// does not prevent using the regular Assistant endpoint.
