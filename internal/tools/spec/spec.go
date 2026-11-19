@@ -1,5 +1,6 @@
-// Package spec defines importable wire contracts for built-in tools and shared
-// tool payloads. It deliberately has no execution or TUI dependencies.
+// Package spec defines the wire contracts of tools: the client's built-in
+// tools, and the parts of server tools the client reads. It deliberately has
+// no execution or TUI dependencies.
 package spec
 
 const (
@@ -11,10 +12,6 @@ const (
 	ExecCommand = "exec_command"
 	WaitCommand = "wait_command"
 	StopCommand = "stop_command"
-
-	// Remote tools.
-	Skill               = "Skill"
-	StartBackgroundTask = "startBackgroundTask"
 
 	// ExecDefaultYieldMS is how long exec_command waits before answering
 	// with a running command. ExecMaxWaitMS bounds every such wait to half
@@ -32,21 +29,14 @@ type Identity struct {
 }
 
 var (
-	ServerSkill            = Identity{Name: Skill}
-	ServerSpawnAgent       = Identity{Name: "spawn_agent"}
-	ServerSendAgentMessage = Identity{Name: "send_agent_message"}
-	ServerWaitForAgents    = Identity{Name: "wait_for_agents"}
-	// ServerStartBackgroundTask starts server work that reports into the
-	// conversation after the turn; its result names the task.
-	ServerStartBackgroundTask = Identity{Name: StartBackgroundTask}
-	ClientReadFile            = Identity{ClientSide: true, Name: ReadFile}
-	ClientListFiles           = Identity{ClientSide: true, Name: ListFiles}
-	ClientGrepFiles           = Identity{ClientSide: true, Name: GrepFiles}
-	ClientWriteFile           = Identity{ClientSide: true, Name: WriteFile}
-	ClientEditFile            = Identity{ClientSide: true, Name: EditFile}
-	ClientExecCommand         = Identity{ClientSide: true, Name: ExecCommand}
-	ClientWaitCommand         = Identity{ClientSide: true, Name: WaitCommand}
-	ClientStopCommand         = Identity{ClientSide: true, Name: StopCommand}
+	ClientReadFile    = Identity{ClientSide: true, Name: ReadFile}
+	ClientListFiles   = Identity{ClientSide: true, Name: ListFiles}
+	ClientGrepFiles   = Identity{ClientSide: true, Name: GrepFiles}
+	ClientWriteFile   = Identity{ClientSide: true, Name: WriteFile}
+	ClientEditFile    = Identity{ClientSide: true, Name: EditFile}
+	ClientExecCommand = Identity{ClientSide: true, Name: ExecCommand}
+	ClientWaitCommand = Identity{ClientSide: true, Name: WaitCommand}
+	ClientStopCommand = Identity{ClientSide: true, Name: StopCommand}
 )
 
 // PathInput is the minimal path-bearing projection shared by local tools. It
@@ -54,32 +44,6 @@ var (
 // as write content or edit operations.
 type PathInput struct {
 	Path string `json:"path"`
-}
-
-// SkillInput is the request payload for the server-side Skill tool. It lives
-// here so presentation code and tool integrations share the same wire shape.
-type SkillInput struct {
-	SkillName string `json:"skill_name"`
-}
-
-// StartBackgroundTaskInput is the task a startBackgroundTask call asks to
-// start. Payload holds the fields an investigation may carry; times are Unix
-// milliseconds.
-type StartBackgroundTaskInput struct {
-	Task struct {
-		AgentID  string `json:"agent_id"`
-		TaskName string `json:"task_name"`
-		Payload  struct {
-			Description      string   `json:"description"`
-			Tags             []string `json:"tags"`
-			MonitorID        *int64   `json:"monitor_id"`
-			EventID          string   `json:"event_id"`
-			EventTS          *int64   `json:"event_ts"`
-			IncidentPublicID *int64   `json:"incident_public_id"`
-			StartTime        *int64   `json:"start_time"`
-			EndTime          *int64   `json:"end_time"`
-		} `json:"payload"`
-	} `json:"task"`
 }
 
 type ReadFileInput struct {

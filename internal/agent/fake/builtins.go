@@ -17,6 +17,7 @@ import (
 	"go.starlark.net/starlarkstruct"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	toolspec "github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 // builtins are the functions a script can call. They know the wire protocol,
@@ -178,7 +179,7 @@ func builtinCall(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 	}
 	for _, s := range specs {
 		s.id = r.out.nextID()
-		if s.name == assistant.ApprovalRequestTool {
+		if s.name == toolspec.ApprovalRequest {
 			s.input = withToolCallID(s.input, s.id)
 		}
 		if err := r.emitToolCall(s, toolEmit{client: true, stream: stream, breakInput: breakInput, at: at}); err != nil {
@@ -258,7 +259,7 @@ func (r *run) streamsInput(name string, style toolEmit) bool {
 	if !style.client {
 		return true
 	}
-	if name == assistant.ApprovalRequestTool {
+	if name == toolspec.ApprovalRequest {
 		return false
 	}
 	for _, tool := range r.opts.ClientTools {

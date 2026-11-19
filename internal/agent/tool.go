@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 type ToolCall struct {
@@ -110,7 +111,7 @@ func NewToolSet(tools ...Tool) (*ToolSet, error) {
 		if name == "" {
 			return nil, fmt.Errorf("tool name is empty")
 		}
-		if name == assistant.ApprovalRequestTool {
+		if name == spec.ApprovalRequest {
 			return nil, fmt.Errorf("tool %q collides with the server approval gate", name)
 		}
 		if tool.Handler == nil {
@@ -206,7 +207,7 @@ func (s *ToolSet) Approval(call ToolCall) (ApprovalRequirement, bool) {
 	if s == nil {
 		return ApprovalRequirement{}, false
 	}
-	if call.Name == assistant.ApprovalRequestTool {
+	if call.Name == spec.ApprovalRequest {
 		return serverGateApprovalRequirement(call)
 	}
 	tool, ok := s.tools[call.Name]

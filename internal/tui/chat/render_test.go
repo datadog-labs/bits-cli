@@ -487,7 +487,7 @@ func TestBackgroundTaskApprovalAndCallPresentTheTask(t *testing.T) {
 		"start_time":1792670400000,"end_time":1792679400000}}}`
 	gate := func(name string) *agent.ToolBlock {
 		return &agent.ToolBlock{
-			Name: assistant.ApprovalRequestTool, IsClientSide: true, Status: agent.ToolAwaitingApproval,
+			Name: spec.ApprovalRequest, IsClientSide: true, Status: agent.ToolAwaitingApproval,
 			Input:    fmt.Sprintf(`{"tool_name":%q,"tool_args":%s,"tool_call_id":"call-1"}`, name, args),
 			Approval: &agent.ApprovalPrompt{Title: "Start it?", Detail: "tool: " + name},
 		}

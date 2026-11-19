@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 func adaptMultiAgentToolInput(toolName, input, wireID, localID string) (string, error) {
-	if toolName != ApprovalRequestTool {
+	if toolName != spec.ApprovalRequest {
 		return input, nil
 	}
 	var fields map[string]json.RawMessage

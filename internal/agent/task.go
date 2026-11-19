@@ -67,9 +67,7 @@ func taskOf(b Block) (*task, bool) {
 	if b.ID.Scope == ScopeCopied || b.Tool == nil || b.Tool.IsClientSide || b.Tool.Name != spec.StartBackgroundTask || b.Tool.Status != ToolSuccess {
 		return nil, false
 	}
-	var output struct {
-		TaskID string `json:"task_id"`
-	}
+	var output spec.StartBackgroundTaskOutput
 	if json.Unmarshal([]byte(b.Tool.Output), &output) != nil || output.TaskID == "" {
 		return nil, false
 	}

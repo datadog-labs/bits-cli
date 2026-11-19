@@ -14,6 +14,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tools"
 	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
+	toolspec "github.com/datadog-labs/bits-cli/internal/tools/spec"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
@@ -118,7 +119,7 @@ func TestParallelClientCalls(t *testing.T) {
 func TestServerGateWithClientCall(t *testing.T) {
 	script := `g, f = call([("approval_request", {"tool_name": "create_monitor", "tool_args": {}}), ("read_file", {"path": "go.mod"})]); say("created" if g.ok else "not created")`
 	decide := func(b agent.Block) agent.ApprovalDecision {
-		if b.Tool.Name == assistant.ApprovalRequestTool {
+		if b.Tool.Name == toolspec.ApprovalRequest {
 			return agent.ApprovalDeny
 		}
 		return agent.ApprovalAllowOnce
@@ -137,7 +138,7 @@ func TestServerGateWithClientCall(t *testing.T) {
 	t.Run("deny stop", func(t *testing.T) {
 		engine := agent.New(&Fake{}, agent.Config{})
 		blocks, _ := runTurn(t, engine, script, workspaceTools(t), agent.DenyStop, decide)
-		if gate := toolBlock(t, blocks, assistant.ApprovalRequestTool); gate.Status != agent.ToolDenied || len(texts(blocks)) != 0 {
+		if gate := toolBlock(t, blocks, toolspec.ApprovalRequest); gate.Status != agent.ToolDenied || len(texts(blocks)) != 0 {
 			t.Fatalf("gate status = %v, answers = %q", gate.Status, texts(blocks))
 		}
 		if read := toolBlock(t, blocks, "read_file"); read.Status != agent.ToolCancelled {

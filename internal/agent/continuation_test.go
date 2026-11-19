@@ -11,6 +11,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 func TestContinuationHistoryBoundaries(t *testing.T) {
@@ -130,7 +131,7 @@ func TestResumeRequiresEveryHandlerToOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"write", "unknown", assistant.ApprovalRequestTool} {
+	for _, name := range []string{"write", "unknown", spec.ApprovalRequest} {
 		e := New(&scriptBackend{}, Config{PermissionsMode: ModeSkipPermissions})
 		e.continuation = continuationFromHistory([]assistant.Message{clientCallMsg("one", "input", `{}`), clientCallMsg("two", name, `{}`)})
 		if e.CanResumeTools(set) {

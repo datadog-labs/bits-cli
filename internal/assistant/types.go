@@ -381,11 +381,6 @@ const (
 	ContentClientToolResponse = "client_tool_response"
 )
 
-// ApprovalRequestTool is the name of the server-injected client_tool_call that
-// gates a backend write. It is never advertised in client_tools; the caller
-// answers it directly according to its own approval policy.
-const ApprovalRequestTool = "approval_request"
-
 const (
 	// ContentWidgetDef carries a Datadog dashboard widget definition (in the
 	// WidgetDef field): a query spec + styling, no data. It is every chart the
