@@ -36,6 +36,7 @@ type conversation struct {
 	turns    int         // user turns started, which index the next turn
 	turn     *scriptTurn // the latest turn; nil before the first
 	tasks    []*fakeTask // background tasks its turns started
+	live     liveState
 }
 
 // scriptTurn is everything needed to re-execute a turn: its source, or the
@@ -51,6 +52,7 @@ type scriptTurn struct {
 	ids         []string
 	snapshot    *sourceSnapshot
 	continueDir string
+	calls       []string // the client calls of its latest round
 }
 
 // conversation returns the conversation for id, creating it when unknown. An
@@ -79,6 +81,10 @@ func (f *Fake) conversation(id string) *conversation {
 func (f *Fake) startTurn(c *conversation, text string, fn starlark.Callable, turnContext *assistant.AssistantContext) scriptTurn {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return *f.startTurnLocked(c, text, fn, turnContext)
+}
+
+func (f *Fake) startTurnLocked(c *conversation, text string, fn starlark.Callable, turnContext *assistant.AssistantContext) *scriptTurn {
 	user := assistant.Message{Role: "user", MessageID: f.nextID(), Content: assistant.TextContent(text)}
 	if turnContext != nil && len(turnContext.Entities) > 0 {
 		user.ContextEntities, _ = json.Marshal(turnContext.Entities)
@@ -95,7 +101,7 @@ func (f *Fake) startTurn(c *conversation, text string, fn starlark.Callable, tur
 		continueDir: cmp.Or(f.ContinueDir, defaultContinueDir()),
 	}
 	c.turns++
-	return *c.turn
+	return c.turn
 }
 
 // scriptRoot returns the fixed root for a new turn. Capturing the current
@@ -116,22 +122,24 @@ func (f *Fake) scriptRoot() string {
 	return absolute
 }
 
-// resumeTurn records the responses as client_tool_response history messages,
-// appends them as the next round, and returns a copy of the turn.
-func (f *Fake) resumeTurn(c *conversation, rs []assistant.ClientToolResponse) (scriptTurn, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+// resumeTurnLocked records the responses as client_tool_response history
+// messages and appends them as the next round of the paused turn they
+// answer, which becomes the current turn. It returns nil when no turn paused
+// on them.
+func (f *Fake) resumeTurnLocked(c *conversation, rs []assistant.ClientToolResponse) *scriptTurn {
 	for _, r := range rs {
 		f.appendLocked(c, toolResponseMessage(f.nextID(), r))
 	}
-	if c.turn == nil {
-		return scriptTurn{}, false
+	i := pausedIndexLocked(c, rs)
+	switch {
+	case i < 0:
+		return nil
+	case i < len(c.live.paused):
+		c.turn = c.live.paused[i]
+		c.live.paused = slices.Delete(c.live.paused, i, i+1)
 	}
 	c.turn.results = append(c.turn.results, rs)
-	turn := *c.turn
-	turn.results = slices.Clone(turn.results)
-	turn.ids = slices.Clone(turn.ids)
-	return turn, true
+	return c.turn
 }
 
 // rememberID records an id that push_conversation() or task() returned in

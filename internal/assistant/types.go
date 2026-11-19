@@ -257,6 +257,22 @@ type MarkdownContent struct {
 	Content string `json:"content"`
 }
 
+// SteeredPrompt is a user prompt sent with answers to client calls a
+// stopped turn left unanswered, as one message: the answers, then the text.
+type SteeredPrompt struct {
+	Answers []ClientToolResponse
+	Text    string
+}
+
+func (p SteeredPrompt) MarshalJSON() ([]byte, error) {
+	items := make([]any, 0, len(p.Answers)+1)
+	for _, a := range p.Answers {
+		items = append(items, a)
+	}
+	items = append(items, MarkdownContent{Type: ContentMarkdownFragment, Content: p.Text})
+	return json.Marshal(items)
+}
+
 // ClientToolResponse is one entry in the message list used to answer a
 // client-side tool call (including the approval_request flow).
 type ClientToolResponse struct {
@@ -702,6 +718,20 @@ type TurnStatusPayload struct {
 	Status string
 }
 
+// ReplayKindFull is the replay_kind of a replay that held the whole
+// conversation.
+const ReplayKindFull = "full"
+
+// ReplayPayload carries the replay_complete marker.
+type ReplayPayload struct {
+	Kind string
+}
+
+// ReplayCompleteMessage is the marker that ends a full replay.
+func ReplayCompleteMessage() Message {
+	return AssistantMessage(ContentReplayComplete, Content{Type: ContentReplayComplete, Replay: &ReplayPayload{Kind: ReplayKindFull}})
+}
+
 // ToolPayload carries fields for all tool-related content types: tool_call,
 // client_tool_call, tool_call_started, tool_call_input_delta, tool_response,
 // client_tool_response.
@@ -789,6 +819,7 @@ type Content struct {
 	Memory     *MemoryContextPayload // memory_context
 	Stop       *StopPayload          // user_stop
 	TurnStatus *TurnStatusPayload    // turn_status
+	Replay     *ReplayPayload        // replay_complete
 	Compaction *CompactionPayload    // provider_compaction
 }
 
@@ -904,6 +935,7 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 		VendorPayload     string            `json:"vendor_payload"`
 		Summary           string            `json:"summary"`
 		Memories          []RetrievedMemory `json:"memories"`
+		ReplayKind        string            `json:"replay_kind"`
 	}
 	var a alias
 	if err := json.Unmarshal(data, &a); err != nil {
@@ -977,6 +1009,8 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 		c.Memory = &MemoryContextPayload{Memories: a.Memories}
 	case ContentTurnStatus:
 		c.TurnStatus = &TurnStatusPayload{Status: a.Status}
+	case ContentReplayComplete:
+		c.Replay = &ReplayPayload{Kind: a.ReplayKind}
 	case ContentProviderCompaction:
 		c.Compaction = &CompactionPayload{
 			Provider:      a.Provider,
