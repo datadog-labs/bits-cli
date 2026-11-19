@@ -490,6 +490,29 @@ func TestConversationItemShowsRelativeUpdateTimeInsteadOfID(t *testing.T) {
 	}
 }
 
+func TestActivity(t *testing.T) {
+	now := time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) *int64 { ms := now.Add(d).UnixMilli(); return &ms }
+	tests := []struct {
+		name    string
+		expires *int64
+		want    string
+	}{
+		{name: "private", want: "5 hours ago"},
+		{name: "shared", expires: at(24 * time.Hour), want: "shared · 5 hours ago"},
+		{name: "expired", expires: at(-time.Minute), want: "5 hours ago"},
+		{name: "expiring now", expires: at(0), want: "5 hours ago"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			summary := assistant.ConversationSummary{UpdatedAt: now.Add(-5 * time.Hour).UnixMilli(), SharedExpires: tt.expires}
+			if got := Activity(summary, now); got != tt.want {
+				t.Fatalf("Activity() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRelativeUpdatedAt(t *testing.T) {
 	now := time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC)
 	tests := []struct {

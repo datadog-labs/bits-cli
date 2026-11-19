@@ -139,7 +139,7 @@ func (r *resume) view(theme styles.Theme, width, visible int) string {
 func (r *resume) row(theme styles.Theme, width, index int) string {
 	summary := r.conversations[index]
 	return offerRow(theme, width, index == r.selected, conversations.SafeTitle(summary),
-		conversations.RelativeUpdatedAt(summary.UpdatedAt, r.now()))
+		conversations.Activity(summary, r.now()))
 }
 
 // offerRow is a marker and title on the left with aside flushed right, padded
