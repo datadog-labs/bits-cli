@@ -720,6 +720,40 @@ func TestDo_DoesNotRetryNonRetryableStatus(t *testing.T) {
 	}
 }
 
+func TestStopRetriesTransientFailures(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		statuses []int
+		want     error
+		attempts int32
+	}{
+		{name: "stopped", statuses: []int{http.StatusNoContent}, attempts: 1},
+		{name: "transient then stopped", statuses: []int{http.StatusBadGateway, http.StatusNoContent}, attempts: 2},
+		{name: "not permitted", statuses: []int{http.StatusForbidden}, want: ErrForbidden, attempts: 1},
+		{name: "keeps failing", statuses: []int{http.StatusGatewayTimeout}, want: ErrServer, attempts: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var n atomic.Int32
+			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/api/v2/assistant/conversation/cid/stop" {
+					t.Errorf("request = %s %s", r.Method, r.URL.Path)
+				}
+				i := min(int(n.Add(1)), len(test.statuses)) - 1
+				w.WriteHeader(test.statuses[i])
+			})
+			c.MaxRetries = 2
+			c.RetryBaseDelay = time.Millisecond
+			err := c.Stop(context.Background(), "cid")
+			if (test.want == nil) != (err == nil) || test.want != nil && !errors.Is(err, test.want) {
+				t.Fatalf("err = %v, want %v", err, test.want)
+			}
+			if got := n.Load(); got != test.attempts {
+				t.Errorf("attempts = %d, want %d", got, test.attempts)
+			}
+		})
+	}
+}
+
 func TestSend_DoesNotRetry(t *testing.T) {
 	// The streaming POST must never retry: the API has no idempotency key, so a
 	// retried turn would be recorded twice.
