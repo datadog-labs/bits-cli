@@ -225,7 +225,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = m.clearDraftOrArmQuit()
 		case m.frame.tooSmall && isUserInput(msg):
 			// Only a resize hint is visible, so input must not drive a hidden
-			// surface. System and engine messages still flow.
+			// surface. System and engine messages still flow. Dismissing a
+			// command prompt confirms nothing, and it may be what does not fit.
+			if m.commandPrompt != nil && isDismissKey(msg) {
+				m.commandPrompt = nil
+			}
 		case m.mode == ModeChat && m.exitCard.open && isUserInput(msg):
 			cmd = m.updateExitCard(msg)
 		default:
@@ -239,6 +243,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	loadSkillMenu, loadOffer := m.syncClientSkills(), m.syncResume()
 	m.relayout()
 	return m, tea.Batch(cmd, loadSkillMenu, loadOffer, m.syncWidgets(), m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape(), m.syncTerminalStatus())
+}
+
+func isDismissKey(msg tea.Msg) bool {
+	key, ok := msg.(tea.KeyPressMsg)
+	return ok && (key.String() == "esc" || key.String() == "ctrl+x")
 }
 
 func isCtrlC(msg tea.Msg) bool {
@@ -334,6 +343,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.ev.State.Version > m.state.Version {
 				m.state = msg.ev.State
 				m.syncTranscript()
+				m.syncStatus()
 			}
 		case m.op.run != 0 && msg.ev.Run == m.op.run:
 			// Every run is an operation this model started, so other runs'
@@ -350,6 +360,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case renameResultMsg:
 		return m, m.applyRenameResult(msg)
+
+	case shareResultMsg:
+		return m, m.applyShareResult(msg)
 
 	case forkResultMsg:
 		return m, m.applyForkResult(msg)

@@ -10,7 +10,7 @@ import (
 )
 
 // operation is the one exclusive session operation: a turn (resumed client
-// tools included), a history restore, a fork, a rename, or logout. Admission
+// tools included), a history restore, a fork, a rename, a sharing change, or logout. Admission
 // and follow-ups read this state; chatPhase only drives what the chat displays.
 type operation struct {
 	kind   opKind
@@ -30,6 +30,7 @@ const (
 	opIdle    opKind = iota
 	opTurn           // a user turn or resumed client tools
 	opRename         // rename the current saved conversation
+	opShare          // share the current saved conversation or make it private
 	opFork           // create and load a conversation copy in place
 	opRestore        // conversation history loading at startup
 	opLogout         // credential deletion; the session quits once it succeeds

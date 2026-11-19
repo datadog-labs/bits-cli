@@ -62,8 +62,11 @@ func (m *Model) View() tea.View {
 		if m.frame.tooSmall {
 			v.MouseMode = tea.MouseModeNone
 			message := "Resize terminal to use Bits"
-			if m.quitConfirm.armed {
+			switch {
+			case m.quitConfirm.armed:
 				message = quitConfirmHint
+			case m.commandPrompt != nil:
+				message = "Resize terminal or press esc"
 			}
 			message = ansi.Truncate(message, max(1, m.width), "")
 			v.Content = lipgloss.Place(max(1, m.width), max(1, m.height), lipgloss.Center, lipgloss.Center, message)
@@ -415,6 +418,9 @@ func (m *Model) promptPlaceholder() string {
 	}
 	if m.op.kind == opRename {
 		return "Renaming…"
+	}
+	if m.op.kind == opShare {
+		return "Sharing…"
 	}
 	switch m.chatPhase {
 	case chat.PhaseLoading:

@@ -31,6 +31,7 @@ const (
 	commandResume
 	commandFork
 	commandRename
+	commandShare
 	commandStatus
 	commandCopy
 	commandExport
@@ -54,6 +55,7 @@ type commandDefinition struct {
 var commandDefinitions = []commandDefinition{
 	{id: commandFork, name: "fork", aliases: []string{"branch"}, activeOperationPolicy: commandRejectedDuringOperation, description: "fork this conversation and continue in the copy"},
 	{id: commandRename, name: "rename", activeOperationPolicy: commandRejectedDuringOperation, description: "rename this conversation"},
+	{id: commandShare, name: "share", activeOperationPolicy: commandRejectedDuringOperation, description: "share this conversation with your organization"},
 	{
 		id:                    commandNew,
 		name:                  "new",
@@ -242,6 +244,8 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 		return m, m.startFork(argument)
 	case commandRename:
 		return m, m.startRename(argument)
+	case commandShare:
+		return m, m.startShare(argument)
 	case commandSkillsLibrary:
 		return m, m.openSkillsLibrary()
 	case commandResume:
