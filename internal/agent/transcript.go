@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"cmp"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -22,7 +24,17 @@ type Transcript struct {
 	index         map[BlockID]int // id -> position in blocks
 	accumulatorID BlockID
 	accumulator   *strings.Builder // pointer-owned: Builder must not be copied after use
-	userSeq       int              // monotonic id source for local user messages
+	prompts       int              // user text prompts the conversation holds
+	turnNumber    int              // user messages so far, see Block.TurnNumber
+	// unsent are prompts shown here that the conversation does not hold
+	// yet, in order; they take the next places.
+	unsent []unsentPrompt
+	// sentTurns maps an unsent prompt's token to its turn number once the
+	// conversation holds it, and answeredTurns a client call's id to the turn
+	// number of its answer.
+	sentTurns     map[int]int
+	answeredTurns map[string]int
+	lastToken     int
 	// openStream tracks the currently streaming (incomplete) text/reasoning
 	openStream BlockID
 	hasOpen    bool
@@ -48,8 +60,18 @@ func NewTranscript() *Transcript {
 	}
 }
 
-// Blocks returns the underlying slice. Callers must treat it as read-only.
-func (t *Transcript) Blocks() []Block { return t.blocks }
+// Blocks returns the conversation's blocks, then the prompts it does not
+// hold yet. Callers must treat it as read-only.
+func (t *Transcript) Blocks() []Block {
+	if len(t.unsent) == 0 {
+		return t.blocks
+	}
+	out := slices.Clone(t.blocks)
+	for _, u := range t.unsent {
+		out = append(out, u.block)
+	}
+	return out
+}
 
 func (t *Transcript) MarkAwaitingApproval(id string, prompt ApprovalPrompt) (Block, bool) {
 	p := prompt
@@ -111,6 +133,20 @@ func (t *Transcript) MarkToolExecuted(id string, result ToolResult) (Block, bool
 	})
 }
 
+// answered reports whether the conversation shows a response to call id.
+func (t *Transcript) answered(id string) bool {
+	i, ok := t.index[BlockID{Scope: ScopeTool, Key: id}]
+	return ok && t.blocks[i].Tool != nil && t.blocks[i].Tool.Responded
+}
+
+// markAnswered records that the conversation received the answer to the
+// client call id, which this client sent.
+func (t *Transcript) markAnswered(id string) {
+	if !t.answered(id) {
+		t.markTool(id, func(tool *ToolBlock) { tool.Responded = true })
+	}
+}
+
 func (t *Transcript) markTool(id string, mutate func(*ToolBlock)) (Block, bool) {
 	i, ok := t.index[BlockID{Scope: ScopeTool, Key: id}]
 	if !ok || t.blocks[i].Tool == nil {
@@ -123,34 +159,137 @@ func (t *Transcript) markTool(id string, mutate func(*ToolBlock)) (Block, bool) 
 	return t.blocks[i], true
 }
 
-// AppendUser adds a user message with a locally generated unique id and returns
-// the created block. User blocks are complete on creation (never streamed).
+// AppendUser shows a user prompt the conversation does not hold yet, keyed
+// by the place it takes, and returns its block. Unsent prompts are kept
+// apart from the conversation's content and shown after it, as in the web
+// client: content streaming meanwhile lands before them, and a replay never
+// shows one twice. User blocks are complete on creation (never streamed).
 // Context is retained without copying; callers must not mutate its slice or
 // any nested data after this call.
-func (t *Transcript) AppendUser(text string, context []assistant.ContextEntity) Block {
-	t.userSeq++
+func (t *Transcript) AppendUser(text string, context []assistant.ContextEntity) (Block, int) {
+	t.lastToken++
 	b := Block{
-		ID:       BlockID{Scope: ScopeLocal, Key: strconv.Itoa(t.userSeq)},
-		Role:     assistant.RoleUser,
-		Kind:     assistant.KindText,
-		Markdown: &assistant.MarkdownPayload{Content: text},
-		Complete: true,
-		Context:  context,
+		ID:         promptID(t.prompts + len(t.unsent) + 1),
+		Role:       assistant.RoleUser,
+		Kind:       assistant.KindText,
+		Markdown:   &assistant.MarkdownPayload{Content: text},
+		Complete:   true,
+		Context:    context,
+		Run:        t.run,
+		TurnNumber: t.turnNumber,
 	}
+	t.unsent = append(t.unsent, unsentPrompt{block: b, token: t.lastToken})
+	return b, t.lastToken
+}
+
+// DropUnsent removes the prompt AppendUser named token, if the
+// conversation does not hold it, and reports whether it did.
+func (t *Transcript) DropUnsent(token int) bool {
+	k := slices.IndexFunc(t.unsent, func(u unsentPrompt) bool { return u.token == token })
+	if k < 0 {
+		return false
+	}
+	t.unsent = slices.Delete(t.unsent, k, k+1)
+	t.renumberUnsent()
+	return true
+}
+
+// Commit places the unsent prompt AppendUser named token next in the
+// conversation, as when the response it gets is the conversation's content.
+func (t *Transcript) Commit(token int) {
+	k := slices.IndexFunc(t.unsent, func(u unsentPrompt) bool { return u.token == token })
+	if k < 0 {
+		return
+	}
+	b := t.unsent[k].block
+	id, _ := t.nextPrompt(b.Markdown.Content)
+	b.ID = id
+	b.Rev++
 	t.push(b)
-	t.closePrior(b)
-	return b
+}
+
+// renumberUnsent gives the unsent prompts the places after the prompts the
+// conversation holds.
+func (t *Transcript) renumberUnsent() {
+	for k := range t.unsent {
+		b := &t.unsent[k].block
+		if id := promptID(t.prompts + k + 1); b.ID != id {
+			b.ID = id
+			b.Rev++
+		}
+	}
+}
+
+// unsentPrompt is a prompt shown before the conversation holds it. token
+// names it for PromptTurn, since its place, and so its id, can change.
+type unsentPrompt struct {
+	block Block
+	token int
+}
+
+func (u unsentPrompt) text() string { return u.block.Markdown.Content }
+
+func promptID(n int) BlockID { return BlockID{Scope: ScopePrompt, Key: strconv.Itoa(n)} }
+
+// PromptTurn reports the turn number of the prompt AppendUser named token,
+// once the conversation holds it.
+func (t *Transcript) PromptTurn(token int) (int, bool) {
+	n, ok := t.sentTurns[token]
+	return n, ok
+}
+
+// AnswerTurn reports the turn number of the answer to a client call, once
+// the conversation holds it.
+func (t *Transcript) AnswerTurn(callID string) (int, bool) {
+	n, ok := t.answeredTurns[callID]
+	return n, ok
+}
+
+// nextPrompt places a prompt the conversation holds, and returns the unsent
+// prompt it confirms, if any: the first with the same text, even past one
+// that never arrived. The unsent ones keep the places after.
+func (t *Transcript) nextPrompt(text string) (BlockID, *Block) {
+	t.prompts++
+	id := promptID(t.prompts)
+	var matched *Block
+	if k := slices.IndexFunc(t.unsent, func(u unsentPrompt) bool { return u.text() == text }); k >= 0 {
+		u := t.unsent[k]
+		t.unsent = slices.Delete(t.unsent, k, k+1)
+		if t.sentTurns == nil {
+			t.sentTurns = map[int]int{}
+		}
+		t.sentTurns[u.token] = t.turnNumber
+		matched = &u.block
+	}
+	t.renumberUnsent()
+	return id, matched
 }
 
 // AppendMessage folds a wire message into the transcript and returns the block
 // it created or updated, plus whether one was produced.
 func (t *Transcript) AppendMessage(msg assistant.Message) (Block, bool) {
+	if assistant.RoleOf(msg.Role) == assistant.RoleUser {
+		t.turnNumber++
+	}
+	if msg.IsError {
+		// The server reuses the answer's message ID for the failure; it is
+		// not part of the answer.
+		msg.MessageID += "#error"
+	}
 	b, ok := t.fold(msg)
 	if ok {
+		if msg.IsError {
+			i := t.index[b.ID]
+			t.blocks[i].Error = true
+			b = t.blocks[i]
+		}
 		t.closePrior(b)
 	}
 	return b, ok
 }
+
+// TurnNumber is the number of user messages folded so far.
+func (t *Transcript) TurnNumber() int { return t.turnNumber }
 
 // fold routes a wire message to the mutator for its kind.
 func (t *Transcript) fold(msg assistant.Message) (Block, bool) {
@@ -190,6 +329,18 @@ func (t *Transcript) appendMarkdown(msg assistant.Message) (Block, bool) {
 		return Block{}, false
 	}
 	id := BlockIDOf(msg)
+	if assistant.RoleOf(msg.Role) == assistant.RoleUser {
+		var local *Block
+		if id, local = t.nextPrompt(p.Content); local != nil {
+			// The block shown while unsent keeps what only this process
+			// knows, such as the context it was sent with.
+			b := *local
+			b.ID = id
+			b.Rev++
+			t.push(b)
+			return t.blocks[t.index[id]], true
+		}
+	}
 	if i, ok := t.index[id]; ok {
 		acc := t.accumulatorFor(id, t.blocks[i].Markdown.Content)
 		_, _ = acc.WriteString(p.Content)
@@ -294,6 +445,13 @@ func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 
 	id := BlockIDOf(msg)
 	tc := ToolBlockOf(msg.Content.Tool)
+	if msg.Content.Type == assistant.ContentClientToolResponse {
+		tc.Responded = true
+		if t.answeredTurns == nil {
+			t.answeredTurns = map[string]int{}
+		}
+		t.answeredTurns[tp.ToolCallID] = t.turnNumber
+	}
 	clientSide, sided := toolSide(msg)
 	if sided {
 		tc.IsClientSide = clientSide
@@ -345,6 +503,14 @@ func (t *Transcript) upsertTool(msg assistant.Message) (Block, bool) {
 		}
 		if msg.Content.Type == assistant.ContentToolCallInputDelta {
 			t.inputToolPreview(&merged, tp.ToolCallID, tp.PartialJSON)
+		}
+		if msg.Content.Type == assistant.ContentClientToolResponse {
+			merged.Responded = true
+		}
+		if msg.Content.Type == assistant.ContentClientToolCall && merged.Responded {
+			// A call asked again is a new call of the current turn.
+			merged.Responded = false
+			t.blocks[i].TurnNumber = t.turnNumber
 		}
 		t.blocks[i].Tool = &merged
 		t.revise(i)
@@ -546,10 +712,99 @@ func (t *Transcript) supersede(prev *Transcript) {
 	}
 }
 
-// revise records a change to the block at i.
+// carryLocal keeps what only this process knows about prev's blocks on the
+// matching blocks of t, a replay replacing prev: presentation state, a local
+// tool detail, a parked approval, and outcomes the wire cannot express. While
+// the replay's turn is running, its tools' states are the conversation's.
+func (t *Transcript) carryLocal(prev *Transcript, running bool) {
+	for i, b := range t.blocks {
+		j, ok := prev.index[b.ID]
+		if !ok {
+			continue
+		}
+		// The run that changed a block is local knowledge too.
+		t.blocks[i].Run = prev.blocks[j].Run
+		if b.Tool == nil || prev.blocks[j].Tool == nil {
+			continue
+		}
+		old, tool := prev.blocks[j].Tool, *b.Tool
+		tool.RenderState = old.RenderState
+		tool.Approval = old.Approval
+		tool.Detail = cmp.Or(tool.Detail, old.Detail)
+		switch {
+		case running && old.Status == ToolCancelled:
+			// A local cancel does not end a call the turn still runs.
+		case old.Status == ToolDenied, old.Status == ToolCancelled,
+			!tool.Status.IsTerminal() && old.Status.IsTerminal(),
+			old.Status == ToolAwaitingApproval && !tool.Responded:
+			tool.Status = old.Status
+			tool.Output = cmp.Or(old.Output, tool.Output)
+		}
+		t.blocks[i].Tool = &tool
+	}
+}
+
+// noteAnswer counts a client call's answer without showing it, when it
+// answers a call not shown.
+func (t *Transcript) noteAnswer(msg assistant.Message) {
+	if msg.Content.Tool == nil {
+		return
+	}
+	if _, shown := t.index[BlockID{Scope: ScopeTool, Key: msg.Content.Tool.ToolCallID}]; shown {
+		t.AppendMessage(msg)
+		return
+	}
+	t.turnNumber++
+	if t.answeredTurns == nil {
+		t.answeredTurns = map[string]int{}
+	}
+	t.answeredTurns[msg.Content.Tool.ToolCallID] = t.turnNumber
+}
+
+// keepUnsent carries prev's prompt bookkeeping to t, a replay replacing
+// prev: the turns of prompts prev saw sent, and the prompts t does not hold
+// yet, which it still shows after its content.
+func (t *Transcript) keepUnsent(prev *Transcript) {
+	for token, n := range prev.sentTurns {
+		if t.sentTurns == nil {
+			t.sentTurns = map[int]int{}
+		}
+		t.sentTurns[token] = n
+	}
+	t.lastToken = prev.lastToken
+	// The prompts the replay holds beyond those prev did are candidates: the
+	// first with an unsent prompt's text is that prompt, sent, wherever the
+	// replay places it.
+	claimed := map[int]bool{}
+	for _, u := range prev.unsent {
+		sent := false
+		for _, b := range t.blocks {
+			n, err := strconv.Atoi(b.ID.Key)
+			if b.ID.Scope != ScopePrompt || err != nil || n <= prev.prompts || claimed[n] || b.Markdown == nil || b.Markdown.Content != u.text() {
+				continue
+			}
+			claimed[n], sent = true, true
+			if t.sentTurns == nil {
+				t.sentTurns = map[int]int{}
+			}
+			t.sentTurns[u.token] = b.TurnNumber
+			break
+		}
+		if !sent {
+			t.unsent = append(t.unsent, u)
+		}
+	}
+	t.renumberUnsent()
+}
+
+// revise records a change to the block at i. A change outside any run, such
+// as a result the conversation shows after the run's response ended, keeps
+// the block the run's.
 func (t *Transcript) revise(i int) {
 	t.blocks[i].Rev++
-	t.blocks[i].Run = t.run
+	if t.run != 0 {
+		t.blocks[i].Run = t.run
+	}
 }
 
 func (t *Transcript) push(b Block) {
@@ -559,6 +814,7 @@ func (t *Transcript) push(b Block) {
 		panic("agent: push of duplicate block id " + b.ID.String())
 	}
 	b.Run = t.run
+	b.TurnNumber = t.turnNumber
 	t.index[b.ID] = len(t.blocks)
 	t.blocks = append(t.blocks, b)
 }

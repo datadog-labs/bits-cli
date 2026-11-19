@@ -39,8 +39,10 @@ type List struct {
 
 	items   []agent.Block
 	notices []NoticeItem
-	view    []presentationItem
-	sty     Styles
+	// status is the live row drawn after everything else, if any.
+	status *NoticeItem
+	view   []presentationItem
+	sty    Styles
 
 	// header is pre-rendered content occupying the document's first rows. It
 	// becomes a synthetic presentation item so the scroll, document-coordinate
@@ -987,8 +989,28 @@ func (l *List) ScrollByChanged(lines int) bool {
 
 // present is the view: the transcript's presentation, less the children of
 // closed groups that are no longer working.
+// SetStatus shows n as the transcript's last row, below every block and
+// notice, or removes the row when n is empty.
+func (l *List) SetStatus(n Notice) {
+	if n.Empty() == (l.status == nil) && (l.status == nil || l.status.Notice.Level == n.Level && l.status.Notice.Text == n.Text) {
+		return
+	}
+	l.status = nil
+	if !n.Empty() {
+		l.status = &NoticeItem{Notice: n}
+	}
+	l.relayout()
+}
+
 func (l *List) present() []presentationItem {
 	items := buildPresentationWithNotices(l.header, l.items, l.notices)
+	if l.status != nil {
+		items = append(items, presentationItem{
+			id:   agent.BlockID{Scope: agent.ScopeLocal, Key: "\x00status"},
+			rev:  uint64(l.status.Notice.Level) + headerRevision(l.status.Notice.Text),
+			kind: itemNotice, start: headerSentinel, end: headerSentinel, notice: l.status,
+		})
+	}
 	if live := l.liveReasoning(items); live >= 0 {
 		items[live].live = true
 	}

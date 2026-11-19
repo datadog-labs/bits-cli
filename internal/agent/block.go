@@ -7,10 +7,15 @@ import "github.com/datadog-labs/bits-cli/internal/assistant"
 type BlockScope int
 
 const (
-	ScopeLocal   BlockScope = iota // client-minted: user messages, which have no wire id
+	ScopeLocal   BlockScope = iota // client-minted rows outside the conversation
 	ScopeMessage                   // keyed by Message.MessageID
 	ScopeTool                      // keyed by ToolPayload.ToolCallID
 	ScopeCopied                    // frozen block from the source conversation, keyed by its original BlockID.String()
+	// ScopePrompt keys a user's text prompt by its 1-based place among the
+	// conversation's prompts. A prompt's wire id differs between the copy
+	// shown live and the saved one, but its place does not, so one prompt
+	// keeps one id whether it was typed here, replayed, or loaded.
+	ScopePrompt
 )
 
 // ToolStatus is the lifecycle state of a tool block.
@@ -79,6 +84,9 @@ type ToolBlock struct {
 	RenderState  any
 	IsClientSide bool
 	Approval     *ApprovalPrompt
+	// Responded records that the conversation holds the call's client tool
+	// response, so it must not run again.
+	Responded bool
 }
 
 // ToolBlockOf builds the aggregated view of a tool content block.
@@ -120,6 +128,11 @@ type Block struct {
 	// Run is the run that last changed the block: 0 if none did, as for
 	// restored history. It tells a run's changes apart wherever they sit.
 	Run RunID
+	// TurnNumber is the number of user messages, prompts and tool answers,
+	// up to and including the one whose turn produced the block.
+	TurnNumber int
+	// Error marks a block that reports the turn failed.
+	Error bool
 
 	Markdown  *assistant.MarkdownPayload      // KindText: assistant answer or user prompt
 	Thinking  *assistant.ThinkingPayload      // KindReasoning: model thinking
@@ -141,6 +154,15 @@ type BlockID struct {
 	Scope BlockScope
 	Key   string
 	Kind  assistant.ContentKind
+}
+
+// Answer returns the assistant's words a block holds: never a failure the
+// conversation reports.
+func (b Block) Answer() (string, bool) {
+	if b.Role != assistant.RoleAssistant || b.Kind != assistant.KindText || b.Error || b.Markdown == nil {
+		return "", false
+	}
+	return b.Markdown.Content, true
 }
 
 func (b Block) ToolCallID() string {
@@ -177,6 +199,8 @@ func (id BlockID) String() string {
 		return "tool:" + id.Key
 	case ScopeMessage:
 		return "msg:" + id.Key + "#" + id.Kind.String()
+	case ScopePrompt:
+		return "prompt:" + id.Key
 	default:
 		return "local:" + id.Key
 	}

@@ -75,10 +75,11 @@ func exportTurn(block agent.Block, userLabel string) string {
 	case assistant.RoleAssistant:
 		switch block.Kind {
 		case assistant.KindText:
-			if block.Markdown == nil {
+			answer, ok := block.Answer()
+			if !ok {
 				return ""
 			}
-			if body := strings.TrimSpace(ansi.Strip(block.Markdown.Content)); body != "" {
+			if body := strings.TrimSpace(ansi.Strip(answer)); body != "" {
 				return withSpeaker("Bits", body)
 			}
 		case assistant.KindWidget:

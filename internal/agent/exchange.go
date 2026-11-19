@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -30,25 +31,47 @@ type DuplexBackend interface {
 type exchange interface {
 	run(ctx context.Context, emit func(exchangeEvent) bool) (conversation string, err error)
 	answer(assistant.ClientToolResponse)
+	withdraw(id string)
 	final() bool
 	stop()
 }
 
 // exchangeEvent is one backend fact, applied field by field. Only execute
-// makes a client call run: content alone, whatever its type, never does.
+// and delivered make a client call run: content alone, whatever its type, never does.
 type exchangeEvent struct {
 	// round starts this backend send, 1-based. Every send is announced
 	// before it is made, so a turn cancelled earlier stays outside any round.
 	round        int
-	conversation string // server-assigned conversation ID
+	conversation string // the conversation's ID, once known or changed
 	title        string // the conversation's newly saved title
 	message      *assistant.Message
 	execute      []ToolCall // a batch, dispatched at once
+	// delivered are calls a send's response carried, run as they arrive.
+	delivered []ToolCall
+	// accepted reports the round's request was delivered.
+	accepted bool
+	// answered are the calls the round's request delivered answers to.
+	answered []string
+	// broken reports the round's response broke before the turn ended: the
+	// calls it could not deliver are offered once the conversation shows
+	// them.
+	broken bool
 	// err fails the turn at once, before run returns: the exchange cannot
 	// continue, so its running calls must stop rather than await transport
 	// cleanup.
 	err error
 }
+
+// sendFailure is a request that failed before any response: the
+// conversation may or may not hold its message. answers are the calls it
+// answered, if it was not the turn's prompt.
+type sendFailure struct {
+	answers []string
+	err     error
+}
+
+func (f *sendFailure) Error() string   { return f.err.Error() }
+func (f *sendFailure) Unwrap() []error { return []error{ErrUndelivered, f.err} }
 
 // backendError marks a failure at the Assistant backend boundary.
 type backendError struct{ error }
@@ -56,7 +79,12 @@ type backendError struct{ error }
 func (e backendError) Unwrap() error { return e.error }
 
 // roundsExchange sends one request per round: the user message, then the
-// answers to each round's client calls, which the backend pauses on.
+// answers to each round's client calls. A send is a write: the round's
+// content comes from the conversation subscription. The client calls it
+// runs are only those its own request's response delivers, since that
+// response reaches only this client and is never replayed; the
+// subscription, which every session sees and which replays, never starts a
+// call.
 type roundsExchange struct {
 	backend Backend
 	message any
@@ -64,51 +92,208 @@ type roundsExchange struct {
 	resumed []ToolCall // answered in the first round, instead of sending message
 
 	mu       sync.Mutex
+	open     map[string]bool // the round's calls still to answer
+	order    []string        // the round's calls, in the order they came
 	answered []assistant.ClientToolResponse
 	stopped  bool
 	ready    chan struct{}
+	// follows is false for a backend without a conversation subscription,
+	// such as the multi-agent one sending a turn it cannot run: its send's
+	// own response is then the round's content.
+	follows bool
 }
 
-func newRoundsExchange(backend Backend, message any, opts assistant.SendOptions, resumed []ToolCall) *roundsExchange {
-	return &roundsExchange{backend: backend, message: message, opts: opts, resumed: resumed, ready: make(chan struct{}, 1)}
+func newRoundsExchange(backend Backend, message any, opts assistant.SendOptions, resumed []ToolCall, follows bool) *roundsExchange {
+	return &roundsExchange{
+		backend: backend, message: message, opts: opts, resumed: resumed, open: map[string]bool{},
+		ready: make(chan struct{}, 1), follows: follows,
+	}
 }
 
 func (x *roundsExchange) run(ctx context.Context, emit func(exchangeEvent) bool) (string, error) {
-	message, opts, calls := x.message, x.opts, x.resumed
-	for round := 1; round <= maxTurns; round++ {
+	message, opts := x.message, x.opts
+	var answers []string // the calls the round's send answers
+	if x.resumed != nil {
+		x.expect(ids(x.resumed))
+		if !emit(exchangeEvent{round: 1}) || !emit(exchangeEvent{execute: x.resumed}) {
+			return opts.ConversationID, ctx.Err()
+		}
+		responses, err := x.collect(ctx)
+		if err != nil || len(responses) == 0 {
+			return opts.ConversationID, err
+		}
+		message = responses
+		for _, r := range responses {
+			answers = append(answers, r.ToolCallID)
+		}
+	}
+	first := 1
+	if x.resumed != nil {
+		first = 2
+	}
+	for round := first; round <= maxTurns; round++ {
 		if !emit(exchangeEvent{round: round}) {
 			return opts.ConversationID, ctx.Err()
 		}
-		if calls == nil {
-			x.mu.Lock()
-			if x.stopped {
-				// The pending context waits for a request whose reply is shown.
-				opts.Context, opts.CustomUserContext = nil, ""
+		if opts.ConversationID == "" {
+			// A new conversation gets its id here, so it is known before the
+			// first response and every surface has a resumable handle even if
+			// the send fails.
+			opts.ConversationID = newConversationID()
+			if !emit(exchangeEvent{conversation: opts.ConversationID}) {
+				return opts.ConversationID, ctx.Err()
 			}
-			x.mu.Unlock()
-			var err error
-			if calls, err = x.send(ctx, message, &opts, emit); err != nil || len(calls) == 0 {
-				return opts.ConversationID, err
-			}
-			// Only the turn's first request carries its context.
+		}
+		x.mu.Lock()
+		if x.stopped {
+			// The pending context waits for a request whose reply is shown.
 			opts.Context, opts.CustomUserContext = nil, ""
 		}
-		answers, err := x.collect(ctx, calls, emit)
+		x.mu.Unlock()
+		var err error
+		if x.follows {
+			err = x.send(ctx, message, opts, answers, emit)
+		} else {
+			err = x.sendFolding(ctx, message, opts, emit)
+		}
 		if err != nil {
 			return opts.ConversationID, err
 		}
-		message, calls = answers, nil
+		if len(answers) > 0 && !emit(exchangeEvent{answered: answers}) {
+			return opts.ConversationID, ctx.Err()
+		}
+		// Only the turn's first request carries its context.
+		opts.Context, opts.CustomUserContext = nil, ""
+		responses, err := x.collect(ctx)
+		if err != nil || len(responses) == 0 {
+			return opts.ConversationID, err
+		}
+		message, answers = responses, nil
+		for _, r := range responses {
+			answers = append(answers, r.ToolCallID)
+		}
 	}
 	return opts.ConversationID, ErrMaxTurns
 }
 
-// send streams one request and returns the client calls it paused on. A
-// message flagged as an error fails the round once the stream ends, so its
-// trailing usage and conversation ID still arrive and its calls never run.
-func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.SendOptions, emit func(exchangeEvent) bool) ([]ToolCall, error) {
+func ids(calls []ToolCall) []string {
+	out := make([]string, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, c.ID)
+	}
+	return out
+}
+
+// expect adds calls the round must answer before its next request.
+func (x *roundsExchange) expect(ids []string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	for _, id := range ids {
+		x.open[id] = true
+		x.order = append(x.order, id)
+	}
+}
+
+// send writes one request and runs the client calls its response delivers,
+// as they arrive; the round's content comes from the conversation
+// subscription. The round ends when the response does. A response that
+// breaks leaves the turn running on the server, and the calls it could not
+// deliver wait for an explicit approval instead of running by themselves.
+func (x *roundsExchange) send(ctx context.Context, message any, opts assistant.SendOptions, answers []string, emit func(exchangeEvent) bool) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	posted := make(chan error, 1)
+	var responded atomic.Bool
+	var batch []ToolCall // calls delivered and not yet handed out, guarded by x.mu
+	var saved string     // a title update not yet handed out, guarded by x.mu
+	var failure error    // the turn's error a flagged message reported, guarded by x.mu
+	arrived := make(chan struct{}, 1)
+	// flush hands out what the response delivered, in arrival order. Each
+	// call runs whichever session's turn made it: the response is this
+	// client's to answer.
+	accepted := false
+	flush := func() bool {
+		x.mu.Lock()
+		calls, title := batch, saved
+		batch, saved = nil, ""
+		x.mu.Unlock()
+		if responded.Load() && !accepted {
+			accepted = true
+			if !emit(exchangeEvent{accepted: true}) {
+				return false
+			}
+		}
+		return (len(calls) == 0 && title == "") || emit(exchangeEvent{delivered: calls, title: title})
+	}
+	go func() {
+		_, err := x.backend.Send(ctx, message, opts, func(response assistant.AssistantResponse) error {
+			// Emitting here could block the response behind the engine; the
+			// round hands out what arrived from its own loop.
+			responded.Store(true)
+			x.mu.Lock()
+			if err := response.Data.Attributes.StructuredMessage.Err(); err != nil {
+				failure = cmp.Or(failure, err)
+			}
+			if title := response.Data.Attributes.ConversationTitle; title != "" {
+				saved = title
+			} else if msg := response.Data.Attributes.StructuredMessage; msg.Content.Type == assistant.ContentClientToolCall && msg.BackgroundTaskID == nil {
+				call := toolCallOf(msg.Content)
+				x.open[call.ID] = true
+				x.order = append(x.order, call.ID)
+				batch = append(batch, call)
+			}
+			x.mu.Unlock()
+			signal(arrived)
+			return nil
+		})
+		posted <- err
+	}()
+	for {
+		select {
+		case <-arrived:
+			if !flush() {
+				return ctx.Err()
+			}
+		case err := <-posted:
+			if !flush() || ctx.Err() != nil {
+				return ctx.Err()
+			}
+			switch {
+			case err == nil:
+				if !accepted && !emit(exchangeEvent{accepted: true}) {
+					return ctx.Err()
+				}
+				x.mu.Lock()
+				defer x.mu.Unlock()
+				// The backend answered, so the failure is the turn's.
+				return failure
+			case errors.Is(err, assistant.ErrStreamBroken):
+				// The turn runs on; the conversation shows the rest.
+				if !emit(exchangeEvent{broken: true}) {
+					return ctx.Err()
+				}
+				return nil
+			case !responded.Load():
+				// Never resent on its own: the conversation shows whether
+				// it arrived, and the user decides to send it again.
+				return backendError{&sendFailure{answers: answers, err: err}}
+			default:
+				return backendError{err}
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// sendFolding streams one request whose response is the round's content,
+// and runs the client calls it pauses on.
+// A message flagged as an error fails the round once the stream ends, so its
+// trailing usage still arrives and its calls never run.
+func (x *roundsExchange) sendFolding(ctx context.Context, message any, opts assistant.SendOptions, emit func(exchangeEvent) bool) error {
 	var calls []ToolCall
 	var failure error
-	id, err := x.backend.Send(ctx, message, *opts, func(response assistant.AssistantResponse) error {
+	_, err := x.backend.Send(ctx, message, opts, func(response assistant.AssistantResponse) error {
 		ev := exchangeEvent{title: response.Data.Attributes.ConversationTitle}
 		if ev.title == "" {
 			msg := response.Data.Attributes.StructuredMessage
@@ -116,10 +301,8 @@ func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.
 				calls = append(calls, toolCallOf(msg.Content))
 			}
 			if err := msg.Err(); err != nil {
+				// The transcript shows the message apart from the answer.
 				failure = cmp.Or(failure, err)
-				// The server reuses the answer's message ID, so its text would
-				// read as part of the answer; the turn's error reports it.
-				msg.Content = assistant.Content{}
 			}
 			ev.message = &msg
 		}
@@ -128,47 +311,55 @@ func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.
 		}
 		return nil
 	})
-	// Send may discover a server-assigned ID before a later stream failure or
-	// cancellation. Report it so every surface has a resumable handle.
-	if id != "" {
-		opts.ConversationID = id
-		if !emit(exchangeEvent{conversation: id}) && err == nil {
-			err = ctx.Err()
-		}
-	}
 	if err != nil {
-		return nil, backendError{err}
+		return backendError{err}
 	}
-	// The backend answered, so the failure is the turn's, not the backend's.
-	return calls, failure
+	if !emit(exchangeEvent{accepted: true}) {
+		return ctx.Err()
+	}
+	if failure != nil {
+		// The backend answered, so the failure is the turn's, not the backend's.
+		return failure
+	}
+	x.expect(ids(calls))
+	if len(calls) > 0 && !emit(exchangeEvent{execute: calls}) {
+		return ctx.Err()
+	}
+	return nil
 }
 
-// collect hands out a round's calls and waits until every one is answered,
-// returning the answers in call order.
-func (x *roundsExchange) collect(ctx context.Context, calls []ToolCall, emit func(exchangeEvent) bool) ([]assistant.ClientToolResponse, error) {
-	if !emit(exchangeEvent{execute: calls}) {
-		return nil, ctx.Err()
-	}
-	answers := make([]assistant.ClientToolResponse, len(calls))
-	for missing := len(calls); missing > 0; {
+// collect waits until every call the round expects is answered or
+// withdrawn, returning the answers in call order.
+func (x *roundsExchange) collect(ctx context.Context) ([]assistant.ClientToolResponse, error) {
+	var answers []assistant.ClientToolResponse
+	defer func() {
+		x.mu.Lock()
+		defer x.mu.Unlock()
+		slices.SortStableFunc(answers, func(a, b assistant.ClientToolResponse) int {
+			return slices.Index(x.order, a.ToolCallID) - slices.Index(x.order, b.ToolCallID)
+		})
+		x.order = nil
+	}()
+	for {
+		x.mu.Lock()
+		for _, answer := range x.answered {
+			if x.open[answer.ToolCallID] {
+				delete(x.open, answer.ToolCallID)
+				answers = append(answers, answer)
+			}
+		}
+		x.answered = nil
+		missing := len(x.open)
+		x.mu.Unlock()
+		if missing == 0 {
+			return answers, nil
+		}
 		select {
 		case <-x.ready:
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		x.mu.Lock()
-		answered := x.answered
-		x.answered = nil
-		x.mu.Unlock()
-		for _, answer := range answered {
-			i := slices.IndexFunc(calls, func(call ToolCall) bool { return call.ID == answer.ToolCallID })
-			if i >= 0 && answers[i].ToolCallID == "" {
-				answers[i] = answer
-				missing--
-			}
-		}
 	}
-	return answers, nil
 }
 
 // A server tool, such as one starting a background task, can outlive its
@@ -179,6 +370,18 @@ func (x *roundsExchange) stop() {
 	x.mu.Lock()
 	x.stopped = true
 	x.mu.Unlock()
+}
+
+// withdraw drops a call the round no longer answers, as one answered
+// elsewhere first or already run.
+func (x *roundsExchange) withdraw(id string) {
+	x.mu.Lock()
+	delete(x.open, id)
+	x.mu.Unlock()
+	select {
+	case x.ready <- struct{}{}:
+	default:
+	}
 }
 
 func (x *roundsExchange) answer(response assistant.ClientToolResponse) {
@@ -234,6 +437,9 @@ func (x *streamExchange) run(ctx context.Context, emit func(exchangeEvent) bool)
 	}
 	return conversation, nil
 }
+
+// A stream's calls are each answered on their own.
+func (x *streamExchange) withdraw(string) {}
 
 // The stream ends with the run, so its unfinished tools cannot report again.
 func (x *streamExchange) final() bool { return true }

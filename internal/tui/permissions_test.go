@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,38 +11,51 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/agenttest"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 )
 
-// turnBackend scripts an alternating conversation: odd sends request the
-// gated test tool, even sends acknowledge the tool batch and answer.
+// turnBackend scripts a conversation: a prompt requests the gated test tool,
+// and the tool batch that answers it gets an answer.
 type turnBackend struct {
-	t         *testing.T
-	calls     int
-	responses [][]assistant.ClientToolResponse
+	t             *testing.T
+	calls         int
+	responses     [][]assistant.ClientToolResponse
+	conversations agenttest.Conversations
 }
 
-func (b *turnBackend) Send(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+func (b *turnBackend) Subscribe(ctx context.Context, id string, opts assistant.SubscribeOptions, fn func(assistant.Message) error) error {
+	if opts.TaskID != "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.conversations.Subscribe(ctx, id, fn)
+}
+
+func (b *turnBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
+	return b.conversations.Send(ctx, message, opts, fn, func(emit func(assistant.AssistantResponse) error) (string, error) {
+		return b.post(message, opts, emit)
+	})
+}
+
+func (b *turnBackend) post(message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.t.Helper()
 	b.calls++
-	if b.calls%2 == 1 {
-		content := assistant.ToolCallContent("tool-call", approvalToolName, `{}`)
+	batch, answering := message.([]assistant.ClientToolResponse)
+	if !answering {
+		content := assistant.ToolCallContent(fmt.Sprintf("tool-call-%d", b.calls), approvalToolName, `{}`)
 		content.Type = assistant.ContentClientToolCall
 		var response assistant.AssistantResponse
-		response.Data.Attributes.ConversationID = "conversation-1"
-		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("tool-message", content)
-		return "conversation-1", emit(response)
-	}
-	batch, ok := message.([]assistant.ClientToolResponse)
-	if !ok {
-		b.t.Fatalf("tool follow-up has type %T", message)
+		response.Data.Attributes.ConversationID = opts.ConversationID
+		response.Data.Attributes.StructuredMessage = assistant.AssistantMessage(fmt.Sprintf("tool-message-%d", b.calls), content)
+		return opts.ConversationID, emit(response)
 	}
 	b.responses = append(b.responses, batch)
 	var response assistant.AssistantResponse
-	response.Data.Attributes.ConversationID = "conversation-1"
+	response.Data.Attributes.ConversationID = opts.ConversationID
 	response.Data.Attributes.StructuredMessage = assistant.AssistantMessage("answer", assistant.TextContent("Done."))
-	return "conversation-1", emit(response)
+	return opts.ConversationID, emit(response)
 }
 
 func newPermissionsModel(t *testing.T, mode agent.PermissionsMode) (*Model, *turnBackend) {

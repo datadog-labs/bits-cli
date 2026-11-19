@@ -174,7 +174,11 @@ func runRunWithStore(ctx context.Context, opts RunOptions, store auth.Credential
 	if err != nil {
 		return err
 	}
-	engine, err := newEngine(ctx, opts.ChatOptions, workspace, store)
+	// A run reads its turn from its own send's response: it neither follows
+	// the conversation live nor reconnects.
+	chat := opts.ChatOptions
+	chat.SendOnly = true
+	engine, err := newEngine(ctx, chat, workspace, store)
 	if err != nil {
 		return err
 	}

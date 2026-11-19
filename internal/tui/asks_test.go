@@ -1,19 +1,24 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tools"
+	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 // waitingApprovals counts the approvals waiting on the user.
@@ -217,5 +222,245 @@ func TestQuestionClosesTheCompletionMenu(t *testing.T) {
 	m.openToolUI(questionRequest(t, "question"))
 	if dockedToolUI(m) == nil || m.editor.MenuOpen() {
 		t.Fatal("the docked question left the completion menu open")
+	}
+}
+
+// A call the conversation still waits on after its operation ended, as one
+// a restore found unanswered or a stop left running, keeps an approval
+// panel, and deciding it releases the prompts it held.
+func TestApprovalsOutliveTheirOperation(t *testing.T) {
+	t.Run("restored", func(t *testing.T) {
+		ctx := context.Background()
+		f := fake.New()
+		id, err := f.Send(ctx, `call("confirm_action", {})`, assistant.SendOptions{}, func(assistant.AssistantResponse) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		set, err := agent.NewToolSet(newApprovalTool())
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := agent.New(f, agent.Config{ConversationID: id, PermissionsMode: agent.ModeManual})
+		defer e.Close()
+		saved, err := e.LoadConversation(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.InstallConversation(ctx, saved); err != nil {
+			t.Fatal(err)
+		}
+		m := New(e, Config{Tools: set})
+		m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+		m.resumePendingTools()
+		denyShown(t, m)
+	})
+	t.Run("stopped while running", func(t *testing.T) {
+		tool := newApprovalTool()
+		tool.Handler = func(ctx context.Context, _ agent.ToolCall) (agent.ToolResult, error) {
+			<-ctx.Done()
+			return agent.ToolResult{}, ctx.Err()
+		}
+		set, err := agent.NewToolSet(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := New(agent.New(fake.New(), agent.Config{PermissionsMode: agent.ModeManual}), Config{Tools: set})
+		m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+		setConversationInput(m, `call("confirm_action", {})`)
+		_, _ = m.submit()
+		for waitingApprovals(m) == 0 {
+			_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+		}
+		for id, a := range m.approvals {
+			a.decide(id, agent.ApprovalAllowOnce)
+		}
+		for tool := findToolBlock(m.state.Blocks, approvalToolName); tool == nil || tool.Status != agent.ToolRunning; tool = findToolBlock(m.state.Blocks, approvalToolName) {
+			_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+		}
+		_, stop := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+		drainConversationRemote(t, m)
+		runStopCmd(t, m, stop)
+		for waitingApprovals(m) == 0 {
+			_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+		}
+		denyShown(t, m)
+	})
+}
+
+// denyShown checks m shows one approval panel for a call that holds
+// prompts, denies it, and checks the prompts are released.
+func denyShown(t *testing.T, m *Model) {
+	t.Helper()
+	if waitingApprovals(m) != 1 || !agent.SendBlocked(m.engine.State()) {
+		t.Fatalf("approval panels = %d, prompts held = %t; want one panel holding prompts", waitingApprovals(m), agent.SendBlocked(m.engine.State()))
+	}
+	for id, a := range m.approvals {
+		if !a.decide(id, agent.ApprovalDeny) {
+			t.Fatal("the denial was refused")
+		}
+	}
+	// The conversation may still show the stopped turn ending.
+	pumpUntilFree(t, m)
+	if agent.SendBlocked(m.engine.State()) {
+		t.Fatal("prompts stay held after the denial")
+	}
+}
+
+// Approving a call the conversation waits on, which a restore found or a
+// dropped response left, runs it and releases the prompts it held.
+func TestApprovingALeftCallRunsIt(t *testing.T) {
+	t.Run("restored", func(t *testing.T) {
+		ctx := context.Background()
+		f := fake.New()
+		id, err := f.Send(ctx, `call("confirm_action", {}); say("confirmed")`, assistant.SendOptions{}, func(assistant.AssistantResponse) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		set, err := agent.NewToolSet(newApprovalTool())
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := agent.New(f, agent.Config{ConversationID: id, PermissionsMode: agent.ModeManual})
+		defer e.Close()
+		saved, err := e.LoadConversation(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.InstallConversation(ctx, saved); err != nil {
+			t.Fatal(err)
+		}
+		m := New(e, Config{Tools: set})
+		m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+		m.resumePendingTools()
+		approveShown(t, m, "confirmed")
+	})
+	t.Run("dropped at the pause", func(t *testing.T) {
+		ws, err := workspace.Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ws.Close() })
+		set, err := agent.NewToolSet(tools.NewClientTools(ws, exectool.NewExecService(ws.DefaultShellPath()))...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := New(agent.New(fake.New(), agent.Config{PermissionsMode: agent.ModeManual}), Config{Tools: set, Workspace: ws})
+		m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+		setConversationInput(m, `load("connection.star", "drop_at_tool_pause"); drop_at_tool_pause()`)
+		_, _ = m.submit()
+		for waitingApprovals(m) == 0 {
+			_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+		}
+		approveShown(t, m, "Listed: ")
+	})
+}
+
+// A call stopped while it ran is offered again; approving it runs it again,
+// once, and leaves nothing to resume.
+func TestApprovingAStoppedRunningCallRunsItAgain(t *testing.T) {
+	var runs atomic.Int32
+	entered := make(chan struct{})
+	tool := newApprovalTool()
+	tool.Handler = func(ctx context.Context, _ agent.ToolCall) (agent.ToolResult, error) {
+		if runs.Add(1) == 1 {
+			close(entered)
+			<-ctx.Done()
+			return agent.ToolResult{}, ctx.Err()
+		}
+		return agent.ToolResult{Title: "Done", Output: "ok"}, nil
+	}
+	set, err := agent.NewToolSet(tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(agent.New(fake.New(), agent.Config{PermissionsMode: agent.ModeManual}), Config{Tools: set})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	setConversationInput(m, `call("confirm_action", {})`)
+	_, _ = m.submit()
+	for waitingApprovals(m) == 0 {
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+	}
+	for id, a := range m.approvals {
+		a.decide(id, agent.ApprovalAllowOnce)
+	}
+	// The block shows running before the handler starts: stop once both
+	// the handler ran and the TUI shows it running.
+	waitSignal(t, entered)
+	for tool := findToolBlock(m.state.Blocks, approvalToolName); tool == nil || tool.Status != agent.ToolRunning; tool = findToolBlock(m.state.Blocks, approvalToolName) {
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+	}
+	_, stop := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	drainConversationRemote(t, m)
+	runStopCmd(t, m, stop)
+	for waitingApprovals(m) == 0 {
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+	}
+	// Allow for session on the re-offer grants the session, as it does for
+	// a call parked in a turn.
+	for id, a := range m.approvals {
+		if cmd := a.grant(grantSession); cmd != nil {
+			t.Fatalf("grant failed: %v", cmd())
+		}
+		a.decide(id, agent.ApprovalAllowOnce)
+	}
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventState, State: m.engine.State()}})
+	// Bounded: an approval that never runs would start runs forever.
+	for i := 0; m.op.busy(); i++ {
+		if i == 200 {
+			t.Fatal("the approved call keeps starting runs")
+		}
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+	}
+	if n := runs.Load(); n != 2 || m.op.busy() || m.engine.CanResumeTools(set) {
+		t.Fatalf("runs = %d, busy = %t, resumable = %t; want the call run again once and nothing left", n, m.op.busy(), m.engine.CanResumeTools(set))
+	}
+	setConversationInput(m, `call("confirm_action", {})`)
+	_, _ = m.submit()
+	for m.op.busy() {
+		if waitingApprovals(m) != 0 {
+			t.Fatal("the session grant did not hold: the same call asks again")
+		}
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+	}
+	if n := runs.Load(); n != 3 {
+		t.Fatalf("runs = %d, want the granted call run without asking", n)
+	}
+}
+
+// runStopCmd runs the stop request among cmd's commands and applies its
+// result.
+func runStopCmd(t *testing.T, m *Model, cmd tea.Cmd) {
+	t.Helper()
+	for cmds := []tea.Cmd{cmd}; len(cmds) > 0; cmds = cmds[1:] {
+		if cmds[0] == nil {
+			continue
+		}
+		switch msg := runConversationCmd(t, cmds[0]).(type) {
+		case tea.BatchMsg:
+			cmds = append(cmds, msg...)
+		case stopResultMsg:
+			_, _ = m.Update(msg)
+		}
+	}
+}
+
+// approveShown approves the one approval m shows and checks the call ran,
+// its answer shows, and nothing holds prompts any more.
+func approveShown(t *testing.T, m *Model, answer string) {
+	t.Helper()
+	if waitingApprovals(m) != 1 {
+		t.Fatalf("approval panels = %d, want one", waitingApprovals(m))
+	}
+	for id, a := range m.approvals {
+		if !a.decide(id, agent.ApprovalAllowOnce) {
+			t.Fatal("the approval was refused")
+		}
+	}
+	_, _ = m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventState, State: m.engine.State()}})
+	if !m.op.busy() {
+		t.Fatal("the approval started no run")
+	}
+	for !hasTextBlock(m.state.Blocks, answer) || m.op.busy() || m.sendBlocked() {
+		_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
 	}
 }

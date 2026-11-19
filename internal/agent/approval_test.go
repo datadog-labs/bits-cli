@@ -223,14 +223,16 @@ func TestServerGateDenials(t *testing.T) {
 		want         []string
 	}{
 		{name: "continue", round: []assistant.Message{deleteGate, writeSibling}, onDeny: DenyContinue, want: []string{denied, "write-1 success written"}},
-		{name: "stop", round: []assistant.Message{deleteGate, writeSibling}, want: []string{denied, "write-1 success written"}},
+		// Calls run as they arrive, so a sibling arriving after the denial
+		// would be cancelled: under DenyStop the siblings come first.
+		{name: "stop", round: []assistant.Message{writeSibling, deleteGate}, want: []string{"write-1 success written", denied}},
 		{
 			name:         "stop cancels a pending sibling",
 			round:        []assistant.Message{writeSibling, deleteGate},
 			gatedSibling: true,
 			want:         []string{"write-1 error tool execution was cancelled by the user", denied},
 		},
-		{name: "stop records a failing sibling", round: []assistant.Message{deleteGate, writeSibling}, siblingFails: true, want: []string{denied, "write-1 error handler exploded"}},
+		{name: "stop records a failing sibling", round: []assistant.Message{writeSibling, deleteGate}, siblingFails: true, want: []string{"write-1 error handler exploded", denied}},
 		{name: "continue records a failing sibling", round: []assistant.Message{deleteGate, writeSibling}, onDeny: DenyContinue, siblingFails: true, want: []string{denied, "write-1 error handler exploded"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -254,8 +256,10 @@ func TestServerGateDenials(t *testing.T) {
 			if batches := backend.responses(); len(batches) != 1 || !slices.Equal(summarize(batches[0]), tt.want) {
 				t.Fatalf("responses = %v, want %q", batches, tt.want)
 			}
+			// A stopped run does not show the follow-up; the conversation, which
+			// holds it, may show it once the run has ended.
 			answered := slices.ContainsFunc(engine.State().Blocks, func(block Block) bool {
-				return block.Markdown != nil && block.Markdown.Content == "adjusted answer"
+				return block.Run != 0 && block.Markdown != nil && block.Markdown.Content == "adjusted answer"
 			})
 			if answered != (tt.onDeny == DenyContinue) {
 				t.Fatalf("follow-up folded = %t under policy %v", answered, tt.onDeny)
@@ -296,7 +300,7 @@ func TestDenyStopDrainsFollowUpClientToolCalls(t *testing.T) {
 		t.Fatalf("drained response = %+v", drained)
 	}
 	for _, block := range engine.State().Blocks {
-		if block.ToolCallID() == "follow-1" || block.Markdown != nil && block.Markdown.Content == "adjusted answer" {
+		if block.Run != 0 && (block.ToolCallID() == "follow-1" || block.Markdown != nil && block.Markdown.Content == "adjusted answer") {
 			t.Fatalf("stopped follow-up was folded into the transcript: %+v", block)
 		}
 	}

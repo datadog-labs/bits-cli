@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"math"
 	"strconv"
 	"time"
@@ -364,6 +363,12 @@ type Message struct {
 	IsError bool `json:"is_error,omitempty"`
 }
 
+// TurnError is the turn failure an IsError message reports. The
+// conversation holds the message, so it shows wherever the conversation does.
+type TurnError struct{ Text string }
+
+func (e *TurnError) Error() string { return e.Text }
+
 // Err returns the turn failure an IsError message reports, or nil.
 func (m Message) Err() error {
 	if !m.IsError {
@@ -373,7 +378,7 @@ func (m Message) Err() error {
 	if m.Content.Markdown != nil {
 		text = sanitizeServerText(m.Content.Markdown.Content)
 	}
-	return errors.New(cmp.Or(text, "the assistant ended the turn with an error"))
+	return &TurnError{Text: cmp.Or(text, "the assistant ended the turn with an error")}
 }
 
 // Content type discriminators: the full AssistantContent union from the server

@@ -66,7 +66,10 @@ func TestForkBoundaryRestoredFromHistory(t *testing.T) {
 			response.Data.Type = "conversation-history-response"
 			response.Data.Attributes.Messages = []assistant.Message{assistant.AssistantMessage("copy", assistant.TextContent("copied")), assistant.AssistantMessage("control", assistant.Content{Type: assistant.ContentUserStop, Stop: &assistant.StopPayload{}}), assistant.AssistantMessage("later", assistant.TextContent("new"))}
 			response.Data.Attributes.ForkedFrom = &assistant.ForkedFrom{ConversationID: testConversationID, ForkMessageID: boundary, SourceTitle: "Original title"}
-			e := New(&historyBackend{resp: response}, Config{})
+			b := &historyBackend{resp: response}
+			// The subscription replays the same saved conversation.
+			b.conversations.Seed("87654321-4321-4321-4321-210987654321", response.Data.Attributes.Messages...)
+			e := New(b, Config{})
 			defer e.Close()
 			conversation, err := e.LoadConversation(context.Background(), "87654321-4321-4321-4321-210987654321")
 			if err != nil {
@@ -106,6 +109,9 @@ func TestForkHistorySeparatesCopiedWork(t *testing.T) {
 			response.Data.Attributes.Messages = messages
 			response.Data.Attributes.ForkedFrom = &assistant.ForkedFrom{ConversationID: testConversationID, ForkMessageID: "progress"}
 			b := &taskBackend{historyBackend: historyBackend{resp: response}}
+			// The installed conversation's replay holds the same history, so
+			// a replay that lands before the check changes nothing.
+			b.conversations.Seed("87654321-4321-4321-4321-210987654321", messages...)
 			e := New(b, Config{})
 			t.Cleanup(e.Close)
 			conversation, err := e.LoadConversation(context.Background(), "87654321-4321-4321-4321-210987654321")

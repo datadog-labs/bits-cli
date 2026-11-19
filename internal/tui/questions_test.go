@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/agenttest"
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tools"
@@ -24,15 +25,16 @@ import (
 const questionInput = `{"questions":[{"question":"Which region?","options":[{"label":"US","description":"US region"},{"label":"EU","description":"EU region"}]},{"question":"Which service?","options":[{"label":"API","description":"Public API"}]}]}`
 
 type questionBackend struct {
-	t           *testing.T
-	input       string
-	count       int
-	calls       int
-	responses   []assistant.ClientToolResponse
-	definitions []assistant.ClientTool
+	conversations agenttest.Conversations
+	t             *testing.T
+	input         string
+	count         int
+	calls         int
+	responses     []assistant.ClientToolResponse
+	definitions   []assistant.ClientTool
 }
 
-func (b *questionBackend) Send(_ context.Context, message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+func (b *questionBackend) post(_ context.Context, message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.calls++
 	if b.calls == 1 {
 		b.definitions = opts.ClientTools
@@ -404,10 +406,12 @@ func TestRestoredCallsThatWillNotResumeSettle(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		scripts []string
+		offered string // the call still waiting for an answer, offered for a decision
 	}{
-		// The tool set has no read_file, so the batch cannot resume.
-		{"mixed batch", []string{`call([` + ask + `, ("read_file", {"path": "go.mod"})])`}},
-		{"abandoned by a later turn", []string{`call([` + ask + `])`, `say("moved on")`}},
+		// The tool set has no read_file, so the batch cannot resume; the
+		// conversation still waits for the question's answer.
+		{"mixed batch", []string{`call([` + ask + `, ("read_file", {"path": "go.mod"})])`}, "ask_user_question"},
+		{"abandoned by a later turn", []string{`call([` + ask + `])`, `say("moved on")`}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fake.Fake{ContinueDir: t.TempDir()}
@@ -417,16 +421,30 @@ func TestRestoredCallsThatWillNotResumeSettle(t *testing.T) {
 			}
 			m := newResumedQuestionModel(t, f, id, true)
 			drainConversationRemote(t, m)
+			// The replay settles what the restore left: it shows whether the
+			// turn still runs.
+			for m.state.Connection.State != agent.ConnectionConnected {
+				_, _ = m.Update(runConversationCmd(t, waitEvent(m.events)))
+			}
 			if dockedToolUI(m) != nil || m.op.run != 0 {
 				t.Fatal("a call that cannot resume opened")
 			}
 			for _, block := range m.state.Blocks {
+				if block.Tool != nil && block.Tool.Name == tc.offered {
+					if block.Tool.Status != agent.ToolAwaitingApproval {
+						t.Fatalf("restored %s is %v, want it offered for a decision", block.Tool.Name, block.Tool.Status)
+					}
+					continue
+				}
 				if block.Tool != nil && block.Tool.Status != agent.ToolCancelled {
 					t.Fatalf("restored %s still looks running", block.Tool.Name)
 				}
 			}
 			if len(questionResponses(t, f, id)) != 0 {
 				t.Fatal("settling persisted a response")
+			}
+			if waiting := tc.offered != ""; agent.SendBlocked(m.state) != waiting {
+				t.Fatalf("prompts held = %t, want %t", !waiting, waiting)
 			}
 		})
 	}
@@ -478,4 +496,18 @@ func TestQuestionsShiftPageScrollsTheTranscript(t *testing.T) {
 	if m.list.VisibleSurface().Top != before || m.frame.promptView == form {
 		t.Fatal("pgdown did not page only the form")
 	}
+}
+
+func (b *questionBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
+	return b.conversations.Send(ctx, message, opts, fn, func(emit func(assistant.AssistantResponse) error) (string, error) {
+		return b.post(ctx, message, opts, emit)
+	})
+}
+
+func (b *questionBackend) Subscribe(ctx context.Context, id string, opts assistant.SubscribeOptions, fn func(assistant.Message) error) error {
+	if opts.TaskID != "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.conversations.Subscribe(ctx, id, fn)
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/agenttest"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
@@ -12,10 +13,11 @@ import (
 const handoffConversation = "00000000-0000-4000-8000-000000000001"
 
 type handoffBackend struct {
-	history   []assistant.Message
-	responses []assistant.ClientToolResponse
-	tools     []assistant.ClientTool
-	sends     int
+	conversations agenttest.Conversations
+	history       []assistant.Message
+	responses     []assistant.ClientToolResponse
+	tools         []assistant.ClientTool
+	sends         int
 }
 
 func (b *handoffBackend) ConversationHistory(context.Context, assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
@@ -26,7 +28,7 @@ func (b *handoffBackend) ConversationHistory(context.Context, assistant.Conversa
 	return response, nil
 }
 
-func (b *handoffBackend) Send(_ context.Context, message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+func (b *handoffBackend) post(_ context.Context, message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.sends++
 	b.tools = opts.ClientTools
 	b.responses, _ = message.([]assistant.ClientToolResponse)
@@ -119,4 +121,18 @@ func TestRejectedHandoffHasNothingToResume(t *testing.T) {
 	if backend.sends != 0 {
 		t.Fatalf("sends = %d, want none", backend.sends)
 	}
+}
+
+func (b *handoffBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
+	return b.conversations.Send(ctx, message, opts, fn, func(emit func(assistant.AssistantResponse) error) (string, error) {
+		return b.post(ctx, message, opts, emit)
+	})
+}
+
+func (b *handoffBackend) Subscribe(ctx context.Context, id string, opts assistant.SubscribeOptions, fn func(assistant.Message) error) error {
+	if opts.TaskID != "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.conversations.Subscribe(ctx, id, fn)
 }
