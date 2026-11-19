@@ -236,8 +236,9 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 	t.Setenv("DD_APP_KEY", "")
 	t.Run("automatic fake bypasses OAuth", func(t *testing.T) {
 		const id = "11111111-1111-4111-8111-111111111111"
-		// A script instead of an id pushes the conversation it opens.
-		for _, conversation := range []string{id, `say("earlier")`} {
+		// A link opens its conversation; a script instead of an id pushes the
+		// conversation it opens.
+		for _, conversation := range []string{id, "https://app.datadoghq.com/bits/chat/" + id, "https://app.datadoghq.eu/ask/" + id + "/?tab=1", `say("earlier")`} {
 			store := &observedStore{err: errors.New("must not load")}
 			engine, err := newEngine(context.Background(), ChatOptions{
 				AuthMode: auth.ModeAuto, ConversationID: conversation,
@@ -249,7 +250,7 @@ func TestNewEngineSelectionAndConfiguration(t *testing.T) {
 				t.Fatalf("store loads = %d", store.loads)
 			}
 			got := engine.State().ConversationID
-			if (conversation == id) != (got == id) || !agent.ValidConversationID(got) {
+			if strings.Contains(conversation, id) != (got == id) || !agent.ValidConversationID(got) {
 				t.Fatalf("conversation ID = %q", got)
 			}
 		}
