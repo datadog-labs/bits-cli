@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -152,6 +153,21 @@ func newTransport() *http.Transport {
 	// Fork creation may wait for a 45-second server-side transaction.
 	// Ordinary requests retain their shorter HTTP client deadline.
 	tr.ResponseHeaderTimeout = 60 * time.Second
+	// A stream can be silent for minutes while the assistant works, so a
+	// dropped network would otherwise go unnoticed until a read deadline.
+	// TCP keepalives and HTTP/2 pings detect a dead link in about 30s.
+	dial := tr.DialContext
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dial(ctx, network, addr)
+		if tcp, ok := conn.(*net.TCPConn); ok && err == nil {
+			keepalive := net.KeepAliveConfig{Enable: true, Idle: 15 * time.Second, Interval: 5 * time.Second, Count: 3}
+			if err := tcp.SetKeepAliveConfig(keepalive); err != nil {
+				return nil, errors.Join(err, conn.Close())
+			}
+		}
+		return conn, err
+	}
+	tr.HTTP2 = &http.HTTP2Config{SendPingTimeout: 15 * time.Second, PingTimeout: 10 * time.Second}
 	return tr
 }
 
