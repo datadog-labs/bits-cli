@@ -49,6 +49,7 @@ server. Type `@` to find services, monitors, incidents, and dashboards.
 - `/rename [title]` renames the current conversation. Without a title, Bits
   asks for one.
 - `/web` opens the current conversation in Datadog.
+- `/share [30d|off]` shares the conversation with your org; `off` unshares it.
 - `/export` copies the whole conversation to your clipboard as Markdown
 - `/skills-library` opens the Skills Library.
 
