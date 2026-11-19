@@ -210,7 +210,8 @@ By contributing to Bits CLI, you agree that your contributions will be licensed 
 The regular Assistant endpoint is the default.
 Opt into experimental subagents with `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits`, or with
 `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits run --prompt '…' --delivery adeep`.
-Unset, empty, `0`, or other values keep the regular endpoint.
+Unset, empty, `0`, or other values keep the regular endpoint. MCP apps
+require that endpoint because the multi-agent endpoint does not stream them.
 The setting is not persisted.
 
 When subagents are enabled, eligible turns use multi-agent run
