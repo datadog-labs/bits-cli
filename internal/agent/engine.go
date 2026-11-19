@@ -90,10 +90,13 @@ type State struct {
 	ConversationID string
 	// Title is the conversation's saved title, once known: loaded with its
 	// history, set by a rename, or streamed when the server generates one.
-	Title  string
-	Fork   ForkBoundary
-	Blocks []Block
-	Usage  *assistant.Usage // nil until a turn reports it
+	Title string
+	// SharedUntil is when the organization stops seeing the conversation, or
+	// nil while it is private. A past time means the share expired.
+	SharedUntil *time.Time
+	Fork        ForkBoundary
+	Blocks      []Block
+	Usage       *assistant.Usage // nil until a turn reports it
 	// Tasks are the background tasks the conversation started, in start
 	// order. Their blocks are apart from Blocks.
 	Tasks []Task
@@ -290,12 +293,13 @@ type Engine struct {
 	turnRun  RunID // the claimed run if it is a turn, which sends the queue
 	// queue holds the conversation's prompts waiting for a turn to send
 	// them: the running turn once it completes, or else SendQueued.
-	queue      []QueuedPrompt
-	lastQueued QueueID
-	version    uint64 // the last published state version
-	subs       map[*outbox]struct{}
-	usage      *assistant.Usage // the conversation's latest, if a turn reported it
-	title      string
+	queue       []QueuedPrompt
+	lastQueued  QueueID
+	version     uint64 // the last published state version
+	subs        map[*outbox]struct{}
+	usage       *assistant.Usage // the conversation's latest, if a turn reported it
+	title       string
+	sharedUntil *time.Time
 	// tasks are the conversation's background tasks. Their observers are
 	// workers too, stopped when the conversation changes.
 	tasks []*task
@@ -827,7 +831,7 @@ func (e *Engine) publish() {
 // retain: the engine keeps mutating its own transcript on later folds.
 func (e *Engine) state() State {
 	return State{
-		Version: e.version, ConversationID: e.opts.ConversationID, Title: e.title, Blocks: slices.Clone(e.transcript.Blocks()),
+		Version: e.version, ConversationID: e.opts.ConversationID, Title: e.title, SharedUntil: e.sharedUntil, Blocks: slices.Clone(e.transcript.Blocks()),
 		Usage: e.usage, Tasks: e.taskViews(), Fork: e.fork, Queued: slices.Clone(e.queue),
 	}
 }
@@ -884,6 +888,7 @@ func (e *Engine) NewConversation() error {
 		e.transcript = NewTranscript()
 		e.usage = nil
 		e.title = ""
+		e.sharedUntil = nil
 		e.continuation = nil
 		e.queue = nil
 		clear(e.gate.grants)
