@@ -503,6 +503,10 @@ func (c *Client) Subscribe(ctx context.Context, conversationID string, opts Subs
 		path += "?" + url.Values{"subtask_id": {opts.TaskID}}.Encode()
 	}
 	_, err := c.stream(ctx, http.MethodGet, path, nil, conversationID, func(ar AssistantResponse) error {
+		// A title update has no message to observe.
+		if ar.Data.Attributes.ConversationTitle != "" {
+			return nil
+		}
 		return fn(ar.Data.Attributes.StructuredMessage)
 	})
 	return err
@@ -632,14 +636,15 @@ func (c *Client) stream(ctx context.Context, method, path string, body any, conv
 	return conversationID, nil
 }
 
-// isKeepalive reports whether ar is a server keepalive: no message and no debug
-// prompt. The server emits these while a turn is in flight to hold the
-// connection open (structured_message is null). A real message always carries a
-// message_id, and a debug line carries a prompt, so both are distinguishable
-// without re-parsing the raw line.
+// isKeepalive reports whether ar is a server keepalive: no message, no debug
+// prompt, and no title. The server emits these while a turn is in flight to
+// hold the connection open (structured_message is null). A real message always
+// carries a message_id, a debug line a prompt, and a title update a title, so
+// each is distinguishable without re-parsing the raw line.
 func isKeepalive(ar AssistantResponse) bool {
 	return ar.Data.Attributes.StructuredMessage.MessageID == "" &&
-		ar.Data.Attributes.Prompt == ""
+		ar.Data.Attributes.Prompt == "" &&
+		ar.Data.Attributes.ConversationTitle == ""
 }
 
 // ConversationHistory fetches the full message history for a conversation.

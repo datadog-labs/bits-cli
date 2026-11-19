@@ -38,6 +38,10 @@ func TestTerminalTitleAnimatesAndStops(t *testing.T) {
 	if got := m.View().WindowTitle; got != "Bits | project" {
 		t.Fatalf("acknowledged title = %q", got)
 	}
+	m.Update(engineEventMsg{ev: agent.Event{Kind: agent.EventState, State: agent.State{Version: 1, Title: "Checkout\x07 latency"}}})
+	if got := m.View().WindowTitle; got != "Bits | project | Checkout latency" {
+		t.Fatalf("conversation title = %q", got)
+	}
 }
 
 func TestTerminalOutcomesAndNotifications(t *testing.T) {

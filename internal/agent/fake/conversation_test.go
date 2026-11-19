@@ -40,6 +40,9 @@ func TestConversationRoundTrip(t *testing.T) {
 	engine := agent.New(f, agent.Config{PermissionsMode: agent.ModeSkipPermissions})
 	set := workspaceTools(t)
 	runTurn(t, engine, "random()", set, agent.DenyContinue, nil)
+	if got := engine.State().Title; got != generatedTitle(1) {
+		t.Fatalf("streamed title = %q, want the generated one", got)
+	}
 	blocks, _ := runTurn(t, engine, `r = call("read_file", {"path": "go.mod"}); say(r.output)`, set, agent.DenyContinue, nil)
 	id := engine.State().ConversationID
 
@@ -58,6 +61,9 @@ func TestConversationRoundTrip(t *testing.T) {
 	}
 	if got, want := viewOf(restored.State().Blocks), viewOf(blocks); !slices.Equal(got, want) {
 		t.Fatalf("restored blocks differ\n got %+v\nwant %+v", got, want)
+	}
+	if got := restored.State().Title; got != generatedTitle(1) {
+		t.Fatalf("restored title = %q", got)
 	}
 
 	// Like the real API, the history resource has its own id.

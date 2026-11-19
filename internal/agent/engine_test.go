@@ -19,6 +19,8 @@ import (
 type scriptBackend struct {
 	rounds [][]assistant.Message
 	convID string
+	// title, when set, follows the final round as a title-only line.
+	title string
 	// After streaming the final round, Send closes started and, when hold is
 	// set, waits for hold to close or the request to be cancelled.
 	started chan struct{}
@@ -47,6 +49,13 @@ func (b *scriptBackend) Send(ctx context.Context, message any, opts assistant.Se
 			if err := emit(response); err != nil {
 				return id, err
 			}
+		}
+	}
+	if b.title != "" && n >= len(b.rounds) {
+		var response assistant.AssistantResponse
+		response.Data.Attributes.ConversationTitle = b.title
+		if err := emit(response); err != nil {
+			return id, err
 		}
 	}
 	held := false
@@ -625,7 +634,7 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 }
 
 func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
-	backend := &scriptBackend{convID: "new-conversation-1"}
+	backend := &scriptBackend{convID: "new-conversation-1", title: "Old prompt"}
 	opts := Config{
 		ConversationID: "old-conversation",
 		Model:          "retained-model",
@@ -635,6 +644,9 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 	e := New(backend, opts)
 
 	_ = drain(t, e, TurnInput{Message: "old prompt"})
+	if state := e.State(); state.Title != "Old prompt" || len(state.Blocks) != 1 {
+		t.Fatalf("title = %q, blocks = %+v; want the streamed title outside the transcript", state.Title, state.Blocks)
+	}
 	callsBeforeReset := len(backend.opts)
 	if err := e.NewConversation(); err != nil {
 		t.Fatal(err)
@@ -642,8 +654,8 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 	if len(backend.opts) != callsBeforeReset {
 		t.Fatal("NewConversation made a backend request")
 	}
-	if got := e.State().ConversationID; got != "" {
-		t.Fatalf("conversation id after reset = %q, want empty", got)
+	if got := e.State(); got.ConversationID != "" || got.Title != "" {
+		t.Fatalf("conversation after reset = %q titled %q, want neither", got.ConversationID, got.Title)
 	}
 	if got := e.PreviousConversationID(); got != "old-conversation" {
 		t.Fatalf("previous conversation id = %q, want old-conversation", got)

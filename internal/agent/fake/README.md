@@ -12,6 +12,9 @@ BITS_FAKE_BACKEND=1 bits run --delivery adeep --prompt 'say("hi")'
 
 Conversations live in memory for the process: `/resume` works within a
 session, but an id from a previous run is not found.
+Each is titled by its first message until its first turn ends, which then
+saves and streams `Fake generated title N`, N counting the session's
+conversations, as the server does with the title it generates.
 
 ## Scripts
 

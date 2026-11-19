@@ -299,13 +299,15 @@ type AssistantResponse struct {
 }
 
 // ResponseAttributes is the payload of one streamed response line. Mirrors the
-// server's AssistantResponse: conversation_id, structured_message, and (debug
-// only) prompt. Token usage is NOT here — it rides on the message itself
+// server's AssistantResponse: conversation_id, structured_message, (debug
+// only) prompt, and conversation_title, which a line carries alone when the
+// server saves a generated title. Token usage is NOT here — it rides on the message itself
 // (StructuredMessage.Results), matching the server's AssistantMessage.results.
 type ResponseAttributes struct {
 	ConversationID    string  `json:"conversation_id"`
 	StructuredMessage Message `json:"structured_message"`
 	Prompt            string  `json:"prompt,omitempty"` // only set when debug mode is enabled
+	ConversationTitle string  `json:"conversation_title,omitempty"`
 }
 
 // Results carries per-message bookkeeping such as token usage (the server's

@@ -24,6 +24,9 @@ func TestRandomStreamGolden(t *testing.T) {
 	for _, seed := range []string{"hello", "why is latency high?"} {
 		fmt.Fprintf(&b, "# %s\n", seed)
 		_, err := (&Fake{}).Send(context.Background(), "random("+strconv.Quote(seed)+")", assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
+			if ar.Data.Attributes.ConversationTitle != "" {
+				return nil
+			}
 			fmt.Fprintln(&b, goldenLine(ar.Data.Attributes.StructuredMessage))
 			return nil
 		})
@@ -63,6 +66,9 @@ func collect(t *testing.T, message string) [][2]string {
 	f := &Fake{} // no delay
 	var got [][2]string
 	_, err := f.Send(context.Background(), message, assistant.SendOptions{}, func(ar assistant.AssistantResponse) error {
+		if ar.Data.Attributes.ConversationTitle != "" {
+			return nil // checked by TestConversationRoundTrip
+		}
 		c := ar.Data.Attributes.StructuredMessage.Content
 		got = append(got, [2]string{c.Type, c.TextBody()})
 		return nil

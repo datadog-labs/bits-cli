@@ -80,7 +80,17 @@ func (f *Fake) Send(ctx context.Context, message any, opts assistant.SendOptions
 	}
 	switch m := message.(type) {
 	case string:
-		return c.id, f.runScript(c, out, opts, f.startTurn(c, m, nil, opts.Context))
+		turn := f.startTurn(c, m, nil, opts.Context)
+		if err := f.runScript(c, out, opts, turn); err != nil || turn.index > 0 {
+			return c.id, err
+		}
+		// Like the server, replace the fallback title with a generated one
+		// once the conversation starts, and stream it.
+		f.mu.Lock()
+		c.title = generatedTitle(len(f.convs))
+		title := c.title
+		f.mu.Unlock()
+		return c.id, out.title(title)
 	case []assistant.ClientToolResponse:
 		// The real backend would persist it again on the tool answers.
 		if opts.Context != nil {

@@ -65,6 +65,11 @@ func keepaliveLine(convID string) string {
 	return fmt.Sprintf(`{"data":{"type":"assistant-response","attributes":{"conversation_id":%q,"structured_message":null}}}`+"\n\n", convID)
 }
 
+// titleLine builds one title update line, which carries no structured_message.
+func titleLine(convID, title string) string {
+	return fmt.Sprintf(`{"data":{"type":"assistant-response","attributes":{"conversation_id":%q,"structured_message":null,"conversation_title":%q}}}`+"\n\n", convID, title)
+}
+
 func writeStream(t *testing.T, w http.ResponseWriter, lines ...string) {
 	t.Helper()
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -316,7 +321,7 @@ func TestSubscribe_StreamsTaskReplayMarkerAndLive(t *testing.T) {
 			r.URL.Query().Get("subtask_id") != "assistant-task.1" {
 			t.Errorf("request = %s %s", r.Method, r.URL)
 		}
-		writeStream(t, w, textLine(id, "replayed"), keepaliveLine(id),
+		writeStream(t, w, textLine(id, "replayed"), keepaliveLine(id), titleLine(id, "Ignored"),
 			`{"data":{"type":"assistant-response","attributes":{"structured_message":{"role":"assistant","message_id":"replay_complete","content":{"type":"replay_complete","replay_kind":"full"}}}}}`+"\n\n",
 			textLine(id, "live"))
 	})
@@ -561,20 +566,28 @@ func TestSend_SkipsKeepalive(t *testing.T) {
 			keepaliveLine("conv-1"),
 			textLine("conv-1", "real content"),
 			keepaliveLine("conv-1"),
+			titleLine("conv-1", "Checkout latency"),
 		)
 	})
 	var calls int
-	var got string
+	var got, title string
 	convID, err := c.Send(context.Background(), "hi", SendOptions{}, func(ar AssistantResponse) error {
 		calls++
+		if ar.Data.Attributes.ConversationTitle != "" {
+			title = ar.Data.Attributes.ConversationTitle
+			return nil
+		}
 		got = ar.Data.Attributes.StructuredMessage.Content.TextBody()
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if calls != 1 {
-		t.Errorf("callback invoked %d times, want 1 (keepalives filtered)", calls)
+	if calls != 2 {
+		t.Errorf("callback invoked %d times, want 2 (keepalives filtered, title kept)", calls)
+	}
+	if title != "Checkout latency" {
+		t.Errorf("title = %q, want %q", title, "Checkout latency")
 	}
 	if got != "real content" {
 		t.Errorf("content = %q, want %q", got, "real content")

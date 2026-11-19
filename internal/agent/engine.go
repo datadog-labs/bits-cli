@@ -87,9 +87,12 @@ type State struct {
 	// ConversationID is the conversation the engine is bound to: set from
 	// Config, then by the backend as turns run. Empty means a new one.
 	ConversationID string
-	Fork           ForkBoundary
-	Blocks         []Block
-	Usage          *assistant.Usage // nil until a turn reports it
+	// Title is the conversation's saved title, once known: loaded with its
+	// history, set by a rename, or streamed when the server generates one.
+	Title  string
+	Fork   ForkBoundary
+	Blocks []Block
+	Usage  *assistant.Usage // nil until a turn reports it
 	// Tasks are the background tasks the conversation started, in start
 	// order. Their blocks are apart from Blocks.
 	Tasks []Task
@@ -291,6 +294,7 @@ type Engine struct {
 	version    uint64 // the last published state version
 	subs       map[*outbox]struct{}
 	usage      *assistant.Usage // the conversation's latest, if a turn reported it
+	title      string
 	// tasks are the conversation's background tasks. Their observers are
 	// workers too, stopped when the conversation changes.
 	tasks []*task
@@ -822,7 +826,7 @@ func (e *Engine) publish() {
 // retain: the engine keeps mutating its own transcript on later folds.
 func (e *Engine) state() State {
 	return State{
-		Version: e.version, ConversationID: e.opts.ConversationID, Blocks: slices.Clone(e.transcript.Blocks()),
+		Version: e.version, ConversationID: e.opts.ConversationID, Title: e.title, Blocks: slices.Clone(e.transcript.Blocks()),
 		Usage: e.usage, Tasks: e.taskViews(), Fork: e.fork, Queued: slices.Clone(e.queue),
 	}
 }
@@ -878,6 +882,7 @@ func (e *Engine) NewConversation() error {
 		e.resetContext()
 		e.transcript = NewTranscript()
 		e.usage = nil
+		e.title = ""
 		e.continuation = nil
 		e.queue = nil
 		clear(e.gate.grants)
@@ -1159,6 +1164,11 @@ func (t *turn) apply(event exchangeEvent) error {
 				t.publish()
 			}
 		}
+	}
+	// The server saved the title, so it stands even when the turn stops.
+	if event.title != "" && event.title != t.e.title {
+		t.e.title = event.title
+		t.publish()
 	}
 	if event.message != nil {
 		t.acknowledge()
