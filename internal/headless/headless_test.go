@@ -11,19 +11,21 @@ func TestClassify(t *testing.T) {
 	for _, tt := range []struct {
 		name                string
 		completed, denied   bool
+		unanswered          bool
 		turnErr, consumeErr error
 		want                Outcome
 		wantErr             error
 	}{
 		{name: "completed", completed: true, want: OutcomeCompleted},
 		{name: "a denial refines a completion", completed: true, denied: true, want: OutcomeApprovalDenied},
+		{name: "an unanswered call leaves it incomplete", completed: true, denied: true, unanswered: true, want: OutcomeIncomplete, wantErr: errIncomplete},
 		{name: "a failure wins over a denial", denied: true, turnErr: turnErr, want: OutcomeFailed, wantErr: turnErr},
 		{name: "a consumer failure wins", completed: true, consumeErr: consumeErr, want: OutcomeFailed, wantErr: consumeErr},
 		{name: "canceled", turnErr: context.Canceled, want: OutcomeCanceled, wantErr: context.Canceled},
 		{name: "timed out", turnErr: context.DeadlineExceeded, want: OutcomeTimedOut, wantErr: context.DeadlineExceeded},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := classify(tt.completed, tt.denied, tt.turnErr, tt.consumeErr)
+			got, err := classify(tt.completed, tt.denied, tt.unanswered, tt.turnErr, tt.consumeErr)
 			if got != tt.want || !errors.Is(err, tt.wantErr) || (tt.wantErr == nil) != (err == nil) {
 				t.Fatalf("classify = %q, %v; want %q, %v", got, err, tt.want, tt.wantErr)
 			}
