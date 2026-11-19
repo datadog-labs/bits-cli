@@ -63,7 +63,7 @@ Every record carries:
 
 ## Outcomes and rounds
 
-- `outcome` is `completed`, `approval_denied`, `failed`, `canceled`, or `timed_out`. A completed turn that denied at least one gate reports `approval_denied`.
+- `outcome` is `completed`, `approval_denied`, `incomplete`, `failed`, `canceled`, or `timed_out`. A completed turn that denied at least one gate reports `approval_denied`. A turn that ended with a client tool request left unanswered reports `incomplete`, and `bits run` exits `1`.
 - `rounds` counts **backend sends**, including rounds whose content a stopped-round drain discarded, so `round.started`/`round.finished` pairs may exist without any content records between them. A send canceled before producing events is not counted.
 - `response` is the final assistant Markdown, drawn **only** from text blocks observed during this run; prior or restored history is never included.
 
@@ -72,4 +72,7 @@ Every record carries:
 - Exactly one `run.finished` ends a healthy stream; `Finish` is rejected afterwards.
 - `Consume` before `Start` or after `run.finished` is rejected, as is a second `Start`.
 - The first writer failure is latched: every later write, including the terminal record, fails, so a recovering writer can never emit a well-formed but incomplete stream.
+- A run reads its turn only from its own request's response; it does not follow the conversation or reconnect. A dropped connection or a failed request fails the run, and `bits run` exits `1`. The error names the conversation, where the turn may still be running. The request is never sent again on its own.
+- In a regular Assistant conversation, canceling a run or reaching its deadline stops listening but does not stop the turn in the conversation; it may keep running.
+- Runs that use experimental subagents also stop the turn when canceled.
 - `headless.Run` cancels the turn on the consumer error and reports it as a `failed` outcome; `bits run` maps it to exit `1`.
