@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
@@ -33,6 +34,7 @@ type ConversationListResult struct {
 type Conversation struct {
 	id           string
 	title        string
+	sharedUntil  *time.Time
 	fork         ForkBoundary
 	transcript   *Transcript
 	tasks        []*task
@@ -110,6 +112,7 @@ func (e *Engine) LoadConversation(ctx context.Context, conversationID string) (*
 	conversation := conversationFromHistory(response.Data.Attributes.ForkedFrom, response.Data.Attributes.Messages)
 	conversation.id = conversationID
 	conversation.title = response.Data.Attributes.Title
+	conversation.sharedUntil = unixMilli(response.Data.Attributes.SharedExpires)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -133,6 +136,7 @@ func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversa
 func (e *Engine) installConversation(conversation *Conversation) {
 	e.opts.ConversationID = conversation.id
 	e.title = conversation.title
+	e.sharedUntil = conversation.sharedUntil
 	e.fork = conversation.fork
 	e.opts.MessageHistory = nil
 	e.resetContext()
@@ -287,6 +291,49 @@ func (e *Engine) RenameConversation(ctx context.Context, conversationID, title s
 		}
 	})
 	return nil
+}
+
+// ConversationShareBackend is the optional capability to share saved
+// conversations with the organization.
+type ConversationShareBackend interface {
+	ShareConversation(context.Context, assistant.ShareConversationInput) (*assistant.ConversationSummary, error)
+}
+
+// ShareConversation shares a saved conversation with its organization, or
+// makes it private, and returns when the share expires: nil once private. It
+// updates the state's share when it is the current conversation.
+func (e *Engine) ShareConversation(ctx context.Context, in assistant.ShareConversationInput) (*time.Time, error) {
+	if !ValidConversationID(in.ConversationID) {
+		return nil, ErrInvalidConversationID
+	}
+	backend, ok := e.backend.(ConversationShareBackend)
+	if !ok {
+		return nil, errors.New("backend does not support sharing conversations")
+	}
+	summary, err := backend.ShareConversation(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if summary == nil || in.Shared != (summary.SharedExpires != nil) {
+		return nil, errors.New("conversation sharing response is malformed")
+	}
+	until := unixMilli(summary.SharedExpires)
+	e.do(func() {
+		if in.ConversationID == e.opts.ConversationID {
+			e.sharedUntil = until
+			e.publish()
+		}
+	})
+	return until, nil
+}
+
+// unixMilli converts the API's optional Unix milliseconds.
+func unixMilli(ms *int64) *time.Time {
+	if ms == nil {
+		return nil
+	}
+	t := time.UnixMilli(*ms)
+	return &t
 }
 
 // ForkBoundary anchors server provenance to the CLI's folded transcript.
