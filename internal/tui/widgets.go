@@ -8,6 +8,7 @@ import (
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/browser"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
 	"github.com/datadog-labs/bits-cli/internal/tui/splash"
@@ -116,7 +117,7 @@ func (w *widgets) sync(list *chat.List, mode widgetMode, dark bool, epoch uint64
 	// A second pass catches a widget that a resized box moved into view.
 	for range 2 {
 		blocks, visible := list.Widgets()
-		resized := false
+		views := make(map[agent.BlockID]chat.WidgetView, len(blocks))
 		for _, block := range blocks {
 			if !block.Complete || block.App == nil {
 				continue
@@ -126,9 +127,9 @@ func (w *widgets) sync(list *chat.List, mode widgetMode, dark bool, epoch uint64
 			cmds = append(cmds, cmd)
 			view, cmd := w.view(e, mode, visible[block.ID], list.Width())
 			cmds = append(cmds, cmd)
-			resized = list.SetWidgetView(block.ID, view) || resized
+			views[block.ID] = view
 		}
-		if !resized {
+		if !list.SetWidgetViews(views) {
 			break
 		}
 	}
@@ -140,59 +141,63 @@ func (w *widgets) sync(list *chat.List, mode widgetMode, dark bool, epoch uint64
 	return tea.Batch(cmds...)
 }
 
+// webAction uses the single-chart contract or the saved app's conversation
+// identity. The app does not need to be restored to open its conversation.
+func (w *widgets) webAction(e *widgetEntry) chat.WidgetAction {
+	if w.origin == "" {
+		return chat.WidgetNone
+	}
+	if e.summary.Chart != nil && e.request.App.ResourceURI == viz.DatavizURI {
+		return chat.WidgetWeb
+	}
+	if e.request.CanRestore() {
+		return chat.WidgetConversation
+	}
+	return chat.WidgetNone
+}
+
 func (w *widgets) view(e *widgetEntry, mode widgetMode, visible bool, width int) (chat.WidgetView, tea.Cmd) {
 	view := chat.WidgetView{Title: e.summary.Title}
-	app := e.request.App
+	request := e.request
+	var state viz.State
 	if e.controller != nil {
-		app = e.controller.App()
+		request.App = e.controller.App()
+		state = e.controller.State()
 	}
-	// A saved app may hold a chart: the link restores it first (see apply).
-	// Previews restore it themselves, and a click meanwhile would report the
-	// snapshot client unable to open, switching every widget to links.
-	restorable := mode == widgetLink && len(app.Result) == 0 && app.Restorable && w.client != nil &&
-		(e.controller == nil || e.controller.State().CanOpen())
-	fallback := chat.WidgetNone
-	if w.origin != "" && (e.summary.Chart != nil || restorable) {
-		fallback = chat.WidgetWeb
-	}
-	// Snapshots show charts only: other views would only fail.
-	if mode == widgetLink || !w.client.Interactive() && len(app.Result) > 0 && e.summary.Chart == nil {
-		view.Action = fallback
-		if e.controller != nil {
-			state := e.controller.State()
-			if state.Open.Phase == viz.Loading {
-				view.Action, view.Loading = chat.WidgetNone, "Opening"
-			}
-			view.Note = failureReason(state.Open)
-		}
-		return view, nil
-	}
-	if e.controller == nil {
+	app := request.App
+	hasResult := len(app.Result) > 0
+	local := mode != widgetLink && w.client.Interactive()
+	supported := app.ResourceURI == viz.DatavizURI
+	canOpen := local && supported && (hasResult && app.RelayHandle != "" || request.CanRestore())
+	canSnapshot := !local && supported && (e.summary.Chart != nil || !hasResult && request.CanRestore())
+	preview := mode == widgetInline && (canOpen || canSnapshot)
+
+	var cmd tea.Cmd
+	if (canOpen || preview) && e.controller == nil {
 		e.controller = viz.NewController(w.client, e.request)
 	}
-	var cmd tea.Cmd
-	state := e.controller.State()
-	if mode == widgetInline && visible && state.Render.Phase == viz.Idle {
+	if preview && visible && state.Render.Phase == viz.Idle {
 		cmd = widgetTask(e.controller.Render(context.Background()))
 		state = e.controller.State()
 	}
-
-	retry := mode == widgetInline && state.CanRender() && state.Render.Phase != viz.Idle
+	fallback := w.webAction(e)
+	view.Note = failureReason(state.Open)
 	switch {
 	case state.Open.Phase == viz.Loading:
 		view.Loading = "Opening"
-	case retry:
-		view.Action = chat.WidgetRetry
-	case state.CanOpen() && w.client.Interactive(): // a snapshot-only client never opens
+	case preview && state.Render.Phase != viz.Idle && state.CanRender():
+		view.Action, view.Link = chat.WidgetRetry, fallback
+	case canOpen && state.CanOpen():
 		view.Action = chat.WidgetOpen
 	default:
 		view.Action = fallback
 	}
-	view.Note = failureReason(state.Open)
-	if mode == widgetInline {
-		var draw tea.Cmd
-		view.Image, draw = e.place(state.Image, width, visible)
-		cmd = tea.Batch(cmd, w.images.Enqueue(draw))
+	if preview {
+		if state.Image != nil || state.Render.Phase == viz.Loading || state.Render.Phase == viz.Idle {
+			var draw tea.Cmd
+			view.Image, draw = e.place(state.Image, width, visible)
+			cmd = tea.Batch(cmd, w.images.Enqueue(draw))
+		}
 		if view.Loading == "" && state.Render.Phase == viz.Loading {
 			view.Loading = "Rendering"
 		}
@@ -200,6 +205,7 @@ func (w *widgets) view(e *widgetEntry, mode widgetMode, visible bool, width int)
 			view.Note = failureReason(state.Render)
 		}
 	}
+	view.Hidden = view.Action == chat.WidgetNone && view.Link == chat.WidgetNone && view.Image.Rows == 0 && view.Loading == "" && view.Note == ""
 	return view, cmd
 }
 
@@ -259,40 +265,54 @@ func (w *widgets) apply(done viz.Completion) string {
 		if state.Render.Phase == viz.Unavailable || openFailed {
 			w.unavailable = true
 		}
-		if openFailed && w.origin != "" && e.summary.Chart != nil {
-			link, _ := viz.SandboxURL(w.origin, *e.summary.Chart)
-			return link
+		if openFailed {
+			return w.webURL(e, w.webAction(e))
 		}
 		return ""
 	}
 	return ""
 }
 
-// click starts the operation behind a widget's action, or returns the web
-// page to open. That URL carries the whole definition, too long for a
-// hyperlink, so it is built only on click. The list reports actions only for
-// views sync keeps current.
+func (w *widgets) webURL(e *widgetEntry, action chat.WidgetAction) string {
+	var target string
+	var err error
+	switch action {
+	case chat.WidgetWeb:
+		if e.summary.Chart == nil {
+			return ""
+		}
+		target, err = viz.SandboxURL(w.origin, *e.summary.Chart)
+	case chat.WidgetConversation:
+		target, err = browser.ConversationURL(w.origin, e.request.ConversationID)
+	case chat.WidgetNone, chat.WidgetOpen, chat.WidgetRetry:
+		return ""
+	}
+	if err != nil {
+		return ""
+	}
+	return target
+}
+
+// click starts the operation or constructs the selected web destination.
 func (w *widgets) click(hit chat.LinkHit) (tea.Cmd, string) {
 	e := w.entries[hit.BlockID]
-	switch {
-	case e == nil:
+	if e == nil {
 		return nil, ""
-	case hit.Action == chat.WidgetWeb && e.summary.Chart != nil:
-		link, _ := viz.SandboxURL(w.origin, *e.summary.Chart)
-		return nil, link
-	case hit.Action == chat.WidgetWeb && w.client != nil:
-		// A saved app: Open restores it, and apply sends its chart to the web.
+	}
+	switch hit.Action {
+	case chat.WidgetWeb, chat.WidgetConversation:
+		return nil, w.webURL(e, hit.Action)
+	case chat.WidgetOpen, chat.WidgetRetry:
 		if e.controller == nil {
-			e.controller = viz.NewController(w.client, e.request)
+			return nil, ""
+		}
+		if hit.Action == chat.WidgetRetry {
+			return widgetTask(e.controller.Render(context.Background())), ""
 		}
 		return widgetTask(e.controller.Open(context.Background())), ""
-	case e.controller == nil:
-		return nil, ""
-	case hit.Action == chat.WidgetRetry:
-		return widgetTask(e.controller.Render(context.Background())), ""
-	default:
-		return widgetTask(e.controller.Open(context.Background())), ""
+	case chat.WidgetNone:
 	}
+	return nil, ""
 }
 
 // release drops every entry, canceling its work, and returns the images the

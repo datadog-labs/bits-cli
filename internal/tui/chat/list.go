@@ -501,16 +501,13 @@ func (l *List) widgetAtRow(y int) (idx, line int, ok bool) {
 		return 0, 0, false
 	}
 	v, has := l.widgets[l.view[idx].id]
-	return idx, line, has && v.Action != WidgetNone
+	return idx, line, has && v.actionAt(line, l.itemHeight(idx)) != WidgetNone
 }
 
 // ClearWidgetViews drops every widget view, so blocks render as before and
 // take no clicks; the caller's widgets are gone.
 func (l *List) ClearWidgetViews() {
-	for id := range l.widgets {
-		delete(l.cache, id)
-	}
-	clear(l.widgets)
+	l.SetWidgetViews(nil)
 }
 
 // itemAtRow maps a viewport row to a rendered presentation item. Gaps and
@@ -549,7 +546,7 @@ func (l *List) LinkAt(x, y int) (LinkHit, bool) {
 	}
 	hit := LinkHit{BlockID: item.id, Rev: item.rev, Row: row}
 	if v, ok := l.widgets[item.id]; ok {
-		hit.Action = v.Action
+		hit.Action = v.actionAt(row, l.itemHeight(idx))
 		return hit, hit.Action != WidgetNone
 	}
 	// Only the markdown renderer emits hyperlinks: every other renderer
@@ -706,19 +703,29 @@ func (l *List) HasAnimated() bool {
 	return false
 }
 
-// SetWidgetView replaces how a widget block renders, and reports whether the
-// view changed. Views are presentation state owned by the caller; Reset drops
-// them with the conversation.
-func (l *List) SetWidgetView(id agent.BlockID, v WidgetView) bool {
-	if old, ok := l.widgets[id]; ok && old == v {
-		return false
+// SetWidgetViews installs the widgets' current presentation. Batch visibility
+// changes so dropping several cards only rebuilds the presentation once.
+func (l *List) SetWidgetViews(views map[agent.BlockID]WidgetView) bool {
+	changed, relayout := false, false
+	for id, view := range views {
+		if old, ok := l.widgets[id]; !ok || old != view {
+			delete(l.cache, id)
+			changed = true
+			relayout = relayout || old.Hidden != view.Hidden
+		}
 	}
-	if l.widgets == nil {
-		l.widgets = make(map[agent.BlockID]WidgetView)
+	for id, old := range l.widgets {
+		if _, ok := views[id]; !ok {
+			delete(l.cache, id)
+			changed = true
+			relayout = relayout || old.Hidden
+		}
 	}
-	l.widgets[id] = v
-	delete(l.cache, id)
-	return true
+	l.widgets = views
+	if relayout {
+		l.relayout()
+	}
+	return changed
 }
 
 // SetRunning reports whether a run is active, so the list alone decides
@@ -995,6 +1002,9 @@ func (l *List) present() []presentationItem {
 	view := items[:0]
 	closed := false
 	for _, it := range items {
+		if it.kind == itemBlock && l.widgets[it.id].Hidden {
+			continue
+		}
 		switch it.kind {
 		case itemToolGroup:
 			closed = it.group.closed && !l.expanded(it.id)
