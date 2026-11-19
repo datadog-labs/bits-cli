@@ -201,6 +201,10 @@ func validateHistoryMessage(message assistant.Message) error {
 		if message.Content.Dashboard == nil {
 			return errors.New("dashboard content has no payload")
 		}
+	case assistant.KindWidget:
+		if message.Content.Widget == nil {
+			return errors.New("widget content has no payload")
+		}
 	case assistant.KindApp:
 		if message.Content.App == nil {
 			return errors.New("app content has no payload")

@@ -60,6 +60,11 @@ func TestRemoteRender(t *testing.T) {
 	if r := c.Render(context.Background(), Request{App: timeseries}); r.Status.Phase != Succeeded || api.got.End.Sub(api.got.Start) != time.Hour {
 		t.Fatalf("no window: result = %+v, options = %+v", r, api.got)
 	}
+	legacy := legacyWidgetRequest(t, `{"type":"timeseries","time":{"type":"fixed","from":1123.0,"to":5456.0}}`)
+	if r := c.Render(context.Background(), legacy); r.Status.Phase != Succeeded || api.got.Start.UnixMilli() != 1123 || api.got.End.UnixMilli() != 5456 ||
+		string(api.got.Definition) != string(legacy.LegacyWidget.Definition) {
+		t.Fatalf("legacy snapshot: result = %+v, options = %+v", r, api.got)
+	}
 	incident := assistant.AppPayload{ResourceURI: DatavizURI, Result: json.RawMessage(`{"_meta":{"datadog/show_ui":{"view_spec":{"view":{"name":"incident_detail"}}}}}`)}
 	if s := c.Render(context.Background(), Request{App: incident}).Status; s.Phase != Failed || s.Retry != RetryNotUseful {
 		t.Fatalf("incident view = %+v", s)

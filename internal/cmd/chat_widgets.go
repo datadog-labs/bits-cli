@@ -10,23 +10,22 @@ import (
 	"sync"
 
 	"github.com/datadog-labs/bits-cli/internal/auth"
+	"github.com/datadog-labs/bits-cli/internal/datadogmcp"
 	"github.com/datadog-labs/bits-cli/internal/site"
 	"github.com/datadog-labs/bits-cli/internal/version"
 	"github.com/datadog-labs/bits-cli/internal/viz"
 )
 
-// chatWidgets is the chat's app client: wiring, not a command. It
-// authenticates on the first operation, on an operation worker rather than the
-// TUI event loop, with the chat's own credentials. It then renders apps with
-// ddviz, or charts with Datadog snapshots where ddviz cannot run, and owns
-// that client.
+// chatWidgets owns the renderer and authenticates with the chat's credentials
+// on the operation worker. The renderer uses ddviz or Datadog snapshots.
 type chatWidgets struct {
-	mu     sync.Mutex
-	opts   ChatOptions
-	store  auth.CredentialStore
-	local  bool // ddviz runs here; otherwise Datadog renders snapshots
-	client viz.Client
-	closed bool
+	mu        sync.Mutex
+	opts      ChatOptions
+	store     auth.CredentialStore
+	local     bool // ddviz runs here; otherwise Datadog renders snapshots
+	client    viz.Client
+	legacyMCP *datadogmcp.Client
+	closed    bool
 }
 
 // EnvViz selects the widget renderer: auto (the default) prefers ddviz, which
@@ -78,7 +77,14 @@ func (c *chatWidgets) get(ctx context.Context) (viz.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.client = viz.New(viz.Config{API: api, FrameURL: frame, Version: version.Build()})
+	config := viz.Config{API: api, FrameURL: frame, Version: version.Build()}
+	// The direct MCP connection is only used by legacy charts and opens lazily.
+	// Sites without a direct MCP endpoint can still serve relayed apps.
+	if legacy, err := datadogmcp.New(api); err == nil {
+		c.legacyMCP = legacy
+		config.CallLegacyTool = legacy.CallToolJSON
+	}
+	c.client = viz.New(config)
 	return c.client, nil
 }
 
@@ -127,10 +133,14 @@ func (c *chatWidgets) Interactive() bool { return c.local }
 func (c *chatWidgets) Close() error {
 	c.mu.Lock()
 	c.closed = true
-	client := c.client
+	client, legacy := c.client, c.legacyMCP
 	c.mu.Unlock()
 	if client == nil {
 		return nil
 	}
-	return client.Close()
+	if legacy == nil {
+		return client.Close()
+	}
+	// Viewers may still be making calls through the direct connection.
+	return errors.Join(client.Close(), legacy.Close())
 }

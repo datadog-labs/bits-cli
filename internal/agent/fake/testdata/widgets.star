@@ -2,8 +2,9 @@
   load("widgets.star", "gallery"); gallery()
 
 Only assistant messages are faked. Charts render as Datadog snapshots of the
-get_widget payload inside each app's result. The fake opens no relay session,
-so ddviz cannot load data for these apps. saved() can: see its comment.
+get_widget payload inside each app's result or from the legacy definition.
+ddviz can render legacy charts with a Bits login that has read-only MCP
+access. The fake opens no relay session for apps. See saved() for real apps.
 CPU metrics depend on the account; an empty chart is not necessarily a failure.
 
 Payloads match the backend's mcp_app content: the title lives inside the
@@ -50,8 +51,9 @@ def saved(message):
     }, id=message)
 
 def gallery():
-    say("## Widget gallery\nResize, then scroll away and back. Previews should be retained. The incident card has no snapshot preview: it shows its title only.")
+    say("## Widget gallery\nResize, then scroll away and back. Previews should be retained. Legacy and app charts should both render. The unsaved incident app has no snapshot or link.")
     _chart(_definition("CPU timeseries"))
+    raw({"type": "widget_def", "widget_def": _definition("CPU timeseries (legacy)")})
     _chart(_definition("CPU query value", kind="query_value"))
     _chart(_definition("CPU by host", query="avg:system.cpu.user{*} by {host}", kind="toplist"))
     _chart(_definition("Empty result", query="avg:system.cpu.user{bits_viz_fixture:deliberately_absent}"))
@@ -66,6 +68,9 @@ def timing(from_s, to_s):
         fail(400, "timing requires positive Unix seconds with from_s < to_s")
     say("## Time range\nCompare axis labels and data in the preview and the web sandbox. The chart must use %d–%d seconds, not the current hour." % (from_s, to_s))
     _chart(_definition("Fixed historical range"), from_s=from_s, to_s=to_s)
+    legacy = _definition("Fixed historical range (legacy)")
+    legacy["time"] = {"type": "fixed", "from": from_s * 1000, "to": to_s * 1000}
+    raw({"type": "widget_def", "widget_def": legacy})
 
 def burst(count=8):
     say("## Concurrent previews\nScroll through these charts to start previews, then use /new while work is pending. Old completions must not appear in the new conversation.")

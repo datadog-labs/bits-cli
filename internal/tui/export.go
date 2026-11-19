@@ -81,6 +81,12 @@ func exportTurn(block agent.Block, userLabel string) string {
 			if body := strings.TrimSpace(ansi.Strip(block.Markdown.Content)); body != "" {
 				return withSpeaker("Bits", body)
 			}
+		case assistant.KindWidget:
+			var title string
+			if block.Widget != nil {
+				title = block.Widget.Title
+			}
+			return withSpeaker("Bits", viewPlaceholder("Chart", title))
 		case assistant.KindApp:
 			if block.App != nil {
 				// NOTE: a saved app exports untitled: what the TUI restores stays in
@@ -96,12 +102,16 @@ func exportTurn(block agent.Block, userLabel string) string {
 }
 
 // appPlaceholder stands in for an app, which an export cannot embed.
-func appPlaceholder(summary assistant.AppSummary) string {
+func appPlaceholder(summary assistant.ViewSummary) string {
 	label := "View"
 	if summary.Chart != nil {
 		label = "Chart"
 	}
-	if title := strings.TrimSpace(summary.Title); title != "" {
+	return viewPlaceholder(label, summary.Title)
+}
+
+func viewPlaceholder(label, title string) string {
+	if title = strings.TrimSpace(title); title != "" {
 		return "_[" + label + ": " + title + "]_"
 	}
 	return "_[" + label + "]_"

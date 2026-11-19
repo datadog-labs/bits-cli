@@ -1264,11 +1264,11 @@ func (l *List) ReplaceTranscript(blocks []agent.Block, tasks []agent.Task, notic
 	l.SetTranscript(blocks, tasks, notices)
 }
 
-// Widgets returns every app block, and which of them intersect the
+// Widgets returns every visualization block, and which of them intersect the
 // viewport, found in one walk of the visible items.
 func (l *List) Widgets() (blocks []agent.Block, visible map[agent.BlockID]bool) {
 	for _, b := range l.items {
-		if b.Kind == assistant.KindApp {
+		if b.Kind == assistant.KindApp || b.Kind == assistant.KindWidget {
 			blocks = append(blocks, b)
 		}
 	}
@@ -1280,8 +1280,11 @@ func (l *List) Widgets() (blocks []agent.Block, visible map[agent.BlockID]bool) 
 	row := -l.offsetLine
 	for idx := l.offsetIdx; idx < len(l.view) && row < l.height; idx++ {
 		height := len(l.entry(idx).lines)
-		if item := l.view[idx]; row+height > 0 && item.kind == itemBlock && item.start >= 0 && l.items[item.start].Kind == assistant.KindApp {
-			visible[item.id] = true
+		if item := l.view[idx]; row+height > 0 && item.kind == itemBlock && item.start >= 0 {
+			kind := l.items[item.start].Kind
+			if kind == assistant.KindApp || kind == assistant.KindWidget {
+				visible[item.id] = true
+			}
 		}
 		row += height + l.gapAfter(idx)
 	}

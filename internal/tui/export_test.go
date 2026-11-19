@@ -140,8 +140,9 @@ func TestConversationMarkdown(t *testing.T) {
 				exportApp(`{"structuredContent":{"widget_definition":{"type":"timeseries","title":" "}}}`),
 				exportApp(`{"_meta":{"datadog/show_ui":{"view_spec":{"view":{"name":"incident_detail"}}}}}`),
 				exportApp(""), // saved, not yet restored
+				{Role: assistant.RoleAssistant, Kind: assistant.KindWidget, Widget: &assistant.LegacyWidget{Title: "Earlier chart"}},
 			},
-			want: "**Bits:** _[Chart: CPU]_\n\n**Bits:** _[Chart]_\n\n**Bits:** _[View: Incident detail]_\n\n**Bits:** _[View]_",
+			want: "**Bits:** _[Chart: CPU]_\n\n**Bits:** _[Chart]_\n\n**Bits:** _[View: Incident detail]_\n\n**Bits:** _[View]_\n\n**Bits:** _[Chart: Earlier chart]_",
 			ok:   true,
 		},
 		{

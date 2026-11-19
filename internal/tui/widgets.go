@@ -2,7 +2,9 @@ package tui
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -92,11 +94,10 @@ type widgets struct {
 // widgetEntry is one app revision: its operations and stored image.
 type widgetEntry struct {
 	rev int
-	// request is the revision's first: a copy of the block's app, which viz
-	// borrows, and the terminal's theme at startup.
+	// request captures the first payload and theme for this block revision.
 	request    viz.Request
-	summary    assistant.AppSummary // of the latest result; empty until there is one
-	controller *viz.Controller      // created on first use outside link mode
+	summary    assistant.ViewSummary // of the latest result; empty until there is one
+	controller *viz.Controller       // created on first use outside link mode
 	image      graphics.Image
 	snapshot   *viz.Snapshot // the one stored under image.ID
 }
@@ -119,7 +120,7 @@ func (w *widgets) sync(list *chat.List, mode widgetMode, dark bool, epoch uint64
 		blocks, visible := list.Widgets()
 		views := make(map[agent.BlockID]chat.WidgetView, len(blocks))
 		for _, block := range blocks {
-			if !block.Complete || block.App == nil {
+			if !block.Complete || (block.App == nil && block.Widget == nil) {
 				continue
 			}
 			live[block.ID] = true
@@ -147,7 +148,7 @@ func (w *widgets) webAction(e *widgetEntry) chat.WidgetAction {
 	if w.origin == "" {
 		return chat.WidgetNone
 	}
-	if e.summary.Chart != nil && e.request.App.ResourceURI == viz.DatavizURI {
+	if e.summary.Chart != nil && (e.request.LegacyWidget != nil || e.request.App.ResourceURI == viz.DatavizURI) {
 		return chat.WidgetWeb
 	}
 	if e.request.CanRestore() {
@@ -170,6 +171,11 @@ func (w *widgets) view(e *widgetEntry, mode widgetMode, visible bool, width int)
 	supported := app.ResourceURI == viz.DatavizURI
 	canOpen := local && supported && (hasResult && app.RelayHandle != "" || request.CanRestore())
 	canSnapshot := !local && supported && (e.summary.Chart != nil || !hasResult && request.CanRestore())
+	if request.LegacyWidget != nil {
+		view.Title = cmp.Or(view.Title, "Widget")
+		canOpen = local && e.summary.Chart != nil
+		canSnapshot = !local && e.summary.Chart != nil
+	}
 	preview := mode == widgetInline && (canOpen || canSnapshot)
 
 	var cmd tea.Cmd
@@ -205,18 +211,20 @@ func (w *widgets) view(e *widgetEntry, mode widgetMode, visible bool, width int)
 			view.Note = failureReason(state.Render)
 		}
 	}
-	view.Hidden = view.Action == chat.WidgetNone && view.Link == chat.WidgetNone && view.Image.Rows == 0 && view.Loading == "" && view.Note == ""
+	view.Hidden = request.LegacyWidget == nil && view.Action == chat.WidgetNone && view.Link == chat.WidgetNone && view.Image.Rows == 0 && view.Loading == "" && view.Note == ""
 	return view, cmd
 }
 
-// entry returns the block's current entry, replacing one whose app changed.
+// entry returns the block's current entry, replacing one whose view changed.
 func (w *widgets) entry(block agent.Block, conversationID string, dark bool) (*widgetEntry, tea.Cmd) {
 	e := w.entries[block.ID]
-	app := *block.App // a revision replaces the payload, never changes it
-	// The server may assign the conversation ID after this app streamed.
-	// Its controller must then use the new ID for restoration.
-	if e != nil && e.request.ConversationID == conversationID && (e.rev == block.Rev || sameApp(e.request.App, app)) {
-		e.rev = block.Rev // a revision that changed nothing to draw
+	request := viz.Request{LegacyWidget: block.Widget, ConversationID: conversationID, MessageID: block.MessageID, Dark: dark}
+	if block.App != nil {
+		request.App = *block.App // revisions replace payloads without mutating them
+	}
+	// A newly assigned conversation ID lets an existing app be restored.
+	if e != nil && e.request.ConversationID == conversationID && (e.rev == block.Rev || sameView(e.request, request)) {
+		e.rev = block.Rev
 		return e, nil
 	}
 	cmd := w.remove(block.ID)
@@ -224,17 +232,25 @@ func (w *widgets) entry(block agent.Block, conversationID string, dark bool) (*w
 		w.entries = make(map[agent.BlockID]*widgetEntry)
 	}
 	w.nextID++
+	summary := request.App.Summary()
+	if block.Widget != nil {
+		summary = assistant.ViewSummary{Title: block.Widget.Title, Chart: block.Widget.Chart(time.Now())}
+	}
 	e = &widgetEntry{
 		rev:     block.Rev,
-		request: viz.Request{App: app, ConversationID: conversationID, MessageID: block.MessageID, Dark: dark},
-		summary: app.Summary(),
+		request: request,
+		summary: summary,
 		image:   graphics.Image{ID: 0xB10000 + w.nextID},
 	}
 	w.entries[block.ID] = e
 	return e, cmd
 }
 
-func sameApp(a, b assistant.AppPayload) bool {
+func sameView(left, right viz.Request) bool {
+	if a, b := left.LegacyWidget, right.LegacyWidget; a != nil || b != nil {
+		return a != nil && b != nil && a.Title == b.Title && bytes.Equal(a.Definition, b.Definition)
+	}
+	a, b := left.App, right.App
 	return a.ToolCallID == b.ToolCallID && a.ToolName == b.ToolName && a.ResourceURI == b.ResourceURI &&
 		a.RelayHandle == b.RelayHandle && a.Restorable == b.Restorable &&
 		bytes.Equal(a.ToolInput, b.ToolInput) && bytes.Equal(a.Result, b.Result)
@@ -278,10 +294,14 @@ func (w *widgets) webURL(e *widgetEntry, action chat.WidgetAction) string {
 	var err error
 	switch action {
 	case chat.WidgetWeb:
-		if e.summary.Chart == nil {
+		chart := e.summary.Chart
+		if e.request.LegacyWidget != nil {
+			chart = e.request.LegacyWidget.Chart(time.Now())
+		}
+		if chart == nil {
 			return ""
 		}
-		target, err = viz.SandboxURL(w.origin, *e.summary.Chart)
+		target, err = viz.SandboxURL(w.origin, *chart)
 	case chat.WidgetConversation:
 		target, err = browser.ConversationURL(w.origin, e.request.ConversationID)
 	case chat.WidgetNone, chat.WidgetOpen, chat.WidgetRetry:

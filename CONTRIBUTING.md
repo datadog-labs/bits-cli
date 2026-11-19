@@ -115,9 +115,9 @@ Tests that contact Datadog are opt-in:
 
 - `BITS_OAUTH_E2E=1` reuses your stored OAuth login.
 - `BITS_VIZ_E2E=1` renders a CPU chart through the Datadog snapshot API. With
-  `BITS_VIZ_E2E_APP=conversation/message` naming a saved app, it also restores
-  that app and renders it through ddviz, which requires macOS 13+ and a built
-  helper. Both tests require a stored Bits login with the corresponding access.
+  a built ddviz helper on macOS 13+, it also renders a legacy chart through
+  direct MCP. Set `BITS_VIZ_E2E_APP=conversation/message` to also restore
+  and render that saved app through ddviz. These tests use your stored Bits login.
 - `BITS_ASSISTANT_E2E=1` requires `DD_API_KEY`, `DD_APP_KEY`, and an explicit
   `BITS_E2E_SITE` naming the Datadog API site.
 
@@ -126,8 +126,9 @@ For noninteractive runs, see the [ADEEP delivery documentation](internal/headles
 ## Widget previews
 
 Bits shows the Datadog views the assistant attaches to its answers, such as
-charts, incident cards, and monitor lists. The assistant sends these MCP apps
-only to the `web_ui` profile for now. To try them, run with the development
+charts, incident cards, and monitor lists. Legacy chart definitions still
+render in new turns and saved conversations. The assistant sends MCP apps only
+to the `web_ui` profile for now. To try them, run with the development
 override `BITS_PROFILE=web_ui`; your organization also needs the assistant's
 MCP app feature.
 
@@ -142,8 +143,9 @@ and saved apps can open their conversation in Datadog. Bits omits a view when
 it has no supported renderer or destination.
 
 When a chart has no time range, snapshots and chart links default to the last
-hour. Previewing or opening a saved view in ddviz restores it by running its
-tool again. Opening the conversation link goes directly to the browser.
+hour. ddviz loads legacy charts through Datadog MCP and restores saved apps
+through the Assistant API. Opening the conversation link goes directly to the
+browser.
 
 `BITS_GRAPHICS=auto` (the default) detects inline images, including the startup logo.
 Use `BITS_GRAPHICS=on bits` to bypass terminal identity checks, or

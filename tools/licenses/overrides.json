@@ -1,4 +1,9 @@
 {
+  "github.com/modelcontextprotocol/go-sdk": {
+    "license": "Apache-2.0 AND MIT",
+    "detected": "CC-BY-4.0",
+    "reason": "v1.8.0 LICENSE assigns Apache-2.0 to new and relicensed code and MIT to code awaiting relicensing consent; CC-BY-4.0 covers documentation only"
+  },
   "github.com/inconshreveable/mousetrap": {
     "license": "Apache-2.0",
     "copyright": "Copyright 2022 Alan Shreve (@inconshreveable)",

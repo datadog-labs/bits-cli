@@ -125,6 +125,7 @@ type Block struct {
 	Thinking  *assistant.ThinkingPayload      // KindReasoning: model thinking
 	Tool      *ToolBlock                      // KindToolCall/KindToolResult: merged call+result
 	Dashboard *assistant.DashboardPayload     // KindDashboard
+	Widget    *assistant.LegacyWidget         // KindWidget
 	App       *assistant.AppPayload           // KindApp
 	Progress  *assistant.ProgressPayload      // KindProgress
 	Memory    *assistant.MemoryContextPayload // KindMemory

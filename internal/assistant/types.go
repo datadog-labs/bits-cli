@@ -368,6 +368,10 @@ const (
 const ApprovalRequestTool = "approval_request"
 
 const (
+	// ContentWidgetDef is a chart definition sent by older producers and stored
+	// in conversation history. ContentWidget is the earlier title-only tile.
+	ContentWidgetDef = "widget_def"
+	ContentWidget    = "widget"
 	// ContentDashboard is a whole generated dashboard (title + widgets).
 	ContentDashboard = "dashboard"
 	// ContentMemoryContext lists the Context Engine memories the backend added
@@ -478,15 +482,15 @@ type Chart struct {
 	Start, End time.Time
 }
 
-// AppSummary is what a client can show of an app without hosting it.
-type AppSummary struct {
+// ViewSummary is the title and optional chart a client can display without a frame.
+type ViewSummary struct {
 	Title string
 	Chart *Chart // nil unless the result renders one widget
 }
 
 // Summary reads the app's result: the chart its widget definition describes,
 // or the name of the show_ui view. It is empty for a saved app.
-func (a *AppPayload) Summary() AppSummary {
+func (a *AppPayload) Summary() ViewSummary {
 	var result struct {
 		Meta struct {
 			ShowUI struct {
@@ -504,7 +508,7 @@ func (a *AppPayload) Summary() AppSummary {
 		} `json:"structuredContent"`
 	}
 	if len(a.Result) == 0 || json.Unmarshal(a.Result, &result) != nil {
-		return AppSummary{}
+		return ViewSummary{}
 	}
 	// Datadog validates the rest of the definition when it renders the widget.
 	var widget struct {
@@ -516,14 +520,14 @@ func (a *AppPayload) Summary() AppSummary {
 		if s.From > 0 && s.To > s.From {
 			chart.Start, chart.End = time.Unix(s.From, 0), time.Unix(s.To, 0)
 		}
-		return AppSummary{Title: widget.Title, Chart: chart}
+		return ViewSummary{Title: widget.Title, Chart: chart}
 	}
 	// NOTE: results carry no display title, so a view's registry name stands in.
 	name := strings.ReplaceAll(result.Meta.ShowUI.ViewSpec.View.Name, "_", " ")
 	if name == "" {
-		return AppSummary{}
+		return ViewSummary{}
 	}
-	return AppSummary{Title: strings.ToUpper(name[:1]) + name[1:]}
+	return ViewSummary{Title: strings.ToUpper(name[:1]) + name[1:]}
 }
 
 // ProgressPayload carries fields for the background_task_update content type;
@@ -567,6 +571,7 @@ type Content struct {
 	Thinking   *ThinkingPayload      // thinking
 	Tool       *ToolPayload          // tool_call, client_tool_call, tool_call_started, tool_call_input_delta, tool_response, client_tool_response
 	Dashboard  *DashboardPayload     // dashboard
+	Widget     *LegacyWidget         // widget_def, widget
 	App        *AppPayload           // mcp_app, mcp_app_saved
 	Progress   *ProgressPayload      // background_task_update
 	Memory     *MemoryContextPayload // memory_context
@@ -665,6 +670,7 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 		ToolName          string            `json:"tool_name"`
 		IsClientSide      *bool             `json:"is_client_side"`
 		PartialJSON       string            `json:"partial_json"`
+		WidgetDef         json.RawMessage   `json:"widget_def"`
 		Widgets           json.RawMessage   `json:"widgets"`
 		Description       string            `json:"description"`
 		LayoutType        string            `json:"layout_type"`
@@ -733,6 +739,8 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 			ReflowType:        a.ReflowType,
 			TemplateVariables: a.TemplateVariables,
 		}
+	case ContentWidgetDef, ContentWidget:
+		c.Widget = decodeLegacyWidget(a.WidgetDef, a.Title)
 	case ContentApp:
 		c.App = &AppPayload{
 			ToolCallID:  a.ToolCallID,
@@ -793,6 +801,7 @@ const (
 	KindToolCall                      // tool_call / client_tool_call / tool_call_started / tool_call_input_delta
 	KindToolResult                    // tool_response / client_tool_response
 	KindDashboard                     // dashboard: whole dashboard, summarize
+	KindWidget                        // widget_def / widget: legacy chart or tile
 	KindApp                           // mcp_app / mcp_app_saved: a Datadog MCP App
 	KindProgress                      // background_task_update: async task progress/final
 	KindMemory                        // memory_context: memories added to the agent's context
@@ -816,6 +825,8 @@ func (c *Content) Kind() ContentKind {
 		return KindToolResult
 	case ContentDashboard:
 		return KindDashboard
+	case ContentWidgetDef, ContentWidget:
+		return KindWidget
 	case ContentApp, ContentAppSaved:
 		return KindApp
 	case ContentBackgroundTaskUpdate:
@@ -848,6 +859,8 @@ func (k ContentKind) String() string {
 		return "tool_result"
 	case KindDashboard:
 		return "dashboard"
+	case KindWidget:
+		return "widget"
 	case KindApp:
 		return "app"
 	case KindProgress:
