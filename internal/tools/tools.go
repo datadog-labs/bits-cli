@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
@@ -55,6 +56,15 @@ func NewClientTools(ws *workspace.Workspace, commands *exectool.ExecService) []a
 // errorResult builds an error ToolResult with a formatted output message.
 func errorResult(format string, args ...any) agent.ToolResult {
 	return agent.ToolResult{IsError: true, Output: fmt.Sprintf(format, args...)}
+}
+
+// walkWarning separates a walk that completed without some .gitignore rules,
+// which it returns as a note for the output, from a failed walk.
+func walkWarning(err error) (string, error) {
+	if unread, ok := errors.AsType[*workspace.IgnoreFileError](err); ok {
+		return "\n\n[Warning: " + unread.Error() + "]", nil
+	}
+	return "", err
 }
 
 // workspaceReadApproval returns the shared approval policy for the read-only editor tools.

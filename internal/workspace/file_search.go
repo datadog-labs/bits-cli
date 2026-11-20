@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"path/filepath"
 	"sync"
@@ -75,7 +76,12 @@ type FileSearchSession struct {
 // NewFileSearchSession starts one asynchronous walk of the workspace.
 func (w *Workspace) NewFileSearchSession(ctx context.Context, options FileSearchOptions) *FileSearchSession {
 	return newFileSearchSession(ctx, func(ctx context.Context, visit WalkFunc) error {
-		return w.Walk(ctx, ".", visit)
+		err := w.Walk(ctx, ".", visit)
+		// The index is complete; unapplied ignore rules only add candidates.
+		if _, ok := errors.AsType[*IgnoreFileError](err); ok {
+			return nil
+		}
+		return err
 	}, options)
 }
 

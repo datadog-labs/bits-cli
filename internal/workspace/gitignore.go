@@ -22,6 +22,8 @@ const maxGitignoreSize = 1024 * 1024
 // hiding a distinct directory.
 type Ignorer struct {
 	matcher *gitignore.Matcher
+	// unread holds the errors of the files add could not read.
+	unread []error
 }
 
 // Add loads .gitignore rules from dir (workspace-relative; "." for the root).
@@ -78,11 +80,49 @@ func (ig *Ignorer) Ignore(filePath string, isDir bool) bool {
 	return ig.matcher != nil && ig.matcher.MatchPath(filePath, isDir)
 }
 
+// IgnoreFileError reports the .gitignore files a walk could not read, such as
+// one another process holds open on Windows. As git does, the walk still
+// visits every entry, only without those files' rules.
+type IgnoreFileError struct{ Errs []error }
+
+// maxNamedIgnoreFiles bounds the message, which tools append after their
+// output budget: a tree of unreadable files must not flood the model.
+const maxNamedIgnoreFiles = 3
+
+func (e *IgnoreFileError) Error() string {
+	named := e.Errs[:min(len(e.Errs), maxNamedIgnoreFiles)]
+	messages := make([]string, len(named))
+	for i, err := range named {
+		messages[i] = err.Error()
+	}
+	message := "ignore rules not applied: " + strings.Join(messages, "; ")
+	if more := len(e.Errs) - len(named); more > 0 {
+		message += fmt.Sprintf("; and %d more", more)
+	}
+	return message
+}
+
+func (e *IgnoreFileError) Unwrap() []error { return e.Errs }
+
+// add loads dir's .gitignore like Add, but records a read failure rather than
+// returning it. Only cancellation stops the caller.
+func (ig *Ignorer) add(ctx context.Context, fsys fs.FS, dir string) error {
+	err := ig.Add(ctx, fsys, dir)
+	if err == nil {
+		return nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	ig.unread = append(ig.unread, err)
+	return nil
+}
+
 // loadIgnorer loads every .gitignore from the workspace root through base.
 // For a file base, only its containing directories are loaded.
 func loadIgnorer(ctx context.Context, fsys fs.FS, base string, baseIsDir bool) (Ignorer, error) {
 	var ig Ignorer
-	if err := ig.Add(ctx, fsys, "."); err != nil {
+	if err := ig.add(ctx, fsys, "."); err != nil {
 		return Ignorer{}, err
 	}
 
@@ -101,7 +141,7 @@ func loadIgnorer(ctx context.Context, fsys fs.FS, base string, baseIsDir bool) (
 		if ig.Ignore(current, true) {
 			break
 		}
-		if err := ig.Add(ctx, fsys, current); err != nil {
+		if err := ig.add(ctx, fsys, current); err != nil {
 			return Ignorer{}, err
 		}
 	}

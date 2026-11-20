@@ -29,8 +29,6 @@ const (
 	maxGrepMatchBytes = 8 * 1024
 )
 
-var errGrepMatchLimit = errors.New("grep match limit reached")
-
 func newGrepFilesTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
@@ -111,6 +109,7 @@ func grepFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 		start := args.Offset
 		seen := 0
 
+		cappedByMatchLimit := false
 		searchFile := func(filePath string, skipOpenErrors bool) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -154,14 +153,14 @@ func grepFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 					}
 					allMatches = append(allMatches, match{file: rel, line: lineNum, text: truncateGrepMatch(line)})
 					if len(allMatches) > maxGrepMatches {
-						return errGrepMatchLimit
+						cappedByMatchLimit = true
+						return fs.SkipAll
 					}
 				}
 				return nil
 			})
 		}
 
-		cappedByMatchLimit := false
 		walkErr := workspace.WalkFS(ctx, fsys, base, func(p string, d fs.DirEntry) error {
 			if d.IsDir() {
 				return nil
@@ -171,9 +170,8 @@ func grepFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 			}
 			return searchFile(p, info.IsDir())
 		})
-		if errors.Is(walkErr, errGrepMatchLimit) {
-			cappedByMatchLimit = true
-		} else if walkErr != nil {
+		warning, walkErr := walkWarning(walkErr)
+		if walkErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return agent.ToolResult{}, ctxErr
 			}
@@ -184,12 +182,12 @@ func grepFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 		}
 
 		if seen == 0 {
-			return agent.ToolResult{Output: "No matches found."}, nil
+			return agent.ToolResult{Output: "No matches found." + warning}, nil
 		}
 
 		if len(allMatches) == 0 {
 			return agent.ToolResult{
-				Output: fmt.Sprintf("offset %d is beyond the last match (%d total).", start, seen),
+				Output: fmt.Sprintf("offset %d is beyond the last match (%d total).", start, seen) + warning,
 			}, nil
 		}
 
@@ -228,7 +226,7 @@ func grepFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 				output += fmt.Sprintf("\n\n[%d more matches. Use offset=%d to continue.]", remaining, next)
 			}
 		}
-		return agent.ToolResult{Output: output}, nil
+		return agent.ToolResult{Output: output + warning}, nil
 	}
 }
 

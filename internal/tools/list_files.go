@@ -118,6 +118,7 @@ func listFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 			byteCount += len(line)
 			return nil
 		})
+		warning, err := walkWarning(err)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return agent.ToolResult{}, ctxErr
@@ -126,7 +127,7 @@ func listFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 		}
 
 		if len(entries) == 0 {
-			return agent.ToolResult{Title: base, Output: "(empty)"}, nil
+			return agent.ToolResult{Title: base, Output: "(empty)" + warning}, nil
 		}
 
 		output := strings.Join(entries, "\n")
@@ -140,6 +141,6 @@ func listFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 			}
 			output += "\n\n[Truncated: " + strings.Join(warnings, ", ") + "]"
 		}
-		return agent.ToolResult{Title: base, Output: output}, nil
+		return agent.ToolResult{Title: base, Output: output + warning}, nil
 	}
 }

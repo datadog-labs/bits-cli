@@ -108,6 +108,38 @@ func TestGrepFilesTool(t *testing.T) {
 		}
 	})
 
+	t.Run("unreadable gitignore searches everything with a warning", func(t *testing.T) {
+		fsys := openErrorFS{
+			FS:   fstest.MapFS{".gitignore": {Data: []byte("*.log\n")}, "a.log": {Data: []byte("needle\n")}},
+			name: ".gitignore",
+			err:  fs.ErrPermission,
+		}
+		tool := newGrepFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"pattern":"needle"}`})
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected error: %v %s", err, result.Output)
+		}
+		if want := "a.log:1: needle\n\n[Warning: ignore rules not applied: open .gitignore: permission denied]"; result.Output != want {
+			t.Errorf("output = %q, want %q", result.Output, want)
+		}
+	})
+
+	t.Run("match limit keeps the gitignore warning", func(t *testing.T) {
+		fsys := openErrorFS{
+			FS:   fstest.MapFS{".gitignore": {Data: []byte("*.log\n")}, "a.log": {Data: []byte(strings.Repeat("needle\n", maxGrepMatches+1))}},
+			name: ".gitignore",
+			err:  fs.ErrPermission,
+		}
+		tool := newGrepFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"pattern":"needle"}`})
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected error: %v %s", err, result.Output)
+		}
+		if want := "Use offset=200 to continue.]\n\n[Warning: ignore rules not applied: open .gitignore: permission denied]"; !strings.HasSuffix(result.Output, want) {
+			t.Errorf("output ends %q, want suffix %q", result.Output[max(0, len(result.Output)-200):], want)
+		}
+	})
+
 	t.Run("directly searched file open error is returned", func(t *testing.T) {
 		fsys := openErrorFS{
 			FS:   fstest.MapFS{"denied.txt": {Data: []byte("needle\n")}},

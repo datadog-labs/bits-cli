@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -176,6 +177,22 @@ func TestListFilesTool(t *testing.T) {
 		}
 		if strings.Contains(result.Output, "secret.txt") || !strings.Contains(result.Output, "visible.txt") {
 			t.Errorf("root ignore rules must apply to scoped listings: %s", result.Output)
+		}
+	})
+
+	t.Run("unreadable gitignore lists everything with a warning", func(t *testing.T) {
+		fsys := openErrorFS{
+			FS:   fstest.MapFS{"src/.gitignore": {Data: []byte("*.log\n")}, "src/a.log": {Data: []byte("x")}},
+			name: "src/.gitignore",
+			err:  fs.ErrPermission,
+		}
+		tool := newListFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"path":"src"}`})
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected error: %v %s", err, result.Output)
+		}
+		if want := ".gitignore\na.log\n\n[Warning: ignore rules not applied: open src/.gitignore: permission denied]"; result.Output != want {
+			t.Errorf("output = %q, want %q", result.Output, want)
 		}
 	})
 
