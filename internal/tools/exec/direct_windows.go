@@ -80,6 +80,11 @@ func (p *directExecProcess) Wait() execProcessResult {
 	}
 	// Exit codes are DWORDs that cmd and PowerShell show as signed: -1 and
 	// -1073741819 (an access violation), not 4294967295 and 3221225477.
+	if p.job.terminated() {
+		// Like a Unix signal, termination leaves no exit code of the
+		// command's own; the job's is the one terminate chose.
+		return execProcessResult{outputIncomplete: outputIncomplete}
+	}
 	exitCode := int(int32(state.Sys().(syscall.WaitStatus).ExitCode))
 	return execProcessResult{exitCode: &exitCode, outputIncomplete: outputIncomplete}
 }
@@ -103,6 +108,8 @@ const execPipeWaitDelay = 100 * time.Millisecond
 type execJob struct {
 	mu     sync.Mutex
 	handle windows.Handle
+	// ended records that terminate ended the job's processes.
+	ended bool
 }
 
 func newExecJob() (*execJob, error) {
@@ -136,7 +143,14 @@ func (j *execJob) terminate() error {
 	if j.handle == 0 {
 		return nil
 	}
+	j.ended = true
 	return windows.TerminateJobObject(j.handle, 1)
+}
+
+func (j *execJob) terminated() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.ended
 }
 
 func (j *execJob) close() {

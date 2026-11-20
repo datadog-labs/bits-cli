@@ -306,8 +306,8 @@ func TestExecServiceWindowsPowerShellTimeoutKillsDirectProcess(t *testing.T) {
 		CWD:     t.TempDir(),
 		Timeout: 50 * time.Millisecond,
 	})
-	if outcome.Status != ExecTimedOut || !errors.Is(outcome.Err, context.DeadlineExceeded) {
-		t.Fatalf("outcome = %+v, want timeout", outcome)
+	if outcome.Status != ExecTimedOut || !errors.Is(outcome.Err, context.DeadlineExceeded) || outcome.ExitCode != nil {
+		t.Fatalf("outcome = %+v, want timeout without an exit code", outcome)
 	}
 	if outcome.Elapsed > 5*time.Second {
 		t.Fatalf("timeout took %s", outcome.Elapsed)
@@ -472,8 +472,8 @@ func testExecJobProcessTree(t *testing.T, shell, command string) {
 			}
 			select {
 			case outcome := <-done:
-				if outcome.Status != want {
-					t.Fatalf("outcome = %+v, want %s", outcome, want)
+				if outcome.Status != want || (want != ExecSucceeded) != (outcome.ExitCode == nil) {
+					t.Fatalf("outcome = %+v, want %s, with an exit code only if it succeeded", outcome, want)
 				}
 			case <-time.After(20 * time.Second):
 				t.Fatal("execution did not finish")
