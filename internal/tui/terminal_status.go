@@ -91,7 +91,7 @@ func (m *Model) terminalView(view tea.View) tea.View {
 // including when the transcript is hidden or has not received its first token.
 func (m *Model) syncTerminalStatus() tea.Cmd {
 	if m.widgets.closed || m.startupStopping || m.startupErr != nil {
-		return nil // runChat clears terminal state after the renderer stops
+		return nil // the closing view clears terminal state in the final frame
 	}
 	if m.terminalProgramStatus().State != ansi.ProgramStateWorking {
 		m.terminal.frame = 0
