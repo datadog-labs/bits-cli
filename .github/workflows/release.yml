@@ -57,6 +57,7 @@ jobs:
   publish:
     name: Publish
     needs: ci
+    environment: protected-main-env
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

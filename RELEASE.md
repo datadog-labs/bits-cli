@@ -67,6 +67,15 @@ macOS-only [ddviz](libexec/ddviz/README.md) helper. Add `--sbom` before the
 tag to include SBOMs; this requires [Syft](https://github.com/anchore/syft).
 Release platforms are listed in `scripts/platforms.sh`.
 
+## Release identity
+
+Only the publish job uses the existing `protected-main-env` environment; its
+STS policy requires that identity and a manual release run on `main`.
+Homebrew keeps its branch identity. The environment needs no approval gate
+or settings change. Merge the workflow and policy changes together after
+in-flight publish jobs finish; older publish jobs must be restarted as a
+fresh release run on `main` to obtain a token.
+
 ## Homebrew
 
 The `bits` formula of the [datadog-labs/homebrew-pack](https://github.com/datadog-labs/homebrew-pack)

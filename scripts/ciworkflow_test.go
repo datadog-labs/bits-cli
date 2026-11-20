@@ -36,6 +36,7 @@ type workflow struct {
 		Uses        string
 		With        map[string]any
 		Needs       needs
+		Environment string
 		Permissions map[string]string
 		Strategy    struct {
 			Matrix struct {
@@ -225,6 +226,28 @@ func TestReleaseWorkflowGating(t *testing.T) {
 		if _, ok := wf.Jobs[name]; !ok {
 			t.Errorf("release.yml has no %s job", name)
 		}
+	}
+
+	environment := wf.Jobs["publish"].Environment
+	if environment == "" {
+		t.Fatal("publish must use an environment identity distinct from Homebrew")
+	}
+	if wf.Jobs["homebrew"].Environment != "" {
+		t.Error("homebrew must keep the branch identity required by the tap's STS policy")
+	}
+	raw, err := os.ReadFile(".github/chainguard/self.release.sts.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy struct {
+		Subject string
+	}
+	if err := yaml.Unmarshal(raw, &policy); err != nil {
+		t.Fatal(err)
+	}
+	wantSubject := "repo:datadog-labs@259158689/bits-cli@1405976060:environment:" + environment
+	if policy.Subject != wantSubject {
+		t.Errorf("release policy subject = %q, want publish job identity %q", policy.Subject, wantSubject)
 	}
 }
 
