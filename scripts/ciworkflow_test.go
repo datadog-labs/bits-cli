@@ -410,7 +410,7 @@ func TestDistArchives(t *testing.T) {
 func releaseFixture(t *testing.T, sbom bool) (dir string, run func(args ...string) *exec.Cmd) {
 	t.Helper()
 	dir = t.TempDir()
-	for _, file := range []string{"scripts/dist.sh", "scripts/package.sh", "scripts/platforms.sh", "README.md", "LICENSE", "LICENSE-3rdparty.csv"} {
+	for _, file := range []string{"scripts/dist.sh", "scripts/package.sh", "scripts/platforms.sh", "scripts/install.sh", "scripts/install.ps1", "README.md", "LICENSE", "LICENSE-3rdparty.csv"} {
 		data, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -563,8 +563,7 @@ func testDistArchives(t *testing.T, sbom bool, distDir string) {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	want := []string{
-		"bits_1.2.3_checksums.txt",
+	archives := []string{
 		"bits_1.2.3_darwin_amd64.tar.gz",
 		"bits_1.2.3_darwin_arm64.tar.gz",
 		"bits_1.2.3_linux_amd64.tar.gz",
@@ -572,12 +571,14 @@ func testDistArchives(t *testing.T, sbom bool, distDir string) {
 		"bits_1.2.3_windows_amd64.zip",
 		"bits_1.2.3_windows_arm64.zip",
 	}
+	assets := append([]string{"install.ps1", "install.sh"}, archives...)
 	if sbom {
-		for _, archive := range want[1:] {
-			want = append(want, archive+".sbom.json")
+		for _, archive := range archives {
+			assets = append(assets, archive+".sbom.json")
 		}
-		slices.Sort(want)
 	}
+	want := append([]string{"bits_1.2.3_checksums.txt"}, assets...)
+	slices.Sort(want)
 	if !slices.Equal(names, want) {
 		t.Fatalf("dist contents = %v, want %v", names, want)
 	}
@@ -585,10 +586,24 @@ func testDistArchives(t *testing.T, sbom bool, distDir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range want[1:] {
+	for _, name := range assets {
 		if !strings.Contains(string(manifest), "  "+name+"\n") {
 			t.Errorf("checksums missing %s", name)
 		}
+	}
+
+	// The published scripts install this release by default.
+	install := exec.Command("sh", filepath.Join(dist, "install.sh"))
+	install.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_DATA_HOME=", "BITS_VERSION=", "BITS_RELEASES_URL=http://127.0.0.1:1")
+	if out, err := install.CombinedOutput(); err == nil || !strings.Contains(string(out), "/download/v1.2.3/bits_1.2.3_checksums.txt") {
+		t.Errorf("install.sh = %v, want it to fetch v1.2.3:\n%s", err, out)
+	}
+	ps1, err := os.ReadFile(filepath.Join(dist, "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ps1), "\n    $release = 'v1.2.3'\n") {
+		t.Errorf("install.ps1 does not install v1.2.3 by default")
 	}
 
 	check := exec.Command("sha256sum", "--check", "bits_1.2.3_checksums.txt")
@@ -640,6 +655,9 @@ func readZip(t *testing.T, path string) map[string]tarFile {
 		if file.FileInfo().IsDir() {
 			continue
 		}
+		if !file.Mode().IsRegular() {
+			t.Fatalf("%s: %s is neither a file nor a directory, which bits update cannot unpack", path, file.Name)
+		}
 		r, err := file.Open()
 		if err != nil {
 			t.Fatal(err)
@@ -682,6 +700,9 @@ func readTarGz(t *testing.T, path string) map[string]tarFile {
 		}
 		if hdr.Typeflag == tar.TypeDir {
 			continue
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			t.Fatalf("%s: %s is neither a file nor a directory, which bits update cannot unpack", path, hdr.Name)
 		}
 		body, err := io.ReadAll(tr)
 		if err != nil {

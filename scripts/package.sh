@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
 # package.sh - package the install prefixes that build.sh built in BUILD_DIR
-# for every release platform into archives, optional SPDX SBOMs, and
-# checksums in DIST_DIR, and print their paths. Each archive is an install
-# prefix:
+# for every release platform into archives, optional SPDX SBOMs, the install
+# scripts set to this release, and checksums in DIST_DIR, and print their
+# paths. Each archive is an install prefix:
 #
 #     bin/bits
 #     libexec/bits/<tool>/   helpers built for the platform, if any
@@ -59,7 +59,7 @@ trap 'rm -rf "$work_dir"' EXIT
 
 mkdir -p "$DIST_DIR"
 DIST_DIR="$(cd "$DIST_DIR" && pwd)"
-rm -f "$DIST_DIR"/bits_*
+rm -f "$DIST_DIR"/bits_* "$DIST_DIR"/install.sh "$DIST_DIR"/install.ps1
 
 docs=(README.md LICENSE LICENSE-3rdparty.csv)
 artifacts=()
@@ -88,6 +88,24 @@ for platform in "${PLATFORMS[@]}"; do
         echo "$DIST_DIR/$archive.sbom.json"
     fi
 done
+
+# stamp copies an install script to DIST_DIR with its placeholder replaced
+# by the line that sets this release. The scripts keep their names, so
+# releases/latest/download/install.sh installs the latest release.
+stamp() {
+    local script="$1" placeholder="$2" line="$3" content
+    content="$(<"$SRC_DIR/scripts/$script")"
+    if [[ "$content" != *"$placeholder"* ]]; then
+        echo "ERROR: scripts/$script does not leave its release to package.sh" >&2
+        exit 1
+    fi
+    # Unquoted: macOS bash 3.2 keeps quotes around the replacement.
+    printf '%s\n' "${content/"$placeholder"/$line}" >"$DIST_DIR/$script"
+    artifacts+=("$script")
+    echo "$DIST_DIR/$script"
+}
+stamp install.sh $'\nrelease=\n' $'\nrelease=v'"$version"$'\n'
+stamp install.ps1 "\$release = ''" "\$release = 'v$version'"
 
 checksums="bits_${version}_checksums.txt"
 if command -v sha256sum >/dev/null; then
