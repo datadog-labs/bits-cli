@@ -90,6 +90,8 @@ latest release ([INSTALL.md](INSTALL.md) has the user commands).
 Each installation then updates itself with the code of the release it runs,
 so released binaries and scripts depend on these, which must not change:
 
+- the repository, `datadog-labs/bits-cli`, and `INSTALL.md` at its root,
+  which bits links when it cannot update itself;
 - the asset names above and the `sha256sum` format of the checksums;
 - archives that hold `bin/`, `libexec/`, and `share/` at their root, and only
   regular files and directories: older binaries unpack nothing else;
