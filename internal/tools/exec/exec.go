@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	osexec "os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -617,7 +616,7 @@ func (s *ExecService) resolve(request ExecRequest) (ExecPlan, error) {
 		if !supportedExecShell(request.Shell) {
 			return ExecPlan{}, fmt.Errorf("unsupported exec shell %s: use %s", request.Shell, supportedExecShells())
 		}
-		resolved, err := osexec.LookPath(request.Shell)
+		resolved, err := lookExecShell(request.Shell)
 		if err != nil {
 			return ExecPlan{}, fmt.Errorf("resolve exec shell: %w", err)
 		}

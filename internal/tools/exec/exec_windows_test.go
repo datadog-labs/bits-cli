@@ -368,6 +368,24 @@ func TestExecServiceWindowsResolvesRequestedBash(t *testing.T) {
 	if _, err := service.resolve(ExecRequest{Command: "ignored", CWD: root, Shell: missing}); err == nil {
 		t.Fatal("missing explicit Bash path was accepted")
 	}
+	// Git for Windows puts only Git\cmd on PATH; its Bash is in Git\bin.
+	git := filepath.Join(root, "Git")
+	gitBash := filepath.Join(git, "bin", "bash.exe")
+	for _, file := range []string{filepath.Join(git, "cmd", "git.exe"), gitBash} {
+		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", filepath.Join(git, "cmd"))
+	for _, requested := range []string{"bash", "BASH.EXE"} {
+		plan, err := service.resolve(ExecRequest{Command: "ignored", CWD: root, Shell: requested})
+		if err != nil || plan.Shell != gitBash {
+			t.Errorf("resolve(%q) with Git on PATH = %q, %v; want %q", requested, plan.Shell, err, gitBash)
+		}
+	}
 	t.Setenv("PATH", t.TempDir())
 	outcome := service.run(t.Context(), ExecRequest{Command: "ignored", CWD: root, Shell: "bash"})
 	if outcome.Status != ExecLaunchFailed || outcome.Err == nil || !strings.Contains(outcome.Err.Error(), "resolve exec shell") {

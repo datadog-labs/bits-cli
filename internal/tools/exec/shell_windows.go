@@ -4,6 +4,7 @@ package exec
 
 import (
 	"io"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -18,6 +19,25 @@ func supportedExecShell(shell string) bool {
 }
 
 func supportedExecShells() string { return "pwsh, powershell, or bash" }
+
+// lookExecShell also finds the Bash of Git for Windows, which puts only
+// Git\cmd on PATH, when no Bash is on PATH.
+// NOTE: WSL's System32\bash.exe, when installed, is on PATH and wins.
+func lookExecShell(shell string) (string, error) {
+	resolved, err := osexec.LookPath(shell)
+	if err == nil || windowsExecShellName(shell) != "bash" || filepath.Base(shell) != shell {
+		return resolved, err
+	}
+	git, gitErr := osexec.LookPath("git")
+	if gitErr != nil {
+		return "", err
+	}
+	bash, bashErr := osexec.LookPath(filepath.Join(filepath.Dir(filepath.Dir(git)), "bin", "bash.exe"))
+	if bashErr != nil {
+		return "", err
+	}
+	return bash, nil
+}
 
 func windowsExecShellName(shell string) string {
 	return strings.TrimSuffix(strings.ToLower(filepath.Base(shell)), ".exe")
