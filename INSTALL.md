@@ -1,0 +1,91 @@
+# Install Bits
+
+| Platform | Command |
+| --- | --- |
+| macOS, Linux (Homebrew) | `brew install datadog-labs/pack/bits` |
+| macOS, Linux | `curl -fsSL https://github.com/datadog-labs/bits-cli/releases/latest/download/install.sh \| sh` |
+| Windows (PowerShell) | `irm https://github.com/datadog-labs/bits-cli/releases/latest/download/install.ps1 \| iex` |
+
+The install scripts need no administrator rights. `install.sh` needs `curl` or
+`wget`, `tar`, and `sha256sum` or `shasum`; `install.ps1` needs PowerShell 5.1
+or later. Both verify the download against the release checksums.
+
+## Where it goes
+
+| | macOS, Linux | Windows |
+| --- | --- | --- |
+| Releases | `~/.local/share/bits/versions/<version>/` | `%LOCALAPPDATA%\bits\versions\<version>\` |
+| Active release | `~/.local/share/bits/current` | `%LOCALAPPDATA%\bits\current` |
+| `bits` command | `~/.local/bin/bits`, a link to `current/bin/bits` | `%LOCALAPPDATA%\bits\current\bin` on your user `PATH` |
+
+On macOS and Linux, `XDG_DATA_HOME` replaces `~/.local/share` when it is an
+absolute path, as the XDG spec requires; keep it a directory only you can
+write, since Bits runs what it finds there. An update installs the new release
+next to the current one and switches `current` to it, keeping the previous
+release.
+
+## PATH
+
+On Windows, the installer adds `bits` to your user `PATH`, so it works in that
+window and in new ones. Restart terminals and editors that were already open.
+
+On macOS and Linux, the installer prints what to do when `~/.local/bin` is not
+on your `PATH`, for example with zsh:
+
+```sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> "${ZDOTDIR:-$HOME}/.zshrc"
+```
+
+It also warns when another `bits`, such as a Homebrew one, comes first on your
+`PATH`. The installer never edits your shell startup files.
+
+## Install a specific release
+
+Set `BITS_VERSION` to a release from v0.0.15 on. Releases before v0.0.15 can
+only be installed with Homebrew or from their archive.
+
+```sh
+curl -fsSL https://github.com/datadog-labs/bits-cli/releases/latest/download/install.sh | BITS_VERSION=v0.1.0 sh
+```
+
+```powershell
+$env:BITS_VERSION = 'v0.1.0'; irm https://github.com/datadog-labs/bits-cli/releases/latest/download/install.ps1 | iex
+```
+
+## Updates
+
+When a release is out, Bits offers to update at startup. Run `bits update` to
+update at any time. Set `BITS_NO_UPDATE_CHECK=1` to stop the startup check.
+Bits updates the way it was installed: with the install scripts' layout, or
+with `brew upgrade` for Homebrew. Homebrew offers a release once its formula is
+updated, which can take longer.
+
+## Verify the installer
+
+To read the script before running it, or to verify where it comes from:
+
+```sh
+curl -fsSLO https://github.com/datadog-labs/bits-cli/releases/latest/download/install.sh
+gh attestation verify install.sh --repo datadog-labs/bits-cli \
+    --signer-workflow datadog-labs/bits-cli/.github/workflows/release.yml \
+    --source-ref refs/heads/main
+sh install.sh
+```
+
+The script checks the archive it downloads against the release checksums,
+which guards against a damaged download. To verify where the archive comes
+from too, run the same `gh attestation verify` on it, as
+[RELEASE.md](RELEASE.md) shows.
+
+## Uninstall
+
+```sh
+data=$XDG_DATA_HOME; case $data in /*) ;; *) data=$HOME/.local/share ;; esac
+rm -rf "$data/bits" ~/.local/bin/bits
+```
+
+On Windows, delete `%LOCALAPPDATA%\bits`, then search the Start menu for
+**Edit environment variables for your account** and remove
+`%LOCALAPPDATA%\bits\current\bin` from `Path`.
+
+Uninstalling keeps your sign-in and settings.

@@ -85,7 +85,7 @@ fresh release run on `main` to obtain a token.
 `scripts/install.sh` and `scripts/install.ps1` leave the release they install
 unset; `package.sh` sets it in the copies it puts in `dist/`. Since the scripts
 keep their names, `releases/latest/download/install.sh` always installs the
-latest release.
+latest release ([INSTALL.md](INSTALL.md) has the user commands).
 
 Each installation then updates itself with the code of the release it runs,
 so released binaries and scripts depend on these, which must not change:
