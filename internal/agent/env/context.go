@@ -14,6 +14,9 @@ import (
 	"runtime"
 	"strings"
 
+	"golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
+
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
@@ -70,8 +73,10 @@ func withinRoot(root, path string) bool {
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
-// readBoundedFile reads a regular file through root, including at most one byte
-// beyond limit so callers can choose whether to reject or truncate large files.
+// readBoundedFile reads a regular file through root as UTF-8, including at most
+// one byte beyond limit so callers can choose whether to reject or truncate
+// large files. A byte order mark is dropped, and one for UTF-16, which Windows
+// editors and PowerShell 5.1 write, decodes the file.
 func readBoundedFile(root *os.Root, path string, limit int) ([]byte, error) {
 	file, err := root.Open(path)
 	if err != nil {
@@ -85,5 +90,5 @@ func readBoundedFile(root *os.Root, path string, limit int) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("file is not regular")
 	}
-	return io.ReadAll(io.LimitReader(file, int64(limit)+1))
+	return io.ReadAll(io.LimitReader(transform.NewReader(file, unicode.BOMOverride(transform.Nop)), int64(limit)+1))
 }

@@ -394,12 +394,20 @@ func TestSkillDocumentPreservesBody(t *testing.T) {
 	for _, tc := range []struct{ name, input, body string }{
 		{"lf", "---\nname: review\ndescription: Review\n---\n\n  body\n---\nend  ", "\n  body\n---\nend  "},
 		{"bom and crlf", "\xef\xbb\xbf---\r\ndescription: Review\r\nmodel-invocable: false\r\n---\r\n\r\n\tBody\r\n ", "\r\n\tBody\r\n "},
+		{"utf-16", utf16LE("---\r\ndescription: Review\r\n---\r\nBody \u00e9"), "Body \u00e9"},
 		{"empty body", "---\ndescription: Review\n---", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			document, ok := parseSkillDocument([]byte(tc.input), "review")
-			if !ok || document.Name != "review" || document.body != tc.body {
-				t.Fatalf("document = %+v, valid = %v, want body %q", document, ok, tc.body)
+			dir := t.TempDir()
+			writeInstructionTestFile(t, dir, "SKILL.md", tc.input)
+			root, err := os.OpenRoot(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = root.Close() })
+			document, _, err := readSkillDocument(root, "SKILL.md", skillFileLimit, "review")
+			if err != nil || document.Name != "review" || document.body != tc.body {
+				t.Fatalf("document = %+v, err = %v, want body %q", document, err, tc.body)
 			}
 		})
 	}

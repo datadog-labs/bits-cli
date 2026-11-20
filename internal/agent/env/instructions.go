@@ -1,7 +1,6 @@
 package env
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"html"
@@ -167,7 +166,7 @@ func loadInstructionFile(directory, boundary string, limit int) *instructionFile
 			}
 			content = content[:limit]
 		}
-		return &instructionFile{path: source, content: bytes.TrimPrefix(content, []byte{0xef, 0xbb, 0xbf}), truncated: truncated}
+		return &instructionFile{path: source, content: content, truncated: truncated}
 	}
 	return nil
 }
