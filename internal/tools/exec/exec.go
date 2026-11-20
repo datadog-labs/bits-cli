@@ -602,28 +602,28 @@ func (s *ExecService) resolve(request ExecRequest) (ExecPlan, error) {
 		return ExecPlan{}, errors.New("exec working directory is empty")
 	}
 	if !filepath.IsAbs(request.CWD) {
-		return ExecPlan{}, fmt.Errorf("exec working directory %q is not absolute", request.CWD)
+		return ExecPlan{}, fmt.Errorf("exec working directory %s is not absolute", request.CWD)
 	}
 	cwd := filepath.Clean(request.CWD)
 	info, err := os.Stat(cwd)
 	if err != nil {
-		return ExecPlan{}, fmt.Errorf("validate exec working directory %q: %w", cwd, err)
+		return ExecPlan{}, fmt.Errorf("validate exec working directory: %w", err)
 	}
 	if !info.IsDir() {
-		return ExecPlan{}, fmt.Errorf("exec working directory %q is not a directory", cwd)
+		return ExecPlan{}, fmt.Errorf("exec working directory %s is not a directory", cwd)
 	}
 	var shell string
 	if request.Shell != "" {
 		if !supportedExecShell(request.Shell) {
-			return ExecPlan{}, fmt.Errorf("unsupported exec shell %q: use %s", request.Shell, supportedExecShells())
+			return ExecPlan{}, fmt.Errorf("unsupported exec shell %s: use %s", request.Shell, supportedExecShells())
 		}
 		resolved, err := osexec.LookPath(request.Shell)
 		if err != nil {
-			return ExecPlan{}, fmt.Errorf("resolve exec shell %q: %w", request.Shell, err)
+			return ExecPlan{}, fmt.Errorf("resolve exec shell: %w", err)
 		}
 		resolved, err = filepath.Abs(resolved)
 		if err != nil {
-			return ExecPlan{}, fmt.Errorf("resolve absolute exec shell %q: %w", request.Shell, err)
+			return ExecPlan{}, fmt.Errorf("resolve absolute exec shell %s: %w", request.Shell, err)
 		}
 		shell = resolved
 	} else {
