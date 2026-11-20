@@ -97,7 +97,7 @@ func grepFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 
 		info, err := fs.Stat(fsys, base)
 		if err != nil {
-			return errorResult("cannot access path: %s", err.Error()), nil
+			return errorResult("cannot access path: %s", pathError(fsys, base, err)), nil
 		}
 
 		type match struct {

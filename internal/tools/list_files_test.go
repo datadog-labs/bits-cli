@@ -180,6 +180,22 @@ func TestListFilesTool(t *testing.T) {
 		}
 	})
 
+	t.Run("marks links it cannot follow", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"jin":       {Mode: fs.ModeSymlink, Data: []byte("/abs/sub")},
+			"ok":        {Mode: fs.ModeSymlink, Data: []byte("sub/a.txt")},
+			"sub/a.txt": {Data: []byte("x")},
+		}
+		tool := newListFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{}`})
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected error: %v %s", err, result.Output)
+		}
+		if want := "jin -> /abs/sub (not followed)\nok\nsub/"; result.Output != want {
+			t.Errorf("output = %q, want %q", result.Output, want)
+		}
+	})
+
 	t.Run("unreadable gitignore lists everything with a warning", func(t *testing.T) {
 		fsys := openErrorFS{
 			FS:   fstest.MapFS{"src/.gitignore": {Data: []byte("*.log\n")}, "src/a.log": {Data: []byte("x")}},

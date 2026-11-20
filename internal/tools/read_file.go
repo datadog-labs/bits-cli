@@ -64,7 +64,7 @@ func readFileHandler(fsys fs.FS, root string) agent.ToolHandler {
 		}
 		f, err := fsys.Open(filePath)
 		if err != nil {
-			return errorResult("%s", err.Error()), nil
+			return errorResult("%s", pathError(fsys, filePath, err)), nil
 		}
 		defer func() { _ = f.Close() }()
 		stopClose := context.AfterFunc(ctx, func() { _ = f.Close() })

@@ -84,7 +84,7 @@ func editFileHandler(r *os.Root, root string, locker *mutationLocker) agent.Tool
 		// detach it (a rename over the link would replace the link with a new
 		// regular file, leaving the real target untouched).
 		if info, err := r.Lstat(filePath); err != nil {
-			return errorResult("cannot access path: %s", err.Error()), nil
+			return errorResult("cannot access path: %s", pathError(r.FS(), filePath, err)), nil
 		} else if info.Mode()&fs.ModeSymlink != 0 {
 			return errorResult("%s is a symbolic link", filePath), nil
 		} else if info.IsDir() {
@@ -97,7 +97,7 @@ func editFileHandler(r *os.Root, root string, locker *mutationLocker) agent.Tool
 		// swap the file between the two calls, bypassing the cap.
 		f, err := r.Open(filePath)
 		if err != nil {
-			return errorResult("%s", err.Error()), nil
+			return errorResult("%s", pathError(r.FS(), filePath, err)), nil
 		}
 		defer func() { _ = f.Close() }()
 		stopClose := context.AfterFunc(ctx, func() { _ = f.Close() })

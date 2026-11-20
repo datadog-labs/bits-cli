@@ -26,7 +26,7 @@ func newListFilesTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
 			Name:        spec.ListFiles,
-			Description: "List files and directories in the workspace. Directories end with /. Respects .gitignore. Returns up to 2000 entries.",
+			Description: "List files and directories in the workspace. Directories end with /; links the tools cannot follow show their target. Respects .gitignore. Returns up to 2000 entries.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -69,7 +69,7 @@ func listFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 		// Verify the target exists and is a directory.
 		info, err := fs.Stat(fsys, base)
 		if err != nil {
-			return errorResult("cannot access path: %s", err.Error()), nil
+			return errorResult("cannot access path: %s", pathError(fsys, base, err)), nil
 		}
 		if !info.IsDir() {
 			return errorResult("%s is not a directory", base), nil
@@ -103,6 +103,8 @@ func listFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 			entry := rel
 			if d.IsDir() {
 				entry += "/"
+			} else if target, ok := unfollowedLink(fsys, p); ok {
+				entry += " -> " + target + " (not followed)"
 			}
 
 			line := entry + "\n"

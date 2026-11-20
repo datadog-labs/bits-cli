@@ -167,6 +167,8 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 	if err != nil {
 		return
 	}
+	// NOTE: os.Root follows no link with an absolute target, so a junction
+	// skill directory, whose target always is, is skipped like any escape.
 	info, err := root.Stat(relative)
 	if err != nil {
 		return

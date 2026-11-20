@@ -88,7 +88,7 @@ func writeFileHandler(r *os.Root, root string, locker *mutationLocker) agent.Too
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return agent.ToolResult{}, ctxErr
 			}
-			return errorResult("write failed: %s", err.Error()), nil
+			return errorResult("write failed: %s", pathError(r.FS(), filePath, err)), nil
 		}
 
 		result := agent.ToolResult{

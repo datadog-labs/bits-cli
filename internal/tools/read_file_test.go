@@ -181,6 +181,13 @@ func TestReadFileTool(t *testing.T) {
 		}
 	})
 
+	t.Run("names a link it cannot follow", func(t *testing.T) {
+		// A Windows junction has an absolute target, like this link.
+		fsys := fstest.MapFS{"jin": {Mode: fs.ModeSymlink, Data: []byte("/abs/sub")}}
+		r := invokeReadFile(t, fsys, map[string]any{"path": "jin/s.txt"})
+		assertError(t, r, "jin links to /abs/sub; file tools follow only relative links that stay in the workspace")
+	})
+
 	t.Run("decodes text marked by a byte order mark", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"utf8.txt":  {Data: []byte(bom + "h\u00e9\n")},
