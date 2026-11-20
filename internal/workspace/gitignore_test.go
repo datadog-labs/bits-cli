@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"testing"
 	"testing/fstest"
@@ -65,6 +66,10 @@ func TestIgnorerIgnore(t *testing.T) {
 		{"subdir excludes sibling dir", "*.test", "src", "lib/foo.test", false, false},
 		{"subdir anchored match", "/local.log", "src", "src/local.log", false, true},
 		{"subdir anchored excludes parent", "/local.log", "src", "local.log", false, false},
+
+		// Encoding: git drops a UTF-8 byte order mark only.
+		{"BOM before first pattern", "\ufeffbuild\r\n*.log\r\n", ".", "build", false, true},
+		{"BOM-less patterns keep U+FEFF", "x\n\ufeffbuild", ".", "build", false, false},
 	}
 
 	for _, tt := range tests {
@@ -92,5 +97,28 @@ func TestIgnorerReportsGitignoreReadErrors(t *testing.T) {
 	err := ig.Add(context.Background(), deniedIgnoreFS{FS: fstest.MapFS{}}, ".")
 	if !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("error = %v, want permission error", err)
+	}
+}
+
+func TestIgnoreFileErrorNamesAFewFiles(t *testing.T) {
+	unread := func(n int) *IgnoreFileError {
+		e := &IgnoreFileError{}
+		for i := range n {
+			e.Errs = append(e.Errs, fmt.Errorf("open d%d/.gitignore: %w", i, fs.ErrPermission))
+		}
+		return e
+	}
+	tests := []struct {
+		files int
+		want  string
+	}{
+		{1, "ignore rules not applied: open d0/.gitignore: permission denied"},
+		{3, "ignore rules not applied: open d0/.gitignore: permission denied; open d1/.gitignore: permission denied; open d2/.gitignore: permission denied"},
+		{500, "ignore rules not applied: open d0/.gitignore: permission denied; open d1/.gitignore: permission denied; open d2/.gitignore: permission denied; and 497 more"},
+	}
+	for _, test := range tests {
+		if got := unread(test.files).Error(); got != test.want {
+			t.Errorf("%d files: Error() = %q, want %q", test.files, got, test.want)
+		}
 	}
 }

@@ -181,6 +181,25 @@ func TestReadFileTool(t *testing.T) {
 		}
 	})
 
+	t.Run("names a link it cannot follow", func(t *testing.T) {
+		// A Windows junction has an absolute target, like this link.
+		fsys := fstest.MapFS{"jin": {Mode: fs.ModeSymlink, Data: []byte("/abs/sub")}}
+		r := invokeReadFile(t, fsys, map[string]any{"path": "jin/s.txt"})
+		assertError(t, r, "jin links to /abs/sub; file tools follow only relative links that stay in the workspace")
+	})
+
+	t.Run("decodes text marked by a byte order mark", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"utf8.txt":  {Data: []byte(bom + "h\u00e9\n")},
+			"utf16.txt": {Data: []byte("\xff\xfeh\x00\xe9\x00\n\x00")},
+		}
+		for _, name := range []string{"utf8.txt", "utf16.txt"} {
+			if r := invokeReadFile(t, fsys, map[string]any{"path": name}); r.IsError || r.Output != "h\u00e9" {
+				t.Errorf("%s: output = %q, want the text without its byte order mark", name, r.Output)
+			}
+		}
+	})
+
 	t.Run("size limit survives a stale stat result", func(t *testing.T) {
 		data := make([]byte, maxFileSize+1)
 		fsys := sizeMaskingFS{FS: fstest.MapFS{"growing.txt": {Data: data}}}

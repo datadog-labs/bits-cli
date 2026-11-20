@@ -145,3 +145,30 @@ func TestSafeReplaceConcurrentDistinctFiles(t *testing.T) {
 		t.Errorf("wrote %d files, want %d", got, len(names))
 	}
 }
+
+func TestSafeReplaceReadOnlyTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "ro.txt")
+	if err := os.WriteFile(target, []byte("old"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(target, 0o644) })
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+
+	// Unix replaces a read-only file; Windows refuses, and must say why.
+	err = safeReplace(context.Background(), r, "ro.txt", []byte("new"))
+	got, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	switch {
+	case err == nil && string(got) != "new":
+		t.Fatalf("content = %q after a successful replace", got)
+	case err != nil && (err.Error() != "ro.txt is read-only" || string(got) != "old"):
+		t.Fatalf("error = %v, content = %q; want the read-only target named and kept", err, got)
+	}
+}

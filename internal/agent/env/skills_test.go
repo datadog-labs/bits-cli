@@ -65,6 +65,10 @@ func TestClientSkillDiscoveryPrecedenceAndBoundaries(t *testing.T) {
 	writeSkill(t, filepath.Dir(active), ".agents/skills/duplicate", "duplicate", "parent version")
 	writeSkill(t, active, ".agents/skills/duplicate", "duplicate", "nearest version")
 	writeSkill(t, home, ".agents/skills/user", "user", "user description")
+	if err := os.MkdirAll(filepath.Join(home, ".agents/skills/lower"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstructionTestFile(t, home, ".agents/skills/lower/skill.md", "---\ndescription: lowercase file name\n---\n")
 	writeSkill(t, home, ".agents/skills/duplicate", "duplicate", "home version")
 	extra := t.TempDir()
 	writeSkill(t, extra, "custom", "custom", "'quoted <tag> & text'")
@@ -83,7 +87,7 @@ func TestClientSkillDiscoveryPrecedenceAndBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := NewSkills(active, []string{extra, extra}).snapshot(context.Background())
-	for _, want := range []string{"nearest version", "root description", "user description", "&lt;tag&gt; &amp; text"} {
+	for _, want := range []string{"nearest version", "root description", "user description", "lowercase file name", "&lt;tag&gt; &amp; text"} {
 		if !strings.Contains(catalog, want) {
 			t.Fatalf("missing %q in %s", want, catalog)
 		}
@@ -116,7 +120,7 @@ func TestClientSkillDisableModelInvocation(t *testing.T) {
 	writeSkill(t, active, ".agents/skills/visible", "visible", "shown to the model")
 	writeSkillFile(t, active, ".agents/skills/hidden", "---\nname: hidden\ndescription: user only\ndisable-model-invocation: true\n---\n")
 	writeSkill(t, active, "extras/hidden", "hidden", "shadowed duplicate")
-	skills := NewSkills(active, []string{"extras"})
+	skills := NewSkills(active, []string{filepath.Join(active, "extras")})
 	visible, err := skills.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -152,13 +156,58 @@ func TestClientSkillOutsideGitAndExplicitPaths(t *testing.T) {
 	writeSkill(t, active, ".agents/skills/local", "local", "local description")
 	writeSkill(t, active, "extras/custom", "custom", "relative explicit directory")
 	writeSkill(t, home, "extras/user", "user", "expanded home path")
-	got := NewSkills(active, []string{"extras", "~/extras"}).snapshot(context.Background())
+	dirs, err := SkillDirs(active, []string{"extras", "~/extras"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := NewSkills(active, dirs).snapshot(context.Background())
 	if strings.Contains(got, `name="parent"`) {
 		t.Fatal("discovered outside non-git workspace")
 	}
 	for _, name := range []string{"local", "custom", "user"} {
 		if !strings.Contains(got, `name="`+name+`"`) {
 			t.Fatalf("missing %s", name)
+		}
+	}
+}
+
+func TestSkillDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	workspace := t.TempDir()
+	for _, dir := range []string{filepath.Join(home, "x"), filepath.Join(workspace, "rel")} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeInstructionTestFile(t, workspace, "file", "")
+	// ~\x names the home directory only where \ separates directories.
+	backslashHome := filepath.Join(workspace, `~\x`)
+	if filepath.Separator == '\\' {
+		backslashHome = filepath.Join(home, "x")
+	} else if err := os.Mkdir(backslashHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ dir, want, err string }{
+		{dir: "~", want: home},
+		{dir: "~/x", want: filepath.Join(home, "x")},
+		{dir: `~\x`, want: backslashHome},
+		{dir: "rel", want: filepath.Join(workspace, "rel")},
+		{dir: filepath.Join(home, "x") + string(filepath.Separator), want: filepath.Join(home, "x")},
+		{dir: "missing", err: `skill directory "missing": `},
+		{dir: "~missing", err: `skill directory "~missing": `},
+		{dir: "file", err: `skill directory "file": not a directory`},
+	} {
+		got, err := SkillDirs(workspace, []string{test.dir})
+		if test.err != "" {
+			if err == nil || !strings.HasPrefix(err.Error(), test.err) {
+				t.Errorf("SkillDirs(%q) = %v, %v; want error %q", test.dir, got, err, test.err)
+			}
+			continue
+		}
+		if err != nil || len(got) != 1 || got[0] != test.want {
+			t.Errorf("SkillDirs(%q) = %v, %v; want %q", test.dir, got, err, test.want)
 		}
 	}
 }
@@ -394,12 +443,20 @@ func TestSkillDocumentPreservesBody(t *testing.T) {
 	for _, tc := range []struct{ name, input, body string }{
 		{"lf", "---\nname: review\ndescription: Review\n---\n\n  body\n---\nend  ", "\n  body\n---\nend  "},
 		{"bom and crlf", "\xef\xbb\xbf---\r\ndescription: Review\r\nmodel-invocable: false\r\n---\r\n\r\n\tBody\r\n ", "\r\n\tBody\r\n "},
+		{"utf-16", utf16LE("---\r\ndescription: Review\r\n---\r\nBody \u00e9"), "Body \u00e9"},
 		{"empty body", "---\ndescription: Review\n---", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			document, ok := parseSkillDocument([]byte(tc.input), "review")
-			if !ok || document.Name != "review" || document.body != tc.body {
-				t.Fatalf("document = %+v, valid = %v, want body %q", document, ok, tc.body)
+			dir := t.TempDir()
+			writeInstructionTestFile(t, dir, "SKILL.md", tc.input)
+			root, err := os.OpenRoot(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = root.Close() })
+			document, _, err := readSkillDocument(root, "SKILL.md", skillFileLimit, "review")
+			if err != nil || document.Name != "review" || document.body != tc.body {
+				t.Fatalf("document = %+v, err = %v, want body %q", document, err, tc.body)
 			}
 		})
 	}
@@ -417,7 +474,7 @@ func TestClientSkillVisibilityFlags(t *testing.T) {
 			root := t.TempDir()
 			writeSkillFile(t, root, ".agents/skills/review", "---\ndescription: User only\n"+flags+"---\nInstructions")
 			writeSkill(t, root, "extra/review", "review", "shadowed automatic version")
-			provider := NewSkills(root, []string{"extra"})
+			provider := NewSkills(root, []string{filepath.Join(root, "extra")})
 			skills := provider.discover(context.Background())
 			if len(skills) != 1 || skills[0].Name != "review" || !skills[0].DisableModelInvocation || skills[0].Description != "User only" {
 				t.Fatalf("registry = %+v", skills)

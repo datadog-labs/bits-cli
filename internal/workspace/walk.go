@@ -17,7 +17,9 @@ func (w *Workspace) Walk(ctx context.Context, base string, visit WalkFunc) error
 
 // WalkFS traverses base without following directory symlinks. It skips .git,
 // unreadable entries, and paths excluded by the applicable nested .gitignore
-// files. Paths passed to visit are relative to the filesystem root.
+// files. Paths passed to visit are relative to the filesystem root. After a
+// complete walk, it returns an *IgnoreFileError for .gitignore files it could
+// not read.
 //
 // WalkFS is exposed so callers can exercise the same traversal against an
 // in-memory fs.FS in tests. Production callers should normally use
@@ -39,7 +41,7 @@ func WalkFS(ctx context.Context, fsys fs.FS, base string, visit WalkFunc) error 
 		return nil
 	}
 
-	return fs.WalkDir(fsys, base, func(filePath string, entry fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(fsys, base, func(filePath string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -56,10 +58,14 @@ func WalkFS(ctx context.Context, fsys fs.FS, base string, visit WalkFunc) error 
 			return nil
 		}
 		if entry.IsDir() && filePath != base {
-			if err := ignorer.Add(ctx, fsys, filePath); err != nil {
+			if err := ignorer.add(ctx, fsys, filePath); err != nil {
 				return err
 			}
 		}
 		return visit(filePath, entry)
 	})
+	if err != nil || len(ignorer.unread) == 0 {
+		return err
+	}
+	return &IgnoreFileError{Errs: ignorer.unread}
 }

@@ -106,7 +106,7 @@ func TestEditorInputReducerKeepsAllPreviewLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = r.Close() }()
-	state := writeFileInputReducer(r)(context.Background(), agent.ToolInputUpdate{
+	state := writeFileInputReducer(r, dir)(context.Background(), agent.ToolInputUpdate{
 		RawPrefix: `{"path":"a.txt","content":"` + strings.Repeat(`x\n`, 2_001) + `"}`,
 	}, nil).(*filediff.State)
 	if state.Preview == nil || state.Preview.Diff == nil {
@@ -127,7 +127,7 @@ func TestEditorInputReducerWriteKeepsPartialContentPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	reduce := writeFileInputReducer(r)
+	reduce := writeFileInputReducer(r, dir)
 
 	state, ok := reduce(context.Background(), agent.ToolInputUpdate{
 		Name: spec.WriteFile, RawPrefix: `{"path":"note.txt","content":"received`,
@@ -174,7 +174,7 @@ func TestWriteFileStreamingPreservesLastValidPreviewOnlyForSamePath(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	reduce := writeFileInputReducer(r)
+	reduce := writeFileInputReducer(r, dir)
 
 	visible := reduce(context.Background(), agent.ToolInputUpdate{
 		Name: spec.WriteFile, RawPrefix: `{"path":"a.txt","content":"first\npartial`,
@@ -210,7 +210,7 @@ func TestWriteFileFinalInputDoesNotPreserveStreamingPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	reduce := writeFileInputReducer(r)
+	reduce := writeFileInputReducer(r, dir)
 
 	visible := reduce(context.Background(), agent.ToolInputUpdate{
 		Name: spec.WriteFile, RawPrefix: `{"path":"a.txt","content":"first\npartial`,
@@ -250,7 +250,7 @@ func TestEditorInputReducerEditStreamsOnlyAfterCompleteOldText(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	reduce := editFileInputReducer(r)
+	reduce := editFileInputReducer(r, dir)
 
 	partialOld, ok := reduce(context.Background(), agent.ToolInputUpdate{
 		Name: spec.EditFile, RawPrefix: `{"path":"note.txt","edits":[{"old_text":"ol`,
@@ -327,7 +327,7 @@ func editReducerForFile(t *testing.T, name, content string) agent.ToolInputReduc
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	return editFileInputReducer(r)
+	return editFileInputReducer(r, dir)
 }
 
 func previewContains(state *filediff.State, want string) bool {

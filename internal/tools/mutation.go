@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"math/rand/v2"
 	"os"
@@ -64,10 +65,10 @@ func safeReplace(ctx context.Context, r *os.Root, relPath string, data []byte) e
 	}
 
 	perm := os.FileMode(0o644)
-	preserve := false
-	if info, err := r.Lstat(relPath); err == nil && info.Mode().IsRegular() {
-		perm = info.Mode().Perm()
-		preserve = true
+	target, err := r.Lstat(relPath)
+	preserve := err == nil && target.Mode().IsRegular()
+	if preserve {
+		perm = target.Mode().Perm()
 	}
 
 	// Create at perm so O_CREATE applies umask: a new file lands at
@@ -81,6 +82,13 @@ func safeReplace(ctx context.Context, r *os.Root, relPath string, data []byte) e
 		_ = f.Close()
 		_ = r.Remove(tmp)
 		return err
+	}
+	if preserve {
+		if err := keepAttributes(f, target); err != nil {
+			_ = f.Close()
+			_ = r.Remove(tmp)
+			return err
+		}
 	}
 	if err := f.Close(); err != nil {
 		_ = r.Remove(tmp)
@@ -100,7 +108,15 @@ func safeReplace(ctx context.Context, r *os.Root, relPath string, data []byte) e
 	}
 	if err := r.Rename(tmp, relPath); err != nil {
 		_ = r.Remove(tmp)
-		return err
+		// Windows refuses to replace a read-only file, which Unix allows.
+		if preserve && perm&0o200 == 0 {
+			return fmt.Errorf("%s is read-only", relPath)
+		}
+		// Name the target, not the temporary file the rename started from.
+		if linkErr, ok := errors.AsType[*os.LinkError](err); ok {
+			err = linkErr.Err
+		}
+		return &fs.PathError{Op: "replace", Path: relPath, Err: err}
 	}
 	return nil
 }

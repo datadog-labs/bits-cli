@@ -126,6 +126,18 @@ func TestWriteFileTool(t *testing.T) {
 		}
 	})
 
+	t.Run("creates parents named in the platform's syntax", func(t *testing.T) {
+		dir := t.TempDir()
+		tool, _ := newWriteTool(t, dir)
+		if r := invokeWrite(t, tool, map[string]any{"path": `new\deep\w.txt`, "content": "x"}); r.IsError {
+			t.Fatalf("unexpected error: %s", r.Output)
+		}
+		// On Windows \ separates directories; elsewhere it is part of the name.
+		if _, err := os.Stat(filepath.Join(dir, `new\deep\w.txt`)); err != nil {
+			t.Fatalf("file not created: %v", err)
+		}
+	})
+
 	t.Run("empty path rejected", func(t *testing.T) {
 		tool, _ := newWriteTool(t, t.TempDir())
 		assertError(t, invokeWrite(t, tool, map[string]any{"path": "", "content": "x"}), "must not be empty")
@@ -268,6 +280,39 @@ func TestWriteFileDisplayPreservesExactBOMAndLineEndingChanges(t *testing.T) {
 	}
 	if !foundBOM || !foundCR {
 		t.Fatalf("Change.Diff = %#v, want exact preimage markers", state.Change.Diff)
+	}
+}
+
+func TestWriteFileKeepsTheEncodingOfTheFileItReplaces(t *testing.T) {
+	for _, test := range []struct{ name, before, content, after string }{
+		{"new file", "", "\ufeffx\n", "\ufeffx\n"},
+		{"UTF-8", "old\n", "x\n", "x\n"},
+		{"UTF-8 BOM", bom + "old\n", "x\n", bom + "x\n"},
+		{"UTF-8 BOM repeated", bom + "old\n", bom + "x\n", bom + "x\n"},
+		{"UTF-16LE", "\xff\xfeo\x00", "x\u00e9\n", "\xff\xfex\x00\xe9\x00\n\x00"},
+		{"UTF-16BE", "\xfe\xff\x00o", "x\n", "\xfe\xff\x00x\x00\n"},
+		{"binary", "\x00\x01", "x\n", "x\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			target := filepath.Join(dir, "f.txt")
+			if test.before != "" {
+				if err := os.WriteFile(target, []byte(test.before), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tool, _ := newWriteTool(t, dir)
+			if r := invokeWrite(t, tool, map[string]any{"path": "f.txt", "content": test.content}); r.IsError {
+				t.Fatalf("unexpected error: %s", r.Output)
+			}
+			got, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != test.after {
+				t.Errorf("content = %q, want %q", got, test.after)
+			}
+		})
 	}
 }
 
