@@ -100,7 +100,7 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 		"",
 		"resume an existing conversation by ID or Datadog link",
 	)
-	root.AddCommand(newRunCommand(invoked, stdout), newLoginCommand(invoked, stderr), newLogoutCommand(invoked, stderr), newUpdateCommand(invoked, stdout, stderr))
+	root.AddCommand(newRunCommand(invoked, stdout), newLoginCommand(invoked, stderr), newLogoutCommand(invoked, stderr), newUpdateCommand(invoked, stdout, stderr), newInstallCommand(invoked, stderr))
 	return root
 }
 
