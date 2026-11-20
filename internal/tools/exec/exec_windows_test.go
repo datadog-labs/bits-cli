@@ -151,10 +151,11 @@ if ([Console]::Out.Encoding.CodePage -ne 1252 -or [Console]::Error.Encoding.Code
 `
 	const probe = `[Console]::Out.Write('日本語 😀')
 [Console]::Error.Write('日本語 😀')`
-	args := windowsExecShellArgs(shell, probe)
+	args, stdin := windowsExecShellArgs(shell, probe)
 	args[len(args)-1] = legacyWriters + args[len(args)-1]
 	command := osexec.CommandContext(t.Context(), shell, args...)
 	command.Dir = t.TempDir()
+	command.Stdin = stdin
 	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -165,6 +166,60 @@ if ([Console]::Out.Encoding.CodePage -ne 1252 -or [Console]::Error.Encoding.Code
 	const want = "日本語 😀"
 	if stdout.String() != want || stderr.String() != want {
 		t.Fatalf("raw output = (%q, %q), want UTF-8 %q on both pipes", stdout.String(), stderr.String(), want)
+	}
+}
+
+// PowerShell commands keep native exit codes, their own error positions, and
+// no length limit from the command line. Their errors are plain text.
+func TestExecServiceWindowsPowerShellCommands(t *testing.T) {
+	tests := []struct {
+		name, command string
+		exitCode      int
+		stdout        string
+		// stderr is text stderr must contain, or empty if stderr must be.
+		stderr string
+	}{
+		{name: "native exit code", command: "cmd /c exit 7", exitCode: 7},
+		{name: "later cmdlet keeps the native exit code", command: "cmd /c exit 7; 'after'", exitCode: 7, stdout: "after"},
+		{name: "later native command replaces it", command: "cmd /c exit 7; cmd /c exit 0", exitCode: 0},
+		{name: "exit statement", command: "cmd /c exit 7; exit 3", exitCode: 3},
+		{name: "strict mode without a native command", command: "Set-StrictMode -Version Latest; 'ok'", exitCode: 0, stdout: "ok"},
+		{name: "suppressed cmdlet error", command: "Get-Item missing -ErrorAction SilentlyContinue", exitCode: 0},
+		{name: "terminating error", command: "'ok'\nthrow 'thrown'", exitCode: 1, stdout: "ok", stderr: "throw 'thrown'"},
+		{name: "error positions", command: "'ok'\ntry { throw 'thrown' } catch { $_.InvocationInfo.ScriptLineNumber }", exitCode: 0, stdout: "ok\r\n2"},
+		{name: "parse error", command: "if (", exitCode: 1, stderr: "At line:1 char:5\r\n+ if ("},
+		{name: "formatted objects", command: "[pscustomobject]@{a = 1}", exitCode: 0, stdout: "a\r\n-\r\n1"},
+		{name: "native ANSI passes through", command: "cmd /c \"echo $([char]27)[32mgreen\"", exitCode: 0, stdout: "\x1b[32mgreen"},
+		{name: "leading using", command: "using namespace System.Text\n[StringBuilder]::new('ok').ToString()", exitCode: 0, stdout: "ok"},
+		{name: "stdin at end of file", command: `$line = [Console]::In.ReadLine(); "[$line]"`, exitCode: 0, stdout: "[]"},
+		{name: "longer than a command line", command: "('" + strings.Repeat("a", 40000) + "').Length", exitCode: 0, stdout: "40000"},
+	}
+	for _, name := range []string{"powershell.exe", "pwsh.exe"} {
+		t.Run(name, func(t *testing.T) {
+			shell, err := osexec.LookPath(name)
+			if err != nil {
+				t.Skipf("%s is not installed", name)
+			}
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					outcome := NewExecService(shell).run(t.Context(), ExecRequest{Command: test.command, CWD: t.TempDir()})
+					exitCode := "none"
+					if outcome.ExitCode != nil {
+						exitCode = strconv.Itoa(*outcome.ExitCode)
+					}
+					if exitCode != strconv.Itoa(test.exitCode) {
+						t.Fatalf("exit code = %s, want %d; outcome = %+v", exitCode, test.exitCode, outcome)
+					}
+					if got := strings.TrimSpace(outcome.Output.Stdout); got != test.stdout {
+						t.Errorf("stdout = %q, want %q", got, test.stdout)
+					}
+					stderr := outcome.Output.Stderr
+					if !strings.Contains(stderr, test.stderr) || (test.stderr == "") != (stderr == "") || strings.Contains(stderr, "\x1b") {
+						t.Errorf("stderr = %q, want plain text containing %q", stderr, test.stderr)
+					}
+				})
+			}
+		})
 	}
 }
 

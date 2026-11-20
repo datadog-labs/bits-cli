@@ -30,9 +30,11 @@ func (launcher directExecLauncher) Start(plan ExecPlan, stdout, stderr io.Writer
 	if err != nil {
 		return nil, err
 	}
-	command := osexec.Command(plan.Shell, windowsExecShellArgs(plan.Shell, plan.Command)...)
+	args, stdin := windowsExecShellArgs(plan.Shell, plan.Command)
+	command := osexec.Command(plan.Shell, args...)
 	command.Dir = plan.CWD
-	command.Stdin = nil
+	// Without input for the shell, a nil Stdin connects the null device.
+	command.Stdin = stdin
 	if len(launcher.excludedEnv) > 0 {
 		command.Env = shellEnvWithoutExcludedNames(command.Environ(), launcher.excludedEnv)
 	}
