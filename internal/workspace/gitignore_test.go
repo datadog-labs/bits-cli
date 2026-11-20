@@ -65,6 +65,10 @@ func TestIgnorerIgnore(t *testing.T) {
 		{"subdir excludes sibling dir", "*.test", "src", "lib/foo.test", false, false},
 		{"subdir anchored match", "/local.log", "src", "src/local.log", false, true},
 		{"subdir anchored excludes parent", "/local.log", "src", "local.log", false, false},
+
+		// Encoding: git drops a UTF-8 byte order mark only.
+		{"BOM before first pattern", "\ufeffbuild\r\n*.log\r\n", ".", "build", false, true},
+		{"BOM-less patterns keep U+FEFF", "x\n\ufeffbuild", ".", "build", false, false},
 	}
 
 	for _, tt := range tests {

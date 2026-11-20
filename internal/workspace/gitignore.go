@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,9 @@ const maxGitignoreSize = 1024 * 1024
 
 // Ignorer accumulates .gitignore rules encountered during a workspace walk.
 // Patterns are matched using Git-compatible wildmatch semantics.
+// NOTE: matching is case-sensitive, as in ripgrep, even where git sets
+// core.ignorecase: a dist/ rule shows Dist/ on Windows rather than risk
+// hiding a distinct directory.
 type Ignorer struct {
 	matcher *gitignore.Matcher
 }
@@ -64,7 +68,8 @@ func (ig *Ignorer) Add(ctx context.Context, fsys fs.FS, dir string) error {
 	if ig.matcher == nil {
 		ig.matcher = gitignore.New("")
 	}
-	ig.matcher.AddPatterns(data, scope)
+	// Like git, drop the BOM Windows editors write, but read no other encoding.
+	ig.matcher.AddPatterns(bytes.TrimPrefix(data, []byte("\ufeff")), scope)
 	return nil
 }
 

@@ -87,6 +87,7 @@ func grepFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 			return errorResult("invalid pattern: %s", err.Error()), nil
 		}
 
+		// NOTE: include globs match case-sensitively, like ignore rules.
 		var includeMatcher *gitignore.Matcher
 		if args.Include != "" {
 			includeMatcher = gitignore.New("")
