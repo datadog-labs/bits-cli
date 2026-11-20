@@ -17,6 +17,9 @@ import (
 	"golang.org/x/mod/semver"
 )
 
+// InstallGuide lists the installations that update themselves.
+const InstallGuide = "https://github.com/datadog-labs/bits-cli/blob/main/INSTALL.md"
+
 const (
 	ttl          = 24 * time.Hour
 	postponement = 24 * time.Hour
@@ -24,7 +27,7 @@ const (
 
 var (
 	// ErrUnsupportedInstallation means no supported installation backend was found.
-	ErrUnsupportedInstallation = errors.New("automatic updates are unavailable for this installation")
+	ErrUnsupportedInstallation = errors.New("automatic updates are unavailable for this installation; to get them, reinstall Bits: " + InstallGuide)
 	// errInvalidVersion means version information is missing, ambiguous, or unsupported.
 	errInvalidVersion = errors.New("invalid update version")
 )
