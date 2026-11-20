@@ -15,13 +15,20 @@ brew tap datadog-labs/pack
 brew install datadog-labs/pack/bits
 ```
 
-Release archives are also available from [GitHub Releases](https://github.com/datadog-labs/bits-cli/releases).
+Without Homebrew, on macOS or Linux:
 
-### Windows
+```sh
+curl -fsSL https://github.com/datadog-labs/bits-cli/releases/latest/download/install.sh | sh
+```
 
-Download `bits_<version>_windows_amd64.zip` (or the `arm64` archive) from
-[GitHub Releases](https://github.com/datadog-labs/bits-cli/releases), extract
-it, and add its `bin` folder to your `PATH`.
+On Windows, in PowerShell:
+
+```powershell
+irm https://github.com/datadog-labs/bits-cli/releases/latest/download/install.ps1 | iex
+```
+
+See [INSTALL.md](INSTALL.md) for where Bits goes, your `PATH`, specific
+releases, updates, and uninstalling.
 
 ## Get started
 
