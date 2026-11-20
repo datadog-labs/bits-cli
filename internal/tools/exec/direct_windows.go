@@ -73,18 +73,15 @@ func (p *directExecProcess) Wait() execProcessResult {
 	// WaitDelay bounds the wait for any output handles those descendants hold.
 	defer p.job.close()
 	err := p.command.Wait()
+	outputIncomplete := errors.Is(err, osexec.ErrWaitDelay)
 	state := p.command.ProcessState
 	if state == nil {
-		return execProcessResult{outputIncomplete: errors.Is(err, osexec.ErrWaitDelay)}
+		return execProcessResult{outputIncomplete: outputIncomplete}
 	}
-	exitCode := state.ExitCode()
-	if exitCode >= 0 {
-		return execProcessResult{
-			exitCode:         &exitCode,
-			outputIncomplete: errors.Is(err, osexec.ErrWaitDelay),
-		}
-	}
-	return execProcessResult{outputIncomplete: errors.Is(err, osexec.ErrWaitDelay)}
+	// Exit codes are DWORDs that cmd and PowerShell show as signed: -1 and
+	// -1073741819 (an access violation), not 4294967295 and 3221225477.
+	exitCode := int(int32(state.Sys().(syscall.WaitStatus).ExitCode))
+	return execProcessResult{exitCode: &exitCode, outputIncomplete: outputIncomplete}
 }
 
 // Windows has no Unix-style graceful group signal for these non-console

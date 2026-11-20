@@ -183,6 +183,7 @@ func TestExecServiceWindowsPowerShellCommands(t *testing.T) {
 		{name: "later cmdlet keeps the native exit code", command: "cmd /c exit 7; 'after'", exitCode: 7, stdout: "after"},
 		{name: "later native command replaces it", command: "cmd /c exit 7; cmd /c exit 0", exitCode: 0},
 		{name: "exit statement", command: "cmd /c exit 7; exit 3", exitCode: 3},
+		{name: "negative exit code", command: "[Environment]::Exit(-1073741819)", exitCode: -1073741819},
 		{name: "strict mode without a native command", command: "Set-StrictMode -Version Latest; 'ok'", exitCode: 0, stdout: "ok"},
 		{name: "suppressed cmdlet error", command: "Get-Item missing -ErrorAction SilentlyContinue", exitCode: 0},
 		{name: "terminating error", command: "'ok'\nthrow 'thrown'", exitCode: 1, stdout: "ok", stderr: "throw 'thrown'"},
