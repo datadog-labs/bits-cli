@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -174,7 +175,6 @@ func TestLinksResolve(t *testing.T) {
 		{links, "/Users/me/repo/./a/../b.go", "file:///Users/me/repo/b.go"},
 		{links, "..", ".."},
 		{Links{Origin: "https://acme.ap1.datadoghq.com"}, "src/main.go", "src/main.go"},
-		{Links{Workspace: `C:\repo`}, "src/main.go", "src/main.go"},
 		{links, "mailto:ops@example.com", "mailto:ops@example.com"},
 		{links, "?q=1", "?q=1"},
 		{links, "#section", "#section"},
@@ -182,6 +182,30 @@ func TestLinksResolve(t *testing.T) {
 	} {
 		if got := tc.links.Resolve(tc.ref); got != tc.want {
 			t.Errorf("%+v.Resolve(%q) = %q, want %q", tc.links, tc.ref, got, tc.want)
+		}
+	}
+}
+
+func TestLinksResolveWindowsWorkspace(t *testing.T) {
+	links := Links{Origin: "https://app.datadoghq.com", Workspace: `C:\My Repo`}
+	// Only Windows reads C:\My Repo as an absolute path; elsewhere it is a
+	// relative name, and the workspace links no files.
+	for _, tc := range []struct{ ref, unix, windows string }{
+		{"src/main.go#L3", "src/main.go#L3", "file:///C:/My%20Repo/src/main.go"},
+		{`src\main.go`, `src\main.go`, "file:///C:/My%20Repo/src/main.go"},
+		{"C:/My Repo/a.go", "C:/My Repo/a.go", "file:///C:/My%20Repo/a.go"},
+		{`C:\My Repo\a.go`, `C:\My Repo\a.go`, "file:///C:/My%20Repo/a.go"},
+		{"/C:/My%20Repo/a.go", "https://app.datadoghq.com/C:/My%20Repo/a.go", "file:///C:/My%20Repo/a.go"},
+		{`C:\Windows\win.ini`, `C:\Windows\win.ini`, `C:\Windows\win.ini`},
+		{"../outside.go", "../outside.go", "../outside.go"},
+		{"/logs", "https://app.datadoghq.com/logs", "https://app.datadoghq.com/logs"},
+	} {
+		want := tc.unix
+		if filepath.Separator == '\\' {
+			want = tc.windows
+		}
+		if got := links.Resolve(tc.ref); got != want {
+			t.Errorf("Resolve(%q) = %q, want %q", tc.ref, got, want)
 		}
 	}
 }

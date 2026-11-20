@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -55,20 +56,25 @@ type Links struct {
 // NOTE: an absolute path outside the workspace, such as /tmp/out.log, reads as
 // an app route; the model links such files as file:// URIs.
 func (l Links) Resolve(ref string) string {
-	u, err := url.Parse(ref)
+	// A Windows path such as C:/repo/a.go would otherwise parse with scheme c.
+	volume := filepath.VolumeName(ref) != ""
+	target := ref
+	if volume {
+		target = fileURLPath(ref)
+	}
+	u, err := url.Parse(target)
 	if err != nil || u.Scheme != "" || u.Host != "" || u.Path == "" {
 		return ref
 	}
-	// Only a Unix path is a file:// URL path as written.
-	ws := strings.TrimSuffix(l.Workspace, "/")
+	ws := strings.TrimSuffix(fileURLPath(l.Workspace), "/")
 	if !strings.HasPrefix(ws, "/") {
 		ws = ""
 	}
-	relative := !strings.HasPrefix(u.Path, "/")
+	file := filepath.ToSlash(u.Path)
+	relative := !strings.HasPrefix(file, "/")
 	if relative && ws == "" {
 		return ref
 	}
-	file := u.Path
 	if relative {
 		file = ws + "/" + file
 	}
@@ -78,7 +84,7 @@ func (l Links) Resolve(ref string) string {
 		// with a line anchor, and no editor reads one from it.
 		return (&url.URL{Scheme: "file", Path: file}).String()
 	}
-	if relative {
+	if relative || volume {
 		return ref
 	}
 	origin, err := url.Parse(l.Origin)
@@ -87,6 +93,15 @@ func (l Links) Resolve(ref string) string {
 	}
 	u.Scheme, u.Host = origin.Scheme, origin.Host
 	return u.String()
+}
+
+// fileURLPath returns the path of the file:// URL for name: slash-separated,
+// with a leading slash before a Windows volume (file:///C:/repo).
+func fileURLPath(name string) string {
+	if filepath.VolumeName(name) != "" {
+		return "/" + filepath.ToSlash(name)
+	}
+	return filepath.ToSlash(name)
 }
 
 // WebOrigin returns the Datadog web app origin for the site serving the
