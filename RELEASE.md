@@ -10,8 +10,9 @@ This triggers `.github/workflows/release.yml` on `main`, which:
 
 1. checks that the tag is the next patch, minor, or major version;
 2. runs CI for the tag, which builds and tests each OS on its own runner and
-   packages the release archives and SBOMs (see CONTRIBUTING.md);
-3. attests the provenance of these archives and publishes them as a GitHub release of
+   packages the release archives, SBOMs, and [install scripts](#install-scripts)
+   (see CONTRIBUTING.md);
+3. attests the provenance of these assets and publishes them as a GitHub release of
    the `main` commit with `./scripts/publish.sh`, which also creates the tag;
 4. opens a pull request that updates the [Homebrew](#homebrew) formula and merges
    once approved.
@@ -27,10 +28,13 @@ bits_<version>_<os>_<arch>.tar.gz            macOS/Linux install prefix
 bits_<version>_windows_<arch>.zip           Windows install prefix
 bits_<version>_<os>_<arch>.tar.gz.sbom.json  SPDX JSON SBOM of a macOS/Linux archive
 bits_<version>_windows_<arch>.zip.sbom.json SPDX JSON SBOM of a Windows archive
-bits_<version>_checksums.txt                SHA-256 of every archive and SBOM
+install.sh                                  macOS/Linux installer for this release
+install.ps1                                 Windows installer for this release
+bits_<version>_checksums.txt                SHA-256 of every other asset
 ```
 
-Each archive is an install prefix, which Homebrew installs as is:
+Each archive is an install prefix, which Homebrew and the install scripts
+install as is:
 
 ```
 bin/bits                  bits.exe on Windows
@@ -75,6 +79,27 @@ Homebrew keeps its branch identity. The environment needs no approval gate
 or settings change. Merge the workflow and policy changes together after
 in-flight publish jobs finish; older publish jobs must be restarted as a
 fresh release run on `main` to obtain a token.
+
+## Install scripts
+
+`scripts/install.sh` and `scripts/install.ps1` leave the release they install
+unset; `package.sh` sets it in the copies it puts in `dist/`. Since the scripts
+keep their names, `releases/latest/download/install.sh` always installs the
+latest release.
+
+Each installation then updates itself with the code of the release it runs,
+so released binaries and scripts depend on these, which must not change:
+
+- the asset names above and the `sha256sum` format of the checksums;
+- archives that hold `bin/`, `libexec/`, and `share/` at their root, and only
+  regular files and directories: older binaries unpack nothing else;
+- `releases/latest` redirecting to the tag page of the latest release;
+- the layout under the installation root: `versions/v<version>/` with an
+  `.install-complete` marker, and `current` pointing at one of them;
+- `bits install`, with no arguments, run from `versions/v<version>/bin`,
+  which switches to that version. A layout change goes in there.
+
+`scripts/install_test.go` and `internal/update` test these.
 
 ## Homebrew
 
