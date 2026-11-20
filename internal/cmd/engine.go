@@ -61,7 +61,11 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 	}
 	if workspace != nil {
 		config.ProjectInstructions = env.NewInstructions(workspace.Path())
-		config.ClientSkills = env.NewSkills(workspace.Path(), opts.SkillPaths)
+		skillDirs, err := env.SkillDirs(workspace.Path(), opts.SkillPaths)
+		if err != nil {
+			return nil, fmt.Errorf("--skill: %w", err)
+		}
+		config.ClientSkills = env.NewSkills(workspace.Path(), skillDirs)
 	}
 
 	switch opts.AuthMode {

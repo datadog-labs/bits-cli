@@ -116,7 +116,7 @@ func TestClientSkillDisableModelInvocation(t *testing.T) {
 	writeSkill(t, active, ".agents/skills/visible", "visible", "shown to the model")
 	writeSkillFile(t, active, ".agents/skills/hidden", "---\nname: hidden\ndescription: user only\ndisable-model-invocation: true\n---\n")
 	writeSkill(t, active, "extras/hidden", "hidden", "shadowed duplicate")
-	skills := NewSkills(active, []string{"extras"})
+	skills := NewSkills(active, []string{filepath.Join(active, "extras")})
 	visible, err := skills.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -152,13 +152,58 @@ func TestClientSkillOutsideGitAndExplicitPaths(t *testing.T) {
 	writeSkill(t, active, ".agents/skills/local", "local", "local description")
 	writeSkill(t, active, "extras/custom", "custom", "relative explicit directory")
 	writeSkill(t, home, "extras/user", "user", "expanded home path")
-	got := NewSkills(active, []string{"extras", "~/extras"}).snapshot(context.Background())
+	dirs, err := SkillDirs(active, []string{"extras", "~/extras"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := NewSkills(active, dirs).snapshot(context.Background())
 	if strings.Contains(got, `name="parent"`) {
 		t.Fatal("discovered outside non-git workspace")
 	}
 	for _, name := range []string{"local", "custom", "user"} {
 		if !strings.Contains(got, `name="`+name+`"`) {
 			t.Fatalf("missing %s", name)
+		}
+	}
+}
+
+func TestSkillDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	workspace := t.TempDir()
+	for _, dir := range []string{filepath.Join(home, "x"), filepath.Join(workspace, "rel")} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeInstructionTestFile(t, workspace, "file", "")
+	// ~\x names the home directory only where \ separates directories.
+	backslashHome := filepath.Join(workspace, `~\x`)
+	if filepath.Separator == '\\' {
+		backslashHome = filepath.Join(home, "x")
+	} else if err := os.Mkdir(backslashHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ dir, want, err string }{
+		{dir: "~", want: home},
+		{dir: "~/x", want: filepath.Join(home, "x")},
+		{dir: `~\x`, want: backslashHome},
+		{dir: "rel", want: filepath.Join(workspace, "rel")},
+		{dir: filepath.Join(home, "x") + string(filepath.Separator), want: filepath.Join(home, "x")},
+		{dir: "missing", err: `skill directory "missing": `},
+		{dir: "~missing", err: `skill directory "~missing": `},
+		{dir: "file", err: `skill directory "file": not a directory`},
+	} {
+		got, err := SkillDirs(workspace, []string{test.dir})
+		if test.err != "" {
+			if err == nil || !strings.HasPrefix(err.Error(), test.err) {
+				t.Errorf("SkillDirs(%q) = %v, %v; want error %q", test.dir, got, err, test.err)
+			}
+			continue
+		}
+		if err != nil || len(got) != 1 || got[0] != test.want {
+			t.Errorf("SkillDirs(%q) = %v, %v; want %q", test.dir, got, err, test.want)
 		}
 	}
 }
@@ -425,7 +470,7 @@ func TestClientSkillVisibilityFlags(t *testing.T) {
 			root := t.TempDir()
 			writeSkillFile(t, root, ".agents/skills/review", "---\ndescription: User only\n"+flags+"---\nInstructions")
 			writeSkill(t, root, "extra/review", "review", "shadowed automatic version")
-			provider := NewSkills(root, []string{"extra"})
+			provider := NewSkills(root, []string{filepath.Join(root, "extra")})
 			skills := provider.discover(context.Background())
 			if len(skills) != 1 || skills[0].Name != "review" || !skills[0].DisableModelInvocation || skills[0].Description != "User only" {
 				t.Fatalf("registry = %+v", skills)
