@@ -76,7 +76,7 @@ func (r *run) stopAt(name string) error {
 		switch err := os.Remove(path); {
 		case err == nil:
 			return nil
-		case !errors.Is(err, fs.ErrNotExist):
+		case !errors.Is(err, fs.ErrNotExist) && !held(err):
 			return fmt.Errorf("breakpoint %q: %w", name, err)
 		}
 		select {
