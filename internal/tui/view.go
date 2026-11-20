@@ -249,19 +249,24 @@ func (m *Model) chatView() string {
 }
 
 // chatOverlay floats a popup above the composer without reflowing the
-// transcript, anchored at x and clamped so it never overflows the width.
+// transcript, anchored at x and clamped so it never overflows the width. The
+// popup blanks the whole rows it covers: transcript cells beside it, such as a
+// notice's marker, would read as stale parts of the popup.
 func (m *Model) chatOverlay(base, popup string, x int) string {
 	if popup == "" {
 		return base
 	}
 	popupW, popupH := lipgloss.Size(popup)
-	if width := m.list.Width(); x+popupW > width {
+	width := m.list.Width()
+	if x+popupW > width {
 		x = max(0, width-popupW)
 	}
 	y := max(0, m.frame.inputTop()-popupH)
+	rows := strings.TrimSuffix(strings.Repeat(strings.Repeat(" ", width)+"\n", popupH), "\n")
 	return lipgloss.NewCompositor(
 		lipgloss.NewLayer(base),
-		lipgloss.NewLayer(popup).X(x).Y(y).Z(1),
+		lipgloss.NewLayer(rows).Y(y).Z(1),
+		lipgloss.NewLayer(popup).X(x).Y(y).Z(2),
 	).Render()
 }
 

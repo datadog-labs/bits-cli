@@ -6,8 +6,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Queue orders terminal image writes across Bubble Tea updates. Its zero value
-// is ready to use.
+// Queue orders raw terminal writes, mostly images, across Bubble Tea updates.
+// Its zero value is ready to use.
 type Queue struct {
 	pending []queuedWrite
 	busy    bool
@@ -21,15 +21,15 @@ type queuedWrite struct {
 
 func (w queuedWrite) String() string { return fmt.Sprint(w.data) }
 
-// Enqueue accepts a command returned by Image.Transmit, Image.Place, or Delete.
-// It returns a command only when the queue was idle.
+// Enqueue accepts a tea.Raw command, such as one returned by Image.Transmit,
+// Image.Place, or Delete. It returns a command only when the queue was idle.
 func (q *Queue) Enqueue(cmd tea.Cmd) tea.Cmd {
 	if cmd == nil {
 		return nil
 	}
 	raw, ok := cmd().(tea.RawMsg)
 	if !ok {
-		panic("graphics.Queue: expected a raw image command")
+		panic("graphics.Queue: expected a raw command")
 	}
 	q.pending = append(q.pending, queuedWrite{queue: q, data: raw.Msg})
 	return q.next()

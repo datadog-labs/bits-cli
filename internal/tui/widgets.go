@@ -60,9 +60,10 @@ func (m *Model) syncWidgets() tea.Cmd {
 	return m.widgets.sync(m.list, m.widgetMode(), m.styles.IsDark, m.conversationEpoch)
 }
 
-// quitWith frees the images this session stored in the terminal, then runs
-// quit. They go first, in one write: once the program stops, nothing reaches
-// the terminal, and it would keep them across runs.
+// quitWith frees the images this session stored in the terminal and resets the
+// pointer shape, then runs quit. They go first: once the program stops, nothing
+// reaches the terminal, and it would keep them across runs. Windows consoles
+// even print later escape sequences as text.
 func (m *Model) quitWith(quit tea.Cmd) tea.Cmd {
 	m.widgets.closed = true // the rest of this Update must not start work again
 	if m.list != nil {
@@ -72,8 +73,8 @@ func (m *Model) quitWith(quit tea.Cmd) tea.Cmd {
 	if m.graphics.Support == graphics.Supported {
 		images = append(images, graphics.Image{ID: splash.ImageID})
 	}
-	deleteCmd := m.widgets.images.Enqueue(graphics.Delete(images...))
-	return tea.Batch(deleteCmd, m.widgets.images.DrainThen(quit))
+	queue := &m.widgets.images
+	return tea.Batch(queue.Enqueue(m.reconcilePointerShape()), queue.Enqueue(graphics.Delete(images...)), queue.DrainThen(quit))
 }
 
 // widgets owns widget operations and stored images for the transcript.

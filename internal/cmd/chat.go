@@ -8,7 +8,6 @@ import (
 	"os"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/tools"
@@ -52,9 +51,6 @@ func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer)
 	stopWatchingJobControl := watchJobControlStops(ctx, program)
 	model, err := program.Run()
 	stopWatchingJobControl()
-	// Reset terminal state after the renderer stops, covering every exit path
-	// (ctrl+c, /quit, /logout, errors). Unsupported OSCs are ignored.
-	_, _ = fmt.Fprint(stdout, ansi.SetPointerShape("default"), ansi.ResetProgressBar, ansi.ClearProgramStatus)
 	if err != nil {
 		return err
 	}
