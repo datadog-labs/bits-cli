@@ -194,7 +194,8 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 		}
 		return
 	}
-	if filepath.Base(source) != "SKILL.md" || !info.Mode().IsRegular() {
+	// Windows and macOS file systems find SKILL.md as skill.md too, and so does discovery.
+	if !strings.EqualFold(filepath.Base(source), "SKILL.md") || !info.Mode().IsRegular() {
 		return
 	}
 	// Reserve the extra byte readBoundedFile uses to detect truncation.

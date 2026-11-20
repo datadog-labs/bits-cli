@@ -65,6 +65,10 @@ func TestClientSkillDiscoveryPrecedenceAndBoundaries(t *testing.T) {
 	writeSkill(t, filepath.Dir(active), ".agents/skills/duplicate", "duplicate", "parent version")
 	writeSkill(t, active, ".agents/skills/duplicate", "duplicate", "nearest version")
 	writeSkill(t, home, ".agents/skills/user", "user", "user description")
+	if err := os.MkdirAll(filepath.Join(home, ".agents/skills/lower"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstructionTestFile(t, home, ".agents/skills/lower/skill.md", "---\ndescription: lowercase file name\n---\n")
 	writeSkill(t, home, ".agents/skills/duplicate", "duplicate", "home version")
 	extra := t.TempDir()
 	writeSkill(t, extra, "custom", "custom", "'quoted <tag> & text'")
@@ -83,7 +87,7 @@ func TestClientSkillDiscoveryPrecedenceAndBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := NewSkills(active, []string{extra, extra}).snapshot(context.Background())
-	for _, want := range []string{"nearest version", "root description", "user description", "&lt;tag&gt; &amp; text"} {
+	for _, want := range []string{"nearest version", "root description", "user description", "lowercase file name", "&lt;tag&gt; &amp; text"} {
 		if !strings.Contains(catalog, want) {
 			t.Fatalf("missing %q in %s", want, catalog)
 		}
