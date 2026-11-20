@@ -124,11 +124,11 @@ func editFileHandler(r *os.Root, root string, locker *mutationLocker) agent.Tool
 		if len(data) > maxFileSize {
 			return errorResult("file exceeds 10 MB limit"), nil
 		}
-		if isBinary(data) {
-			return errorResult("binary file, cannot edit as text"), nil
+		raw, enc, ok := decodeText(data)
+		if !ok {
+			return errorResult("%s, cannot edit as text", errNotText), nil
 		}
 
-		raw := string(data)
 		hasBOM := strings.HasPrefix(raw, bom)
 		body := strings.TrimPrefix(raw, bom)
 		ending, ok := filediff.LineEndingStyle(body)
@@ -151,7 +151,11 @@ func editFileHandler(r *os.Root, root string, locker *mutationLocker) agent.Tool
 		if hasBOM {
 			final = bom + final
 		}
-		if err := safeReplace(ctx, r, filePath, []byte(final)); err != nil {
+		encoded, err := encodeText(final, enc)
+		if err != nil {
+			return errorResult("encode %s: %s", filePath, err.Error()), nil
+		}
+		if err := safeReplace(ctx, r, filePath, encoded); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return agent.ToolResult{}, ctxErr
 			}

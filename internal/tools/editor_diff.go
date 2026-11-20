@@ -13,6 +13,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/filediff"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
+	"golang.org/x/text/encoding"
 )
 
 type editorInput struct {
@@ -309,7 +310,7 @@ func writeFileInputReducer(r *os.Root, root string) agent.ToolInputReducer {
 			return state
 		}
 		state.Phase = filediff.PhaseReady
-		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Raw, content)
+		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Raw, overwriteText(snapshot.Raw, content))
 		state.Preview = &filediff.Preview{Kind: filediff.PreviewWritePrefix, Diff: &diff, InputTruncated: update.PreviewTruncated}
 		return state
 	}
@@ -405,7 +406,7 @@ func editorPreviewState(ctx context.Context, r *os.Root, root string, previous *
 	}
 	snapshot := priorSnapshot(previous, filePath)
 	if snapshot == nil {
-		snapshot = captureEditorSnapshot(ctx, r, filePath)
+		snapshot, _ = captureEditorSnapshot(ctx, r, filePath)
 	}
 	state := &filediff.State{Phase: filediff.PhaseStreaming, Snapshot: snapshot}
 	if snapshot.State == filediff.SnapshotUnavailable {
@@ -473,27 +474,28 @@ func priorSnapshot(previous *filediff.State, filePath string) *filediff.Snapshot
 	return &copy
 }
 
-// captureEditorSnapshot reads an ordinary text file only. Failure to make a
-// safe display snapshot never changes whether the eventual mutation may run.
-func captureEditorSnapshot(ctx context.Context, r *os.Root, filePath string) *filediff.Snapshot {
+// captureEditorSnapshot reads an ordinary text file only, with the encoding
+// decodeText found (nil for UTF-8). Failure to make a safe display snapshot
+// never changes whether the eventual mutation may run.
+func captureEditorSnapshot(ctx context.Context, r *os.Root, filePath string) (*filediff.Snapshot, encoding.Encoding) {
 	snapshot := &filediff.Snapshot{Path: filePath}
 	info, err := r.Lstat(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			snapshot.State = filediff.SnapshotMissing
-			return snapshot
+			return snapshot, nil
 		}
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, err.Error()
-		return snapshot
+		return snapshot, nil
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, "path is not a regular file"
-		return snapshot
+		return snapshot, nil
 	}
 	f, err := r.Open(filePath)
 	if err != nil {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, err.Error()
-		return snapshot
+		return snapshot, nil
 	}
 	defer func() { _ = f.Close() }()
 	stopClose := context.AfterFunc(ctx, func() { _ = f.Close() })
@@ -504,38 +506,39 @@ func captureEditorSnapshot(ctx context.Context, r *os.Root, filePath string) *fi
 	openedInfo, err := f.Stat()
 	if err != nil {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, err.Error()
-		return snapshot
+		return snapshot, nil
 	}
 	if !openedInfo.Mode().IsRegular() {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, "path is not a regular file"
-		return snapshot
+		return snapshot, nil
 	}
 	if !os.SameFile(info, openedInfo) {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, "file changed while opening"
-		return snapshot
+		return snapshot, nil
 	}
 	if openedInfo.Size() > maxFileSize {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, "file exceeds 10 MB preview limit"
-		return snapshot
+		return snapshot, nil
 	}
 	data, err := io.ReadAll(io.LimitReader(contextReader{ctx: ctx, r: f}, maxFileSize+1))
-	if err != nil || len(data) > maxFileSize || isBinary(data) {
-		snapshot.State = filediff.SnapshotUnavailable
-		if err != nil {
-			snapshot.Reason = err.Error()
-		} else if len(data) > maxFileSize {
-			snapshot.Reason = "file exceeds 10 MB preview limit"
-		} else {
-			snapshot.Reason = "binary file"
-		}
-		return snapshot
+	if err != nil {
+		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, err.Error()
+		return snapshot, nil
 	}
-	text := strings.TrimPrefix(string(data), bom)
+	if len(data) > maxFileSize {
+		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, "file exceeds 10 MB preview limit"
+		return snapshot, nil
+	}
+	raw, enc, ok := decodeText(data)
+	if !ok {
+		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, errNotText
+		return snapshot, nil
+	}
 	// A write replacement is safe to render for any non-binary text, including
 	// mixed endings or a literal bare CR. edit_file performs its stricter
 	// line-ending validation only when it needs normalized matching text.
-	snapshot.Raw, snapshot.Text, snapshot.State = string(data), filediff.NormalizeToLF(text), filediff.SnapshotReady
-	return snapshot
+	snapshot.Raw, snapshot.Text, snapshot.State = raw, filediff.NormalizeToLF(strings.TrimPrefix(raw, bom)), filediff.SnapshotReady
+	return snapshot, enc
 }
 
 func writePrefixDiff(filePath, content string) filediff.Diff {

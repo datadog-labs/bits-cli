@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -18,7 +19,7 @@ func newWriteFileTool(r *os.Root, root string, locker *mutationLocker) agent.Too
 	return agent.Tool{
 		Definition: assistant.ClientTool{
 			Name:        spec.WriteFile,
-			Description: "Create a new file or fully overwrite an existing one in the workspace. Missing parent directories are created. Use edit_file for targeted changes to an existing file.",
+			Description: "Create a new file or fully overwrite an existing one in the workspace. Missing parent directories are created. An overwrite keeps the file's encoding (UTF-8 or UTF-16) and byte order mark. Use edit_file for targeted changes to an existing file.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -72,9 +73,17 @@ func writeFileHandler(r *os.Root, root string, locker *mutationLocker) agent.Too
 				return errorResult("%s is not a regular file", filePath), nil
 			}
 		}
-		before := captureEditorSnapshot(ctx, r, filePath)
+		before, enc := captureEditorSnapshot(ctx, r, filePath)
 
-		data := []byte(*args.Content)
+		// An overwrite keeps the file's encoding, which the content cannot
+		// express.
+		// NOTE: a file over the 10 MB preview limit is not read, so it is
+		// rewritten as UTF-8; read_file cannot read it either.
+		content := overwriteText(before.Raw, *args.Content)
+		data, err := encodeText(content, enc)
+		if err != nil {
+			return errorResult("encode %s: %s", filePath, err.Error()), nil
+		}
 		if err := safeReplace(ctx, r, filePath, data); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return agent.ToolResult{}, ctxErr
@@ -88,7 +97,7 @@ func writeFileHandler(r *os.Root, root string, locker *mutationLocker) agent.Too
 		}
 		if before.State == filediff.SnapshotReady || before.State == filediff.SnapshotMissing {
 			previous := before.Raw
-			renderDiff, display := filediff.BuildWithDisplay("a/"+filePath, "b/"+filePath, previous, *args.Content)
+			renderDiff, display := filediff.BuildWithDisplay("a/"+filePath, "b/"+filePath, previous, content)
 			result.Display = display
 			result.RenderState = agent.ReplaceRenderState(appliedEditorState(filePath, operation, renderDiff))
 		} else {
@@ -96,6 +105,15 @@ func writeFileHandler(r *os.Root, root string, locker *mutationLocker) agent.Too
 		}
 		return result, nil
 	}
+}
+
+// overwriteText keeps the byte order mark of the file text it replaces:
+// read_file does not show one, so the content need not repeat it.
+func overwriteText(before, content string) string {
+	if strings.HasPrefix(before, bom) && !strings.HasPrefix(content, bom) {
+		return bom + content
+	}
+	return content
 }
 
 func pluralizeBytes(filePath string, n int) string {

@@ -241,6 +241,21 @@ func TestGrepFilesTool(t *testing.T) {
 		}
 	})
 
+	t.Run("byte order marks select the encoding and never match", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"utf8.txt":  {Data: []byte(bom + "needle\n")},
+			"utf16.txt": {Data: []byte("\xff\xfen\x00e\x00e\x00d\x00l\x00e\x00\r\x00\n\x00")},
+		}
+		tool := newGrepFilesTool(fsys, "/workspace")
+		result, err := tool.Handler(ctx, agent.ToolCall{Input: `{"pattern":"^needle$"}`})
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected error: %v %s", err, result.Output)
+		}
+		if want := "utf16.txt:1: needle\nutf8.txt:1: needle"; result.Output != want {
+			t.Errorf("output = %q, want %q", result.Output, want)
+		}
+	})
+
 	t.Run("invalid UTF-8 files are skipped", func(t *testing.T) {
 		fsys := fstest.MapFS{"invalid.txt": {Data: []byte("needle\xff")}}
 		tool := newGrepFilesTool(fsys, "/workspace")

@@ -330,6 +330,33 @@ func TestEditFilePreservation(t *testing.T) {
 		}
 	})
 
+	t.Run("preserves UTF-16 with its byte order mark", func(t *testing.T) {
+		for _, test := range []struct{ name, before, after string }{
+			{"little endian", "\xff\xfea\x00\r\x00\n\x00\xe9\x00\r\x00\n\x00", "\xff\xfeA\x00\r\x00\n\x00\xe9\x00\r\x00\n\x00"},
+			{"big endian", "\xfe\xff\x00a\x00\n\x00\xe9\x00\n", "\xfe\xff\x00A\x00\n\x00\xe9\x00\n"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				r, got := editInDir(t, "f.txt", test.before, []editSpec{{Old: "a\n", New: "A\n"}})
+				if r.IsError {
+					t.Fatalf("unexpected error: %s", r.Output)
+				}
+				if got != test.after {
+					t.Errorf("content = %q, want %q", got, test.after)
+				}
+			})
+		}
+	})
+
+	t.Run("refuses text it cannot write back unchanged", func(t *testing.T) {
+		for _, content := range []string{"caf\xe9\n", "\xff\xfea\x00\x00\xd8"} {
+			r, got := editInDir(t, "f.txt", content, []editSpec{{Old: "a", New: "A"}})
+			assertError(t, r, errNotText)
+			if got != content {
+				t.Errorf("file was modified: %q", got)
+			}
+		}
+	})
+
 	t.Run("preserves CRLF line endings", func(t *testing.T) {
 		r, got := editInDir(t, "f.txt", "alpha\r\nbeta\r\ngamma\r\n", []editSpec{{Old: "beta", New: "BETA"}})
 		if r.IsError {

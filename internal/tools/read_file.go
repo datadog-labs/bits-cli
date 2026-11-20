@@ -95,11 +95,12 @@ func readFileHandler(fsys fs.FS, root string) agent.ToolHandler {
 			return errorResult("file exceeds 10 MB limit"), nil
 		}
 
-		if isBinary(data) {
-			return errorResult("binary file, cannot read as text"), nil
+		text, _, ok := decodeText(data)
+		if !ok {
+			return errorResult("%s, cannot read as text", errNotText), nil
 		}
 
-		content := strings.TrimSuffix(string(data), "\n")
+		content := strings.TrimSuffix(strings.TrimPrefix(text, bom), "\n")
 		totalLines := strings.Count(content, "\n") + 1
 
 		offset := 1

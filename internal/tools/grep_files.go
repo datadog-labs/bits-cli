@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	gitignore "github.com/git-pkgs/gitignore"
+	"golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -130,7 +132,8 @@ func grepFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 				return nil
 			}
 
-			reader, binary, err := probeBinary(ctx, f)
+			// Search UTF-16 files as text, and never match a byte order mark.
+			reader, binary, err := probeBinary(ctx, transform.NewReader(f, unicode.BOMOverride(transform.Nop)))
 			if err != nil {
 				return err
 			}
