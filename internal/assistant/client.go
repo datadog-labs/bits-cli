@@ -2,19 +2,22 @@
 // Assistant HTTP API. It targets the same API the Datadog UI uses when you
 // chat with Bits, and is intended to drive a remote agent loop.
 //
-// The main endpoint (POST /api/v2/assistant) returns a stream of
-// newline-delimited JSON, where each line is a complete AssistantResponse.
+// A turn is sent with POST /api/v2/assistant/conversation/{id}, which returns
+// a stream of newline-delimited JSON, where each line is a complete
+// AssistantResponse.
 package assistant
 
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -49,6 +52,10 @@ const (
 	defaultRetryBaseDelay = 200 * time.Millisecond
 	// maxRetryDelay caps a single backoff wait.
 	maxRetryDelay = 5 * time.Second
+	// subscribeSilenceTimeout treats a subscription silent this long as dead.
+	// A subscription carries no keepalives, and an idle one may close on its
+	// own, so this only needs to outlast that.
+	subscribeSilenceTimeout = 130 * time.Second
 )
 
 // AccessTokenSource returns a current OAuth access token. Implementations may
@@ -79,6 +86,9 @@ type Client struct {
 	// StreamIdleTimeout is the maximum gap between streamed lines before the
 	// stream is considered wedged. Zero uses defaultStreamIdleTimeout.
 	StreamIdleTimeout time.Duration
+	// SubscribeSilenceTimeout is StreamIdleTimeout for Subscribe. Zero uses
+	// subscribeSilenceTimeout.
+	SubscribeSilenceTimeout time.Duration
 	// MaxLineBytes caps the size of a single streamed line. Zero uses
 	// defaultMaxLineBytes. A larger line fails the stream (wrapping
 	// bufio.ErrTooLong) rather than growing unbounded in memory.
@@ -152,6 +162,21 @@ func newTransport() *http.Transport {
 	// Fork creation may wait for a 45-second server-side transaction.
 	// Ordinary requests retain their shorter HTTP client deadline.
 	tr.ResponseHeaderTimeout = 60 * time.Second
+	// A stream can be silent for minutes while the assistant works, so a
+	// dropped network would otherwise go unnoticed until a read deadline.
+	// TCP keepalives and HTTP/2 pings detect a dead link in about 30s.
+	dial := tr.DialContext
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dial(ctx, network, addr)
+		if tcp, ok := conn.(*net.TCPConn); ok && err == nil {
+			keepalive := net.KeepAliveConfig{Enable: true, Idle: 15 * time.Second, Interval: 5 * time.Second, Count: 3}
+			if err := tcp.SetKeepAliveConfig(keepalive); err != nil {
+				return nil, errors.Join(err, conn.Close())
+			}
+		}
+		return conn, err
+	}
+	tr.HTTP2 = &http.HTTP2Config{SendPingTimeout: 15 * time.Second, PingTimeout: 10 * time.Second}
 	return tr
 }
 
@@ -340,13 +365,15 @@ func (c *Client) rejectAccessToken(ctx context.Context, req *http.Request) error
 // It retries transient failures for idempotent requests only; the streaming
 // POST does not go through do and is never retried.
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
-	return c.doWithClient(ctx, c.httpClient(), method, path, body)
+	return c.doWithClient(ctx, c.httpClient(), method, path, body, method != http.MethodPost)
 }
 
-func (c *Client) doWithClient(ctx context.Context, client *http.Client, method, path string, body any) (*http.Response, error) {
-	attempts := c.maxRetries() + 1
-	if method == http.MethodPost {
-		attempts = 1
+// doWithClient is do with another client. Only an idempotent request is
+// retried.
+func (c *Client) doWithClient(ctx context.Context, client *http.Client, method, path string, body any, idempotent bool) (*http.Response, error) {
+	attempts := 1
+	if idempotent {
+		attempts = c.maxRetries() + 1
 	}
 	var lastErr error
 	var wait time.Duration // Retry-After from the previous response, if any
@@ -480,7 +507,13 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 		Attributes: attrs,
 	}}
 
-	return c.stream(ctx, http.MethodPost, "/api/v2/assistant", reqBody, opts.ConversationID, fn)
+	// Naming the conversation in the path lets later stop and subscribe
+	// requests address the same conversation as the send.
+	path := "/api/v2/assistant/conversation"
+	if opts.ConversationID != "" {
+		path += "/" + url.PathEscape(opts.ConversationID)
+	}
+	return c.stream(ctx, http.MethodPost, path, reqBody, opts.ConversationID, c.streamIdleTimeout(), fn)
 }
 
 // SubscribeOptions selects what a /subscribe stream carries.
@@ -502,7 +535,8 @@ func (c *Client) Subscribe(ctx context.Context, conversationID string, opts Subs
 	if opts.TaskID != "" {
 		path += "?" + url.Values{"subtask_id": {opts.TaskID}}.Encode()
 	}
-	_, err := c.stream(ctx, http.MethodGet, path, nil, conversationID, func(ar AssistantResponse) error {
+	silence := cmp.Or(c.SubscribeSilenceTimeout, subscribeSilenceTimeout)
+	_, err := c.stream(ctx, http.MethodGet, path, nil, conversationID, silence, func(ar AssistantResponse) error {
 		// A title update has no message to observe.
 		if ar.Data.Attributes.ConversationTitle != "" {
 			return nil
@@ -548,6 +582,9 @@ func (c *Client) responseError(
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 	_ = resp.Body.Close()
 	apiErr := httpError(snippet, resp.StatusCode, req.Method, path)
+	if d, ok := retryAfterDelay(resp.Header); ok {
+		apiErr.RetryAfter = d
+	}
 	var rejectErr error
 	if resp.StatusCode == http.StatusUnauthorized {
 		rejectErr = c.rejectAccessToken(ctx, req)
@@ -557,14 +594,13 @@ func (c *Client) responseError(
 
 // stream issues a streaming request and hands every non-keepalive line to fn.
 // It returns the last conversation id the stream reported, or conversationID.
-func (c *Client) stream(ctx context.Context, method, path string, body any, conversationID string, fn func(AssistantResponse) error) (string, error) {
+func (c *Client) stream(ctx context.Context, method, path string, body any, conversationID string, idle time.Duration, fn func(AssistantResponse) error) (string, error) {
 	// Bound the gap between lines (not the total duration) by cancelling a
 	// derived context when no data arrives for streamIdleTimeout (see
 	// defaultStreamIdleTimeout for why the default outlasts the server's own).
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var idledOut atomic.Bool
-	idle := c.streamIdleTimeout()
 
 	req, err := c.newRequest(streamCtx, method, path, body)
 	if err != nil {
@@ -631,7 +667,7 @@ func (c *Client) stream(ctx context.Context, method, path string, body any, conv
 		if e := ctx.Err(); e != nil {
 			return conversationID, e
 		}
-		return conversationID, fmt.Errorf("read stream: %w", err)
+		return conversationID, fmt.Errorf("%w: %w", ErrStreamBroken, err)
 	}
 	return conversationID, nil
 }
@@ -837,12 +873,23 @@ func (c *Client) ShareConversation(ctx context.Context, in ShareConversationInpu
 	return &out.Data.Attributes, nil
 }
 
+// Stop asks the server to stop the conversation's running turn. Stopping is
+// idempotent, so transient failures are retried. It fails with ErrForbidden
+// when the caller may not stop the turn.
+func (c *Client) Stop(ctx context.Context, conversationID string) error {
+	resp, err := c.doWithClient(ctx, c.httpClient(), http.MethodPost, "/api/v2/assistant/conversation/"+url.PathEscape(conversationID)+"/stop", nil, true)
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
 // ForkConversation creates a private copy without retrying the non-idempotent POST.
 func (c *Client) ForkConversation(ctx context.Context, conversationID string) (*ConversationSummary, error) {
 	// Share the connection pool while allowing the server's 45-second fork RPC to finish.
 	client := *c.httpClient()
 	client.Timeout = 60 * time.Second
-	resp, err := c.doWithClient(ctx, &client, http.MethodPost, "/api/v2/assistant/conversation/"+conversationID+"/fork", nil)
+	resp, err := c.doWithClient(ctx, &client, http.MethodPost, "/api/v2/assistant/conversation/"+conversationID+"/fork", nil, false)
 	if err != nil {
 		return nil, err
 	}

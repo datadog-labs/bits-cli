@@ -294,8 +294,10 @@ func TestInitialPrompt(t *testing.T) {
 				tc.interrupt(m)
 			}
 			// Drain the runs; a queued logout starts with the last one's end.
+			// A prompt held until the restored conversation is followed is
+			// sent once it is.
 			var last tea.Cmd
-			for m.op.run != 0 {
+			for m.op.run != 0 || tc.wantQueued == nil && m.conn.remote {
 				_, last = m.Update(runConversationCmd(t, waitEvent(m.events)))
 			}
 			if m.op.kind == opLogout {

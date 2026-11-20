@@ -41,9 +41,12 @@ type Outcome string
 const (
 	OutcomeCompleted      Outcome = "completed"
 	OutcomeApprovalDenied Outcome = "approval_denied"
-	OutcomeFailed         Outcome = "failed"
-	OutcomeCanceled       Outcome = "canceled"
-	OutcomeTimedOut       Outcome = "timed_out"
+	// OutcomeIncomplete is a turn that ended with a client tool request
+	// left unanswered, as one a dropped connection kept from running here.
+	OutcomeIncomplete Outcome = "incomplete"
+	OutcomeFailed     Outcome = "failed"
+	OutcomeCanceled   Outcome = "canceled"
+	OutcomeTimedOut   Outcome = "timed_out"
 )
 
 // Run drives one turn on an idle engine through delivery, then finishes the
@@ -65,6 +68,11 @@ func Run(ctx context.Context, engine *agent.Engine, input agent.TurnInput, deliv
 				completed = true
 			case agent.EventError, agent.EventCanceled:
 				turnErr = event.Err
+				if id := engine.State().ConversationID; event.BackendFailure && id != "" {
+					// The run reads only its send's response: once that ends
+					// early, the turn may still go on in the conversation.
+					turnErr = fmt.Errorf("%w (conversation %s: the turn may still be running there)", turnErr, id)
+				}
 			case agent.EventState, agent.EventUsage, agent.EventConversation:
 			}
 			if consumeErr == nil {
@@ -75,8 +83,9 @@ func Run(ctx context.Context, engine *agent.Engine, input agent.TurnInput, deliv
 		}
 	}
 
-	blocks := engine.State().Blocks
-	outcome, err := classify(completed, denied(blocks, run), turnErr, consumeErr)
+	state := engine.State()
+	blocks := state.Blocks
+	outcome, err := classify(completed, denied(blocks, run), unanswered(blocks, run), turnErr, consumeErr)
 	finishErr := delivery.Finish(Finish{
 		EndedAt:        time.Now(),
 		Outcome:        outcome,
@@ -90,12 +99,17 @@ func Run(ctx context.Context, engine *agent.Engine, input agent.TurnInput, deliv
 	return outcome, finishErr
 }
 
+// errIncomplete is the error of an incomplete outcome.
+var errIncomplete = errors.New("the turn ended with a tool request left unanswered")
+
 // classify maps the turn's terminal event to an outcome. A cancelled turn's
 // error is its context's: canceled, or timed out at the deadline.
-func classify(completed, denied bool, turnErr, consumeErr error) (Outcome, error) {
+func classify(completed, denied, unanswered bool, turnErr, consumeErr error) (Outcome, error) {
 	switch {
 	case consumeErr != nil:
 		return OutcomeFailed, fmt.Errorf("consume turn event: %w", consumeErr)
+	case completed && unanswered:
+		return OutcomeIncomplete, errIncomplete
 	case completed && denied:
 		return OutcomeApprovalDenied, nil
 	case completed:
@@ -107,6 +121,17 @@ func classify(completed, denied bool, turnErr, consumeErr error) (Outcome, error
 	default:
 		return OutcomeFailed, turnErr
 	}
+}
+
+// unanswered reports whether run left a client tool call without an answer
+// the conversation received, as one whose input never finished.
+func unanswered(blocks []agent.Block, run agent.RunID) bool {
+	for _, block := range blocks {
+		if run != 0 && block.Run == run && block.Tool != nil && block.Tool.IsClientSide && !block.Tool.Responded {
+			return true
+		}
+	}
+	return false
 }
 
 // denied reports whether run denied a tool call. Run 0 started nothing.

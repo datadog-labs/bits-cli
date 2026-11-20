@@ -98,7 +98,7 @@ func (m *Model) syncAnimationsAt(now time.Time) tea.Cmd {
 	case ModeChat:
 		wantSweep = m.borderSweepWanted()
 		wantActivity = m.transcriptAnimationWanted() || m.resumeAnimationWanted() || (m.animationsVisible() && m.editor.QueueAnimating()) ||
-			m.trayAnimationWanted()
+			m.trayAnimationWanted() || m.reconnectingAnimationWanted(now)
 	case ModeConversations:
 		wantActivity = m.picker != nil && m.picker.Animating()
 	default:
@@ -147,12 +147,22 @@ func (m *Model) advanceAnimations(msg animationTickMsg) tea.Cmd {
 // the offer, and the picker.
 func (m *Model) setActivityFrame(frame int) {
 	m.list.SetFrame(frame)
+	if m.reconnectingAnimationWanted(time.Now()) {
+		// The reconnecting row's dots follow the frame.
+		m.list.SetStatus(m.connectionStatus(time.Now()))
+	}
 	m.editor.SetActivityFrame(frame)
 	m.resume.frame = frame
 	m.tray.frame = frame
 	if m.picker != nil {
 		m.picker.SetFrame(frame)
 	}
+}
+
+// reconnectingAnimationWanted moves the reconnecting row's dots while it
+// shows, unless motion is off.
+func (m *Model) reconnectingAnimationWanted(now time.Time) bool {
+	return m.animationsVisible() && m.styles.Chat.Motion && m.reconnectingShown(now)
 }
 
 // animationRepaintInterval uses the faster cadence only while the sweep is

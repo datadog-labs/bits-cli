@@ -90,6 +90,50 @@ func TestRunFakeBackendStreamsVersionedJSONL(t *testing.T) {
 	}
 }
 
+// A run reads only its send's response, so a connection dropped mid-turn
+// fails it, naming the conversation where the turn may still be running.
+func TestRunFailsWhenTheConnectionDrops(t *testing.T) {
+	t.Setenv("BITS_FAKE_BACKEND", "1")
+	t.Setenv("DD_API_KEY", "")
+	t.Setenv("DD_APP_KEY", "")
+	var out, stderr bytes.Buffer
+	err := Execute(context.Background(), []string{
+		"run", "--prompt", `say("first half. "); drop(); say("second half.")`, "--delivery", "adeep",
+	}, &out, &stderr)
+	var finished map[string]any
+	for line := range strings.Lines(out.String()) {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record["type"] == "run.finished" {
+			finished = record
+		}
+	}
+	id, _ := finished["conversation_id"].(string)
+	var exit *ExitError
+	if errors.As(err, &exit) || err == nil || id == "" || !strings.Contains(err.Error(), id) || !strings.Contains(err.Error(), "may still be running") || finished["outcome"] != "failed" {
+		t.Fatalf("err = %v, run.finished = %v; want a failure naming the conversation", err, finished)
+	}
+}
+
+// A run whose turn left a client tool request unanswered, here one whose
+// input never finished, reports incomplete and fails.
+func TestRunWithAnUnansweredCallIsIncomplete(t *testing.T) {
+	t.Setenv("BITS_FAKE_BACKEND", "1")
+	t.Setenv("DD_API_KEY", "")
+	t.Setenv("DD_APP_KEY", "")
+	var out, stderr bytes.Buffer
+	err := Execute(context.Background(), []string{
+		"run", "--delivery", "adeep", "--permissions", "skip-permissions", "--prompt",
+		`raw({"type": "tool_call_started", "tool_call_id": "unfinished", "tool_name": "read_file", "is_client_side": True}); say("done")`,
+	}, &out, &stderr)
+	var exit *ExitError
+	if err == nil || errors.As(err, &exit) || !strings.Contains(out.String(), `"outcome":"incomplete"`) {
+		t.Fatalf("err = %v, output:\n%s\nwant an incomplete run that exits 1", err, &out)
+	}
+}
+
 // A missing OAuth session fails fast with the `bits login` hint; run never
 // opens interactive login or a TUI.
 func TestRunMissingOAuthFailsFastWithLoginHint(t *testing.T) {
@@ -196,7 +240,7 @@ func TestRunOutcomeExitMapping(t *testing.T) {
 				writer = out
 			}
 			mode := cmp.Or(tt.mode, agent.ModeSkipPermissions)
-			err := runEngineTurn(ctx, agent.New(&fake.Fake{}, agent.Config{PermissionsMode: mode}), agent.TurnInput{Tools: runToolSet(t)}, opts, writer)
+			err := runEngineTurn(ctx, agent.New(&fake.Fake{}, agent.Config{PermissionsMode: mode, SendOnly: true}), agent.TurnInput{Tools: runToolSet(t)}, opts, writer)
 			if !tt.wantErr(err) {
 				t.Fatalf("error = %v", err)
 			}

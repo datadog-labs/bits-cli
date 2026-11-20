@@ -364,9 +364,8 @@ func assistantResponse(blocks []agent.Block, included map[agent.BlockID]struct{}
 		if _, ok := included[block.ID]; !ok {
 			continue
 		}
-		if block.Kind == assistant.KindText && block.Role == assistant.RoleAssistant &&
-			block.Markdown != nil && block.Markdown.Content != "" {
-			parts = append(parts, block.Markdown.Content)
+		if answer, ok := block.Answer(); ok && answer != "" {
+			parts = append(parts, answer)
 		}
 	}
 	return strings.Join(parts, "\n\n")

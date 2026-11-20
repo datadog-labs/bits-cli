@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -37,13 +38,30 @@ func (b *historyBackend) ConversationHistory(ctx context.Context, in assistant.C
 	return b.resp, nil
 }
 
-func engineWithConversation(backend Backend, id string, messages ...assistant.Message) *Engine {
+// engineWithConversation returns an engine bound to a conversation that
+// holds messages, once it has replayed them.
+func engineWithConversation(backend *historyBackend, id string, messages ...assistant.Message) *Engine {
+	backend.conversations.Seed(id, messages...)
 	e := New(backend, Config{ConversationID: id, Model: "retained"})
-	for _, message := range messages {
-		e.transcript.AppendMessage(message)
-	}
-	e.transcript.FinalizeAll()
+	waitConnected(e)
 	return e
+}
+
+// waitConnected returns once e has replayed its conversation.
+// waitConnected follows the engine's conversation, as a turn or restore
+// would, and waits for the subscription to connect.
+func waitConnected(e *Engine) {
+	events, unsubscribe := e.Subscribe()
+	defer unsubscribe()
+	e.do(func() { e.bind(); e.publish() })
+	if e.State().Connection.State == ConnectionConnected {
+		return
+	}
+	for ev := range events {
+		if ev.Kind == EventState && ev.State.Connection.State == ConnectionConnected {
+			return
+		}
+	}
 }
 
 func TestListConversationsCopiesAndHandlesFailures(t *testing.T) {
@@ -115,6 +133,7 @@ func TestLoadAndInstallConversation(t *testing.T) {
 		}
 		return response, nil
 	}}
+	backend.conversations.Seed(testConversationID, response.Data.Attributes.Messages...)
 	e := engineWithConversation(backend, "old", assistant.AssistantMessage("old", assistant.TextContent("keep")))
 	e.opts.MessageHistory = []json.RawMessage{json.RawMessage(`{"role":"user","content":"stale"}`)}
 	before := e.State().Blocks
@@ -143,7 +162,7 @@ func TestLoadAndInstallConversation(t *testing.T) {
 	if e.OperationActive() {
 		t.Fatal("install retained engine ownership")
 	}
-	if ev := <-events; ev.Kind != EventState || ev.Run != 0 || !reflect.DeepEqual(ev.State, e.State()) ||
+	if ev := <-events; ev.Kind != EventState || ev.Run != 0 ||
 		ev.State.ConversationID != testConversationID || ev.State.Title != "Saved title" || !reflect.DeepEqual(ev.State.Blocks, blocks) {
 		t.Fatalf("install published %+v, want the installed conversation outside any run", ev)
 	}
@@ -435,7 +454,10 @@ func TestCloseCancelsAndAwaitsTheOperation(t *testing.T) {
 			if len(evs) == 0 || evs[len(evs)-1].Kind != EventCanceled || !errors.Is(evs[len(evs)-1].Err, context.Canceled) {
 				t.Fatalf("closed operation events = %+v, want EventCanceled last", evs)
 			}
-			if got := collect(sub); !reflect.DeepEqual(superseded(got), superseded(evs)) {
+			// Following the conversation outside the operation publishes
+			// states of no run; the operation's own events must all arrive.
+			got := slices.DeleteFunc(collect(sub), func(ev Event) bool { return ev.Run == 0 && ev.Kind == EventState })
+			if !reflect.DeepEqual(superseded(got), superseded(evs)) {
 				t.Fatalf("subscription after Close = %+v, want the operation's events %+v", got, evs)
 			}
 			if late, _ := e.Subscribe(); len(collect(late)) != 0 {

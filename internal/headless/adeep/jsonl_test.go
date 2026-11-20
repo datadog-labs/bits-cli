@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/agenttest"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/headless"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
@@ -19,21 +21,22 @@ import (
 
 // roundsBackend streams one scripted round per Send.
 type roundsBackend struct {
-	rounds [][]assistant.Message
-	calls  int
+	conversations agenttest.Conversations
+	rounds        [][]assistant.Message
+	calls         int
 }
 
-func (b *roundsBackend) Send(_ context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+func (b *roundsBackend) post(_ context.Context, _ any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.calls++
 	for _, msg := range b.rounds[b.calls-1] {
 		var response assistant.AssistantResponse
-		response.Data.Attributes.ConversationID = "conversation-1"
+		response.Data.Attributes.ConversationID = opts.ConversationID
 		response.Data.Attributes.StructuredMessage = msg
 		if err := emit(response); err != nil {
-			return "conversation-1", err
+			return opts.ConversationID, err
 		}
 	}
-	return "conversation-1", nil
+	return opts.ConversationID, nil
 }
 
 func textMsg(id, text string) assistant.Message {
@@ -167,34 +170,55 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 	}
 
 	records := parseDelivery(t, out.String())
+	// The run's own client result and the conversation's usage report race;
+	// every other record keeps its place.
+	got := typeRounds(t, records)
+	// Round 1's usage may land on either side of the client result: compare
+	// without it, then place it after the client call.
+	withoutUsage := slices.DeleteFunc(slices.Clone(got), func(k string) bool { return k == "usage:1" })
 	want := []string{
 		"run.started:0", "round.started:1",
-		"tool.call:1", "tool.result:1", "tool.call:1", "usage:1", "conversation.updated:1", "tool.result:1",
-		"round.finished:1", "round.started:2", "usage:2", "conversation.updated:2",
+		"conversation.updated:1", "tool.call:1", "tool.result:1", "tool.call:1", "tool.result:1",
+		"round.finished:1", "round.started:2", "usage:2",
 		"round.finished:2", "run.finished:0",
 	}
-	if got := typeRounds(t, records); strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Fatalf("records = %v, want %v", got, want)
+	usageAt := slices.Index(got, "usage:1")
+	if strings.Join(withoutUsage, " ") != strings.Join(want, " ") || len(got) != len(want)+1 || usageAt < 6 || usageAt > 7 {
+		t.Fatalf("records = %v, want %v with one round-1 usage after the client call", got, want)
 	}
-	for i, want := range map[int]map[string]any{
-		2: {"id": "srv-1", "name": "search_logs", "side": "server", "arguments": `{"query":"errors"}`},
-		3: {"id": "srv-1", "status": "success", "result": "3 hits"},
-		4: {"id": "cli-1", "name": "get_local_time", "side": "client", "arguments": "{}"},
-		7: {"id": "cli-1", "status": "success", "result": `{"timestamp":"2026-09-01T12:00:00Z"}`},
+	// Each tool's result follows its call.
+	index := func(kind, id string) int {
+		return slices.IndexFunc(records, func(r parsedRecord) bool {
+			tool, _ := r["tool"].(map[string]any)
+			return r["type"] == kind && tool["id"] == id
+		})
+	}
+	for _, want := range []struct {
+		kind, id string
+		fields   map[string]any
+	}{
+		{"tool.call", "srv-1", map[string]any{"name": "search_logs", "side": "server", "arguments": `{"query":"errors"}`}},
+		{"tool.result", "srv-1", map[string]any{"status": "success", "result": "3 hits"}},
+		{"tool.call", "cli-1", map[string]any{"name": "get_local_time", "side": "client", "arguments": "{}"}},
+		{"tool.result", "cli-1", map[string]any{"status": "success", "result": `{"timestamp":"2026-09-01T12:00:00Z"}`}},
 	} {
+		i := index(want.kind, want.id)
+		if i < 0 || want.kind == "tool.result" && i < index("tool.call", want.id) {
+			t.Fatalf("%s %s at %d, want after its call", want.kind, want.id, i)
+		}
 		tool := toolOf(t, records[i])
-		for key, value := range want {
+		for key, value := range want.fields {
 			if tool[key] != value {
-				t.Fatalf("record %d tool = %v, want %s = %v", i+1, tool, key, value)
+				t.Fatalf("%s %s = %v, want %s = %v", want.kind, want.id, tool, key, value)
 			}
 		}
 	}
-	usage, _ := records[5]["usage"].(map[string]any)
+	usage, _ := records[usageAt]["usage"].(map[string]any)
 	if usage["tokens_used"] != float64(100) || usage["input_tokens"] != float64(30) || usage["output_tokens"] != float64(70) {
 		t.Fatalf("usage = %v", usage)
 	}
 	finished := records[len(records)-1]
-	if finished["outcome"] != "completed" || finished["conversation_id"] != "conversation-1" ||
+	if finished["outcome"] != "completed" || finished["conversation_id"] != records[2]["conversation_id"] ||
 		finished["response"] != "checking logs\n\ndone." || finished["rounds"] != float64(2) {
 		t.Fatalf("run.finished = %v", finished)
 	}
@@ -420,4 +444,18 @@ func TestDeliveryLifecycleTransitions(t *testing.T) {
 	if err := delivery.Consume(agent.Event{Kind: agent.EventDone}); err == nil {
 		t.Fatal("Consume after Finish succeeded")
 	}
+}
+
+func (b *roundsBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
+	return b.conversations.Send(ctx, message, opts, fn, func(emit func(assistant.AssistantResponse) error) (string, error) {
+		return b.post(ctx, message, opts, emit)
+	})
+}
+
+func (b *roundsBackend) Subscribe(ctx context.Context, id string, opts assistant.SubscribeOptions, fn func(assistant.Message) error) error {
+	if opts.TaskID != "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.conversations.Subscribe(ctx, id, fn)
 }

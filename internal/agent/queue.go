@@ -13,6 +13,48 @@ import (
 // ErrNothingQueued is returned by SendQueued when the queue is empty.
 var ErrNothingQueued = errors.New("no queued prompts")
 
+// ErrSendBlocked is returned by StartTurn and SendQueued while a prompt must
+// wait; StartTurn queues its prompt.
+var ErrSendBlocked = errors.New("the prompt waits for the running turn and unanswered tool calls")
+
+// PendingClientCalls lists the client tool calls the conversation shows with
+// no answer, on the wire or local, whichever session made them.
+func (s State) PendingClientCalls() []string {
+	var ids []string
+	for _, b := range s.Blocks {
+		if tool := b.Tool; tool != nil && tool.IsClientSide && !tool.Responded && !tool.Status.IsTerminal() {
+			ids = append(ids, b.ToolCallID())
+		}
+	}
+	return ids
+}
+
+// SendBlocked reports whether a user prompt must wait: a turn runs, here or
+// elsewhere (a local run also holds the engine itself), a stop is pending, or a client tool call has no answer yet. A
+// prompt sent then could run ahead of that answer, and its turn's calls
+// would reach whoever sent the answer. A round's own answers never wait,
+// since they answer the calls that block.
+//
+// NOTE: two clients sending at the same instant can still cross; a full
+// guarantee needs the service to name the message each event answers.
+func SendBlocked(s State) bool {
+	return !current(s) || s.Turn == TurnRunning || s.Stopping || len(s.PendingClientCalls()) > 0
+}
+
+// current reports whether s shows the conversation as it is now. Until a
+// replay after the last (re)connect arrives, a turn another session started
+// meanwhile, and its tool calls, are unknown, so a prompt waits for it.
+func current(s State) bool {
+	switch s.Connection.State {
+	case ConnectionConnecting, ConnectionReconnecting, ConnectionDisconnected:
+		return s.ConversationID == ""
+	case ConnectionIdle, ConnectionConnected, ConnectionNew:
+		// A conversation not followed, or not created yet, has nothing
+		// another session can be running.
+	}
+	return true
+}
+
 // QueueID identifies a queued prompt for the engine's lifetime.
 type QueueID uint64
 
@@ -37,12 +79,28 @@ func (e *Engine) Queue(in TurnInput) error {
 		if err = ErrOperationActive; e.busy && e.turnRun == 0 {
 			return
 		}
+		e.reconnect()
 		e.lastQueued++
 		e.queue = append(e.queue, QueuedPrompt{ID: e.lastQueued, Message: in.Message, Skill: in.Skill, Context: in.Context, SkillOverrides: in.SkillOverrides})
 		e.emit(e.turnRun, Event{Kind: EventState, State: e.state()})
 		err = nil
 	})
 	return err
+}
+
+// Retry has a prompt whose send failed wait like any other queued prompt,
+// to be sent once nothing holds it, as when the user asks to send it again
+// while the conversation is busy or out of reach.
+func (e *Engine) Retry() {
+	e.do(func() {
+		// Like a new message, an explicit retry tries the conversation at
+		// once rather than waiting out the backoff.
+		e.reconnect()
+		if e.failed != nil {
+			e.failed = nil
+			e.publish()
+		}
+	})
 }
 
 // SendQueued starts a turn with the prompts the queue sends first. Only in's
@@ -52,6 +110,9 @@ func (e *Engine) SendQueued(ctx context.Context, in TurnInput) (RunID, error) {
 	err := e.idle(func() (err error) {
 		if e.life.Err() != nil {
 			return ErrClosed
+		}
+		if len(e.queue) > 0 && SendBlocked(e.state()) {
+			return ErrSendBlocked
 		}
 		in, ok := e.dequeue(in)
 		if !ok {

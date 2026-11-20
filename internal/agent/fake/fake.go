@@ -10,8 +10,6 @@ package fake
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -57,53 +55,24 @@ type Fake struct {
 	// derive from the message: identical prompts would then collide and
 	// clobber earlier transcript items (keyed by message id).
 	seq atomic.Int64
+	// liveSeq names live-only messages, see liveID.
+	liveSeq atomic.Int64
 
-	mu    sync.Mutex               // guards convs and every *conversation
+	// IdleClose closes a subscription that has been silent this long, as the
+	// service may. Zero keeps it open.
+	IdleClose time.Duration
+
+	mu    sync.Mutex               // guards convs, every *conversation, and offlineUntil
+	shown *sync.Cond               // on mu: a subscription handled a message
 	convs map[string]*conversation // created lazily so the zero Fake works
+	// offlineUntil fails every request until then, as a lost network would.
+	offlineUntil time.Time
 }
 
 // New returns a Fake with a small inter-fragment delay so interactive use looks
 // like a real stream.
-func New() *Fake { return &Fake{Delay: 10 * time.Millisecond, BundledFixtures: true} }
-
-// Send runs a user message as a script, or resumes the current script with
-// the tool responses of its last round. The returned id is the
-// conversation's canonical id. It honors ctx so Esc/Ctrl+C interrupt a turn.
-func (f *Fake) Send(ctx context.Context, message any, opts assistant.SendOptions,
-	fn func(assistant.AssistantResponse) error,
-) (string, error) {
-	c := f.conversation(opts.ConversationID)
-	out := &emitter{
-		ctx: ctx, delay: f.Delay, convID: c.id, fn: fn,
-		record: func(m assistant.Message) { f.record(c, m) },
-		nextID: f.nextID,
-	}
-	switch m := message.(type) {
-	case string:
-		turn := f.startTurn(c, m, nil, opts.Context)
-		if err := f.runScript(c, out, opts, turn); err != nil || turn.index > 0 {
-			return c.id, err
-		}
-		// Like the server, replace the fallback title with a generated one
-		// once the conversation starts, and stream it.
-		f.mu.Lock()
-		c.title = generatedTitle(len(f.convs))
-		title := c.title
-		f.mu.Unlock()
-		return c.id, out.title(title)
-	case []assistant.ClientToolResponse:
-		// The real backend would persist it again on the tool answers.
-		if opts.Context != nil {
-			return c.id, errors.New("fake: tool responses must not carry context")
-		}
-		turn, ok := f.resumeTurn(c, m)
-		if !ok {
-			return c.id, errors.New("fake: tool responses without a turn")
-		}
-		return c.id, f.runScript(c, out, opts, turn)
-	default:
-		return c.id, fmt.Errorf("fake: unsupported message type %T", message)
-	}
+func New() *Fake {
+	return &Fake{Delay: 10 * time.Millisecond, BundledFixtures: true, IdleClose: 2 * time.Minute}
 }
 
 // nextID hands out a fresh, globally unique message id.

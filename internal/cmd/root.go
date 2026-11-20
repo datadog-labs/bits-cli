@@ -26,6 +26,9 @@ type ChatOptions struct {
 	PermissionsMode agent.PermissionsMode
 	NoUpdateCheck   bool
 	InitialPrompt   string
+	// SendOnly reads each turn from its own send's response, without
+	// following the conversation live; set for noninteractive runs.
+	SendOnly bool
 }
 
 // Execute builds a fresh command tree for args and runs it with ctx, writing

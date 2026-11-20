@@ -80,7 +80,9 @@ func TestStartupLoginTransitionsToChatInSameRootModel(t *testing.T) {
 // the turn's events still queued.
 func TestDetachEndsTheEngineSubscription(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		engine := agent.New(fake.New(), agent.Config{})
+		// An unpaced fake finishes its turn, which outlives the request, before
+		// the bubble ends.
+		engine := agent.New(&fake.Fake{}, agent.Config{})
 		defer engine.Close() // the bubble requires its goroutines to exit
 		m := New(engine)
 		if _, err := engine.StartTurn(context.Background(), agent.TurnInput{Message: "hello"}); err != nil {

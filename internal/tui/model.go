@@ -164,6 +164,7 @@ type Model struct {
 	// Session-only UI messages are merged with the agent snapshot for display.
 	notices      []chat.NoticeItem
 	nextNoticeID uint64
+	conn         connectionView
 
 	// Transcript rendering. list owns the transcript's scroll position and
 	// per-item render cache.

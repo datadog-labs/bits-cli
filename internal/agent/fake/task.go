@@ -3,7 +3,6 @@ package fake
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -140,14 +139,15 @@ func taskHistoryLocked(c *conversation, now time.Time) []assistant.Message {
 	return messages
 }
 
-// Subscribe follows one task as the server does: it replays the updates
-// posted so far, marks the replay complete, sends the rest as they come due,
-// and ends with the end marker. An unknown task is not found.
+// Subscribe follows the conversation, or with a task id one task: it
+// replays the updates posted so far, marks the replay complete, sends the
+// rest as they come due, and ends with the end marker. An unknown task is not
+// found.
 func (f *Fake) Subscribe(ctx context.Context, conversationID string, opts assistant.SubscribeOptions,
 	fn func(assistant.Message) error,
 ) error {
 	if opts.TaskID == "" {
-		return errors.New("fake: subscribe follows one task")
+		return f.subscribe(ctx, conversationID, fn)
 	}
 	t := f.findTask(conversationID, opts.TaskID)
 	if t == nil {
@@ -159,8 +159,7 @@ func (f *Fake) Subscribe(ctx context.Context, conversationID string, opts assist
 			return err
 		}
 	}
-	if err := fn(assistant.AssistantMessage(assistant.ContentReplayComplete,
-		assistant.Content{Type: assistant.ContentReplayComplete})); err != nil {
+	if err := fn(assistant.ReplayCompleteMessage()); err != nil {
 		return err
 	}
 	for i := posted; i < t.posts(); i++ {

@@ -57,6 +57,11 @@ type blockRenderer struct {
 
 // RenderBlock renders a block without a trailing newline.
 func (r *blockRenderer) RenderBlock(it agent.Block, width int, sty Styles, frame int) string {
+	if it.Error && it.Markdown != nil {
+		// The conversation marks where a turn failed; show it as a failure,
+		// not as the assistant's words.
+		return renderNotice(Notice{Level: NoticeError, Text: it.Markdown.Content}, width, sty)
+	}
 	switch it.Kind {
 	case assistant.KindText:
 		return r.renderText(it, width, sty)

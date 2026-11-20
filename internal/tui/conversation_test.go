@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/agenttest"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 )
@@ -18,7 +19,23 @@ type cancellableConversationBackend struct {
 	sendStarted    chan struct{}
 	historyStarted chan struct{}
 	cancelled      atomic.Int32
+	stops          atomic.Int32
+	stopErr        error
 	messages       []assistant.Message
+	conversations  agenttest.Conversations
+}
+
+func (b *cancellableConversationBackend) Subscribe(ctx context.Context, id string, opts assistant.SubscribeOptions, fn func(assistant.Message) error) error {
+	if opts.TaskID != "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.conversations.Subscribe(ctx, id, fn)
+}
+
+func (b *cancellableConversationBackend) Stop(context.Context, string) error {
+	b.stops.Add(1)
+	return b.stopErr
 }
 
 func newCancellableConversationBackend() *cancellableConversationBackend {
@@ -28,7 +45,13 @@ func newCancellableConversationBackend() *cancellableConversationBackend {
 	}
 }
 
-func (b *cancellableConversationBackend) Send(ctx context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+func (b *cancellableConversationBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
+	return b.conversations.Send(ctx, message, opts, fn, func(emit func(assistant.AssistantResponse) error) (string, error) {
+		return b.post(ctx, emit)
+	})
+}
+
+func (b *cancellableConversationBackend) post(ctx context.Context, emit func(assistant.AssistantResponse) error) (string, error) {
 	for _, message := range b.messages {
 		var response assistant.AssistantResponse
 		response.Data.Attributes.StructuredMessage = message
@@ -130,7 +153,7 @@ type duplexConversationBackend struct {
 }
 
 func (b *duplexConversationBackend) Stream(ctx context.Context, prompt string, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) error {
-	_, err := b.Send(ctx, prompt, opts, func(response assistant.AssistantResponse) error {
+	_, err := b.post(ctx, func(response assistant.AssistantResponse) error {
 		response.Data.Attributes.ConversationID = "old"
 		return emit(response)
 	})
@@ -287,6 +310,37 @@ func TestNewAfterFailedTurnClearsError(t *testing.T) {
 	}
 }
 
+// Esc stops the turn on the server, and reports a stop it could not confirm.
+func TestEscStopsTheTurn(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		stopErr error
+		notice  string
+	}{
+		{name: "confirmed"},
+		{name: "unconfirmed", stopErr: errors.New("offline"), notice: "Stopped locally. The stop wasn't confirmed."},
+		{name: "another session's turn", stopErr: assistant.ErrForbidden, notice: "Stopped locally. Only the session that started this turn can stop it."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := newCancellableConversationBackend()
+			backend.stopErr = test.stopErr
+			m := New(agent.New(backend, agent.Config{ConversationID: "old"}))
+			m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+			setConversationInput(m, "long prompt")
+			_, _ = m.submit()
+			<-backend.sendStarted
+			_, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+			m.Update(runConversationCmd(t, cmd))
+			if got := backend.stops.Load(); got != 1 {
+				t.Fatalf("stops = %d, want 1", got)
+			}
+			if test.notice != "" && latestNotice(m).Text != test.notice {
+				t.Fatalf("notice = %+v, want %q", latestNotice(m), test.notice)
+			}
+		})
+	}
+}
+
 func TestNewRejectsStaleEventsFromPriorConversation(t *testing.T) {
 	m := New(agent.New(&immediateConversationBackend{}, agent.Config{ConversationID: "old"}))
 	setConversationInput(m, "/new")
@@ -302,8 +356,8 @@ func TestNewRejectsStaleEventsFromPriorConversation(t *testing.T) {
 		t.Fatalf("stale event mutated fresh operation: id=%q generation=%d active=%v", m.state.ConversationID, m.op.gen, m.op.run != 0)
 	}
 	drainConversationRemote(t, m)
-	if m.state.ConversationID != "fresh" {
-		t.Fatalf("first prompt after reset got conversation id %q, want fresh", m.state.ConversationID)
+	if id := m.state.ConversationID; !agent.ValidConversationID(id) || id == "old" {
+		t.Fatalf("first prompt after reset got conversation id %q, want a fresh one", id)
 	}
 }
 

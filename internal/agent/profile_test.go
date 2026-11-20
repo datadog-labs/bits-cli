@@ -70,7 +70,7 @@ func TestNewPreservesExplicitSkillOverrides(t *testing.T) {
 }
 
 func TestTurnSkillOverridesApplyToOneTurn(t *testing.T) {
-	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
+	backend := &scriptBackend{rounds: toolRounds("read")}
 	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }})
 	if err != nil {
 		t.Fatal(err)

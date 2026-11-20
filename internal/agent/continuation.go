@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
 // CanResumeTools requires every unanswered call to opt into replay. A mixed
@@ -14,6 +15,9 @@ func (e *Engine) CanResumeTools(tools *ToolSet) bool {
 }
 
 func (e *Engine) canResumeTools(tools *ToolSet) bool {
+	if len(e.approved) > 0 && tools != nil {
+		return true
+	}
 	if len(e.continuation) == 0 || tools == nil {
 		return false
 	}
@@ -40,12 +44,54 @@ func (e *Engine) SettleRestoredTools(tools *ToolSet) {
 
 func (e *Engine) settleRestoredTools(tools *ToolSet) bool {
 	resuming := map[string]bool{}
-	if e.canResumeTools(tools) {
+	// A stopped turn's calls wait for their decision or their run.
+	for id := range e.stoppedCalls {
+		resuming[id] = true
+	}
+	for id := range e.approved {
+		resuming[id] = true
+	}
+	if len(e.approved) == 0 && e.canResumeTools(tools) {
 		for _, call := range e.continuation {
 			resuming[call.Tool.ToolCallID] = true
 		}
 	}
-	return e.transcript.settleTools(resuming)
+	// A call the conversation shows unanswered that cannot resume by itself
+	// is offered for a decision, as after a stop: the conversation still
+	// waits for its answer, so prompts wait too.
+	changed := false
+	if tools != nil {
+		for _, content := range e.continuation {
+			call := toolCallOf(content)
+			if resuming[call.ID] || !tools.Has(call.Name) && call.Name != spec.ApprovalRequest {
+				continue
+			}
+			if e.stoppedCalls == nil {
+				e.stoppedCalls = map[string]ToolCall{}
+			}
+			e.stoppedCalls[call.ID] = call
+			resuming[call.ID] = true
+			changed = true
+		}
+		if changed {
+			e.tools = tools
+			e.continuation = nil
+			e.offerStopped()
+		}
+	}
+	if e.follower != nil && !e.follower.shown {
+		// Until the replay shows whether the turn still runs, an unfinished
+		// tool may be running: the replay settles them.
+		e.unsettled = func() { e.settleRestoredTools(tools) }
+		return changed
+	}
+	e.unsettled = nil
+	if e.turnState == TurnRunning {
+		// The conversation still runs the turn: its unfinished tools are
+		// running, and their results and the turn's end follow.
+		return changed
+	}
+	return e.transcript.settleTools(resuming) || changed
 }
 
 // settleTools interrupts unfinished tools except those selected for replay.
@@ -119,4 +165,32 @@ func continuationFromHistory(messages []assistant.Message) []assistant.Content {
 		}
 	}
 	return pending
+}
+
+// decideStopped answers a call a confirmed stop left unanswered: a denial is
+// held for the next prompt, and an approval for the run that answers it,
+// which ResumePendingTools starts. It fails with ErrStale for any other call.
+func (e *Engine) decideStopped(id string, decision ApprovalDecision) error {
+	err := ErrClosed
+	e.do(func() {
+		call, ok := e.stoppedCalls[id]
+		if !ok || e.turn != nil {
+			err = ErrStale
+			return
+		}
+		err = nil
+		delete(e.stoppedCalls, id)
+		if decision == ApprovalDeny {
+			result := approvalDeniedResult(call)
+			e.steering = append(e.steering, toolResponse(call, result))
+			e.transcript.MarkToolExecuted(id, e.tools.NormalizeResult(call, result))
+		} else {
+			if e.approved == nil {
+				e.approved = map[string]ToolCall{}
+			}
+			e.approved[id] = call
+		}
+		e.publish()
+	})
+	return err
 }
