@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"io/fs"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -257,7 +258,8 @@ func fileSearchSnapshot(query fileSearchQuery, paths []string, limit int, comple
 }
 
 func rankFileSearch(query string, paths []string, limit int) []FileSearchResult {
-	matches := fuzzy.Find(query, paths)
+	// The index holds slash paths; on Windows a typed \ separates directories too.
+	matches := fuzzy.Find(filepath.ToSlash(query), paths)
 	if len(matches) > limit {
 		matches = matches[:limit]
 	}
