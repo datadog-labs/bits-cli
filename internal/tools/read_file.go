@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"path"
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 const (
@@ -36,12 +36,12 @@ func newReadFileTool(fsys fs.FS, root string) agent.Tool {
 				"additionalProperties": false,
 			},
 		},
-		Handler:  readFileHandler(fsys),
+		Handler:  readFileHandler(fsys, root),
 		Approval: workspaceReadApproval(root),
 	}
 }
 
-func readFileHandler(fsys fs.FS) agent.ToolHandler {
+func readFileHandler(fsys fs.FS, root string) agent.ToolHandler {
 	return func(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
@@ -51,12 +51,6 @@ func readFileHandler(fsys fs.FS) agent.ToolHandler {
 			return errorResult("%s", err.Error()), nil
 		}
 
-		if args.Path == "" {
-			return errorResult("path must not be empty"), nil
-		}
-		if strings.HasPrefix(args.Path, "/") {
-			return errorResult("path must be relative, not absolute"), nil
-		}
 		if args.Offset != nil && *args.Offset < 1 {
 			return errorResult("offset must be positive"), nil
 		}
@@ -64,7 +58,10 @@ func readFileHandler(fsys fs.FS) agent.ToolHandler {
 			return errorResult("limit must be positive"), nil
 		}
 
-		filePath := path.Clean(args.Path)
+		filePath, err := workspace.LocalPath(root, args.Path)
+		if err != nil {
+			return errorResult("%s", err.Error()), nil
+		}
 		f, err := fsys.Open(filePath)
 		if err != nil {
 			return errorResult("%s", err.Error()), nil

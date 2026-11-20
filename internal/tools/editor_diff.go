@@ -8,11 +8,11 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/filediff"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 type editorInput struct {
@@ -270,11 +270,11 @@ func decodeJSONString(value jsontext.Value) (string, bool) {
 // writeFileInputReducer creates speculative write_file state from an append-only
 // argument prefix. It deliberately does not acquire the mutation lock: a
 // preview is informational only, while handlers remain authoritative.
-func writeFileInputReducer(r *os.Root) agent.ToolInputReducer {
+func writeFileInputReducer(r *os.Root, root string) agent.ToolInputReducer {
 	return func(ctx context.Context, update agent.ToolInputUpdate, prior any) any {
 		previous, _ := prior.(*filediff.State)
 		input := parseWriteFileInput(editorRawInput(update))
-		state, snapshot, ok := editorPreviewState(ctx, r, previous, input)
+		state, snapshot, ok := editorPreviewState(ctx, r, root, previous, input)
 		if !ok {
 			return state
 		}
@@ -318,11 +318,11 @@ func writeFileInputReducer(r *os.Root) agent.ToolInputReducer {
 // editFileInputReducer creates speculative edit_file state from an append-only
 // argument prefix. Like the write reducer it never acquires the mutation lock;
 // the handler re-reads authoritatively beneath it.
-func editFileInputReducer(r *os.Root) agent.ToolInputReducer {
+func editFileInputReducer(r *os.Root, root string) agent.ToolInputReducer {
 	return func(ctx context.Context, update agent.ToolInputUpdate, prior any) any {
 		previous, _ := prior.(*filediff.State)
 		input := parseEditFileInput(editorRawInput(update))
-		state, snapshot, ok := editorPreviewState(ctx, r, previous, input)
+		state, snapshot, ok := editorPreviewState(ctx, r, root, previous, input)
 		if !ok {
 			return state
 		}
@@ -394,11 +394,15 @@ func editorRawInput(update agent.ToolInputUpdate) string {
 // editorPreviewState validates the streamed path and captures (or reuses) the
 // display snapshot shared by both editor reducers. When the returned bool is
 // false the state is final and tool-specific rendering must not run.
-func editorPreviewState(ctx context.Context, r *os.Root, previous *filediff.State, input editorInput) (*filediff.State, *filediff.Snapshot, bool) {
-	if !usableWorkspacePath(input.Path) {
-		return &filediff.State{Phase: filediff.PhaseStreaming, Reason: "waiting for a workspace-relative path"}, nil, false
+func editorPreviewState(ctx context.Context, r *os.Root, root string, previous *filediff.State, input editorInput) (*filediff.State, *filediff.Snapshot, bool) {
+	waiting := &filediff.State{Phase: filediff.PhaseStreaming, Reason: "waiting for a workspace-relative path"}
+	if input.Path == nil {
+		return waiting, nil, false
 	}
-	filePath := path.Clean(*input.Path)
+	filePath, err := workspace.LocalPath(root, *input.Path)
+	if err != nil {
+		return waiting, nil, false
+	}
 	snapshot := priorSnapshot(previous, filePath)
 	if snapshot == nil {
 		snapshot = captureEditorSnapshot(ctx, r, filePath)
@@ -459,14 +463,6 @@ func editPreviewKey(edits []filediff.Edit) (int, uint64) {
 		_, _ = h.Write([]byte{0})
 	}
 	return bytes, h.Sum64()
-}
-
-func usableWorkspacePath(value *string) bool {
-	if value == nil || *value == "" || strings.HasPrefix(*value, "/") {
-		return false
-	}
-	clean := path.Clean(*value)
-	return clean != ".." && !strings.HasPrefix(clean, "../")
 }
 
 func priorSnapshot(previous *filediff.State, filePath string) *filediff.Snapshot {

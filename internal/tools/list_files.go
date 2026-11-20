@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"path"
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
@@ -38,11 +37,11 @@ func newListFilesTool(fsys fs.FS, root string) agent.Tool {
 			},
 		},
 		Approval: workspaceReadApproval(root),
-		Handler:  listFilesHandler(fsys),
+		Handler:  listFilesHandler(fsys, root),
 	}
 }
 
-func listFilesHandler(fsys fs.FS) agent.ToolHandler {
+func listFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 	return func(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
@@ -51,11 +50,13 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("invalid input: %s", err.Error()), nil
 		}
-		if strings.HasPrefix(args.Path, "/") {
-			return errorResult("path must be workspace-relative, not absolute"), nil
+		if args.Path == "" {
+			args.Path = "."
 		}
-
-		base := path.Clean(args.Path)
+		base, err := workspace.LocalPath(root, args.Path)
+		if err != nil {
+			return errorResult("%s", err.Error()), nil
+		}
 
 		maxDepth := listFilesDefaultDepth
 		if args.Depth != nil {
@@ -71,7 +72,7 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 			return errorResult("cannot access path: %s", err.Error()), nil
 		}
 		if !info.IsDir() {
-			return errorResult("%s is not a directory", args.Path), nil
+			return errorResult("%s is not a directory", base), nil
 		}
 
 		var entries []string

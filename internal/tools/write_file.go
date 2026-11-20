@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"io/fs"
 	"os"
-	"path"
 	"strconv"
-	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/filediff"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 func newWriteFileTool(r *os.Root, root string, locker *mutationLocker) agent.Tool {
@@ -31,12 +30,12 @@ func newWriteFileTool(r *os.Root, root string, locker *mutationLocker) agent.Too
 			},
 		},
 		Approval:     workspaceWriteApproval(root),
-		Handler:      writeFileHandler(r, locker),
-		InputReducer: writeFileInputReducer(r),
+		Handler:      writeFileHandler(r, root, locker),
+		InputReducer: writeFileInputReducer(r, root),
 	}
 }
 
-func writeFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
+func writeFileHandler(r *os.Root, root string, locker *mutationLocker) agent.ToolHandler {
 	return func(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
@@ -45,17 +44,13 @@ func writeFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("invalid input: %s", err.Error()), nil
 		}
-		if args.Path == "" {
-			return errorResult("path must not be empty"), nil
-		}
-		if strings.HasPrefix(args.Path, "/") {
-			return errorResult("path must be workspace-relative, not absolute"), nil
+		filePath, err := workspace.LocalPath(root, args.Path)
+		if err != nil {
+			return errorResult("%s", err.Error()), nil
 		}
 		if args.Content == nil {
 			return errorResult("content is required"), nil
 		}
-
-		filePath := path.Clean(args.Path)
 
 		unlock, err := locker.lock(ctx)
 		if err != nil {
@@ -70,11 +65,11 @@ func writeFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 			operation = filediff.OpOverwrite
 			switch {
 			case info.Mode()&fs.ModeSymlink != 0:
-				return errorResult("%s is a symbolic link", args.Path), nil
+				return errorResult("%s is a symbolic link", filePath), nil
 			case info.IsDir():
-				return errorResult("%s is a directory", args.Path), nil
+				return errorResult("%s is a directory", filePath), nil
 			case !info.Mode().IsRegular():
-				return errorResult("%s is not a regular file", args.Path), nil
+				return errorResult("%s is not a regular file", filePath), nil
 			}
 		}
 		before := captureEditorSnapshot(ctx, r, filePath)

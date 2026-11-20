@@ -8,13 +8,13 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/filediff"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
 
 const bom = "\ufeff"
@@ -47,12 +47,12 @@ func newEditFileTool(r *os.Root, root string, locker *mutationLocker) agent.Tool
 			},
 		},
 		Approval:     workspaceWriteApproval(root),
-		Handler:      editFileHandler(r, locker),
-		InputReducer: editFileInputReducer(r),
+		Handler:      editFileHandler(r, root, locker),
+		InputReducer: editFileInputReducer(r, root),
 	}
 }
 
-func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
+func editFileHandler(r *os.Root, root string, locker *mutationLocker) agent.ToolHandler {
 	return func(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
@@ -61,11 +61,9 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("invalid input: %s", err.Error()), nil
 		}
-		if args.Path == "" {
-			return errorResult("path must not be empty"), nil
-		}
-		if strings.HasPrefix(args.Path, "/") {
-			return errorResult("path must be workspace-relative, not absolute"), nil
+		filePath, err := workspace.LocalPath(root, args.Path)
+		if err != nil {
+			return errorResult("%s", err.Error()), nil
 		}
 		if len(args.Edits) == 0 {
 			return errorResult("edits must contain at least one replacement"), nil
@@ -75,7 +73,6 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 		for i, edit := range args.Edits {
 			edits[i] = filediff.Edit{OldText: edit.OldText, NewText: edit.NewText}
 		}
-		filePath := path.Clean(args.Path)
 
 		unlock, err := locker.lock(ctx)
 		if err != nil {
@@ -89,9 +86,9 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 		if info, err := r.Lstat(filePath); err != nil {
 			return errorResult("cannot access path: %s", err.Error()), nil
 		} else if info.Mode()&fs.ModeSymlink != 0 {
-			return errorResult("%s is a symbolic link", args.Path), nil
+			return errorResult("%s is a symbolic link", filePath), nil
 		} else if info.IsDir() {
-			return errorResult("%s is a directory", args.Path), nil
+			return errorResult("%s is a directory", filePath), nil
 		}
 
 		// Open once, then validate and read the opened file through a bounded,
@@ -111,7 +108,7 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 			return errorResult("%s", err.Error()), nil
 		}
 		if !info.Mode().IsRegular() {
-			return errorResult("%s is not a regular file", args.Path), nil
+			return errorResult("%s is not a regular file", filePath), nil
 		}
 		if info.Size() > maxFileSize {
 			return errorResult("file exceeds 10 MB limit (%d bytes)", info.Size()), nil
@@ -136,7 +133,7 @@ func editFileHandler(r *os.Root, locker *mutationLocker) agent.ToolHandler {
 		body := strings.TrimPrefix(raw, bom)
 		ending, ok := filediff.LineEndingStyle(body)
 		if !ok {
-			return errorResult("%s has inconsistent line endings; normalize them before editing", args.Path), nil
+			return errorResult("%s has inconsistent line endings; normalize them before editing", filePath), nil
 		}
 		base := filediff.NormalizeToLF(body)
 

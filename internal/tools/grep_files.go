@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -50,11 +49,11 @@ func newGrepFilesTool(fsys fs.FS, root string) agent.Tool {
 		},
 		Approval: workspaceReadApproval(root),
 		// TODO: add optional ripgrep acceleration once profiling identifies a bottleneck.
-		Handler: grepFilesHandler(fsys),
+		Handler: grepFilesHandler(fsys, root),
 	}
 }
 
-func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
+func grepFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 	return func(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
@@ -69,8 +68,12 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 		if args.Offset < 0 {
 			return errorResult("offset must not be negative"), nil
 		}
-		if strings.HasPrefix(args.Path, "/") {
-			return errorResult("path must be workspace-relative, not absolute"), nil
+		if args.Path == "" {
+			args.Path = "."
+		}
+		base, err := workspace.LocalPath(root, args.Path)
+		if err != nil {
+			return errorResult("%s", err.Error()), nil
 		}
 
 		reStr := args.Pattern
@@ -90,8 +93,6 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 				return errorResult("invalid include pattern: %s", args.Include), nil
 			}
 		}
-
-		base := path.Clean(args.Path)
 
 		info, err := fs.Stat(fsys, base)
 		if err != nil {

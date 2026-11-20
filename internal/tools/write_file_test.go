@@ -126,6 +126,18 @@ func TestWriteFileTool(t *testing.T) {
 		}
 	})
 
+	t.Run("creates parents named in the platform's syntax", func(t *testing.T) {
+		dir := t.TempDir()
+		tool, _ := newWriteTool(t, dir)
+		if r := invokeWrite(t, tool, map[string]any{"path": `new\deep\w.txt`, "content": "x"}); r.IsError {
+			t.Fatalf("unexpected error: %s", r.Output)
+		}
+		// On Windows \ separates directories; elsewhere it is part of the name.
+		if _, err := os.Stat(filepath.Join(dir, `new\deep\w.txt`)); err != nil {
+			t.Fatalf("file not created: %v", err)
+		}
+	})
+
 	t.Run("empty path rejected", func(t *testing.T) {
 		tool, _ := newWriteTool(t, t.TempDir())
 		assertError(t, invokeWrite(t, tool, map[string]any{"path": "", "content": "x"}), "must not be empty")
