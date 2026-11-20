@@ -26,10 +26,12 @@ func TestExecServiceRejectsInvalidRequestBeforeLaunch(t *testing.T) {
 	if err := os.WriteFile(regularFile, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Errors name a path as given: quoting would double Windows backslashes.
+	relative := filepath.Join("relative", "dir")
 	tests := []ExecRequest{
 		{CWD: absolute},
 		{Command: "true"},
-		{Command: "true", CWD: "relative"},
+		{Command: "true", CWD: relative},
 		{Command: "true", CWD: filepath.Join(absolute, "missing")},
 		{Command: "true", CWD: regularFile},
 	}
@@ -37,6 +39,8 @@ func TestExecServiceRejectsInvalidRequestBeforeLaunch(t *testing.T) {
 		outcome := service.run(context.Background(), request)
 		if outcome.Status != ExecLaunchFailed || outcome.Err == nil {
 			t.Errorf("Run(%+v) = %+v, want a typed launch failure", request, outcome)
+		} else if request.Command != "" && !strings.Contains(outcome.Err.Error(), request.CWD) {
+			t.Errorf("Run(%+v) error = %q, want it to name the directory", request, outcome.Err)
 		}
 	}
 	if got := launcher.starts.Load(); got != 0 {

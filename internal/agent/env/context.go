@@ -20,11 +20,13 @@ import (
 // localEnvironment is the model-facing description of the local machine. Its
 // XML encoding is the exact text sent to the assistant.
 type localEnvironment struct {
-	XMLName  xml.Name  `xml:"local_environment"`
-	CWD      string    `xml:"cwd"`
-	Git      *localGit `xml:"git"`
-	Shell    string    `xml:"shell,omitempty"`
-	Platform string    `xml:"platform"`
+	XMLName xml.Name  `xml:"local_environment"`
+	CWD     string    `xml:"cwd"`
+	Git     *localGit `xml:"git"`
+	Shell   string    `xml:"shell,omitempty"`
+	// ShellVersion is the major.minor version of a PowerShell shell.
+	ShellVersion string `xml:"shell_version,omitempty"`
+	Platform     string `xml:"platform"`
 	// AppURL is the org's Datadog web origin, so links the model writes open
 	// on the user's site; it is empty when unknown.
 	AppURL string `xml:"datadog_app_url,omitempty"`
@@ -54,6 +56,11 @@ func renderLocalEnvironment(ctx context.Context, ws *workspace.Workspace, appURL
 	}
 	if shell := ws.DefaultShellPath(); shell != "" {
 		env.Shell = filepath.Base(shell)
+	}
+	// NOTE: a failed probe leaves the version out; the context has no place
+	// for the error, which only says why the version is unknown.
+	if version, err := ws.DefaultShellVersion(); err == nil {
+		env.ShellVersion = version
 	}
 	if repository := ws.Repository(ctx); repository.State == workspace.RepositoryPresent {
 		env.Git = &localGit{Root: repository.Root, Branch: repository.Branch}

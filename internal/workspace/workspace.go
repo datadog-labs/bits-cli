@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Workspace owns a confined filesystem root, its display path, and the shell
@@ -19,7 +20,10 @@ type Workspace struct {
 	path             string
 	displayPath      string
 	defaultShellPath string
-	root             *os.Root
+	// shellVersion probes the default shell's version once, on first use,
+	// so opening a workspace never waits for PowerShell to start.
+	shellVersion func() (string, error)
+	root         *os.Root
 }
 
 // Open resolves path, opens it as a confined workspace, and selects its shell.
@@ -36,7 +40,14 @@ func Open(path string) (*Workspace, error) {
 	if home, homeErr := os.UserHomeDir(); homeErr == nil {
 		displayPath = userRelativePath(abs, home)
 	}
-	return &Workspace{path: abs, displayPath: displayPath, defaultShellPath: resolveDefaultShellPath(), root: root}, nil
+	shell := resolveDefaultShellPath()
+	return &Workspace{
+		path:             abs,
+		displayPath:      displayPath,
+		defaultShellPath: shell,
+		shellVersion:     sync.OnceValues(func() (string, error) { return probeShellVersion(shell) }),
+		root:             root,
+	}, nil
 }
 
 // Path returns the absolute path used to identify the workspace to processes
@@ -48,6 +59,13 @@ func (w *Workspace) Path() string {
 // DefaultShellPath returns the shell selected when this workspace was opened.
 func (w *Workspace) DefaultShellPath() string {
 	return w.defaultShellPath
+}
+
+// DefaultShellVersion returns the major.minor version of a PowerShell
+// default shell, or "" for other shells. Only the first call runs the
+// shell, for at most a couple of seconds.
+func (w *Workspace) DefaultShellVersion() (string, error) {
+	return w.shellVersion()
 }
 
 // DisplayPath returns the stable user-facing form of Path. Locations inside
