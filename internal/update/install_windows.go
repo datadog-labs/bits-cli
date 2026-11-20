@@ -19,6 +19,28 @@ import (
 
 const executableName = "bits.exe"
 
+// resolveExecutable follows the current junction to the version that runs.
+// filepath.EvalSymlinks fails on any path through a junction since Go 1.23.
+func resolveExecutable(path string) (string, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return "", err
+	}
+	file, err := windows.CreateFile(name, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = windows.CloseHandle(file) }()
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	// Flags 0 ask for a normalized path with a drive letter.
+	n, err := windows.GetFinalPathNameByHandle(file, &buf[0], uint32(len(buf)), 0)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(windows.UTF16ToString(buf[:n]), `\\?\`), nil
+}
+
 // activate points the current junction at versions\<v>. Junctions need no
 // privilege, unlike directory symlinks, and a running bits.exe under the old
 // target does not stop the switch.

@@ -15,6 +15,12 @@ import (
 
 const executableName = "bits"
 
+// resolveExecutable follows ~/.local/bin/bits and current to the version
+// that runs.
+func resolveExecutable(path string) (string, error) {
+	return filepath.EvalSymlinks(path)
+}
+
 // activate points current at versions/<v>. The link is relative, so the
 // root can move, and renamed over the old one, so bits never goes missing.
 func activate(root, v string) error {

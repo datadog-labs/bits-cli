@@ -22,7 +22,6 @@ type fakeBackend func(context.Context) (string, error)
 
 func (fakeBackend) Name() string                                        { return "homebrew" }
 func (f fakeBackend) LatestVersion(ctx context.Context) (string, error) { return f(ctx) }
-func (fakeBackend) Command() string                                     { return "" }
 func (fakeBackend) Upgrade(io.Reader, io.Writer, io.Writer) error       { return nil }
 
 type upgradeBackend struct {
@@ -386,7 +385,7 @@ func TestHomebrewUpgrade(t *testing.T) {
 	if got := stdout.String(); got != "upgrade datadog-labs/pack/bits auto-update=0\n" {
 		t.Fatalf("brew invocation = %q", got)
 	}
-	if stderr.String() != "typed\n" {
+	if stderr.String() != "Updating Bits with "+homebrewUpgrade+"\ntyped\n" {
 		t.Fatalf("terminal streams not attached: stderr = %q", stderr.String())
 	}
 	t.Setenv("FAKE_BREW_EXIT", "1")
