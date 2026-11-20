@@ -37,6 +37,7 @@ type Runtime struct {
 	AuthenticationState string
 	Identity            string
 	ConversationID      string
+	Sharing             string
 	Profile             string
 	Model               string
 	PermissionsMode     string
@@ -176,6 +177,7 @@ func (m *Model) rebuild() {
 	}
 	assistantRows := []statusRow{
 		{label: "Conversation", value: available(m.runtime.ConversationID, "no conversation has been created")},
+		{label: "Sharing", value: available(m.runtime.Sharing, "no conversation has been created")},
 		{label: "Profile", value: available(m.runtime.Profile, "assistant profile is not known")},
 		{label: "Model", value: model},
 		{label: "Permissions", value: available(m.runtime.PermissionsMode, "permissions mode is not known")},

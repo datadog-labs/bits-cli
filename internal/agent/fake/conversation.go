@@ -29,13 +29,16 @@ func generatedTitle(n int) string { return "Fake generated title " + strconv.Ito
 
 // conversation is one fake conversation. All fields are guarded by Fake.mu.
 type conversation struct {
-	id       string
-	title    string // first user message, cut to titleRunes
-	updated  int64  // Unix milliseconds of the last recorded message
-	messages []assistant.Message
-	turns    int         // user turns started, which index the next turn
-	turn     *scriptTurn // the latest turn; nil before the first
-	tasks    []*fakeTask // background tasks its turns started
+	id      string
+	title   string // first user message, cut to titleRunes
+	updated int64  // Unix milliseconds of the last recorded message
+	// sharedUntil is when the share expires, in Unix milliseconds, or nil
+	// while the conversation is private.
+	sharedUntil *int64
+	messages    []assistant.Message
+	turns       int         // user turns started, which index the next turn
+	turn        *scriptTurn // the latest turn; nil before the first
+	tasks       []*fakeTask // background tasks its turns started
 }
 
 // scriptTurn is everything needed to re-execute a turn: its source, or the
@@ -197,6 +200,7 @@ func (f *Fake) ConversationHistory(ctx context.Context, in assistant.Conversatio
 	r.Data.ID = "fake-history-" + strconv.FormatInt(f.seq.Add(1), 10)
 	r.Data.Type = "conversation-history-response"
 	r.Data.Attributes.Title = c.title
+	r.Data.Attributes.SharedExpires = c.sharedUntil
 	r.Data.Attributes.Messages = append(slices.Clone(c.messages), taskHistoryLocked(c, time.Now())...)
 	return &r, nil
 }
@@ -216,7 +220,7 @@ func (f *Fake) UserConversations(ctx context.Context, in assistant.UserConversat
 			continue
 		}
 		r.Data.Attributes.Conversations = append(r.Data.Attributes.Conversations, assistant.ConversationSummary{
-			ID: c.id, ConversationID: c.id, UpdatedAt: c.updated, Title: c.title,
+			ID: c.id, ConversationID: c.id, UpdatedAt: c.updated, Title: c.title, SharedExpires: c.sharedUntil,
 		})
 	}
 	slices.SortFunc(r.Data.Attributes.Conversations, func(a, b assistant.ConversationSummary) int {
@@ -241,6 +245,35 @@ func (f *Fake) RenameConversation(ctx context.Context, in assistant.RenameConver
 	}
 	c.title = in.Title
 	return nil
+}
+
+// defaultShareDays is the server's share lifetime when a request names none.
+const defaultShareDays = 456
+
+// ShareConversation shares a conversation until now plus in.TTLDays, or the
+// server default, or makes it private. Sharing again restarts the lifetime.
+func (f *Fake) ShareConversation(ctx context.Context, in assistant.ShareConversationInput) (*assistant.ConversationSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.convs[in.ConversationID]
+	if !ok {
+		return nil, &assistant.APIError{StatusCode: http.StatusNotFound, Title: "Not Found", Input: in}
+	}
+	c.sharedUntil = nil
+	if in.Shared {
+		days := defaultShareDays
+		if in.TTLDays != nil {
+			days = *in.TTLDays
+		}
+		until := time.Now().Add(time.Duration(days) * 24 * time.Hour).UnixMilli()
+		c.sharedUntil = &until
+	}
+	return &assistant.ConversationSummary{
+		ID: c.id, ConversationID: c.id, UpdatedAt: c.updated, Title: c.title, SharedExpires: c.sharedUntil,
+	}, nil
 }
 
 // CurrentUser returns a fixed demo identity.

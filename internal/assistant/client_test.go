@@ -226,6 +226,7 @@ func TestCurrentUserFetchesProfileAndMatchingOrganization(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := CurrentUser{
+		ID:             "user-uuid",
 		Name:           "Bits User",
 		Handle:         "bits.user@example.com",
 		Email:          "bits.user@example.com",

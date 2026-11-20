@@ -49,13 +49,15 @@ server. Type `@` to find services, monitors, incidents, and dashboards.
 - `/rename [title]` renames the current conversation. Without a title, Bits
   asks for one.
 - `/web` opens the current conversation in Datadog.
+- `/share [30d|off]` shares the conversation with your org; `off` unshares it.
 - `/export` copies the whole conversation to your clipboard as Markdown
 - `/skills-library` opens the Skills Library.
 
-You can also resume by ID:
+You can also resume by ID or by its Datadog link:
 
 ```sh
 bits --conversation YOUR_CONVERSATION_ID
+bits --conversation https://app.datadoghq.com/bits/chat/YOUR_CONVERSATION_ID
 ```
 
 Run `bits --help` for CLI commands, or type `/` in chat to find chat commands.

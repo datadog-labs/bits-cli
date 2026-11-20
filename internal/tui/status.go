@@ -134,6 +134,7 @@ func (m *Model) statusRuntime() statusview.Runtime {
 		AuthenticationState: authenticationState,
 		Identity:            m.statusIdentity,
 		ConversationID:      m.state.ConversationID,
+		Sharing:             m.statusSharing(),
 		Profile:             string(runtime.Profile),
 		Model:               runtime.Model,
 		PermissionsMode:     permissionsMode,

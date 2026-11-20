@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -321,5 +322,67 @@ func TestInitialPrompt(t *testing.T) {
 				t.Fatalf("picker open = %t, editor = %q; want no command run and the draft kept", m.picker != nil, m.editor.Value())
 			}
 		})
+	}
+}
+
+// sharedWithMeBackend serves one conversation another user owns.
+type sharedWithMeBackend struct {
+	t *testing.T
+}
+
+func (b *sharedWithMeBackend) Send(context.Context, any, assistant.SendOptions, func(assistant.AssistantResponse) error) (string, error) {
+	b.t.Fatal("sent a turn to a conversation the user does not own")
+	return "", nil
+}
+
+func (*sharedWithMeBackend) ConversationHistory(context.Context, assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
+	r := history(assistant.AssistantMessage("m1", assistant.TextContent("Checkout latency is back to normal.")))
+	r.Data.Attributes.OwnerUserUUID = "coworker-uuid"
+	expires := shareExpiry.UnixMilli()
+	r.Data.Attributes.SharedExpires = &expires
+	return r, nil
+}
+
+func (*sharedWithMeBackend) CurrentUser(context.Context) (assistant.CurrentUser, error) {
+	return assistant.CurrentUser{ID: "me-uuid"}, nil
+}
+
+func TestConversationSharedWithMeIsReadOnly(t *testing.T) {
+	m := New(agent.New(&sharedWithMeBackend{t: t}, agent.Config{ConversationID: forkSourceID}))
+	t.Cleanup(m.Detach)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	_ = m.initChat()
+	drainConversationRemote(t, m)
+	if !m.state.ReadOnly || !strings.Contains(latestNotice(m).Text, "/fork") {
+		t.Fatalf("read-only = %v, notice = %q, want a hint to fork", m.state.ReadOnly, latestNotice(m).Text)
+	}
+
+	m.notices = nil
+	setConversationInput(m, "Is it still fine?")
+	m.submit()
+	if m.editor.Value() != "Is it still fine?" || m.op.busy() {
+		t.Fatalf("draft = %q, busy = %v; want the draft kept and no turn", m.editor.Value(), m.op.busy())
+	}
+	if !strings.Contains(latestNotice(m).Text, "/fork") {
+		t.Fatalf("notice = %q, want a hint to fork", latestNotice(m).Text)
+	}
+
+	// Only the owner may change sharing; others may still see the link.
+	for _, tt := range []struct{ argument, want string }{
+		{"off", "Only the conversation's owner"},
+		{"30d", "Only the conversation's owner"},
+		{"", "Shared with your organization until Mar 2, 2030."},
+	} {
+		_, cmd := m.dispatchCommand("share", tt.argument)
+		runShare(t, m, cmd)
+		if m.commandPrompt != nil || m.op.busy() || !strings.Contains(latestNotice(m).Text, tt.want) {
+			t.Fatalf("/share %s: picker = %v, busy = %v, notice = %q; want %q", tt.argument, m.commandPrompt != nil, m.op.busy(), latestNotice(m).Text, tt.want)
+		}
+	}
+
+	setConversationInput(m, "/fork")
+	m.submit()
+	if m.op.kind != opFork {
+		t.Fatalf("operation = %v, want /fork to run", m.op.kind)
 	}
 }
