@@ -15,9 +15,9 @@ func newUpdateCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 		Aliases: []string{"upgrade"},
 		Short:   "Update Bits to the latest release",
 		Args:    cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			*invoked = true
-			return update.New().Upgrade(os.Stdin, stdout, stderr)
+			return update.New().Upgrade(cmd.Context(), os.Stdin, stdout, stderr)
 		},
 	}
 }

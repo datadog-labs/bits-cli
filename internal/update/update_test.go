@@ -20,17 +20,18 @@ import (
 
 type fakeBackend func(context.Context) (string, error)
 
-func (fakeBackend) Name() string                                        { return "homebrew" }
-func (f fakeBackend) LatestVersion(ctx context.Context) (string, error) { return f(ctx) }
-func (fakeBackend) Command() string                                     { return "" }
-func (fakeBackend) Upgrade(io.Reader, io.Writer, io.Writer) error       { return nil }
+func (fakeBackend) Name() string                                                   { return "homebrew" }
+func (f fakeBackend) LatestVersion(ctx context.Context) (string, error)            { return f(ctx) }
+func (fakeBackend) Upgrade(context.Context, io.Reader, io.Writer, io.Writer) error { return nil }
 
 type upgradeBackend struct {
 	fakeBackend
 	err error
 }
 
-func (b upgradeBackend) Upgrade(io.Reader, io.Writer, io.Writer) error { return b.err }
+func (b upgradeBackend) Upgrade(context.Context, io.Reader, io.Writer, io.Writer) error {
+	return b.err
+}
 
 func testChecker(t *testing.T, b backend) *Checker {
 	t.Helper()
@@ -129,7 +130,7 @@ func TestCheckDoesNotWaitForNetwork(t *testing.T) {
 // Remind me later and any upgrade attempt hold the offer back a day.
 func TestPostpone(t *testing.T) {
 	upgradeErr := errors.New("brew failed")
-	upgrade := func(c *Checker) error { return c.Upgrade(nil, io.Discard, io.Discard) }
+	upgrade := func(c *Checker) error { return c.Upgrade(context.Background(), nil, io.Discard, io.Discard) }
 	for _, tc := range []struct {
 		name       string
 		upgradeErr error
@@ -161,6 +162,27 @@ func TestPostpone(t *testing.T) {
 				synctest.Wait()
 			})
 		})
+	}
+}
+
+func TestUpgradeWithUnwritableState(t *testing.T) {
+	upgradeErr := errors.New("brew failed")
+	for _, want := range []error{nil, upgradeErr} {
+		latest := fakeBackend(func(context.Context) (string, error) { return "v1.2.4", nil })
+		c := testChecker(t, upgradeBackend{latest, want})
+		// A file where the state directory should be makes every save fail.
+		dir := filepath.Join(filepath.Dir(c.path), "file")
+		if err := os.WriteFile(dir, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c.path = filepath.Join(dir, "update.json")
+		var stderr strings.Builder
+		if err := c.Upgrade(context.Background(), nil, io.Discard, &stderr); !errors.Is(err, want) {
+			t.Errorf("Upgrade = %v, want %v", err, want)
+		}
+		if !strings.Contains(stderr.String(), "Warning: ") {
+			t.Errorf("stderr = %q, want a warning about the state file", &stderr)
+		}
 	}
 }
 
@@ -380,17 +402,17 @@ func TestHomebrewUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if err := h.Upgrade(strings.NewReader("typed\n"), &stdout, &stderr); err != nil {
+	if err := h.Upgrade(context.Background(), strings.NewReader("typed\n"), &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	if got := stdout.String(); got != "upgrade datadog-labs/pack/bits auto-update=0\n" {
 		t.Fatalf("brew invocation = %q", got)
 	}
-	if stderr.String() != "typed\n" {
+	if stderr.String() != "Updating Bits with "+homebrewUpgrade+"\ntyped\n" {
 		t.Fatalf("terminal streams not attached: stderr = %q", stderr.String())
 	}
 	t.Setenv("FAKE_BREW_EXIT", "1")
-	if err := h.Upgrade(nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), homebrewUpgrade) {
+	if err := h.Upgrade(context.Background(), nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), homebrewUpgrade) {
 		t.Fatalf("failed upgrade error = %v, want the command named for a manual retry", err)
 	}
 }

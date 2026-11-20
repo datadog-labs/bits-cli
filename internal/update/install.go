@@ -61,10 +61,6 @@ func Install(opts InstallOptions, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(root, versionsDir, v)
-	if _, err := os.Stat(filepath.Join(dir, completeMarker)); err != nil {
-		return fmt.Errorf("%s is not a complete installation: %w", dir, err)
-	}
 	previous, err := activeVersion(root)
 	if err != nil {
 		return err
@@ -79,22 +75,27 @@ func Install(opts InstallOptions, out io.Writer) error {
 	return setUpCommand(root, opts, out)
 }
 
-// standaloneVersion returns the root and version of the installation the
-// executable was unpacked into.
+// standaloneVersion returns the root and version of the complete
+// installation the executable belongs to.
 func standaloneVersion(executable string) (root, v string, err error) {
-	resolved, err := filepath.EvalSymlinks(executable)
+	resolved, err := resolveExecutable(executable)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve executable: %w", err)
 	}
 	bin := filepath.Dir(resolved)
 	dir := filepath.Dir(bin)
 	versions := filepath.Dir(dir)
-	v = filepath.Base(dir)
-	if filepath.Base(resolved) != executableName || filepath.Base(bin) != "bin" ||
-		filepath.Base(versions) != versionsDir || !version.IsStable(v) {
+	if filepath.Base(resolved) == executableName && filepath.Base(bin) == "bin" && filepath.Base(versions) == versionsDir {
+		root, v = filepath.Dir(versions), filepath.Base(dir)
+	}
+	if !version.IsStable(v) {
 		return "", "", fmt.Errorf("%w: %s", errNotStandalone, resolved)
 	}
-	return filepath.Dir(versions), v, nil
+	marker := filepath.Join(root, versionsDir, v, completeMarker)
+	if _, err := os.Stat(marker); err != nil {
+		return "", "", fmt.Errorf("%s is not a complete installation: %w", filepath.Dir(marker), err)
+	}
+	return root, v, nil
 }
 
 // activeVersion returns the version current points at, or "" before the
