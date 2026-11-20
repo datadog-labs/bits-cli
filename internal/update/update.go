@@ -32,8 +32,7 @@ var (
 type backend interface {
 	Name() string
 	LatestVersion(context.Context) (string, error)
-	Command() string
-	Upgrade(stdin io.Reader, stdout, stderr io.Writer) error
+	Upgrade(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
 // Checker owns update state for the detected installation backend.
@@ -74,6 +73,19 @@ func New() *Checker {
 	return c
 }
 
+// detectBackend finds the installer that owns the running executable.
+func detectBackend(executable string) (backend, error) {
+	b, homebrewErr := detectHomebrew(executable)
+	if homebrewErr == nil {
+		return b, nil
+	}
+	b, standaloneErr := detectStandalone(executable)
+	if standaloneErr == nil {
+		return b, nil
+	}
+	return nil, errors.Join(homebrewErr, standaloneErr)
+}
+
 // Offer returns nil for an unsupported installation. With check enabled, it
 // includes the cached newer release, if any, for the startup prompt.
 func (c *Checker) Offer(ctx context.Context, check bool) *Offer {
@@ -111,19 +123,24 @@ func (c *Checker) check(ctx context.Context, current string) string {
 // Upgrade installs the latest release in the foreground with the installer
 // attached to the given streams, so call it only once the TUI has released
 // the terminal. The running process keeps the old binary; the new version
-// starts on the next launch. It takes no context: the installer must finish
-// or clean up on its own, since killing it mid-install can break the keg.
+// starts on the next launch. Canceling ctx, as Ctrl-C does, stops a
+// download, but an installer that has started runs to the end, since killing
+// it mid-install can break the installation.
 // Every attempt postpones the offer, like postpone: a failed or declined one,
 // and one where brew exits 0 without installing (a pinned formula, auto-update
 // disabled). After a real upgrade the postponement has no effect. Brew's output
 // has the last word because an exit code of 0 does not guarantee an install.
-func (c *Checker) Upgrade(stdin io.Reader, stdout, stderr io.Writer) error {
+func (c *Checker) Upgrade(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error {
 	if c.backend == nil {
 		return ErrUnsupportedInstallation
 	}
-	_, _ = fmt.Fprintf(stderr, "Updating Bits with %s\n", c.backend.Command())
-	err := c.backend.Upgrade(stdin, stdout, stderr)
-	if err = errors.Join(err, c.postpone()); err != nil {
+	err := c.backend.Upgrade(ctx, stdin, stdout, stderr)
+	// The state file is a cache: failing to write it, as when another bits on
+	// Windows holds it open, must not fail an upgrade that worked.
+	if postponeErr := c.postpone(); postponeErr != nil {
+		_, _ = fmt.Fprintf(stderr, "Warning: %v\n", postponeErr)
+	}
+	if err != nil {
 		return fmt.Errorf("update Bits: %w", err)
 	}
 	return nil
