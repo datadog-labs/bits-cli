@@ -288,7 +288,7 @@ func (m *Model) chooseUpgrade() tea.Cmd {
 func (m *Model) requestUpgrade() (tea.Model, tea.Cmd) {
 	if m.upgrade.offer == nil {
 		return m, m.postNotice(notice(chat.NoticeWarn, update.ErrUnsupportedInstallation,
-			"Automatic updates are unavailable for this installation."))
+			"Automatic updates are unavailable for this installation. To get them, reinstall Bits: "+update.InstallGuide))
 	}
 	m.upgrade.pending = false
 	m.upgrade.requested = true

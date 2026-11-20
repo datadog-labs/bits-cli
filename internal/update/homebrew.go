@@ -43,14 +43,13 @@ func newHomebrew(url string) homebrew {
 
 func (homebrew) Name() string { return "homebrew" }
 
-func (homebrew) Command() string { return homebrewUpgrade }
-
 // Upgrade runs brew attached to the terminal. LatestVersion reads the tap's
 // main branch, but brew installs from its local tap clone, which its
 // auto-update may leave up to a day old; forcing that fetch makes brew see the
 // release we offered. HOMEBREW_NO_AUTO_UPDATE still takes precedence. A
 // Ctrl+C reaches brew directly from the terminal, so brew handles it itself.
 func (h homebrew) Upgrade(stdin io.Reader, stdout, stderr io.Writer) error {
+	_, _ = fmt.Fprintf(stderr, "Updating Bits with %s\n", homebrewUpgrade)
 	args := strings.Fields(homebrewUpgrade)
 	cmd := exec.Command(filepath.Join(h.prefix, "bin", args[0]), args[1:]...)
 	cmd.Env = append(os.Environ(), "HOMEBREW_AUTO_UPDATE_SECS=0")
@@ -85,9 +84,10 @@ func (h homebrew) LatestVersion(ctx context.Context) (string, error) {
 	return homebrewVersion(raw)
 }
 
-// detectBackend uses the running executable, not whichever bits or brew happens
-// to be on PATH. The keg layout also works with non-default Homebrew prefixes.
-func detectBackend(executable string) (backend, error) {
+// detectHomebrew uses the running executable, not whichever bits or brew
+// happens to be on PATH. The keg layout also works with non-default Homebrew
+// prefixes.
+func detectHomebrew(executable string) (backend, error) {
 	resolved, err := filepath.EvalSymlinks(executable)
 	if err != nil {
 		return nil, fmt.Errorf("%w: resolve executable: %w", ErrUnsupportedInstallation, err)

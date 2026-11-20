@@ -17,6 +17,9 @@ import (
 	"golang.org/x/mod/semver"
 )
 
+// InstallGuide lists the installations that update themselves.
+const InstallGuide = "https://github.com/datadog-labs/bits-cli/blob/main/INSTALL.md"
+
 const (
 	ttl          = 24 * time.Hour
 	postponement = 24 * time.Hour
@@ -24,7 +27,7 @@ const (
 
 var (
 	// ErrUnsupportedInstallation means no supported installation backend was found.
-	ErrUnsupportedInstallation = errors.New("automatic updates are unavailable for this installation")
+	ErrUnsupportedInstallation = errors.New("automatic updates are unavailable for this installation; to get them, reinstall Bits: " + InstallGuide)
 	// errInvalidVersion means version information is missing, ambiguous, or unsupported.
 	errInvalidVersion = errors.New("invalid update version")
 )
@@ -32,7 +35,6 @@ var (
 type backend interface {
 	Name() string
 	LatestVersion(context.Context) (string, error)
-	Command() string
 	Upgrade(stdin io.Reader, stdout, stderr io.Writer) error
 }
 
@@ -72,6 +74,19 @@ func New() *Checker {
 	c.backend = b
 	c.path = filepath.Join(dir, "update.json")
 	return c
+}
+
+// detectBackend finds the installer that owns the running executable.
+func detectBackend(executable string) (backend, error) {
+	b, homebrewErr := detectHomebrew(executable)
+	if homebrewErr == nil {
+		return b, nil
+	}
+	b, standaloneErr := detectStandalone(executable)
+	if standaloneErr == nil {
+		return b, nil
+	}
+	return nil, errors.Join(homebrewErr, standaloneErr)
 }
 
 // Offer returns nil for an unsupported installation. With check enabled, it
@@ -121,7 +136,6 @@ func (c *Checker) Upgrade(stdin io.Reader, stdout, stderr io.Writer) error {
 	if c.backend == nil {
 		return ErrUnsupportedInstallation
 	}
-	_, _ = fmt.Fprintf(stderr, "Updating Bits with %s\n", c.backend.Command())
 	err := c.backend.Upgrade(stdin, stdout, stderr)
 	if err = errors.Join(err, c.postpone()); err != nil {
 		return fmt.Errorf("update Bits: %w", err)
