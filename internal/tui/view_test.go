@@ -15,6 +15,7 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 
+	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/styles"
 )
 
@@ -232,6 +233,38 @@ func TestChatFooterUsesSecondaryText(t *testing.T) {
 			}
 			if strings.Contains(footer, sgrForeground(t, theme.Text.Tertiary.GetForeground())) {
 				t.Errorf("footer still painted with tertiary text: %q", footer)
+			}
+		})
+	}
+}
+
+// A popup hides the transcript rows it covers whole, so no fragment of them,
+// such as a notice's marker, shows beside it.
+func TestPopupCoversItsRows(t *testing.T) {
+	for name, open := range map[string]func(*Model){
+		"completion menu": func(m *Model) { m.Update(tea.KeyPressMsg{Code: '/', Text: "/"}) },
+		"permissions":     func(m *Model) { m.dispatchCommand("permissions", "") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, _ := newPermissionsModel(t, agent.ModeManual)
+			defer m.Detach()
+			for range 30 {
+				m.postNotice(notice(chat.NoticeInfo, nil, "Earlier message"))
+			}
+			open(m)
+			popupRows := 0
+			for _, row := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+				first, last := strings.IndexAny(row, "╭│╰"), strings.LastIndexAny(row, "╮│╯")
+				if first < 0 {
+					continue
+				}
+				popupRows++
+				if strings.TrimSpace(row[:first]) != "" || strings.TrimSpace(row[last+len("│"):]) != "" {
+					t.Fatalf("transcript shows beside the popup: %q", row)
+				}
+			}
+			if popupRows == 0 {
+				t.Fatal("setup: no popup drawn")
 			}
 		})
 	}

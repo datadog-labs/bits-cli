@@ -146,11 +146,14 @@ func (m *Model) reconcileFocus() tea.Cmd {
 // only special-cases SGR and OSC 8, silently swallowing any other escape
 // sequence instead of writing it to the terminal.
 //
-// Exiting never resets it here: main resets the shape once the program has
-// stopped, which covers every quit path.
+// Quitting resets it through quitWith, while the renderer still holds the
+// terminal modes that let it reach the terminal.
+//
+// NOTE: a signal kills the program without a final update, so a hand shown at
+// that moment stays until the next program sets the shape.
 func (m *Model) reconcilePointerShape() tea.Cmd {
 	hand := false
-	if m.mode == ModeChat && !m.frame.tooSmall && m.focus() != focusExitCard {
+	if m.mode == ModeChat && !m.widgets.closed && !m.frame.tooSmall && m.focus() != focusExitCard {
 		hand = m.list.Hovered() || m.follow.hover || m.editor.QueueHovered() || (m.focus() == focusEditor && m.editor.ChipHovered())
 		if !hand && !m.frame.replaced && !m.editor.MenuOpen() {
 			if hit, ok := m.list.HoveredLink(); ok && m.clickableLink(hit) {

@@ -274,21 +274,29 @@ func TestMouseWheelScrollRefreshesHoverUnderTheStationaryPointer(t *testing.T) {
 	}
 }
 
-func TestResizeToTooSmallResetsPointerShape(t *testing.T) {
-	m := scrollableAccordionTestModel(t)
-	m.list.ScrollToTop()
-	row := visibleAccordionRow(t, m)
-	if _, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row}); rawSequence(cmd) != ansi.SetPointerShape("pointer") {
-		t.Fatal("hovering the row did not set the pointer shape")
-	}
-
-	// Only the height drops below the minimum, so the row under the pointer is
-	// still a transcript header; the resize hint replacing the view must win.
-	_, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: minimumChatHeight - 1})
-	if !m.frame.tooSmall || !m.list.Hovered() {
-		t.Fatal("fixture must be too small while the list still reports hover")
-	}
-	if got := rawSequence(cmd); got != ansi.SetPointerShape("default") {
-		t.Fatalf("resize to the too-small view did not reset the pointer shape: got %q", got)
+// The hand resets while the list still reports hover: when the resize hint
+// replaces the transcript, and on quit, before the program stops writing.
+func TestPointerShapeResetsWhileHovered(t *testing.T) {
+	for name, msg := range map[string]tea.Msg{
+		// Only the height drops below the minimum, so the row under the
+		// pointer is still a transcript header.
+		"too small": tea.WindowSizeMsg{Width: 80, Height: minimumChatHeight - 1},
+		"quit":      tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := scrollableAccordionTestModel(t)
+			m.list.ScrollToTop()
+			row := visibleAccordionRow(t, m)
+			if _, cmd := m.Update(tea.MouseMotionMsg{X: 0, Y: row}); rawSequence(cmd) != ansi.SetPointerShape("pointer") {
+				t.Fatal("hovering the row did not set the pointer shape")
+			}
+			_, cmd := m.Update(msg)
+			if !m.list.Hovered() {
+				t.Fatal("fixture must still report hover")
+			}
+			if got := rawSequence(cmd); got != ansi.SetPointerShape("default") {
+				t.Fatalf("the pointer shape was not reset: got %q", got)
+			}
+		})
 	}
 }
