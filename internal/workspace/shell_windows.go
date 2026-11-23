@@ -5,6 +5,9 @@ package workspace
 import (
 	osexec "os/exec"
 	"path/filepath"
+	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 // resolveDefaultShellPath prefers PowerShell 7 and falls back to the Windows
@@ -27,4 +30,10 @@ func resolvePowerShell(lookPath func(string) (string, error)) string {
 		}
 	}
 	return ""
+}
+
+// detachConsole keeps a probe off the console Bits draws on, whose modes
+// PowerShell would otherwise share.
+func detachConsole(command *osexec.Cmd) {
+	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 }

@@ -66,3 +66,6 @@ func resolveShell(accountShell string, lookPath func(string) (string, error)) st
 	}
 	return ""
 }
+
+// detachConsole is a no-op: the default shell on Unix is never PowerShell.
+func detachConsole(*osexec.Cmd) {}

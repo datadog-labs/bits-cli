@@ -423,6 +423,13 @@ func TestRenderLocalEnvironment(t *testing.T) {
 	if path := ws.DefaultShellPath(); path != "" {
 		shell = "\n  <shell>" + filepath.Base(path) + "</shell>"
 	}
+	version, err := ws.DefaultShellVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "" {
+		shell += "\n  <shell_version>" + version + "</shell_version>"
+	}
 	want := `<local_environment>
   <cwd>` + dir + `</cwd>
   <git>

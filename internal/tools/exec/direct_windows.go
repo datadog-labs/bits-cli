@@ -30,9 +30,11 @@ func (launcher directExecLauncher) Start(plan ExecPlan, stdout, stderr io.Writer
 	if err != nil {
 		return nil, err
 	}
-	command := osexec.Command(plan.Shell, windowsExecShellArgs(plan.Shell, plan.Command)...)
+	args, stdin := windowsExecShellArgs(plan.Shell, plan.Command)
+	command := osexec.Command(plan.Shell, args...)
 	command.Dir = plan.CWD
-	command.Stdin = nil
+	// Without input for the shell, a nil Stdin connects the null device.
+	command.Stdin = stdin
 	if len(launcher.excludedEnv) > 0 {
 		command.Env = shellEnvWithoutExcludedNames(command.Environ(), launcher.excludedEnv)
 	}
@@ -71,18 +73,20 @@ func (p *directExecProcess) Wait() execProcessResult {
 	// WaitDelay bounds the wait for any output handles those descendants hold.
 	defer p.job.close()
 	err := p.command.Wait()
+	outputIncomplete := errors.Is(err, osexec.ErrWaitDelay)
 	state := p.command.ProcessState
 	if state == nil {
-		return execProcessResult{outputIncomplete: errors.Is(err, osexec.ErrWaitDelay)}
+		return execProcessResult{outputIncomplete: outputIncomplete}
 	}
-	exitCode := state.ExitCode()
-	if exitCode >= 0 {
-		return execProcessResult{
-			exitCode:         &exitCode,
-			outputIncomplete: errors.Is(err, osexec.ErrWaitDelay),
-		}
+	// Exit codes are DWORDs that cmd and PowerShell show as signed: -1 and
+	// -1073741819 (an access violation), not 4294967295 and 3221225477.
+	if p.job.terminated() {
+		// Like a Unix signal, termination leaves no exit code of the
+		// command's own; the job's is the one terminate chose.
+		return execProcessResult{outputIncomplete: outputIncomplete}
 	}
-	return execProcessResult{outputIncomplete: errors.Is(err, osexec.ErrWaitDelay)}
+	exitCode := int(int32(state.Sys().(syscall.WaitStatus).ExitCode))
+	return execProcessResult{exitCode: &exitCode, outputIncomplete: outputIncomplete}
 }
 
 // Windows has no Unix-style graceful group signal for these non-console
@@ -104,6 +108,8 @@ const execPipeWaitDelay = 100 * time.Millisecond
 type execJob struct {
 	mu     sync.Mutex
 	handle windows.Handle
+	// ended records that terminate ended the job's processes.
+	ended bool
 }
 
 func newExecJob() (*execJob, error) {
@@ -137,7 +143,14 @@ func (j *execJob) terminate() error {
 	if j.handle == 0 {
 		return nil
 	}
+	j.ended = true
 	return windows.TerminateJobObject(j.handle, 1)
+}
+
+func (j *execJob) terminated() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.ended
 }
 
 func (j *execJob) close() {

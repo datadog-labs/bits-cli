@@ -2,7 +2,10 @@
 
 package exec
 
-import "path/filepath"
+import (
+	osexec "os/exec"
+	"path/filepath"
+)
 
 func supportedExecShell(shell string) bool {
 	switch filepath.Base(shell) {
@@ -14,3 +17,5 @@ func supportedExecShell(shell string) bool {
 }
 
 func supportedExecShells() string { return "bash, zsh, or sh" }
+
+func lookExecShell(shell string) (string, error) { return osexec.LookPath(shell) }
