@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -51,6 +52,19 @@ func TestConversationRoundTrip(t *testing.T) {
 		t.Fatalf("list = %+v, want only %s", list, id)
 	}
 
+	ttl := 7
+	shared, err := engine.ShareConversation(ctx, assistant.ShareConversationInput{ConversationID: id, Shared: true, TTLDays: &ttl})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left := time.Until(*shared); left <= 6*24*time.Hour || left > 7*24*time.Hour {
+		t.Fatalf("share expires in %v, want 7 days", left)
+	}
+
+	if list := engine.ListConversations(ctx, 0); list.Err != nil || len(list.Conversations) != 1 || list.Conversations[0].SharedExpires == nil {
+		t.Fatalf("list = %+v, want the shared conversation", list)
+	}
+
 	restored := agent.New(f, agent.Config{})
 	conversation, err := restored.LoadConversation(ctx, id)
 	if err != nil {
@@ -64,6 +78,9 @@ func TestConversationRoundTrip(t *testing.T) {
 	}
 	if got := restored.State().Title; got != generatedTitle(1) {
 		t.Fatalf("restored title = %q", got)
+	}
+	if got := restored.State().SharedUntil; got == nil || !got.Equal(*shared) {
+		t.Fatalf("restored share = %v, want %v", got, shared)
 	}
 
 	// Like the real API, the history resource has its own id.
@@ -115,5 +132,40 @@ say(id)`
 	}
 	if got := texts(engine.State().Blocks); !slices.Equal(got, []string{"earlier", "after resumed"}) {
 		t.Fatalf("answers = %q", got)
+	}
+}
+
+func TestSharedByGivesTheConversationAway(t *testing.T) {
+	ctx := context.Background()
+	f := &Fake{}
+	id, err := f.PushConversation(ctx, "", `say("findings"); shared_by("coworker")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := agent.New(f, agent.Config{})
+	conversation, err := engine.LoadConversation(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.InstallConversation(ctx, conversation); err != nil {
+		t.Fatal(err)
+	}
+	if state := engine.State(); !state.ReadOnly || state.SharedUntil == nil {
+		t.Fatalf("read-only = %v, shared until = %v; want a read-only share", state.ReadOnly, state.SharedUntil)
+	}
+
+	if list := engine.ListConversations(ctx, 0); list.Err != nil || len(list.Conversations) != 0 {
+		t.Fatalf("list = %+v, want only the user's own conversations", list)
+	}
+	if _, err := engine.ShareConversation(ctx, assistant.ShareConversationInput{ConversationID: id}); !errors.Is(err, assistant.ErrForbidden) {
+		t.Fatalf("share error = %v, want forbidden", err)
+	}
+	if err := engine.RenameConversation(ctx, id, "Mine"); !errors.Is(err, assistant.ErrForbidden) {
+		t.Fatalf("rename error = %v, want forbidden", err)
+	}
+	// bits run sends without loading the history, so the server refuses it.
+	_, err = f.Send(ctx, `say("mine")`, assistant.SendOptions{ConversationID: id}, func(assistant.AssistantResponse) error { return nil })
+	if !errors.Is(err, assistant.ErrNotFound) {
+		t.Fatalf("send error = %v, want not found", err)
 	}
 }

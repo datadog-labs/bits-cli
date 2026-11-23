@@ -251,20 +251,19 @@ type Theme struct {
 	// state or interaction behind it.
 	Logo lipgloss.Style
 
-	Input       Input
-	Chat        Chat
-	Editor      Editor
-	Text        Text
-	Feedback    Feedback
-	Panel       Panel
-	Approval    Approval
-	ExitCard    ExitCard
-	Permissions Panel
-	Accordion   Accordion
-	Selector    Selector
-	TextInput   textinput.Styles
-	Tabs        Tabs
-	Selection   Selection
+	Input     Input
+	Chat      Chat
+	Editor    Editor
+	Text      Text
+	Feedback  Feedback
+	Panel     Panel
+	Approval  Approval
+	ExitCard  ExitCard
+	Accordion Accordion
+	Selector  Selector
+	TextInput textinput.Styles
+	Tabs      Tabs
+	Selection Selection
 }
 
 // Selection paints cells the pointer has dragged over. Both colors are stated

@@ -38,6 +38,11 @@ func resumeFixture(count int) *resume {
 			Title:          strings.Repeat("title ", 20),
 			UpdatedAt:      fixedNow().Add(-time.Duration(i+1) * time.Hour).UnixMilli(),
 		}
+		// Every other conversation is shared, so layouts measure its longer detail.
+		if i%2 == 0 {
+			expires := fixedNow().Add(24 * time.Hour).UnixMilli()
+			summaries[i].SharedExpires = &expires
+		}
 	}
 	r := &resume{now: fixedNow}
 	r.setConversations(summaries)
@@ -71,6 +76,17 @@ func TestResumeBlockNeverExceedsItsWidth(t *testing.T) {
 				t.Fatalf("width=%d line %d measures %d columns", width, i, got)
 			}
 		}
+	}
+}
+
+func TestResumeRowsMarkSharedConversations(t *testing.T) {
+	r := resumeFixture(2)
+	rows := strings.Split(ansi.Strip(r.view(styles.Default(true), 80, 2)), "\n")
+	if !strings.HasSuffix(strings.TrimSpace(rows[2]), "shared · 1 hour ago") {
+		t.Fatalf("shared row = %q", rows[2])
+	}
+	if row := strings.TrimSpace(rows[4]); strings.Contains(row, "shared") || !strings.HasSuffix(row, "2 hours ago") {
+		t.Fatalf("private row = %q", row)
 	}
 }
 
@@ -380,7 +396,7 @@ func TestNewConversationBringsTheOfferBack(t *testing.T) {
 func TestSelectedRowTimestampTakesTheTitleAccent(t *testing.T) {
 	theme := styles.Default(true)
 	r := resumeFixture(4)
-	stamp := conversations.RelativeUpdatedAt(r.conversations[0].UpdatedAt, fixedNow())
+	stamp := conversations.Activity(r.conversations[0], fixedNow())
 
 	accented := theme.Text.Tertiary.Foreground(theme.Selector.Selected.GetForeground()).Render(stamp)
 	if got := r.row(theme, 80, 0); !strings.Contains(got, accented) {

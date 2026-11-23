@@ -430,7 +430,7 @@ func TestExitCardDropsReflexInputForAPromptBehindIt(t *testing.T) {
 func TestExitCardClosesWhenLeavingChat(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
 	openCard(m)
-	m.setMode(ModePermissions)
+	m.setMode(ModeStatus)
 	if m.exitCard.open {
 		t.Fatal("the card survived leaving chat")
 	}

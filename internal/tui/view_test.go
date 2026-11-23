@@ -254,7 +254,6 @@ func TestChatFooterUsesSecondaryText(t *testing.T) {
 func TestPopupCoversItsRows(t *testing.T) {
 	for name, open := range map[string]func(*Model){
 		"completion menu": func(m *Model) { m.Update(tea.KeyPressMsg{Code: '/', Text: "/"}) },
-		"permissions":     func(m *Model) { m.dispatchCommand("permissions", "") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, _ := newPermissionsModel(t, agent.ModeManual)

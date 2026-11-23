@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -73,6 +74,13 @@ func (f *Fake) Send(ctx context.Context, message any, opts assistant.SendOptions
 	fn func(assistant.AssistantResponse) error,
 ) (string, error) {
 	c := f.conversation(opts.ConversationID)
+	f.mu.Lock()
+	owner := c.owner
+	f.mu.Unlock()
+	// Like the server, which hides other people's conversations from turns.
+	if owner != demoUserID {
+		return c.id, &assistant.APIError{StatusCode: http.StatusNotFound, Title: "Not Found", Detail: "Conversation not found"}
+	}
 	out := &emitter{
 		ctx: ctx, delay: f.Delay, convID: c.id, fn: fn,
 		record: func(m assistant.Message) { f.record(c, m) },

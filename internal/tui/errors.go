@@ -72,6 +72,8 @@ func noticeForNonAPIError(op string, err error) chat.Notice {
 		return notice(chat.NoticeError, err, "The assistant kept working without finishing, so it was stopped at the turn limit.")
 	case errors.Is(err, agent.ErrHistoryUnsupported):
 		return notice(chat.NoticeWarn, err, "This backend can't restore past conversations.")
+	case errors.Is(err, agent.ErrReadOnlyConversation):
+		return notice(chat.NoticeWarn, err, "This conversation was shared with you, so it is read-only. Use /fork to continue in your own copy.")
 	}
 
 	text := err.Error()

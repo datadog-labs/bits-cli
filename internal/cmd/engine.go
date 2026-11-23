@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -50,13 +52,24 @@ type ClientOptions struct {
 	APISite string
 }
 
+// conversationFromArg reads --conversation, which takes an ID or a link whose
+// last path segment is one, such as the link /share copies.
+func conversationFromArg(arg string) string {
+	if u, err := url.Parse(strings.TrimSpace(arg)); err == nil && u.Scheme != "" {
+		if id := path.Base(u.Path); agent.ValidConversationID(id) {
+			return id
+		}
+	}
+	return arg
+}
+
 // newEngine constructs an engine backed by either the explicit fake backend or
 // an authenticated Assistant client. Explicit API-key mode takes precedence
 // over the fake backend so an invalid automation invocation cannot silently
 // become a demo session.
 func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, store auth.CredentialStore) (*agent.Engine, error) {
 	config := agent.Config{
-		ConversationID: opts.ConversationID, PermissionsMode: opts.PermissionsMode,
+		ConversationID: conversationFromArg(opts.ConversationID), PermissionsMode: opts.PermissionsMode,
 		Model: opts.Model, InferenceMode: opts.InferenceMode,
 	}
 	if workspace != nil {

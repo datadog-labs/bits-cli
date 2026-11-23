@@ -92,13 +92,12 @@ func waitEvent(ch <-chan agent.Event) tea.Cmd {
 type focus int
 
 const (
-	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
-	focusExitCard                 // the "Exit Bits?" confirmation card
-	focusPrompt                   // a tool approval or a tool's UI is shown (see prompt), unless the user drafts
-	focusPicker                   // the /resume conversation picker
-	focusStatus                   // the local /status document
-	focusPermissions              // the permissions picker
-	focusLogin                    // startup OAuth
+	focusEditor   focus = iota // transcript scroll + text input (and its completion menu)
+	focusExitCard              // the "Exit Bits?" confirmation card
+	focusPrompt                // a tool approval or a tool's UI is shown (see prompt), unless the user drafts
+	focusPicker                // the /resume conversation picker
+	focusStatus                // the local /status document
+	focusLogin                 // startup OAuth
 )
 
 func (m *Model) focus() focus {
@@ -109,8 +108,6 @@ func (m *Model) focus() focus {
 		return focusPicker
 	case ModeStatus:
 		return focusStatus
-	case ModePermissions:
-		return focusPermissions
 	case ModeChat, ModeTermInit:
 		if m.mode == ModeChat && m.exitCard.open {
 			return focusExitCard
@@ -225,7 +222,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = m.clearDraftOrArmQuit()
 		case m.frame.tooSmall && isUserInput(msg):
 			// Only a resize hint is visible, so input must not drive a hidden
-			// surface. System and engine messages still flow.
+			// surface. System and engine messages still flow. Dismissing a
+			// command prompt confirms nothing, and it may be what does not fit.
+			if m.commandPrompt != nil && isDismissKey(msg) {
+				m.commandPrompt = nil
+			}
 		case m.mode == ModeChat && m.exitCard.open && isUserInput(msg):
 			cmd = m.updateExitCard(msg)
 		default:
@@ -239,6 +240,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	loadSkillMenu, loadOffer := m.syncClientSkills(), m.syncResume()
 	m.relayout()
 	return m, tea.Batch(cmd, loadSkillMenu, loadOffer, m.syncWidgets(), m.syncAnimations(), m.reconcileFocus(), m.reconcilePointerShape(), m.syncTerminalStatus())
+}
+
+func isDismissKey(msg tea.Msg) bool {
+	key, ok := msg.(tea.KeyPressMsg)
+	return ok && (key.String() == "esc" || key.String() == "ctrl+x")
 }
 
 func isCtrlC(msg tea.Msg) bool {
@@ -334,6 +340,7 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.ev.State.Version > m.state.Version {
 				m.state = msg.ev.State
 				m.syncTranscript()
+				m.syncStatus()
 			}
 		case m.op.run != 0 && msg.ev.Run == m.op.run:
 			// Every run is an operation this model started, so other runs'
@@ -350,6 +357,9 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case renameResultMsg:
 		return m, m.applyRenameResult(msg)
+
+	case shareResultMsg:
+		return m, m.applyShareResult(msg)
 
 	case forkResultMsg:
 		return m, m.applyForkResult(msg)
@@ -419,9 +429,6 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.focus() == focusStatus {
 		return m, m.updateStatus(msg)
-	}
-	if m.focus() == focusPermissions {
-		return m, nil
 	}
 	return m, m.updateEditorInput(msg)
 }
@@ -823,8 +830,8 @@ func (m *Model) stopStartup() {
 // handled earlier in Update.
 //
 // Ctrl+O toggles tool blocks and Shift+PgUp/PgDn page chat from any chat focus,
-// as Ctrl+X stops a shown prompt's tool round, or dismisses a command prompt,
-// even while the user drafts. PgUp/PgDn go to the focused prompt or transcript.
+// as Ctrl+X dismisses a command prompt, or else stops a shown ask's tool
+// round, even while the user drafts. PgUp/PgDn go to the focused prompt or transcript.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" && m.selection.active() {
 		m.selection.clear()
@@ -842,12 +849,13 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.list.PageDown()
 			return m, nil
 		case "ctrl+x":
-			if m.shown != nil {
-				m.stopTools()
-				return m, nil
-			}
+			// A command prompt shows over an ask, so ctrl+x dismisses it first.
 			if m.commandPrompt != nil {
 				m.commandPrompt = nil // a command prompt has no tools to stop
+				return m, nil
+			}
+			if m.shown != nil {
+				m.stopTools()
 				return m, nil
 			}
 		}
@@ -859,8 +867,6 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.handlePromptKey(msg)
 	case focusStatus:
 		return m, m.updateStatus(msg)
-	case focusPermissions:
-		return m, m.updatePermissionsKey(msg)
 	default:
 		return m.handleEditorKey(msg)
 	}
@@ -1007,6 +1013,10 @@ func (m *Model) resumePendingTools() tea.Cmd {
 	m.engine.SettleRestoredTools(m.tools)
 	m.state = m.engine.State() // the event that publishes it follows
 	m.syncTranscript()
+	// Another user's conversation runs no turn here, so say how to continue.
+	if m.state.ReadOnly {
+		return m.postNotice(noticeForError("", agent.ErrReadOnlyConversation))
+	}
 	if m.tools == nil || !m.engine.CanResumeTools(m.tools) {
 		return nil
 	}

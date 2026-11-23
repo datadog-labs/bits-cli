@@ -58,12 +58,15 @@ func (m *Model) View() tea.View {
 	switch m.mode {
 	case ModeTermInit:
 		v.Content = "loading…"
-	case ModeChat, ModePermissions:
+	case ModeChat:
 		if m.frame.tooSmall {
 			v.MouseMode = tea.MouseModeNone
 			message := "Resize terminal to use Bits"
-			if m.quitConfirm.armed {
+			switch {
+			case m.quitConfirm.armed:
 				message = quitConfirmHint
+			case m.commandPrompt != nil:
+				message = "Resize terminal or press esc"
 			}
 			message = ansi.Truncate(message, max(1, m.width), "")
 			v.Content = lipgloss.Place(max(1, m.width), max(1, m.height), lipgloss.Center, lipgloss.Center, message)
@@ -229,7 +232,7 @@ func (m *Model) layout() frame {
 	f.transcript = image.Rect(0, 0, m.width, max(minimumTranscriptRows, y))
 
 	switch {
-	case m.mode != ModeChat && m.mode != ModePermissions:
+	case m.mode != ModeChat:
 	case m.width < minimumChatWidth || m.height < minimumChatHeight:
 		f.tooSmall = true
 	case !answerable:
@@ -275,9 +278,6 @@ func (m *Model) layoutPopup() (string, image.Rectangle) {
 		return "", image.Rectangle{}
 	}
 	switch m.focus() {
-	case focusPermissions:
-		// Spans the terminal inside its margin, so it does not track the composer.
-		return m.aboveInput(m.permissionsView(), m.styles.Permissions.HorizontalMargin)
 	case focusExitCard:
 		return m.layoutExitCard()
 	case focusEditor:
@@ -415,6 +415,9 @@ func (m *Model) promptPlaceholder() string {
 	}
 	if m.op.kind == opRename {
 		return "Renaming…"
+	}
+	if m.op.kind == opShare {
+		return "Sharing…"
 	}
 	switch m.chatPhase {
 	case chat.PhaseLoading:

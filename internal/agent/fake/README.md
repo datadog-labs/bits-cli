@@ -72,6 +72,7 @@ inline preview.
 | `fail(status)`, `fail("net")`, `fail("timeout")` | a backend failure after the output so far |
 | `sleep("2s")` | a stall |
 | `breakpoint(name)` | nothing; stops until continued ([Breakpoints](#breakpoints)) |
+| `shared_by(user)` | nothing; the conversation now belongs to `user`, who shared it with you ([Shared conversations](#shared-conversations)) |
 | `push_conversation(fn, …, title=)` | nothing; records a new conversation, returns its id ([Pushed conversations](#pushed-conversations)) |
 | `load("file.star", "name", …)` | imports definitions from a module below the script root (the working directory), or a bundled fixture by filename |
 | `help()` | the built-ins and the client tools' input schemas |
@@ -158,6 +159,20 @@ load("questions.star", "ask_user_question"); say(push_conversation(lambda: say("
 - A turn is called again when it resumes, so its function and the globals it
   reaches are frozen when pushed.
 - A replayed round returns its earlier id instead of pushing again.
+
+## Shared conversations
+
+`shared_by(user)` gives the conversation it runs in to `user`, who shares it
+with you for the server's default 456 days. As on the server, its history
+names `user` as the owner, it leaves your `/resume` list, `/share` and
+`/rename` get 403, and a turn gets 404. Open one at startup to see the
+read-only view:
+
+```sh
+BITS_FAKE_BACKEND=1 bits --conversation 'say("Findings"); shared_by("coworker")'
+```
+
+The fake does not fork, so `/fork` is unsupported there.
 
 ## Tests
 

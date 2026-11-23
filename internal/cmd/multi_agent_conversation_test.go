@@ -22,6 +22,12 @@ func TestMultiAgentEngineConversationLifecycle(t *testing.T) {
 	const continuePath = "/api/unstable/assistant/multi-agent/conversation/" + conversationID
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Restoring checks who owns the conversation: this user, so it resumes.
+		if r.URL.Path == "/api/v2/current_user" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"data":{"type":"users","id":"owner","attributes":{}}}`)
+			return
+		}
 		request := requests.Add(1)
 		if request == 3 {
 			if r.Method != http.MethodGet || r.URL.Path != "/api/v2/assistant/conversation-history/"+conversationID {

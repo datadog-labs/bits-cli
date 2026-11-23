@@ -116,6 +116,8 @@ type BackendStatus struct {
 // local status surfaces may display. Roles and permissions returned by the API
 // are deliberately not retained.
 type CurrentUser struct {
+	// ID is the user's UUID, which conversations name as their owner.
+	ID             string
 	Name           string
 	Handle         string
 	Email          string
@@ -690,6 +692,7 @@ func (c *Client) CurrentUser(ctx context.Context) (CurrentUser, error) {
 	defer func() { _ = resp.Body.Close() }()
 	var document struct {
 		Data struct {
+			ID         string `json:"id"`
 			Attributes struct {
 				Name   string `json:"name"`
 				Handle string `json:"handle"`
@@ -719,6 +722,7 @@ func (c *Client) CurrentUser(ctx context.Context) (CurrentUser, error) {
 
 	organizationRef := document.Data.Relationships.Organization.Data
 	out := CurrentUser{
+		ID:             document.Data.ID,
 		Name:           document.Data.Attributes.Name,
 		Handle:         document.Data.Attributes.Handle,
 		Email:          document.Data.Attributes.Email,
