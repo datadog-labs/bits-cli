@@ -34,8 +34,8 @@ type Input struct {
 	SweepDim    color.Color
 	SweepHot    color.Color
 	SweepMotion bool
-	// Spinner shares the tool activity glyphs with queued prompts.
-	Spinner Spinner
+	// Pending is the queued prompts' marker, prompt-width and already styled.
+	Pending Shimmer
 
 	// Chip styles the attachment chips shown above the prompt, both in the
 	// composer and in submitted user blocks.

@@ -104,14 +104,16 @@ func TestQueueStackKeepsOneTextRowWhileAnimating(t *testing.T) {
 	long := HistoryEntry{Text: strings.Repeat("long prompt\n", 30), Attachments: []Attachment{{Type: "service", ID: "api", Label: "API"}}}
 	queue(e, false, long)
 	e.SetActivityFrame(0)
-	first := ansi.Strip(e.QueueView(11))
-	if rows := strings.Split(first, "\n"); len(rows) != 5 || !strings.Contains(rows[1], "API") || !strings.Contains(rows[3], "…") {
-		t.Fatalf("expected frame, chip row, gap, one text row and frame: %q", first)
+	first := e.QueueView(11)
+	plain := ansi.Strip(first)
+	if rows := strings.Split(plain, "\n"); len(rows) != 5 || !strings.Contains(rows[1], "API") || !strings.HasPrefix(rows[3], "⏸ ") || !strings.Contains(rows[3], "…") {
+		t.Fatalf("expected frame, chip row, gap, one pending text row and frame: %q", plain)
 	}
-	e.SetActivityFrame(2)
-	second := ansi.Strip(e.QueueView(11))
-	if first == second || strings.Count(first, "\n") != strings.Count(second, "\n") {
-		t.Fatal("spinner did not animate with stable geometry")
+	// The pulse only recolors the marker, so the plain text stays put.
+	e.SetActivityFrame(8)
+	second := e.QueueView(11)
+	if first == second || ansi.Strip(second) != plain {
+		t.Fatal("pending marker did not pulse with stable text")
 	}
 	queue(e, true, long)
 	paused := e.QueueView(11)
