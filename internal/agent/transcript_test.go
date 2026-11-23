@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -34,6 +35,54 @@ func streamedToolStarted(messageID, toolCallID, toolName string) assistant.Messa
 }
 
 // Text fragments sharing a message id concatenate into a single block.
+// A prompt has one id however it arrives: typed here, echoed live under one
+// wire id, or saved under another.
+func TestPromptsAreKeyedByTheirPlace(t *testing.T) {
+	user := func(id, text string) assistant.Message {
+		return assistant.Message{Role: "user", MessageID: id, Content: assistant.TextContent(text)}
+	}
+	for _, test := range []struct {
+		name   string
+		second func(*Transcript) Block
+	}{
+		{name: "typed here", second: func(tr *Transcript) Block { b, _ := tr.AppendUser("two", nil); return b }},
+		{name: "echoed live", second: func(tr *Transcript) Block { b, _ := tr.AppendMessage(user("echo-7", "two")); return b }},
+		{name: "saved", second: func(tr *Transcript) Block { b, _ := tr.AppendMessage(user("saved-3", "two")); return b }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tr := NewTranscript()
+			tr.AppendMessage(user("saved-1", "one"))
+			tr.AppendMessage(textMsg("a1", "answer"))
+			got := test.second(tr)
+			if want := (BlockID{Scope: ScopePrompt, Key: "2"}); got.ID != want {
+				t.Fatalf("second prompt id = %v, want %v", got.ID, want)
+			}
+		})
+	}
+}
+
+// A prompt shown here stays after the conversation's content, keeps its
+// block when the conversation's copy arrives, and another session's prompt
+// taking its place moves it down.
+func TestUnsentPromptsAreConfirmedOrMoved(t *testing.T) {
+	user := func(id, text string) assistant.Message {
+		return assistant.Message{Role: "user", MessageID: id, Content: assistant.TextContent(text)}
+	}
+	tr := NewTranscript()
+	_, mine := tr.AppendUser("mine", nil)
+	tr.AppendMessage(user("other-1", "theirs"))
+	if got := turnTexts(tr.Blocks()); !slices.Equal(got, []string{"1:theirs", "0:mine"}) {
+		t.Fatalf("blocks = %q", got)
+	}
+	if b := tr.Blocks()[1]; b.ID != promptID(2) {
+		t.Fatalf("unsent prompt id = %v, want moved to prompt:2", b.ID)
+	}
+	tr.AppendMessage(user("saved-2", "mine"))
+	if n, ok := tr.PromptTurn(mine); !ok || n != 2 || len(tr.Blocks()) != 2 {
+		t.Fatalf("prompt turn = %d, %v; blocks %d", n, ok, len(tr.Blocks()))
+	}
+}
+
 func TestTextFragmentsConcatenate(t *testing.T) {
 	tr := NewTranscript()
 	tr.AppendMessage(assistant.AssistantMessage("m1", assistant.TextContent("Hello")))
@@ -368,7 +417,7 @@ func TestInterleavedStreamReopens(t *testing.T) {
 func TestUserMessageFinalizesPriorStream(t *testing.T) {
 	tr := NewTranscript()
 	tr.AppendMessage(assistant.AssistantMessage("m1", assistant.TextContent("partial")))
-	tr.AppendUser("next turn", nil)
+	tr.AppendMessage(userMsg("u2", "next turn"))
 	if !tr.Blocks()[0].Complete {
 		t.Fatal("assistant block not finalized when a user message followed it")
 	}
@@ -479,5 +528,30 @@ func TestToolNamespaceMergesByPresence(t *testing.T) {
 	tool := tr.Blocks()[0].Tool
 	if tool.Namespace == nil || *tool.Namespace != "" {
 		t.Fatalf("explicit empty namespace did not clear identity: %+v", tool)
+	}
+}
+
+// A replay holding an unsent prompt sent it, even at a place other than the
+// one it was shown at, as when another turn ran first.
+func TestReplayConfirmsAnUnsentPromptWhereverItLands(t *testing.T) {
+	prev := NewTranscript()
+	_, mine := prev.AppendUser("mine", nil)
+	next := conversationFromHistory(nil, []assistant.Message{userMsg("u1", "ready"), textMsg("a1", "ok"), userMsg("u2", "mine")}).transcript
+	next.keepUnsent(prev)
+	if _, ok := next.PromptTurn(mine); !ok || len(next.unsent) != 0 {
+		t.Fatalf("unsent = %d, sent = %t; want the replay's prompt to confirm it", len(next.unsent), ok)
+	}
+}
+
+// A tool's result the conversation shows after its run ended leaves the
+// block the run's.
+func TestLateResultKeepsTheRun(t *testing.T) {
+	tr := NewTranscript()
+	tr.run = 1
+	tr.AppendMessage(serverCallMsg("c1", "search", "{}"))
+	tr.run = 0
+	tr.AppendMessage(assistant.AssistantMessage("c1", assistant.ToolResultContent("c1", "search", assistant.ToolStatusSuccess, "ok")))
+	if b := tr.Blocks()[0]; b.Tool == nil || b.Tool.Status != ToolSuccess || b.Run != 1 {
+		t.Fatalf("block = %+v, want the run's finished tool", b)
 	}
 }

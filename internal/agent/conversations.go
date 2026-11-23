@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strings"
@@ -37,6 +38,7 @@ type Conversation struct {
 	transcript   *Transcript
 	tasks        []*task
 	continuation []assistant.Content
+	forkedFrom   *assistant.ForkedFrom
 }
 
 // ListConversations reads and validates summaries without taking the engine's
@@ -132,8 +134,19 @@ func (e *Engine) InstallConversation(ctx context.Context, conversation *Conversa
 // installConversation runs on the actor, while idle or restoring.
 func (e *Engine) installConversation(conversation *Conversation) {
 	e.opts.ConversationID = conversation.id
+	e.resetDecisions()
 	e.title = conversation.title
-	e.fork = conversation.fork
+	e.fork, e.forkedFrom = conversation.fork, conversation.forkedFrom
+	following := e.follower != nil && e.follower.conversation == conversation.id && e.follower.shown
+	e.bind()
+	if f := e.follower; f != nil {
+		f.source = e.forkedFrom
+		if following {
+			// The subscription may have shown content newer than this
+			// history; a fresh replay replaces the history with it.
+			e.refreshFollower()
+		}
+	}
 	e.opts.MessageHistory = nil
 	e.resetContext()
 	e.transcript = conversation.transcript
@@ -151,6 +164,19 @@ func (e *Engine) State() State {
 }
 
 func (e *Engine) OperationActive() bool { return get(e, func() bool { return e.busy }) }
+
+// newConversationID returns a random version 4 UUID in the canonical spelling
+// ValidConversationID accepts.
+func newConversationID() string {
+	var b [16]byte
+	// NOTE: crypto/rand.Read never fails; it crashes the program instead.
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
 
 // ValidConversationID reports the canonical lowercase UUID spelling emitted
 // by the backend's uuid.UUID route/model, without adding another dependency.
@@ -315,6 +341,7 @@ func conversationFromHistory(source *assistant.ForkedFrom, messages []assistant.
 		return conversation
 	}
 
+	conversation.forkedFrom = source
 	copied, copiedTasks := historyTasks(messages[:split])
 	copied.settleTools(nil)
 	views := make([]Task, 0, len(copiedTasks))
@@ -333,12 +360,17 @@ func conversationFromHistory(source *assistant.ForkedFrom, messages []assistant.
 	combined := NewTranscript()
 	for _, block := range BlocksWithTasks(copied.Blocks(), views) {
 		block.ID = BlockID{Scope: ScopeCopied, Key: block.ID.String()}
+		combined.turnNumber = block.TurnNumber
 		combined.push(block)
 		conversation.fork.After = block.ID
 	}
 	for _, block := range transcript.Blocks() {
+		combined.turnNumber = block.TurnNumber
 		combined.push(block)
 	}
+	// Prompts and turns after the fork count from it, live as on a replay.
+	combined.prompts, combined.turnNumber = transcript.prompts, transcript.turnNumber
+	combined.answeredTurns = transcript.answeredTurns
 	conversation.transcript = combined
 	conversation.fork.SourceID, conversation.fork.SourceTitle = source.ConversationID, source.SourceTitle
 	return conversation

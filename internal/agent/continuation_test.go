@@ -166,10 +166,14 @@ func TestCancelledClientToolPublishesTerminalSnapshot(t *testing.T) {
 				t.Fatal(err)
 			}
 			call := clientCallMsg("call-input", "input", `{}`)
-			e := New(&scriptBackend{rounds: [][]assistant.Message{{call}}}, Config{ConversationID: "conversation"})
+			backend := &scriptBackend{rounds: [][]assistant.Message{{call}}}
+			if resumed {
+				backend.conversations.Seed("conversation", call)
+			}
+			e := New(backend, Config{ConversationID: "conversation"})
 			var events <-chan Event
 			if resumed {
-				e.transcript.AppendMessage(call)
+				waitConnected(e)
 				e.continuation = continuationFromHistory([]assistant.Message{call})
 				events = resumeEvents(e, ctx, TurnInput{Tools: set})
 			} else {

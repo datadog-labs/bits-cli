@@ -184,6 +184,9 @@ func (m *Model) endOperation() tea.Cmd {
 	}
 	if done.kind == opTurn || done.kind == opRestore {
 		m.clearAsks()
+		// A call the conversation still waits on, as one a stop left
+		// unanswered, keeps its approval past the operation.
+		m.syncApprovals(m.state.PendingApprovals())
 	}
 
 	m.syncStatus()
@@ -199,14 +202,24 @@ func (m *Model) endOperation() tea.Cmd {
 	case done.kind == opRestore && done.stop != stopAll:
 		cmd := tea.Batch(notice, m.resumePendingTools())
 		// A resumed turn drains the queue when it completes.
-		if done.completed && !m.op.busy() && len(m.state.Queued) > 0 {
+		if done.completed && !m.op.busy() && len(m.state.Queued) > 0 && !m.holdQueue() {
 			cmd = tea.Batch(cmd, m.startTurn(m.engine.SendQueued, agent.TurnInput{}))
 		}
 		return cmd
-	case done.kind == opTurn && done.completed && done.stop == stopNone && len(m.state.Queued) > 0:
+	case done.kind == opTurn && done.completed && done.stop == stopNone && len(m.state.Queued) > 0 && !m.holdQueue():
 		return m.startTurn(m.engine.SendQueued, agent.TurnInput{})
 	}
 	return notice
+}
+
+// holdQueue reports whether the queue must wait for another session, and
+// if so has it sent once nothing holds it.
+func (m *Model) holdQueue() bool {
+	if !m.sendBlocked() {
+		return false
+	}
+	m.conn.remote = true
+	return true
 }
 
 // cancellable reports whether an operation is running that cancelOperation

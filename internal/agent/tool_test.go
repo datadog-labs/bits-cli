@@ -194,18 +194,18 @@ func TestEngineApprovalScope(t *testing.T) {
 
 			// With per-call keys, wait for the sibling to park too, after call-a,
 			// so the decision has to release it.
+			// Calls run as they arrive, so an allow-once decision waits for
+			// the sibling to park too: it must not release it.
+			allowOnce := tt.decision == ApprovalAllowOnce && !tt.grantSession && tt.switchTo == ""
 			parked := "call-a"
-			if tt.perCallKey {
+			if tt.perCallKey || allowOnce {
 				parked = "call-b"
 			}
 			all = append(all, waitForToolStatusEvents(t, events, parked, ToolAwaitingApproval)...)
 			decide("call-a")
-			if tt.decision == ApprovalAllowOnce && !tt.grantSession && tt.switchTo == "" {
-				beforeACompleted := waitForToolStatusEvents(t, events, "call-a", ToolSuccess)
-				if !hasToolStatus(beforeACompleted, "call-b", ToolAwaitingApproval) {
-					t.Fatal("sibling call did not request its own approval")
-				}
-				if hasToolStatus(beforeACompleted, "call-b", ToolRunning) {
+			if allowOnce {
+				waitForToolStatusEvents(t, events, "call-a", ToolSuccess)
+				if runs.Load() != 1 {
 					t.Fatal("allow-once approval released sibling call")
 				}
 				decide("call-b")
@@ -273,7 +273,7 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 	} {
 		t.Run(string(tt.mode), func(t *testing.T) {
 			backend := &scriptBackend{rounds: writeRounds()}
-			release := make(chan struct{})
+			release, running := make(chan struct{}), make(chan struct{})
 			tools, err := NewToolSet(Tool{
 				Definition: assistant.ClientTool{Name: "write"},
 				Approval: func(ToolCall) (ApprovalRequirement, bool) {
@@ -284,6 +284,7 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 				},
 				Handler: func(_ context.Context, call ToolCall) (ToolResult, error) {
 					if call.ID == "call-b" {
+						close(running)
 						<-release
 					}
 					return ToolResult{Title: "Wrote record", Output: "ok"}, nil
@@ -301,7 +302,9 @@ func TestEngineModeSwitchMidTurnOverridesSessionGrant(t *testing.T) {
 			if !allowForSession(engine, "call-a") {
 				t.Fatal("decision for call-a was not applied")
 			}
-			waitForToolStatus(t, events, "call-b", ToolRunning)
+			// The conversation can show call-b before the send delivers it:
+			// wait for its handler.
+			<-running
 			if engine.GrantSessionFor("call-b") == nil {
 				t.Fatal("granted for call-b while it runs")
 			}
@@ -775,7 +778,13 @@ func waitForToolStatusEvents(t *testing.T, events <-chan Event, id string, statu
 			return received
 		}
 	}
-	t.Fatalf("tool %q never reached status %d", id, status)
+	var last *ToolBlock
+	for _, ev := range received {
+		if b, ok := stateBlock(ev, id); ok {
+			last = b.Tool
+		}
+	}
+	t.Fatalf("tool %q never reached status %d; last %+v, events %d", id, status, last, len(received))
 	return nil
 }
 

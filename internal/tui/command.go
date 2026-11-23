@@ -7,7 +7,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
-	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
 	"github.com/datadog-labs/bits-cli/internal/tui/editor"
 )
@@ -286,11 +285,11 @@ func (m *Model) copyLatestAssistantResponse() tea.Cmd {
 
 func latestCopyableAssistantResponse(blocks []agent.Block) (string, bool) {
 	for i := len(blocks) - 1; i >= 0; i-- {
-		block := blocks[i]
-		if block.Role != assistant.RoleAssistant || block.Kind != assistant.KindText || !block.Complete || block.Markdown == nil {
+		answer, ok := blocks[i].Answer()
+		if !ok || !blocks[i].Complete {
 			continue
 		}
-		text := ansi.Strip(block.Markdown.Content)
+		text := ansi.Strip(answer)
 		if text != "" {
 			return text, true
 		}

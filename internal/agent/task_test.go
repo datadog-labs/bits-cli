@@ -31,6 +31,9 @@ type taskBackend struct {
 }
 
 func (b *taskBackend) Subscribe(ctx context.Context, conversation string, opts assistant.SubscribeOptions, fn func(assistant.Message) error) error {
+	if opts.TaskID == "" {
+		return b.conversations.Subscribe(ctx, conversation, fn)
+	}
 	b.mu.Lock()
 	n := len(b.calls)
 	b.calls = append(b.calls, conversation+"/"+opts.TaskID)
@@ -66,7 +69,6 @@ func (b *taskBackend) attached() []string {
 // newTaskEngine returns an engine whose first turn starts testTaskID, and a
 // subscription to its events.
 func newTaskEngine(t *testing.T, backend *taskBackend) (*Engine, <-chan Event) {
-	backend.convID = testConversationID
 	backend.rounds = [][]assistant.Message{startTaskMsgs("call-1", testTaskID)}
 	e := New(backend, Config{})
 	t.Cleanup(e.Close)
@@ -113,9 +115,8 @@ func updateMsg(messageID, kind, content string) assistant.Message {
 }
 
 var (
-	replayComplete = assistant.AssistantMessage(assistant.ContentReplayComplete,
-		assistant.Content{Type: assistant.ContentReplayComplete})
-	taskEnded = assistant.AssistantMessage("marker", assistant.Content{
+	replayComplete = assistant.ReplayCompleteMessage()
+	taskEnded      = assistant.AssistantMessage("marker", assistant.Content{
 		Type: assistant.ContentTurnStatus, TurnStatus: &assistant.TurnStatusPayload{Status: "ended"},
 	})
 )
@@ -167,7 +168,7 @@ func TestTurnStartedTaskIsObservedUntilItsFinalUpdateAndEnd(t *testing.T) {
 	if got := progressTexts(task.Blocks); !slices.Equal(got, []string{"looking", "found it"}) {
 		t.Errorf("task updates = %q", got)
 	}
-	if got := backend.attached(); !slices.Equal(got, []string{testConversationID + "/" + testTaskID}) {
+	if got := backend.attached(); !slices.Equal(got, []string{e.State().ConversationID + "/" + testTaskID}) {
 		t.Errorf("attachments = %q", got)
 	}
 	if blocks := e.State().Blocks; slices.ContainsFunc(blocks, func(b Block) bool { return b.Progress != nil }) {
@@ -355,6 +356,8 @@ func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
 	defer e.Close()
 	events, unsubscribe := e.Subscribe()
 	defer unsubscribe()
+	// The saved conversation, which the subscription replays after Restore.
+	backend.conversations.Seed(testConversationID, history...)
 
 	collect(restoreEvents(e, context.Background()))
 	if n := len(e.State().Tasks); n != 2 {
@@ -377,10 +380,31 @@ func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
 	if want := []string{"call-0", "old result", "call-1", "meanwhile", "persisted", "new result"}; !slices.Equal(got, want) {
 		t.Errorf("blocks = %q, want %q", got, want)
 	}
-	if got := backend.attached(); !slices.Equal(got, []string{testConversationID + "/" + testTaskID}) {
+	if got := backend.attached(); !slices.Equal(got, []string{e.State().ConversationID + "/" + testTaskID}) {
 		t.Errorf("attachments = %q, want only the unfinished task", got)
 	}
 	if blocks := e.State().Blocks; slices.ContainsFunc(blocks, func(b Block) bool { return b.Progress != nil }) {
 		t.Errorf("conversation transcript = %+v, want no task update", blocks)
 	}
+}
+
+// A replay that shows a finished task never attaches to it.
+func TestReplayObservesOnlyUnfinishedTasks(t *testing.T) {
+	const doneID = "assistant-task.0"
+	doneUpdate := updateMsg("d1", "final", "old result")
+	doneUpdate.Content.Progress.TaskID, doneUpdate.BackgroundTaskID = doneID, nil
+	backend := &taskBackend{attachments: [][]assistant.Message{{replayComplete, updateMsg("u2", "final", "new result"), taskEnded}}}
+	backend.conversations.Seed(testConversationID, slices.Concat(
+		startTaskMsgs("call-0", doneID), []assistant.Message{doneUpdate}, gatedStartTaskMsgs("call-1", testTaskID))...)
+	e := following(backend)
+	events, unsubscribe := e.Subscribe()
+	defer unsubscribe()
+	tasks := waitTasks(t, events, func(tasks []Task) bool { return len(tasks) == 2 && tasks[1].Status == TaskDone })
+	if tasks[0].Status != TaskDone {
+		t.Errorf("finished task = %+v, want done", tasks[0])
+	}
+	if got := backend.attached(); !slices.Equal(got, []string{testConversationID + "/" + testTaskID}) {
+		t.Errorf("attachments = %q, want only the unfinished task", got)
+	}
+	e.Close()
 }

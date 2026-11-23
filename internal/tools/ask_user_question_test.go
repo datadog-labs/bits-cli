@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/agenttest"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
@@ -15,12 +16,13 @@ import (
 const validQuestion = `{"questions":[{"question":"Which?","options":[{"label":"A","description":"Option A"}]}]}`
 
 type headlessQuestionBackend struct {
-	t        *testing.T
-	calls    int
-	response assistant.ClientToolResponse
+	conversations agenttest.Conversations
+	t             *testing.T
+	calls         int
+	response      assistant.ClientToolResponse
 }
 
-func (b *headlessQuestionBackend) Send(_ context.Context, message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+func (b *headlessQuestionBackend) post(_ context.Context, message any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.calls++
 	for _, def := range opts.ClientTools {
 		if def.Name == spec.AskUserQuestion {
@@ -74,4 +76,18 @@ func TestQuestionMalformedArgumentsReturnErrorWithoutForm(t *testing.T) {
 	if err != nil || !result.IsError || !strings.Contains(result.Output, "invalid ask_user_question arguments") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
+}
+
+func (b *headlessQuestionBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
+	return b.conversations.Send(ctx, message, opts, fn, func(emit func(assistant.AssistantResponse) error) (string, error) {
+		return b.post(ctx, message, opts, emit)
+	})
+}
+
+func (b *headlessQuestionBackend) Subscribe(ctx context.Context, id string, opts assistant.SubscribeOptions, fn func(assistant.Message) error) error {
+	if opts.TaskID != "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.conversations.Subscribe(ctx, id, fn)
 }

@@ -113,6 +113,7 @@ say(id)`
 			t.Fatal(ev.Err)
 		}
 	}
+	settle(t, engine, set, nil)
 	if got := texts(engine.State().Blocks); !slices.Equal(got, []string{"earlier", "after resumed"}) {
 		t.Fatalf("answers = %q", got)
 	}

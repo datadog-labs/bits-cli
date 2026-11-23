@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/agenttest"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
@@ -52,13 +53,14 @@ func newApprovalTool() agent.Tool {
 }
 
 type approvalBackend struct {
-	t          *testing.T
-	responses  []assistant.ClientToolResponse
-	calls      int
-	serverGate bool
+	conversations agenttest.Conversations
+	t             *testing.T
+	responses     []assistant.ClientToolResponse
+	calls         int
+	serverGate    bool
 }
 
-func (b *approvalBackend) Send(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+func (b *approvalBackend) post(_ context.Context, message any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.t.Helper()
 	b.calls++
 	if b.calls == 1 {
@@ -964,4 +966,18 @@ func TestApprovalClickLeavesNothingOfTheComposerBehind(t *testing.T) {
 	if model.editor.MenuOpen() || model.selection.active() || model.focus() != focusPrompt || panel.decision != "" {
 		t.Fatalf("menu open %v, selection %v, focus %v, decision %q", model.editor.MenuOpen(), model.selection.active(), model.focus(), panel.decision)
 	}
+}
+
+func (b *approvalBackend) Send(ctx context.Context, message any, opts assistant.SendOptions, fn func(assistant.AssistantResponse) error) (string, error) {
+	return b.conversations.Send(ctx, message, opts, fn, func(emit func(assistant.AssistantResponse) error) (string, error) {
+		return b.post(ctx, message, opts, emit)
+	})
+}
+
+func (b *approvalBackend) Subscribe(ctx context.Context, id string, opts assistant.SubscribeOptions, fn func(assistant.Message) error) error {
+	if opts.TaskID != "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.conversations.Subscribe(ctx, id, fn)
 }
