@@ -23,6 +23,24 @@ func newExitCardModel(t *testing.T, width, height int) *Model {
 	return m
 }
 
+// labelAt returns the screen cell where label starts in the drawn view.
+func labelAt(t *testing.T, m *Model, label string) image.Point {
+	t.Helper()
+	for y, line := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+		if x := strings.Index(line, label); x >= 0 {
+			return image.Pt(ansi.StringWidth(line[:x]), y)
+		}
+	}
+	t.Fatalf("%q is not drawn", label)
+	return image.Point{}
+}
+
+// openCard opens the exit card and lays the frame out, as an update does.
+func openCard(m *Model) {
+	m.openExitCard()
+	m.relayout()
+}
+
 func drawnView(t *testing.T, m *Model) *uv.ScreenBuffer {
 	t.Helper()
 	buf := uv.NewScreenBuffer(m.width, m.height)
@@ -57,14 +75,14 @@ func drawnCardRect(t *testing.T, view string) image.Rectangle {
 
 func openedCardRect(t *testing.T, m *Model) image.Rectangle {
 	t.Helper()
-	m.openExitCard()
+	openCard(m)
 	defer m.closeExitCard()
 	return drawnCardRect(t, ansi.Strip(m.View().Content))
 }
 
 func TestExitCardRendersCopy(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
-	m.openExitCard()
+	openCard(m)
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{
 		"Exit Bits?",
@@ -81,12 +99,14 @@ func TestExitCardRendersCopy(t *testing.T) {
 
 func TestExitCardHighlightFollowsSelection(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
-	m.openExitCard()
-	m.exitCard.selected = exitKeepWorking
+	openCard(m)
+	m.exitCard.buttons.Selected = int(exitKeepWorking)
+	m.relayout()
 	buf := drawnView(t, m)
 	fill := hexOf(m.styles.ExitCard.Selected.GetBackground())
-	quit := buf.Lines[m.exitCard.quit.Min.Y][m.exitCard.quit.Min.X]
-	keep := buf.Lines[m.exitCard.keep.Min.Y][m.exitCard.keep.Min.X]
+	quitAt, keepAt := labelAt(t, m, "Quit"), labelAt(t, m, "Keep working")
+	quit := buf.Lines[quitAt.Y][quitAt.X]
+	keep := buf.Lines[keepAt.Y][keepAt.X]
 	if hexOf(keep.Style.Bg) != fill || hexOf(quit.Style.Bg) == fill {
 		t.Fatalf("the highlight fill did not move to Keep working: quit bg %s, keep bg %s, fill %s",
 			hexOf(quit.Style.Bg), hexOf(keep.Style.Bg), fill)
@@ -95,37 +115,26 @@ func TestExitCardHighlightFollowsSelection(t *testing.T) {
 
 func TestExitCardCentered(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
-	m.openExitCard()
+	openCard(m)
 	rect := drawnCardRect(t, ansi.Strip(m.View().Content))
 	if want := image.Pt((120-rect.Dx())/2, (40-rect.Dy())/2); rect.Min != want {
 		t.Fatalf("card at %v, want %v", rect.Min, want)
 	}
 }
 
-func TestExitCardHitRects(t *testing.T) {
+func TestExitCardDismissRect(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
-	m.openExitCard()
-	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
-	cells := func(r image.Rectangle) string {
-		return string([]rune(lines[r.Min.Y])[r.Min.X:r.Max.X])
-	}
-	for name, tc := range map[string]struct {
-		rect image.Rectangle
-		want string
-	}{
-		"quit":    {m.exitCard.quit, " Quit "},
-		"keep":    {m.exitCard.keep, " Keep working "},
-		"dismiss": {m.exitCard.dismiss, "ESC x"},
-	} {
-		if got := cells(tc.rect); got != tc.want {
-			t.Errorf("%s rect %v covers %q, want %q", name, tc.rect, got, tc.want)
-		}
+	openCard(m)
+	r := m.exitCard.dismiss.Add(m.frame.popup.Min)
+	line := strings.Split(ansi.Strip(m.View().Content), "\n")[r.Min.Y]
+	if got := ansi.Cut(line, r.Min.X, r.Max.X); got != "ESC x" {
+		t.Errorf("dismiss rect %v covers %q, want %q", r, got, "ESC x")
 	}
 }
 
 func TestExitCardNarrowWraps(t *testing.T) {
 	m := newExitCardModel(t, 44, 20)
-	m.openExitCard()
+	openCard(m)
 	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
 	for _, line := range lines {
 		if width := ansi.StringWidth(line); width > 44 {
@@ -144,7 +153,7 @@ func TestExitCardNarrowWraps(t *testing.T) {
 
 func TestExitCardCompactKeepsKeyHint(t *testing.T) {
 	m := newExitCardModel(t, 24, 20)
-	m.openExitCard()
+	openCard(m)
 	view := ansi.Strip(m.View().Content)
 	if !strings.Contains(strings.Join(strings.Fields(view), " "), "enter quit · esc keep working") {
 		t.Fatalf("the compact card lost its key hint:\n%s", view)
@@ -158,7 +167,7 @@ func TestExitCardCompactKeepsKeyHint(t *testing.T) {
 
 func TestExitCardCompactHintFollowsSelection(t *testing.T) {
 	m := newExitCardModel(t, 24, 20)
-	m.openExitCard()
+	openCard(m)
 	m.Update(exitCardKey("", tea.KeyTab))
 	view := strings.Join(strings.Fields(ansi.Strip(m.View().Content)), " ")
 	if !strings.Contains(view, "enter/esc keep working") || strings.Contains(view, "enter quit") {
@@ -192,7 +201,7 @@ func TestExitCardFadesBehind(t *testing.T) {
 		t.Fatal("the closed view has no styled text to compare")
 	}
 
-	m.openExitCard()
+	openCard(m)
 	buf := drawnView(t, m)
 	faded := 0
 	for at, was := range before {
@@ -221,7 +230,7 @@ func TestExitCardMonochromeSkipsFade(t *testing.T) {
 		t.Fatal("the closed view has no styled text to compare")
 	}
 
-	m.openExitCard()
+	openCard(m)
 	buf := drawnView(t, m)
 	for at, was := range before {
 		if got := hexOf(buf.Lines[at.Y][at.X].Style.Fg); got != hexOf(was.Style.Fg) {
@@ -235,7 +244,7 @@ func TestExitCardMonochromeSkipsFade(t *testing.T) {
 
 func TestExitCardBlursEditor(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
-	m.openExitCard()
+	openCard(m)
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	if m.focus() != focusExitCard {
 		t.Fatalf("focus = %v, want focusExitCard", m.focus())
@@ -247,7 +256,7 @@ func TestExitCardBlursEditor(t *testing.T) {
 
 func TestExitCardSurvivesTooSmall(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
-	m.openExitCard()
+	openCard(m)
 	m.Update(tea.WindowSizeMsg{Width: 6, Height: 4})
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "Resize") {
 		t.Fatalf("too-small frame did not show the resize hint:\n%s", view)
@@ -281,7 +290,7 @@ func quitsIn(cmd tea.Cmd) bool {
 
 func TestExitCardEnterQuits(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
-	m.openExitCard()
+	openCard(m)
 	_, cmd := m.Update(exitCardKey("", tea.KeyEnter))
 	if !quitsIn(cmd) {
 		t.Fatal("enter on Quit did not quit")
@@ -291,7 +300,7 @@ func TestExitCardEnterQuits(t *testing.T) {
 func TestExitCardEscCloses(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
 	m.editor.Update(tea.PasteMsg{Content: "half a prompt"})
-	m.openExitCard()
+	openCard(m)
 	_, cmd := m.Update(exitCardKey("", tea.KeyEscape))
 	if m.exitCard.open || quitsIn(cmd) {
 		t.Fatalf("esc: open %v, quit %v", m.exitCard.open, quitsIn(cmd))
@@ -303,10 +312,10 @@ func TestExitCardEscCloses(t *testing.T) {
 
 func TestExitCardTabThenEnterKeepsWorking(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
-	m.openExitCard()
+	openCard(m)
 	m.Update(exitCardKey("", tea.KeyTab))
-	if m.exitCard.selected != exitKeepWorking {
-		t.Fatalf("selected = %v after tab, want Keep working", m.exitCard.selected)
+	if exitChoice(m.exitCard.buttons.Selected) != exitKeepWorking {
+		t.Fatalf("selected = %v after tab, want Keep working", m.exitCard.buttons.Selected)
 	}
 	_, cmd := m.Update(exitCardKey("", tea.KeyEnter))
 	if m.exitCard.open || quitsIn(cmd) {
@@ -325,14 +334,14 @@ func TestExitCardArrowsAndShiftTabMoveHighlight(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newExitCardModel(t, 120, 40)
-			m.openExitCard()
+			openCard(m)
 			m.Update(tc.key)
-			if m.exitCard.selected != exitKeepWorking {
-				t.Fatalf("selected = %v, want Keep working", m.exitCard.selected)
+			if exitChoice(m.exitCard.buttons.Selected) != exitKeepWorking {
+				t.Fatalf("selected = %v, want Keep working", m.exitCard.buttons.Selected)
 			}
 			m.Update(tc.key)
-			if m.exitCard.selected != exitQuit {
-				t.Fatalf("selected = %v, want Quit after a second press", m.exitCard.selected)
+			if exitChoice(m.exitCard.buttons.Selected) != exitQuit {
+				t.Fatalf("selected = %v, want Quit after a second press", m.exitCard.buttons.Selected)
 			}
 		})
 	}
@@ -341,7 +350,7 @@ func TestExitCardArrowsAndShiftTabMoveHighlight(t *testing.T) {
 func TestExitCardTypingClosesAndTypes(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
 	m.editor.Update(tea.PasteMsg{Content: "fix "})
-	m.openExitCard()
+	openCard(m)
 	m.Update(exitCardKey("t", 't'))
 	if m.exitCard.open {
 		t.Fatal("typing left the card open")
@@ -354,23 +363,23 @@ func TestExitCardTypingClosesAndTypes(t *testing.T) {
 func TestExitCardSpaceTypesButTabToggles(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
 	m.editor.Update(tea.PasteMsg{Content: "a"})
-	m.openExitCard()
+	openCard(m)
 	m.Update(exitCardKey(" ", tea.KeySpace))
 	if m.exitCard.open || m.editor.Value() != "a " {
 		t.Fatalf("space: open %v, editor %q", m.exitCard.open, m.editor.Value())
 	}
 
-	m.openExitCard()
+	openCard(m)
 	m.Update(exitCardKey("", tea.KeyTab))
-	if !m.exitCard.open || m.exitCard.selected != exitKeepWorking || m.editor.Value() != "a " {
-		t.Fatalf("tab: open %v, selected %v, editor %q", m.exitCard.open, m.exitCard.selected, m.editor.Value())
+	if !m.exitCard.open || exitChoice(m.exitCard.buttons.Selected) != exitKeepWorking || m.editor.Value() != "a " {
+		t.Fatalf("tab: open %v, selected %v, editor %q", m.exitCard.open, m.exitCard.buttons.Selected, m.editor.Value())
 	}
 }
 
 func TestExitCardPasteLandsInComposer(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
 	m.editor.Update(tea.PasteMsg{Content: "a"})
-	m.openExitCard()
+	openCard(m)
 	m.Update(tea.PasteMsg{Content: "bc"})
 	if m.exitCard.open {
 		t.Fatal("paste left the card open")
@@ -399,7 +408,7 @@ func TestExitCardDropsReflexInputForAPromptBehindIt(t *testing.T) {
 			}
 			editor := m.editor.Value()
 
-			m.openExitCard()
+			openCard(m)
 			m.Update(tc.msg)
 
 			if m.exitCard.open {
@@ -420,7 +429,7 @@ func TestExitCardDropsReflexInputForAPromptBehindIt(t *testing.T) {
 
 func TestExitCardClosesWhenLeavingChat(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
-	m.openExitCard()
+	openCard(m)
 	m.setMode(ModePermissions)
 	if m.exitCard.open {
 		t.Fatal("the card survived leaving chat")
@@ -434,39 +443,43 @@ func clickAt(p image.Point) tea.MouseClickMsg {
 func TestExitCardClicks(t *testing.T) {
 	open := func() *Model {
 		m := scrolledFollowModel()
-		if m.follow.area.Empty() {
+		if m.frame.follow.Empty() {
 			t.Fatal("fixture shows no jump-to-latest control")
 		}
-		m.openExitCard()
-		m.View()
-		if m.exitCard.quit.Empty() || m.follow.area.Overlaps(image.Rect(0, m.exitCard.dismiss.Min.Y, m.width, m.exitCard.quit.Max.Y)) {
-			t.Fatalf("fixture card %+v overlaps the control %v", m.exitCard, m.follow.area)
+		openCard(m)
+		if m.frame.follow.Overlaps(m.frame.popup) {
+			t.Fatalf("fixture card %v overlaps the control %v", m.frame.popup, m.frame.follow)
 		}
 		return m
 	}
 
+	// Quit starts selected, so one click quits.
 	m := open()
-	_, cmd := m.Update(clickAt(m.exitCard.quit.Min))
+	_, cmd := m.Update(clickAt(labelAt(t, m, "Quit")))
 	if !quitsIn(cmd) {
 		t.Fatal("click on Quit did not quit")
 	}
 
-	for name, pick := range map[string]func(*Model) image.Rectangle{
-		"keep":    func(m *Model) image.Rectangle { return m.exitCard.keep },
-		"dismiss": func(m *Model) image.Rectangle { return m.exitCard.dismiss },
-	} {
-		m := open()
-		_, cmd := m.Update(clickAt(pick(m).Min))
-		if m.exitCard.open || quitsIn(cmd) {
-			t.Fatalf("click on %s: open %v, quit %v", name, m.exitCard.open, quitsIn(cmd))
-		}
+	// A first click on Keep working selects it; the next one presses it.
+	m = open()
+	keep := labelAt(t, m, "Keep working")
+	if _, cmd := m.Update(clickAt(keep)); !m.exitCard.open || quitsIn(cmd) || exitChoice(m.exitCard.buttons.Selected) != exitKeepWorking {
+		t.Fatalf("first click on Keep working: open %v, quit %v, selected %v", m.exitCard.open, quitsIn(cmd), m.exitCard.buttons.Selected)
+	}
+	if _, cmd := m.Update(clickAt(keep)); m.exitCard.open || quitsIn(cmd) {
+		t.Fatalf("second click on Keep working: open %v, quit %v", m.exitCard.open, quitsIn(cmd))
+	}
+
+	m = open()
+	if _, cmd := m.Update(clickAt(m.exitCard.dismiss.Min.Add(m.frame.popup.Min))); m.exitCard.open || quitsIn(cmd) {
+		t.Fatalf("click on ESC x: open %v, quit %v", m.exitCard.open, quitsIn(cmd))
 	}
 
 	m = open()
 	top := m.list.VisibleSurface().Top
 	for name, msg := range map[string]tea.Msg{
 		"outside the card": clickAt(image.Pt(0, 0)),
-		"jump-to-latest":   clickAt(m.follow.area.Min.Add(image.Pt(1, 1))),
+		"jump-to-latest":   clickAt(m.frame.follow.Min.Add(image.Pt(1, 1))),
 		"wheel":            tea.MouseWheelMsg(tea.Mouse{X: 5, Y: 5, Button: tea.MouseWheelDown}),
 		"motion":           tea.MouseMotionMsg(tea.Mouse{X: 5, Y: 5}),
 	} {
@@ -486,9 +499,8 @@ func TestExitCardClicks(t *testing.T) {
 func TestExitCardIgnoresSecondaryClicks(t *testing.T) {
 	for _, button := range []tea.MouseButton{tea.MouseRight, tea.MouseMiddle} {
 		m := newExitCardModel(t, 120, 40)
-		m.openExitCard()
-		m.View()
-		at := m.exitCard.quit.Min
+		openCard(m)
+		at := labelAt(t, m, "Quit")
 		_, cmd := m.Update(tea.MouseClickMsg(tea.Mouse{X: at.X, Y: at.Y, Button: button}))
 		if !m.exitCard.open || quitsIn(cmd) {
 			t.Fatalf("button %v on Quit: open %v, quit %v", button, m.exitCard.open, quitsIn(cmd))
@@ -498,7 +510,7 @@ func TestExitCardIgnoresSecondaryClicks(t *testing.T) {
 
 func TestExitCardCtrlCStillQuits(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
-	m.openExitCard()
+	openCard(m)
 	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if !quitsIn(cmd) {
 		t.Fatal("ctrl+c with the card open did not quit")
@@ -511,7 +523,7 @@ func TestExitCardOpenClearsSelection(t *testing.T) {
 	if !m.selection.active() {
 		t.Fatal("fixture selection is not active")
 	}
-	m.openExitCard()
+	openCard(m)
 	if m.selection.active() {
 		t.Fatal("opening the card kept the selection")
 	}
@@ -520,17 +532,15 @@ func TestExitCardOpenClearsSelection(t *testing.T) {
 	}
 }
 
-func TestExitCardHitRectsResetWhenNotDrawn(t *testing.T) {
+func TestExitCardLeavesNoPopupWhenNotDrawn(t *testing.T) {
 	m := newExitCardModel(t, 120, 40)
-	m.openExitCard()
-	m.View()
-	if m.exitCard.quit.Empty() {
-		t.Fatal("fixture drew no hit rectangles")
+	openCard(m)
+	if m.exitCard.dismiss.Empty() || m.frame.popup.Empty() {
+		t.Fatal("fixture laid out no card")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 6, Height: 4})
-	m.View()
-	if !m.exitCard.quit.Empty() || !m.exitCard.keep.Empty() || !m.exitCard.dismiss.Empty() {
-		t.Fatalf("stale hit rectangles survived an undrawn card: %+v", m.exitCard)
+	if !m.frame.popup.Empty() {
+		t.Fatalf("an undrawn card left a popup to click at %v", m.frame.popup)
 	}
 }
 
@@ -756,7 +766,7 @@ func scrolledFollowModel() *Model {
 	m.relayout()
 	m.list.ScrollToBottom()
 	m.list.ScrollBy(-4)
-	m.View()
+	m.relayout()
 	return m
 }
 
@@ -767,7 +777,7 @@ func TestExitCardOpenClearsHover(t *testing.T) {
 		if !m.list.Hovered() || !m.pointerIsHand {
 			t.Fatalf("fixture is not hovering a row: hovered %v, hand %v", m.list.Hovered(), m.pointerIsHand)
 		}
-		m.openExitCard()
+		openCard(m)
 		m.Update(tea.MouseMotionMsg{X: 0, Y: accordionRow(t, m)})
 		if m.list.Hovered() || m.pointerIsHand {
 			t.Fatalf("hover survived the card: hovered %v, hand %v", m.list.Hovered(), m.pointerIsHand)
@@ -776,11 +786,11 @@ func TestExitCardOpenClearsHover(t *testing.T) {
 
 	t.Run("follow control", func(t *testing.T) {
 		m := scrolledFollowModel()
-		m.Update(tea.MouseMotionMsg{X: m.follow.area.Min.X + 1, Y: m.follow.area.Min.Y + 1})
+		m.Update(tea.MouseMotionMsg{X: m.frame.follow.Min.X + 1, Y: m.frame.follow.Min.Y + 1})
 		if !m.follow.hover || !m.pointerIsHand {
 			t.Fatalf("fixture is not hovering the control: hover %v, hand %v", m.follow.hover, m.pointerIsHand)
 		}
-		m.openExitCard()
+		openCard(m)
 		m.Update(tea.MouseMotionMsg{X: 0, Y: 0})
 		if m.follow.hover || m.pointerIsHand {
 			t.Fatalf("hover survived the card: hover %v, hand %v", m.follow.hover, m.pointerIsHand)
@@ -790,11 +800,11 @@ func TestExitCardOpenClearsHover(t *testing.T) {
 
 func TestExitCardOpenDropsStaleFollowPress(t *testing.T) {
 	m := scrolledFollowModel()
-	m.Update(clickAt(m.follow.area.Min.Add(image.Pt(1, 1))))
+	m.Update(clickAt(m.frame.follow.Min.Add(image.Pt(1, 1))))
 	if m.follow.pressed.Empty() {
 		t.Fatal("fixture did not press the control")
 	}
-	m.openExitCard()
+	openCard(m)
 	if !m.follow.pressed.Empty() {
 		t.Fatal("a press survived the card")
 	}
@@ -803,7 +813,7 @@ func TestExitCardOpenDropsStaleFollowPress(t *testing.T) {
 func TestExitCardSuppressesHandWhileOpen(t *testing.T) {
 	t.Run("transcript row", func(t *testing.T) {
 		m := accordionTestModel(t)
-		m.openExitCard()
+		openCard(m)
 		m.list.SetPointer(0, accordionRow(t, m))
 		if !m.list.Hovered() {
 			t.Fatal("fixture row is not hovered")
@@ -816,7 +826,7 @@ func TestExitCardSuppressesHandWhileOpen(t *testing.T) {
 
 	t.Run("follow control", func(t *testing.T) {
 		m := scrolledFollowModel()
-		m.openExitCard()
+		openCard(m)
 		m.follow.hover = true
 		m.reconcilePointerShape()
 		if m.pointerIsHand {
@@ -923,7 +933,7 @@ func TestSubmitExitWordDuringTurnOpensCard(t *testing.T) {
 
 func TestPromptArrivingBehindCardWaits(t *testing.T) {
 	m := startApprovalTurn(t)
-	m.openExitCard()
+	openCard(m)
 
 	awaitPendingApproval(t, m)
 
@@ -957,7 +967,7 @@ func TestNonInputMessagesReachAPromptBehindTheCard(t *testing.T) {
 	ask := m.shown.(*toolAsk)
 	recorder := &recordingToolPrompt{ToolPrompt: ask.form}
 	ask.form = recorder
-	m.openExitCard()
+	openCard(m)
 
 	m.Update(promptNudgeMsg{})
 

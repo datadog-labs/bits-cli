@@ -437,7 +437,7 @@ var testCommands = []CommandSpec{
 	{Name: "quit", Aliases: []string{"exit"}, Detail: "exit bits"},
 }
 
-func TestEscapeDismissesCompletionWithoutChangingPrompt(t *testing.T) {
+func TestDismissingCompletionKeepsThePrompt(t *testing.T) {
 	tests := []struct {
 		name  string
 		value string
@@ -470,19 +470,26 @@ func TestEscapeDismissesCompletionWithoutChangingPrompt(t *testing.T) {
 				t.Fatal("menu did not open")
 			}
 
-			e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-			if e.MenuOpen() {
-				t.Fatal("Esc did not close menu")
-			}
-			if got := e.Value(); got != test.value {
-				t.Fatalf("value after Esc = %q, want %q", got, test.value)
-			}
+			for name, dismiss := range map[string]func(){
+				"esc":   func() { e.Update(tea.KeyPressMsg{Code: tea.KeyEscape}) },
+				"click": e.DismissMenu,
+			} {
+				e.ReopenCompletion()
+				dismiss()
+				if e.MenuOpen() {
+					t.Fatalf("%s did not close menu", name)
+				}
+				if got := e.Value(); got != test.value {
+					t.Fatalf("value after %s = %q, want %q", name, got, test.value)
+				}
 
-			// Theme and result updates can recompute completions without editing
-			// the prompt. They must not reopen a menu the user dismissed.
-			e.recompute()
-			if e.MenuOpen() {
-				t.Fatal("dismissed menu reopened without a prompt change")
+				// Theme and result updates can recompute completions without
+				// editing the prompt. They must not reopen a menu the user
+				// dismissed.
+				e.recompute()
+				if e.MenuOpen() {
+					t.Fatalf("menu dismissed by %s reopened without a prompt change", name)
+				}
 			}
 		})
 	}

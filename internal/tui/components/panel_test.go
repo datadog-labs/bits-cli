@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"image"
 	"strings"
 	"testing"
 
@@ -110,7 +111,8 @@ func TestPanelPagesAScrollableBodyThroughItsWindow(t *testing.T) {
 		ScrollHint:     "keys scroll",
 	}
 
-	first, window, _ := panel.Layout(60, 20, content)
+	firstLayout := panel.Layout(60, 20, content)
+	first, window := firstLayout.View, firstLayout.Window
 	assertBounded(t, first, 60, 20)
 	plain := ansi.Strip(first)
 	if !strings.Contains(plain, "detail-01") || strings.Contains(plain, "detail-12") || !strings.Contains(plain, "lines 1–9 of 12 · keys scroll") {
@@ -118,7 +120,7 @@ func TestPanelPagesAScrollableBodyThroughItsWindow(t *testing.T) {
 	}
 
 	content.ScrollOffset = window.Scrolled(window.PageSize()).Offset
-	second, _, _ := panel.Layout(60, 20, content)
+	second := panel.Layout(60, 20, content).View
 	assertBounded(t, second, 60, 20)
 	plain = ansi.Strip(second)
 	if strings.Contains(plain, "detail-01") || !strings.Contains(plain, "detail-12") {
@@ -162,13 +164,52 @@ func TestPanelLayoutIsPure(t *testing.T) {
 		ScrollableBody: func(int) string { return strings.Join(rows, "\n") },
 		ScrollOffset:   9,
 	}
-	first, window, _ := panel.Layout(60, 16, content)
-	second, again, _ := panel.Layout(60, 16, content)
-	if first != second || window != again || window.Offset != 9 {
-		t.Fatalf("layout is not repeatable: window=%+v again=%+v", window, again)
+	first, second := panel.Layout(60, 16, content), panel.Layout(60, 16, content)
+	window := first.Window
+	if first != second || window.Offset != 9 {
+		t.Fatalf("layout is not repeatable: %+v then %+v", first, second)
 	}
 	content.ScrollOffset = 1000
-	if _, clamped, _ := panel.Layout(60, 16, content); clamped.Offset != window.Rows-window.Page {
+	if clamped := panel.Layout(60, 16, content).Window; clamped.Offset != window.Rows-window.Page {
 		t.Fatalf("offset = %d, want the last page at %d", clamped.Offset, window.Rows-window.Page)
+	}
+}
+
+func TestPanelLayoutReportsWhereItsPartsLanded(t *testing.T) {
+	panel := NewPanel(styles.Default(true).Panel)
+	content := PanelContent{
+		Title:        "Exit?",
+		Dismiss:      "ESC x",
+		Body:         func(int, int) string { return "first\nsecond\nlast" },
+		CompactTitle: "Exit, with a title long enough to wrap in the compact form?",
+		CompactBody:  func(int) string { return "compact first\ncompact last" },
+	}
+	cells := func(view string, r image.Rectangle) string {
+		lines := strings.Split(ansi.Strip(view), "\n")
+		var rows []string
+		for y := r.Min.Y; y < r.Max.Y; y++ {
+			rows = append(rows, strings.TrimRight(ansi.Cut(lines[y], r.Min.X, r.Max.X), " "))
+		}
+		return strings.Join(rows, "\n")
+	}
+
+	full := panel.Layout(60, 20, content)
+	if got := cells(full.View, full.Dismiss); got != "ESC x" {
+		t.Errorf("full dismiss %v covers %q", full.Dismiss, got)
+	}
+	if got := cells(full.View, full.Body); got != "first\nsecond\nlast" {
+		t.Errorf("full body %v covers %q", full.Body, got)
+	}
+
+	compact := panel.Layout(80, 8, content)
+	if !compact.Dismiss.Empty() {
+		t.Errorf("compact form reports a dismiss at %v", compact.Dismiss)
+	}
+	if got := cells(compact.View, compact.Body); got != "compact first\ncompact last" {
+		t.Errorf("compact body %v covers %q in\n%s", compact.Body, got, ansi.Strip(compact.View))
+	}
+
+	if tiny := panel.Layout(10, 2, content); tiny.Body != (image.Rectangle{}) || !tiny.Dismiss.Empty() {
+		t.Errorf("one-line fallback reports body %v, dismiss %v", tiny.Body, tiny.Dismiss)
 	}
 }

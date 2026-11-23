@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"image"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,9 +19,6 @@ import (
 )
 
 const (
-	// approvalCompactWidth is the slot width below which the panel switches to
-	// condensed action labels so the choice row still fits.
-	approvalCompactWidth = 50
 	// approvalMinWidth is the narrowest slot that still shows the actions that
 	// never drop (Allow, Deny); below it the panel conceals entirely.
 	approvalMinWidth = 36
@@ -29,9 +27,6 @@ const (
 	fullAccessDisclaimer = "Full access skips all approval requests. Use with caution."
 	// draftingHint replaces the disclaimer while the user writes a message.
 	draftingHint = "tab to choose"
-
-	// noChoice is the selection while the user drafts: nothing is highlighted.
-	noChoice = -1
 )
 
 // approvalGrant is the permissions change a choice makes before it answers
@@ -81,17 +76,15 @@ func (c approvalChoice) chip(style lipgloss.Style, compact bool) string {
 
 // approvalPrompt is the panel asking the user to allow one tool call. It owns
 // the highlighted action, the body scroll, and the decision; its approvalAsk
-// delivers that. A new prompt starts scrolled to the top, on the first action
-// unless the user is drafting.
+// delivers that. A new prompt starts scrolled to the top, on the first action.
 //
-// A user writing a message when the panel opens would otherwise answer it
-// with the Enter meant for the message. While they draft, nothing is
+// While the user drafts over it, the panel is not focused: nothing is
 // highlighted and the composer keeps the text keys, Enter included; the
-// prompt keeps tab, esc and paging. Tab picks a choice; typing drafts again.
+// prompt keeps tab, esc and paging, and tab picks a choice.
 type approvalPrompt struct {
 	block    agent.Block
-	selected int                    // index into approvalChoices, or noChoice
-	visible  []int                  // choices the last Layout showed; empty until the first Layout
+	choices  components.ButtonRow   // selects among approvalChoices
+	dismiss  image.Rectangle        // where the last Layout showed "ESC x", if it did
 	window   components.Window      // the body rows the last layout showed
 	decision agent.ApprovalDecision // "" until the user decides
 	grant    approvalGrant          // the permissions change made with the decision
@@ -116,18 +109,23 @@ func (a *approvalPrompt) SetStyles(theme styles.Theme) {
 	a.panel.SetStyles(theme.Approval.Panel)
 }
 
-func (a *approvalPrompt) drafting() bool { return a.selected == noChoice }
-func (a *approvalPrompt) draft()         { a.selected = noChoice }
-
-// Update moves the highlight, scrolls the body, or makes the decision. Typed
-// text and pastes start drafting and are left unused for the composer, as are
-// the composer's keys while drafting. The wheel scrolls the body; clicks are
-// left to text selection.
+// Update moves the highlight, scrolls the body, or makes the decision. Text,
+// pastes, and while unfocused the composer's keys are left unused for the
+// composer. The wheel scrolls the body. A click on a choice selects it and,
+// on the selected choice of a focused panel, answers with it; a click on
+// "ESC x" denies. Other clicks are left to text selection.
 func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 	switch msg := msg.(type) {
-	case tea.PasteMsg:
-		a.draft()
-		return nil, false
+	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft && image.Pt(msg.X, msg.Y).In(a.dismiss) {
+			a.decision = agent.ApprovalDeny
+			return nil, true
+		}
+		pressed, used := a.choices.Update(msg)
+		if pressed {
+			a.answer()
+		}
+		return nil, used
 	case tea.MouseWheelMsg:
 		switch msg.Button {
 		case tea.MouseWheelUp:
@@ -138,37 +136,20 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		return nil, true
 	case tea.KeyPressMsg:
+		if pressed, used := a.choices.Update(msg); used {
+			if pressed {
+				a.answer()
+			}
+			return nil, true
+		}
 		switch msg.String() {
-		case "left":
-			if a.drafting() {
-				return nil, false // the composer's cursor
-			}
-			a.selected = a.cycle(-1)
-		case "right":
-			if a.drafting() {
-				return nil, false
-			}
-			a.selected = a.cycle(1)
-		case "shift+tab":
-			a.selected = a.cycle(-1)
-		case "tab":
-			a.selected = a.cycle(1)
 		case "pgup":
 			a.scroll(-a.window.PageSize())
 		case "pgdown":
 			a.scroll(a.window.PageSize())
 		case "esc":
 			a.decision = agent.ApprovalDeny
-		case "enter":
-			if a.drafting() {
-				return nil, false // sends the message
-			}
-			choice := approvalChoices[a.selected]
-			a.decision, a.grant = choice.decision, choice.grant
 		default:
-			if msg.Text != "" {
-				a.draft()
-			}
 			return nil, false
 		}
 		return nil, true
@@ -176,34 +157,20 @@ func (a *approvalPrompt) Update(msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-func (a *approvalPrompt) scroll(rows int) { a.window = a.window.Scrolled(rows) }
-
-// cycle moves the focus by delta among the choices the last Layout showed, so
-// the user can never focus and enter a control they cannot see. Before the
-// first Layout nothing has rendered yet, so every choice is in the cycle. From
-// drafting it lands on the first choice going forward, the last going back.
-func (a *approvalPrompt) cycle(delta int) int {
-	visible := a.visible
-	if len(visible) == 0 {
-		visible = allChoiceIndices()
-	}
-	if a.selected == noChoice {
-		if delta > 0 {
-			return visible[0]
-		}
-		return visible[len(visible)-1]
-	}
-	pos := slices.Index(visible, a.selected)
-	pos = (pos + delta + len(visible)) % len(visible)
-	return visible[pos]
+// answer decides with the selected choice.
+func (a *approvalPrompt) answer() {
+	choice := approvalChoices[a.choices.Selected]
+	a.decision, a.grant = choice.decision, choice.grant
 }
+
+func (a *approvalPrompt) scroll(rows int) { a.window = a.window.Scrolled(rows) }
 
 // Layout renders the panel within the slot. It is answerable in the full
 // form, whose body scrolls, or in the compact one, which only shows when the
 // whole request fits; never in the one-line fallback. Layout keeps the body
 // window it showed, so scrolling clamps to what the last frame displayed.
 func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
-	width := slot.Width
+	width, focused := slot.Width, slot.Focused
 	block := a.block
 	prompt := block.Tool.Approval
 	title := "Run " + escape.Inline(block.Tool.Name) + "?"
@@ -238,7 +205,9 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 			}
 			return textwrap.WrapProseText(width, escape.Inline(detail), sty.Detail)
 		},
-		BodyFooter:    a.actions,
+		BodyFooter: func(width int) string {
+			return a.actions(width, focused)
+		},
 		BodyFooterGap: 1,
 		CompactTitle:  queue,
 		CompactBody: func(width int) string {
@@ -252,20 +221,36 @@ func (a *approvalPrompt) Layout(slot components.Slot) (string, bool) {
 			}
 			// No blank line before actions: it already ends in the
 			// disclaimer-or-blank row, keeping this form's height unchanged.
-			lines = append(lines, a.actions(width))
+			lines = append(lines, a.actions(width, focused))
 			return strings.Join(lines, "\n")
 		},
 		TinyMessage: "Resize terminal to approve",
 	}
-	rendered, window, bodyWidth := a.panel.Layout(width, slot.Height, content)
-	a.window = window
+	layout := a.panel.Layout(width, slot.Height, content)
+	a.window = layout.Window
+	// Centered by hand so the choices' offset is the one drawn, not a copy of
+	// lipgloss.PlaceHorizontal's rounding.
+	offset := image.Pt((width-lipgloss.Width(layout.View))/2, 0)
+	a.dismiss = layout.Dismiss.Add(offset)
 	// The panel may measure a form it then rejects, so the choices are
-	// committed only for the width of the form that showed.
-	if bodyWidth > 0 {
-		row := a.fitChoices(bodyWidth)
-		a.visible, a.selected = row.visible, row.selected
+	// committed only for the form that showed; the one-line fallback shows
+	// none.
+	body := layout.Body.Add(offset)
+	var placed []components.PlacedButton
+	if body.Dx() > 0 {
+		row := a.fitChoices(body.Dx())
+		a.choices.Selected = row.selected
+		// The choice row and its disclaimer row end the body in both forms
+		// (see actions); a row truncated to fit loses the clicks it hides.
+		origin := image.Pt(body.Min.X, body.Max.Y-2)
+		_, rects := components.JoinButtons(a.choiceChips(row, focused))
+		for n, rect := range rects {
+			placed = append(placed, components.PlacedButton{Index: row.visible[n], At: rect.Add(origin).Intersect(body)})
+		}
 	}
-	return lipgloss.PlaceHorizontal(width, lipgloss.Center, rendered), bodyWidth > 0 && width >= approvalMinWidth
+	a.choices.Place(placed, focused)
+	view := lipgloss.PlaceHorizontal(width, lipgloss.Left, lipgloss.NewStyle().MarginLeft(offset.X).Render(layout.View))
+	return view, body.Dx() > 0 && width >= approvalMinWidth
 }
 
 // choiceRow is the choice row that fits a width: the visible choices, the
@@ -277,11 +262,11 @@ type choiceRow struct {
 }
 
 // fitChoices measures the choice row within width: full labels, then
-// condensed, then dropping choices by dropPriority until it fits, rather than
-// trusting a width threshold to predict that. It leaves the prompt untouched.
+// condensed, then dropping choices by dropPriority until it fits. It leaves
+// the prompt untouched.
 func (a *approvalPrompt) fitChoices(width int) choiceRow {
-	row := choiceRow{visible: allChoiceIndices(), selected: a.selected, compact: width < approvalCompactWidth}
-	for ansi.StringWidth(a.renderChoiceRow(row)) > width {
+	row := choiceRow{visible: allChoiceIndices(), selected: a.choices.Selected}
+	for ansi.StringWidth(a.renderChoiceRow(row, false)) > width {
 		if !row.compact {
 			row.compact = true
 			continue
@@ -292,7 +277,7 @@ func (a *approvalPrompt) fitChoices(width int) choiceRow {
 		}
 		row.visible = slices.DeleteFunc(row.visible, func(i int) bool { return i == drop })
 	}
-	if row.selected != noChoice && !slices.Contains(row.visible, row.selected) {
+	if !slices.Contains(row.visible, row.selected) {
 		row.selected = 0 // clamp toward Allow; a resize must never park the cursor on full access
 	}
 	return row
@@ -300,16 +285,16 @@ func (a *approvalPrompt) fitChoices(width int) choiceRow {
 
 // actions renders the choice row that fits width, then its disclaimer row,
 // which tells a drafting user how to answer.
-func (a *approvalPrompt) actions(width int) string {
+func (a *approvalPrompt) actions(width int, focused bool) string {
 	choices := a.fitChoices(width)
-	row := ansi.Truncate(a.renderChoiceRow(choices), max(1, width), "…")
+	row := ansi.Truncate(a.renderChoiceRow(choices, focused), max(1, width), "…")
 	// The disclaimer row is always present, blank when unfocused, so focusing
 	// full access cannot change the panel's height. It costs nothing: the
 	// approval Frame gives up a row of bottom padding for it (see
 	// builder.go's approvalPanel).
 	disclaimer := ""
 	switch {
-	case choices.selected == noChoice:
+	case !focused:
 		disclaimer = a.theme.Approval.Detail.Render(ansi.Truncate(draftingHint, max(1, width), "…"))
 	case approvalChoices[choices.selected].fullAccess():
 		disclaimer = a.theme.Approval.Disclaimer.Render(ansi.Truncate(fullAccessDisclaimer, max(1, width), "…"))
@@ -317,13 +302,18 @@ func (a *approvalPrompt) actions(width int) string {
 	return row + "\n" + disclaimer
 }
 
-func (a *approvalPrompt) renderChoiceRow(row choiceRow) string {
+func (a *approvalPrompt) renderChoiceRow(row choiceRow, focused bool) string {
+	view, _ := components.JoinButtons(a.choiceChips(row, focused))
+	return view
+}
+
+func (a *approvalPrompt) choiceChips(row choiceRow, focused bool) []string {
 	sty := a.theme.Approval
 	rendered := make([]string, len(row.visible))
 	for n, i := range row.visible {
 		choice := approvalChoices[i]
 		style := sty.Action
-		if i == row.selected {
+		if focused && i == row.selected {
 			if choice.fullAccess() {
 				style = sty.FullAccess
 			} else {
@@ -332,7 +322,7 @@ func (a *approvalPrompt) renderChoiceRow(row choiceRow) string {
 		}
 		rendered[n] = choice.chip(style, row.compact)
 	}
-	return strings.Join(rendered, "  ")
+	return rendered
 }
 
 func allChoiceIndices() []int {

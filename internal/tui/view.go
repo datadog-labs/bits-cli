@@ -51,8 +51,6 @@ func chatMouseMode() tea.MouseMode {
 // Alt-screen and mouse tracking, which were program options in Bubble Tea v1,
 // are now declared on the returned view.
 func (m *Model) View() tea.View {
-	m.follow.area = image.Rectangle{}
-	m.exitCard.quit, m.exitCard.keep, m.exitCard.dismiss = image.Rectangle{}, image.Rectangle{}, image.Rectangle{}
 	if m.mode == ModeLogin && m.loginModel != nil {
 		return m.terminalView(m.loginModel.View())
 	}
@@ -107,6 +105,15 @@ type frame struct {
 	// promptView is the shown prompt as its one Layout of the update drew it.
 	promptView string
 
+	// popup floats over the rest: the permissions picker, the exit card, or
+	// the completion menu. Only one shows at a time.
+	popup     image.Rectangle
+	popupView string
+
+	// follow is the jump-to-latest control floating over the transcript.
+	follow      image.Rectangle
+	followLabel string
+
 	// replaced means the prompt takes the composer slot and dims chat.
 	replaced bool
 
@@ -122,26 +129,32 @@ type region uint8
 
 const (
 	regionTranscript region = iota
+	regionPopup
+	regionFollow
 	regionPrompt
 	regionQueue
 	regionComposer
 	regionChrome // the gap, tray, and footer around the composer
 )
 
-// at reports which region of the frame contains p. The prompt comes first,
-// so it stays on top should it ever float over the rest.
-func (f frame) at(p image.Point) region {
+// at reports which region of the frame contains p, and p relative to that
+// region. Floating surfaces come first, since they cover the rest.
+func (f frame) at(p image.Point) (region, image.Point) {
 	switch {
+	case p.In(f.popup):
+		return regionPopup, p.Sub(f.popup.Min)
+	case p.In(f.follow):
+		return regionFollow, p.Sub(f.follow.Min)
 	case p.In(f.prompt):
-		return regionPrompt
+		return regionPrompt, p.Sub(f.prompt.Min)
 	case p.In(f.queue):
-		return regionQueue
+		return regionQueue, p.Sub(f.queue.Min)
 	case p.In(f.transcript):
-		return regionTranscript
+		return regionTranscript, p.Sub(f.transcript.Min)
 	case p.In(f.composer):
-		return regionComposer
+		return regionComposer, p.Sub(f.composer.Min)
 	default:
-		return regionChrome
+		return regionChrome, p
 	}
 }
 
@@ -175,7 +188,7 @@ func (m *Model) layout() frame {
 		free -= m.editor.Height()
 	}
 	if p != nil {
-		slot := components.Slot{Width: m.width, Height: promptRows(free - min(1, len(tasks))), Waiting: len(m.waitingAsks())}
+		slot := components.Slot{Width: m.width, Height: promptRows(free - min(1, len(tasks))), Waiting: len(m.waitingAsks()), Focused: !m.drafting}
 		if f.promptView, answerable = p.Layout(slot); f.promptView != "" {
 			free -= lipgloss.Height(f.promptView)
 		}
@@ -226,48 +239,66 @@ func (m *Model) layout() frame {
 	return f
 }
 
-// chatView stacks the frame's surfaces and floats at most one popup — the
-// permissions picker or the completion menu — above the composer. Input is
-// routed to a shown prompt; a docked one leaves the editor visible but inert.
+// chatView stacks the frame's surfaces and floats its popup over them. Input
+// is routed to a shown prompt; a docked one leaves the editor visible but
+// inert.
 func (m *Model) chatView() string {
 	if m.selection.active() {
 		return m.selection.render(m.visibleSelectionFrame(m.selection.scope), m.selectionCellStyle())
 	}
-
 	base := m.followOverlay(m.chatViewBase(m.list.Render()))
-	switch {
-	case m.mode == ModePermissions:
-		// Spans the terminal inside its margin, so it does not track the composer.
-		return m.chatOverlay(base, m.permissionsView(), m.styles.Permissions.HorizontalMargin)
-	case m.focus() == focusExitCard:
-		return m.exitCardOverlay(base)
-	case m.focus() == focusEditor:
-		return m.chatOverlay(base, m.editor.MenuView(), m.editor.ContentOffset())
-	default:
+	if m.frame.popupView == "" {
 		return base
 	}
+	layers := []*lipgloss.Layer{lipgloss.NewLayer(base)}
+	if m.focus() == focusExitCard {
+		// A monochrome terminal cannot show the fade behind the exit card, so
+		// it keeps the chat as drawn.
+		if !m.monochrome {
+			layers[0] = lipgloss.NewLayer(fade(base, m.width, m.height, m.styles.ExitCard.Text, m.styles.Background))
+		}
+	} else {
+		// A popup above the input blanks the whole rows it covers: transcript
+		// cells beside it, such as a notice's marker, would read as stale parts
+		// of the popup.
+		rows := strings.TrimSuffix(strings.Repeat(strings.Repeat(" ", m.list.Width())+"\n", m.frame.popup.Dy()), "\n")
+		layers = append(layers, lipgloss.NewLayer(rows).Y(m.frame.popup.Min.Y).Z(1))
+	}
+	layers = append(layers, lipgloss.NewLayer(m.frame.popupView).X(m.frame.popup.Min.X).Y(m.frame.popup.Min.Y).Z(2))
+	return lipgloss.NewCompositor(layers...).Render()
 }
 
-// chatOverlay floats a popup above the composer without reflowing the
-// transcript, anchored at x and clamped so it never overflows the width. The
-// popup blanks the whole rows it covers: transcript cells beside it, such as a
-// notice's marker, would read as stale parts of the popup.
-func (m *Model) chatOverlay(base, popup string, x int) string {
+// layoutPopup places the one surface floating over the chat. Selection, which
+// redraws the screen as cells, shows none.
+func (m *Model) layoutPopup() (string, image.Rectangle) {
+	if m.frame.tooSmall || m.selection.active() {
+		return "", image.Rectangle{}
+	}
+	switch m.focus() {
+	case focusPermissions:
+		// Spans the terminal inside its margin, so it does not track the composer.
+		return m.aboveInput(m.permissionsView(), m.styles.Permissions.HorizontalMargin)
+	case focusExitCard:
+		return m.layoutExitCard()
+	case focusEditor:
+		return m.aboveInput(m.editor.MenuView(), m.editor.ContentOffset())
+	case focusPrompt, focusPicker, focusStatus, focusLogin:
+	}
+	return "", image.Rectangle{}
+}
+
+// aboveInput floats a popup above the composer without reflowing the
+// transcript, anchored at x and clamped so it never overflows the width.
+func (m *Model) aboveInput(popup string, x int) (string, image.Rectangle) {
 	if popup == "" {
-		return base
+		return "", image.Rectangle{}
 	}
 	popupW, popupH := lipgloss.Size(popup)
-	width := m.list.Width()
-	if x+popupW > width {
+	if width := m.list.Width(); x+popupW > width {
 		x = max(0, width-popupW)
 	}
 	y := max(0, m.frame.inputTop()-popupH)
-	rows := strings.TrimSuffix(strings.Repeat(strings.Repeat(" ", width)+"\n", popupH), "\n")
-	return lipgloss.NewCompositor(
-		lipgloss.NewLayer(base),
-		lipgloss.NewLayer(rows).Y(y).Z(1),
-		lipgloss.NewLayer(popup).X(x).Y(y).Z(2),
-	).Render()
+	return popup, image.Rect(x, y, x+popupW, y+popupH)
 }
 
 // chatViewBase composes the chat surface without popups. Selection uses this
