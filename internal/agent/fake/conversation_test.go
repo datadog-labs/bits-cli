@@ -134,3 +134,38 @@ say(id)`
 		t.Fatalf("answers = %q", got)
 	}
 }
+
+func TestSharedByGivesTheConversationAway(t *testing.T) {
+	ctx := context.Background()
+	f := &Fake{}
+	id, err := f.PushConversation(ctx, "", `say("findings"); shared_by("coworker")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := agent.New(f, agent.Config{})
+	conversation, err := engine.LoadConversation(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.InstallConversation(ctx, conversation); err != nil {
+		t.Fatal(err)
+	}
+	if state := engine.State(); !state.ReadOnly || state.SharedUntil == nil {
+		t.Fatalf("read-only = %v, shared until = %v; want a read-only share", state.ReadOnly, state.SharedUntil)
+	}
+
+	if list := engine.ListConversations(ctx, 0); list.Err != nil || len(list.Conversations) != 0 {
+		t.Fatalf("list = %+v, want only the user's own conversations", list)
+	}
+	if _, err := engine.ShareConversation(ctx, assistant.ShareConversationInput{ConversationID: id}); !errors.Is(err, assistant.ErrForbidden) {
+		t.Fatalf("share error = %v, want forbidden", err)
+	}
+	if err := engine.RenameConversation(ctx, id, "Mine"); !errors.Is(err, assistant.ErrForbidden) {
+		t.Fatalf("rename error = %v, want forbidden", err)
+	}
+	// bits run sends without loading the history, so the server refuses it.
+	_, err = f.Send(ctx, `say("mine")`, assistant.SendOptions{ConversationID: id}, func(assistant.AssistantResponse) error { return nil })
+	if !errors.Is(err, assistant.ErrNotFound) {
+		t.Fatalf("send error = %v, want not found", err)
+	}
+}

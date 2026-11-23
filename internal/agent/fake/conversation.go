@@ -30,6 +30,7 @@ func generatedTitle(n int) string { return "Fake generated title " + strconv.Ito
 // conversation is one fake conversation. All fields are guarded by Fake.mu.
 type conversation struct {
 	id      string
+	owner   string // the owning user's ID: demoUserID unless shared_by() gave it away
 	title   string // first user message, cut to titleRunes
 	updated int64  // Unix milliseconds of the last recorded message
 	// sharedUntil is when the share expires, in Unix milliseconds, or nil
@@ -71,7 +72,7 @@ func (f *Fake) conversation(id string) *conversation {
 	if f.convs == nil {
 		f.convs = make(map[string]*conversation)
 	}
-	c := &conversation{id: id}
+	c := &conversation{id: id, owner: demoUserID}
 	f.convs[id] = c
 	return c
 }
@@ -200,13 +201,14 @@ func (f *Fake) ConversationHistory(ctx context.Context, in assistant.Conversatio
 	r.Data.ID = "fake-history-" + strconv.FormatInt(f.seq.Add(1), 10)
 	r.Data.Type = "conversation-history-response"
 	r.Data.Attributes.Title = c.title
+	r.Data.Attributes.OwnerUserUUID = c.owner
 	r.Data.Attributes.SharedExpires = c.sharedUntil
 	r.Data.Attributes.Messages = append(slices.Clone(c.messages), taskHistoryLocked(c, time.Now())...)
 	return &r, nil
 }
 
-// UserConversations lists conversations with at least one message, newest
-// first, keeping the first in.PageSize when it is set.
+// UserConversations lists the user's own conversations with at least one
+// message, newest first, keeping the first in.PageSize when it is set.
 func (f *Fake) UserConversations(ctx context.Context, in assistant.UserConversationsInput) (*assistant.UserConversationsResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -216,11 +218,11 @@ func (f *Fake) UserConversations(ctx context.Context, in assistant.UserConversat
 	var r assistant.UserConversationsResponse
 	r.Data.Type = "user-conversations-response"
 	for _, c := range f.convs {
-		if len(c.messages) == 0 {
+		if len(c.messages) == 0 || c.owner != demoUserID {
 			continue
 		}
 		r.Data.Attributes.Conversations = append(r.Data.Attributes.Conversations, assistant.ConversationSummary{
-			ID: c.id, ConversationID: c.id, UpdatedAt: c.updated, Title: c.title, SharedExpires: c.sharedUntil,
+			ID: c.id, ConversationID: c.id, OwnerUserUUID: c.owner, UpdatedAt: c.updated, Title: c.title, SharedExpires: c.sharedUntil,
 		})
 	}
 	slices.SortFunc(r.Data.Attributes.Conversations, func(a, b assistant.ConversationSummary) int {
@@ -232,6 +234,19 @@ func (f *Fake) UserConversations(ctx context.Context, in assistant.UserConversat
 	return &r, nil
 }
 
+// ownedLocked returns the conversation id names for a change only its owner
+// may make, or the server's error for in. The caller holds f.mu.
+func (f *Fake) ownedLocked(id string, in any) (*conversation, error) {
+	c, ok := f.convs[id]
+	switch {
+	case !ok:
+		return nil, &assistant.APIError{StatusCode: http.StatusNotFound, Title: "Not Found", Input: in}
+	case c.owner != demoUserID:
+		return nil, &assistant.APIError{StatusCode: http.StatusForbidden, Title: "Forbidden", Detail: "Not the conversation owner", Input: in}
+	}
+	return c, nil
+}
+
 // RenameConversation sets a conversation's title.
 func (f *Fake) RenameConversation(ctx context.Context, in assistant.RenameConversationInput) error {
 	if err := ctx.Err(); err != nil {
@@ -239,9 +254,9 @@ func (f *Fake) RenameConversation(ctx context.Context, in assistant.RenameConver
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	c, ok := f.convs[in.ConversationID]
-	if !ok {
-		return &assistant.APIError{StatusCode: http.StatusNotFound, Title: "Not Found", Input: in}
+	c, err := f.ownedLocked(in.ConversationID, in)
+	if err != nil {
+		return err
 	}
 	c.title = in.Title
 	return nil
@@ -258,9 +273,9 @@ func (f *Fake) ShareConversation(ctx context.Context, in assistant.ShareConversa
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	c, ok := f.convs[in.ConversationID]
-	if !ok {
-		return nil, &assistant.APIError{StatusCode: http.StatusNotFound, Title: "Not Found", Input: in}
+	c, err := f.ownedLocked(in.ConversationID, in)
+	if err != nil {
+		return nil, err
 	}
 	c.sharedUntil = nil
 	if in.Shared {
@@ -268,13 +283,47 @@ func (f *Fake) ShareConversation(ctx context.Context, in assistant.ShareConversa
 		if in.TTLDays != nil {
 			days = *in.TTLDays
 		}
-		until := time.Now().Add(time.Duration(days) * 24 * time.Hour).UnixMilli()
-		c.sharedUntil = &until
+		c.sharedUntil = shareExpiry(days)
 	}
 	return &assistant.ConversationSummary{
-		ID: c.id, ConversationID: c.id, UpdatedAt: c.updated, Title: c.title, SharedExpires: c.sharedUntil,
+		ID: c.id, ConversationID: c.id, OwnerUserUUID: c.owner, UpdatedAt: c.updated, Title: c.title, SharedExpires: c.sharedUntil,
 	}, nil
 }
+
+// shareExpiry is when a share made now for days ends, in Unix milliseconds.
+func shareExpiry(days int) *int64 {
+	until := time.Now().Add(time.Duration(days) * 24 * time.Hour).UnixMilli()
+	return &until
+}
+
+// builtinSharedBy gives the conversation to user, who shares it with the demo
+// user for the server's default lifetime. The history then names user as its
+// owner, so the engine opens it read-only, and the fake refuses its turns
+// and changes as the server does.
+func builtinSharedBy(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var user string
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &user); err != nil {
+		return nil, err
+	}
+	if user == "" || user == demoUserID {
+		return nil, fmt.Errorf("%s: user must be someone other than the demo user", b.Name())
+	}
+	r := runOf(thread)
+	if err := r.sideEffectError(b.Name()); err != nil {
+		return nil, err
+	}
+	r.fake.mu.Lock()
+	defer r.fake.mu.Unlock()
+	// A replayed round runs this again; the first run already shared it.
+	if r.conv.owner != user {
+		r.conv.owner, r.conv.sharedUntil = user, shareExpiry(defaultShareDays)
+	}
+	return starlark.None, nil
+}
+
+// demoUserID is the ID of the demo user, who owns every conversation that
+// shared_by() did not give away.
+const demoUserID = "00000000-0000-4000-8000-00000000d3e0"
 
 // CurrentUser returns a fixed demo identity.
 func (*Fake) CurrentUser(ctx context.Context) (assistant.CurrentUser, error) {
@@ -282,6 +331,7 @@ func (*Fake) CurrentUser(ctx context.Context) (assistant.CurrentUser, error) {
 		return assistant.CurrentUser{}, err
 	}
 	return assistant.CurrentUser{
+		ID:             demoUserID,
 		Name:           "Demo User",
 		Handle:         "demo@example.com",
 		Email:          "demo@example.com",
