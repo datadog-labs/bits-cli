@@ -40,6 +40,18 @@ func TestFileSearchSessionWalksOnceAcrossQueries(t *testing.T) {
 	if got := fileSearchResultPaths(beta.Results); !slices.Equal(got, []string{"beta.go"}) {
 		t.Fatalf("beta results = %v", got)
 	}
+	// Windows users type \ between directories; elsewhere it is a name character.
+	var wantBackslash []string
+	if filepath.Separator == '\\' {
+		wantBackslash = []string{"docs/alphabet.md"}
+	}
+	backslashGeneration := session.UpdateQuery(`docs\alpha`)
+	backslash := waitForFileSearchSnapshot(t, session.Updates(), func(snapshot FileSearchSnapshot) bool {
+		return snapshot.Generation == backslashGeneration && snapshot.Complete
+	})
+	if got := fileSearchResultPaths(backslash.Results); !slices.Equal(got, wantBackslash) {
+		t.Fatalf(`docs\alpha results = %v, want %v`, got, wantBackslash)
+	}
 	if got := walks.Load(); got != 1 {
 		t.Fatalf("walks = %d, want 1", got)
 	}

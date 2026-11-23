@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"path"
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
@@ -27,7 +26,7 @@ func newListFilesTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
 		Definition: assistant.ClientTool{
 			Name:        spec.ListFiles,
-			Description: "List files and directories in the workspace. Directories end with /. Respects .gitignore. Returns up to 2000 entries.",
+			Description: "List files and directories in the workspace. Directories end with /; links the tools cannot follow show their target. Respects .gitignore. Returns up to 2000 entries.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -38,11 +37,11 @@ func newListFilesTool(fsys fs.FS, root string) agent.Tool {
 			},
 		},
 		Approval: workspaceReadApproval(root),
-		Handler:  listFilesHandler(fsys),
+		Handler:  listFilesHandler(fsys, root),
 	}
 }
 
-func listFilesHandler(fsys fs.FS) agent.ToolHandler {
+func listFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 	return func(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
@@ -51,11 +50,13 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return errorResult("invalid input: %s", err.Error()), nil
 		}
-		if strings.HasPrefix(args.Path, "/") {
-			return errorResult("path must be workspace-relative, not absolute"), nil
+		if args.Path == "" {
+			args.Path = "."
 		}
-
-		base := path.Clean(args.Path)
+		base, err := workspace.LocalPath(root, args.Path)
+		if err != nil {
+			return errorResult("%s", err.Error()), nil
+		}
 
 		maxDepth := listFilesDefaultDepth
 		if args.Depth != nil {
@@ -68,10 +69,10 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 		// Verify the target exists and is a directory.
 		info, err := fs.Stat(fsys, base)
 		if err != nil {
-			return errorResult("cannot access path: %s", err.Error()), nil
+			return errorResult("cannot access path: %s", pathError(fsys, base, err)), nil
 		}
 		if !info.IsDir() {
-			return errorResult("%s is not a directory", args.Path), nil
+			return errorResult("%s is not a directory", base), nil
 		}
 
 		var entries []string
@@ -102,6 +103,8 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 			entry := rel
 			if d.IsDir() {
 				entry += "/"
+			} else if target, ok := unfollowedLink(fsys, p); ok {
+				entry += " -> " + target + " (not followed)"
 			}
 
 			line := entry + "\n"
@@ -117,6 +120,7 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 			byteCount += len(line)
 			return nil
 		})
+		warning, err := walkWarning(err)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return agent.ToolResult{}, ctxErr
@@ -125,7 +129,7 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 		}
 
 		if len(entries) == 0 {
-			return agent.ToolResult{Title: base, Output: "(empty)"}, nil
+			return agent.ToolResult{Title: base, Output: "(empty)" + warning}, nil
 		}
 
 		output := strings.Join(entries, "\n")
@@ -139,6 +143,6 @@ func listFilesHandler(fsys fs.FS) agent.ToolHandler {
 			}
 			output += "\n\n[Truncated: " + strings.Join(warnings, ", ") + "]"
 		}
-		return agent.ToolResult{Title: base, Output: output}, nil
+		return agent.ToolResult{Title: base, Output: output + warning}, nil
 	}
 }

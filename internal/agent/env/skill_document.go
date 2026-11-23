@@ -1,7 +1,6 @@
 package env
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -32,7 +31,6 @@ type skillDocument struct {
 var skillNamePattern = regexp.MustCompile(`^[a-z0-9]+([:-][a-z0-9]+)*$`)
 
 func parseSkillDocument(content []byte, defaultName string) (skillDocument, bool) {
-	content = bytes.TrimPrefix(content, []byte{0xef, 0xbb, 0xbf})
 	lines := strings.Split(string(content), "\n")
 	if len(lines) < 3 || strings.TrimSuffix(lines[0], "\r") != "---" {
 		return skillDocument{}, false

@@ -32,9 +32,39 @@ type Skills struct {
 }
 
 // NewSkills discovers skills relative to an explicit workspace. Extra
-// directories are searched in flag order after project directories.
+// directories, absolute as SkillDirs returns them, are searched in flag order
+// after project directories.
 func NewSkills(workspace string, extra []string) *Skills {
 	return &Skills{workspace: workspace, extra: slices.Clone(extra)}
+}
+
+// SkillDirs resolves the --skill directories: absolute, relative to the
+// workspace, or starting with ~ for the home directory. Each must be a
+// directory, so a mistyped one is reported rather than ignored.
+func SkillDirs(workspace string, dirs []string) ([]string, error) {
+	resolved := make([]string, len(dirs))
+	for i, dir := range dirs {
+		// ~ is followed by / anywhere, and by \ too on Windows.
+		if rest, ok := strings.CutPrefix(dir, "~"); ok && (rest == "" || os.IsPathSeparator(rest[0])) {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("skill directory \"%s\": %w", dir, err)
+			}
+			resolved[i] = filepath.Join(home, rest)
+		} else if filepath.IsAbs(dir) {
+			resolved[i] = filepath.Clean(dir)
+		} else {
+			resolved[i] = filepath.Join(workspace, dir)
+		}
+		info, err := os.Stat(resolved[i])
+		if err != nil {
+			return nil, fmt.Errorf("skill directory \"%s\": %w", dir, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("skill directory \"%s\": not a directory", dir)
+		}
+	}
+	return resolved, nil
 }
 
 // SkillSummary is the presentation metadata exposed to completion clients.
@@ -79,23 +109,14 @@ func (s *Skills) discover(ctx context.Context) []registeredSkill {
 			break
 		}
 	}
-	home, _ := os.UserHomeDir()
 	for _, extra := range s.extra {
 		if len(locations) >= skillRootLimit {
 			break
 		}
-		if strings.HasPrefix(extra, "~/") && home != "" {
-			extra = filepath.Join(home, extra[2:])
-		}
-		if extra == "" {
-			continue
-		}
-		if !filepath.IsAbs(extra) {
-			extra = filepath.Join(active, extra)
-		}
 		locations = append(locations, skillLocation{extra, extra})
 	}
-	if home != "" && len(locations) < skillRootLimit {
+	// Without a home directory there is no default user root to search.
+	if home, err := os.UserHomeDir(); err == nil && len(locations) < skillRootLimit {
 		root := filepath.Join(home, ".agents", "skills")
 		locations = append(locations, skillLocation{root, root})
 	}
@@ -146,6 +167,8 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 	if err != nil {
 		return
 	}
+	// NOTE: os.Root follows no link with an absolute target, so a junction
+	// skill directory, whose target always is, is skipped like any escape.
 	info, err := root.Stat(relative)
 	if err != nil {
 		return
@@ -173,7 +196,8 @@ func (s *skillScan) walk(root *os.Root, boundary, source string, depth int, seen
 		}
 		return
 	}
-	if filepath.Base(source) != "SKILL.md" || !info.Mode().IsRegular() {
+	// Windows and macOS file systems find SKILL.md as skill.md too, and so does discovery.
+	if !strings.EqualFold(filepath.Base(source), "SKILL.md") || !info.Mode().IsRegular() {
 		return
 	}
 	// Reserve the extra byte readBoundedFile uses to detect truncation.

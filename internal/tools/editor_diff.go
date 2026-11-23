@@ -8,11 +8,12 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/filediff"
+	"github.com/datadog-labs/bits-cli/internal/workspace"
+	"golang.org/x/text/encoding"
 )
 
 type editorInput struct {
@@ -270,11 +271,11 @@ func decodeJSONString(value jsontext.Value) (string, bool) {
 // writeFileInputReducer creates speculative write_file state from an append-only
 // argument prefix. It deliberately does not acquire the mutation lock: a
 // preview is informational only, while handlers remain authoritative.
-func writeFileInputReducer(r *os.Root) agent.ToolInputReducer {
+func writeFileInputReducer(r *os.Root, root string) agent.ToolInputReducer {
 	return func(ctx context.Context, update agent.ToolInputUpdate, prior any) any {
 		previous, _ := prior.(*filediff.State)
 		input := parseWriteFileInput(editorRawInput(update))
-		state, snapshot, ok := editorPreviewState(ctx, r, previous, input)
+		state, snapshot, ok := editorPreviewState(ctx, r, root, previous, input)
 		if !ok {
 			return state
 		}
@@ -309,7 +310,7 @@ func writeFileInputReducer(r *os.Root) agent.ToolInputReducer {
 			return state
 		}
 		state.Phase = filediff.PhaseReady
-		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Raw, content)
+		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Raw, overwriteText(snapshot.Raw, content))
 		state.Preview = &filediff.Preview{Kind: filediff.PreviewWritePrefix, Diff: &diff, InputTruncated: update.PreviewTruncated}
 		return state
 	}
@@ -318,11 +319,11 @@ func writeFileInputReducer(r *os.Root) agent.ToolInputReducer {
 // editFileInputReducer creates speculative edit_file state from an append-only
 // argument prefix. Like the write reducer it never acquires the mutation lock;
 // the handler re-reads authoritatively beneath it.
-func editFileInputReducer(r *os.Root) agent.ToolInputReducer {
+func editFileInputReducer(r *os.Root, root string) agent.ToolInputReducer {
 	return func(ctx context.Context, update agent.ToolInputUpdate, prior any) any {
 		previous, _ := prior.(*filediff.State)
 		input := parseEditFileInput(editorRawInput(update))
-		state, snapshot, ok := editorPreviewState(ctx, r, previous, input)
+		state, snapshot, ok := editorPreviewState(ctx, r, root, previous, input)
 		if !ok {
 			return state
 		}
@@ -394,14 +395,18 @@ func editorRawInput(update agent.ToolInputUpdate) string {
 // editorPreviewState validates the streamed path and captures (or reuses) the
 // display snapshot shared by both editor reducers. When the returned bool is
 // false the state is final and tool-specific rendering must not run.
-func editorPreviewState(ctx context.Context, r *os.Root, previous *filediff.State, input editorInput) (*filediff.State, *filediff.Snapshot, bool) {
-	if !usableWorkspacePath(input.Path) {
-		return &filediff.State{Phase: filediff.PhaseStreaming, Reason: "waiting for a workspace-relative path"}, nil, false
+func editorPreviewState(ctx context.Context, r *os.Root, root string, previous *filediff.State, input editorInput) (*filediff.State, *filediff.Snapshot, bool) {
+	waiting := &filediff.State{Phase: filediff.PhaseStreaming, Reason: "waiting for a workspace-relative path"}
+	if input.Path == nil {
+		return waiting, nil, false
 	}
-	filePath := path.Clean(*input.Path)
+	filePath, err := workspace.LocalPath(root, *input.Path)
+	if err != nil {
+		return waiting, nil, false
+	}
 	snapshot := priorSnapshot(previous, filePath)
 	if snapshot == nil {
-		snapshot = captureEditorSnapshot(ctx, r, filePath)
+		snapshot, _ = captureEditorSnapshot(ctx, r, filePath)
 	}
 	state := &filediff.State{Phase: filediff.PhaseStreaming, Snapshot: snapshot}
 	if snapshot.State == filediff.SnapshotUnavailable {
@@ -461,14 +466,6 @@ func editPreviewKey(edits []filediff.Edit) (int, uint64) {
 	return bytes, h.Sum64()
 }
 
-func usableWorkspacePath(value *string) bool {
-	if value == nil || *value == "" || strings.HasPrefix(*value, "/") {
-		return false
-	}
-	clean := path.Clean(*value)
-	return clean != ".." && !strings.HasPrefix(clean, "../")
-}
-
 func priorSnapshot(previous *filediff.State, filePath string) *filediff.Snapshot {
 	if previous == nil || previous.Snapshot == nil || previous.Snapshot.Path != filePath {
 		return nil
@@ -477,27 +474,28 @@ func priorSnapshot(previous *filediff.State, filePath string) *filediff.Snapshot
 	return &copy
 }
 
-// captureEditorSnapshot reads an ordinary text file only. Failure to make a
-// safe display snapshot never changes whether the eventual mutation may run.
-func captureEditorSnapshot(ctx context.Context, r *os.Root, filePath string) *filediff.Snapshot {
+// captureEditorSnapshot reads an ordinary text file only, with the encoding
+// decodeText found (nil for UTF-8). Failure to make a safe display snapshot
+// never changes whether the eventual mutation may run.
+func captureEditorSnapshot(ctx context.Context, r *os.Root, filePath string) (*filediff.Snapshot, encoding.Encoding) {
 	snapshot := &filediff.Snapshot{Path: filePath}
 	info, err := r.Lstat(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			snapshot.State = filediff.SnapshotMissing
-			return snapshot
+			return snapshot, nil
 		}
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, err.Error()
-		return snapshot
+		return snapshot, nil
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, "path is not a regular file"
-		return snapshot
+		return snapshot, nil
 	}
 	f, err := r.Open(filePath)
 	if err != nil {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, err.Error()
-		return snapshot
+		return snapshot, nil
 	}
 	defer func() { _ = f.Close() }()
 	stopClose := context.AfterFunc(ctx, func() { _ = f.Close() })
@@ -508,38 +506,39 @@ func captureEditorSnapshot(ctx context.Context, r *os.Root, filePath string) *fi
 	openedInfo, err := f.Stat()
 	if err != nil {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, err.Error()
-		return snapshot
+		return snapshot, nil
 	}
 	if !openedInfo.Mode().IsRegular() {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, "path is not a regular file"
-		return snapshot
+		return snapshot, nil
 	}
 	if !os.SameFile(info, openedInfo) {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, "file changed while opening"
-		return snapshot
+		return snapshot, nil
 	}
 	if openedInfo.Size() > maxFileSize {
 		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, "file exceeds 10 MB preview limit"
-		return snapshot
+		return snapshot, nil
 	}
 	data, err := io.ReadAll(io.LimitReader(contextReader{ctx: ctx, r: f}, maxFileSize+1))
-	if err != nil || len(data) > maxFileSize || isBinary(data) {
-		snapshot.State = filediff.SnapshotUnavailable
-		if err != nil {
-			snapshot.Reason = err.Error()
-		} else if len(data) > maxFileSize {
-			snapshot.Reason = "file exceeds 10 MB preview limit"
-		} else {
-			snapshot.Reason = "binary file"
-		}
-		return snapshot
+	if err != nil {
+		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, err.Error()
+		return snapshot, nil
 	}
-	text := strings.TrimPrefix(string(data), bom)
+	if len(data) > maxFileSize {
+		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, "file exceeds 10 MB preview limit"
+		return snapshot, nil
+	}
+	raw, enc, ok := decodeText(data)
+	if !ok {
+		snapshot.State, snapshot.Reason = filediff.SnapshotUnavailable, errNotText
+		return snapshot, nil
+	}
 	// A write replacement is safe to render for any non-binary text, including
 	// mixed endings or a literal bare CR. edit_file performs its stricter
 	// line-ending validation only when it needs normalized matching text.
-	snapshot.Raw, snapshot.Text, snapshot.State = string(data), filediff.NormalizeToLF(text), filediff.SnapshotReady
-	return snapshot
+	snapshot.Raw, snapshot.Text, snapshot.State = raw, filediff.NormalizeToLF(strings.TrimPrefix(raw, bom)), filediff.SnapshotReady
+	return snapshot, enc
 }
 
 func writePrefixDiff(filePath, content string) filediff.Diff {

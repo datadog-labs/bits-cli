@@ -709,7 +709,7 @@ func TestClientSkillInvocationResolvesCurrentRegistry(t *testing.T) {
 	writeSkillFile(t, root, ".agents/skills/review", "---\nname: review\ndescription: Project\n---\nPROJECT BODY")
 	writeSkillFile(t, root, "extras/review", "---\nname: review\ndescription: Extra\n---\nEXTRA BODY")
 	backend := &scriptBackend{convID: "new-conversation-1"}
-	engine := New(backend, Config{ClientSkills: env.NewSkills(root, []string{"extras"})})
+	engine := New(backend, Config{ClientSkills: env.NewSkills(root, []string{filepath.Join(root, "extras")})})
 	summaries := mustClientSkills(t, engine)
 	summaries[0].Name = "tampered"
 	drain(t, engine, TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: "review"}})

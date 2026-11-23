@@ -34,3 +34,37 @@ func TestIsBinary(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeText(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data string
+		text string
+		ok   bool
+	}{
+		{"UTF-8", "h\u00e9\n", "h\u00e9\n", true},
+		{"UTF-8 BOM", bom + "x", bom + "x", true},
+		{"UTF-16LE BOM", "\xff\xfeh\x00\xe9\x00", bom + "h\u00e9", true},
+		{"UTF-16BE BOM", "\xfe\xff\x00h\x00\xe9", bom + "h\u00e9", true},
+		{"UTF-16 surrogate pair", "\xff\xfe\x3d\xd8\x00\xde", bom + "\U0001F600", true},
+		{"UTF-16 without BOM", "h\x00i\x00", "", false},
+		{"UTF-16 odd length", "\xff\xfeh\x00i", "", false},
+		{"UTF-16 lone surrogate", "\xff\xfeh\x00\x00\xd8", "", false},
+		{"UTF-16 NUL", "\xff\xfeh\x00\x00\x00", "", false},
+		{"legacy code page", "caf\xe9", "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			text, enc, ok := decodeText([]byte(test.data))
+			if ok != test.ok || text != test.text {
+				t.Fatalf("decodeText = %q, %v; want %q, %v", text, ok, test.text, test.ok)
+			}
+			if !ok {
+				return
+			}
+			back, err := encodeText(text, enc)
+			if err != nil || string(back) != test.data {
+				t.Fatalf("encodeText = %q, %v; want %q", back, err, test.data)
+			}
+		})
+	}
+}

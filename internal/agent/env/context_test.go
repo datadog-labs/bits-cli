@@ -3,6 +3,7 @@ package env
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/datadog-labs/bits-cli/internal/workspace"
 )
@@ -47,7 +49,7 @@ func TestInstructionsHierarchy(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeInstructionTestFile(t, repo, "AGENTS.md", "root instruction")
-	writeInstructionTestFile(t, filepath.Dir(nested), "AGENTS.md", "nested instruction")
+	writeInstructionTestFile(t, filepath.Dir(nested), "AGENTS.md", utf16LE("nested instruction"))
 	writeInstructionTestFile(t, nested, "AGENTS.md", "active instruction")
 	if supportsCaseSensitiveNames(t, nested) {
 		writeInstructionTestFile(t, nested, "agents.md", "wrong case")
@@ -222,6 +224,15 @@ func runInstructionsGit(t *testing.T, dir string, args ...string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, output)
 	}
+}
+
+// utf16LE encodes s as Windows PowerShell 5.1 redirection writes it.
+func utf16LE(s string) string {
+	b := []byte{0xff, 0xfe}
+	for _, u := range utf16.Encode([]rune(s)) {
+		b = binary.LittleEndian.AppendUint16(b, u)
+	}
+	return string(b)
 }
 
 func writeInstructionTestFile(t *testing.T, dir, name, content string) {

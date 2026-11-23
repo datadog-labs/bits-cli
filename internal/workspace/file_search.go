@@ -2,7 +2,9 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"io/fs"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -74,7 +76,12 @@ type FileSearchSession struct {
 // NewFileSearchSession starts one asynchronous walk of the workspace.
 func (w *Workspace) NewFileSearchSession(ctx context.Context, options FileSearchOptions) *FileSearchSession {
 	return newFileSearchSession(ctx, func(ctx context.Context, visit WalkFunc) error {
-		return w.Walk(ctx, ".", visit)
+		err := w.Walk(ctx, ".", visit)
+		// The index is complete; unapplied ignore rules only add candidates.
+		if _, ok := errors.AsType[*IgnoreFileError](err); ok {
+			return nil
+		}
+		return err
 	}, options)
 }
 
@@ -257,7 +264,8 @@ func fileSearchSnapshot(query fileSearchQuery, paths []string, limit int, comple
 }
 
 func rankFileSearch(query string, paths []string, limit int) []FileSearchResult {
-	matches := fuzzy.Find(query, paths)
+	// The index holds slash paths; on Windows a typed \ separates directories too.
+	matches := fuzzy.Find(filepath.ToSlash(query), paths)
 	if len(matches) > limit {
 		matches = matches[:limit]
 	}

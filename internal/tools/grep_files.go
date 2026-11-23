@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	gitignore "github.com/git-pkgs/gitignore"
+	"golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
@@ -27,8 +28,6 @@ const (
 	maxGrepLineBytes  = 10 * 1024 * 1024
 	maxGrepMatchBytes = 8 * 1024
 )
-
-var errGrepMatchLimit = errors.New("grep match limit reached")
 
 func newGrepFilesTool(fsys fs.FS, root string) agent.Tool {
 	return agent.Tool{
@@ -50,11 +49,11 @@ func newGrepFilesTool(fsys fs.FS, root string) agent.Tool {
 		},
 		Approval: workspaceReadApproval(root),
 		// TODO: add optional ripgrep acceleration once profiling identifies a bottleneck.
-		Handler: grepFilesHandler(fsys),
+		Handler: grepFilesHandler(fsys, root),
 	}
 }
 
-func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
+func grepFilesHandler(fsys fs.FS, root string) agent.ToolHandler {
 	return func(ctx context.Context, call agent.ToolCall) (agent.ToolResult, error) {
 		if err := ctx.Err(); err != nil {
 			return agent.ToolResult{}, err
@@ -69,8 +68,12 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 		if args.Offset < 0 {
 			return errorResult("offset must not be negative"), nil
 		}
-		if strings.HasPrefix(args.Path, "/") {
-			return errorResult("path must be workspace-relative, not absolute"), nil
+		if args.Path == "" {
+			args.Path = "."
+		}
+		base, err := workspace.LocalPath(root, args.Path)
+		if err != nil {
+			return errorResult("%s", err.Error()), nil
 		}
 
 		reStr := args.Pattern
@@ -82,6 +85,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 			return errorResult("invalid pattern: %s", err.Error()), nil
 		}
 
+		// NOTE: include globs match case-sensitively, like ignore rules.
 		var includeMatcher *gitignore.Matcher
 		if args.Include != "" {
 			includeMatcher = gitignore.New("")
@@ -91,11 +95,9 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 			}
 		}
 
-		base := path.Clean(args.Path)
-
 		info, err := fs.Stat(fsys, base)
 		if err != nil {
-			return errorResult("cannot access path: %s", err.Error()), nil
+			return errorResult("cannot access path: %s", pathError(fsys, base, err)), nil
 		}
 
 		type match struct {
@@ -107,6 +109,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 		start := args.Offset
 		seen := 0
 
+		cappedByMatchLimit := false
 		searchFile := func(filePath string, skipOpenErrors bool) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -129,7 +132,8 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 				return nil
 			}
 
-			reader, binary, err := probeBinary(ctx, f)
+			// Search UTF-16 files as text, and never match a byte order mark.
+			reader, binary, err := probeBinary(ctx, transform.NewReader(f, unicode.BOMOverride(transform.Nop)))
 			if err != nil {
 				return err
 			}
@@ -149,14 +153,14 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 					}
 					allMatches = append(allMatches, match{file: rel, line: lineNum, text: truncateGrepMatch(line)})
 					if len(allMatches) > maxGrepMatches {
-						return errGrepMatchLimit
+						cappedByMatchLimit = true
+						return fs.SkipAll
 					}
 				}
 				return nil
 			})
 		}
 
-		cappedByMatchLimit := false
 		walkErr := workspace.WalkFS(ctx, fsys, base, func(p string, d fs.DirEntry) error {
 			if d.IsDir() {
 				return nil
@@ -166,9 +170,8 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 			}
 			return searchFile(p, info.IsDir())
 		})
-		if errors.Is(walkErr, errGrepMatchLimit) {
-			cappedByMatchLimit = true
-		} else if walkErr != nil {
+		warning, walkErr := walkWarning(walkErr)
+		if walkErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return agent.ToolResult{}, ctxErr
 			}
@@ -179,12 +182,12 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 		}
 
 		if seen == 0 {
-			return agent.ToolResult{Output: "No matches found."}, nil
+			return agent.ToolResult{Output: "No matches found." + warning}, nil
 		}
 
 		if len(allMatches) == 0 {
 			return agent.ToolResult{
-				Output: fmt.Sprintf("offset %d is beyond the last match (%d total).", start, seen),
+				Output: fmt.Sprintf("offset %d is beyond the last match (%d total).", start, seen) + warning,
 			}, nil
 		}
 
@@ -223,7 +226,7 @@ func grepFilesHandler(fsys fs.FS) agent.ToolHandler {
 				output += fmt.Sprintf("\n\n[%d more matches. Use offset=%d to continue.]", remaining, next)
 			}
 		}
-		return agent.ToolResult{Output: output}, nil
+		return agent.ToolResult{Output: output + warning}, nil
 	}
 }
 

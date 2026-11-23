@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"slices"
 	"testing"
@@ -80,5 +81,26 @@ func TestWalkFSCancellation(t *testing.T) {
 	}
 	if visited != 1 {
 		t.Fatalf("visited = %d, want 1", visited)
+	}
+}
+
+func TestWalkFSVisitsEverythingWhenAnIgnoreFileIsUnreadable(t *testing.T) {
+	fsys := deniedIgnoreFS{FS: fstest.MapFS{
+		".gitignore":     {Data: []byte("*.log\n")},
+		"a.log":          {Data: []byte("kept: its rule is unread")},
+		"src/.gitignore": {Data: []byte("*.tmp\n")},
+		"src/x.tmp":      {Data: []byte("ignored")},
+	}}
+	var paths []string
+	err := WalkFS(context.Background(), fsys, ".", func(filePath string, _ fs.DirEntry) error {
+		paths = append(paths, filePath)
+		return nil
+	})
+	unread, ok := errors.AsType[*IgnoreFileError](err)
+	if !ok || !errors.Is(err, fs.ErrPermission) || len(unread.Errs) != 1 {
+		t.Fatalf("error = %v, want one unread .gitignore", err)
+	}
+	if !slices.Equal(paths, []string{".", ".gitignore", "a.log", "src", "src/.gitignore"}) {
+		t.Fatalf("paths = %v", paths)
 	}
 }

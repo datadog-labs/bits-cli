@@ -2,7 +2,11 @@ package tools
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"path"
+	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	exectool "github.com/datadog-labs/bits-cli/internal/tools/exec"
@@ -55,6 +59,46 @@ func NewClientTools(ws *workspace.Workspace, commands *exectool.ExecService) []a
 // errorResult builds an error ToolResult with a formatted output message.
 func errorResult(format string, args ...any) agent.ToolResult {
 	return agent.ToolResult{IsError: true, Output: fmt.Sprintf(format, args...)}
+}
+
+// unfollowedLink returns the target of name when name is a link the workspace
+// cannot follow: os.Root follows only links with a relative target inside the
+// workspace, and every Windows junction has an absolute target.
+func unfollowedLink(fsys fs.FS, name string) (string, bool) {
+	info, err := fs.Lstat(fsys, name)
+	if err != nil || info.Mode()&(fs.ModeSymlink|fs.ModeIrregular) == 0 {
+		return "", false
+	}
+	if _, err := fs.Stat(fsys, name); err == nil {
+		return "", false
+	}
+	// An irregular file that is not a link has no target.
+	target, err := fs.ReadLink(fsys, name)
+	return target, err == nil
+}
+
+// pathError explains err from an operation on name. os.Root only says that a
+// path escapes when it meets a link it cannot follow, so name that link.
+// NOTE: following links with an absolute target, even into the workspace,
+// would take a second path resolver beside os.Root; junctions stay unreachable.
+func pathError(fsys fs.FS, name string, err error) string {
+	prefix := ""
+	for part := range strings.SplitSeq(name, "/") {
+		prefix = path.Join(prefix, part)
+		if target, ok := unfollowedLink(fsys, prefix); ok {
+			return fmt.Sprintf("%s links to %s; file tools follow only relative links that stay in the workspace", prefix, target)
+		}
+	}
+	return err.Error()
+}
+
+// walkWarning separates a walk that completed without some .gitignore rules,
+// which it returns as a note for the output, from a failed walk.
+func walkWarning(err error) (string, error) {
+	if unread, ok := errors.AsType[*workspace.IgnoreFileError](err); ok {
+		return "\n\n[Warning: " + unread.Error() + "]", nil
+	}
+	return "", err
 }
 
 // workspaceReadApproval returns the shared approval policy for the read-only editor tools.
