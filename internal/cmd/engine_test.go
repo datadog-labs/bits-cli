@@ -19,6 +19,7 @@ type observedStore struct {
 	deletes int
 	session auth.Session
 	err     error
+	saveErr error
 }
 
 func (s *observedStore) Load() (auth.Session, error) {
@@ -28,6 +29,9 @@ func (s *observedStore) Load() (auth.Session, error) {
 
 func (s *observedStore) Save(session auth.Session) error {
 	s.saves++
+	if s.saveErr != nil {
+		return s.saveErr
+	}
 	s.session = session
 	s.err = nil
 	return nil
@@ -186,6 +190,7 @@ func TestNewAuthenticatedClientClassifiesOnlyReplaceableOAuthFailures(t *testing
 		{name: "corrupt session", store: &observedStore{err: errors.Join(auth.ErrSessionCorrupt, errors.New("truncated"))}, wantCause: auth.ErrSessionCorrupt, loginRequired: true},
 		{name: "invalid decoded session", store: &observedStore{session: auth.Session{Site: "https://api.datadoghq.com"}}, wantCause: auth.ErrSessionCorrupt, loginRequired: true},
 		{name: "store failure", store: &observedStore{err: errors.New("keyring unavailable")}},
+		{name: "login ID not saved", store: &observedStore{session: validSession(), saveErr: errors.New("keyring unavailable")}, wantCause: auth.ErrSessionNotDurable},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := NewAuthenticatedClient(context.Background(), ClientOptions{Mode: auth.ModeAuto, Store: test.store})

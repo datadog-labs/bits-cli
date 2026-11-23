@@ -154,7 +154,7 @@ func TestSourceKeepsRefreshTokenWhenResponseOmitsReplacement(t *testing.T) {
 	initial := expiredSession()
 	initial.WebOrigin = "https://demo.datadoghq.com"
 	store := newMemoryStore(initial)
-	source, err := NewSource(initial, store, server.Client())
+	source, err := NewSource(context.Background(), store, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,40 +176,122 @@ func TestSourceKeepsRefreshTokenWhenResponseOmitsReplacement(t *testing.T) {
 }
 
 func TestIndependentSourcesRefreshOnceAndAdoptDurableRotation(t *testing.T) {
-	var requests atomic.Int32
-	server := refreshServer(t, &requests)
-	defer server.Close()
+	noStagingEnv(t)
+	// The empty ID is a login saved by a version that predates login IDs.
+	for _, loginID := range []string{"login-1", ""} {
+		t.Run(fmt.Sprintf("login ID %q", loginID), func(t *testing.T) {
+			var requests atomic.Int32
+			server := refreshServer(t, &requests)
+			defer server.Close()
 
-	initial := expiredSession()
-	store := newMemoryStore(initial)
-	sources := []*Source{
-		testSource(t, initial, store, server.URL, server.Client()),
-		testSource(t, initial, store, server.URL, server.Client()),
-	}
-
-	start := make(chan struct{})
-	errs := make(chan error, len(sources))
-	for _, source := range sources {
-		go func(source *Source) {
-			<-start
-			token, err := source.AccessToken(context.Background())
-			if err == nil && token != "new-access" {
-				err = fmt.Errorf("token = %q", token)
+			initial := expiredSession()
+			initial.LoginID = loginID
+			store := newMemoryStore(initial)
+			type started struct {
+				source *Source
+				err    error
 			}
-			errs <- err
-		}(source)
+			const instances = 3
+			start := make(chan struct{})
+			results := make(chan started, instances)
+			for range instances {
+				go func() {
+					<-start
+					// Each startup races the others' upgrades and refreshes.
+					source, err := NewSource(context.Background(), store, server.Client())
+					if err == nil {
+						source.config.TokenURL = server.URL
+						var token string
+						if token, err = source.AccessToken(context.Background()); err == nil && token != "new-access" {
+							err = fmt.Errorf("token = %q", token)
+						}
+					}
+					results <- started{source, err}
+				}()
+			}
+			close(start)
+			var sources []*Source
+			for range instances {
+				result := <-results
+				if result.err != nil {
+					t.Fatal(result.err)
+				}
+				sources = append(sources, result.source)
+			}
+			if got := requests.Load(); got != 1 {
+				t.Fatalf("refresh requests = %d, want 1", got)
+			}
+			durable := store.session
+			wantSaves := 1
+			if loginID == "" {
+				wantSaves = 2 // One new ID, then one rotation.
+			} else if durable.LoginID != loginID {
+				t.Fatalf("stored login ID = %q, want %q", durable.LoginID, loginID)
+			}
+			if store.saves != wantSaves || durable.RefreshToken != "new-refresh" || durable.LoginID == "" {
+				t.Fatalf("stored session = %#v, saves = %d", durable, store.saves)
+			}
+			for _, source := range sources {
+				if source.loginID != durable.LoginID {
+					t.Fatalf("source login ID = %q, stored %q", source.loginID, durable.LoginID)
+				}
+			}
+
+			replacement := durable
+			replacement.LoginID = "login-2"
+			replacement.AccessToken = "replacement-access"
+			store.session = replacement
+			for _, source := range sources {
+				if token, err := source.AccessToken(context.Background()); !errors.Is(err, ErrSessionReplaced) || token != "" {
+					t.Fatalf("AccessToken = %q, %v; want session replaced", token, err)
+				}
+			}
+			if requests.Load() != 1 || store.saves != wantSaves || !sameSession(store.session, replacement) {
+				t.Fatal("replacement login was refreshed or mutated")
+			}
+		})
 	}
-	close(start)
-	for range sources {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got := requests.Load(); got != 1 {
-		t.Fatalf("refresh requests = %d, want 1", got)
-	}
-	if store.saves != 1 || store.session.RefreshToken != "new-refresh" || store.session.LoginID != initial.LoginID {
-		t.Fatalf("stored session = %#v, saves = %d", store.session, store.saves)
+}
+
+// A source exists only once its login ID is durable, so no running instance can
+// pin an ID that the next one would not load.
+func TestNewSourceRequiresDurableLoginID(t *testing.T) {
+	noStagingEnv(t)
+	for _, tt := range []struct {
+		name          string
+		saveFailures  int
+		saveCommitErr error
+		durable       bool
+	}{
+		{name: "saved", durable: true},
+		{name: "retried", saveFailures: 2, durable: true},
+		{name: "lost acknowledgement", saveCommitErr: errors.New("keyring reply lost"), durable: true},
+		{name: "not saved", saveFailures: -1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			legacy := expiredSession()
+			legacy.LoginID = ""
+			store := newMemoryStore(legacy)
+			store.saveFailures = tt.saveFailures
+			store.saveErr = errors.New("keyring unavailable")
+			store.saveCommitErr = tt.saveCommitErr
+			source, err := NewSource(context.Background(), store, nil)
+			if !tt.durable {
+				if !errors.Is(err, ErrSessionNotDurable) || source != nil {
+					t.Fatalf("NewSource error = %v, want ErrSessionNotDurable without a source", err)
+				}
+				if !sameSession(store.session, legacy) {
+					t.Fatalf("stored session = %#v, want the legacy login unchanged", store.session)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if source.loginID == "" || store.session.LoginID != source.loginID || store.saves != 1 {
+				t.Fatalf("source login ID = %q, stored = %#v, saves = %d", source.loginID, store.session, store.saves)
+			}
+		})
 	}
 }
 
@@ -607,15 +689,12 @@ func TestSourceCompletesInFlightRotationAfterCallerCancellation(t *testing.T) {
 func TestSourceRejectsReplacementLogin(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
-		initialID     string
 		replacementID string
 		changeToken   bool
 	}{
-		{"new login", "login-1", "login-2", true},
-		{"new login with unchanged tokens", "login-1", "login-2", false},
-		{"older binary drops ID", "login-1", "", true},
-		{"legacy replacement", "", "", true},
-		{"legacy to new login", "", "login-2", true},
+		{"new login", "login-2", true},
+		{"new login with unchanged tokens", "login-2", false},
+		{"older binary drops ID", "", true},
 	} {
 		for _, dirty := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/dirty=%t", tt.name, dirty), func(t *testing.T) {
@@ -623,10 +702,9 @@ func TestSourceRejectsReplacementLogin(t *testing.T) {
 				server := refreshServer(t, &requests)
 				defer server.Close()
 				initial := expiredSession()
-				initial.LoginID = tt.initialID
 				initial.WebOrigin = "https://first.datadoghq.com"
 				store := newMemoryStore(initial)
-				source, err := NewSource(initial, store, server.Client())
+				source, err := NewSource(context.Background(), store, server.Client())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -654,38 +732,6 @@ func TestSourceRejectsReplacementLogin(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestLegacySourceRefresh(t *testing.T) {
-	var requests atomic.Int32
-	server := refreshServer(t, &requests)
-	defer server.Close()
-	initial := expiredSession()
-	initial.LoginID = ""
-	store := newMemoryStore(initial)
-	source := testSource(t, initial, store, server.URL, server.Client())
-	other := testSource(t, initial, store, server.URL, server.Client())
-	for range 2 {
-		if token, err := source.AccessToken(context.Background()); err != nil || token != "new-access" {
-			t.Fatalf("AccessToken = %q, %v", token, err)
-		}
-	}
-	if requests.Load() != 1 || store.session.LoginID != "" {
-		t.Fatal("unexpected legacy refresh")
-	}
-	if _, err := other.AccessToken(context.Background()); !errors.Is(err, ErrSessionReplaced) {
-		t.Fatalf("external legacy rotation = %v, want session replaced", err)
-	}
-	restarted, err := NewSource(store.session, store, server.Client())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if token, err := restarted.AccessToken(context.Background()); err != nil || token != "new-access" {
-		t.Fatalf("after restart = %q, %v", token, err)
-	}
-	if err := source.RejectAccessToken(context.Background(), "new-access"); err != nil {
-		t.Fatalf("reject legacy access token: %v", err)
 	}
 }
 

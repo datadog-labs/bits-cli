@@ -228,14 +228,7 @@ func newClientForMode(ctx context.Context, opts ClientOptions) (*assistant.Clien
 		return assistant.NewAPIKeyClient(normalizedSite, opts.APIKey, opts.AppKey)
 
 	case auth.ModeAuto:
-		if opts.Store == nil {
-			return nil, fmt.Errorf("OAuth credential store is required")
-		}
-		session, err := opts.Store.Load()
-		if err != nil {
-			return nil, classifyOAuthError(err)
-		}
-		source, err := auth.NewSource(session, opts.Store, nil)
+		source, err := auth.NewSource(ctx, opts.Store, nil)
 		if err != nil {
 			// A site-configuration failure (for example a staging login whose
 			// BITS_STAGING_* variables are missing or no longer match) is
@@ -244,9 +237,7 @@ func newClientForMode(ctx context.Context, opts ClientOptions) (*assistant.Clien
 			if errors.Is(err, auth.ErrSiteConfiguration) {
 				return nil, fmt.Errorf("cannot use stored OAuth session; restore the matching site configuration or run `bits login`: %w", err)
 			}
-			// The stored session can also be unusable for structural reasons, so
-			// never advise deleting credentials here.
-			return nil, fmt.Errorf("%w: cannot use stored OAuth session; run `bits login`: %w: %w", ErrLoginRequired, auth.ErrSessionCorrupt, err)
+			return nil, classifyOAuthError(err)
 		}
 		// Validate the grant before handing the client to a surface. This is a
 		// local check for a fresh token and performs the existing safe refresh

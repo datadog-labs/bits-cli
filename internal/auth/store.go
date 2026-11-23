@@ -39,8 +39,8 @@ var (
 	// ErrReauthRequired means the stored grant cannot be refreshed safely and a
 	// new interactive login is required.
 	ErrReauthRequired = errors.New("OAuth login is no longer valid")
-	// ErrSessionNotDurable means a newly rotated token is valid in this process
-	// but could not be secured in the OS credential store.
+	// ErrSessionNotDurable means a session change made by this process, such as
+	// a rotated token, could not be secured in the OS credential store.
 	ErrSessionNotDurable = errors.New("OAuth session could not be persisted")
 	// ErrSessionReplaced means another process replaced the active login with a
 	// session that cannot be adopted by the current Assistant client.
