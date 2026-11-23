@@ -14,7 +14,6 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/browser"
 	"github.com/datadog-labs/bits-cli/internal/tools"
 	"github.com/datadog-labs/bits-cli/internal/tui/chat"
-	"github.com/datadog-labs/bits-cli/internal/tui/components"
 	conversationview "github.com/datadog-labs/bits-cli/internal/tui/conversations"
 	"github.com/datadog-labs/bits-cli/internal/tui/editor"
 	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
@@ -35,7 +34,6 @@ const (
 	ModeLogin
 	ModeConversations
 	ModeStatus
-	ModePermissions
 )
 
 // EngineFactory constructs the authenticated chat engine after startup login
@@ -135,14 +133,8 @@ type Model struct {
 	// so the composer holds the keyboard. It resets whenever another ask
 	// shows.
 	drafting bool
-	// The prompt a slash command opened, shown when no ask is.
+	// The prompt a slash command opened, shown over any ask.
 	commandPrompt *commandPrompt
-
-	permissionsPanel *components.Panel
-	// The picker shows the options, or the full-access confirmation; the
-	// cursor is the row on the page shown (on the confirmation, 0 is Yes).
-	permissionConfirm bool
-	permissionCursor  int
 
 	upgrade upgradePrompt
 
@@ -333,7 +325,6 @@ func newShell() *Model {
 		animActivity:      newAnimationTimeline(activityAnimInterval),
 		animBorderSweep:   newAnimationTimeline(borderSweepInterval),
 		status:            statusview.New(1, 1, theme),
-		permissionsPanel:  components.NewPanel(theme.Permissions),
 		styles:            theme,
 		searchSessionID:   newSearchSessionID(),
 		entitySearchCache: make(map[string]entitySearchCacheEntry),
@@ -391,7 +382,6 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	if m.commandPrompt != nil {
 		m.commandPrompt.form.SetStyles(theme)
 	}
-	m.permissionsPanel.SetStyles(theme.Permissions)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
 	}

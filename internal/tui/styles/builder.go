@@ -99,9 +99,6 @@ func build(isDark bool, p palette) Theme {
 	// (approval.go's actions) fills that row instead, so the panel's height is
 	// unchanged. The shared Panel default is untouched.
 	approvalPanel.Frame = approvalPanel.Frame.Padding(1, 2, 0, 2)
-	permissionsPanel := panel
-	permissionsPanel.SectionGap = 0
-	permissionsPanel.MaxWidth = 0
 	approval := Approval{
 		Panel:  approvalPanel,
 		Text:   text.Secondary,
@@ -190,7 +187,6 @@ func build(isDark bool, p palette) Theme {
 		Panel:        panel,
 		Approval:     approval,
 		ExitCard:     exitCard,
-		Permissions:  permissionsPanel,
 		Accordion:    accordion,
 		Selector:     selector,
 		FollowBorder: lipgloss.Color(p.followBorder),

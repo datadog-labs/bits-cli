@@ -83,8 +83,8 @@ func (m *Model) openSharePrompt(conversationID string) {
 		current = sharedOption
 		options[sharedOption].Description += " Expires " + shareDate(*until) + ". Enter copies the link."
 	}
-	options[current].Label += " (current)"
-	form := components.NewChoicePrompt("Share conversation", options[:], sharedOption)
+	form := components.NewChoicePrompt("Share conversation", "", options[:], sharedOption)
+	form.SetCurrent(current)
 	epoch := m.conversationEpoch
 	openCommandPrompt(m, form, func(choice int) tea.Cmd {
 		if epoch != m.conversationEpoch {

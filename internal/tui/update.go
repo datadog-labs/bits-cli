@@ -92,13 +92,12 @@ func waitEvent(ch <-chan agent.Event) tea.Cmd {
 type focus int
 
 const (
-	focusEditor      focus = iota // transcript scroll + text input (and its completion menu)
-	focusExitCard                 // the "Exit Bits?" confirmation card
-	focusPrompt                   // a tool approval or a tool's UI is shown (see prompt), unless the user drafts
-	focusPicker                   // the /resume conversation picker
-	focusStatus                   // the local /status document
-	focusPermissions              // the permissions picker
-	focusLogin                    // startup OAuth
+	focusEditor   focus = iota // transcript scroll + text input (and its completion menu)
+	focusExitCard              // the "Exit Bits?" confirmation card
+	focusPrompt                // a tool approval or a tool's UI is shown (see prompt), unless the user drafts
+	focusPicker                // the /resume conversation picker
+	focusStatus                // the local /status document
+	focusLogin                 // startup OAuth
 )
 
 func (m *Model) focus() focus {
@@ -109,8 +108,6 @@ func (m *Model) focus() focus {
 		return focusPicker
 	case ModeStatus:
 		return focusStatus
-	case ModePermissions:
-		return focusPermissions
 	case ModeChat, ModeTermInit:
 		if m.mode == ModeChat && m.exitCard.open {
 			return focusExitCard
@@ -432,9 +429,6 @@ func (m *Model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.focus() == focusStatus {
 		return m, m.updateStatus(msg)
-	}
-	if m.focus() == focusPermissions {
-		return m, nil
 	}
 	return m, m.updateEditorInput(msg)
 }
@@ -836,8 +830,8 @@ func (m *Model) stopStartup() {
 // handled earlier in Update.
 //
 // Ctrl+O toggles tool blocks and Shift+PgUp/PgDn page chat from any chat focus,
-// as Ctrl+X stops a shown prompt's tool round, or dismisses a command prompt,
-// even while the user drafts. PgUp/PgDn go to the focused prompt or transcript.
+// as Ctrl+X dismisses a command prompt, or else stops a shown ask's tool
+// round, even while the user drafts. PgUp/PgDn go to the focused prompt or transcript.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" && m.selection.active() {
 		m.selection.clear()
@@ -855,12 +849,13 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.list.PageDown()
 			return m, nil
 		case "ctrl+x":
-			if m.shown != nil {
-				m.stopTools()
-				return m, nil
-			}
+			// A command prompt shows over an ask, so ctrl+x dismisses it first.
 			if m.commandPrompt != nil {
 				m.commandPrompt = nil // a command prompt has no tools to stop
+				return m, nil
+			}
+			if m.shown != nil {
+				m.stopTools()
 				return m, nil
 			}
 		}
@@ -872,8 +867,6 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.handlePromptKey(msg)
 	case focusStatus:
 		return m, m.updateStatus(msg)
-	case focusPermissions:
-		return m, m.updatePermissionsKey(msg)
 	default:
 		return m.handleEditorKey(msg)
 	}

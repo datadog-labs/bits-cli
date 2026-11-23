@@ -182,10 +182,11 @@ func (m *Model) reshow() {
 	}
 }
 
-// draftOver hands the keyboard to the composer if the shown ask is docked,
-// so the user can write a message while it waits.
+// draftOver hands the keyboard to the composer if the shown prompt is
+// docked, so the user can write a message while it waits.
 func (m *Model) draftOver() {
-	m.drafting = m.shown != nil && m.shown.prompt().Placement() == components.Docked
+	p := m.prompt()
+	m.drafting = p != nil && p.Placement() == components.Docked
 }
 
 // waitingAsks returns the asks that still need the user, in no order.
@@ -215,12 +216,15 @@ func (m *Model) compareAsks(a, b ask) int {
 	return cmp.Or(cmp.Compare(position(a), position(b)), cmp.Compare(a.callID(), b.callID()))
 }
 
-// updatePrompt applies msg to the shown prompt, then delivers its answer;
-// once delivered, the next ask is shown. Without an ask, msg goes to the
-// command prompt.
+// updatePrompt applies msg to the shown prompt: the command prompt, or else
+// the shown ask, whose answer it then delivers; once delivered, the next ask
+// is shown.
 func (m *Model) updatePrompt(msg tea.Msg) (tea.Cmd, bool) {
-	if m.shown == nil {
+	if m.commandPrompt != nil {
 		return m.updateCommandPrompt(msg)
+	}
+	if m.shown == nil {
+		return nil, false
 	}
 	cmd, used := m.shown.prompt().Update(msg)
 	if followUp, delivered := m.shown.deliver(); delivered {

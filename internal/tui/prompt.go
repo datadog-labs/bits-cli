@@ -18,13 +18,15 @@ const minimumPromptRows = 15
 // composer, which stays visible, or puts it in the composer's place (see
 // frame).
 
-// prompt returns the shown prompt, or nil. An ask shows over a command prompt.
+// prompt returns the shown prompt, or nil. A command prompt shows over an
+// ask, which waits beneath it: the user just asked for the command, and only
+// commands allowed during a turn, such as /permissions, can meet an ask.
 func (m *Model) prompt() components.Prompt {
 	switch {
-	case m.shown != nil:
-		return m.shown.prompt()
 	case m.commandPrompt != nil:
 		return m.commandPrompt.form
+	case m.shown != nil:
+		return m.shown.prompt()
 	}
 	return nil
 }
@@ -48,6 +50,7 @@ type answeringPrompt[V any] interface {
 // with the answer unless they dismissed it.
 func openCommandPrompt[V any](m *Model, form answeringPrompt[V], submit func(V) tea.Cmd) {
 	form.SetStyles(m.styles)
+	m.drafting = false // the command prompt takes the keyboard from a draft
 	m.commandPrompt = &commandPrompt{form: form, finish: func() (tea.Cmd, bool) {
 		value, dismissed, done := form.Result()
 		if !done || dismissed {

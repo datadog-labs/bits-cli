@@ -14,12 +14,21 @@ import (
 // choicePromptMinWidth leaves the descriptions a few words per row.
 const choicePromptMinWidth = 36
 
+// choiceDetailMinWidth is the narrowest a description may wrap beside its
+// label; narrower, descriptions go under their labels.
+const choiceDetailMinWidth = 24
+
+// currentSuffix marks the option in effect.
+const currentSuffix = " (current)"
+
 // ChoicePrompt asks the user to pick one of a few options, each described in
-// full rather than truncated. Enter picks the highlighted option; esc
-// dismisses the prompt.
+// full rather than truncated, below an optional intro. Enter picks the
+// highlighted option; esc dismisses the prompt.
 type ChoicePrompt struct {
 	title     string
+	intro     string
 	options   []Option
+	current   int // the option in effect, or -1
 	cursor    int
 	styles    styles.Theme
 	dismissed bool
@@ -27,9 +36,13 @@ type ChoicePrompt struct {
 }
 
 // NewChoicePrompt creates a prompt highlighting options[selected].
-func NewChoicePrompt(title string, options []Option, selected int) *ChoicePrompt {
-	return &ChoicePrompt{title: title, options: options, cursor: max(0, min(selected, len(options)-1))}
+func NewChoicePrompt(title, intro string, options []Option, selected int) *ChoicePrompt {
+	return &ChoicePrompt{title: title, intro: intro, options: options, current: -1, cursor: max(0, min(selected, len(options)-1))}
 }
+
+// SetCurrent marks options[index] as the one in effect. The label column
+// keeps room for the mark on every option, so moving it shifts nothing.
+func (p *ChoicePrompt) SetCurrent(index int) { p.current = index }
 
 // SetStyles replaces the prompt's theme-derived styles.
 func (p *ChoicePrompt) SetStyles(theme styles.Theme) { p.styles = theme }
@@ -78,27 +91,46 @@ func (p *ChoicePrompt) Layout(slot Slot) (string, bool) {
 	for _, option := range p.options {
 		label = max(label, ansi.StringWidth(option.Label))
 	}
+	if p.current >= 0 {
+		label += ansi.StringWidth(currentSuffix)
+	}
 	column := marker + label + max(1, sty.ColumnGap)
+	stacked := width-column < choiceDetailMinWidth
 
 	lines := []string{
 		p.styles.Text.Primary.Bold(true).Render(ansi.Truncate(p.title, width, "…")),
 		p.styles.Text.Tertiary.Render(strings.Repeat("─", width)),
+	}
+	if p.intro != "" {
+		lines = append(append(lines, textwrap.WrapProse(width, p.intro, p.styles.Text.Secondary)...), "")
 	}
 	for i, option := range p.options {
 		labelStyle, detailStyle, mark := sty.Item, sty.Detail, sty.Marker
 		if i == p.cursor {
 			labelStyle, detailStyle, mark = sty.Selected, sty.SelectedDetail, sty.SelectedMarker
 		}
+		name := option.Label
+		if i == p.current {
+			name += currentSuffix
+		}
 		if i > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, textwrap.Wrap(textwrap.Options{
+		wrap := textwrap.Options{
 			Width:       width,
-			FirstPrefix: labelStyle.Width(column).Render(mark + option.Label),
+			FirstPrefix: labelStyle.Width(column).Render(mark + name),
 			RestPrefix:  strings.Repeat(" ", column),
 			Breakpoints: textwrap.Prose,
 			TrimSpace:   true,
-		}, textwrap.Styled(option.Description, detailStyle))...)
+		}
+		if stacked {
+			lines = append(lines, labelStyle.Render(mark+name))
+			if option.Description == "" {
+				continue
+			}
+			wrap.FirstPrefix, wrap.RestPrefix = strings.Repeat(" ", marker), strings.Repeat(" ", marker)
+		}
+		lines = append(lines, textwrap.Wrap(wrap, textwrap.Styled(option.Description, detailStyle))...)
 	}
 	help := "↑↓ choose · enter confirm · esc cancel"
 	lines = append(lines, "", p.styles.Text.Tertiary.Render(ansi.Truncate(help, width, "…")))
