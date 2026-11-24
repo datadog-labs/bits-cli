@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"maps"
@@ -275,6 +276,77 @@ func command(t *testing.T, dir, name string, args ...string) *exec.Cmd {
 	}
 	cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TEMPLATE_DIR=")
 	return cmd
+}
+
+// publish.sh publishes a draft only if it holds the assets the job built.
+func TestPublishChecksDraftAssets(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("publish.sh runs on Linux and requires GNU sha256sum")
+	}
+	tests := []struct {
+		name     string
+		tamper   string // when the archive stops matching the built one: "draft" or "published"
+		wantLog  string
+		wantFail bool
+	}{
+		{name: "matching draft", wantLog: "create\npublish\nlatest\n"},
+		{name: "edited draft", tamper: "draft", wantLog: "create\n", wantFail: true},
+		{name: "swapped as it is published", tamper: "published", wantLog: "create\npublish\n", wantFail: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dist, bin := t.TempDir(), t.TempDir()
+			archive := "bits_1.2.3_linux_amd64.tar.gz"
+			if err := os.WriteFile(filepath.Join(dist, archive), []byte("built"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			sum := func(b []byte) string { return fmt.Sprintf("%x", sha256.Sum256(b)) }
+			checksums := sum([]byte("built")) + "  " + archive + "\n"
+			if err := os.WriteFile(filepath.Join(dist, "bits_1.2.3_checksums.txt"), []byte(checksums), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// What gh release view prints for the assets through the --jq filter,
+			// in the draft and once published.
+			listing := func(content string) []byte {
+				return []byte(sum([]byte(content)) + "  " + archive + "\n" + sum([]byte(checksums)) + "  bits_1.2.3_checksums.txt\n")
+			}
+			draft, published := "built", "built"
+			switch tc.tamper {
+			case "draft":
+				draft, published = "swapped", "swapped"
+			case "published":
+				published = "swapped"
+			}
+			for name, content := range map[string]string{"draft": draft, "published": published} {
+				if err := os.WriteFile(filepath.Join(bin, name), listing(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			state, log := filepath.Join(bin, "draft"), filepath.Join(bin, "log")
+			gh := `#!/bin/sh
+case "$1 $2 $*" in
+"release view "*isDraft*) exit 1 ;;
+"release view "*) cat "` + state + `" ;;
+"release create "*) echo create >>"` + log + `" ;;
+"release edit "*--draft=false*) echo publish >>"` + log + `"; cp "` + filepath.Join(bin, "published") + `" "` + state + `" ;;
+"release edit "*--latest*) echo latest >>"` + log + `" ;;
+*) exit 99 ;;
+esac
+`
+			if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(gh), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := command(t, "", "bash", "scripts/publish.sh", "v1.2.3")
+			cmd.Env = append(cmd.Env, "DIST_DIR="+dist, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			out, err := cmd.CombinedOutput()
+			if (err != nil) != tc.wantFail {
+				t.Fatalf("publish.sh = %v, want failure %v:\n%s", err, tc.wantFail, out)
+			}
+			if calls, err := os.ReadFile(log); err != nil || string(calls) != tc.wantLog {
+				t.Fatalf("gh calls = %q, %v; want %q", calls, err, tc.wantLog)
+			}
+		})
+	}
 }
 
 func TestReleaseCheck(t *testing.T) {

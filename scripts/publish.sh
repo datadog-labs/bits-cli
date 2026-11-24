@@ -34,5 +34,23 @@ case "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || true)
         ;;
 esac
 
+# Anyone who can write to the repository can edit a draft. Publish it only if
+# it holds exactly the assets this job built and attested. Installers and bits
+# update only follow the latest release, so mark it latest only once a second
+# check finds the same assets in the published, immutable release.
+same_assets() {
+    diff <(sha256sum "${assets[@]}" | sort) \
+        <(gh release view "$tag" --json assets --jq '.assets[] | "\(.digest | ltrimstr("sha256:"))  \(.name)"' | sort)
+}
+
 gh release create "$tag" --target "$target" --draft --title "bits $version" --generate-notes "${assets[@]}"
-gh release edit "$tag" --draft=false
+if ! same_assets; then
+    echo "ERROR: the draft of $tag does not hold the assets this job built" >&2
+    exit 1
+fi
+gh release edit "$tag" --draft=false --latest=false
+if ! same_assets; then
+    echo "ERROR: release $tag does not hold the assets this job built; it is published but not latest" >&2
+    exit 1
+fi
+gh release edit "$tag" --latest

@@ -13,7 +13,10 @@ This triggers `.github/workflows/release.yml` on `main`, which:
    packages the release archives, SBOMs, and [install scripts](#install-scripts)
    (see CONTRIBUTING.md);
 3. attests the provenance of these assets and publishes them as a GitHub release of
-   the `main` commit with `./scripts/publish.sh`, which also creates the tag;
+   the `main` commit with `./scripts/publish.sh`, which also creates the tag. It
+   uploads them to a draft and publishes it only if the draft's asset digests
+   match the attested files, since anyone with write access can edit a draft,
+   then marks it latest once the published release passes the same check;
 4. opens a pull request that updates the [Homebrew](#homebrew) formula and merges
    once approved.
 
