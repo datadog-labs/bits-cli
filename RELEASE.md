@@ -10,8 +10,7 @@ This triggers `.github/workflows/release.yml` on `main`, which:
 
 1. checks that the tag is the next patch, minor, or major version;
 2. runs CI for the tag, which builds and tests each OS on its own runner and
-   packages the release archives, SBOMs, and [install scripts](#install-scripts)
-   (see CONTRIBUTING.md);
+   packages the release archives and SBOMs (see CONTRIBUTING.md);
 3. attests the provenance of these assets and publishes them as a GitHub release of
    the `main` commit with `./scripts/publish.sh`, which also creates the tag. It
    uploads them to a draft and publishes it only if the draft's asset digests
@@ -31,9 +30,7 @@ bits_<version>_<os>_<arch>.tar.gz            macOS/Linux install prefix
 bits_<version>_windows_<arch>.zip           Windows install prefix
 bits_<version>_<os>_<arch>.tar.gz.sbom.json  SPDX JSON SBOM of a macOS/Linux archive
 bits_<version>_windows_<arch>.zip.sbom.json SPDX JSON SBOM of a Windows archive
-install.sh                                  macOS/Linux installer for this release
-install.ps1                                 Windows installer for this release
-bits_<version>_checksums.txt                SHA-256 of every other asset
+bits_<version>_checksums.txt                SHA-256 of every archive and SBOM
 ```
 
 Each archive is an install prefix, which Homebrew and the install scripts
@@ -85,16 +82,17 @@ fresh release run on `main` to obtain a token.
 
 ## Install scripts
 
-`scripts/install.sh` and `scripts/install.ps1` leave the release they install
-unset; `package.sh` sets it in the copies it puts in `dist/`. Since the scripts
-keep their names, `releases/latest/download/install.sh` always installs the
-latest release ([INSTALL.md](INSTALL.md) has the user commands).
+Users run `scripts/install.sh` and `scripts/install.ps1` from the default
+branch ([INSTALL.md](INSTALL.md) has the commands), and they install the latest
+release. A change to them reaches users when it merges, so keep them working
+with the latest release.
 
 Each installation then updates itself with the code of the release it runs,
-so released binaries and scripts depend on these, which must not change:
+so released binaries and the scripts depend on these, which must not change:
 
-- the repository, `datadog-labs/bits-cli`, and `INSTALL.md` at its root,
-  which bits links when it cannot update itself;
+- the repository, `datadog-labs/bits-cli`, `INSTALL.md` at its root, which
+  bits links when it cannot update itself, and the scripts' paths on the
+  default branch, which users and docs link;
 - the asset names above and the `sha256sum` format of the checksums;
 - archives that hold `bin/`, `libexec/`, and `share/` at their root, and only
   regular files and directories: older binaries unpack nothing else;

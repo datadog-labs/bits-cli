@@ -3,8 +3,8 @@
 | Platform | Command |
 | --- | --- |
 | macOS, Linux (Homebrew) | `brew install datadog-labs/pack/bits` |
-| macOS, Linux | `curl -fsSL https://github.com/datadog-labs/bits-cli/releases/latest/download/install.sh \| sh` |
-| Windows (PowerShell) | `irm https://github.com/datadog-labs/bits-cli/releases/latest/download/install.ps1 \| iex` |
+| macOS, Linux | `curl -fsSL https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.sh \| sh` |
+| Windows (PowerShell) | `irm https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.ps1 \| iex` |
 
 The install scripts need no administrator rights. `install.sh` needs `curl` or
 `wget`, `tar`, and `sha256sum` or `shasum`; `install.ps1` needs PowerShell 5.1
@@ -15,7 +15,7 @@ not offer TLS 1.2, which GitHub requires. Enable it for the session first:
 
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-irm https://github.com/datadog-labs/bits-cli/releases/latest/download/install.ps1 | iex
+irm https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.ps1 | iex
 ```
 
 ## Where it goes
@@ -53,11 +53,11 @@ Set `BITS_VERSION` to a release from v0.0.15 on. Releases before v0.0.15 can
 only be installed with Homebrew or from their archive.
 
 ```sh
-curl -fsSL https://github.com/datadog-labs/bits-cli/releases/latest/download/install.sh | BITS_VERSION=v0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.sh | BITS_VERSION=v0.1.0 sh
 ```
 
 ```powershell
-$env:BITS_VERSION = 'v0.1.0'; irm https://github.com/datadog-labs/bits-cli/releases/latest/download/install.ps1 | iex
+$env:BITS_VERSION = 'v0.1.0'; irm https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.ps1 | iex
 ```
 
 ## Updates
@@ -70,20 +70,19 @@ updated, which can take longer.
 
 ## Verify the installer
 
-To read the script before running it, or to verify where it comes from:
+The commands run the scripts in
+[`scripts/`](https://github.com/datadog-labs/bits-cli/tree/main/scripts) on the
+default branch. To read a script before running it, download it first:
 
 ```sh
-curl -fsSLO https://github.com/datadog-labs/bits-cli/releases/latest/download/install.sh &&
-    gh attestation verify install.sh --repo datadog-labs/bits-cli \
-        --signer-workflow datadog-labs/bits-cli/.github/workflows/release.yml \
-        --source-ref refs/heads/main &&
-    sh install.sh
+curl -fsSLO https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.sh && less install.sh && sh install.sh
 ```
 
-The script checks the archive it downloads against the release checksums,
-which guards against a damaged download. To verify where the archive comes
-from too, run the same `gh attestation verify` on it, as
-[RELEASE.md](RELEASE.md) shows.
+To run exactly the script you read, replace `HEAD` in the URL with a commit.
+
+The script checks the archive it downloads against the release checksums. To
+verify that the archive was built by the release workflow, run
+`gh attestation verify` on it, as [RELEASE.md](RELEASE.md) shows.
 
 ## Uninstall
 

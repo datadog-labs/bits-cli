@@ -1,8 +1,8 @@
 #!/bin/sh
 #
-# install.sh - install Bits on macOS or Linux from a GitHub release:
+# install.sh - install the latest release of Bits on macOS or Linux:
 #
-#     curl -fsSL https://github.com/datadog-labs/bits-cli/releases/latest/download/install.sh | sh
+#     curl -fsSL https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.sh | sh
 #
 # It needs curl or wget, tar, and sha256sum or shasum. The release is
 # unpacked into ${XDG_DATA_HOME:-~/.local/share}/bits/versions/<version>, and
@@ -11,10 +11,9 @@
 
 set -eu
 
-# The release this script installs; package.sh sets it in release assets.
-release=
-
 releases="${BITS_RELEASES_URL:-https://github.com/datadog-labs/bits-cli/releases}"
+# Redirects keep to the scheme of the releases, https unless overridden.
+scheme="${releases%%://*}"
 
 say() {
     printf '%s\n' "$*" >&2
@@ -27,10 +26,27 @@ fail() {
 
 download() {
     if command -v curl >/dev/null 2>&1; then
-        curl --fail --silent --show-error --location --proto-redir '=https' --retry 3 --output "$2" "$1"
+        curl --fail --silent --show-error --location --proto-redir "=$scheme" --retry 3 --output "$2" "$1"
     else
         wget --quiet --output-document="$2" "$1"
     fi || fail "could not download $1"
+}
+
+# latest prints the version releases/latest redirects to, the way bits update
+# finds it: the tag page of the latest release.
+latest() {
+    if command -v curl >/dev/null 2>&1; then
+        url="$(curl --fail --silent --show-error --location --proto-redir "=$scheme" --retry 3 \
+            --head --output /dev/null --write-out '%{url_effective}' "$releases/latest")"
+    else
+        # wget prints each response's headers; the last Location is the tag page.
+        url="$(wget --spider --server-response "$releases/latest" 2>&1 |
+            sed -n 's/^ *Location: *\([^ ]*\).*/\1/p' | tr -d '\r' | tail -n 1)"
+    fi || fail "could not find the latest release at $releases/latest"
+    case "$url" in
+    */releases/tag/v*) printf '%s\n' "${url##*/}" ;;
+    *) fail "could not find the latest release at $releases/latest" ;;
+    esac
 }
 
 sha256() {
@@ -44,8 +60,8 @@ sha256() {
 
 # Everything runs from main, so a download cut short runs nothing.
 main() {
-    version="${BITS_VERSION:-$release}"
-    [ -n "$version" ] || fail "set BITS_VERSION to the release to install, such as v0.1.0"
+    version="${BITS_VERSION:-}"
+    [ -n "$version" ] || version="$(latest)"
     version="v${version#v}"
     printf '%s\n' "$version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
         fail "$version is not a release version, such as v0.1.0"

@@ -1,7 +1,7 @@
-# install.ps1 - install Bits on Windows from a GitHub release, with
+# install.ps1 - install the latest release of Bits on Windows, with
 # PowerShell 5.1 or later:
 #
-#     irm https://github.com/datadog-labs/bits-cli/releases/latest/download/install.ps1 | iex
+#     irm https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.ps1 | iex
 #
 # The release is unpacked into %LOCALAPPDATA%\bits\versions\<version>, and its
 # `bits install` makes it current and puts %LOCALAPPDATA%\bits\current\bin on
@@ -16,13 +16,23 @@ function Install-Bits {
     $ErrorActionPreference = 'Stop'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-    # The release this script installs; package.sh sets it in release assets.
-    $release = ''
-
     $releases = if ($env:BITS_RELEASES_URL) { $env:BITS_RELEASES_URL } else { 'https://github.com/datadog-labs/bits-cli/releases' }
-    $version = if ($env:BITS_VERSION) { $env:BITS_VERSION } else { $release }
+    $version = $env:BITS_VERSION
     if (-not $version) {
-        throw 'Set BITS_VERSION to the release to install, such as v0.1.0.'
+        # releases/latest redirects to the tag page of the latest release,
+        # which is how bits update finds it.
+        $request = [Net.WebRequest]::Create("$releases/latest")
+        $request.Method = 'HEAD'
+        $response = $request.GetResponse()
+        try {
+            $latest = $response.ResponseUri.AbsolutePath
+        } finally {
+            $response.Close()
+        }
+        if ($latest -notmatch '/releases/tag/(v[^/]+)$') {
+            throw "Could not find the latest release at $releases/latest."
+        }
+        $version = $Matches[1]
     }
     $version = 'v' + ($version -replace '^v', '')
     if ($version -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {

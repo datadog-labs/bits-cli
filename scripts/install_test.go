@@ -95,10 +95,13 @@ func TestInstallScript(t *testing.T) {
 	sum := fmt.Sprintf("%x", sha256.Sum256(content))
 	tests := []struct {
 		name     string
-		version  string
+		version  string // BITS_VERSION, "" for the latest release
+		latest   string // the release releases/latest redirects to
 		checksum string
 		failure  string // "" for a successful install
 	}{
+		{name: "the latest release", latest: "v0.1.0", checksum: sum},
+		{name: "a latest release older than the installer", latest: "v0.0.14", checksum: sum, failure: "predates this installer"},
 		{name: "installs", version: "v0.1.0", checksum: sum},
 		{name: "a version without v", version: "0.1.0", checksum: sum},
 		{name: "corrupt download", version: "v0.1.0", checksum: strings.Repeat("0", 64), failure: "does not match its checksum"},
@@ -112,6 +115,10 @@ func TestInstallScript(t *testing.T) {
 			mux.HandleFunc("GET /install.ps1", func(w http.ResponseWriter, r *http.Request) {
 				http.ServeFile(w, r, "scripts/install.ps1")
 			})
+			mux.HandleFunc("GET /releases/latest", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/releases/tag/"+tc.latest, http.StatusFound)
+			})
+			mux.HandleFunc("GET /releases/tag/", func(http.ResponseWriter, *http.Request) {})
 			mux.HandleFunc("GET /releases/download/v0.1.0/bits_0.1.0_checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = fmt.Fprintf(w, "%s  %s.sbom.json\n%s  %s\n", strings.Repeat("0", 64), archive, tc.checksum, archive)
 			})

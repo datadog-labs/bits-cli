@@ -18,13 +18,13 @@ brew install datadog-labs/pack/bits
 Without Homebrew, on macOS or Linux:
 
 ```sh
-curl -fsSL https://github.com/datadog-labs/bits-cli/releases/latest/download/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-irm https://github.com/datadog-labs/bits-cli/releases/latest/download/install.ps1 | iex
+irm https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.ps1 | iex
 ```
 
 See [INSTALL.md](INSTALL.md) for where Bits goes, your `PATH`, specific

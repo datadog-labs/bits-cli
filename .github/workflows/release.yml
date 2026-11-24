@@ -81,8 +81,6 @@ jobs:
             dist/bits_*.tar.gz
             dist/bits_*.zip
             dist/bits_*.sbom.json
-            dist/install.sh
-            dist/install.ps1
       - name: Get release token
         id: octo-sts
         uses: DataDog/dd-octo-sts-action@c85802a58e202b7e764b5441e4378c76043c8108 # v1.0.5
