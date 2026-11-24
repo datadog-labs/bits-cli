@@ -197,19 +197,10 @@ By contributing to Bits CLI, you agree that your contributions will be licensed 
 
 ## Multi-agent Assistant transport
 
-Experimental subagents are enabled automatically for numeric organization ID 2.
-Bits checks the authenticated organization at startup with a three-second
-timeout unless `BITS_USE_EXPERIMENTAL_SUBAGENTS` is `1` or `0`. If the lookup
-fails, it keeps the regular endpoint. The lookup uses
-`/api/v1/legacy_current_user`, which requires first-party access for OAuth;
-credentials without access to this endpoint must use the environment opt-in
-below.
-
-For other organizations, the regular Assistant endpoint remains the default.
+The regular Assistant endpoint is the default.
 Opt into experimental subagents with `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits`, or with
 `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits run --prompt '…' --delivery adeep`.
-`BITS_USE_EXPERIMENTAL_SUBAGENTS=0` keeps the regular endpoint, even for
-organization 2. Unset, empty, or other values fall back to the organization check.
+Unset, empty, `0`, or other values keep the regular endpoint.
 The setting is not persisted.
 
 When subagents are enabled, eligible turns use multi-agent run

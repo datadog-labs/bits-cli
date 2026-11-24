@@ -26,9 +26,9 @@ func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
 		lookupStatus int
 		path         string
 	}{
-		{name: "org 2 default", orgID: 2, path: "/api/unstable/assistant/multi-agent/runs"},
+		{name: "org 2 default", orgID: 2, path: "/api/v2/assistant"},
 		{name: "org 2 disabled", orgID: 2, value: "0", path: "/api/v2/assistant"},
-		{name: "org 2 ignores other value", orgID: 2, value: "true", path: "/api/unstable/assistant/multi-agent/runs"},
+		{name: "org 2 ignores other value", orgID: 2, value: "true", path: "/api/v2/assistant"},
 		{name: "other org", orgID: 3, path: "/api/v2/assistant"},
 		{name: "lookup unavailable", lookupStatus: http.StatusServiceUnavailable, path: "/api/v2/assistant"},
 		{name: "default", path: "/api/v2/assistant"},
@@ -79,12 +79,8 @@ func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
 			http.DefaultTransport = transport
 			args := []string{"run", "--prompt", "question", "--delivery", "adeep", "--auth", "api-key", "--site", "api.datadoghq.com"}
 			out, _, err := executeForTest(t, args)
-			wantIdentityRequests := 1
-			if test.value == "1" || test.value == "0" {
-				wantIdentityRequests = 0
-			}
-			if test.lookupStatus == 0 && identityRequests != wantIdentityRequests {
-				t.Fatalf("identity requests = %d, want %d", identityRequests, wantIdentityRequests)
+			if identityRequests != 0 {
+				t.Fatalf("identity requests = %d, want 0", identityRequests)
 			}
 			if err != nil || requests != 1 || !strings.Contains(out, `"response":"answer"`) {
 				t.Fatalf("err=%v requests=%d output=%s", err, requests, out)

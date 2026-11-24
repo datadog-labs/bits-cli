@@ -8,7 +8,6 @@ import (
 	"os"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/agent/env"
@@ -112,25 +111,14 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 	}
 	config.UserContext = env.UserContext(workspace, client.WebOrigin)
 	var backend agent.Backend = client
-	if useSubagents(ctx, client) {
+	if useSubagents() {
 		backend = assistant.NewMultiAgentClient(client)
 	}
 	return agent.New(backend, config), nil
 }
 
-func useSubagents(ctx context.Context, client *assistant.Client) bool {
-	switch os.Getenv("BITS_USE_EXPERIMENTAL_SUBAGENTS") {
-	case "1":
-		return true
-	case "0":
-		return false
-	}
-	// Bound the optional identity lookup so an unavailable profile service
-	// does not prevent using the regular Assistant endpoint.
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	orgID, err := client.CurrentOrganizationID(ctx)
-	return err == nil && orgID == 2
+func useSubagents() bool {
+	return os.Getenv("BITS_USE_EXPERIMENTAL_SUBAGENTS") == "1"
 }
 
 // newExecService returns the service that runs every command of this
