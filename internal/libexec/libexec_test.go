@@ -26,30 +26,41 @@ func TestDirFromEnvironment(t *testing.T) {
 
 func TestDirInExecutablePrefix(t *testing.T) {
 	t.Setenv(DirEnv, "")
-	prefix := t.TempDir()
-	want := filepath.Join(prefix, "libexec", "bits", "tool")
-	for _, dir := range []string{filepath.Join(prefix, "bin"), filepath.Join(prefix, "link"), want} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+	// Two releases, as an update leaves them, and a link to the running one.
+	var prefixes []string
+	for range 2 {
+		prefix, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
 			t.Fatal(err)
 		}
+		for _, dir := range []string{filepath.Join(prefix, "bin"), filepath.Join(prefix, "libexec", "bits", "tool")} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(prefix, "bin", "bits"), nil, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		prefixes = append(prefixes, prefix)
 	}
-	bits := filepath.Join(prefix, "bin", "bits")
-	if err := os.WriteFile(bits, nil, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(prefix, "link", "bits")
-	if err := os.Symlink(bits, link); err != nil {
+	link := filepath.Join(t.TempDir(), "bits")
+	if err := os.Symlink(filepath.Join(prefixes[0], "bin", "bits"), link); err != nil {
 		t.Skip(err)
 	}
-	executable = func() (string, error) { return link, nil }
-	t.Cleanup(func() { executable = os.Executable })
+	saved, savedErr := executable, executableErr
+	t.Cleanup(func() { executable, executableErr = saved, savedErr })
+	executable, executableErr = resolve(link, nil)
 
-	got, err := Dir("tool")
-	if err != nil {
+	// The update switches the link; this process keeps its own helpers.
+	if err := os.Remove(link); err != nil {
 		t.Fatal(err)
 	}
-	if want, _ = filepath.EvalSymlinks(want); got != want {
-		t.Errorf("Dir(tool) = %q, want %q", got, want)
+	if err := os.Symlink(filepath.Join(prefixes[1], "bin", "bits"), link); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(prefixes[0], "libexec", "bits", "tool")
+	if got, err := Dir("tool"); err != nil || got != want {
+		t.Errorf("Dir(tool) = %q, %v; want %q", got, err, want)
 	}
 }
 

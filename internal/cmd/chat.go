@@ -70,7 +70,8 @@ func runChat(parent context.Context, opts ChatOptions, stdout, stderr io.Writer)
 	// The installer runs first so its output cannot scroll the resume hint away.
 	var upgradeErr error
 	if m.UpgradeRequested() {
-		upgradeErr = checker.Upgrade(os.Stdin, stdout, stderr)
+		// parent, which Ctrl-C cancels: ctx ends with the TUI.
+		upgradeErr = checker.Upgrade(parent, os.Stdin, stdout, stderr)
 	}
 	// On a clean exit with an active conversation, surface how to get back to it.
 	// The conversation id is the server-side handle the Assistant API restores via
