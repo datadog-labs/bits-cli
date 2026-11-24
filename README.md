@@ -27,6 +27,10 @@ On Windows, in PowerShell:
 irm https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.ps1 | iex
 ```
 
+On Windows, you can also download the `amd64` or `arm64` ZIP from
+[GitHub Releases](https://github.com/datadog-labs/bits-cli/releases), extract
+it, and add its `bin` folder to your `PATH`.
+
 See [INSTALL.md](INSTALL.md) for where Bits goes, your `PATH`, specific
 releases, updates, and uninstalling.
 

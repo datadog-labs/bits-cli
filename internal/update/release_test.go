@@ -1,239 +1,142 @@
 package update
 
 import (
-	"archive/tar"
-	"archive/zip"
 	"bytes"
-	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
 )
 
-// TestMain lets upgrade tests ship this test binary as the bits of a
-// release: run as bits install, it installs itself.
-func TestMain(m *testing.M) {
-	if filepath.Base(os.Args[0]) == executableName && len(os.Args) == 2 && os.Args[1] == "install" {
-		executable, err := os.Executable()
-		if err == nil {
-			err = Install(InstallOptions{
-				Executable:      executable,
-				Home:            os.Getenv("HOME"),
-				UserEnvironment: os.Getenv("BITS_TEST_USER_ENVIRONMENT"),
-			}, os.Stderr)
-		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-	os.Exit(m.Run())
-}
-
-// releaseArchive packs this test binary as bin/bits in this platform's
-// release archive format.
-var releaseArchive = sync.OnceValues(func() ([]byte, error) {
-	executable, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	bits, err := os.ReadFile(executable)
-	if err != nil {
-		return nil, err
-	}
-	files := []struct {
-		name string
-		mode int64
-		body []byte
-	}{
-		{"bin/" + executableName, 0o755, bits},
-		{"share/doc/bits/README.md", 0o644, []byte("# Bits\n")},
-	}
-	var buf bytes.Buffer
-	if runtime.GOOS == "windows" {
-		w := zip.NewWriter(&buf)
-		for _, file := range files {
-			f, err := w.Create(file.name)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := f.Write(file.body); err != nil {
-				return nil, err
-			}
-		}
-		if err := w.Close(); err != nil {
-			return nil, err
-		}
-		return buf.Bytes(), nil
-	}
-	gz := gzip.NewWriter(&buf)
-	w := tar.NewWriter(gz)
-	for _, dir := range []string{"bin/", "share/", "share/doc/", "share/doc/bits/"} {
-		if err := w.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: dir, Mode: 0o755}); err != nil {
-			return nil, err
-		}
-	}
-	for _, file := range files {
-		if err := w.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: file.name, Mode: file.mode, Size: int64(len(file.body))}); err != nil {
-			return nil, err
-		}
-		if _, err := w.Write(file.body); err != nil {
-			return nil, err
-		}
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	if err := gz.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-})
-
-// fakeRelease serves v as the latest release, with assets for this platform.
-type fakeRelease struct {
-	latest   string
-	archive  []byte
-	checksum string // overrides the archive's SHA-256
-	missing  bool   // the archive is not uploaded
-	// interrupt, when set, is called as the archive is requested, as a
-	// Ctrl-C during the download would.
-	interrupt context.CancelFunc
-}
-
-func (f *fakeRelease) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	archive := archiveName(f.latest)
-	switch r.URL.Path {
-	case "/releases/latest":
-		http.Redirect(w, r, "/releases/tag/"+f.latest, http.StatusFound)
-	case "/releases/download/" + f.latest + "/" + checksumsName(f.latest):
-		sum := f.checksum
-		if sum == "" {
-			sum = fmt.Sprintf("%x", sha256.Sum256(f.archive))
-		}
-		_, _ = fmt.Fprintf(w, "%s  %s.sbom.json\n%s  %s\n", strings.Repeat("0", 64), archive, sum, archive)
-	case "/releases/download/" + f.latest + "/" + archive:
-		if f.missing {
-			http.NotFound(w, r)
-			return
-		}
-		if f.interrupt != nil {
-			f.interrupt()
-			// Send nothing until the client gives up the request.
-			<-r.Context().Done()
-			return
-		}
-		_, _ = w.Write(f.archive)
-	default:
-		http.NotFound(w, r)
-	}
-}
-
 func TestStandaloneUpgrade(t *testing.T) {
-	archive, err := releaseArchive()
-	if err != nil {
-		t.Fatal(err)
-	}
 	tests := []struct {
-		name    string
-		release fakeRelease
-		want    string // the active version afterwards
-		output  string
-		failure string
-		// existing leaves versions/v1.2.4 complete, as a concurrent upgrade
-		// does, or damaged by hand; the upgrade must leave it alone.
-		existing    string
-		interrupted bool // Ctrl-C during the download
+		name        string
+		latest      string
+		status      int
+		interrupted bool
+		duringRun   bool
+		truncated   bool
+		exit        int
+		want        string
 	}{
-		{name: "upgrades", release: fakeRelease{latest: "v1.2.4"}, want: "v1.2.4", output: "Installed Bits v1.2.4"},
-		{name: "up to date", release: fakeRelease{latest: "v1.2.3"}, want: "v1.2.3", output: "Bits v1.2.3 is up to date."},
-		{name: "never downgrades", release: fakeRelease{latest: "v1.2.2"}, want: "v1.2.3", output: "Bits v1.2.3 is up to date."},
-		{name: "corrupt download", release: fakeRelease{latest: "v1.2.4", checksum: strings.Repeat("ab", 32)}, want: "v1.2.3", failure: "does not match its checksum"},
-		{name: "missing archive", release: fakeRelease{latest: "v1.2.4", missing: true}, want: "v1.2.3", failure: "HTTP 404"},
-		{name: "keeps a concurrent upgrade", release: fakeRelease{latest: "v1.2.4"}, want: "v1.2.4", output: "Installed Bits v1.2.4", existing: "complete"},
-		{name: "refuses a damaged version", release: fakeRelease{latest: "v1.2.4"}, want: "v1.2.3", failure: "is incomplete; remove it", existing: "damaged"},
-		{name: "interrupted download", release: fakeRelease{latest: "v1.2.4"}, want: "v1.2.3", failure: context.Canceled.Error(), interrupted: true},
+		{name: "upgrades", latest: "v1.2.4", status: 200},
+		{name: "up to date", latest: "v1.2.3", want: "is up to date"},
+		{name: "never downgrades", latest: "v1.2.2", want: "is up to date"},
+		{name: "installer missing", latest: "v1.2.4", status: 404, want: "HTTP 404"},
+		{name: "interrupted download", latest: "v1.2.4", status: 200, interrupted: true, want: "context canceled"},
+		{name: "truncated download", latest: "v1.2.4", status: 200, truncated: true, want: "unexpected EOF"},
+		{name: "cancels a running installer", latest: "v1.2.4", status: 200, duringRun: true, want: "context canceled"},
+		{name: "installer failure", latest: "v1.2.4", status: 200, exit: 7, want: "exit status 7"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			root := newRoot(t)
-			opts := isolatedOptions(t)
-			opts.Home = t.TempDir()
-			t.Setenv("HOME", opts.Home)
-			t.Setenv("BITS_TEST_USER_ENVIRONMENT", opts.UserEnvironment)
-			if err := install(t, opts, unpack(t, root, "v1.2.3", true)); err != nil {
+			dir := filepath.Join(t.TempDir(), "a&b (c) %PATH% [d] $e")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			leftover := filepath.Join(root, versionsDir, "v1.2.4", "leftover")
-			if tc.existing != "" {
-				shipTestBinary(t, unpack(t, root, "v1.2.4", tc.existing == "complete"))
-				if err := os.WriteFile(leftover, nil, 0o644); err != nil {
-					t.Fatal(err)
+			capture := filepath.Join(dir, "invocation")
+			t.Setenv("BITS_TEST_CAPTURE", capture)
+			t.Setenv("BITS_VERSION", "v0.0.1")
+			t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "wrong"))
+			t.Setenv("LOCALAPPDATA", filepath.Join(dir, "wrong"))
+			t.Setenv("BITS_RELEASES_URL", "https://wrong.invalid")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			requested := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/started" {
+					cancel()
+					<-r.Context().Done()
+					return
+				}
+
+				if r.URL.Path == "/releases/latest" {
+					http.Redirect(w, r, "/releases/tag/"+tc.latest, http.StatusFound)
+					return
+				}
+				requested = true
+				if tc.status != 200 {
+					w.WriteHeader(tc.status)
+					return
+				}
+				if tc.interrupted {
+					cancel()
+					<-r.Context().Done()
+					return
+				}
+				if tc.truncated {
+					// A valid, executable prefix must never run after an incomplete transfer.
+					hijacker := w.(http.Hijacker)
+					conn, buf, err := hijacker.Hijack()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					defer func() {
+						if err := conn.Close(); err != nil {
+							t.Error(err)
+						}
+					}()
+					if _, err := fmt.Fprint(buf, "HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n"); err != nil {
+						t.Error(err)
+					}
+					if _, err := fmt.Fprintf(buf, "echo unsafe > '%s'\n", capture); err != nil {
+						t.Error(err)
+					}
+					if err := buf.Flush(); err != nil {
+						t.Error(err)
+					}
+					return
+				}
+				if tc.duringRun {
+					if runtime.GOOS == "windows" {
+						_, _ = fmt.Fprint(w, "$client=New-Object Net.WebClient; $client.DownloadString($env:BITS_TEST_RUN_URL)\n")
+					} else {
+						_, _ = fmt.Fprint(w, "curl -fsS \"$BITS_TEST_RUN_URL\" >/dev/null\n")
+					}
+					return
+				}
+
+				if runtime.GOOS == "windows" {
+					_, _ = fmt.Fprintf(w, "param($Root,$Version,$UpdateFrom)\n[IO.File]::WriteAllLines($env:BITS_TEST_CAPTURE, @($Root,$Version,$UpdateFrom,$env:BITS_RELEASES_URL))\nexit %d\n", tc.exit)
+				} else {
+					_, _ = fmt.Fprintf(w, "printf '%%s\\n' \"$2\" \"$4\" \"$6\" \"$BITS_RELEASES_URL\" > \"$BITS_TEST_CAPTURE\"\nexit %d\n", tc.exit)
+				}
+			}))
+			defer server.Close()
+			t.Setenv("BITS_TEST_RUN_URL", server.URL+"/started")
+			s := newStandalone(server.URL+"/releases", dir, "v1.2.3")
+			s.installer = server.URL + "/installer"
+			var out bytes.Buffer
+			err := s.Upgrade(ctx, nil, &out, &out)
+			if tc.status == 200 && !tc.interrupted && !tc.truncated && !tc.duringRun && tc.exit == 0 || tc.status == 0 {
+				if err != nil {
+					t.Fatalf("Upgrade: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Upgrade = %v, want %q", err, tc.want)
+			}
+			if tc.status == 0 {
+				if requested || !strings.Contains(out.String(), tc.want) {
+					t.Fatalf("unexpected installer fetch or output: %t %s", requested, &out)
 				}
 			}
-			tc.release.archive = archive
-			ctx, cancel := context.WithCancel(context.Background())
-			t.Cleanup(cancel)
-			if tc.interrupted {
-				tc.release.interrupt = cancel
-			}
-			server := httptest.NewServer(&tc.release)
-			t.Cleanup(server.Close)
-
-			var stderr bytes.Buffer
-			err := newStandalone(server.URL+"/releases", root, "v1.2.3").Upgrade(ctx, nil, io.Discard, &stderr)
-			if tc.failure == "" && err != nil || tc.failure != "" && (err == nil || !strings.Contains(err.Error(), tc.failure)) {
-				t.Fatalf("Upgrade = %v, want failure %q; stderr:\n%s", err, tc.failure, &stderr)
-			}
-			if !strings.Contains(stderr.String(), tc.output) {
-				t.Errorf("stderr = %q, want %q", &stderr, tc.output)
-			}
-			if got, err := activeVersion(root); err != nil || got != tc.want {
-				t.Errorf("current = %q, %v; want %q", got, err, tc.want)
-			}
-			wantVersions := []string{"v1.2.3"}
-			if tc.want != "v1.2.3" || tc.existing != "" {
-				wantVersions = append(wantVersions, "v1.2.4")
-			}
-			if got := entries(t, filepath.Join(root, versionsDir)); !slices.Equal(got, wantVersions) {
-				t.Errorf("versions = %q, want %q", got, wantVersions)
-			}
-			if got := entries(t, root); !slices.Equal(got, []string{currentLink, versionsDir}) {
-				t.Errorf("root = %q, want no staging left", got)
-			}
-			if _, err := os.Stat(leftover); tc.existing != "" && err != nil {
-				t.Errorf("the upgrade replaced the existing v1.2.4: %v", err)
+			data, readErr := os.ReadFile(capture)
+			if tc.status == 200 && !tc.interrupted && !tc.truncated && !tc.duringRun {
+				want := strings.Join([]string{dir, tc.latest, "v1.2.3", server.URL + "/releases", ""}, "\n")
+				if readErr != nil || strings.ReplaceAll(string(data), "\r\n", "\n") != want {
+					t.Fatalf("invocation = %q, %v; want %q", data, readErr, want)
+				}
+			} else if !errors.Is(readErr, os.ErrNotExist) {
+				t.Fatalf("installer ran or capture read failed: %q, %v", data, readErr)
 			}
 		})
-	}
-}
-
-// shipTestBinary copies this test binary to executable, so running it as
-// bits install works.
-func shipTestBinary(t *testing.T, executable string) {
-	t.Helper()
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	bits, err := os.ReadFile(self)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(executable, bits, 0o755); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -280,43 +183,68 @@ func TestStandaloneStaysOnHTTPS(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://"+r.Host+"/releases/tag/v1.2.4", http.StatusFound)
 	}))
-	t.Cleanup(server.Close)
+	defer server.Close()
 	s := newStandalone(server.URL+"/releases", "", "")
 	s.check.Transport = server.Client().Transport
 	s.download.Transport = server.Client().Transport
 	if _, err := s.LatestVersion(context.Background()); err == nil || !strings.Contains(err.Error(), "refusing a redirect") {
-		t.Errorf("LatestVersion = %v, want a refused redirect", err)
+		t.Fatalf("LatestVersion = %v", err)
 	}
-	if _, err := s.get(context.Background(), "v1.2.4", "bits_1.2.4_checksums.txt"); err == nil || !strings.Contains(err.Error(), "refusing a redirect") {
-		t.Errorf("get = %v, want a refused redirect", err)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := s.download.Do(req)
+	if resp != nil {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}
+	if err == nil || !strings.Contains(err.Error(), "refusing a redirect") {
+		t.Fatalf("installer download = %v", err)
 	}
 }
 
 func TestDetectStandalone(t *testing.T) {
-	root := newRoot(t)
-	opts := isolatedOptions(t)
-	if runtime.GOOS != "windows" {
-		opts.Home = t.TempDir()
-	}
-	executable := unpack(t, root, "v1.2.3", true)
-	if err := install(t, opts, executable); err != nil {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
 		t.Fatal(err)
 	}
-	incomplete := unpack(t, root, "v1.2.4", false)
-	for path, want := range map[string]bool{
-		executable: true,
-		filepath.Join(root, currentLink, "bin", executableName): true,
-		incomplete: false,
+	for _, tc := range []struct {
+		name     string
+		version  string
+		complete bool
+		want     bool
+	}{
+		{name: "complete", version: "v1.2.3", complete: true, want: true},
+		{name: "incomplete", version: "v1.2.4"},
+		{name: "development", version: "dev", complete: true},
 	} {
-		got, err := detectBackend(path)
-		if !want {
-			if got != nil || !errors.Is(err, ErrUnsupportedInstallation) {
-				t.Errorf("detect %s = %v, %v; want unsupported installation", path, got, err)
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(root, "versions", tc.version)
+			executable := filepath.Join(dir, "bin", executableName)
+			if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+				t.Fatal(err)
 			}
-			continue
-		}
-		if s, ok := got.(standalone); err != nil || !ok || s.root != root || s.current != "v1.2.3" {
-			t.Errorf("detect %s = %#v, %v; want standalone v1.2.3 in %s", path, got, err, root)
-		}
+			if err := os.WriteFile(executable, nil, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tc.complete {
+				if err := os.WriteFile(filepath.Join(dir, ".install-complete"), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := detectBackend(executable)
+			if !tc.want {
+				if got != nil || !errors.Is(err, ErrUnsupportedInstallation) {
+					t.Fatalf("detect = %#v, %v", got, err)
+				}
+				return
+			}
+			s, ok := got.(standalone)
+			if err != nil || !ok || s.root != root || s.current != tc.version {
+				t.Fatalf("detect = %#v, %v", got, err)
+			}
+		})
 	}
 }

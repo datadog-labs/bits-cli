@@ -126,9 +126,9 @@ func (c *Checker) check(ctx context.Context, current string) string {
 // Upgrade installs the latest release in the foreground with the installer
 // attached to the given streams, so call it only once the TUI has released
 // the terminal. The running process keeps the old binary; the new version
-// starts on the next launch. Canceling ctx, as Ctrl-C does, stops a
-// download, but an installer that has started runs to the end, since killing
-// it mid-install can break the installation.
+// starts on the next launch. Canceling ctx stops a standalone installer and
+// its downloads; staging and atomic activation keep the current release usable.
+// Homebrew finishes its own installation once it starts.
 // Every attempt postpones the offer, like postpone: a failed or declined one,
 // and one where brew exits 0 without installing (a pinned formula, auto-update
 // disabled). After a real upgrade the postponement has no effect. Brew's output

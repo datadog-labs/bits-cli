@@ -7,8 +7,10 @@
 | Windows (PowerShell) | `irm https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.ps1 \| iex` |
 
 The install scripts need no administrator rights. `install.sh` needs `curl` or
-`wget`, `tar`, and `sha256sum` or `shasum`; `install.ps1` needs PowerShell 5.1
-or later. Both verify the download against the release checksums.
+`wget`, `tar`, `sha256sum` or `shasum`, and `flock` on Linux (system Perl on macOS); `install.ps1` needs PowerShell 5.1
+or later in FullLanguage mode (the default), with .NET available to create a
+Windows junction without administrator rights. Both verify the archive against
+the release checksums and check the executable version before making it active.
 
 If `irm` fails with "Could not create SSL/TLS secure channel", PowerShell does
 not offer TLS 1.2, which GitHub requires. Enable it for the session first:
@@ -36,6 +38,9 @@ release.
 
 On Windows, the installer adds `bits` to your user `PATH`, so it works in that
 window and in new ones. Restart terminals and editors that were already open.
+The existing PATH value keeps its registry type and expansion behavior. If an
+expandable PATH must name an installation containing literal percent signs,
+the installer creates the user variable `BITS_INSTALL_BIN` to preserve them.
 
 On macOS and Linux, the installer prints what to do when `~/.local/bin` is not
 on your `PATH`, for example with zsh:
@@ -64,9 +69,15 @@ $env:BITS_VERSION = 'v0.1.0'; irm https://raw.githubusercontent.com/datadog-labs
 
 When a release is out, Bits offers to update at startup. Run `bits update` to
 update at any time. Set `BITS_NO_UPDATE_CHECK=1` to stop the startup check.
-Bits updates the way it was installed: with the install scripts' layout, or
-with `brew upgrade` for Homebrew. Homebrew offers a release once its formula is
-updated, which can take longer.
+For a script installation, Bits downloads the complete current installer from
+the default branch and runs it with the existing installation root and selected
+release. Changing `XDG_DATA_HOME`, `LOCALAPPDATA`, or `BITS_VERSION` does not move
+or pin an update. If another installation has switched the active version since
+this Bits session started, the updater leaves that selection alone; restart
+Bits and update again if needed.
+
+Homebrew installations update with `brew upgrade`. Homebrew offers a release
+once its formula is updated, which can take longer.
 
 ## Verify the installer
 
@@ -79,6 +90,10 @@ curl -fsSLO https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts
 ```
 
 To run exactly the script you read, replace `HEAD` in the URL with a commit.
+This pins that invocation only: `bits update` fetches the current default-branch
+installer over HTTPS. First installation and updates therefore trust changes
+to these scripts as well as the release publishing workflow. Bits does not
+independently verify the installer's provenance before executing it.
 
 The script checks the archive it downloads against the release checksums. To
 verify that the archive was built by the release workflow, run
@@ -87,14 +102,18 @@ verify that the archive was built by the release workflow, run
 ## Uninstall
 
 ```sh
-data=$XDG_DATA_HOME; case $data in /*) ;; *) data=$HOME/.local/share ;; esac
-# Remove ~/.local/bin/bits only if it is the link the installer made.
-[ "$(readlink ~/.local/bin/bits)" = "$data/bits/current/bin/bits" ] && rm ~/.local/bin/bits
-rm -rf "$data/bits"
+data=${XDG_DATA_HOME:-}; case $data in /*) ;; *) data=$HOME/.local/share ;; esac
+if root=$(cd -P "$data/bits" 2>/dev/null && pwd); then
+    # Remove ~/.local/bin/bits only if it is the link the installer made.
+    [ "$(readlink ~/.local/bin/bits)" = "$root/current/bin/bits" ] && rm ~/.local/bin/bits
+    rm -rf "$data/bits"
+fi
 ```
 
 On Windows, delete `%LOCALAPPDATA%\bits`, then search the Start menu for
 **Edit environment variables for your account** and remove
-`%LOCALAPPDATA%\bits\current\bin` from `Path`.
+the Bits entry from `Path` (`%LOCALAPPDATA%\bits\current\bin`, its absolute path,
+or `%BITS_INSTALL_BIN%`). If the installer created `BITS_INSTALL_BIN`, remove
+that user variable too.
 
 Uninstalling keeps your sign-in and settings.

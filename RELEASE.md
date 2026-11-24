@@ -19,6 +19,11 @@ This triggers `.github/workflows/release.yml` on `main`, which:
 4. opens a pull request that updates the [Homebrew](#homebrew) formula and merges
    once approved.
 
+If publication succeeds but a later lookup or promotion fails, rerun the failed
+publish job in the same workflow run. It resumes promotion only when the existing
+release is immutable and its tag commit and asset digests match that run. A fresh
+workflow dispatch still refuses an existing tag.
+
 Tags are protected, so they are only created by the workflow, with a
 dd-octo-sts token scoped by `.github/chainguard/self.release.sts.yaml`.
 
@@ -87,22 +92,39 @@ branch ([INSTALL.md](INSTALL.md) has the commands), and they install the latest
 release. A change to them reaches users when it merges, so keep them working
 with the latest release.
 
-Each installation then updates itself with the code of the release it runs,
-so released binaries and the scripts depend on these, which must not change:
+Standalone updates fetch the complete current script before executing it.
+The scripts own archive selection, checksum verification, activation, PATH setup,
+and pruning; the binary only checks the latest release and invokes the installer.
+Installer changes reach existing installations when merged, without waiting for
+them to upgrade. Review them as executable update code: this path trusts the
+default branch over HTTPS in addition to the release workflow.
 
-- the repository, `datadog-labs/bits-cli`, `INSTALL.md` at its root, which
-  bits links when it cannot update itself, and the scripts' paths on the
-  default branch, which users and docs link;
-- the asset names above and the `sha256sum` format of the checksums;
-- archives that hold `bin/`, `libexec/`, and `share/` at their root, and only
-  regular files and directories: older binaries unpack nothing else;
-- `releases/latest` redirecting to the tag page of the latest release;
-- the layout under the installation root: `versions/v<version>/` with an
-  `.install-complete` marker, and `current` pointing at one of them;
-- `bits install`, with no arguments, run from `versions/v<version>/bin`,
-  which switches to that version. A layout change goes in there.
+Released binaries depend on these compatibility contracts:
 
-`scripts/install_test.go` and `internal/update` test these.
+- the repository, `datadog-labs/bits-cli`, `INSTALL.md` at its root, and the
+  scripts' paths on the default branch;
+- `releases/latest` redirecting to the tag page of the latest stable release;
+- the Unix installer accepting `--root PATH --version vX.Y.Z --update-from vA.B.C`,
+  and the PowerShell installer accepting `-Root`, `-Version`, and `-UpdateFrom`;
+- these explicit options taking precedence over the environment, and a stale
+  updater leaving a changed active selection alone;
+- installation discovery through `versions/v<version>/bin/bits` (`bits.exe` on
+  Windows), the `.install-complete` marker, and the `current` link or junction.
+
+Keep the latest scripts compatible with supported existing layouts and releases
+from v0.0.15. Archive formats and names can evolve in the scripts without changing
+old updaters. A layout migration must preserve discovery for the binaries it
+continues to support. There is no `bits install` activation protocol.
+
+Both scripts stage on the installation filesystem and switch `current` without
+removing it. Reinstalling a version retains its existing files and rollback copy.
+Installers serialize publication, the final active-version check, activation,
+and cleanup with a process-owned lock per root. Keep the lock file in place;
+deleting it would allow different processes to lock different files.
+Cleanup failures warn after a successful activation.
+
+`scripts/install_test.go`, its platform-specific tests, and `internal/update`
+test these contracts using real installers and local release fixtures.
 
 ## Homebrew
 

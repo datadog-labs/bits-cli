@@ -182,15 +182,17 @@ func TestReleaseWorkflowGating(t *testing.T) {
 	if wf.Jobs["check"].If != "github.ref == 'refs/heads/main'" {
 		t.Errorf("check job if = %q, must only release main", wf.Jobs["check"].If)
 	}
-	// release.sh --check compares against every existing tag.
-	fullClone := false
-	for _, step := range wf.Jobs["check"].Steps {
-		if strings.HasPrefix(step.Uses, "actions/checkout@") && step.With["fetch-depth"] == 0 {
-			fullClone = true
+	// Tag validation and superseded-promotion protection need every tag.
+	for _, name := range []string{"check", "publish"} {
+		fullClone := false
+		for _, step := range wf.Jobs[name].Steps {
+			if strings.HasPrefix(step.Uses, "actions/checkout@") && step.With["fetch-depth"] == 0 {
+				fullClone = true
+			}
 		}
-	}
-	if !fullClone {
-		t.Error("check job must check out the full history and tags (fetch-depth: 0)")
+		if !fullClone {
+			t.Errorf("%s must check out full history and tags (fetch-depth: 0)", name)
+		}
 	}
 	if wf.Jobs["ci"].Uses != "./.github/workflows/ci.yml" {
 		t.Errorf("release ci job uses %q, want ./.github/workflows/ci.yml", wf.Jobs["ci"].Uses)
@@ -283,19 +285,60 @@ func TestPublishChecksDraftAssets(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("publish.sh runs on Linux and requires GNU sha256sum")
 	}
-	tests := []struct {
-		name     string
-		tamper   string // when the archive stops matching the built one: "draft" or "published"
-		wantLog  string
-		wantFail bool
+	script, err := os.ReadFile("scripts/publish.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name        string
+		tamper      string
+		existing    bool
+		mutable     bool
+		wrongCommit bool
+		superseded  bool
+		retry       string
+		wantLog     string
+		wantFail    bool
 	}{
 		{name: "matching draft", wantLog: "create\npublish\nlatest\n"},
 		{name: "edited draft", tamper: "draft", wantLog: "create\n", wantFail: true},
 		{name: "swapped as it is published", tamper: "published", wantLog: "create\npublish\n", wantFail: true},
-	}
-	for _, tc := range tests {
+		{name: "resume verified release", existing: true, wantLog: "latest\n"},
+		{name: "reject mutable release", existing: true, mutable: true, wantFail: true},
+		{name: "reject another commit", existing: true, wrongCommit: true, wantFail: true},
+		{name: "reject different published assets", existing: true, tamper: "published", wantFail: true},
+		{name: "do not roll back a newer release", existing: true, superseded: true, wantFail: true},
+		{name: "retry promotion failure", retry: "latest", wantLog: "create\npublish\nlatest\nlatest\n"},
+		{name: "retry post-publish lookup failure", retry: "lookup", wantLog: "create\npublish\nlatest\n"},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dist, bin := t.TempDir(), t.TempDir()
+			repo, dist, bin := t.TempDir(), t.TempDir(), t.TempDir()
+			for _, args := range [][]string{{"init", "-q", repo}, {"-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "fixture"}} {
+				if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+					t.Fatalf("git: %v\n%s", err, out)
+				}
+			}
+			head, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := strings.TrimSpace(string(head))
+			if tc.wrongCommit {
+				target = strings.Repeat("0", 40)
+			}
+			if tc.superseded {
+				if out, err := exec.Command("git", "-C", repo, "tag", "v1.2.4").CombinedOutput(); err != nil {
+					t.Fatalf("git tag: %v\n%s", err, out)
+				}
+			}
+			scripts := filepath.Join(repo, "scripts")
+			if err := os.Mkdir(scripts, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(scripts, "publish.sh")
+			if err := os.WriteFile(path, script, 0o755); err != nil {
+				t.Fatal(err)
+			}
 			archive := "bits_1.2.3_linux_amd64.tar.gz"
 			if err := os.WriteFile(filepath.Join(dist, archive), []byte("built"), 0o644); err != nil {
 				t.Fatal(err)
@@ -305,8 +348,6 @@ func TestPublishChecksDraftAssets(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dist, "bits_1.2.3_checksums.txt"), []byte(checksums), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			// What gh release view prints for the assets through the --jq filter,
-			// in the draft and once published.
 			listing := func(content string) []byte {
 				return []byte(sum([]byte(content)) + "  " + archive + "\n" + sum([]byte(checksums)) + "  bits_1.2.3_checksums.txt\n")
 			}
@@ -317,33 +358,56 @@ func TestPublishChecksDraftAssets(t *testing.T) {
 			case "published":
 				published = "swapped"
 			}
-			for name, content := range map[string]string{"draft": draft, "published": published} {
-				if err := os.WriteFile(filepath.Join(bin, name), listing(content), 0o644); err != nil {
+			for name, content := range map[string][]byte{"draft": listing(draft), "published": listing(published), "log": nil} {
+				if err := os.WriteFile(filepath.Join(bin, name), content, 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
-			state, log := filepath.Join(bin, "draft"), filepath.Join(bin, "log")
+			if tc.existing {
+				if err := os.WriteFile(filepath.Join(bin, "exists"), []byte("false\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.retry != "" {
+				if err := os.WriteFile(filepath.Join(bin, "fail-"+tc.retry), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			immutable := "true"
+			if tc.mutable {
+				immutable = "false"
+			}
 			gh := `#!/bin/sh
 case "$1 $2 $*" in
-"release view "*isDraft*) exit 1 ;;
-"release view "*) cat "` + state + `" ;;
-"release create "*) echo create >>"` + log + `" ;;
-"release edit "*--draft=false*) echo publish >>"` + log + `"; cp "` + filepath.Join(bin, "published") + `" "` + state + `" ;;
-"release edit "*--latest*) echo latest >>"` + log + `" ;;
+"release view "*isDraft*) cat "$BITS_TEST_GH/exists" 2>/dev/null ;;
+"release view "*isImmutable*) if [ -f "$BITS_TEST_GH/fail-lookup" ]; then rm "$BITS_TEST_GH/fail-lookup"; exit 1; fi; echo ` + immutable + ` ;;
+"release view "*) if [ -f "$BITS_TEST_GH/exists" ] && [ "$(cat "$BITS_TEST_GH/exists")" = false ]; then cat "$BITS_TEST_GH/published"; else cat "$BITS_TEST_GH/draft"; fi ;;
+"release create "*) echo create >>"$BITS_TEST_GH/log"; echo true >"$BITS_TEST_GH/exists" ;;
+"release edit "*--draft=false*) echo publish >>"$BITS_TEST_GH/log"; echo false >"$BITS_TEST_GH/exists" ;;
+"release edit "*--latest*) echo latest >>"$BITS_TEST_GH/log"; if [ -f "$BITS_TEST_GH/fail-latest" ]; then rm "$BITS_TEST_GH/fail-latest"; exit 1; fi ;;
+"api "*) echo ` + target + ` ;;
 *) exit 99 ;;
 esac
 `
 			if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(gh), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			cmd := command(t, "", "bash", "scripts/publish.sh", "v1.2.3")
-			cmd.Env = append(cmd.Env, "DIST_DIR="+dist, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-			out, err := cmd.CombinedOutput()
-			if (err != nil) != tc.wantFail {
-				t.Fatalf("publish.sh = %v, want failure %v:\n%s", err, tc.wantFail, out)
+			attempts := 1
+			if tc.retry != "" {
+				attempts = 2
 			}
-			if calls, err := os.ReadFile(log); err != nil || string(calls) != tc.wantLog {
-				t.Fatalf("gh calls = %q, %v; want %q", calls, err, tc.wantLog)
+			for attempt := range attempts {
+				cmd := command(t, "", "bash", path, "v1.2.3")
+				cmd.Env = append(cmd.Env, "DIST_DIR="+dist, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "BITS_TEST_GH="+bin)
+				out, err := cmd.CombinedOutput()
+				wantFail := tc.wantFail || tc.retry != "" && attempt == 0
+				if (err != nil) != wantFail {
+					t.Fatalf("attempt %d = %v, want failure %v:\n%s", attempt, err, wantFail, out)
+				}
+			}
+			calls, err := os.ReadFile(filepath.Join(bin, "log"))
+			if err != nil || string(calls) != tc.wantLog {
+				t.Fatalf("calls=%q, %v; want %q", calls, err, tc.wantLog)
 			}
 		})
 	}
