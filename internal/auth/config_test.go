@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"net/url"
 	"strings"
@@ -523,7 +524,7 @@ func TestStagingSessionIdentityIsCanonicalAPIDomain(t *testing.T) {
 	// session stays usable and its refresh and Assistant routes are rebuilt
 	// from the saved site, not from the alias.
 	t.Setenv(site.EnvStagingSite, "https://ui.staging.test")
-	source, err := NewSource(saved, newMemoryStore(saved), nil)
+	source, err := NewSource(context.Background(), newMemoryStore(saved), nil)
 	if err != nil {
 		t.Fatalf("NewSource after login alias change: %v", err)
 	}
@@ -542,7 +543,7 @@ func TestStagingSessionIdentityIsCanonicalAPIDomain(t *testing.T) {
 	t.Setenv(site.EnvStagingSite, "https://login.other.test")
 	t.Setenv(site.EnvStagingDomain, "other.test")
 	t.Setenv(site.EnvStagingClientID, "other-client")
-	if _, err := NewSource(saved, newMemoryStore(saved), nil); err == nil {
+	if _, err := NewSource(context.Background(), newMemoryStore(saved), nil); err == nil {
 		t.Fatal("NewSource accepted a stored session from a different staging domain")
 	} else if !errors.Is(err, ErrSiteConfiguration) {
 		t.Fatalf("NewSource error = %v, want ErrSiteConfiguration", err)

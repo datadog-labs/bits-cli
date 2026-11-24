@@ -14,19 +14,19 @@ func TestE2E_OAuthRefresh(t *testing.T) {
 		t.Skip("set BITS_OAUTH_E2E=1 after bits login")
 	}
 	store := DefaultStore()
+	// Validate the session and its site configuration before forcing its
+	// expiry: a config problem (for example a staging session whose
+	// BITS_STAGING_SITE/BITS_STAGING_DOMAIN is no longer set) must fail here
+	// rather than after a forced-expiry save.
+	if _, err := NewSource(context.Background(), store, nil); err != nil {
+		t.Fatalf("stored OAuth session is unusable: %v", err)
+	}
 	before, err := store.Load()
 	if err != nil {
 		t.Fatalf("load OAuth session: %v", err)
 	}
 	if before.RefreshToken == "" {
 		t.Fatal("stored OAuth session has no refresh token")
-	}
-	// Validate the session and its site configuration before mutating the
-	// stored credential: a config problem (for example a staging session whose
-	// BITS_STAGING_SITE/BITS_STAGING_DOMAIN is no longer set) must fail here
-	// rather than after a forced-expiry save.
-	if _, err := NewSource(before, store, nil); err != nil {
-		t.Fatalf("stored OAuth session is unusable: %v", err)
 	}
 
 	forced := before
@@ -36,7 +36,7 @@ func TestE2E_OAuthRefresh(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("persist forced-expiry session: %v", err)
 	}
-	source, err := NewSource(forced, store, nil)
+	source, err := NewSource(context.Background(), store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

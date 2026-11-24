@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net/http"
@@ -25,34 +26,59 @@ type Source struct {
 	store        CredentialStore
 	httpClient   *http.Client
 	session      Session
-	reconciled   bool
 	dirty        bool
 	persistBase  Session
 	cleanupGrant Session
 }
 
-// NewSource builds a refreshing source from a stored session.
-func NewSource(session Session, store CredentialStore, httpClient *http.Client) (*Source, error) {
-	if err := session.validate(); err != nil {
-		return nil, err
-	}
-	cfg, err := ConfigForSite(session.Site, session.ClientID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrSiteConfiguration, err)
-	}
-	cfg.WebOrigin = session.WebOrigin
+// NewSource builds a refreshing source pinned to the stored login. A login
+// stored without an ID first gets a durable one under the session lock, so
+// every source pinned to it can tell another process's refresh from a
+// replacement login.
+func NewSource(ctx context.Context, store CredentialStore, httpClient *http.Client) (*Source, error) {
 	if store == nil {
 		return nil, fmt.Errorf("OAuth credential store is required")
 	}
-	httpClient = defaultOAuthClient(httpClient, refreshTimeout)
-	return &Source{
+	source := &Source{
 		gate:       make(chan struct{}, 1),
-		config:     cfg,
-		loginID:    session.LoginID,
 		store:      store,
-		httpClient: httpClient,
-		session:    session,
-	}, nil
+		httpClient: defaultOAuthClient(httpClient, refreshTimeout),
+	}
+	lockCtx, lockCancel := context.WithTimeout(ctx, sessionLockTimeout)
+	defer lockCancel()
+	err := withSessionLock(lockCtx, store, func() error {
+		if err := reconcileStoreLocked(store); err != nil {
+			return err
+		}
+		session, err := store.Load()
+		if err != nil {
+			return err
+		}
+		if err := session.validate(); err != nil {
+			return fmt.Errorf("%w: %w", ErrSessionCorrupt, err)
+		}
+		cfg, err := ConfigForSite(session.Site, session.ClientID)
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrSiteConfiguration, err)
+		}
+		cfg.WebOrigin = session.WebOrigin
+		if session.LoginID == "" {
+			session.LoginID = rand.Text()
+			persistCtx, persistCancel := context.WithTimeout(ctx, sessionPersistTimeout)
+			defer persistCancel()
+			if err := saveWithRetry(persistCtx, store, session); err != nil {
+				return fmt.Errorf("%w: upgrade stored OAuth login: %w", ErrSessionNotDurable, err)
+			}
+		}
+		source.config = cfg
+		source.loginID = session.LoginID
+		source.session = session
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return source, nil
 }
 
 // Site is the Assistant base URL associated with this login.
@@ -76,9 +102,6 @@ func (s *Source) AccessToken(ctx context.Context) (string, error) {
 	lockCtx, lockCancel := context.WithTimeout(ctx, sessionLockTimeout)
 	defer lockCancel()
 	err := withSessionLock(lockCtx, s.store, func() error {
-		if err := s.reconcileStoreLocked(); err != nil {
-			return err
-		}
 		durable, loadErr := s.store.Load()
 		if s.dirty {
 			if err := s.reconcileDirty(ctx, durable, loadErr); err != nil {
@@ -197,10 +220,6 @@ func (s *Source) adopt(session Session) error {
 	if session.Site != s.config.Site || session.ClientID != s.config.ClientID || session.LoginID != s.loginID {
 		return fmt.Errorf("%w; restart Bits to use the new login", ErrSessionReplaced)
 	}
-	// Legacy sessions cannot distinguish another process's refresh from a login.
-	if s.loginID == "" && !sameSession(session, s.session) {
-		return fmt.Errorf("%w; restart Bits to use the new login", ErrSessionReplaced)
-	}
 	s.session = session
 	return nil
 }
@@ -254,9 +273,6 @@ func (s *Source) RejectAccessToken(ctx context.Context, rejected string) error {
 	}
 	defer s.release()
 	return withSessionLock(ctx, s.store, func() error {
-		if err := s.reconcileStoreLocked(); err != nil {
-			return err
-		}
 		durable, err := s.store.Load()
 		if errors.Is(err, ErrNoSession) {
 			return nil
@@ -281,20 +297,6 @@ func (s *Source) RejectAccessToken(ctx context.Context, rejected string) error {
 		s.session = stale
 		return nil
 	})
-}
-
-// reconcileStoreLocked performs one-time backend maintenance for this Source.
-// Each request still reads the durable session below; skipping repeat cleanup
-// avoids a second keyring round trip on every request.
-func (s *Source) reconcileStoreLocked() error {
-	if s.reconciled {
-		return nil
-	}
-	if err := reconcileStoreLocked(s.store); err != nil {
-		return err
-	}
-	s.reconciled = true
-	return nil
 }
 
 func isInvalidGrant(err error) bool {

@@ -56,7 +56,7 @@ func TestNewOAuthHTTPClientSurfacesRedirectWithoutFollowing(t *testing.T) {
 // NewSource's default client construction must refuse redirects.
 func TestNewSourceDefaultClientRefusesRedirects(t *testing.T) {
 	noStagingEnv(t)
-	source, err := NewSource(expiredSession(), newMemoryStore(expiredSession()), nil)
+	source, err := NewSource(context.Background(), newMemoryStore(expiredSession()), nil)
 	if err != nil {
 		t.Fatalf("NewSource: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestSourceRefreshDoesNotFollowTokenRedirect(t *testing.T) {
 		clone.URL.Host = strings.TrimPrefix(redirect.URL, "http://")
 		return http.DefaultTransport.RoundTrip(clone)
 	})
-	source, err := NewSource(initial, store, client)
+	source, err := NewSource(context.Background(), store, client)
 	if err != nil {
 		t.Fatalf("NewSource: %v", err)
 	}

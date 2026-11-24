@@ -431,12 +431,7 @@ func TestSnapshotLive(t *testing.T) {
 
 func widgetE2EAPI(t *testing.T) *assistant.Client {
 	t.Helper()
-	store := auth.DefaultStore()
-	session, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	source, err := auth.NewSource(session, store, nil)
+	source, err := auth.NewSource(context.Background(), auth.DefaultStore(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

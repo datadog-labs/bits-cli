@@ -71,11 +71,11 @@ credentials at their next check rather than switch a running conversation to a
 new login. Requests already in flight may finish or fail with their original
 credentials.
 
-Older saved logins remain usable, but cannot distinguish another process's
-refresh from a replacement login. An external credential change requires a
-restart until you run `bits login` with a current version. If an older binary
-refreshes a new login and drops its login identifier, current instances also
-require a restart.
+A login saved by an older version gets a login identifier the first time a
+current version starts, so you do not need to sign in again. Instances started
+before then stop using credentials at their next check and need one restart. If
+an older version refreshes a login and drops its identifier, current instances
+also require a restart.
 
 For an Assistant endpoint that acknowledges a request policy in a streaming
 response header, set `BITS_REQUIRED_RESPONSE_HEADER=Name=value`. Bits checks

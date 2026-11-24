@@ -198,7 +198,7 @@ func TestStartupStoredOAuthEntersChatWithConversation(t *testing.T) {
 	model, err := startupModelWithStore(
 		context.Background(),
 		ChatOptions{AuthMode: auth.ModeAuto, ConversationID: "conversation-1", PermissionsMode: agent.ModeManual},
-		stubCredentialStore{session: validOAuthSession()},
+		&recordingCredentialStore{session: validOAuthSession()},
 		testWorkspace(t), exectool.NewExecService(""),
 		nil,
 	)
