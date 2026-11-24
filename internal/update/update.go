@@ -17,6 +17,9 @@ import (
 	"golang.org/x/mod/semver"
 )
 
+// InstallGuide lists the installations that update themselves.
+const InstallGuide = "https://github.com/datadog-labs/bits-cli/blob/main/INSTALL.md"
+
 const (
 	ttl          = 24 * time.Hour
 	postponement = 24 * time.Hour
@@ -24,7 +27,7 @@ const (
 
 var (
 	// ErrUnsupportedInstallation means no supported installation backend was found.
-	ErrUnsupportedInstallation = errors.New("automatic updates are unavailable for this installation")
+	ErrUnsupportedInstallation = errors.New("automatic updates are unavailable for this installation; to get them, reinstall Bits: " + InstallGuide)
 	// errInvalidVersion means version information is missing, ambiguous, or unsupported.
 	errInvalidVersion = errors.New("invalid update version")
 )
@@ -32,8 +35,7 @@ var (
 type backend interface {
 	Name() string
 	LatestVersion(context.Context) (string, error)
-	Command() string
-	Upgrade(stdin io.Reader, stdout, stderr io.Writer) error
+	Upgrade(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
 // Checker owns update state for the detected installation backend.
@@ -61,7 +63,7 @@ func New() *Checker {
 	if err != nil {
 		return c
 	}
-	b, err := detectBackend(executable)
+	b, err := detectBackend(executable, version.Build())
 	if err != nil {
 		return c
 	}
@@ -72,6 +74,19 @@ func New() *Checker {
 	c.backend = b
 	c.path = filepath.Join(dir, "update.json")
 	return c
+}
+
+// detectBackend finds the installer that owns the running executable.
+func detectBackend(executable, buildVersion string) (backend, error) {
+	b, homebrewErr := detectHomebrew(executable)
+	if homebrewErr == nil {
+		return b, nil
+	}
+	b, standaloneErr := detectStandalone(executable, buildVersion)
+	if standaloneErr == nil {
+		return b, nil
+	}
+	return nil, errors.Join(homebrewErr, standaloneErr)
 }
 
 // Offer returns nil for an unsupported installation. With check enabled, it
@@ -111,19 +126,24 @@ func (c *Checker) check(ctx context.Context, current string) string {
 // Upgrade installs the latest release in the foreground with the installer
 // attached to the given streams, so call it only once the TUI has released
 // the terminal. The running process keeps the old binary; the new version
-// starts on the next launch. It takes no context: the installer must finish
-// or clean up on its own, since killing it mid-install can break the keg.
+// starts on the next launch. Canceling ctx stops a standalone installer and
+// its downloads; staging and atomic activation keep the current release usable.
+// Homebrew finishes its own installation once it starts.
 // Every attempt postpones the offer, like postpone: a failed or declined one,
 // and one where brew exits 0 without installing (a pinned formula, auto-update
 // disabled). After a real upgrade the postponement has no effect. Brew's output
 // has the last word because an exit code of 0 does not guarantee an install.
-func (c *Checker) Upgrade(stdin io.Reader, stdout, stderr io.Writer) error {
+func (c *Checker) Upgrade(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error {
 	if c.backend == nil {
 		return ErrUnsupportedInstallation
 	}
-	_, _ = fmt.Fprintf(stderr, "Updating Bits with %s\n", c.backend.Command())
-	err := c.backend.Upgrade(stdin, stdout, stderr)
-	if err = errors.Join(err, c.postpone()); err != nil {
+	err := c.backend.Upgrade(ctx, stdin, stdout, stderr)
+	// The state file is a cache: failing to write it, as when another bits on
+	// Windows holds it open, must not fail an upgrade that worked.
+	if postponeErr := c.postpone(); postponeErr != nil {
+		_, _ = fmt.Fprintf(stderr, "Warning: %v\n", postponeErr)
+	}
+	if err != nil {
 		return fmt.Errorf("update Bits: %w", err)
 	}
 	return nil
