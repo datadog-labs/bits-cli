@@ -374,16 +374,16 @@ func TestUserMessageFinalizesPriorStream(t *testing.T) {
 	}
 }
 
-// Widget/dashboard/progress kinds now produce blocks instead of being dropped.
+// App/dashboard/progress kinds produce blocks instead of being dropped.
 func TestPassthroughKindProducesBlock(t *testing.T) {
 	tr := NewTranscript()
-	c := assistant.Content{Type: assistant.ContentWidget, Widget: &assistant.WidgetPayload{Title: "CPU"}}
+	c := assistant.Content{Type: assistant.ContentApp, App: &assistant.AppPayload{ToolName: "show_ui"}}
 	b, ok := tr.AppendMessage(assistant.AssistantMessage("m1", c))
 	if !ok {
-		t.Fatal("widget produced no block")
+		t.Fatal("app produced no block")
 	}
-	if b.Kind != assistant.KindWidget || b.Widget == nil || b.Widget.Title != "CPU" {
-		t.Fatalf("widget block = %+v", b)
+	if b.Kind != assistant.KindApp || b.App == nil || b.App.ToolName != "show_ui" {
+		t.Fatalf("app block = %+v", b)
 	}
 
 	// History replays a live memory message under the same id: it must update

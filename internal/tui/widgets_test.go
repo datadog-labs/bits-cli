@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,35 +26,53 @@ import (
 )
 
 type widgetTestClient struct {
-	render         viz.RenderResult
+	render         viz.Result
 	open           viz.Status // zero opens successfully
 	renders, opens int
+	last           viz.Request
 	closed         bool
 	remote         bool // previews only, like Datadog snapshots
 }
 
-func (c *widgetTestClient) Render(context.Context, viz.Request) viz.RenderResult {
+func (c *widgetTestClient) Render(_ context.Context, r viz.Request) viz.Result {
 	c.renders++
+	c.last = r
 	return c.render
 }
 
-func (c *widgetTestClient) Open(context.Context, viz.Request) viz.Status {
+func (c *widgetTestClient) Open(_ context.Context, r viz.Request) viz.Result {
 	c.opens++
+	c.last = r
 	if c.open.Phase == viz.Idle {
-		return viz.Status{Phase: viz.Succeeded}
+		return viz.Result{Status: viz.Status{Phase: viz.Succeeded}}
 	}
-	return c.open
+	return viz.Result{Status: c.open}
 }
 
 func (c *widgetTestClient) Interactive() bool { return !c.remote }
 
 func (c *widgetTestClient) Close() error { c.closed = true; return nil }
 
-var timeseries = assistant.WidgetDefinition{Type: "timeseries", Title: "CPU"}
+// chartApp is a get_widget result rendering definition.
+func chartApp(definition string) assistant.AppPayload {
+	result := `{"structuredContent":{"source_tool":"get_widget","widget_definition":` + definition + `,"from_ts":1700000000,"to_ts":1700003600}}`
+	return assistant.AppPayload{ResourceURI: viz.DatavizURI, Result: json.RawMessage(result), RelayHandle: "h"}
+}
 
-// widgetModel shows one widget block; cmd holds any operation it started, and
+var (
+	timeseries = chartApp(`{"type":"timeseries","title":"CPU"}`)
+	toplist    = chartApp(`{"type":"toplist","title":"CPU"}`)
+	incident   = assistant.AppPayload{ResourceURI: viz.DatavizURI, Result: json.RawMessage(`{"_meta":{"datadog/show_ui":{"view_spec":{"view":{"name":"incident_detail"}}}}}`)}
+)
+
+// widgetModel shows one app block; cmd holds any operation it started, and
 // opened records URLs sent to the browser.
-func widgetModel(t *testing.T, client viz.Client, support graphics.Support, def assistant.WidgetDefinition) (m *Model, id agent.BlockID, cmd tea.Cmd, opened *[]string) {
+func widgetModel(t *testing.T, client viz.Client, support graphics.Support, app assistant.AppPayload) (m *Model, id agent.BlockID, cmd tea.Cmd, opened *[]string) {
+	block := agent.Block{Kind: assistant.KindApp, App: &app}
+	return widgetModelForBlock(t, client, support, block)
+}
+
+func widgetModelForBlock(t *testing.T, client viz.Client, support graphics.Support, block agent.Block) (m *Model, id agent.BlockID, cmd tea.Cmd, opened *[]string) {
 	opened = new([]string)
 	m = New(agent.New(&spyBackend{t: t, webOrigin: "https://demo.datadoghq.com"}, agent.Config{}), Config{
 		Visualization: client,
@@ -60,8 +80,10 @@ func widgetModel(t *testing.T, client viz.Client, support graphics.Support, def 
 	})
 	m.mode = ModeChat
 	m.graphics.Support = support
+	m.state.ConversationID = "conv"
 	id = agent.BlockID{Key: "widget"}
-	m.state.Blocks = []agent.Block{{ID: id, Kind: assistant.KindWidget, Complete: true, Widget: &assistant.WidgetPayload{WidgetDef: &def}}}
+	block.ID, block.MessageID, block.Complete = id, "msg", true
+	m.state.Blocks = []agent.Block{block}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	m.syncTranscript()
 	_, cmd = m.Update(struct{}{})
@@ -149,11 +171,65 @@ func TestWidgetModes(t *testing.T) {
 	}
 }
 
+func TestLegacyWidgetPresentation(t *testing.T) {
+	var content assistant.Content
+	if err := json.Unmarshal([]byte(`{"type":"widget_def","widget_def":{"type":"timeseries","title":"Legacy CPU","time":{"type":"fixed","from":1700000000123.0,"to":1700000030456.0}}}`), &content); err != nil {
+		t.Fatal(err)
+	}
+	block := agent.Block{Kind: content.Kind(), Widget: content.Widget}
+	for _, tc := range []struct {
+		name    string
+		client  *widgetTestClient
+		support graphics.Support
+		action  chat.WidgetAction
+	}{
+		{"links", nil, graphics.Unsupported, chat.WidgetWeb},
+		{"snapshots without graphics", &widgetTestClient{remote: true}, graphics.Unsupported, chat.WidgetWeb},
+		{"ddviz without graphics", &widgetTestClient{}, graphics.Unsupported, chat.WidgetOpen},
+		{"inline snapshot", &widgetTestClient{remote: true, render: rendered(t)}, graphics.Supported, chat.WidgetWeb},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var client viz.Client
+			if tc.client != nil {
+				client = tc.client
+			}
+			m, _, render, opened := widgetModelForBlock(t, client, tc.support, block)
+			defer m.Detach()
+			if tc.support == graphics.Supported {
+				runWidgetTasks(m, render)
+				if tc.client.renders != 1 || tc.client.last.LegacyWidget == nil {
+					t.Fatalf("legacy preview request = %+v", tc.client.last)
+				}
+			}
+			if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, "Legacy CPU") || strings.Contains(doc, "[unknown]") {
+				t.Fatal(doc)
+			}
+			runWidgetTasks(m, clickWidget(t, m, tc.action))
+			if tc.action == chat.WidgetOpen {
+				if tc.client.opens != 1 || tc.client.last.LegacyWidget == nil {
+					t.Fatalf("legacy panel request = %+v", tc.client.last)
+				}
+				return
+			}
+			if len(*opened) != 1 {
+				t.Fatalf("opened %v", *opened)
+			}
+			u, err := url.Parse((*opened)[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if u.Path != "/dataviz/sandbox" || u.Query().Get("start") != "1700000000123" || u.Query().Get("end") != "1700000030456" {
+				t.Fatalf("sandbox = %s", u)
+			}
+		})
+	}
+}
+
 // A helper that cannot run moves the whole session to links, and a failure
 // worth retrying offers Retry with its reason.
 func TestWidgetCompletions(t *testing.T) {
-	client := &widgetTestClient{render: viz.RenderResult{Status: viz.Status{Phase: viz.Failed, Reason: "Query failed.", Retry: viz.RetryAllowed}}}
-	m, _, render, _ := widgetModel(t, client, graphics.Supported, timeseries)
+	client := &widgetTestClient{render: viz.Result{Status: viz.Status{Phase: viz.Failed, Reason: "Query failed.", Retry: viz.RetryAllowed}}}
+	m, _, render, opened := widgetModel(t, client, graphics.Supported, timeseries)
 	defer m.Detach()
 
 	// The render finishes after streaming pushed the widget off screen: its
@@ -172,15 +248,19 @@ func TestWidgetCompletions(t *testing.T) {
 	m.state.Blocks = m.state.Blocks[:1]
 	m.syncTranscript()
 	m.Update(struct{}{})
-	if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, "Query failed.") || widgetActions(m)[0] != chat.WidgetRetry {
+	if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, "Query failed.") || !strings.Contains(doc, "Open chart in Datadog") || !slices.Equal(widgetActions(m), []chat.WidgetAction{chat.WidgetRetry, chat.WidgetWeb}) {
 		t.Fatalf("retryable failure not offered:\n%s", doc)
+	}
+	runWidgetTasks(m, clickWidget(t, m, chat.WidgetWeb))
+	if len(*opened) != 1 || !strings.HasPrefix((*opened)[0], "https://demo.datadoghq.com/dataviz/sandbox?") {
+		t.Fatalf("opened %q after a failed preview", *opened)
 	}
 	runWidgetTasks(m, clickWidget(t, m, chat.WidgetRetry))
 	if client.renders != 2 {
 		t.Fatalf("renders = %d, want 2", client.renders)
 	}
 
-	client.render = viz.RenderResult{Status: viz.Status{Phase: viz.Unavailable}}
+	client.render = viz.Result{Status: viz.Status{Phase: viz.Unavailable}}
 	runWidgetTasks(m, clickWidget(t, m, chat.WidgetRetry))
 	m.Update(struct{}{})
 	if m.widgetMode() != widgetLink || widgetActions(m)[0] != chat.WidgetWeb {
@@ -206,14 +286,14 @@ func TestWidgetLifecycle(t *testing.T) {
 	m.syncTranscript()
 	m.Update(struct{}{})
 	if m.widgets.entries[id] != original {
-		t.Fatal("a revision with the same definition replaced the entry")
+		t.Fatal("a revision with the same app replaced the entry")
 	}
-	m.state.Blocks[0].Widget = &assistant.WidgetPayload{WidgetDef: &assistant.WidgetDefinition{Type: "toplist", Title: "CPU"}}
+	m.state.Blocks[0].App = &toplist
 	m.state.Blocks[0].Rev++
 	m.syncTranscript()
 	m.Update(struct{}{})
 	if m.widgets.entries[id] == original || original.controller.State().CanOpen() {
-		t.Fatal("a changed definition did not replace the entry")
+		t.Fatal("a changed app did not replace the entry")
 	}
 	runWidgetTasks(m, open)
 	if m.widgets.entries[id].controller.State().Open.Phase != viz.Idle {
@@ -234,6 +314,39 @@ func TestWidgetLifecycle(t *testing.T) {
 	}
 }
 
+func TestStreamedAppAdoptsConversationID(t *testing.T) {
+	for _, revise := range []bool{false, true} {
+		t.Run(fmt.Sprintf("revised=%t", revise), func(t *testing.T) {
+			client := &widgetTestClient{}
+			m, id, _, _ := widgetModel(t, client, graphics.Unsupported, timeseries)
+			defer m.Detach()
+			m.widgets.release()
+			m.state.ConversationID = ""
+			m.Update(struct{}{})
+			original := m.widgets.entries[id]
+			pending := clickWidget(t, m, chat.WidgetOpen)
+
+			m.state.ConversationID = "assigned"
+			if revise {
+				m.state.Blocks[0].Rev++
+				m.syncTranscript()
+			}
+			m.Update(struct{}{})
+			if m.widgets.entries[id] == original || original.controller.State().CanOpen() {
+				t.Fatal("conversation ID assignment kept the old widget's work")
+			}
+			runWidgetTasks(m, pending)
+			if m.widgets.entries[id].controller.State().Open.Phase != viz.Idle {
+				t.Fatal("old completion reached the replacement widget")
+			}
+			runWidgetTasks(m, clickWidget(t, m, chat.WidgetOpen))
+			if client.last.ConversationID != "assigned" || client.last.MessageID != "msg" {
+				t.Fatalf("restore keys = %q, %q", client.last.ConversationID, client.last.MessageID)
+			}
+		})
+	}
+}
+
 // A preview's pixels go to the terminal once, and leave with their widget.
 func TestWidgetInlineImage(t *testing.T) {
 	client := &widgetTestClient{render: rendered(t)}
@@ -251,7 +364,7 @@ func TestWidgetInlineImage(t *testing.T) {
 	if _, cmd := m.Update(tea.WindowSizeMsg{Width: 60, Height: 40}); !strings.Contains(runWidgetTasks(m, cmd), "a=p") {
 		t.Fatal("a resized preview was not placed again without its pixels")
 	}
-	m.state.Blocks[0].Widget = &assistant.WidgetPayload{WidgetDef: &assistant.WidgetDefinition{Type: "toplist", Title: "CPU"}}
+	m.state.Blocks[0].App = &toplist
 	m.state.Blocks[0].Rev++
 	m.syncTranscript()
 	old := m.widgets.entries[id].image.ID
@@ -273,7 +386,7 @@ func TestWidgetInlineImage(t *testing.T) {
 }
 
 // rendered is a successful preview of ddviz's usual size.
-func rendered(t *testing.T) viz.RenderResult {
+func rendered(t *testing.T) viz.Result {
 	t.Helper()
 	var data bytes.Buffer
 	if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, 820, 450))); err != nil {
@@ -283,7 +396,7 @@ func rendered(t *testing.T) viz.RenderResult {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return viz.RenderResult{Status: viz.Status{Phase: viz.Succeeded}, Image: snapshot}
+	return viz.Result{Status: viz.Status{Phase: viz.Succeeded}, Image: snapshot}
 }
 
 // A click that finds the helper unable to run still goes somewhere: the web
@@ -307,18 +420,145 @@ func TestWidgetOpenFallsBackToWeb(t *testing.T) {
 	}
 }
 
-// A legacy tile has no widget definition: it shows its title, with nothing
-// to act on and nothing that reads as an error.
-func TestLegacyWidgetShowsOnlyItsTitle(t *testing.T) {
-	m, id, _, _ := widgetModel(t, &widgetTestClient{}, graphics.Supported, timeseries)
+// A restore replaces the app's summary: a saved app has no result to title it,
+// and a live app restored on retry may bring a new chart.
+func TestRestoredAppTakesItsTitle(t *testing.T) {
+	for _, tc := range []struct {
+		name, before string
+		app          assistant.AppPayload
+	}{
+		{"saved", "Datadog view", assistant.AppPayload{ResourceURI: viz.DatavizURI, Restorable: true}},
+		{"live", "Old", chartApp(`{"type":"timeseries","title":"Old"}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := rendered(t)
+			result.App = &timeseries
+			m, _, render, _ := widgetModel(t, &widgetTestClient{render: result, open: viz.Status{Phase: viz.Unavailable}}, graphics.Supported, tc.app)
+			defer m.Detach()
+			if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, tc.before) {
+				t.Fatalf("view before restore:\n%s", doc)
+			}
+			runWidgetTasks(m, render)
+			m.Update(struct{}{})
+			if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, "CPU") || strings.Contains(doc, tc.before) {
+				t.Fatalf("restored app view:\n%s", doc)
+			}
+		})
+	}
+}
+
+func TestWidgetWithoutLocalPresentation(t *testing.T) {
+	saved := assistant.AppPayload{ResourceURI: viz.DatavizURI, Restorable: true}
+	savedIncident := incident
+	savedIncident.Restorable = true
+	withoutRelay := timeseries
+	withoutRelay.RelayHandle = ""
+	for _, tc := range []struct {
+		name     string
+		app      assistant.AppPayload
+		client   viz.Client
+		support  graphics.Support
+		noOrigin bool
+		action   chat.WidgetAction
+		target   string
+	}{
+		{name: "saved app without renderer", app: saved, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/ask/conv"},
+		{name: "saved app with snapshots and no graphics", app: saved, client: &widgetTestClient{remote: true}, support: graphics.Unsupported, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/ask/conv"},
+		{name: "saved incident with snapshots", app: savedIncident, client: &widgetTestClient{remote: true}, support: graphics.Supported, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/ask/conv"},
+		{name: "unsaved incident with snapshots", app: incident, client: &widgetTestClient{remote: true}, support: graphics.Supported},
+		{name: "unsaved incident without relay", app: incident, client: &widgetTestClient{}},
+		{name: "saved app without web origin", app: saved, noOrigin: true},
+		{name: "relay-less chart uses the sandbox", app: withoutRelay, client: &widgetTestClient{}, action: chat.WidgetWeb, target: "https://demo.datadoghq.com/dataviz/sandbox?"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, id, _, opened := widgetModel(t, tc.client, tc.support, tc.app)
+			defer m.Detach()
+			if tc.noOrigin {
+				m.widgets.origin = ""
+				m.Update(struct{}{})
+			}
+			if m.widgets.entries[id].controller != nil {
+				t.Fatal("fallback started renderer work")
+			}
+			if tc.action == chat.WidgetNone {
+				m.list.SetHeader("")
+				if doc := ansi.Strip(m.list.Document()); doc != "" || len(widgetActions(m)) != 0 {
+					t.Fatalf("hidden view occupies space or takes clicks: %q", doc)
+				}
+				return
+			}
+			if tc.action == chat.WidgetConversation {
+				title := tc.app.Summary().Title
+				if title == "" {
+					title = "Datadog view"
+				}
+				if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, title+" · Open conversation ↗") {
+					t.Fatalf("conversation action not on the title row: %q", doc)
+				}
+			}
+			if actions := widgetActions(m); !slices.Equal(actions, []chat.WidgetAction{tc.action}) {
+				t.Fatalf("actions = %v, want %v", actions, tc.action)
+			}
+			runWidgetTasks(m, clickWidget(t, m, tc.action))
+			if len(*opened) != 1 || !strings.HasPrefix((*opened)[0], tc.target) {
+				t.Fatalf("opened %q, want %s", *opened, tc.target)
+			}
+			if client, ok := tc.client.(*widgetTestClient); ok && client.opens != 0 {
+				t.Fatal("web action restored the app")
+			}
+		})
+	}
+}
+
+func TestChartWithExpiredRelayOffersSandbox(t *testing.T) {
+	withoutRelay := timeseries
+	withoutRelay.RelayHandle = ""
+	client := &widgetTestClient{render: viz.Result{
+		Status: viz.Status{Phase: viz.Failed, Reason: "The visualization session expired."},
+		App:    &withoutRelay,
+	}}
+	m, _, render, opened := widgetModel(t, client, graphics.Supported, timeseries)
 	defer m.Detach()
-	m.state.Blocks[0].Widget = &assistant.WidgetPayload{Title: "Saved CPU tile", TileDef: []byte(`{"viz":"timeseries"}`)}
-	m.state.Blocks[0].Rev++
-	m.syncTranscript()
-	m.Update(struct{}{})
-	doc := ansi.Strip(m.list.Document())
-	if !strings.Contains(doc, "Saved CPU tile") || strings.Contains(doc, "definition") || len(widgetActions(m)) != 0 || m.widgets.entries[id] != nil {
-		t.Fatalf("legacy tile view:\n%s", doc)
+	runWidgetTasks(m, render)
+	if m.widgets.unavailable || !slices.Equal(widgetActions(m), []chat.WidgetAction{chat.WidgetWeb}) {
+		t.Fatalf("actions after expiry = %v, renderer unavailable = %v", widgetActions(m), m.widgets.unavailable)
+	}
+	runWidgetTasks(m, clickWidget(t, m, chat.WidgetWeb))
+	if len(*opened) != 1 || !strings.HasPrefix((*opened)[0], "https://demo.datadoghq.com/dataviz/sandbox?") || client.opens != 0 {
+		t.Fatalf("opened %v; panel requests = %d", *opened, client.opens)
+	}
+}
+
+func TestSavedAppPreviewKeepsConversationUntilRestored(t *testing.T) {
+	chart := rendered(t)
+	chart.App = &timeseries
+	for _, tc := range []struct {
+		name   string
+		result viz.Result
+		title  string
+		action chat.WidgetAction
+	}{
+		{"chart", chart, "CPU", chat.WidgetWeb},
+		{"product card", viz.Result{App: &incident, Status: viz.Status{Phase: viz.Failed, Reason: "This view can't be shown here."}}, "Incident detail", chat.WidgetConversation},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &widgetTestClient{remote: true, render: tc.result}
+			m, _, render, _ := widgetModel(t, client, graphics.Supported, assistant.AppPayload{ResourceURI: viz.DatavizURI, Restorable: true})
+			defer m.Detach()
+			if render == nil || !slices.Equal(widgetActions(m), []chat.WidgetAction{chat.WidgetConversation}) {
+				t.Fatalf("rendering saved app offers %v", widgetActions(m))
+			}
+			runWidgetTasks(m, render)
+			if client.last.ConversationID != "conv" || client.last.MessageID != "msg" {
+				t.Fatalf("restore keys = %q, %q", client.last.ConversationID, client.last.MessageID)
+			}
+			if actions := widgetActions(m); !slices.Equal(actions, []chat.WidgetAction{tc.action}) {
+				t.Fatalf("restored view offers %v, want %v", actions, tc.action)
+			}
+			if doc := ansi.Strip(m.list.Document()); !strings.Contains(doc, tc.title) || strings.Contains(doc, "can't be shown") {
+				t.Fatalf("restored view:\n%s", doc)
+			}
+		})
 	}
 }
 
@@ -327,8 +567,8 @@ func TestLegacyWidgetShowsOnlyItsTitle(t *testing.T) {
 func TestLargeWidgetLinkOpens(t *testing.T) {
 	random := make([]byte, 12<<10)
 	_, _ = rand.Read(random)
-	def := assistant.WidgetDefinition{Type: "note", Fields: map[string]json.RawMessage{"content": json.RawMessage(fmt.Sprintf("%q", hex.EncodeToString(random)))}}
-	m, _, _, opened := widgetModel(t, nil, graphics.Unsupported, def)
+	note := chartApp(fmt.Sprintf(`{"type":"note","content":%q}`, hex.EncodeToString(random)))
+	m, _, _, opened := widgetModel(t, nil, graphics.Unsupported, note)
 	runWidgetTasks(m, clickWidget(t, m, chat.WidgetWeb))
 	if len(*opened) != 1 || !strings.HasPrefix((*opened)[0], "https://demo.datadoghq.com/dataviz/sandbox?") || len((*opened)[0]) <= 8<<10 {
 		t.Fatalf("opened %d URLs", len(*opened))

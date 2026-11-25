@@ -501,16 +501,13 @@ func (l *List) widgetAtRow(y int) (idx, line int, ok bool) {
 		return 0, 0, false
 	}
 	v, has := l.widgets[l.view[idx].id]
-	return idx, line, has && v.Action != WidgetNone
+	return idx, line, has && v.actionAt(line, l.itemHeight(idx)) != WidgetNone
 }
 
 // ClearWidgetViews drops every widget view, so blocks render as before and
 // take no clicks; the caller's widgets are gone.
 func (l *List) ClearWidgetViews() {
-	for id := range l.widgets {
-		delete(l.cache, id)
-	}
-	clear(l.widgets)
+	l.SetWidgetViews(nil)
 }
 
 // itemAtRow maps a viewport row to a rendered presentation item. Gaps and
@@ -549,7 +546,7 @@ func (l *List) LinkAt(x, y int) (LinkHit, bool) {
 	}
 	hit := LinkHit{BlockID: item.id, Rev: item.rev, Row: row}
 	if v, ok := l.widgets[item.id]; ok {
-		hit.Action = v.Action
+		hit.Action = v.actionAt(row, l.itemHeight(idx))
 		return hit, hit.Action != WidgetNone
 	}
 	// Only the markdown renderer emits hyperlinks: every other renderer
@@ -654,7 +651,7 @@ func (l *List) renderPresentationItem(it presentationItem, c renderContext) stri
 		return l.renderer.renderMemory(l.items[it.start].Memory.Memories[it.memory], c)
 	case itemBlock:
 		if v, ok := l.widgets[it.id]; ok {
-			return renderWidgetView(l.items[it.start], v, c)
+			return renderWidgetView(v, c)
 		}
 	}
 	return l.renderer.RenderBlock(l.items[it.start], c.width, c.sty, c.frame)
@@ -706,19 +703,29 @@ func (l *List) HasAnimated() bool {
 	return false
 }
 
-// SetWidgetView replaces how a widget block renders, and reports whether the
-// view changed. Views are presentation state owned by the caller; Reset drops
-// them with the conversation.
-func (l *List) SetWidgetView(id agent.BlockID, v WidgetView) bool {
-	if old, ok := l.widgets[id]; ok && old == v {
-		return false
+// SetWidgetViews installs the widgets' current presentation. Batch visibility
+// changes so dropping several cards only rebuilds the presentation once.
+func (l *List) SetWidgetViews(views map[agent.BlockID]WidgetView) bool {
+	changed, relayout := false, false
+	for id, view := range views {
+		if old, ok := l.widgets[id]; !ok || old != view {
+			delete(l.cache, id)
+			changed = true
+			relayout = relayout || old.Hidden != view.Hidden
+		}
 	}
-	if l.widgets == nil {
-		l.widgets = make(map[agent.BlockID]WidgetView)
+	for id, old := range l.widgets {
+		if _, ok := views[id]; !ok {
+			delete(l.cache, id)
+			changed = true
+			relayout = relayout || old.Hidden
+		}
 	}
-	l.widgets[id] = v
-	delete(l.cache, id)
-	return true
+	l.widgets = views
+	if relayout {
+		l.relayout()
+	}
+	return changed
 }
 
 // SetRunning reports whether a run is active, so the list alone decides
@@ -995,6 +1002,9 @@ func (l *List) present() []presentationItem {
 	view := items[:0]
 	closed := false
 	for _, it := range items {
+		if it.kind == itemBlock && l.widgets[it.id].Hidden {
+			continue
+		}
 		switch it.kind {
 		case itemToolGroup:
 			closed = it.group.closed && !l.expanded(it.id)
@@ -1254,11 +1264,11 @@ func (l *List) ReplaceTranscript(blocks []agent.Block, tasks []agent.Task, notic
 	l.SetTranscript(blocks, tasks, notices)
 }
 
-// Widgets returns every widget block, and which of them intersect the
+// Widgets returns every visualization block, and which of them intersect the
 // viewport, found in one walk of the visible items.
 func (l *List) Widgets() (blocks []agent.Block, visible map[agent.BlockID]bool) {
 	for _, b := range l.items {
-		if b.Kind == assistant.KindWidget {
+		if b.Kind == assistant.KindApp || b.Kind == assistant.KindWidget {
 			blocks = append(blocks, b)
 		}
 	}
@@ -1270,8 +1280,11 @@ func (l *List) Widgets() (blocks []agent.Block, visible map[agent.BlockID]bool) 
 	row := -l.offsetLine
 	for idx := l.offsetIdx; idx < len(l.view) && row < l.height; idx++ {
 		height := len(l.entry(idx).lines)
-		if item := l.view[idx]; row+height > 0 && item.kind == itemBlock && item.start >= 0 && l.items[item.start].Kind == assistant.KindWidget {
-			visible[item.id] = true
+		if item := l.view[idx]; row+height > 0 && item.kind == itemBlock && item.start >= 0 {
+			kind := l.items[item.start].Kind
+			if kind == assistant.KindApp || kind == assistant.KindWidget {
+				visible[item.id] = true
+			}
 		}
 		row += height + l.gapAfter(idx)
 	}

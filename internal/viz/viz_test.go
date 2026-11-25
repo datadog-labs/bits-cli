@@ -2,6 +2,8 @@ package viz
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"image"
 	"image/png"
 	"testing"
@@ -39,7 +41,11 @@ func TestSnapshotOwnsItsBytes(t *testing.T) {
 
 func request(t *testing.T) Request {
 	t.Helper()
-	return Request{
-		Definition: assistant.WidgetDefinition{Type: "timeseries"},
-	}
+	return Request{App: assistant.AppPayload{ResourceURI: DatavizURI, Result: json.RawMessage(`{"structuredContent":{}}`), RelayHandle: "h"}}
+}
+
+// chartApp is a get_widget result for definition, over Unix seconds from..to.
+func chartApp(definition string, from, to int64) assistant.AppPayload {
+	result := fmt.Sprintf(`{"structuredContent":{"source_tool":"get_widget","widget_definition":%s,"from_ts":%d,"to_ts":%d}}`, definition, from, to)
+	return assistant.AppPayload{ResourceURI: DatavizURI, Result: json.RawMessage(result), RelayHandle: "h"}
 }

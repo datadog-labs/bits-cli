@@ -4,29 +4,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
 
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/datadogmcp"
+	"github.com/datadog-labs/bits-cli/internal/site"
 	"github.com/datadog-labs/bits-cli/internal/version"
 	"github.com/datadog-labs/bits-cli/internal/viz"
 )
 
-// chatWidgets is the chat's widget client: wiring, not a command. It
-// authenticates on the first operation, on an operation worker rather than the
-// TUI event loop, with the chat's own credentials. It then renders with ddviz
-// through Datadog MCP, or with Datadog snapshots where ddviz cannot run, and
-// owns that client and any MCP connection.
+// chatWidgets owns the renderer and authenticates with the chat's credentials
+// on the operation worker. The renderer uses ddviz or Datadog snapshots.
 type chatWidgets struct {
-	mu     sync.Mutex
-	opts   ChatOptions
-	store  auth.CredentialStore
-	local  bool // ddviz runs here; otherwise Datadog renders snapshots
-	client viz.Client
-	mcp    *datadogmcp.Client // nil for snapshots
-	closed bool
+	mu        sync.Mutex
+	opts      ChatOptions
+	store     auth.CredentialStore
+	local     bool // ddviz runs here; otherwise Datadog renders snapshots
+	client    viz.Client
+	legacyMCP *datadogmcp.Client
+	closed    bool
 }
 
 // EnvViz selects the widget renderer: auto (the default) prefers ddviz, which
@@ -74,13 +73,32 @@ func (c *chatWidgets) get(ctx context.Context) (viz.Client, error) {
 		c.client = viz.NewRemote(api)
 		return c.client, nil
 	}
-	mcp, err := datadogmcp.New(api)
+	frame, err := frameURL(api.BaseURL)
 	if err != nil {
-		return nil, errors.Join(errUnsupportedSite, err)
+		return nil, err
 	}
-	c.mcp = mcp
-	c.client = viz.New(viz.Config{MCP: mcp, FrameURL: api.BaseURL + "/api/unstable/dataviz-mcp-ui", Version: version.Build()})
+	config := viz.Config{API: api, FrameURL: frame, Version: version.Build()}
+	// The direct MCP connection is only used by legacy charts and opens lazily.
+	// Sites without a direct MCP endpoint can still serve relayed apps.
+	if legacy, err := datadogmcp.New(api); err == nil {
+		c.legacyMCP = legacy
+		config.CallLegacyTool = legacy.CallToolJSON
+	}
+	c.client = viz.New(config)
 	return c.client, nil
+}
+
+// frameURL is the dataviz app ddviz frames. ddviz trusts only the hosts in
+// the site catalog, over https, and nothing else of the base URL reaches it.
+func frameURL(baseURL string) (string, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return "", errors.Join(errUnsupportedSite, err)
+	}
+	if _, trusted := site.WebHostForAssistantHost(u.Hostname()); !trusted || u.Scheme != "https" || u.User != nil {
+		return "", errUnsupportedSite
+	}
+	return (&url.URL{Scheme: "https", Host: u.Host, Path: "/api/unstable/dataviz-mcp-ui"}).String(), nil
 }
 
 func widgetsFailure(err error) viz.Status {
@@ -94,18 +112,18 @@ func widgetsFailure(err error) viz.Status {
 }
 
 // Render and Open rely on viz to bound each operation once connected.
-func (c *chatWidgets) Render(ctx context.Context, r viz.Request) viz.RenderResult {
+func (c *chatWidgets) Render(ctx context.Context, r viz.Request) viz.Result {
 	client, err := c.get(ctx)
 	if err != nil {
-		return viz.RenderResult{Status: widgetsFailure(err)}
+		return viz.Result{Status: widgetsFailure(err)}
 	}
 	return client.Render(ctx, r)
 }
 
-func (c *chatWidgets) Open(ctx context.Context, r viz.Request) viz.Status {
+func (c *chatWidgets) Open(ctx context.Context, r viz.Request) viz.Result {
 	client, err := c.get(ctx)
 	if err != nil {
-		return widgetsFailure(err)
+		return viz.Result{Status: widgetsFailure(err)}
 	}
 	return client.Open(ctx, r)
 }
@@ -115,13 +133,14 @@ func (c *chatWidgets) Interactive() bool { return c.local }
 func (c *chatWidgets) Close() error {
 	c.mu.Lock()
 	c.closed = true
-	client, mcp := c.client, c.mcp
+	client, legacy := c.client, c.legacyMCP
 	c.mu.Unlock()
 	if client == nil {
 		return nil
 	}
-	if mcp == nil {
+	if legacy == nil {
 		return client.Close()
 	}
-	return errors.Join(client.Close(), mcp.Close())
+	// Viewers may still be making calls through the direct connection.
+	return errors.Join(client.Close(), legacy.Close())
 }

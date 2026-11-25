@@ -39,21 +39,36 @@ notices, disclosure, tool grouping, questions, code execution
 (`load("tasks.star", "investigation"); investigation()`), and injected memories
 (`load("memories.star", "injected"); injected()`).
 
-For visualizations, run `BITS_FAKE_BACKEND=1` with a built ddviz helper and
-load `widgets.star`. Only assistant messages are faked: rendering still requires
-a stored Bits login with Datadog MCP visualization access and macOS 13+.
+For visualizations, run `BITS_FAKE_BACKEND=1 BITS_VIZ=snapshot` and load
+`widgets.star`. Only assistant messages are faked: rendering still requires a
+stored Bits login with snapshot access. ddviz can render legacy charts with
+a Bits login that has read-only MCP access. The fake opens no app relay session.
+
+To see a real app in ddviz, pass a real conversation to `--conversation`: the
+fake opens it empty, and `saved()` shows the app saved at one of its messages.
+Opening the app restores it from Datadog with a live relay session, so its
+tool calls and data are real. The ids come from a conversation where the
+assistant answered with an app (`BITS_PROFILE=web_ui`).
+
+```sh
+BITS_FAKE_BACKEND=1 bits --conversation CONVERSATION_ID
+```
+
+```text
+load("widgets.star", "saved"); saved("MESSAGE_ID")
+```
 
 ```text
 load("widgets.star", "gallery"); gallery()
-load("widgets.star", "timing"); timing(1700000000000, 1700003600000)
+load("widgets.star", "timing"); timing(1700000000, 1700003600)
 load("widgets.star", "burst"); burst()
 load("widgets.star", "revision"); revision()
 load("widgets.star", "failures"); failures()
 ```
 
 Replace the timing example with a historical interval within your account's
-metric retention, in Unix milliseconds. Check its axis in both the preview and
-interactive pane. The gallery exercises scrolling, resizing, and reopening;
+metric retention, in Unix seconds. The fixture sends the same interval for an
+app and a legacy chart so their previews and links can be compared. The gallery exercises scrolling, resizing, and reopening;
 the burst exercises queued previews and conversation changes. `revision()`
 replaces a widget after two seconds (`delay="10s"` gives more time to open it).
 Failures include invalid definitions and a legacy tile without a definition;
@@ -143,6 +158,8 @@ the only turn of the conversation that opens:
 ```sh
 BITS_FAKE_BACKEND=1 bits --conversation 'load("questions.star", "ask_user_question"); ask_user_question()'
 ```
+
+An id opens an empty conversation under it instead, as `saved()` needs.
 
 In a session, `push_conversation` takes functions as the turns, in order,
 and returns the id to open with `/resume`:

@@ -1,57 +1,93 @@
-"""Run with BITS_FAKE_BACKEND=1 and a built ddviz helper:
+"""Run with BITS_FAKE_BACKEND=1 BITS_VIZ=snapshot and a Bits login:
   load("widgets.star", "gallery"); gallery()
 
-Only assistant messages are faked. Rendering needs a Bits login and MCP access.
+Only assistant messages are faked. Charts render as Datadog snapshots of the
+get_widget payload inside each app's result or from the legacy definition.
+ddviz can render legacy charts with a Bits login that has read-only MCP
+access. The fake opens no relay session for apps. See saved() for real apps.
 CPU metrics depend on the account; an empty chart is not necessarily a failure.
 
-Payloads match the backend's: the title lives inside widget_def, and the
-backend always pins a fixed time window in milliseconds. Fixtures without one
-let the chart show recent data.
+Payloads match the backend's mcp_app content: the title lives inside the
+widget definition, and get_widget pins a window in Unix seconds. Fixtures
+without one let the chart show the last hour.
 """
 
-def _definition(title, query="avg:system.cpu.user{*}", kind="timeseries", from_ms=None, to_ms=None):
-    definition = {"type": kind, "title": title, "requests": [{"q": query}]}
-    if from_ms != None:
-        definition["time"] = {"type": "fixed", "from": from_ms, "to": to_ms}
-    return definition
+def _definition(title, query="avg:system.cpu.user{*}", kind="timeseries"):
+    return {"type": kind, "title": title, "requests": [{"q": query}]}
 
-def _widget(definition, id=""):
-    raw({"type": "widget_def", "widget_def": definition}, id=id)
+def _app(result, id="", tool="show_ui", resource="ui://apps/dataviz"):
+    raw({
+        "type": "mcp_app",
+        "tool_call_id": "call-" + (id or "fixture"),
+        "tool_name": tool,
+        "tool_input": {},
+        "resource_uri": resource,
+        "resource_handle": "dataviz-mcp-ui@prototype",
+        "relay_handle": None,
+        "tool_result": result,
+        "restoration": None,
+    }, id=id)
+
+def _chart(definition, id="", from_s=0, to_s=0):
+    payload = {"source_tool": "get_widget", "widget_definition": definition}
+    if to_s:
+        payload["from_ts"] = from_s
+        payload["to_ts"] = to_s
+    _app({"content": [{"type": "text", "text": definition.get("title", "")}], "structuredContent": payload}, id=id)
+
+def saved(message):
+    """A real app the assistant saved, at message in the conversation given by
+    --conversation. Opening it restores it from Datadog, with a live relay
+    session, so ddviz loads its real data:
+      BITS_FAKE_BACKEND=1 bits --conversation CONVERSATION_ID
+      load("widgets.star", "saved"); saved("MESSAGE_ID")
+    """
+    raw({
+        "type": "mcp_app_saved",
+        "tool_call_id": "call-saved",
+        "tool_name": "show_ui",
+        "resource_uri": "ui://apps/dataviz",
+        "resource_handle": "dataviz-mcp-ui@prototype",
+    }, id=message)
 
 def gallery():
-    say("## Widget gallery\nOpen while a preview loads, reopen it, resize, then scroll away and back. Previews should be retained; opening should reuse one interactive pane.")
-    _widget(_definition("CPU timeseries"))
-    _widget(_definition("CPU query value", kind="query_value"))
-    _widget(_definition("CPU by host", query="avg:system.cpu.user{*} by {host}", kind="toplist"))
-    _widget(_definition("Empty result", query="avg:system.cpu.user{bits_viz_fixture:deliberately_absent}"))
-    _widget(_definition("A long widget title to inspect wrapping and action placement when the terminal becomes narrow"))
+    say("## Widget gallery\nResize, then scroll away and back. Previews should be retained. Legacy and app charts should both render. The unsaved incident app has no snapshot or link.")
+    _chart(_definition("CPU timeseries"))
+    raw({"type": "widget_def", "widget_def": _definition("CPU timeseries (legacy)")})
+    _chart(_definition("CPU query value", kind="query_value"))
+    _chart(_definition("CPU by host", query="avg:system.cpu.user{*} by {host}", kind="toplist"))
+    _chart(_definition("Empty result", query="avg:system.cpu.user{bits_viz_fixture:deliberately_absent}"))
+    _chart(_definition("A long widget title to inspect wrapping and action placement when the terminal becomes narrow"))
+    _app({"content": [], "_meta": {"datadog/show_ui": {"view_spec": {"schema_version": 1, "data_tool": {"name": "get_datadog_incident", "args": {"incident_id": "1"}}, "view": {"name": "incident_detail", "version": 1, "args": {"incident_id": "1"}}}}}})
     say("\n".join(["Scroll spacer %d" % i for i in range(40)]))
     say("Scroll back to the charts: cached previews should reappear without fetching again.")
 
-def timing(from_ms, to_ms):
+def timing(from_s, to_s):
     """Use a recognizable historical interval within your metric retention."""
-    if from_ms <= 0 or to_ms <= from_ms:
-        fail(400, "timing requires positive Unix milliseconds with from_ms < to_ms")
-    say("## Time range\nCompare axis labels and data in the preview, the interactive pane, and the web sandbox. The chart must use %d–%d milliseconds, not the current hour. Reopening must preserve that range." % (from_ms, to_ms))
-    _widget(_definition("Fixed historical range", from_ms=from_ms, to_ms=to_ms))
+    if from_s <= 0 or to_s <= from_s:
+        fail(400, "timing requires positive Unix seconds with from_s < to_s")
+    say("## Time range\nCompare axis labels and data in the preview and the web sandbox. The chart must use %d–%d seconds, not the current hour." % (from_s, to_s))
+    _chart(_definition("Fixed historical range"), from_s=from_s, to_s=to_s)
+    legacy = _definition("Fixed historical range (legacy)")
+    legacy["time"] = {"type": "fixed", "from": from_s * 1000, "to": to_s * 1000}
+    raw({"type": "widget_def", "widget_def": legacy})
 
 def burst(count=8):
-    say("## Concurrent previews\nScroll through these charts to start previews. Open one while previews are loading; then use /new while work is pending. Old completions must not appear in the new conversation.")
+    say("## Concurrent previews\nScroll through these charts to start previews, then use /new while work is pending. Old completions must not appear in the new conversation.")
     for i in range(count):
         metric = "user" if i % 2 == 0 else "system"
-        _widget(_definition("Chart %d: CPU %s" % (i + 1, metric), query="avg:system.cpu.%s{*}" % metric))
+        _chart(_definition("Chart %d: CPU %s" % (i + 1, metric), query="avg:system.cpu.%s{*}" % metric))
 
 def revision(delay="2s"):
-    say("## Replaced widget\nThe same widget ID changes from user CPU to system CPU. Only the latest revision should remain, even if the first preview is still loading.")
-    _widget(_definition("Before: CPU user"), id="widget-revision")
+    say("## Replaced widget\nThe same message ID changes from user CPU to system CPU. Only the latest revision should remain, even if the first preview is still loading.")
+    _chart(_definition("Before: CPU user"), id="widget-revision")
     sleep(delay)
-    _widget(_definition("After: CPU system", query="avg:system.cpu.system{*}"), id="widget-revision")
+    _chart(_definition("After: CPU system", query="avg:system.cpu.system{*}"), id="widget-revision")
 
 def failures():
-    say("## Failure isolation\nInvalid definitions should show readable failures without preventing the final valid chart from loading. Retry is offered only when the client advises it; these inputs do not simulate network failures.")
-    _widget({"title": "Missing widget type"})
-    _widget(_definition("Malformed query", query="avg:"))
-    _widget({"type": "bits_fixture_unknown", "title": "Unsupported widget type", "requests": []})
-    # Legacy content: no backend writes it today; it shows only its title.
-    raw({"type": "widget", "title": "Legacy tile without a widget definition", "tile_def": {}, "timeframe": {"start": 1700000000000, "end": 1700003600000, "paused": True}})
-    _widget(_definition("Valid chart after failures"))
+    say("## Failure isolation\nInvalid apps should show a failure or a plain \"Datadog view\" without preventing the final valid chart from loading. Retry is offered only when the client advises it; these inputs do not simulate network failures.")
+    _chart({"title": "Missing widget type"})
+    _chart(_definition("Malformed query", query="avg:"))
+    _chart({"type": "bits_fixture_unknown", "title": "Unsupported widget type", "requests": []})
+    _app({"content": []}, resource="ui://apps/unknown")
+    _chart(_definition("Valid chart after failures"))

@@ -212,8 +212,8 @@ func TestBuiltinsEmit(t *testing.T) {
 			want: []string{`client_tool_call:approval_request {"tool_args":{},"tool_call_id":"fake-msg-3","tool_name":"t"}`, "usage"},
 		},
 		{
-			name: "raw content", message: `raw({"type": "widget_def", "widget_def": {"title": "p95"}})`,
-			want: []string{"widget_def", "usage"},
+			name: "raw content", message: `raw({"type": "dashboard", "title": "p95"})`,
+			want: []string{"dashboard", "usage"},
 		},
 		{
 			name: "raw usage replaces the default", message: `raw({"type": "markdown_fragment", "content": ""}, results={"usage": {"tokens_used": 1, "max_tokens": 2}})`,

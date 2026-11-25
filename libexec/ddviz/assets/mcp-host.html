@@ -238,7 +238,7 @@
                       protocolVersion: PROTOCOL_VERSION,
                       hostCapabilities: {
                           openLinks: {},
-                          ...(BIDIRECTIONAL ? { serverTools: {}, updateModelContext: {} } : {}),
+                          ...(BIDIRECTIONAL ? { serverTools: {} } : {}),
                       },
                       hostInfo: {
                           name: '{{HOST_NAME}}',

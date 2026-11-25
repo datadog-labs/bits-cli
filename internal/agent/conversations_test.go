@@ -111,6 +111,14 @@ func TestLoadAndInstallConversation(t *testing.T) {
 		assistant.AssistantMessage("internal", assistant.Content{Type: assistant.ContentProviderCompaction, Compaction: &assistant.CompactionPayload{Summary: "private"}}),
 		assistant.AssistantMessage("future", assistant.Content{Type: "future_content"}),
 	}
+	var saved []assistant.Message
+	if err := json.Unmarshal([]byte(`[
+      {"role":"assistant","message_id":"chart","content":{"type":"widget_def","widget_def":{"type":"timeseries","title":"Saved chart"}}},
+      {"role":"assistant","message_id":"app","content":{"type":"mcp_app_saved","tool_name":"show_ui","resource_uri":"ui://apps/dataviz"}}
+    ]`), &saved); err != nil {
+		t.Fatal(err)
+	}
+	response.Data.Attributes.Messages = append(response.Data.Attributes.Messages, saved...)
 	backend := &historyBackend{history: func(_ context.Context, in assistant.ConversationHistoryInput) (*assistant.ConversationHistoryResponse, error) {
 		if in.ConversationID != testConversationID {
 			t.Fatalf("history id = %q", in.ConversationID)
@@ -125,13 +133,15 @@ func TestLoadAndInstallConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocks := conversation.transcript.Blocks()
-	if conversation.id != testConversationID || len(blocks) != 1 {
+	if conversation.id != testConversationID || len(blocks) != 3 {
 		t.Fatalf("loaded conversation = %+v", conversation)
 	}
 	if e.State().ConversationID != "old" || !reflect.DeepEqual(e.State().Blocks, before) {
 		t.Fatal("load mutated engine before installation")
 	}
-	if blocks[0].Markdown.Content != "Hello world" {
+	if blocks[0].Markdown.Content != "Hello world" ||
+		blocks[1].Kind != assistant.KindWidget || blocks[1].Widget == nil || blocks[1].Widget.Title != "Saved chart" ||
+		blocks[2].Kind != assistant.KindApp || blocks[2].App == nil || !blocks[2].App.Restorable {
 		t.Fatalf("loaded blocks = %+v", blocks)
 	}
 	if e.OperationActive() {

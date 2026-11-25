@@ -12,78 +12,88 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tui/graphics"
 )
 
-// WidgetAction is what a click on a widget does. LinkAt reports it on every
-// row of the widget, the way an accordion takes clicks on its whole block.
+// WidgetAction is what a click on a widget or its separate web link does.
 type WidgetAction uint8
 
 const (
-	WidgetNone  WidgetAction = iota
-	WidgetOpen               // open the interactive panel
-	WidgetRetry              // retry a failed preview
-	WidgetWeb                // open the web sandbox
+	WidgetNone         WidgetAction = iota
+	WidgetOpen                      // open the interactive panel
+	WidgetRetry                     // retry a failed preview
+	WidgetWeb                       // open the web sandbox
+	WidgetConversation              // open the conversation in Datadog
 )
 
-// widgetIcons mark the title as a way out of the terminal, as the former
-// action links did.
-var widgetIcons = map[WidgetAction]string{WidgetOpen: " ⧉", WidgetWeb: " ↗"}
+// widgetSuffix shows the action attached to the title.
+var widgetSuffix = map[WidgetAction]string{
+	WidgetOpen:         " ⧉",
+	WidgetRetry:        " · Retry",
+	WidgetWeb:          " ↗",
+	WidgetConversation: " · " + conversationLinkLabel,
+}
 
-// WidgetView is what the transcript draws for a widget block. The tui decides
-// it from capabilities and operation state; the list only renders it.
+const conversationLinkLabel = "Open conversation ↗"
+
+// WidgetView is what the transcript draws for an app block. The tui decides
+// it from the app, capabilities and operation state; the list only renders it.
 type WidgetView struct {
+	Title string
 	// Image reserves a full-width band Rows tall when Rows > 0, and paints the
 	// picture, Columns wide and centered, once ID > 0.
 	Image   graphics.Image
 	Loading string // spinner label: a badge over the box, or a line without one
 	Note    string // one muted line, such as a failure reason
 	Action  WidgetAction
+	Link    WidgetAction // a separately labeled link below the card
+	Hidden  bool
 }
 
 // animated reports whether the view depends on the frame counter.
 func (v WidgetView) animated() bool { return v.Loading != "" }
 
-// widgetTitle reads the title a widget_def carries inside its definition,
-// then the legacy payload's, or "" when there is none.
-func widgetTitle(it agent.Block) string {
-	if it.Widget == nil {
-		return ""
+func (v WidgetView) actionAt(row, height int) WidgetAction {
+	if v.Link != WidgetNone && row == height-1 {
+		return v.Link
 	}
-	if def := it.Widget.WidgetDef; def != nil {
-		if def.Title != "" {
-			return escape.SingleLine(def.Title)
-		}
-	}
-	return escape.SingleLine(it.Widget.Title)
+	return v.Action
 }
 
-func renderWidgetView(it agent.Block, v WidgetView, c renderContext) string {
+func renderWidgetView(v WidgetView, c renderContext) string {
 	width := max(1, c.width)
-	lines := []string{widgetHeader(it, v, width, c)}
+	lines := []string{widgetHeader(v, width, c)}
 	box, badged := widgetBox(v, width, c)
 	lines = append(lines, box...)
 	if v.Loading != "" && !badged {
 		glyph, style := statusGlyph(agent.ToolRunning, c.sty, c.frame)
-		lines = append(lines, ansi.Truncate(style.UnsetBackground().Render(glyph)+" "+c.sty.Meta.Render(v.Loading), width, "…"))
+		lines = append(lines, ansi.Truncate(widgetTitlePad+style.UnsetBackground().Render(glyph)+" "+c.sty.Meta.Render(v.Loading), width, "…"))
 	}
 	if v.Note != "" {
-		lines = append(lines, ansi.Truncate(c.sty.Meta.Render(escape.SingleLine(v.Note)), width, "…"))
+		lines = append(lines, ansi.Truncate(widgetTitlePad+c.sty.Meta.Render(escape.SingleLine(v.Note)), width, "…"))
+	}
+	if v.Link != WidgetNone {
+		label := "Open chart in Datadog ↗"
+		if v.Link == WidgetConversation {
+			label = conversationLinkLabel
+		}
+		lines = append(lines, ansi.Truncate(widgetTitlePad+c.sty.ToolName.Foreground(c.sty.MarkdownLink).Render(label), width, "…"))
 	}
 	return strings.Join(lines, "\n")
 }
 
-// widgetTitlePad indents the title like the markdown around it.
+// widgetTitlePad indents the title, and the lines under it, like the
+// markdown around them.
 const widgetTitlePad = "  "
 
 // widgetHeader is the title row: padded, on the band's surface across the
 // full width, so title and image read as one card.
-func widgetHeader(it agent.Block, v WidgetView, width int, c renderContext) string {
+func widgetHeader(v WidgetView, width int, c renderContext) string {
 	title := c.sty.ToolName.Background(c.sty.WidgetBox.GetBackground())
 	if v.Action != WidgetNone {
 		title = title.Foreground(c.sty.MarkdownLink)
 	}
-	icon := widgetIcons[v.Action]
-	room := max(1, width-len(widgetTitlePad)-lipgloss.Width(icon))
+	suffix := widgetSuffix[v.Action]
+	room := max(1, width-len(widgetTitlePad)-lipgloss.Width(suffix))
 	head := c.sty.WidgetBox.Render(widgetTitlePad) +
-		ansi.Truncate(title.Render(cmp.Or(widgetTitle(it), "Widget")), room, "…") + title.Render(icon)
+		ansi.Truncate(title.Render(cmp.Or(escape.SingleLine(v.Title), "Datadog view")), room, "…") + title.Render(suffix)
 	if fill := width - lipgloss.Width(head); fill > 0 {
 		head += c.sty.WidgetBox.Render(strings.Repeat(" ", fill))
 	}

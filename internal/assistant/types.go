@@ -5,8 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"math"
-	"strconv"
+	"strings"
 	"time"
 )
 
@@ -382,18 +381,22 @@ const (
 )
 
 const (
-	// ContentWidgetDef carries a Datadog dashboard widget definition (in the
-	// WidgetDef field): a query spec + styling, no data. It is every chart the
-	// agent produces, live and in restored history alike. The definition holds
-	// its own title, and the backend pins a fixed millisecond window in its
-	// "time". History restores its numbers as floats.
+	// ContentWidgetDef is a chart definition sent by older producers and stored
+	// in conversation history. ContentWidget is the earlier title-only tile.
 	ContentWidgetDef = "widget_def"
+	ContentWidget    = "widget"
 	// ContentDashboard is a whole generated dashboard (title + widgets).
 	ContentDashboard = "dashboard"
 	// ContentMemoryContext lists the Context Engine memories the backend added
 	// to the agent's context before it ran. History replays it with the same
 	// message id.
 	ContentMemoryContext = "memory_context"
+	// ContentApp is a live Datadog MCP App: a tool result, such as show_ui's,
+	// for the app at its resource URI. It is never persisted: history keeps a
+	// ContentAppSaved in its place, under the same message id, only when the
+	// app is restorable.
+	ContentApp      = "mcp_app"
+	ContentAppSaved = "mcp_app_saved"
 
 	// --- Provisional POST events for tools with stream_input enabled ---
 
@@ -402,7 +405,6 @@ const (
 
 	// --- conversation-history / persistence only (not the live POST stream) ---
 
-	ContentWidget   = "widget"    // legacy tile (tile_def + timeframe); no backend writes it today
 	ContentUserStop = "user_stop" // marker persisted when a turn was interrupted
 
 	// --- background-task follow streams (/subscribe, subtask stream) ---
@@ -417,267 +419,6 @@ const (
 
 	ContentProviderCompaction = "provider_compaction"
 )
-
-// WidgetDefinition is a Datadog dashboard widget definition. Its common fields
-// are typed; Fields preserves widget-specific fields for rendering and MCP.
-// A pointer distinguishes an absent definition from an empty object.
-type WidgetDefinition struct {
-	Type   string
-	Title  string
-	Time   *WidgetTime
-	Fields map[string]json.RawMessage
-}
-
-// WidgetTime describes the backend's fixed, live, calendar-aligned, and legacy
-// time forms. Fields preserves options such as hide_incomplete_cost_data.
-type WidgetTime struct {
-	Type     string
-	From     float64
-	To       float64
-	Value    float64
-	Unit     string
-	Offset   float64
-	LiveSpan string
-	Fields   map[string]json.RawMessage
-}
-
-func (d *WidgetDefinition) UnmarshalJSON(data []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	var known struct {
-		Type  string      `json:"type"`
-		Title string      `json:"title"`
-		Time  *WidgetTime `json:"time"`
-	}
-	if err := json.Unmarshal(data, &known); err != nil {
-		return err
-	}
-	delete(fields, "type")
-	delete(fields, "title")
-	delete(fields, "time")
-	*d = WidgetDefinition{Type: known.Type, Title: known.Title, Time: known.Time, Fields: fields}
-	return nil
-}
-
-func (d WidgetDefinition) MarshalJSON() ([]byte, error) {
-	fields := make(map[string]json.RawMessage, len(d.Fields)+3)
-	for name, raw := range d.Fields {
-		fields[name] = raw
-	}
-	known, err := json.Marshal(struct {
-		Type  string      `json:"type,omitempty"`
-		Title string      `json:"title,omitempty"`
-		Time  *WidgetTime `json:"time,omitempty"`
-	}{d.Type, d.Title, d.Time})
-	if err != nil {
-		return nil, err
-	}
-	var values map[string]json.RawMessage
-	if err := json.Unmarshal(known, &values); err != nil {
-		return nil, err
-	}
-	for name, raw := range values {
-		fields[name] = raw
-	}
-	return json.Marshal(fields)
-}
-
-func (t *WidgetTime) UnmarshalJSON(data []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	var known struct {
-		Type     string  `json:"type"`
-		From     float64 `json:"from"`
-		To       float64 `json:"to"`
-		Value    float64 `json:"value"`
-		Unit     string  `json:"unit"`
-		Offset   float64 `json:"offset"`
-		LiveSpan string  `json:"live_span"`
-	}
-	if err := json.Unmarshal(data, &known); err != nil {
-		return err
-	}
-	for _, name := range []string{"type", "from", "to", "value", "unit", "offset", "live_span"} {
-		delete(fields, name)
-	}
-	*t = WidgetTime{
-		Type: known.Type, From: known.From, To: known.To, Value: known.Value,
-		Unit: known.Unit, Offset: known.Offset, LiveSpan: known.LiveSpan, Fields: fields,
-	}
-	return nil
-}
-
-func (t WidgetTime) MarshalJSON() ([]byte, error) {
-	fields := make(map[string]json.RawMessage, len(t.Fields)+7)
-	for name, raw := range t.Fields {
-		fields[name] = raw
-	}
-	known := struct {
-		Type     string   `json:"type,omitempty"`
-		From     *float64 `json:"from,omitempty"`
-		To       *float64 `json:"to,omitempty"`
-		Value    *float64 `json:"value,omitempty"`
-		Unit     string   `json:"unit,omitempty"`
-		Offset   *float64 `json:"offset,omitempty"`
-		LiveSpan string   `json:"live_span,omitempty"`
-	}{Type: t.Type, Unit: t.Unit, LiveSpan: t.LiveSpan}
-	switch t.Type {
-	case "fixed":
-		known.From, known.To = &t.From, &t.To
-	case "live":
-		known.Value = &t.Value
-	case "daily", "weekly", "monthly", "yearly":
-		known.Offset = &t.Offset
-	}
-	raw, err := json.Marshal(known)
-	if err != nil {
-		return nil, err
-	}
-	var values map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, err
-	}
-	for name, value := range values {
-		fields[name] = value
-	}
-	return json.Marshal(fields)
-}
-
-// Valid reports whether the definition names a widget type. The complete
-// widget-specific schema is validated by Datadog when the widget is rendered.
-func (d WidgetDefinition) Valid() bool { return d.Type != "" }
-
-// TimeRange resolves fixed and rolling live widget times to Unix milliseconds.
-// Calendar-aligned and unknown times have no simple duration; callers use their
-// own default when ok is false.
-func (d WidgetDefinition) TimeRange(now time.Time) (from, to int64, ok bool) {
-	if d.Time == nil {
-		return 0, 0, false
-	}
-	t := d.Time
-	if from, to, ok := fixedWidgetRange(t); ok {
-		return from, to, true
-	}
-	span, months, ok := liveWidgetSpan(t)
-	if !ok {
-		return 0, 0, false
-	}
-	end := now.UnixMilli()
-	if months != 0 {
-		return subtractWidgetMonths(now, months).UnixMilli(), end, true
-	}
-	return end - span.Milliseconds(), end, true
-}
-
-// TimeRangeSeconds expands the millisecond window to whole Unix seconds for
-// MCP's from_ts and to_ts arguments, which do not accept milliseconds.
-func (d WidgetDefinition) TimeRangeSeconds(now time.Time) (from, to int64, ok bool) {
-	fromMS, toMS, ok := d.TimeRange(now)
-	if !ok {
-		return 0, 0, false
-	}
-	end := toMS / 1000
-	if toMS%1000 != 0 {
-		end++
-	}
-	return fromMS / 1000, end, true
-}
-
-func fixedWidgetRange(t *WidgetTime) (from, to int64, ok bool) {
-	if t.Type != "fixed" {
-		return 0, 0, false
-	}
-	f, e := t.From, t.To
-	if f < 0 || f >= e || e > 1<<53 || f != math.Trunc(f) || e != math.Trunc(e) {
-		return 0, 0, false
-	}
-	return int64(f), int64(e), true
-}
-
-// Years use the web UI's 365-day approximation; months use calendar dates.
-func liveWidgetSpan(t *WidgetTime) (span time.Duration, months int, ok bool) {
-	if t.LiveSpan != "" {
-		return legacyWidgetSpan(t.LiveSpan)
-	}
-	if t.Type != "live" {
-		return 0, 0, false
-	}
-	return widgetSpan(t.Value, t.Unit)
-}
-
-func legacyWidgetSpan(s string) (span time.Duration, months int, ok bool) {
-	digits := 0
-	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
-		digits++
-	}
-	value, err := strconv.Atoi(s[:digits])
-	if err != nil {
-		return 0, 0, false
-	}
-	var unit string
-	switch s[digits:] {
-	case "m":
-		unit = "minute"
-	case "h":
-		unit = "hour"
-	case "d":
-		unit = "day"
-	case "w":
-		unit = "week"
-	case "mo":
-		unit = "month"
-	case "y":
-		unit = "year"
-	default:
-		return 0, 0, false
-	}
-	return widgetSpan(float64(value), unit)
-}
-
-func widgetSpan(value float64, unit string) (span time.Duration, months int, ok bool) {
-	if value <= 0 || value != math.Trunc(value) {
-		return 0, 0, false
-	}
-	day := 24 * time.Hour
-	var per time.Duration
-	switch unit {
-	case "minute":
-		per = time.Minute
-	case "hour":
-		per = time.Hour
-	case "day":
-		per = day
-	case "week":
-		per = 7 * day
-	case "month":
-		per = 30 * day
-	case "year":
-		per = 365 * day
-	default:
-		return 0, 0, false
-	}
-	if value > float64(math.MaxInt64/int64(per)) {
-		return 0, 0, false
-	}
-	if unit == "month" {
-		return 0, int(value), true
-	}
-	return time.Duration(value) * per, 0, true
-}
-
-// subtractWidgetMonths clamps the day to the target month's last day, matching
-// the web time selector (March 31 minus one month becomes February 28 or 29).
-func subtractWidgetMonths(now time.Time, months int) time.Time {
-	year, month, day := now.Date()
-	target := time.Date(year, month, 1, 12, 0, 0, 0, now.Location()).AddDate(0, -months, 0)
-	lastDay := time.Date(target.Year(), target.Month()+1, 0, 12, 0, 0, 0, now.Location()).Day()
-	hour, minute, second := now.Clock()
-	return time.Date(target.Year(), target.Month(), min(day, lastDay), hour, minute, second, now.Nanosecond(), now.Location())
-}
 
 // MarkdownPayload carries the text fragment of a markdown_fragment content.
 type MarkdownPayload struct {
@@ -723,16 +464,6 @@ type ToolPayload struct {
 	Detail *MarkdownPayload
 }
 
-// WidgetPayload carries fields for the widget_def and widget content types. A
-// widget_def has only WidgetDef, which holds its own title; Title, TileDef and
-// Timeframe belong to the legacy widget type.
-type WidgetPayload struct {
-	Title     string
-	WidgetDef *WidgetDefinition
-	TileDef   json.RawMessage
-	Timeframe *Timeframe
-}
-
 // DashboardPayload carries fields for the dashboard content type.
 type DashboardPayload struct {
 	Title             string
@@ -741,6 +472,75 @@ type DashboardPayload struct {
 	LayoutType        string
 	ReflowType        string
 	TemplateVariables json.RawMessage
+}
+
+// AppPayload carries fields for the mcp_app and mcp_app_saved content types.
+// A saved app has no Result until RestoreApp runs its tool again.
+type AppPayload struct {
+	ToolCallID  string
+	ToolName    string
+	ToolInput   json.RawMessage // nil when saved
+	ResourceURI string
+	Result      json.RawMessage // the MCP CallToolResult; nil when saved
+	// RelayHandle lets the app call tools through CallAppTool for an hour. It
+	// is "" when saved, or when the server could not open a relay session.
+	RelayHandle string
+	Restorable  bool // the server saved the app, so RestoreApp can reopen it
+}
+
+// Chart is the single widget a chart result renders, over its window. The
+// window is zero when the result has none.
+type Chart struct {
+	Definition json.RawMessage // a Datadog dashboard widget definition
+	Start, End time.Time
+}
+
+// ViewSummary is the title and optional chart a client can display without a frame.
+type ViewSummary struct {
+	Title string
+	Chart *Chart // nil unless the result renders one widget
+}
+
+// Summary reads the app's result: the chart its widget definition describes,
+// or the name of the show_ui view. It is empty for a saved app.
+func (a *AppPayload) Summary() ViewSummary {
+	var result struct {
+		Meta struct {
+			ShowUI struct {
+				ViewSpec struct {
+					View struct {
+						Name string `json:"name"`
+					} `json:"view"`
+				} `json:"view_spec"`
+			} `json:"datadog/show_ui"`
+		} `json:"_meta"`
+		StructuredContent struct {
+			Definition json.RawMessage `json:"widget_definition"`
+			From       int64           `json:"from_ts"` // Unix seconds
+			To         int64           `json:"to_ts"`
+		} `json:"structuredContent"`
+	}
+	if len(a.Result) == 0 || json.Unmarshal(a.Result, &result) != nil {
+		return ViewSummary{}
+	}
+	// Datadog validates the rest of the definition when it renders the widget.
+	var widget struct {
+		Type  string `json:"type"`
+		Title string `json:"title"`
+	}
+	if s := result.StructuredContent; json.Unmarshal(s.Definition, &widget) == nil && widget.Type != "" {
+		chart := &Chart{Definition: s.Definition}
+		if s.From > 0 && s.To > s.From {
+			chart.Start, chart.End = time.Unix(s.From, 0), time.Unix(s.To, 0)
+		}
+		return ViewSummary{Title: widget.Title, Chart: chart}
+	}
+	// NOTE: results carry no display title, so a view's registry name stands in.
+	name := strings.ReplaceAll(result.Meta.ShowUI.ViewSpec.View.Name, "_", " ")
+	if name == "" {
+		return ViewSummary{}
+	}
+	return ViewSummary{Title: strings.ToUpper(name[:1]) + name[1:]}
 }
 
 // ProgressPayload carries fields for the background_task_update content type;
@@ -776,15 +576,16 @@ type CompactionPayload struct {
 // Content is a polymorphic message body: Type is always set, and exactly one
 // matching payload pointer is non-nil (all nil for types this client does not
 // model). It mirrors the server's AssistantContent discriminated union, so
-// distinct variants — text and a widget, say — never coexist on one Content.
+// distinct variants — text and an app, say — never coexist on one Content.
 type Content struct {
 	Type string `json:"type"`
 
 	Markdown   *MarkdownPayload      // markdown_fragment
 	Thinking   *ThinkingPayload      // thinking
 	Tool       *ToolPayload          // tool_call, client_tool_call, tool_call_started, tool_call_input_delta, tool_response, client_tool_response
-	Widget     *WidgetPayload        // widget_def, widget
 	Dashboard  *DashboardPayload     // dashboard
+	Widget     *LegacyWidget         // widget_def, widget
+	App        *AppPayload           // mcp_app, mcp_app_saved
 	Progress   *ProgressPayload      // background_task_update
 	Memory     *MemoryContextPayload // memory_context
 	Stop       *StopPayload          // user_stop
@@ -855,13 +656,6 @@ func AssistantMessage(messageID string, content Content) Message {
 	return Message{Role: "assistant", MessageID: messageID, Content: content}
 }
 
-// Timeframe is the time window of a legacy widget content block.
-type Timeframe struct {
-	Start  int64 `json:"start"` // start timestamp in milliseconds
-	End    int64 `json:"end"`   // end timestamp in milliseconds
-	Paused bool  `json:"paused"`
-}
-
 // ToolMetadata describes a server- or client-side tool call/response. Input
 // and Output are JSON encoded as strings.
 type ToolMetadata struct {
@@ -889,14 +683,17 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 		ToolName          string            `json:"tool_name"`
 		IsClientSide      *bool             `json:"is_client_side"`
 		PartialJSON       string            `json:"partial_json"`
-		WidgetDef         *WidgetDefinition `json:"widget_def"`
-		TileDef           json.RawMessage   `json:"tile_def"`
-		Timeframe         *Timeframe        `json:"timeframe"`
+		WidgetDef         json.RawMessage   `json:"widget_def"`
 		Widgets           json.RawMessage   `json:"widgets"`
 		Description       string            `json:"description"`
 		LayoutType        string            `json:"layout_type"`
 		ReflowType        string            `json:"reflow_type"`
 		TemplateVariables json.RawMessage   `json:"template_variables"`
+		ToolInput         json.RawMessage   `json:"tool_input"`
+		ToolResult        json.RawMessage   `json:"tool_result"`
+		ResourceURI       string            `json:"resource_uri"`
+		RelayHandle       string            `json:"relay_handle"`
+		Restoration       *struct{}         `json:"restoration"`
 		EventType         string            `json:"event_type"`
 		TaskID            string            `json:"task_id"`
 		Sequence          int               `json:"sequence"`
@@ -946,13 +743,6 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 			tp.Detail = &MarkdownPayload{Content: md.Content}
 		}
 		c.Tool = tp
-	case ContentWidgetDef, ContentWidget:
-		c.Widget = &WidgetPayload{
-			Title:     a.Title,
-			WidgetDef: a.WidgetDef,
-			TileDef:   a.TileDef,
-			Timeframe: a.Timeframe,
-		}
 	case ContentDashboard:
 		c.Dashboard = &DashboardPayload{
 			Title:             a.Title,
@@ -962,6 +752,20 @@ func (c *Content) UnmarshalJSON(data []byte) error {
 			ReflowType:        a.ReflowType,
 			TemplateVariables: a.TemplateVariables,
 		}
+	case ContentWidgetDef, ContentWidget:
+		c.Widget = decodeLegacyWidget(a.WidgetDef, a.Title)
+	case ContentApp:
+		c.App = &AppPayload{
+			ToolCallID:  a.ToolCallID,
+			ToolName:    a.ToolName,
+			ToolInput:   a.ToolInput,
+			ResourceURI: a.ResourceURI,
+			Result:      a.ToolResult,
+			RelayHandle: a.RelayHandle,
+			Restorable:  a.Restoration != nil,
+		}
+	case ContentAppSaved:
+		c.App = &AppPayload{ToolCallID: a.ToolCallID, ToolName: a.ToolName, ResourceURI: a.ResourceURI, Restorable: true}
 	case ContentBackgroundTaskUpdate:
 		pp := &ProgressPayload{
 			Content:   jsonString(a.Content),
@@ -1009,8 +813,9 @@ const (
 	KindReasoning                     // thinking: render dimmed/collapsible
 	KindToolCall                      // tool_call / client_tool_call / tool_call_started / tool_call_input_delta
 	KindToolResult                    // tool_response / client_tool_response
-	KindWidget                        // widget_def / widget: rich viz, render or summarize
 	KindDashboard                     // dashboard: whole dashboard, summarize
+	KindWidget                        // widget_def / widget: legacy chart or tile
+	KindApp                           // mcp_app / mcp_app_saved: a Datadog MCP App
 	KindProgress                      // background_task_update: async task progress/final
 	KindMemory                        // memory_context: memories added to the agent's context
 	KindTurnMarker                    // turn_status, replay_complete: stream markers (not seen on POST)
@@ -1031,10 +836,12 @@ func (c *Content) Kind() ContentKind {
 		return KindToolCall
 	case ContentToolResponse, ContentClientToolResponse:
 		return KindToolResult
-	case ContentWidgetDef, ContentWidget:
-		return KindWidget
 	case ContentDashboard:
 		return KindDashboard
+	case ContentWidgetDef, ContentWidget:
+		return KindWidget
+	case ContentApp, ContentAppSaved:
+		return KindApp
 	case ContentBackgroundTaskUpdate:
 		return KindProgress
 	case ContentMemoryContext:
@@ -1063,10 +870,12 @@ func (k ContentKind) String() string {
 		return "tool_call"
 	case KindToolResult:
 		return "tool_result"
-	case KindWidget:
-		return "widget"
 	case KindDashboard:
 		return "dashboard"
+	case KindWidget:
+		return "widget"
+	case KindApp:
+		return "app"
 	case KindProgress:
 		return "progress"
 	case KindMemory:

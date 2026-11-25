@@ -1,6 +1,10 @@
 package viz
 
-import "context"
+import (
+	"context"
+
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+)
 
 // State describes the current request's independent render and open operations.
 // Image is immutable and may be retained across updates.
@@ -42,6 +46,7 @@ type Completion struct {
 	id     uint64
 	status Status
 	image  *Snapshot
+	app    *assistant.AppPayload // updated by the operation
 }
 
 // Controller methods belong to the consumer's event loop. Tasks never mutate
@@ -57,9 +62,15 @@ type Controller struct {
 	state        State
 }
 
-// NewController retains one widget revision read-only.
+// NewController retains one app revision and applies payload updates from
+// its operations.
 func NewController(client Client, request Request) *Controller {
 	return &Controller{client: client, request: request}
+}
+
+// App returns the current app payload.
+func (c *Controller) App() assistant.AppPayload {
+	return c.request.App
 }
 
 // Render starts a preview or permitted retry without disturbing Open.
@@ -67,37 +78,40 @@ func (c *Controller) Render(ctx context.Context) Task {
 	if !c.state.CanRender() {
 		return nil
 	}
+	request := c.request
 	c.sequence++
 	c.renderID = c.sequence
 	c.state.Render = Status{Phase: Loading}
 
 	ctx, cancel := context.WithCancel(ctx)
 	c.renderCancel = cancel
-	client, request, id := c.client, c.request, c.renderID
+	client, id := c.client, c.renderID
 
 	return func() Completion {
 		defer cancel()
 		result := client.Render(ctx, request)
-		return Completion{owner: c, id: id, status: result.Status, image: result.Image}
+		return Completion{owner: c, id: id, status: result.Status, image: result.Image, app: result.App}
 	}
 }
 
-// Open presents the widget independently of preview rendering.
+// Open presents the app independently of preview rendering.
 func (c *Controller) Open(ctx context.Context) Task {
 	if !c.state.CanOpen() {
 		return nil
 	}
+	request := c.request
 	c.sequence++
 	c.openID = c.sequence
 	c.state.Open = Status{Phase: Loading}
 
 	ctx, cancel := context.WithCancel(ctx)
 	c.openCancel = cancel
-	client, request, id := c.client, c.request, c.openID
+	client, id := c.client, c.openID
 
 	return func() Completion {
 		defer cancel()
-		return Completion{owner: c, id: id, status: client.Open(ctx, request)}
+		result := client.Open(ctx, request)
+		return Completion{owner: c, id: id, status: result.Status, app: result.App}
 	}
 }
 
@@ -127,6 +141,9 @@ func (c *Controller) Apply(done Completion) bool {
 		c.state.Open = done.status
 	default:
 		return false
+	}
+	if done.app != nil {
+		c.request.App = *done.app
 	}
 	return true
 }

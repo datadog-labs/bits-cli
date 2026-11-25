@@ -114,9 +114,10 @@ those commands. When unset, shell commands inherit the normal environment.
 Tests that contact Datadog are opt-in:
 
 - `BITS_OAUTH_E2E=1` reuses your stored OAuth login.
-- `BITS_VIZ_E2E=1` renders CPU charts through Datadog MCP and ddviz, and through
-  the Datadog snapshot API. The ddviz test requires macOS 13+ and a built helper;
-  both tests require a stored Bits login with the corresponding access.
+- `BITS_VIZ_E2E=1` renders a CPU chart through the Datadog snapshot API. With
+  a built ddviz helper on macOS 13+, it also renders a legacy chart through
+  direct MCP. Set `BITS_VIZ_E2E_APP=conversation/message` to also restore
+  and render that saved app through ddviz. These tests use your stored Bits login.
 - `BITS_ASSISTANT_E2E=1` requires `DD_API_KEY`, `DD_APP_KEY`, and an explicit
   `BITS_E2E_SITE` naming the Datadog API site.
 
@@ -124,13 +125,27 @@ For noninteractive runs, see the [ADEEP delivery documentation](internal/headles
 
 ## Widget previews
 
+Bits shows the Datadog views the assistant attaches to its answers, such as
+charts, incident cards, and monitor lists. Legacy chart definitions still
+render in new turns and saved conversations. The assistant sends MCP apps only
+to the `web_ui` profile for now. To try them, run with the development
+override `BITS_PROFILE=web_ui`; your organization also needs the assistant's
+MCP app feature.
+
 `BITS_VIZ=auto` is the default. It uses ddviz for interactive previews when the
-macOS helper is available, and Datadog snapshots otherwise. Snapshot previews
-require a Datadog site and login that support the snapshot API. Set
-`BITS_VIZ=snapshot` to use snapshots on any system, or `BITS_VIZ=off` to show
-web sandbox links only. Terminal image support is required for inline previews;
-without it, snapshot-only widgets appear as links. When a widget has no usable
-fixed or live time range, snapshots and links default to the last hour.
+macOS helper is available, and Datadog snapshots otherwise. Snapshots preview
+charts only. Snapshot previews require a
+Datadog site and login that support the snapshot API. Set `BITS_VIZ=snapshot`
+to use snapshots on any system, or `BITS_VIZ=off` to use browser links only.
+Without terminal image support, ddviz can still open a view in its own panel.
+When Bits can't show a view locally, known charts can open in the web sandbox
+and saved apps can open their conversation in Datadog. Bits omits a view when
+it has no supported renderer or destination.
+
+When a chart has no time range, snapshots and chart links default to the last
+hour. ddviz loads legacy charts through Datadog MCP and restores saved apps
+through the Assistant API. Opening the conversation link goes directly to the
+browser.
 
 `BITS_GRAPHICS=auto` (the default) detects inline images, including the startup logo.
 Use `BITS_GRAPHICS=on bits` to bypass terminal identity checks, or
@@ -200,7 +215,8 @@ By contributing to Bits CLI, you agree that your contributions will be licensed 
 The regular Assistant endpoint is the default.
 Opt into experimental subagents with `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits`, or with
 `BITS_USE_EXPERIMENTAL_SUBAGENTS=1 bits run --prompt '…' --delivery adeep`.
-Unset, empty, `0`, or other values keep the regular endpoint.
+Unset, empty, `0`, or other values keep the regular endpoint. MCP apps
+require that endpoint because the multi-agent endpoint does not stream them.
 The setting is not persisted.
 
 When subagents are enabled, eligible turns use multi-agent run

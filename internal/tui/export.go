@@ -82,7 +82,17 @@ func exportTurn(block agent.Block, userLabel string) string {
 				return withSpeaker("Bits", body)
 			}
 		case assistant.KindWidget:
-			return withSpeaker("Bits", chartPlaceholder(block.Widget))
+			var title string
+			if block.Widget != nil {
+				title = block.Widget.Title
+			}
+			return withSpeaker("Bits", viewPlaceholder("Chart", title))
+		case assistant.KindApp:
+			if block.App != nil {
+				// NOTE: a saved app exports untitled: what the TUI restores stays in
+				// its widgets, not in the transcript.
+				return withSpeaker("Bits", appPlaceholder(block.App.Summary()))
+			}
 		case assistant.KindUnknown, assistant.KindReasoning, assistant.KindToolCall, assistant.KindToolResult,
 			assistant.KindDashboard, assistant.KindProgress, assistant.KindMemory, assistant.KindTurnMarker, assistant.KindStop, assistant.KindInternal:
 		}
@@ -91,18 +101,20 @@ func exportTurn(block agent.Block, userLabel string) string {
 	return ""
 }
 
-func chartPlaceholder(widget *assistant.WidgetPayload) string {
-	title := ""
-	if widget != nil {
-		title = widget.Title
-		if widget.WidgetDef != nil {
-			title = widget.WidgetDef.Title
-		}
+// appPlaceholder stands in for an app, which an export cannot embed.
+func appPlaceholder(summary assistant.ViewSummary) string {
+	label := "View"
+	if summary.Chart != nil {
+		label = "Chart"
 	}
-	if title = strings.TrimSpace(title); title == "" {
-		return "_[Chart]_"
+	return viewPlaceholder(label, summary.Title)
+}
+
+func viewPlaceholder(label, title string) string {
+	if title = strings.TrimSpace(title); title != "" {
+		return "_[" + label + ": " + title + "]_"
 	}
-	return "_[Chart: " + title + "]_"
+	return "_[" + label + "]_"
 }
 
 func relatedLinks(entities []assistant.ContextEntity) string {
