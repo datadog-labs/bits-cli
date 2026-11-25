@@ -510,6 +510,25 @@ func TestWidgetWithoutLocalPresentation(t *testing.T) {
 	}
 }
 
+func TestChartWithExpiredRelayOffersSandbox(t *testing.T) {
+	withoutRelay := timeseries
+	withoutRelay.RelayHandle = ""
+	client := &widgetTestClient{render: viz.Result{
+		Status: viz.Status{Phase: viz.Failed, Reason: "The visualization session expired."},
+		App:    &withoutRelay,
+	}}
+	m, _, render, opened := widgetModel(t, client, graphics.Supported, timeseries)
+	defer m.Detach()
+	runWidgetTasks(m, render)
+	if m.widgets.unavailable || !slices.Equal(widgetActions(m), []chat.WidgetAction{chat.WidgetWeb}) {
+		t.Fatalf("actions after expiry = %v, renderer unavailable = %v", widgetActions(m), m.widgets.unavailable)
+	}
+	runWidgetTasks(m, clickWidget(t, m, chat.WidgetWeb))
+	if len(*opened) != 1 || !strings.HasPrefix((*opened)[0], "https://demo.datadoghq.com/dataviz/sandbox?") || client.opens != 0 {
+		t.Fatalf("opened %v; panel requests = %d", *opened, client.opens)
+	}
+}
+
 func TestSavedAppPreviewKeepsConversationUntilRestored(t *testing.T) {
 	chart := rendered(t)
 	chart.App = &timeseries

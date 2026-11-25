@@ -648,6 +648,86 @@ func TestExpiredRelayRestoresOnNextOpen(t *testing.T) {
 	if result.Status.Phase != Succeeded || result.App == nil || result.App.RelayHandle != "fresh" || restores != 2 {
 		t.Fatalf("reopen = %+v, restores = %d", result, restores)
 	}
+
+	// A live view that was never saved cannot reopen with the same expired
+	// handle. Its result still provides the chart definition for the browser.
+	unsaved := live
+	unsaved.App.Restorable = false
+	result = c.Open(context.Background(), unsaved)
+	if result.Status.Phase != Failed || result.Status.Retry != RetryNotUseful || result.App == nil ||
+		result.App.RelayHandle != "" || !bytes.Equal(result.App.Result, unsaved.App.Result) || len(viewers) != 3 || restores != 2 {
+		t.Fatalf("reopen unsaved view = %+v, viewers = %d, restores = %d", result, len(viewers), restores)
+	}
+}
+
+func TestRelayExpiresWhileRendering(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		restorable bool
+		retry      RetryAdvice
+	}{
+		{name: "saved chart can retry", restorable: true, retry: RetryAllowed},
+		{name: "unsaved chart loses only its local relay", retry: RetryNotUseful},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			live := chartApp(`{"type":"timeseries","title":"CPU"}`, 10, 20)
+			live.Restorable = tc.restorable
+			fresh := live
+			fresh.RelayHandle = "fresh"
+			var callbacks []string
+			var restores int
+			c := testClient(func(_, _ context.Context, _ bool, tools toolCaller) (viewer, error) {
+				return &fakeViewer{snapshotFn: func(ctx context.Context) ([]byte, error) {
+					_, err := tools(ctx, "_dd_wfd", nil)
+					if err != nil && !errors.Is(err, assistant.ErrGone) {
+						t.Fatal(err)
+					}
+					// The helper captures an image even when the chart's data call fails.
+					return imageBytes(), nil
+				}}, nil
+			})
+			defer func() {
+				if err := c.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			c.api = fakeAPI{
+				restore: func(conversationID, messageID string) (assistant.AppPayload, error) {
+					if conversationID != "conv" || messageID != "msg" {
+						t.Fatalf("restore identity = %s/%s", conversationID, messageID)
+					}
+					restores++
+					return fresh, nil
+				},
+				call: func(_ context.Context, handle, _ string, _ json.RawMessage) (json.RawMessage, error) {
+					callbacks = append(callbacks, handle)
+					if handle == live.RelayHandle {
+						return nil, assistant.ErrGone
+					}
+					return json.RawMessage(`{}`), nil
+				},
+			}
+
+			ctx := context.Background()
+			request := Request{App: live, ConversationID: "conv", MessageID: "msg"}
+			result := c.Render(ctx, request)
+			if result.Status.Phase != Failed || result.Status.Retry != tc.retry || result.Image != nil {
+				t.Fatalf("preview with expired relay = %+v", result)
+			}
+			if !tc.restorable {
+				if result.App == nil || result.App.RelayHandle != "" || !bytes.Equal(result.App.Result, live.Result) ||
+					restores != 0 || !slices.Equal(callbacks, []string{live.RelayHandle}) {
+					t.Fatalf("unsaved app = %+v, callbacks = %v, restores = %d", result.App, callbacks, restores)
+				}
+				return
+			}
+			result = c.Render(ctx, request)
+			if result.Status.Phase != Succeeded || result.Image == nil || result.App == nil || result.App.RelayHandle != fresh.RelayHandle ||
+				restores != 1 || !slices.Equal(callbacks, []string{live.RelayHandle, fresh.RelayHandle}) {
+				t.Fatalf("preview after retry = %+v, callbacks = %v, restores = %d", result, callbacks, restores)
+			}
+		})
+	}
 }
 
 // A live app with no relay session it could restore cannot load its data, so

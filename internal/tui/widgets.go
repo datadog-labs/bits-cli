@@ -199,7 +199,7 @@ func (w *widgets) view(e *widgetEntry, mode widgetMode, visible bool, width int)
 	default:
 		view.Action = fallback
 	}
-	if preview {
+	if mode == widgetInline && (preview || state.Image != nil) {
 		if state.Image != nil || state.Render.Phase == viz.Loading || state.Render.Phase == viz.Idle {
 			var draw tea.Cmd
 			view.Image, draw = e.place(state.Image, width, visible)
@@ -272,8 +272,7 @@ func (w *widgets) apply(done viz.Completion) string {
 		if !e.controller.Apply(done) {
 			continue
 		}
-		// A restore replaces the app, saved or live, with a new result; a failed
-		// restore leaves none, and the last summary stands.
+		// A restore can supply a title and chart definition for a saved app.
 		if app := e.controller.App(); len(app.Result) > 0 {
 			e.summary = app.Summary()
 		}

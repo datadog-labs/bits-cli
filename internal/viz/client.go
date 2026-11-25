@@ -47,8 +47,8 @@ type localClient struct {
 	renderers      chan viewerSession
 	interactive    chan viewerSession
 	closeOnce      sync.Once
-	// expired holds relay handles the server reported gone. Their callbacks
-	// fail after Open succeeds, so the next operation must restore instead.
+	// expired holds relay handles the server reported gone, including those
+	// detected by callbacks after Open has returned.
 	expired sync.Map
 }
 
@@ -149,14 +149,14 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 	defer stop()
 
 	var app assistant.AppPayload
-	var restored *assistant.AppPayload
+	var updated *assistant.AppPayload
 	tools := c.callLegacyTool
 	if request.LegacyWidget == nil {
 		// Restore before taking a viewer, which the restore would leave idle.
 		var status Status
-		app, restored, status = c.loadForViewer(ctx, request)
+		app, updated, status = c.loadForViewer(ctx, request)
 		if status.Phase != Succeeded {
-			return Result{Status: status, App: restored}
+			return Result{Status: status, App: updated}
 		}
 		tools = c.relay(app.RelayHandle)
 	}
@@ -170,12 +170,12 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 	select {
 	case current = <-pool:
 	case <-ctx.Done():
-		return Result{Status: failure(ctx.Err()), App: restored}
+		return Result{Status: failure(ctx.Err()), App: updated}
 	}
 	defer func() { pool <- current }()
 
 	if err := ctx.Err(); err != nil {
-		return Result{Status: failure(err), App: restored}
+		return Result{Status: failure(err), App: updated}
 	}
 
 	if request.LegacyWidget != nil {
@@ -194,7 +194,7 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 	if current.viewer == nil {
 		started, err := c.launch(c.ctx, ctx, headless, tools)
 		if err != nil {
-			return Result{Status: failure(err), App: restored}
+			return Result{Status: failure(err), App: updated}
 		}
 		current = viewerSession{viewer: started, relayHandle: app.RelayHandle}
 	}
@@ -207,6 +207,16 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 		close(finished)
 	})
 	image, status := present(ctx, current, app, headless)
+	// A frame can produce a valid PNG of its error state after the relay expires.
+	if _, gone := c.expired.Load(app.RelayHandle); gone {
+		image, status = nil, expiredRelay
+		if request.CanRestore() {
+			status.Retry = RetryAllowed
+		} else {
+			app.RelayHandle = ""
+			updated = &app
+		}
+	}
 	if !stopClose() {
 		<-finished
 		current = viewerSession{}
@@ -216,19 +226,26 @@ func (c *localClient) perform(ctx context.Context, request Request, headless boo
 	}
 
 	if err := ctx.Err(); err != nil {
-		return Result{Status: failure(err), App: restored}
+		return Result{Status: failure(err), App: updated}
 	}
-	return Result{Status: status, Image: image, App: restored}
+	return Result{Status: status, Image: image, App: updated}
 }
+
+var expiredRelay = Status{Phase: Failed, Reason: "The visualization session expired."}
 
 func (c *localClient) loadForViewer(ctx context.Context, request Request) (assistant.AppPayload, *assistant.AppPayload, Status) {
 	// An app without a live relay session fails its tool calls: restore it for
 	// a new one.
-	if _, gone := c.expired.Load(request.App.RelayHandle); request.App.Restorable && (gone || request.App.RelayHandle == "") {
+	_, gone := c.expired.Load(request.App.RelayHandle)
+	if gone || request.App.RelayHandle == "" {
+		if !request.CanRestore() {
+			if gone {
+				request.App.RelayHandle = ""
+				return assistant.AppPayload{}, &request.App, expiredRelay
+			}
+			return assistant.AppPayload{}, nil, notShown
+		}
 		request.App.Result, request.App.RelayHandle = nil, ""
-	}
-	if request.App.RelayHandle == "" && !request.App.Restorable {
-		return assistant.AppPayload{}, nil, notShown
 	}
 	app, restored, status := load(ctx, c.api, request)
 	if status.Phase == Succeeded && app.RelayHandle == "" {

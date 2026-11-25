@@ -46,7 +46,7 @@ type Completion struct {
 	id     uint64
 	status Status
 	image  *Snapshot
-	app    *assistant.AppPayload // restored, to reuse
+	app    *assistant.AppPayload // updated by the operation
 }
 
 // Controller methods belong to the consumer's event loop. Tasks never mutate
@@ -62,13 +62,13 @@ type Controller struct {
 	state        State
 }
 
-// NewController retains one app revision read-only, and replaces it with the
-// apps its operations restore.
+// NewController retains one app revision and applies payload updates from
+// its operations.
 func NewController(client Client, request Request) *Controller {
 	return &Controller{client: client, request: request}
 }
 
-// App returns the app operations present: the latest restored, if any.
+// App returns the current app payload.
 func (c *Controller) App() assistant.AppPayload {
 	return c.request.App
 }

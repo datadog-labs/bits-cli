@@ -66,8 +66,8 @@ type Availability struct {
 	Reason    string
 }
 
-// Result is the outcome of an operation. App is set when the operation
-// restored the app, to reuse until its relay session expires.
+// Result is the outcome of an operation. App carries the updated payload
+// when an operation restores the app or drops its expired relay.
 type Result struct {
 	Status Status
 	Image  *Snapshot
