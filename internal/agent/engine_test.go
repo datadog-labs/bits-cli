@@ -935,6 +935,63 @@ func (b *currentUserBackend) CurrentUser(context.Context) (assistant.CurrentUser
 	return b.user, b.err
 }
 
+// A prompt queued behind a turn starts a turn of its own, with the mode set
+// by then.
+func TestSetInferenceModeReachesAQueuedPrompt(t *testing.T) {
+	backend := &scriptBackend{convID: "c", started: make(chan struct{}), hold: make(chan struct{})}
+	engine := New(backend, Config{})
+	t.Cleanup(engine.Close)
+	events, stop := engine.Subscribe()
+	defer stop()
+	run, err := engine.StartTurn(t.Context(), TurnInput{Message: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-backend.started
+	if err := engine.Queue(TurnInput{Message: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SetInferenceMode("deep"); err != nil {
+		t.Fatal(err)
+	}
+	close(backend.hold)
+	for range Follow(events, run) {
+	}
+	var modes []string
+	for _, opts := range backend.opts {
+		modes = append(modes, opts.InferenceMode)
+	}
+	if want := []string{"", "deep"}; !slices.Equal(modes, want) {
+		t.Fatalf("inference modes sent = %q, want %q", modes, want)
+	}
+}
+
+func TestSetInferenceModeAppliesToLaterTurns(t *testing.T) {
+	backend := &scriptBackend{rounds: gateRounds(deleteGate)}
+	engine := New(backend, Config{Model: "model-a"})
+	t.Cleanup(engine.Close)
+	// Set while the turn waits between its rounds, the mode reaches the next
+	// turn, and Status reads it back.
+	drain(t, engine, TurnInput{Message: "delete", Tools: writeTools(t, true, written)},
+		decideGates(t, func(id string) bool {
+			return engine.SetInferenceMode("deep") == nil && engine.Decide(id, ApprovalAllowOnce) == nil
+		}))
+	drain(t, engine, TurnInput{Message: "next"})
+	var modes []string
+	for _, opts := range backend.opts {
+		modes = append(modes, opts.InferenceMode)
+		if opts.Model != "model-a" {
+			t.Fatalf("model = %q", opts.Model)
+		}
+	}
+	if want := []string{"", "", "deep"}; !slices.Equal(modes, want) {
+		t.Fatalf("inference modes sent = %q, want %q", modes, want)
+	}
+	if got := engine.Status(); got.Model != "model-a" || got.InferenceMode != "deep" {
+		t.Fatalf("status = %+v", got)
+	}
+}
+
 func TestEngineCurrentUserUsesOptionalBackendCapability(t *testing.T) {
 	want := assistant.CurrentUser{Name: "Bits User", Organization: "Bits Staging"}
 	backend := &currentUserBackend{user: want}
