@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -36,10 +37,19 @@ type testClient struct {
 	thought strings.Builder
 	user    strings.Builder
 	title   string
+	// withdrawn receives each request whose context the agent cancelled:
+	// the client learns it from $/cancel_request, in its own time.
+	withdrawn chan acp.ToolCallId
 
-	updated  chan struct{} // signaled after each update
-	untagged int           // message chunks that name no message
-	images   int           // replayed prompt images
+	updated  chan struct{}                         // signaled after each update
+	untagged int                                   // message chunks that name no message
+	images   int                                   // replayed prompt images
+	statuses map[acp.ToolCallId]acp.ToolCallStatus // each card's, as last sent
+	// diffs and texts hold each card's diffs and text as last sent.
+	diffs map[acp.ToolCallId][]*acp.ToolCallContentDiff
+	texts map[acp.ToolCallId]string
+	// decide answers a permission request; nil waits until it is withdrawn.
+	decide func(acp.RequestPermissionRequest) *acp.PermissionOptionId
 }
 
 func (c *testClient) SessionUpdate(ctx context.Context, n acp.SessionNotification) error {
@@ -66,6 +76,16 @@ func (c *testClient) SessionUpdate(ctx context.Context, n acp.SessionNotificatio
 		} else {
 			c.user.WriteString(u.UserMessageChunk.Content.Text.Text)
 		}
+	case u.ToolCall != nil:
+		c.statuses[u.ToolCall.ToolCallId] = u.ToolCall.Status
+		c.diff(u.ToolCall.ToolCallId, u.ToolCall.Content)
+	case u.ToolCallUpdate != nil:
+		if status, ok := u.ToolCallUpdate.Status.Value(); ok {
+			c.statuses[u.ToolCallUpdate.ToolCallId] = status
+		}
+		if content, ok := u.ToolCallUpdate.Content.Value(); ok {
+			c.diff(u.ToolCallUpdate.ToolCallId, content)
+		}
 	case u.SessionInfoUpdate != nil:
 		c.title, _ = u.SessionInfoUpdate.Title.Value()
 	}
@@ -89,6 +109,19 @@ func (c *testClient) awaitText(t *testing.T, want string) string {
 	}
 }
 
+// awaitWithdrawn returns once a permission request is withdrawn; a request
+// never withdrawn fails the test instead of hanging it.
+func (c *testClient) awaitWithdrawn(t *testing.T) acp.ToolCallId {
+	t.Helper()
+	select {
+	case id := <-c.withdrawn:
+		return id
+	case <-time.After(5 * time.Second):
+		t.Fatal("no permission request was withdrawn")
+		return ""
+	}
+}
+
 func (c *testClient) agentText() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -99,6 +132,30 @@ func (c *testClient) tag(id *acp.MessageId) {
 	if id == nil {
 		c.untagged++
 	}
+}
+
+func (c *testClient) diff(id acp.ToolCallId, content []acp.ToolCallContent) {
+	var diffs []*acp.ToolCallContentDiff
+	var texts []string
+	for _, item := range content {
+		switch {
+		case item.Diff != nil:
+			diffs = append(diffs, item.Diff)
+		case item.Content != nil && item.Content.Content.Text != nil:
+			texts = append(texts, item.Content.Content.Text.Text)
+		}
+	}
+	c.diffs[id], c.texts[id] = diffs, strings.Join(texts, "\n")
+}
+
+func (c *testClient) RequestPermission(ctx context.Context, p acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
+	choice := c.decide(p)
+	if choice == nil {
+		<-ctx.Done()
+		c.withdrawn <- p.ToolCall.ToolCallId
+		return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeCancelled()}, nil
+	}
+	return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(*choice)}, nil
 }
 
 type harness struct {
@@ -139,7 +196,7 @@ func connectWith(t *testing.T, backend agent.Backend, dir string, caps acp.Clien
 	}
 	base.Open, base.Log, base.Version = open, log, "test"
 	a := NewAgent(base)
-	c := &testClient{updated: make(chan struct{}, 1)}
+	c := &testClient{statuses: map[acp.ToolCallId]acp.ToolCallStatus{}, diffs: map[acp.ToolCallId][]*acp.ToolCallContentDiff{}, texts: map[acp.ToolCallId]string{}, updated: make(chan struct{}, 1), withdrawn: make(chan acp.ToolCallId, 8)}
 	a2cR, a2cW := io.Pipe()
 	c2aR, c2aW := io.Pipe()
 	served := make(chan error, 1)
@@ -189,6 +246,10 @@ func (h *harness) prompt(id acp.SessionId, text string) acp.StopReason {
 		h.t.Fatal(err)
 	}
 	return r.StopReason
+}
+
+func choose(id acp.PermissionOptionId) func(acp.RequestPermissionRequest) *acp.PermissionOptionId {
+	return func(acp.RequestPermissionRequest) *acp.PermissionOptionId { return &id }
 }
 
 // recorder keeps the history of every conversation, so a session loads what
@@ -262,6 +323,7 @@ func TestPromptStreamsTheTranscript(t *testing.T) {
 	for name, script := range map[string]string{
 		"text":      `think("let me think"); say("hello "); say("world")`,
 		"long":      `think("a" * 3000); say(random(seed=1, size=20000))`,
+		"tool":      `say("before "); r = call("read_file", {"path": "go.mod"}); say("after: " + r.output.splitlines()[0])`,
 		"multibyte": `say("héllo " * 500); think("日本語" * 300)`,
 		"task":      `task("Investigate", ["Findings so far"], every="0s"); say("started")`,
 	} {
@@ -272,6 +334,7 @@ func TestPromptStreamsTheTranscript(t *testing.T) {
 			}
 			backend := &recorder{Fake: &fake.Fake{}}
 			h := connect(t, backend, dir, acp.ClientCapabilities{})
+			h.client.decide = choose(optionAllowOnce)
 			id := h.newSession().SessionId
 			if reason := h.prompt(id, script); reason != acp.StopReasonEndTurn {
 				t.Fatalf("stop reason %q", reason)
@@ -355,6 +418,117 @@ func TestAuthenticateSignsIn(t *testing.T) {
 	}
 }
 
+func TestPermissions(t *testing.T) {
+	write := `r = call("write_file", {"path": "a.txt", "content": "x\n"}); say("status=" + r.status)`
+	batch := `rs = call([("write_file", {"path": "a.txt", "content": "a\n"}), ("edit_file", {"path": "b.txt", "edits": [{"old_text": "b", "new_text": "B"}]})]); say(",".join([r.status for r in rs]))`
+	// The grant answers a.txt only once b.txt was asked too: a grant first
+	// would release b.txt before it was ever asked, so none is withdrawn.
+	secondAsked := make(chan struct{})
+	cases := []struct {
+		name, script string
+		decide       func(acp.RequestPermissionRequest) *acp.PermissionOptionId
+		wantText     string
+		wantA        string // a.txt afterwards, empty for absent
+		withdrawn    int
+	}{
+		{"allow once", write, choose(optionAllowOnce), "status=success", "x\n", 0},
+		{"reject", write, choose(optionReject), "status=error", "", 0},
+		{"unknown option denies", write, choose("nonsense"), "status=error", "", 0},
+		// The first answer grants workspace writes, which releases the
+		// second call: its request is withdrawn.
+		{"allow always withdraws covered requests", batch, func(p acp.RequestPermissionRequest) *acp.PermissionOptionId {
+			if title, _ := p.ToolCall.Title.Value(); strings.Contains(title, "a.txt") {
+				select {
+				case <-secondAsked:
+				case <-time.After(5 * time.Second):
+					t.Error("b.txt was never asked")
+				}
+				id := optionAllowAlways
+				return &id
+			}
+			close(secondAsked)
+			return nil
+		}, "success,success", "a\n", 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			h := connect(t, &fake.Fake{}, dir, acp.ClientCapabilities{})
+			h.client.decide = c.decide
+			if reason := h.prompt(h.newSession().SessionId, c.script); reason != acp.StopReasonEndTurn {
+				t.Fatalf("stop reason %q", reason)
+			}
+			if !strings.Contains(h.client.agentText(), c.wantText) {
+				t.Fatalf("text = %q, want %q", h.client.agentText(), c.wantText)
+			}
+			got, err := os.ReadFile(filepath.Join(dir, "a.txt"))
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if string(got) != c.wantA {
+				t.Fatalf("a.txt = %q, want %q", got, c.wantA)
+			}
+			for range c.withdrawn {
+				h.client.awaitWithdrawn(t)
+			}
+			if extra := len(h.client.withdrawn); extra > 0 {
+				t.Fatalf("%d more requests withdrawn than %d", extra, c.withdrawn)
+			}
+		})
+	}
+}
+
+func TestCancelWithdrawsThePermission(t *testing.T) {
+	h := connect(t, &fake.Fake{}, t.TempDir(), acp.ClientCapabilities{})
+	id := h.newSession().SessionId
+	h.client.decide = func(acp.RequestPermissionRequest) *acp.PermissionOptionId {
+		// As Zed does: cancel the prompt while its permission is shown.
+		if err := h.conn.Cancel(context.Background(), acp.CancelNotification{SessionId: id}); err != nil {
+			t.Error(err)
+		}
+		return nil
+	}
+	if reason := h.prompt(id, `call("write_file", {"path": "a.txt", "content": "x"}); say("after")`); reason != acp.StopReasonCancelled {
+		t.Fatalf("stop reason %q", reason)
+	}
+	h.client.awaitWithdrawn(t)
+	if reason := h.prompt(id, `say("next")`); reason != acp.StopReasonEndTurn {
+		t.Fatalf("next prompt: stop reason %q", reason)
+	}
+}
+
+func TestLoadSettlesUnansweredCalls(t *testing.T) {
+	backend := &recorder{Fake: &fake.Fake{}}
+	h := connect(t, backend, t.TempDir(), acp.ClientCapabilities{})
+	id := h.newSession().SessionId
+	// The prompt is cancelled while its call awaits approval, which leaves
+	// the call unanswered in history.
+	h.client.decide = func(acp.RequestPermissionRequest) *acp.PermissionOptionId {
+		if err := h.conn.Cancel(context.Background(), acp.CancelNotification{SessionId: id}); err != nil {
+			t.Error(err)
+		}
+		return nil
+	}
+	if reason := h.prompt(id, `call("write_file", {"path": "a.txt", "content": "x"})`); reason != acp.StopReasonCancelled {
+		t.Fatalf("stop reason %q", reason)
+	}
+	replay := connect(t, backend, h.dir, acp.ClientCapabilities{})
+	replay.load(id)
+	replay.client.mu.Lock()
+	defer replay.client.mu.Unlock()
+	if len(replay.client.statuses) == 0 {
+		t.Fatal("no card replayed")
+	}
+	for call, status := range replay.client.statuses {
+		if status != acp.ToolCallStatusFailed && status != acp.ToolCallStatusCompleted {
+			t.Fatalf("card %s loaded %s, want it settled", call, status)
+		}
+	}
+}
+
 func TestCloseSessionIsIdempotent(t *testing.T) {
 	h := connect(t, &fake.Fake{}, t.TempDir(), acp.ClientCapabilities{})
 	id := h.newSession().SessionId
@@ -386,6 +560,72 @@ func TestPromptJoinsTextAroundMentions(t *testing.T) {
 	if got := h.client.agentText(); !strings.HasPrefix(got, "see <resource_link") || !strings.HasSuffix(got, "/> now") {
 		t.Fatalf("text %q", got)
 	}
+}
+
+func TestEditsShowTheirDiff(t *testing.T) {
+	const before = "one\ntwo\nthree\n"
+	for name, tc := range map[string]struct {
+		script   string
+		old      *string
+		new      string
+		filename string
+	}{
+		"edit":      {`call("edit_file", {"path": "a.txt", "edits": [{"old_text": "two", "new_text": "2"}]})`, acp.Ptr(before), "one\n2\nthree\n", "a.txt"},
+		"overwrite": {`call("write_file", {"path": "a.txt", "content": "new\n"})`, acp.Ptr(before), "new\n", "a.txt"},
+		"create":    {`call("write_file", {"path": "b.txt", "content": "new\n"})`, nil, "new\n", "b.txt"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte(before), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			h := connect(t, &fake.Fake{}, dir, acp.ClientCapabilities{})
+			h.client.decide = choose(optionAllowOnce)
+			if reason := h.prompt(h.newSession().SessionId, tc.script); reason != acp.StopReasonEndTurn {
+				t.Fatalf("stop reason %q", reason)
+			}
+			h.client.mu.Lock()
+			defer h.client.mu.Unlock()
+			if len(h.client.diffs) != 1 {
+				t.Fatalf("diffs of %d cards", len(h.client.diffs))
+			}
+			for _, diffs := range h.client.diffs {
+				if len(diffs) != 1 {
+					t.Fatalf("%d diffs on the card", len(diffs))
+				}
+				d := diffs[0]
+				if d.Path != filepath.Join(dir, tc.filename) || d.NewText != tc.new || !reflect.DeepEqual(d.OldText, tc.old) {
+					t.Fatalf("diff %s: %q -> %q", d.Path, ptrText(d.OldText), d.NewText)
+				}
+			}
+		})
+	}
+}
+
+func TestFailedEditSaysWhy(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := connect(t, &fake.Fake{}, dir, acp.ClientCapabilities{})
+	h.client.decide = choose(optionAllowOnce)
+	h.prompt(h.newSession().SessionId, `call("edit_file", {"path": "a.txt", "edits": [{"old_text": "missing", "new_text": "x"}]})`)
+	h.client.mu.Lock()
+	defer h.client.mu.Unlock()
+	for id, text := range h.client.texts {
+		if !strings.Contains(text, "missing") && !strings.Contains(text, "not found") {
+			t.Fatalf("card %s says %q", id, text)
+		}
+		return
+	}
+	t.Fatal("no card")
+}
+
+func ptrText(s *string) string {
+	if s == nil {
+		return "<none>"
+	}
+	return *s
 }
 
 func TestPromptImages(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
 )
 
-// quietClient accepts every update and is never asked anything.
-type quietClient struct{}
+// quietClient accepts every update; a test that asks it anything panics.
+type quietClient struct{ client }
 
 func (quietClient) SessionUpdate(context.Context, acp.SessionNotification) error { return nil }
 
@@ -27,7 +27,7 @@ func testSession(t *testing.T) *session {
 			t.Error("the session's environment closed twice")
 		}
 	}}
-	return newSession("s", quietClient{}, env, log)
+	return newSession("s", quietClient{}, env, t.TempDir(), log)
 }
 
 // run starts a turn and returns once the engine has ended it, before anyone

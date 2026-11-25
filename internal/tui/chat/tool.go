@@ -793,7 +793,7 @@ func renderChangeTool(tool *agent.ToolBlock, p toolPresentation, c renderContext
 	header := renderToolHeader(tool, p.summary(tool), nil, c)
 	if diff != nil {
 		lines := []string{header}
-		if format := formatChange(*diff); format != "" {
+		if format := diff.FormatChange(); format != "" {
 			lines = append(lines, c.sty.ToolDetail.Render(ansi.Truncate("  └ "+format, c.width, "…")))
 		}
 		limit := collapsedDiffLines
@@ -845,21 +845,6 @@ func editorDiff(state *filediff.State) (path string, diff *filediff.Diff, reason
 	default:
 		return "", nil, state.Reason
 	}
-}
-
-func formatChange(diff filediff.Diff) string {
-	if diff.BeforeFormat == diff.AfterFormat {
-		return ""
-	}
-	return "format: " + formatName(diff.BeforeFormat) + " → " + formatName(diff.AfterFormat)
-}
-
-func formatName(format filediff.TextFormat) string {
-	name := strings.ToUpper(format.LineEnding)
-	if format.BOM {
-		name += " + BOM"
-	}
-	return name
 }
 
 func renderExecTool(tool *agent.ToolBlock, p toolPresentation, c renderContext) string {

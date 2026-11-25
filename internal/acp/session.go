@@ -14,6 +14,7 @@ import (
 // client is the part of the connection a session calls.
 type client interface {
 	SessionUpdate(context.Context, acp.SessionNotification) error
+	RequestPermission(context.Context, acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error)
 }
 
 // Env is one session's local world: its engine and the tools it runs at the
@@ -57,20 +58,27 @@ type waiter struct {
 	end chan agent.Event
 }
 
-func newSession(id acp.SessionId, c client, env Env, log *slog.Logger) *session {
+func newSession(id acp.SessionId, c client, env Env, root string, log *slog.Logger) *session {
 	// Engine.Close ends the subscription, so its stop function is unused.
 	events, _ := env.Engine.Subscribe()
 	s := &session{
-		id: id, client: c, env: env, mirror: newMirror(), log: log,
+		id: id, client: c, env: env, mirror: newMirror(root), log: log,
 		events: events, waits: make(chan waiter), syncs: make(chan syncer), done: make(chan struct{}), turn: make(chan struct{}, 1),
 	}
 	go s.pump()
 	return s
 }
 
-// pump sends every state change, until the subscription ends.
+// pump sends every state change and asks about every parked call, until
+// the subscription ends.
 func (s *session) pump() {
 	defer close(s.done)
+	asks := make(map[string]context.CancelFunc) // parked call id -> its request
+	defer func() {
+		for _, cancel := range asks {
+			cancel()
+		}
+	}()
 	// A run can end before its request asks for the end, so the ends no
 	// one asked for yet are kept. Every run is a request's, so both stay small.
 	ended := make(map[agent.RunID]agent.Event)
@@ -96,6 +104,7 @@ func (s *session) pump() {
 			switch ev.Kind {
 			case agent.EventState:
 				s.send(s.mirror.updates(ev.State))
+				s.ask(ev.State, asks)
 				synced()
 			case agent.EventUsage:
 				if ev.Usage != nil {
@@ -131,6 +140,76 @@ func (s *session) send(updates []acp.SessionUpdate) {
 		if err := s.client.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: s.id, Update: update}); err != nil {
 			s.log.Debug("session update", "session", s.id, "err", err)
 		}
+	}
+}
+
+// ask starts one permission request per newly parked call, and withdraws
+// the request of a call the engine settled another way: a grant, a mode
+// switch, a stop, or the turn's end.
+func (s *session) ask(state agent.State, asks map[string]context.CancelFunc) {
+	parked := make(map[string]bool)
+	for _, block := range state.PendingApprovals() {
+		id := block.ToolCallID()
+		parked[id] = true
+		if asks[id] != nil {
+			continue
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		asks[id] = cancel
+		go s.permission(ctx, block)
+	}
+	for id, cancel := range asks {
+		if !parked[id] {
+			cancel()
+			delete(asks, id)
+		}
+	}
+}
+
+const (
+	optionAllowOnce   acp.PermissionOptionId = "allow_once"
+	optionAllowAlways acp.PermissionOptionId = "allow_always"
+	optionReject      acp.PermissionOptionId = "reject_once"
+)
+
+// The labels are the TUI's: a session grant covers the call's approval key,
+// such as every workspace write, not only this call.
+var permissionOptions = []acp.PermissionOption{
+	{OptionId: optionAllowOnce, Kind: acp.PermissionOptionKindAllowOnce, Name: "Allow"},
+	{OptionId: optionAllowAlways, Kind: acp.PermissionOptionKindAllowAlways, Name: "Allow for session"},
+	{OptionId: optionReject, Kind: acp.PermissionOptionKindRejectOnce, Name: "Deny"},
+}
+
+// permission asks the client about one parked call and applies the answer.
+// Anything but an allow denies: the user did not approve the call.
+func (s *session) permission(ctx context.Context, block agent.Block) {
+	id := block.ToolCallID()
+	call := acp.ToolCallUpdate{ToolCallId: acp.ToolCallId(id)}
+	if block.Tool.Approval != nil {
+		call.Title = acp.PatchSet(block.Tool.Approval.Title)
+	}
+	response, err := s.client.RequestPermission(ctx, acp.RequestPermissionRequest{SessionId: s.id, ToolCall: call, Options: permissionOptions})
+	if ctx.Err() != nil {
+		return // settled otherwise; the client was told to drop the prompt
+	}
+	choice := optionReject
+	switch {
+	case err != nil:
+		s.log.Debug("permission request", "session", s.id, "call", id, "err", err)
+	case response.Outcome.Selected != nil:
+		choice = response.Outcome.Selected.OptionId
+	}
+	switch choice {
+	case optionAllowOnce:
+		err = s.env.Engine.Decide(id, agent.ApprovalAllowOnce)
+	case optionAllowAlways:
+		err = s.env.Engine.GrantSessionFor(id)
+	default:
+		err = s.env.Engine.Decide(id, agent.ApprovalDeny)
+	}
+	// A stale call was settled otherwise, such as by a grant.
+	if err != nil && !errors.Is(err, agent.ErrStale) {
+		s.log.Debug("permission", "session", s.id, "call", id, "err", err)
 	}
 }
 

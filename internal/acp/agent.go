@@ -210,7 +210,7 @@ func (a *Agent) start(ctx context.Context, id acp.SessionId, cwd string) (*sessi
 	if err != nil {
 		return nil, a.clientError(err)
 	}
-	s := newSession(id, conn, env, a.config.Log)
+	s := newSession(id, conn, env, cwd, a.config.Log)
 	a.mu.Lock()
 	closed := a.sessions == nil
 	old := a.sessions[id]
