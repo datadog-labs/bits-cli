@@ -2,6 +2,7 @@ package acp
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -384,52 +386,6 @@ func TestPromptStreamsTheTranscript(t *testing.T) {
 	}
 }
 
-func TestPromptErrorsGoThroughConfig(t *testing.T) {
-	// As a login revoked mid-session: the command makes it auth_required.
-	authRequired := func(err error) error { return acp.NewAuthRequired(map[string]any{"message": err.Error()}) }
-	h := connectWith(t, &fake.Fake{}, t.TempDir(), acp.ClientCapabilities{}, Config{Error: authRequired})
-	_, err := h.conn.Prompt(context.Background(), acp.PromptRequest{SessionId: h.newSession().SessionId, Prompt: []acp.ContentBlock{acp.TextBlock(`fail("net")`)}})
-	var request *acp.RequestError
-	if !errors.As(err, &request) || request.Code != acp.NewAuthRequired(nil).Code {
-		t.Fatalf("prompt error = %v, want auth required", err)
-	}
-}
-
-func TestAuthenticateSignsIn(t *testing.T) {
-	for name, tc := range map[string]struct {
-		method acp.AuthMethodId
-		signIn error
-		want   string // in the error, if any
-		calls  int
-	}{
-		"signed in":      {loginMethod, nil, "", 1},
-		"sign-in failed": {loginMethod, errors.New("browser closed"), "browser closed", 1},
-		"unknown method": {"other", nil, "Invalid params", 0},
-	} {
-		t.Run(name, func(t *testing.T) {
-			calls := 0
-			signIn := func(context.Context) error { calls++; return tc.signIn }
-			h := connectWith(t, &fake.Fake{}, t.TempDir(), acp.ClientCapabilities{}, Config{SignIn: signIn})
-			init, err := h.conn.Initialize(context.Background(), acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber})
-			if err != nil {
-				t.Fatal(err)
-			}
-			// A client with no terminal still gets a method to call.
-			if len(init.AuthMethods) != 1 || init.AuthMethods[0].Agent == nil {
-				t.Fatalf("auth methods = %+v", init.AuthMethods)
-			}
-			_, err = h.conn.Authenticate(context.Background(), acp.AuthenticateRequest{MethodId: tc.method})
-			got := ""
-			if err != nil {
-				got = err.Error()
-			}
-			if calls != tc.calls || (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
-				t.Fatalf("authenticate = %q after %d sign-ins, want %q after %d", got, calls, tc.want, tc.calls)
-			}
-		})
-	}
-}
-
 func TestPermissions(t *testing.T) {
 	write := `r = call("write_file", {"path": "a.txt", "content": "x\n"}); say("status=" + r.status)`
 	batch := `rs = call([("write_file", {"path": "a.txt", "content": "a\n"}), ("edit_file", {"path": "b.txt", "edits": [{"old_text": "b", "new_text": "B"}]})]); say(",".join([r.status for r in rs]))`
@@ -512,35 +468,6 @@ func TestCancelWithdrawsThePermission(t *testing.T) {
 	}
 }
 
-func TestLoadSettlesUnansweredCalls(t *testing.T) {
-	backend := &recorder{Fake: &fake.Fake{}}
-	h := connect(t, backend, t.TempDir(), acp.ClientCapabilities{})
-	id := h.newSession().SessionId
-	// The prompt is cancelled while its call awaits approval, which leaves
-	// the call unanswered in history.
-	h.client.decide = func(acp.RequestPermissionRequest) *acp.PermissionOptionId {
-		if err := h.conn.Cancel(context.Background(), acp.CancelNotification{SessionId: id}); err != nil {
-			t.Error(err)
-		}
-		return nil
-	}
-	if reason := h.prompt(id, `call("write_file", {"path": "a.txt", "content": "x"})`); reason != acp.StopReasonCancelled {
-		t.Fatalf("stop reason %q", reason)
-	}
-	replay := connect(t, backend, h.dir, acp.ClientCapabilities{})
-	replay.load(id)
-	replay.client.mu.Lock()
-	defer replay.client.mu.Unlock()
-	if len(replay.client.statuses) == 0 {
-		t.Fatal("no card replayed")
-	}
-	for call, status := range replay.client.statuses {
-		if status != acp.ToolCallStatusFailed && status != acp.ToolCallStatusCompleted {
-			t.Fatalf("card %s loaded %s, want it settled", call, status)
-		}
-	}
-}
-
 func TestQuestionsAskAForm(t *testing.T) {
 	str := acp.NewElicitationContentValueString
 	cases := []struct {
@@ -605,6 +532,81 @@ func TestQuestionsNeedForms(t *testing.T) {
 	}
 }
 
+func TestPromptErrorsGoThroughConfig(t *testing.T) {
+	// As a login revoked mid-session: the command makes it auth_required.
+	authRequired := func(err error) error { return acp.NewAuthRequired(map[string]any{"message": err.Error()}) }
+	h := connectWith(t, &fake.Fake{}, t.TempDir(), acp.ClientCapabilities{}, Config{Error: authRequired})
+	_, err := h.conn.Prompt(context.Background(), acp.PromptRequest{SessionId: h.newSession().SessionId, Prompt: []acp.ContentBlock{acp.TextBlock(`fail("net")`)}})
+	var request *acp.RequestError
+	if !errors.As(err, &request) || request.Code != acp.NewAuthRequired(nil).Code {
+		t.Fatalf("prompt error = %v, want auth required", err)
+	}
+}
+
+func TestAuthenticateSignsIn(t *testing.T) {
+	for name, tc := range map[string]struct {
+		method acp.AuthMethodId
+		signIn error
+		want   string // in the error, if any
+		calls  int
+	}{
+		"signed in":      {loginMethod, nil, "", 1},
+		"sign-in failed": {loginMethod, errors.New("browser closed"), "browser closed", 1},
+		"unknown method": {"other", nil, "Invalid params", 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			signIn := func(context.Context) error { calls++; return tc.signIn }
+			h := connectWith(t, &fake.Fake{}, t.TempDir(), acp.ClientCapabilities{}, Config{SignIn: signIn})
+			init, err := h.conn.Initialize(context.Background(), acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A client with no terminal still gets a method to call.
+			if len(init.AuthMethods) != 1 || init.AuthMethods[0].Agent == nil {
+				t.Fatalf("auth methods = %+v", init.AuthMethods)
+			}
+			_, err = h.conn.Authenticate(context.Background(), acp.AuthenticateRequest{MethodId: tc.method})
+			got := ""
+			if err != nil {
+				got = err.Error()
+			}
+			if calls != tc.calls || (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+				t.Fatalf("authenticate = %q after %d sign-ins, want %q after %d", got, calls, tc.want, tc.calls)
+			}
+		})
+	}
+}
+
+func TestLoadSettlesUnansweredCalls(t *testing.T) {
+	backend := &recorder{Fake: &fake.Fake{}}
+	h := connect(t, backend, t.TempDir(), acp.ClientCapabilities{})
+	id := h.newSession().SessionId
+	// The prompt is cancelled while its call awaits approval, which leaves
+	// the call unanswered in history.
+	h.client.decide = func(acp.RequestPermissionRequest) *acp.PermissionOptionId {
+		if err := h.conn.Cancel(context.Background(), acp.CancelNotification{SessionId: id}); err != nil {
+			t.Error(err)
+		}
+		return nil
+	}
+	if reason := h.prompt(id, `call("write_file", {"path": "a.txt", "content": "x"})`); reason != acp.StopReasonCancelled {
+		t.Fatalf("stop reason %q", reason)
+	}
+	replay := connect(t, backend, h.dir, acp.ClientCapabilities{})
+	replay.load(id)
+	replay.client.mu.Lock()
+	defer replay.client.mu.Unlock()
+	if len(replay.client.statuses) == 0 {
+		t.Fatal("no card replayed")
+	}
+	for call, status := range replay.client.statuses {
+		if status != acp.ToolCallStatusFailed && status != acp.ToolCallStatusCompleted {
+			t.Fatalf("card %s loaded %s, want it settled", call, status)
+		}
+	}
+}
+
 func TestCloseSessionIsIdempotent(t *testing.T) {
 	h := connect(t, &fake.Fake{}, t.TempDir(), acp.ClientCapabilities{})
 	id := h.newSession().SessionId
@@ -624,17 +626,43 @@ func TestLoadUnpromptedSessionIsEmpty(t *testing.T) {
 	}
 }
 
-func TestPromptJoinsTextAroundMentions(t *testing.T) {
-	h := connect(t, &fake.Fake{}, t.TempDir(), acp.ClientCapabilities{})
-	// The fake runs the message as a script, so a stray separator breaks it.
-	r, err := h.conn.Prompt(context.Background(), acp.PromptRequest{SessionId: h.newSession().SessionId, Prompt: []acp.ContentBlock{
-		acp.TextBlock(`say('''see `), acp.ResourceLinkBlock("a.go", "file:///a.go"), acp.TextBlock(` now''')`),
-	}})
-	if err != nil || r.StopReason != acp.StopReasonEndTurn {
-		t.Fatalf("prompt: %v %v", r.StopReason, err)
+func TestConfigOptionsApplyToLaterPrompts(t *testing.T) {
+	backend := &recorder{Fake: &fake.Fake{}}
+	h := connect(t, backend, t.TempDir(), acp.ClientCapabilities{})
+	session := h.newSession()
+	current := func(options []acp.SessionConfigOption, id acp.SessionConfigId) acp.SessionConfigValueId {
+		i := slices.IndexFunc(options, func(o acp.SessionConfigOption) bool { return o.Select.Id == id })
+		return options[i].Select.CurrentValue
 	}
-	if got := h.client.agentText(); !strings.HasPrefix(got, "see <resource_link") || !strings.HasSuffix(got, "/> now") {
-		t.Fatalf("text %q", got)
+	if got := current(session.ConfigOptions, configReasoning); got != "default" {
+		t.Fatalf("reasoning = %q", got)
+	}
+	for _, set := range []struct {
+		id    acp.SessionConfigId
+		value acp.SessionConfigValueId
+	}{{configReasoning, "deep"}, {configPermissions, acp.SessionConfigValueId(agent.ModeSkipPermissions)}} {
+		r, err := h.conn.SetSessionConfigOption(context.Background(), acp.SetSessionConfigOptionRequest{ValueId: &acp.SetSessionConfigOptionValueId{
+			SessionId: session.SessionId, ConfigId: set.id, Value: set.value,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := current(r.ConfigOptions, set.id); got != set.value {
+			t.Fatalf("%s = %q, want %q", set.id, got, set.value)
+		}
+	}
+	// Full access runs the write without asking.
+	h.prompt(session.SessionId, `r = call("write_file", {"path": "a.txt", "content": "x"}); say(r.status)`)
+	if got := h.client.agentText(); got != "success" {
+		t.Fatalf("text = %q", got)
+	}
+	if got := backend.sent[0].InferenceMode; got != "deep" {
+		t.Fatalf("inference mode = %q", got)
+	}
+	if _, err := h.conn.SetSessionConfigOption(context.Background(), acp.SetSessionConfigOptionRequest{ValueId: &acp.SetSessionConfigOptionValueId{
+		SessionId: session.SessionId, ConfigId: configReasoning, Value: "turbo",
+	}}); err == nil {
+		t.Fatal("accepted an unknown value")
 	}
 }
 
@@ -645,14 +673,18 @@ func TestEditsShowTheirDiff(t *testing.T) {
 		old      *string
 		new      string
 		filename string
+		file     string // a.txt before, if not before
 	}{
-		"edit":      {`call("edit_file", {"path": "a.txt", "edits": [{"old_text": "two", "new_text": "2"}]})`, acp.Ptr(before), "one\n2\nthree\n", "a.txt"},
-		"overwrite": {`call("write_file", {"path": "a.txt", "content": "new\n"})`, acp.Ptr(before), "new\n", "a.txt"},
-		"create":    {`call("write_file", {"path": "b.txt", "content": "new\n"})`, nil, "new\n", "b.txt"},
+		"edit":      {`call("edit_file", {"path": "a.txt", "edits": [{"old_text": "two", "new_text": "2"}]})`, acp.Ptr(before), "one\n2\nthree\n", "a.txt", ""},
+		"overwrite": {`call("write_file", {"path": "a.txt", "content": "new\n"})`, acp.Ptr(before), "new\n", "a.txt", ""},
+		"create":    {`call("write_file", {"path": "b.txt", "content": "new\n"})`, nil, "new\n", "b.txt", ""},
+		// The tool refuses mixed line endings, so the card shows only the
+		// replacement it was asked for.
+		"unappliable edit": {`call("edit_file", {"path": "a.txt", "edits": [{"old_text": "two", "new_text": "2"}]})`, acp.Ptr("two"), "2", "a.txt", "one\r\ntwo\nthree\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte(before), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte(cmp.Or(tc.file, before)), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			h := connect(t, &fake.Fake{}, dir, acp.ClientCapabilities{})
@@ -702,6 +734,20 @@ func ptrText(s *string) string {
 		return "<none>"
 	}
 	return *s
+}
+
+func TestPromptJoinsTextAroundMentions(t *testing.T) {
+	h := connect(t, &fake.Fake{}, t.TempDir(), acp.ClientCapabilities{})
+	// The fake runs the message as a script, so a stray separator breaks it.
+	r, err := h.conn.Prompt(context.Background(), acp.PromptRequest{SessionId: h.newSession().SessionId, Prompt: []acp.ContentBlock{
+		acp.TextBlock(`say('''see `), acp.ResourceLinkBlock("a.go", "file:///a.go"), acp.TextBlock(` now''')`),
+	}})
+	if err != nil || r.StopReason != acp.StopReasonEndTurn {
+		t.Fatalf("prompt: %v %v", r.StopReason, err)
+	}
+	if got := h.client.agentText(); !strings.HasPrefix(got, "see <resource_link") || !strings.HasSuffix(got, "/> now") {
+		t.Fatalf("text %q", got)
+	}
 }
 
 func TestPromptImages(t *testing.T) {

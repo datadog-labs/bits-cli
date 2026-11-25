@@ -161,7 +161,7 @@ func (a *Agent) NewSession(ctx context.Context, params acp.NewSessionRequest) (a
 	if err != nil {
 		return acp.NewSessionResponse{}, err
 	}
-	return acp.NewSessionResponse{SessionId: s.id}, nil
+	return acp.NewSessionResponse{SessionId: s.id, ConfigOptions: configOptions(s.env.Engine)}, nil
 }
 
 // LoadSession restores the conversation and replays it as updates before
@@ -184,7 +184,7 @@ func (a *Agent) LoadSession(ctx context.Context, params acp.LoadSessionRequest) 
 	}
 	s.env.Engine.SettleRestoredTools(nil)
 	s.synced(s.env.Engine.State().Version)
-	return acp.LoadSessionResponse{}, nil
+	return acp.LoadSessionResponse{ConfigOptions: configOptions(s.env.Engine)}, nil
 }
 
 // ResumeSession binds a session to its conversation without replaying it:
@@ -192,10 +192,11 @@ func (a *Agent) LoadSession(ctx context.Context, params acp.LoadSessionRequest) 
 // NOTE: background tasks already running in the conversation are not
 // followed: only a restore finds them, and its history would replay.
 func (a *Agent) ResumeSession(ctx context.Context, params acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
-	if _, err := a.start(ctx, params.SessionId, params.Cwd); err != nil {
+	s, err := a.start(ctx, params.SessionId, params.Cwd)
+	if err != nil {
 		return acp.ResumeSessionResponse{}, err
 	}
-	return acp.ResumeSessionResponse{}, nil
+	return acp.ResumeSessionResponse{ConfigOptions: configOptions(s.env.Engine)}, nil
 }
 
 // notFound is a conversation the server never saw.
@@ -307,13 +308,8 @@ func (a *Agent) DeleteSession(ctx context.Context, params acp.DeleteSessionReque
 	return acp.DeleteSessionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionDelete)
 }
 
-// SetSessionConfigOption has no options to set yet.
-func (a *Agent) SetSessionConfigOption(ctx context.Context, params acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
-	return acp.SetSessionConfigOptionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetConfigOption)
-}
-
-// SetSessionMode is unused: the permissions mode will be a config option,
-// which clients prefer to modes.
+// SetSessionMode is unused: the permissions mode is a config option, which
+// clients prefer to modes.
 func (a *Agent) SetSessionMode(ctx context.Context, params acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
 	return acp.SetSessionModeResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetMode)
 }
