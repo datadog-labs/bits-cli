@@ -49,7 +49,7 @@ func (e *Editor) SetQueueRemover(remove func(id uint64)) { e.queue.remove = remo
 func (e *Editor) QueueLen() int     { return len(e.queue.items) }
 func (e *Editor) QueuePaused() bool { return e.queue.paused }
 
-// QueueAnimating reports whether pending prompts spin; a paused queue and
+// QueueAnimating reports whether pending prompts pulse; a paused queue and
 // reduced-motion themes keep a static marker.
 func (e *Editor) QueueAnimating() bool {
 	return e.inputStyle.SweepMotion && e.QueueLen() > 0 && !e.QueuePaused()

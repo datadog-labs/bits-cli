@@ -339,7 +339,7 @@ func TestPickerLoadingUsesSharedClockAndStopsOnClose(t *testing.T) {
 	}
 }
 
-func TestQueueSpinnerSharesActivityClockWithoutTools(t *testing.T) {
+func TestQueuePulseSharesActivityClockWithoutTools(t *testing.T) {
 	m := newShell()
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.op = operation{kind: opTurn, run: 1}
@@ -352,14 +352,14 @@ func TestQueueSpinnerSharesActivityClockWithoutTools(t *testing.T) {
 		t.Fatal("queue started a second repaint chain")
 	}
 	m.advanceAnimations(animationTickMsg{generation: m.animClock.generation, at: start.Add(100 * time.Millisecond)})
-	if !m.animActivity.active || !strings.Contains(m.editor.QueueView(11), m.styles.Chat.StatusSpinner.Frame(2)) {
-		t.Fatal("queue did not share the tool spinner's frame and cadence")
+	if !m.animActivity.active || !strings.Contains(m.editor.QueueView(11), m.styles.Input.Pending.Frame(2)) {
+		t.Fatal("queue did not pulse on the tool activity's frame and cadence")
 	}
 	// Waiting on an approval stills the sweep, not the pending prompt.
 	m.syncApprovals([]agent.Block{awaitingCall("a")})
 	m.syncAnimationsAt(start.Add(100 * time.Millisecond))
 	if m.animBorderSweep.active || !m.animActivity.active {
-		t.Fatal("an approval stopped the queue spinner or kept the sweep")
+		t.Fatal("an approval stopped the queue pulse or kept the sweep")
 	}
 	m.syncApprovals(nil)
 	m.state.Queued = nil

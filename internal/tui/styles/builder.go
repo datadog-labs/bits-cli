@@ -57,7 +57,7 @@ func build(isDark bool, p palette) Theme {
 		SweepDim:    lipgloss.Color(p.inputRule),
 		SweepHot:    lipgloss.Color(p.sweepHot),
 		SweepMotion: true,
-		Spinner:     activitySpinner,
+		Pending:     pulse(pendingGlyph+" ", lipgloss.Color(p.interactive), lipgloss.Color(p.surface)),
 		Chip:        chip(p),
 	}
 

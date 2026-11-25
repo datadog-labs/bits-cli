@@ -209,17 +209,16 @@ func renderQueuedPrompt(p HistoryEntry, width, budget int, sty styles.Input, hig
 	return rendered
 }
 
-// queueMarker uses exactly the same spinner and timeline as tool activity.
+// queueMarker pulses on the tool activity timeline. A spinner would claim the
+// prompt is being worked on; it is only waiting its turn.
 func (e *Editor) queueMarker() string {
 	if e.QueuePaused() {
 		return "Ⅱ "
 	}
-	if e.QueueAnimating() {
-		if glyph := e.inputStyle.Spinner.Frame(e.activityFrame); glyph != "" {
-			return glyph + " "
-		}
+	if !e.QueueAnimating() {
+		return e.inputStyle.Pending.Static()
 	}
-	return "◦ "
+	return e.inputStyle.Pending.Frame(e.activityFrame)
 }
 
 // SetQueuePointer uses coordinates local to the last QueueView.
