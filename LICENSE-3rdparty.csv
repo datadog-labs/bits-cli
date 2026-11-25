@@ -20,6 +20,7 @@ github.com/charmbracelet/x/termios,https://github.com/charmbracelet/x,MIT,"Copyr
 github.com/charmbracelet/x/windows,https://github.com/charmbracelet/x,MIT,"Copyright (c) 2023 Charmbracelet, Inc."
 github.com/clipperhouse/displaywidth,https://github.com/clipperhouse/displaywidth,MIT,Copyright (c) 2025 Matt Sherman
 github.com/clipperhouse/uax29/v2,https://github.com/clipperhouse/uax29,MIT,Copyright (c) 2020 Matt Sherman
+github.com/coder/acp-go-sdk,https://github.com/coder/acp-go-sdk,Apache-2.0,"Copyright 2025 Coder Technologies, Inc."
 github.com/danieljoos/wincred,https://github.com/danieljoos/wincred,MIT,Copyright (c) 2014 Daniel Joos
 github.com/dlclark/regexp2/v2,https://github.com/dlclark/regexp2,MIT,Copyright (c) Doug Clark
 github.com/git-pkgs/gitignore,https://github.com/git-pkgs/gitignore,MIT,Copyright (c) 2026 Andrew Nesbitt
