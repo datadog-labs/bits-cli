@@ -322,6 +322,11 @@ type Engine struct {
 	userContext  func(context.Context) string
 }
 
+// StatusBackend is a backend that reports how it was constructed.
+type StatusBackend interface {
+	BackendStatus() assistant.BackendStatus
+}
+
 // RuntimeStatus is the non-secret request and backend state needed by local
 // status surfaces.
 type RuntimeStatus struct {
@@ -383,9 +388,7 @@ func New(b Backend, config Config) *Engine {
 	}
 	_, multiAgent := b.(DuplexBackend)
 	runtimeStatus := RuntimeStatus{Profile: profile, Model: opts.Model, MultiAgent: multiAgent}
-	if provider, ok := b.(interface {
-		BackendStatus() assistant.BackendStatus
-	}); ok {
+	if provider, ok := b.(StatusBackend); ok {
 		runtimeStatus.Backend = provider.BackendStatus()
 	}
 	engine := &Engine{

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -128,6 +129,26 @@ func TestRequiredResponseHeaderValidatedBeforeAuthentication(t *testing.T) {
 	}
 	if store.loads != 0 || store.saves != 0 {
 		t.Fatalf("invalid configuration touched OAuth store: load %d, save %d", store.loads, store.saves)
+	}
+}
+
+func TestSkillValidatedBeforeAuthentication(t *testing.T) {
+	clearStagingEnv(t)
+	t.Setenv("BITS_FAKE_BACKEND", "")
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := ws.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	// A signed-out user learns about the bad flag, not that they must sign in.
+	store := &observedStore{err: auth.ErrNoSession}
+	_, err = newEngine(context.Background(), ChatOptions{AuthMode: auth.ModeAuto, SkillPaths: []string{filepath.Join(t.TempDir(), "missing")}}, ws, store)
+	if err == nil || !strings.Contains(err.Error(), "--skill") || store.loads != 0 {
+		t.Fatalf("error = %v after %d store loads, want the --skill error first", err, store.loads)
 	}
 }
 
