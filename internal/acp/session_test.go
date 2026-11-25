@@ -27,7 +27,7 @@ func testSession(t *testing.T) *session {
 			t.Error("the session's environment closed twice")
 		}
 	}}
-	return newSession("s", quietClient{}, env, t.TempDir(), log)
+	return newSession("s", quietClient{}, env, nil, t.TempDir(), log)
 }
 
 // run starts a turn and returns once the engine has ended it, before anyone

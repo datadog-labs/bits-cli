@@ -50,6 +50,7 @@ type testClient struct {
 	texts map[acp.ToolCallId]string
 	// decide answers a permission request; nil waits until it is withdrawn.
 	decide func(acp.RequestPermissionRequest) *acp.PermissionOptionId
+	form   func(acp.CreateElicitationRequest) acp.CreateElicitationResponse
 }
 
 func (c *testClient) SessionUpdate(ctx context.Context, n acp.SessionNotification) error {
@@ -158,6 +159,10 @@ func (c *testClient) RequestPermission(ctx context.Context, p acp.RequestPermiss
 	return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(*choice)}, nil
 }
 
+func (c *testClient) CreateElicitation(ctx context.Context, p acp.CreateElicitationRequest) (acp.CreateElicitationResponse, error) {
+	return c.form(p), nil
+}
+
 type harness struct {
 	t      *testing.T
 	client *testClient
@@ -176,13 +181,17 @@ func connect(t *testing.T, backend agent.Backend, dir string, caps acp.ClientCap
 func connectWith(t *testing.T, backend agent.Backend, dir string, caps acp.ClientCapabilities, base Config) *harness {
 	t.Helper()
 	log := slog.New(slog.DiscardHandler)
-	open := func(ctx context.Context, id, cwd string) (Env, error) {
+	open := func(ctx context.Context, id, cwd string, ui *tools.UI) (Env, error) {
 		ws, err := workspace.Open(cwd)
 		if err != nil {
 			return Env{}, err
 		}
 		commands := exectool.NewExecService(ws.DefaultShellPath())
-		set, err := agent.NewToolSet(tools.NewClientTools(ws, commands)...)
+		list := tools.NewClientTools(ws, commands)
+		if ui != nil {
+			list = append(list, tools.NewAskUserQuestionTool(ui))
+		}
+		set, err := agent.NewToolSet(list...)
 		if err != nil {
 			return Env{}, err
 		}
@@ -221,6 +230,9 @@ func connectWith(t *testing.T, backend agent.Backend, dir string, caps acp.Clien
 	}
 	return &harness{t: t, client: c, conn: cc, dir: dir}
 }
+
+// forms is a client that renders form elicitations, as Zed does.
+var forms = acp.ClientCapabilities{Elicitation: &acp.ElicitationCapabilities{Form: &acp.ElicitationFormCapabilities{}}}
 
 // load restores session id in the harness's dir.
 func (h *harness) load(id acp.SessionId) {
@@ -270,7 +282,7 @@ func (r *recorder) Send(ctx context.Context, message any, opts assistant.SendOpt
 func TestSessionOpenedAfterCloseIsClosed(t *testing.T) {
 	opening, release := make(chan struct{}), make(chan struct{})
 	closed := make(chan struct{}, 1)
-	open := func(ctx context.Context, id, cwd string) (Env, error) {
+	open := func(ctx context.Context, id, cwd string, ui *tools.UI) (Env, error) {
 		close(opening)
 		<-release
 		return Env{Engine: agent.New(&fake.Fake{}, agent.Config{ConversationID: id}), Close: func() { closed <- struct{}{} }}, nil
@@ -297,7 +309,7 @@ func TestSessionOpenedAfterCloseIsClosed(t *testing.T) {
 func TestReopeningASessionClosesTheOpenOne(t *testing.T) {
 	closed := make(map[int]int) // environment -> closes
 	opened := 0
-	open := func(ctx context.Context, id, cwd string) (Env, error) {
+	open := func(ctx context.Context, id, cwd string, ui *tools.UI) (Env, error) {
 		env := opened
 		opened++
 		return Env{Engine: agent.New(&fake.Fake{}, agent.Config{ConversationID: id}), Close: func() { closed[env]++ }}, nil
@@ -526,6 +538,70 @@ func TestLoadSettlesUnansweredCalls(t *testing.T) {
 		if status != acp.ToolCallStatusFailed && status != acp.ToolCallStatusCompleted {
 			t.Fatalf("card %s loaded %s, want it settled", call, status)
 		}
+	}
+}
+
+func TestQuestionsAskAForm(t *testing.T) {
+	str := acp.NewElicitationContentValueString
+	cases := []struct {
+		name     string
+		response acp.CreateElicitationResponse
+		want     []string
+	}{
+		{"choices", acp.CreateElicitationResponse{Accept: &acp.CreateElicitationAccept{Action: "accept", Content: map[string]acp.ElicitationContentValue{
+			"q0": str("EU"), "q1": str("API"),
+		}}}, []string{"A: EU", "A: API"}},
+		{"other answer wins", acp.CreateElicitationResponse{Accept: &acp.CreateElicitationAccept{Action: "accept", Content: map[string]acp.ElicitationContentValue{
+			"q0": str("EU"), "q1": str("API"), "q1_other": str("Billing"),
+		}}}, []string{"A: EU", "A: Billing"}},
+		{"missing answer dismisses", acp.CreateElicitationResponse{Accept: &acp.CreateElicitationAccept{Action: "accept", Content: map[string]acp.ElicitationContentValue{
+			"q0": str("EU"),
+		}}}, []string{"without answers"}},
+		{"decline dismisses", acp.CreateElicitationResponse{Decline: &acp.CreateElicitationDecline{Action: "decline"}}, []string{"without answers"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := connect(t, &fake.Fake{BundledFixtures: true}, t.TempDir(), forms)
+			h.client.form = func(acp.CreateElicitationRequest) acp.CreateElicitationResponse { return c.response }
+			if reason := h.prompt(h.newSession().SessionId, `load("questions.star", "ask_user_question"); ask_user_question()`); reason != acp.StopReasonEndTurn {
+				t.Fatalf("stop reason %q", reason)
+			}
+			for _, want := range c.want {
+				if !strings.Contains(h.client.agentText(), want) {
+					t.Fatalf("text = %q, want %q", h.client.agentText(), want)
+				}
+			}
+		})
+	}
+}
+
+func TestQuestionBesideAPermission(t *testing.T) {
+	h := connect(t, &fake.Fake{}, t.TempDir(), forms)
+	asked := make(chan struct{}, 1)
+	h.client.decide = func(acp.RequestPermissionRequest) *acp.PermissionOptionId {
+		asked <- struct{}{}
+		return acp.Ptr(optionAllowOnce)
+	}
+	// Both are shown at once, as Zed shows them: the form must not hold
+	// back the permission request of the call beside it.
+	h.client.form = func(acp.CreateElicitationRequest) acp.CreateElicitationResponse {
+		select {
+		case <-asked:
+		case <-time.After(5 * time.Second):
+			t.Error("no permission request while the form was open")
+		}
+		return acp.CreateElicitationResponse{Decline: &acp.CreateElicitationDecline{Action: "decline"}}
+	}
+	h.prompt(h.newSession().SessionId, `call([("ask_user_question", {"questions": [{"question": "Q?", "options": [{"label": "A", "description": "a"}, {"label": "B", "description": "b"}]}]}), ("write_file", {"path": "a.txt", "content": "x"})])`)
+}
+
+// A client without forms gets no questions tool, so the model cannot wait
+// on an answer nobody can give.
+func TestQuestionsNeedForms(t *testing.T) {
+	h := connect(t, &fake.Fake{BundledFixtures: true}, t.TempDir(), acp.ClientCapabilities{})
+	h.prompt(h.newSession().SessionId, `load("questions.star", "ask_user_question"); ask_user_question()`)
+	if !strings.Contains(h.client.agentText(), "without answers") {
+		t.Fatalf("text = %q", h.client.agentText())
 	}
 }
 

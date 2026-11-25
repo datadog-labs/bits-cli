@@ -21,10 +21,13 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/imageinput"
+	"github.com/datadog-labs/bits-cli/internal/tools"
 )
 
 // Open builds the environment of a session at cwd bound to conversationID.
-type Open func(ctx context.Context, conversationID, cwd string) (Env, error)
+// ui is nil when the client cannot answer forms; the questions tool is then
+// not registered.
+type Open func(ctx context.Context, conversationID, cwd string, ui *tools.UI) (Env, error)
 
 // Config is what an Agent needs from its command.
 type Config struct {
@@ -55,7 +58,8 @@ type Agent struct {
 	mu sync.Mutex
 	// conn is set under mu before any request can read it: the connection
 	// reads requests as soon as it exists.
-	conn *acp.AgentSideConnection
+	conn  *acp.AgentSideConnection
+	forms bool // the client renders form elicitations
 	// sessions is nil once the connection ended: a session still opening
 	// then closes itself.
 	sessions map[acp.SessionId]*session
@@ -91,6 +95,9 @@ const loginMethod acp.AuthMethodId = "login"
 
 func (a *Agent) Initialize(ctx context.Context, params acp.InitializeRequest) (acp.InitializeResponse, error) {
 	caps := params.ClientCapabilities
+	a.mu.Lock()
+	a.forms = caps.Elicitation != nil && caps.Elicitation.Form != nil
+	a.mu.Unlock()
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentInfo:       &acp.Implementation{Name: "bits", Title: acp.Ptr("Bits"), Version: a.config.Version},
@@ -204,13 +211,17 @@ func (a *Agent) start(ctx context.Context, id acp.SessionId, cwd string) (*sessi
 		return nil, acp.NewInvalidParams(map[string]any{"sessionId": id, "error": "not a conversation id"})
 	}
 	a.mu.Lock()
-	conn := a.conn
+	conn, forms := a.conn, a.forms
 	a.mu.Unlock()
-	env, err := a.config.Open(ctx, string(id), cwd)
+	var ui *tools.UI
+	if forms {
+		ui = tools.NewUI()
+	}
+	env, err := a.config.Open(ctx, string(id), cwd, ui)
 	if err != nil {
 		return nil, a.clientError(err)
 	}
-	s := newSession(id, conn, env, cwd, a.config.Log)
+	s := newSession(id, conn, env, ui, cwd, a.config.Log)
 	a.mu.Lock()
 	closed := a.sessions == nil
 	old := a.sessions[id]

@@ -10,7 +10,8 @@ import (
 	"github.com/datadog-labs/bits-cli/internal/tools/spec"
 )
 
-// NewAskUserQuestionTool is registered only by the interactive CLI. It has no
+// NewAskUserQuestionTool is registered only by front ends that can ask the
+// user: the interactive CLI, and editors that render forms. It has no
 // approval policy: permission grants cannot answer a question for the user.
 func NewAskUserQuestionTool(ui *UI) agent.Tool {
 	return agent.Tool{

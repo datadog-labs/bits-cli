@@ -46,6 +46,12 @@ type key struct {
 	index int
 }
 
+// shown reports whether the client has the card of tool call id.
+func (m *mirror) shown(id string) bool {
+	_, ok := m.sent[key{block: agent.BlockID{Scope: agent.ScopeTool, Key: id}}]
+	return ok
+}
+
 func taskKeys(tasks []agent.Task) map[agent.BlockID]key {
 	out := make(map[agent.BlockID]key)
 	for _, task := range tasks {

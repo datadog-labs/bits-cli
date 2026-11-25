@@ -9,12 +9,14 @@ import (
 	"github.com/coder/acp-go-sdk"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/tools"
 )
 
 // client is the part of the connection a session calls.
 type client interface {
 	SessionUpdate(context.Context, acp.SessionNotification) error
 	RequestPermission(context.Context, acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error)
+	CreateElicitation(context.Context, acp.CreateElicitationRequest) (acp.CreateElicitationResponse, error)
 }
 
 // Env is one session's local world: its engine and the tools it runs at the
@@ -31,6 +33,7 @@ type session struct {
 	id     acp.SessionId
 	client client
 	env    Env
+	ui     *tools.UI // nil when the client cannot answer forms
 	mirror *mirror
 	log    *slog.Logger
 
@@ -58,19 +61,19 @@ type waiter struct {
 	end chan agent.Event
 }
 
-func newSession(id acp.SessionId, c client, env Env, root string, log *slog.Logger) *session {
+func newSession(id acp.SessionId, c client, env Env, ui *tools.UI, root string, log *slog.Logger) *session {
 	// Engine.Close ends the subscription, so its stop function is unused.
 	events, _ := env.Engine.Subscribe()
 	s := &session{
-		id: id, client: c, env: env, mirror: newMirror(root), log: log,
+		id: id, client: c, env: env, ui: ui, mirror: newMirror(root), log: log,
 		events: events, waits: make(chan waiter), syncs: make(chan syncer), done: make(chan struct{}), turn: make(chan struct{}, 1),
 	}
 	go s.pump()
 	return s
 }
 
-// pump sends every state change and asks about every parked call, until
-// the subscription ends.
+// pump sends every state change, asks about every parked call, and presents
+// every tool UI request, until the subscription ends.
 func (s *session) pump() {
 	defer close(s.done)
 	asks := make(map[string]context.CancelFunc) // parked call id -> its request
@@ -95,6 +98,28 @@ func (s *session) pump() {
 		}
 		syncing = kept
 	}
+	var requests <-chan *tools.Request
+	if s.ui != nil {
+		requests = s.ui.Requests()
+	}
+	// held are the questions whose card the client has yet to be sent: a
+	// form must follow its card, and the state that adds it may be queued.
+	// NOTE: no test covers the hold: the fake backend always delivers the
+	// card's state first, so only this pump's order guarantees it.
+	var held []*tools.Request
+	present := func() {
+		kept := held[:0]
+		for _, request := range held {
+			switch {
+			case request.Context().Err() != nil: // the call ended unanswered
+			case s.mirror.shown(request.Call.ID):
+				go s.question(request)
+			default:
+				kept = append(kept, request)
+			}
+		}
+		held = kept
+	}
 	for {
 		select {
 		case ev, ok := <-s.events:
@@ -105,6 +130,7 @@ func (s *session) pump() {
 			case agent.EventState:
 				s.send(s.mirror.updates(ev.State))
 				s.ask(ev.State, asks)
+				present()
 				synced()
 			case agent.EventUsage:
 				if ev.Usage != nil {
@@ -129,6 +155,9 @@ func (s *session) pump() {
 		case w := <-s.syncs:
 			syncing = append(syncing, w)
 			synced()
+		case request := <-requests:
+			held = append(held, request)
+			present()
 		}
 	}
 }
