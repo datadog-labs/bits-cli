@@ -8,20 +8,27 @@ edit local code, run commands, and continue conversations started in Datadog.
 
 ## Install
 
-On macOS or Linux, install with Homebrew:
+On macOS or Linux with Homebrew:
 
 ```sh
 brew tap datadog-labs/pack
 brew install datadog-labs/pack/bits
 ```
 
-Release archives are also available from [GitHub Releases](https://github.com/datadog-labs/bits-cli/releases).
+On macOS or Linux without Homebrew:
 
-### Windows
+```sh
+sh -c 'installer=$(curl -qfsSL --proto-redir "=https" https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.sh) && eval "$installer"'
+```
 
-Download `bits_<version>_windows_amd64.zip` (or the `arm64` archive) from
-[GitHub Releases](https://github.com/datadog-labs/bits-cli/releases), extract
-it, and add its `bin` folder to your `PATH`.
+On Windows, in PowerShell:
+
+```powershell
+irm -MaximumRedirection 0 https://raw.githubusercontent.com/datadog-labs/bits-cli/HEAD/scripts/install.ps1 | iex
+```
+
+See the [install guide](https://github.com/datadog-labs/bits-cli/blob/main/INSTALL.md)
+for PATH setup, updates, and uninstalling.
 
 ## Get started
 

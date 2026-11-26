@@ -30,6 +30,9 @@ func (s state) postponed(now time.Time) bool {
 	return remaining > 0 && remaining <= postponement
 }
 
+// NOTE: one state file serves every installation, so running a Homebrew and
+// a standalone bits in turn starts each one over: it checks again and forgets
+// a skipped version.
 func (c *Checker) load() state {
 	var s state
 	raw, err := os.ReadFile(c.path)

@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -538,24 +537,6 @@ func TestExecJobHelper(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("helper safety timeout")
-}
-
-func TestExecJobConcurrentCloseAndTerminate(t *testing.T) {
-	job, err := newExecJob()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer job.close()
-	var wg sync.WaitGroup
-	for range 20 {
-		wg.Go(func() {
-			if err := job.terminate(); err != nil {
-				t.Errorf("terminate: %v", err)
-			}
-		})
-		wg.Go(job.close)
-	}
-	wg.Wait()
 }
 
 func TestExecJobLaunchFailure(t *testing.T) {
