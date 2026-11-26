@@ -1,6 +1,9 @@
 package agent
 
-import "github.com/datadog-labs/bits-cli/internal/assistant"
+import (
+	"github.com/datadog-labs/bits-cli/internal/assistant"
+	"github.com/datadog-labs/bits-cli/internal/tools/spec"
+)
 
 // BlockScope namespaces a BlockID so ids drawn from different sources can never
 // collide.
@@ -79,6 +82,16 @@ type ToolBlock struct {
 	RenderState  any
 	IsClientSide bool
 	Approval     *ApprovalPrompt
+}
+
+// Identity is the call's exact tool identity, which presentation keys on: a
+// server tool that shares a client tool's name is not that tool.
+func (t *ToolBlock) Identity() spec.Identity {
+	namespace := ""
+	if t.Namespace != nil {
+		namespace = *t.Namespace
+	}
+	return spec.Identity{ClientSide: t.IsClientSide, Namespace: namespace, Name: t.Name}
 }
 
 // ToolBlockOf builds the aggregated view of a tool content block.
