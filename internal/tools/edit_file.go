@@ -129,10 +129,8 @@ func editFileHandler(r *os.Root, root string, locker *mutationLocker) agent.Tool
 			return errorResult("%s, cannot edit as text", errNotText), nil
 		}
 
-		hasBOM := strings.HasPrefix(raw, bom)
 		body := strings.TrimPrefix(raw, bom)
-		ending, ok := filediff.LineEndingStyle(body)
-		if !ok {
+		if _, ok := filediff.LineEndingStyle(body); !ok {
 			return errorResult("%s has inconsistent line endings; normalize them before editing", filePath), nil
 		}
 		base := filediff.NormalizeToLF(body)
@@ -147,10 +145,7 @@ func editFileHandler(r *os.Root, root string, locker *mutationLocker) agent.Tool
 			return errorResult("no changes: the replacements produced identical content"), nil
 		}
 
-		final := filediff.RestoreLineEndings(newBase, ending)
-		if hasBOM {
-			final = bom + final
-		}
+		final := editedText(raw, newBase)
 		encoded, err := encodeText(final, enc)
 		if err != nil {
 			return errorResult("encode %s: %s", filePath, err.Error()), nil
@@ -197,4 +192,15 @@ func editMatchError(err error, filePath string) agent.ToolResult {
 		return errorResult("%s in %s", message, filePath)
 	}
 	return errorResult("edits[%d]: %s in %s", matchErr.Index, message, filePath)
+}
+
+// editedText is the text edit_file writes once raw's normalized text becomes
+// base: base with the line endings and byte order mark raw has.
+func editedText(raw, base string) string {
+	ending, _ := filediff.LineEndingStyle(strings.TrimPrefix(raw, bom))
+	text := filediff.RestoreLineEndings(base, ending)
+	if strings.HasPrefix(raw, bom) {
+		return bom + text
+	}
+	return text
 }

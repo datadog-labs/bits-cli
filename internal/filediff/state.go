@@ -44,6 +44,10 @@ const (
 type Preview struct {
 	Kind PreviewKind
 	Diff *Diff
+	// After is a final preview's file text as the tool writes it, for a front
+	// end that shows the change whole against the snapshot's Raw text. Diff
+	// shows the same change in hunks.
+	After string
 	// InputPrefixBytes and InputPrefixHash identify the visible streamed input
 	// that produced this immutable preview. They avoid retaining a second raw
 	// input copy while allowing tools to preserve the state between incomplete

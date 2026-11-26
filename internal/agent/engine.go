@@ -322,13 +322,19 @@ type Engine struct {
 	userContext  func(context.Context) string
 }
 
+// StatusBackend is a backend that reports how it was constructed.
+type StatusBackend interface {
+	BackendStatus() assistant.BackendStatus
+}
+
 // RuntimeStatus is the non-secret request and backend state needed by local
 // status surfaces.
 type RuntimeStatus struct {
-	MultiAgent bool
-	Profile    assistant.Profile
-	Model      string
-	Backend    assistant.BackendStatus
+	MultiAgent    bool
+	Profile       assistant.Profile
+	Model         string
+	InferenceMode string
+	Backend       assistant.BackendStatus
 }
 
 // Config holds engine-lifetime dependencies and backend request defaults.
@@ -382,9 +388,7 @@ func New(b Backend, config Config) *Engine {
 	}
 	_, multiAgent := b.(DuplexBackend)
 	runtimeStatus := RuntimeStatus{Profile: profile, Model: opts.Model, MultiAgent: multiAgent}
-	if provider, ok := b.(interface {
-		BackendStatus() assistant.BackendStatus
-	}); ok {
+	if provider, ok := b.(StatusBackend); ok {
 		runtimeStatus.Backend = provider.BackendStatus()
 	}
 	engine := &Engine{
@@ -630,7 +634,10 @@ func (e *Engine) launch(ctx context.Context, in TurnInput, resumed []ToolCall) (
 		return 0, err
 	}
 	e.turnRun = run
-	e.work(ctx, func(ctx context.Context) { e.run(ctx, run, in, resumed) })
+	// The turn's mode is the one set as it starts: it prepares its prompt
+	// off the actor, while the mode may change.
+	mode := e.opts.InferenceMode
+	e.work(ctx, func(ctx context.Context) { e.run(ctx, run, in, resumed, mode) })
 	return run, nil
 }
 
@@ -680,22 +687,22 @@ func (e *Engine) command(fn func(*turn) error) error {
 
 // run drives a claimed turn, then one more for each request the queue sends,
 // until a turn ends without sending it.
-func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []ToolCall) {
+func (e *Engine) run(ctx context.Context, run RunID, in TurnInput, resumed []ToolCall, mode string) {
 	round := 0
 	for {
-		t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, run: run, base: round, round: round}
-		next, more := e.segment(ctx, t, in, resumed)
+		t := &turn{e: e, parent: ctx, tools: in.Tools, onDeny: in.OnDeny, run: run, base: round, round: round, mode: mode}
+		next, nextMode, more := e.segment(ctx, t, in, resumed)
 		if !more {
 			return
 		}
-		in, resumed, round = next, nil, t.round
+		in, resumed, round, mode = next, nil, t.round, nextMode
 	}
 }
 
 // segment prepares one turn off the actor, where it may block on files and
 // the environment, then drives it on the actor until it ends. A turn that
 // completes returns the queue's next request instead of ending the run.
-func (e *Engine) segment(ctx context.Context, t *turn, in TurnInput, resumed []ToolCall) (next TurnInput, more bool) {
+func (e *Engine) segment(ctx context.Context, t *turn, in TurnInput, resumed []ToolCall) (next TurnInput, nextMode string, more bool) {
 	run := t.run
 	sentContext, imageNotices, err := prepareImageContext(ctx, in.Context)
 	if err != nil {
@@ -722,6 +729,7 @@ func (e *Engine) segment(ctx context.Context, t *turn, in TurnInput, resumed []T
 			e.emit(run, Event{Kind: EventState, State: e.state()})
 		}
 		opts, delivery = e.sendOptions(in.Tools), e.delivery
+		opts.InferenceMode = t.mode
 	})
 
 	// An invalid image or a skill that cannot be read fails the turn like a
@@ -747,13 +755,14 @@ func (e *Engine) segment(ctx context.Context, t *turn, in TurnInput, resumed []T
 		end := t.conclude(err)
 		if end.Kind == EventDone && !t.stopRequested {
 			if next, more = e.dequeue(in); more {
+				nextMode = e.opts.InferenceMode
 				return
 			}
 		}
 		e.emit(run, end)
 		e.release()
 	})
-	return next, more
+	return next, nextMode, more
 }
 
 // conclude publishes the turn's final state and returns its terminal event.
@@ -844,11 +853,28 @@ func (e *Engine) state() State {
 	}
 }
 
-// Status reports the immutable effective request configuration and non-secret
+// Status reports the effective request configuration and the non-secret
 // backend metadata captured when the engine was constructed. An empty model
-// remains empty because only the server knows which effective model it selected.
+// remains empty because only the server knows which effective model it
+// selected. It reads on the actor, since the inference mode can change.
 func (e *Engine) Status() RuntimeStatus {
-	return e.runtimeStatus
+	return get(e, func() RuntimeStatus {
+		status := e.runtimeStatus
+		status.InferenceMode = e.opts.InferenceMode
+		return status
+	})
+}
+
+// SetInferenceMode sets the inference mode of later turns, even mid-turn: a
+// running turn keeps the one it started with. Empty means the server's
+// default.
+func (e *Engine) SetInferenceMode(mode string) error {
+	err := ErrClosed
+	e.do(func() {
+		e.opts.InferenceMode = mode
+		err = nil
+	})
+	return err
 }
 
 // CurrentUser loads the authenticated Datadog identity when the backend
@@ -1026,6 +1052,7 @@ type turn struct {
 	handlers     context.Context
 	stopHandlers context.CancelFunc
 	tools        *ToolSet
+	mode         string // the inference mode, as set when the turn started
 	ex           exchange
 	request      *userRequest // acknowledged on first response or request success
 	onDeny       DenyPolicy

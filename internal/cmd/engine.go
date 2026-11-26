@@ -66,11 +66,24 @@ func conversationFromArg(arg string) string {
 	return arg
 }
 
-// newEngine constructs an engine backed by either the explicit fake backend or
-// an authenticated Assistant client. Explicit API-key mode takes precedence
-// over the fake backend so an invalid automation invocation cannot silently
-// become a demo session.
+// newEngine constructs an engine for workspace on the backend opts selects.
+// Its configuration is checked first, before authenticating, as
+// NewAuthenticatedClient checks its own.
 func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Workspace, store auth.CredentialStore) (*agent.Engine, error) {
+	config, err := engineConfig(opts, workspace)
+	if err != nil {
+		return nil, err
+	}
+	b, err := newBackend(ctx, opts, store)
+	if err != nil {
+		return nil, err
+	}
+	return newEngineOn(ctx, b, config, workspace)
+}
+
+// engineConfig is the engine configuration opts and workspace select, apart
+// from what depends on the backend.
+func engineConfig(opts ChatOptions, workspace *workspace.Workspace) (agent.Config, error) {
 	config := agent.Config{
 		ConversationID: conversationFromArg(opts.ConversationID), PermissionsMode: opts.PermissionsMode,
 		Model: opts.Model, InferenceMode: opts.InferenceMode,
@@ -80,38 +93,28 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 		config.ProjectInstructions = env.NewInstructions(workspace.Path())
 		skillDirs, err := env.SkillDirs(workspace.Path(), opts.SkillPaths)
 		if err != nil {
-			return nil, fmt.Errorf("--skill: %w", err)
+			return agent.Config{}, fmt.Errorf("--skill: %w", err)
 		}
 		config.ClientSkills = env.NewSkills(workspace.Path(), skillDirs)
 	}
+	return config, nil
+}
 
+// newBackend returns either the explicit fake backend or an authenticated
+// Assistant client. Explicit API-key mode takes precedence over the fake
+// backend so an invalid automation invocation cannot silently become a demo
+// session.
+func newBackend(ctx context.Context, opts ChatOptions, store auth.CredentialStore) (agent.Backend, error) {
 	switch opts.AuthMode {
 	case auth.ModeAuto:
 		if os.Getenv("BITS_FAKE_BACKEND") == "1" {
-			backend := fake.New()
-			config.UserContext = env.UserContext(workspace, "")
-			// The fake also takes a script for --conversation: it becomes the
-			// first turn of a conversation an earlier session left behind. An id
-			// opens an empty one, so scripts can show that real conversation's
-			// saved apps.
-			switch script := config.ConversationID; {
-			case agent.ValidConversationID(script):
-				backend.AdoptConversation(script)
-			case script != "":
-				id, err := backend.PushConversation(ctx, "", script)
-				if err != nil {
-					return nil, fmt.Errorf("fake --conversation script: %w", err)
-				}
-				config.ConversationID = id
-			}
-			return agent.New(backend, config), nil
+			return fake.New(), nil
 		}
 	case auth.ModeAPIKey:
 		// Continue below; API-key mode must validate its explicit credentials.
 	default:
 		return nil, fmt.Errorf("unsupported authentication mode %q", opts.AuthMode)
 	}
-
 	client, err := NewAuthenticatedClient(ctx, clientOptions(opts, store))
 	if err != nil {
 		if opts.AuthMode == auth.ModeAPIKey {
@@ -119,12 +122,36 @@ func newEngine(ctx context.Context, opts ChatOptions, workspace *workspace.Works
 		}
 		return nil, err
 	}
-	config.UserContext = env.UserContext(workspace, client.WebOrigin)
-	var backend agent.Backend = client
 	if useSubagents() {
-		backend = assistant.NewMultiAgentClient(client)
+		return assistant.NewMultiAgentClient(client), nil
 	}
-	return agent.New(backend, config), nil
+	return client, nil
+}
+
+// newEngineOn constructs an engine for workspace on b, from config.
+func newEngineOn(ctx context.Context, b agent.Backend, config agent.Config, workspace *workspace.Workspace) (*agent.Engine, error) {
+	// The fake reports no web origin, so its context links nowhere.
+	var webOrigin string
+	if status, ok := b.(agent.StatusBackend); ok {
+		webOrigin = status.BackendStatus().WebOrigin
+	}
+	config.UserContext = env.UserContext(workspace, webOrigin)
+	// The fake also takes a script for --conversation: it becomes the first
+	// turn of a conversation an earlier session left behind. An id opens an
+	// empty one, so scripts can show that real conversation's saved apps.
+	if f, ok := b.(*fake.Fake); ok {
+		switch script := config.ConversationID; {
+		case agent.ValidConversationID(script):
+			f.AdoptConversation(script)
+		case script != "":
+			id, err := f.PushConversation(ctx, "", script)
+			if err != nil {
+				return nil, fmt.Errorf("fake --conversation script: %w", err)
+			}
+			config.ConversationID = id
+		}
+	}
+	return agent.New(b, config), nil
 }
 
 func useSubagents() bool {

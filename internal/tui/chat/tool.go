@@ -262,7 +262,7 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 	}
 	qualified := qualifiedToolName(tool)
 	input := toolInput(tool)
-	id := spec.Identity{ClientSide: tool.IsClientSide, Namespace: toolNamespace(tool), Name: tool.Name}
+	id := tool.Identity()
 	p := toolPresentation{identity: id, name: qualified, renderSpec: toolRenderSpecFor(id)}
 	p.action = p.renderSpec.action
 
@@ -428,17 +428,10 @@ func qualifiedToolName(tool *agent.ToolBlock) string {
 	if name == "" {
 		name = "tool"
 	}
-	if namespace := toolNamespace(tool); namespace != "" {
+	if namespace := tool.Identity().Namespace; namespace != "" {
 		name = namespace + "." + name
 	}
 	return escape.Inline(name)
-}
-
-func toolNamespace(tool *agent.ToolBlock) string {
-	if tool == nil || tool.Namespace == nil {
-		return ""
-	}
-	return *tool.Namespace
 }
 
 func compactInput(input string) string {

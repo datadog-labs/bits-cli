@@ -412,3 +412,36 @@ func TestEditFileFinalEmptyInputDoesNotPreserveStreamingPreview(t *testing.T) {
 		t.Fatalf("final empty input retained speculative preview: %#v", final)
 	}
 }
+
+// A final preview's After is the text the tool writes, line endings and byte
+// order mark included, so it pairs with the snapshot's Raw text.
+func TestFinalPreviewKeepsTheWrittenText(t *testing.T) {
+	const before = "\ufeffone\r\ntwo\r\n"
+	for name, tc := range map[string]struct {
+		reducer func(*os.Root, string) agent.ToolInputReducer
+		input   string
+		after   string
+	}{
+		"write": {writeFileInputReducer, `{"path":"a.txt","content":"new\r\n"}`, "\ufeffnew\r\n"},
+		"edit":  {editFileInputReducer, `{"path":"a.txt","edits":[{"old_text":"two","new_text":"2"}]}`, "\ufeffone\r\n2\r\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte(before), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r, err := os.OpenRoot(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = r.Close() })
+			state := tc.reducer(r, dir)(context.Background(), agent.ToolInputUpdate{FinalInput: tc.input, HasFinalInput: true}, nil).(*filediff.State)
+			if state.Phase != filediff.PhaseReady || state.Preview == nil || state.Snapshot == nil {
+				t.Fatalf("state = %+v", state)
+			}
+			if state.Preview.After != tc.after || state.Snapshot.Raw != before {
+				t.Fatalf("after %q against %q, want %q against %q", state.Preview.After, state.Snapshot.Raw, tc.after, before)
+			}
+		})
+	}
+}
