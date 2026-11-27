@@ -29,6 +29,7 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 	var authMode string
 	var permissionsMode string
 	var imagePaths []string
+	var turbo bool
 	command := &cobra.Command{
 		Use:   "run",
 		Short: "Run one noninteractive assistant turn and stream a delivery on stdout",
@@ -51,6 +52,9 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 				return err
 			}
 			opts.InferenceMode = inferenceMode
+			if turbo {
+				opts.InferenceMode = assistant.InferenceModeFast
+			}
 			delivery, err := parseDelivery(opts.Delivery)
 			if err != nil {
 				return err
@@ -92,10 +96,12 @@ func newRunCommand(invoked *bool, stdout io.Writer) *cobra.Command {
 	flags.StringVar(&opts.Delivery, "delivery", "", "delivery streamed on stdout: adeep (required)")
 	flags.StringVar(&opts.Model, "model", "", "backend model ID override (for example, anthropic/claude-sonnet-4-6)")
 	flags.StringVar(&opts.InferenceMode, "reasoning", "", "reasoning mode: fast or deep (feature flagged by the backend)")
+	flags.BoolVar(&turbo, "turbo", false, "turbo mode: faster responses that cost more; the same as --reasoning fast")
 	flags.StringVar(&permissionsMode, "permissions", string(agent.ModeDeny), "permissions mode for gated actions: deny or skip-permissions")
 	flags.StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
 	flags.StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
 	flags.StringVar(&opts.ConversationID, "conversation", "", "resume an existing conversation by ID or Datadog link")
+	command.MarkFlagsMutuallyExclusive("turbo", "reasoning")
 	return command
 }
 
@@ -149,7 +155,7 @@ func parseInferenceMode(raw string) (string, error) {
 	switch raw {
 	case "":
 		return "", nil
-	case "fast", "deep":
+	case assistant.InferenceModeFast, "deep":
 		return raw, nil
 	default:
 		return "", fmt.Errorf("invalid inference mode %q; expected fast or deep", raw)

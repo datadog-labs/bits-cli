@@ -69,6 +69,7 @@ func TestCommandUsageErrors(t *testing.T) {
 		{[]string{"run", "--prompt", "x", "--delivery", "plain"}, "invalid delivery"},
 		{[]string{"run", "--prompt", "x", "--delivery", "adeep", "--permissions", "manual"}, "invalid permissions mode"},
 		{[]string{"run", "--prompt", "x", "--delivery", "adeep", "--reasoning", "normal"}, "invalid inference mode"},
+		{[]string{"run", "--prompt", "x", "--delivery", "adeep", "--turbo", "--reasoning", "deep"}, "[reasoning turbo] were all set"},
 		{[]string{"run", "--prompt", "x", "--delivery", "adeep", "--image", "/nonexistent/shot.png"}, `could not attach "/nonexistent/shot.png"`},
 	}
 	for _, tc := range cases {

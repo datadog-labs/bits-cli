@@ -87,7 +87,11 @@ Full access allows actions without asking for approval.
 
 Turbo answers faster at the same quality, and costs more. Use `/turbo` to pick
 Standard or Turbo, or `/turbo on` and `/turbo off`. A change applies from the
-next turn, and the footer shows `Turbo` while it is on.
+next turn, and the footer shows `Turbo` while it is on. To start in Turbo:
+
+```sh
+bits --turbo
+```
 
 Your organization must have Turbo enabled. When it does not, Bits runs Standard
 without an error, so the footer cannot tell. HIPAA-compliant organizations

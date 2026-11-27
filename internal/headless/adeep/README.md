@@ -16,8 +16,10 @@ a working login and never opens an interactive login flow. For API-key
 authentication, see [Contributing](../../../CONTRIBUTING.md#authentication-for-development).
 
 Actions requiring approval are denied by default (`--permissions deny`). Pass
-`--permissions skip-permissions` to allow them without prompting. The final
-assistant text is in `run.finished.response`.
+`--permissions skip-permissions` to allow them without prompting. Pass
+`--turbo` for faster answers that cost more; it is the same as
+`--reasoning fast`, so the two cannot be combined. The final assistant text is
+in `run.finished.response`.
 
 | Exit status | Meaning |
 | --- | --- |
