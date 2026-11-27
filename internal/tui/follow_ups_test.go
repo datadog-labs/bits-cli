@@ -263,3 +263,22 @@ func TestFollowUpsOfABackgroundTask(t *testing.T) {
 		})
 	}
 }
+
+// Of two tasks running at once, the one that finishes last suggests the
+// latest set, even when it started first.
+func TestFollowUpsOfTheTaskThatFinishesLast(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newFollowUpsModel(t,
+			`task("A", [], every="2s", follow_ups=["From A"])`,
+			`task("B", [], every="1s", follow_ups=["From B"])`,
+		)
+		defer m.engine.Close() // the bubble requires its goroutines to exit
+		for len(m.state.Tasks) < 2 || slices.ContainsFunc(m.state.Tasks, func(task agent.Task) bool { return task.Status != agent.TaskDone }) {
+			m.Update(runConversationCmd(t, waitEvent(m.events)))
+		}
+		m.View()
+		if got := shownFollowUps(m); !slices.Equal(got, []string{"From A"}) {
+			t.Fatalf("shown %q, want the last task's", got)
+		}
+	})
+}
