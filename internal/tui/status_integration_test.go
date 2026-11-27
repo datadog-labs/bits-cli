@@ -231,12 +231,24 @@ func TestLocalTurnErrorDoesNotBecomeAssistantConnectivityFailure(t *testing.T) {
 	}
 }
 
+// Only an event from a send proves the credentials. A new conversation's id
+// and its state arrive before the first request, outside any round.
 func TestSuccessfulBackendEventConfirmsConfiguredAuthentication(t *testing.T) {
-	m := newStatusModel(t)
-	m.observeEvent(agent.Event{Kind: agent.EventUsage})
-
-	if got := m.statusRuntime().AuthenticationState; got != "authenticated" {
-		t.Fatalf("authentication after successful backend event = %q, want authenticated", got)
+	for _, test := range []struct {
+		event agent.Event
+		want  string
+	}{
+		{event: agent.Event{Kind: agent.EventUsage}, want: "authenticated"},
+		{event: agent.Event{Kind: agent.EventConversation, ConvID: "c", Round: 1}, want: "authenticated"},
+		{event: agent.Event{Kind: agent.EventState, Round: 1}, want: "authenticated"},
+		{event: agent.Event{Kind: agent.EventConversation, ConvID: "c"}, want: "configured, not verified"},
+		{event: agent.Event{Kind: agent.EventState}, want: "configured, not verified"},
+	} {
+		m := newStatusModel(t)
+		m.observeEvent(test.event)
+		if got := m.statusRuntime().AuthenticationState; got != test.want {
+			t.Errorf("authentication after kind %v round %d = %q, want %q", test.event.Kind, test.event.Round, got, test.want)
+		}
 	}
 }
 

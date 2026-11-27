@@ -168,7 +168,7 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 
 	records := parseDelivery(t, out.String())
 	want := []string{
-		"run.started:0", "round.started:1", "conversation.updated:1",
+		"run.started:0", "conversation.updated:0", "round.started:1",
 		"tool.call:1", "tool.result:1", "tool.call:1", "usage:1", "conversation.updated:1", "tool.result:1",
 		"round.finished:1", "round.started:2", "usage:2", "conversation.updated:2",
 		"round.finished:2", "run.finished:0",
@@ -194,7 +194,7 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 		t.Fatalf("usage = %v", usage)
 	}
 	finished := records[len(records)-1]
-	if finished["outcome"] != "completed" || finished["conversation_id"] != records[2]["conversation_id"] ||
+	if finished["outcome"] != "completed" || finished["conversation_id"] != records[1]["conversation_id"] ||
 		finished["response"] != "checking logs\n\ndone." || finished["rounds"] != float64(2) {
 		t.Fatalf("run.finished = %v", finished)
 	}

@@ -556,14 +556,16 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	e := New(b, Config{})
 
 	evs := coalesced(drain(t, e, TurnInput{Message: "hi"}))
-	want := []EventKind{EventState, EventConversation, EventState, EventUsage, EventConversation, EventState, EventDone}
+	want := []EventKind{EventState, EventConversation, EventState, EventState, EventUsage, EventConversation, EventState, EventDone}
 	if got := kinds(evs); !reflect.DeepEqual(got, want) {
 		t.Fatalf("event kinds = %v, want %v", got, want)
 	}
-	if evs[0].Round != 0 || evs[2].Round != 1 {
-		t.Fatalf("transcript rounds = %d, %d; want the local echo outside any send, then round 1", evs[0].Round, evs[2].Round)
+	// The local echo and the new conversation's id come outside any send, so
+	// no surface takes them for the backend's answer.
+	if evs[0].Round != 0 || evs[1].Round != 0 || evs[2].Round != 0 || evs[3].Round != 1 {
+		t.Fatalf("rounds = %d, %d, %d, %d; want the local echo and id outside any send, then round 1", evs[0].Round, evs[1].Round, evs[2].Round, evs[3].Round)
 	}
-	blocks := evs[2].State.Blocks
+	blocks := evs[3].State.Blocks
 	if len(blocks) == 0 || blocks[len(blocks)-1].Markdown == nil || blocks[len(blocks)-1].Markdown.Content != "Hello world" {
 		t.Fatalf("final text blocks = %+v", blocks)
 	}
@@ -573,10 +575,10 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	// A new conversation's id is known before the backend responds, and the
 	// response confirms it.
 	id := evs[1].ConvID
-	if !ValidConversationID(id) || b.opts[0].ConversationID != id || evs[4].ConvID != id {
-		t.Fatalf("conv ids = %q then %q, sent %q", id, evs[4].ConvID, b.opts[0].ConversationID)
+	if !ValidConversationID(id) || b.opts[0].ConversationID != id || evs[5].ConvID != id {
+		t.Fatalf("conv ids = %q then %q, sent %q", id, evs[5].ConvID, b.opts[0].ConversationID)
 	}
-	final := evs[5].State
+	final := evs[6].State
 	if len(final.Blocks) == 0 || !final.Blocks[len(final.Blocks)-1].Complete {
 		t.Fatalf("final transcript = %+v, want completed answer", final.Blocks)
 	}
@@ -609,15 +611,15 @@ func TestTurnRetainsConversationIDAfterBackendError(t *testing.T) {
 	}, Config{})
 
 	events := coalesced(drain(t, e, TurnInput{Message: "question"}))
-	wantKinds := []EventKind{EventState, EventConversation, EventState, EventConversation, EventState, EventError}
+	wantKinds := []EventKind{EventState, EventConversation, EventState, EventState, EventConversation, EventState, EventError}
 	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
 	}
 	id := events[1].ConvID
-	if !ValidConversationID(id) || events[3].ConvID != id || !errors.Is(events[5].Err, backendErr) || !events[5].BackendFailure {
+	if !ValidConversationID(id) || events[4].ConvID != id || !errors.Is(events[6].Err, backendErr) || !events[6].BackendFailure {
 		t.Fatalf("terminal events = %+v", events[1:])
 	}
-	final := events[4].State.Blocks
+	final := events[5].State.Blocks
 	if len(final) == 0 || !final[len(final)-1].Complete {
 		t.Fatalf("final transcript snapshot = %+v, want completed answer", final)
 	}

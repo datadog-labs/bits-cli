@@ -75,6 +75,16 @@ func newRoundsExchange(backend Backend, message any, opts assistant.SendOptions,
 
 func (x *roundsExchange) run(ctx context.Context, emit func(exchangeEvent) bool) (string, error) {
 	message, opts, calls := x.message, x.opts, x.resumed
+	// A turn is sent to its conversation's endpoint, so a new conversation
+	// takes its id now. It is reported before the first round, so no surface
+	// mistakes it for the backend's answer, and every surface has a handle to
+	// the conversation even if the send fails.
+	if opts.ConversationID == "" {
+		opts.ConversationID = assistant.NewConversationID()
+		if !emit(exchangeEvent{conversation: opts.ConversationID}) {
+			return opts.ConversationID, ctx.Err()
+		}
+	}
 	for round := 1; round <= maxTurns; round++ {
 		if !emit(exchangeEvent{round: round}) {
 			return opts.ConversationID, ctx.Err()
@@ -106,15 +116,6 @@ func (x *roundsExchange) run(ctx context.Context, emit func(exchangeEvent) bool)
 // message flagged as an error fails the round once the stream ends, so its
 // trailing usage and conversation ID still arrive and its calls never run.
 func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.SendOptions, emit func(exchangeEvent) bool) ([]ToolCall, error) {
-	// A turn is sent to its conversation's endpoint, so a new conversation
-	// takes its id now. Reporting it before the request gives every surface a
-	// resumable handle even if the send fails.
-	if opts.ConversationID == "" {
-		opts.ConversationID = assistant.NewConversationID()
-		if !emit(exchangeEvent{conversation: opts.ConversationID}) {
-			return nil, ctx.Err()
-		}
-	}
 	var calls []ToolCall
 	var failure error
 	id, err := x.backend.Send(ctx, message, *opts, func(response assistant.AssistantResponse) error {
