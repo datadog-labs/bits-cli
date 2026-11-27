@@ -22,7 +22,9 @@ type followControl struct {
 }
 
 func (m *Model) followTarget() (string, image.Rectangle) {
-	if m.mode != ModeChat || m.frame.tooSmall || m.prompt() != nil ||
+	// Asks and command prompts hide it; follow-up suggestions show after
+	// most turns, so they keep it.
+	if m.mode != ModeChat || m.frame.tooSmall || m.shown != nil || m.commandPrompt != nil ||
 		m.editor.MenuOpen() ||
 		m.selection.selecting() || m.selection.selected() ||
 		m.list.Height() <= 0 || m.list.Following() || m.list.AtBottom() {

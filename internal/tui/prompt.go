@@ -21,12 +21,16 @@ const minimumPromptRows = 15
 // prompt returns the shown prompt, or nil. A command prompt shows over an
 // ask, which waits beneath it: the user just asked for the command, and only
 // commands allowed during a turn, such as /permissions, can meet an ask.
+// Follow-up suggestions show only when neither does.
 func (m *Model) prompt() components.Prompt {
 	switch {
 	case m.commandPrompt != nil:
 		return m.commandPrompt.form
 	case m.shown != nil:
 		return m.shown.prompt()
+	}
+	if f := m.followUpsPrompt(); f != nil {
+		return f
 	}
 	return nil
 }

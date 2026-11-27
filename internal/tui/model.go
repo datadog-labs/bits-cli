@@ -136,6 +136,8 @@ type Model struct {
 	promptFocused bool
 	// The prompt a slash command opened, shown over any ask.
 	commandPrompt *commandPrompt
+	// followUps shows below asks while the chat waits for a message.
+	followUps followUps
 
 	upgrade upgradePrompt
 
@@ -383,6 +385,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	if m.commandPrompt != nil {
 		m.commandPrompt.form.SetStyles(theme)
 	}
+	m.followUps.SetStyles(theme)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
 	}

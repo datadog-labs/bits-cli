@@ -226,14 +226,17 @@ func (m *Model) compareAsks(a, b ask) int {
 	return cmp.Or(cmp.Compare(position(a), position(b)), cmp.Compare(a.callID(), b.callID()))
 }
 
-// updatePrompt applies msg to the shown prompt: the command prompt, or else
-// the shown ask, whose answer it then delivers; once delivered, the next ask
-// is shown.
+// updatePrompt applies msg to the shown prompt: the command prompt, the
+// shown ask, whose answer it then delivers, or the follow-up suggestions;
+// once an answer is delivered, the next ask is shown.
 func (m *Model) updatePrompt(msg tea.Msg) (tea.Cmd, bool) {
 	if m.commandPrompt != nil {
 		return m.updateCommandPrompt(msg)
 	}
 	if m.shown == nil {
+		if m.followUpsPrompt() != nil {
+			return m.updateFollowUps(msg)
+		}
 		return nil, false
 	}
 	cmd, used := m.shown.prompt().Update(msg)

@@ -1390,6 +1390,65 @@ func TestServerGroupingBoundaries(t *testing.T) {
 	}
 }
 
+func TestFollowUpSuggestionsAreUnlisted(t *testing.T) {
+	first := disclosableToolBlock("first")
+	first.Tool.Name, first.Tool.Namespace, first.Tool.IsClientSide = "search_datadog_logs", nil, false
+	suggest := agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: "suggest"}, Kind: assistant.KindToolCall, Tool: &agent.ToolBlock{Name: spec.ServerSuggestFollowUps.Name, Input: `{"prompts":["Check my monitors"]}`, Status: agent.ToolSuccess}}
+	last := disclosableToolBlock("last")
+	last.Tool.Name, last.Tool.Namespace, last.Tool.IsClientSide = "search_datadog_docs", nil, false
+	blocks := []agent.Block{first, suggest, last}
+
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(100)
+	list.SetHeight(20)
+	list.SetItems(blocks)
+	openGroups(list)
+	// The calls around it still form one group: a header and its two rows.
+	if got := len(list.view); got != 3 {
+		t.Fatalf("got %d items, want 3", got)
+	}
+	if plain := ansi.Strip(list.Render()); strings.Contains(plain, "follow") || strings.Contains(plain, "Check my monitors") {
+		t.Fatalf("transcript lists the suggestions:\n%s", plain)
+	}
+	if blocks[1].ID != suggest.ID {
+		t.Fatal("unlisting changed the caller's blocks")
+	}
+}
+
+// A notice after hidden suggestions stays where they were: before a later
+// message, and a fork marker is not dropped as orphaned.
+func TestNoticesAfterUnlistedBlocksKeepTheirPlace(t *testing.T) {
+	text := func(key, content string) agent.Block {
+		return agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: key, Kind: assistant.KindText}, Kind: assistant.KindText, Markdown: &assistant.MarkdownPayload{Content: content}}
+	}
+	suggest := agent.Block{ID: agent.BlockID{Scope: agent.ScopeTool, Key: "suggest"}, Kind: assistant.KindToolCall, Tool: &agent.ToolBlock{Name: spec.ServerSuggestFollowUps.Name, Input: `{"prompts":["A"]}`, Status: agent.ToolSuccess}}
+	blocks := []agent.Block{text("answer", "First answer."), suggest, text("later", "Later answer.")}
+	notices := []NoticeItem{
+		{ID: 1, After: suggest.ID, Notice: Notice{Level: NoticeInfo, Text: "Renamed."}},
+		{ID: 2, After: suggest.ID, Notice: Notice{Level: NoticeFork, Text: "Forked conversation"}},
+	}
+
+	list := NewList()
+	list.SetStyles(DefaultStyles(true))
+	list.SetWidth(100)
+	list.SetHeight(30)
+	list.SetTranscript(blocks, nil, notices)
+	plain := ansi.Strip(list.Render())
+	order := []string{"First answer.", "Renamed.", "Forked conversation", "Later answer."}
+	at := -1
+	for _, want := range order {
+		i := strings.Index(plain, want)
+		if i <= at {
+			t.Fatalf("%q is missing or out of order %q:\n%s", want, order, plain)
+		}
+		at = i
+	}
+	if notices[0].After != suggest.ID {
+		t.Fatal("unlisting changed the caller's notices")
+	}
+}
+
 func TestLeadingReasoningJoinsTheGroupOfItsCall(t *testing.T) {
 	reasoning := agent.Block{ID: agent.BlockID{Scope: agent.ScopeMessage, Key: "thinking", Kind: assistant.KindReasoning}, Kind: assistant.KindReasoning, Complete: true, Thinking: &assistant.ThinkingPayload{Content: "plan"}}
 	server := func(status agent.ToolStatus) agent.Block {

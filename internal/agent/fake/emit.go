@@ -1,11 +1,16 @@
 package fake
 
 import (
+	"cmp"
 	"context"
 	"time"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
+
+// mainAgentID is the agent the server names on every message of the main
+// conversation, the user's included.
+const mainAgentID = "command"
 
 // emitter delivers one Send's messages: it paces them, stops on
 // cancellation, and records delivered messages into the conversation.
@@ -32,6 +37,7 @@ func (e *emitter) emit(msg assistant.Message) error {
 	} else if err := e.ctx.Err(); err != nil {
 		return err
 	}
+	msg.AgentID = cmp.Or(msg.AgentID, mainAgentID)
 	if err := e.fn(resp(e.convID, msg)); err != nil {
 		return err
 	}

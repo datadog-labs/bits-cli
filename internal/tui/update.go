@@ -902,9 +902,9 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// A prompt the user drafts over keeps the keys it still uses while the
 	// text has the keys; a chip or the queue keeps its own. Tab moves the
-	// keyboard back to the prompt.
-	if m.shown != nil && m.editor.OnText() {
-		if key := msg.String(); key == "tab" || key == "shift+tab" {
+	// keyboard back to the prompt, unless it had no room to show.
+	if m.prompt() != nil && m.editor.OnText() {
+		if key := msg.String(); (key == "tab" || key == "shift+tab") && !m.frame.prompt.Empty() {
 			m.promptFocused = true
 		}
 		return m, m.handlePromptKey(msg)
@@ -1107,6 +1107,7 @@ func (m *Model) relayout() {
 	if m.mode == ModeTermInit {
 		return
 	}
+	m.followUps.sync(m.state.Blocks)
 	m.reshow()
 	m.syncQueue()
 	m.editor.SetPlaceholder(m.promptPlaceholder())

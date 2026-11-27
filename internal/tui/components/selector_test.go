@@ -167,3 +167,17 @@ func TestSelectorMaxLabelWidthCapsLabelColumn(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectorShowsSelectionOnlyWhileFocused(t *testing.T) {
+	sty := styles.Default(true).Selector
+	selector := NewSelector([]Choice{{Label: "one"}, {Label: "two"}}, sty)
+	selector.SetIndex(1)
+	selector.SetFocused(false)
+	if plain := ansi.Strip(selector.View(20)); strings.Contains(plain, strings.TrimSpace(sty.SelectedMarker)) {
+		t.Fatalf("blurred selector marks a row:\n%s", plain)
+	}
+	selector.SetFocused(true)
+	if plain := ansi.Strip(selector.View(20)); !strings.Contains(plain, sty.SelectedMarker+"two") {
+		t.Fatalf("focused selector lost its selection:\n%s", plain)
+	}
+}
