@@ -987,8 +987,37 @@ func TestSetInferenceModeAppliesToLaterTurns(t *testing.T) {
 	if want := []string{"", "", "deep"}; !slices.Equal(modes, want) {
 		t.Fatalf("inference modes sent = %q, want %q", modes, want)
 	}
-	if got := engine.Status(); got.Model != "model-a" || got.InferenceMode != "deep" {
-		t.Fatalf("status = %+v", got)
+	if got := engine.State().InferenceMode; got != "deep" {
+		t.Fatalf("state inference mode = %q, want deep", got)
+	}
+}
+
+// A change publishes the state, so a subscriber shows the mode without asking.
+// Setting the current mode again publishes nothing: the next change is the
+// very next version.
+func TestSetInferenceModePublishesAChange(t *testing.T) {
+	engine := New(&scriptBackend{}, Config{})
+	t.Cleanup(engine.Close)
+	events, stop := engine.Subscribe()
+	defer stop()
+	var version uint64
+	for _, step := range []struct {
+		set  []string
+		want string
+	}{
+		{set: []string{"fast"}, want: "fast"},
+		{set: []string{"fast", ""}, want: ""},
+	} {
+		for _, mode := range step.set {
+			if err := engine.SetInferenceMode(mode); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ev := <-events
+		if ev.Kind != EventState || ev.State.InferenceMode != step.want || ev.State.Version != version+1 {
+			t.Fatalf("after setting %q: event = %+v, want mode %q at version %d", step.set, ev, step.want, version+1)
+		}
+		version = ev.State.Version
 	}
 }
 

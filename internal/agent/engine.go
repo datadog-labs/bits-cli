@@ -106,6 +106,9 @@ type State struct {
 	Tasks []Task
 	// Queued are the prompts waiting to be sent, in submission order.
 	Queued []QueuedPrompt
+	// InferenceMode is the mode later turns request. Empty means the server's
+	// default.
+	InferenceMode string
 }
 
 // HasStreamingContent reports whether an assistant text or reasoning block is
@@ -330,11 +333,10 @@ type StatusBackend interface {
 // RuntimeStatus is the non-secret request and backend state needed by local
 // status surfaces.
 type RuntimeStatus struct {
-	MultiAgent    bool
-	Profile       assistant.Profile
-	Model         string
-	InferenceMode string
-	Backend       assistant.BackendStatus
+	MultiAgent bool
+	Profile    assistant.Profile
+	Model      string
+	Backend    assistant.BackendStatus
 }
 
 // Config holds engine-lifetime dependencies and backend request defaults.
@@ -849,30 +851,34 @@ func (e *Engine) publish() {
 func (e *Engine) state() State {
 	return State{
 		Version: e.version, ConversationID: e.opts.ConversationID, Title: e.title, SharedUntil: e.sharedUntil, ReadOnly: e.readOnly, Blocks: slices.Clone(e.transcript.Blocks()),
-		Usage: e.usage, Tasks: e.taskViews(), Fork: e.fork, Queued: slices.Clone(e.queue),
+		Usage: e.usage, Tasks: e.taskViews(), Fork: e.fork, Queued: slices.Clone(e.queue), InferenceMode: e.opts.InferenceMode,
 	}
 }
 
-// Status reports the effective request configuration and the non-secret
-// backend metadata captured when the engine was constructed. An empty model
-// remains empty because only the server knows which effective model it
-// selected. It reads on the actor, since the inference mode can change.
+// Status reports the request defaults and the non-secret backend metadata
+// fixed when the engine was constructed. An empty model remains empty because
+// only the server knows which effective model it selected.
 func (e *Engine) Status() RuntimeStatus {
-	return get(e, func() RuntimeStatus {
-		status := e.runtimeStatus
-		status.InferenceMode = e.opts.InferenceMode
-		return status
-	})
+	return e.runtimeStatus
+}
+
+// InferenceMode reports the inference mode of later turns.
+func (e *Engine) InferenceMode() string {
+	return get(e, func() string { return e.opts.InferenceMode })
 }
 
 // SetInferenceMode sets the inference mode of later turns, even mid-turn: a
 // running turn keeps the one it started with. Empty means the server's
-// default.
+// default. A change publishes the state.
 func (e *Engine) SetInferenceMode(mode string) error {
 	err := ErrClosed
 	e.do(func() {
-		e.opts.InferenceMode = mode
 		err = nil
+		if mode == e.opts.InferenceMode {
+			return
+		}
+		e.opts.InferenceMode = mode
+		e.publish()
 	})
 	return err
 }
