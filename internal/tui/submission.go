@@ -14,11 +14,11 @@ import (
 )
 
 // submit routes slash commands through their active-operation policy. A prompt
-// starts a turn when idle, or else joins the engine's queue; Enter on an
-// empty draft sends a paused queue. A turn starts only once the previous
-// one's end is read, so one turn is shown at a time. The user block is added
-// by the engine (it owns the transcript), so it arrives as the turn's first
-// event.
+// starts a turn when idle, after any paused queue, or else joins the engine's
+// queue; Enter on an empty draft sends a paused queue. A turn starts only once
+// the previous one's end is read, so one turn is shown at a time. The user
+// block is added by the engine (it owns the transcript), so it arrives as the
+// turn's first event.
 func (m *Model) submit() (tea.Model, tea.Cmd) {
 	raw := m.editor.Value()
 	text := strings.TrimSpace(raw)
@@ -94,7 +94,12 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 			return m, tea.Batch(closeFileSearch, m.postNotice(noticeForError("", err)))
 		}
 		m.state = m.engine.State() // the event that publishes it follows
-		return m, closeFileSearch
+		if m.op.busy() {
+			return m, closeFileSearch
+		}
+		// Prompts keep their order: the waiting ones go first, and the run
+		// sends this one after them.
+		return m, tea.Batch(closeFileSearch, m.startTurn(m.engine.SendQueued, agent.TurnInput{}))
 	}
 	return m, tea.Batch(closeFileSearch, m.startTurn(m.engine.StartTurn, in))
 }

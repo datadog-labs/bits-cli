@@ -96,16 +96,19 @@ func TestPromptsQueueBehindTheRunningTurn(t *testing.T) {
 	}
 }
 
-// A turn that is cancelled or fails leaves its queue paused: new prompts join
-// it, and Enter on an empty draft sends it.
+// A turn that is cancelled or fails leaves its queue paused until Enter. An
+// empty draft sends it; a new prompt sends after it.
 func TestInterruptedTurnPausesTheQueueUntilEnter(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		err    error
 		cancel bool
+		draft  string
+		want   string
 	}{
-		{"cancelled", nil, true},
-		{"failed", errors.New("backend failed"), false},
+		{"cancelled", nil, true, "", "later"},
+		{"failed", errors.New("backend failed"), false, "", "later"},
+		{"failed, then a new prompt", errors.New("backend failed"), false, "more", "later\n\nmore"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, backend := newModelInTurn(t, tc.err)
@@ -121,17 +124,11 @@ func TestInterruptedTurnPausesTheQueueUntilEnter(t *testing.T) {
 				t.Fatalf("paused %v, queued %d", m.editor.QueuePaused(), m.editor.QueueLen())
 			}
 
-			setConversationInput(m, "more")
-			m.submit()
-			m.relayout()
-			if m.op.busy() || m.editor.QueueLen() != 2 || !m.editor.QueuePaused() {
-				t.Fatal("a prompt submitted to a paused queue did not join it")
-			}
-			setConversationInput(m, "")
+			setConversationInput(m, tc.draft)
 			m.submit()
 			drainConversationRemote(t, m)
 			m.relayout()
-			if got := userTexts(m); !reflect.DeepEqual(got, []string{"first", "later\n\nmore"}) || m.editor.QueueLen() != 0 {
+			if got := userTexts(m); !reflect.DeepEqual(got, []string{"first", tc.want}) || m.editor.QueueLen() != 0 {
 				t.Fatalf("prompts = %q, queued %d", got, m.editor.QueueLen())
 			}
 		})
