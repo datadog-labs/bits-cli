@@ -87,7 +87,7 @@ func waitEvent(ch <-chan agent.Event) tea.Cmd {
 }
 
 // focus identifies which surface currently owns keyboard input. It is derived
-// from mode, turn state, and drafting, so input routing and the editor's
+// from mode, turn state, and promptHasKeyboard, so input routing and the editor's
 // cursor cannot disagree about who is active.
 type focus int
 
@@ -112,7 +112,7 @@ func (m *Model) focus() focus {
 		if m.mode == ModeChat && m.exitCard.open {
 			return focusExitCard
 		}
-		if m.prompt() != nil && !m.drafting {
+		if m.promptHasKeyboard() {
 			return focusPrompt
 		}
 	}
@@ -734,7 +734,7 @@ func (m *Model) focusOn(over region) {
 	}
 	if over == regionPrompt {
 		// The completion menu belongs to the composer it leaves.
-		m.drafting = false
+		m.promptFocused = true
 		m.editor.CloseMenu()
 	}
 }
@@ -905,7 +905,7 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// keyboard back to the prompt.
 	if m.shown != nil && m.editor.OnText() {
 		if key := msg.String(); key == "tab" || key == "shift+tab" {
-			m.drafting = false
+			m.promptFocused = true
 		}
 		return m, m.handlePromptKey(msg)
 	}

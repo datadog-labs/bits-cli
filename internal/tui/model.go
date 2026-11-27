@@ -129,10 +129,11 @@ type Model struct {
 	approvals          map[string]*approvalAsk // mirrors the transcript, by call ID
 	toolUIs            []*toolAsk              // requests from the tools.UI channel
 	shown              ask
-	// drafting means the user writes a message over the docked shown ask,
-	// so the composer holds the keyboard. It resets whenever another ask
-	// shows.
-	drafting bool
+	// promptFocused means a docked prompt holds the keyboard; otherwise the
+	// user writes a message over it in the composer. A prompt that replaces
+	// the composer holds the keyboard regardless (see promptHasKeyboard).
+	// reshow focuses each ask it shows unless the user was drafting.
+	promptFocused bool
 	// The prompt a slash command opened, shown over any ask.
 	commandPrompt *commandPrompt
 

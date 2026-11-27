@@ -14,7 +14,7 @@ const minimumPromptRows = 15
 
 // The chat shows one ask waiting on the user (see ask and reshow) through its
 // components.Prompt, which owns the keyboard while it shows, unless the user
-// drafts over it (see ask.drafting). Its Placement docks it above the
+// drafts over it (see Model.promptFocused). Its Placement docks it above the
 // composer, which stays visible, or puts it in the composer's place (see
 // frame).
 
@@ -50,7 +50,6 @@ type answeringPrompt[V any] interface {
 // with the answer unless they dismissed it.
 func openCommandPrompt[V any](m *Model, form answeringPrompt[V], submit func(V) tea.Cmd) {
 	form.SetStyles(m.styles)
-	m.drafting = false // the command prompt takes the keyboard from a draft
 	m.commandPrompt = &commandPrompt{form: form, finish: func() (tea.Cmd, bool) {
 		value, dismissed, done := form.Result()
 		if !done || dismissed {

@@ -150,7 +150,7 @@ func (m *Model) dropToolUIs() {
 // clearAsks forgets every ask when the operation they belong to ends.
 func (m *Model) clearAsks() {
 	m.approvals = make(map[string]*approvalAsk)
-	m.toolUIs, m.shown, m.drafting = nil, nil, false
+	m.toolUIs, m.shown, m.promptFocused = nil, nil, false
 }
 
 // reshow keeps the current request or docks the earliest pending call. A
@@ -164,20 +164,22 @@ func (m *Model) reshow() {
 	// The next ask keeps the keyboard where the user left it. One that docks
 	// with none before it docks drafting over a draft, so the Enter meant for
 	// the message cannot answer it.
-	drafting := m.drafting
+	// The keyboard goes back to the composer only from an ask that held it:
+	// without one, the flag may belong to a docked prompt that is no ask.
+	drafting := !m.promptFocused
 	if m.shown == nil {
 		drafting = m.editor.Value() != "" || len(m.editor.Attachments()) > 0
+	} else {
+		m.shown, m.promptFocused = nil, false
 	}
-	m.shown, m.drafting = nil, false
 	waiting := m.waitingAsks()
 	if len(waiting) == 0 {
 		return
 	}
 	m.shown = slices.MinFunc(waiting, m.compareAsks)
-	if drafting {
-		m.draftOver()
-	}
-	if !m.drafting {
+	// Not draftOver: a command prompt may show over the ask.
+	m.promptFocused = !drafting || m.shown.prompt().Placement() != components.Docked
+	if m.promptFocused {
 		m.editor.CloseMenu()
 	}
 }
@@ -185,8 +187,16 @@ func (m *Model) reshow() {
 // draftOver hands the keyboard to the composer if the shown prompt is
 // docked, so the user can write a message while it waits.
 func (m *Model) draftOver() {
+	if p := m.prompt(); p != nil && p.Placement() == components.Docked {
+		m.promptFocused = false
+	}
+}
+
+// promptHasKeyboard reports whether the shown prompt takes the keys: one in
+// the composer's place always does, a docked one unless the user drafts.
+func (m *Model) promptHasKeyboard() bool {
 	p := m.prompt()
-	m.drafting = p != nil && p.Placement() == components.Docked
+	return p != nil && (m.promptFocused || p.Placement() == components.ReplacesInput)
 }
 
 // waitingAsks returns the asks that still need the user, in no order.

@@ -805,6 +805,7 @@ func TestDraftingOverAnApproval(t *testing.T) {
 		{name: "ctrl+x stops the tools while drafting", draft: "fix the", attach: true, keys: press('x', tea.ModCtrl), editor: "fix the", stopped: true},
 		{name: "esc on a chip returns to the text", attach: true, keys: slices.Concat(press(tea.KeyBackspace), esc)},
 		{name: "the completion menu stays open", draft: "/sta", editor: "/sta", menu: true},
+		{name: "a command prompt returns to the draft", draft: "/permissions", keys: slices.Concat(enter, esc, enter)},
 		{name: "ctrl+x stops the tools over the menu", draft: "/sta", attach: true, keys: press('x', tea.ModCtrl), editor: "/sta", menu: true, stopped: true},
 	}
 	for _, tt := range tests {
