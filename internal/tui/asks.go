@@ -168,7 +168,7 @@ func (m *Model) reshow() {
 	// without one, the flag may belong to a docked prompt that is no ask.
 	drafting := !m.promptFocused
 	if m.shown == nil {
-		drafting = m.editor.Value() != "" || len(m.editor.Attachments()) > 0
+		drafting = !m.editor.Empty()
 	} else {
 		m.shown, m.promptFocused = nil, false
 	}

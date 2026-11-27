@@ -966,7 +966,7 @@ func (m *Model) editKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// the character under the cursor. While an operation runs it is ignored,
 		// so a stray press cannot drop a streaming turn: esc interrupts it and
 		// a confirmed ctrl+c still quits.
-		if m.editor.Value() == "" && len(m.editor.Attachments()) == 0 {
+		if m.editor.Empty() {
 			if m.op.busy() {
 				return m, nil
 			}

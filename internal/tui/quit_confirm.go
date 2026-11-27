@@ -35,7 +35,7 @@ func (m *Model) composerHasDraft() bool {
 	if m.editor == nil || m.frame.replaced || m.frame.tooSmall {
 		return false
 	}
-	return m.editor.Value() != "" || len(m.editor.Attachments()) > 0
+	return !m.editor.Empty()
 }
 
 func (m *Model) expireQuitConfirm(msg quitConfirmExpiredMsg) {
