@@ -40,6 +40,8 @@ type conversation struct {
 	turns       int         // user turns started, which index the next turn
 	turn        *scriptTurn // the latest turn; nil before the first
 	tasks       []*fakeTask // background tasks its turns started
+	stops       int
+	failStop    bool
 }
 
 // scriptTurn is everything needed to re-execute a turn: its source, or the
@@ -323,6 +325,45 @@ func builtinSharedBy(thread *starlark.Thread, b *starlark.Builtin, args starlark
 	if r.conv.owner != user {
 		r.conv.owner, r.conv.sharedUntil = user, shareExpiry(defaultShareDays)
 	}
+	return starlark.None, nil
+}
+
+// Stop only records the request: a script's turn already ends with its request.
+func (f *Fake) Stop(ctx context.Context, conversationID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c := f.conversation(conversationID)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c.stops++
+	if c.failStop {
+		return &assistant.APIError{StatusCode: http.StatusServiceUnavailable, Title: "Service Unavailable"}
+	}
+	return nil
+}
+
+func builtinStops(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	r := runOf(thread)
+	r.fake.mu.Lock()
+	defer r.fake.mu.Unlock()
+	return starlark.MakeInt(r.conv.stops), nil
+}
+
+func builtinFailStop(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	r := runOf(thread)
+	if err := r.sideEffectError(b.Name()); err != nil {
+		return nil, err
+	}
+	r.fake.mu.Lock()
+	defer r.fake.mu.Unlock()
+	r.conv.failStop = true
 	return starlark.None, nil
 }
 

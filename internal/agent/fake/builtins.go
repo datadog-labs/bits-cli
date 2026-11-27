@@ -34,6 +34,8 @@ var builtins = starlark.StringDict{
 	"help":       starlark.NewBuiltin("help", builtinHelp),
 	"breakpoint": starlark.NewBuiltin("breakpoint", builtinBreakpoint),
 	"shared_by":  starlark.NewBuiltin("shared_by", builtinSharedBy),
+	"stops":      starlark.NewBuiltin("stops", builtinStops),
+	"fail_stop":  starlark.NewBuiltin("fail_stop", builtinFailStop),
 	"START":      startPosition,
 	"END":        endPosition,
 	"json":       stjson.Module,
@@ -495,6 +497,8 @@ const helpText = "## Fake backend scripts\n\n" +
 	"| `break_input=name, at=` on `tool`/`call` | stops while streaming input: halfway by default, or `at=START`, `at=END`, `at=\"text\"` (right after it) |\n" +
 	"| `break_before_results=name` on `tool` | stops after the calls, before any result |\n" +
 	"| `shared_by(user)` | nothing: the conversation now belongs to user, who shared it with you, so it opens read-only |\n" +
+	"| `stops()` | nothing; returns how many times Esc asked to stop one of the conversation's turns |\n" +
+	"| `fail_stop()` | nothing: later stop requests fail, so Esc cannot confirm the stop |\n" +
 	"| `push_conversation(fn, ..., title=)` | nothing: records a new conversation whose user turns are the functions, as an earlier session left it, and returns its id; open it with /resume |\n" +
 	"| `kitchen()` | every output type once |\n" +
 	"| `json.encode`, `json.decode`, `true`, `false`, `null` | JSON helpers |\n"
