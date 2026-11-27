@@ -115,11 +115,11 @@ func TestCancelledTurnPausesTheQueue(t *testing.T) {
 	}
 }
 
-func TestUnqueueRemovesAnUnsentPrompt(t *testing.T) {
+func TestUnqueueRemovesUnsentPrompts(t *testing.T) {
 	e := New(&scriptBackend{}, Config{})
 	defer e.Close()
 	e.do(func() {
-		e.queue = []QueuedPrompt{{ID: 1, Message: "a"}, {ID: 2, Message: "b"}}
+		e.queue = []QueuedPrompt{{ID: 1, Message: "a"}, {ID: 2, Message: "b"}, {ID: 3, Message: "c"}, {ID: 4, Message: "d"}}
 	})
 	if err := e.Unqueue(1); err != nil {
 		t.Fatal(err)
@@ -127,7 +127,14 @@ func TestUnqueueRemovesAnUnsentPrompt(t *testing.T) {
 	if err := e.Unqueue(1); !errors.Is(err, ErrStale) {
 		t.Fatalf("second Unqueue = %v, want ErrStale", err)
 	}
-	if got := queuedMessages(e.State()); !reflect.DeepEqual(got, []string{"b"}) {
+	// One stale ID keeps every other prompt queued.
+	if err := e.Unqueue(2, 1); !errors.Is(err, ErrStale) {
+		t.Fatalf("Unqueue with a stale ID = %v, want ErrStale", err)
+	}
+	if err := e.Unqueue(2, 4); err != nil {
+		t.Fatal(err)
+	}
+	if got := queuedMessages(e.State()); !reflect.DeepEqual(got, []string{"c"}) {
 		t.Fatalf("queue = %q", got)
 	}
 	if err := e.NewConversation(); err != nil {

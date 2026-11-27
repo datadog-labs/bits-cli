@@ -67,17 +67,17 @@ func (e *Engine) SendQueued(ctx context.Context, in TurnInput) (RunID, error) {
 	return run, err
 }
 
-// Unqueue removes a prompt not yet sent. It fails with ErrStale once the
-// prompt is removed or taken for a request, which may precede the state that
-// shows it sent.
-func (e *Engine) Unqueue(id QueueID) error {
+// Unqueue removes prompts not yet sent, all or none. It fails with ErrStale
+// once any of them is removed or taken for a request, which may precede the
+// state that shows it sent.
+func (e *Engine) Unqueue(ids ...QueueID) error {
 	err := ErrClosed
 	e.do(func() {
-		i := slices.IndexFunc(e.queue, func(q QueuedPrompt) bool { return q.ID == id })
-		if err = ErrStale; i < 0 {
+		kept := slices.DeleteFunc(slices.Clone(e.queue), func(q QueuedPrompt) bool { return slices.Contains(ids, q.ID) })
+		if err = ErrStale; len(e.queue)-len(kept) != len(ids) {
 			return
 		}
-		e.queue = slices.Delete(e.queue, i, i+1)
+		e.queue = kept
 		e.emit(e.turnRun, Event{Kind: EventState, State: e.state()})
 		err = nil
 	})
@@ -85,18 +85,29 @@ func (e *Engine) Unqueue(id QueueID) error {
 }
 
 // dequeue removes the prompts the next request sends and returns in with
-// their message: the queued prompts up to the first skill invocation, which
-// is sent alone because a turn carries one skill, and up to MaxImages images.
-// A prompt with skill overrides is sent alone so they apply to it only.
+// their message.
 func (e *Engine) dequeue(in TurnInput) (TurnInput, bool) {
-	if len(e.queue) == 0 {
+	batch, n := BatchQueued(e.queue)
+	if n == 0 {
 		return in, false
 	}
-	first := e.queue[0]
-	in.Message, in.Skill, in.Context, in.SkillOverrides = first.Message, first.Skill, first.Context, first.SkillOverrides
-	if sentAlone(first) || len(e.queue) == 1 {
-		e.queue = slices.Delete(e.queue, 0, 1)
-		return in, true
+	in.Message, in.Skill, in.Context, in.SkillOverrides = batch.Message, batch.Skill, batch.Context, batch.SkillOverrides
+	e.queue = slices.Delete(e.queue, 0, n)
+	return in, true
+}
+
+// BatchQueued returns the first request prompts would send, and how many of
+// them it carries: the prompts up to the first skill invocation, which is sent
+// alone because a turn carries one skill, and up to MaxImages images. A prompt
+// with skill overrides is sent alone so they apply to it only.
+func BatchQueued(prompts []QueuedPrompt) (TurnInput, int) {
+	if len(prompts) == 0 {
+		return TurnInput{}, 0
+	}
+	first := prompts[0]
+	in := TurnInput{Message: first.Message, Skill: first.Skill, Context: first.Context, SkillOverrides: first.SkillOverrides}
+	if sentAlone(first) || len(prompts) == 1 {
+		return in, 1
 	}
 	type identity struct {
 		kind assistant.EntityType
@@ -106,7 +117,7 @@ func (e *Engine) dequeue(in TurnInput) (TurnInput, bool) {
 	var merged assistant.AssistantContext
 	seen := make(map[identity]bool)
 	images, n := 0, 0
-	for _, q := range e.queue {
+	for _, q := range prompts {
 		if sentAlone(q) {
 			break
 		}
@@ -147,8 +158,7 @@ func (e *Engine) dequeue(in TurnInput) (TurnInput, bool) {
 	if len(merged.Entities) > 0 || len(merged.Resources) > 0 {
 		in.Context = &merged
 	}
-	e.queue = slices.Delete(e.queue, 0, n)
-	return in, true
+	return in, n
 }
 
 func sentAlone(q QueuedPrompt) bool { return q.Skill != nil || len(q.SkillOverrides) > 0 }
