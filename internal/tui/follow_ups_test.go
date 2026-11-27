@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -227,4 +228,38 @@ func TestFollowUpsLayout(t *testing.T) {
 			t.Fatalf("shown %q, jump control at %v; want both", shownFollowUps(m), m.frame.follow)
 		}
 	})
+}
+
+// A background task's final update can carry suggestions of its own: they
+// show once it ends, and the user's next message retires them.
+func TestFollowUpsOfABackgroundTask(t *testing.T) {
+	const script = `say("Started."); task("Investigate", ["_Looking_"], every="10ms", follow_ups=["Create Bits Autonomous Ops Scope"])`
+	for _, tc := range []struct {
+		name  string
+		later string
+		want  []string
+	}{
+		{name: "shown when it ends", want: []string{"Create Bits Autonomous Ops Scope"}},
+		{name: "retired by a later message", later: `say("Later.")`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The bubble's clock runs the task's timers at once and in order.
+			synctest.Test(t, func(t *testing.T) {
+				m := newFollowUpsModel(t, script)
+				defer m.engine.Close() // the bubble requires its goroutines to exit
+				for len(m.state.Tasks) == 0 || m.state.Tasks[0].Status != agent.TaskDone {
+					m.Update(runConversationCmd(t, waitEvent(m.events)))
+				}
+				if tc.later != "" {
+					setConversationInput(m, tc.later)
+					_, _ = m.submit()
+					drainConversationRemote(t, m)
+				}
+				m.View()
+				if got := shownFollowUps(m); !slices.Equal(got, tc.want) {
+					t.Fatalf("shown %q, want %q", got, tc.want)
+				}
+			})
+		})
+	}
 }

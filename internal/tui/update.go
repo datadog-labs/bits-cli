@@ -1107,7 +1107,8 @@ func (m *Model) relayout() {
 	if m.mode == ModeTermInit {
 		return
 	}
-	m.followUps.sync(m.state.Blocks)
+	// A background task's final update can suggest follow-ups too.
+	m.followUps.sync(agent.BlocksWithTasks(m.state.Blocks, m.state.Tasks))
 	m.reshow()
 	m.syncQueue()
 	m.editor.SetPlaceholder(m.promptPlaceholder())
