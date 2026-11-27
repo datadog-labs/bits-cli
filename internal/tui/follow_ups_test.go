@@ -1,0 +1,284 @@
+package tui
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+	"testing/synctest"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/agent/fake"
+)
+
+// suggestScript is a turn that ends by suggesting prompts.
+const suggestScript = `say("Done."); tool("suggest_follow_ups", {"prompts": ["A", "B"]}, out='{"accepted":true}')`
+
+// newFollowUpsModel runs each script as a turn of a fake conversation, then
+// lays the chat out as the program does after them.
+func newFollowUpsModel(t *testing.T, scripts ...string) *Model {
+	t.Helper()
+	m := New(agent.New(&fake.Fake{ContinueDir: t.TempDir(), BundledFixtures: true}, agent.Config{}), Config{})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	for _, script := range scripts {
+		setConversationInput(m, script)
+		_, _ = m.submit()
+		drainConversationRemote(t, m)
+	}
+	m.View()
+	return m
+}
+
+// sentAfterScript returns the message sent after the script, if any.
+func sentAfterScript(m *Model) string {
+	if prompts := userTexts(m); len(prompts) > 1 {
+		return prompts[len(prompts)-1]
+	}
+	return ""
+}
+
+// shownFollowUps returns the suggestions the chat shows, or nil.
+func shownFollowUps(m *Model) []string {
+	if f, ok := m.prompt().(*followUps); ok {
+		return f.prompts
+	}
+	return nil
+}
+
+func TestFollowUpsShowTheLatestSet(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		script string
+		later  string // a turn after it
+		draft  string
+		want   []string
+	}{
+		{name: "suggested", script: suggestScript, want: []string{"A", "B"}},
+		{name: "a later message retires them", script: suggestScript, later: `say("Done.")`},
+		{name: "a later set replaces an earlier one", script: `load("follow_ups.star", "superseded"); superseded()`, want: []string{"The later suggestion", "Another later one"}},
+		{name: "a set without prompts keeps the earlier one", script: suggestScript + `; tool("suggest_follow_ups", {"prompts": [" "]}, out="{}")`, want: []string{"A", "B"}},
+		{name: "none suggested", script: `say("Done.")`},
+		{name: "a draft hides them", script: suggestScript, draft: "x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scripts := []string{tc.script}
+			if tc.later != "" {
+				scripts = append(scripts, tc.later)
+			}
+			m := newFollowUpsModel(t, scripts...)
+			if tc.draft != "" {
+				setConversationInput(m, tc.draft)
+			}
+			if got := shownFollowUps(m); !slices.Equal(got, tc.want) {
+				t.Fatalf("shown %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The suggestions leave the composer its keys until tab moves to them. A
+// pick sends it as the next message, which retires the set.
+func TestFollowUpsKeys(t *testing.T) {
+	press := func(code rune) tea.Msg { return tea.KeyPressMsg{Code: code} }
+	typed := func(r rune) tea.Msg { return tea.KeyPressMsg{Code: r, Text: string(r)} }
+	tab, up, down, enter, esc := press(tea.KeyTab), press(tea.KeyUp), press(tea.KeyDown), press(tea.KeyEnter), press(tea.KeyEscape)
+	for _, tc := range []struct {
+		name   string
+		keys   []tea.Msg
+		sent   string // the message a pick sent, if any
+		shown  bool   // the suggestions still show
+		editor string
+		exit   bool // the exit card opened
+	}{
+		{name: "enter alone sends nothing", keys: []tea.Msg{enter}, shown: true},
+		{name: "tab then enter sends the first", keys: []tea.Msg{tab, enter}, sent: "A"},
+		{name: "down moves to the next", keys: []tea.Msg{tab, down, enter}, sent: "B"},
+		{name: "up wraps to the last", keys: []tea.Msg{tab, up, enter}, sent: "B"},
+		{name: "esc dismisses them", keys: []tea.Msg{tab, esc}},
+		{name: "esc alone opens the exit card", keys: []tea.Msg{esc}, shown: true, exit: true},
+		{name: "up alone recalls the last message", keys: []tea.Msg{up}, editor: suggestScript},
+		{name: "typing writes a message", keys: []tea.Msg{tab, typed('j')}, editor: "j"},
+		{name: "other keys go back to the composer", keys: []tea.Msg{tab, press(tea.KeyBackspace)}, shown: true},
+		{name: "a dismissed set stays dismissed", keys: []tea.Msg{tab, esc, typed('j'), press(tea.KeyBackspace)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newFollowUpsModel(t, suggestScript)
+			for _, key := range tc.keys {
+				m.Update(key)
+				m.View()
+			}
+			drainConversationRemote(t, m)
+			sent := sentAfterScript(m)
+			if sent != tc.sent || (shownFollowUps(m) != nil) != tc.shown || m.editor.Value() != tc.editor || m.exitCard.open != tc.exit {
+				t.Fatalf("sent %q, shown %q, editor %q, exit card %t; want %q, %t, %q, %t",
+					sent, shownFollowUps(m), m.editor.Value(), m.exitCard.open, tc.sent, tc.shown, tc.editor, tc.exit)
+			}
+			if m.focus() != focusEditor && !tc.exit {
+				t.Fatalf("focus = %v, want the composer", m.focus())
+			}
+		})
+	}
+}
+
+// Clicks follow an approval's: one selects a suggestion and moves the
+// keyboard to the list, one on the selected suggestion of a focused list
+// sends it, and one on "ESC x" dismisses the set.
+func TestFollowUpsClicks(t *testing.T) {
+	const first, second = "Summarize this dashboard", "Check my monitors"
+	for _, tc := range []struct {
+		name    string
+		tab     bool     // the list holds the keyboard first
+		targets []string // clicked in order
+		sent    string
+		shown   bool
+		focus   focus
+	}{
+		{name: "one click selects", targets: []string{second}, shown: true, focus: focusPrompt},
+		{name: "a second click sends", targets: []string{second, second}, sent: second, focus: focusEditor},
+		{name: "a click on another row selects it", targets: []string{first, second}, shown: true, focus: focusPrompt},
+		{name: "a focused list sends its selection", tab: true, targets: []string{first}, sent: first, focus: focusEditor},
+		{name: "esc x dismisses", targets: []string{"ESC x"}, focus: focusEditor},
+		{name: "the title only focuses", targets: []string{followUpsTitle}, shown: true, focus: focusPrompt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newFollowUpsModel(t, `load("follow_ups.star", "suggest"); suggest()`)
+			if tc.tab {
+				m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+				m.View()
+			}
+			for _, target := range tc.targets {
+				tap(m, labelAt(t, m, target))
+				m.View()
+			}
+			focus := m.focus()
+			drainConversationRemote(t, m)
+			if sent := sentAfterScript(m); sent != tc.sent || (shownFollowUps(m) != nil) != tc.shown || focus != tc.focus {
+				t.Fatalf("sent %q, shown %q, focus %v; want %q, %t, %v", sent, shownFollowUps(m), focus, tc.sent, tc.shown, tc.focus)
+			}
+		})
+	}
+}
+
+// Suggestions made before an approval in the same turn wait for the turn to
+// end, and show then without taking the keyboard the approval held.
+func TestFollowUpsWaitForApprovals(t *testing.T) {
+	set, err := agent.NewToolSet() // the turn runs approval_request
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(agent.New(&fake.Fake{ContinueDir: t.TempDir()}, agent.Config{}), Config{Tools: set})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	setConversationInput(m, `tool("suggest_follow_ups", {"prompts": ["A"]}, out="{}"); call("approval_request", {"tool_name": "mute_monitor", "tool_args": {}}); say("Muted.")`)
+	_, _ = m.submit()
+	for waitingApprovals(m) == 0 {
+		m.Update(runConversationCmd(t, waitEvent(m.events)))
+	}
+	m.View()
+	if _, ok := m.prompt().(*approvalPrompt); !ok || m.focus() != focusPrompt {
+		t.Fatalf("shown %T with focus %v, want the focused approval", m.prompt(), m.focus())
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // allows
+	drainConversationRemote(t, m)
+	m.View()
+	if got := shownFollowUps(m); !slices.Equal(got, []string{"A"}) || m.focus() != focusEditor {
+		t.Fatalf("shown %q with focus %v, want the suggestions and the composer", got, m.focus())
+	}
+}
+
+// Suggestions without room to show leave the keyboard to the composer, and
+// shown ones leave the transcript its jump-to-latest control.
+func TestFollowUpsLayout(t *testing.T) {
+	for _, tc := range []struct {
+		height int
+		panel  bool
+	}{{height: 30, panel: true}, {height: 12}} {
+		t.Run(fmt.Sprintf("%d rows", tc.height), func(t *testing.T) {
+			m := newFollowUpsModel(t, suggestScript)
+			m.Update(tea.WindowSizeMsg{Width: 80, Height: tc.height})
+			m.View()
+			view := ansi.Strip(m.frame.promptView)
+			// Without the panel's frame, the list still shows every suggestion.
+			if strings.Contains(view, "╭") != tc.panel || !strings.Contains(view, followUpsTitle) || !strings.Contains(view, "B") {
+				t.Fatalf("panel %t, want %t:\n%s", strings.Contains(view, "╭"), tc.panel, view)
+			}
+		})
+	}
+	t.Run("no room", func(t *testing.T) {
+		// A running task takes the tray row the list would need.
+		m := newFollowUpsModel(t, `task("Watch", ["_Watching_"], every="1h"); `+suggestScript)
+		m.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+		m.View()
+		if !m.frame.prompt.Empty() || m.frame.tooSmall {
+			t.Fatalf("prompt at %v, too small %t; want a chat without the list", m.frame.prompt, m.frame.tooSmall)
+		}
+		m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		if m.focus() != focusEditor {
+			t.Fatalf("focus = %v, want the composer", m.focus())
+		}
+	})
+	t.Run("jump to latest", func(t *testing.T) {
+		m := newFollowUpsModel(t, `say("\n\n".join(["Paragraph %d." % i for i in range(40)])); tool("suggest_follow_ups", {"prompts": ["A"]}, out="{}")`)
+		m.list.ScrollBy(-10)
+		m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+		m.View()
+		if shownFollowUps(m) == nil || m.frame.follow.Empty() {
+			t.Fatalf("shown %q, jump control at %v; want both", shownFollowUps(m), m.frame.follow)
+		}
+	})
+}
+
+// A background task's final update can carry suggestions of its own: they
+// show once it ends, and the user's next message retires them.
+func TestFollowUpsOfABackgroundTask(t *testing.T) {
+	const script = `say("Started."); task("Investigate", ["_Looking_"], every="10ms", follow_ups=["Create Bits Autonomous Ops Scope"])`
+	for _, tc := range []struct {
+		name  string
+		later string
+		want  []string
+	}{
+		{name: "shown when it ends", want: []string{"Create Bits Autonomous Ops Scope"}},
+		{name: "retired by a later message", later: `say("Later.")`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The bubble's clock runs the task's timers at once and in order.
+			synctest.Test(t, func(t *testing.T) {
+				m := newFollowUpsModel(t, script)
+				defer m.engine.Close() // the bubble requires its goroutines to exit
+				for len(m.state.Tasks) == 0 || m.state.Tasks[0].Status != agent.TaskDone {
+					m.Update(runConversationCmd(t, waitEvent(m.events)))
+				}
+				if tc.later != "" {
+					setConversationInput(m, tc.later)
+					_, _ = m.submit()
+					drainConversationRemote(t, m)
+				}
+				m.View()
+				if got := shownFollowUps(m); !slices.Equal(got, tc.want) {
+					t.Fatalf("shown %q, want %q", got, tc.want)
+				}
+			})
+		})
+	}
+}
+
+// Of two tasks running at once, the one that finishes last suggests the
+// latest set, even when it started first.
+func TestFollowUpsOfTheTaskThatFinishesLast(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newFollowUpsModel(t,
+			`task("A", [], every="2s", follow_ups=["From A"])`,
+			`task("B", [], every="1s", follow_ups=["From B"])`,
+		)
+		defer m.engine.Close() // the bubble requires its goroutines to exit
+		for len(m.state.Tasks) < 2 || slices.ContainsFunc(m.state.Tasks, func(task agent.Task) bool { return task.Status != agent.TaskDone }) {
+			m.Update(runConversationCmd(t, waitEvent(m.events)))
+		}
+		m.View()
+		if got := shownFollowUps(m); !slices.Equal(got, []string{"From A"}) {
+			t.Fatalf("shown %q, want the last task's", got)
+		}
+	})
+}

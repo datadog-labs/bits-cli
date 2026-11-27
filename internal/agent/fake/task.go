@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.starlark.net/starlark"
@@ -31,6 +32,10 @@ type fakeTask struct {
 	every   time.Duration
 	updates []string // progress updates, in order
 	status  string   // the final update's outcome, such as "succeeded"
+	// followUps is the suggest_follow_ups input a succeeded final update
+	// carries, as an investigation offers automatic investigations; empty for
+	// none.
+	followUps string
 }
 
 // posts is how many updates the task has: its progress ones and its final one.
@@ -48,9 +53,11 @@ func (t *fakeTask) due(now time.Time) int {
 	return n
 }
 
-// update is update i as the server sends it. Only persisted messages carry
-// their time: a live one has none, as on the real stream.
-func (t *fakeTask) update(i int, persisted bool) assistant.Message {
+// messages are update i as the server sends it: the update, then, for a
+// succeeded final update with follow-ups, a suggest_follow_ups call and its
+// result, each a message of the task. Only persisted messages carry their
+// time: a live one has none, as on the real stream.
+func (t *fakeTask) messages(i int, persisted bool) []assistant.Message {
 	progress := &assistant.ProgressPayload{
 		TaskID:       t.id,
 		Sequence:     i + 1,
@@ -63,13 +70,34 @@ func (t *fakeTask) update(i int, persisted bool) assistant.Message {
 		progress.EventType, progress.Content = "final", "Task complete."
 		progress.TaskMetadata["status"] = t.status
 	}
-	msg := assistant.AssistantMessage(t.id+"-update-"+strconv.Itoa(i+1),
-		assistant.Content{Type: assistant.ContentBackgroundTaskUpdate, Progress: progress})
-	msg.BackgroundTaskID = &t.id
-	if persisted {
-		msg.CreatedAt = t.at(i).UnixMilli()
+	id := t.id + "-update-" + strconv.Itoa(i+1)
+	parts := []assistant.Content{{Type: assistant.ContentBackgroundTaskUpdate, Progress: progress}}
+	if i == len(t.updates) && t.status == "succeeded" && t.followUps != "" {
+		parts = append(parts, t.followUpParts()...)
 	}
-	return msg
+	messages := make([]assistant.Message, len(parts))
+	for n, part := range parts {
+		partID := id
+		if n > 0 {
+			partID += "-" + strconv.Itoa(n)
+		}
+		messages[n] = assistant.AssistantMessage(partID, part)
+		messages[n].BackgroundTaskID, messages[n].AgentID = &t.id, mainAgentID
+		if persisted {
+			messages[n].CreatedAt = t.at(i).UnixMilli()
+		}
+	}
+	return messages
+}
+
+// followUpParts are the suggest_follow_ups call and result the server adds
+// to a succeeded final update, named after the task.
+func (t *fakeTask) followUpParts() []assistant.Content {
+	callID := strings.ReplaceAll(t.id, ".", "-") + "-follow-ups"
+	call := assistant.ToolCallContent(callID, toolspec.ServerSuggestFollowUps.Name, t.followUps)
+	result := assistant.ToolResultContent(callID, toolspec.ServerSuggestFollowUps.Name, assistant.ToolStatusSuccess, `{"accepted": true}`)
+	call.Tool.Title, result.Tool.Title = "Suggested next steps", "Suggested next steps"
+	return []assistant.Content{call, result}
 }
 
 // builtinTask starts a background task: the startBackgroundTask call and its
@@ -77,9 +105,11 @@ func (t *fakeTask) update(i int, persisted bool) assistant.Message {
 func builtinTask(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
 	var updates *starlark.List
+	followUps := starlark.NewList(nil)
 	agentID, every, status := "investigation", "2s", "succeeded"
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"name", &name, "updates", &updates, "agent?", &agentID, "every?", &every, "status?", &status); err != nil {
+		"name", &name, "updates", &updates, "agent?", &agentID, "every?", &every, "status?", &status,
+		"follow_ups?", &followUps); err != nil {
 		return nil, err
 	}
 	interval, err := time.ParseDuration(every)
@@ -93,6 +123,21 @@ func builtinTask(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 			return nil, fmt.Errorf("%s: update %d is %s, want string", b.Name(), i, updates.Index(i).Type())
 		}
 		t.updates = append(t.updates, update)
+	}
+	if followUps.Len() > 0 {
+		var in toolspec.SuggestFollowUpsInput
+		for i := range followUps.Len() {
+			prompt, ok := starlark.AsString(followUps.Index(i))
+			if !ok {
+				return nil, fmt.Errorf("%s: follow-up %d is %s, want string", b.Name(), i, followUps.Index(i).Type())
+			}
+			in.Prompts = append(in.Prompts, prompt)
+		}
+		input, err := json.Marshal(in)
+		if err != nil {
+			return nil, err
+		}
+		t.followUps = string(input)
 	}
 	r := runOf(thread)
 	if err := r.sideEffectError(b.Name()); err != nil {
@@ -134,7 +179,7 @@ func taskHistoryLocked(c *conversation, now time.Time) []assistant.Message {
 	var messages []assistant.Message
 	for _, t := range c.tasks {
 		for i := range t.due(now) {
-			messages = append(messages, t.update(i, true))
+			messages = append(messages, t.messages(i, true)...)
 		}
 	}
 	return messages
@@ -155,7 +200,7 @@ func (f *Fake) Subscribe(ctx context.Context, conversationID string, opts assist
 	}
 	posted := t.due(time.Now())
 	for i := range posted {
-		if err := fn(t.update(i, true)); err != nil {
+		if err := emitAll(fn, t.messages(i, true)); err != nil {
 			return err
 		}
 	}
@@ -171,13 +216,22 @@ func (f *Fake) Subscribe(ctx context.Context, conversationID string, opts assist
 			return ctx.Err()
 		case <-timer.C:
 		}
-		if err := fn(t.update(i, false)); err != nil {
+		if err := emitAll(fn, t.messages(i, false)); err != nil {
 			return err
 		}
 	}
 	return fn(assistant.AssistantMessage(t.id+"-ended", assistant.Content{
 		Type: assistant.ContentTurnStatus, TurnStatus: &assistant.TurnStatusPayload{Status: "ended"},
 	}))
+}
+
+func emitAll(fn func(assistant.Message) error, messages []assistant.Message) error {
+	for _, msg := range messages {
+		if err := fn(msg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (f *Fake) findTask(conversationID, taskID string) *fakeTask {

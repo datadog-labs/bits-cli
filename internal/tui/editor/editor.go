@@ -351,6 +351,9 @@ func (e *Editor) SetSweepFrame(frame int) {
 // Value returns the current input text.
 func (e *Editor) Value() string { return e.ta.Value() }
 
+// Empty reports whether the composer holds neither text nor attachments.
+func (e *Editor) Empty() bool { return e.ta.Value() == "" && len(e.attachments) == 0 }
+
 // SetValue replaces the prompt text and leaves history mode.
 func (e *Editor) SetValue(s string) {
 	e.history.end()

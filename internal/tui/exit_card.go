@@ -105,7 +105,7 @@ func (m *Model) pressExitButton() tea.Cmd {
 
 func (m *Model) closeExitCardInto(msg tea.Msg) tea.Cmd {
 	m.closeExitCard()
-	if m.prompt() != nil {
+	if m.promptHasKeyboard() {
 		return nil
 	}
 	blink := m.editor.Focus()

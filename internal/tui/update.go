@@ -87,7 +87,7 @@ func waitEvent(ch <-chan agent.Event) tea.Cmd {
 }
 
 // focus identifies which surface currently owns keyboard input. It is derived
-// from mode, turn state, and drafting, so input routing and the editor's
+// from mode, turn state, and promptHasKeyboard, so input routing and the editor's
 // cursor cannot disagree about who is active.
 type focus int
 
@@ -112,7 +112,7 @@ func (m *Model) focus() focus {
 		if m.mode == ModeChat && m.exitCard.open {
 			return focusExitCard
 		}
-		if m.prompt() != nil && !m.drafting {
+		if m.promptHasKeyboard() {
 			return focusPrompt
 		}
 	}
@@ -734,7 +734,7 @@ func (m *Model) focusOn(over region) {
 	}
 	if over == regionPrompt {
 		// The completion menu belongs to the composer it leaves.
-		m.drafting = false
+		m.promptFocused = true
 		m.editor.CloseMenu()
 	}
 }
@@ -902,10 +902,10 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// A prompt the user drafts over keeps the keys it still uses while the
 	// text has the keys; a chip or the queue keeps its own. Tab moves the
-	// keyboard back to the prompt.
-	if m.shown != nil && m.editor.OnText() {
-		if key := msg.String(); key == "tab" || key == "shift+tab" {
-			m.drafting = false
+	// keyboard back to the prompt, unless it had no room to show.
+	if m.prompt() != nil && m.editor.OnText() {
+		if key := msg.String(); (key == "tab" || key == "shift+tab") && !m.frame.prompt.Empty() {
+			m.promptFocused = true
 		}
 		return m, m.handlePromptKey(msg)
 	}
@@ -966,7 +966,7 @@ func (m *Model) editKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// the character under the cursor. While an operation runs it is ignored,
 		// so a stray press cannot drop a streaming turn: esc interrupts it and
 		// a confirmed ctrl+c still quits.
-		if m.editor.Value() == "" && len(m.editor.Attachments()) == 0 {
+		if m.editor.Empty() {
 			if m.op.busy() {
 				return m, nil
 			}
@@ -1107,6 +1107,8 @@ func (m *Model) relayout() {
 	if m.mode == ModeTermInit {
 		return
 	}
+	// A background task's final update can suggest follow-ups too.
+	m.followUps.sync(agent.BlocksWithTasks(m.state.Blocks, m.state.Tasks))
 	m.reshow()
 	m.syncQueue()
 	m.editor.SetPlaceholder(m.promptPlaceholder())

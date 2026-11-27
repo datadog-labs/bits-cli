@@ -129,12 +129,15 @@ type Model struct {
 	approvals          map[string]*approvalAsk // mirrors the transcript, by call ID
 	toolUIs            []*toolAsk              // requests from the tools.UI channel
 	shown              ask
-	// drafting means the user writes a message over the docked shown ask,
-	// so the composer holds the keyboard. It resets whenever another ask
-	// shows.
-	drafting bool
+	// promptFocused means a docked prompt holds the keyboard; otherwise the
+	// user writes a message over it in the composer. A prompt that replaces
+	// the composer holds the keyboard regardless (see promptHasKeyboard).
+	// reshow focuses each ask it shows unless the user was drafting.
+	promptFocused bool
 	// The prompt a slash command opened, shown over any ask.
 	commandPrompt *commandPrompt
+	// followUps shows below asks while the chat waits for a message.
+	followUps followUps
 
 	upgrade upgradePrompt
 
@@ -382,6 +385,7 @@ func (m *Model) applyStyles(theme styles.Theme) {
 	if m.commandPrompt != nil {
 		m.commandPrompt.form.SetStyles(theme)
 	}
+	m.followUps.SetStyles(theme)
 	if m.picker != nil {
 		m.picker.SetStyles(theme)
 	}

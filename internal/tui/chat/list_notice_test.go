@@ -64,8 +64,8 @@ func TestTaskBlocksFollowTheirConversationBlocks(t *testing.T) {
 	l.SetTranscript(
 		[]agent.Block{textBlock("a", "LAUNCHING"), start, meanwhile, textBlock("c", "LATER")},
 		[]agent.Task{
-			{Blocks: []agent.Block{update("u3", "ORPHAN")}, After: []agent.BlockID{gone}},
-			{Blocks: []agent.Block{update("u1", "GATHERING"), update("u2", "FOUND")}, After: []agent.BlockID{start.ID, meanwhile.ID}},
+			{Blocks: []agent.Block{update("u3", "ORPHAN")}, Places: []agent.Place{{After: gone, Arrival: 3}}},
+			{Blocks: []agent.Block{update("u1", "GATHERING"), update("u2", "FOUND")}, Places: []agent.Place{{After: start.ID, Arrival: 1}, {After: meanwhile.ID, Arrival: 2}}},
 		},
 		nil,
 	)

@@ -24,6 +24,7 @@ type Selector struct {
 	alignDetailRight bool
 	fillWidth        bool
 	maxLabelWidth    int
+	blurred          bool
 }
 
 // SelectionWindow describes the visible slice of a selector.
@@ -57,6 +58,10 @@ func (s *Selector) SetAlignDetailRight(align bool) { s.alignDetailRight = align 
 func (s *Selector) SetFillWidth(fill bool) { s.fillWidth = fill }
 
 func (s *Selector) SetMaxLabelWidth(cells int) { s.maxLabelWidth = max(0, cells) }
+
+// SetFocused shows the selection only while focused, so a list that does not
+// hold the keyboard does not suggest that Enter would pick a row.
+func (s *Selector) SetFocused(focused bool) { s.blurred = !focused }
 
 // SetIndex selects index, clamped to the available rows.
 func (s *Selector) SetIndex(index int) {
@@ -139,7 +144,7 @@ func (s *Selector) ViewWindow(width, rows int) (string, SelectionWindow) {
 	renderedRows := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
 		choice := s.choices[i]
-		selected := i == s.selected
+		selected := i == s.selected && !s.blurred
 		marker := s.styles.Marker
 		labelStyle, detailStyle := s.styles.Item, s.styles.Detail
 		if selected {

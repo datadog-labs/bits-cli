@@ -34,7 +34,8 @@ Reusable scripts for tests and manual TUI previews live together in
 The runner bundles these scripts; a file with the same name in the working
 directory takes precedence. Full paths below the working directory also work.
 The files cover approvals, command wrapping and background commands, links,
-notices, disclosure, tool grouping, questions, code execution
+notices, disclosure, tool grouping, questions, follow-up suggestions
+(`load("follow_ups.star", "suggest"); suggest()`), code execution
 (`load("code_exec.star", "all"); all()`), background tasks
 (`load("tasks.star", "investigation"); investigation()`), and injected memories
 (`load("memories.star", "injected"); injected()`).
@@ -83,7 +84,7 @@ inline preview.
 | `tool(name, input, out=, err=, ns=, title=, detail=, stream=, delay=)` or `tool([(name, input, out), …])` | server tool calls, then their results; `delay="3s"` keeps the calls running that long |
 | `call(name, input, stream=)` or `call([(name, input), …])` | one round of client tool calls, run by the real engine; returns results with `ok`, `status`, `title`, `output` |
 | `raw(content, results=, id=, is_error=)` | any other wire content, through the real decoder; `is_error=True` marks a turn error, as the server does for rate and context limits |
-| `task(name, updates, agent=, every=, status=)` | a started background task, then one update every `every` (`2s`) and a final one with `status` (`succeeded`); returns its id |
+| `task(name, updates, agent=, every=, status=, follow_ups=)` | a started background task, then one update every `every` (`2s`) and a final one with `status` (`succeeded`); a succeeded final update carries `follow_ups` as a `suggest_follow_ups` call, as an investigation's does; returns its id |
 | `fail(status)`, `fail("net")`, `fail("timeout")` | a backend failure after the output so far |
 | `sleep("2s")` | a stall |
 | `breakpoint(name)` | nothing; stops until continued ([Breakpoints](#breakpoints)) |

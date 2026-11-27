@@ -363,6 +363,12 @@ func classifyTool(tool *agent.ToolBlock) toolPresentation {
 	return p
 }
 
+// unlisted reports whether the transcript leaves a block out: follow-up
+// suggestions show by the composer instead.
+func unlisted(block agent.Block) bool {
+	return block.Tool != nil && block.Tool.Identity() == spec.ServerSuggestFollowUps
+}
+
 func toolRenderSpecFor(id spec.Identity) *toolRenderSpec {
 	switch id {
 	case spec.ClientAskUserQuestion:

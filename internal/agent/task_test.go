@@ -384,3 +384,35 @@ func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
 		t.Errorf("conversation transcript = %+v, want no task update", blocks)
 	}
 }
+
+// Tasks that run at once show their updates as they arrived, even where they
+// follow the same conversation block: the later-started task can finish
+// first.
+func TestTaskUpdatesFollowingOneBlockShowInArrivalOrder(t *testing.T) {
+	update := func(taskID, messageID, kind, content string) assistant.Message {
+		msg := updateMsg(messageID, kind, content)
+		msg.Content.Progress.TaskID, msg.BackgroundTaskID = taskID, &taskID
+		return msg
+	}
+	history := slices.Concat(
+		startTaskMsgs("call-a", "task-a"), startTaskMsgs("call-b", "task-b"),
+		[]assistant.Message{
+			textMsg("t1", "both running"),
+			update("task-a", "a1", "progress", "A looking"),
+			update("task-b", "b1", "final", "B done"),
+			update("task-a", "a2", "final", "A done"),
+		},
+	)
+	backend := &historyBackend{resp: &assistant.ConversationHistoryResponse{}}
+	backend.resp.Data.Type = "conversation-history-response"
+	backend.resp.Data.Attributes.Messages = history
+	e := New(backend, Config{ConversationID: testConversationID})
+	defer e.Close()
+	collect(restoreEvents(e, context.Background()))
+
+	state := e.State()
+	got := texts(BlocksWithTasks(state.Blocks, state.Tasks))
+	if want := []string{"call-a", "call-b", "both running", "A looking", "B done", "A done"}; !slices.Equal(got, want) {
+		t.Errorf("blocks = %q, want %q", got, want)
+	}
+}

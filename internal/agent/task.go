@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,10 +46,19 @@ type Task struct {
 	// outcome if any. They are folded apart from the conversation, whose turns
 	// own their range of blocks, and a reconnection replaces them whole.
 	Blocks []Block
-	// After holds, for each of Blocks, the conversation block it follows: the
-	// newest one when it arrived, or the one before it in history. Live
-	// messages carry no time, so arrival is the server's order.
-	After []BlockID
+	// Places holds, for each of Blocks, where it shows in the conversation.
+	Places []Place
+}
+
+// Place is where a task block shows among the conversation's: after the
+// conversation block it follows, the newest one when it arrived or the one
+// before it in history, and in arrival order among the task blocks there.
+// Live messages carry no time, so arrival is the server's order.
+type Place struct {
+	After BlockID
+	// Arrival numbers the block among all the conversation's task blocks,
+	// from 1.
+	Arrival int
 }
 
 // task is the actor's state for one background task.
@@ -82,11 +92,17 @@ func taskOf(b Block) (*task, bool) {
 }
 
 // place puts the blocks of t that have no place yet after the conversation
-// block last. A replay keeps the places of the blocks it replaces, since it
-// replays them in the same order.
-func (t *task) place(last BlockID) {
-	for range len(t.transcript.Blocks()) - len(t.After) {
-		t.After = append(t.After, last)
+// block last, each arriving after every block the tasks placed before. Places
+// are never removed, so their count numbers the next arrival. A replay keeps
+// the places of the blocks it replaces, since it replays them in the same
+// order.
+func (t *task) place(last BlockID, tasks []*task) {
+	arrived := 0
+	for _, other := range tasks {
+		arrived += len(other.Places)
+	}
+	for i := range len(t.transcript.Blocks()) - len(t.Places) {
+		t.Places = append(t.Places, Place{After: last, Arrival: arrived + i + 1})
 	}
 }
 
@@ -160,7 +176,7 @@ func historyTasks(messages []assistant.Message) (*Transcript, []*task) {
 			tasks = append(tasks, t)
 		}
 		t.transcript.AppendMessage(msg)
-		t.place(after[i])
+		t.place(after[i], tasks)
 		if isFinalUpdate(msg) {
 			t.Status = TaskDone
 		}
@@ -177,7 +193,7 @@ func (e *Engine) taskViews() []Task {
 	for _, t := range e.tasks {
 		view := t.Task
 		view.Blocks = slices.Clone(t.transcript.Blocks())
-		view.After = slices.Clone(t.After)
+		view.Places = slices.Clone(t.Places)
 		tasks = append(tasks, view)
 	}
 	return tasks
@@ -324,7 +340,7 @@ func (e *Engine) observe(ctx context.Context, backend TaskBackend, conversation 
 func (e *Engine) updateTask(t *task, change func() bool) {
 	e.do(func() {
 		if change() && slices.Contains(e.tasks, t) {
-			t.place(lastBlockID(e.transcript))
+			t.place(lastBlockID(e.transcript), e.tasks)
 			e.publish()
 		}
 	})
@@ -332,32 +348,36 @@ func (e *Engine) updateTask(t *task, change func() bool) {
 
 // BlocksWithTasks merges the conversation's blocks with its tasks' in the
 // order the server appended them: each task block right after the
-// conversation block it follows. One whose conversation block is not shown
-// goes last.
-//
-// NOTE: tasks' blocks that follow the same conversation block show task by
-// task, not interleaved as they arrived.
+// conversation block it follows, in arrival order among the task blocks
+// there. One whose conversation block is not shown goes last.
 func BlocksWithTasks(blocks []Block, tasks []Task) []Block {
 	if len(tasks) == 0 {
 		return blocks
 	}
-	following := make(map[BlockID][]Block)
+	type placed struct {
+		block Block
+		Place
+	}
+	var arrived []placed
 	for _, task := range tasks {
 		for i, b := range task.Blocks {
-			following[task.After[i]] = append(following[task.After[i]], b)
+			arrived = append(arrived, placed{b, task.Places[i]})
 		}
 	}
-	out := make([]Block, 0, len(blocks))
+	slices.SortFunc(arrived, func(a, b placed) int { return cmp.Compare(a.Arrival, b.Arrival) })
+	following := make(map[BlockID][]Block)
+	for _, p := range arrived {
+		following[p.After] = append(following[p.After], p.block)
+	}
+	out := make([]Block, 0, len(blocks)+len(arrived))
 	for _, b := range blocks {
 		out = append(out, b)
 		out = append(out, following[b.ID]...)
 		delete(following, b.ID)
 	}
-	for _, task := range tasks {
-		for i, b := range task.Blocks {
-			if _, unshown := following[task.After[i]]; unshown {
-				out = append(out, b)
-			}
+	for _, p := range arrived {
+		if _, unshown := following[p.After]; unshown {
+			out = append(out, p.block)
 		}
 	}
 	return out

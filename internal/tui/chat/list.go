@@ -213,8 +213,34 @@ func (l *List) SetItems(items []agent.Block) {
 // their backend-facing transcript.
 func (l *List) SetTranscript(blocks []agent.Block, tasks []agent.Task, notices []NoticeItem) {
 	l.items = agent.BlocksWithTasks(blocks, tasks)
+	if slices.ContainsFunc(l.items, unlisted) {
+		l.items, notices = unlist(l.items, notices)
+	}
 	l.notices = notices
 	l.relayout()
+}
+
+// unlist drops the blocks the transcript leaves out, without changing the
+// caller's slices. A notice after a dropped block moves after the block
+// before it, so it keeps its place instead of reading as orphaned.
+func unlist(items []agent.Block, notices []NoticeItem) ([]agent.Block, []NoticeItem) {
+	kept := make([]agent.Block, 0, len(items))
+	before := make(map[agent.BlockID]agent.BlockID)
+	var last agent.BlockID
+	for _, block := range items {
+		if unlisted(block) {
+			before[block.ID] = last
+			continue
+		}
+		kept, last = append(kept, block), block.ID
+	}
+	notices = slices.Clone(notices)
+	for i := range notices {
+		if to, ok := before[notices[i].After]; ok {
+			notices[i].After = to
+		}
+	}
+	return kept, notices
 }
 
 // relayout rebuilds the view and keeps a scrolled viewport on the item it

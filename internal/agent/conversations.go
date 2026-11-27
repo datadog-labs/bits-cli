@@ -386,7 +386,7 @@ func conversationFromHistory(source *assistant.ForkedFrom, messages []assistant.
 	views := make([]Task, 0, len(copiedTasks))
 	for _, task := range copiedTasks {
 		task.transcript.settleTools(nil)
-		views = append(views, Task{Blocks: task.transcript.Blocks(), After: task.After})
+		views = append(views, Task{Blocks: task.transcript.Blocks(), Places: task.Places})
 	}
 	// Copied task IDs still belong to the source, even if later history contains
 	// additional messages for them. Only tasks started in the fork are observed.

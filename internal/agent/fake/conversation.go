@@ -167,6 +167,7 @@ func (f *Fake) appendLocked(c *conversation, msg assistant.Message) {
 	if msg.CreatedAt == 0 {
 		msg.CreatedAt = c.updated
 	}
+	msg.AgentID = cmp.Or(msg.AgentID, mainAgentID)
 	c.messages = append(c.messages, msg)
 }
 

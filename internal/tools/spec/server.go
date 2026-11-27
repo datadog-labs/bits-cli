@@ -1,6 +1,9 @@
 package spec
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Tools the server defines and runs. The client only presents them or acts on
 // their results, so each payload keeps just the fields the client reads.
@@ -27,6 +30,9 @@ var (
 	// catalog.
 	ServerExecuteCode      = Identity{Name: "execute_code"}
 	ServerSearchDatadogSDK = Identity{Name: "search_datadog_sdk"}
+	// ServerSuggestFollowUps offers prompts the user may send next. It
+	// returns nothing the client reads; its input is the suggestions.
+	ServerSuggestFollowUps = Identity{Name: "suggest_follow_ups"}
 )
 
 // ApprovalRequestInput names the server call an approval_request asks to
@@ -110,4 +116,24 @@ type ExecuteCodeOutput struct {
 			Note string `json:"note"`
 		} `json:"sampled"`
 	} `json:"diagnostics"`
+}
+
+type SuggestFollowUpsInput struct {
+	Prompts []string `json:"prompts"`
+}
+
+// ParseFollowUps returns the prompts a suggest_follow_ups call offers,
+// trimmed, without blank ones. Malformed input offers none.
+func ParseFollowUps(raw string) []string {
+	var in SuggestFollowUpsInput
+	if err := json.Unmarshal([]byte(raw), &in); err != nil {
+		return nil
+	}
+	prompts := in.Prompts[:0]
+	for _, prompt := range in.Prompts {
+		if prompt = strings.TrimSpace(prompt); prompt != "" {
+			prompts = append(prompts, prompt)
+		}
+	}
+	return prompts
 }
