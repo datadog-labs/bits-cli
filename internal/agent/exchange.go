@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"uuid"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
@@ -76,11 +77,12 @@ func newRoundsExchange(backend Backend, message any, opts assistant.SendOptions,
 func (x *roundsExchange) run(ctx context.Context, emit func(exchangeEvent) bool) (string, error) {
 	message, opts, calls := x.message, x.opts, x.resumed
 	// A turn is sent to its conversation's endpoint, so a new conversation
-	// takes its id now. It is reported before the first round, so no surface
+	// takes its id now: a random version 4 UUID, as the Datadog web client
+	// creates. It is reported before the first round, so no surface
 	// mistakes it for the backend's answer, and every surface has a handle to
 	// the conversation even if the send fails.
 	if opts.ConversationID == "" {
-		opts.ConversationID = assistant.NewConversationID()
+		opts.ConversationID = uuid.NewV4().String()
 		if !emit(exchangeEvent{conversation: opts.ConversationID}) {
 			return opts.ConversationID, ctx.Err()
 		}

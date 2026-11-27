@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/datadog-labs/bits-cli/internal/textsafe"
 )
@@ -346,20 +347,12 @@ func TestSubscribe_StreamsTaskReplayMarkerAndLive(t *testing.T) {
 // A turn goes to its conversation's endpoint, named the same in the path and
 // the body. An id the path cannot carry unchanged never reaches the server.
 func TestSend_NamesTheConversationInPathAndBody(t *testing.T) {
-	minted := NewConversationID()
-	if minted == NewConversationID() {
-		t.Fatalf("NewConversationID repeated %q", minted)
-	}
-	// A version 4 UUID of the standard variant, as the web client creates.
-	if len(minted) != 36 || minted[14] != '4' || !strings.ContainsRune("89ab", rune(minted[19])) {
-		t.Fatalf("NewConversationID = %q, want a version 4 UUID", minted)
-	}
 	for _, test := range []struct {
 		name    string
 		id      string
 		invalid bool
 	}{
-		{name: "new conversation", id: minted},
+		{name: "new conversation", id: uuid.NewV4().String()},
 		{name: "existing conversation", id: testConversationID},
 		{name: "missing id", id: "", invalid: true},
 		{name: "id the path would change", id: "a/b", invalid: true},
