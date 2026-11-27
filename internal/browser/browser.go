@@ -38,7 +38,7 @@ func SettingsURL(origin string) (string, error) {
 	if origin == "" {
 		return "", errors.New("web origin is empty")
 	}
-	return origin + "/ask/settings", nil
+	return origin + "/bits/settings", nil
 }
 
 // Links resolves the scheme-less links the Assistant writes, which name

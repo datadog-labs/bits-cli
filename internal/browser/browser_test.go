@@ -217,7 +217,7 @@ func TestLinksUseResolvedOrigin(t *testing.T) {
 			t.Fatalf("conversation = %q, %v", got, err)
 		}
 		got, err = SettingsURL(origin)
-		if err != nil || got != origin+"/ask/settings" {
+		if err != nil || got != origin+"/bits/settings" {
 			t.Fatalf("settings = %q, %v", got, err)
 		}
 	}
