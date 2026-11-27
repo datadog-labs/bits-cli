@@ -143,7 +143,9 @@ func TestQueueRejectsQueueingBehindRestore(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}}
-	e := New(backend, Config{ConversationID: "c"})
+	// A valid id, so the restore reaches the backend and is still running
+	// when Queue asks; an invalid one ends it at once.
+	e := New(backend, Config{ConversationID: "11111111-1111-4111-8111-111111111111"})
 	defer e.Close()
 	if _, err := e.Restore(t.Context()); err != nil {
 		t.Fatal(err)
