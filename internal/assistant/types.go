@@ -32,6 +32,10 @@ func RoleOf(s string) Role {
 	}
 }
 
+// InferenceModeFast requests the backend's fast inference, which users know
+// as Turbo: faster at the same quality, for a higher cost.
+const InferenceModeFast = "fast"
+
 // SendOptions configures a single call to Send.
 type SendOptions struct {
 	// ConversationID resumes an existing conversation. Empty starts a new one;

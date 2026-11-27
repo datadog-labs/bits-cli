@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
+	"github.com/datadog-labs/bits-cli/internal/assistant"
 	"github.com/datadog-labs/bits-cli/internal/auth"
 	"github.com/datadog-labs/bits-cli/internal/version"
 	"github.com/spf13/cobra"
@@ -50,6 +51,7 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 	opts := ChatOptions{AuthMode: auth.ModeAuto, PermissionsMode: agent.ModeManual}
 	var authMode string
 	var permissionsMode string
+	var turbo bool
 	root := &cobra.Command{
 		Use:           "bits [prompt]",
 		Short:         "Datadog Assistant in your terminal",
@@ -81,6 +83,9 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 			if inferenceMode, ok := os.LookupEnv("BITS_ASSISTANT_INFERENCE_MODE"); ok {
 				opts.InferenceMode = inferenceMode
 			}
+			if turbo {
+				opts.InferenceMode = assistant.InferenceModeFast
+			}
 			opts.NoUpdateCheck = os.Getenv("BITS_NO_UPDATE_CHECK") == "1"
 			*invoked = true
 			return runChat(command.Context(), opts, stdout, stderr)
@@ -93,6 +98,7 @@ func newRootCommand(invoked *bool, stdout, stderr io.Writer) *cobra.Command {
 	root.Flags().StringArrayVar(&opts.SkillPaths, "skill", nil, "additional skill directory to discover (repeatable)")
 	root.Flags().StringVar(&authMode, "auth", string(auth.ModeAuto), "authentication mode: auto or api-key")
 	root.Flags().StringVar(&permissionsMode, "permissions", string(agent.ModeManual), "permissions mode: manual or skip-permissions")
+	root.Flags().BoolVar(&turbo, "turbo", false, "start in turbo mode: faster responses that cost more")
 	root.Flags().StringVar(&opts.Site, "site", "", "Datadog API site for api-key authentication")
 	root.Flags().StringVar(
 		&opts.ConversationID,

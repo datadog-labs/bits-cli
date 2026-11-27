@@ -138,6 +138,7 @@ func (m *Model) statusRuntime() statusview.Runtime {
 		Profile:             string(runtime.Profile),
 		Model:               runtime.Model,
 		PermissionsMode:     permissionsMode,
+		Turbo:               m.turbo(),
 		Phase:               phaseName(m.chatPhase),
 		Connectivity:        m.statusConnectivity(),
 		Usage:               m.state.Usage,

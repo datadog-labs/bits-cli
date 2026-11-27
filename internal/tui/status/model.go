@@ -41,6 +41,7 @@ type Runtime struct {
 	Profile             string
 	Model               string
 	PermissionsMode     string
+	Turbo               bool
 	Phase               string
 	Connectivity        Connectivity
 	Usage               *assistant.Usage
@@ -170,6 +171,10 @@ func (m *Model) rebuild() {
 		// once /api/v2/assistant exposes it in the public response contract.
 		model = "default"
 	}
+	turbo := "off"
+	if m.runtime.Turbo {
+		turbo = "on"
+	}
 	datadog := []statusRow{
 		{label: "Site", value: available(m.runtime.Site, "no remote Datadog site is configured")},
 		{label: "Authentication", value: authentication(m.runtime)},
@@ -181,6 +186,7 @@ func (m *Model) rebuild() {
 		{label: "Profile", value: available(m.runtime.Profile, "assistant profile is not known")},
 		{label: "Model", value: model},
 		{label: "Permissions", value: available(m.runtime.PermissionsMode, "permissions mode is not known")},
+		{label: "Turbo", value: turbo},
 		{label: "Turn", value: available(m.runtime.Phase, "turn state is not known")},
 		{label: "Connectivity", value: available(string(m.runtime.Connectivity), "no backend activity has been observed")},
 		{label: "Context tokens", value: usage(m.runtime.Usage)},

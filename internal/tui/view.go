@@ -438,7 +438,7 @@ func (m *Model) lowerPaneText() (width, indent int) {
 // the editor.
 func (m *Model) chatFooter() string {
 	width, indent := m.lowerPaneText()
-	text := chatFooterText(m.workspaceDisplayPath, m.backgroundCommands.label(), m.state.Usage, max(1, width-indent))
+	text := chatFooterText(m.workspaceDisplayPath, m.turbo(), m.backgroundCommands.label(), m.state.Usage, max(1, width-indent))
 	if m.quitConfirm.armed {
 		text = ansi.Truncate(quitConfirmHint, max(1, width-indent), "…")
 	}
@@ -449,9 +449,12 @@ func (m *Model) chatFooter() string {
 	return strings.Repeat(" ", indent) + m.styles.Text.Secondary.Render(text)
 }
 
-func chatFooterText(path, commands string, usage *assistant.Usage, width int) string {
+func chatFooterText(path string, turbo bool, commands string, usage *assistant.Usage, width int) string {
 	path = escape.SingleLine(path)
 	var details []string
+	if turbo {
+		details = append(details, "Turbo")
+	}
 	if commands != "" {
 		details = append(details, commands)
 	}
