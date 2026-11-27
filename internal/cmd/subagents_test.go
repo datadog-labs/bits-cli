@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/datadog-labs/bits-cli/internal/agent"
 )
 
 func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
@@ -17,6 +19,7 @@ func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
 	t.Setenv("BITS_CUSTOM_HEADERS", "")
 	t.Setenv("DD_API_KEY", "test-api-key")
 	t.Setenv("DD_APP_KEY", "test-app-key")
+	const turnPath = "/api/v2/assistant/conversation/"
 	original := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = original })
 	for _, test := range []struct {
@@ -26,15 +29,15 @@ func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
 		lookupStatus int
 		path         string
 	}{
-		{name: "org 2 default", orgID: 2, path: "/api/v2/assistant"},
-		{name: "org 2 disabled", orgID: 2, value: "0", path: "/api/v2/assistant"},
-		{name: "org 2 ignores other value", orgID: 2, value: "true", path: "/api/v2/assistant"},
-		{name: "other org", orgID: 3, path: "/api/v2/assistant"},
-		{name: "lookup unavailable", lookupStatus: http.StatusServiceUnavailable, path: "/api/v2/assistant"},
-		{name: "default", path: "/api/v2/assistant"},
+		{name: "org 2 default", orgID: 2, path: "/api/v2/assistant/conversation/"},
+		{name: "org 2 disabled", orgID: 2, value: "0", path: "/api/v2/assistant/conversation/"},
+		{name: "org 2 ignores other value", orgID: 2, value: "true", path: "/api/v2/assistant/conversation/"},
+		{name: "other org", orgID: 3, path: "/api/v2/assistant/conversation/"},
+		{name: "lookup unavailable", lookupStatus: http.StatusServiceUnavailable, path: "/api/v2/assistant/conversation/"},
+		{name: "default", path: "/api/v2/assistant/conversation/"},
 		{name: "enabled", value: "1", path: "/api/unstable/assistant/multi-agent/runs"},
-		{name: "explicitly disabled", value: "0", path: "/api/v2/assistant"},
-		{name: "other value", value: "true", path: "/api/v2/assistant"},
+		{name: "explicitly disabled", value: "0", path: "/api/v2/assistant/conversation/"},
+		{name: "other value", value: "true", path: "/api/v2/assistant/conversation/"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("BITS_USE_EXPERIMENTAL_SUBAGENTS", test.value)
@@ -51,13 +54,19 @@ func TestSubagentOrganizationAndEnvironmentSelectEndpoint(t *testing.T) {
 					return
 				}
 				requests++
-				if r.URL.Path != test.path {
+				// A turn goes to its conversation's endpoint; other requests
+				// match their path exactly.
+				matches := r.URL.Path == test.path
+				if id, ok := strings.CutPrefix(r.URL.Path, turnPath); ok && test.path == turnPath {
+					matches = agent.ValidConversationID(id)
+				}
+				if !matches {
 					t.Errorf("endpoint=%s, want %s", r.URL.Path, test.path)
 					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
-				if test.path == "/api/v2/assistant" {
+				if test.path == turnPath {
 					_, _ = fmt.Fprintln(w, `{"data":{"type":"assistant-response","attributes":{"conversation_id":"11111111-1111-4111-8111-111111111111","structured_message":{"role":"assistant","message_id":"answer","content":{"type":"markdown_fragment","content":"answer"}}}}}`)
 				} else {
 					w.Header().Set("X-Assistant-Conversation-ID", "11111111-1111-4111-8111-111111111111")

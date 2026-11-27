@@ -67,7 +67,7 @@ type EventKind int
 const (
 	EventState        EventKind = iota // the conversation's state; read State
 	EventUsage                         // token usage update; read Usage
-	EventConversation                  // server-assigned/confirmed conversation id
+	EventConversation                  // the conversation's id, minted or confirmed
 	EventDone                          // the operation completed (a turn: with no pending tool calls)
 	EventError                         // the operation failed; read Err
 	EventCanceled                      // the operation's context ended; Err is its error

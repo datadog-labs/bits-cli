@@ -18,11 +18,9 @@ import (
 )
 
 // scriptBackend is the test backend: Send i streams rounds[i], if any, and
-// every request is recorded. It returns the request's conversation ID, or
-// convID for a new conversation.
+// every request is recorded. It returns the request's conversation ID.
 type scriptBackend struct {
 	rounds [][]assistant.Message
-	convID string
 	// title, when set, follows the final round as a title-only line.
 	title string
 	// After streaming the final round, Send closes started and, when hold is
@@ -43,9 +41,6 @@ func (b *scriptBackend) Send(ctx context.Context, message any, opts assistant.Se
 	b.sent = append(b.sent, message)
 	n := len(b.sent)
 	id := opts.ConversationID
-	if id == "" {
-		id = b.convID
-	}
 	if n <= len(b.rounds) {
 		for _, m := range b.rounds[n-1] {
 			var response assistant.AssistantResponse
@@ -116,11 +111,7 @@ func (b *scriptBackend) responses() [][]assistant.ClientToolResponse {
 func (b *scriptBackend) userMessages(conversationID string) []string {
 	var messages []string
 	for i, message := range b.sent {
-		id := b.opts[i].ConversationID
-		if id == "" {
-			id = b.convID
-		}
-		if text, ok := message.(string); ok && id == conversationID {
+		if text, ok := message.(string); ok && b.opts[i].ConversationID == conversationID {
 			messages = append(messages, text)
 		}
 	}
@@ -181,7 +172,7 @@ func TestContextIsSentOnlyWithTheUserMessage(t *testing.T) {
 }
 
 func TestUserContextIsSentOnlyWhenTheConversationLacksIt(t *testing.T) {
-	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
+	backend := &scriptBackend{rounds: toolRounds("read")}
 	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler: func(context.Context, ToolCall) (ToolResult, error) {
@@ -560,35 +551,37 @@ func TestTurnEmitsEventSequence(t *testing.T) {
 	usage := assistant.AssistantMessage("m1", assistant.TextContent(""))
 	usage.Results = &assistant.Results{Usage: &assistant.Usage{TokensUsed: 5}}
 	b := &scriptBackend{
-		convID: "conv-1",
 		rounds: [][]assistant.Message{{textMsg("m1", "Hello"), textMsg("m1", " world"), usage}},
 	}
 	e := New(b, Config{})
 
 	evs := coalesced(drain(t, e, TurnInput{Message: "hi"}))
-	want := []EventKind{EventState, EventState, EventUsage, EventConversation, EventState, EventDone}
+	want := []EventKind{EventState, EventConversation, EventState, EventUsage, EventConversation, EventState, EventDone}
 	if got := kinds(evs); !reflect.DeepEqual(got, want) {
 		t.Fatalf("event kinds = %v, want %v", got, want)
 	}
-	if evs[0].Round != 0 || evs[1].Round != 1 {
-		t.Fatalf("transcript rounds = %d, %d; want the local echo outside any send, then round 1", evs[0].Round, evs[1].Round)
+	if evs[0].Round != 0 || evs[2].Round != 1 {
+		t.Fatalf("transcript rounds = %d, %d; want the local echo outside any send, then round 1", evs[0].Round, evs[2].Round)
 	}
-	blocks := evs[1].State.Blocks
+	blocks := evs[2].State.Blocks
 	if len(blocks) == 0 || blocks[len(blocks)-1].Markdown == nil || blocks[len(blocks)-1].Markdown.Content != "Hello world" {
 		t.Fatalf("final text blocks = %+v", blocks)
 	}
 	if blocks[len(blocks)-1].Complete {
 		t.Fatal("streaming transcript snapshot unexpectedly marked the answer complete")
 	}
-	if evs[3].ConvID != "conv-1" {
-		t.Fatalf("conv id = %q, want conv-1", evs[3].ConvID)
+	// A new conversation's id is known before the backend responds, and the
+	// response confirms it.
+	id := evs[1].ConvID
+	if !ValidConversationID(id) || b.opts[0].ConversationID != id || evs[4].ConvID != id {
+		t.Fatalf("conv ids = %q then %q, sent %q", id, evs[4].ConvID, b.opts[0].ConversationID)
 	}
-	final := evs[4].State
+	final := evs[5].State
 	if len(final.Blocks) == 0 || !final.Blocks[len(final.Blocks)-1].Complete {
 		t.Fatalf("final transcript = %+v, want completed answer", final.Blocks)
 	}
-	if final.ConversationID != "conv-1" || final.Usage == nil || final.Usage.TokensUsed != 5 {
-		t.Fatalf("final state = conversation %q, usage %+v; want conv-1 and the reported usage", final.ConversationID, final.Usage)
+	if final.ConversationID != id || final.Usage == nil || final.Usage.TokensUsed != 5 {
+		t.Fatalf("final state = conversation %q, usage %+v; want %s and the reported usage", final.ConversationID, final.Usage, id)
 	}
 }
 
@@ -608,27 +601,27 @@ func TestBlocksRecordTheRunThatLastChangedThem(t *testing.T) {
 	}
 }
 
-func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
+func TestTurnRetainsConversationIDAfterBackendError(t *testing.T) {
 	backendErr := errors.New("stream failed")
 	e := New(&scriptBackend{
-		convID: "created-before-error",
 		err:    backendErr,
 		rounds: [][]assistant.Message{{textMsg("m1", "partial")}},
 	}, Config{})
 
 	events := coalesced(drain(t, e, TurnInput{Message: "question"}))
-	wantKinds := []EventKind{EventState, EventState, EventConversation, EventState, EventError}
+	wantKinds := []EventKind{EventState, EventConversation, EventState, EventConversation, EventState, EventError}
 	if got := kinds(events); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("event kinds = %v, want %v", got, wantKinds)
 	}
-	if events[2].ConvID != "created-before-error" || !errors.Is(events[4].Err, backendErr) || !events[4].BackendFailure {
-		t.Fatalf("terminal events = %+v", events[2:])
+	id := events[1].ConvID
+	if !ValidConversationID(id) || events[3].ConvID != id || !errors.Is(events[5].Err, backendErr) || !events[5].BackendFailure {
+		t.Fatalf("terminal events = %+v", events[1:])
 	}
-	final := events[3].State.Blocks
+	final := events[4].State.Blocks
 	if len(final) == 0 || !final[len(final)-1].Complete {
 		t.Fatalf("final transcript snapshot = %+v, want completed answer", final)
 	}
-	if got := e.State().ConversationID; got != "created-before-error" {
+	if got := e.State().ConversationID; got != id {
 		t.Fatalf("conversation ID = %q", got)
 	}
 	blocks := e.State().Blocks
@@ -638,7 +631,7 @@ func TestTurnRetainsConversationIDDiscoveredBeforeBackendError(t *testing.T) {
 }
 
 func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
-	backend := &scriptBackend{convID: "new-conversation-1", title: "Old prompt"}
+	backend := &scriptBackend{title: "Old prompt"}
 	opts := Config{
 		ConversationID: "old-conversation",
 		Model:          "retained-model",
@@ -669,10 +662,11 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 	}
 
 	_ = drain(t, e, TurnInput{Message: "new prompt"})
-	if got := e.State().ConversationID; got != "new-conversation-1" {
-		t.Fatalf("new conversation id = %q", got)
+	newID := e.State().ConversationID
+	if !ValidConversationID(newID) || newID == "old-conversation" {
+		t.Fatalf("new conversation id = %q, want a fresh client id", newID)
 	}
-	if got := backend.opts[len(backend.opts)-1]; got.ConversationID != "" ||
+	if got := backend.opts[len(backend.opts)-1]; got.ConversationID != newID ||
 		len(got.MessageHistory) != 0 || got.Model != opts.Model ||
 		got.DebugTag != opts.DebugTag {
 		t.Fatalf("first new request options = %+v; process-wide configuration was not retained", got)
@@ -680,7 +674,7 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 	if got := backend.userMessages("old-conversation"); !reflect.DeepEqual(got, []string{"old prompt"}) {
 		t.Fatalf("prior conversation was mutated: %v", got)
 	}
-	if got := backend.userMessages("new-conversation-1"); !reflect.DeepEqual(got, []string{"new prompt"}) {
+	if got := backend.userMessages(newID); !reflect.DeepEqual(got, []string{"new prompt"}) {
 		t.Fatalf("new conversation messages = %v", got)
 	}
 }
@@ -688,7 +682,7 @@ func TestNewConversationIsLazyAndRetainsClientConfiguration(t *testing.T) {
 // A cancelled turn's last state carries the conversation the backend assigned,
 // and a new conversation publishes its empty state outside any run.
 func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
-	backend := &scriptBackend{convID: "created-before-cancel", started: make(chan struct{}), hold: make(chan struct{})}
+	backend := &scriptBackend{started: make(chan struct{}), hold: make(chan struct{})}
 	e := New(backend, Config{})
 	events, unsubscribe := e.Subscribe()
 	defer unsubscribe()
@@ -709,13 +703,13 @@ func TestNewConversationRetainsIDDiscoveredDuringCancellation(t *testing.T) {
 		}
 	}
 
-	if last.ConversationID != "created-before-cancel" {
-		t.Fatalf("conversation id after cancellation = %q", last.ConversationID)
+	if !ValidConversationID(last.ConversationID) || last.ConversationID != backend.opts[0].ConversationID {
+		t.Fatalf("conversation id after cancellation = %q, want the one sent", last.ConversationID)
 	}
 	if err := e.NewConversation(); err != nil {
 		t.Fatal(err)
 	}
-	if got := e.PreviousConversationID(); got != "created-before-cancel" {
+	if got := e.PreviousConversationID(); got != last.ConversationID {
 		t.Fatalf("previous conversation id after reset = %q", got)
 	}
 	if ev := <-events; ev.Kind != EventState || ev.Run != 0 || ev.State.ConversationID != "" || len(ev.State.Blocks) != 0 {
@@ -803,7 +797,7 @@ func TestTurnCancelledBeforeSendPublishesOutsideAnyRound(t *testing.T) {
 // A subscription sees every run's events, as following each run does. Ending
 // a subscription closes it even if its consumer stopped reading.
 func TestSubscribeSpansRuns(t *testing.T) {
-	e := New(&scriptBackend{convID: "conversation-1", rounds: [][]assistant.Message{
+	e := New(&scriptBackend{rounds: [][]assistant.Message{
 		{assistant.AssistantMessage("one", assistant.TextContent("first"))},
 		{assistant.AssistantMessage("two", assistant.TextContent("second"))},
 	}}, Config{})
@@ -938,7 +932,7 @@ func (b *currentUserBackend) CurrentUser(context.Context) (assistant.CurrentUser
 // A prompt queued behind a turn starts a turn of its own, with the mode set
 // by then.
 func TestSetInferenceModeReachesAQueuedPrompt(t *testing.T) {
-	backend := &scriptBackend{convID: "c", started: make(chan struct{}), hold: make(chan struct{})}
+	backend := &scriptBackend{started: make(chan struct{}), hold: make(chan struct{})}
 	engine := New(backend, Config{})
 	t.Cleanup(engine.Close)
 	events, stop := engine.Subscribe()

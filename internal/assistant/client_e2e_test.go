@@ -113,7 +113,8 @@ func TestE2E_SearchEntitiesReturnsMultipleTypes(t *testing.T) {
 		t.Fatalf("entity search returned %d distinct types: %#v", len(types), response.Entities)
 	}
 	conversationID, err := c.Send(ctx, "Name the two attached Datadog entities.", SendOptions{
-		Context: &AssistantContext{Entities: attached},
+		ConversationID: NewConversationID(),
+		Context:        &AssistantContext{Entities: attached},
 	}, nil)
 	if err != nil {
 		t.Fatalf("attach two entity types: %v", err)
@@ -133,7 +134,7 @@ func TestE2E_ConversationLifecycle(t *testing.T) {
 
 	// Structural: send a message and collect assistant text.
 	var text strings.Builder
-	convID, err := c.Send(ctx, "Reply with a short one-sentence greeting.", SendOptions{}, func(ar AssistantResponse) error {
+	convID, err := c.Send(ctx, "Reply with a short one-sentence greeting.", SendOptions{ConversationID: NewConversationID()}, func(ar AssistantResponse) error {
 		if ct := ar.Data.Attributes.StructuredMessage.Content; ct.Kind() == KindText {
 			text.WriteString(ct.TextBody())
 		}
@@ -236,7 +237,7 @@ func TestE2E_ResumeConversationLifecycle(t *testing.T) {
 	nonce := time.Now().UnixNano()
 	first := fmt.Sprintf("bits-resume-e2e-first-%d", nonce)
 	second := fmt.Sprintf("bits-resume-e2e-second-%d", nonce)
-	convID, err := c.Send(ctx, first, SendOptions{}, nil)
+	convID, err := c.Send(ctx, first, SendOptions{ConversationID: NewConversationID()}, nil)
 	if err != nil {
 		t.Fatalf("initial Send: %v", err)
 	}
@@ -352,7 +353,7 @@ func TestE2E_ClientToolOutOfBandContent(t *testing.T) {
 		toolCallID string
 		toolInput  string
 	)
-	convID, err := c.Send(ctx, prompt, SendOptions{ClientTools: []ClientTool{tool}}, func(ar AssistantResponse) error {
+	convID, err := c.Send(ctx, prompt, SendOptions{ConversationID: NewConversationID(), ClientTools: []ClientTool{tool}}, func(ar AssistantResponse) error {
 		ct := ar.Data.Attributes.StructuredMessage.Content
 		// A client-side tool invocation surfaces as ContentClientToolCall; the
 		// stream pauses until we answer it. This is the same discriminator the

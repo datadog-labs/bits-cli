@@ -41,17 +41,17 @@ func TestMultiAgentUsesRegularAPIForUnsupportedTurns(t *testing.T) {
 			requests := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
-				if r.URL.Path != "/api/v2/assistant" {
-					t.Errorf("path=%s, want regular API", r.URL.Path)
-					w.WriteHeader(500)
-					return
-				}
 				if r.Header.Get("test-drive-ds-rl") != "1" {
 					t.Error("routing header missing")
 				}
 				var body assistant.Request
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
+					return
+				}
+				if id := body.Data.Attributes.ConversationID; !ValidConversationID(id) || r.URL.Path != "/api/v2/assistant/conversation/"+id {
+					t.Errorf("path=%s, conversation=%q, want the regular API's conversation endpoint", r.URL.Path, id)
+					w.WriteHeader(500)
 					return
 				}
 				if body.Data.Attributes.InferenceMode != test.config.InferenceMode {

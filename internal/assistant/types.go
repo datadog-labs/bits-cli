@@ -2,9 +2,11 @@ package assistant
 
 import (
 	"cmp"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -34,8 +36,8 @@ func RoleOf(s string) Role {
 
 // SendOptions configures a single call to Send.
 type SendOptions struct {
-	// ConversationID resumes an existing conversation. Empty starts a new one;
-	// the server-generated id is available via the streamed responses.
+	// ConversationID names the conversation the turn belongs to. It is
+	// required: a new conversation takes an id from NewConversationID.
 	ConversationID string
 	// Model optionally overrides the model (e.g. "claude-sonnet-4-6").
 	Model string
@@ -77,7 +79,24 @@ type SendOptions struct {
 	ExperimentalToolOverrides map[string]any
 }
 
-// Request is the JSON:API-style envelope for POST /api/v2/assistant.
+// NewConversationID returns a fresh id for a new conversation: a random
+// version 4 UUID in canonical lowercase spelling, as the Datadog web client
+// creates. A turn sent under an id the service has not seen starts that
+// conversation, so the id is known before the first response.
+func NewConversationID() string {
+	var b [16]byte
+	// NOTE: crypto/rand.Read never returns an error; it crashes the program
+	// instead.
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	b[6] = b[6]&0x0f | 0x40 // version 4
+	b[8] = b[8]&0x3f | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// Request is the JSON:API-style envelope for
+// POST /api/v2/assistant/conversation/{id}.
 type Request struct {
 	Data RequestData `json:"data"`
 }

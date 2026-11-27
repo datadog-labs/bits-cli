@@ -40,7 +40,7 @@ type exchangeEvent struct {
 	// round starts this backend send, 1-based. Every send is announced
 	// before it is made, so a turn cancelled earlier stays outside any round.
 	round        int
-	conversation string // server-assigned conversation ID
+	conversation string // the conversation's ID, minted or reported by the backend
 	title        string // the conversation's newly saved title
 	message      *assistant.Message
 	execute      []ToolCall // a batch, dispatched at once
@@ -106,6 +106,15 @@ func (x *roundsExchange) run(ctx context.Context, emit func(exchangeEvent) bool)
 // message flagged as an error fails the round once the stream ends, so its
 // trailing usage and conversation ID still arrive and its calls never run.
 func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.SendOptions, emit func(exchangeEvent) bool) ([]ToolCall, error) {
+	// A turn is sent to its conversation's endpoint, so a new conversation
+	// takes its id now. Reporting it before the request gives every surface a
+	// resumable handle even if the send fails.
+	if opts.ConversationID == "" {
+		opts.ConversationID = assistant.NewConversationID()
+		if !emit(exchangeEvent{conversation: opts.ConversationID}) {
+			return nil, ctx.Err()
+		}
+	}
 	var calls []ToolCall
 	var failure error
 	id, err := x.backend.Send(ctx, message, *opts, func(response assistant.AssistantResponse) error {
@@ -128,8 +137,8 @@ func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.
 		}
 		return nil
 	})
-	// Send may discover a server-assigned ID before a later stream failure or
-	// cancellation. Report it so every surface has a resumable handle.
+	// Send reports the ID the backend confirmed, even after a later stream
+	// failure or cancellation. Report it so every surface has a resumable handle.
 	if id != "" {
 		opts.ConversationID = id
 		if !emit(exchangeEvent{conversation: id}) && err == nil {

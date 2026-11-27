@@ -174,7 +174,7 @@ func TestProjectInstructionsCascadingReplacement(t *testing.T) {
 }
 
 func TestConversationInstructionsSnapshotAndReset(t *testing.T) {
-	backend := &scriptBackend{convID: "new-conversation-1"}
+	backend := &scriptBackend{}
 	dir := t.TempDir()
 	writeInstructionTestFile(t, dir, "AGENTS.md", "original instructions")
 	engine := New(backend, Config{UserContext: func(context.Context) string { return "existing" }, ProjectInstructions: env.NewInstructions(dir)})
@@ -187,7 +187,7 @@ func TestConversationInstructionsSnapshotAndReset(t *testing.T) {
 	if got := backend.opts[1].CustomUserContext; got != "" {
 		t.Fatalf("later context = %q", got)
 	}
-	for _, message := range backend.userMessages("new-conversation-1") {
+	for _, message := range backend.userMessages(engine.State().ConversationID) {
 		if message != "visible prompt" {
 			t.Fatalf("visible prompt changed: %q", message)
 		}
@@ -202,7 +202,7 @@ func TestConversationInstructionsSnapshotAndReset(t *testing.T) {
 }
 
 func TestResumedConversationReplacesUnknownInstructions(t *testing.T) {
-	backend := &scriptBackend{convID: "new-conversation-1"}
+	backend := &scriptBackend{}
 	dir := t.TempDir()
 	writeInstructionTestFile(t, dir, "AGENTS.md", "local instructions")
 	engine := New(backend, Config{ConversationID: "existing", ProjectInstructions: env.NewInstructions(dir)})
@@ -220,7 +220,7 @@ func TestResumedConversationReplacesUnknownInstructions(t *testing.T) {
 }
 
 func TestInstructionsAreNotResentOnToolContinuations(t *testing.T) {
-	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
+	backend := &scriptBackend{rounds: toolRounds("read")}
 	tools, err := NewToolSet(Tool{
 		Definition: assistant.ClientTool{Name: "read"},
 		Handler:    func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil },
@@ -245,7 +245,7 @@ func TestInstructionsAreNotResentOnToolContinuations(t *testing.T) {
 }
 
 func TestResumedConversationWithdrawsUnknownInstructionsOnce(t *testing.T) {
-	backend := &scriptBackend{convID: "new-conversation-1"}
+	backend := &scriptBackend{}
 	engine := New(backend, Config{ConversationID: "existing", ProjectInstructions: env.NewInstructions(t.TempDir())})
 	for range 2 {
 		drain(t, engine, TurnInput{Message: "continue"})
@@ -294,7 +294,7 @@ func failingFirstRequest(streamed bool) *scriptBackend {
 	if !streamed {
 		first = nil
 	}
-	return &scriptBackend{rounds: [][]assistant.Message{first, answer}, convID: "conversation", err: errors.New("request failed")}
+	return &scriptBackend{rounds: [][]assistant.Message{first, answer}, err: errors.New("request failed")}
 }
 
 func TestProjectInstructionsRetryUntilDelivered(t *testing.T) {
@@ -384,7 +384,7 @@ func TestClientSkillsOnlySentWithUserMessages(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	writeSkill(t, dir, ".agents/skills/example", "example", "example description")
-	backend := &scriptBackend{rounds: toolRounds("read"), convID: "conversation-1"}
+	backend := &scriptBackend{rounds: toolRounds("read")}
 	tools, err := NewToolSet(Tool{Definition: assistant.ClientTool{Name: "read"}, Handler: func(context.Context, ToolCall) (ToolResult, error) { return ToolResult{Output: "ok"}, nil }})
 	if err != nil {
 		t.Fatal(err)
@@ -633,7 +633,7 @@ func TestClientSkillInvocationLoadsCurrentBody(t *testing.T) {
 	}
 	skill := summaries[0]
 	writeSkillFile(t, root, ".agents/skills/review", "\xef\xbb\xbf---\r\nname: review\r\ndescription: Updated\r\n---\r\nCurrent <instructions> & body\r\n\t ")
-	backend := &scriptBackend{convID: "new-conversation-1"}
+	backend := &scriptBackend{}
 	engine := New(backend, Config{ClientSkills: provider})
 	arguments := "  Preserve CASE\n\t and trailing space "
 	for range 2 {
@@ -692,7 +692,7 @@ func TestClientSkillInvocationReadFailuresNeverSend(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			backend := &scriptBackend{convID: "new-conversation-1"}
+			backend := &scriptBackend{}
 			engine := New(backend, Config{ClientSkills: provider})
 			events := drain(t, engine, TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: skill.Name}})
 			// The failed turn keeps its user block, like a backend failure.
@@ -708,7 +708,7 @@ func TestClientSkillInvocationResolvesCurrentRegistry(t *testing.T) {
 	root := t.TempDir()
 	writeSkillFile(t, root, ".agents/skills/review", "---\nname: review\ndescription: Project\n---\nPROJECT BODY")
 	writeSkillFile(t, root, "extras/review", "---\nname: review\ndescription: Extra\n---\nEXTRA BODY")
-	backend := &scriptBackend{convID: "new-conversation-1"}
+	backend := &scriptBackend{}
 	engine := New(backend, Config{ClientSkills: env.NewSkills(root, []string{filepath.Join(root, "extras")})})
 	summaries := mustClientSkills(t, engine)
 	summaries[0].Name = "tampered"
@@ -743,7 +743,7 @@ func TestClientSkillInvocationKeepsDiscoveredDefaultName(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, ".agents/skills/shared/SKILL.md"), filepath.Join(root, ".agents/skills/review/SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
-	backend := &scriptBackend{convID: "new-conversation-1"}
+	backend := &scriptBackend{}
 	engine := New(backend, Config{ClientSkills: env.NewSkills(root, nil)})
 	if last := drain(t, engine, TurnInput{Message: "/skill:review", Skill: &SkillInvocation{Name: "review"}}); last[len(last)-1].Kind != EventDone {
 		t.Fatal(last[len(last)-1].Err)
