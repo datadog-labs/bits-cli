@@ -25,6 +25,9 @@ import (
 // historyLoadTimeout bounds the conversation-history fetch on startup.
 const historyLoadTimeout = 30 * time.Second
 
+// stopTimeout leaves room for the client's retries.
+const stopTimeout = 90 * time.Second
+
 // mouseWheelDelta is how many transcript lines one wheel notch scrolls,
 const mouseWheelDelta = 1
 
@@ -956,8 +959,22 @@ func (m *Model) editKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.openExitCard()
 			return m, nil
 		}
+		// Only Esc stops the turn; quitting or switching conversations leaves it running.
+		var stop tea.Cmd
+		if m.cancellable() && m.op.kind == opTurn {
+			engine, run := m.engine, m.op.run
+			stop = func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+				defer cancel()
+				if err := engine.StopConversation(ctx, run); err != nil {
+					// A failed stop shows nothing: the turn already stopped here.
+					return nil
+				}
+				return nil
+			}
+		}
 		m.cancelOperation() // interrupt the running turn
-		return m, nil
+		return m, stop
 	case "enter":
 		return m.submit()
 	case "ctrl+d":
