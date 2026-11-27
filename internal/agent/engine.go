@@ -33,6 +33,10 @@ var (
 	ErrStale                  = errors.New("no running turn has this call pending")
 )
 
+type turnStopper interface {
+	Stop(ctx context.Context, conversationID string) error
+}
+
 // Backend is the minimal transport the engine drives. *assistant.Client
 // satisfies it; tests can substitute a fake.
 type Backend interface {
@@ -298,6 +302,11 @@ type Engine struct {
 	turn     *turn // the turn whose exchange is running, if any
 	lastRun  RunID // the most recently claimed run
 	turnRun  RunID // the claimed run if it is a turn, which sends the queue
+	sent     struct {
+		run          RunID
+		conversation string
+	}
+	sendOrEnd chan struct{}
 	// queue holds the conversation's prompts waiting for a turn to send
 	// them: the running turn once it completes, or else SendQueued.
 	queue       []QueuedPrompt
@@ -507,6 +516,7 @@ func (e *Engine) work(ctx context.Context, fn func(context.Context)) {
 
 // release ends the operation, after its terminal event.
 func (e *Engine) release() {
+	e.wake()
 	e.busy = false
 	e.turnRun = 0
 	e.transcript.run = 0
@@ -660,6 +670,48 @@ func (e *Engine) Decide(toolCallID string, decision ApprovalDecision) error {
 		}
 		return err
 	})
+}
+
+// StopConversation takes the run so a late stop never reaches a later turn,
+// and waits for an unsent prompt, since a stop sent first finds nothing.
+func (e *Engine) StopConversation(ctx context.Context, run RunID) error {
+	stopper, ok := e.backend.(turnStopper)
+	if _, duplex := e.backend.(DuplexBackend); !ok || duplex {
+		return nil
+	}
+	for {
+		var conversation string
+		var wait <-chan struct{}
+		e.do(func() {
+			switch {
+			case e.sent.run == run:
+				conversation = e.sent.conversation
+			case e.busy && e.lastRun == run:
+				if e.sendOrEnd == nil {
+					e.sendOrEnd = make(chan struct{})
+				}
+				wait = e.sendOrEnd
+			}
+		})
+		if wait == nil {
+			if conversation == "" {
+				return nil
+			}
+			return stopper.Stop(ctx, conversation)
+		}
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (e *Engine) wake() {
+	if e.sendOrEnd != nil {
+		close(e.sendOrEnd)
+		e.sendOrEnd = nil
+	}
 }
 
 // StopTools cancels the active client-tool round and persists its cancellation
@@ -1200,6 +1252,8 @@ func (t *turn) apply(event exchangeEvent) error {
 		// ones, and an earlier denial no longer excuses a handler failure. A
 		// stop spans the rounds that drain it.
 		t.round = round
+		t.e.sent.run, t.e.sent.conversation = t.run, t.e.opts.ConversationID
+		t.e.wake()
 		t.calls = slices.DeleteFunc(t.calls, resolved)
 		maps.DeleteFunc(t.byID, func(_ string, c *clientCall) bool { return resolved(c) })
 		t.denied = false

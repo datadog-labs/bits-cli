@@ -343,13 +343,13 @@ func (c *Client) rejectAccessToken(ctx context.Context, req *http.Request) error
 // It retries transient failures for idempotent requests only; the streaming
 // POST does not go through do and is never retried.
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
-	return c.doWithClient(ctx, c.httpClient(), method, path, body)
+	return c.doWithClient(ctx, c.httpClient(), method, path, body, method != http.MethodPost)
 }
 
-func (c *Client) doWithClient(ctx context.Context, client *http.Client, method, path string, body any) (*http.Response, error) {
-	attempts := c.maxRetries() + 1
-	if method == http.MethodPost {
-		attempts = 1
+func (c *Client) doWithClient(ctx context.Context, client *http.Client, method, path string, body any, idempotent bool) (*http.Response, error) {
+	attempts := 1
+	if idempotent {
+		attempts = c.maxRetries() + 1
 	}
 	var lastErr error
 	var wait time.Duration // Retry-After from the previous response, if any
@@ -851,12 +851,21 @@ func (c *Client) ShareConversation(ctx context.Context, in ShareConversationInpu
 	return &out.Data.Attributes, nil
 }
 
+// Stop is a POST, but stopping is idempotent, so it retries transient failures.
+func (c *Client) Stop(ctx context.Context, conversationID string) error {
+	resp, err := c.doWithClient(ctx, c.httpClient(), http.MethodPost, "/api/v2/assistant/conversation/"+url.PathEscape(conversationID)+"/stop", nil, true)
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
 // ForkConversation creates a private copy without retrying the non-idempotent POST.
 func (c *Client) ForkConversation(ctx context.Context, conversationID string) (*ConversationSummary, error) {
 	// Share the connection pool while allowing the server's 45-second fork RPC to finish.
 	client := *c.httpClient()
 	client.Timeout = 60 * time.Second
-	resp, err := c.doWithClient(ctx, &client, http.MethodPost, "/api/v2/assistant/conversation/"+conversationID+"/fork", nil)
+	resp, err := c.doWithClient(ctx, &client, http.MethodPost, "/api/v2/assistant/conversation/"+conversationID+"/fork", nil, false)
 	if err != nil {
 		return nil, err
 	}

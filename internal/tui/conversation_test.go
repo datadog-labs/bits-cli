@@ -270,6 +270,44 @@ func TestNewAfterCancellationDoesNotCancelTwice(t *testing.T) {
 	}
 }
 
+type stoppableConversationBackend struct {
+	*cancellableConversationBackend
+	stops atomic.Int32
+}
+
+func (b *stoppableConversationBackend) Stop(context.Context, string) error {
+	b.stops.Add(1)
+	return nil
+}
+
+func TestEscStopsTheTurnInTheConversation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		messages []assistant.Message
+	}{
+		{name: "after the first answer", messages: []assistant.Message{assistant.AssistantMessage("answer", assistant.TextContent("partial answer"))}},
+		{name: "before the first answer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &stoppableConversationBackend{cancellableConversationBackend: newCancellableConversationBackend()}
+			backend.messages = tc.messages
+			m := New(agent.New(backend, agent.Config{}))
+			setConversationInput(m, "prompt")
+			_, _ = m.submit()
+			waitSignal(t, backend.sendStarted)
+			_, stop := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+			if msg := runConversationCmd(t, stop); msg != nil {
+				t.Fatalf("stop showed %#v, want nothing", msg)
+			}
+			drainConversationRemote(t, m)
+
+			if got := backend.stops.Load(); got != 1 || backend.cancelled.Load() != 1 {
+				t.Fatalf("stop requests = %d, closed requests = %d, want 1 each", got, backend.cancelled.Load())
+			}
+		})
+	}
+}
+
 // A failed turn has ended once its error shows, so /new resets at once.
 func TestNewAfterFailedTurnClearsError(t *testing.T) {
 	m := New(agent.New(&failedConversationBackend{err: errors.New("turn failed")}, agent.Config{ConversationID: "old"}))

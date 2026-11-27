@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/datadog-labs/bits-cli/internal/agent/env"
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
 
@@ -771,6 +772,153 @@ func TestTurnCancellationSettlesUnfinishedTools(t *testing.T) {
 	}
 	if status["prior"] == ToolCancelled || status["preview"] != ToolCancelled || status["server"] != ToolCancelled {
 		t.Fatalf("tool statuses = %v, want only this turn's tools cancelled", status)
+	}
+}
+
+type stopBackend struct {
+	scriptBackend
+	mu    sync.Mutex
+	stops []string
+}
+
+func (b *stopBackend) Stop(_ context.Context, conversationID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stops = append(b.stops, conversationID)
+	return nil
+}
+
+func (b *stopBackend) stopped() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.stops)
+}
+
+type duplexStopBackend struct{ *stopBackend }
+
+func (b duplexStopBackend) Stream(ctx context.Context, message string, opts assistant.SendOptions, fn func(assistant.AssistantResponse) error) error {
+	_, err := b.Send(ctx, message, opts, fn)
+	return err
+}
+
+func (duplexStopBackend) SubmitToolResults(context.Context, []assistant.ClientToolResponse) error {
+	return nil
+}
+
+func TestStopConversationStopsOnlyASentTurn(t *testing.T) {
+	answer := [][]assistant.Message{{textMsg("answer", "partial")}}
+	for _, tc := range []struct {
+		name   string
+		rounds [][]assistant.Message
+		duplex bool
+		stop   func(e *Engine, run RunID) error
+		stops  int
+	}{
+		{name: "after the first answer", rounds: answer, stop: (*Engine).stopNow, stops: 1},
+		{name: "before the first answer", stop: (*Engine).stopNow, stops: 1},
+		{name: "cancelled only", rounds: answer, stop: func(*Engine, RunID) error { return nil }},
+		{name: "an earlier run", rounds: answer, stop: func(e *Engine, run RunID) error { return e.stopNow(run - 1) }},
+		{name: "multi-agent stream", rounds: answer, duplex: true, stop: (*Engine).stopNow},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &stopBackend{}
+			backend.rounds = [][]assistant.Message{nil}
+			var b Backend = backend
+			if tc.duplex {
+				b = duplexStopBackend{backend}
+			}
+			e := New(b, Config{ConversationID: "conversation"})
+			defer e.Close()
+			drain(t, e, TurnInput{Message: "earlier"})
+			backend.rounds = append(backend.rounds, tc.rounds...)
+			backend.started, backend.hold = make(chan struct{}), make(chan struct{})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			events, unsubscribe := e.Subscribe()
+			defer unsubscribe()
+			run, err := e.StartTurn(ctx, TurnInput{Message: "long answer"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-backend.started
+			stopped := make(chan error, 1)
+			go func() { stopped <- tc.stop(e, run) }()
+			cancel()
+			if err := <-stopped; err != nil {
+				t.Fatal(err)
+			}
+			for range Follow(events, run) {
+			}
+
+			var want []string
+			for range tc.stops {
+				want = append(want, e.State().ConversationID)
+			}
+			if got := backend.stopped(); !slices.Equal(got, want) {
+				t.Fatalf("stops = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func (e *Engine) stopNow(run RunID) error { return e.StopConversation(context.Background(), run) }
+
+func TestStopConversationWaitsForThePrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cancel bool
+		stops  int
+	}{
+		{name: "sent later", stops: 1},
+		{name: "never sent", cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &stopBackend{}
+			backend.started, backend.hold = make(chan struct{}), make(chan struct{})
+			preparing, prepared := make(chan struct{}), make(chan struct{})
+			release := sync.OnceFunc(func() { close(prepared) })
+			e := New(backend, Config{
+				ConversationID: "conversation",
+				UserContext: func(context.Context) string {
+					close(preparing)
+					<-prepared
+					return ""
+				},
+				// Reading instructions notices a cancellation before sending.
+				ProjectInstructions: env.NewInstructions(t.TempDir()),
+			})
+			defer e.Close()
+			defer release()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			events, unsubscribe := e.Subscribe()
+			defer unsubscribe()
+			run, err := e.StartTurn(ctx, TurnInput{Message: "long answer"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-preparing
+			expired, expire := context.WithCancel(context.Background())
+			expire()
+			if err := e.StopConversation(expired, run); !errors.Is(err, context.Canceled) || len(backend.stopped()) != 0 {
+				t.Fatalf("stop before the prompt went out = %v with stops %q, want it to wait", err, backend.stopped())
+			}
+			stopped := make(chan error, 1)
+			go func() { stopped <- e.stopNow(run) }()
+			if tc.cancel {
+				cancel()
+			}
+			release()
+			if err := <-stopped; err != nil {
+				t.Fatal(err)
+			}
+			cancel()
+			for range Follow(events, run) {
+			}
+			if got := len(backend.stopped()); got != tc.stops {
+				t.Fatalf("stops = %d, want %d", got, tc.stops)
+			}
+		})
 	}
 }
 

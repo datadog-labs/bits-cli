@@ -169,3 +169,53 @@ func TestSharedByGivesTheConversationAway(t *testing.T) {
 		t.Fatalf("send error = %v, want not found", err)
 	}
 }
+
+func TestStopsCountsStopRequests(t *testing.T) {
+	answered := func(ev agent.Event) bool { return slices.Contains(texts(ev.State.Blocks), "long") }
+	for _, tc := range []struct {
+		name, script string
+		stopAt       func(agent.Event) bool
+		said         []string
+		fails        bool
+	}{
+		{name: "stopped", script: `say("long"); sleep("20s"); say("should not appear")`, stopAt: answered, said: []string{"long"}},
+		{
+			name: "stopped before any answer", script: `sleep("20s"); say("should not appear")`,
+			stopAt: func(ev agent.Event) bool { return ev.Kind == agent.EventConversation },
+		},
+		{name: "stop fails", script: `fail_stop(); say("long"); sleep("20s"); say("should not appear")`, stopAt: answered, said: []string{"long"}, fails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := agent.New(&Fake{}, agent.Config{})
+			defer engine.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			events, unsubscribe := engine.Subscribe()
+			defer unsubscribe()
+			run, err := engine.StartTurn(ctx, agent.TurnInput{Message: tc.script})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var last agent.Event
+			stopped := false
+			for ev := range agent.Follow(events, run) {
+				if !stopped && tc.stopAt(ev) {
+					stopped = true
+					err := engine.StopConversation(context.Background(), run)
+					if errors.Is(err, assistant.ErrServer) != tc.fails {
+						t.Fatalf("stop = %v, want a failure: %t", err, tc.fails)
+					}
+					cancel()
+				}
+				last = ev
+			}
+			if last.Kind != agent.EventCanceled {
+				t.Fatalf("last event = %+v, want a canceled turn", last)
+			}
+			blocks, _ := runTurn(t, engine, `say("stops: %d" % stops())`, nil, agent.DenyContinue, nil)
+			if got, want := texts(blocks), append(tc.said, "stops: 1"); !slices.Equal(got, want) {
+				t.Fatalf("answers = %q, want %q", got, want)
+			}
+		})
+	}
+}

@@ -88,6 +88,8 @@ inline preview.
 | `sleep("2s")` | a stall |
 | `breakpoint(name)` | nothing; stops until continued ([Breakpoints](#breakpoints)) |
 | `shared_by(user)` | nothing; the conversation now belongs to `user`, who shared it with you ([Shared conversations](#shared-conversations)) |
+| `stops()` | nothing; returns how many times Esc asked to stop one of the conversation's turns |
+| `fail_stop()` | nothing; later stop requests fail, so Esc cannot confirm the stop |
 | `push_conversation(fn, …, title=)` | nothing; records a new conversation, returns its id ([Pushed conversations](#pushed-conversations)) |
 | `load("file.star", "name", …)` | imports definitions from a module below the script root (the working directory), or a bundled fixture by filename |
 | `help()` | the built-ins and the client tools' input schemas |
