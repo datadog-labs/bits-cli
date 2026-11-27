@@ -30,7 +30,7 @@ func ConversationURL(origin, conversationID string) (string, error) {
 	if origin == "" {
 		return "", errors.New("web origin is empty")
 	}
-	return origin + "/ask/" + url.PathEscape(conversationID), nil
+	return origin + "/bits/chat/" + url.PathEscape(conversationID), nil
 }
 
 // SettingsURL returns the Assistant settings page on the resolved web origin.
@@ -38,7 +38,7 @@ func SettingsURL(origin string) (string, error) {
 	if origin == "" {
 		return "", errors.New("web origin is empty")
 	}
-	return origin + "/ask/settings", nil
+	return origin + "/bits/settings", nil
 }
 
 // Links resolves the scheme-less links the Assistant writes, which name

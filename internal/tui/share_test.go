@@ -72,7 +72,7 @@ func runShare(t *testing.T, m *Model, cmd tea.Cmd) []tea.Msg {
 
 func TestShare(t *testing.T) {
 	const id = forkSourceID
-	link := "https://app.datadoghq.com/ask/" + id
+	link := "https://app.datadoghq.com/bits/chat/" + id
 	copied := "Shared with your organization until Mar 2, 2030. Share link: " + link
 	thirty := 30
 	tests := []struct {

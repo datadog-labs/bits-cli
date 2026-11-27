@@ -98,7 +98,7 @@ func TestWebOriginStagingEnvironment(t *testing.T) {
 }
 
 func TestLauncherCommand(t *testing.T) {
-	target := "https://app.datadoghq.com/ask/conversation-1"
+	target := "https://app.datadoghq.com/bits/chat/conversation-1"
 	tests := []struct {
 		goos    string
 		command string
@@ -145,7 +145,7 @@ func TestConversationURLEncodesConversationID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "https://demo.datadoghq.com/ask/conversation%2Fid%3Fcopy=yes"
+	want := "https://demo.datadoghq.com/bits/chat/conversation%2Fid%3Fcopy=yes"
 	if got != want {
 		t.Fatalf("ConversationURL() = %q, want %q", got, want)
 	}
@@ -213,11 +213,11 @@ func TestLinksResolveWindowsWorkspace(t *testing.T) {
 func TestLinksUseResolvedOrigin(t *testing.T) {
 	for _, origin := range []string{"https://demo.datadoghq.com", "https://acme.us3.datadoghq.com", "https://acme.staging.test"} {
 		got, err := ConversationURL(origin, "conversation-1")
-		if err != nil || got != origin+"/ask/conversation-1" {
+		if err != nil || got != origin+"/bits/chat/conversation-1" {
 			t.Fatalf("conversation = %q, %v", got, err)
 		}
 		got, err = SettingsURL(origin)
-		if err != nil || got != origin+"/ask/settings" {
+		if err != nil || got != origin+"/bits/settings" {
 			t.Fatalf("settings = %q, %v", got, err)
 		}
 	}
