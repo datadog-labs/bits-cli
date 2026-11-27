@@ -16,4 +16,4 @@ def superseded():
     _suggest(["The later suggestion", "   ", "Another later one"])
 
 def long():
-    _suggest(["Compare p99 latency of every service tagged team:payments over the last 7 days against the previous week and explain any regression", "`kubectl` and \x1b[31mescapes\x1b[0m stay plain text", "/status is sent as a message, not run"])
+    _suggest(["Compare p99 latency of team:payments services this week against last week and explain regressions", "`kubectl` and \x1b[31mescapes\x1b[0m stay plain text", "/status is sent as a message, not run"])

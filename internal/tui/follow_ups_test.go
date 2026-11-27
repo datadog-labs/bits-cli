@@ -1,11 +1,13 @@
 package tui
 
 import (
-	"image"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datadog-labs/bits-cli/internal/agent"
 	"github.com/datadog-labs/bits-cli/internal/agent/fake"
@@ -120,30 +122,40 @@ func TestFollowUpsKeys(t *testing.T) {
 	}
 }
 
-// A click on a suggestion sends it whether or not the list held the keyboard;
-// one beside the suggestions only moves the keyboard there.
+// Clicks follow an approval's: one selects a suggestion and moves the
+// keyboard to the list, one on the selected suggestion of a focused list
+// sends it, and one on "ESC x" dismisses the set.
 func TestFollowUpsClicks(t *testing.T) {
+	const first, second = "Summarize this dashboard", "Check my monitors"
 	for _, tc := range []struct {
-		name string
-		row  int // the row clicked, the header being 0
-		sent string
+		name    string
+		tab     bool     // the list holds the keyboard first
+		targets []string // clicked in order
+		sent    string
+		shown   bool
+		focus   focus
 	}{
-		{name: "first", row: 1, sent: "A"},
-		{name: "second", row: 2, sent: "B"},
-		{name: "header", row: 0},
+		{name: "one click selects", targets: []string{second}, shown: true, focus: focusPrompt},
+		{name: "a second click sends", targets: []string{second, second}, sent: second, focus: focusEditor},
+		{name: "a click on another row selects it", targets: []string{first, second}, shown: true, focus: focusPrompt},
+		{name: "a focused list sends its selection", tab: true, targets: []string{first}, sent: first, focus: focusEditor},
+		{name: "esc x dismisses", targets: []string{"ESC x"}, focus: focusEditor},
+		{name: "the title only focuses", targets: []string{followUpsTitle}, shown: true, focus: focusPrompt},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := newFollowUpsModel(t, suggestScript)
-			at := m.frame.prompt.Min.Add(image.Pt(followUpsPadding+2, tc.row))
-			tap(m, at)
-			m.View()
-			focus := focusPrompt
-			if tc.sent != "" {
-				focus = focusEditor
+			m := newFollowUpsModel(t, `load("follow_ups.star", "suggest"); suggest()`)
+			if tc.tab {
+				m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+				m.View()
 			}
+			for _, target := range tc.targets {
+				tap(m, labelAt(t, m, target))
+				m.View()
+			}
+			focus := m.focus()
 			drainConversationRemote(t, m)
-			if sent := sentAfterScript(m); sent != tc.sent || m.focus() != focus {
-				t.Fatalf("sent %q, focus %v; want %q, %v", sent, m.focus(), tc.sent, focus)
+			if sent := sentAfterScript(m); sent != tc.sent || (shownFollowUps(m) != nil) != tc.shown || focus != tc.focus {
+				t.Fatalf("sent %q, shown %q, focus %v; want %q, %t, %v", sent, shownFollowUps(m), focus, tc.sent, tc.shown, tc.focus)
 			}
 		})
 	}
@@ -178,6 +190,21 @@ func TestFollowUpsWaitForApprovals(t *testing.T) {
 // Suggestions without room to show leave the keyboard to the composer, and
 // shown ones leave the transcript its jump-to-latest control.
 func TestFollowUpsLayout(t *testing.T) {
+	for _, tc := range []struct {
+		height int
+		panel  bool
+	}{{height: 30, panel: true}, {height: 12}} {
+		t.Run(fmt.Sprintf("%d rows", tc.height), func(t *testing.T) {
+			m := newFollowUpsModel(t, suggestScript)
+			m.Update(tea.WindowSizeMsg{Width: 80, Height: tc.height})
+			m.View()
+			view := ansi.Strip(m.frame.promptView)
+			// Without the panel's frame, the list still shows every suggestion.
+			if strings.Contains(view, "╭") != tc.panel || !strings.Contains(view, followUpsTitle) || !strings.Contains(view, "B") {
+				t.Fatalf("panel %t, want %t:\n%s", strings.Contains(view, "╭"), tc.panel, view)
+			}
+		})
+	}
 	t.Run("no room", func(t *testing.T) {
 		// A running task takes the tray row the list would need.
 		m := newFollowUpsModel(t, `task("Watch", ["_Watching_"], every="1h"); `+suggestScript)
