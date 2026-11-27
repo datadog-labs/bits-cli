@@ -1,6 +1,7 @@
 package status
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -22,6 +23,7 @@ func TestModelRendersTruthfulRuntimeAndWorkspaceSnapshot(t *testing.T) {
 		ConversationID:      "conversation-123",
 		Profile:             "cli",
 		PermissionsMode:     "manual",
+		Turbo:               true,
 		Phase:               "streaming",
 		Connectivity:        ConnectivityConnected,
 		Usage:               &assistant.Usage{TokensUsed: 3200, MaxTokens: 16000},
@@ -61,6 +63,9 @@ func TestModelRendersTruthfulRuntimeAndWorkspaceSnapshot(t *testing.T) {
 	}
 	if strings.Contains(view, "collecting") {
 		t.Fatalf("loaded status still shows pending values:\n%s", view)
+	}
+	if !regexp.MustCompile(`Turbo +on `).MatchString(view) {
+		t.Errorf("status view has no Turbo on row:\n%s", view)
 	}
 }
 

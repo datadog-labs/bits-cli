@@ -39,6 +39,7 @@ const (
 	commandSettings
 	commandLogout
 	commandPermissions
+	commandTurbo
 	commandUpdate
 	commandSkillsLibrary
 	commandStopCommands
@@ -117,6 +118,12 @@ var commandDefinitions = []commandDefinition{
 		name:                  "permissions",
 		activeOperationPolicy: commandAllowedDuringOperation,
 		description:           "choose what Bits is allowed to do",
+	},
+	{
+		id:                    commandTurbo,
+		name:                  "turbo",
+		activeOperationPolicy: commandAllowedDuringOperation,
+		description:           "switch to faster responses that cost more",
 	},
 	{
 		id:                    commandSkillsLibrary,
@@ -264,6 +271,8 @@ func (m *Model) dispatchCommand(name, argument string) (tea.Model, tea.Cmd) {
 		return m, m.startLogout()
 	case commandPermissions:
 		return m, tea.Batch(m.stopCompletionSearches(), m.switchPermissions(strings.ToLower(argument)))
+	case commandTurbo:
+		return m, tea.Batch(m.stopCompletionSearches(), m.switchTurbo(strings.ToLower(argument)))
 	case commandUpdate:
 		return m.requestUpgrade()
 	case commandStopCommands:

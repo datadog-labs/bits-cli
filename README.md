@@ -83,6 +83,16 @@ bits --permissions skip-permissions
 
 Full access allows actions without asking for approval.
 
+## Turbo mode
+
+Turbo answers faster at the same quality, and costs more. Use `/turbo` to pick
+Standard or Turbo, or `/turbo on` and `/turbo off`. A change applies from the
+next turn, and the footer shows `Turbo` while it is on.
+
+Your organization must have Turbo enabled. When it does not, Bits runs Standard
+without an error, so the footer cannot tell. HIPAA-compliant organizations
+cannot use Turbo: their turns fail with an error until you switch it off.
+
 ## Project instructions
 
 Add an `AGENTS.md` to your project to give Bits shared instructions. Bits reads

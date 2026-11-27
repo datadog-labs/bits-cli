@@ -162,7 +162,7 @@ func TestChatFooterRendersBelowEditor(t *testing.T) {
 func TestChatFooterTextIsSafeAndWidthBounded(t *testing.T) {
 	usage := &assistant.Usage{TokensUsed: 330_000}
 	for _, width := range []int{1, 8, 24, 80} {
-		text := chatFooterText("/tmp/private\x1b[31m\nworkspace", "", usage, width)
+		text := chatFooterText("/tmp/private\x1b[31m\nworkspace", true, "", usage, width)
 		if strings.ContainsAny(text, "\x1b\n\r") {
 			t.Fatalf("width %d footer retained terminal controls: %q", width, text)
 		}
@@ -170,8 +170,18 @@ func TestChatFooterTextIsSafeAndWidthBounded(t *testing.T) {
 			t.Fatalf("width %d footer rendered %d cells: %q", width, got, text)
 		}
 	}
-	if got := chatFooterText("/tmp/workspace", "", usage, 24); !strings.HasSuffix(got, " · 330K used") {
-		t.Fatalf("footer did not preserve usage suffix: %q", got)
+	for _, tc := range []struct {
+		turbo bool
+		width int
+		want  string
+	}{
+		{width: 24, want: "…p/workspace · 330K used"},
+		{turbo: true, width: 80, want: "/tmp/workspace · Turbo · 330K used"},
+		{turbo: true, width: 30, want: "…workspace · Turbo · 330K used"},
+	} {
+		if got := chatFooterText("/tmp/workspace", tc.turbo, "", usage, tc.width); got != tc.want {
+			t.Errorf("footer(turbo=%v, width=%d) = %q, want %q", tc.turbo, tc.width, got, tc.want)
+		}
 	}
 }
 
