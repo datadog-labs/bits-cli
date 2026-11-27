@@ -59,14 +59,14 @@ func TestConversationMarkdown(t *testing.T) {
 				exportText(assistant.RoleAssistant, "#hashtag and 3.5 is not a list"),
 				exportText(assistant.RoleUser, "plain *text*"),
 			},
-			link: "https://app.datadoghq.com/ask/c1",
+			link: "https://app.datadoghq.com/bits/chat/c1",
 			want: "**Bits:**\n\n" + code +
 				"\n\n**You:**\n\n# Title\ntext" +
 				"\n\n**Bits:**\n\n" + table +
 				"\n\n**Bits:**\n\n- one\n- two" +
 				"\n\n**Bits:** #hashtag and 3.5 is not a list" +
 				"\n\n**You:** plain *text*" +
-				"\n\n> _🟪 Conversation from Bits AI ([link](https://app.datadoghq.com/ask/c1))_",
+				"\n\n> _🟪 Conversation from Bits AI ([link](https://app.datadoghq.com/bits/chat/c1))_",
 			ok: true,
 		},
 		{
@@ -80,7 +80,7 @@ func TestConversationMarkdown(t *testing.T) {
 				exportText(assistant.RoleUser, "after"),
 				exportText(assistant.RoleAssistant, "one\ntwo"),
 			},
-			link: "https://app.datadoghq.com/ask/c1",
+			link: "https://app.datadoghq.com/bits/chat/c1",
 			want: "**Bits:**\n\nTitle\n===" +
 				"\n\n**Bits:**\n\nTitle\ncontinued\n===" +
 				"\n\n**Bits:**\n\nTitle\n---" +
@@ -88,7 +88,7 @@ func TestConversationMarkdown(t *testing.T) {
 				"\n\n**Bits:**\n\n~~~\nraw ```\n~~~" +
 				"\n\n**You:** after" +
 				"\n\n**Bits:** one\ntwo" +
-				"\n\n> _🟪 Conversation from Bits AI ([link](https://app.datadoghq.com/ask/c1))_",
+				"\n\n> _🟪 Conversation from Bits AI ([link](https://app.datadoghq.com/bits/chat/c1))_",
 			ok: true,
 		},
 		{
@@ -111,10 +111,10 @@ func TestConversationMarkdown(t *testing.T) {
 				exportText(assistant.RoleAssistant, "````\n```\n````"),
 				exportText(assistant.RoleAssistant, "x\n\n   ~~~\ncode\n   ~~~"),
 			},
-			link: "https://app.datadoghq.com/ask/c1",
+			link: "https://app.datadoghq.com/bits/chat/c1",
 			want: "**Bits:**\n\n***\n\n**Bits:**\n\n* * *\n\n**Bits:**\n\n1. item" +
 				"\n\n**Bits:**\n\n````\n```\n````\n\n**Bits:** x\n\n   ~~~\ncode\n   ~~~" +
-				"\n\n> _🟪 Conversation from Bits AI ([link](https://app.datadoghq.com/ask/c1))_",
+				"\n\n> _🟪 Conversation from Bits AI ([link](https://app.datadoghq.com/bits/chat/c1))_",
 			ok: true,
 		},
 		{
@@ -163,8 +163,8 @@ func TestConversationMarkdown(t *testing.T) {
 					Context:  []assistant.ContextEntity{{ID: "x", URL: "https://example.com/x"}},
 				},
 			},
-			link: "https://app.datadoghq.com/ask/c1",
-			want: "**You:** why?\n_Related: [Board](https://app.datadoghq.com/dashboard/abc), [123](https://app.datadoghq.com/monitors/123)_\n\n> _🟪 Conversation from Bits AI ([link](https://app.datadoghq.com/ask/c1))_",
+			link: "https://app.datadoghq.com/bits/chat/c1",
+			want: "**You:** why?\n_Related: [Board](https://app.datadoghq.com/dashboard/abc), [123](https://app.datadoghq.com/monitors/123)_\n\n> _🟪 Conversation from Bits AI ([link](https://app.datadoghq.com/bits/chat/c1))_",
 			ok:   true,
 		},
 	} {

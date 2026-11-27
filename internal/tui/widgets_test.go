@@ -462,9 +462,9 @@ func TestWidgetWithoutLocalPresentation(t *testing.T) {
 		action   chat.WidgetAction
 		target   string
 	}{
-		{name: "saved app without renderer", app: saved, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/ask/conv"},
-		{name: "saved app with snapshots and no graphics", app: saved, client: &widgetTestClient{remote: true}, support: graphics.Unsupported, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/ask/conv"},
-		{name: "saved incident with snapshots", app: savedIncident, client: &widgetTestClient{remote: true}, support: graphics.Supported, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/ask/conv"},
+		{name: "saved app without renderer", app: saved, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/bits/chat/conv"},
+		{name: "saved app with snapshots and no graphics", app: saved, client: &widgetTestClient{remote: true}, support: graphics.Unsupported, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/bits/chat/conv"},
+		{name: "saved incident with snapshots", app: savedIncident, client: &widgetTestClient{remote: true}, support: graphics.Supported, action: chat.WidgetConversation, target: "https://demo.datadoghq.com/bits/chat/conv"},
 		{name: "unsaved incident with snapshots", app: incident, client: &widgetTestClient{remote: true}, support: graphics.Supported},
 		{name: "unsaved incident without relay", app: incident, client: &widgetTestClient{}},
 		{name: "saved app without web origin", app: saved, noOrigin: true},
