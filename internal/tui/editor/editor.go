@@ -206,10 +206,8 @@ func (e *Editor) Attachments() []Attachment {
 
 // AddAttachment appends a, unless the same item is already attached.
 func (e *Editor) AddAttachment(a Attachment) {
-	for _, existing := range e.attachments {
-		if existing.Type == a.Type && existing.ID == a.ID {
-			return
-		}
+	if slices.ContainsFunc(e.attachments, a.sameItem) {
+		return
 	}
 	e.history.end()
 	e.changeChips(func() { e.attachments = append(e.attachments, a) })
@@ -265,10 +263,15 @@ func (e *Editor) SetStyles(menuStyles styles.Editor) {
 	e.recompute()
 }
 
-// Focus focuses the textarea and returns its cursor-blink command.
+// Focus focuses the textarea and brings its caret into view.
 func (e *Editor) Focus() tea.Cmd {
+	blink := e.ta.Focus()
+	// The textarea ignores updates while blurred, so a draft loaded behind
+	// another surface has not scrolled to its caret yet.
+	var refresh tea.Cmd
+	e.ta, refresh = e.ta.Update(nil)
 	e.invalidateBody()
-	return e.ta.Focus()
+	return tea.Batch(blink, refresh)
 }
 
 // Blur removes focus from the textarea, hiding the cursor and making it ignore

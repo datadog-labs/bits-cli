@@ -929,6 +929,13 @@ func TestAcceptedMentionStopsSearchAtItsBoundary(t *testing.T) {
 					t.Fatalf("accepted mention restarted search: query=%q, value=%q", query, e.Value())
 				}
 			}
+			// A recovered queue goes in front of the mention, which must move with it.
+			draft, _ := e.ComposeQueued([]QueuedPrompt{{HistoryEntry: HistoryEntry{Text: "préface"}}})
+			e.LoadDraft(draft)
+			e.Update(tea.PasteMsg{Content: " after recovery"})
+			if query, active := e.ActiveEntityQuery(); active || e.MenuOpen() {
+				t.Fatalf("recovering a draft restarted its accepted mention: query=%q, value=%q", query, e.Value())
+			}
 			e.Update(tea.PasteMsg{Content: " @next"})
 			if query, active := e.ActiveEntityQuery(); !active || query != "next" {
 				t.Fatalf("new trigger = (%q, %v), want next", query, active)
@@ -1114,24 +1121,42 @@ func TestPromptHistorySnapshotsOnEntry(t *testing.T) {
 }
 
 // TestPromptHistoryTallRecallShowsItsEnd pins E14: a recall taller than the
-// visible rows scrolls to its end, where the cursor is.
+// visible rows scrolls to its end, where the cursor is. A draft loaded while
+// another surface has focus scrolls there once the editor is focused again.
 func TestPromptHistoryTallRecallShowsItsEnd(t *testing.T) {
 	lines := make([]string, 3*maxHeight)
 	for i := range lines {
 		lines[i] = "line " + strconv.Itoa(i)
 	}
-	e := New()
-	e.SetWidth(80)
-	e.Focus()
-	e.SetHistorySource(func() []HistoryEntry { return textEntries(strings.Join(lines, "\n")) })
-	e.Update(historyKeyMsg("up"))
-	view := ansi.Strip(e.View())
-	visible := map[string]bool{}
-	for row := range strings.SplitSeq(view, "\n") {
-		visible[strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(row), "›"))] = true
-	}
-	if !visible[lines[len(lines)-1]] || visible[lines[0]] {
-		t.Fatalf("recalled view does not show the end of the prompt:\n%s", view)
+	text := strings.Join(lines, "\n")
+	for _, tc := range []struct {
+		name string
+		load func(e *Editor)
+	}{
+		{"recalled", func(e *Editor) {
+			e.Focus()
+			e.SetHistorySource(func() []HistoryEntry { return textEntries(text) })
+			e.Update(historyKeyMsg("up"))
+		}},
+		{"loaded while blurred", func(e *Editor) {
+			e.Blur()
+			e.LoadDraft(HistoryEntry{Text: text})
+			e.Focus()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := New()
+			e.SetWidth(80)
+			tc.load(e)
+			view := ansi.Strip(e.View())
+			visible := map[string]bool{}
+			for row := range strings.SplitSeq(view, "\n") {
+				visible[strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(row), "›"))] = true
+			}
+			if !visible[lines[len(lines)-1]] || visible[lines[0]] {
+				t.Fatalf("view does not show the end of the prompt:\n%s", view)
+			}
+		})
 	}
 }
 

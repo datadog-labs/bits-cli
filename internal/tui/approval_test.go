@@ -518,7 +518,8 @@ func TestApprovalKeepsTranscriptScrollable(t *testing.T) {
 	}
 }
 
-// ctrl+x stops the tool round from any docked prompt, an approval included.
+// ctrl+x stops the tool round from any docked prompt, an approval included,
+// and returns unsent prompts to the composer as Esc does.
 func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 	backend := &approvalBackend{t: t}
 	tool := newApprovalTool()
@@ -537,6 +538,9 @@ func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 	for waitingApprovals(model) == 0 {
 		_, _ = model.Update(runConversationCmd(t, waitEvent(model.events)))
 	}
+	if err := model.engine.Queue(agent.TurnInput{Message: "follow-up"}); err != nil {
+		t.Fatal(err)
+	}
 
 	_, _ = model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	if model.op.stop != stopTools {
@@ -545,6 +549,9 @@ func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 	drainConversationRemote(t, model)
 	if waitingApprovals(model) > 0 || model.focus() != focusEditor {
 		t.Fatal("the approval outlived the stopped tool round")
+	}
+	if model.editor.Value() != "follow-up" || len(model.state.Queued) != 0 {
+		t.Fatalf("draft = %q, queue = %+v", model.editor.Value(), model.state.Queued)
 	}
 }
 

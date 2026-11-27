@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -104,6 +105,64 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(closeFileSearch, m.startTurn(m.engine.StartTurn, in))
 }
 
+// recoverQueue returns the prompts a stopped turn left unsent to the
+// composer, in front of the draft, when they can be sent as one prompt from
+// there. Otherwise they stay paused and send first on the next Enter.
+func (m *Model) recoverQueue() tea.Cmd {
+	queued := m.engine.State().Queued
+	if len(queued) == 0 {
+		return nil
+	}
+	draft, ok := m.recoveredDraft(queued)
+	if !ok {
+		return nil
+	}
+	ids := make([]agent.QueueID, len(queued))
+	for i, q := range queued {
+		ids[i] = q.ID
+	}
+	if err := m.engine.Unqueue(ids...); err != nil {
+		return m.postNotice(noticeForError("", err))
+	}
+	m.state = m.engine.State() // the event that publishes it follows
+	return tea.Batch(m.editor.LoadDraft(draft), m.stopCompletionSearches())
+}
+
+// recoveredDraft composes queued and the draft into one, if Enter on it would
+// send them as one request with the same context. The engine would send them
+// that way too.
+func (m *Model) recoveredDraft(queued []agent.QueuedPrompt) (editor.HistoryEntry, bool) {
+	raw, attachments := m.editor.Value(), m.editor.Attachments()
+	if isCommandDraft(raw, attachments) {
+		return editor.HistoryEntry{}, false
+	}
+	prompts := queued
+	if strings.TrimSpace(raw) != "" || len(attachments) > 0 {
+		prompts = append(slices.Clone(queued), agent.QueuedPrompt{Message: raw, Context: contextFromAttachments(attachments)})
+	}
+	if _, n := agent.BatchQueued(prompts); n != len(prompts) {
+		return editor.HistoryEntry{}, false
+	}
+	items := make([]editor.QueuedPrompt, len(queued))
+	for i, q := range queued {
+		items[i] = queuedEditorPrompt(q)
+	}
+	draft, fits := m.editor.ComposeQueued(items)
+	// A skill prompt is queued as its "/name" invocation, and a text prompt
+	// trimmed, so " /new" would now run /new: neither can lead a draft.
+	if !fits || isCommandDraft(draft.Text, draft.Attachments) {
+		return editor.HistoryEntry{}, false
+	}
+	return draft, true
+}
+
+// isCommandDraft reports whether Enter would run text as a command or skill,
+// or offer to exit, instead of sending it.
+func isCommandDraft(text string, attachments []editor.Attachment) bool {
+	_, _, command := parseCommand(text)
+	return command || (len(attachments) == 0 && isExitWord(text))
+}
+
 // startTurn starts a turn through start and shows it, or its failure.
 func (m *Model) startTurn(start func(context.Context, agent.TurnInput) (agent.RunID, error), in agent.TurnInput) tea.Cmd {
 	in.Tools, in.OnDeny = m.tools, agent.DenyContinue
@@ -150,9 +209,13 @@ func (m *Model) queueInitialPrompt() tea.Cmd {
 func (m *Model) syncQueue() {
 	items := make([]editor.QueuedPrompt, len(m.state.Queued))
 	for i, q := range m.state.Queued {
-		items[i] = editor.QueuedPrompt{ID: uint64(q.ID), HistoryEntry: editorPrompt(q.Message, entities(q.Context))}
+		items[i] = queuedEditorPrompt(q)
 	}
 	m.editor.SetQueue(items, m.op.kind != opTurn)
+}
+
+func queuedEditorPrompt(q agent.QueuedPrompt) editor.QueuedPrompt {
+	return editor.QueuedPrompt{ID: uint64(q.ID), HistoryEntry: editorPrompt(q.Message, entities(q.Context))}
 }
 
 func entities(context *assistant.AssistantContext) []assistant.ContextEntity {

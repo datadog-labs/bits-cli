@@ -155,3 +155,31 @@ func TestQueueSelectionFollowsItsPrompt(t *testing.T) {
 		t.Fatalf("cursor = %d, want it on %q", e.queueUI.cursor, "b")
 	}
 }
+
+// Checking whether queued prompts fit must leave the visible draft alone.
+func TestComposeQueuedLeavesTheVisibleDraftUnchanged(t *testing.T) {
+	e := New()
+	e.SetWidth(32)
+	e.Focus()
+	e.LoadDraft(HistoryEntry{Text: strings.Repeat("draft line\n", 30) + "visible tail"})
+	before := ansi.Strip(e.View())
+	if !strings.Contains(before, "visible tail") {
+		t.Fatalf("draft did not scroll to its tail:\n%s", before)
+	}
+	for _, tc := range []struct {
+		text string
+		fits bool
+	}{
+		{text: "short", fits: true},
+		{text: strings.Repeat("too many lines\n", maxContentHeight*10)},
+		{text: strings.Repeat("wrapped text ", maxContentHeight*4)},
+	} {
+		if _, fits := e.ComposeQueued([]QueuedPrompt{{HistoryEntry: HistoryEntry{Text: tc.text}}}); fits != tc.fits {
+			t.Fatalf("composing a %d-byte prompt: fits = %t, want %t", len(tc.text), fits, tc.fits)
+		}
+		e.invalidateBody()
+		if after := ansi.Strip(e.View()); after != before {
+			t.Fatalf("composing changed the visible draft:\n%s\nwant:\n%s", after, before)
+		}
+	}
+}

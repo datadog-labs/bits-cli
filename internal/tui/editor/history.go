@@ -3,14 +3,17 @@ package editor
 import (
 	"slices"
 
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 )
 
-// HistoryEntry is a previous prompt: its text and the attachments it was sent
-// with.
+// HistoryEntry is a prompt and its attachments. A recovered draft also carries
+// its caret and accepted mentions.
 type HistoryEntry struct {
 	Text        string
 	Attachments []Attachment
+	caret       *textarea.Position // nil puts the caret at the end
+	mentions    []trackedMention
 }
 
 // history is the prompt-recall state: Up from an empty prompt loads the newest
@@ -73,9 +76,15 @@ func (e *Editor) historyKey(key string) (tea.Cmd, bool) {
 	return nil, false
 }
 
-// recall loads an entry as a fresh prompt with the cursor at its end. The value
-// is marked dismissed so a trailing @mention or leading /command is not treated
-// as a completion trigger.
+// LoadDraft replaces the prompt with entry for editing.
+func (e *Editor) LoadDraft(entry HistoryEntry) tea.Cmd {
+	e.history.end()
+	return e.recall(entry)
+}
+
+// recall loads an entry as a fresh prompt, with the cursor at its end unless
+// the entry places it. The value is marked dismissed so a trailing @mention or
+// leading /command is not treated as a completion trigger.
 func (e *Editor) recall(entry HistoryEntry) tea.Cmd {
 	e.focus = focusText
 	e.changeChips(func() {
@@ -83,16 +92,31 @@ func (e *Editor) recall(entry HistoryEntry) tea.Cmd {
 		e.chips = chipRow{pointer: e.chips.pointer}
 	})
 	e.ta.SetValue(entry.Text)
+	// The textarea sanitizes input (tabs, CR, control characters) and caps
+	// its content, so the value may differ from text: track what it holds.
+	// Offsets apply only to the value they were taken from.
+	value := e.ta.Value()
+	e.completedMentions = nil
+	if value == entry.Text {
+		e.completedMentions = slices.Clone(entry.mentions)
+		if caret := entry.caret; caret != nil {
+			// SetValue leaves the cursor at the end. CursorUp moves by wrapped
+			// row, so a logical row can take several steps.
+			for range e.ta.MaxContentHeight {
+				if e.ta.Line() <= caret.Row {
+					break
+				}
+				e.ta.CursorUp()
+			}
+			e.ta.SetCursorColumn(caret.Col)
+		}
+	}
 	// SetValue neither refreshes the textarea's viewport content nor scrolls
 	// it, so a recall taller than the visible rows would show its head. An
 	// empty update refreshes the content and height and scrolls to the cursor,
 	// as after any edit.
 	var cmd tea.Cmd
 	e.ta, cmd = e.ta.Update(nil)
-	// The textarea sanitizes input (tabs, CR, control characters) and caps
-	// its content, so the value may differ from text: track what it holds.
-	value := e.ta.Value()
-	e.completedMentions = nil
 	e.dismissedValue = value
 	e.closeMenu()
 	e.invalidateBody()

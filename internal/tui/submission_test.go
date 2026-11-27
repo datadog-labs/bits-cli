@@ -96,27 +96,21 @@ func TestPromptsQueueBehindTheRunningTurn(t *testing.T) {
 	}
 }
 
-// A turn that is cancelled or fails leaves its queue paused until Enter. An
-// empty draft sends it; a new prompt sends after it.
-func TestInterruptedTurnPausesTheQueueUntilEnter(t *testing.T) {
+// A failed turn leaves its queue paused until Enter. An empty draft sends it;
+// a new prompt sends after it.
+func TestFailedTurnPausesTheQueueUntilEnter(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		err    error
-		cancel bool
-		draft  string
-		want   string
+		name  string
+		draft string
+		want  string
 	}{
-		{"cancelled", nil, true, "", "later"},
-		{"failed", errors.New("backend failed"), false, "", "later"},
-		{"failed, then a new prompt", errors.New("backend failed"), false, "more", "later\n\nmore"},
+		{"empty draft", "", "later"},
+		{"new prompt", "more", "later\n\nmore"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m, backend := newModelInTurn(t, tc.err)
+			m, backend := newModelInTurn(t, errors.New("backend failed"))
 			setConversationInput(m, "later")
 			m.submit()
-			if tc.cancel {
-				m.cancelOperation()
-			}
 			backend.open()
 			drainConversationRemote(t, m)
 			m.relayout()
@@ -130,6 +124,135 @@ func TestInterruptedTurnPausesTheQueueUntilEnter(t *testing.T) {
 			m.relayout()
 			if got := userTexts(m); !reflect.DeepEqual(got, []string{"first", tc.want}) || m.editor.QueueLen() != 0 {
 				t.Fatalf("prompts = %q, queued %d", got, m.editor.QueueLen())
+			}
+		})
+	}
+}
+
+// Esc returns unsent prompts to the composer, in front of the draft as typed:
+// its whitespace, its caret, and its attachments, which win over a queued
+// copy of the same item.
+func TestEscapeReturnsQueuedPromptsToTheDraft(t *testing.T) {
+	const queued = "check staging\n\ncompare with yesterday"
+	old := editor.Attachment{Type: "service", ID: "checkout", Label: "old"}
+	checkout := editor.Attachment{Type: "service", ID: "checkout", Label: "Checkout", SearchFlowID: "draft-selection"}
+	latency := editor.Attachment{Type: "dashboard", ID: "latency"}
+	tail := strings.Repeat("wrapped text ", 20)
+	for _, tc := range []struct {
+		name        string
+		draft       string
+		attachments []editor.Attachment
+		keys        []tea.KeyPressMsg // before Esc
+		want        string            // after typing X
+		chips       []editor.Attachment
+	}{
+		{name: "no draft", want: queued + "X", chips: []editor.Attachment{old}},
+		{
+			name:        "attachments",
+			draft:       "look for errors",
+			attachments: []editor.Attachment{checkout, latency},
+			want:        queued + "\n\nlook for errorsX",
+			chips:       []editor.Attachment{checkout, latency},
+		},
+		{name: "whitespace", draft: "\n    ", want: queued + "\n\n\n    X", chips: []editor.Attachment{old}},
+		{
+			name:  "caret across wrapped lines",
+			draft: "ab\n" + tail,
+			keys:  []tea.KeyPressMsg{{Code: tea.KeyHome, Mod: tea.ModCtrl}, {Code: tea.KeyRight}},
+			want:  queued + "\n\naXb\n" + tail,
+			chips: []editor.Attachment{old},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newModelInTurn(t, nil)
+			enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+			setConversationInput(m, "check staging")
+			m.editor.AddAttachment(old)
+			m.Update(enter)
+			setConversationInput(m, "compare with yesterday")
+			m.Update(enter)
+			setConversationInput(m, tc.draft)
+			for _, attachment := range tc.attachments {
+				m.editor.AddAttachment(attachment)
+			}
+			for _, key := range tc.keys {
+				m.Update(key)
+			}
+			m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+			drainConversationRemote(t, m)
+			m.Update(tea.PasteMsg{Content: "X"})
+			if got := m.editor.Value(); got != tc.want || len(m.state.Queued) != 0 || m.engine.OperationActive() {
+				t.Fatalf("draft = %q, want %q, queue = %+v, busy = %v", got, tc.want, m.state.Queued, m.engine.OperationActive())
+			}
+			if got := m.editor.Attachments(); !reflect.DeepEqual(got, tc.chips) {
+				t.Fatalf("chips = %+v, want %+v", got, tc.chips)
+			}
+		})
+	}
+}
+
+// Prompts that one draft cannot carry stay queued and paused, and the draft
+// untouched.
+func TestEscapeKeepsPromptsADraftCannotCarry(t *testing.T) {
+	long := strings.Repeat("line\n", 275) + "last line"
+	image := string(assistant.EntityImageURL)
+	override := []assistant.SkillOverride{{Name: "skills-library/clear-writing", Source: assistant.SkillSourceSkillsLibrary, Enabled: true}}
+	for _, tc := range []struct {
+		name        string
+		queued      agent.TurnInput
+		draft       string
+		attachments []editor.Attachment
+	}{
+		{
+			name:   "skill",
+			queued: agent.TurnInput{Message: "/clear-writing", SkillOverrides: override},
+		},
+		{
+			name:   "skill and a draft",
+			queued: agent.TurnInput{Message: "/clear-writing", SkillOverrides: override},
+			draft:  "draft",
+		},
+		{
+			// Queued as text from " /new"; as a draft, Enter would run /new.
+			name:   "command text",
+			queued: agent.TurnInput{Message: "/new"},
+			draft:  "draft",
+		},
+		{name: "command draft", queued: agent.TurnInput{Message: "queued"}, draft: "/help"},
+		{
+			name:   "editor row limit",
+			queued: agent.TurnInput{Message: long},
+			draft:  long,
+		},
+		{
+			name: "image limit",
+			queued: agent.TurnInput{Message: "queued", Context: contextFromAttachments([]editor.Attachment{
+				{Type: image, ID: "one"}, {Type: image, ID: "two"}, {Type: image, ID: "three"},
+			})},
+			draft:       "draft",
+			attachments: []editor.Attachment{{Type: image, ID: "four"}, {Type: image, ID: "five"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newModelInTurn(t, nil)
+			if err := m.engine.Queue(tc.queued); err != nil {
+				t.Fatal(err)
+			}
+			queued := m.engine.State().Queued
+			setConversationInput(m, tc.draft)
+			for _, attachment := range tc.attachments {
+				m.editor.AddAttachment(attachment)
+			}
+			if m.editor.Value() != tc.draft {
+				t.Fatal("draft did not fit before the merge")
+			}
+			m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+			drainConversationRemote(t, m)
+			if m.editor.Value() != tc.draft || !reflect.DeepEqual(m.editor.Attachments(), tc.attachments) {
+				t.Fatal("keeping the queue changed the draft")
+			}
+			if !reflect.DeepEqual(m.state.Queued, queued) || !m.editor.QueuePaused() {
+				t.Fatalf("queue = %+v, paused %v", m.state.Queued, m.editor.QueuePaused())
 			}
 		})
 	}
@@ -170,11 +293,13 @@ func TestQueueControlsPrecedeSubmissionAndCancellation(t *testing.T) {
 // completed turn's successor sends them all, and a failed one pauses them.
 func TestPromptsSubmittedBeforeAnUnreadTurnEnd(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		err  error
+		name   string
+		err    error
+		escape bool
 	}{
-		{"completed", nil},
-		{"failed", errors.New("backend failed")},
+		{name: "completed"},
+		{name: "failed", err: errors.New("backend failed")},
+		{name: "escaped before its end is read", escape: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, backend := newModelInTurn(t, tc.err)
@@ -190,6 +315,14 @@ func TestPromptsSubmittedBeforeAnUnreadTurnEnd(t *testing.T) {
 				if m.op.run != first || m.engine.OperationActive() {
 					t.Fatalf("%q started a turn before the first one's end was read", prompt)
 				}
+			}
+			if tc.escape {
+				m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+				drainConversationRemote(t, m)
+				if got := userTexts(m); !reflect.DeepEqual(got, []string{"first"}) || m.editor.Value() != "second\n\nthird" || len(m.state.Queued) != 0 {
+					t.Fatalf("prompts = %q, draft = %q, queue = %+v", got, m.editor.Value(), m.state.Queued)
+				}
+				return
 			}
 			drainConversationRemote(t, m)
 			m.relayout()
