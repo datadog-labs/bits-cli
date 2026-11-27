@@ -66,7 +66,6 @@ func (b *taskBackend) attached() []string {
 // newTaskEngine returns an engine whose first turn starts testTaskID, and a
 // subscription to its events.
 func newTaskEngine(t *testing.T, backend *taskBackend) (*Engine, <-chan Event) {
-	backend.convID = testConversationID
 	backend.rounds = [][]assistant.Message{startTaskMsgs("call-1", testTaskID)}
 	e := New(backend, Config{})
 	t.Cleanup(e.Close)
@@ -167,7 +166,7 @@ func TestTurnStartedTaskIsObservedUntilItsFinalUpdateAndEnd(t *testing.T) {
 	if got := progressTexts(task.Blocks); !slices.Equal(got, []string{"looking", "found it"}) {
 		t.Errorf("task updates = %q", got)
 	}
-	if got := backend.attached(); !slices.Equal(got, []string{testConversationID + "/" + testTaskID}) {
+	if got := backend.attached(); !slices.Equal(got, []string{e.State().ConversationID + "/" + testTaskID}) {
 		t.Errorf("attachments = %q", got)
 	}
 	if blocks := e.State().Blocks; slices.ContainsFunc(blocks, func(b Block) bool { return b.Progress != nil }) {
@@ -377,7 +376,7 @@ func TestRestoreFoldsTaskMessagesApartAndObservesUnfinishedTasks(t *testing.T) {
 	if want := []string{"call-0", "old result", "call-1", "meanwhile", "persisted", "new result"}; !slices.Equal(got, want) {
 		t.Errorf("blocks = %q, want %q", got, want)
 	}
-	if got := backend.attached(); !slices.Equal(got, []string{testConversationID + "/" + testTaskID}) {
+	if got := backend.attached(); !slices.Equal(got, []string{e.State().ConversationID + "/" + testTaskID}) {
 		t.Errorf("attachments = %q, want only the unfinished task", got)
 	}
 	if blocks := e.State().Blocks; slices.ContainsFunc(blocks, func(b Block) bool { return b.Progress != nil }) {

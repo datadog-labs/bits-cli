@@ -13,9 +13,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/datadog-labs/bits-cli/internal/textsafe"
 )
+
+// testConversationID names the conversation of a test turn.
+const testConversationID = "0b6f1a52-2f2c-4c43-9a3e-1d2b3c4d5e6f"
 
 // testClient points a Client at h with the httptest server's client for both
 // the streaming and non-streaming paths. StreamIdleTimeout is left zero so it
@@ -246,7 +250,7 @@ func TestSend_StreamsTextAndConversationID(t *testing.T) {
 		writeStream(t, w, textLine("conv-xyz", "hello "), textLine("conv-xyz", "world"))
 	})
 	var got strings.Builder
-	convID, err := c.Send(context.Background(), "hi", SendOptions{}, func(ar AssistantResponse) error {
+	convID, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, func(ar AssistantResponse) error {
 		if ct := ar.Data.Attributes.StructuredMessage.Content; ct.Kind() == KindText {
 			got.WriteString(ct.TextBody())
 		}
@@ -283,7 +287,7 @@ func TestSend_RequiresConfiguredResponseHeaderBeforeStreaming(t *testing.T) {
 			c.RequiredStreamHeaderName = "X-Request-Accepted"
 			c.RequiredStreamHeaderValue = "expected-value"
 			called := false
-			_, err := c.Send(context.Background(), "hi", SendOptions{}, func(AssistantResponse) error {
+			_, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, func(AssistantResponse) error {
 				called = true
 				return nil
 			})
@@ -306,7 +310,7 @@ func TestSend_RequiredResponseHeaderRejectsRedirect(t *testing.T) {
 	c.RequiredStreamHeaderName = "X-Request-Accepted"
 	c.RequiredStreamHeaderValue = "expected-value"
 	called := false
-	_, err := c.Send(context.Background(), "hi", SendOptions{}, func(AssistantResponse) error {
+	_, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, func(AssistantResponse) error {
 		called = true
 		return nil
 	})
@@ -340,27 +344,47 @@ func TestSubscribe_StreamsTaskReplayMarkerAndLive(t *testing.T) {
 	}
 }
 
-func TestSend_EmptyConversationIDCreatesOnFirstTurn(t *testing.T) {
-	var request Request
-	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		writeStream(t, w, textLine("created-on-send", "hello"))
-	})
-
-	conversationID, err := c.Send(context.Background(), "first prompt", SendOptions{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if request.Data.Attributes.ConversationID != "" {
-		t.Fatalf("request conversation id = %q, want empty", request.Data.Attributes.ConversationID)
-	}
-	if request.Data.Attributes.Message != "first prompt" {
-		t.Fatalf("request message = %#v", request.Data.Attributes.Message)
-	}
-	if conversationID != "created-on-send" {
-		t.Fatalf("returned conversation id = %q, want server-assigned id", conversationID)
+// A turn goes to its conversation's endpoint, named the same in the path and
+// the body. An id the path cannot carry unchanged never reaches the server.
+func TestSend_NamesTheConversationInPathAndBody(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		id      string
+		invalid bool
+	}{
+		{name: "new conversation", id: uuid.NewV4().String()},
+		{name: "existing conversation", id: testConversationID},
+		{name: "missing id", id: "", invalid: true},
+		{name: "id the path would change", id: "a/b", invalid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var request Request
+			requests := 0
+			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if want := "/api/v2/assistant/conversation/" + test.id; r.Method != http.MethodPost || r.URL.EscapedPath() != want {
+					t.Errorf("request = %s %s, want POST %s", r.Method, r.URL.EscapedPath(), want)
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decode request: %v", err)
+				}
+				writeStream(t, w, textLine(test.id, "hello"))
+			})
+			id, err := c.Send(context.Background(), "first prompt", SendOptions{ConversationID: test.id}, nil)
+			if test.invalid {
+				if err == nil || requests != 0 {
+					t.Fatalf("error = %v after %d requests, want a local rejection", err, requests)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			attrs := request.Data.Attributes
+			if attrs.ConversationID != test.id || attrs.Message != "first prompt" || id != test.id {
+				t.Fatalf("body conversation %q, message %#v, returned %q; want %q", attrs.ConversationID, attrs.Message, id, test.id)
+			}
+		})
 	}
 }
 
@@ -372,7 +396,7 @@ func TestSend_IncludesModelAndInferenceMode(t *testing.T) {
 		}
 		writeStream(t, w)
 	})
-	_, err := c.Send(context.Background(), "hello", SendOptions{Model: "openai/gpt-5.5", InferenceMode: "deep"}, nil)
+	_, err := c.Send(context.Background(), "hello", SendOptions{ConversationID: testConversationID, Model: "openai/gpt-5.5", InferenceMode: "deep"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +459,7 @@ func TestSend_DefaultsToCLIProfile(t *testing.T) {
 		writeStream(t, w)
 	})
 
-	if _, err := c.Send(context.Background(), "hi", SendOptions{}, nil); err != nil {
+	if _, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if gotProfile != "cli" {
@@ -453,7 +477,7 @@ func TestSend_PreservesExplicitProfile(t *testing.T) {
 		writeStream(t, w)
 	})
 
-	if _, err := c.Send(context.Background(), "hi", SendOptions{Profile: ProfileWebUI}, nil); err != nil {
+	if _, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID, Profile: ProfileWebUI}, nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if got != "web_ui" {
@@ -469,7 +493,7 @@ func TestSend_SurfacesInBandError(t *testing.T) {
 		)
 	})
 	var lines int
-	convID, err := c.Send(context.Background(), "hi", SendOptions{}, func(ar AssistantResponse) error {
+	convID, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, func(ar AssistantResponse) error {
 		if ar.Data.Attributes.StructuredMessage.Content.Kind() == KindText {
 			lines++
 		}
@@ -508,7 +532,7 @@ func TestSend_IdleTimeout(t *testing.T) {
 	c.StreamIdleTimeout = 50 * time.Millisecond
 
 	start := time.Now()
-	_, err := c.Send(context.Background(), "hi", SendOptions{}, nil)
+	_, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, nil)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected an idle-timeout error")
@@ -535,7 +559,7 @@ func TestSend_CallerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
 
-	_, err := c.Send(ctx, "hi", SendOptions{}, nil)
+	_, err := c.Send(ctx, "hi", SendOptions{ConversationID: testConversationID}, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
@@ -549,7 +573,7 @@ func TestSend_HandlesLargeLine(t *testing.T) {
 		writeStream(t, w, textLine("conv-1", big))
 	})
 	var got int
-	_, err := c.Send(context.Background(), "hi", SendOptions{}, func(ar AssistantResponse) error {
+	_, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, func(ar AssistantResponse) error {
 		got = len(ar.Data.Attributes.StructuredMessage.Content.TextBody())
 		return nil
 	})
@@ -572,7 +596,7 @@ func TestSend_SkipsKeepalive(t *testing.T) {
 	})
 	var calls int
 	var got, title string
-	convID, err := c.Send(context.Background(), "hi", SendOptions{}, func(ar AssistantResponse) error {
+	convID, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, func(ar AssistantResponse) error {
 		calls++
 		if ar.Data.Attributes.ConversationTitle != "" {
 			title = ar.Data.Attributes.ConversationTitle
@@ -633,7 +657,7 @@ func TestSend_KeepalivesResetIdleTimeout(t *testing.T) {
 	var got strings.Builder
 	var calls int
 	start := time.Now()
-	_, err := c.Send(context.Background(), "hi", SendOptions{}, func(ar AssistantResponse) error {
+	_, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, func(ar AssistantResponse) error {
 		calls++
 		got.WriteString(ar.Data.Attributes.StructuredMessage.Content.TextBody())
 		return nil
@@ -657,7 +681,7 @@ func TestSend_RejectsOversizedLine(t *testing.T) {
 		writeStream(t, w, textLine("conv-1", big))
 	})
 	c.MaxLineBytes = 128 * 1024
-	_, err := c.Send(context.Background(), "hi", SendOptions{}, nil)
+	_, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, nil)
 	if err == nil {
 		t.Fatal("expected an error for an oversized line")
 	}
@@ -732,7 +756,7 @@ func TestSend_DoesNotRetry(t *testing.T) {
 	})
 	c.MaxRetries = 5
 	c.RetryBaseDelay = time.Millisecond
-	_, err := c.Send(context.Background(), "hi", SendOptions{}, nil)
+	_, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, nil)
 	if !errors.Is(err, ErrServer) {
 		t.Fatalf("want ErrServer, got %v", err)
 	}
@@ -759,7 +783,7 @@ func TestUnauthorizedMarksOAuthTokenStaleWithoutRetry(t *testing.T) {
 			c.MaxRetries = 3
 			var requestErr error
 			if streaming {
-				_, requestErr = c.Send(context.Background(), "hi", SendOptions{}, nil)
+				_, requestErr = c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, nil)
 			} else {
 				_, requestErr = c.ExperimentalToolFlags(context.Background())
 			}
@@ -1010,7 +1034,7 @@ func TestHTTPAPIErrorSanitizesEnvelopeText(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write(body)
 	})
-	_, err := c.Send(context.Background(), "hi", SendOptions{}, nil)
+	_, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, nil)
 	assertSanitizedEnvelopeError(t, err)
 }
 
@@ -1018,7 +1042,7 @@ func TestStreamAPIErrorSanitizesEnvelopeText(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeStream(t, w, string(envelopeJSON(t, envelopeDetail)))
 	})
-	_, err := c.Send(context.Background(), "hi", SendOptions{}, nil)
+	_, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, nil)
 	assertSanitizedEnvelopeError(t, err)
 }
 
@@ -1027,7 +1051,7 @@ func TestSendDecodeErrorCapsRawLine(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeStream(t, w, long)
 	})
-	_, err := c.Send(context.Background(), "hi", SendOptions{}, nil)
+	_, err := c.Send(context.Background(), "hi", SendOptions{ConversationID: testConversationID}, nil)
 	if err == nil || !strings.Contains(err.Error(), "decode stream line") {
 		t.Fatalf("error = %v, want a decode stream line error", err)
 	}

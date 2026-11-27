@@ -23,17 +23,17 @@ type roundsBackend struct {
 	calls  int
 }
 
-func (b *roundsBackend) Send(_ context.Context, _ any, _ assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
+func (b *roundsBackend) Send(_ context.Context, _ any, opts assistant.SendOptions, emit func(assistant.AssistantResponse) error) (string, error) {
 	b.calls++
 	for _, msg := range b.rounds[b.calls-1] {
 		var response assistant.AssistantResponse
-		response.Data.Attributes.ConversationID = "conversation-1"
+		response.Data.Attributes.ConversationID = opts.ConversationID
 		response.Data.Attributes.StructuredMessage = msg
 		if err := emit(response); err != nil {
-			return "conversation-1", err
+			return opts.ConversationID, err
 		}
 	}
-	return "conversation-1", nil
+	return opts.ConversationID, nil
 }
 
 func textMsg(id, text string) assistant.Message {
@@ -168,7 +168,7 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 
 	records := parseDelivery(t, out.String())
 	want := []string{
-		"run.started:0", "round.started:1",
+		"run.started:0", "conversation.updated:0", "round.started:1",
 		"tool.call:1", "tool.result:1", "tool.call:1", "usage:1", "conversation.updated:1", "tool.result:1",
 		"round.finished:1", "round.started:2", "usage:2", "conversation.updated:2",
 		"round.finished:2", "run.finished:0",
@@ -177,10 +177,10 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 		t.Fatalf("records = %v, want %v", got, want)
 	}
 	for i, want := range map[int]map[string]any{
-		2: {"id": "srv-1", "name": "search_logs", "side": "server", "arguments": `{"query":"errors"}`},
-		3: {"id": "srv-1", "status": "success", "result": "3 hits"},
-		4: {"id": "cli-1", "name": "get_local_time", "side": "client", "arguments": "{}"},
-		7: {"id": "cli-1", "status": "success", "result": `{"timestamp":"2026-09-01T12:00:00Z"}`},
+		3: {"id": "srv-1", "name": "search_logs", "side": "server", "arguments": `{"query":"errors"}`},
+		4: {"id": "srv-1", "status": "success", "result": "3 hits"},
+		5: {"id": "cli-1", "name": "get_local_time", "side": "client", "arguments": "{}"},
+		8: {"id": "cli-1", "status": "success", "result": `{"timestamp":"2026-09-01T12:00:00Z"}`},
 	} {
 		tool := toolOf(t, records[i])
 		for key, value := range want {
@@ -189,12 +189,12 @@ func TestDeliveryStreamsMinimalTwoRoundLifecycle(t *testing.T) {
 			}
 		}
 	}
-	usage, _ := records[5]["usage"].(map[string]any)
+	usage, _ := records[6]["usage"].(map[string]any)
 	if usage["tokens_used"] != float64(100) || usage["input_tokens"] != float64(30) || usage["output_tokens"] != float64(70) {
 		t.Fatalf("usage = %v", usage)
 	}
 	finished := records[len(records)-1]
-	if finished["outcome"] != "completed" || finished["conversation_id"] != "conversation-1" ||
+	if finished["outcome"] != "completed" || finished["conversation_id"] != records[1]["conversation_id"] ||
 		finished["response"] != "checking logs\n\ndone." || finished["rounds"] != float64(2) {
 		t.Fatalf("run.finished = %v", finished)
 	}

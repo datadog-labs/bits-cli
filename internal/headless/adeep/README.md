@@ -46,7 +46,7 @@ Every record carries:
 | `run.started` | 0 | `requested_model?`, `started_at?` (RFC3339) |
 | `round.started` | N | — |
 | `round.finished` | N | — |
-| `conversation.updated` | N | `conversation_id` |
+| `conversation.updated` | 0 or N | `conversation_id` |
 | `tool.call` | N | `tool{id, name, side: client\|server, arguments}` — `arguments` is the exact wire string, including malformed JSON |
 | `tool.result` | N | `tool{id, status, result}` — `result` is the exact wire string |
 | `usage` | N | `usage{tokens_used, max_tokens, input_tokens?, output_tokens?}` |
@@ -67,6 +67,7 @@ Every record carries:
 
 - `outcome` is `completed`, `approval_denied`, `failed`, `canceled`, or `timed_out`. A completed turn that denied at least one gate reports `approval_denied`.
 - `rounds` counts **backend sends**, including rounds whose content a stopped-round drain discarded, so `round.started`/`round.finished` pairs may exist without any content records between them. A send canceled before producing events is not counted.
+- A new conversation's id is created before the first send and reported once at round 0; each send then reports the conversation's id again, as confirmed by the service or, if the send failed first, as the CLI created it.
 - `response` is the final assistant Markdown, drawn **only** from text blocks observed during this run; prior or restored history is never included.
 
 ## Failure and lifecycle semantics

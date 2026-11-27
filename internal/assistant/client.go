@@ -2,7 +2,8 @@
 // Assistant HTTP API. It targets the same API the Datadog UI uses when you
 // chat with Bits, and is intended to drive a remote agent loop.
 //
-// The main endpoint (POST /api/v2/assistant) returns a stream of
+// A turn is sent to its conversation's endpoint
+// (POST /api/v2/assistant/conversation/{id}), which returns a stream of
 // newline-delimited JSON, where each line is a complete AssistantResponse.
 package assistant
 
@@ -447,15 +448,22 @@ func retryAfterDelay(h http.Header) (time.Duration, bool) {
 	return 0, false
 }
 
-// Send posts a user message and invokes fn for every streamed AssistantResponse
-// line until the stream ends. Empty server keepalive lines are not surfaced to
-// fn. It returns the conversation id observed in the stream (useful when the
-// server generated a new one).
+// Send posts a user message to the endpoint of the conversation that
+// opts.ConversationID names, and invokes fn for every streamed
+// AssistantResponse line until the stream ends. Empty server keepalive lines
+// are not surfaced to fn. It returns the conversation id observed in the
+// stream, or opts.ConversationID.
 //
 // Send is never retried on failure: the API has no idempotency key, so
 // resending a turn would record the user message and run the agent twice.
 // MaxRetries applies only to the idempotent non-streaming calls.
 func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn func(AssistantResponse) error) (string, error) {
+	// The path and the body must name the same conversation, or the service
+	// rejects the turn, so the id has to fit in the path unchanged.
+	id := opts.ConversationID
+	if id == "" || url.PathEscape(id) != id {
+		return id, fmt.Errorf("send turn: invalid conversation id %q", id)
+	}
 	profile := opts.Profile
 	if profile == "" {
 		profile = DefaultProfile
@@ -482,7 +490,9 @@ func (c *Client) Send(ctx context.Context, message any, opts SendOptions, fn fun
 		Attributes: attrs,
 	}}
 
-	return c.stream(ctx, http.MethodPost, "/api/v2/assistant", reqBody, opts.ConversationID, fn)
+	// Sending to the conversation's own endpoint lets later requests for the
+	// same conversation, like stopping or following its turn, reach it.
+	return c.stream(ctx, http.MethodPost, "/api/v2/assistant/conversation/"+id, reqBody, id, fn)
 }
 
 // SubscribeOptions selects what a /subscribe stream carries.

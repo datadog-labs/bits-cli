@@ -38,8 +38,9 @@ const InferenceModeFast = "fast"
 
 // SendOptions configures a single call to Send.
 type SendOptions struct {
-	// ConversationID resumes an existing conversation. Empty starts a new one;
-	// the server-generated id is available via the streamed responses.
+	// ConversationID names the conversation the turn belongs to. It is
+	// required: a new conversation takes a fresh version 4 UUID, and the
+	// service starts a conversation for an id it has not seen.
 	ConversationID string
 	// Model optionally overrides the model (e.g. "claude-sonnet-4-6").
 	Model string
@@ -81,7 +82,8 @@ type SendOptions struct {
 	ExperimentalToolOverrides map[string]any
 }
 
-// Request is the JSON:API-style envelope for POST /api/v2/assistant.
+// Request is the JSON:API-style envelope for
+// POST /api/v2/assistant/conversation/{id}.
 type Request struct {
 	Data RequestData `json:"data"`
 }

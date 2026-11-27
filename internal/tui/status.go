@@ -223,11 +223,13 @@ func (m *Model) statusConnectivity() statusview.Connectivity {
 // never copied into status state.
 func (m *Model) observeEvent(event agent.Event) {
 	switch event.Kind {
-	case agent.EventState:
+	case agent.EventState, agent.EventConversation:
+		// Outside any round, the engine reports what it knows locally, such
+		// as a new conversation's id before the first request.
 		if event.Round > 0 { // the backend answered
 			m.markConnected()
 		}
-	case agent.EventUsage, agent.EventConversation, agent.EventDone:
+	case agent.EventUsage, agent.EventDone:
 		m.markConnected()
 	case agent.EventCanceled:
 	case agent.EventError:

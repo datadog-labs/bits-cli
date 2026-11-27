@@ -182,7 +182,7 @@ func TestSendIncludesStructuredEntityContext(t *testing.T) {
 	want := &AssistantContext{Entities: []ContextEntity{{
 		Type: "dashboard", ID: "dash-1", Label: "Checkout overview",
 	}}}
-	if _, err := c.Send(context.Background(), "inspect this", SendOptions{Context: want}, nil); err != nil {
+	if _, err := c.Send(context.Background(), "inspect this", SendOptions{ConversationID: testConversationID, Context: want}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(request.Data.Attributes.Context, want) {

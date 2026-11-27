@@ -21,7 +21,7 @@ func queuedMessages(s State) []string {
 // Prompts queued during a turn join its run: the run sends them as one
 // request once the turn completes, and ends once.
 func TestQueueJoinsTheRunningTurn(t *testing.T) {
-	backend := &scriptBackend{convID: "c", started: make(chan struct{}), hold: make(chan struct{})}
+	backend := &scriptBackend{started: make(chan struct{}), hold: make(chan struct{})}
 	e := New(backend, Config{})
 	defer e.Close()
 	events, unsubscribe := e.Subscribe()
@@ -60,7 +60,7 @@ func TestQueueJoinsTheRunningTurn(t *testing.T) {
 	if !reflect.DeepEqual(terminals, []EventKind{EventDone}) {
 		t.Fatalf("terminal events = %v, want one EventDone", terminals)
 	}
-	if got := backend.userMessages("c"); !reflect.DeepEqual(got, []string{"one", "two\n\nthree"}) {
+	if got := backend.userMessages(e.State().ConversationID); !reflect.DeepEqual(got, []string{"one", "two\n\nthree"}) {
 		t.Fatalf("sent = %q", got)
 	}
 	if round != 2 {
@@ -74,7 +74,7 @@ func TestQueueJoinsTheRunningTurn(t *testing.T) {
 // A cancelled turn leaves its queue waiting for SendQueued, and so does a
 // prompt queued once no turn runs.
 func TestCancelledTurnPausesTheQueue(t *testing.T) {
-	backend := &scriptBackend{convID: "c", started: make(chan struct{}), hold: make(chan struct{})}
+	backend := &scriptBackend{started: make(chan struct{}), hold: make(chan struct{})}
 	e := New(backend, Config{})
 	defer e.Close()
 	events, unsubscribe := e.Subscribe()
@@ -107,7 +107,7 @@ func TestCancelledTurnPausesTheQueue(t *testing.T) {
 	if last := resumed[len(resumed)-1]; last.Kind != EventDone {
 		t.Fatalf("resumed run ended with %+v", last)
 	}
-	if got := backend.userMessages("c"); !reflect.DeepEqual(got, []string{"one", "two\n\nthree"}) {
+	if got := backend.userMessages(e.State().ConversationID); !reflect.DeepEqual(got, []string{"one", "two\n\nthree"}) {
 		t.Fatalf("sent = %q", got)
 	}
 	if _, err := e.SendQueued(t.Context(), TurnInput{}); !errors.Is(err, ErrNothingQueued) {
@@ -220,7 +220,7 @@ func TestQueueAfterToolRoundsAndStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, stop := range []bool{false, true} {
-		backend := &scriptBackend{convID: "c", rounds: toolRounds("read"), started: make(chan struct{}), hold: make(chan struct{})}
+		backend := &scriptBackend{rounds: toolRounds("read"), started: make(chan struct{}), hold: make(chan struct{})}
 		e := New(backend, Config{})
 		events, unsubscribe := e.Subscribe()
 		run, err := e.StartTurn(t.Context(), TurnInput{Message: "one", Tools: tools})
@@ -253,7 +253,7 @@ func TestQueueAfterToolRoundsAndStop(t *testing.T) {
 		if end != EventDone || !reflect.DeepEqual(rounds, wantRounds) {
 			t.Fatalf("stop=%v: end %v, rounds %v; want EventDone, %v", stop, end, rounds, wantRounds)
 		}
-		if got := backend.userMessages("c"); !reflect.DeepEqual(got, wantSent) {
+		if got := backend.userMessages(e.State().ConversationID); !reflect.DeepEqual(got, wantSent) {
 			t.Fatalf("stop=%v: sent %q, want %q", stop, got, wantSent)
 		}
 		if got := queuedMessages(e.State()); !reflect.DeepEqual(got, wantQueued) {
@@ -268,7 +268,7 @@ func TestQueueAfterToolRoundsAndStop(t *testing.T) {
 func TestQueuedSkillOverridesReachTheirRequest(t *testing.T) {
 	override := assistant.SkillOverride{Name: "skills-library/clear-writing", Source: assistant.SkillSourceSkillsLibrary, Enabled: true}
 	for _, drain := range []bool{true, false} {
-		backend := &scriptBackend{convID: "c", started: make(chan struct{}), hold: make(chan struct{})}
+		backend := &scriptBackend{started: make(chan struct{}), hold: make(chan struct{})}
 		e := New(backend, Config{})
 		events, unsubscribe := e.Subscribe()
 		ctx, cancel := context.WithCancel(t.Context())

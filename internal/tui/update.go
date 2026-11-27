@@ -1045,7 +1045,8 @@ func (m *Model) applyEvent(ev agent.Event) tea.Cmd {
 			m.chatPhase = chat.PhaseStreaming
 		}
 	case agent.EventUsage, agent.EventConversation:
-		// The state carries both; these report a backend send.
+		// The state carries both; these report a backend send, or a new
+		// conversation's id before it, so there is nothing to do here.
 	case agent.EventDone:
 		m.op.completed = true
 		m.chatPhase = chat.PhaseIdle

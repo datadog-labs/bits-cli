@@ -302,8 +302,8 @@ func TestNewRejectsStaleEventsFromPriorConversation(t *testing.T) {
 		t.Fatalf("stale event mutated fresh operation: id=%q generation=%d active=%v", m.state.ConversationID, m.op.gen, m.op.run != 0)
 	}
 	drainConversationRemote(t, m)
-	if m.state.ConversationID != "fresh" {
-		t.Fatalf("first prompt after reset got conversation id %q, want fresh", m.state.ConversationID)
+	if id := m.state.ConversationID; !agent.ValidConversationID(id) || id == "old" {
+		t.Fatalf("first prompt after reset got conversation id %q, want a fresh one", id)
 	}
 }
 

@@ -167,7 +167,7 @@ func TestCrossHostRedirectDropsAPIKeyHeadersOnStreamClient(t *testing.T) {
 
 	// An API-key client actually carries DD-* headers on the streaming POST,
 	// unlike an OAuth client, which only sends Authorization.
-	if _, err := apiKeyClient(t, origin.URL).Send(context.Background(), "hello", SendOptions{}, nil); err != nil {
+	if _, err := apiKeyClient(t, origin.URL).Send(context.Background(), "hello", SendOptions{ConversationID: testConversationID}, nil); err != nil {
 		t.Fatalf("stream through a cross-host redirect failed: %v", err)
 	}
 	mu.Lock()

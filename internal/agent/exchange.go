@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"uuid"
 
 	"github.com/datadog-labs/bits-cli/internal/assistant"
 )
@@ -40,7 +41,7 @@ type exchangeEvent struct {
 	// round starts this backend send, 1-based. Every send is announced
 	// before it is made, so a turn cancelled earlier stays outside any round.
 	round        int
-	conversation string // server-assigned conversation ID
+	conversation string // the conversation's ID, minted or reported by the backend
 	title        string // the conversation's newly saved title
 	message      *assistant.Message
 	execute      []ToolCall // a batch, dispatched at once
@@ -75,6 +76,17 @@ func newRoundsExchange(backend Backend, message any, opts assistant.SendOptions,
 
 func (x *roundsExchange) run(ctx context.Context, emit func(exchangeEvent) bool) (string, error) {
 	message, opts, calls := x.message, x.opts, x.resumed
+	// A turn is sent to its conversation's endpoint, so a new conversation
+	// takes its id now: a random version 4 UUID, as the Datadog web client
+	// creates. It is reported before the first round, so no surface
+	// mistakes it for the backend's answer, and every surface has a handle to
+	// the conversation even if the send fails.
+	if opts.ConversationID == "" {
+		opts.ConversationID = uuid.NewV4().String()
+		if !emit(exchangeEvent{conversation: opts.ConversationID}) {
+			return opts.ConversationID, ctx.Err()
+		}
+	}
 	for round := 1; round <= maxTurns; round++ {
 		if !emit(exchangeEvent{round: round}) {
 			return opts.ConversationID, ctx.Err()
@@ -128,8 +140,8 @@ func (x *roundsExchange) send(ctx context.Context, message any, opts *assistant.
 		}
 		return nil
 	})
-	// Send may discover a server-assigned ID before a later stream failure or
-	// cancellation. Report it so every surface has a resumable handle.
+	// Send reports the ID the backend confirmed, even after a later stream
+	// failure or cancellation. Report it so every surface has a resumable handle.
 	if id != "" {
 		opts.ConversationID = id
 		if !emit(exchangeEvent{conversation: id}) && err == nil {
