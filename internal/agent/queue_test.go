@@ -33,7 +33,7 @@ func TestQueueJoinsTheRunningTurn(t *testing.T) {
 	}
 	<-backend.started
 	for _, message := range []string{"two", "three"} {
-		if err := e.Queue(TurnInput{Message: message}); err != nil {
+		if _, err := e.Queue(TurnInput{Message: message}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -86,7 +86,7 @@ func TestCancelledTurnPausesTheQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-backend.started
-	if err := e.Queue(TurnInput{Message: "two"}); err != nil {
+	if _, err := e.Queue(TurnInput{Message: "two"}); err != nil {
 		t.Fatal(err)
 	}
 	cancel()
@@ -97,7 +97,7 @@ func TestCancelledTurnPausesTheQueue(t *testing.T) {
 	}
 	close(backend.hold)
 
-	if err := e.Queue(TurnInput{Message: "three"}); err != nil || e.OperationActive() {
+	if _, err := e.Queue(TurnInput{Message: "three"}); err != nil || e.OperationActive() {
 		t.Fatalf("Queue while idle = %v, started a turn: %v", err, e.OperationActive())
 	}
 	if got := queuedMessages(e.State()); !reflect.DeepEqual(got, []string{"two", "three"}) {
@@ -115,11 +115,11 @@ func TestCancelledTurnPausesTheQueue(t *testing.T) {
 	}
 }
 
-func TestUnqueueRemovesAnUnsentPrompt(t *testing.T) {
+func TestUnqueueRemovesUnsentPrompts(t *testing.T) {
 	e := New(&scriptBackend{}, Config{})
 	defer e.Close()
 	e.do(func() {
-		e.queue = []QueuedPrompt{{ID: 1, Message: "a"}, {ID: 2, Message: "b"}}
+		e.queue = []QueuedPrompt{{ID: 1, Message: "a"}, {ID: 2, Message: "b"}, {ID: 3, Message: "c"}, {ID: 4, Message: "d"}}
 	})
 	if err := e.Unqueue(1); err != nil {
 		t.Fatal(err)
@@ -127,7 +127,14 @@ func TestUnqueueRemovesAnUnsentPrompt(t *testing.T) {
 	if err := e.Unqueue(1); !errors.Is(err, ErrStale) {
 		t.Fatalf("second Unqueue = %v, want ErrStale", err)
 	}
-	if got := queuedMessages(e.State()); !reflect.DeepEqual(got, []string{"b"}) {
+	// One stale ID keeps every other prompt queued.
+	if err := e.Unqueue(2, 1); !errors.Is(err, ErrStale) {
+		t.Fatalf("Unqueue with a stale ID = %v, want ErrStale", err)
+	}
+	if err := e.Unqueue(2, 4); err != nil {
+		t.Fatal(err)
+	}
+	if got := queuedMessages(e.State()); !reflect.DeepEqual(got, []string{"c"}) {
 		t.Fatalf("queue = %q", got)
 	}
 	if err := e.NewConversation(); err != nil {
@@ -150,7 +157,7 @@ func TestQueueRejectsQueueingBehindRestore(t *testing.T) {
 	if _, err := e.Restore(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Queue(TurnInput{Message: "x"}); !errors.Is(err, ErrOperationActive) {
+	if _, err := e.Queue(TurnInput{Message: "x"}); !errors.Is(err, ErrOperationActive) {
 		t.Fatalf("Queue during restore = %v, want ErrOperationActive", err)
 	}
 }
@@ -221,7 +228,7 @@ func TestQueueAfterToolRoundsAndStop(t *testing.T) {
 			t.Fatal(err)
 		}
 		<-backend.started
-		if err := e.Queue(TurnInput{Message: "two"}); err != nil {
+		if _, err := e.Queue(TurnInput{Message: "two"}); err != nil {
 			t.Fatal(err)
 		}
 		if stop {
@@ -274,7 +281,7 @@ func TestQueuedSkillOverridesReachTheirRequest(t *testing.T) {
 			{Message: "/clear-writing x", SkillOverrides: []assistant.SkillOverride{override}},
 			{Message: "plain"},
 		} {
-			if err := e.Queue(in); err != nil {
+			if _, err := e.Queue(in); err != nil {
 				t.Fatal(err)
 			}
 		}

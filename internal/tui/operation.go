@@ -206,6 +206,8 @@ func (m *Model) endOperation() tea.Cmd {
 		return cmd
 	case done.kind == opTurn && done.completed && done.stop == stopNone && len(m.state.Queued) > 0:
 		return m.startTurn(m.engine.SendQueued, agent.TurnInput{})
+	case done.kind == opTurn && done.stop != stopNone:
+		return m.recoverQueue()
 	}
 	return notice
 }

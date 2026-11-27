@@ -28,6 +28,10 @@ type Attachment struct {
 	TrackingAttributes map[string]string
 }
 
+// sameItem reports whether a and b attach the same item, as the engine
+// dedupes context entities.
+func (a Attachment) sameItem(b Attachment) bool { return a.Type == b.Type && a.ID == b.ID }
+
 // Candidate is one completion row. Kind and ID are stable source identities;
 // Label and Detail are presentation; Insert edits the prompt. Attachment is
 // non-nil only when selection should add structured turn context.
