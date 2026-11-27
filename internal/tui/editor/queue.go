@@ -4,6 +4,7 @@ import (
 	"image"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textarea"
@@ -20,6 +21,9 @@ type promptQueue struct {
 	items  []QueuedPrompt
 	paused bool
 	remove func(id uint64)
+	// mentions are the accepted mentions of queued prompts, by ID, in case
+	// they return to the composer.
+	mentions map[uint64][]trackedMention
 }
 
 // SetQueue mirrors the parent's queue in send order. Paused means it waits
@@ -31,6 +35,11 @@ func (e *Editor) SetQueue(items []QueuedPrompt, paused bool) {
 		selected = e.queue.items[e.queueUI.cursor].ID
 	}
 	e.queue.items, e.queue.paused = items, paused && len(items) > 0
+	for id := range e.queue.mentions {
+		if !slices.ContainsFunc(items, func(q QueuedPrompt) bool { return q.ID == id }) {
+			delete(e.queue.mentions, id)
+		}
+	}
 	if same {
 		return
 	}
@@ -47,8 +56,35 @@ func (e *Editor) SetQueue(items []QueuedPrompt, paused bool) {
 	}
 }
 
+// RememberQueuedMentions keeps the draft's accepted mentions for the queued
+// prompt id, whose text is the draft as sent.
+func (e *Editor) RememberQueuedMentions(id uint64, text string) {
+	raw := e.ta.Value()
+	// The text sent is the draft trimmed; a text that differs otherwise, as a
+	// resolved skill does, has no offsets to keep.
+	left := strings.TrimLeftFunc(raw, unicode.IsSpace)
+	if strings.TrimRightFunc(left, unicode.IsSpace) != text {
+		return
+	}
+	trimmed := utf8.RuneCountInString(raw) - utf8.RuneCountInString(left)
+	runes := []rune(text)
+	var mentions []trackedMention
+	for _, mention := range e.completedMentions {
+		if mention.applyEdit(0, trimmed, 0, runes) {
+			mentions = append(mentions, mention)
+		}
+	}
+	if len(mentions) == 0 {
+		return
+	}
+	if e.queue.mentions == nil {
+		e.queue.mentions = make(map[uint64][]trackedMention)
+	}
+	e.queue.mentions[id] = mentions
+}
+
 // ComposeQueued returns the draft that puts queued in front of the current
-// one: their texts, then the draft's as typed, with the draft's caret and
+// one: their texts, then the draft's as typed, with the draft's caret and all
 // accepted mentions. Attachments are merged by identity, and the draft's copy
 // wins. It reports false if the composer would not hold the text unchanged.
 func (e *Editor) ComposeQueued(queued []QueuedPrompt) (HistoryEntry, bool) {
@@ -75,7 +111,7 @@ func (e *Editor) ComposeQueued(queued []QueuedPrompt) (HistoryEntry, bool) {
 	}
 	for _, prompt := range queued {
 		if strings.TrimSpace(prompt.Text) != "" {
-			appendText(prompt.Text, nil)
+			appendText(prompt.Text, e.queue.mentions[prompt.ID])
 		}
 		for _, attachment := range prompt.Attachments {
 			if !slices.ContainsFunc(entry.Attachments, attachment.sameItem) {

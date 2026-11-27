@@ -287,7 +287,7 @@ func TestLoadConversationOwnership(t *testing.T) {
 			if _, err := e.StartTurn(context.Background(), TurnInput{Message: "hi"}); !errors.Is(err, ErrReadOnlyConversation) {
 				t.Fatalf("StartTurn err = %v, want ErrReadOnlyConversation", err)
 			}
-			if err := e.Queue(TurnInput{Message: "later"}); !errors.Is(err, ErrReadOnlyConversation) {
+			if _, err := e.Queue(TurnInput{Message: "later"}); !errors.Is(err, ErrReadOnlyConversation) {
 				t.Fatalf("Queue err = %v, want ErrReadOnlyConversation", err)
 			}
 			if e.OperationActive() || len(e.State().Queued) != 0 {

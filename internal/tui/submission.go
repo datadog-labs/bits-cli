@@ -87,13 +87,15 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		in = resolved
 	}
 	in.Context = contextFromAttachments(attachments)
-	m.editor.Reset()
-	closeFileSearch := m.stopCompletionSearches()
 	// Behind a turn, or a queue still waiting, the prompt joins the queue.
 	if m.op.busy() || len(m.state.Queued) > 0 {
-		if err := m.engine.Queue(in); err != nil {
-			return m, tea.Batch(closeFileSearch, m.postNotice(noticeForError("", err)))
+		id, err := m.engine.Queue(in)
+		if err != nil {
+			return m, m.postNotice(noticeForError("", err))
 		}
+		m.editor.RememberQueuedMentions(uint64(id), in.Message)
+		m.editor.Reset()
+		closeFileSearch := m.stopCompletionSearches()
 		m.state = m.engine.State() // the event that publishes it follows
 		if m.op.busy() {
 			return m, closeFileSearch
@@ -102,7 +104,8 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		// sends this one after them.
 		return m, tea.Batch(closeFileSearch, m.startTurn(m.engine.SendQueued, agent.TurnInput{}))
 	}
-	return m, tea.Batch(closeFileSearch, m.startTurn(m.engine.StartTurn, in))
+	m.editor.Reset()
+	return m, tea.Batch(m.stopCompletionSearches(), m.startTurn(m.engine.StartTurn, in))
 }
 
 // recoverQueue returns the prompts a stopped turn left unsent to the
@@ -197,7 +200,7 @@ func (m *Model) queueInitialPrompt() tea.Cmd {
 	}
 	in := agent.TurnInput{Message: m.initialPrompt}
 	m.initialPrompt = ""
-	if err := m.engine.Queue(in); err != nil {
+	if _, err := m.engine.Queue(in); err != nil {
 		return m.postNotice(noticeForError("", err))
 	}
 	m.state = m.engine.State() // the event that publishes it follows

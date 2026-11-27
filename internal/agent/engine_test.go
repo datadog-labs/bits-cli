@@ -948,7 +948,7 @@ func TestSetInferenceModeReachesAQueuedPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-backend.started
-	if err := engine.Queue(TurnInput{Message: "two"}); err != nil {
+	if _, err := engine.Queue(TurnInput{Message: "two"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := engine.SetInferenceMode("deep"); err != nil {

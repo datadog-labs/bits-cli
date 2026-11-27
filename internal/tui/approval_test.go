@@ -538,7 +538,7 @@ func TestCtrlXStopsTheToolsFromAnApproval(t *testing.T) {
 	for waitingApprovals(model) == 0 {
 		_, _ = model.Update(runConversationCmd(t, waitEvent(model.events)))
 	}
-	if err := model.engine.Queue(agent.TurnInput{Message: "follow-up"}); err != nil {
+	if _, err := model.engine.Queue(agent.TurnInput{Message: "follow-up"}); err != nil {
 		t.Fatal(err)
 	}
 

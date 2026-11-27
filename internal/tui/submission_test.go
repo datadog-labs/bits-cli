@@ -191,6 +191,41 @@ func TestEscapeReturnsQueuedPromptsToTheDraft(t *testing.T) {
 	}
 }
 
+// A mention accepted in a queued prompt stays accepted once recovered, past a
+// multibyte prompt before it and the whitespace trimmed from its own.
+func TestEscapeKeepsMentionsAcceptedInQueuedPrompts(t *testing.T) {
+	m, _ := newModelInTurn(t, nil)
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	setConversationInput(m, "Préface")
+	m.Update(enter)
+	m.editor.AddAttachment(editor.Attachment{Type: "service", ID: "web"})
+	m.Update(enter)
+	setConversationInput(m, "  @dash")
+	m.editor.SetEntityResults("dash", editor.RemoteReady, []editor.Candidate{{
+		Kind: editor.CandidateEntity, ID: "latency", Label: "Latency", Insert: `@dashboard:"Latency"`,
+		Attachment: &editor.Attachment{Type: "dashboard", ID: "latency", Label: "Latency"},
+	}})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := m.editor.Attachments(); len(got) != 1 || got[0].ID != "latency" {
+		t.Fatalf("did not accept the mention: %+v", got)
+	}
+	m.Update(enter)
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	drainConversationRemote(t, m)
+	if got, want := m.editor.Value(), "Préface\n\n"+`@dashboard:"Latency"`; got != want {
+		t.Fatalf("draft = %q, want %q", got, want)
+	}
+	m.Update(tea.PasteMsg{Content: " look for errors"})
+	if query, active := m.editor.ActiveEntityQuery(); active || m.editor.MenuOpen() {
+		t.Fatalf("editing the recovered draft restarted its accepted mention: %q", query)
+	}
+	m.Update(enter)
+	drainConversationRemote(t, m)
+	if prompts := m.state.UserPrompts(); len(prompts) != 2 || len(prompts[1].Context) != 2 || prompts[1].Context[0].ID != "web" || prompts[1].Context[1].ID != "latency" {
+		t.Fatalf("recovered prompt and context were not sent: %+v", prompts)
+	}
+}
+
 // Prompts that one draft cannot carry stay queued and paused, and the draft
 // untouched.
 func TestEscapeKeepsPromptsADraftCannotCarry(t *testing.T) {
@@ -235,7 +270,7 @@ func TestEscapeKeepsPromptsADraftCannotCarry(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := newModelInTurn(t, nil)
-			if err := m.engine.Queue(tc.queued); err != nil {
+			if _, err := m.engine.Queue(tc.queued); err != nil {
 				t.Fatal(err)
 			}
 			queued := m.engine.State().Queued
@@ -343,7 +378,7 @@ func TestPromptsSubmittedBeforeAnUnreadTurnEnd(t *testing.T) {
 func TestRenameKeepsPausedPromptsAndTurnAdmission(t *testing.T) {
 	backend := &tuiRenameBackend{resumeBackend: newResumeBackend()}
 	m := newRenameModel(t, backend, forkSourceID)
-	if err := m.engine.Queue(agent.TurnInput{Message: "pending follow-up"}); err != nil {
+	if _, err := m.engine.Queue(agent.TurnInput{Message: "pending follow-up"}); err != nil {
 		t.Fatal(err)
 	}
 	m.state = m.engine.State()

@@ -25,13 +25,14 @@ type QueuedPrompt struct {
 	SkillOverrides []assistant.SkillOverride
 }
 
-// Queue adds in's prompt to the queue. A running turn sends the queue, in
+// Queue adds in's prompt to the queue and returns its ID. A running turn sends the queue, in
 // the same run, once it completes. Otherwise the queue waits for SendQueued:
 // it is left by a turn that failed, was cancelled, or stopped (StopTools or
 // a DenyStop denial), or queued after the turn ended. Queued prompts run
 // with the tools, policy and context of the run that sends them. Queue
 // fails with ErrOperationActive while an operation other than a turn runs.
-func (e *Engine) Queue(in TurnInput) error {
+func (e *Engine) Queue(in TurnInput) (QueueID, error) {
+	var id QueueID
 	err := ErrClosed
 	e.do(func() {
 		if err = ErrOperationActive; e.busy && e.turnRun == 0 {
@@ -42,11 +43,12 @@ func (e *Engine) Queue(in TurnInput) error {
 			return
 		}
 		e.lastQueued++
-		e.queue = append(e.queue, QueuedPrompt{ID: e.lastQueued, Message: in.Message, Skill: in.Skill, Context: in.Context, SkillOverrides: in.SkillOverrides})
+		id = e.lastQueued
+		e.queue = append(e.queue, QueuedPrompt{ID: id, Message: in.Message, Skill: in.Skill, Context: in.Context, SkillOverrides: in.SkillOverrides})
 		e.emit(e.turnRun, Event{Kind: EventState, State: e.state()})
 		err = nil
 	})
-	return err
+	return id, err
 }
 
 // SendQueued starts a turn with the prompts the queue sends first. Only in's
