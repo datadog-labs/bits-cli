@@ -30,19 +30,18 @@ const approvalKeyWorkspaceWrite = "workspace_write"
 //
 // The three read-only tools share one approval key; the two mutating tools
 // share another. A single allow-session decision on either key covers all
-// tools in that group for the workspace. Mutations to the same path are
-// serialized through a shared locker.
+// tools in that group for the workspace. Mutations are serialized through
+// the process's one locker.
 func NewEditorTools(ws *workspace.Workspace) []agent.Tool {
 	root := ws.Path()
 	r := ws.OSRoot()
 	fsys := ws.FS()
-	locker := newMutationLocker()
 	return []agent.Tool{
 		newReadFileTool(fsys, root),
 		newListFilesTool(fsys, root),
 		newGrepFilesTool(fsys, root),
-		newWriteFileTool(r, root, locker),
-		newEditFileTool(r, root, locker),
+		newWriteFileTool(r, root, processMutations),
+		newEditFileTool(r, root, processMutations),
 	}
 }
 

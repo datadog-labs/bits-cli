@@ -169,6 +169,31 @@ Actions that need approval are denied by default. Add
 See the [noninteractive guide](internal/headless/adeep/README.md) for output fields,
 exit codes, and authentication details.
 
+## Use Bits in your editor
+
+`bits acp` serves the [Agent Client Protocol](https://agentclientprotocol.com)
+on stdio, so editors such as Zed run Bits as an agent. In Zed, add it to your
+settings:
+
+```json
+{
+  "agent_servers": {
+    "Bits": { "type": "custom", "command": "bits", "args": ["acp"] }
+  }
+}
+```
+
+Each editor thread is a Bits conversation in the thread's project folder, and
+reopening a thread restores it. The editor asks before gated actions, and its
+thread settings pick the permissions mode and the reasoning level, which the
+backend feature-flags. Sign in with `bits login` first, or from the editor,
+which offers it when you are signed out: Zed runs the login in a terminal, and
+other editors have Bits open your browser. To sign in from the editor to a site
+other than US1, add `"--site", "datadoghq.eu"` (your site) after `"acp"` in
+`args`.
+Questions Bits asks need an editor that renders forms, as Zed does. Editor MCP
+servers and listing past conversations are not supported yet.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and the contribution workflow.

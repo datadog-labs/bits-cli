@@ -29,6 +29,12 @@ func newMutationLocker() *mutationLocker {
 	return &mutationLocker{ch: make(chan struct{}, 1)}
 }
 
+// processMutations is shared by every tool set of the process: sessions of
+// one process, such as an editor's threads in one project, open their own
+// workspace and tools, yet can mutate the same files.
+// NOTE: another process in the same workspace is not serialized.
+var processMutations = newMutationLocker()
+
 // lock acquires the mutation lock, returning its unlock function. It returns
 // ctx.Err() instead if the context is cancelled while waiting; the unlock
 // function is nil in that case.

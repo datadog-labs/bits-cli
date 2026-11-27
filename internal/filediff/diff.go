@@ -246,6 +246,23 @@ func LogicalLineContent(value string) string {
 	return strings.TrimSuffix(value, "\r")
 }
 
+// FormatChange names a change of line endings or byte order mark, which
+// line content does not show, or is empty.
+func (d Diff) FormatChange() string {
+	if d.BeforeFormat == d.AfterFormat {
+		return ""
+	}
+	return "format: " + d.BeforeFormat.name() + " → " + d.AfterFormat.name()
+}
+
+func (f TextFormat) name() string {
+	name := strings.ToUpper(f.LineEnding)
+	if f.BOM {
+		name += " + BOM"
+	}
+	return name
+}
+
 func textFormat(text string) TextFormat {
 	format := TextFormat{BOM: strings.HasPrefix(text, "\ufeff")}
 	body := strings.TrimPrefix(text, "\ufeff")

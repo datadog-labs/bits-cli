@@ -310,9 +310,8 @@ func writeFileInputReducer(r *os.Root, root string) agent.ToolInputReducer {
 			return state
 		}
 		state.Phase = filediff.PhaseReady
-		after := overwriteText(snapshot.Raw, content)
-		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Raw, after)
-		state.Preview = &filediff.Preview{Kind: filediff.PreviewWritePrefix, Diff: &diff, After: after, InputTruncated: update.PreviewTruncated}
+		diff := filediff.Build("a/"+filePath, "b/"+filePath, snapshot.Raw, overwriteText(snapshot.Raw, content))
+		state.Preview = &filediff.Preview{Kind: filediff.PreviewWritePrefix, Diff: &diff, InputTruncated: update.PreviewTruncated}
 		return state
 	}
 }
@@ -382,9 +381,6 @@ func editFileInputReducer(r *os.Root, root string) agent.ToolInputReducer {
 			state.Phase = filediff.PhaseReady
 		}
 		state.Preview = &filediff.Preview{Kind: filediff.PreviewEdit, Diff: &diff, InputPrefixBytes: bytes, InputPrefixHash: hash, Pending: pending, InputTruncated: update.PreviewTruncated}
-		if !pending {
-			state.Preview.After = editedText(snapshot.Raw, after)
-		}
 		return state
 	}
 }
