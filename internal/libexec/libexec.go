@@ -12,20 +12,26 @@ import (
 // DirEnv overrides the libexec/bits directory, for development.
 const DirEnv = "BITS_LIBEXEC_DIR"
 
-var executable = os.Executable
+// The running executable, resolved once at startup: Homebrew links bin/bits
+// from outside the prefix, and a standalone install reaches it through
+// current. An update that moves either to a new release while this process
+// runs must not hand it that release's helpers.
+var executable, executableErr = resolve(os.Executable())
+
+func resolve(exe string, err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
+}
 
 func helperDir(name string) (string, error) {
 	root := os.Getenv(DirEnv)
 	if root == "" {
-		exe, err := executable()
-		if err != nil {
-			return "", err
+		if executableErr != nil {
+			return "", executableErr
 		}
-		// Homebrew links bin/bits from outside the prefix.
-		if exe, err = filepath.EvalSymlinks(exe); err != nil {
-			return "", err
-		}
-		root = filepath.Join(filepath.Dir(exe), "..", "libexec", "bits")
+		root = filepath.Join(filepath.Dir(executable), "..", "libexec", "bits")
 	}
 	dir, err := filepath.Abs(filepath.Join(root, name))
 	if err != nil {
