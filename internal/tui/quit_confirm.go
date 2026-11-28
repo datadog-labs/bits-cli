@@ -17,18 +17,28 @@ type quitConfirm struct {
 	token uint64
 }
 
-func (m *Model) clearDraftOrArmQuit() tea.Cmd {
-	if m.composerHasDraft() {
-		m.quitConfirm.armed = false
+func (m *Model) handleCtrlC() tea.Cmd {
+	var cmd tea.Cmd
+	switch {
+	case m.composerHasDraft():
 		m.editor.Reset()
-		return m.stopCompletionSearches()
+		cmd = m.stopCompletionSearches()
+	case m.cancellable():
+		m.cancelOperation()
 	}
 	m.quitConfirm.armed = true
 	m.quitConfirm.token++
 	token := m.quitConfirm.token
-	return tea.Tick(quitConfirmWindow, func(time.Time) tea.Msg {
+	return tea.Batch(cmd, tea.Tick(quitConfirmWindow, func(time.Time) tea.Msg {
 		return quitConfirmExpiredMsg{token: token}
-	})
+	}))
+}
+
+func (m *Model) ctrlCQuits() bool {
+	if (m.mode != ModeChat && m.mode != ModeTermInit) || m.exitCard.open {
+		return true
+	}
+	return m.quitConfirm.armed && !m.composerHasDraft() && !m.cancellable()
 }
 
 func (m *Model) composerHasDraft() bool {
